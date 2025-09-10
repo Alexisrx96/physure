@@ -5,6 +5,7 @@ engineering.
 It provides some common notations for physical quantities and units, such as
 superscript and subscript notations for exponents and units.
 """
+
 import re
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -16,18 +17,18 @@ _SUPERSCRIPT_REVERSE_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻", "0
 _SUBSCRIPT_MAP = str.maketrans("0123456789-", "₀₁₂₃₄₅₆₇₈₉₋")
 
 
-def to_superscript(n: str | int | float) -> str:
+def to_superscript(n: str | float) -> str:
     """Convert an integer to its superscript representation."""
     result = str(n).translate(_SUPERSCRIPT_MAP)
     # Remove characters that weren't translated
-    return ''.join(c for c in result if c in "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻")
+    return "".join(c for c in result if c in "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻")
 
 
-def to_subscript(n: str | int | float) -> str:
+def to_subscript(n: str | float) -> str:
     """Convert an integer to its subscript representation."""
     result = str(n).translate(_SUBSCRIPT_MAP)
     # Remove characters that weren't translated
-    return ''.join(c for c in result if c in "₀₁₂₃₄₅₆₇₈₉₋")
+    return "".join(c for c in result if c in "₀₁₂₃₄₅₆₇₈₉₋")
 
 
 def parse_superscript(sup: str) -> int | float:
@@ -72,13 +73,13 @@ class UnitToken:
 
 # Lexer for Notation Parsing
 _TOKEN_SPEC = [
-    ("NUMBER", r"[+-]?\d+"),
-    ("UNIT_WITH_EXP", r"[a-zA-Z°Ωµ$₀₁₂₃₄₅₆₇₈₉]+[-]?[0-9]+"),
-    ("UNIT", r"[a-zA-Z°Ωµ$₀₁₂₃₄₅₆₇₈₉]+"),
+    ("NUMBER", r"[+-]?\d+(\.\d*)?([eE][+-]?\d+)?"),
+    ("UNIT_WITH_EXP", r"[a-zA-Z_°Ωµ$₀₁₂₃₄₅₆₇₈₉]+[-]?[0-9]+"),
+    ("UNIT", r"[a-zA-Z_°Ωµ$₀₁₂₃₄₅₆₇₈₉]+"),
     ("SUP", r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+"),
+    ("EXP", r"\*\*|\^"),
     ("MUL", r"[\*·]"),
     ("DIV", r"/"),
-    ("EXP", r"\^"),
     ("LPAREN", r"\("),
     ("RPAREN", r"\)"),
     ("SKIP", r"\s+"),

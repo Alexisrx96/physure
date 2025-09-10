@@ -1,4 +1,4 @@
-"""TokenBuffer module
+"""TokenBuffer module.
 
 This module contains the TokenBuffer class, which is a class that provides a
 way to look ahead in a token stream. It uses a deque to store the tokens and
@@ -21,7 +21,9 @@ T = TypeVar("T")
 
 
 class TokenBuffer(Generic[T]):
-    """A TokenBuffer is a class that provides a way to look ahead in a token
+    """TokenBuffer class.
+
+    A TokenBuffer is a class that provides a way to look ahead in a token
     stream. It uses a deque to store the tokens and provides a way to look
     ahead in the streamby indexing the buffer. It also provides a way to
     advance the buffer by one token
@@ -36,10 +38,18 @@ class TokenBuffer(Generic[T]):
     """
 
     def __init__(self, token_stream: Iterator[T]):
+        """Initialize the TokenBuffer with an empty deque and a token stream.
+
+        :param token_stream: An iterator over the tokens in the stream.
+        """
         self.token_stream = token_stream
         self.buffer: deque[T] = deque()
 
     def __getitem__(self, index: int) -> T:
+        """Return the token at the given index.
+
+        If the index is out of range,raise an IndexError.
+        """
         while len(self.buffer) <= index:
             try:
                 self.buffer.append(next(self.token_stream))
@@ -58,13 +68,17 @@ class TokenBuffer(Generic[T]):
         return self[0]
 
     def __len__(self) -> int:
+        """Return the number of tokens in the buffer."""
         return len(self.buffer)
 
     def __repr__(self) -> str:
+        """Return a string representation of the buffer."""
         return f"TokenBuffer({self.buffer!r})"
 
     def __str__(self) -> str:
+        """Return a string representation of the buffer."""
         return str(self.buffer)
 
     def __iter__(self):
+        """Return an iterator over the tokens in the buffer."""
         return iter(self.buffer)

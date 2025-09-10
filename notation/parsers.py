@@ -37,7 +37,8 @@ class NotationParser:
         result = self.expr()
         if self.current.type != TokenType.EOF:
             raise ValueError(
-                "Unexpected token at the end of the " f"expression: {self.current.type}"
+                "Unexpected token at the end of the "
+                f"expression: {self.current.type}"
             )
         return result
 
@@ -58,7 +59,10 @@ class NotationParser:
             self.eat(TokenType.EXP)
             exponent = int(self.eat(TokenType.NUMBER).value)
             result = result**exponent
-        if self.current.type == TokenType.UNIT and self.current.value[-1].isdigit():
+        if (
+            self.current.type == TokenType.UNIT
+            and self.current.value[-1].isdigit()
+        ):
             exponent = int(self.current.value[-1])
             self.eat(TokenType.UNIT)
             result = result**exponent
@@ -69,29 +73,35 @@ class NotationParser:
 
         if token.type == TokenType.UNIT:
             self.eat(TokenType.UNIT)
-            # Check if the token value contains digits at the end (like "m2" or "s-1")
+            # Check if the token value contains digits at the
+            # end (like "m2" or "s-1")
             unit_value = token.value
             exponent_value = None
-            
+
             # Extract unit and exponent if the token has a numeric suffix
-            if any(c.isdigit() for c in unit_value) or '-' in unit_value:
+            if any(c.isdigit() for c in unit_value) or "-" in unit_value:
                 # Find where the numeric part starts
                 for i, char in enumerate(unit_value):
-                    if char.isdigit() or (char == '-' and i > 0 and i < len(unit_value) - 1 and unit_value[i+1].isdigit()):
+                    if char.isdigit() or (
+                        char == "-"
+                        and i > 0
+                        and i < len(unit_value) - 1
+                        and unit_value[i + 1].isdigit()
+                    ):
                         exponent_value = unit_value[i:]
                         unit_value = unit_value[:i]
                         break
-            
+
             # Create the base unit
             base_unit = self.entity_cls({unit_value: 1})
-            
+
             # Apply the embedded exponent if found
             if exponent_value is not None:
                 try:
                     return base_unit ** int(exponent_value)
                 except ValueError:
                     pass  # If parsing fails, fall back to normal behavior
-            
+
             # Normal exponent handling
             exponent = self._parse_exponent()
             return base_unit**exponent if exponent is not None else base_unit
@@ -121,5 +131,8 @@ class NotationParser:
             if self.current.type == TokenType.NUMBER:
                 token = self.eat(TokenType.NUMBER)
                 return int(token.value)
-            raise ValueError(f"Expected number after exponent operator, got {self.current.type}")
+            raise ValueError(
+                "Expected number after exponent operator,"
+                f" got {self.current.type}"
+            )
         return None

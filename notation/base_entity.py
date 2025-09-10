@@ -7,7 +7,6 @@ from notation.typing import ExponentsDict
 
 @dataclass(frozen=True)
 class BaseExponentEntity:
-
     exponents: ExponentsDict
 
     def __new__(cls, exponents: ExponentsDict) -> "BaseExponentEntity":
@@ -15,7 +14,7 @@ class BaseExponentEntity:
         instance = super().__new__(cls)
         object.__setattr__(instance, "exponents", normalized)
         return instance
-    
+
     def __init__(self, exponents: ExponentsDict) -> None:
         normalized = {k: v for k, v in exponents.items() if v}
         object.__setattr__(self, "exponents", normalized)
@@ -36,8 +35,12 @@ class BaseExponentEntity:
             new_exponents[key] = new_exponents.get(key, 0) - exp
         return type(self)(new_exponents)
 
-    def __pow__(self: "BaseExponentEntity", power: int | float) -> "BaseExponentEntity":
-        return BaseExponentEntity({k: v * power for k, v in self.exponents.items()})
+    def __pow__(
+        self: "BaseExponentEntity", power: float
+    ) -> "BaseExponentEntity":
+        return BaseExponentEntity(
+            {k: v * power for k, v in self.exponents.items()}
+        )
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, BaseExponentEntity):
@@ -72,5 +75,7 @@ class BaseExponentEntity:
         return "1"
 
     @singledispatchmethod
-    def __rtruediv__(self, other: float | int | complex) -> "BaseExponentEntity":
+    def __rtruediv__(
+        self, other: complex
+    ) -> "BaseExponentEntity":
         return type(self)({u: -exp for u, exp in self.exponents.items()})
