@@ -360,7 +360,7 @@ class CompoundUnit:
             if should_auto_simplify():
                 new_unit = new_unit.simplify()
             return Quantity_.from_input(
-                value=other.value,
+                value=other.magnitude,
                 unit=new_unit,
                 uncertainty=other.uncertainty_obj,
             )

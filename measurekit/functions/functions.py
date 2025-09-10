@@ -79,7 +79,7 @@ class Function:
                     f"Recibida: {quantity.dimension}"
                 )
 
-            numeric_args.append(quantity.value)
+            numeric_args.append(quantity.magnitude)
 
         # 4. Llamada a la función numérica eficiente
         result_value = self.numeric_func(*numeric_args)

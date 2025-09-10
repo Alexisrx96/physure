@@ -524,7 +524,7 @@ class Quantity(Generic[ValueType, UncType]):
           'full')
           3. "<unit_format>" if the format_spec is recognized as a unit format
           (e.g., "alias" or "full")
-             so that the numeric part defaults to str(self.value).
+             so that the numeric part defaults to str(self.magnitude).
 
         Special case:
           - "frac" for the numeric part will output the Fraction
@@ -553,7 +553,7 @@ class Quantity(Generic[ValueType, UncType]):
         if numeric_format == "frac":
             numeric_str = str(self.fraction)
         elif numeric_format:
-            # Check if self.value is an array
+            # Check if self.magnitude is an array
             if isinstance(self.magnitude, np.ndarray):
                 numeric_str = np.array2string(
                     self.magnitude,

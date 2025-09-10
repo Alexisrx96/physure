@@ -38,13 +38,13 @@ def solve_unit_aware_ivp(
     # ¿Por qué? Extraemos toda la información de unidades ANTES de entrar
     # al bucle del solucionador. Esto es la clave de la eficiencia.
     t_unit = t_span[0].unit
-    y0_values = np.array([q.value for q in y0])
+    y0_values = np.array([q.magnitude for q in y0])
     y0_units = [q.unit for q in y0]
 
     # Calculamos las unidades esperadas para las derivadas de antemano.
     dydt_units = [state_unit / t_unit for state_unit in y0_units]
 
-    t_span_values = [t_span[0].value, t_span[1].to(t_unit).value]
+    t_span_values = [t_span[0].magnitude, t_span[1].to(t_unit).magnitude]
 
     # --- 2. Creación del Wrapper de la Función (Enfoque Eficiente) ---
     # ¿Por qué? Este wrapper ahora trabaja exclusivamente con arrays de NumPy.
@@ -63,7 +63,7 @@ def solve_unit_aware_ivp(
         # Se realizan las conversiones necesarias para asegurar la consistencia.
         dy_dt_values = np.array(
             [
-                res.to(expected_unit).value
+                res.to(expected_unit).magnitude
                 for res, expected_unit in zip(dy_dt_q, dydt_units)
             ]
         )
