@@ -1,8 +1,6 @@
 """Measurement package initialization."""
 
-from measurement.conversions import UNIT_REGISTRY
-from measurement.dimensions import Dimension
-from measurement.units import CompoundUnit
+from measurement.api import Q_
+from measurement.quantity import Quantity
 
-# Initialize the unit registry
-UNIT_REGISTRY.clear()
+__all__ = ["Q_", "Quantity"]
