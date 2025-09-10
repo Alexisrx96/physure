@@ -14,6 +14,13 @@ You can install the package via pip:
 pip install measurekit
 ```
 
+Install it as a ipython kernel:
+
+```bash
+pip install ipykernel
+python -m ipykernel install --user --name measurekit
+```
+
 ## Usage
 
 ```python
