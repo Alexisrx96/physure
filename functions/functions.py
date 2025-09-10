@@ -1,127 +1,121 @@
+from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
 import sympy as sp
 
+from measurement.api import Q_
 from measurement.dimensions import Dimension
 from measurement.quantity import Quantity
 from measurement.units import CompoundUnit
-from notation.lexer import to_subscript
 
 
+@dataclass(frozen=True)
 class Function:
-    def __init__(
-        self,
-        parameters: dict[str, Dimension],
-        output: Dimension,
-        func: Callable[..., float],
-        reference_units: dict[Dimension, CompoundUnit],
-        symbolic_func: sp.Expr | None = None,
-    ):
-        """Defines a function that operates on physical quantities.
+    """Representa una función físico-matemática.
 
-        :param parameters: Dict mapping parameter names to their expected
-        dimensions.
-        :param output: The expected dimension of the output.
-        :param func: The function to compute the output.
-        :param reference_units: A mapping of dimensions to reference units for
-        internal conversions.
-        :param symbolic_func: SymPy function to allow differentiation.
+    Una instancia de esta clase es inmutable que es consciente de
+    las dimensiones y unidades.
+    """
+
+    parameters: dict[str, Dimension]
+    output_dimension: Dimension
+    symbolic_func: sp.Expr
+    arg_names: tuple[str, ...] = field(init=False, repr=False)
+
+    numeric_func: Callable[..., np.ndarray] = field(init=False, repr=False)
+
+    def __post_init__(self):
+        """Este método se llama automáticamente después del __init__ de la dataclass.
+        Lo usamos para pre-calcular los atributos de eficiencia y DX.
         """
-        self.parameters = parameters
-        self.output = output
-        self.func = func
-        self.reference_units = reference_units
-        self.symbolic_func = symbolic_func
+        arg_symbols = tuple(self.symbolic_func.free_symbols)
 
-    def __call__(self, output_unit: CompoundUnit, **kwargs) -> Quantity:
-        """Calls the function by providing the required parameters as Quantity
-        objects.
+        sorted_symbols = sorted(arg_symbols, key=lambda s: s.name)  # type: ignore
+        object.__setattr__(
+            self,
+            "arg_names",
+            tuple(s.name for s in sorted_symbols),  # type: ignore
+        )
+
+        callable_func = sp.lambdify(
+            sorted_symbols, self.symbolic_func, "numpy"
+        )
+        object.__setattr__(self, "numeric_func", callable_func)
+
+    def __call__(
+        self, output_unit: CompoundUnit, **kwargs: Quantity
+    ) -> Quantity:
+        """Ejecuta la función, validando las entradas y devolviendo el resultado
+        en la unidad de salida especificada.
         """
-        converted_values = {}
+        if output_unit.dimension != self.output_dimension:
+            raise ValueError(
+                f"La unidad de salida '{output_unit}' tiene una dimensión "
+                f"incorrecta. Esperada: {self.output_dimension}, "
+                f"Recibida: {output_unit.dimension}"
+            )
 
-        for param, expected_dim in self.parameters.items():
-            if param not in kwargs:
-                raise ValueError(f"Missing parameter: {param}")
+        # 2. Validación de parámetros
+        if len(kwargs) != len(self.parameters):
+            raise ValueError(
+                f"Se esperaban {len(self.parameters)} argumentos, "
+                f"pero se recibieron {len(kwargs)}"
+            )
 
-            value = kwargs[param]
-            if not isinstance(value, Quantity):
-                raise TypeError(f"Parameter '{param}' must be a Quantity")
+        # 3. Desempaquetado y validación de dimensiones
+        numeric_args = []
+        for name in self.arg_names:
+            if name not in kwargs:
+                raise ValueError(f"Parámetro faltante: '{name}'")
 
-            if value.dimension != expected_dim:
+            quantity = kwargs[name]
+            expected_dim = self.parameters[name]
+
+            if quantity.dimension != expected_dim:
                 raise ValueError(
-                    f"Incorrect dimension for '{param}': expected "
-                    f"{expected_dim}, got {value.dimension}"
+                    f"Dimensión incorrecta para '{name}'. "
+                    f"Esperada: {expected_dim}, "
+                    f"Recibida: {quantity.dimension}"
                 )
 
-            # Convert to the reference unit
-            ref_unit = self.reference_units[expected_dim]
-            converted_values[param] = value.to(ref_unit).value
+            numeric_args.append(quantity.value)
 
-        # Compute result
-        result_value = self.func(**converted_values)
+        # 4. Llamada a la función numérica eficiente
+        result_value = self.numeric_func(*numeric_args)
 
-        # Validate output unit
-        if output_unit.dimension != self.output:
+        # 5. Empaquetado del resultado en la unidad de salida correcta
+        return Q_(result_value, output_unit)
+
+    def derivative(self, respect_to: str) -> "Function":
+        """Devuelve una NUEVA función que representa la derivada.
+        El enfoque inmutable asegura que no modificamos la función original.
+        """
+        respect_to_sym = sp.Symbol(respect_to)
+        if respect_to_sym not in self.symbolic_func.free_symbols:
             raise ValueError(
-                f"Output unit {output_unit} does not match expected dimension"
-                f" {self.output}"
-            )
-        return Quantity(result_value, output_unit)
-
-    def derivative(self, respect_to: str):
-        """Returns a new Function representing the derivative of the function
-        with respect to a variable."""
-        if self.symbolic_func is None:
-            raise ValueError(
-                "No symbolic function available for differentiation."
+                f"'{respect_to}' no es un parámetro de la función."
             )
 
-        if respect_to not in self.parameters:
-            raise ValueError(
-                f"Cannot differentiate with respect to {respect_to}, it's not "
-                "a parameter."
-            )
+        derivative_expr = sp.diff(self.symbolic_func, respect_to_sym)
 
-        # Compute derivative
-        symbolic_vars = {param: sp.Symbol(param) for param in self.parameters}
-        symbolic_expr = self.symbolic_func.subs(symbolic_vars)
-        derivative_expr = sp.diff(symbolic_expr, symbolic_vars[respect_to])
-
-        # Determine new output dimension
-        respect_dim = self.parameters[respect_to]
-        new_output_dim = self.output / respect_dim
-
-        # Convert symbolic function to Python
-        derivative_func = sp.lambdify(
-            list(symbolic_vars.values()), derivative_expr
-        )
+        # La nueva dimensión de salida es la original dividida por la
+        # dimensión de la variable respecto a la que se derivó.
+        new_output_dim = self.output_dimension / self.parameters[respect_to]
 
         return Function(
             parameters=self.parameters,
-            output=new_output_dim,
-            func=derivative_func,
-            reference_units=self.reference_units,
+            output_dimension=new_output_dim,
             symbolic_func=derivative_expr,
         )
 
-    def __str__(self):
-        """Returns a readable representation of the function."""
-        param_str = ", ".join(self.parameters.keys())
-        eq_str = (
-            str(self.symbolic_func)
-            if self.symbolic_func
-            else "<No symbolic equation>"
+    def __repr__(self) -> str:
+        param_str = ", ".join(
+            f"{name}: {dim.analytical_representation}"
+            for name, dim in self.parameters.items()
         )
-
         return (
-            f"Function({to_subscript(param_str)}) -> {self.output}: "
-            f"{to_subscript(eq_str)}"
-        )
-
-    def __repr__(self):
-        """Returns a detailed representation useful for debugging."""
-        return (
-            "Function"
-            f"({self.parameters=}, {self.output=}, {self.symbolic_func=}, "
-            f"{self.reference_units=})"
+            f"Function({self.symbolic_func}, "
+            f"params={{ {param_str} }}, "
+            f"output_dim={self.output_dimension.analytical_representation})"
         )
