@@ -129,7 +129,7 @@ class Quantity(Generic[ValueType, UncType]):
     Examples:
     --------
     >>> q1 = Quantity.from_input(5.0, meter, uncertainty=0.1)
-    >>> q2 = Quantity.from_input([1, 2, 3], meter)
+    >>> q2 = Quantity.from_input(np.array([10.0, 20.0]), meter)
     >>> q3 = q1 + q1
     >>> q4 = q2 * 2
     >>> print(q1.to("cm"))
@@ -608,6 +608,8 @@ class Quantity(Generic[ValueType, UncType]):
         return f"${self.to_latex()}$"
 
     def __repr__(self) -> str:
+        if config.get_setting("readable_representation", False):  # type: ignore
+            return str(self)
         return (
             f"Quantity({self.magnitude!r}, {self.unit!r}, "
             f"uncertainty={self.uncertainty!r})"

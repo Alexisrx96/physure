@@ -21,36 +21,36 @@ class _SpecializedQuantityFactory:
         self,
         value: ValueType
         | Quantity = 1,  # <-- El valor por defecto se incluye aquí
-        unit: str | CompoundUnit | None = None,
+        from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity[ValueType, UncType]: ...
 
     def __call__(
         self,
         value: ValueType | Quantity = 1,
-        unit: str | CompoundUnit | None = None,
+        from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
         if isinstance(value, Quantity):
-            if unit is not None:
+            if from_unit is not None:
                 raise ValueError(
                     "No se puede proporcionar una unidad cuando "
                     "el valor ya es una Quantity."
                 )
             return value.to(self._default_unit)
 
-        if unit is None:
+        if from_unit is None:
             return Quantity.from_input(
                 value=value, unit=self._default_unit, uncertainty=uncertainty
             )
 
-        if isinstance(unit, str):
-            provided_unit = get_unit(unit)
-        elif isinstance(unit, CompoundUnit):
-            provided_unit = unit
+        if isinstance(from_unit, str):
+            provided_unit = get_unit(from_unit)
+        elif isinstance(from_unit, CompoundUnit):
+            provided_unit = from_unit
         else:
             raise TypeError(
-                f"Se esperaba str o CompoundUnit, se obtuvo {type(unit)}"
+                f"Se esperaba str o CompoundUnit, se obtuvo {type(from_unit)}"
             )
 
         temp_quantity = Quantity.from_input(

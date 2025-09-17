@@ -16,8 +16,31 @@ Numeric = int | float | np.ndarray
 
 @dataclass(frozen=True)
 class Uncertainty(Generic[UncType]):
-    """Representa la incertidumbre de una cantidad.
-    Es una clase inmutable y optimizada con __slots__.
+    """Represents the uncertainty of a quantity.
+
+    The uncertainty is a measure of the precision of a quantity,
+    typically represented by a standard deviation.
+
+    Parameters:
+    ----------
+    std_dev : UncType
+        The standard deviation of the uncertainty.
+
+    Notes:
+    -----
+    The uncertainty is typically represented by a standard deviation.
+    In the context of the measurement system, the uncertainty is used
+    to propagate the uncertainty of a quantity to other quantities.
+
+    Examples:
+    --------
+    >>> from measurekit import units
+    >>> from measurekit.measurement import Quantity
+    >>> from measurekit.measurement.uncertainty import Uncertainty
+    >>> q = Quantity(1.0, units.meter, uncertainty=Uncertainty(0.1))
+    >>> q.uncertainty
+    Uncertainty(std_dev=0.1)
+
     """
 
     __slots__ = ("std_dev",)
@@ -25,30 +48,62 @@ class Uncertainty(Generic[UncType]):
     std_dev: UncType
 
     def __post_init__(self):
-        """Valida los datos después de la inicialización."""
+        """Validates the data after initialization.
+
+        Checks that the standard deviation is not negative and that it is
+        immutable.
+
+        Raises:
+        ValueError: If the standard deviation is negative.
+        """
         if np.any(np.asarray(self.std_dev) < 0):
             raise ValueError("La desviación estándar no puede ser negativa.")
 
-        if isinstance(self.std_dev, np.ndarray):
-            object.__setattr__(self.std_dev, "flags", {"WRITEABLE": False})
+        if (
+            isinstance(self.std_dev, np.ndarray)
+            and self.std_dev.flags.writeable
+        ):
+            self.std_dev.flags.writeable = False
 
     def __repr__(self) -> str:
-        """Representación legible de la incertidumbre."""
+        """Readable representation of the uncertainty.
+
+        Returns a string with the standard deviation of the uncertainty.
+
+        Notes:
+        -----
+        The string is formatted as "Uncertainty(std_dev=<std_dev>)" where
+        <std_dev> is the standard deviation of the uncertainty.
+
+        Examples:
+        --------
+        >>> uncertainty = Uncertainty(0.1)
+        >>> repr(uncertainty)
+        'Uncertainty(std_dev=0.1)'
+        """
         return f"Uncertainty(std_dev={self.std_dev})"
 
     def add(self, other: Uncertainty[UncType]) -> Uncertainty[UncType]:
-        """Calcula la incertidumbre de una suma/resta.
+        """Calculate the uncertainty of a sum or difference.
 
-        Para z = x ± y, las incertidumbres absolutas (δx, δy) se suman
-        en cuadratura, asumiendo que los errores no están correlacionados.
+        For z = x ± y, the absolute uncertainties (δx, δy) are added in
+        quadrature, assuming that the errors are not correlated.
 
-        Fórmula: δz = sqrt( (δx)² + (δy)² )
+        Formula: δz = sqrt( (δx)² + (δy)² )
+
+        Parameters:
+        ----------
+        other : Uncertainty[UncType]
+            The uncertainty of the other value.
+
+        Returns:
+        -------
+        Uncertainty[UncType]
+            The uncertainty of the result.
         """
         new_std_dev = (self.std_dev**2 + other.std_dev**2) ** 0.5
         return Uncertainty(new_std_dev)
 
-    # 1. Si CUALQUIER valor (`val1`, `val2`, `result_value`) o incertidumbre
-    # (`self` o `other`) es un array, el resultado es un `Uncertainty[NDArray]`.
     @overload
     def propagate_mul_div(
         self: Uncertainty[NDArray[Any]],
@@ -78,8 +133,6 @@ class Uncertainty(Generic[UncType]):
         self, other: Any, val1: Any, val2: Any, result_value: NDArray[Any]
     ) -> Uncertainty[NDArray[Any]]: ...
 
-    # 2. Solo si TODOS los valores e incertidumbres son escalares,
-    # el resultado es un `Uncertainty[float]`.
     @overload
     def propagate_mul_div(
         self,
@@ -93,7 +146,6 @@ class Uncertainty(Generic[UncType]):
         self, other: Any, val1: Any, val2: Any, result_value: Any
     ) -> Any:
         """Calcula la incertidumbre de una multiplicación/división."""
-        # La implementación no necesita cambiar, su lógica ya es correcta.
         if np.any(np.asarray(val1) == 0) or np.any(np.asarray(val2) == 0):
             if isinstance(result_value, np.ndarray):
                 return Uncertainty(np.zeros_like(result_value, dtype=float))
