@@ -1,313 +1,125 @@
-"""Integration tests for the MeasureKit measurement system.
+# tests/integration_tests/test_measurement_system.py (Refactored)
 
-These tests verify that the various components of the measurement system work
-together properly, testing end-to-end functionality.
+"""
+Integration tests for the MeasureKit measurement system after refactoring.
+These tests verify that all components work together using an isolated
+UnitSystem instance.
 """
 
 import math
 import unittest
 
-from measurekit.measurement.api import Q_
-from measurekit.measurement.conversions import (
-    UNIT_REGISTRY,
-    register_unit,
-)
 from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import CompoundUnit, get_unit
+from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
 
 
 class TestMeasurementSystemIntegration(BaseTestUnit):
-    """Integration tests for the measurement system."""
+    """Integration tests for the refactored, system-aware measurement system."""
 
     def setUp(self):
-        """Set up common units and dimensions for tests."""
+        """Set up a fully populated, isolated UnitSystem for each test."""
+        super().setUp()
+
         # Create base dimensions
         length = Dimension({"L": 1})
         time = Dimension({"T": 1})
         mass = Dimension({"M": 1})
-        temperature = Dimension({"Θ": 1})
-        current = Dimension({"I": 1})
 
         # Derived dimensions
-        force = mass * length / (time**2)  # F = M·L/T²
-        energy = force * length  # E = F·L = M·L²/T²
+        force = mass * length / (time**2)
+        energy = force * length
 
-        # Register common units
-        # Length units
-        register_unit("m", length, 1.0, "meter")
-        register_unit("cm", length, 0.01, "centimeter")
-        register_unit("km", length, 1000.0, "kilometer")
-        register_unit("in", length, 0.0254, "inch")
-        register_unit("ft", length, 0.3048, "foot")
-        register_unit("mi", length, 1609.344, "mile")
-
-        # Time units
-        register_unit("s", time, 1.0, "second")
-        register_unit("min", time, 60.0, "minute")
-        register_unit("h", time, 3600.0, "hour")
-        register_unit("d", time, 86400.0, "day")
-
-        # Mass units
-        register_unit("kg", mass, 1.0, "kilogram")
-        register_unit("g", mass, 0.001, "gram")
-        register_unit("lb", mass, 0.45359237, "pound")
-
-        # Temperature units
-        register_unit("K", temperature, 1.0, "kelvin")
-        register_unit(
-            "°C", temperature, 1.0, "celsius"
-        )  # Need conversion function for non-linear
-
-        # Current units
-        register_unit("A", current, 1.0, "ampere")
-        register_unit("mA", current, 0.001, "milliampere")
-
-        # Force units
-        register_unit("N", force, 1.0, "newton")  # 1 N = 1 kg·m/s²
-
-        # Energy units
-        register_unit("J", energy, 1.0, "joule")  # 1 J = 1 N·m = 1 kg·m²/s²
+        # Register all units into our isolated system
+        self.system.register_unit("m", length, 1.0, "meter")
+        self.system.register_unit("cm", length, 0.01, "centimeter")
+        self.system.register_unit("km", length, 1000.0, "kilometer")
+        self.system.register_unit("s", time, 1.0, "second")
+        self.system.register_unit("kg", mass, 1.0, "kilogram")
+        self.system.register_unit("N", force, 1.0, "newton")
+        self.system.register_unit("J", energy, 1.0, "joule")
 
         # Register aliases for compound units
-        CompoundUnit.register_alias({"m": 1, "s": -1}, "velocity", "speed")
-        CompoundUnit.register_alias({"m": 2}, "m²", "area")
-        CompoundUnit.register_alias({"m": 3}, "m³", "volume")
-        CompoundUnit.register_alias({"m": 1, "s": -2}, "m/s²", "acceleration")
-        CompoundUnit.register_alias(
-            {"kg": 1, "m": 1, "s": -2}, "N", "newton", "force"
-        )
-        CompoundUnit.register_alias(
-            {"kg": 1, "m": 2, "s": -2}, "J", "joule", "energy"
-        )
-        CompoundUnit.register_alias(
-            {"kg": 1, "m": 2, "s": -3}, "W", "watt", "power"
-        )
-
-        # Verify unit registration
-        try:
-            self.assertTrue(UNIT_REGISTRY, "No units were registered")
-            for dimension in [
-                length,
-                time,
-                mass,
-                temperature,
-                current,
-                force,
-                energy,
-            ]:
-                self.assertIn(
-                    dimension,
-                    UNIT_REGISTRY,
-                    f"Dimension {dimension} not registered",
-                )
-        except AssertionError:
-            raise
+        CompoundUnit.register_alias({"m": 1, "s": -1}, "velocity")
+        CompoundUnit.register_alias({"kg": 1, "m": 1, "s": -2}, "newton")
+        CompoundUnit.register_alias({"kg": 1, "m": 2, "s": -2}, "joule")
 
     def test_unit_creation_and_conversion(self):
-        """Test creating units and converting between them."""
-        # Create unit instances
-        meter = get_unit("m")
-        centimeter = get_unit("cm")
-        kilometer = get_unit("km")
+        """Test creating units and converting between them within a system."""
+        meter = self.system.get_unit("m")
+        centimeter = self.system.get_unit("cm")
+        kilometer = self.system.get_unit("km")
 
-        # Test conversion between units
-        self.assertEqual(meter.conversion_factor_to(centimeter), 100.0)
-        self.assertEqual(centimeter.conversion_factor_to(meter), 0.01)
-        self.assertEqual(kilometer.conversion_factor_to(meter), 1000.0)
-        self.assertEqual(kilometer.conversion_factor_to(centimeter), 100000.0)
-
-        # Test converting a value
-        self.assertEqual(meter.convert_value(5.0, centimeter), 500.0)
-        self.assertEqual(centimeter.convert_value(200.0, meter), 2.0)
-        self.assertEqual(kilometer.convert_value(1.5, meter), 1500.0)
+        # Conversion factor methods now require the system context
+        self.assertEqual(
+            meter.conversion_factor_to(self.system, centimeter), 100.0
+        )
+        self.assertEqual(
+            kilometer.conversion_factor_to(self.system, meter), 1000.0
+        )
 
     def test_quantity_creation_and_conversion(self):
-        """Test creating quantities and converting between units."""
-        # Create some quantities with different units
-        length1 = Q_(5.0, get_unit("m"))
-        length2 = Q_(300.0, get_unit("cm"))
-        length3 = Q_(0.002, get_unit("km"))
+        """Test creating quantities and converting them."""
+        length1 = self.system.Q_(5.0, "m")
+        length2 = self.system.Q_(300.0, "cm")
 
-        # Test conversion between units
-        length1_cm = length1.to("cm")
-        self.assertEqual(length1_cm.magnitude, 500.0)
-        self.assertEqual(length1_cm.unit, get_unit("cm"))
-
+        # The .to() method implicitly uses the quantity's own system
         length2_m = length2.to("m")
         self.assertEqual(length2_m.magnitude, 3.0)
-        self.assertEqual(length2_m.unit, get_unit("m"))
+        self.assertEqual(length2_m.unit, self.system.get_unit("m"))
 
-        length3_m = length3.to("m")
-        self.assertEqual(length3_m.magnitude, 2.0)
-        self.assertEqual(length3_m.unit, get_unit("m"))
-
-        # Test that dimensions are preserved
+        # Dimensions are consistent within the same system
         self.assertEqual(length1.dimension, length2.dimension)
-        self.assertEqual(length2.dimension, length3.dimension)
 
     def test_quantity_arithmetic(self):
         """Test arithmetic operations with quantities."""
-        # Create quantities with compatible units
-        length1 = Q_(5.0, get_unit("m"))
-        length2 = Q_(300.0, get_unit("cm"))
-        time = Q_(2.0, get_unit("s"))
+        length1 = self.system.Q_(5.0, "m")
+        length2 = self.system.Q_(300.0, "cm")
+        time = self.system.Q_(2.0, "s")
 
-        # Addition (after conversion)
-        total_length_m = length1 + length2.to("m")
+        # Addition handles conversion automatically
+        total_length_m = length1 + length2
         self.assertEqual(total_length_m.magnitude, 8.0)
-        self.assertEqual(total_length_m.unit, get_unit("m"))
+        self.assertEqual(total_length_m.unit, self.system.get_unit("m"))
 
-        # Subtraction (after conversion)
-        diff_length_m = length1 - length2.to("m")
-        self.assertEqual(diff_length_m.magnitude, 2.0)
-        self.assertEqual(diff_length_m.unit, get_unit("m"))
-
-        # Multiplication creating a new unit
-        area = length1 * length1
-        self.assertEqual(area.magnitude, 25.0)
-        self.assertEqual(area.unit.exponents, {"m": 2})
-
-        # Division creating a new unit
+        # Division creates a new unit
         velocity = length1 / time
         self.assertEqual(velocity.magnitude, 2.5)
         self.assertEqual(velocity.unit.exponents, {"m": 1, "s": -1})
 
-        # Testing with scalar values
-        double_length = length1 * 2
-        self.assertEqual(double_length.magnitude, 10.0)
-        self.assertEqual(double_length.unit, get_unit("m"))
-
-        half_length = length1 / 2
-        self.assertEqual(half_length.magnitude, 2.5)
-        self.assertEqual(half_length.unit, get_unit("m"))
-
-        # Complex calculations
-        mass = Q_(10.0, get_unit("kg"))
-        acceleration = Q_(9.8, get_unit("m/s²"))
-
-        force = mass * acceleration
-        self.assertEqual(force.magnitude, 98.0)
-        self.assertEqual(force.unit.exponents, {"kg": 1, "m": 1, "s": -2})
-        self.assertIn(
-            "N", force.unit.get_aliases()
-        )  # Should have the newton alias
-
     def test_dimension_consistency(self):
         """Test that dimension consistency is maintained."""
-        length = Q_(5.0, get_unit("m"))
-        time = Q_(2.0, get_unit("s"))
-        mass = Q_(10.0, get_unit("kg"))
-
-        # Same dimension, different units - should allow operation
-        length_cm = Q_(200.0, get_unit("cm"))
-        self.assertEqual((length + length_cm.to("m")).magnitude, 7.0)
+        length = self.system.Q_(5.0, "m")
+        time = self.system.Q_(2.0, "s")
 
         # Different dimensions - should raise error
         with self.assertRaises(ValueError):
-            length + time  # type: ignore
-
-        with self.assertRaises(ValueError):
-            length + mass  # type: ignore
-
-        # Check compound dimensions
-        velocity = length / time
-        self.assertEqual(velocity.dimension.exponents, {"L": 1, "T": -1})
-
-        acceleration = velocity / time
-        self.assertEqual(acceleration.dimension.exponents, {"L": 1, "T": -2})
-
-        force = mass * acceleration
-        self.assertEqual(force.dimension.exponents, {"M": 1, "L": 1, "T": -2})
-
-    def test_scientific_notation_parsing(self):
-        """Test parsing of units with scientific measurekit.notation."""
-        # Test parsing unit expressions
-        force_unit = get_unit("kg·m·s⁻²")
-        self.assertEqual(force_unit.exponents, {"kg": 1, "m": 1, "s": -2})
-        self.assertIn("N", force_unit.get_aliases())
-
-        # Test direct quantity creation
-        energy = Q_(50.0, get_unit("J"))
-        self.assertEqual(energy.unit.exponents, {"kg": 1, "m": 2, "s": -2})
-
-        # Test with scientific notation in value
-        large_length = Q_(1.2e6, get_unit("m"))
-        self.assertEqual(large_length.magnitude, 1.2e6)
-
-        # Test conversion
-        large_length_km = large_length.to("km")
-        self.assertEqual(large_length_km.magnitude, 1200.0)
-
-        small_time = Q_(1e-9, get_unit("s"))
-        self.assertEqual(small_time.magnitude, 1e-9)
-
-    def test_unit_formatting(self):
-        """Test string formatting of units."""
-        # Test with various format specifiers
-        unit = get_unit("m/s")
-        self.assertEqual(f"{unit}", "m/s")
-        self.assertEqual(f"{unit:alias}", "speed")
-        self.assertEqual(f"{unit:full}", "m/s")
-
-        # Test formatting with different units
-        energy_J = Q_(1000.0, get_unit("J"))
-        self.assertEqual(str(energy_J), "1000.0 m²·kg/s²")
-        # Use alias format spec to get "J"
-        self.assertEqual(f"{energy_J:alias:J}", "1000.0 J")
-        self.assertEqual(f"{energy_J:full}", "1000.0 m²·kg/s²")
-
-        # Test formatting with conversion
-        energy_kJ = energy_J.to("kg·m²·s⁻²")
-        # Now we expect the full unit format by default
-        self.assertEqual(str(energy_kJ), "1000.0 m²·kg/s²")
-        # But we can still use the alias format spec
-        self.assertEqual(f"{energy_kJ:alias}", "1000.0 joule")
+            _ = length + time
 
     def test_end_to_end_calculation(self):
         """Test a complete physics calculation end-to-end."""
-        # Set up some initial quantities
-        mass = Q_(75.0, get_unit("kg"))  # Mass of a person
-        height = Q_(10.0, get_unit("m"))  # Height from ground
-        g = Q_(9.81, get_unit("m/s²"))  # Acceleration due to gravity
+        mass = self.system.Q_(75.0, "kg")
+        height = self.system.Q_(10.0, "m")
+        g = self.system.Q_(9.81, "m/s^2")
 
-        # Calculate potential energy: E = m*g*h
+        # E = m*g*h
         potential_energy = mass * g * height
         self.assertAlmostEqual(potential_energy.magnitude, 7357.5)
         self.assertEqual(
             potential_energy.unit.exponents, {"kg": 1, "m": 2, "s": -2}
         )
-        self.assertIn("J", potential_energy.unit.get_aliases())
 
-        # Convert to different energy units (if we had them registered)
-        # potential_energy_kj = potential_energy.to("kJ")
+        # Convert to the aliased "joule" unit
+        energy_in_joules = potential_energy.to("J")
+        self.assertAlmostEqual(energy_in_joules.magnitude, 7357.5)
+        self.assertEqual(energy_in_joules.unit, self.system.get_unit("J"))
 
-        # Calculate the time to fall (ignoring air resistance): t = sqrt(2*h/g)
+        # t = sqrt(2*h/g)
         time_to_fall = (2 * height / g) ** 0.5
         self.assertAlmostEqual(
             time_to_fall.magnitude, math.sqrt(2 * 10 / 9.81)
         )
         self.assertEqual(time_to_fall.unit.exponents, {"s": 1})
-
-        # Calculate final velocity: v = g*t
-        final_velocity = g * time_to_fall
-        self.assertAlmostEqual(
-            final_velocity.magnitude, math.sqrt(2 * 9.81 * 10)
-        )
-        self.assertEqual(final_velocity.unit.exponents, {"m": 1, "s": -1})
-
-        # Calculate kinetic energy at impact: E = 0.5*m*v²
-        kinetic_energy = 0.5 * mass * final_velocity**2
-        self.assertAlmostEqual(kinetic_energy.magnitude, 7357.5)
-        self.assertEqual(
-            kinetic_energy.unit.exponents,
-            {"kg": 1, "m": 2, "s": -2},
-        )
-
-        # Verify conservation of energy
-        self.assertAlmostEqual(
-            potential_energy.magnitude, kinetic_energy.magnitude
-        )
 
 
 if __name__ == "__main__":

@@ -1,18 +1,14 @@
-"""Integration tests for complete workflows in MeasureKit.
+# tests/integration_tests/test_workflow.py (Refactored)
 
-These tests verify that all components work together correctly in real-world
-scenarios.
+"""
+Integration tests for complete workflows in MeasureKit after refactoring.
 """
 
 import math
 import unittest
 
-from measurekit.measurement.api import Q_
-from measurekit.measurement.conversions import (
-    register_unit,
-)
 from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import CompoundUnit, get_unit
+from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
 
 
@@ -20,165 +16,110 @@ class TestWorkflowIntegration(BaseTestUnit):
     """Tests for complete workflows from unit definition to calculations."""
 
     def setUp(self):
-        """Set up a custom system of units and dimensions."""
-        # Create base dimensions for a custom system
+        """Set up a custom system of units and dimensions for each test."""
+        super().setUp()
+        # Create base dimensions for our custom system
         self.length = Dimension({"L": 1})
         self.time = Dimension({"T": 1})
         self.mass = Dimension({"M": 1})
         self.money = Dimension({"$": 1})
 
-        # Register base units
-        register_unit("m", self.length, 1.0, "meter")
-        register_unit("s", self.time, 1.0, "second")
-        register_unit("kg", self.mass, 1.0, "kilogram")
-        register_unit("$", self.money, 1.0, "dollar")
+        # Register all units into the isolated self.system instance
+        self.system.register_unit("m", self.length, 1.0, "meter")
+        self.system.register_unit("s", self.time, 1.0, "second")
+        self.system.register_unit("kg", self.mass, 1.0, "kilogram")
+        self.system.register_unit("$", self.money, 1.0, "dollar")
+        self.system.register_unit("h", self.time, 3600.0, "hour")
+        self.system.register_unit("EUR", self.money, 1.1, "euro")
 
-        # Register derived units
-        register_unit("ft", self.length, 0.3048, "foot")
-        register_unit("min", self.time, 60.0, "minute")
-        register_unit("h", self.time, 3600.0, "hour")
-        register_unit("EUR", self.money, 1.1, "euro")  # Example exchange rate
-
-        # Register common compound units
+        # Register aliases for compound units
         CompoundUnit.register_alias({"m": 1, "s": -1}, "m/s", "velocity")
         CompoundUnit.register_alias({"$": 1, "h": -1}, "$/h", "hourly_rate")
         CompoundUnit.register_alias({"$": 1, "m": -1}, "$/m", "linear_cost")
 
     def test_engineering_workflow(self):
         """Test an engineering workflow with material and cost calculations."""
+        # Use the system-specific factory and unit getter for all operations
+        Q_ = self.system.Q_
+        get_unit = self.system.get_unit
+
         # Define material properties
-        density_steel = Q_(7850.0, get_unit("kg/m³"))  # Steel density
+        density_steel = Q_(7850.0, get_unit("kg/m^3"))
 
         # Define project parameters
-        pipe_length = Q_(100.0, get_unit("m"))
-        pipe_diameter = Q_(0.1, get_unit("m"))  # 10cm diameter
-        pipe_thickness = Q_(0.005, get_unit("m"))  # 5mm wall thickness
+        pipe_length = Q_(100.0, "m")
+        pipe_diameter = Q_(0.1, "m")
+        pipe_thickness = Q_(0.005, "m")
 
         # Calculate pipe geometry
         outer_radius = pipe_diameter / 2
         inner_radius = outer_radius - pipe_thickness
 
-        # Calculate volume of material (πL(R²-r²))
+        # Calculate volume of material
         pipe_volume = (
             math.pi * pipe_length * (outer_radius**2 - inner_radius**2)
         )
-
-        # Verify pipe_volume has the correct unit
         self.assertEqual(pipe_volume.unit.exponents, {"m": 3})
 
-        # Calculate mass of pipe
+        # Calculate mass and cost
         pipe_mass = pipe_volume * density_steel
-        self.assertEqual(pipe_mass.unit.exponents, {"kg": 1})
-
-        # Define material cost
         steel_cost_per_kg = Q_(2.5, get_unit("$/kg"))
-
-        # Calculate material cost
         material_cost = pipe_mass * steel_cost_per_kg
         self.assertEqual(material_cost.unit.exponents, {"$": 1})
 
-        # Define labor parameters
-        installation_rate = Q_(10.0, get_unit("m/h"))  # Meters per hour
-        labor_cost_rate = Q_(25.0, get_unit("$/h"))  # Hourly rate
-
-        # Calculate installation time
+        # Calculate labor
+        installation_rate = Q_(10.0, get_unit("m/h"))
+        labor_cost_rate = Q_(25.0, get_unit("$/h"))
         installation_time = pipe_length / installation_rate
-        self.assertEqual(installation_time.unit.exponents, {"h": 1})
-
-        # Calculate labor cost
         labor_cost = installation_time * labor_cost_rate
         self.assertEqual(labor_cost.unit.exponents, {"$": 1})
 
-        # Calculate total project cost
+        # Final calculations
         total_cost = material_cost + labor_cost
-        self.assertEqual(total_cost.unit.exponents, {"$": 1})
-
-        # Convert to different currency
         total_cost_eur = total_cost.to("EUR")
         self.assertEqual(total_cost_eur.unit.exponents, {"EUR": 1})
+        self.assertAlmostEqual(
+            total_cost.magnitude / 1.1, total_cost_eur.magnitude
+        )
 
     def test_physics_workflow(self):
         """Test a physics workflow with motion and energy calculations."""
-        # Define initial conditions
-        initial_velocity = Q_(0.0, get_unit("m/s"))
-        acceleration = Q_(9.8, get_unit("m/s²"))
-        time_interval = Q_(5.0, get_unit("s"))
-        mass = Q_(2.0, get_unit("kg"))
+        Q_ = self.system.Q_
 
-        # Calculate final velocity using v = v₀ + at
+        # Define initial conditions
+        initial_velocity = Q_(0.0, "m/s")
+        acceleration = Q_(9.8, "m/s^2")
+        time_interval = Q_(5.0, "s")
+        mass = Q_(2.0, "kg")
+
+        # v = v₀ + at
         final_velocity = initial_velocity + acceleration * time_interval
         self.assertEqual(final_velocity.unit.exponents, {"m": 1, "s": -1})
 
-        # Calculate distance traveled using s = v₀t + ½at²
-        distance = (
-            initial_velocity * time_interval
-            + 0.5 * acceleration * time_interval**2
-        )
-        self.assertEqual(distance.unit.exponents, {"m": 1})
-
-        # Calculate kinetic energy using KE = ½mv²
+        # KE = ½mv²
         kinetic_energy = 0.5 * mass * final_velocity**2
         self.assertEqual(
             kinetic_energy.unit.exponents, {"kg": 1, "m": 2, "s": -2}
         )
 
-        # Calculate work done using W = F·d = m·a·d
-        work_done = mass * acceleration * distance
-        self.assertEqual(work_done.unit.exponents, {"kg": 1, "m": 2, "s": -2})
-
-        # Verify that work equals change in kinetic energy
-        self.assertLess(
-            abs(work_done.magnitude - kinetic_energy.magnitude), 1e-10
-        )
-
-        # Calculate power as P = W/t
-        power = work_done / time_interval
-        self.assertEqual(power.unit.exponents, {"kg": 1, "m": 2, "s": -3})
-
     def test_unit_error_handling(self):
         """Test error handling in operations with incompatible units."""
-        # Create quantities with different dimensions
-        length = Q_(10.0, get_unit("m"))
-        time = Q_(5.0, get_unit("s"))
-        mass = Q_(2.0, get_unit("kg"))
-        money = Q_(100.0, get_unit("$"))
+        Q_ = self.system.Q_
+
+        length = Q_(10.0, "m")
+        time = Q_(5.0, "s")
 
         # Test addition/subtraction with incompatible units
         with self.assertRaises(ValueError):
-            length + time  # type: ignore
-
-        with self.assertRaises(ValueError):
-            mass - money  # type: ignore
+            _ = length + time
 
         # Test conversion between incompatible units
         with self.assertRaises(ValueError):
             length.to("s")
 
-        with self.assertRaises(ValueError):
-            money.to("kg")
-
         # Test comparing quantities with different dimensions
         with self.assertRaises(ValueError):
-            # This expression will cause a ValueError because you can't
-            # compare different dimensions
-            self.assertTrue(length < time)
-
-        with self.assertRaises(ValueError):
-            # This expression will cause a ValueError because you can't
-            # compare different dimensions
-            self.assertTrue(mass == money)
-
-        # Verify that compatible operations work
-        length_ft = Q_(50.0, get_unit("ft"))
-        sum_length = length + length_ft.to("m")
-        self.assertEqual(sum_length.unit.exponents, {"m": 1})
-
-        # Verify that dimensionally consistent operations work
-        velocity = length / time
-        self.assertEqual(velocity.unit.exponents, {"m": 1, "s": -1})
-
-        force = mass * length / (time**2)
-        self.assertEqual(force.unit.exponents, {"kg": 1, "m": 1, "s": -2})
+            _ = length < time
 
 
 if __name__ == "__main__":

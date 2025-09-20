@@ -1,23 +1,24 @@
 import unittest
 
-from measurekit.measurement.conversions import UNIT_DIMENSIONS, UNIT_REGISTRY
-from measurekit.measurement.dimensions import (
-    _DIMENSION_NAME_REGISTRY,
-    Dimension,
-)
-from measurekit.measurement.units import CompoundUnit
+from measurekit.system import UnitSystem
 
 
 class BaseTestUnit(unittest.TestCase):
     def setUp(self):
-        pass
+        """
+        Creates a fresh, isolated UnitSystem instance before each test.
+
+        Any test class that inherits from BaseTestUnit will automatically
+        have a `self.system` attribute available for its tests.
+        """
+        self.system = UnitSystem()
 
     def tearDown(self):
-        """Reset the unit registry after each test."""
-        _DIMENSION_NAME_REGISTRY.clear()
-        UNIT_REGISTRY.clear()
-        UNIT_DIMENSIONS.clear()
-        CompoundUnit._aliases.clear()
-        CompoundUnit._alias_to_exponents.clear()
-        CompoundUnit._cache.clear()
-        Dimension._cache.clear()
+        """
+        This method is no longer needed.
+
+        Because each test gets its own UnitSystem instance, there is no
+        shared global state to clean up. The old system instance is
+        automatically discarded when the test finishes.
+        """
+        pass
