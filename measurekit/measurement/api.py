@@ -1,26 +1,29 @@
 # measurekit/api.py (Versión Definitiva y Simplificada)
 
-from typing import overload
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, overload
 
 from measurekit.measurement.quantity import Quantity, UncType, ValueType
 from measurekit.measurement.units import CompoundUnit, get_unit
 
+if TYPE_CHECKING:
+    from measurekit.system import UnitSystem
+
 
 class _SpecializedQuantityFactory:
-    """Una fábrica callable diseñada para crear Quantities con una unidad
-    predefinida.
-    """
+    """A callable factory for creating Quantities with a predefined default unit."""
 
-    __slots__ = ("_default_unit",)
+    __slots__ = ("_default_unit", "_system")
 
-    def __init__(self, default_unit: CompoundUnit):
+    def __init__(self, default_unit: CompoundUnit, system: UnitSystem):
         self._default_unit = default_unit
+        self._system = system
 
     @overload
     def __call__(  # type: ignore
         self,
-        value: ValueType
-        | Quantity = 1,  # <-- El valor por defecto se incluye aquí
+        value: ValueType | Quantity = 1,
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity[ValueType, UncType]: ...
@@ -31,33 +34,27 @@ class _SpecializedQuantityFactory:
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
-        if isinstance(value, Quantity):
-            if from_unit is not None:
-                raise ValueError(
-                    "No se puede proporcionar una unidad cuando "
-                    "el valor ya es una Quantity."
-                )
-            return value.to(self._default_unit)
+        from measurekit.measurement.quantity import Quantity
 
-        if from_unit is None:
-            return Quantity.from_input(
-                value=value, unit=self._default_unit, uncertainty=uncertainty
+        # Create a temporary quantity if a `from_unit` is provided for conversion
+        if from_unit:
+            temp_unit = (
+                get_unit(from_unit)
+                if isinstance(from_unit, str)
+                else from_unit
             )
-
-        if isinstance(from_unit, str):
-            provided_unit = get_unit(from_unit)
-        elif isinstance(from_unit, CompoundUnit):
-            provided_unit = from_unit
-        else:
-            raise TypeError(
-                f"Se esperaba str o CompoundUnit, se obtuvo {type(from_unit)}"
+            temp_q = Quantity.from_input(
+                value, temp_unit, self._system, uncertainty
             )
+            # Convert it to the factory's default unit
+            return temp_q.to(self._default_unit)
 
-        temp_quantity = Quantity.from_input(
-            value=value, unit=provided_unit, uncertainty=uncertainty
+        return Quantity.from_input(
+            value=value,
+            unit=self._default_unit,
+            system=self._system,
+            uncertainty=uncertainty,
         )
-
-        return temp_quantity.to(self._default_unit)
 
     def __repr__(self) -> str:
         return f"<Quantity Factory for unit='{self._default_unit}'>"
@@ -72,7 +69,7 @@ class _QuantityFactory:
     def __call__(  # type: ignore
         self,
         value: ValueType,
-        unit: str | CompoundUnit,
+        unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity[ValueType, UncType]: ...
 
@@ -81,31 +78,40 @@ class _QuantityFactory:
         value: ValueType = 1,
         unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
-    ) -> Quantity[ValueType, UncType]:
+    ) -> "Quantity":
+        # Dynamic import to avoid cycles
+        from measurekit import default_system
+        from measurekit.measurement.quantity import Quantity
+
         if unit is None:
-            raise ValueError(
-                "La unidad debe ser especificada para el constructor genérico."
-            )
+            unit = default_system.get_unit("dimensionless")
+
         if isinstance(unit, str):
+            # This now correctly uses the default system's get_unit method
             unit = get_unit(unit)
+
         return Quantity.from_input(
-            value=value, unit=unit, uncertainty=uncertainty
+            value=value,
+            unit=unit,
+            system=default_system,
+            uncertainty=uncertainty,
         )
 
     def __getitem__(
         self, unit_expression: str | CompoundUnit
     ) -> _SpecializedQuantityFactory:
+        from measurekit import default_system
+
         if isinstance(unit_expression, str):
             default_unit = get_unit(unit_expression)
-        elif isinstance(unit_expression, CompoundUnit):
-            default_unit = unit_expression
         else:
-            raise TypeError(
-                f"Se esperaba str o CompoundUnit, se obtuvo {type(unit_expression)}"
-            )
+            default_unit = unit_expression
+
         if default_unit in self._cache:
             return self._cache[default_unit]
-        factory = _SpecializedQuantityFactory(default_unit)
+
+        # FIX 3: Pass the system to the specialized factory when creating it.
+        factory = _SpecializedQuantityFactory(default_unit, default_system)
         self._cache[default_unit] = factory
         return factory
 
