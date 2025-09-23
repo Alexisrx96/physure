@@ -1,10 +1,9 @@
-"""Exceptions for MeasureKit.
+# measurekit/exceptions.py
+"""This module defines custom exception types for the measurekit library.
 
-.. autoclass:: MeasureKitError
-.. autoclass:: IncompatibleUnitsError
-.. autoclass:: ConversionError
-.. autoclass:: UnitNotFoundError
-
+It provides a clear hierarchy of exceptions, making it easier to catch
+and handle specific errors that may occur during unit conversions,
+calculations, or definitions.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from measurekit.measurement.quantity import Quantity
     from measurekit.measurement.units import CompoundUnit
 
 
