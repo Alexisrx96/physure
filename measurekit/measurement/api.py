@@ -1,4 +1,10 @@
-# measurekit/api.py (Versión Definitiva y Simplificada)
+# measurekit/measurement/api.py
+"""This module provides the primary user-facing API for creating quantities.
+
+It defines the `Q_` object, a versatile factory that allows for the easy
+creation of `Quantity` instances in a variety of ways, including direct
+instantiation and subscripting for specialized, unit-specific factories.
+"""
 
 from __future__ import annotations
 
@@ -61,7 +67,7 @@ class _SpecializedQuantityFactory:
 
 
 class _QuantityFactory:
-    """La fachada principal de la librería."""
+    """The main facade for the library."""
 
     _cache: dict[CompoundUnit, _SpecializedQuantityFactory] = {}
 
@@ -78,7 +84,7 @@ class _QuantityFactory:
         value: ValueType = 1,
         unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
-    ) -> "Quantity":
+    ) -> Quantity:
         # Dynamic import to avoid cycles
         from measurekit import default_system
         from measurekit.measurement.quantity import Quantity
@@ -110,7 +116,6 @@ class _QuantityFactory:
         if default_unit in self._cache:
             return self._cache[default_unit]
 
-        # FIX 3: Pass the system to the specialized factory when creating it.
         factory = _SpecializedQuantityFactory(default_unit, default_system)
         self._cache[default_unit] = factory
         return factory

@@ -1,9 +1,10 @@
-# measurekit/measurement/conversions.py (Refactored)
+# measurekit/measurement/conversions.py
 """This module defines the data structure for a unit's definition.
 
-In the refactored architecture, this file is stateless. All registries and
-functions that manage the unit system's state have been moved to the
-`measurekit.system.UnitSystem` class.
+It contains the `UnitDefinition` class, which serves as a stateless
+container for the properties of a single unit. This class is fundamental
+to the unit system, providing the core information needed for conversions
+and dimensional analysis.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class UnitDefinition:
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
     ):
+        """Ensures that each unit symbol corresponds to a single instance."""
         key = symbol
         if key in cls._instances:
             # Update properties if the unit is being redefined.
@@ -72,7 +74,12 @@ class UnitDefinition:
         self.allow_prefixes = allow_prefixes
 
     def __str__(self) -> str:
+        """Provides a simple string representation of the unit definition."""
         return f"UnitDefinition({self.symbol}, {self.dimension}, {self.factor_to_base})"
 
     def __repr__(self) -> str:
-        return f"UnitDefinition({self.symbol}, {self.dimension}, {self.factor_to_base}, {self.name})"
+        """Provides a detailed developer representation of the unit definition."""
+        return (
+            f"UnitDefinition({self.symbol}, {self.dimension}, "
+            f"{self.factor_to_base}, {self.name})"
+        )
