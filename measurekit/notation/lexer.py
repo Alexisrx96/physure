@@ -1,6 +1,5 @@
 # notation/lexer.py
-"""Provides a lexical analyzer for various notations used in science and
-engineering.
+"""Lexical analyzer for scientific notations.
 
 It provides some common notations for physical quantities and units, such as
 superscript and subscript notations for exponents and units.
