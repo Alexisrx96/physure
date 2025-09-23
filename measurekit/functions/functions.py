@@ -1,3 +1,10 @@
+"""Unit-aware mathematical functions.
+
+It leverages the sympy library for symbolic mathematics, allowing for
+the creation of functions that understand physical dimensions. This enables
+operations like differentiation while ensuring dimensional consistency.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,6 +24,13 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Function:
+    """Represents a unit-aware mathematical function.
+
+    This class binds a symbolic expression from sympy with the physical
+    dimensions of its parameters and output, allowing for safe and
+    dimensionally-aware calculations.
+    """
+
     parameters: dict[str, Dimension]
     output_dimension: Dimension
     symbolic_func: sp.Expr
@@ -25,6 +39,12 @@ class Function:
     numeric_func: Callable[..., np.ndarray] = field(init=False, repr=False)
 
     def __post_init__(self):
+        """Initializes the numeric version of the function after the dataclass.
+
+        This method is called after the dataclass __init__ method has finished
+        executing. It populates the numeric_func attribute with a callable
+        that can be used to evaluate the function with Quantity arguments.
+        """
         arg_symbols = tuple(self.symbolic_func.free_symbols)
         sorted_symbols = sorted(arg_symbols, key=lambda s: str(s.name))  # type: ignore
         object.__setattr__(
@@ -40,6 +60,13 @@ class Function:
     def __call__(
         self, output_unit: CompoundUnit, **kwargs: Quantity
     ) -> Quantity:
+        """Evaluates the function with the given quantity arguments.
+
+        :param output_unit: The desired unit for the output quantity.
+        :param kwargs: Keyword arguments where keys are parameter names
+                       and values are Quantity objects.
+        :return: A new Quantity object representing the result.
+        """
         if output_unit.dimension(self.system) != self.output_dimension:
             raise ValueError(
                 f"The output unit '{output_unit}' has an incorrect dimension. "
@@ -48,12 +75,9 @@ class Function:
             )
 
         numeric_args = []
-        # Ensure kwargs are processed in the correct order for the numeric function
+        # Ensure kwargs are processed in the correct order
         for name in self.arg_names:
             if name not in kwargs:
-                # This handles the case where a derivative results in a constant (e.g., `v`)
-                # but the user still provides the original arguments (x0, v, t).
-                # We simply ignore the ones that are no longer in the symbolic expression.
                 continue
             quantity = kwargs[name]
             expected_dim = self.parameters[name]
@@ -68,30 +92,31 @@ class Function:
         return self.system.Q_(result_value, output_unit)
 
     def derivative(self, respect_to: str) -> Function:
+        """Computes the symbolic derivative of the function.
+
+        :param respect_to: The name of the parameter to differentiate against.
+        :return: A new Function object representing the derivative.
+        """
         respect_to_sym = sp.Symbol(respect_to)
 
-        # THIS IS THE FIX: The check must be on the original parameters, not the symbols.
         if respect_to not in self.parameters:
             raise ValueError(
-                f"Cannot differentiate with respect to '{respect_to}' because its dimension is unknown."
+                f"Cannot differentiate with respect to '{respect_to}' "
+                "because its dimension is unknown."
             )
 
         derivative_expr = sp.diff(self.symbolic_func, respect_to_sym)
-
-        # The new dimension is always the original output dimension divided by the
-        # dimension of the variable we are differentiating with respect to.
         new_output_dim = self.output_dimension / self.parameters[respect_to]
 
-        # The new function still understands all original parameters, even if
-        # some have been eliminated from the symbolic expression.
         return Function(
-            parameters=self.parameters,  # Keep all original parameter dimensions
+            parameters=self.parameters,
             output_dimension=new_output_dim,
             symbolic_func=derivative_expr,
             system=self.system,
         )
 
     def __repr__(self) -> str:
+        """Provides a detailed developer representation of the function."""
         param_str = ", ".join(
             f"{name}: {dim.analytical_representation}"
             for name, dim in self.parameters.items()
@@ -107,11 +132,6 @@ class Function:
 
         Returns a string showing the function's symbolic expression and
         the names and dimensions of its parameters.
-
-        Examples:
-        >>> f = Function(sp.sin(x), params={"x": Dimension("length")})
-        >>> str(f)
-        "sin(x) with parameters {x: length}"
         """
         param_str = ", ".join(
             f"{name}: {dim.analytical_representation}"
