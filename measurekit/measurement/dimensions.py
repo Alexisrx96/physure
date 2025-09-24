@@ -1,21 +1,14 @@
-# measurekit/measurement/dimensions.py
-"""This module defines the Dimension class and related utility functions.
-
-A Dimension represents a physical dimension as a mapping of base symbols
-(e.g., L, M, T) to their integer exponents. It provides methods for
-dimensional analysis through arithmetic operations. The module also includes
-a registry for naming dimensions and functions for parsing dimension strings.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import ClassVar, cast
 
+from measurekit.notation.base_entity import BaseExponentEntity
 from measurekit.notation.lexer import generate_tokens, to_superscript
 from measurekit.notation.parsers import (
     NotationParser,
 )
+from measurekit.notation.protocols import ExponentEntityProtocol
 from measurekit.notation.typing import ExponentsDict
 
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
@@ -48,7 +41,7 @@ def register_dimension(dimension: Dimension, name: str):
 
 
 @dataclass(frozen=True)
-class Dimension:
+class Dimension(BaseExponentEntity):
     """Represents a physical dimension as a mapping of base symbols (e.g., L, M, T) to their exponents.
 
     Attributes
@@ -65,12 +58,6 @@ class Dimension:
 
     Methods
     -------
-    __mul__(other: Dimension) -> Dimension
-        Multiplies two Dimension objects.
-    __truediv__(other: Dimension) -> Dimension
-        Divides two Dimension objects.
-    __pow__(power: float) -> Dimension
-        Raises the Dimension to a power.
     is_dimensionless() -> bool
         Checks if the dimension is dimensionless.
     set_base_dimensions(bases: list[str])
@@ -81,10 +68,8 @@ class Dimension:
 
     _cache: ClassVar[dict[tuple, Dimension]] = {}
     _base_dimensions: ClassVar[list[str]] = []
-    exponents: ExponentsDict
 
     __slots__ = (
-        "exponents",
         "_analytical_representation",
         "_display_exponents",
     )
@@ -95,8 +80,7 @@ class Dimension:
         if key in cls._cache:
             return cls._cache[key]
 
-        instance = super().__new__(cls)
-        object.__setattr__(instance, "exponents", normalized)
+        instance = super().__new__(cls, exponents)
 
         # Pre-calculate the analytical representation
         if not normalized:
@@ -121,38 +105,11 @@ class Dimension:
         )
         object.__setattr__(instance, "_display_exponents", display_exp_dict)
 
-        cls._cache[key] = instance
-        return instance
-
-    def __init__(self, exponents: ExponentsDict) -> None:
-        pass
-
-    def __mul__(self, other: Dimension) -> Dimension:
-        new_exponents = {**self.exponents}
-        for key, exp in other.exponents.items():
-            new_exponents[key] = new_exponents.get(key, 0) + exp
-        return Dimension(new_exponents)
-
-    def __truediv__(self, other: Dimension) -> Dimension:
-        new_exponents = {**self.exponents}
-        for key, exp in other.exponents.items():
-            new_exponents[key] = new_exponents.get(key, 0) - exp
-        return Dimension(new_exponents)
-
-    def __pow__(self, power: float) -> Dimension:
-        return Dimension({k: v * power for k, v in self.exponents.items()})
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Dimension):
-            return NotImplemented
-        return self.exponents == other.exponents
+        cls._cache[key] = cast(Dimension, instance)
+        return cast(Dimension, instance)
 
     def __hash__(self) -> int:
-        return hash(tuple(sorted(self.exponents.items())))
-
-    def __rtruediv__(self, other: complex) -> Dimension:
-        """Allows division where a scalar is divided by a Dimension (inverse)."""
-        return Dimension({k: -v for k, v in self.exponents.items()})
+        return super().__hash__()
 
     @property
     def analytical_representation(self) -> str:
@@ -223,5 +180,7 @@ def get_dimension(unit_expression: str) -> Dimension:
         Dimension: The corresponding Dimension object.
     """
     tokens = generate_tokens(unit_expression)
-    parser = NotationParser(tokens, Dimension)
+    parser = NotationParser(
+        tokens, cast(type[ExponentEntityProtocol], Dimension)
+    )
     return cast(Dimension, parser.parse())
