@@ -9,6 +9,7 @@ UnitSystem instance.
 import math
 import unittest
 
+from measurekit.exceptions import IncompatibleUnitsError
 from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
 
@@ -75,7 +76,7 @@ class TestMeasurementSystemIntegration(BaseTestUnit):
         time = self.system.Q_(2.0, "s")
 
         # Different dimensions - should raise error
-        with self.assertRaises(ValueError):
+        with self.assertRaises(IncompatibleUnitsError):
             _ = length + time
 
     def test_end_to_end_calculation(self):
@@ -101,7 +102,7 @@ class TestMeasurementSystemIntegration(BaseTestUnit):
         self.assertAlmostEqual(
             time_to_fall.magnitude, math.sqrt(2 * 10 / 9.81)
         )
-        self.assertEqual(time_to_fall.unit.exponents, {"s": 1})
+        self.assertEqual(time_to_fall.unit.exponents, {"s": 1.0})
 
 
 if __name__ == "__main__":

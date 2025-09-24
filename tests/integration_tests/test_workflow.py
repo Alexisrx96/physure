@@ -7,6 +7,7 @@ Integration tests for complete workflows in MeasureKit after refactoring.
 import math
 import unittest
 
+from measurekit.exceptions import IncompatibleUnitsError
 from measurekit.measurement.dimensions import Dimension
 from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
@@ -110,15 +111,15 @@ class TestWorkflowIntegration(BaseTestUnit):
         time = Q_(5.0, "s")
 
         # Test addition/subtraction with incompatible units
-        with self.assertRaises(ValueError):
+        with self.assertRaises(IncompatibleUnitsError):
             _ = length + time
 
         # Test conversion between incompatible units
-        with self.assertRaises(ValueError):
+        with self.assertRaises(IncompatibleUnitsError):
             length.to("s")
 
         # Test comparing quantities with different dimensions
-        with self.assertRaises(ValueError):
+        with self.assertRaises(IncompatibleUnitsError):
             _ = length < time
 
 

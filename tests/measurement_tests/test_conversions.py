@@ -4,6 +4,7 @@
 
 import unittest
 
+from measurekit.exceptions import IncompatibleUnitsError
 from measurekit.measurement.conversions import UnitDefinition
 from measurekit.measurement.dimensions import Dimension
 from measurekit.measurement.units import CompoundUnit
@@ -104,7 +105,7 @@ class TestCompoundUnitConversion(BaseTestUnit):
         # Test incompatible dimensions
         length = CompoundUnit({"m": 1})
         time = CompoundUnit({"s": 1})
-        with self.assertRaises(ValueError):
+        with self.assertRaises(IncompatibleUnitsError):
             length.conversion_factor_to(self.system, time)
 
 
