@@ -86,27 +86,25 @@ class TestCompoundUnitConversion(BaseTestUnit):
         """Test getting conversion factors between compound units."""
         meter = CompoundUnit({"m": 1})
         centimeter = CompoundUnit({"cm": 1})
-        self.assertEqual(
-            meter.conversion_factor_to(self.system, centimeter), 100.0
-        )
+        self.assertEqual(meter.conversion_factor_to(centimeter), 100.0)
 
         velocity_mps = CompoundUnit({"m": 1, "s": -1})
         velocity_kmph = CompoundUnit({"km": 1, "h": -1})
         self.assertAlmostEqual(
-            velocity_mps.conversion_factor_to(self.system, velocity_kmph), 3.6
+            velocity_mps.conversion_factor_to(velocity_kmph), 3.6
         )
 
         force_newton = CompoundUnit({"kg": 1, "m": 1, "s": -2})
         force_dyne = CompoundUnit({"g": 1, "cm": 1, "s": -2})
         self.assertAlmostEqual(
-            force_newton.conversion_factor_to(self.system, force_dyne), 1e5
+            force_newton.conversion_factor_to(force_dyne), 1e5
         )
 
         # Test incompatible dimensions
         length = CompoundUnit({"m": 1})
         time = CompoundUnit({"s": 1})
         with self.assertRaises(IncompatibleUnitsError):
-            length.conversion_factor_to(self.system, time)
+            length.conversion_factor_to(time)
 
 
 if __name__ == "__main__":

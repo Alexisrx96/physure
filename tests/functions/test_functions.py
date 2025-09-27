@@ -2,10 +2,9 @@ import unittest
 
 import sympy as sp
 
-from measurekit import Q_
+from measurekit import Q_, get_unit
 from measurekit.functions.functions import Function
 from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import get_unit
 
 
 class TestFunction(unittest.TestCase):

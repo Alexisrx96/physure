@@ -4,8 +4,9 @@
 
 import unittest
 
+from measurekit import get_unit
 from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import CompoundUnit, get_unit
+from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
 
 
@@ -16,7 +17,7 @@ class TestCompoundUnit(BaseTestUnit):
         """Set up test fixtures before each test."""
         super().setUp()
         # Aliases are still registered on the class, as they are stateless definitions
-        CompoundUnit.register_alias({"m": 1, "s": -1}, "velocity", "speed")
+        self.system.register_alias({"m": 1, "s": -1}, "velocity", "speed")
 
         # Register units into our isolated test system
         length = Dimension({"L": 1})
@@ -74,15 +75,9 @@ class TestCompoundUnit(BaseTestUnit):
         kilometer = CompoundUnit({"km": 1})
 
         # Test conversion factor calculation using the system
-        self.assertEqual(
-            meter.conversion_factor_to(self.system, centimeter), 100.0
-        )
-        self.assertEqual(
-            centimeter.conversion_factor_to(self.system, meter), 0.01
-        )
-        self.assertEqual(
-            kilometer.conversion_factor_to(self.system, meter), 1000.0
-        )
+        self.assertEqual(meter.conversion_factor_to(centimeter), 100.0)
+        self.assertEqual(centimeter.conversion_factor_to(meter), 0.01)
+        self.assertEqual(kilometer.conversion_factor_to(meter), 1000.0)
 
 
 class TestGetUnit(BaseTestUnit):

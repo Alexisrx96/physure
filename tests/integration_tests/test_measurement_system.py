@@ -10,7 +10,6 @@ import math
 import unittest
 
 from measurekit.exceptions import IncompatibleUnitsError
-from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
 
 
@@ -23,9 +22,9 @@ class TestMeasurementSystemIntegration(BaseTestUnit):
         self.add_common_units()
 
         # Register aliases for compound units
-        CompoundUnit.register_alias({"m": 1, "s": -1}, "velocity")
-        CompoundUnit.register_alias({"kg": 1, "m": 1, "s": -2}, "newton")
-        CompoundUnit.register_alias({"kg": 1, "m": 2, "s": -2}, "joule")
+        self.system.register_alias({"m": 1, "s": -1}, "velocity")
+        self.system.register_alias({"kg": 1, "m": 1, "s": -2}, "newton")
+        self.system.register_alias({"kg": 1, "m": 2, "s": -2}, "joule")
 
     def test_unit_creation_and_conversion(self):
         """Test creating units and converting between them within a system."""
@@ -34,12 +33,8 @@ class TestMeasurementSystemIntegration(BaseTestUnit):
         kilometer = self.system.get_unit("km")
 
         # Conversion factor methods now require the system context
-        self.assertEqual(
-            meter.conversion_factor_to(self.system, centimeter), 100.0
-        )
-        self.assertEqual(
-            kilometer.conversion_factor_to(self.system, meter), 1000.0
-        )
+        self.assertEqual(meter.conversion_factor_to(centimeter), 100.0)
+        self.assertEqual(kilometer.conversion_factor_to(meter), 1000.0)
 
     def test_quantity_creation_and_conversion(self):
         """Test creating quantities and converting them."""

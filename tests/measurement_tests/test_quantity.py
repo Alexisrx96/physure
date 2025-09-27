@@ -15,15 +15,12 @@ class TestQuantity(BaseTestUnit):
 
     def setUp(self):
         """Set up a fresh UnitSystem for each test."""
-        # The BaseTestUnit now creates a self.system instance for us.
         super().setUp()
 
-        # Define dimensions
         length = Dimension({"L": 1})
         time = Dimension({"T": 1})
         mass = Dimension({"M": 1})
 
-        # Register units within the isolated system for this test
         self.system.register_unit("m", length, 1.0, "meter")
         self.system.register_unit("cm", length, 0.01, "centimeter")
         self.system.register_unit("km", length, 1000.0, "kilometer")
@@ -32,11 +29,8 @@ class TestQuantity(BaseTestUnit):
         self.system.register_unit("h", time, 3600.0, "hour")
         self.system.register_unit("kg", mass, 1.0, "kilogram")
         self.system.register_unit("g", mass, 0.001, "gram")
-        self.system.register_unit(
-            "rad", Dimension({}), 1.0, "radian"
-        )  # Dimensionless unit
+        self.system.register_unit("rad", Dimension({}), 1.0, "radian")
 
-        # Create common compound units for convenience in tests
         self.meter = CompoundUnit({"m": 1})
         self.centimeter = CompoundUnit({"cm": 1})
         self.kilometer = CompoundUnit({"km": 1})
@@ -45,24 +39,18 @@ class TestQuantity(BaseTestUnit):
 
     def test_initialization(self):
         """Test basic initialization patterns."""
-        # Use our test-specific system to create a quantity
         q1 = self.system.Q_(5.0, self.meter)
         self.assertEqual(q1.magnitude, 5.0)
         self.assertEqual(q1.unit, self.meter)
-        # Dimension is now a method call requiring the system
         self.assertEqual(q1.dimension, self.meter.dimension(self.system))
         self.assertIs(q1.system, self.system)
 
     def test_conversion(self):
         """Test unit conversion with the to method."""
         length = self.system.Q_(5.0, self.meter)
-
-        # Convert to centimeters
         length_cm = length.to(self.centimeter)
         self.assertEqual(length_cm.magnitude, 500.0)
         self.assertEqual(length_cm.unit, self.centimeter)
-
-        # Convert using a string (relies on the system's get_unit)
         length_km_str = length.to("km")
         self.assertAlmostEqual(length_km_str.magnitude, 0.005)
         self.assertEqual(length_km_str.unit, self.kilometer)
@@ -73,20 +61,16 @@ class TestQuantity(BaseTestUnit):
         length2 = self.system.Q_(10.0, self.meter)
         time = self.system.Q_(2.0, self.second)
 
-        # Addition
         sum_length = length1 + length2
         self.assertEqual(sum_length.magnitude, 15.0)
         self.assertEqual(sum_length.unit, self.meter)
 
-        # Subtraction
         diff_length = length2 - length1
         self.assertEqual(diff_length.magnitude, 5.0)
 
-        # Multiplication with a scalar
         double_length = length1 * 2
         self.assertEqual(double_length.magnitude, 10.0)
 
-        # Division creating a new unit
         velocity = length1 / time
         self.assertEqual(velocity.magnitude, 2.5)
         self.assertEqual(velocity.unit.exponents, {"m": 1, "s": -1})
@@ -97,11 +81,8 @@ class TestQuantity(BaseTestUnit):
         length2 = self.system.Q_(500.0, "cm")
         length3 = self.system.Q_(10.0, "m")
 
-        # Equality should work across units after conversion
         self.assertEqual(length1, length2)
         self.assertNotEqual(length1, length3)
-
-        # Comparisons
         self.assertLess(length1, length3)
         self.assertGreater(length3, length1)
 
@@ -110,7 +91,6 @@ class TestQuantity(BaseTestUnit):
         q1 = self.system.Q_(10.0, self.meter, uncertainty=0.1)
         q2 = self.system.Q_(5.0, self.meter, uncertainty=0.2)
 
-        # Suma: δz = sqrt(δx² + δy²)
         result_add = q1 + q2
         self.assertAlmostEqual(result_add.magnitude, 15.0)
         self.assertAlmostEqual(result_add.uncertainty, 0.22361, places=5)
@@ -125,7 +105,6 @@ class TestQuantity(BaseTestUnit):
         self.assertAlmostEqual(result.uncertainty, 0.00625)
 
 
-# --- NEW TEST CLASS FOR 100% COVERAGE ---
 class TestQuantityFullCoverage(BaseTestUnit):
     """
     Test suite aiming for 100% coverage of quantity.py by testing
@@ -144,30 +123,25 @@ class TestQuantityFullCoverage(BaseTestUnit):
 
     def test_dunder_methods(self):
         """Test various dunder methods."""
-        q1 = self.system.Q_(10, "m", 0.1)
+        q1 = self.system.Q_(10, "m", uncertainty=0.1)
         q2 = self.system.Q_(5, "m")
 
         self.assertEqual(self.system.Q_(5, "m") - q2, self.system.Q_(0, "m"))
 
-        # __neg__, __pos__, __abs__
         self.assertEqual((-q1).magnitude, -10)
         self.assertEqual((+q1).magnitude, 10)
         self.assertEqual(abs(self.system.Q_(-5, "m")).magnitude, 5)
 
-        # __float__
         self.assertEqual(float(q2), 5.0)
 
-        # __repr__ and __str__
-        # TODO: Fix bug in Quantity where uncertainty is lost after initialization.
-        # This test is temporarily set to pass by expecting the buggy behavior.
+        # --- FIX: The test now asserts the CORRECT representation ---
         self.assertEqual(
             repr(q1),
-            "Quantity(10, CompoundUnit(exponents={'m': 1}), uncertainty=0.0)",
+            "Quantity(10, CompoundUnit(exponents={'m': 1}), uncertainty=0.1)",
         )
-        self.assertEqual(str(q1), "10 m")
+        self.assertEqual(str(q1), "(10 ± 0.1) m")
         self.assertEqual(str(q2), "5 m")
 
-        # __str__ for array uncertainty
         q_arr_unc = self.system.Q_(10, "m", uncertainty=np.array([0.1, 0.2]))
         self.assertIn("uncertainty=[...]", str(q_arr_unc))
 
@@ -182,20 +156,18 @@ class TestQuantityFullCoverage(BaseTestUnit):
         self.assertGreaterEqual(q2, q1)
         self.assertGreaterEqual(q3, q1)
 
-        # Test against non-Quantity
         self.assertNotEqual(q1, 5)
         with self.assertRaises(TypeError):
-            q1 < 5
+            _ = q1 < 5
         with self.assertRaises(TypeError):
-            q1 <= 5
+            _ = q1 <= 5
         with self.assertRaises(TypeError):
-            q1 > 5
+            _ = q1 > 5
         with self.assertRaises(TypeError):
-            q1 >= 5
+            _ = q1 >= 5
 
     def test_numpy_ufuncs(self):
         """Test interactions with NumPy universal functions."""
-        # Trig functions
         angle = self.system.Q_(np.pi / 2, "rad", 0.01)
         self.assertAlmostEqual(np.sin(angle).magnitude, 1.0)
         self.assertAlmostEqual(np.cos(angle).magnitude, 0.0)
@@ -203,22 +175,18 @@ class TestQuantityFullCoverage(BaseTestUnit):
             np.tan(self.system.Q_(np.pi / 4, "rad")).magnitude, 1.0
         )
 
-        # Trig functions require dimensionless quantities
         with self.assertRaises(IncompatibleUnitsError):
             np.sin(self.system.Q_(1, "m"))
 
-        # sqrt and square
         area = self.system.Q_(16, "m**2")
         side = np.sqrt(area)
         self.assertEqual(side.magnitude, 4.0)
         self.assertEqual(side.unit.exponents, {"m": 1.0})
         self.assertEqual(np.square(side), area)
 
-        # reduce
         arr_q = self.system.Q_(np.array([1, 2, 3]), "m")
         self.assertEqual(np.add.reduce(arr_q), self.system.Q_(6, "m"))
 
-        # Generic ufunc
         self.assertEqual(
             np.absolute(self.system.Q_(np.array([-1, -2]), "m")),
             self.system.Q_(np.array([1, 2]), "m"),
@@ -229,7 +197,6 @@ class TestQuantityFullCoverage(BaseTestUnit):
         v1 = self.system.Q_(np.array([1, 0, 0]), "m")
         v2 = self.system.Q_(np.array([0, 2, 0]), "m")
 
-        # dot and cross products
         self.assertEqual(v1.dot(v2).magnitude, 0)
         self.assertEqual(v1.dot(v2).unit.exponents, {"m": 2})
 
@@ -237,33 +204,26 @@ class TestQuantityFullCoverage(BaseTestUnit):
         np.testing.assert_array_equal(cross_prod.magnitude, [0, 0, 2])
         self.assertEqual(cross_prod.unit.exponents, {"m": 2})
 
-        # len and getitem
         self.assertEqual(len(v1), 3)
         self.assertEqual(v1[0], self.system.Q_(1, "m"))
         np.testing.assert_array_equal(v1[1:].magnitude, np.array([0, 0]))
 
-        # Error cases
         with self.assertRaises(TypeError):
             len(self.system.Q_(1, "m"))
         with self.assertRaises(TypeError):
-            (self.system.Q_(1, "m"))[0]
+            _ = (self.system.Q_(1, "m"))[0]
 
     def test_formatting(self):
         """Test the __format__ method."""
         q = self.system.Q_(1234.567, "m/s**2", 0.02)
 
-        # Numeric formats
-        self.assertEqual(format(q, ".2f"), "1234.57 m/s²")
+        self.assertEqual(format(q, ".2f"), "(1234.57 ± 0.02) m/s²")
 
-        # Unit formats
-        self.assertEqual(format(q, "alias"), "1234.567 m/s²")
+        self.system.register_alias({"m": 1, "s": -2}, "acceleration")
+        self.assertEqual(format(q, "alias"), "(1234.567 ± 0.02) acceleration")
+        self.assertEqual(format(q, ".1f|alias"), "(1234.6 ± 0.0) acceleration")
 
-        # Composite format
-        self.assertEqual(format(q, ".1f|alias"), "1234.6 m/s²")
-
-        # Frac format
         q_frac = self.system.Q_(1.5, "m")
-        # FIX: Match the actual output which uses the symbolic unit name.
         self.assertEqual(format(q_frac, "frac"), "3/2 m")
 
     def test_latex_representation(self):
@@ -271,9 +231,7 @@ class TestQuantityFullCoverage(BaseTestUnit):
         q_unc = self.system.Q_(10, "m/s", 0.1)
         q_no_unc = self.system.Q_(5, "kg")
 
-        # TODO: Fix bug in Quantity.to_latex for quantities with uncertainty.
-        # This test is temporarily set to pass by expecting the buggy behavior.
-        self.assertEqual(q_unc.to_latex(), "10 \\; \\frac{m}{s}")
+        self.assertEqual(q_unc.to_latex(), "(10 \\pm 0.1) \\; \\frac{m}{s}")
         self.assertEqual(q_no_unc.to_latex(), "5 \\; kg")
         self.assertEqual(q_unc._repr_latex_(), f"${q_unc.to_latex()}$")
 
@@ -312,21 +270,17 @@ class TestQuantityFullCoverage(BaseTestUnit):
         """Test edge cases in arithmetic operations."""
         q = self.system.Q_(10, "m")
 
-        # Multiplication by zero
         self.assertEqual((q * 0).magnitude, 0)
         self.assertEqual((0 * q).magnitude, 0)
 
-        # Division by one
         self.assertEqual((q / 1).magnitude, 10)
         self.assertEqual((1 / q).magnitude, 0.1)
         self.assertEqual((1 / q).unit.exponents, {"m": -1})
 
-        # Addition with zero quantity
         zero_q = self.system.Q_(0, "m")
         self.assertEqual((q + zero_q).magnitude, 10)
         self.assertEqual((zero_q + q).magnitude, 10)
 
-        # Subtraction resulting in zero
         self.assertEqual((q - q).magnitude, 0)
 
     def test_invalid_operations(self):
@@ -334,23 +288,14 @@ class TestQuantityFullCoverage(BaseTestUnit):
         q_length = self.system.Q_(10, "m")
         q_time = self.system.Q_(5, "s")
 
-        # Addition of incompatible units
         with self.assertRaises(IncompatibleUnitsError):
             _ = q_length + q_time
-
-        # Subtraction of incompatible units
         with self.assertRaises(IncompatibleUnitsError):
             _ = q_length - q_time
-
-        # Comparison of incompatible units
         with self.assertRaises(IncompatibleUnitsError):
             _ = q_length < q_time
-
-        # Invalid multiplication
         with self.assertRaises(TypeError):
             _ = q_length * "invalid"
-
-        # Invalid division
         with self.assertRaises(TypeError):
             _ = q_length / "invalid"
 
@@ -399,7 +344,7 @@ class TestQuantityFullCoverage(BaseTestUnit):
         result = q1 - q2
         self.assertAlmostEqual(result.magnitude, 7.0)
 
-    def test__rsub(self):
+    def test__rsub__(self):
         """Test right-side subtraction."""
         q1 = self.system.Q_(10.0, "m")
         q2 = self.system.Q_(3.0, "m")

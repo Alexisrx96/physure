@@ -9,8 +9,8 @@ import unittest
 
 from measurekit.exceptions import IncompatibleUnitsError
 from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
+from tests.decorators import with_system_context
 
 
 class TestWorkflowIntegration(BaseTestUnit):
@@ -34,10 +34,11 @@ class TestWorkflowIntegration(BaseTestUnit):
         self.system.register_unit("EUR", self.money, 1.1, "euro")
 
         # Register aliases for compound units
-        CompoundUnit.register_alias({"m": 1, "s": -1}, "m/s", "velocity")
-        CompoundUnit.register_alias({"$": 1, "h": -1}, "$/h", "hourly_rate")
-        CompoundUnit.register_alias({"$": 1, "m": -1}, "$/m", "linear_cost")
+        self.system.register_alias({"m": 1, "s": -1}, "m/s", "velocity")
+        self.system.register_alias({"$": 1, "h": -1}, "$/h", "hourly_rate")
+        self.system.register_alias({"$": 1, "m": -1}, "$/m", "linear_cost")
 
+    @with_system_context
     def test_engineering_workflow(self):
         """Test an engineering workflow with material and cost calculations."""
         # Use the system-specific factory and unit getter for all operations

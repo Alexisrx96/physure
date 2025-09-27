@@ -1,5 +1,6 @@
 import unittest
 
+from measurekit.measurement.units import CompoundUnit
 from measurekit.system import UnitSystem
 from measurekit.measurement.dimensions import Dimension
 
@@ -27,7 +28,13 @@ class BaseTestUnit(unittest.TestCase):
         self.system.register_unit("km", length, 1000.0, "kilometer")
         self.system.register_unit("s", time, 1.0, "second")
         self.system.register_unit("kg", mass, 1.0, "kilogram")
-        self.system.register_unit("N", force, 1.0, "newton")
+        self.system.register_unit(
+            "N",
+            Dimension({"M": 1, "L": 1, "T": -2}),
+            1.0,
+            "newton",
+            recipe=CompoundUnit({"kg": 1, "m": 1, "s": -2}),
+        )
         self.system.register_unit("J", energy, 1.0, "joule")
 
     def tearDown(self):
