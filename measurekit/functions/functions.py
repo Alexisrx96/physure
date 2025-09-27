@@ -60,13 +60,7 @@ class Function:
     def __call__(
         self, output_unit: CompoundUnit, **kwargs: Quantity
     ) -> Quantity:
-        """Evaluates the function with the given quantity arguments.
-
-        :param output_unit: The desired unit for the output quantity.
-        :param kwargs: Keyword arguments where keys are parameter names
-                       and values are Quantity objects.
-        :return: A new Quantity object representing the result.
-        """
+        """Evaluates the function with the given quantity arguments."""
         if output_unit.dimension(self.system) != self.output_dimension:
             raise ValueError(
                 f"The output unit '{output_unit}' has an incorrect dimension. "
@@ -74,11 +68,23 @@ class Function:
                 f"Received: {output_unit.dimension(self.system)}"
             )
 
+        # --- FIX: Stricter argument checking ---
+        required_args = set(self.arg_names)
+        provided_args = set(kwargs.keys())
+
+        if required_args != provided_args:
+            missing = required_args - provided_args
+            extra = provided_args - required_args
+            msg = ""
+            if missing:
+                msg += f"Missing required arguments: {missing}. "
+            if extra:
+                msg += f"Got unexpected arguments: {extra}."
+            raise TypeError(msg)
+
+        # Build the list of numeric arguments in the correct, sorted order
         numeric_args = []
-        # Ensure kwargs are processed in the correct order
         for name in self.arg_names:
-            if name not in kwargs:
-                continue
             quantity = kwargs[name]
             expected_dim = self.parameters[name]
             if quantity.dimension != expected_dim:
