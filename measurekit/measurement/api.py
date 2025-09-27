@@ -11,13 +11,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, overload
 
 from measurekit.measurement.quantity import Quantity, UncType, ValueType
-from measurekit.measurement.units import CompoundUnit, get_unit
+from measurekit.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
     from measurekit.system import UnitSystem
 
 
-class _SpecializedQuantityFactory:
+class SpecializedQuantityFactory:
     """A callable factory for creating Quantities with a predefined default unit."""
 
     __slots__ = ("_default_unit", "_system")
@@ -40,19 +40,15 @@ class _SpecializedQuantityFactory:
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
-        from measurekit.measurement.quantity import Quantity
-
-        # Create a temporary quantity if a `from_unit` is provided for conversion
         if from_unit:
             temp_unit = (
-                get_unit(from_unit)
+                self._system.get_unit(from_unit)
                 if isinstance(from_unit, str)
                 else from_unit
             )
             temp_q = Quantity.from_input(
                 value, temp_unit, self._system, uncertainty
             )
-            # Convert it to the factory's default unit
             return temp_q.to(self._default_unit)
 
         return Quantity.from_input(
@@ -66,16 +62,20 @@ class _SpecializedQuantityFactory:
         return f"<Quantity Factory for unit='{self._default_unit}'>"
 
 
-class _QuantityFactory:
-    """The main facade for the library."""
+class QuantityFactory:
+    """The main facade for creating quantities within a specific UnitSystem."""
 
-    _cache: dict[CompoundUnit, _SpecializedQuantityFactory] = {}
+    __slots__ = ("_system", "_cache")
+
+    def __init__(self, system: UnitSystem):
+        self._system = system
+        self._cache: dict[CompoundUnit, SpecializedQuantityFactory] = {}
 
     @overload
     def __call__(  # type: ignore
         self,
         value: ValueType,
-        unit: str | CompoundUnit | None = None,
+        unit: str | CompoundUnit,
         uncertainty: UncType = 0.0,
     ) -> Quantity[ValueType, UncType]: ...
 
@@ -85,41 +85,28 @@ class _QuantityFactory:
         unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
-        # Dynamic import to avoid cycles
-        from measurekit import default_system
-        from measurekit.measurement.quantity import Quantity
-
         if unit is None:
-            unit = default_system.get_unit("dimensionless")
-
-        if isinstance(unit, str):
-            # This now correctly uses the default system's get_unit method
-            unit = get_unit(unit)
+            unit = self._system.get_unit("dimensionless")
+        elif isinstance(unit, str):
+            unit = self._system.get_unit(unit)
 
         return Quantity.from_input(
             value=value,
             unit=unit,
-            system=default_system,
+            system=self._system,
             uncertainty=uncertainty,
         )
 
     def __getitem__(
         self, unit_expression: str | CompoundUnit
-    ) -> _SpecializedQuantityFactory:
-        from measurekit import default_system
-
-        if isinstance(unit_expression, str):
-            default_unit = get_unit(unit_expression)
-        else:
-            default_unit = unit_expression
-
+    ) -> SpecializedQuantityFactory:
+        default_unit = (
+            self._system.get_unit(unit_expression)
+            if isinstance(unit_expression, str)
+            else unit_expression
+        )
         if default_unit in self._cache:
             return self._cache[default_unit]
-
-        factory = _SpecializedQuantityFactory(default_unit, default_system)
+        factory = SpecializedQuantityFactory(default_unit, self._system)
         self._cache[default_unit] = factory
         return factory
-
-
-Q_ = _QuantityFactory()
-__all__ = ["Q_"]

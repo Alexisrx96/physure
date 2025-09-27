@@ -34,8 +34,6 @@ class CompoundUnit(BaseExponentEntity):
     """
 
     _cache: ClassVar[dict[tuple, CompoundUnit]] = {}
-    _aliases: ClassVar[dict[tuple, list[str]]] = defaultdict(list)
-    _alias_to_exponents: ClassVar[dict[str, tuple]] = {}
 
     def __new__(cls, exponents: ExponentsDict):
         """Create or retrieve a cached CompoundUnit instance."""
@@ -55,27 +53,8 @@ class CompoundUnit(BaseExponentEntity):
     def __hash__(self) -> int:
         return super().__hash__()
 
-    @classmethod
-    def register_alias(cls, exponents: ExponentsDict, *aliases: str) -> None:
-        """Register one or more aliases for a specific set of unit exponents.
-
-        This class method allows alternative names (like 'velocity' for 'm/s')
-        to be associated with a unit's structure.
-
-        Args:
-        exponents (ExponentsDict): The unit structure to alias.
-        *aliases (str): A variable number of alias strings.
-        """
-        key = tuple(sorted((k, v) for k, v in exponents.items() if v != 0))
-        for alias in aliases:
-            if alias not in cls._aliases[key]:
-                cls._aliases[key].append(alias)
-            cls._alias_to_exponents[alias] = key
-
     # --- System-Dependent Methods ---
-    def conversion_factor_to(
-        self, system: UnitSystem, target: CompoundUnit
-    ) -> float:
+    def conversion_factor_to(self, target: CompoundUnit) -> float:
         """Calculate the conversion factor to a target unit within a system.
 
         Args:
@@ -89,6 +68,9 @@ class CompoundUnit(BaseExponentEntity):
         Raises:
         IncompatibleUnitsError: If the units have incompatible dimensions.
         """
+        from measurekit.context import get_active_system
+
+        system = get_active_system()
         if self.dimension(system) != target.dimension(system):
             raise IncompatibleUnitsError(self, target)
         source_factor = self._compound_factor(system)
@@ -112,7 +94,9 @@ class CompoundUnit(BaseExponentEntity):
         """
         factor = 1.0
         for unit, exp in self.exponents.items():
-            dim = system.UNIT_DIMENSIONS.get(unit)
+            _unit = system.get_unit(unit)
+            dim = _unit.dimension(system)
+
             if dim is None:
                 raise ValueError(
                     f"Unit '{unit}' not found in system for conversion."
@@ -168,21 +152,25 @@ class CompoundUnit(BaseExponentEntity):
         Any: A new Quantity instance, or NotImplemented if the operation is
         not supported.
         """
-        from measurekit import default_system
+        from measurekit.context import get_active_system
         from measurekit.measurement.quantity import Quantity
 
         if isinstance(other, (float, int, np.ndarray)):
             return Quantity.from_input(
-                value=other, unit=self, system=default_system
+                value=other, unit=self, system=get_active_system()
             )
         return NotImplemented
 
     def to_string(
-        self, use_alias: bool = False, alias_preference: str | None = None
+        self,
+        system: UnitSystem | None = None,
+        use_alias: bool = False,
+        alias_preference: str | None = None,
     ) -> str:
         """Generate a human-readable string representation of the unit.
 
         Args:
+        system (UnitSystem | None, optional): The system to check for aliases.
         use_alias (bool, optional): If True, uses a registered alias if one
         exists. Defaults to False.
         alias_preference (str | None, optional): A preferred alias to use if
@@ -191,12 +179,12 @@ class CompoundUnit(BaseExponentEntity):
         Returns:
         str: The string representation of the unit.
         """
-        if use_alias:
+        if use_alias and system:
             key = tuple(
                 sorted((k, v) for k, v in self.exponents.items() if v != 0)
             )
-            if key in self._aliases and self._aliases[key]:
-                aliases = self._aliases[key]
+            aliases = system.ALIASES.get(key, [])
+            if aliases:
                 if alias_preference and alias_preference in aliases:
                     return alias_preference
                 return aliases[0]
@@ -204,28 +192,13 @@ class CompoundUnit(BaseExponentEntity):
         return super().__str__()
 
     def __format__(self, format_spec: str) -> str:
-        """Format the CompoundUnit using a format specification.
-
-        Supports specifications like 'full' for the complete unit string or
-        'alias' to use a registered alias.
-
-        Args:
-        format_spec (str): The string specifying how to format the unit.
-
-        Returns:
-        str: The formatted unit string.
         """
-        if not format_spec or format_spec == "full":
-            return self.to_string(use_alias=False)
+        Format the CompoundUnit using a format specification.
 
-        parts = format_spec.split(":")
-        if parts[0] == "alias":
-            alias_preference = parts[1] if len(parts) > 1 else None
-            return self.to_string(
-                use_alias=True, alias_preference=alias_preference
-            )
-
-        return self.to_string(use_alias=False)
+        This method is now primarily for internal use by Quantity.__format__.
+        """
+        # This method is simple now; the complex logic is in to_string
+        return self.to_string(use_alias=format_spec.startswith("alias"))
 
     def to_latex(self) -> str:
         r"""Generate a LaTeX representation of the unit for display.
@@ -267,20 +240,29 @@ class CompoundUnit(BaseExponentEntity):
         """
         return not self.exponents
 
+    def simplify(self, system: UnitSystem) -> CompoundUnit:
+        """Simplifies the unit by expanding derived units into their base components.
 
-def get_unit(unit_expression: str) -> CompoundUnit:
-    """Parse a string expression and return the corresponding CompoundUnit.
+        This method uses the unit "recipes" defined in the given system to
+        recursively substitute derived units (like 'N' or 'J') until only
+        base units remain. The exponents are then consolidated.
 
-    This function acts as the primary factory for creating unit objects from
-    strings. It delegates the parsing logic to the currently active default
-    unit system.
+        Args:
+            system (UnitSystem): The system containing the unit recipes.
 
-    Args:
-    unit_expression (str): The string to parse (e.g., "m/s", "kilometer").
+        Returns:
+            A new, simplified CompoundUnit instance.
+        """
+        new_exponents: dict[str, float] = defaultdict(float)
 
-    Returns:
-    CompoundUnit: The corresponding unit object.
-    """
-    from measurekit import default_system
+        for unit_symbol, exponent in self.exponents.items():
+            if unit_symbol in system._UNIT_RECIPES:
+                recipe_unit = system._UNIT_RECIPES[unit_symbol]
+                simplified_recipe = recipe_unit.simplify(system)
 
-    return default_system.get_unit(unit_expression)
+                for base_unit, base_exp in simplified_recipe.exponents.items():
+                    new_exponents[base_unit] += base_exp * exponent
+            else:
+                new_exponents[unit_symbol] += exponent
+
+        return CompoundUnit(new_exponents)
