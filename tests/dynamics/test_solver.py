@@ -1,9 +1,11 @@
 import math
 import unittest
+
 import numpy as np
-from tests.base_test_class import BaseTestUnit
+
 from measurekit.dynamics.solver import ODESolution, solve_unit_aware_ivp
 from measurekit.measurement.dimensions import Dimension
+from tests.base_test_class import BaseTestUnit
 
 
 class TestODESolution(BaseTestUnit):

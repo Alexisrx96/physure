@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import configparser
 from importlib import resources
+from pathlib import Path
 from typing import cast
 
 from measurekit.context import system_context
-from measurekit.measurement.api import QuantityFactory
 from measurekit.measurement.conversions import UnitDefinition
 from measurekit.measurement.dimensions import (
     Dimension,
@@ -14,38 +14,62 @@ from measurekit.measurement.dimensions import (
 from measurekit.measurement.units import CompoundUnit
 from measurekit.system import UnitSystem
 
-Q_ = QuantityFactory()
-
 
 def _load_all_configurations_into(
     parser: configparser.ConfigParser, verbose: bool
 ):
-    """Reads all configuration files and loads them into the given parser."""
+    """Reads all configuration files and loads them into the given parser.
+
+    This function prioritizes the user's custom 'measurekit.conf' file
+    found in the application's root (CWD) over the packaged defaults.
+    """
     if verbose:
         print("\n--- Phase 1: Loading Configuration Files ---")
 
+    # 1. Define the list of internal configuration files
     config_files = [
         "measurekit.conf",
         "systems/international.conf",
         "systems/imperial.conf",
     ]
+
     paths_to_read = []
 
+    # 2. Add packaged library configuration files (Low Priority)
     try:
         lib_config_dir = resources.files("measurekit.config")
         for file_name in config_files:
+            # Note: We must use str() because configparser.read()
+            # might not support Path objects across all Python versions
             file_path = lib_config_dir / file_name
             if file_path.is_file():
                 paths_to_read.append(str(file_path))
                 if verbose:
-                    print(f"  -> Found: {file_path}")
+                    print(
+                        f"  -> Found (Library Default): {file_path.name} from package"
+                    )
             elif verbose:
-                print(f"  -> Not found: {file_path}")
+                print(f"  -> Not found (Library Default): {file_path.name}")
     except ModuleNotFoundError:
         print(
             "[WARNING] Could not locate built-in library configuration files."
         )
-        return
+        # Continue to check for user config even if library defaults fail
+        pass
+
+    # 3. Add the user's override configuration file (High Priority)
+    # Check the Current Working Directory (CWD), which is typically the application's root.
+    user_config_path = Path.cwd() / "measurekit.conf"
+
+    if user_config_path.is_file():
+        # Append the path LAST. The last file read overrides previous values.
+        paths_to_read.append(str(user_config_path))
+        if verbose:
+            print(f"  -> Found (User Override): {user_config_path.resolve()}")
+    elif verbose:
+        print(
+            f"  -> Not found (User Override): {user_config_path.name} in CWD."
+        )
 
     if paths_to_read:
         parser.read(paths_to_read, encoding="utf-8")
@@ -171,7 +195,6 @@ class UnitSystemBuilder:
         self, constants_data: dict[str, str]
     ) -> UnitSystemBuilder:
         """Adds constants from a dictionary of constant definitions."""
-
         if not constants_data:
             return self
         if self._verbose:
@@ -185,7 +208,7 @@ class UnitSystemBuilder:
                 else CompoundUnit({})
             )
             with system_context(self._system):
-                _ = Q_(value, unit)
+                _ = self._system.Q_(value, unit)
         return self
 
     def build(self) -> UnitSystem:

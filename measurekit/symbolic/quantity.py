@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, Union
+from typing import Dict, List, Union
 
 import sympy
 from sympy.core.expr import Expr
@@ -7,7 +7,6 @@ from sympy.core.symbol import Symbol
 from measurekit import default_system
 from measurekit.exceptions import IncompatibleUnitsError
 from measurekit.functions.functions import Function
-from measurekit.measurement.quantity import Quantity
 from measurekit.measurement.units import CompoundUnit
 from measurekit.system import UnitSystem
 
@@ -170,8 +169,7 @@ class Equation:
         return str(self.equation)
 
     def solve_for(self, symbol_to_solve: Union[str, SymbolicQuantity]):
-        """
-        Resuelve la ecuación para un símbolo dado y deduce la unidad resultante.
+        """Resuelve la ecuación para un símbolo dado y deduce la unidad resultante.
         """
         # --- ARREGLO DEFINITIVO ---
         # Busca el objeto de símbolo correcto en lugar de crear uno nuevo.

@@ -7,13 +7,11 @@ from measurekit.measurement.conversions import UnitDefinition
 
 
 class IUnitRepository(ABC):
-    """
-    An interface (Port) for retrieving unit definitions.
+    """An interface (Port) for retrieving unit definitions.
     """
 
     @abstractmethod
     def get_definition(self, unit_symbol: str) -> Optional[UnitDefinition]:
-        """
-        Retrieves the definition for a given unit symbol.
+        """Retrieves the definition for a given unit symbol.
         """
         pass

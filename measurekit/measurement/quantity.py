@@ -59,7 +59,6 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __post_init__(self):
         """Calculates and sets derived fields after the object is initialized."""
-
         calculated_dimension = self.unit.dimension(self.system)
         object.__setattr__(self, "dimension", calculated_dimension)
 

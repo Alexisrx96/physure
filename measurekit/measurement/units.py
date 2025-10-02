@@ -192,8 +192,7 @@ class CompoundUnit(BaseExponentEntity):
         return super().__str__()
 
     def __format__(self, format_spec: str) -> str:
-        """
-        Format the CompoundUnit using a format specification.
+        """Format the CompoundUnit using a format specification.
 
         This method is now primarily for internal use by Quantity.__format__.
         """

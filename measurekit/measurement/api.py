@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, overload
 
+from measurekit.context import get_active_system
 from measurekit.measurement.quantity import Quantity, UncType, ValueType
 from measurekit.measurement.units import CompoundUnit
-from measurekit.context import get_active_system
 
 if TYPE_CHECKING:
     from measurekit.system import UnitSystem

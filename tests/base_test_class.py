@@ -1,8 +1,8 @@
 import unittest
 
+from measurekit.measurement.dimensions import Dimension
 from measurekit.measurement.units import CompoundUnit
 from measurekit.system import UnitSystem
-from measurekit.measurement.dimensions import Dimension
 
 
 class BaseTestUnit(unittest.TestCase):

@@ -44,7 +44,7 @@ def register_dimension(dimension: Dimension, name: str):
 class Dimension(BaseExponentEntity):
     """Represents a physical dimension as a mapping of base symbols (e.g., L, M, T) to their exponents.
 
-    Attributes
+    Attributes:
     ----------
     exponents : ExponentsDict
         Dictionary mapping base dimension symbols to their exponents.
@@ -56,7 +56,7 @@ class Dimension(BaseExponentEntity):
     _base_dimensions : list[str]
         List of recognized base dimension symbols.
 
-    Methods
+    Methods:
     -------
     is_dimensionless() -> bool
         Checks if the dimension is dimensionless.

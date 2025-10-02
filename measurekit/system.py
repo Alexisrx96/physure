@@ -13,8 +13,7 @@ from measurekit.notation.parsers import NotationParser
 
 
 class UnitSystem(IUnitRepository):
-    """
-    Manages a self-contained system of dimensions, units, and configurations.
+    """Manages a self-contained system of dimensions, units, and configurations.
     """
 
     def __init__(self, name: str | None = None, description: str = ""):
@@ -83,8 +82,7 @@ class UnitSystem(IUnitRepository):
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
     ) -> None:
-        """
-        Registers a unit and its aliases with the system.
+        """Registers a unit and its aliases with the system.
         """
         unit_def = UnitDefinition(
             symbol,
@@ -134,8 +132,7 @@ class UnitSystem(IUnitRepository):
                 self.UNIT_REGISTRY[dimension][prefixed_symbol] = prefixed_def
 
     def get_unit(self, unit_expression: str) -> CompoundUnit:
-        """
-        Retrieves a CompoundUnit from the system based on its notation.
+        """Retrieves a CompoundUnit from the system based on its notation.
         This method is now a pure retrieval function with no side effects.
         """
         # 1. Check for simple units (including aliases and prefixed units)

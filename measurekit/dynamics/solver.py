@@ -56,7 +56,6 @@ def solve_unit_aware_ivp(
     **kwargs,
 ) -> ODESolution:
     """Solves an initial value problem, handling units consciously and efficiently."""
-
     """Solves an initial value problem, handling units consciously and efficiently."""
     # --- 1. Unit Unpacking (ONCE) ---
     t_unit = t_span[0].unit
