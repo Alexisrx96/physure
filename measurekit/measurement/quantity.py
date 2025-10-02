@@ -1,3 +1,13 @@
+"""Defines the `Quantity` class, the representation of a physical quantity.
+
+This module contains the `Quantity` class, which bundles a numerical value
+(magnitude), a `CompoundUnit`, and an optional `Uncertainty`. It is the central
+object that users interact with. The class overloads arithmetic, comparison,
+and other operators to provide intuitive, unit-aware calculations, automatic
+error propagation, and seamless integration with NumPy for handling array
+values.
+"""
+
 from __future__ import annotations
 
 import operator
@@ -58,7 +68,7 @@ class Quantity(Generic[ValueType, UncType]):
     _cache: ClassVar[dict[CompoundUnit, type]] = {}
 
     def __post_init__(self):
-        """Calculates and sets derived fields after the object is initialized."""
+        """Calculates derived fields after the object is initialized."""
         calculated_dimension = self.unit.dimension(self.system)
         object.__setattr__(self, "dimension", calculated_dimension)
 
@@ -100,6 +110,7 @@ class Quantity(Generic[ValueType, UncType]):
         system: UnitSystem,
         uncertainty: Any = 0.0,
     ) -> Self:
+        """Creates a Quantity from raw input values."""
         from measurekit.context import get_active_system
 
         resolved_system = system if system is not None else get_active_system()
@@ -124,11 +135,13 @@ class Quantity(Generic[ValueType, UncType]):
 
     @property
     def uncertainty(self) -> UncType:
+        """Returns the standard deviation of the uncertainty."""
         return self.uncertainty_obj.std_dev
 
     def to(
         self, target_unit: CompoundUnit | str
     ) -> Quantity[ValueType, UncType]:
+        """Converts the quantity to a different unit."""
         if isinstance(target_unit, str):
             target_unit = self.system.get_unit(target_unit)
         if self.dimension != target_unit.dimension(self.system):
@@ -142,6 +155,7 @@ class Quantity(Generic[ValueType, UncType]):
 
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Any) -> Quantity:
+        """Handles cases like my_quantity + other."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:
@@ -159,6 +173,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __sub__(self, other: Any) -> Quantity:
+        """Handles cases like my_quantity - other."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:
@@ -176,6 +191,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __mul__(self, other: Any) -> Quantity:
+        """Handles cases like my_quantity * other."""
         if isinstance(other, (int, float, np.ndarray)):
             new_magnitude = self.magnitude * other
             new_uncertainty = self.uncertainty_obj.std_dev * np.abs(other)
@@ -211,6 +227,7 @@ class Quantity(Generic[ValueType, UncType]):
         return NotImplemented
 
     def __truediv__(self, other: Any) -> Quantity:
+        """Handles cases like my_quantity / other."""
         if isinstance(other, (int, float, np.ndarray)):
             new_magnitude = self.magnitude / other
             new_uncertainty = self.uncertainty_obj.std_dev / np.abs(other)
@@ -246,6 +263,7 @@ class Quantity(Generic[ValueType, UncType]):
         return NotImplemented
 
     def __pow__(self, exponent: float) -> Quantity:
+        """Handles cases like my_quantity ** power."""
         new_value = self.magnitude**exponent
         new_unit = self.unit**exponent
         calc_value = np.asarray(self.magnitude, dtype=float)
@@ -260,6 +278,7 @@ class Quantity(Generic[ValueType, UncType]):
     __rmul__ = __mul__
 
     def __rtruediv__(self, other: Any) -> Quantity:
+        """Handles right-side division, typically for creating a Quantity."""
         if np.any(np.asarray(self.magnitude) == 0):
             raise ZeroDivisionError(
                 "Division by a Quantity with zero magnitude."
@@ -278,6 +297,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __neg__(self) -> Self:
+        """Returns a new Quantity with negated magnitude."""
         return cast(
             Self,
             Quantity.from_input(
@@ -289,9 +309,11 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __pos__(self) -> Self:
+        """Returns the Quantity itself."""
         return self
 
     def __abs__(self) -> Self:
+        """Returns the absolute value of the Quantity."""
         return cast(
             Self,
             Quantity.from_input(
@@ -303,6 +325,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __float__(self) -> float:
+        """Converts the Quantity to a float."""
         return float(self.magnitude)
 
     # --- NumPy Integration ---
@@ -315,6 +338,7 @@ class Quantity(Generic[ValueType, UncType]):
         *inputs: Any,
         **kwargs: Any,
     ) -> Any:
+        """Handles NumPy ufuncs applied to Quantity instances."""
         q_input = next(
             (inp for inp in inputs if isinstance(inp, Quantity)), None
         )
@@ -395,6 +419,7 @@ class Quantity(Generic[ValueType, UncType]):
     def dot(
         self, other: Quantity[NDArray[Any], Any]
     ) -> Quantity[float, float]:
+        """Dot product."""
         if not isinstance(other, Quantity):
             return NotImplemented
         result_value = np.dot(self.magnitude, other.magnitude)
@@ -409,6 +434,7 @@ class Quantity(Generic[ValueType, UncType]):
     def cross(
         self, other: Quantity[NDArray[Any], Any]
     ) -> Quantity[NDArray[Any], NDArray[Any]]:
+        """Cross product."""
         if not isinstance(other, Quantity):
             return NotImplemented
         result_value = np.cross(self.magnitude, other.magnitude)
@@ -418,6 +444,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __len__(self):
+        """Returns the length if the magnitude is an array."""
         if isinstance(self.magnitude, np.ndarray):
             return len(self.magnitude)
         raise TypeError(
@@ -425,6 +452,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __getitem__(self, key):
+        """Supports indexing and slicing if the magnitude is an array."""
         if not isinstance(self.magnitude, np.ndarray):
             raise TypeError(
                 f"'{type(self).__name__}' object is not subscriptable."
@@ -443,6 +471,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __round__(self, ndigits: int | None = None) -> Self:
+        """Rounds the magnitude to a specified number of digits."""
         new_value = (
             np.round(self.magnitude, ndigits)
             if ndigits is not None
@@ -457,6 +486,7 @@ class Quantity(Generic[ValueType, UncType]):
 
     # --- Comparison Dunder Methods ---
     def __eq__(self, other: object) -> bool:
+        """Equality comparison."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:
@@ -467,6 +497,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __lt__(self, other: Any) -> bool:
+        """Less than."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:
@@ -475,6 +506,7 @@ class Quantity(Generic[ValueType, UncType]):
         return self.magnitude < other_converted.magnitude
 
     def __le__(self, other: Any) -> bool:
+        """Less than or equal to."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:
@@ -483,6 +515,7 @@ class Quantity(Generic[ValueType, UncType]):
         return self.magnitude <= other_converted.magnitude
 
     def __gt__(self, other: Any) -> bool:
+        """Greater than."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:
@@ -491,6 +524,7 @@ class Quantity(Generic[ValueType, UncType]):
         return self.magnitude > other_converted.magnitude
 
     def __ge__(self, other: Any) -> bool:
+        """Greater than or equal to."""
         if not isinstance(other, Quantity):
             return NotImplemented
         if self.dimension != other.dimension:

@@ -1,7 +1,16 @@
+"""Defines the `Dimension` class for representing physical dimensions.
+
+A physical dimension is a fundamental property of a quantity, such as Length,
+Mass, or Time. This module provides the `Dimension` class, which represents
+these concepts as a combination of base dimensions raised to certain powers
+(e.g., Velocity is Length/Time or L¹·T⁻¹). This class is a cornerstone of the
+library, enabling it to check for dimensional consistency in calculations.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar, cast
+from typing import ClassVar, Self, cast
 
 from measurekit.notation.base_entity import BaseExponentEntity
 from measurekit.notation.lexer import generate_tokens, to_superscript
@@ -42,7 +51,9 @@ def register_dimension(dimension: Dimension, name: str):
 
 @dataclass(frozen=True)
 class Dimension(BaseExponentEntity):
-    """Represents a physical dimension as a mapping of base symbols (e.g., L, M, T) to their exponents.
+    """Represents a physical dimension.
+
+    It has a mapping of base symbols (e.g., L, M, T) to their exponents.
 
     Attributes:
     ----------
@@ -74,11 +85,12 @@ class Dimension(BaseExponentEntity):
         "_display_exponents",
     )
 
-    def __new__(cls, exponents: ExponentsDict) -> Dimension:
+    def __new__(cls, exponents: ExponentsDict) -> Self:
+        """Creates or retrieves a cached Dimension instance."""
         normalized = {k: float(v) for k, v in exponents.items() if v != 0}
         key = tuple(sorted(normalized.items()))
         if key in cls._cache:
-            return cls._cache[key]
+            return cast(Self, cls._cache[key])
 
         instance = super().__new__(cls, exponents)
 
@@ -106,14 +118,15 @@ class Dimension(BaseExponentEntity):
         object.__setattr__(instance, "_display_exponents", display_exp_dict)
 
         cls._cache[key] = cast(Dimension, instance)
-        return cast(Dimension, instance)
+        return instance
 
     def __hash__(self) -> int:
+        """Returns a hash value for the dimension."""
         return super().__hash__()
 
     @property
     def analytical_representation(self) -> str:
-        """Returns the pre-calculated analytical description of the dimension."""
+        """Returns the pre-calculated analytical dimension description."""
         return self._analytical_representation
 
     @property
@@ -133,7 +146,10 @@ class Dimension(BaseExponentEntity):
                 f"<Dimension: {self.analytical_representation} "
                 f"({registered_name}) {self._display_exponents}>"
             )
-        return f"<Dimension: {self.analytical_representation} {self._display_exponents}>"
+        return (
+            "<Dimension: "
+            f"{self.analytical_representation} {self._display_exponents}>"
+        )
 
     def is_dimensionless(self) -> bool:
         """Checks if the dimension is dimensionless."""

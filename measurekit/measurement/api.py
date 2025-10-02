@@ -19,13 +19,21 @@ if TYPE_CHECKING:
 
 
 class SpecializedQuantityFactory:
-    """A callable factory for creating Quantities with a predefined default unit."""
+    """A callable factory for creating Quantities with a predefined unit."""
 
     __slots__ = ("_default_unit", "_system")
 
     def __init__(
         self, default_unit: CompoundUnit, system: UnitSystem | None = None
     ):
+        """Initializes the factory with a default unit and optional system.
+
+        Args:
+            default_unit (CompoundUnit): The unit that will be used by default
+                when creating quantities.
+            system (UnitSystem | None): The unit system to use. If None, the
+                active system from context will be used.
+        """
         self._default_unit = default_unit
         self._system = system
 
@@ -43,6 +51,7 @@ class SpecializedQuantityFactory:
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
+        """Creates a Quantity in the factory's default unit."""
         system = (
             self._system if self._system is not None else get_active_system()
         )
@@ -63,6 +72,7 @@ class SpecializedQuantityFactory:
         )
 
     def __repr__(self) -> str:
+        """Detailed representation for debugging."""
         return f"<Quantity Factory for unit='{self._default_unit}'>"
 
 
@@ -72,6 +82,7 @@ class QuantityFactory:
     __slots__ = ("_system", "_cache")
 
     def __init__(self, system: UnitSystem | None = None):
+        """Initializes a new QuantityFactory instance."""
         self._system = system
         self._cache: dict[CompoundUnit, SpecializedQuantityFactory] = {}
 
@@ -89,6 +100,7 @@ class QuantityFactory:
         unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
+        """Creates a Quantity with the specified value and unit."""
         system = (
             self._system if self._system is not None else get_active_system()
         )
@@ -107,6 +119,7 @@ class QuantityFactory:
     def __getitem__(
         self, unit_expression: str | CompoundUnit
     ) -> SpecializedQuantityFactory:
+        """Returns a specialized Quantity factory for a specific unit."""
         system = (
             self._system if self._system is not None else get_active_system()
         )

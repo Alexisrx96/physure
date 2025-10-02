@@ -1,3 +1,12 @@
+"""Defines the `CompoundUnit` class for representing complex physical units.
+
+This module provides the `CompoundUnit` class, which represents any physical
+unit as a combination of base units raised to various powers (e.g., meters per
+second squared as `m¹·s⁻²`). It supports arithmetic operations (multiplication,
+division, exponentiation) and is responsible for calculating conversion factors
+and determining the physical dimension of a unit within a given `UnitSystem`.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -45,12 +54,11 @@ class CompoundUnit(BaseExponentEntity):
         return cast(CompoundUnit, instance)
 
     def __init__(self, exponents: ExponentsDict) -> None:
-        # This is intentionally left blank because all logic is in __new__.
-        # This prevents the dataclass-generated __init__ from overwriting
-        # the normalized exponents set in the parent's __new__ method.
+        """Initializes the compound unit with a dictionary of exponents."""
         pass
 
     def __hash__(self) -> int:
+        """Returns a hash value for the compound unit."""
         return super().__hash__()
 
     # --- System-Dependent Methods ---
@@ -240,7 +248,7 @@ class CompoundUnit(BaseExponentEntity):
         return not self.exponents
 
     def simplify(self, system: UnitSystem) -> CompoundUnit:
-        """Simplifies the unit by expanding derived units into their base components.
+        """Simplifies the unit by expanding derived units into base components.
 
         This method uses the unit "recipes" defined in the given system to
         recursively substitute derived units (like 'N' or 'J') until only

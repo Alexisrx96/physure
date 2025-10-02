@@ -1,3 +1,12 @@
+"""Handles the initialization and creation of the default unit system.
+
+This module is responsible for reading configuration files (`.conf`), parsing
+them, and using a builder pattern (`UnitSystemBuilder`) to construct a fully
+configured `UnitSystem` instance. It acts as the assembly root for the library,
+piecing together all the definitions for dimensions, prefixes, units, and
+constants into a coherent, usable system.
+"""
+
 from __future__ import annotations
 
 import configparser
@@ -46,7 +55,8 @@ def _load_all_configurations_into(
                 paths_to_read.append(str(file_path))
                 if verbose:
                     print(
-                        f"  -> Found (Library Default): {file_path.name} from package"
+                        f"  -> Found (Library Default): {file_path.name} from"
+                        " package"
                     )
             elif verbose:
                 print(f"  -> Not found (Library Default): {file_path.name}")
@@ -58,7 +68,8 @@ def _load_all_configurations_into(
         pass
 
     # 3. Add the user's override configuration file (High Priority)
-    # Check the Current Working Directory (CWD), which is typically the application's root.
+    # Check the Current Working Directory (CWD), which is typically the
+    # application's root.
     user_config_path = Path.cwd() / "measurekit.conf"
 
     if user_config_path.is_file():
@@ -81,10 +92,12 @@ class UnitSystemBuilder:
     """A builder class for constructing a UnitSystem instance."""
 
     def __init__(self, name: str | None = None, verbose: bool = False):
+        """Initializes a new builder instance."""
         self._system = UnitSystem(name=name)
         self._verbose = verbose
 
     def add_settings(self, settings_data: dict[str, str]) -> UnitSystemBuilder:
+        """Adds settings from a dictionary of key-value pairs."""
         self._system.settings.update(settings_data)
         return self
 
@@ -161,7 +174,8 @@ class UnitSystemBuilder:
                 allow_prefixes=allow_prefixes,
             )
 
-        # Pass 2: Register recipes for derived units after all base units are available
+        # Pass 2: Register recipes for derived units after all base
+        # units are available
         for key, value_str in units_data.items():
             if "[" in value_str:
                 main_part, _ = value_str.split("[", 1)
@@ -199,7 +213,7 @@ class UnitSystemBuilder:
             return self
         if self._verbose:
             print("\n--- Phase 5: Initializing Constants ---")
-        for name, value_str in constants_data.items():
+        for value_str in constants_data.values():
             value_str_part, unit_str = value_str.split(maxsplit=1)
             value = float(value_str_part)
             unit = (

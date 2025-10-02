@@ -56,6 +56,7 @@ class TokenType(Enum):
     EOF = auto()
 
     def __str__(self):
+        """Returns the name of the token type."""
         return self.name
 
 

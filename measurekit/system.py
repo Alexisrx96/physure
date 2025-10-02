@@ -1,3 +1,12 @@
+"""Defines the `UnitSystem` class, the central engine for unit management.
+
+The `UnitSystem` acts as a comprehensive registry for all definitions,
+including dimensions, prefixes, units, and their conversion factors. It is the
+core component that orchestrates all unit-aware operations, from parsing unit
+expressions to performing conversions and validating dimensional consistency.
+It serves as the main "application" object in the library's architecture.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -13,8 +22,7 @@ from measurekit.notation.parsers import NotationParser
 
 
 class UnitSystem(IUnitRepository):
-    """Manages a self-contained system of dimensions, units, and configurations.
-    """
+    """Manages a  system of dimensions, units, and configurations."""
 
     def __init__(self, name: str | None = None, description: str = ""):
         """Initializes a new, clean unit system."""
@@ -41,12 +49,18 @@ class UnitSystem(IUnitRepository):
         self.Q_ = QuantityFactory(self)
 
     def get_definition(self, unit_symbol: str) -> UnitDefinition | None:
+        """Retrieves the definition for a given unit symbol."""
         return self.UNIT_SYMBOL_REGISTRY.get(unit_symbol)
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Retrieves a configuration setting by key.
+
+        Optionally returning a default if not found.
+        """
         return self.settings.get(key, default)
 
     def register_alias(self, exponents: ExponentsDict, *aliases: str) -> None:
+        """Registers aliases for a given set of exponents."""
         key = tuple(sorted((k, v) for k, v in exponents.items() if v != 0))
         for alias in aliases:
             if alias not in self.ALIASES[key]:
@@ -56,9 +70,11 @@ class UnitSystem(IUnitRepository):
     def register_prefix(
         self, symbol: str, factor: float, name: str | None = None
     ) -> None:
+        """Registers a prefix with its symbol, factor, and optional name."""
         if symbol in self.PREFIX_REGISTRY:
             print(
-                f"[WARNING] Prefix '{symbol}' is being redefined in this system."
+                f"[WARNING] Prefix '{symbol}' is being "
+                "redefined in this system."
             )
         self.PREFIX_REGISTRY[symbol] = {
             "factor": factor,
@@ -66,9 +82,11 @@ class UnitSystem(IUnitRepository):
         }
 
     def register_dimension(self, dimension: Dimension, name: str):
+        """Registers a descriptive name for a Dimension instance."""
         if dimension in self._DIMENSION_NAME_REGISTRY:
             print(
-                f"[WARNING] Dimension '{dimension}' is being redefined in this system."
+                f"[WARNING] Dimension '{dimension}' is being "
+                "redefined in this system."
             )
         self._DIMENSION_NAME_REGISTRY[dimension] = name
 
@@ -82,8 +100,7 @@ class UnitSystem(IUnitRepository):
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
     ) -> None:
-        """Registers a unit and its aliases with the system.
-        """
+        """Registers a unit and its aliases with the system."""
         unit_def = UnitDefinition(
             symbol,
             dimension,
@@ -94,7 +111,7 @@ class UnitSystem(IUnitRepository):
         )
 
         all_names = set([symbol] + list(aliases))
-        sorted_names = sorted(list(all_names))
+        sorted_names = sorted(all_names)
 
         for unit_name in sorted_names:
             if unit_name in self.UNIT_SYMBOL_REGISTRY:
@@ -133,6 +150,7 @@ class UnitSystem(IUnitRepository):
 
     def get_unit(self, unit_expression: str) -> CompoundUnit:
         """Retrieves a CompoundUnit from the system based on its notation.
+
         This method is now a pure retrieval function with no side effects.
         """
         # 1. Check for simple units (including aliases and prefixed units)

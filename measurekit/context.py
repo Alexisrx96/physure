@@ -1,4 +1,12 @@
-# measurekit/context.py
+"""Manages the active unit system context for the MeasureKit library.
+
+This module provides functions to get the currently active unit system and a
+context manager to temporarily switch to a different system. This is crucial
+for ensuring that quantity operations are performed within the correct set of
+unit definitions, especially in applications that may need to work with
+multiple, distinct unit systems simultaneously.
+"""
+
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -17,7 +25,8 @@ _global_default_system: UnitSystem | None = None
 
 # 2. Internal function for setting the global default system
 def _set_global_default_system(system: UnitSystem) -> None:
-    """Internal function to set the global default system after it's been created.
+    """Internal function to set the global default system after it's built.
+
     This replaces the implicit import from measurekit.
     """
     global _global_default_system
@@ -44,10 +53,12 @@ def get_active_system() -> UnitSystem:
         # If this happens, it means code is calling get_active_system()
         # before the system has been fully created and set.
         # The calling code (e.g., in startup.py) should explicitly pass the
-        # UnitSystem object it is currently building during this bootstrap phase.
+        # UnitSystem object it is currently building during this bootstrap
+        # phase.
         raise RuntimeError(
-            "Attempted to access the default UnitSystem before its initialization was complete. "
-            "Pass the current system explicitly to the Quantity factory during setup."
+            "Attempted to access the default UnitSystem before its "
+            "initialization was complete. Pass the current system explicitly "
+            "to the Quantity factory during setup."
         )
 
     return _global_default_system
@@ -55,6 +66,7 @@ def get_active_system() -> UnitSystem:
 
 @contextmanager
 def system_context(system: UnitSystem) -> Iterator[None]:
+    """A context manager to temporarily set the active unit system."""
     token = _active_system.set(system)
     try:
         yield
