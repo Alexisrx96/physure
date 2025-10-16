@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from measurekit.dynamics.solver import ODESolution, solve_unit_aware_ivp
+from measurekit.application.solver_service import ODESolution, solve_unit_aware_ivp
 from measurekit.domain.measurement.dimensions import Dimension
 from tests.base_test_class import BaseTestUnit
 
