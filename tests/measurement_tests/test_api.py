@@ -1,11 +1,11 @@
 import unittest
 
 from measurekit import default_system, get_unit
-from measurekit.measurement.api import (
+from measurekit.application.factories import (
     QuantityFactory,
     SpecializedQuantityFactory,
 )
-from measurekit.measurement.quantity import Quantity
+from measurekit.domain.measurement.quantity import Quantity
 
 
 class TestSpecializedQuantityFactory(unittest.TestCase):

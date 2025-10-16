@@ -4,7 +4,7 @@ import sympy as sp
 
 from measurekit import Q_, get_unit
 from measurekit.functions.functions import Function
-from measurekit.measurement.dimensions import Dimension
+from measurekit.domain.measurement.dimensions import Dimension
 
 
 class TestFunction(unittest.TestCase):

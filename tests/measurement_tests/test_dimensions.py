@@ -4,7 +4,7 @@
 
 import unittest
 
-from measurekit.measurement.dimensions import Dimension, get_dimension
+from measurekit.domain.measurement.dimensions import Dimension, get_dimension
 from tests.base_test_class import BaseTestUnit
 
 

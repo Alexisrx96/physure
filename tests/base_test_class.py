@@ -1,7 +1,7 @@
 import unittest
 
-from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import CompoundUnit
+from measurekit.domain.measurement.dimensions import Dimension
+from measurekit.domain.measurement.units import CompoundUnit
 from measurekit.system import UnitSystem
 
 

@@ -5,8 +5,8 @@ import unittest
 import numpy as np
 
 from measurekit.exceptions import IncompatibleUnitsError
-from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.units import CompoundUnit
+from measurekit.domain.measurement.dimensions import Dimension
+from measurekit.domain.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
 
 
