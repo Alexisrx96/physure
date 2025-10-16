@@ -14,9 +14,9 @@ import numpy as np
 import sympy as sp
 
 from measurekit import default_system
-from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.quantity import Quantity
-from measurekit.measurement.units import CompoundUnit
+from measurekit.domain.measurement.dimensions import Dimension
+from measurekit.domain.measurement.quantity import Quantity
+from measurekit.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
     from measurekit.system import UnitSystem
