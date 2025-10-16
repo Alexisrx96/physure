@@ -17,15 +17,15 @@ import numpy as np
 import sympy as sp
 
 from measurekit.domain.measurement.dimensions import Dimension
+from measurekit.domain.notation.base_entity import BaseExponentEntity
+from measurekit.domain.notation.typing import ExponentsDict
 from measurekit.exceptions import IncompatibleUnitsError
-from measurekit.notation.base_entity import BaseExponentEntity
-from measurekit.notation.typing import ExponentsDict
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
     from measurekit.domain.measurement.quantity import Quantity
-    from measurekit.system import UnitSystem
+    from measurekit.domain.measurement.system import UnitSystem
 
 
 @dataclass(frozen=True)
@@ -76,7 +76,7 @@ class CompoundUnit(BaseExponentEntity):
         Raises:
         IncompatibleUnitsError: If the units have incompatible dimensions.
         """
-        from measurekit.context import get_active_system
+        from measurekit.application.context import get_active_system
 
         system = get_active_system()
         if self.dimension(system) != target.dimension(system):
@@ -160,7 +160,7 @@ class CompoundUnit(BaseExponentEntity):
         Any: A new Quantity instance, or NotImplemented if the operation is
         not supported.
         """
-        from measurekit.context import get_active_system
+        from measurekit.application.context import get_active_system
         from measurekit.domain.measurement.quantity import Quantity
 
         if isinstance(other, (float, int, np.ndarray)):

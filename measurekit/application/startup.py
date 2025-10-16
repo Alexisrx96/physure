@@ -14,7 +14,7 @@ from importlib import resources
 from pathlib import Path
 from typing import cast
 
-from measurekit.context import system_context
+from measurekit.application.context import system_context
 from measurekit.domain.measurement.conversions import UnitDefinition
 from measurekit.domain.measurement.dimensions import (
     Dimension,

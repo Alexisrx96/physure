@@ -29,14 +29,14 @@ import numpy as np
 import sympy as sp
 from numpy.typing import NDArray
 
-from measurekit.context import get_active_system
+from measurekit.application.context import get_active_system
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.uncertainty import Uncertainty
 from measurekit.domain.measurement.units import CompoundUnit
 from measurekit.exceptions import IncompatibleUnitsError
 
 if TYPE_CHECKING:
-    from measurekit.system import UnitSystem
+    from measurekit.domain.measurement.system import UnitSystem
 
 # --- Generic Type Variables ---
 ValueType = TypeVar("ValueType", float, int, NDArray[Any])
@@ -111,7 +111,7 @@ class Quantity(Generic[ValueType, UncType]):
         uncertainty: Any = 0.0,
     ) -> Self:
         """Creates a Quantity from raw input values."""
-        from measurekit.context import get_active_system
+        from measurekit.application.context import get_active_system
 
         resolved_system = system if system is not None else get_active_system()
 
