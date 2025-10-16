@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Callable
 import numpy as np
 from scipy.integrate import solve_ivp
 
-from measurekit.measurement.quantity import Quantity
+from measurekit.domain.measurement.quantity import Quantity
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
