@@ -35,3 +35,4 @@ Thumbs.db
 *.log
 *.sqlite3
 db.sqlite3
+manual_sandbox/
