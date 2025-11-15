@@ -19,7 +19,7 @@ from measurekit.domain.measurement.quantity import Quantity
 from measurekit.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
-    from measurekit.system import UnitSystem
+    from measurekit.domain.measurement.system import UnitSystem
 
 
 @dataclass(frozen=True)
