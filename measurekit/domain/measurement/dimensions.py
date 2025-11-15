@@ -9,7 +9,7 @@ library, enabling it to check for dimensional consistency in calculations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Self, cast
 
 from measurekit.domain.notation.base_entity import BaseExponentEntity
@@ -23,17 +23,17 @@ from measurekit.domain.notation.typing import ExponentsDict
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
 DIMENSIONLESS = None
-_PREFIX_BLOCKLIST: set[str] = set()
+_PREFIX_DENYLIST: set[str] = set()
 
 
 def block_prefixes_for_dimension_symbol(symbol: str) -> None:
-    """Adds a dimension symbol to the prefix blocklist."""
-    _PREFIX_BLOCKLIST.add(symbol)
+    """Adds a dimension symbol to the prefix denylist."""
+    _PREFIX_DENYLIST.add(symbol)
 
 
 def prefixes_allowed_for_dimension_symbol(symbol: str) -> bool:
     """Checks if a dimension symbol is allowed to have prefixes."""
-    return symbol not in _PREFIX_BLOCKLIST
+    return symbol not in _PREFIX_DENYLIST
 
 
 def register_dimension(dimension: Dimension, name: str):
@@ -80,10 +80,8 @@ class Dimension(BaseExponentEntity):
     _cache: ClassVar[dict[tuple, Dimension]] = {}
     _base_dimensions: ClassVar[list[str]] = []
 
-    __slots__ = (
-        "_analytical_representation",
-        "_display_exponents",
-    )
+    _analytical_representation: str = field(init=False, repr=False)
+    _display_exponents: dict = field(init=False, repr=False)
 
     def __new__(cls, exponents: ExponentsDict) -> Self:
         """Creates or retrieves a cached Dimension instance."""

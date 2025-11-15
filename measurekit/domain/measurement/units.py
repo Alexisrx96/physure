@@ -19,7 +19,7 @@ import sympy as sp
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.notation.base_entity import BaseExponentEntity
 from measurekit.domain.notation.typing import ExponentsDict
-from measurekit.exceptions import IncompatibleUnitsError
+from measurekit.domain.exceptions import IncompatibleUnitsError
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray

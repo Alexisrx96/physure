@@ -13,13 +13,13 @@ import logging
 from collections import defaultdict
 from typing import Any, cast
 
-from measurekit.measurement.api import QuantityFactory
-from measurekit.measurement.conversions import UnitDefinition
-from measurekit.measurement.dimensions import Dimension
-from measurekit.measurement.ports.unit_repository import IUnitRepository
-from measurekit.measurement.units import CompoundUnit, ExponentsDict
-from measurekit.notation.lexer import generate_tokens
-from measurekit.notation.parsers import NotationParser
+from measurekit.application.factories import QuantityFactory
+from measurekit.domain.measurement.conversions import UnitDefinition
+from measurekit.domain.measurement.dimensions import Dimension
+from measurekit.domain.measurement.ports.unit_repository import IUnitRepository
+from measurekit.domain.measurement.units import CompoundUnit, ExponentsDict
+from measurekit.domain.notation.lexer import generate_tokens
+from measurekit.domain.notation.parsers import NotationParser
 
 # Create a logger specific to this module
 log = logging.getLogger(__name__)
