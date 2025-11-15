@@ -2,7 +2,7 @@ import unittest
 
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.units import CompoundUnit
-from measurekit.system import UnitSystem
+from measurekit.domain.measurement.system import UnitSystem
 
 
 class BaseTestUnit(unittest.TestCase):

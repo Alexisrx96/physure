@@ -2,7 +2,7 @@
 
 import unittest
 
-from measurekit.notation.token_buffer import TokenBuffer
+from measurekit.domain.notation.token_buffer import TokenBuffer
 
 
 class TestTokenBuffer(unittest.TestCase):

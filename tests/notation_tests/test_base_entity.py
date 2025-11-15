@@ -2,7 +2,7 @@
 
 import unittest
 
-from measurekit.notation.base_entity import BaseExponentEntity
+from measurekit.domain.notation.base_entity import BaseExponentEntity
 
 
 class TestBaseExponentEntity(unittest.TestCase):

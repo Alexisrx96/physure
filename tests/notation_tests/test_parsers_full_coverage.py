@@ -2,9 +2,13 @@
 
 import unittest
 
-from measurekit.notation.base_entity import BaseExponentEntity
-from measurekit.notation.lexer import TokenType, UnitToken, generate_tokens
-from measurekit.notation.parsers import NotationParser
+from measurekit.domain.notation.base_entity import BaseExponentEntity
+from measurekit.domain.notation.lexer import (
+    TokenType,
+    UnitToken,
+    generate_tokens,
+)
+from measurekit.domain.notation.parsers import NotationParser
 
 
 class TestNotationParser(unittest.TestCase):

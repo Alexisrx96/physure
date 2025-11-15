@@ -2,7 +2,7 @@
 
 import unittest
 
-from measurekit.notation.lexer import (
+from measurekit.domain.notation.lexer import (
     TokenType,
     UnitToken,
     generate_tokens,

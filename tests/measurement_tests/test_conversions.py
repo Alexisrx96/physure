@@ -4,7 +4,7 @@
 
 import unittest
 
-from measurekit.exceptions import IncompatibleUnitsError
+from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.conversions import UnitDefinition
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.units import CompoundUnit

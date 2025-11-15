@@ -1,7 +1,7 @@
 # decorators.py (or added to tests/base_test_class.py)
 import functools
 
-from measurekit.context import system_context
+from measurekit.application.context import system_context
 
 
 def with_system_context(f):

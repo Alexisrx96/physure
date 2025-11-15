@@ -7,7 +7,7 @@ Integration tests for complete workflows in MeasureKit after refactoring.
 import math
 import unittest
 
-from measurekit.exceptions import IncompatibleUnitsError
+from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.dimensions import Dimension
 from tests.base_test_class import BaseTestUnit
 from tests.decorators import with_system_context

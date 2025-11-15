@@ -3,7 +3,7 @@ import unittest
 import sympy as sp
 
 from measurekit import Q_, get_unit
-from measurekit.functions.functions import Function
+from measurekit.application.functions.functions import Function
 from measurekit.domain.measurement.dimensions import Dimension
 
 

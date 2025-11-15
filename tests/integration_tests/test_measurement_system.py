@@ -9,7 +9,7 @@ UnitSystem instance.
 import math
 import unittest
 
-from measurekit.exceptions import IncompatibleUnitsError
+from measurekit.domain.exceptions import IncompatibleUnitsError
 from tests.base_test_class import BaseTestUnit
 
 
