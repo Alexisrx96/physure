@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import singledispatchmethod
-from typing import Self
 
-from measurekit.notation.lexer import to_superscript
-from measurekit.notation.typing import ExponentsDict
+from typing_extensions import Self
+
+from measurekit.application.parsing import to_superscript
+from measurekit.domain.notation.typing import ExponentsDict
 
 
 @dataclass(frozen=True)

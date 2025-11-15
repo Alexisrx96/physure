@@ -19,13 +19,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from measurekit.notation.lexer import (
+from measurekit.domain.notation.lexer import (
     TokenType,
     UnitToken,
     parse_superscript,
 )
-from measurekit.notation.protocols import ExponentEntityProtocol
-from measurekit.notation.token_buffer import TokenBuffer
+from measurekit.domain.notation.protocols import ExponentEntityProtocol
+from measurekit.domain.notation.token_buffer import TokenBuffer
 
 
 class NotationParser:
