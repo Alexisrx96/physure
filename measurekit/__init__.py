@@ -7,10 +7,10 @@ use, allowing developers to focus on the logic of their calculations without
 worrying about the intricacies of unit management.
 """
 
-from measurekit.context import _set_global_default_system
-from measurekit.measurement.api import QuantityFactory
-from measurekit.startup import create_default_system
-from measurekit.system import UnitSystem
+from measurekit.application.context import _set_global_default_system
+from measurekit.application.factories import QuantityFactory
+from measurekit.application.startup import create_default_system
+from measurekit.domain.measurement.system import UnitSystem
 
 # --- Application Assembly ---
 # 1. Create the concrete adapter instance. This is our main application object.
@@ -34,15 +34,15 @@ def get_unit(unit_expression):
 
 
 # --- Expose Core Domain Objects and Exceptions ---
-from measurekit.context import get_active_system, system_context
-from measurekit.exceptions import (
+from measurekit.application.context import get_active_system, system_context
+from measurekit.domain.measurement.quantity import Quantity
+from measurekit.domain.measurement.uncertainty import Uncertainty
+from measurekit.domain.measurement.units import CompoundUnit
+from measurekit.domain.exceptions import (
     ConversionError,
     MeasureKitError,
     UnitNotFoundError,
 )
-from measurekit.measurement.quantity import Quantity
-from measurekit.measurement.uncertainty import Uncertainty
-from measurekit.measurement.units import CompoundUnit
 
 __all__ = [
     "Q_",
