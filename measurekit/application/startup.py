@@ -226,6 +226,20 @@ class UnitSystemBuilder:
                 _ = self._system.Q_(value, unit)
         return self
 
+    def add_system_info(
+        self, system_data: dict[str, str]
+    ) -> UnitSystemBuilder:
+        """Adds system metadata from the [System] section."""
+        if not system_data:
+            return self
+
+        if "name" in system_data:
+            self._system.name = system_data["name"]
+
+        # Store other system settings (like base_units) in the settings dict
+        self._system.settings.update(system_data)
+        return self
+
     def build(self) -> UnitSystem:
         """Returns the fully constructed and configured UnitSystem object."""
         if self._verbose:
@@ -233,15 +247,78 @@ class UnitSystemBuilder:
         return self._system
 
 
-def create_default_system(verbose: bool = False) -> UnitSystem:
-    """Creates and populates a default UnitSystem using a decoupled builder."""
+def _get_config_parser(
+    extra_config_files: list[str] = None, verbose: bool = False
+) -> configparser.ConfigParser:
+    """Creates a ConfigParser with base configs and optional extra files."""
     parser = configparser.ConfigParser()
-    _load_all_configurations_into(parser, verbose)
 
-    builder = UnitSystemBuilder(name="Default", verbose=verbose)
+    # 1. Always load the base measurekit.conf
+    try:
+        with resources.path(
+            "measurekit.infrastructure.config", "measurekit.conf"
+        ) as base_config:
+            parser.read(str(base_config), encoding="utf-8")
+            if verbose:
+                print(f"  -> Loaded base config: {base_config}")
+    except Exception as e:
+        print(f"[WARNING] Could not load base configuration: {e}")
+
+    # 2. Load extra configuration files (e.g., specific system configs)
+    if extra_config_files:
+        for file_name in extra_config_files:
+            try:
+                # Try finding it in the systems subpackage first
+                with resources.path(
+                    "measurekit.infrastructure.config.systems", file_name
+                ) as sys_config:
+                    parser.read(str(sys_config), encoding="utf-8")
+                    if verbose:
+                        print(f"  -> Loaded system config: {sys_config}")
+            except Exception:
+                # Fallback: try as a direct path or user file
+                if Path(file_name).is_file():
+                    parser.read(file_name, encoding="utf-8")
+                    if verbose:
+                        print(f"  -> Loaded external config: {file_name}")
+                elif verbose:
+                    print(f"  -> Config file not found: {file_name}")
+
+    # 3. Load user override (measurekit.conf in CWD)
+    user_config_path = Path.cwd() / "measurekit.conf"
+    if user_config_path.is_file():
+        parser.read(str(user_config_path), encoding="utf-8")
+        if verbose:
+            print(f"  -> Loaded user override: {user_config_path}")
+
+    return parser
+
+
+def create_system(
+    config_name: str = None, verbose: bool = False
+) -> UnitSystem:
+    """Creates a UnitSystem, optionally loading a specific system config file.
+
+    Args:
+        config_name: The name of the config file (e.g., 'imperial.conf')
+                     located in infrastructure/config/systems, or a path.
+    """
+    extra_files = [config_name] if config_name else []
+    parser = _get_config_parser(extra_files, verbose)
+
+    # Determine system name
+    sys_name = "Default"
+    if parser.has_section("System") and parser.has_option("System", "name"):
+        sys_name = parser.get("System", "name")
+
+    builder = UnitSystemBuilder(name=sys_name, verbose=verbose)
+
     return (
         builder.add_settings(
             dict(parser.items("Settings")) if "Settings" in parser else {}
+        )
+        .add_system_info(
+            dict(parser.items("System")) if "System" in parser else {}
         )
         .add_prefixes(
             dict(parser.items("Prefixes")) if "Prefixes" in parser else {}
@@ -255,3 +332,8 @@ def create_default_system(verbose: bool = False) -> UnitSystem:
         )
         .build()
     )
+
+
+def create_default_system(verbose: bool = False) -> UnitSystem:
+    """Creates the default UnitSystem (SI)."""
+    return create_system("international.conf", verbose=verbose)
