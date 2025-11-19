@@ -1,65 +1,112 @@
-# MeasureKit
+<p align="center">
+  <img src="MeasureKitLogoBeta.jpg" alt="MeasureKit Logo" width="400">
+</p>
 
-A Python package for handling measurement units and conversions.
+<h1 align="center">MeasureKit</h1>
 
-## Description
+<p align="center">
+  <strong>A powerful Python library for physical computing, unit conversions, and symbolic analysis.</strong>
+</p>
 
-MeasureKit is a Python library designed to simplify working with measurement units, unit conversions, and dimensional analysis. It provides an intuitive interface for scientists, engineers, and developers working with physical quantities.
+<p align="center">
+  <a href="https://pypi.org/project/measurekit/">
+    <img src="https://img.shields.io/pypi/v/measurekit.svg" alt="PyPI version">
+  </a>
+  <a href="https://opensource.org/licenses/MIT">
+    <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+  </a>
+  <a href="https://www.python.org/">
+    <img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python 3.8+">
+  </a>
+</p>
 
-## Installation
+---
 
-You can install the package via pip:
+## 🚀 Description
+
+**MeasureKit** is designed to make working with physical quantities in Python intuitive, robust, and error-free. Whether you are a scientist, engineer, or student, MeasureKit handles the complexity of unit conversions and dimensional analysis so you can focus on the physics.
+
+## 📦 Installation
+
+Install the package via pip:
 
 ```bash
 pip install measurekit
 ```
 
-Install it as a ipython kernel:
+To use it within a Jupyter Notebook/Lab environment:
 
 ```bash
 pip install ipykernel
 python -m ipykernel install --user --name measurekit
 ```
 
-## Usage
+## 🛠 Usage
 
 ```python
-import measurekit as mk
+from measurekit import Q_
 
-# Convert between units
-meters = mk.convert(3.28, 'feet', 'meters')
-print(f"3.28 feet = {meters} meters")
+# 1. Easy Unit Conversions
+# Use the Q_ factory to create quantities
+feet = Q_(3.28, 'ft')
+meters = feet.to('m')
+print(f"3.28 feet = {meters:.4f}")
 
-# Create a quantity with units
-distance = mk.Quantity(5, 'km')
-time = mk.Quantity(2, 'hours')
+# 2. Quantity Arithmetic
+distance = Q_(5, 'km')
+time = Q_(2, 'h')
 
-# Calculate speed
+# Automatic unit handling in calculations
 speed = distance / time
-print(f"Speed: {speed}")  # Outputs with correct units (km/h)
+print(f"Speed: {speed}")  # Output: 2.5 km/h
 
-# Convert to different units
+# 3. Fluid Conversions
 speed_in_mph = speed.to('mph')
 print(f"Speed in mph: {speed_in_mph}")
 ```
 
-## Features
+## ✨ Features
 
-- Comprehensive unit conversion system
-- Support for SI, imperial, and custom units
-- Dimensional analysis to prevent invalid operations
-- Unit-aware calculations
-- Extensible unit definition system
-- Automatic unit simplification and normalization
+- **Robust Unit System:** Support for SI, Imperial, and custom unit definitions.
+- **Dimensional Analysis:** Prevents invalid operations (e.g., adding length to mass) at runtime.
+- **Symbolic Math:** Built-in support for symbolic manipulation of physical equations.
+- **Extensible:** Easily define your own units and constants via configuration files.
+- **Developer Friendly:** Type hints, clean API, and comprehensive error messages.
 
-## Requirements
+## ⚙️ Configuration
 
-- Python 3.6 or higher
+MeasureKit allows you to customize its behavior, define new units, and add constants through a `measurekit.conf` file.
 
-## License
+1.  **Create a `measurekit.conf` file** in your project's root directory.
+2.  **Define your custom settings** following the INI format.
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+**Example `measurekit.conf`:**
 
-## Author
+```ini
+[Settings]
+default_system = SI
 
-Irvin Torres ([irvinrx1996@hotmail.com](mailto:irvinrx1996@hotmail.com))
+[Units]
+# Format: name = factor_to_base, dimension, [symbol, alias...]
+hand = 0.1016, L, [hand, hands]
+bitcoin = 95000.0, $, [BTC, bitcoin]
+
+[Constants]
+# Format: name = value unit
+my_gravity = 9.81 m/s^2
+```
+
+## 📋 Requirements
+
+- Python 3.8 or higher
+- `sympy`
+- `numpy` (optional, for advanced features)
+- `scipy` (optional, for simulations)
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## ✍️ Author
+
+**Irvin Torres** - [irvinrx1996@hotmail.com](mailto:irvinrx1996@hotmail.com)
