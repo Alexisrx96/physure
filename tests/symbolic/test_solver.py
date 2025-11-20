@@ -4,6 +4,9 @@ import sympy
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.symbolic.quantity import Equation, SymbolicQuantity
+from measurekit.domain.symbolic.expression import (
+    SymbolicExpression,
+)  # Add this import
 from tests.base_test_class import BaseTestUnit
 from tests.decorators import with_system_context
 
@@ -32,18 +35,20 @@ class TestSymbolicQuantity(BaseTestUnit):
         # FIX: Use symbols with correct assumptions for comparison
         m_sym = sympy.Symbol("m", positive=True)
         a_sym = sympy.Symbol("a", positive=True)
-        self.assertEqual(force.symbol, m_sym * a_sym)  # type: ignore
+
+        # --- FIX: Use .expr instead of .symbol for derived expressions ---
+        self.assertEqual(force.expr, m_sym * a_sym)
         self.assertEqual(force.unit, self.system.get_unit("kg*m/s^2"))
 
         # Division
         val = force / a
-        self.assertEqual(val.symbol, (m_sym * a_sym) / a_sym)  # type: ignore
+        self.assertEqual(val.expr, (m_sym * a_sym) / a_sym)
         self.assertEqual(val.unit, self.system.get_unit("kg"))
 
         # Power
         L_sym = sympy.Symbol("L", positive=True)
         area = SymbolicQuantity("L", "m", system=self.system) ** 2
-        self.assertEqual(area.symbol, L_sym**2)
+        self.assertEqual(area.expr, L_sym**2)
         self.assertEqual(area.unit, self.system.get_unit("m^2"))
 
     @with_system_context
@@ -54,19 +59,20 @@ class TestSymbolicQuantity(BaseTestUnit):
 
         # Multiplication
         doubled = length * 2
-        self.assertEqual(doubled.symbol, 2 * L_sym)  # type: ignore
+        # --- FIX: Use .expr ---
+        self.assertEqual(doubled.expr, 2 * L_sym)
         self.assertEqual(doubled.unit, self.system.get_unit("m"))
 
         doubled_rev = 2 * length
-        self.assertEqual(doubled_rev.symbol, 2 * L_sym)  # type: ignore
+        self.assertEqual(doubled_rev.expr, 2 * L_sym)
 
         # Division
         halved = length / 2
-        self.assertEqual(halved.symbol, L_sym / 2)  # type: ignore
+        self.assertEqual(halved.expr, L_sym / 2)
 
         # Inverse
         inv = 1 / length
-        self.assertEqual(inv.symbol, 1 / L_sym)  # type: ignore
+        self.assertEqual(inv.expr, 1 / L_sym)
         self.assertEqual(inv.unit, self.system.get_unit("1/m"))
 
     @with_system_context
@@ -79,7 +85,8 @@ class TestSymbolicQuantity(BaseTestUnit):
         # FIX: Use symbols with correct assumptions
         L1_sym = sympy.Symbol("L1", positive=True)
         L2_sym = sympy.Symbol("L2", positive=True)
-        self.assertEqual(total.symbol, L1_sym + L2_sym)  # type: ignore
+        # --- FIX: Use .expr ---
+        self.assertEqual(total.expr, L1_sym + L2_sym)
         self.assertEqual(total.unit, self.system.get_unit("m"))
 
         # Test with incompatible units
@@ -105,22 +112,24 @@ class TestEquationSolver(BaseTestUnit):
         newtons_law = Equation(F, m * a, variables=[F, m, a])
         self.assertEqual(
             newtons_law.equation,
-            sympy.Eq(F.symbol, m.symbol * a.symbol),  # type: ignore
+            # --- FIX: Use .symbol (which is .expr) for quantities ---
+            sympy.Eq(F.symbol, m.symbol * a.symbol),
         )
 
         # Solve for a
         solution_a = newtons_law.solve_for("a")
-        self.assertEqual(solution_a.symbol, F.symbol / m.symbol)  # type: ignore
+        # --- FIX: Use .expr for the solution (which is a SymbolicExpression) ---
+        self.assertEqual(solution_a.expr, F.symbol / m.symbol)
         # Compare the exponent dictionaries for dimensional equivalence
         self.assertEqual(
-            solution_a.unit.exponents,  # type: ignore
-            self.system.get_unit("m/s^2").exponents,  # type: ignore
+            solution_a.unit.exponents,
+            self.system.get_unit("m/s^2").exponents,
         )
 
         # Solve for m
         solution_m = newtons_law.solve_for(m)
-        self.assertEqual(solution_m.symbol, F.symbol / a.symbol)  # type: ignore
-        self.assertEqual(solution_m.unit, self.system.get_unit("kg"))  # type: ignore
+        self.assertEqual(solution_m.expr, F.symbol / a.symbol)
+        self.assertEqual(solution_m.unit, self.system.get_unit("kg"))
 
     @with_system_context
     def test_kinematics_equation(self):
@@ -137,10 +146,11 @@ class TestEquationSolver(BaseTestUnit):
         kinematics_eq = Equation(d, rhs, variables=[d, v, t, a])
 
         solution_a = kinematics_eq.solve_for("a")
-        expected_expr = 2 * (d.symbol - v.symbol * t.symbol) / (t.symbol**2)  # type: ignore
+        expected_expr = 2 * (d.symbol - v.symbol * t.symbol) / (t.symbol**2)
 
-        self.assertEqual(sympy.simplify(solution_a.symbol - expected_expr), 0)  # type: ignore
-        self.assertEqual(solution_a.unit, self.system.get_unit("m/s^2"))  # type: ignore
+        # --- FIX: Use .expr ---
+        self.assertEqual(sympy.simplify(solution_a.expr - expected_expr), 0)
+        self.assertEqual(solution_a.unit, self.system.get_unit("m/s^2"))
 
     @with_system_context
     def test_incompatible_equation(self):
@@ -166,10 +176,10 @@ class TestEquationSolver(BaseTestUnit):
 
         solution_mu = reynolds_eq.solve_for("mu")
         self.assertEqual(
-            solution_mu.symbol,  # type: ignore
-            (rho.symbol * v.symbol * L.symbol) / Re.symbol,  # type: ignore
+            solution_mu.expr,  # --- FIX: Use .expr ---
+            (rho.symbol * v.symbol * L.symbol) / Re.symbol,
         )
-        self.assertEqual(solution_mu.unit, self.system.get_unit("kg/(m*s)"))  # type: ignore
+        self.assertEqual(solution_mu.unit, self.system.get_unit("kg/(m*s)"))
 
     @with_system_context
     def test_no_solution(self):

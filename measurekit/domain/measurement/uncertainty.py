@@ -1,5 +1,5 @@
-# measurekit/measurement/uncertainty.py
-"""Este módulo define las clases para el manejo de la incertidumbre."""
+# measurekit/domain/measurement/uncertainty.py
+"""This module defines classes for handling measurement uncertainty."""
 
 from __future__ import annotations
 
@@ -28,19 +28,18 @@ class Uncertainty(Generic[UncType]):
 
     Notes:
     -----
-    The uncertainty is typically represented by a standard deviation.
     In the context of the measurement system, the uncertainty is used
-    to propagate the uncertainty of a quantity to other quantities.
+    to propagate errors during arithmetic operations between quantities.
 
     Examples:
     --------
-    >>> from measurekit import units
-    >>> from measurekit.domain.measurement import Quantity
+    >>> from measurekit import get_unit
+    >>> from measurekit.domain.measurement.quantity import Quantity
     >>> from measurekit.domain.measurement.uncertainty import Uncertainty
-    >>> q = Quantity(1.0, units.meter, uncertainty=Uncertainty(0.1))
+    >>> u = get_unit("m")
+    >>> q = Quantity.from_input(1.0, u, None, uncertainty=Uncertainty(0.1))
     >>> q.uncertainty
-    Uncertainty(std_dev=0.1)
-
+    0.1
     """
 
     __slots__ = ("std_dev",)
@@ -51,13 +50,13 @@ class Uncertainty(Generic[UncType]):
         """Validates the data after initialization.
 
         Checks that the standard deviation is not negative and that it is
-        immutable.
+        immutable (if it is an array).
 
         Raises:
         ValueError: If the standard deviation is negative.
         """
         if np.any(np.asarray(self.std_dev) < 0):
-            raise ValueError("La desviación estándar no puede ser negativa.")
+            raise ValueError("Standard deviation cannot be negative.")
 
         if (
             isinstance(self.std_dev, np.ndarray)
@@ -68,18 +67,8 @@ class Uncertainty(Generic[UncType]):
     def __repr__(self) -> str:
         """Readable representation of the uncertainty.
 
-        Returns a string with the standard deviation of the uncertainty.
-
-        Notes:
-        -----
-        The string is formatted as "Uncertainty(std_dev=<std_dev>)" where
-        <std_dev> is the standard deviation of the uncertainty.
-
-        Examples:
-        --------
-        >>> uncertainty = Uncertainty(0.1)
-        >>> repr(uncertainty)
-        'Uncertainty(std_dev=0.1)'
+        Returns:
+            str: A string formatted as "Uncertainty(std_dev=<value>)".
         """
         return f"Uncertainty(std_dev={self.std_dev})"
 
@@ -99,7 +88,7 @@ class Uncertainty(Generic[UncType]):
         Returns:
         -------
         Uncertainty[UncType]
-            The uncertainty of the result.
+            The new uncertainty object for the result.
         """
         new_std_dev = (self.std_dev**2 + other.std_dev**2) ** 0.5
         return Uncertainty(new_std_dev)
@@ -145,7 +134,10 @@ class Uncertainty(Generic[UncType]):
     def propagate_mul_div(
         self, other: Any, val1: Any, val2: Any, result_value: Any
     ) -> Any:
-        """Calcula la incertidumbre de una multiplicación/división."""
+        """Calculates the uncertainty for multiplication or division.
+
+        This method adds relative uncertainties in quadrature.
+        """
         if np.any(np.asarray(val1) == 0) or np.any(np.asarray(val2) == 0):
             if isinstance(result_value, np.ndarray):
                 return Uncertainty(np.zeros_like(result_value, dtype=float))
@@ -158,13 +150,12 @@ class Uncertainty(Generic[UncType]):
         return Uncertainty(new_std_dev)
 
     def power(self, exponent: float, value: UncType) -> Uncertainty[UncType]:
-        """Calcula la incertidumbre de una potencia.
+        """Calculates the uncertainty of a power operation.
 
-        Para z = x^n, la incertidumbre relativa se multiplica por el
-        valor absoluto del exponente.
+        For z = x^n, the relative uncertainty is multiplied by the
+        absolute value of the exponent.
 
-        Fórmula: (δz / |z|) = |n| * (δx / |x|)
-        Despejando δz: δz = |z| * |n| * (δx / |x|)
+        Formula: δz = |z| * |n| * (δx / |x|)
         """
         if np.any(np.asarray(value) == 0):
             if isinstance(value, np.ndarray):

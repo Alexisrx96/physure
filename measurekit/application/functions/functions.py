@@ -1,9 +1,4 @@
-"""Unit-aware mathematical functions.
-
-It leverages the sympy library for symbolic mathematics, allowing for
-the creation of functions that understand physical dimensions. This enables
-operations like differentiation while ensuring dimensional consistency.
-"""
+"""Unit-aware mathematical functions."""
 
 from __future__ import annotations
 
@@ -14,7 +9,6 @@ import numpy as np
 import sympy as sp
 
 from measurekit import default_system
-from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.quantity import Quantity
 from measurekit.domain.measurement.units import CompoundUnit
 
@@ -24,123 +18,105 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Function:
-    """Represents a unit-aware mathematical function.
+    """Represents a unit-aware mathematical function."""
 
-    This class binds a symbolic expression from sympy with the physical
-    dimensions of its parameters and output, allowing for safe and
-    dimensionally-aware calculations.
-    """
-
-    parameters: dict[str, Dimension]
-    output_dimension: Dimension
+    parameters: dict[str, CompoundUnit]  # FIX: Store Units, not Dimensions
+    output_unit: CompoundUnit  # FIX: Store Output Unit
     symbolic_func: sp.Expr
     system: UnitSystem = field(default=default_system, repr=False)
     arg_names: tuple[str, ...] = field(init=False, repr=False)
     numeric_func: Callable[..., np.ndarray] = field(init=False, repr=False)
 
     def __post_init__(self):
-        """Initializes the numeric version of the function after the dataclass.
-
-        This method is called after the dataclass __init__ method has finished
-        executing. It populates the numeric_func attribute with a callable
-        that can be used to evaluate the function with Quantity arguments.
-        """
+        """Initializes the numeric version of the function."""
         arg_symbols = tuple(self.symbolic_func.free_symbols)
-        sorted_symbols = sorted(arg_symbols, key=lambda s: str(s.name))  # type: ignore
+        # Sort symbols by name to ensure consistent argument order
+        sorted_symbols = sorted(arg_symbols, key=lambda s: str(s.name))
+
+        # Store argument names
         object.__setattr__(
             self,
             "arg_names",
-            tuple(str(s.name) for s in sorted_symbols),  # type: ignore
+            tuple(str(s.name) for s in sorted_symbols),
         )
+
+        # Compile numeric function using NumPy
         callable_func = sp.lambdify(
             sorted_symbols, self.symbolic_func, "numpy"
         )
         object.__setattr__(self, "numeric_func", callable_func)
 
     def __call__(
-        self, output_unit: CompoundUnit, **kwargs: Quantity
+        self, output_unit: CompoundUnit | str, **kwargs: Quantity
     ) -> Quantity:
         """Evaluates the function with the given quantity arguments."""
-        if output_unit.dimension(self.system) != self.output_dimension:
+        if isinstance(output_unit, str):
+            output_unit = self.system.get_unit(output_unit)
+
+        # Verify output dimension consistency
+        if output_unit.dimension(self.system) != self.output_unit.dimension(
+            self.system
+        ):
             raise ValueError(
-                f"The output unit '{output_unit}' has an incorrect dimension. "
-                f"Expected: {self.output_dimension}, "
-                f"Received: {output_unit.dimension(self.system)}"
+                f"Output unit '{output_unit}' has incorrect dimension. "
+                f"Expected: {self.output_unit.dimension(self.system)}"
             )
 
-        # --- FIX: Stricter argument checking ---
+        # Check for missing arguments
         required_args = set(self.arg_names)
         provided_args = set(kwargs.keys())
-
         if not required_args.issubset(provided_args):
-            missing = required_args - provided_args
-            raise TypeError(f"Missing required arguments: {missing}")
+            raise TypeError(
+                f"Missing required arguments: {required_args - provided_args}"
+            )
 
-        # Allow arguments that are in parameters, even if not used in the symbolic expression
-        allowed_args = set(self.parameters.keys())
-        if not provided_args.issubset(allowed_args):
-            unexpected = provided_args - allowed_args
-            raise TypeError(f"Got unexpected arguments: {unexpected}")
-
-        # Build the list of numeric arguments in the correct, sorted order
+        # --- FIX: Convert inputs to expected units before calculation ---
         numeric_args = []
         for name in self.arg_names:
             quantity = kwargs[name]
-            expected_dim = self.parameters[name]
-            if quantity.dimension != expected_dim:
-                raise ValueError(
-                    f"Argument '{name}' has an incorrect dimension. "
-                    f"Expected: {expected_dim}, Received: {quantity.dimension}"
-                )
-            numeric_args.append(quantity.magnitude)
+            target_unit = self.parameters[name]
 
+            # This handles unit conversion (e.g. cm -> m) automatically
+            # and raises IncompatibleUnitsError if dimensions don't match
+            converted_val = quantity.to(target_unit).magnitude
+            numeric_args.append(converted_val)
+
+        # Calculate result (magnitude in terms of self.output_unit)
         result_value = self.numeric_func(*numeric_args)
-        return self.system.Q_(result_value, output_unit)
+
+        # Wrap result in the derivation's output unit, then convert to user's requested unit
+        return self.system.Q_(result_value, self.output_unit).to(output_unit)
 
     def derivative(self, respect_to: str) -> Function:
-        """Computes the symbolic derivative of the function.
-
-        :param respect_to: The name of the parameter to differentiate against.
-        :return: A new Function object representing the derivative.
-        """
-        respect_to_sym = sp.Symbol(respect_to)
-
+        """Computes the symbolic derivative of the function."""
         if respect_to not in self.parameters:
-            raise ValueError(
-                f"Cannot differentiate with respect to '{respect_to}' "
-                "because its dimension is unknown."
-            )
+            raise ValueError(f"Unknown parameter '{respect_to}'")
+
+        # --- FIX: Find the specific symbol instance in the expression ---
+        respect_to_sym = None
+        for sym in self.symbolic_func.free_symbols:
+            if sym.name == respect_to:
+                respect_to_sym = sym
+                break
+
+        # If symbol isn't found (variable cancelled out), we use a dummy
+        if respect_to_sym is None:
+            respect_to_sym = sp.Symbol(respect_to)
 
         derivative_expr = sp.diff(self.symbolic_func, respect_to_sym)
-        new_output_dim = self.output_dimension / self.parameters[respect_to]
+
+        # Calculate new output unit: Output / Parameter
+        new_output_unit = self.output_unit / self.parameters[respect_to]
 
         return Function(
             parameters=self.parameters,
-            output_dimension=new_output_dim,
+            output_unit=new_output_unit,
             symbolic_func=derivative_expr,
             system=self.system,
         )
 
     def __repr__(self) -> str:
-        """Provides a detailed developer representation of the function."""
-        param_str = ", ".join(
-            f"{name}: {dim.analytical_representation}"
-            for name, dim in self.parameters.items()
-        )
-        return (
-            f"Function({self.symbolic_func}, "
-            f"params={{ {param_str} }}, "
-            f"output_dim={self.output_dimension.analytical_representation})"
-        )
+        return f"Function({self.symbolic_func}) -> [{self.output_unit}]"
 
     def __str__(self) -> str:
-        """Human-readable representation of the function.
-
-        Returns a string showing the function's symbolic expression and
-        the names and dimensions of its parameters.
-        """
-        param_str = ", ".join(
-            f"{name}: {dim.analytical_representation}"
-            for name, dim in self.parameters.items()
-        )
-        return f"'{self.symbolic_func}' with parameters {{{param_str}}}"
+        return f"'{self.symbolic_func}'"
