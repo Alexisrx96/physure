@@ -11,6 +11,10 @@ import numpy as np
 import sympy as sp
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
+from measurekit.domain.measurement.converters import (
+    LinearConverter,
+    UnitConverter,
+)
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.notation.base_entity import BaseExponentEntity
 from measurekit.domain.notation.typing import ExponentsDict
@@ -20,6 +24,25 @@ if TYPE_CHECKING:
 
     from measurekit.domain.measurement.quantity import Quantity
     from measurekit.domain.measurement.system import UnitSystem
+
+
+@dataclass(frozen=True)
+class Unit:
+    """Represents a single atomic unit definition."""
+
+    name: str
+    symbol: str
+    dimension: Dimension
+    # Reemplazamos 'factor: float' por esto:
+    converter: UnitConverter
+
+    # Helper para mantener compatibilidad hacia atrás si lo deseas
+    @property
+    def conversion_factor(self) -> float:
+        """Helper to maintain backward compatibility for linear units."""
+        if isinstance(self.converter, LinearConverter):
+            return self.converter.scale
+        raise ValueError(f"La unidad {self.name} no es lineal.")
 
 
 @dataclass(frozen=True)
@@ -51,6 +74,14 @@ class CompoundUnit(BaseExponentEntity):
     def __init__(self, exponents: ExponentsDict) -> None:
         """Initializes the compound unit with a dictionary of exponents."""
         pass
+
+    def __post_init__(self):
+        """Eliminamos cualquier unidad con exponente 0."""
+        # clean_exponents = {k: v for k, v in self.exponents.items() if v != 0}
+        # BasExponentEntity ya hace esto en __new__, pero siguiendo la instrucción:
+        clean_exponents = {k: v for k, v in self.exponents.items() if v != 0}
+        # Hack necesario porque es frozen=True
+        object.__setattr__(self, "exponents", clean_exponents)
 
     def __hash__(self) -> int:
         """Returns a hash value for the compound unit."""
@@ -219,13 +250,14 @@ class CompoundUnit(BaseExponentEntity):
         """
         return f"${self.to_latex()}$"
 
+    @property
     def is_dimensionless(self) -> bool:
         """Check if the unit is dimensionless (i.e., has no components).
 
         Returns:
         bool: True if the unit is dimensionless, False otherwise.
         """
-        return not self.exponents
+        return not bool(self.exponents)
 
     def simplify(self, system: UnitSystem) -> CompoundUnit:
         """Simplifies the unit by expanding derived units into base components.

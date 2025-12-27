@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from measurekit.domain.measurement.converters import UnitConverter
     from measurekit.domain.measurement.dimensions import Dimension
     from measurekit.domain.measurement.units import CompoundUnit
 
@@ -26,7 +27,7 @@ class UnitDefinition:
     _instances = {}
     symbol: str
     dimension: Dimension
-    factor_to_base: float
+    converter: UnitConverter
     name: str | None
     recipe: CompoundUnit | None
     allow_prefixes: bool
@@ -35,7 +36,7 @@ class UnitDefinition:
         cls,
         symbol: str,
         dimension: Dimension,
-        factor_to_base: float,
+        converter: UnitConverter,
         name: str | None = None,
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
@@ -46,7 +47,7 @@ class UnitDefinition:
             # Update properties if the unit is being redefined.
             instance = cls._instances[key]
             instance.dimension = dimension
-            instance.factor_to_base = factor_to_base
+            instance.converter = converter
             instance.name = name
             instance.recipe = recipe
             instance.allow_prefixes = allow_prefixes
@@ -60,7 +61,7 @@ class UnitDefinition:
         self,
         symbol: str,
         dimension: Dimension,
-        factor_to_base: float,
+        converter: UnitConverter,
         name: str | None = None,
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
@@ -68,21 +69,33 @@ class UnitDefinition:
         """Initializes the attributes of the instance."""
         self.symbol = symbol
         self.dimension = dimension
-        self.factor_to_base = factor_to_base
+        self.converter = converter
         self.name = name
         self.recipe = recipe
         self.allow_prefixes = allow_prefixes
+
+    @property
+    def factor_to_base(self) -> float:
+        """Helper to maintain backward compatibility. Returns the linear scale."""
+        from measurekit.domain.measurement.converters import (
+            AffineConverter,
+            LinearConverter,
+        )
+
+        if isinstance(self.converter, (LinearConverter, AffineConverter)):
+            return self.converter.scale
+        return 1.0
 
     def __str__(self) -> str:
         """Provides a simple string representation of the unit definition."""
         return (
             f"UnitDefinition({self.symbol}, {self.dimension}, "
-            f"{self.factor_to_base})"
+            f"{self.converter})"
         )
 
     def __repr__(self) -> str:
         """Provides a detailed representation of the unit definition."""
         return (
             f"UnitDefinition({self.symbol}, {self.dimension}, "
-            f"{self.factor_to_base}, {self.name})"
+            f"{self.converter}, {self.name})"
         )

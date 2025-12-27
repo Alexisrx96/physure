@@ -151,6 +151,7 @@ class Dimension(BaseExponentEntity):
             f"{self.analytical_representation} {self._display_exponents}>"
         )
 
+    @property
     def is_dimensionless(self) -> bool:
         """Checks if the dimension is dimensionless."""
         return not self.exponents
