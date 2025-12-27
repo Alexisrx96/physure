@@ -144,13 +144,44 @@ class Quantity(Generic[ValueType, UncType]):
             target_unit = self.system.get_unit(target_unit)
         if self.dimension != target_unit.dimension(self.system):
             raise IncompatibleUnitsError(self.unit, target_unit)
-        conversion_factor = self.unit.conversion_factor_to(target_unit)
 
-        # Use cast to ensure type checker accepts magnitude * float
+        # --- Manejo de Conversiones con Offset (ej: Temperatura) ---
+        if (
+            len(self.unit.exponents) == 1
+            and list(self.unit.exponents.values())[0] == 1
+            and len(target_unit.exponents) == 1
+            and list(target_unit.exponents.values())[0] == 1
+        ):
+            source_u = list(self.unit.exponents.keys())[0]
+            target_u = list(target_unit.exponents.keys())[0]
+
+            source_def = self.system.get_definition(source_u)
+            target_def = self.system.get_definition(target_u)
+
+            if source_def and target_def:
+                base_mag = source_def.converter.to_base(self.magnitude)
+                new_magnitude = target_def.converter.from_base(base_mag)
+
+                scale_source = source_def.factor_to_base
+                scale_target = target_def.factor_to_base
+                scale_ratio = scale_source / scale_target
+                new_uncertainty = cast(Numeric, self.uncertainty) * scale_ratio
+
+                return cast(
+                    Quantity[ValueType, UncType],
+                    Quantity.from_input(
+                        new_magnitude,
+                        target_unit,
+                        self.system,
+                        uncertainty=new_uncertainty,
+                    ),
+                )
+        # ----------------------------------------------------------
+
+        conversion_factor = self.unit.conversion_factor_to(target_unit)
         new_value = cast(Numeric, self.magnitude) * conversion_factor
         new_uncertainty = cast(Numeric, self.uncertainty) * conversion_factor
 
-        # Cast the return to assert type preservation
         return cast(
             Quantity[ValueType, UncType],
             Quantity.from_input(
@@ -166,6 +197,19 @@ class Quantity(Generic[ValueType, UncType]):
         """Handles cases like my_quantity + other."""
         if not isinstance(other, Quantity):
             return NotImplemented
+
+        # --- FAST PATH ---
+        if self.unit is other.unit:
+            new_magnitude = self.magnitude + other.magnitude
+            new_unc = self.uncertainty_obj + other.uncertainty_obj
+            return Quantity(
+                new_magnitude,
+                self.unit,
+                new_unc,
+                system=self.system,
+            )
+        # -----------------
+
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)
         other_converted = other.to(self.unit)
@@ -184,6 +228,19 @@ class Quantity(Generic[ValueType, UncType]):
         """Handles cases like my_quantity - other."""
         if not isinstance(other, Quantity):
             return NotImplemented
+
+        # --- FAST PATH ---
+        if self.unit is other.unit:
+            new_magnitude = self.magnitude - other.magnitude
+            new_unc = self.uncertainty_obj + other.uncertainty_obj
+            return Quantity(
+                new_magnitude,
+                self.unit,
+                new_unc,
+                system=self.system,
+            )
+        # -----------------
+
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)
         other_converted = other.to(self.unit)
@@ -271,6 +328,18 @@ class Quantity(Generic[ValueType, UncType]):
                 other.magnitude,
                 new_magnitude,
             )
+
+            # --- Manejo Adimensional ---
+            if new_unit.is_dimensionless:
+                # Retornamos un Quantity adimensional
+                return Quantity.from_input(
+                    new_magnitude,
+                    new_unit,
+                    self.system,
+                    uncertainty=new_uncertainty_obj,
+                )
+            # ---------------------------
+
             return Quantity.from_input(
                 new_magnitude,
                 new_unit,
@@ -406,9 +475,7 @@ class Quantity(Generic[ValueType, UncType]):
                     result_magnitude, q_input.unit**2, q_input.system
                 )
             if ufunc in {np.sin, np.cos, np.tan}:
-                if not q_input.unit.dimension(
-                    q_input.system
-                ).is_dimensionless():
+                if not q_input.unit.dimension(q_input.system).is_dimensionless:
                     raise IncompatibleUnitsError(
                         q_input.unit, CompoundUnit({})
                     )
@@ -434,7 +501,7 @@ class Quantity(Generic[ValueType, UncType]):
             }
             if ufunc in op_map and len(inputs) == 2:
                 return op_map[ufunc](inputs[0], inputs[1])
-            if q_input.unit.dimension(q_input.system).is_dimensionless():
+            if q_input.unit.dimension(q_input.system).is_dimensionless:
                 return Quantity.from_input(
                     result_magnitude, q_input.unit, q_input.system
                 )
@@ -560,7 +627,7 @@ class Quantity(Generic[ValueType, UncType]):
     # --- Formatting Methods ---
     def __format__(self, format_spec: str) -> str:
         """Format the quantity as a string."""
-        recognized_unit_formats = {"alias", "full"}
+        recognized_unit_formats = {"alias", "full", "latex"}
         if "|" in format_spec:
             numeric_format, unit_format = format_spec.split("|", 1)
         else:
@@ -568,6 +635,7 @@ class Quantity(Generic[ValueType, UncType]):
                 format_spec in recognized_unit_formats
                 or format_spec.startswith("alias:")
                 or format_spec.startswith("full:")
+                or format_spec.startswith("latex:")
             )
             if is_unit_format:
                 numeric_format, unit_format = "", format_spec
@@ -579,11 +647,14 @@ class Quantity(Generic[ValueType, UncType]):
         alias_pref = (
             unit_format.split(":", 1)[1] if ":" in unit_format else None
         )
-        unit_str = self.unit.to_string(
-            system=self.system,
-            use_alias=use_alias,
-            alias_preference=alias_pref,
-        )
+        if unit_format == "latex":
+            unit_str = self.unit.to_latex()
+        else:
+            unit_str = self.unit.to_string(
+                system=self.system,
+                use_alias=use_alias,
+                alias_preference=alias_pref,
+            )
 
         # --- Numeric and Uncertainty Formatting ---
         has_unc = np.any(np.asarray(self.uncertainty) > 0)
@@ -605,9 +676,14 @@ class Quantity(Generic[ValueType, UncType]):
                 return str(val)
 
         if has_unc:
-            mag_str = format_val(self.magnitude, numeric_format)
-            unc_str = format_val(self.uncertainty, numeric_format)
-            return f"({mag_str} ± {unc_str}) {unit_str}"
+            if unit_format == "latex":
+                mag_str = sp.latex(self.magnitude)
+                unc_str = sp.latex(self.uncertainty)
+                return f"({mag_str} \\pm {unc_str}) \\; {unit_str}"
+            else:
+                mag_str = format_val(self.magnitude, numeric_format)
+                unc_str = format_val(self.uncertainty, numeric_format)
+                return f"({mag_str} ± {unc_str}) {unit_str}"
         else:
             numeric_str = format_val(self.magnitude, numeric_format)
             return f"{numeric_str} {unit_str}"

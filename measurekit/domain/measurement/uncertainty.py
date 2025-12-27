@@ -93,6 +93,10 @@ class Uncertainty(Generic[UncType]):
         new_std_dev = (self.std_dev**2 + other.std_dev**2) ** 0.5
         return Uncertainty(new_std_dev)
 
+    def __add__(self, other: Uncertainty[UncType]) -> Uncertainty[UncType]:
+        """Alias for add()."""
+        return self.add(other)
+
     @overload
     def propagate_mul_div(
         self: Uncertainty[NDArray[Any]],
