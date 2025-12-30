@@ -41,3 +41,25 @@ class AffineConverter(UnitConverter):
 
     def from_base(self, value: float) -> float:
         return (value - self.offset) / self.scale
+
+
+@dataclass(frozen=True)
+class LogarithmicConverter(UnitConverter):
+    """For logarithmic units: y = factor * log10(x / reference).
+
+    Specifically for Decibels (dB): dB = 10 * log10(P / P_ref) or 20 * log10(V / V_ref).
+    We store the factor (10 or 20) and the reference value.
+    """
+
+    factor: float
+    reference: float = 1.0
+
+    def to_base(self, value: float) -> float:
+        import numpy as np
+
+        return self.reference * (10 ** (value / self.factor))
+
+    def from_base(self, value: float) -> float:
+        import numpy as np
+
+        return self.factor * np.log10(value / self.reference)

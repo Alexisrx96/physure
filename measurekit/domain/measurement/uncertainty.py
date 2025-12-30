@@ -147,10 +147,26 @@ class Uncertainty(Generic[UncType]):
                 return Uncertainty(np.zeros_like(result_value, dtype=float))
             return Uncertainty(0.0)
 
-        rel_unc1_sq = (self.std_dev / np.abs(val1)) ** 2
-        rel_unc2_sq = (other.std_dev / np.abs(val2)) ** 2
+        if hasattr(result_value, "free_symbols"):
+            import sympy as sp
 
-        new_std_dev = np.abs(result_value) * np.sqrt(rel_unc1_sq + rel_unc2_sq)
+            rel_unc1_sq = (self.std_dev / sp.Abs(val1)) ** 2
+            rel_unc2_sq = (other.std_dev / sp.Abs(val2)) ** 2
+        else:
+            rel_unc1_sq = (self.std_dev / np.abs(val1)) ** 2
+            rel_unc2_sq = (other.std_dev / np.abs(val2)) ** 2
+
+        if hasattr(result_value, "free_symbols"):
+            # Symbolic magnitude (SymPy)
+            import sympy as sp
+
+            new_std_dev = sp.Abs(result_value) * sp.sqrt(
+                rel_unc1_sq + rel_unc2_sq
+            )
+        else:
+            new_std_dev = np.abs(result_value) * np.sqrt(
+                rel_unc1_sq + rel_unc2_sq
+            )
         return Uncertainty(new_std_dev)
 
     def power(self, exponent: float, value: UncType) -> Uncertainty[UncType]:

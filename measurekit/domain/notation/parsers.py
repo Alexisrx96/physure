@@ -109,6 +109,8 @@ class NotationParser:
 
     def expr(self) -> ExponentEntityProtocol:
         """Parses a full expression with multiplication and division."""
+        if self.current.type == TokenType.EOF:
+            return self.entity_cls({})
         result = self.term()
         # Handle a sequence of multiplications or divisions.
         while self.current.type in (TokenType.MUL, TokenType.DIV):

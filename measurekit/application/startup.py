@@ -25,6 +25,7 @@ from measurekit.domain.measurement.units import CompoundUnit
 from measurekit.domain.measurement.converters import (
     AffineConverter,
     LinearConverter,
+    LogarithmicConverter,
 )
 
 
@@ -163,26 +164,36 @@ class UnitSystemBuilder:
                 allow_prefixes = False
                 parts.remove("noprefix")
 
-            factor = float(parts[0])
-            offset = 0.0
-            dim_index = 1
-
-            # Check if there is an offset (for AffineConverter)
-            if len(parts) > 2:
-                try:
-                    # If parts[1] is a float, it's an offset
-                    offset = float(parts[1])
-                    dim_index = 2
-                except ValueError:
-                    # parts[1] is likely the dimension
-                    pass
-
-            dimension = Dimension.from_string(parts[dim_index])
-
-            if offset != 0:
-                converter = AffineConverter(factor, offset)
+            if parts[0].lower() == "log":
+                factor = float(parts[1])
+                reference = float(parts[2])
+                dim_str = parts[3]
+                if dim_str == "1":
+                    dimension = Dimension({})
+                else:
+                    dimension = Dimension.from_string(dim_str)
+                converter = LogarithmicConverter(factor, reference)
             else:
-                converter = LinearConverter(factor)
+                factor = float(parts[0])
+                offset = 0.0
+                dim_index = 1
+
+                # Check if there is an offset (for AffineConverter)
+                if len(parts) > 2:
+                    try:
+                        # If parts[1] is a float, it's an offset
+                        offset = float(parts[1])
+                        dim_index = 2
+                    except ValueError:
+                        # parts[1] is likely the dimension
+                        pass
+
+                dimension = Dimension.from_string(parts[dim_index])
+
+                if offset != 0:
+                    converter = AffineConverter(factor, offset)
+                else:
+                    converter = LinearConverter(factor)
 
             symbol = aliases[0] if aliases else key
             all_aliases = set([key] + aliases)
@@ -205,6 +216,9 @@ class UnitSystemBuilder:
                 main_part = value_str
 
             parts = [p.strip() for p in main_part.split(",") if p.strip()]
+
+            if parts[0].lower() == "log":
+                continue
 
             # Check if there was an offset for this key
             has_offset = False

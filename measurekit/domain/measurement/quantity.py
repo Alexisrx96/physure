@@ -39,16 +39,18 @@ if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
 
 # --- Generic Type Variables ---
-ValueType = TypeVar("ValueType", float, int, NDArray[Any])
+ValueType = TypeVar("ValueType", float, int, NDArray[Any], sp.Symbol, sp.Expr)
 UncType = TypeVar("UncType", float, NDArray[Any])
-Numeric = int | float | NDArray[Any]
-ScalarValue = TypeVar("ScalarValue", int, float)
+Numeric = int | float | NDArray[Any] | sp.Symbol | sp.Expr
+ScalarValue = TypeVar("ScalarValue", int, float, sp.Symbol, sp.Expr)
 ArrayValue = TypeVar("ArrayValue", bound=NDArray[Any])
 ScalarUnc = TypeVar("ScalarUnc", bound=float)
 ArrayUnc = TypeVar("ArrayUnc", bound=NDArray[Any])
-ScalarValueSelf = TypeVar("ScalarValueSelf", int, float)
-ScalarValueOther = TypeVar("ScalarValueOther", int, float)
-OtherValueType = TypeVar("OtherValueType", float, int, NDArray[Any])
+ScalarValueSelf = TypeVar("ScalarValueSelf", int, float, sp.Symbol, sp.Expr)
+ScalarValueOther = TypeVar("ScalarValueOther", int, float, sp.Symbol, sp.Expr)
+OtherValueType = TypeVar(
+    "OtherValueType", float, int, NDArray[Any], sp.Symbol, sp.Expr
+)
 OtherUncType = TypeVar("OtherUncType", float, NDArray[Any])
 
 
@@ -438,79 +440,179 @@ class Quantity(Generic[ValueType, UncType]):
         **kwargs: Any,
     ) -> Any:
         """Handles NumPy ufuncs applied to Quantity instances."""
-        q_input = next(
-            (inp for inp in inputs if isinstance(inp, Quantity)), None
-        )
-        if q_input is None:
-            return NotImplemented
-        if method == "reduce":
-            result_magnitude = ufunc.reduce(q_input.magnitude, **kwargs)
-            return Quantity.from_input(
-                result_magnitude, q_input.unit, q_input.system
-            )
-        if method == "__call__":
-            numeric_inputs = [
-                inp.magnitude if isinstance(inp, Quantity) else inp
-                for inp in inputs
+        if method != "__call__":
+            # For reduce, accumulate, etc.
+            magnitudes = [
+                i.magnitude if isinstance(i, Quantity) else i for i in inputs
             ]
-            result_magnitude = ufunc(*numeric_inputs, **kwargs)
-            if ufunc == np.absolute:
-                return Quantity.from_input(
-                    result_magnitude,
-                    q_input.unit,
-                    q_input.system,
-                    uncertainty=q_input.uncertainty,
-                )
-            if ufunc == np.sqrt:
-                result_unit = q_input.unit**0.5
-                rel_unc = (
-                    (q_input.uncertainty / q_input.magnitude)
-                    if np.all(q_input.magnitude != 0)
-                    else 0
-                )
-                result_uncertainty = np.abs(result_magnitude * 0.5) * rel_unc
-                return Quantity.from_input(
-                    result_magnitude,
-                    result_unit,
-                    q_input.system,
-                    uncertainty=result_uncertainty,
-                )
-            if ufunc == np.square:
-                return Quantity.from_input(
-                    result_magnitude, q_input.unit**2, q_input.system
-                )
-            if ufunc in {np.sin, np.cos, np.tan}:
-                if not q_input.unit.dimension(q_input.system).is_dimensionless:
-                    raise IncompatibleUnitsError(
-                        q_input.unit, CompoundUnit({})
+            result = getattr(ufunc, method)(*magnitudes, **kwargs)
+            if isinstance(result, (np.ndarray, float, int)):
+                return Quantity.from_input(result, self.unit, self.system)
+            return result
+
+        # --- FAST PATH for Binary Operations ---
+        if (
+            len(inputs) == 2
+            and isinstance(inputs[0], Quantity)
+            and isinstance(inputs[1], Quantity)
+        ):
+            if inputs[0].unit is inputs[1].unit:
+                if ufunc in (np.add, np.subtract):
+                    res_mag = ufunc(
+                        inputs[0].magnitude, inputs[1].magnitude, **kwargs
                     )
-                result_unit = CompoundUnit({})
+                    res_unc = (
+                        inputs[0].uncertainty_obj + inputs[1].uncertainty_obj
+                    )
+                    return Quantity(
+                        res_mag,
+                        inputs[0].unit,
+                        res_unc,
+                        system=inputs[0].system,
+                    )
+                if ufunc == np.multiply:
+                    res_mag = inputs[0].magnitude * inputs[1].magnitude
+                    res_unit = inputs[0].unit * inputs[1].unit
+                    res_unc = inputs[0].uncertainty_obj.propagate_mul_div(
+                        inputs[1].uncertainty_obj,
+                        inputs[0].magnitude,
+                        inputs[1].magnitude,
+                        res_mag,
+                    )
+                    return Quantity(
+                        res_mag, res_unit, res_unc, system=inputs[0].system
+                    )
+                if ufunc == np.true_divide:
+                    res_mag = inputs[0].magnitude / inputs[1].magnitude
+                    res_unit = inputs[0].unit / inputs[1].unit
+                    res_unc = inputs[0].uncertainty_obj.propagate_mul_div(
+                        inputs[1].uncertainty_obj,
+                        inputs[0].magnitude,
+                        inputs[1].magnitude,
+                        res_mag,
+                    )
+                    return Quantity(
+                        res_mag, res_unit, res_unc, system=inputs[0].system
+                    )
+
+        # Delegate to dunder methods if available for standard arithmetic
+        op_map = {
+            np.add: operator.add,
+            np.subtract: operator.sub,
+            np.multiply: operator.mul,
+            np.true_divide: operator.truediv,
+            np.power: operator.pow,
+        }
+        if ufunc in op_map:
+            return op_map[ufunc](*inputs, **kwargs)
+
+        # Handle other ufuncs
+        magnitudes = [
+            i.magnitude if isinstance(i, Quantity) else i for i in inputs
+        ]
+        result_magnitude = ufunc(*magnitudes, **kwargs)
+
+        if ufunc in (np.sin, np.cos, np.tan, np.exp, np.log, np.log10):
+            # Must be dimensionless
+            for i, inp in enumerate(inputs):
+                if (
+                    isinstance(inp, Quantity)
+                    and not inp.unit.dimension(inp.system).is_dimensionless
+                ):
+                    raise IncompatibleUnitsError(inp.unit, CompoundUnit({}))
+
+            # Uncertainty propagation (simplified)
+            if isinstance(inputs[0], Quantity):
+                q = inputs[0]
                 if ufunc == np.sin:
-                    derivative = np.abs(np.cos(q_input.magnitude))
+                    deriv = np.abs(np.cos(q.magnitude))
                 elif ufunc == np.cos:
-                    derivative = np.abs(-np.sin(q_input.magnitude))
+                    deriv = np.abs(-np.sin(q.magnitude))
+                elif ufunc == np.exp:
+                    deriv = np.abs(np.exp(q.magnitude))
                 else:
-                    derivative = np.abs(1 / np.cos(q_input.magnitude) ** 2)
-                result_uncertainty = derivative * q_input.uncertainty
+                    deriv = 1.0  # Fallback
+
+                res_unc = Uncertainty(deriv * q.uncertainty)
                 return Quantity.from_input(
                     result_magnitude,
-                    result_unit,
-                    q_input.system,
-                    uncertainty=result_uncertainty,
+                    CompoundUnit({}),
+                    q.system,
+                    uncertainty=res_unc,
                 )
-            op_map = {
-                np.add: operator.add,
-                np.subtract: operator.sub,
-                np.multiply: operator.mul,
-                np.true_divide: operator.truediv,
-            }
-            if ufunc in op_map and len(inputs) == 2:
-                return op_map[ufunc](inputs[0], inputs[1])
-            if q_input.unit.dimension(q_input.system).is_dimensionless:
+            return result_magnitude
+
+        if ufunc == np.sqrt:
+            q = inputs[0]
+            res_unit = q.unit**0.5
+            # Simplified uncertainty: rel_unc_res = 0.5 * rel_unc_q
+            rel_unc = (
+                (q.uncertainty / q.magnitude)
+                if np.all(q.magnitude != 0)
+                else 0
+            )
+            res_unc = np.abs(result_magnitude * 0.5) * rel_unc
+            return Quantity.from_input(
+                result_magnitude, res_unit, q.system, uncertainty=res_unc
+            )
+
+        if ufunc in (
+            np.absolute,
+            np.abs,
+            np.fabs,
+            np.floor,
+            np.ceil,
+            np.trunc,
+            np.rint,
+            np.around,
+            np.round,
+            np.negative,
+            np.positive,
+        ):
+            q = next((i for i in inputs if isinstance(i, Quantity)), None)
+            if q:
                 return Quantity.from_input(
-                    result_magnitude, q_input.unit, q_input.system
+                    result_magnitude, q.unit, q.system, q.uncertainty_obj
                 )
-        return NotImplemented
+
+        if ufunc == np.square:
+            q = inputs[0]
+            return Quantity.from_input(result_magnitude, q.unit**2, q.system)
+
+        if ufunc in (
+            np.less,
+            np.less_equal,
+            np.greater,
+            np.greater_equal,
+            np.equal,
+            np.not_equal,
+        ):
+            # Comparison: return plain bool/array
+            return result_magnitude
+
+        # Default: if result is numeric, wrap in dimensionless Quantity if input was Quantity
+        if isinstance(result_magnitude, (np.ndarray, float, int)):
+            q_input = next(
+                (i for i in inputs if isinstance(i, Quantity)), None
+            )
+            if q_input:
+                return Quantity.from_input(
+                    result_magnitude, CompoundUnit({}), q_input.system
+                )
+
+        return result_magnitude
+
+    def __array_function__(
+        self, func: Any, types: Any, args: Any, kwargs: Any
+    ) -> Any:
+        """Supports NEP-18 high-level NumPy functions."""
+        if func not in HANDLED_FUNCTIONS:
+            # Fallback to default behavior: convert all to magnitude
+            new_args = [
+                a.magnitude if isinstance(a, Quantity) else a for a in args
+            ]
+            return func(*new_args, **kwargs)
+        return HANDLED_FUNCTIONS[func](*args, **kwargs)
 
     # --- Vector and Other Methods ---
     def dot(
@@ -586,8 +688,8 @@ class Quantity(Generic[ValueType, UncType]):
         """Equality comparison."""
         if not isinstance(other, Quantity):
             return NotImplemented
-        if self.dimension != other.dimension:
-            raise IncompatibleUnitsError(self.unit, other.unit)
+        if self.system != other.system or self.dimension != other.dimension:
+            return False
         other_converted = other.to(self.unit)
         return cast(
             bool, np.all(np.isclose(self.magnitude, other_converted.magnitude))
@@ -732,6 +834,53 @@ class Quantity(Generic[ValueType, UncType]):
             f"Quantity({self.magnitude!r}, {self.unit!r}, "
             f"uncertainty={self.uncertainty!r})"
         )
+
+
+HANDLED_FUNCTIONS: dict[Any, Any] = {}
+
+
+def implements(numpy_function):
+    """Register an __array_function__ implementation for Quantity objects."""
+
+    def decorator(func):
+        HANDLED_FUNCTIONS[numpy_function] = func
+        return func
+
+    return decorator
+
+
+@implements(np.concatenate)
+def concatenate(items, *args, **kwargs):
+    unit = items[0].unit
+    system = items[0].system
+    if not all(i.unit == unit for i in items):
+        # Could convert all to first unit, but simpler to raise for now
+        raise IncompatibleUnitsError(items[1].unit, unit)
+    magnitudes = [i.magnitude for i in items]
+    uncertainties = []
+    for i in items:
+        val = i.uncertainty
+        if np.isscalar(val):
+            # If magnitudes are arrays, uncertainties should be arrays for concatenate
+            if isinstance(i.magnitude, np.ndarray):
+                uncertainties.append(
+                    np.full_like(i.magnitude, val, dtype=float)
+                )
+            else:
+                uncertainties.append(val)
+        else:
+            uncertainties.append(val)
+    res_mag = np.concatenate(magnitudes, *args, **kwargs)
+    res_unc = np.concatenate(uncertainties, *args, **kwargs)
+    return Quantity.from_input(res_mag, unit, system, uncertainty=res_unc)
+
+
+@implements(np.mean)
+def mean(a, *args, **kwargs):
+    res_mag = np.mean(a.magnitude, *args, **kwargs)
+    # Uncertainty of mean (simplified): sqrt(sum(u^2))/N
+    res_unc = np.sqrt(np.sum(a.uncertainty**2)) / len(a)
+    return Quantity.from_input(res_mag, a.unit, a.system, uncertainty=res_unc)
 
 
 __all__ = ["Quantity"]
