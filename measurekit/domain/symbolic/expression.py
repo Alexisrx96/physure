@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class SymbolicExpression:
-    """Represents a dimensionally consistent symbolic mathematical expression."""
+    """A dimensionally consistent symbolic mathematical expression."""
 
     def __init__(
         self,
@@ -45,8 +45,10 @@ class SymbolicExpression:
         """Evaluates the expression directly with Quantity arguments.
 
         Args:
-            output_unit: The desired unit for the result. Defaults to the expression's native unit.
-            **kwargs: The values for the symbolic variables (e.g., m=Q_(10, 'kg')).
+            output_unit: The desired unit for the result. Defaults to the
+                expression's native unit.
+            **kwargs: The values for the symbolic variables
+                (e.g., m=Q_(10, 'kg')).
         """
         # 1. Identify arguments from the internal variable tracking
         args_list = list(self.variables)
@@ -65,7 +67,7 @@ class SymbolicExpression:
     def __call__(
         self, output_unit: str | CompoundUnit | None = None, **kwargs: Any
     ) -> Quantity:
-        """Alias for evaluate(), allowing the object to be called like a function."""
+        """Alias for evaluate(), allowing the object to be called."""
         return self.evaluate(output_unit, **kwargs)
 
     # --- NEW: Jupyter Pretty Printing ---
@@ -102,6 +104,7 @@ class SymbolicExpression:
         )
 
     def __add__(self, other: Any) -> SymbolicExpression:
+        """Adds two symbolic expressions."""
         if not isinstance(other, SymbolicExpression):
             raise TypeError("Can only add/sub other SymbolicExpressions.")
         if self.dimension != other.dimension:
@@ -114,6 +117,7 @@ class SymbolicExpression:
         )
 
     def __sub__(self, other: Any) -> SymbolicExpression:
+        """Subtracts two symbolic expressions."""
         if not isinstance(other, SymbolicExpression):
             raise TypeError("Can only add/sub other SymbolicExpressions.")
         if self.dimension != other.dimension:
@@ -126,15 +130,19 @@ class SymbolicExpression:
         )
 
     def __mul__(self, other: Any) -> SymbolicExpression:
+        """Multiplies two symbolic expressions."""
         return self._operate(other, lambda x, y: x * y, lambda u1, u2: u1 * u2)
 
     def __rmul__(self, other: Any) -> SymbolicExpression:
+        """Multiplies two symbolic expressions (reflected)."""
         return self.__mul__(other)
 
     def __truediv__(self, other: Any) -> SymbolicExpression:
+        """Divides two symbolic expressions."""
         return self._operate(other, lambda x, y: x / y, lambda u1, u2: u1 / u2)
 
     def __rtruediv__(self, other: Any) -> SymbolicExpression:
+        """Divides two symbolic expressions (reflected)."""
         if not isinstance(other, (int, float)):
             return NotImplemented
         new_expr = other / self.expr
@@ -144,6 +152,7 @@ class SymbolicExpression:
         )
 
     def __pow__(self, power: float) -> SymbolicExpression:
+        """Raises the expression to a power."""
         new_expr = self.expr**power
         new_unit = self.unit**power
         return SymbolicExpression(
@@ -151,6 +160,7 @@ class SymbolicExpression:
         )
 
     def __repr__(self) -> str:
+        """Returns a string representation for debugging."""
         return f"Expression({self.expr}) [{self.unit}]"
 
     def to_function(self, *args: SymbolicExpression) -> Function:

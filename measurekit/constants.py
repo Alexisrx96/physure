@@ -1,5 +1,6 @@
+"""Physical constants as MeasureKit quantities."""
+
 from measurekit import Q_
-from measurekit.domain.measurement.quantity import Quantity
 
 # CODATA 2018 values (most recent official ones as of general knowledge)
 # Note: In the 2019 SI redefinition, c, h, e, k are exact.

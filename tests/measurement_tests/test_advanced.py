@@ -1,5 +1,5 @@
-import pytest
 import timeit
+
 from measurekit import create_default_system
 from measurekit.domain.measurement.quantity import Quantity
 
@@ -49,5 +49,4 @@ def test_performance_benchmark():
 
     number = 100_000
     t = timeit.timeit(lambda: q1 + q2, number=number)
-    print(f"\nSuma de {number} cantidades: {t:.4f}s")
     assert t < 10.0  # Increased threshold to account for coverage overhead

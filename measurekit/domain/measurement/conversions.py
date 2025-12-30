@@ -76,7 +76,7 @@ class UnitDefinition:
 
     @property
     def factor_to_base(self) -> float:
-        """Helper to maintain backward compatibility. Returns the linear scale."""
+        """Backward compatibility helper returning linear scale."""
         from measurekit.domain.measurement.converters import (
             AffineConverter,
             LinearConverter,

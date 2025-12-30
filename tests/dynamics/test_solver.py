@@ -1,7 +1,9 @@
+"""Tests for the ODE solver using pytest."""
+
 import math
-import unittest
 
 import numpy as np
+import pytest
 
 from measurekit.application.solver_service import (
     ODESolution,
@@ -9,84 +11,61 @@ from measurekit.application.solver_service import (
 )
 from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
-from tests.base_test_class import BaseTestUnit
 
 
-class TestODESolution(BaseTestUnit):
-    """Tests for the ODESolution class."""
-
-    def setUp(self):
-        """Set up a fresh system with necessary units for each test."""
-        super().setUp()
-        length = Dimension({"L": 1})
-        time = Dimension({"T": 1})
-        self.system.register_unit("m", length, LinearConverter(1.0), "meter")
-        self.system.register_unit("s", time, LinearConverter(1.0), "second")
-
-    def test_init_and_repr(self):
-        """Test the initialization and representation for ODESolution class."""
-        t_quantities = self.system.Q_(np.linspace(0, 1, 5), "s")
-        # The solver returns a list of Quantities, where each Quantity
-        # holds an array of values
-        y_quantities = [self.system.Q_(np.linspace(0, 10, 5), "m")]
-
-        sol = ODESolution(t=t_quantities, y=y_quantities)
-
-        # Test __init__
-        self.assertEqual(len(sol.t), 5)
-        self.assertEqual(sol.t[0].magnitude, 0.0)
-        self.assertEqual(sol.t.unit, self.system.get_unit("s"))
-        self.assertEqual(len(sol.y), 1)
-        self.assertEqual(len(sol.y[0]), 5)
-        self.assertEqual(sol.y[0].magnitude[0], 0.0)
-        self.assertEqual(sol.y[0].unit, self.system.get_unit("m"))
-
-        # Test __repr__ by reconstructing the expected string
-        expected_repr = (
-            f"ODESolution(t=[{sol.t[0]:.2f}...{sol.t[-1]:.2f}],"
-            f" num_states={len(sol.y)})"
-        )
-        self.assertEqual(repr(sol), expected_repr)
+@pytest.fixture
+def solver_system(system):
+    """Set up test fixtures for solver tests."""
+    length = Dimension({"L": 1})
+    time = Dimension({"T": 1})
+    mass = Dimension({"M": 1})
+    system.register_unit("m", length, LinearConverter(1.0), "meter")
+    system.register_unit("s", time, LinearConverter(1.0), "second")
+    system.register_unit("g", mass, LinearConverter(0.001), "gram")
+    return system
 
 
-class TestSolveUnitAwareIvp(BaseTestUnit):
-    """Tests for the solve_unit_aware_ivp function."""
+def test_odesolution_init_and_repr(solver_system):
+    """Test the initialization and representation for ODESolution."""
+    t_quantities = solver_system.Q_(np.linspace(0, 1, 5), "s")
+    y_quantities = [solver_system.Q_(np.linspace(0, 10, 5), "m")]
 
-    def setUp(self):
-        """Set up a fresh system with necessary units for each test."""
-        super().setUp()
-        self.mass = Dimension({"M": 1})
-        self.time = Dimension({"T": 1})
-        self.system.register_unit(
-            "g", self.mass, LinearConverter(0.001), "gram"
-        )
-        self.system.register_unit(
-            "s", self.time, LinearConverter(1.0), "second"
-        )
+    sol = ODESolution(t=t_quantities, y=y_quantities)
 
-    def test_solve_unit_aware_ivp_simple_decay(self):
-        """Test with a simple first-order ODE: dy/dt = -k*y."""
-        k = self.system.Q_(0.1, "1/s")
+    assert len(sol.t) == 5
+    assert sol.t[0].magnitude == 0.0
+    assert sol.t.unit == solver_system.get_unit("s")
+    assert len(sol.y) == 1
+    assert len(sol.y[0]) == 5
+    assert sol.y[0].magnitude[0] == 0.0
+    assert sol.y[0].unit == solver_system.get_unit("m")
 
-        def decay_rate(t, y):
-            return [-k * y[0]]
-
-        y0 = [self.system.Q_(100.0, "g")]
-        t_span = [self.system.Q_(0.0, "s"), self.system.Q_(10.0, "s")]
-
-        sol = solve_unit_aware_ivp(decay_rate, t_span, y0)
-
-        self.assertIsInstance(sol, ODESolution)
-        self.assertEqual(sol.t.unit, self.system.get_unit("s"))
-        self.assertEqual(sol.y[0].unit, self.system.get_unit("g"))
-        self.assertAlmostEqual(sol.t[0].magnitude, 0.0)
-        self.assertAlmostEqual(sol.y[0].magnitude[0], 100.0)
-
-        final_t = sol.t[-1].magnitude
-        final_y_actual = sol.y[0].magnitude[-1]
-        final_y_expected = 100.0 * math.exp(-0.1 * final_t)
-        self.assertAlmostEqual(final_y_actual, final_y_expected, places=1)
+    expected_repr = (
+        f"ODESolution(t=[{sol.t[0]:.2f}...{sol.t[-1]:.2f}],"
+        f" num_states={len(sol.y)})"
+    )
+    assert repr(sol) == expected_repr
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_solve_unit_aware_ivp_simple_decay(solver_system):
+    """Test with a simple first-order ODE: dy/dt = -k*y."""
+    k = solver_system.Q_(0.1, "1/s")
+
+    def decay_rate(t, y):
+        return [-k * y[0]]
+
+    y0 = [solver_system.Q_(100.0, "g")]
+    t_span = [solver_system.Q_(0.0, "s"), solver_system.Q_(10.0, "s")]
+
+    sol = solve_unit_aware_ivp(decay_rate, t_span, y0)
+
+    assert isinstance(sol, ODESolution)
+    assert sol.t.unit == solver_system.get_unit("s")
+    assert sol.y[0].unit == solver_system.get_unit("g")
+    assert np.isclose(sol.t[0].magnitude, 0.0)
+    assert np.isclose(sol.y[0].magnitude[0], 100.0)
+
+    final_t = sol.t[-1].magnitude
+    final_y_actual = sol.y[0].magnitude[-1]
+    final_y_expected = 100.0 * math.exp(-0.1 * final_t)
+    assert np.isclose(final_y_actual, final_y_expected, rtol=1e-2)

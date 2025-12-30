@@ -78,7 +78,8 @@ class CompoundUnit(BaseExponentEntity):
     def __post_init__(self):
         """Eliminamos cualquier unidad con exponente 0."""
         # clean_exponents = {k: v for k, v in self.exponents.items() if v != 0}
-        # BasExponentEntity ya hace esto en __new__, pero siguiendo la instrucción:
+        # BasExponentEntity ya hace esto en __new__, pero siguiendo la
+        # instrucción:
         clean_exponents = {k: v for k, v in self.exponents.items() if v != 0}
         # Hack necesario porque es frozen=True
         object.__setattr__(self, "exponents", clean_exponents)

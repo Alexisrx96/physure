@@ -2,8 +2,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import sympy as sp
-from measurekit import Q_, default_system
-from measurekit.constants import c, G
+
+from measurekit import Q_
+from measurekit.constants import G, c
+from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.pandas_ext import MeasureKitArray
 
 
@@ -22,7 +24,7 @@ def test_numpy_ufuncs():
 
     # Test incompatible units for sin
     lengths = Q_(np.array([1, 2]), "m")
-    with pytest.raises(Exception):  # IncompatibleUnitsError
+    with pytest.raises(IncompatibleUnitsError):
         np.sin(lengths)
 
 
@@ -71,7 +73,8 @@ def test_latex_repr():
 
 def test_logarithmic_units():
     # 20 dB should be factor 100 in power (if factor is 10)
-    # Actually dB = 10 * log10(P/Pref). So 20 dB => 2 = log10(P/Pref) => P/Pref = 100
+    # Actually dB = 10 * log10(P/Pref). So 20 dB => 2 = log10(P/Pref)
+    # => P/Pref = 100
     db = Q_(20, "dB")
     val = db.to("1")  # convert to dimensionless base
     assert val.magnitude == 100.0

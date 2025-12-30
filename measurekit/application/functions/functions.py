@@ -84,7 +84,8 @@ class Function:
         # Calculate result (magnitude in terms of self.output_unit)
         result_value = self.numeric_func(*numeric_args)
 
-        # Wrap result in the derivation's output unit, then convert to user's requested unit
+        # Wrap result in the derivation's output unit,
+        # then convert to user's requested unit
         return self.system.Q_(result_value, self.output_unit).to(output_unit)
 
     def derivative(self, respect_to: str) -> Function:
@@ -116,7 +117,9 @@ class Function:
         )
 
     def __repr__(self) -> str:
+        """Returns a string representation of the function."""
         return f"Function({self.symbolic_func}) -> [{self.output_unit}]"
 
     def __str__(self) -> str:
+        """Returns the string form of the symbolic expression."""
         return f"'{self.symbolic_func}'"

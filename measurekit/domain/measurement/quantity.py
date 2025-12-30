@@ -455,45 +455,43 @@ class Quantity(Generic[ValueType, UncType]):
             len(inputs) == 2
             and isinstance(inputs[0], Quantity)
             and isinstance(inputs[1], Quantity)
+            and inputs[0].unit is inputs[1].unit
         ):
-            if inputs[0].unit is inputs[1].unit:
-                if ufunc in (np.add, np.subtract):
-                    res_mag = ufunc(
-                        inputs[0].magnitude, inputs[1].magnitude, **kwargs
-                    )
-                    res_unc = (
-                        inputs[0].uncertainty_obj + inputs[1].uncertainty_obj
-                    )
-                    return Quantity(
-                        res_mag,
-                        inputs[0].unit,
-                        res_unc,
-                        system=inputs[0].system,
-                    )
-                if ufunc == np.multiply:
-                    res_mag = inputs[0].magnitude * inputs[1].magnitude
-                    res_unit = inputs[0].unit * inputs[1].unit
-                    res_unc = inputs[0].uncertainty_obj.propagate_mul_div(
-                        inputs[1].uncertainty_obj,
-                        inputs[0].magnitude,
-                        inputs[1].magnitude,
-                        res_mag,
-                    )
-                    return Quantity(
-                        res_mag, res_unit, res_unc, system=inputs[0].system
-                    )
-                if ufunc == np.true_divide:
-                    res_mag = inputs[0].magnitude / inputs[1].magnitude
-                    res_unit = inputs[0].unit / inputs[1].unit
-                    res_unc = inputs[0].uncertainty_obj.propagate_mul_div(
-                        inputs[1].uncertainty_obj,
-                        inputs[0].magnitude,
-                        inputs[1].magnitude,
-                        res_mag,
-                    )
-                    return Quantity(
-                        res_mag, res_unit, res_unc, system=inputs[0].system
-                    )
+            if ufunc in (np.add, np.subtract):
+                res_mag = ufunc(
+                    inputs[0].magnitude, inputs[1].magnitude, **kwargs
+                )
+                res_unc = inputs[0].uncertainty_obj + inputs[1].uncertainty_obj
+                return Quantity(
+                    res_mag,
+                    inputs[0].unit,
+                    res_unc,
+                    system=inputs[0].system,
+                )
+            if ufunc == np.multiply:
+                res_mag = inputs[0].magnitude * inputs[1].magnitude
+                res_unit = inputs[0].unit * inputs[1].unit
+                res_unc = inputs[0].uncertainty_obj.propagate_mul_div(
+                    inputs[1].uncertainty_obj,
+                    inputs[0].magnitude,
+                    inputs[1].magnitude,
+                    res_mag,
+                )
+                return Quantity(
+                    res_mag, res_unit, res_unc, system=inputs[0].system
+                )
+            if ufunc == np.true_divide:
+                res_mag = inputs[0].magnitude / inputs[1].magnitude
+                res_unit = inputs[0].unit / inputs[1].unit
+                res_unc = inputs[0].uncertainty_obj.propagate_mul_div(
+                    inputs[1].uncertainty_obj,
+                    inputs[0].magnitude,
+                    inputs[1].magnitude,
+                    res_mag,
+                )
+                return Quantity(
+                    res_mag, res_unit, res_unc, system=inputs[0].system
+                )
 
         # Delegate to dunder methods if available for standard arithmetic
         op_map = {
@@ -514,7 +512,7 @@ class Quantity(Generic[ValueType, UncType]):
 
         if ufunc in (np.sin, np.cos, np.tan, np.exp, np.log, np.log10):
             # Must be dimensionless
-            for i, inp in enumerate(inputs):
+            for _, inp in enumerate(inputs):
                 if (
                     isinstance(inp, Quantity)
                     and not inp.unit.dimension(inp.system).is_dimensionless
@@ -590,7 +588,8 @@ class Quantity(Generic[ValueType, UncType]):
             # Comparison: return plain bool/array
             return result_magnitude
 
-        # Default: if result is numeric, wrap in dimensionless Quantity if input was Quantity
+        # Default: if result is numeric, wrap in dimensionless Quantity if
+        # input was Quantity
         if isinstance(result_magnitude, (np.ndarray, float, int)):
             q_input = next(
                 (i for i in inputs if isinstance(i, Quantity)), None
@@ -861,7 +860,8 @@ def concatenate(items, *args, **kwargs):
     for i in items:
         val = i.uncertainty
         if np.isscalar(val):
-            # If magnitudes are arrays, uncertainties should be arrays for concatenate
+            # If magnitudes are arrays, uncertainties should be arrays
+            # for concatenate
             if isinstance(i.magnitude, np.ndarray):
                 uncertainties.append(
                     np.full_like(i.magnitude, val, dtype=float)

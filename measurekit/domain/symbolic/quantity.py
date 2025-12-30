@@ -20,6 +20,7 @@ class SymbolicQuantity(SymbolicExpression):
         unit: Union[str, CompoundUnit],
         system: UnitSystem = default_system,
     ):
+        """Initializes a SymbolicQuantity."""
         symbol = sp.Symbol(name, positive=True)
         if isinstance(unit, str):
             resolved_unit = system.get_unit(unit)
@@ -31,13 +32,16 @@ class SymbolicQuantity(SymbolicExpression):
 
     @property
     def symbol(self) -> sp.Symbol:
+        """Returns the underlying SymPy symbol."""
         return self.expr
 
     def __repr__(self) -> str:
+        """Returns a string representation."""
         return f"Symbol({self.expr}) [{self.unit}]"
 
     @classmethod
     def from_expression(cls, *args, **kwargs):
+        """Quantities are atomic; this method is disabled."""
         raise NotImplementedError(
             "Quantities are atomic. Use SymbolicExpression for results."
         )
@@ -52,6 +56,7 @@ class Equation:
         rhs: SymbolicExpression,
         variables: list[SymbolicQuantity] | None = None,
     ):
+        """Initializes an Equation between two symbolic expressions."""
         if lhs.dimension != rhs.dimension:
             raise IncompatibleUnitsError(lhs.unit, rhs.unit)
 
@@ -67,6 +72,7 @@ class Equation:
             self.variable_map = {v.expr: v for v in all_vars}
 
     def __repr__(self) -> str:
+        """Returns a string representation of the equation."""
         return str(self.equation)
 
     # --- NEW: Jupyter Pretty Printing ---
@@ -79,6 +85,7 @@ class Equation:
     def solve_for(
         self, target: str | SymbolicQuantity
     ) -> SymbolicExpression | None:
+        """Solves the equation for a specific target variable."""
         target_symbol = None
 
         if isinstance(target, SymbolicQuantity):

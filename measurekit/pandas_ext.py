@@ -1,13 +1,17 @@
+"""Pandas extension for MeasureKit quantities."""
+
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any, cast
+
 import numpy as np
-import pandas as pd
 from pandas.api.extensions import (
     ExtensionArray,
     ExtensionDtype,
     register_extension_dtype,
 )
-from typing import Any, Sequence, Type, cast
+
 from measurekit.domain.measurement.quantity import Quantity
 from measurekit.domain.measurement.units import CompoundUnit
 
@@ -21,21 +25,26 @@ class MeasureKitDtype(ExtensionDtype):
     kind = "O"
 
     def __init__(self, unit: CompoundUnit | str | None = None):
+        """Initializes the dtype with an optional unit."""
         self._unit = unit
 
     @property
     def unit(self) -> CompoundUnit | str | None:
+        """Returns the unit associated with this dtype."""
         return self._unit
 
     @classmethod
-    def construct_array_type(cls) -> Type[MeasureKitArray]:
+    def construct_array_type(cls) -> type[MeasureKitArray]:
+        """Returns the array type for this dtype."""
         return MeasureKitArray
 
     def __repr__(self) -> str:
+        """Returns a string representation."""
         return f"MeasureKitDtype(unit={self.unit})"
 
     @classmethod
     def construct_from_string(cls, string: str) -> MeasureKitDtype:
+        """Construct from string like 'measurekit[m/s]'."""
         if string == "measurekit":
             return cls()
         if string.startswith("measurekit[") and string.endswith("]"):
@@ -53,21 +62,23 @@ class MeasureKitArray(ExtensionArray):
         dtype: MeasureKitDtype | None = None,
         copy: bool = False,
     ):
-        if copy:
-            values = np.array(values, copy=True)
-        else:
-            values = np.asarray(values)
-        self._data = values
+        """Initializes the MeasureKitArray."""
+        self._data = (
+            np.array(values, copy=True) if copy else np.asarray(values)
+        )
         self._dtype = dtype or MeasureKitDtype()
 
     @property
     def dtype(self) -> MeasureKitDtype:
+        """Returns the dtype of the array."""
         return self._dtype
 
     def __len__(self) -> int:
+        """Returns the length of the array."""
         return len(self._data)
 
     def __getitem__(self, item: int | slice | np.ndarray) -> Any:
+        """Returns the item at the given index or a slice of the array."""
         if isinstance(item, int):
             return self._data[item]
         return type(self)(self._data[item], dtype=self.dtype)
@@ -81,12 +92,15 @@ class MeasureKitArray(ExtensionArray):
         return cls(values, dtype=original.dtype)
 
     def copy(self):
+        """Returns a copy of the array."""
         return type(self)(self._data.copy(), dtype=self.dtype)
 
     def isna(self) -> np.ndarray:
+        """Returns a boolean mask of missing values."""
         return np.array([v is None for v in self._data], dtype=bool)
 
     def take(self, indices, allow_fill=False, fill_value=None):
+        """Takes elements from the array."""
         from pandas.api.extensions import take
 
         data = self._data

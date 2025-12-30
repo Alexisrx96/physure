@@ -1,3 +1,5 @@
+"""Unit conversion strategies."""
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -23,9 +25,11 @@ class LinearConverter(UnitConverter):
     scale: float
 
     def to_base(self, value: float) -> float:
+        """Converts value to base unit."""
         return value * self.scale
 
     def from_base(self, value: float) -> float:
+        """Converts value from base unit."""
         return value / self.scale
 
 
@@ -37,9 +41,11 @@ class AffineConverter(UnitConverter):
     offset: float
 
     def to_base(self, value: float) -> float:
+        """Converts value to base unit."""
         return (value * self.scale) + self.offset
 
     def from_base(self, value: float) -> float:
+        """Converts value from base unit."""
         return (value - self.offset) / self.scale
 
 
@@ -47,7 +53,8 @@ class AffineConverter(UnitConverter):
 class LogarithmicConverter(UnitConverter):
     """For logarithmic units: y = factor * log10(x / reference).
 
-    Specifically for Decibels (dB): dB = 10 * log10(P / P_ref) or 20 * log10(V / V_ref).
+    Specifically for Decibels (dB): dB = 10 * log10(P / P_ref) or
+    20 * log10(V / V_ref).
     We store the factor (10 or 20) and the reference value.
     """
 
@@ -55,11 +62,11 @@ class LogarithmicConverter(UnitConverter):
     reference: float = 1.0
 
     def to_base(self, value: float) -> float:
-        import numpy as np
-
+        """Converts logarithmic value to linear base value."""
         return self.reference * (10 ** (value / self.factor))
 
     def from_base(self, value: float) -> float:
+        """Converts linear base value to logarithmic value."""
         import numpy as np
 
         return self.factor * np.log10(value / self.reference)

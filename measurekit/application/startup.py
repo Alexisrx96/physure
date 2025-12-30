@@ -16,17 +16,17 @@ from typing import cast
 
 from measurekit.application.context import system_context
 from measurekit.domain.measurement.conversions import UnitDefinition
+from measurekit.domain.measurement.converters import (
+    AffineConverter,
+    LinearConverter,
+    LogarithmicConverter,
+)
 from measurekit.domain.measurement.dimensions import (
     Dimension,
     block_prefixes_for_dimension_symbol,
 )
 from measurekit.domain.measurement.system import UnitSystem
 from measurekit.domain.measurement.units import CompoundUnit
-from measurekit.domain.measurement.converters import (
-    AffineConverter,
-    LinearConverter,
-    LogarithmicConverter,
-)
 
 
 def _load_all_configurations_into(
@@ -304,9 +304,10 @@ def _get_config_parser(
 
     # 1. Always load the base measurekit.conf
     try:
-        with resources.path(
-            "measurekit.infrastructure.config", "measurekit.conf"
-        ) as base_config:
+        base_config_path = resources.files(
+            "measurekit.infrastructure.config"
+        ).joinpath("measurekit.conf")
+        with resources.as_file(base_config_path) as base_config:
             parser.read(str(base_config), encoding="utf-8")
             if verbose:
                 print(f"  -> Loaded base config: {base_config}")
@@ -318,9 +319,10 @@ def _get_config_parser(
         for file_name in extra_config_files:
             try:
                 # Try finding it in the systems subpackage first
-                with resources.path(
-                    "measurekit.infrastructure.config.systems", file_name
-                ) as sys_config:
+                sys_config_path = resources.files(
+                    "measurekit.infrastructure.config.systems"
+                ).joinpath(file_name)
+                with resources.as_file(sys_config_path) as sys_config:
                     parser.read(str(sys_config), encoding="utf-8")
                     if verbose:
                         print(f"  -> Loaded system config: {sys_config}")
@@ -351,6 +353,7 @@ def create_system(
     Args:
         config_name: The name of the config file (e.g., 'imperial.conf')
                      located in infrastructure/config/systems, or a path.
+        verbose: If True, prints loading details.
     """
     extra_files = [config_name] if config_name else []
     parser = _get_config_parser(extra_files, verbose)

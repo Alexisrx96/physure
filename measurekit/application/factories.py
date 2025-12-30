@@ -8,7 +8,7 @@ creation of `Quantity` instances in a variety of ways.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, overload
 
 from measurekit.application.context import get_active_system
 from measurekit.domain.measurement.quantity import Quantity, UncType, ValueType
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 # Matches: start, optional sign, digits, optional dot, digits,
 #   optional exponent, space, unit string
 _STRING_PARSE_REGEX = re.compile(
-    r"^\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*(.*)$"
+    r"^\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*(.*)$"
 )
 
 
@@ -33,6 +33,13 @@ class SpecializedQuantityFactory:
     def __init__(
         self, default_unit: CompoundUnit, system: UnitSystem | None = None
     ):
+        """Initializes a SpecializedQuantityFactory.
+
+        Args:
+            default_unit: The unit to be applied to quantities created by
+                this factory.
+            system: The UnitSystem context to use.
+        """
         self._default_unit = default_unit
         self._system = system
 
@@ -50,6 +57,7 @@ class SpecializedQuantityFactory:
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
     ) -> Quantity:
+        """Creates a Quantity with the factory's default unit."""
         system = (
             self._system if self._system is not None else get_active_system()
         )
@@ -70,6 +78,7 @@ class SpecializedQuantityFactory:
         )
 
     def __repr__(self) -> str:
+        """Returns a string representation of the factory."""
         return f"<Quantity Factory for unit='{self._default_unit}'>"
 
 
@@ -79,6 +88,11 @@ class QuantityFactory:
     __slots__ = ("_system", "_cache")
 
     def __init__(self, system: UnitSystem | None = None):
+        """Initializes a QuantityFactory.
+
+        Args:
+            system: The optional UnitSystem to associate with this factory.
+        """
         self._system = system
         self._cache: dict[CompoundUnit, SpecializedQuantityFactory] = {}
 
@@ -109,29 +123,7 @@ class QuantityFactory:
 
         # Handle string input like "10 m/s"
         if isinstance(value, str) and unit is None:
-            match = _STRING_PARSE_REGEX.match(value)
-            if match:
-                num_str, unit_str = match.groups()
-                try:
-                    # Try parsing as float first
-                    parsed_value = float(num_str)
-                    # If the number was an integer (e.g., "10"), convert back to int for cleanness
-                    if (
-                        parsed_value.is_integer()
-                        and "." not in num_str
-                        and "e" not in num_str.lower()
-                    ):
-                        parsed_value = int(parsed_value)
-
-                    value = parsed_value
-                    unit = (
-                        system.get_unit(unit_str.strip())
-                        if unit_str
-                        else system.get_unit("dimensionless")
-                    )
-                except ValueError:
-                    # If parsing fails, fall through to normal handling (will likely fail later)
-                    pass
+            value, unit = self._parse_string_value(value, system)
 
         if unit is None:
             unit = system.get_unit("dimensionless")
@@ -162,3 +154,32 @@ class QuantityFactory:
         factory = SpecializedQuantityFactory(default_unit, system)
         self._cache[default_unit] = factory
         return factory
+
+    def _parse_string_value(
+        self, value_str: str, system: UnitSystem
+    ) -> tuple[ValueType, CompoundUnit]:
+        """Parses a string like '10 m/s' into a value and a unit."""
+        match = _STRING_PARSE_REGEX.match(value_str)
+        if not match:
+            return value_str, system.get_unit("dimensionless")
+
+        num_str, unit_str = match.groups()
+        try:
+            parsed_value = float(num_str)
+            # If the number was an integer (e.g., "10"), convert back to int
+            # for cleanness
+            if (
+                parsed_value.is_integer()
+                and "." not in num_str
+                and "e" not in num_str.lower()
+            ):
+                parsed_value = int(parsed_value)
+
+            unit = (
+                system.get_unit(unit_str.strip())
+                if unit_str
+                else system.get_unit("dimensionless")
+            )
+            return parsed_value, unit
+        except ValueError:
+            return value_str, system.get_unit("dimensionless")
