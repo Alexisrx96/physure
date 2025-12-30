@@ -142,6 +142,11 @@ class Quantity(Generic[ValueType, UncType]):
         """Converts the quantity to a different unit."""
         if isinstance(target_unit, str):
             target_unit = self.system.get_unit(target_unit)
+
+        # Fast path for same unit
+        if target_unit == self.unit:
+            return self
+
         if self.dimension != target_unit.dimension(self.system):
             raise IncompatibleUnitsError(self.unit, target_unit)
 

@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
+from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
@@ -21,15 +22,21 @@ class TestQuantity(BaseTestUnit):
         time = Dimension({"T": 1})
         mass = Dimension({"M": 1})
 
-        self.system.register_unit("m", length, 1.0, "meter")
-        self.system.register_unit("cm", length, 0.01, "centimeter")
-        self.system.register_unit("km", length, 1000.0, "kilometer")
-        self.system.register_unit("s", time, 1.0, "second")
-        self.system.register_unit("min", time, 60.0, "minute")
-        self.system.register_unit("h", time, 3600.0, "hour")
-        self.system.register_unit("kg", mass, 1.0, "kilogram")
-        self.system.register_unit("g", mass, 0.001, "gram")
-        self.system.register_unit("rad", Dimension({}), 1.0, "radian")
+        self.system.register_unit("m", length, LinearConverter(1.0), "meter")
+        self.system.register_unit(
+            "cm", length, LinearConverter(0.01), "centimeter"
+        )
+        self.system.register_unit(
+            "km", length, LinearConverter(1000.0), "kilometer"
+        )
+        self.system.register_unit("s", time, LinearConverter(1.0), "second")
+        self.system.register_unit("min", time, LinearConverter(60.0), "minute")
+        self.system.register_unit("h", time, LinearConverter(3600.0), "hour")
+        self.system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
+        self.system.register_unit("g", mass, LinearConverter(0.001), "gram")
+        self.system.register_unit(
+            "rad", Dimension({}), LinearConverter(1.0), "radian"
+        )
 
         self.meter = CompoundUnit({"m": 1})
         self.centimeter = CompoundUnit({"cm": 1})
@@ -116,10 +123,12 @@ class TestQuantityFullCoverage(BaseTestUnit):
         length = Dimension({"L": 1})
         time = Dimension({"T": 1})
         mass = Dimension({"M": 1})
-        self.system.register_unit("m", length, 1.0, "meter")
-        self.system.register_unit("s", time, 1.0, "second")
-        self.system.register_unit("kg", mass, 1.0, "kilogram")
-        self.system.register_unit("rad", Dimension({}), 1.0, "radian")
+        self.system.register_unit("m", length, LinearConverter(1.0), "meter")
+        self.system.register_unit("s", time, LinearConverter(1.0), "second")
+        self.system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
+        self.system.register_unit(
+            "rad", Dimension({}), LinearConverter(1.0), "radian"
+        )
 
     def test_dunder_methods(self):
         """Test various dunder methods."""

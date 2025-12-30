@@ -1,5 +1,6 @@
 import unittest
 
+from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.units import CompoundUnit
 from measurekit.domain.measurement.system import UnitSystem
@@ -23,19 +24,23 @@ class BaseTestUnit(unittest.TestCase):
         force = mass * length / (time**2)
         energy = force * length
 
-        self.system.register_unit("m", length, 1.0, "meter")
-        self.system.register_unit("cm", length, 0.01, "centimeter")
-        self.system.register_unit("km", length, 1000.0, "kilometer")
-        self.system.register_unit("s", time, 1.0, "second")
-        self.system.register_unit("kg", mass, 1.0, "kilogram")
+        self.system.register_unit("m", length, LinearConverter(1.0), "meter")
+        self.system.register_unit(
+            "cm", length, LinearConverter(0.01), "centimeter"
+        )
+        self.system.register_unit(
+            "km", length, LinearConverter(1000.0), "kilometer"
+        )
+        self.system.register_unit("s", time, LinearConverter(1.0), "second")
+        self.system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
         self.system.register_unit(
             "N",
             Dimension({"M": 1, "L": 1, "T": -2}),
-            1.0,
+            LinearConverter(1.0),
             "newton",
             recipe=CompoundUnit({"kg": 1, "m": 1, "s": -2}),
         )
-        self.system.register_unit("J", energy, 1.0, "joule")
+        self.system.register_unit("J", energy, LinearConverter(1.0), "joule")
 
     def tearDown(self):
         """

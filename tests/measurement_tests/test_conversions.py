@@ -6,6 +6,7 @@ import unittest
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.conversions import UnitDefinition
+from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
@@ -17,12 +18,12 @@ class TestUnitDefinition(BaseTestUnit):
     def test_initialization_and_caching(self):
         """Test initialization and caching behavior."""
         length = Dimension({"L": 1})
-        unit1 = UnitDefinition("m", length, 1.0, "meter")
+        unit1 = UnitDefinition("m", length, LinearConverter(1.0), "meter")
         self.assertEqual(unit1.symbol, "m")
         self.assertEqual(unit1.dimension, length)
         self.assertEqual(unit1.name, "meter")
 
-        unit2 = UnitDefinition("m", length, 1.0, "meter")
+        unit2 = UnitDefinition("m", length, LinearConverter(1.0), "meter")
         self.assertIs(unit1, unit2)
 
 
@@ -39,20 +40,28 @@ class TestUnitSystemRegistration(BaseTestUnit):
     def test_register_unit(self):
         """Test registering units in the system's registries."""
         # Register a unit using the system instance
-        self.system.register_unit("m", self.length, 1.0, "meter")
+        self.system.register_unit(
+            "m", self.length, LinearConverter(1.0), "meter"
+        )
 
         # Check that it's in the system's registries
         self.assertIn("m", self.system.UNIT_REGISTRY[self.length])
         self.assertEqual(self.system.UNIT_DIMENSIONS["m"], self.length)
 
         # Register another unit of the same dimension
-        self.system.register_unit("cm", self.length, 0.01, "centimeter")
+        self.system.register_unit(
+            "cm", self.length, LinearConverter(0.01), "centimeter"
+        )
         self.assertIn("cm", self.system.UNIT_REGISTRY[self.length])
 
     def test_find_dimension_for_unit(self):
         """Test finding the dimension for a registered unit."""
-        self.system.register_unit("m", self.length, 1.0, "meter")
-        self.system.register_unit("s", self.time, 1.0, "second")
+        self.system.register_unit(
+            "m", self.length, LinearConverter(1.0), "meter"
+        )
+        self.system.register_unit(
+            "s", self.time, LinearConverter(1.0), "second"
+        )
 
         # Dimensions are now stored in the system's UNIT_DIMENSIONS dictionary
         self.assertEqual(self.system.UNIT_DIMENSIONS["m"], self.length)
@@ -73,14 +82,30 @@ class TestCompoundUnitConversion(BaseTestUnit):
         self.time = Dimension({"T": 1})
         self.mass = Dimension({"M": 1})
 
-        self.system.register_unit("m", self.length, 1.0, "meter")
-        self.system.register_unit("cm", self.length, 0.01, "centimeter")
-        self.system.register_unit("km", self.length, 1000.0, "kilometer")
-        self.system.register_unit("s", self.time, 1.0, "second")
-        self.system.register_unit("min", self.time, 60.0, "minute")
-        self.system.register_unit("h", self.time, 3600.0, "hour")
-        self.system.register_unit("kg", self.mass, 1.0, "kilogram")
-        self.system.register_unit("g", self.mass, 0.001, "gram")
+        self.system.register_unit(
+            "m", self.length, LinearConverter(1.0), "meter"
+        )
+        self.system.register_unit(
+            "cm", self.length, LinearConverter(0.01), "centimeter"
+        )
+        self.system.register_unit(
+            "km", self.length, LinearConverter(1000.0), "kilometer"
+        )
+        self.system.register_unit(
+            "s", self.time, LinearConverter(1.0), "second"
+        )
+        self.system.register_unit(
+            "min", self.time, LinearConverter(60.0), "minute"
+        )
+        self.system.register_unit(
+            "h", self.time, LinearConverter(3600.0), "hour"
+        )
+        self.system.register_unit(
+            "kg", self.mass, LinearConverter(1.0), "kilogram"
+        )
+        self.system.register_unit(
+            "g", self.mass, LinearConverter(0.001), "gram"
+        )
 
     def test_compound_unit_conversion_factor(self):
         """Test getting conversion factors between compound units."""

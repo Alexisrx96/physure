@@ -8,6 +8,7 @@ import math
 import unittest
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
+from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from tests.base_test_class import BaseTestUnit
 from tests.decorators import with_system_context
@@ -26,12 +27,24 @@ class TestWorkflowIntegration(BaseTestUnit):
         self.money = Dimension({"$": 1})
 
         # Register all units into the isolated self.system instance
-        self.system.register_unit("m", self.length, 1.0, "meter")
-        self.system.register_unit("s", self.time, 1.0, "second")
-        self.system.register_unit("kg", self.mass, 1.0, "kilogram")
-        self.system.register_unit("$", self.money, 1.0, "dollar")
-        self.system.register_unit("h", self.time, 3600.0, "hour")
-        self.system.register_unit("EUR", self.money, 1.1, "euro")
+        self.system.register_unit(
+            "m", self.length, LinearConverter(1.0), "meter"
+        )
+        self.system.register_unit(
+            "s", self.time, LinearConverter(1.0), "second"
+        )
+        self.system.register_unit(
+            "kg", self.mass, LinearConverter(1.0), "kilogram"
+        )
+        self.system.register_unit(
+            "$", self.money, LinearConverter(1.0), "dollar"
+        )
+        self.system.register_unit(
+            "h", self.time, LinearConverter(3600.0), "hour"
+        )
+        self.system.register_unit(
+            "EUR", self.money, LinearConverter(1.1), "euro"
+        )
 
         # Register aliases for compound units
         self.system.register_alias({"m": 1, "s": -1}, "m/s", "velocity")

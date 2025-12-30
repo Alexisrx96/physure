@@ -205,6 +205,19 @@ class UnitSystemBuilder:
                 main_part = value_str
 
             parts = [p.strip() for p in main_part.split(",") if p.strip()]
+
+            # Check if there was an offset for this key
+            has_offset = False
+            if len(parts) > 2:
+                try:
+                    float(parts[1])
+                    has_offset = True
+                except ValueError:
+                    pass
+
+            if has_offset:
+                continue
+
             recipe_str = parts[2] if len(parts) > 2 else None
 
             if recipe_str:

@@ -3,7 +3,11 @@ import unittest
 
 import numpy as np
 
-from measurekit.application.solver_service import ODESolution, solve_unit_aware_ivp
+from measurekit.application.solver_service import (
+    ODESolution,
+    solve_unit_aware_ivp,
+)
+from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from tests.base_test_class import BaseTestUnit
 
@@ -16,8 +20,8 @@ class TestODESolution(BaseTestUnit):
         super().setUp()
         length = Dimension({"L": 1})
         time = Dimension({"T": 1})
-        self.system.register_unit("m", length, 1.0, "meter")
-        self.system.register_unit("s", time, 1.0, "second")
+        self.system.register_unit("m", length, LinearConverter(1.0), "meter")
+        self.system.register_unit("s", time, LinearConverter(1.0), "second")
 
     def test_init_and_repr(self):
         """Test the initialization and representation for ODESolution class."""
@@ -53,8 +57,12 @@ class TestSolveUnitAwareIvp(BaseTestUnit):
         super().setUp()
         self.mass = Dimension({"M": 1})
         self.time = Dimension({"T": 1})
-        self.system.register_unit("g", self.mass, 0.001, "gram")
-        self.system.register_unit("s", self.time, 1.0, "second")
+        self.system.register_unit(
+            "g", self.mass, LinearConverter(0.001), "gram"
+        )
+        self.system.register_unit(
+            "s", self.time, LinearConverter(1.0), "second"
+        )
 
     def test_solve_unit_aware_ivp_simple_decay(self):
         """Test with a simple first-order ODE: dy/dt = -k*y."""

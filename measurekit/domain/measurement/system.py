@@ -107,7 +107,6 @@ class UnitSystem(IUnitRepository):
         allow_prefixes: bool = True,
     ) -> None:
         """Registers a unit and its aliases with the system."""
-
         unit_def = UnitDefinition(
             symbol,
             dimension,
@@ -162,6 +161,7 @@ class UnitSystem(IUnitRepository):
                         dimension,
                         LinearConverter(prefixed_factor),
                         prefixed_name,
+                        recipe=None,
                         allow_prefixes=False,
                     )
                     self.UNIT_SYMBOL_REGISTRY[prefixed_symbol] = prefixed_def

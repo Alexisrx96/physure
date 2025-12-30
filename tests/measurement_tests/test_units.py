@@ -3,6 +3,7 @@
 import unittest
 
 from measurekit import get_unit
+from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.units import CompoundUnit
 from tests.base_test_class import BaseTestUnit
@@ -22,11 +23,15 @@ class TestCompoundUnit(BaseTestUnit):
         length = Dimension({"L": 1})
         time = Dimension({"T": 1})
         mass = Dimension({"M": 1})
-        self.system.register_unit("m", length, 1.0, "meter")
-        self.system.register_unit("s", time, 1.0, "second")
-        self.system.register_unit("kg", mass, 1.0, "kilogram")
-        self.system.register_unit("cm", length, 0.01, "centimeter")
-        self.system.register_unit("km", length, 1000.0, "kilometer")
+        self.system.register_unit("m", length, LinearConverter(1.0), "meter")
+        self.system.register_unit("s", time, LinearConverter(1.0), "second")
+        self.system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
+        self.system.register_unit(
+            "cm", length, LinearConverter(0.01), "centimeter"
+        )
+        self.system.register_unit(
+            "km", length, LinearConverter(1000.0), "kilometer"
+        )
 
     def test_init_and_new(self):
         """Test initialization and __new__ caching behavior."""
