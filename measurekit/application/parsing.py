@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Generator, Iterator
 from dataclasses import dataclass
@@ -12,9 +13,11 @@ from measurekit.domain.notation.protocols import ExponentEntityProtocol
 from measurekit.domain.notation.token_buffer import TokenBuffer
 
 # Superscript and Subscript Mapping
-_SUPERSCRIPT_MAP = str.maketrans("0123456789.-", "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻")
-_SUPERSCRIPT_REVERSE_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻", "0123456789.-")
-_SUBSCRIPT_MAP = str.maketrans("0123456789-", "₀₁₂₃₄₅₆₇₈₉₋")
+__SUPERSCRIPT_TABLE = "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻"
+__SUBSCRIPT_TABLE = "₀₁₂₃₄₅₆₇₈₉₋"
+_SUPERSCRIPT_MAP = str.maketrans("0123456789.-", __SUPERSCRIPT_TABLE)
+_SUPERSCRIPT_REVERSE_MAP = str.maketrans(__SUPERSCRIPT_TABLE, "0123456789.-")
+_SUBSCRIPT_MAP = str.maketrans("0123456789-", __SUBSCRIPT_TABLE)
 
 
 def to_superscript(n: str | float) -> str:
@@ -211,6 +214,8 @@ class NotationParser:
 
     def expr(self) -> ExponentEntityProtocol:
         """Parses a full expression with multiplication and division."""
+        if self.current.type == TokenType.EOF:
+            return self.entity_cls({})
         result = self.term()
         # Handle a sequence of multiplications or divisions.
         while self.current.type in (TokenType.MUL, TokenType.DIV):
@@ -238,43 +243,7 @@ class NotationParser:
         token = self.current
 
         if token.type == TokenType.UNIT:
-            self.eat(TokenType.UNIT)
-            original_value = token.value
-            unit_value = original_value
-            exponent_value = None
-
-            # Attempt to split the token into a unit name and an embedded
-            # exponent
-            # (e.g., "m2" -> "m", "2" or "s-1" -> "s", "-1").
-            split_index = -1
-            for i, char in enumerate(original_value):
-                # An exponent starts with a digit or a hyphen
-                # (but not at the beginning).
-                if i > 0 and (char.isdigit() or char == "-"):
-                    split_index = i
-                    break
-
-            if split_index != -1:
-                exponent_value = original_value[split_index:]
-                unit_value = original_value[:split_index]
-
-            # Create an entity for the base unit part.
-            base_unit = self.entity_cls({unit_value: 1})
-
-            # If an embedded exponent was found, try to apply it.
-            if exponent_value is not None:
-                try:
-                    return base_unit ** int(exponent_value)
-                except ValueError:
-                    # If parsing the exponent fails (e.g., "m-s"), fall back to
-                    # treating the entire original token ("m-s") as a single
-                    # unit name.
-                    return self.entity_cls({original_value: 1})
-
-            # If no embedded exponent, check for a standard exponent
-            # (e.g., "^2" or "²").
-            exponent = self._parse_exponent()
-            return base_unit**exponent if exponent is not None else base_unit
+            return self._parse_unit_factor()
 
         if token.type == TokenType.LPAREN:
             self.eat(TokenType.LPAREN)
@@ -286,15 +255,52 @@ class NotationParser:
 
         # Handle dimensionless quantities represented by the number '1'.
         if token.type == TokenType.NUMBER and token.value == "1":
-            self.eat(TokenType.NUMBER)
-            # Handle cases like "1/s".
-            if self.current.type == TokenType.DIV:
-                self.eat(TokenType.DIV)
-                return self.entity_cls({}) / self.factor()
-            return self.entity_cls({})
+            return self._handle_number_one()
 
         # If the token is not a unit, parenthesis, or '1', it's an error.
         raise ValueError(f"Unexpected token: {token.type} ({token.value})")
+
+    def _parse_unit_factor(self) -> ExponentEntityProtocol:
+        """Helper to parse a unit factor, including embedded exponents."""
+        token = self.eat(TokenType.UNIT)
+        original_value = token.value
+        unit_value = original_value
+        exponent_value = None
+
+        # Attempt to split the token into a unit name and an embedded exponent
+        split_index = -1
+        for i, char in enumerate(original_value):
+            if i > 0 and (char.isdigit() or char == "-"):
+                split_index = i
+                break
+
+        if split_index != -1:
+            exponent_value = original_value[split_index:]
+            unit_value = original_value[:split_index]
+
+        # Create an entity for the base unit part.
+        base_unit = self.entity_cls({unit_value: 1})
+
+        # If an embedded exponent was found, try to apply it.
+        if exponent_value is not None:
+            try:
+                return base_unit ** int(exponent_value)
+            except ValueError:
+                # Fallback to treating the entire original token as unit name
+                return self.entity_cls({original_value: 1})
+
+        # Check for a standard exponent (e.g., "^2" or "²").
+        exponent = self._parse_exponent()
+        return base_unit**exponent if exponent is not None else base_unit
+
+    def _handle_number_one(self) -> ExponentEntityProtocol:
+        """Helper to handle the number '1' (dimensionless/unity)."""
+        self.eat(TokenType.NUMBER)
+        # Handle cases like "1/s".
+        if self.current.type == TokenType.DIV:
+            self.eat(TokenType.DIV)
+            return self.entity_cls({}) / self.factor()
+        return self.entity_cls({})
 
     def _parse_exponent(self) -> int | float | None:
         """Parses an optional exponent following a factor.
@@ -324,3 +330,17 @@ class NotationParser:
             )
         # Case 3: No exponent found.
         return None
+
+
+@functools.lru_cache(maxsize=2048)
+def parse_unit_string(
+    expression: str, entity_cls: type[ExponentEntityProtocol]
+) -> ExponentEntityProtocol:
+    """Parses a unit or dimension string into the target entity class.
+
+    This function uses memoization to avoid redundant processing of the same
+    unit strings, significantly improving performance for repeated lookups.
+    """
+    tokens = generate_tokens(expression)
+    parser = NotationParser(tokens, entity_cls)
+    return parser.parse()
