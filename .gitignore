@@ -45,3 +45,5 @@ ddd.md
 cleanup.md
 coverage.*
 build.md
+
+benchmark_results.png
