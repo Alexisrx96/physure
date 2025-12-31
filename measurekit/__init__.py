@@ -60,12 +60,19 @@ __all__ = [
     "u",
 ]
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 # Register Pandas Accessor if pandas is available
 try:
     import pandas as pd  # noqa: F401
 
     from measurekit.ext import pandas_support  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import numba
+
+    import measurekit.ext.numba_support
 except ImportError:
     pass
