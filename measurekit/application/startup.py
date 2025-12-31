@@ -210,12 +210,20 @@ class UnitSystemBuilder:
         # Pass 2: Register recipes for derived units after all base
         # units are available
         for key, value_str in units_data.items():
+            # Extract aliases for registration
+            aliases = []
             if "[" in value_str:
-                main_part, _ = value_str.split("[", 1)
+                main_part, alias_part = value_str.split("[", 1)
+                aliases = [
+                    a.strip() for a in alias_part.strip()[:-1].split(",")
+                ]
             else:
                 main_part = value_str
 
             parts = [p.strip() for p in main_part.split(",") if p.strip()]
+
+            symbol = aliases[0] if aliases else key
+            all_aliases = [key] + aliases
 
             if parts[0].lower() == "log":
                 continue
@@ -251,6 +259,11 @@ class UnitSystemBuilder:
                     unit_def.recipe = simplified_recipe
                     self._system._UNIT_RECIPES[unit_def.symbol] = (
                         simplified_recipe
+                    )
+                    # Register the alias for the simplified recipe so that
+                    # to_string(use_alias=True) works for base-unit quantities.
+                    self._system.register_alias(
+                        simplified_recipe.exponents, *reversed(all_aliases)
                     )
 
         return self
@@ -301,6 +314,7 @@ def _get_config_parser(
 ) -> configparser.ConfigParser:
     """Creates a ConfigParser with base configs and optional extra files."""
     parser = configparser.ConfigParser()
+    parser.optionxform = str
 
     # 1. Always load the base measurekit.conf
     try:

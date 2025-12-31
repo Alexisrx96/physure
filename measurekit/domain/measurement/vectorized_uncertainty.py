@@ -21,7 +21,7 @@ class CovarianceStore:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._init_store()
-        return cast("CovarianceStore", cls._instance)
+        return cls._instance
 
     def _init_store(self) -> None:
         """Initializes the sparse matrix and index tracking."""
@@ -41,6 +41,27 @@ class CovarianceStore:
     ) -> sparse.csr_matrix:
         """Retrieves a block from the global covariance matrix."""
         return self._matrix[row_slice, col_slice]
+
+    def set_covariance_block(
+        self, row_slice: slice, col_slice: slice, block: Any
+    ) -> None:
+        """Sets a block in the global covariance matrix, growing it if needed."""
+        max_idx = max(row_slice.stop, col_slice.stop)
+        current_size = self._matrix.shape[0]
+
+        if max_idx > current_size:
+            # Grow by converting to LIL (most robust for resizing/assignment)
+            lil = self._matrix.tolil()
+            lil.resize((max_idx, max_idx))
+            self._matrix = lil.tocsr()
+
+        # Perform assignment - using LIL if already modifying a block
+        # is often more reliable than CSR assignment.
+        lil = self._matrix.tolil()
+        if hasattr(block, "toarray"):
+            block = block.toarray()
+        lil[row_slice, col_slice] = block
+        self._matrix = lil.tocsr()
 
     def get_covariance(self) -> sparse.csr_matrix:
         """Returns the full covariance matrix."""
@@ -121,6 +142,3 @@ class CovarianceStore:
                 (self._matrix, block), format="csr"
             )
         return slc
-
-
-from typing import cast
