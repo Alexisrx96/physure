@@ -8,6 +8,7 @@ from collections import defaultdict
 from typing import Any, cast
 
 from measurekit.application.factories import QuantityFactory
+from measurekit.application.parsing import parse_unit_string
 from measurekit.domain.measurement.conversions import UnitDefinition
 from measurekit.domain.measurement.converters import (
     LinearConverter,
@@ -16,8 +17,6 @@ from measurekit.domain.measurement.converters import (
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.ports.unit_repository import IUnitRepository
 from measurekit.domain.measurement.units import CompoundUnit, ExponentsDict
-from measurekit.domain.notation.lexer import generate_tokens
-from measurekit.domain.notation.parsers import NotationParser
 
 log = logging.getLogger(__name__)
 
@@ -135,40 +134,52 @@ class UnitSystem(IUnitRepository):
 
         # Automatically register prefixed units
         if allow_prefixes:
-            for unit_name in sorted_names:
-                if unit_name in self._PREFIX_BLOCKLIST:
+            self._register_prefixed_units(
+                sorted_names, symbol, dimension, converter, name
+            )
+
+    def _register_prefixed_units(
+        self,
+        names: list[str],
+        base_symbol: str,
+        dimension: Dimension,
+        converter: UnitConverter,
+        base_name: str | None,
+    ) -> None:
+        """Helper to register all prefixed variants for a set of unit names."""
+        for unit_name in names:
+            if unit_name in self._PREFIX_BLOCKLIST:
+                continue
+
+            for prefix_symbol, prefix_data in self.PREFIX_REGISTRY.items():
+                prefixed_symbol = prefix_symbol + unit_name
+
+                if prefixed_symbol in self.UNIT_SYMBOL_REGISTRY:
                     continue
 
-                for prefix_symbol, prefix_data in self.PREFIX_REGISTRY.items():
-                    prefixed_symbol = prefix_symbol + unit_name
+                # Prefixes only make sense for linear units
+                if not isinstance(converter, LinearConverter):
+                    continue
 
-                    if prefixed_symbol in self.UNIT_SYMBOL_REGISTRY:
-                        continue
+                desc_name = (
+                    base_name
+                    if (base_name and unit_name == base_symbol)
+                    else unit_name
+                )
+                prefixed_name = prefix_data["name"] + desc_name
+                prefixed_factor = prefix_data["factor"] * converter.scale
 
-                    base_desc_name = (
-                        name if (name and unit_name == symbol) else unit_name
-                    )
-                    prefixed_name = prefix_data["name"] + base_desc_name
-
-                    # Prefixes only make sense for linear units
-                    if not isinstance(converter, LinearConverter):
-                        continue
-
-                    prefixed_factor = prefix_data["factor"] * converter.scale
-
-                    prefixed_def = UnitDefinition(
-                        prefixed_symbol,
-                        dimension,
-                        LinearConverter(prefixed_factor),
-                        prefixed_name,
-                        recipe=None,
-                        allow_prefixes=False,
-                    )
-                    self.UNIT_SYMBOL_REGISTRY[prefixed_symbol] = prefixed_def
-                    self.UNIT_DIMENSIONS[prefixed_symbol] = dimension
-                    self.UNIT_REGISTRY[dimension][prefixed_symbol] = (
-                        prefixed_def
-                    )
+                prefixed_def = UnitDefinition(
+                    prefixed_symbol,
+                    dimension,
+                    LinearConverter(prefixed_factor),
+                    prefixed_name,
+                    recipe=None,
+                    allow_prefixes=False,
+                )
+                self.UNIT_SYMBOL_REGISTRY[prefixed_symbol] = prefixed_def
+                self.UNIT_DIMENSIONS[prefixed_symbol] = dimension
+                self.UNIT_REGISTRY[dimension][prefixed_symbol] = prefixed_def
 
     def get_unit(self, unit_expression: str) -> CompoundUnit:
         """Retrieves a CompoundUnit from the system based on its notation."""
@@ -184,9 +195,9 @@ class UnitSystem(IUnitRepository):
             return CompoundUnit(dict(key))
 
         # Parse as a compound expression
-        tokens = generate_tokens(unit_expression)
-        parser = NotationParser(tokens, CompoundUnit)
-        result = cast(CompoundUnit, parser.parse())
+        result = cast(
+            CompoundUnit, parse_unit_string(unit_expression, CompoundUnit)
+        )
 
         # Simplify the result of the parsing
         return result.simplify(self)

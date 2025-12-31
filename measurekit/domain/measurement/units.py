@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
+import weakref
 from collections import defaultdict
 from dataclasses import dataclass
-import weakref
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, cast, overload
 
 import numpy as np
@@ -96,8 +96,8 @@ class CompoundUnit(BaseExponentEntity):
         # efficiently if we returned cached. Use object.__setattr__ if needed
         # but BaseExponentEntity sets exponents in __new__?
         # Actually Base is standard class?
-        # dataclass __init__ is called after __new__.
-        # But if we return existing, __init__ runs again for dataclasses usually?
+        # But if we return existing, __init__ runs again for
+        # dataclasses usually?
         # Singleton pattern in __new__:
         cls._cache[key] = cast(CompoundUnit, instance)
         return cast(CompoundUnit, instance)
@@ -117,13 +117,14 @@ class CompoundUnit(BaseExponentEntity):
 
     # --- System-Dependent Methods ---
     def conversion_factor_to(
-        self, target: CompoundUnit, system: UnitSystem
+        self, target: CompoundUnit, system: UnitSystem | None = None
     ) -> float:
         """Calculate the conversion factor to a target unit within a system.
 
         Args:
         target (CompoundUnit): The unit to convert to.
-        system (UnitSystem): The unit system providing conversion definitions.
+        system (UnitSystem | None): The unit system for conversion.
+                                    If None, the default system is used.
 
         Returns:
         float: The numerical factor to multiply by to convert to the target
@@ -132,6 +133,9 @@ class CompoundUnit(BaseExponentEntity):
         Raises:
         IncompatibleUnitsError: If the units have incompatible dimensions.
         """
+        if system is None:
+            system = get_default_system()
+
         if self.dimension(system) != target.dimension(system):
             raise IncompatibleUnitsError(self, target)
         source_factor = self._compound_factor(system)
@@ -167,7 +171,8 @@ class CompoundUnit(BaseExponentEntity):
                 raise ValueError(f"Unit definition for '{unit}' not found.")
             # Assume Linear for compound factors default path
             # If not linear, this naive multiplication is wrong,
-            # but _compound_factor is legacy helper only for linear combinations.
+            # but _compound_factor is legacy helper only for linear
+            # combinations.
             if hasattr(unit_def.converter, "scale"):
                 factor *= unit_def.converter.scale**exp
             else:
@@ -228,7 +233,8 @@ class CompoundUnit(BaseExponentEntity):
             try:
                 sys = get_default_system()
             except RuntimeError:
-                # If no system is active, we cannot create a Quantity with defaults
+                # If no system is active, we cannot create a Quantity
+                # with defaults
                 return NotImplemented
 
             return Quantity.from_input(value=other, unit=self, system=sys)

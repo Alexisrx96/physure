@@ -62,3 +62,9 @@ class UnitNotFoundError(MeasureKitError, KeyError):
         """
         self.unit_name = unit_name
         super().__init__(f"Unit '{unit_name}' not found or registered.")
+
+
+class DimensionError(MeasureKitError):
+    """Raised when an invalid operation is performed on dimensions."""
+
+    pass

@@ -10,15 +10,16 @@ library, enabling it to check for dimensional consistency in calculations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import ClassVar, cast
+from typing import ClassVar, Final, cast
 
 from typing_extensions import Self
 
-from measurekit.domain.notation.base_entity import BaseExponentEntity
-from measurekit.domain.notation.lexer import generate_tokens, to_superscript
-from measurekit.domain.notation.parsers import (
-    NotationParser,
+from measurekit.application.parsing import (
+    parse_unit_string,
+    to_superscript,
 )
+from measurekit.domain.exceptions import DimensionError
+from measurekit.domain.notation.base_entity import BaseExponentEntity
 from measurekit.domain.notation.protocols import ExponentEntityProtocol
 from measurekit.domain.notation.typing import ExponentsDict
 
@@ -26,6 +27,23 @@ _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
 DIMENSIONLESS = None
 _PREFIX_DENYLIST: set[str] = set()
+
+# Canonical Basis for SI plus supplementary (Angle, Money):
+# [Length, Mass, Time, Current, Temperature, Amount, Luminous, Angle, Money]
+SI_ORDER: Final[tuple[str, ...]] = (
+    "L",
+    "M",
+    "T",
+    "I",
+    "O",
+    "N",
+    "J",
+    "A",
+    "$",
+)
+SI_INDICES: Final[dict[str, int]] = {s: i for i, s in enumerate(SI_ORDER)}
+DIM_COUNT: Final[int] = len(SI_ORDER)
+ZERO_VECTOR: Final[tuple[int, ...]] = (0,) * DIM_COUNT
 
 
 def block_prefixes_for_dimension_symbol(symbol: str) -> None:
@@ -53,76 +71,173 @@ def register_dimension(dimension: Dimension, name: str):
 
 @dataclass(frozen=True)
 class Dimension(BaseExponentEntity):
-    """Represents a physical dimension.
+    """Represents a physical dimension using a fixed-length vector.
 
-    It has a mapping of base symbols (e.g., L, M, T) to their exponents.
+    Canonical Order:
+    [Length, Mass, Time, Current, Temperature, Amount, Luminous]
+    Symbols: [L, M, T, I, O, N, J]
 
     Attributes:
     ----------
-    exponents : ExponentsDict
-        Dictionary mapping base dimension symbols to their exponents.
-
-    Class Attributes
-    ---------------
-    _cache : dict[tuple, Dimension]
-        Cache for unique Dimension instances.
-    _base_dimensions : list[str]
-        List of recognized base dimension symbols.
-
-    Methods:
-    -------
-    is_dimensionless() -> bool
-        Checks if the dimension is dimensionless.
-    set_base_dimensions(bases: list[str])
-        Sets the base dimensions for the system.
-    from_string(dim_str: str) -> Dimension
-        Creates a Dimension from a string representation.
+    _vector : Tuple[int, ...]
+        Tuple of integers storing the exponents of the base dimensions.
     """
 
-    _cache: ClassVar[dict[tuple, Dimension]] = {}
-    _base_dimensions: ClassVar[list[str]] = []
-
+    _vector: tuple[int, ...]
     _analytical_representation: str = field(init=False, repr=False)
     _display_exponents: dict = field(init=False, repr=False)
 
-    def __new__(cls, exponents: ExponentsDict) -> Self:
+    _cache: ClassVar[dict[tuple[int, ...], Dimension]] = {}
+    _base_dimensions: ClassVar[list[str]] = list(SI_ORDER)
+
+    def __new__(
+        cls, exponents: ExponentsDict | tuple[int, ...] | None = None
+    ) -> Self:
         """Creates or retrieves a cached Dimension instance."""
-        normalized = {k: float(v) for k, v in exponents.items() if v != 0}
-        key = tuple(sorted(normalized.items()))
-        if key in cls._cache:
-            return cast(Self, cls._cache[key])
-
-        instance = super().__new__(cls, exponents)
-
-        # Pre-calculate the analytical representation
-        if not normalized:
-            analytical_rep = "Dimensionless"
+        if isinstance(exponents, tuple):
+            vector = exponents
+        elif exponents is None:
+            vector = ZERO_VECTOR
         else:
-            parts = []
-            for k, exp in sorted(normalized.items()):
-                display_exp = int(exp) if exp == int(exp) else exp
-                if display_exp == 1:
-                    parts.append(k)
-                else:
-                    parts.append(f"{k}{to_superscript(display_exp)}")
-            analytical_rep = "·".join(parts)
+            vector = cls._normalize_exponents(exponents)
 
-        # Pre-calculate the display exponents dictionary
-        display_exp_dict = {
-            k: int(v) if v == int(v) else v for k, v in normalized.items()
-        }
+        if vector in cls._cache:
+            return cast(Self, cls._cache[vector])
 
+        # Initialize instance without calling BaseExponentEntity.__new__
+        # to avoid its default dictionary-based logic.
+        instance = super(BaseExponentEntity, cls).__new__(cls)
+
+        analytical_rep, display_exp_dict = cls._calculate_representation(
+            vector
+        )
+
+        object.__setattr__(instance, "_vector", vector)
         object.__setattr__(
             instance, "_analytical_representation", analytical_rep
         )
         object.__setattr__(instance, "_display_exponents", display_exp_dict)
+        # Backward compatibility:
+        # set the 'exponents' field from BaseExponentEntity
+        object.__setattr__(instance, "exponents", display_exp_dict)
 
-        cls._cache[key] = cast(Dimension, instance)
-        return instance
+        cls._cache[vector] = cast(Dimension, instance)
+        return cast(Self, instance)
+
+    @classmethod
+    def _calculate_representation(
+        cls, vector: tuple[int, ...]
+    ) -> tuple[str, dict[str, int]]:
+        """Calculates the analytical string and display dict for a vector."""
+        normalized = {SI_ORDER[i]: v for i, v in enumerate(vector) if v != 0}
+
+        if not normalized:
+            analytical_rep = "Dimensionless"
+        else:
+            parts = []
+            for k in SI_ORDER:
+                idx = SI_INDICES[k]
+                exp = vector[idx]
+                if exp == 0:
+                    continue
+                parts.append(k if exp == 1 else f"{k}{to_superscript(exp)}")
+            analytical_rep = "·".join(parts)
+
+        display_exp_dict = {k: int(v) for k, v in normalized.items()}
+        return analytical_rep, display_exp_dict
+
+    @classmethod
+    def _normalize_exponents(cls, exponents: ExponentsDict) -> tuple[int, ...]:
+        """Converts an exponents dictionary into a canonical vector."""
+        v_list = [0] * DIM_COUNT
+        for k, v in exponents.items():
+            if k in SI_INDICES:
+                v_list[SI_INDICES[k]] = int(v)
+            elif v != 0:
+                raise DimensionError(f"Unknown base dimension symbol: {k}")
+        return tuple(v_list)
+
+    def __init__(
+        self, exponents: ExponentsDict | tuple[int, ...] | None = None
+    ):
+        """Initializes the dimension. Logic is handled in __new__."""
+        pass
 
     def __hash__(self) -> int:
-        """Returns a hash value for the dimension."""
-        return super().__hash__()
+        """Returns a hash value for the dimension based on its vector."""
+        return hash(self._vector)
+
+    def __eq__(self, other: object) -> bool:
+        """Checks equality by comparing vector representations."""
+        if isinstance(other, Dimension):
+            return self._vector == other._vector
+        if isinstance(other, BaseExponentEntity):
+            # Fallback for mixed comparisons if necessary
+            return self.exponents == other.exponents
+        return NotImplemented
+
+    # --- Vector Arithmetic ---
+
+    def __mul__(self, other: ExponentEntityProtocol) -> Dimension:
+        """Multiplies two dimensions by adding their exponent vectors."""
+        if not isinstance(other, Dimension):
+            # If multiplying by something else (e.g. CompoundUnit),
+            # let it handle it
+            return NotImplemented
+        new_vector = tuple(a + b for a, b in zip(self._vector, other._vector))
+        return Dimension(new_vector)
+
+    def __truediv__(self, other: ExponentEntityProtocol) -> Dimension:
+        """Divides two dimensions by subtracting their exponent vectors."""
+        if not isinstance(other, Dimension):
+            return NotImplemented
+        new_vector = tuple(a - b for a, b in zip(self._vector, other._vector))
+        return Dimension(new_vector)
+
+    def __pow__(self, power: float) -> Dimension:
+        """Raises a dimension to a power by scaling its exponent vector."""
+        if not isinstance(power, (int, float)):
+            return NotImplemented
+        # Dimensions typically have integer exponents
+        new_vector = tuple(int(v * power) for v in self._vector)
+        return Dimension(new_vector)
+
+    # --- Properties for SI Base Dimensions ---
+
+    @property
+    def length(self) -> int:
+        """Exponent of the Length dimension."""
+        return self._vector[0]
+
+    @property
+    def mass(self) -> int:
+        """Exponent of the Mass dimension."""
+        return self._vector[1]
+
+    @property
+    def time(self) -> int:
+        """Exponent of the Time dimension."""
+        return self._vector[2]
+
+    @property
+    def current(self) -> int:
+        """Exponent of the Electric Current dimension."""
+        return self._vector[3]
+
+    @property
+    def temperature(self) -> int:
+        """Exponent of the Thermodynamic Temperature dimension."""
+        return self._vector[4]
+
+    @property
+    def amount(self) -> int:
+        """Exponent of the Amount of Substance dimension."""
+        return self._vector[5]
+
+    @property
+    def luminous(self) -> int:
+        """Exponent of the Luminous Intensity dimension."""
+        return self._vector[6]
 
     @property
     def analytical_representation(self) -> str:
@@ -154,50 +269,25 @@ class Dimension(BaseExponentEntity):
     @property
     def is_dimensionless(self) -> bool:
         """Checks if the dimension is dimensionless."""
-        return not self.exponents
+        return all(v == 0 for v in self._vector)
 
     @classmethod
     def set_base_dimensions(cls, bases: list[str]):
         """Sets the base dimensions that the system will recognize.
 
-        This method should be called during system initialization.
-
-        Args:
-            bases (list[str]): A list of the base dimension symbols.
-                               e.g., ['L', 'M', 'T', 'I', 'O', 'J', 'N']
+        Note: The vector representation strictly follows the SI order.
+        If a different system is used, this method will update the registry,
+        but the vector internally will still map known SI symbols.
         """
         cls._base_dimensions = bases
 
     @classmethod
     def from_string(cls, dim_str: str) -> Dimension:
-        """Creates a Dimension object from a string.
-
-        Args:
-            dim_str (str): The string representing the dimension.
-                           e.g., "L", "T", "L·T⁻²", "M*L^2 / T^2"
-
-        Returns:
-            Dimension: A new corresponding Dimension object.
-        """
-        tokens = generate_tokens(dim_str)
-
-        parser = NotationParser(tokens, cls)  # type: ignore
-
-        parsed_dim = parser.parse()
-        return cast(Dimension, parsed_dim)
+        """Creates a Dimension object from a string."""
+        # Use memoized parser eventually, or just use get_dimension
+        return get_dimension(dim_str)
 
 
 def get_dimension(unit_expression: str) -> Dimension:
-    """Returns a Dimension object parsed from a unit expression string.
-
-    Args:
-        unit_expression (str): The string representing the unit expression.
-
-    Returns:
-        Dimension: The corresponding Dimension object.
-    """
-    tokens = generate_tokens(unit_expression)
-    parser = NotationParser(
-        tokens, cast(type[ExponentEntityProtocol], Dimension)
-    )
-    return cast(Dimension, parser.parse())
+    """Returns a Dimension object parsed from a unit expression string."""
+    return cast(Dimension, parse_unit_string(unit_expression, Dimension))
