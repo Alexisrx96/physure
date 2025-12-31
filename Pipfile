@@ -14,6 +14,8 @@ numba = "*"
 configparser = "*"
 scipy = "*"
 typing-extensions = "*"
+jax = "*"
+jaxlib = "*"
 
 [dev-packages]
 isort = "*"
