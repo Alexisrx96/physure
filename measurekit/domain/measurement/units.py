@@ -8,9 +8,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, cast, overload
 
-import numpy as np
 import sympy as sp
 
+from measurekit.core.dispatcher import BackendManager
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.converters import (
     LinearConverter,
@@ -232,7 +232,11 @@ class CompoundUnit(BaseExponentEntity):
         """
         from measurekit.domain.measurement.quantity import Quantity
 
-        if isinstance(other, (float, int, np.ndarray)):
+        backend = BackendManager.get_backend(other)
+        # Check if scalar (int/float) or array via backend
+        is_valid = isinstance(other, (float, int)) or backend.is_array(other)
+
+        if is_valid:
             # Implicitly use default system for syntactic sugar
             try:
                 sys = get_default_system()

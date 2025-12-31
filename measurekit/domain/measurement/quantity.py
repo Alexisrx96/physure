@@ -32,9 +32,6 @@ from measurekit.domain.measurement.units import (
     CompoundUnit,
     get_default_system,
 )
-from measurekit.domain.measurement.vectorized_uncertainty import (
-    CovarianceStore,
-)
 
 if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
@@ -358,6 +355,10 @@ class Quantity(Generic[ValueType, UncType]):
         jac_other: Any = None,
     ) -> Uncertainty:
         """Helper to propagate vectorized uncertainty via CovarianceStore."""
+        from measurekit.domain.measurement.vectorized_uncertainty import (
+            CovarianceStore,
+        )
+
         store = CovarianceStore()
         in_slices = []
         jacobians = []

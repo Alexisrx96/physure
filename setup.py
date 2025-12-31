@@ -8,7 +8,7 @@ with open("README.md", encoding="utf-8") as f:
 
 setup(
     name="measurekit",
-    version="0.0.002-dev",
+    version="0.0.003-dev",
     author="Irvin Torres",
     author_email="irvinrx1996@hotmail.com",
     description="A Python package for handling measurement units and "
@@ -39,8 +39,6 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "sympy>=1.4",
-        "numpy>=2.2",
-        "scipy>=1.5",
         "typing-extensions>=4.15.0",
     ],
     keywords="units, measurement, conversion, physics, engineering, science",
@@ -55,6 +53,28 @@ setup(
         "pytest-cov>=2.12.0",
     ],
     extras_require={
+        "numpy": [
+            "numpy>=1.21.0",
+            "scipy>=1.5.0",
+        ],
+        "torch": [
+            "torch>=2.0.0",
+        ],
+        "jax": [
+            "jax>=0.4.0",
+            "jaxlib>=0.4.0",
+        ],
+        "pandas": [
+            "pandas>=1.3.0",
+        ],
+        "all": [
+            "numpy>=1.21.0",
+            "scipy>=1.5.0",
+            "torch>=2.0.0",
+            "jax>=0.4.0",
+            "jaxlib>=0.4.0",
+            "pandas>=1.3.0",
+        ],
         "dev": [
             "pytest>=6.0.0",
             "pytest-cov>=2.12.0",
@@ -62,6 +82,8 @@ setup(
             "isort>=5.9.1",
             "mypy>=0.812",
             "flake8>=3.9.2",
+            "numpy>=1.21.0",
+            "scipy>=1.5.0",
         ],
         "docs": [
             "sphinx>=4.0.2",
