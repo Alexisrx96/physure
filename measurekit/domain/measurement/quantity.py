@@ -78,17 +78,17 @@ class Quantity(Generic[ValueType, UncType]):
     @classmethod
     def _fast_new(
         cls,
-        magnitude: ValueType,
+        value: ValueType,
         unit: CompoundUnit,
-        uncertainty_obj: Uncertainty[UncType],
+        uncertainty: Uncertainty[UncType],
         system: UnitSystem,
         dimension: Dimension,
     ) -> Self:
         """Bypasses __post_init__ and validation for high-performance creation."""
         obj = object.__new__(cls)
-        object.__setattr__(obj, "magnitude", magnitude)
+        object.__setattr__(obj, "magnitude", value)
         object.__setattr__(obj, "unit", unit)
-        object.__setattr__(obj, "uncertainty_obj", uncertainty_obj)
+        object.__setattr__(obj, "uncertainty_obj", uncertainty)
         object.__setattr__(obj, "system", system)
         object.__setattr__(obj, "dimension", dimension)
         object.__setattr__(obj, "fraction", None)
@@ -234,21 +234,20 @@ class Quantity(Generic[ValueType, UncType]):
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity + other."""
-        if not isinstance(other, Quantity):
-            return NotImplemented
-
         # --- FAST PATH ---
-        if self.unit is other.unit:
-            new_magnitude = self.magnitude + other.magnitude
-            new_unc = self.uncertainty_obj + other.uncertainty_obj
+        # Speculative Identity Check: fastest for identical unit instances
+        if type(other) is Quantity and self.unit is other.unit:
             return self._fast_new(
-                new_magnitude,
+                self.magnitude + other.magnitude,
                 self.unit,
-                new_unc,
+                self.uncertainty_obj + other.uncertainty_obj,
                 self.system,
                 self.dimension,
             )
         # -----------------
+
+        if not isinstance(other, Quantity):
+            return NotImplemented
 
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)
@@ -266,21 +265,20 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __sub__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity - other."""
-        if not isinstance(other, Quantity):
-            return NotImplemented
-
         # --- FAST PATH ---
-        if self.unit is other.unit:
-            new_magnitude = self.magnitude - other.magnitude
-            new_unc = self.uncertainty_obj - other.uncertainty_obj
+        # Speculative Identity Check: fastest for identical unit instances
+        if type(other) is Quantity and self.unit is other.unit:
             return self._fast_new(
-                new_magnitude,
+                self.magnitude - other.magnitude,
                 self.unit,
-                new_unc,
+                self.uncertainty_obj - other.uncertainty_obj,
                 self.system,
                 self.dimension,
             )
         # -----------------
+
+        if not isinstance(other, Quantity):
+            return NotImplemented
 
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)

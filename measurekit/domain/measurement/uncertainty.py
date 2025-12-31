@@ -14,7 +14,7 @@ UncType = TypeVar("UncType", float, NDArray[Any])
 Numeric = int | float | np.ndarray
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Uncertainty(Generic[UncType]):
     """Represents the uncertainty of a quantity with lineage tracking.
 
