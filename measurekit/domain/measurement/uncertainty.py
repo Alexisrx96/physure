@@ -24,11 +24,13 @@ class Uncertainty(Generic[UncType]):
 
     std_dev: UncType
     lineage: dict[str, UncType] = field(default_factory=dict)
+    vector_slice: slice | None = None
 
     def __post_init__(self):
         """Validates the data after initialization."""
-        if np.any(np.asarray(self.std_dev) < 0):
-            raise ValueError("Standard deviation cannot be negative.")
+        if self.vector_slice is None:
+            if np.any(np.asarray(self.std_dev) < 0):
+                raise ValueError("Standard deviation cannot be negative.")
 
         if (
             isinstance(self.std_dev, np.ndarray)
@@ -38,12 +40,14 @@ class Uncertainty(Generic[UncType]):
 
     def __repr__(self) -> str:
         """Readable representation of the uncertainty."""
+        if self.vector_slice:
+            return f"Uncertainty(vector_slice={self.vector_slice})"
         return f"Uncertainty(std_dev={self.std_dev})"
 
     def __hash__(self) -> int:
         """Returns a hash for the uncertainty object."""
-        # lineage is a dict, so we convert it to a sorted tuple of items for hashing
-        # if std_dev is an array, we hash its bytes or similar, but normally it's numeric
+        if self.vector_slice:
+            return hash(self.vector_slice)
         std_dev_hashable = (
             tuple(self.std_dev.tolist())
             if isinstance(self.std_dev, np.ndarray)
@@ -58,13 +62,42 @@ class Uncertainty(Generic[UncType]):
     ) -> Uncertainty[UncType]:
         """Creates an uncertainty from a standard deviation.
 
-        If measurement_id is provided, it marks this as a primary source of error.
+        If std_dev is an array, it registers it with CovarianceStore.
         """
+        if isinstance(std_dev, np.ndarray):
+            from measurekit.domain.measurement.vectorized_uncertainty import (
+                CovarianceStore,
+            )
+
+            store = CovarianceStore()
+            slc = store.register_independent_array(std_dev)
+            return cls(std_dev=std_dev, vector_slice=slc)
+
         import uuid
 
         uid = measurement_id or str(uuid.uuid4())
         lineage = {uid: std_dev} if np.any(np.asarray(std_dev) > 0) else {}
         return cls(std_dev=std_dev, lineage=lineage)
+
+    def ensure_vector_slice(self) -> slice:
+        """Returns the existing vector slice or registers if it's a scalar."""
+        if self.vector_slice:
+            return self.vector_slice
+
+        from scipy import sparse
+
+        from measurekit.domain.measurement.vectorized_uncertainty import (
+            CovarianceStore,
+        )
+
+        store = CovarianceStore()
+        val = np.asarray(self.std_dev)
+        slc = store.allocate(1)
+        diag_val = val.flatten() ** 2
+        store.set_covariance_block(
+            slc, slc, sparse.diags(diagonals=[diag_val], offsets=[0])
+        )
+        return slc
 
     def _compute_std_dev(self, lineage: dict[str, UncType]) -> UncType:
         """Computes total std_dev from lineage using sum of squares."""

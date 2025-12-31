@@ -26,6 +26,7 @@ from typing import (
 import numpy as np
 import sympy as sp
 from numpy.typing import NDArray
+from scipy import sparse
 from typing_extensions import Self
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
@@ -34,6 +35,9 @@ from measurekit.domain.measurement.uncertainty import Uncertainty
 from measurekit.domain.measurement.units import (
     CompoundUnit,
     get_default_system,
+)
+from measurekit.domain.measurement.vectorized_uncertainty import (
+    CovarianceStore,
 )
 
 if TYPE_CHECKING:
@@ -139,6 +143,10 @@ class Quantity(Generic[ValueType, UncType]):
 
         if isinstance(value, np.ndarray):
             value.flags.writeable = False
+            # Ensure uncertainty is also an array for vectorized consistency
+            if not isinstance(uncertainty, (np.ndarray, Uncertainty)):
+                uncertainty = np.full(value.shape, uncertainty, dtype=float)
+
         uncertainty_obj = (
             uncertainty
             if isinstance(uncertainty, Uncertainty)
@@ -231,12 +239,66 @@ class Quantity(Generic[ValueType, UncType]):
             ),
         )
 
+    def _propagate_vectorized(
+        self,
+        other: Any,
+        out_magnitude: NDArray[Any],
+        jac_self: sparse.spmatrix | NDArray[Any] | None,
+        jac_other: sparse.spmatrix | NDArray[Any] | None = None,
+    ) -> Uncertainty:
+        """Helper to propagate vectorized uncertainty via CovarianceStore."""
+        store = CovarianceStore()
+        in_slices = []
+        jacobians = []
+
+        if jac_self is not None:
+            in_slices.append(self.uncertainty_obj.ensure_vector_slice())
+            jacobians.append(jac_self)
+
+        if jac_other is not None:
+            if isinstance(other, Quantity):
+                in_slices.append(other.uncertainty_obj.ensure_vector_slice())
+                jacobians.append(jac_other)
+            elif isinstance(other, (int, float, np.ndarray)):
+                # Raw value has zero uncertainty, but we still need a Jacobian
+                # if the user provided one, though typically it wouldn't be needed.
+                # However, if it's broadcating a scalar it might be relevant.
+                pass
+
+        out_size = int(np.prod(out_magnitude.shape))
+        out_slice = store.allocate(out_size)
+
+        store.update_from_propagation(out_slice, in_slices, jacobians)
+
+        # Compute std_dev from diagonal for the new Uncertainty object
+        out_cov = store.get_covariance_block(out_slice, out_slice)
+        std_dev = np.sqrt(out_cov.diagonal()).reshape(out_magnitude.shape)
+
+        return Uncertainty(
+            std_dev=cast(UncType, std_dev), vector_slice=out_slice
+        )
+
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity + other."""
         # --- FAST PATH ---
-        # Speculative Identity Check: fastest for identical unit instances
         if type(other) is Quantity and self.unit is other.unit:
+            new_magnitude = self.magnitude + other.magnitude
+            if isinstance(new_magnitude, np.ndarray):
+                # Always use vectorized for arrays even in fast path if unit matches
+                size = int(np.prod(new_magnitude.shape))
+                j_self = sparse.eye(size)
+                j_other = sparse.eye(size)
+                new_unc = self._propagate_vectorized(
+                    other, new_magnitude, j_self, j_other
+                )
+                return self._fast_new(
+                    new_magnitude,
+                    self.unit,
+                    new_unc,
+                    self.system,
+                    self.dimension,
+                )
             return self._fast_new(
                 self.magnitude + other.magnitude,
                 self.unit,
@@ -253,9 +315,27 @@ class Quantity(Generic[ValueType, UncType]):
             raise IncompatibleUnitsError(self.unit, other.unit)
         other_converted = other.to(self.unit)
         new_magnitude = self.magnitude + other_converted.magnitude
-        new_uncertainty_obj = self.uncertainty_obj.add(
-            other_converted.uncertainty_obj
-        )
+
+        if isinstance(new_magnitude, np.ndarray):
+            size = int(np.prod(new_magnitude.shape))
+            j_self = (
+                sparse.eye(size)
+                if isinstance(self.magnitude, np.ndarray)
+                else sparse.csr_matrix(np.ones((size, 1)))
+            )
+            j_other = (
+                sparse.eye(size)
+                if isinstance(other_converted.magnitude, np.ndarray)
+                else sparse.csr_matrix(np.ones((size, 1)))
+            )
+            new_uncertainty_obj = self._propagate_vectorized(
+                other_converted, new_magnitude, j_self, j_other
+            )
+        else:
+            new_uncertainty_obj = self.uncertainty_obj.add(
+                other_converted.uncertainty_obj
+            )
+
         return Quantity.from_input(
             new_magnitude,
             self.unit,
@@ -266,8 +346,22 @@ class Quantity(Generic[ValueType, UncType]):
     def __sub__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity - other."""
         # --- FAST PATH ---
-        # Speculative Identity Check: fastest for identical unit instances
         if type(other) is Quantity and self.unit is other.unit:
+            new_magnitude = self.magnitude - other.magnitude
+            if isinstance(new_magnitude, np.ndarray):
+                size = int(np.prod(new_magnitude.shape))
+                j_self = sparse.eye(size)
+                j_other = -sparse.eye(size)
+                new_unc = self._propagate_vectorized(
+                    other, new_magnitude, j_self, j_other
+                )
+                return self._fast_new(
+                    new_magnitude,
+                    self.unit,
+                    new_unc,
+                    self.system,
+                    self.dimension,
+                )
             return self._fast_new(
                 self.magnitude - other.magnitude,
                 self.unit,
@@ -284,9 +378,27 @@ class Quantity(Generic[ValueType, UncType]):
             raise IncompatibleUnitsError(self.unit, other.unit)
         other_converted = other.to(self.unit)
         new_magnitude = self.magnitude - other_converted.magnitude
-        new_uncertainty_obj = (
-            self.uncertainty_obj - other_converted.uncertainty_obj
-        )
+
+        if isinstance(new_magnitude, np.ndarray):
+            size = int(np.prod(new_magnitude.shape))
+            j_self = (
+                sparse.eye(size)
+                if isinstance(self.magnitude, np.ndarray)
+                else sparse.csr_matrix(np.ones((size, 1)))
+            )
+            j_other = (
+                -sparse.eye(size)
+                if isinstance(other_converted.magnitude, np.ndarray)
+                else -sparse.csr_matrix(np.ones((size, 1)))
+            )
+            new_uncertainty_obj = self._propagate_vectorized(
+                other_converted, new_magnitude, j_self, j_other
+            )
+        else:
+            new_uncertainty_obj = (
+                self.uncertainty_obj - other_converted.uncertainty_obj
+            )
+
         return Quantity.from_input(
             new_magnitude,
             self.unit,
@@ -297,11 +409,23 @@ class Quantity(Generic[ValueType, UncType]):
     def __mul__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity * other."""
         if isinstance(other, (int, float, np.ndarray)):
-            # Use cast for arithmetic safety
             new_magnitude = cast(Numeric, self.magnitude) * other
-            new_uncertainty_obj = self.uncertainty_obj.scale(other)
+            if isinstance(new_magnitude, np.ndarray):
+                # z_i = x_i * k_i => dz_i = k_i * dx_i
+                size = int(np.prod(new_magnitude.shape))
+                # other might be scalar or array
+                if isinstance(other, np.ndarray):
+                    j_self = sparse.diags(
+                        diagonals=[other.flatten()], offsets=[0]
+                    )
+                else:
+                    j_self = sparse.eye(size) * other
+                new_uncertainty_obj = self._propagate_vectorized(
+                    None, new_magnitude, j_self, None
+                )
+            else:
+                new_uncertainty_obj = self.uncertainty_obj.scale(other)
 
-            # Cast the return to the expected generic type
             return cast(
                 Quantity[ValueType, UncType],
                 Quantity.from_input(
@@ -316,12 +440,38 @@ class Quantity(Generic[ValueType, UncType]):
             new_magnitude = self.magnitude * other.magnitude
             new_unit = self.unit * other.unit
             new_dimension = self.dimension * other.dimension
-            new_uncertainty_obj = self.uncertainty_obj.propagate_mul_div(
-                other.uncertainty_obj,
-                self.magnitude,
-                other.magnitude,
-                new_magnitude,
-            )
+
+            if isinstance(new_magnitude, np.ndarray):
+                # z = x * y => dz = y*dx + x*dy
+                size = int(np.prod(new_magnitude.shape))
+                # Handle broadcasting by tiling/flattening
+                y_flat = np.broadcast_to(
+                    other.magnitude, new_magnitude.shape
+                ).flatten()
+                x_flat = np.broadcast_to(
+                    self.magnitude, new_magnitude.shape
+                ).flatten()
+
+                j_self = (
+                    sparse.diags(diagonals=[y_flat], offsets=[0])
+                    if isinstance(self.magnitude, np.ndarray)
+                    else sparse.csr_matrix(y_flat.reshape(-1, 1))
+                )
+                j_other = (
+                    sparse.diags(diagonals=[x_flat], offsets=[0])
+                    if isinstance(other.magnitude, np.ndarray)
+                    else sparse.csr_matrix(x_flat.reshape(-1, 1))
+                )
+                new_uncertainty_obj = self._propagate_vectorized(
+                    other, new_magnitude, j_self, j_other
+                )
+            else:
+                new_uncertainty_obj = self.uncertainty_obj.propagate_mul_div(
+                    other.uncertainty_obj,
+                    self.magnitude,
+                    other.magnitude,
+                    new_magnitude,
+                )
             return self._fast_new(
                 new_magnitude,
                 new_unit,
@@ -342,11 +492,22 @@ class Quantity(Generic[ValueType, UncType]):
     def __truediv__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity / other."""
         if isinstance(other, (int, float, np.ndarray)):
-            # Use cast for arithmetic safety
             new_magnitude = cast(Numeric, self.magnitude) / other
-            new_uncertainty_obj = self.uncertainty_obj.scale(1.0 / other)
+            if isinstance(new_magnitude, np.ndarray):
+                # z_i = x_i / k_i => dz_i = (1/k_i) * dx_i
+                size = int(np.prod(new_magnitude.shape))
+                if isinstance(other, np.ndarray):
+                    j_self = sparse.diags(
+                        diagonals=[1.0 / other.flatten()], offsets=[0]
+                    )
+                else:
+                    j_self = sparse.eye(size) * (1.0 / other)
+                new_uncertainty_obj = self._propagate_vectorized(
+                    None, new_magnitude, j_self, None
+                )
+            else:
+                new_uncertainty_obj = self.uncertainty_obj.scale(1.0 / other)
 
-            # Cast the return to the expected generic type
             return cast(
                 Quantity[ValueType, UncType],
                 Quantity.from_input(
@@ -360,12 +521,41 @@ class Quantity(Generic[ValueType, UncType]):
             new_magnitude = self.magnitude / other.magnitude
             new_unit = self.unit / other.unit
             new_dimension = self.dimension / other.dimension
-            new_uncertainty_obj = self.uncertainty_obj.propagate_mul_div(
-                other.uncertainty_obj,
-                self.magnitude,
-                other.magnitude,
-                new_magnitude,
-            )
+
+            if isinstance(new_magnitude, np.ndarray):
+                # z = x / y => dz = (1/y)dx - (x/y^2)dy
+                size = int(np.prod(new_magnitude.shape))
+                y_flat = np.broadcast_to(
+                    other.magnitude, new_magnitude.shape
+                ).flatten()
+                x_flat = np.broadcast_to(
+                    self.magnitude, new_magnitude.shape
+                ).flatten()
+
+                j_self = (
+                    sparse.diags(diagonals=[1.0 / y_flat], offsets=[0])
+                    if isinstance(self.magnitude, np.ndarray)
+                    else sparse.csr_matrix((1.0 / y_flat).reshape(-1, 1))
+                )
+                j_other = (
+                    sparse.diags(
+                        diagonals=[-x_flat / (y_flat**2)], offsets=[0]
+                    )
+                    if isinstance(other.magnitude, np.ndarray)
+                    else sparse.csr_matrix(
+                        (-x_flat / (y_flat**2)).reshape(-1, 1)
+                    )
+                )
+                new_uncertainty_obj = self._propagate_vectorized(
+                    other, new_magnitude, j_self, j_other
+                )
+            else:
+                new_uncertainty_obj = self.uncertainty_obj.propagate_mul_div(
+                    other.uncertainty_obj,
+                    self.magnitude,
+                    other.magnitude,
+                    new_magnitude,
+                )
 
             return self._fast_new(
                 new_magnitude,
