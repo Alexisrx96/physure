@@ -3,128 +3,152 @@
 **Author:** Irvin Torres  
 **Status:** Active  
 **Type:** Informational  
-**Created:** 2025-11-19
+**Created:** 2025-12-31 (Updated)
 
-## Abstract
+## 🎯 Abstract
 
-This document outlines the recommended patterns, idioms, and best practices for using the `measurekit` library. It serves as a guide for developers to write clean, correct, and efficient code using MeasureKit, ensuring consistency across projects.
+This document outlines the architecture-aware patterns, idioms, and best practices for the `measurekit` ecosystem. It serves as the "source of truth" for developers to ensure code is not only correct but also takes full advantage of MeasureKit's high-performance multi-backend execution and strict dimensional safety.
 
-## 1. Quantity Creation
+---
 
-### 1.1. Use the `Q_` Factory
+## 1. High-Performance Quantity Handling
 
-The preferred method for creating quantities is the `Q_` factory function. It provides a unified interface for parsing values, units, and uncertainty.
+### 1.1. The `Q_` Registry Factory
 
-**Correct:**
+The `Q_` function is the primary entry point. It handles unit parsing and backend dispatching automatically.
+
+**Best Practice:**
 
 ```python
 from measurekit import Q_
+import numpy as np
 
-length = Q_(10, "m")
-speed = Q_(25, "m/s")
-mass_with_error = Q_(50, "kg", 0.5) # 50 ± 0.5 kg
+# Scalar
+temp = Q_(25, "degC")
+
+# Vectorized (Automatic NumPy Backend)
+array_q = Q_(np.array([1, 2, 3]), "m/s")
 ```
 
-**Avoid:**
-Direct instantiation of `Quantity` classes unless you are developing internal extensions to the library.
+### 1.2. Utilizing the Fast Path
 
-## 2. Unit Systems & Contexts
+For performance-critical loops (e.g., simulations), avoid repeated unit conversions. Perform arithmetic on quantities with identical units to trigger the `_fast_new` optimization path, which bypasses validation.
 
-### 2.1. Context Managers for System Switching
+---
 
-When working with non-default unit systems (like Imperial), use the `system_context` manager. This ensures that all quantities created within the block belong to the specified system and that the global state is cleanly reverted afterwards.
+## 2. Multi-Backend Development
+
+### 2.1. Implicit Backend Dispatching
+
+MeasureKit is designed to be "tensor-agnostic." Avoid hard-coding backend checks (`isinstance(x, torch.Tensor)`). Let the library handle it.
 
 **Correct:**
 
 ```python
-from measurekit import system_context, Q_
-from measurekit.infrastructure.config.systems import imperial
+import torch
+from measurekit import Q_
 
-with system_context(imperial):
-    weight = Q_(150, "lb")
-    height = Q_(6, "ft")
-    # Calculations here use Imperial rules
+# Initialize with Torch - operations will automatically stay in Torch
+q_torch = Q_(torch.randn(10), "kg")
+result = q_torch * 2.5 # Zero-copy backend operation
 ```
 
-### 2.2. Explicit System Definition
+### 2.2. Cross-Device Management
 
-When defining a custom system, register dimensions and units explicitly before use.
+When using **PyTorch** or **JAX**, explicitly manage your devices through the quantity's `.to_device()` method.
 
-## 3. Symbolic Mathematics
+```python
+gpu_q = q.to_device("cuda:0")
+```
 
-### 3.1. Use `SymbolicQuantity` and `Equation`
+---
 
-For algebraic manipulation, use `SymbolicQuantity` instead of raw SymPy symbols. This preserves unit information during symbolic solving.
+## 3. Data Integrity & Validation
+
+### 3.1. Pydantic V2 Integration
+
+Always use `measurekit.Quantity` as a type hint in your Pydantic models to ensure input data is physically valid.
 
 **Correct:**
 
 ```python
-from measurekit.symbolic import SymbolicQuantity, Equation
+from pydantic import BaseModel
+from measurekit import Quantity
 
-E = SymbolicQuantity("E", "J")
-m = SymbolicQuantity("m", "kg")
-c = SymbolicQuantity("c", "m/s")
+class Experiment(BaseModel):
+    duration: Quantity
+    pressure: Quantity
 
-# Explicitly pass variables to the Equation
-eq = Equation(E, m * c**2, variables=[E, m, c])
-mass_expr = eq.solve_for("m")
+# Validated automatically from strings
+ex = Experiment(duration="10.5 s", pressure="101.3 kPa")
 ```
 
-## 4. Dynamics & Simulation
+---
 
-### 4.1. Encapsulate Physics in `Function`
+## 4. Uncertainty & Covariance
 
-Use the `Function` class to define physical laws. This ensures dimensional consistency and allows for easy reuse in simulations.
+### 4.1. Correlated Error Propagation
+
+MeasureKit tracks correlations automatically through a global `CovarianceStore`. Avoid manual standard deviation addition (`sqrt(s1^2 + s2^2)`).
 
 **Correct:**
 
 ```python
-from measurekit.functions import Function
-
-# Define a function with explicit dimensions
-kinetic_energy = Function(
-    parameters={'m': MASS, 'v': VELOCITY},
-    output_dimension=ENERGY,
-    symbolic_func=0.5 * m * v**2
-)
+a = Q_(10, "m", 0.1)
+b = Q_(5, "m", 0.05)
+c = a + b # Correctly propagates correlated or independent errors
 ```
 
-### 4.2. Use Unit-Aware Solvers
+### 4.2. Vectorized Uncertainty
 
-For differential equations, use `solve_unit_aware_ivp` rather than raw `scipy.integrate`. This wrapper handles unit stripping and re-wrapping automatically.
+For large arrays, pass the uncertainty as an array of the same shape to ensure O(N) vectorized propagation.
 
-## 5. Interoperability & Plotting
+---
 
-### 5.1. Access `.magnitude` for External Libraries
+## 5. Symbolic Mathematics
 
-Libraries like Matplotlib and NumPy do not understand `Quantity` objects. Always extract the magnitude (and ensure units are consistent) before passing data to them.
+### 5.1. Preserving Dimensions
 
-**Correct:**
+Use `SymbolicQuantity` for algebraic derivations. This prevents "dimension-less" errors during complex equation solving.
 
 ```python
-import matplotlib.pyplot as plt
-
-# Ensure the array is in the desired unit first
-time_vals = result.t.to("s").magnitude
-pos_vals = result.y[0].to("m").magnitude
-
-plt.plot(time_vals, pos_vals)
+from measurekit.symbolic import SymbolicQuantity
+force = SymbolicQuantity("F", "N")
 ```
 
-## 6. Uncertainty Handling
+---
 
-### 6.1. Explicit Uncertainty
+## 6. Project Architecture (DDD)
 
-Pass uncertainty as the third positional argument to `Q_`.
+### 6.1. Unit System Contexts
 
-**Correct:**
+Avoid global state mutations. Use the `system_context` for localized unit system overrides.
 
 ```python
-reading = Q_(10.5, "V", 0.1) # 10.5 ± 0.1 V
+from measurekit import system_context
+from measurekit.systems import IMPERIAL
+
+with system_context(IMPERIAL):
+    # Units default to Imperial within this scope
+    val = Q_(1, "gallon")
 ```
 
-## 7. Naming Conventions
+---
 
-- **Quantities:** Use descriptive variable names (e.g., `velocity`, `initial_mass`).
-- **Units:** Use standard abbreviations in strings (e.g., `"m/s"`, `"kg"`).
-- **Dimensions:** Use uppercase constants for dimensions (e.g., `LENGTH`, `TIME`).
+## 7. Performance Checklist
+
+| Action            | Recommended     | Performance Impact      |
+| :---------------- | :-------------- | :---------------------- |
+| **Instantiation** | `Q_` Factory    | High (Standard Parsing) |
+| **Arithmetic**    | Same-unit ops   | **Extreme (Fast Path)** |
+| **Conversions**   | `.to("unit")`   | Moderate (Matrix Mul)   |
+| **Arrays**        | NumPy/Torch/JAX | **High (SIMD/GPU)**     |
+| **Validation**    | Pydantic        | Moderate (Safety First) |
+
+---
+
+## 8. Naming Conventions
+
+- **Variables:** Use standard physics symbols or descriptive names (`velocity_m_s` is redundant, use `velocity`).
+- **Unit Strings:** Always use standard SI/Imperial abbreviations (`"kg"`, `"slug"`, `"m/s^2"`).
+- **Constants:** Use `SCREAMING_SNAKE_CASE` for physical constants.

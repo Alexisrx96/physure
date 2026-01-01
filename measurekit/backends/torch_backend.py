@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Sequence
-from typing import Any, Union
+from typing import Any
 
-with contextlib.suppress(ImportError):
-    import torch
+import torch
 
 from measurekit.core.protocols import BackendOps
 
@@ -33,39 +31,45 @@ class TorchBackend(BackendOps):
 
     def add(self, x: Any, y: Any) -> Any:
         """Element-wise addition."""
-        return torch.add(x, y)
+        return torch.add(self.asarray(x), self.asarray(y))
 
     def sub(self, x: Any, y: Any) -> Any:
         """Element-wise subtraction."""
+        x_t = self.asarray(x)
+        y_t = self.asarray(y)
         return (
-            torch.subtract(x, y)
+            torch.subtract(x_t, y_t)
             if hasattr(torch, "subtract")
-            else torch.sub(x, y)
+            else torch.sub(x_t, y_t)
         )
 
     def mul(self, x: Any, y: Any) -> Any:
         """Element-wise multiplication."""
+        x_t = self.asarray(x)
+        y_t = self.asarray(y)
         return (
-            torch.multiply(x, y)
+            torch.multiply(x_t, y_t)
             if hasattr(torch, "multiply")
-            else torch.mul(x, y)
+            else torch.mul(x_t, y_t)
         )
 
     def truediv(self, x: Any, y: Any) -> Any:
         """Element-wise true division."""
+        x_t = self.asarray(x)
+        y_t = self.asarray(y)
         return (
-            torch.true_divide(x, y)
+            torch.true_divide(x_t, y_t)
             if hasattr(torch, "true_divide")
-            else torch.div(x, y)
+            else torch.div(x_t, y_t)
         )
 
     def pow(self, x: Any, y: Any) -> Any:
         """Element-wise power."""
-        return torch.pow(x, y)
+        return torch.pow(self.asarray(x), self.asarray(y))
 
     def sqrt(self, x: Any) -> Any:
         """Element-wise square root."""
-        return torch.sqrt(x)
+        return torch.sqrt(self.asarray(x))
 
     def exp(self, x: Any) -> Any:
         """Element-wise exponential."""
@@ -110,17 +114,13 @@ class TorchBackend(BackendOps):
         """Element-wise sign."""
         return torch.sign(x)
 
-    def sum(
-        self, obj: Any, axis: Union[int, Sequence[int], None] = None
-    ) -> Any:
+    def sum(self, obj: Any, axis: int | Sequence[int] | None = None) -> Any:
         """Sum of elements."""
         if axis is None:
             return torch.sum(obj)
         return torch.sum(obj, dim=axis)
 
-    def mean(
-        self, obj: Any, axis: Union[int, Sequence[int], None] = None
-    ) -> Any:
+    def mean(self, obj: Any, axis: int | Sequence[int] | None = None) -> Any:
         """Mean of elements."""
         if axis is None:
             return torch.mean(obj)

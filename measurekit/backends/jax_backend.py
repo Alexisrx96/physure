@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from collections.abc import Sequence
 from typing import Any
 
-with contextlib.suppress(ImportError):
-    import jax
-    import jax.numpy as jnp
-    from jax.core import Tracer
+import jax
+import jax.numpy as jnp
+from jax.core import Tracer
 
 from measurekit.core.protocols import BackendOps
 
@@ -196,7 +194,7 @@ class JaxBackend(BackendOps):
         min_offset = min(offsets)
         n = len(diagonals[0]) + max(0, -min_offset) + max(0, max_offset)
         res = jnp.zeros((n, n))
-        for diag, offset in zip(diagonals, offsets):
+        for diag, offset in zip(diagonals, offsets, strict=False):
             res = res + jnp.diag(diag, k=offset)
         return res
 

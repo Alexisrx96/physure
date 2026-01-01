@@ -10,6 +10,7 @@ error propagation, and seamless integration with various backends (NumPy, etc.).
 from __future__ import annotations
 
 import operator
+import re
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import (
@@ -23,8 +24,11 @@ from typing import (
 
 from typing_extensions import Self
 
+if TYPE_CHECKING:
+    from measurekit.core.protocols import BackendOps
+    from measurekit.domain.measurement.system import UnitSystem
+
 from measurekit.core.dispatcher import BackendManager
-from measurekit.core.protocols import BackendOps
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.uncertainty import Uncertainty
@@ -39,6 +43,11 @@ from measurekit.domain.measurement.vectorized_uncertainty import (
 if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
 
+try:
+    from pydantic_core import core_schema
+except ImportError:
+    core_schema = None
+
 # --- Generic Type Variables ---
 ValueType = TypeVar("ValueType")
 UncType = TypeVar("UncType")
@@ -47,7 +56,24 @@ Numeric = Any  # Ideally strictly typed via protocols, but simplified for now
 
 @dataclass(frozen=True, slots=True)
 class Quantity(Generic[ValueType, UncType]):
-    """Represents a physical quantity with magnitude, unit, and uncertainty."""
+    """Represents a physical quantity with magnitude, unit, and uncertainty.
+
+    Example:
+        >>> from measurekit.domain.measurement.system import UnitSystem
+        >>> from measurekit.domain.measurement.units import set_system_provider
+        >>> from measurekit.domain.measurement.dimensions import Dimension
+        >>> from measurekit.domain.measurement.converters import (
+        ...     LinearConverter,
+        ... )
+        >>> sys = UnitSystem("SI")
+        >>> set_system_provider(lambda: sys)
+        >>> L = Dimension({"L": 1})
+        >>> sys.register_unit("m", L, LinearConverter(1.0), "meter")
+        >>> m = sys.get_unit("m")
+        >>> q = Quantity(10.5, m, system=sys)
+        >>> q.magnitude
+        10.5
+    """
 
     magnitude: ValueType
     unit: CompoundUnit
@@ -146,21 +172,94 @@ class Quantity(Generic[ValueType, UncType]):
                 pass
 
         return cls(
-            magnitude=cast(ValueType, value),
+            magnitude=cast("ValueType", value),
             unit=unit,
             uncertainty_obj=cast("Uncertainty[UncType]", uncertainty_obj),
             fraction=frac,
             system=resolved_system,
         )
 
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: Any
+    ) -> Any:
+        """Defines the Pydantic Core Schema for validation."""
+        if core_schema is None:
+            return handler(source_type)
+
+        def validate_from_str(value: Any) -> Quantity:
+            if not isinstance(value, str):
+                raise ValueError("Expected string")
+            # Parse "magnitude unit" string (e.g., "10 m", "5.5 kg*m/s^2")
+            match = re.match(
+                r"^\s*([-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)\s*(.*)$",
+                value,
+            )
+            if not match:
+                raise ValueError(f"Invalid quantity string: {value}")
+
+            mag_str, unit_str = match.groups()
+
+            # Parse magnitude
+            try:
+                if "." in mag_str or "e" in mag_str.lower() or "E" in mag_str:
+                    mag = float(mag_str)
+                else:
+                    mag = int(mag_str)
+            except ValueError:
+                # Should be caught by regex, but safety first
+                raise ValueError(f"Invalid magnitude: {mag_str}")
+
+            # Parse unit
+            sys = get_default_system()
+            # If unit string is empty (e.g. "10"), get_unit("") returns dimensionless
+            unit_obj = sys.get_unit(unit_str)
+
+            return cls.from_input(mag, unit_obj, sys)
+
+        def validate_from_dict(value: Any) -> Quantity:
+            if not isinstance(value, dict):
+                raise ValueError("Expected dict")
+            mag = value.get("magnitude")
+            if mag is None:
+                mag = value.get("value")
+            if mag is None:
+                raise ValueError("Dict must contain 'magnitude' or 'value'")
+
+            unit_val = value.get("unit")
+            if unit_val is None:
+                raise ValueError("Dict must contain 'unit'")
+
+            unc = value.get("uncertainty", 0.0)
+
+            sys = get_default_system()
+            if isinstance(unit_val, str):
+                unit_obj = sys.get_unit(unit_val)
+            else:
+                unit_obj = unit_val
+
+            return cls.from_input(mag, unit_obj, sys, uncertainty=unc)
+
+        return core_schema.union_schema(
+            [
+                core_schema.is_instance_schema(cls),
+                core_schema.no_info_plain_validator_function(
+                    validate_from_str
+                ),
+                core_schema.no_info_plain_validator_function(
+                    validate_from_dict
+                ),
+            ]
+        )
+
     def __hash__(self) -> int:
         """Computes hash of the quantity."""
         try:
             return hash((self.magnitude, self.unit, self.uncertainty_obj))
-        except TypeError:
+        except TypeError as e:
             raise TypeError(
                 "unhashable type: 'Quantity' with unhashable magnitude"
-            )
+            ) from e
 
     @property
     def _has_uncertainty(self) -> bool:
@@ -376,10 +475,11 @@ class Quantity(Generic[ValueType, UncType]):
         std_dev = self._backend.reshape(std_dev_flat, shape)
 
         return Uncertainty(
-            std_dev=cast(UncType, std_dev), vector_slice=out_slice
+            std_dev=cast("UncType", std_dev), vector_slice=out_slice
         )
 
     def __add__(self, other: Any) -> Quantity:
+        """Adds two quantities together."""
         if type(other) is Quantity and self.unit is other.unit:
             new_magnitude = self._backend.add(self.magnitude, other.magnitude)
 
@@ -404,11 +504,10 @@ class Quantity(Generic[ValueType, UncType]):
                 is_other_scalar = False
                 if isinstance(other, Quantity):
                     if (
-                        (
-                            self._backend.shape(other.magnitude) == ()
-                            or len(self._backend.shape(other.magnitude)) == 0
-                        )
-                        or hasattr(other.magnitude, "shape")
+                        self._backend.shape(other.magnitude) == ()
+                        or len(self._backend.shape(other.magnitude)) == 0
+                    ) or (
+                        hasattr(other.magnitude, "shape")
                         and other.magnitude.shape == (1,)
                     ):
                         is_other_scalar = True
@@ -471,6 +570,7 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __sub__(self, other: Any) -> Quantity:
+        """Subtracts one quantity from another."""
         if type(other) is Quantity and self.unit is other.unit:
             new_magnitude = self._backend.sub(self.magnitude, other.magnitude)
             if self._backend.is_array(new_magnitude):
@@ -496,8 +596,10 @@ class Quantity(Generic[ValueType, UncType]):
                     if (
                         self._backend.shape(other.magnitude) == ()
                         or len(self._backend.shape(other.magnitude)) == 0
-                        or hasattr(other.magnitude, "shape")
-                        and other.magnitude.shape == (1,)
+                        or (
+                            hasattr(other.magnitude, "shape")
+                            and other.magnitude.shape == (1,)
+                        )
                     ):
                         is_other_scalar = True
 
@@ -561,7 +663,8 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
     def __mul__(self, other: Any) -> Quantity:
-        if isinstance(other, (int, float, complex)) or self._backend.is_array(
+        """Multiplies two quantities or a quantity and a scalar."""
+        if isinstance(other, int | float | complex) or self._backend.is_array(
             other
         ):
             new_magnitude = self._backend.mul(self.magnitude, other)
@@ -718,7 +821,8 @@ class Quantity(Generic[ValueType, UncType]):
         return NotImplemented
 
     def __truediv__(self, other: Any) -> Quantity:
-        if isinstance(other, (int, float, complex)) or self._backend.is_array(
+        """Divides one quantity by another or by a scalar."""
+        if isinstance(other, int | float | complex) or self._backend.is_array(
             other
         ):
             new_magnitude = self._backend.truediv(self.magnitude, other)
@@ -913,7 +1017,7 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __neg__(self) -> Self:
         return cast(
-            Self,
+            "Self",
             Quantity.from_input(
                 self._backend.mul(self.magnitude, -1),
                 self.unit,
@@ -928,7 +1032,7 @@ class Quantity(Generic[ValueType, UncType]):
     def __abs__(self) -> Self:
         sign = self._backend.sign(self.magnitude)
         return cast(
-            Self,
+            "Self",
             Quantity.from_input(
                 self._backend.abs(self.magnitude),
                 self.unit,

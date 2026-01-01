@@ -1,49 +1,73 @@
-
+# Default Python .gitignore
 __pycache__/
 *.py[cod]
 *$py.class
-
-.venv/
-venv/
-ENV/
+*.so
+.Python
 env/
-.env/
-.agent/
-
 build/
+develop-eggs/
 dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
 *.egg
 
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# uv
+uv.lock
+
+# Tools
 .pytest_cache/
+.hypothesis/
+.ruff_cache/
+.mypy_cache/
 .coverage
+.coverage.*
 htmlcov/
-nosetests.xml
-coverage.xml
+.benchmarks/
 
-.idea/
-.vscode/
-*.sublime-project
-*.sublime-workspace
-
+# Jupyter
 .ipynb_checkpoints
+*.ipynb
 
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific temporary files
+*.log
+manual_sandbox/
+*.txt
+!requirements.txt
+
+# Artifacts
+benchmark_results.png
+torch_fail.txt
+backends_out.txt
+pydantic_out.txt
+all_skips.txt
+invariants_fail.txt
+test_out.txt
+backends_test_out.txt
+
+# Documentation
 docs/_build/
 
+# OS
 .DS_Store
 Thumbs.db
-
-*.log
-*.sqlite3
-db.sqlite3
-manual_sandbox/
-roadmap.md
-mapper.py
-structure*.txt
-GEMINI.md
-ddd.md
-cleanup.md
-coverage.*
-build.md
-
-benchmark_results.png

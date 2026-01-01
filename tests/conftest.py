@@ -35,3 +35,17 @@ def common_system(system):
     )
     system.register_unit("J", energy, LinearConverter(1.0), "joule")
     return system
+
+
+@pytest.fixture(params=["python", "numpy", "jax", "torch"])
+def backend_instance(request):
+    """Provides a backend instance, skipping if dependencies are missing."""
+    from measurekit.core.dispatcher import BackendManager
+
+    name = request.param
+    try:
+        if name == "python":
+            return BackendManager._get_python_backend()
+        return BackendManager._get_or_load_backend(name)
+    except (ImportError, ModuleNotFoundError):
+        pytest.skip(f"Backend {name} dependencies not installed.")

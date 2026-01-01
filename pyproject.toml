@@ -1,73 +1,152 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "measurekit"
+version = "0.0.3-dev"
+description = "High-performance physical dimension handling and unit conversion engine with multi-backend support."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Irvin Torres", email = "irvinrx1996@hotmail.com" }
+]
+keywords = [
+    "units", "measurement", "conversion", "physics", "engineering", 
+    "science", "dimensional-analysis", "vectorization", "uncertainty"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "sympy>=1.13.0",
+    "typing-extensions>=4.15.0",
+]
+
+[project.optional-dependencies]
+numpy = ["numpy>=1.26.0", "scipy>=1.12.0", "numba>=0.59.0"]
+torch = ["torch>=2.2.0"]
+jax = ["jax>=0.4.25", "jaxlib>=0.4.25"]
+pandas = ["pandas>=2.2.0"]
+pydantic = ["pydantic>=2.6.0"]
+all = [
+    "numpy>=1.26.0",
+    "scipy>=1.12.0",
+    "numba>=0.59.0",
+    "torch>=2.2.0",
+    "jax>=0.4.25",
+    "jaxlib>=0.4.25",
+    "pandas>=2.2.0",
+    "pydantic>=2.6.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-benchmark>=4.0.0",
+    "hypothesis>=6.98.0",
+    "mypy>=1.9.0",
+    "ruff>=0.3.0",
+]
+docs = [
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=2.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/Alexisrx96/measurekit"
+"Bug Reports" = "https://github.com/Alexisrx96/measurekit/issues"
+"Source" = "https://github.com/Alexisrx96/measurekit"
+"Documentation" = "https://measurekit.readthedocs.io/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["measurekit"]
+
+[tool.uv]
+managed = true
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-benchmark>=4.0.0",
+    "hypothesis>=6.98.0",
+    "mypy>=1.9.0",
+    "ruff>=0.3.0",
+]
+
 [tool.ruff]
 line-length = 79
-
-# Excluir carpetas y archivos que no deben ser analizados.
-# Es buena práctica excluir cachés, entornos virtuales y archivos autogenerados.
+target-version = "py310"
 exclude = [
     ".ruff_cache",
     "__pycache__",
     "*.ipynb",
     "manual_sandbox/*",
     ".venv",
-    "venv",
 ]
 
 [tool.ruff.lint]
-# Selección de reglas a aplicar.
-# D: pydocstyle (documentación)
-# C4: flake8-comprehensions (comprensiones eficientes)
-# T20: flake8-print (evitar prints)
-# PYI: flake8-pyi (buenas prácticas en stubs)
-select = ["E", "F", "UP", "B", "SIM", "I", "D", "C4", "T20", "PYI"]
-
-# Ignorar reglas específicas. F401 (unused import) a menudo es problemático
-# ignore = ["F401"]
-
-# Habilitar la corrección automática para todas las reglas que lo soporten.
+select = [
+    "E", "F", "UP", "B", "SIM", "I", "N", "RUF", "TCH", 
+    "D", "C4", "T20", "PYI", "PT", "RET"
+]
+ignore = ["D100", "D104"]
 fixable = ["ALL"]
 
-# Reglas específicas que no deben ser corregidas automáticamente.
-# unfixable = []
-
 [tool.ruff.lint.pydocstyle]
-# Usar la convención de Google para los docstrings es un estándar muy legible.
 convention = "google"
 
 [tool.ruff.lint.isort]
-# Ayuda a isort a saber que 'measurekit' es tu propio proyecto y debe
-# agrupar sus importaciones por separado de las librerías de terceros.
 known-first-party = ["measurekit"]
 
 [tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["E402", "F401"] # Permite importaciones relativas en inits.
-"tests/*" = ["D", "S101"]         # En los tests, no requerimos docstrings (D) ni asserts (S101).
-"manual_sandbox/*" = ["ALL"]   # Ignora completamente este directorio.
-"startup.py" = ["T20"]          # Permite los 'print' en el archivo de arranque para feedback.
+"__init__.py" = ["E402", "F401"]
+"tests/*" = ["D", "S101"]
+"manual_sandbox/*" = ["ALL"]
 
 [tool.ruff.format]
 docstring-code-format = true
 
 [tool.pytest.ini_options]
-# addopts = "--strict-markers --cov=measurekit --cov-report=term-missing"
-# Especifica dónde buscar los tests.
-testpaths = [
-    "tests",
-]
+testpaths = ["tests"]
+addopts = "-ra --benchmark-disable"
 
 [tool.coverage.run]
 source = ["measurekit"]
+branch = true
 omit = [
     "**/__init__.py",
     "tests/*",
     "manual_sandbox/*",
-    "measurekit/*.py"    
 ]
 
 [tool.coverage.report]
 fail_under = 80
+show_missing = true
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
+    "@(abc\\.)?abstractmethod",
 ]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "measurekit.tests.*"
+ignore_errors = true
