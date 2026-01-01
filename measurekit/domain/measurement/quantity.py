@@ -498,45 +498,40 @@ class Quantity(Generic[ValueType, UncType]):
             new_magnitude = self._backend.add(self.magnitude, other.magnitude)
 
             if self._backend.is_array(new_magnitude):
-                size = 1
-                for d in self._backend.shape(new_magnitude):
-                    size *= d
+                size = self._backend.size(new_magnitude)
 
                 # Broadcasting for self
-                is_self_scalar = False
-                if (
+                is_self_scalar = (
                     self._backend.shape(self.magnitude) == ()
                     or len(self._backend.shape(self.magnitude)) == 0
-                ) or (
-                    hasattr(self.magnitude, "shape")
-                    and self.magnitude.shape == (1,)
-                ):
-                    is_self_scalar = True
+                    or (
+                        hasattr(self.magnitude, "shape")
+                        and self.magnitude.shape == (1,)
+                    )
+                )
 
                 if is_self_scalar:
                     j_self = self._backend.ones((size, 1))
                 else:
-                    j_self = self._backend.eye(size, format="csr")
+                    j_self = self._backend.identity_operator(size)
 
                 # Check for broadcasting: if other is scalar-like, broadcast Jacobian
                 is_other_scalar = False
                 if isinstance(other, Quantity):
-                    # If backend supports shape on magnitude, checking shape is robust
                     if (
                         self._backend.shape(other.magnitude) == ()
                         or len(self._backend.shape(other.magnitude)) == 0
+                        or (
+                            hasattr(other.magnitude, "shape")
+                            and other.magnitude.shape == (1,)
+                        )
                     ):
-                        is_other_scalar = True
-                    elif hasattr(
-                        other.magnitude, "shape"
-                    ) and other.magnitude.shape == (1,):
-                        # Numpy specific fallback safe for now if backend is numpy
                         is_other_scalar = True
 
                 if is_other_scalar:
                     j_other = self._backend.ones((size, 1))
                 else:
-                    j_other = self._backend.eye(size, format="csr")
+                    j_other = self._backend.identity_operator(size)
 
                 new_unc = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other
@@ -571,21 +566,10 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
         if self._backend.is_array(new_magnitude):
-            size = 1
-            for d in self._backend.shape(new_magnitude):
-                size *= d
-
-            # For sparse matrix construction we need ones/eye.
-            # Delegating to backend.
-            if self._backend.is_array(self.magnitude):
-                j_self = self._backend.eye(size)
-            else:
-                j_self = self._backend.eye(size)
-
-            if self._backend.is_array(other_converted.magnitude):
-                j_other = self._backend.eye(size)
-            else:
-                j_other = self._backend.eye(size)
+            size = self._backend.size(new_magnitude)
+            # In slow path, we assume arrays if is_array matches (simplification)
+            j_self = self._backend.identity_operator(size)
+            j_other = self._backend.identity_operator(size)
 
             new_uncertainty_obj = self._propagate_vectorized(
                 other_converted, new_magnitude, j_self, j_other
@@ -608,25 +592,22 @@ class Quantity(Generic[ValueType, UncType]):
         if type(other) is Quantity and self.unit is other.unit:
             new_magnitude = self._backend.sub(self.magnitude, other.magnitude)
             if self._backend.is_array(new_magnitude):
-                size = 1
-                for d in self._backend.shape(new_magnitude):
-                    size *= d
+                size = self._backend.size(new_magnitude)
 
                 # Broadcasting for self
-                is_self_scalar = False
-                if (
+                is_self_scalar = (
                     self._backend.shape(self.magnitude) == ()
                     or len(self._backend.shape(self.magnitude)) == 0
-                ) or (
-                    hasattr(self.magnitude, "shape")
-                    and self.magnitude.shape == (1,)
-                ):
-                    is_self_scalar = True
+                    or (
+                        hasattr(self.magnitude, "shape")
+                        and self.magnitude.shape == (1,)
+                    )
+                )
 
                 if is_self_scalar:
                     j_self = self._backend.ones((size, 1))
                 else:
-                    j_self = self._backend.eye(size)
+                    j_self = self._backend.identity_operator(size)
 
                 # Broadcasting for subtraction
                 is_other_scalar = False
@@ -646,7 +627,9 @@ class Quantity(Generic[ValueType, UncType]):
                         self._backend.ones((size, 1)), -1
                     )
                 else:
-                    j_other = self._backend.mul(self._backend.eye(size), -1)
+                    j_other = self._backend.mul(
+                        self._backend.identity_operator(size), -1
+                    )
 
                 new_unc = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other
@@ -679,11 +662,11 @@ class Quantity(Generic[ValueType, UncType]):
         )
 
         if self._backend.is_array(new_magnitude):
-            size = 1
-            for d in self._backend.shape(new_magnitude):
-                size *= d
-            j_self = self._backend.eye(size)
-            j_other = self._backend.mul(self._backend.eye(size), -1)
+            size = self._backend.size(new_magnitude)
+            j_self = self._backend.identity_operator(size)
+            j_other = self._backend.mul(
+                self._backend.identity_operator(size), -1
+            )
 
             new_uncertainty_obj = self._propagate_vectorized(
                 other_converted, new_magnitude, j_self, j_other
@@ -706,16 +689,18 @@ class Quantity(Generic[ValueType, UncType]):
         ):
             new_magnitude = self._backend.mul(self.magnitude, other)
             if self._backend.is_array(new_magnitude):
-                size = 1
-                for d in self._backend.shape(new_magnitude):
-                    size *= d
+                size = self._backend.size(new_magnitude)
 
                 if self._backend.is_array(other):
                     # flatten
-                    other_flat = self._backend.reshape(other, (size,))
-                    j_self = self._backend.diags([other_flat], [0])
+                    (other_flat,) = self._backend.broadcast_and_flatten(
+                        [other]
+                    )
+                    j_self = self._backend.diagonal_operator(other_flat)
                 else:
-                    j_self = self._backend.mul(self._backend.eye(size), other)
+                    j_self = self._backend.mul(
+                        self._backend.identity_operator(size), other
+                    )
 
                 new_uncertainty_obj = self._propagate_vectorized(
                     None, new_magnitude, j_self, None
@@ -739,44 +724,12 @@ class Quantity(Generic[ValueType, UncType]):
             new_dimension = self.dimension * other.dimension
 
             if self._backend.is_array(new_magnitude):
-                size = 1
-                for d in self._backend.shape(new_magnitude):
-                    size *= d
+                size = self._backend.size(new_magnitude)
 
-                # Prepare broadcasted values flattened to (size,)
-                # Note: This relies on backend to handle broadcasting in existing mul op,
-                # here we need explicit flat arrays for Jacobian construction.
-
-                # Flatten/Broadcast other (coefficient for j_self)
-                if self._backend.is_array(other.magnitude):
-                    if self._backend.shape(other.magnitude) == () or (
-                        hasattr(other.magnitude, "shape")
-                        and other.magnitude.shape == (1,)
-                    ):
-                        other_val = (
-                            other.magnitude.item()
-                            if hasattr(other.magnitude, "item")
-                            else other.magnitude
-                        )
-                        other_flat = self._backend.mul(
-                            self._backend.ones(size), other_val
-                        )
-                    elif self._backend.shape(
-                        other.magnitude
-                    ) == self._backend.shape(new_magnitude):
-                        other_flat = self._backend.reshape(
-                            other.magnitude, (size,)
-                        )
-                    else:
-                        # Complex broadcast? Fallback to ones*val if it implicitly broadcasted?
-                        # Or assume correct shape.
-                        other_flat = self._backend.reshape(
-                            other.magnitude, (size,)
-                        )  # Simplistic
-                else:
-                    other_flat = self._backend.mul(
-                        self._backend.ones(size), other.magnitude
-                    )
+                # Flatten/Broadcast using new backend capability
+                self_flat, other_flat = self._backend.broadcast_and_flatten(
+                    [self.magnitude, other.magnitude]
+                )
 
                 # Determine j_self structure
                 is_self_scalar = (
@@ -790,39 +743,8 @@ class Quantity(Generic[ValueType, UncType]):
 
                 if is_self_scalar:
                     j_self = self._backend.reshape(other_flat, (size, 1))
-                    # If backend returns dense, it's fine. If sparse required, we might need conversion.
-                    # But CovarianceStore handles dense too.
                 else:
-                    j_self = self._backend.diags([other_flat], [0])
-
-                # Flatten/Broadcast self (coefficient for j_other)
-                if self._backend.is_array(self.magnitude):
-                    if self._backend.shape(self.magnitude) == () or (
-                        hasattr(self.magnitude, "shape")
-                        and self.magnitude.shape == (1,)
-                    ):
-                        self_val = (
-                            self.magnitude.item()
-                            if hasattr(self.magnitude, "item")
-                            else self.magnitude
-                        )
-                        self_flat = self._backend.mul(
-                            self._backend.ones(size), self_val
-                        )
-                    elif self._backend.shape(
-                        self.magnitude
-                    ) == self._backend.shape(new_magnitude):
-                        self_flat = self._backend.reshape(
-                            self.magnitude, (size,)
-                        )
-                    else:
-                        self_flat = self._backend.reshape(
-                            self.magnitude, (size,)
-                        )
-                else:
-                    self_flat = self._backend.mul(
-                        self._backend.ones(size), self.magnitude
-                    )
+                    j_self = self._backend.diagonal_operator(other_flat)
 
                 # Determine j_other structure
                 is_other_scalar = (
@@ -837,7 +759,7 @@ class Quantity(Generic[ValueType, UncType]):
                 if is_other_scalar:
                     j_other = self._backend.reshape(self_flat, (size, 1))
                 else:
-                    j_other = self._backend.diags([self_flat], [0])
+                    j_other = self._backend.diagonal_operator(self_flat)
 
                 new_uncertainty_obj = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other

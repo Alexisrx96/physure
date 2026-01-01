@@ -25,49 +25,96 @@ class PythonBackend(BackendOps):
     def add(
         self, x: Float[Array, ...], y: Float[Array, ...]
     ) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            return [a + b for a, b in zip(x, y, strict=False)]
+        if isinstance(x, (list, tuple)):
+            return [a + y for a in x]
+        if isinstance(y, (list, tuple)):
+            return [x + b for b in y]
         return x + y
 
     def sub(
         self, x: Float[Array, ...], y: Float[Array, ...]
     ) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            return [a - b for a, b in zip(x, y, strict=False)]
+        if isinstance(x, (list, tuple)):
+            return [a - y for a in x]
+        if isinstance(y, (list, tuple)):
+            return [x - b for b in y]
         return x - y
 
     def mul(
         self, x: Float[Array, ...], y: Float[Array, ...]
     ) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            return [a * b for a, b in zip(x, y, strict=False)]
+        if isinstance(x, (list, tuple)):
+            return [a * y for a in x]
+        if isinstance(y, (list, tuple)):
+            return [x * b for b in y]
         return x * y
 
     def truediv(
         self, x: Float[Array, ...], y: Float[Array, ...]
     ) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            return [a / b for a, b in zip(x, y, strict=False)]
+        if isinstance(x, (list, tuple)):
+            return [a / y for a in x]
+        if isinstance(y, (list, tuple)):
+            return [x / b for b in y]
         return x / y
 
     def pow(
         self, x: Float[Array, ...], y: Float[Array, ...]
     ) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            return [a**b for a, b in zip(x, y, strict=False)]
+        if isinstance(x, (list, tuple)):
+            return [a**y for a in x]
+        if isinstance(y, (list, tuple)):
+            return [x**b for b in y]
         return x**y
 
     def sqrt(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.sqrt(val) for val in x]
         return math.sqrt(x)
 
     def exp(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.exp(val) for val in x]
         return math.exp(x)
 
     def log(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.log(val) for val in x]
         return math.log(x)
 
     def sin(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.sin(val) for val in x]
         return math.sin(x)
 
     def cos(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.cos(val) for val in x]
         return math.cos(x)
 
     def tan(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.tan(val) for val in x]
         return math.tan(x)
 
     def dot(
         self, x: Float[Array, ...], y: Float[Array, ...]
     ) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)) and isinstance(y, (list, tuple)):
+            # Assuming dot product for 1D lists
+            if len(x) != len(y):
+                raise ValueError("Lists must have same length for dot product")
+            return sum(a * b for a, b in zip(x, y, strict=False))
         return x * y
 
     def cross(
@@ -76,9 +123,13 @@ class PythonBackend(BackendOps):
         raise NotImplementedError("Cross product not supported for scalars")
 
     def abs(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [abs(val) for val in x]
         return abs(x)
 
     def sign(self, x: Float[Array, ...]) -> Float[Array, ...]:
+        if isinstance(x, (list, tuple)):
+            return [math.copysign(1, val) for val in x]
         return math.copysign(1, x)
 
     def sum(
@@ -183,6 +234,30 @@ class PythonBackend(BackendOps):
         """Returns an array of ones."""
         raise NotImplementedError(
             "Ones array creation not supported in PythonBackend"
+        )
+
+    def size(self, obj: Any) -> int:
+        """Returns the total number of elements in the object."""
+        if hasattr(obj, "__len__"):
+            return len(obj)
+        return 1
+
+    def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
+        """Broadcasts inputs to a common shape and returns them as flattened 1D arrays."""
+        raise NotImplementedError(
+            "Vectorized uncertainty propagation not supported for Python lists"
+        )
+
+    def identity_operator(self, size: int) -> Any:
+        """Returns an identity operator (matrix) of the given size."""
+        raise NotImplementedError(
+            "Sparse matrices not supported in PythonBackend"
+        )
+
+    def diagonal_operator(self, diagonal: Any) -> Any:
+        """Returns a diagonal operator (matrix) from the given diagonal values."""
+        raise NotImplementedError(
+            "Sparse matrices not supported in PythonBackend"
         )
 
 

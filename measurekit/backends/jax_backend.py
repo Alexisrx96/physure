@@ -234,6 +234,24 @@ class JaxBackend(BackendOps):
         """Returns an array of ones."""
         return jnp.ones(shape)
 
+    def size(self, obj: Any) -> int:
+        """Returns the total number of elements in the object."""
+        return jnp.size(obj)
+
+    def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
+        """Broadcasts inputs to a common shape and returns them as flattened 1D arrays."""
+        broadcasted = jnp.broadcast_arrays(*inputs)
+        return [jnp.ravel(b) for b in broadcasted]
+
+    def identity_operator(self, size: int) -> Any:
+        """Returns an identity operator (matrix) of the given size."""
+        # JAX sparse support is experimental/limited, using dense for now as previous implementation did
+        return jnp.eye(size)
+
+    def diagonal_operator(self, diagonal: Any) -> Any:
+        """Returns a diagonal operator (matrix) from the given diagonal values."""
+        return jnp.diag(diagonal)
+
 
 def register_jax_behavior():
     """Registers Quantity as a JAX Pytree."""

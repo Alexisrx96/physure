@@ -177,6 +177,23 @@ class BackendOps(Protocol):
         ...
 
     # Sparse / Jacobian Helper
+    def size(self, obj: Any) -> int:
+        """Returns the total number of elements in the object."""
+        ...
+
+    def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
+        """Broadcasts inputs to a common shape and returns them as flattened 1D arrays."""
+        ...
+
+    def identity_operator(self, size: int) -> Any:
+        """Returns an identity operator (matrix) of the given size."""
+        ...
+
+    def diagonal_operator(self, diagonal: Any) -> Any:
+        """Returns a diagonal operator (matrix) from the given diagonal values."""
+        ...
+
+    # Legacy (Keep for backward compatibility during refactor if needed, or remove if unused)
     def eye(self, n: int, format: str = "csr") -> Any:
         """Returns an n x n identity matrix, potentially sparse."""
         ...

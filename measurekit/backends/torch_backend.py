@@ -230,3 +230,23 @@ class TorchBackend(BackendOps):
     def ones(self, shape: tuple[int, ...]) -> Float[Array, ...]:
         """Returns a tensor of ones."""
         return torch.ones(shape)
+
+    def size(self, obj: Any) -> int:
+        """Returns the total number of elements in the object."""
+        if hasattr(obj, "numel"):
+            return obj.numel()
+        return 1
+
+    def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
+        """Broadcasts inputs to a common shape and returns them as flattened 1D arrays."""
+        tensors = [self.asarray(x) for x in inputs]
+        broadcasted = torch.broadcast_tensors(*tensors)
+        return [torch.flatten(b) for b in broadcasted]
+
+    def identity_operator(self, size: int) -> Any:
+        """Returns an identity operator (matrix) of the given size."""
+        return torch.eye(size)
+
+    def diagonal_operator(self, diagonal: Any) -> Any:
+        """Returns a diagonal operator (matrix) from the given diagonal values."""
+        return torch.diag(diagonal)

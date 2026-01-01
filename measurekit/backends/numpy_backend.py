@@ -193,6 +193,25 @@ class NumpyBackend(BackendOps):
             diagonals=diagonals, offsets=offsets, format=format
         )
 
+    def size(self, obj: Any) -> int:
+        """Returns the total number of elements in the object."""
+        return np.size(obj)
+
+    def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
+        """Broadcasts inputs to a common shape and returns them as flattened 1D arrays."""
+        # np.broadcast_arrays broadcasts inputs against each other
+        broadcasted = np.broadcast_arrays(*inputs)
+        # Flatten each
+        return [b.ravel() for b in broadcasted]
+
+    def identity_operator(self, size: int) -> Any:
+        """Returns an identity operator (matrix) of the given size."""
+        return sparse.eye(size, format="csr")
+
+    def diagonal_operator(self, diagonal: Any) -> Any:
+        """Returns a diagonal operator (matrix) from the given diagonal values."""
+        return sparse.diags([diagonal], [0], format="csr")
+
     def ones(self, shape: tuple[int, ...]) -> Float[Array, ...]:
         """Returns an array of ones."""
         return np.ones(shape)
