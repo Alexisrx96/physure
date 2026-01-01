@@ -18,6 +18,10 @@ from measurekit.application.context import (
     use_system,
 )
 from measurekit.application.factories import QuantityFactory
+from measurekit.application.startup import (
+    create_default_system,
+    create_system,
+)
 from measurekit.domain.measurement.units import get_default_system
 
 # Expose the primary factory method (Inbound Port)
@@ -51,6 +55,8 @@ __all__ = [
     "Quantity",
     "Uncertainty",
     "UnitNotFoundError",
+    "create_default_system",
+    "create_system",
     "default_system",
     "get_active_system",
     "get_current_system",
