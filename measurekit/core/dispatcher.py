@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from jaxtyping import Array, Bool, Float
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+try:
+    from jaxtyping import Array, Bool, Float
+except (ImportError, ModuleNotFoundError):
+    # Fallback if jaxtyping or its dependencies (jax) are missing
+    from typing import Any
+
+    Array = Any
+    Bool = Any
+    Float = Any
+
 
 from measurekit.core.protocols import BackendOps
 

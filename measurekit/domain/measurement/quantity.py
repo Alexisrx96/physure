@@ -108,9 +108,43 @@ class Quantity(Generic[ValueType, UncType]):
         for k, v in state.items():
             object.__setattr__(self, k, v)
 
-        # Re-derive backend
         backend = BackendManager.get_backend(self.magnitude)
         object.__setattr__(self, "_backend", backend)
+
+    def tree_flatten(self):
+        """Flattens the Quantity for JAX Pytree registration."""
+        # Children: the dynamic/differentiable parts (magnitude)
+        # Note: uncertainty is also dynamic if present?
+        # If uncertainty is used in gradients, it should be a child.
+        # However, uncertainty logic in functional is currently somewhat separate.
+        # But if we want JIT compatibility for uncertainty propagation, it must be traced.
+        # self.uncertainty_obj contains 'std_dev'.
+        return (self.magnitude, self.uncertainty_obj), (
+            self.unit,
+            self.system,
+            self.fraction,
+        )
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        """Reconstructs the Quantity from JAX flatten results."""
+        magnitude, uncertainty_obj = children
+        unit, system, _ = aux_data  # fraction unused
+
+        # Determine backend from magnitude (likely a JAX Tracer or Array)
+        # We use _fast_new to skip checks
+        # But we need 'dimension'.
+        dimension = unit.dimension(system)
+
+        # We need backend ops.
+        # If magnitude is Tracer, BackendManager might fail or return NumpyBackend (default).
+        # We trust BackendManager or pass explicitly?
+        # Ideally BackendManager handles Tracers.
+        backend = BackendManager.get_backend(magnitude)
+
+        return cls._fast_new(
+            magnitude, unit, uncertainty_obj, system, dimension, backend
+        )
 
     @classmethod
     def _fast_new(
@@ -1333,9 +1367,8 @@ class Quantity(Generic[ValueType, UncType]):
     __rmul__ = __mul__
 
     def __rtruediv__(self, other: Any) -> Quantity:
-        # Check for zero.
-        if self._backend.any(self._backend.allclose(self.magnitude, 0)):
-            raise ZeroDivisionError("Division by zero magnitude Quantity")
+        # Note: We rely on the backend to handle division by zero (e.g. inf/nan)
+        # to ensure compatibility with JAX/Tracer environments where value checks are forbidden.
 
         new_magnitude = self._backend.truediv(other, self.magnitude)
         new_unit = 1 / self.unit
@@ -1499,15 +1532,13 @@ class Quantity(Generic[ValueType, UncType]):
         return NotImplemented
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
-        """Handles Torch functions like torch.mean, torch.relu for Quantity objects.
-
-        This method allows Quantity objects to be passed directly to torch functions.
-        It unwraps the Quantity magnitudes, performs the torch operation, and
-        wraps the results back into a Quantity if appropriate.
-        """
+        """Handles Torch functions like torch.mean, torch.relu for Quantity objects."""
         if kwargs is None:
             kwargs = {}
 
+        import torch
+
+        # Helper to unwrap Quantities
         def unwrap(obj):
             if isinstance(obj, Quantity):
                 return obj.magnitude
@@ -1515,26 +1546,74 @@ class Quantity(Generic[ValueType, UncType]):
                 return type(obj)(unwrap(x) for x in obj)
             return obj
 
+        # --- Dispatch Logic ---
+        # Map common torch functions to Quantity operators or functional logic
+
+        # Arithmetic -> Delegate to operators to preserve uncertainty logic
+        if func in (torch.add,):
+            return operator.add(args[0], args[1])  # type: ignore
+        if func in (torch.sub,):
+            return operator.sub(args[0], args[1])  # type: ignore
+        if func in (torch.mul,):
+            return operator.mul(args[0], args[1])  # type: ignore
+        if func in (torch.div, torch.true_divide):
+            return operator.truediv(args[0], args[1])  # type: ignore
+        if func in (torch.pow,):
+            return operator.pow(args[0], args[1])  # type: ignore
+
+        # Unary Math -> Check Dimensionless
+        # (Sin, Cos, Exp, Log...)
+        trig_map = {
+            torch.sin: torch.sin,
+            torch.cos: torch.cos,
+            torch.tan: torch.tan,
+            torch.exp: torch.exp,
+            torch.log: torch.log,
+            torch.log10: torch.log10,
+            torch.abs: torch.abs,
+            torch.sqrt: torch.sqrt,
+        }
+
+        if func in trig_map:
+            q = args[0]
+            if not isinstance(q, Quantity):
+                return NotImplemented
+
+            # sqrt is special (unit becomes u^0.5)
+            if func == torch.sqrt:
+                return q**0.5
+
+            # abs preserves unit
+            if func == torch.abs:
+                return abs(q)
+
+            # Others require dimensionless
+            if not q.dimension.is_dimensionless:
+                raise IncompatibleUnitsError(q.unit, CompoundUnit({}))
+
+            # Result is dimensionless
+            res_mag = func(q.magnitude, **kwargs)
+            # Create dimensionless quantity
+            return Quantity.from_input(res_mag, CompoundUnit({}), q.system)
+
+        # Fallback: Unwrap -> Call -> Wrap (Blind wrapping)
+        # This is dangerous for operations that change units, but acceptable for
+        # shape ops (reshape, transpose) or generic tensor ops.
+
         unwrapped_args = tuple(unwrap(arg) for arg in args)
         unwrapped_kwargs = {k: unwrap(v) for k, v in kwargs.items()}
 
-        # Call the original torch function
         result = func(*unwrapped_args, **unwrapped_kwargs)
 
-        # Find representative Quantity for metadata
-        source_q = None
-        for arg in args:
-            if isinstance(arg, Quantity):
-                source_q = arg
-                break
+        # If result is Tensor, try to wrap it using the first Quantity's unit
+        # This is heuristic and might be wrong for some ops.
+        # But it enables things like 'torch.unsqueeze(q)' to work.
+        source_q = next(
+            (arg for arg in args if isinstance(arg, Quantity)), None
+        )
 
-        res_module = getattr(result.__class__, "__module__", "")
-        if source_q and res_module.startswith("torch"):
-            return type(self)(
-                magnitude=result,
-                unit=source_q.unit,
-                system=source_q.system,
-            )
+        if source_q is not None and isinstance(result, torch.Tensor):
+            return Quantity.from_input(result, source_q.unit, source_q.system)
 
         return result
 

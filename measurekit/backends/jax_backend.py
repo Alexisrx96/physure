@@ -6,10 +6,24 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax.core import Tracer
-from jaxtyping import Array, Bool, Float
+try:
+    import jax
+    import jax.numpy as jnp
+    from jax.core import Tracer
+except (ImportError, ModuleNotFoundError):
+    jax = None
+    jnp = None
+    Tracer = None
+
+try:
+    from jaxtyping import Array, Bool, Float
+except (ImportError, ModuleNotFoundError):
+    from typing import Any
+
+    Array = Any
+    Bool = Any
+    Float = Any
+
 
 from measurekit.core.protocols import BackendOps
 
@@ -18,6 +32,10 @@ log = logging.getLogger(__name__)
 
 class JaxBackend(BackendOps):
     """JAX-based implementation of BackendOps."""
+
+    def __init__(self):
+        if jax is None:
+            raise ImportError("JAX is not available.")
 
     def _is_tracer(self, obj: Any) -> bool:
         """Returns True if the object is a JAX Tracer (used in JIT)."""
@@ -253,32 +271,46 @@ class JaxBackend(BackendOps):
         return jnp.diag(diagonal)
 
 
+_jax_registered = False
+
+
 def register_jax_behavior():
     """Registers Quantity as a JAX Pytree."""
+    global _jax_registered
+    if _jax_registered:
+        return
+    _jax_registered = True
     try:
         import jax
 
-        def flatten_quantity(q: Any):
-            """Flattens a Quantity into children and aux_data."""
-            # Per Phase 3 requirement: magnitude is child, unit is aux_data
-            return (q.magnitude,), q.unit
-
-        def unflatten_quantity_base(cls, aux_data, children):
-            """Reconstructs a specific Quantity class."""
-            return cls(children[0], aux_data)
-
-        # Register Quantity from both locations to ensure compatibility
-        # during Core Decoupling (Phase 1/2/3).
-        from measurekit.domain.measurement.quantity import (
-            Quantity as DomainQuantity,
-        )
+        # Register Quantity
+        from measurekit.domain.measurement.quantity import Quantity
 
         jax.tree_util.register_pytree_node(
-            DomainQuantity,
-            flatten_quantity,
-            lambda aux, children: unflatten_quantity_base(
-                DomainQuantity, aux, children
-            ),
+            Quantity,
+            Quantity.tree_flatten,
+            Quantity.tree_unflatten,
+        )
+
+        from measurekit.domain.measurement.uncertainty import Uncertainty
+
+        def unc_flatten(unc):
+            keys = tuple(sorted(unc.lineage.keys()))
+            values = tuple(unc.lineage[k] for k in keys)
+            return (unc.std_dev, values), (unc.vector_slice, keys)
+
+        def unc_unflatten(aux, children):
+            vector_slice, keys = aux
+            std_dev, values = children
+            lineage = dict(zip(keys, values))
+            return Uncertainty(
+                std_dev=std_dev, lineage=lineage, vector_slice=vector_slice
+            )
+
+        jax.tree_util.register_pytree_node(
+            Uncertainty,
+            unc_flatten,
+            unc_unflatten,
         )
 
     except (ImportError, NameError):
