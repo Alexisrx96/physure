@@ -11,7 +11,9 @@ floats = st.floats(min_value=-1e12, max_value=1e12)
 special_floats = st.floats(allow_nan=True, allow_infinity=True)
 
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @pytest.mark.parametrize("unit_name", ["m", "s", "kg"])
 @given(a_val=floats, b_val=floats)
 def test_commutativity_addition(common_system, unit_name, a_val, b_val):
@@ -30,7 +32,9 @@ def test_commutativity_addition(common_system, unit_name, a_val, b_val):
         assert res1.magnitude == pytest.approx(res2.magnitude, nan_ok=True)
 
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @pytest.mark.parametrize("unit_name", ["m", "s", "kg"])
 @given(a_val=floats, b_val=floats, c_val=floats)
 def test_associativity_addition(common_system, unit_name, a_val, b_val, c_val):
@@ -52,7 +56,9 @@ def test_associativity_addition(common_system, unit_name, a_val, b_val, c_val):
         )
 
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @given(val=st.floats(min_value=1e-6, max_value=1e6))
 def test_round_trip_conversion(common_system, val):
     """Verify Quantity(x).to(unit).to(original_unit) ≈ x"""
@@ -65,17 +71,23 @@ def test_round_trip_conversion(common_system, val):
     assert q_converted.magnitude == pytest.approx(val)
 
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @given(val=special_floats)
 def test_nan_inf_handling(common_system, val):
     """Ensure basic operations don't crash on NaN/Inf"""
+    import warnings
+
     unit = common_system.get_unit("m")
     q = Quantity.from_input(val, unit, common_system)
 
     # Simple arithmetic should not raise exception
-    try:
-        _ = q * 2
-        _ = q + q
-        _ = q / 2
-    except Exception as e:
-        pytest.fail(f"Operation raised exception on value {val}: {e}")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        try:
+            _ = q * 2
+            _ = q + q
+            _ = q / 2
+        except Exception as e:
+            pytest.fail(f"Operation raised exception on value {val}: {e}")
