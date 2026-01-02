@@ -13,9 +13,18 @@ import numpy as np
 
 try:
     import pandas as pd
+
+    # Verify minimal functionality to avoid broken installations
+    _ = pd.Series
+    _ = pd.DataFrame
     from pandas.api.extensions import register_series_accessor
-except ImportError:
-    # Define a dummy decorator if pandas is not available
+
+    HAS_PANDAS = True
+except (ImportError, AttributeError):
+    HAS_PANDAS = False
+    pd = None
+
+    # Define a dummy decorator if pandas is not available or broken
     def register_series_accessor(name: str):
         """Dummy decorator if pandas is not available."""
         return lambda cls: cls
@@ -28,13 +37,13 @@ from measurekit.domain.measurement.quantity import Quantity
 class MeasureKitAccessor:
     """Pandas accessor for MeasureKit quantities."""
 
-    def __init__(self, pandas_obj: pd.Series):
+    def __init__(self, pandas_obj: Any):
         """Initializes the accessor with a Pandas Series."""
         self._validate(pandas_obj)
         self._obj = pandas_obj
 
     @staticmethod
-    def _validate(obj: pd.Series) -> None:
+    def _validate(obj: Any) -> None:
         """Validates that the Series contains Quantity objects."""
         # Check dtype first
         if not pd.api.types.is_object_dtype(obj):

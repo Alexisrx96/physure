@@ -79,12 +79,12 @@ try:
     import pandas as pd
 
     from measurekit.ext import pandas_support
-except ImportError:
+except (ImportError, AttributeError):
     pass
 
 try:
     import numba
 
     import measurekit.ext.numba_support
-except ImportError:
+except (ImportError, AttributeError):
     pass

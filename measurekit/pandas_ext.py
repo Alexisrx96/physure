@@ -6,11 +6,21 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 import numpy as np
-from pandas.api.extensions import (
-    ExtensionArray,
-    ExtensionDtype,
-    register_extension_dtype,
-)
+
+try:
+    from pandas.api.extensions import (
+        ExtensionArray,
+        ExtensionDtype,
+        register_extension_dtype,
+    )
+except (ImportError, AttributeError):
+    # Fallback if pandas is missing/broken
+    ExtensionArray = object
+    ExtensionDtype = object
+
+    def register_extension_dtype(cls):
+        return cls
+
 
 from measurekit.domain.measurement.quantity import Quantity
 from measurekit.domain.measurement.units import CompoundUnit
@@ -115,7 +125,7 @@ class MeasureKitArray(ExtensionArray):
         self, to_concat: Sequence[MeasureKitArray]
     ) -> MeasureKitArray:
         return type(self)(
-            np.concatenate([cast(np.ndarray, p._data) for p in to_concat]),
+            np.concatenate([cast("np.ndarray", p._data) for p in to_concat]),
             dtype=self.dtype,
         )
 
