@@ -165,6 +165,9 @@ check_untyped_defs = true
 module = "measurekit.tests.*"
 ignore_errors = true
 
+[project.scripts]
+measurekit = "measurekit.cli:main"
+
 [project.entry-points."measurekit.units"]
 meter = "measurekit.domain.measurement.core_units:meter"
 kilogram = "measurekit.domain.measurement.core_units:kilogram"
