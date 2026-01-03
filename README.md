@@ -24,6 +24,7 @@ MeasureKit is not just another unit library. It's a high-performance engine desi
 - **🔌 Backend Agnostic:** Transparently switch between **NumPy**, **PyTorch**, and **JAX**.
 - **📈 Uncertainty Propagation:** Advanced correlated error tracking using the Affine Transformation Formula.
 - **🧩 Symbolic Analysis:** Native SymPy integration for dimensional verification.
+- **⚡ Zero-Overhead Lazy Loading:** Units are transpiled to Python bytecode at build time, ensuring sub-millisecond import costs.
 
 ---
 
@@ -99,6 +100,26 @@ data = SensorData(
 - **Correlation Tracking:** Uncertainties are propagated through the global `CovarianceStore`, keeping track of dependencies between measured quantities.
 - **Unit Systems:** Easily define and switch between SI, Imperial, and custom unit systems.
 - **Commutativity & Invariants:** Strictly follows physical laws for group operations.
+
+### Adding Custom Units (The Transpiler)
+
+MeasureKit uses a "Python-as-Database" approach. Instead of parsing slow TOML/YAML files at runtime, we **transpile** definitions into optimized Python modules.
+
+1. **Define:** Add your unit to `definitions/your_scope.toml`.
+   ```toml
+   [volt]
+   symbol = "V"
+   definition = "kg * m^2 * s^-3 * A^-1"
+   ```
+2. **Compile:** Run the transpiler to generate the Python code.
+   ```bash
+   python scripts/compile_units.py
+   ```
+3. **Use:** Access it immediately with zero runtime parsing cost.
+   ```python
+   import measurekit as mk
+   print(mk.units.volt)
+   ```
 
 ---
 

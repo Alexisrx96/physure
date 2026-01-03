@@ -1,0 +1,9 @@
+[meter]
+symbol = "m"
+dimension = "L"
+scale = 1.0
+
+[second]
+symbol = "s"
+dimension = "T"
+scale = 1.0
