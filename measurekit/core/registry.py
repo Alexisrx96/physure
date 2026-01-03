@@ -90,6 +90,13 @@ class UnitRegistry:
 
         raise AttributeError(f"Unit '{name}' not found in registry.")
 
+    @property
+    def available_units(self) -> list[str]:
+        """Returns a list of all available unit names."""
+        return sorted(
+            list(self._registry.keys()) + list(self._lazy_loaders.keys())
+        )
+
     def __dir__(self) -> list[str]:
         """Lists all available units for discovery (e.g. in notebooks)."""
         return sorted(
