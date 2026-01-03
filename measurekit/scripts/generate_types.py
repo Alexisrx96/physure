@@ -26,7 +26,7 @@ def generate():
         os.path.dirname(os.path.dirname(__file__)), "_generated_types.py"
     )
 
-    with open(generated_types_path, "w") as f:
+    with open(generated_types_path, "w", encoding="utf-8") as f:
         f.write("# AUTO-GENERATED FILE. DO NOT EDIT.\n")
         f.write("# Run 'measurekit sync-types' to update.\n\n")
         f.write("from typing import Literal, Union\n\n")
@@ -37,7 +37,7 @@ def generate():
         os.path.dirname(os.path.dirname(__file__)), "core", "registry.pyi"
     )
 
-    with open(registry_stub_path, "w") as f:
+    with open(registry_stub_path, "w", encoding="utf-8") as f:
         f.write("# AUTO-GENERATED FILE. DO NOT EDIT.\n")
         f.write("# Run 'measurekit sync-types' to update.\n\n")
         f.write("from typing import Any\n")
