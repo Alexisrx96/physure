@@ -327,24 +327,31 @@ class BackendManager:
         # Use module-based detection to avoid eager imports
         module = getattr(data_obj.__class__, "__module__", "")
 
+        if isinstance(data_obj, (int, float, complex, list, tuple)):
+            return cls._get_python_backend()
+
+        cls_name = getattr(data_obj.__class__, "__name__", "").lower()
+
+        # JAX Detection (Prioritize to catch Tracers which might mimic other things)
+        if (
+            module.startswith("jax")
+            or module.startswith("jaxlib")
+            or "jax" in module
+            or "jax" in cls_name
+            or "tracer" in cls_name
+            or hasattr(data_obj, "aval")  # JAX Tracers often have 'aval'
+        ):
+            return cls._get_or_load_backend("jax")
+
         if module.startswith("torch"):
             return cls._get_or_load_backend("torch")
+
         if (
             module.startswith("numpy")
             or "numpy" in str(type(data_obj)).lower()
             or "ndarray" in str(type(data_obj)).lower()
         ):
             return cls._get_or_load_backend("numpy")
-        if (
-            module.startswith("jax")
-            or module.startswith("jaxlib")
-            or "jax"
-            in str(getattr(data_obj.__class__, "__name__", "")).lower()
-        ):
-            return cls._get_or_load_backend("jax")
-
-        if isinstance(data_obj, (int, float, complex, list, tuple)):
-            return cls._get_python_backend()
 
         try:
             return cls._get_or_load_backend("numpy")

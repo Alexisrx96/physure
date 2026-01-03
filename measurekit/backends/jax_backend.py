@@ -39,10 +39,22 @@ class JaxBackend(BackendOps):
 
     def _is_tracer(self, obj: Any) -> bool:
         """Returns True if the object is a JAX Tracer (used in JIT)."""
-        try:
-            return isinstance(obj, Tracer)
-        except NameError:
+        if Tracer is not None and isinstance(obj, Tracer):
+            return True
+
+        # Concrete JAX arrays also have 'aval', so satisfy check carefully.
+        # If it is a concrete array, it is NOT a tracer.
+        if jax is not None and isinstance(obj, jax.Array):
             return False
+
+        # Fallback: check class hierarchy names for 'Tracer'
+        try:
+            for cls in type(obj).__mro__:
+                if "Tracer" in cls.__name__:
+                    return True
+        except (AttributeError, TypeError):
+            pass
+        return False
 
     def is_array(self, obj: Any) -> bool:
         """Checks if the object is a concrete JAX array.

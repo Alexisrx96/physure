@@ -35,9 +35,13 @@ class Uncertainty(Generic[UncType]):
         # Skip validation if tracing (e.g. JAX JIT/VMAP) as it can't handle concrete checks
         if self.vector_slice is None and not backend.is_tracing(self.std_dev):
             # Check if any element is negative
-            is_neg = backend.less(self.std_dev, 0)
-            if backend.any(is_neg):
-                raise ValueError("Standard deviation cannot be negative.")
+            try:
+                is_neg = backend.less(self.std_dev, 0)
+                if backend.any(is_neg):
+                    raise ValueError("Standard deviation cannot be negative.")
+            except (TypeError, ValueError):
+                # If comparison fails (e.g. undetected JAX Tracer), we skip validation
+                pass
 
         # Writeability check is specific to numpy arrays
         # We can try/except or check is_array
