@@ -1,18 +1,19 @@
 import numpy as np
 
+from measurekit.backends.numpy_backend import NumpyBackend
 from measurekit.domain.measurement.quantity import Quantity
 from measurekit.domain.measurement.units import (
     get_default_system,
 )
 from measurekit.domain.measurement.vectorized_uncertainty import (
-    CovarianceStore,
+    ensure_store,
 )
 
 
 def test_correlated_arrays():
     system = get_default_system()
     meter = system.get_unit("meter")
-    store = CovarianceStore()
+    store = ensure_store(NumpyBackend())
 
     val_base = np.array([1.0, 2.0])
     unc_base = np.array([0.1, 0.2])

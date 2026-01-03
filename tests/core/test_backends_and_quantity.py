@@ -30,16 +30,10 @@ def clean_backend_manager():
     # Reset singleton state if needed
     BackendManager._backends.clear()
     BackendManager._python_backend = None
-    # Reset CovarianceStore
-    from measurekit.domain.measurement.vectorized_uncertainty import (
-        CovarianceStore,
-    )
-
-    CovarianceStore._instance = None
+    # CovarianceStore is now stateless/context-aware
     yield
     BackendManager._backends.clear()
     BackendManager._python_backend = None
-    CovarianceStore._instance = None
 
 
 def test_numpy_backend_compliance():
