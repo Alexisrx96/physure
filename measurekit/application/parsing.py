@@ -34,7 +34,7 @@ def parse_unit_string(expression: str, entity_cls: type[T]) -> T:
         # returns CompoundUnit (which has .exponents)
         compound_unit = _PARSER.parse(expression)
     except Exception as e:
-        # Wrap as ValueError for API compatibility with legacy parser expectations
+        # Wrap as ValueError for API compatibility (legacy)
         raise ValueError(f"Parsing failed: {e}") from e
 
     # 2. Convert to the requested entity class if necessary

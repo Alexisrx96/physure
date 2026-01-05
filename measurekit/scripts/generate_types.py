@@ -51,7 +51,8 @@ def generate():
         f.write("    def register(self, name: str, unit: Any) -> None:\n")
         f.write("        ...\n")
         f.write(
-            "    def register_lazy(self, name: str, loader_func: Any) -> None:\n"
+            "    def register_lazy("
+            "self, name: str, loader_func: Any) -> None:\n"
         )
         f.write("        ...\n")
         f.write("    def discover_plugins(self) -> None:\n")

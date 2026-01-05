@@ -1,150 +1,207 @@
-### Fase 1: Blindaje de Tipos y Validación (Robustness Core)
+### **Strategic Roadmap: Path to v1.0 Stable**
 
-El objetivo es que sea imposible usar mal la librería sin que el IDE o el linter griten.
+#### **Phase 1: Architectural Refactoring (The "Hard" Core)**
 
-#### 1.1. Integración "Blanda" de Pydantic V2
+_Goal: Remove technical debt in the broadcasting logic and improve the fallback experience._
 
-Implementar el shim para Pydantic en `measurekit/domain/measurement/quantity.py` para permitir validación de esquemas sin dependencias duras.
+**1.1. Refactor Jacobian Broadcasting logic**
 
-- **Acción de Código:** Añadir `__get_pydantic_core_schema__` en la clase `Quantity`.
-- **Beneficio:** Permite usar `Quantity` directamente en modelos de FastAPI o Pydantic, serializando automáticamente unidades y valores.
+- **Current State:** `Quantity` manually constructs Jacobian matrices (using `eye`, `diags`, `ones`) inside arithmetic methods like `__add__` and `__mul__`. This logic is complex, brittle, and duplicates tensor logic that backends (Torch/JAX) already possess.
+- **Problem:** If a user adds a `(3, 1, 4)` tensor to a `(4,)` tensor, your manual Jacobian construction in `quantity.py` might fail or produce incorrect sparse matrices because you are manually calculating `size` and flattening arrays.
+- **Action Plan:**
+- **Delegation:** Move the Jacobian creation logic **into the `BackendOps` protocol** (`measurekit/core/protocols.py`).
+- **Polymorphism:** The `Quantity` class should ask the backend: `backend.create_jacobian(shape_a, shape_b, operation_type)`.
+- **Benefit:** This cleans up `quantity.py` significantly and allows JAX to use `jax.jacfwd` or `jax.vjp` instead of manually building sparse matrices, potentially speeding up uncertainty propagation by 10x-100x.
 
-#### 1.2. Adopción de `jaxtyping` para Tensores
+**1.2. Robust `PythonBackend` Implementation**
 
-Dado que soportas JAX y Torch, los type hints genéricos como `Any` en `dispatcher.py` son insuficientes. `jaxtyping` permite tipar formas y dtypes de tensores.
-
-- **Acción de Código:**
-- Añadir `jaxtyping` como dependencia opcional.
-- Refactorizar `dispatcher.py` para usar protocolos tipados en lugar de `Any`.
+- **Current State:** The `PythonBackend` in `dispatcher.py` wraps `math` module functions directly (e.g., `math.sin(x)`).
+- **Problem:** This fails if `x` is a native Python list (`[1, 2, 3]`), causing a crash for users who haven't installed NumPy.
+- **Action Plan:**
+- **Vectorization Wrapper:** Update `PythonBackend` methods to detect iterables.
+- **Implementation:**
 
 ```python
-# En measurekit/core/protocols.py
-from jaxtyping import Array, Float
-
-class BackendOps(Protocol):
-    def add(self, x: Float[Array, "..."], y: Float[Array, "..."]) -> Float[Array, "..."]: ...
-
-```
-
-- **Beneficio:** Detección estática de errores de dimensiones (ej. sumar un vector `[3]` con una matriz `[3, 3]`) antes de ejecutar.
-
-#### 1.3. Migración a `uv` y Endurecimiento de Linting
-
-Tu `pyproject.toml` ya usa `ruff`, pero podemos hacerlo más estricto para garantizar robustez.
-
-- **Acción de Código:**
-- Migrar de `Pipfile` a `pyproject.toml` completo gestionado por `uv` (el estándar moderno de facto).
-- Activar reglas adicionales en `ruff` para seguridad y documentación:
-
-```toml
-# pyproject.toml
-[tool.ruff.lint]
-select = ["E", "F", "UP", "B", "SIM", "I", "D", "N", "RUF", "TCH", "PT"]
-# PT: flake8-pytest-style (mejores tests)
-# TCH: flake8-type-checking (gestión de imports de tipos)
-# RUF: Reglas específicas de Ruff (muy potentes)
+def sin(self, x: Any) -> Any:
+    if isinstance(x, (list, tuple)):
+        return [math.sin(i) for i in x]
+    return math.sin(x)
 
 ```
+
+- **Benefit:** True "Zero-Overhead" fallback for simple Python scripts without needing heavy dependencies like NumPy.
 
 ---
 
-### Fase 2: Testing Científico Avanzado (Robustness & QA)
+#### **Phase 2: Concurrency & State Management**
 
-Los tests unitarios simples (`assert a == b`) no son suficientes para física computacional. Necesitas "Property-Based Testing".
+_Goal: Ensure thread safety and robust multi-system support._
 
-#### 2.1. Implementar `Hypothesis`
+**2.1. Eliminate Global Unit System State**
 
-En lugar de escribir casos de prueba manuales (`1 + 1 = 2`), define propiedades matemáticas que deben cumplirse siempre (ej. conmutatividad, asociatividad).
-
-- **Acción de Código:** Crear `tests/core/test_invariants.py`.
+- **Current State:** `units.py` relies on `_system_provider` and `get_default_system()`. This is a global variable.
+- **Problem:** In a multi-threaded web server (e.g., FastAPI) handling requests from users with different unit preferences (Imperial vs. SI), global state leads to race conditions where User A sees User B's units.
+- **Action Plan:**
+- **ContextVars:** Replace the global `_system_provider` with Python's `contextvars.ContextVar`.
+- **Scoped Contexts:** Implement a context manager:
 
 ```python
-from hypothesis import given, strategies as st
-from measurekit import Q_
-
-@given(st.floats(allow_nan=False), st.floats(allow_nan=False))
-def test_addition_commutativity(a, b):
-    q1 = Q_(a, "m")
-    q2 = Q_(b, "m")
-    assert q1 + q2 == q2 + q1
+with measurekit.use_system("imperial"):
+    # All new Quantities here use Imperial
+    q = Q_(10, "ft")
 
 ```
 
-- **Beneficio:** `Hypothesis` encontrará casos borde (infinitos, ceros, números muy pequeños) que rompen tu lógica de unidades y que tú no pensaste.
-
-#### 2.2. Benchmarking Continuo
-
-Ya tienes scripts de benchmark (`benchmark_vectorized.py`), pero están aislados. Intégralos con `pytest-benchmark`.
-
-- **Acción de Código:**
-- Instalar `pytest-benchmark`.
-- Convertir `benchmark_vectorized.py` en un test de pytest:
-
-```python
-def test_vectorized_propagation_speed(benchmark):
-    # ... setup ...
-    result = benchmark(lambda: q_array * 2)
-
-```
-
-- **Beneficio:** Detectar regresiones de rendimiento en cada PR automáticamente.
-
-#### 2.3. Validación Cruzada de Backends
-
-Asegurar que `numpy`, `torch` y `jax` den _exactamente_ el mismo resultado numérico.
-
-- **Acción de Código:** Crear un parametrizador de pytest personalizado en `tests/conftest.py` que ejecute el mismo test matemático contra los 3 backends automáticamente.
+- **Benefit:** Thread-safe, async-safe operation suitable for high-concurrency production environments.
 
 ---
 
-### Fase 3: Documentación Viva (Evolution)
+#### **Phase 3: Domain Completeness**
 
-La documentación no debe ser solo texto en Markdown, debe estar viva y verificada por código.
+_Goal: Support the "messy" parts of physics that most libraries ignore._
 
-#### 3.1. Doctests Estrictos
+**3.1. Non-Multiplicative Units (Offset Units)**
 
-Tu código en `MK-001_Best_Practices.md` son ejemplos estáticos. Si cambias la API, los ejemplos quedarán obsoletos.
+- **Current State:** The current `CompoundUnit` logic assumes multiplicative factors (`scale`).
+- **Problem:** Temperature conversions (Celsius to Fahrenheit) require an offset (). Logarithmic units (Decibels, pH) require non-linear transforms ().
+- **Action Plan:**
+- **Converter Expansion:** Update `UnitConverter` in `converters.py` to support `OffsetConverter` and `LogarithmicConverter`.
+- **Arithmetic Logic:** You cannot simply multiply decibels. . You must implement specific arithmetic rules for these units in `quantity.py`.
 
-- **Acción de Código:**
-- Habilitar `pytest --doctest-modules`.
-- Mover los ejemplos de uso a los docstrings de las clases en formato REPL ejecutable.
+**3.2. Symbolic Differentiation of Quantities**
 
-```python
-class Quantity:
-    """
-    ...
-    Examples:
-        >>> Q_(10, 'm') + Q_(5, 'm')
-        Quantity(15, 'meter')
-    """
+- **Current State:** You use SymPy for _dimensional analysis_.
+- **Opportunity:** Users in AI/ML often need the derivative of a physical quantity with respect to another.
+- **Action Plan:**
+- Implement a `diff(variable)` method on `Quantity`.
+- Integration: Ensure that `q.backward()` (Torch) works seamlessly with the `Uncertainty` object, perhaps by registering a custom Autograd Function that propagates the covariance matrix through the backpropagation step.
 
-```
+---
 
-#### 3.2. Automatización de Referencia de API con `mkdocstrings`
+#### **Phase 4: Developer Experience (DX) & Ecosystem**
 
-Ya tienes configurado `mkdocstrings` en `pyproject.toml`. Llévalo al siguiente nivel.
+_Goal: Make the library a joy to use._
 
-- **Acción de Código:**
-- Crear/Configurar `mkdocs.yml` para usar el handler de python moderno.
-- Usar referencias cruzadas en tus docstrings. En lugar de decir "Return a Quantity", usa "Returns: [measurekit.core.quantity.Quantity][]". `mkdocstrings` generará el enlace automáticamente.
+**4.1. Rich Console Output**
 
-#### 3.3. Tutoriales Ejecutables con `mkdocs-jupyter`
+- **Current State:** `__str__` and `__repr__` are standard text.
+- **Action Plan:**
+- Integrate with the `rich` library for beautiful console output.
+- When printing a `Quantity` with uncertainty, color-code the significant digits.
+- Example: `1.23` in green, `±0.05` in grey.
 
-Para la documentación científica, los usuarios esperan notebooks.
+**4.2. Serialization Protocol**
 
-- **Acción de Código:**
-- Añadir `mkdocs-jupyter` a `pyproject.toml`.
-- Escribir la documentación narrativa (como "How to use JAX with MeasureKit") directamente como archivos `.ipynb` en la carpeta `docs/`.
-- Configurar el CI para ejecutar estos notebooks como tests antes de desplegar la doc (asegurando que la documentación nunca mienta).
+- **Current State:** Pydantic support exists.
+- **Action Plan:**
+- Implement `__json__` or standard dictionaries for non-Pydantic serialization.
+- Support `pickle` explicitly for distributed computing (Dask/Ray), ensuring that the `WeakValueDictionary` cache in `CompoundUnit` doesn't break pickling.
 
-### Resumen del Roadmap
+---
 
-| Prioridad | Tarea                                   | Archivos Afectados                     | Impacto                       | Estado |
-| --------- | --------------------------------------- | -------------------------------------- | ----------------------------- | ------ |
-| **Alta**  | **Integrar Pydantic V2 Shim**           | `quantity.py`                          | Interoperabilidad API moderna | ✅     |
-| **Alta**  | **Migrar a `uv` y endurecer `ruff**`    | `pyproject.toml`, `Pipfile` (eliminar) | Calidad de código y DX        | ✅     |
-| **Alta**  | **Adopción de `jaxtyping`**             | `backends/*.py`, `protocols.py`        | Seguridad de Tipos Tensores   | ✅     |
-| **Media** | **Tests de Propiedades (`Hypothesis`)** | `tests/`                               | Robustez matemática crítica   | ✅     |
-| **Media** | **Benchmarking Continuo**               | `tests/performance/`                   | Detección de Regresiones      | ✅     |
-| **Media** | **Cross-Backend Testing**               | `tests/conftest.py`, `dispatcher.py`   | Consistencia numérica         | ✅     |
-| **Baja**  | **Doctests & Notebooks CI**             | `docs/*.ipynb`, `core/*.py`            | Documentación siempre verde   | ✅     |
+### **Summary of Priorities**
+
+| Horizon        | Focus Area       | Key Deliverable                                  | Impact                                           |
+| -------------- | ---------------- | ------------------------------------------------ | ------------------------------------------------ |
+| **Immediate**  | **Architecture** | Refactor Jacobian construction into `BackendOps` | massive performance gain + fix broadcasting bugs |
+| **Short Term** | **Stability**    | ContextVars for Unit System                      | Thread-safety for web apps                       |
+| **Mid Term**   | **Physics**      | Offset/Logarithmic Units (Temp/dB)               | Completeness of physical domain                  |
+| **Long Term**  | **Ecosystem**    | Serialization & Rich Output                      | Professional polish                              |
+
+Based on the comprehensive review of the latest codebase (`v0.0.3-dev` / Alpha Candidate), here is the **Strategic Roadmap to v1.0**.
+
+This roadmap is specifically designed to eliminate the remaining **Weaknesses** (Python Backend gaps, Monolithic logic), neutralize **Threats** (Performance overhead), and aggressively exploit **Opportunities** (JAX/Torch Deep Learning integration).
+
+---
+
+### **Roadmap to v1.0: The "Physical AI" Evolution**
+
+#### **Phase 5: JAX Native Integration (The "Speed" Opportunity)**
+
+_Goal: Transform MeasureKit into a first-class citizen of the JAX ecosystem._
+
+**Context:** Currently, `Quantity` works with JAX arrays, but you cannot `jax.jit` or `jax.vmap` a function that takes `Quantity` objects because JAX doesn't know how to flatten/unflatten them.
+**Opportunity:** By registering `Quantity` as a **JAX Pytree Node**, users can compile unit-aware physics code into XLA kernels, running on GPU/TPU at native speeds.
+
+- **5.1. Pytree Registration**
+- **Action:** Implement `tree_flatten` and `tree_unflatten` for `Quantity` in `measurekit/backends/jax_backend.py`.
+- **Logic:**
+- _Flatten:_ Return `(self.magnitude, self.uncertainty_obj)` as children, and `(self.unit, self.system)` as auxiliary data (metadata).
+- _Unflatten:_ Reconstruct `Quantity` using the compiled arrays and metadata.
+
+- **Impact:** Enables `jax.jit(my_physics_loss_function)`.
+
+- **5.2. Sharding & Distributed Arrays**
+- **Action:** Ensure `Quantity.to_device()` respects JAX sharding specs (`jax.sharding.NamedSharding`).
+- **Impact:** Allows massive physical simulations distributed across multiple TPU pods.
+
+---
+
+#### **Phase 6: The "Universal" Fallback (Fixing Weakness)**
+
+_Goal: Close the feature gap between `PythonBackend` and `NumpyBackend`._
+
+**Context:** The `PythonBackend` currently crashes (raises `NotImplementedError`) if a user tries to propagate uncertainty using standard Python lists, because it lacks linear algebra operators.
+**Weakness:** This forces users to install NumPy even for small, pure-Python scripts if they want error propagation.
+
+- **6.1. Pure Python Linear Algebra**
+- **Action:** Implement "Poor Man's Linear Algebra" in `measurekit/core/dispatcher.py`.
+- **Logic:**
+- Implement `diagonal_operator(flat_list)` -> returns a list of lists (dense matrix).
+- Implement `identity_operator(size)` -> returns a list of lists `[[1,0], [0,1]]`.
+- Implement `matmul` for list-of-lists.
+
+- **Impact:** `Quantity([1, 2], 'm')` with uncertainty works out-of-the-box with zero dependencies. It will be slow, but it will _work_.
+
+---
+
+#### **Phase 7: Deep Learning Interop (The "AI" Opportunity)**
+
+_Goal: Enable "Physics-Informed" Neural Networks (PINNs) where weights have units._
+
+**Context:** While you have `__torch_function__`, effectively using `Quantity` inside a `torch.nn.Module` requires parameter handling.
+**Opportunity:** AI Researchers need to constrain model weights to specific physical units (e.g., ensuring a layer outputs "Joules").
+
+- **7.1. Unit-Aware Torch Parameters**
+- **Action:** Create `measurekit.ext.torch.UnitParameter` (subclass of `torch.nn.Parameter`).
+- **Logic:** A wrapper that ensures when the optimizer updates the magnitude tensor, the unit metadata is preserved.
+
+- **7.2. Autograd Integration (The "Backward" Link)**
+- **Action:** Implement `Quantity.backward()`.
+- **Logic:**
+- If the backend is Torch/JAX, delegate to `self.magnitude.backward()`.
+- _Crucial:_ Ensure that the gradient flowing back has the _inverse unit_ of the variable (e.g., in meters, in seconds is m/s). This allows checking unit consistency of gradients.
+
+---
+
+#### **Phase 8: Optimization & Refactoring (Fixing Threats)**
+
+_Goal: Eliminate technical debt and performance overhead._
+
+**Context:** `_nonlinear_add_sub` in `quantity.py` is becoming a "God Method" handling too many cases (Offset, Log, Delta). Also, the `isinstance` checks in the hot path (`__add__`) slow down tight loops.
+**Threat:** As logic grows, this becomes unmaintainable and slow.
+
+- **8.1. Strategy Pattern for Arithmetic**
+- **Action:** Extract logic into `measurekit/domain/measurement/arithmetic_strategies.py`.
+- **Structure:**
+- `ArithmeticStrategy` (Interface)
+- `LinearStrategy` (Fast path)
+- `OffsetStrategy` (Temperature logic)
+- `LogarithmicStrategy` (dB logic)
+
+- **Refactor:** `Quantity` simply asks the `StrategyFactory` for the right handler based on `self.unit.converter`.
+
+- **8.2. Fast-Path Optimization (Cython/C Extension?)**
+- **Action:** For the standard linear case (`float` + `float` in `Quantity`), bypass the `_backend` dispatch if possible.
+- **Optimization:** Create a `__slots__` optimized "FastQuantity" path or use `mypyc` to compile `quantity.py` to C extension.
+
+---
+
+### **Summary of Priorities for v1.0**
+
+| Phase | Focus            | Key Deliverable             | Value Proposition                                  |
+| ----- | ---------------- | --------------------------- | -------------------------------------------------- |
+| **5** | **JAX**          | `jax.jit` support           | "The fastest unit library on Earth" (TPU support). |
+| **6** | **Robustness**   | Pure Python Jacobian        | "Zero-dependency safety" for lightweight scripts.  |
+| **7** | **AI/ML**        | `UnitParameter` for Torch   | "Type-safe Neural Networks" for Science.           |
+| **8** | **Code Quality** | Arithmetic Strategy Pattern | Maintainability and speed for v1.0 release.        |

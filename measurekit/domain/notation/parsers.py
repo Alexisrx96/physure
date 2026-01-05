@@ -83,7 +83,7 @@ class NotationParser:
             self.tokens.advance()
             return token
         else:
-            raise ValueError(f"Expected {token_type}, but got {token.type}.")
+            raise ValueError(f"Expected {token_type}, but got {token.type}")
 
     def parse(self) -> ExponentEntityProtocol:
         """Parses the entire token stream and returns the final entity.

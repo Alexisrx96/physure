@@ -19,7 +19,7 @@ class Uncertainty(ABC, Generic[UncType]):
     """Abstract base class for uncertainty models.
 
     Defines the interface for error propagation strategies.
-    Implementations include Correlated (Covariance) and Uncorrelated (Variance).
+    Implementations include Correlated (Covariance) and Uncorrelated.
     """
 
     @property
@@ -40,9 +40,11 @@ class Uncertainty(ABC, Generic[UncType]):
         ...
 
     def __add__(self, other: Uncertainty[UncType]) -> Uncertainty[UncType]:
+        """Adds two uncertainty models."""
         return self.add(other)
 
     def __sub__(self, other: Uncertainty[UncType]) -> Uncertainty[UncType]:
+        """Subtracts two uncertainty models."""
         return self.add(other, jac_other=-1.0)
 
     @abstractmethod
@@ -76,8 +78,7 @@ class Uncertainty(ABC, Generic[UncType]):
     ) -> Uncertainty[UncType]:
         """Factory method to create the appropriate uncertainty model.
 
-        Checks the global/context propagation mode to decide whether to
-        instantiate a CovarianceModel (correlated) or a VarianceModel (uncorrelated).
+        Checks global context to select CovarianceModel or VarianceModel.
         """
         from measurekit.application.context import get_propagation_mode
 
@@ -99,11 +100,13 @@ class VarianceModel(Uncertainty[UncType]):
 
     @property
     def std_dev(self) -> UncType:
+        """Returns the standard deviation."""
         backend = BackendManager.get_backend(self.variance)
         return cast("UncType", backend.sqrt(self.variance))
 
     @classmethod
     def from_standard(cls, std_dev: UncType) -> VarianceModel[UncType]:
+        """Creates a VarianceModel from a standard deviation."""
         backend = BackendManager.get_backend(std_dev)
         # Handle zero variance safely
         var = backend.pow(std_dev, 2)
@@ -171,6 +174,7 @@ class VarianceModel(Uncertainty[UncType]):
         jac_other: Any = 1.0,
         out_magnitude: Any = None,
     ) -> VarianceModel[UncType]:
+        """Adds two uncertainty models."""
         backend = BackendManager.get_backend(self.variance)
 
         # Ensure other has variance
@@ -194,6 +198,7 @@ class VarianceModel(Uncertainty[UncType]):
         jac_self: Any = None,
         jac_other: Any = None,
     ) -> VarianceModel[Any]:
+        """Propagates uncertainty for multiplication/division."""
         backend = BackendManager.get_backend(val1)
 
         if jac_self is None or jac_other is None:
@@ -221,6 +226,7 @@ class VarianceModel(Uncertainty[UncType]):
     def power(
         self, exponent: float, value: Any, jac: Any = None
     ) -> VarianceModel[Any]:
+        """Propagates uncertainty for exponentiation."""
         backend = BackendManager.get_backend(value)
         if jac is None:
             term = backend.pow(value, exponent - 1)
@@ -230,6 +236,7 @@ class VarianceModel(Uncertainty[UncType]):
         return VarianceModel(new_var)
 
     def scale(self, factor: float | NDArray[Any]) -> VarianceModel[UncType]:
+        """Scales the uncertainty."""
         backend = BackendManager.get_backend(factor)
         new_var = backend.mul(self.variance, backend.pow(factor, 2))
         return VarianceModel(new_var)
@@ -261,12 +268,14 @@ class CovarianceModel(Uncertainty[UncType]):
 
     @property
     def std_dev(self) -> UncType:
+        """Returns the standard deviation."""
         return self.std_dev_internal
 
     @classmethod
     def from_standard(
         cls, std_dev: UncType, measurement_id: str | None = None
     ) -> CovarianceModel[UncType]:
+        """Creates a CovarianceModel from a standard deviation."""
         backend = BackendManager.get_backend(std_dev)
 
         if backend.is_array(std_dev):
@@ -280,10 +289,7 @@ class CovarianceModel(Uncertainty[UncType]):
 
         uid = measurement_id or str(uuid.uuid4())
         is_pos = backend.greater(std_dev, 0)
-        if backend.any(is_pos):
-            lineage = {uid: std_dev}
-        else:
-            lineage = {}
+        lineage = {uid: std_dev} if backend.any(is_pos) else {}
 
         return cls(std_dev_internal=std_dev, lineage=lineage)
 
@@ -303,6 +309,7 @@ class CovarianceModel(Uncertainty[UncType]):
         return hash((self.std_dev_internal, lineage_items, self.vector_slice))
 
     def ensure_vector_slice(self, backend: BackendOps | None = None) -> slice:
+        """Ensures the vector slice is allocated in the store."""
         if self.vector_slice:
             return self.vector_slice
         from measurekit.domain.measurement.vectorized_uncertainty import (
@@ -333,6 +340,7 @@ class CovarianceModel(Uncertainty[UncType]):
         jac_other: Any = 1.0,
         out_magnitude: Any = None,
     ) -> Uncertainty[UncType]:
+        """Adds two uncertainty models (correlated)."""
         backend = BackendManager.get_backend(self.std_dev_internal)
 
         # Vector Path
@@ -422,6 +430,7 @@ class CovarianceModel(Uncertainty[UncType]):
         jac_self: Any = None,
         jac_other: Any = None,
     ) -> CovarianceModel[Any]:
+        """Propagates uncertainty for multiplication/division (correlated)."""
         backend = BackendManager.get_backend(val1)
         if jac_self is None or jac_other is None:
             is_v1_zero = backend.all(backend.equal(val1, 0))
@@ -454,6 +463,7 @@ class CovarianceModel(Uncertainty[UncType]):
     def power(
         self, exponent: float, value: Any, jac: Any = None
     ) -> CovarianceModel[Any]:
+        """Propagates uncertainty for exponentiation (correlated)."""
         backend = BackendManager.get_backend(value)
         if jac is None:
             term = backend.pow(value, exponent - 1)
@@ -472,6 +482,7 @@ class CovarianceModel(Uncertainty[UncType]):
         return CovarianceModel(std_dev_internal=new_std, lineage=filtered)
 
     def scale(self, factor: float | NDArray[Any]) -> CovarianceModel[UncType]:
+        """Scales the uncertainty (correlated)."""
         backend = BackendManager.get_backend(factor)
         new_lineage = {
             uid: backend.mul(coeff, factor)

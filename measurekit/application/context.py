@@ -3,7 +3,8 @@
 This module provides the mechanism for managing the "current" unit system
 in a thread-safe and async-safe manner using Python's `contextvars`.
 It eliminates global mutable state, ensuring that concurrent requests or tasks
-can operate with different unit systems (e.g. SI vs Imperial) without interference.
+can operate with different unit systems (e.g. SI vs Imperial) without
+interference.
 """
 
 from __future__ import annotations
@@ -55,7 +56,7 @@ def get_current_system() -> UnitSystem:
         return _global_default_system
 
     # 3. Lazy Load Default System (SI)
-    # Import here to avoid circular dependency: context -> startup -> units -> context
+    # Import here to avoid circular dependency: context -> startup -> units
     from measurekit.application.startup import create_default_system
 
     _global_default_system = create_default_system()

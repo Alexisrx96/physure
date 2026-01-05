@@ -47,13 +47,13 @@ class CovarianceStore:
         # For Scipy it is. For Torch sparse it is NOT directly.
         # However, for propagation we usually need the full matrix or
         # specific blocks during update.
-        # If the backend is Torch, we might need a specific sparse_slice method.
+        # If backend is Torch, we might need specific sparse_slice method.
         # For now, we assume the backend handles it or we provide a fallback.
         try:
             return self._matrix[row_slice, col_slice]
         except (TypeError, AttributeError, RuntimeError):
             # Fallback or specific backend call if needed
-            # RuntimeError catches 'aten::as_strided' for sparse tensors in Torch
+            # RuntimeError catches 'aten::as_strided' for sparse (Torch)
             if hasattr(self.backend, "sparse_slice"):
                 return self.backend.sparse_slice(
                     self._matrix, row_slice, col_slice
@@ -83,7 +83,7 @@ class CovarianceStore:
         all_rows = []
         all_cols = []
 
-        for slc, jac in zip(in_slices, jacobians):
+        for slc, jac in zip(in_slices, jacobians, strict=False):
             # Move jac to target device if needed
             jac = self.backend.asarray(jac)
             if target_device:
@@ -92,8 +92,8 @@ class CovarianceStore:
                     jac = self.backend.to_device(jac, target_device)
 
             # Implementation continued...
-            # (Keeping previous logic for COO extraction but adding backend.to_coo or similar would be better)
-            # For now, we assume backend.sparse_matrix can handle the jac format if it's on the right device.
+            # (Keeping logic for COO, but backend.to_coo would be better)
+            # Assume backend.sparse_matrix handles jac on right device.
             if hasattr(jac, "is_sparse") and jac.is_sparse:
                 # Torch specific
                 indices = jac.indices()
@@ -111,8 +111,8 @@ class CovarianceStore:
                 # We can convert dense to COO data
                 pass
 
-        # ... (rest of implementation remains same but with device-safe jacobians)
-        # For brevity in this replace call, I'll just finish the device check implementation
+        # ... (rest of implementation remains same)
+        # For brevity, finishing device check implementation.
         # and assume the rest of the method handles the device-aware objects.
 
         # Alternative approach using sparse_bmat which is more backend-friendly
@@ -122,7 +122,7 @@ class CovarianceStore:
 
         # Better: compute out_cov = sum(Ji @ Sigma_ii @ Ji^T) + cross terms
         # But Sigma might have cross-correlations!
-        # So we MUST do J @ Sigma @ J^T where J = [J1, J2, ...] mapping from full state.
+        # So we MUST do J @ Sigma @ J^T where J = [J1, ...] from full state.
 
         for slc, jac in zip(in_slices, jacobians, strict=False):
             # We need to flattened jac data
@@ -150,12 +150,12 @@ class CovarianceStore:
                 all_cols.append(indices[1] + slc.start)
             else:
                 # Dense fallback for generic arrays (e.g. JAX, NumPy)
-                # We can use nonzero() to get indices if it's available and efficient
+                # We can use nonzero() to get indices if efficient
                 try:
                     # Generic dense-to-sparse via nonzero
-                    # Assuming backend has nonzero or we can use numpy fallback if it's numpy array
+                    # Assuming backend has nonzero or we can use numpy fallback
                     if hasattr(jac, "nonzero"):
-                        # If jac is large dense, this is slow. But JAX/NumPy might not have 'to_sparse'
+                        # If jac is large dense, this is slow.
                         rows, cols = jac.nonzero()
                         vals = jac[rows, cols]
                         all_data.append(self.backend.asarray(vals))
@@ -167,9 +167,7 @@ class CovarianceStore:
                         # Assume numpy-like behavior or cast to numpy
                         import numpy as np
 
-                        jac_np = np.array(
-                            jac
-                        )  # Force host sync if needed, acceptable for parity tests
+                        jac_np = np.array(jac)  # Force host sync if needed
                         rows, cols = jac_np.nonzero()
                         vals = jac_np[rows, cols]
                         # Must convert back to backend array!
@@ -197,14 +195,14 @@ class CovarianceStore:
                 shape=(out_size, total_old_size),
             )
 
-        # cross_cov = J_in @ Sigma_old  (out_size x total_old_size)
+        # cross_cov = J_in @ Sigma_old
         cross_cov = self.backend.sparse_matmul(j_in, csr_mat)
 
-        # out_cov = cross_cov @ J_in.T (out_size x out_size)
+        # out_cov = cross_cov @ J_in.T
         out_cov = self.backend.sparse_matmul(
             cross_cov, self.backend.reshape(j_in, (total_old_size, out_size))
-        )  # reshape as transpose hack or use .T if supported
-        # Actually most backends support .T on sparse. If not, we should add it to protocol.
+        )
+        # Most backends support .T on sparse. If not, add to protocol.
         if hasattr(j_in, "T"):
             out_cov = self.backend.sparse_matmul(cross_cov, j_in.T)
         else:
@@ -212,12 +210,12 @@ class CovarianceStore:
             pass
 
         # Sigma_new = [ [Sigma_old, cross_cov.T], [cross_cov, out_cov] ]
-        cross_cov_T = (
+        cross_cov_transposed = (
             cross_cov.T if hasattr(cross_cov, "T") else None
         )  # Should implement transpose in BackendOps
 
         self._matrix = self.backend.sparse_bmat(
-            [[csr_mat, cross_cov_T], [cross_cov, out_cov]]
+            [[csr_mat, cross_cov_transposed], [cross_cov, out_cov]]
         )
 
     def register_independent_array(self, std_dev: Any) -> slice:
@@ -253,10 +251,12 @@ class MeasureKitContext:
     """Context manager for managing the active covariance store."""
 
     def __init__(self, backend_type: str = "numpy"):
+        """Initializes the context."""
         self.backend_type = backend_type
         self.token = None
 
     def __enter__(self) -> CovarianceStore:
+        """Enters the context."""
         # Create a new store using the requested backend
         # We need a way to get the backend instance without data object here,
         # or we wait until first allocation.
@@ -267,6 +267,7 @@ class MeasureKitContext:
         return store
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exits the context."""
         _current_store.reset(self.token)
 
 
@@ -281,7 +282,7 @@ _global_stores: dict[type, CovarianceStore] = {}
 def ensure_store(backend: BackendOps) -> CovarianceStore:
     """Gets the current store or creates a new one tied to the backend.
 
-    If no context is active, it returns a global shared store for the backend type
+    If no context active, returns global shared store for backend type
     to ensure persistence of covariance data across operations.
     """
     store = get_current_store()

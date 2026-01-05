@@ -7,7 +7,6 @@ from the concrete implementation of how units are stored and retrieved.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from measurekit.domain.measurement.conversions import UnitDefinition
 
@@ -16,6 +15,6 @@ class IUnitRepository(ABC):
     """An interface (Port) for retrieving unit definitions."""
 
     @abstractmethod
-    def get_definition(self, unit_symbol: str) -> Optional[UnitDefinition]:
+    def get_definition(self, unit_symbol: str) -> UnitDefinition | None:
         """Retrieves the definition for a given unit symbol."""
         pass

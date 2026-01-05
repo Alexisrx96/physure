@@ -1,6 +1,5 @@
 """Provides classes for atomic symbolic quantities and equations."""
 
-from typing import Union
 
 import sympy as sp
 
@@ -17,7 +16,7 @@ class SymbolicQuantity(SymbolicExpression):
     def __init__(
         self,
         name: str,
-        unit: Union[str, CompoundUnit],
+        unit: str | CompoundUnit,
         system: UnitSystem = default_system,
     ):
         """Initializes a SymbolicQuantity."""

@@ -2,9 +2,9 @@
 
 This library provides a comprehensive framework for performing calculations
 with physical quantities, ensuring dimensional consistency and providing a
-robust system for unit conversions. It is designed to be intuitive and easy to
-use, allowing developers to focus on the logic of their calculations without
-worrying about the intricacies of unit management.
+robust system for unit conversions. It is designed to be intuitive and easy,
+allowing developers to focus on calculation logic without worrying about
+unit management intricacies.
 """
 
 # --- Application Assembly ---
@@ -27,7 +27,7 @@ from measurekit.application.startup import (
 from measurekit.domain.measurement.units import get_default_system, units
 
 # Expose the primary factory method (Inbound Port)
-# QuantityFactory will use get_default_system() internally if no system provided.
+# QuantityFactory uses get_default_system() internally if no system provided.
 Q_ = QuantityFactory()
 
 
