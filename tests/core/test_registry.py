@@ -104,8 +104,5 @@ def test_registry_dir_completeness():
     d = dir(registry)
     assert "cached" in d
     assert "lazy" in d
-    assert (
-        "register" not in d
-    )  # methods aren't in dir(instance) usually unless included
-    # Actually, dir() on objects shows methods too, but our __dir__ only returns keys.
-    # That's fine for our purpose.
+    # Our __dir__ only returns units
+    assert "register" not in d

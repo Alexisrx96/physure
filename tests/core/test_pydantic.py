@@ -3,8 +3,7 @@ import pytest
 from measurekit import Quantity
 
 try:
-    import pydantic_core
-    from pydantic import BaseModel
+    from pydantic import BaseModel, ValidationError
 
     PYDANTIC_AVAILABLE = True
 except ImportError:
@@ -18,12 +17,12 @@ def test_pydantic_validation_success(common_system):
 
     # From string
     m1 = Model(q="10 m")
-    assert m1.q.magnitude == 10.0
+    assert m1.q.magnitude == pytest.approx(10.0)
     assert str(m1.q.unit) == "m"
 
     # From dict
     m2 = Model(q={"magnitude": 5.5, "unit": "kg"})
-    assert m2.q.magnitude == 5.5
+    assert m2.q.magnitude == pytest.approx(5.5)
     assert str(m2.q.unit) == "kg"
 
     # From existing Quantity
@@ -36,15 +35,14 @@ def test_pydantic_validation_error(common_system):
     class Model(BaseModel, arbitrary_types_allowed=True):
         q: Quantity
 
-    # The SymPy parser is stricter/different, so this creates a ValidationError
-    # because the invalid string is rejected or causes factory failure propagation.
-    with pytest.raises(Exception):
+    # The SymPy parser rejects invalid strings, causing a ValidationError.
+    with pytest.raises(ValidationError):
         Model(q="10 * /")
 
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Model(q=10)  # Invalid type (int)
 
 
 def test_pydantic_schema_metadata():
-    """Verify that the schema method exists regardless of Pydantic installation."""
+    """Verify schema method exists regardless of Pydantic."""
     assert hasattr(Quantity, "__get_pydantic_core_schema__")

@@ -1,4 +1,4 @@
-"""Unit tests for non-linear units (Temperature, Logarithmic) and symbolic calculus."""
+"""Unit tests for non-linear units (Temperature, Logarithmic) and calculus."""
 
 import pytest
 import sympy as sp
@@ -14,7 +14,7 @@ def test_temperature_conversions():
     t_c = Q_(100, "degC")
     t_f = t_c.to("degF")
     assert t_f.magnitude == pytest.approx(212, abs=1e-9)
-    # String representation might vary based on prefered alias, checking unit symbol or string
+    # Checking unit symbol or string
     assert "F" in t_f.unit.to_string() or "fahrenheit" in t_f.unit.to_string()
 
     # 100 C -> 373.15 K
@@ -128,7 +128,7 @@ def test_logarithmic_subtraction():
 
 
 def test_symbolic_differentiation():
-    """Test first and second order derivatives of a simple position function."""
+    """Test derivatives of a simple position function."""
     t = sp.Symbol("t")
     # x(t) = 5 t^2 meters
     expression = 5 * t**2
@@ -144,12 +144,13 @@ def test_symbolic_differentiation():
     # Unit should be m/s
     # MeasureKit might format as 'm/s' or 'm s^-1' depending on implementation
     u_str = v.unit.to_string()
-    assert "m" in u_str and "s" in u_str
+    assert "m" in u_str
+    assert "s" in u_str
 
     # a = dv/dt -> 10 m/s^2
     a = v.diff(q_t)
     assert str(a.magnitude) == "10"
-    u_str_a = a.unit.to_string()
+    # u_str_a = a.unit.to_string()
     # Check if s has exponent -2
     # Simple check:
     assert v.unit.exponents.get("m", 0) == 1

@@ -85,14 +85,17 @@ def test_affine_conversion_absolute(q):
 
     k = t.to("kelvin")
     assert k.magnitude == pytest.approx(373.15)
-    # Kelvin might be considered delta (linear) or absolute (point) depending on context?
+    # Kelvin might be considered delta (linear) or absolute (point) depending
+    # on context?
     # In measurekit, K is standard linear unit, so kind="delta".
     # Converting P -> V? No, Kelvin is the Base Unit for Temperature.
-    # If we convert 100C (Point) to K? It usually implies Absolute Temperature (Point).
+    # If we convert 100C (Point) to K? It usually implies Absolute
+    # Temperature (Point).
     # But our taxonomy says Linear = Delta.
     # Does converting Point -> Linear Unit mean Point -> Vector?
     # Physically 373.15 K is an Absolute Temperature (from Absolute Zero).
-    # So using a Linear unit for Absolute Temperature is valid if the scale starts at 0.
+    # So using a Linear unit for Absolute Temperature is valid if the
+    # scale starts at 0.
     # Our logic mostly restricts P+P.
     # It does not prevent representing Points with Linear units.
 

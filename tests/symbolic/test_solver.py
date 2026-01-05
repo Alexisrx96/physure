@@ -38,64 +38,64 @@ def test_symbolic_quantity_arithmetic_operations(symbolic_system):
     assert val.unit == symbolic_system.get_unit("kg")
 
     # Power
-    L_sym = sympy.Symbol("L", positive=True)
+    l_sym = sympy.Symbol("L", positive=True)
     area = SymbolicQuantity("L", "m", system=symbolic_system) ** 2
-    assert area.expr == L_sym**2
+    assert area.expr == l_sym**2
     assert area.unit == symbolic_system.get_unit("m^2")
 
 
 def test_symbolic_quantity_operations_with_scalars(symbolic_system):
     """Test operations with numeric scalars."""
     length = SymbolicQuantity("L", "m", system=symbolic_system)
-    L_sym = sympy.Symbol("L", positive=True)
+    l_sym = sympy.Symbol("L", positive=True)
 
     # Multiplication
     doubled = length * 2
-    assert doubled.expr == 2 * L_sym
+    assert doubled.expr == 2 * l_sym
     assert doubled.unit == symbolic_system.get_unit("m")
 
     doubled_rev = 2 * length
-    assert doubled_rev.expr == 2 * L_sym
+    assert doubled_rev.expr == 2 * l_sym
 
     # Division
     halved = length / 2
-    assert halved.expr == L_sym / 2
+    assert halved.expr == l_sym / 2
 
     # Inverse
     inv = 1 / length
-    assert inv.expr == 1 / L_sym
+    assert inv.expr == 1 / l_sym
     assert inv.unit == symbolic_system.get_unit("1/m")
 
 
 def test_symbolic_quantity_addition_and_subtraction(symbolic_system):
     """Test addition and subtraction with compatible units."""
-    L1 = SymbolicQuantity("L1", "m", system=symbolic_system)
-    L2 = SymbolicQuantity("L2", "m", system=symbolic_system)
+    l1 = SymbolicQuantity("L1", "m", system=symbolic_system)
+    l2 = SymbolicQuantity("L2", "m", system=symbolic_system)
 
-    total = L1 + L2
-    L1_sym = sympy.Symbol("L1", positive=True)
-    L2_sym = sympy.Symbol("L2", positive=True)
-    assert total.expr == L1_sym + L2_sym
+    total = l1 + l2
+    l1_sym = sympy.Symbol("L1", positive=True)
+    l2_sym = sympy.Symbol("L2", positive=True)
+    assert total.expr == l1_sym + l2_sym
     assert total.unit == symbolic_system.get_unit("m")
 
     # Test with incompatible units
     t = SymbolicQuantity("t", "s", system=symbolic_system)
     with pytest.raises(IncompatibleUnitsError):
-        _ = L1 + t
+        _ = l1 + t
 
 
 def test_equation_creation_and_solving(symbolic_system):
     """Test solving a simple physics equation F=ma."""
-    F = SymbolicQuantity("F", "N", system=symbolic_system)
+    f = SymbolicQuantity("F", "N", system=symbolic_system)
     m = SymbolicQuantity("m", "kg", system=symbolic_system)
     a = SymbolicQuantity("a", "m/s^2", system=symbolic_system)
 
-    newtons_law = Equation(F, m * a, variables=[F, m, a])
-    assert newtons_law.equation == sympy.Eq(F.symbol, m.symbol * a.symbol)
+    newtons_law = Equation(f, m * a, variables=[f, m, a])
+    assert newtons_law.equation == sympy.Eq(f.symbol, m.symbol * a.symbol)
 
     # Solve for a
-    solution_a = newtons_law.solve_for("a")
-    assert solution_a.expr == F.symbol / m.symbol
+    solution_a = newtons_law.solve_for(a)
+    assert solution_a.expr == f.symbol / m.symbol
     assert (
         solution_a.unit.exponents
         == symbolic_system.get_unit("m/s^2").exponents
@@ -103,7 +103,7 @@ def test_equation_creation_and_solving(symbolic_system):
 
     # Solve for m
     solution_m = newtons_law.solve_for(m)
-    assert solution_m.expr == F.symbol / a.symbol
+    assert solution_m.expr == f.symbol / a.symbol
     assert solution_m.unit == symbolic_system.get_unit("kg")
 
 
@@ -126,27 +126,27 @@ def test_kinematics_equation(symbolic_system):
 
 def test_incompatible_equation(symbolic_system):
     """Test creating an equation with incompatible sides."""
-    F = SymbolicQuantity("F", "N", system=symbolic_system)
+    f = SymbolicQuantity("F", "N", system=symbolic_system)
     d = SymbolicQuantity("d", "m", system=symbolic_system)
 
     with pytest.raises(IncompatibleUnitsError):
-        _ = Equation(F, d, variables=[F, d])
+        _ = Equation(f, d, variables=[f, d])
 
 
 def test_solving_with_dimensionless_constant(symbolic_system):
     """Test equation with a dimensionless variable."""
-    Re = SymbolicQuantity("Re", "1", system=symbolic_system)
+    re = SymbolicQuantity("re", "1", system=symbolic_system)
     rho = SymbolicQuantity("rho", "kg/m^3", system=symbolic_system)
     v = SymbolicQuantity("v", "m/s", system=symbolic_system)
-    L = SymbolicQuantity("L", "m", system=symbolic_system)
+    le = SymbolicQuantity("l", "m", system=symbolic_system)
     mu = SymbolicQuantity("mu", "kg/(m*s)", system=symbolic_system)
 
     reynolds_eq = Equation(
-        Re, (rho * v * L) / mu, variables=[Re, rho, v, L, mu]
+        re, (rho * v * le) / mu, variables=[re, rho, v, le, mu]
     )
 
     solution_mu = reynolds_eq.solve_for("mu")
-    assert solution_mu.expr == (rho.symbol * v.symbol * L.symbol) / Re.symbol
+    assert solution_mu.expr == (rho.symbol * v.symbol * le.symbol) / re.symbol
     assert solution_mu.unit == symbolic_system.get_unit("kg/(m*s)")
 
 

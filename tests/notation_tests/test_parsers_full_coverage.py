@@ -27,7 +27,7 @@ def test_eat_method():
     assert token.type == TokenType.UNIT
     assert token.value == "m"
     assert parser.current.type == TokenType.EOF
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"Expected .* but got .*"):
         parser.eat(TokenType.MUL)
 
 
@@ -120,7 +120,9 @@ def test_parser_error_handling():
 
     tokens = generate_tokens("(m")
     parser = NotationParser(tokens, BaseExponentEntity)
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match=r"Expected .*RPAREN.*, but got .*EOF"
+    ):
         parser.parse()
 
 

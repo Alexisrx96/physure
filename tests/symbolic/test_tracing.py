@@ -6,17 +6,18 @@ def test_symbolic_tracing_basic():
     with trace_formulas() as trace:
         m = mk.Q_(10, "kg", symbol="m")
         a = mk.Q_(5, "m/s^2", symbol="a")
-        F = m * a
+        f = m * a
 
         # Verify the math works
-        assert F.magnitude == 50
+        assert f.magnitude == 50
 
         # Verify the symbol exists
-        latex = trace.get_equation(F)
+        latex = trace.get_equation(f)
         assert "m" in latex
         assert "a" in latex
         # Sympy normally renders m*a as 'm a' or 'm \cdot a'
-        assert "m" in latex and "a" in latex
+        assert "m" in latex
+        assert "a" in latex
 
 
 def test_symbolic_tracing_complex():
@@ -37,18 +38,18 @@ def test_zero_overhead_active():
     # and should not register anything anywhere global.
     m = mk.Q_(10, "kg", symbol="m")
     a = mk.Q_(5, "m/s^2", symbol="a")
-    F = m * a
-    assert F.magnitude == 50
+    f = m * a
+    assert f.magnitude == 50
 
 
 def test_affine_trace():
     # Phase 3 requirement: reflect Affine Logic
     with trace_formulas() as trace:
-        T1 = mk.Q_(273.15, "kelvin", symbol="T_1")
-        T2 = mk.Q_(373.15, "kelvin", symbol="T_2")
-        dT = T2 - T1
+        t1 = mk.Q_(273.15, "kelvin", symbol="T_1")
+        t2 = mk.Q_(373.15, "kelvin", symbol="T_2")
+        dt = t2 - t1
 
-        latex = trace.get_equation(dT)
+        latex = trace.get_equation(dt)
         assert "T" in latex
         assert "1" in latex
         assert "2" in latex

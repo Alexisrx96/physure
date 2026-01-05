@@ -20,21 +20,21 @@ class TestStubGeneration(unittest.TestCase):
             base_path, "measurekit", "core", "registry.pyi"
         )
 
-        self.assertTrue(os.path.exists(generated_types_path))
-        self.assertTrue(os.path.exists(registry_stub_path))
+        assert os.path.exists(generated_types_path)
+        assert os.path.exists(registry_stub_path)
 
         # Verify content
         with open(generated_types_path) as f:
             content = f.read()
-            self.assertIn("UnitName = Literal", content)
-            self.assertIn('"meter"', content)
-            self.assertIn('"second"', content)
+            assert "UnitName = Literal" in content
+            assert '"meter"' in content
+            assert '"second"' in content
 
         with open(registry_stub_path) as f:
             content = f.read()
-            self.assertIn("class UnitRegistry:", content)
-            self.assertIn("meter: Unit", content)
-            self.assertIn("second: Unit", content)
+            assert "class UnitRegistry:" in content
+            assert "meter: Unit" in content
+            assert "second: Unit" in content
 
     def test_mock_plugin_discovery(self):
         # We can't easily mock entry points here without complexity,
@@ -50,14 +50,14 @@ class TestStubGeneration(unittest.TestCase):
 
         with open(generated_types_path) as f:
             content = f.read()
-            self.assertIn('"mock_unit"', content)
+            assert '"mock_unit"' in content
 
         registry_stub_path = os.path.join(
             base_path, "measurekit", "core", "registry.pyi"
         )
         with open(registry_stub_path) as f:
             content = f.read()
-            self.assertIn("mock_unit: Unit", content)
+            assert "mock_unit: Unit" in content
 
 
 if __name__ == "__main__":

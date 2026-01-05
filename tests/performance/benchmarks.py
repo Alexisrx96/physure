@@ -10,8 +10,8 @@ from measurekit.domain.measurement.system import UnitSystem
 @pytest.fixture
 def benchmark_system():
     sys = UnitSystem("Benchmark")
-    L = Dimension({"L": 1})
-    sys.register_unit("m", L, LinearConverter(1.0), "meter")
+    le = Dimension({"L": 1})
+    sys.register_unit("m", le, LinearConverter(1.0), "meter")
     return sys
 
 

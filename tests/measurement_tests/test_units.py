@@ -63,7 +63,9 @@ def test_dimension(unit_system):
     assert velocity.dimension(unit_system) == length / time
 
     # Test with an unknown unit
-    with pytest.raises(ValueError):
+    with pytest.raises(
+        ValueError, match=r"Unknown dimension for unit 'unknown_unit'"
+    ):
         CompoundUnit({"unknown_unit": 1}).dimension(unit_system)
 
 
@@ -74,9 +76,15 @@ def test_conversion_methods(unit_system):
     kilometer = CompoundUnit({"km": 1})
 
     # Test conversion factor calculation using the system
-    assert meter.conversion_factor_to(centimeter, unit_system) == 100.0
-    assert centimeter.conversion_factor_to(meter, unit_system) == 0.01
-    assert kilometer.conversion_factor_to(meter, unit_system) == 1000.0
+    assert meter.conversion_factor_to(
+        centimeter, unit_system
+    ) == pytest.approx(100.0)
+    assert centimeter.conversion_factor_to(
+        meter, unit_system
+    ) == pytest.approx(0.01)
+    assert kilometer.conversion_factor_to(meter, unit_system) == pytest.approx(
+        1000.0
+    )
 
 
 def test_get_unit_simple():

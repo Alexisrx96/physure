@@ -59,7 +59,7 @@ def test_calculus_kinematics():
 
 
 def test_differentiation_invalid_variable():
-    """Ensures TypeError is raised when differentiating by a non-SymbolicQuantity."""
+    """Ensures TypeError is raised by a non-SymbolicQuantity."""
     t = SymbolicQuantity("t", "s")
     x = t**2
 
@@ -77,7 +77,7 @@ def test_differentiation_invalid_variable():
 
 
 def test_integration_invalid_variable():
-    """Ensures TypeError is raised when integrating by a non-SymbolicQuantity."""
+    """Ensures TypeError is raised by a non-SymbolicQuantity."""
     t = SymbolicQuantity("t", "s")
     v = t
 

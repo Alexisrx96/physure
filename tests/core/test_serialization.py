@@ -4,7 +4,7 @@ from measurekit import Q_
 
 
 def test_unit_identity_preservation():
-    """Verify that CompoundUnits maintain identity after unpickling (Flyweight)."""
+    """Verify CompoundUnits maintain identity (Flyweight)."""
     # get_default_system() is implicitly active
 
     # Create via factory
@@ -37,7 +37,9 @@ def test_quantity_serialization_roundtrip():
     dumped = pickle.dumps(q)
     loaded = pickle.loads(dumped)
 
-    assert loaded.magnitude == q.magnitude
+    import pytest
+
+    assert loaded.magnitude == pytest.approx(q.magnitude)
     # Unit identity should be preserved
     assert loaded.unit is q.unit
 
@@ -45,7 +47,7 @@ def test_quantity_serialization_roundtrip():
     assert hasattr(loaded, "_backend")
     assert loaded._backend is not None
     res = loaded * 2
-    assert res.magnitude == 21.0
+    assert res.magnitude == pytest.approx(21.0)
 
 
 def test_quantity_with_uncertainty_pickle():
@@ -55,8 +57,10 @@ def test_quantity_with_uncertainty_pickle():
     dumped = pickle.dumps(q)
     loaded = pickle.loads(dumped)
 
-    assert loaded.magnitude == 10.0
-    assert loaded.uncertainty == 0.5
+    import pytest
+
+    assert loaded.magnitude == pytest.approx(10.0)
+    assert loaded.uncertainty == pytest.approx(0.5)
     assert loaded.unit is q.unit
 
 
