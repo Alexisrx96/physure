@@ -90,6 +90,8 @@ class Quantity(Generic[ValueType, UncType]):
     system: UnitSystem = field(default_factory=get_default_system)
     dimension: Dimension = field(init=False)
     _backend: BackendOps = field(init=False, repr=False)
+    symbol: str | None = field(default=None, repr=False, compare=False)
+    __weakref__: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
         """Calculates derived fields after the object is initialized."""
@@ -99,6 +101,15 @@ class Quantity(Generic[ValueType, UncType]):
         # Determine and set backend
         backend = BackendManager.get_backend(self.magnitude)
         object.__setattr__(self, "_backend", backend)
+
+        # Phase 3 Hook: Symbolic Tracing
+        if self.symbol is not None:
+            from measurekit.application.tracing.context import (
+                get_active_tracer,
+            )
+
+            if (tracer := get_active_tracer()) is not None:
+                tracer.register_leaf(self, self.symbol)
 
     def __getstate__(self):
         """Custom pickling to exclude _backend."""
@@ -196,6 +207,7 @@ class Quantity(Generic[ValueType, UncType]):
         unit: CompoundUnit,
         system: UnitSystem,
         uncertainty: Any = 0.0,
+        symbol: str | None = None,
     ) -> Self:
         """Creates a Quantity from raw input values."""
         resolved_system = (
@@ -239,6 +251,7 @@ class Quantity(Generic[ValueType, UncType]):
             uncertainty_obj=cast("Uncertainty[UncType]", uncertainty_obj),
             fraction=frac,
             system=resolved_system,
+            symbol=symbol,
         )
 
     @classmethod
@@ -811,11 +824,27 @@ class Quantity(Generic[ValueType, UncType]):
             # Affine Logic
             res_affine = self._affine_check(other, is_add=True)
             if res_affine is not None:
+                from measurekit.application.tracing.context import (
+                    get_active_tracer,
+                )
+
+                if (tracer := get_active_tracer()) is not None:
+                    tracer.record_operation(
+                        "add", operands=(self, other), result=res_affine
+                    )
                 return res_affine
 
             # Logarithmic Logic (Fallback for old behavior dB + dB)
             res_log = self._logarithmic_add_sub(other, is_add=True)
             if res_log is not None:
+                from measurekit.application.tracing.context import (
+                    get_active_tracer,
+                )
+
+                if (tracer := get_active_tracer()) is not None:
+                    tracer.record_operation(
+                        "add", operands=(self, other), result=res_log
+                    )
                 return res_log
 
         # --- FAST PATH ---
@@ -878,7 +907,7 @@ class Quantity(Generic[ValueType, UncType]):
                 new_unc = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other
                 )
-                return self._fast_new(
+                res = self._fast_new(
                     new_magnitude,
                     self.unit,
                     new_unc,
@@ -886,8 +915,18 @@ class Quantity(Generic[ValueType, UncType]):
                     self.dimension,
                     self._backend,
                 )
+                from measurekit.application.tracing.context import (
+                    get_active_tracer,
+                )
+
+                if (tracer := get_active_tracer()) is not None:
+                    tracer.record_operation(
+                        "add", operands=(self, other), result=res
+                    )
+                return res
+
             # Scalar path
-            return self._fast_new(
+            res = self._fast_new(
                 new_magnitude,
                 self.unit,
                 self.uncertainty_obj + other.uncertainty_obj,
@@ -895,6 +934,15 @@ class Quantity(Generic[ValueType, UncType]):
                 self.dimension,
                 self._backend,
             )
+            from measurekit.application.tracing.context import (
+                get_active_tracer,
+            )
+
+            if (tracer := get_active_tracer()) is not None:
+                tracer.record_operation(
+                    "add", operands=(self, other), result=res
+                )
+            return res
         # -----------------
 
         if not isinstance(other, Quantity):
@@ -934,11 +982,27 @@ class Quantity(Generic[ValueType, UncType]):
             # Affine Logic
             res_affine = self._affine_check(other, is_add=False)
             if res_affine is not None:
+                from measurekit.application.tracing.context import (
+                    get_active_tracer,
+                )
+
+                if (tracer := get_active_tracer()) is not None:
+                    tracer.record_operation(
+                        "sub", operands=(self, other), result=res_affine
+                    )
                 return res_affine
 
             # Logarithmic Logic
             res_log = self._logarithmic_add_sub(other, is_add=False)
             if res_log is not None:
+                from measurekit.application.tracing.context import (
+                    get_active_tracer,
+                )
+
+                if (tracer := get_active_tracer()) is not None:
+                    tracer.record_operation(
+                        "sub", operands=(self, other), result=res_log
+                    )
                 return res_log
 
         # --- FAST PATH ---
@@ -988,7 +1052,7 @@ class Quantity(Generic[ValueType, UncType]):
                 new_unc = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other
                 )
-                return self._fast_new(
+                res = self._fast_new(
                     new_magnitude,
                     self.unit,
                     new_unc,
@@ -996,7 +1060,16 @@ class Quantity(Generic[ValueType, UncType]):
                     self.dimension,
                     self._backend,
                 )
-            return self._fast_new(
+                from measurekit.application.tracing.context import (
+                    get_active_tracer,
+                )
+
+                if (tracer := get_active_tracer()) is not None:
+                    tracer.record_operation(
+                        "sub", operands=(self, other), result=res
+                    )
+                return res
+            res = self._fast_new(
                 new_magnitude,
                 self.unit,
                 self.uncertainty_obj - other.uncertainty_obj,
@@ -1004,6 +1077,15 @@ class Quantity(Generic[ValueType, UncType]):
                 self.dimension,
                 self._backend,
             )
+            from measurekit.application.tracing.context import (
+                get_active_tracer,
+            )
+
+            if (tracer := get_active_tracer()) is not None:
+                tracer.record_operation(
+                    "sub", operands=(self, other), result=res
+                )
+            return res
 
         if not isinstance(other, Quantity):
             return NotImplemented
@@ -1112,8 +1194,27 @@ class Quantity(Generic[ValueType, UncType]):
 
                 if is_other_scalar:
                     j_other = self._backend.reshape(self_flat, (size, 1))
-                else:
-                    j_other = self._backend.diagonal_operator(self_flat)
+                    new_uncertainty_obj = self._propagate_vectorized(
+                        other, new_magnitude, j_self, j_other
+                    )
+                    res = self._fast_new(
+                        new_magnitude,
+                        new_unit,
+                        new_uncertainty_obj,
+                        self.system,
+                        new_dimension,
+                        self._backend,
+                    )
+                    from measurekit.application.tracing.context import (
+                        get_active_tracer,
+                    )
+
+                    if (tracer := get_active_tracer()) is not None:
+                        tracer.record_operation(
+                            "mul", operands=(self, other), result=res
+                        )
+                    return res
+                j_other = self._backend.diagonal_operator(self_flat)
 
                 new_uncertainty_obj = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other
@@ -1127,7 +1228,7 @@ class Quantity(Generic[ValueType, UncType]):
                     jac_self=other.magnitude,
                     jac_other=self.magnitude,
                 )
-            return self._fast_new(
+            res_q = self._fast_new(
                 new_magnitude,
                 new_unit,
                 new_uncertainty_obj,
@@ -1135,6 +1236,15 @@ class Quantity(Generic[ValueType, UncType]):
                 new_dimension,
                 self._backend,
             )
+            from measurekit.application.tracing.context import (
+                get_active_tracer,
+            )
+
+            if (tracer := get_active_tracer()) is not None:
+                tracer.record_operation(
+                    "mul", operands=(self, other), result=res_q
+                )
+            return res_q
 
         if isinstance(other, CompoundUnit):
             new_unit = self.unit * other
@@ -1236,8 +1346,27 @@ class Quantity(Generic[ValueType, UncType]):
 
                 if is_other_scalar:
                     j_other = self._backend.reshape(factor_flat, (size, 1))
-                else:
-                    j_other = self._backend.diags([factor_flat], [0])
+                    new_uncertainty_obj = self._propagate_vectorized(
+                        other, new_magnitude, j_self, j_other
+                    )
+                    res = self._fast_new(
+                        new_magnitude,
+                        new_unit,
+                        new_uncertainty_obj,
+                        self.system,
+                        new_dimension,
+                        self._backend,
+                    )
+                    from measurekit.application.tracing.context import (
+                        get_active_tracer,
+                    )
+
+                    if (tracer := get_active_tracer()) is not None:
+                        tracer.record_operation(
+                            "truediv", operands=(self, other), result=res
+                        )
+                    return res
+                j_other = self._backend.diags([factor_flat], [0])
 
                 new_uncertainty_obj = self._propagate_vectorized(
                     other, new_magnitude, j_self, j_other
@@ -1254,7 +1383,7 @@ class Quantity(Generic[ValueType, UncType]):
                         other.magnitude,
                     ),
                 )
-            return self._fast_new(
+            res_q = self._fast_new(
                 new_magnitude,
                 new_unit,
                 new_uncertainty_obj,
@@ -1262,6 +1391,15 @@ class Quantity(Generic[ValueType, UncType]):
                 new_dimension,
                 self._backend,
             )
+            from measurekit.application.tracing.context import (
+                get_active_tracer,
+            )
+
+            if (tracer := get_active_tracer()) is not None:
+                tracer.record_operation(
+                    "truediv", operands=(self, other), result=res_q
+                )
+            return res_q
 
         if isinstance(other, CompoundUnit):
             new_unit = self.unit / other
@@ -1279,9 +1417,16 @@ class Quantity(Generic[ValueType, UncType]):
         # Casting to float is tricky if it's array.
         # But Uncertainty.power expects Any value usually.
         new_uncertainty_obj = self.uncertainty_obj.power(exponent, new_value)
-        return Quantity.from_input(
+        res = Quantity.from_input(
             new_value, new_unit, self.system, uncertainty=new_uncertainty_obj
         )
+        from measurekit.application.tracing.context import get_active_tracer
+
+        if (tracer := get_active_tracer()) is not None:
+            tracer.record_operation(
+                "pow", operands=(self, exponent), result=res
+            )
+        return res
 
     __radd__ = __add__
     __rmul__ = __mul__
@@ -1296,12 +1441,19 @@ class Quantity(Generic[ValueType, UncType]):
         new_uncertainty_obj = other_uncertainty.propagate_mul_div(
             self.uncertainty_obj, other, self.magnitude, new_magnitude
         )
-        return Quantity.from_input(
+        res = Quantity.from_input(
             new_magnitude,
             new_unit,
             self.system,
             uncertainty=new_uncertainty_obj,
         )
+        from measurekit.application.tracing.context import get_active_tracer
+
+        if (tracer := get_active_tracer()) is not None:
+            tracer.record_operation(
+                "truediv", operands=(other, self), result=res
+            )
+        return res
 
     def __neg__(self) -> Self:
         """Returns the negation of the quantity."""
