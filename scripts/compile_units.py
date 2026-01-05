@@ -8,144 +8,130 @@ PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
 
-def compile_units(config_path, output_dir):
-    conf_path = pathlib.Path(config_path)
-    out_path = pathlib.Path(output_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
-
-    print(f"Reading configuration from: {conf_path}")
+def load_config(config_path):
+    """Parses the INI configuration file."""
+    path = pathlib.Path(config_path)
+    print(f"Reading configuration from: {path}")
     parser = configparser.ConfigParser()
-    parser.optionxform = str  # Preserve case sensitivity
+    parser.optionxform = str
     try:
-        parser.read(str(conf_path), encoding="utf-8")
+        parser.read(str(path), encoding="utf-8")
+        return parser
     except Exception as e:
         print(f"Failed to read config file: {e}")
         sys.exit(1)
 
-    index_map = {}  # unit_name -> scope_name
 
-    # 1. Parse Prefixes
+def parse_prefixes(parser):
+    """Extracts prefixes from config."""
     prefixes = {}
     if "Prefixes" in parser:
         for name, value in parser["Prefixes"].items():
-            # Format: quetta = Q, 1e30
             parts = [p.strip() for p in value.split(",")]
             symbol = parts[0]
             prefixes[name] = symbol
+    return prefixes
 
-    # 2. Parse Units and Expand Prefixes
-    # We will put all units from measurekit.conf into a 'core' scope
-    scope_name = "core"
 
+def parse_unit_entry(value_str):
+    """Parses a single unit entry line."""
+    aliases = []
+    main_part = value_str
+    if "[" in value_str:
+        main_part, alias_block = value_str.split("[", 1)
+        if "]" in alias_block:
+            alias_content = alias_block.split("]")[0]
+            aliases = [a.strip() for a in alias_content.split(",")]
+        else:
+            aliases = [a.strip() for a in alias_block.split(",")]
+    else:
+        main_part = main_part.split("#")[0]
+
+    attrs = [p.strip() for p in main_part.split(",") if p.strip()]
+    allow_prefixes = "noprefix" not in attrs
+    return aliases, allow_prefixes
+
+
+def _register_unit_and_prefixes(
+    name, scope_name, allow_prefix, prefixes, unit_definitions, index_map
+):
+    """Registers a unit and its prefixed variants."""
+    import keyword
+
+    if not name.isidentifier():
+        return
+    if keyword.iskeyword(name):
+        print(f"Skipping keyword alias: {name}")
+        return
+
+    unit_definitions.append(name)
+    index_map[name] = scope_name
+
+    if allow_prefix:
+        for prefix_name in prefixes:
+            prefixed_name = prefix_name + name
+            unit_definitions.append(prefixed_name)
+            index_map[prefixed_name] = scope_name
+
+
+def parse_units(parser, prefixes):
+    """Parses unit definitions and expands prefixes."""
+    index_map = {}
     unit_definitions = []
+    scope_name = "core"
 
     if "Units" in parser:
         print("Processing [Units] section...")
         for key, value_str in parser["Units"].items():
-            # Parse line: meter = 1.0, L, [m, meter, metro, metros]
-            # or: inch = 0.0254, L, noprefix, [in, inch]
-
-            # Remove inline comments from value_str for safety, though [ ] handling below does it too
-            # Be careful not to remove # if it's part of a string but here it's config.
-
-            aliases = []
-            main_part = value_str
-            if "[" in value_str:
-                main_part, alias_block = value_str.split("[", 1)
-                # Parse up to the closing bracket
-                if "]" in alias_block:
-                    alias_content = alias_block.split("]")[0]
-                    aliases = [a.strip() for a in alias_content.split(",")]
-                else:
-                    # Malformed? Fallback
-                    aliases = [a.strip() for a in alias_block.split(",")]
-            else:
-                main_part = main_part.split("#")[
-                    0
-                ]  # Strip comment if no [ ] block
-
-            # Parse attributes
-            attrs = [p.strip() for p in main_part.split(",") if p.strip()]
-
-            # Check for 'noprefix' flag
-            allow_prefixes = True
-            if "noprefix" in attrs:
-                allow_prefixes = False
-
-            # The key is usually the primary name, but aliases[0] is often the symbol
-            # We want to register all names: key and aliases
-            all_names = sorted(list(set([key] + aliases)))
-
-            import keyword
+            aliases, allow_prefix = parse_unit_entry(value_str)
+            all_names = sorted({key, *aliases})
 
             for name in all_names:
-                # Python variable names must be valid identifiers.
-                # Skip things like ' (arcminute) or " (arcsecond) or numbers if they start with digit
-                if not name.isidentifier():
-                    continue
+                _register_unit_and_prefixes(
+                    name,
+                    scope_name,
+                    allow_prefix,
+                    prefixes,
+                    unit_definitions,
+                    index_map,
+                )
 
-                # Also skip Python keywords like 'in', 'as', etc.
-                if keyword.iskeyword(name):
-                    print(f"Skipping keyword alias: {name}")
-                    continue
+    return sorted(set(unit_definitions)), index_map
 
-                unit_definitions.append(name)
-                index_map[name] = scope_name
 
-                # Generate prefixed versions if allowed
-                # But only if it's not blocked (noprefix)
-                # Also skip if it seems to be an alias that shouldn't have prefixes?
-                # MeasureKit logic applies prefixes to all aliases usually unless restricted.
-                if allow_prefixes:
-                    # Skip if this unit name is in prefixes blocklist? (Not implemented here, but simplistic check)
-                    # Also skip if it seems to be an alias that shouldn't have prefixes?
-                    # MeasureKit logic applies prefixes to all aliases usually unless restricted.
-
-                    for prefix_name in prefixes:
-                        prefixed_name = prefix_name + name
-                        unit_definitions.append(prefixed_name)
-                        index_map[prefixed_name] = scope_name
-
-    # 3. Generate Core Module
+def generate_core_module(unique_units, output_dir):
+    """Generates the core unit module."""
     lines = [
         "# GENERATED CODE - DO NOT EDIT",
         "from measurekit.domain.measurement.units import CompoundUnit",
         "",
         "# This module defines the static unit objects for the 'core' scope.",
-        "# These are simple CompoundUnit wrappers. The UnitSystem handles the physics.",
+        "# These are simple CompoundUnit wrappers.",
         "",
     ]
-
-    # De-duplicate names
-    unique_units = sorted(list(set(unit_definitions)))
-
     for unit_name in unique_units:
-        # We generate: meter = CompoundUnit({'meter': 1})
-        # This assumes the unit name used in the CompoundUnit matches the key in the UnitSystem
-        # which it should.
         lines.append(f'{unit_name} = CompoundUnit({{"{unit_name}": 1}})')
-
     lines.append("")
 
-    scope_file = out_path / f"{scope_name}.py"
-    with open(scope_file, "w", encoding="utf-8") as f:
+    with open(output_dir / "core.py", "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    print(f"Generated {scope_file} with {len(unique_units)} units.")
+    print(f"Generated core.py with {len(unique_units)} units.")
 
-    # 4. Write Index File
-    index_lines = [
+
+def generate_index_module(index_map, output_dir):
+    """Generates the index module."""
+    lines = [
         "# GENERATED CODE - DO NOT EDIT",
         f"UNIT_INDEX = {pprint.pformat(index_map)}",
         "",
     ]
-    index_file = out_path / "_index.py"
-    with open(index_file, "w", encoding="utf-8") as f:
-        f.write("\n".join(index_lines))
+    with open(output_dir / "_index.py", "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
-    # 5. Generate __init__.py with Lazy Loading
-    init_file = out_path / "__init__.py"
 
-    init_content = [
+def generate_init_module(output_dir):
+    """Generates the __init__.py for the package."""
+    content = [
         '"""Lazy-loading unit package."""',
         "from __future__ import annotations",
         "import typing",
@@ -161,17 +147,34 @@ def compile_units(config_path, output_dir):
         "def __getattr__(name: str) -> CompoundUnit:",
         "    if name in UNIT_INDEX:",
         "        scope = UNIT_INDEX[name]",
-        '        module = __import__(f"measurekit.units.{scope}", fromlist=[name])',
+        "        module = __import__(",
+        '            f"measurekit.units.{scope}", fromlist=[name]',
+        "        )",
         "        return getattr(module, name)",
-        '    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")',
+        "    raise AttributeError(",
+        '        f"module {__name__!r} has no attribute {name!r}"',
+        "    )",
         "",
         "def __dir__() -> list[str]:",
         "    return sorted(list(globals().keys()) + list(UNIT_INDEX.keys()))",
         "",
     ]
+    with open(output_dir / "__init__.py", "w", encoding="utf-8") as f:
+        f.write("\n".join(content))
 
-    with open(init_file, "w", encoding="utf-8") as f:
-        f.write("\n".join(init_content))
+
+def compile_units(config_path, output_dir):
+    """Compiles units from config file to Python modules."""
+    out_path = pathlib.Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    parser = load_config(config_path)
+    prefixes = parse_prefixes(parser)
+    unique_units, index_map = parse_units(parser, prefixes)
+
+    generate_core_module(unique_units, out_path)
+    generate_index_module(index_map, out_path)
+    generate_init_module(out_path)
 
     print("Compilation complete.")
 
