@@ -41,7 +41,7 @@ def test_temperature_addition_raises_error():
     """T (Offset) + T (Offset) is ambiguous and should raise ValueError."""
     t1 = Q_(100, "degC")
     t2 = Q_(90, "degC")
-    with pytest.raises(ValueError, match="Cannot add two affine quantities"):
+    with pytest.raises(ValueError, match="Cannot add two absolute quantities"):
         _ = t1 + t2
 
 
@@ -72,20 +72,15 @@ def test_temperature_minus_delta():
     assert "C" in res.unit.to_string()
 
 
-def test_delta_minus_temperature():
-    """Delta (Linear) - T (Offset) should result in T (Offset)."""
-    # 5 K - 100 degC
-    # 5K (base) - 100 degC (373.15 K base) = -368.15 K base
-    # -368.15 K to degC = -641.3 degC
+def test_delta_minus_temperature_raises_error():
+    """Delta (Linear) - T (Offset) is undefined and should raise ValueError."""
     delta = Q_(5, "K")
     t = Q_(100, "degC")
-    res = delta - t
 
-    expected_base = 5.0 - 373.15
-    expected_c = expected_base - 273.15
-
-    assert res.magnitude == pytest.approx(expected_c, abs=1e-9)
-    assert "C" in res.unit.to_string()
+    with pytest.raises(
+        ValueError, match="Cannot subtract an absolute quantity"
+    ):
+        _ = delta - t
 
 
 # --- Logarithmic (dB) Tests ---

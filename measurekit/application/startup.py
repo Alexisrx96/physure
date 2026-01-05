@@ -164,6 +164,7 @@ class UnitSystemBuilder:
                 allow_prefixes = False
                 parts.remove("noprefix")
 
+            kind = "delta"
             if parts[0].lower() == "log":
                 factor = float(parts[1])
                 reference = float(parts[2])
@@ -192,8 +193,10 @@ class UnitSystemBuilder:
 
                 if offset != 0:
                     converter = OffsetConverter(factor, offset)
+                    kind = "absolute"
                 else:
                     converter = LinearConverter(factor)
+                    kind = "delta"
 
             symbol = aliases[0] if aliases else key
             all_aliases = set([key] + aliases)
@@ -205,6 +208,7 @@ class UnitSystemBuilder:
                 key,
                 *all_aliases,
                 allow_prefixes=allow_prefixes,
+                kind=kind,
             )
 
         # Pass 2: Register recipes for derived units after all base
@@ -314,7 +318,7 @@ class UnitSystemBuilder:
 
 
 def _get_config_parser(
-    extra_config_files: list[str] = None, verbose: bool = False
+    extra_config_files: list[str] | None = None, verbose: bool = False
 ) -> configparser.ConfigParser:
     """Creates a ConfigParser with base configs and optional extra files."""
     parser = configparser.ConfigParser()
@@ -364,7 +368,7 @@ def _get_config_parser(
 
 
 def create_system(
-    config_name: str = None, verbose: bool = False
+    config_name: str | None = None, verbose: bool = False
 ) -> UnitSystem:
     """Creates a UnitSystem, optionally loading a specific system config file.
 

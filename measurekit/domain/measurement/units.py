@@ -132,7 +132,7 @@ class CompoundUnit(BaseExponentEntity):
         object.__setattr__(self, "exponents", clean_exponents)
 
     def __reduce__(self):
-        """Custom pickling to ensure Flyweight pattern (cache) is used on deserialization.
+        """Custom pickling to ensure Flyweight pattern (cache) is used.
 
         By returning (reconstruct_compound_unit, (args,)), we bypass direct
         class lookups that can be corrupted by namespace shadowing.
@@ -220,6 +220,21 @@ class CompoundUnit(BaseExponentEntity):
             if unit_def and not unit_def.converter.is_linear:
                 return False
         return True
+
+    def kind(self, system: UnitSystem) -> str:
+        """Determines if the unit is 'absolute' (Point) or 'delta' (Vector).
+
+        By default, all units are 'delta' (vectors/magnitudes).
+        Only single units explicitly defined as 'absolute' (e.g. Celsius)
+        without exponents != 1 are considered Absolute.
+        """
+        if len(self.exponents) == 1:
+            unit_name, exp = next(iter(self.exponents.items()))
+            if exp == 1 and unit_name != "noprefix":
+                unit_def = system.get_definition(unit_name)
+                if unit_def:
+                    return getattr(unit_def, "kind", "delta")
+        return "delta"
 
     def dimension(self, system: UnitSystem) -> Dimension:
         """Determine the physical dimension of the unit within a system.

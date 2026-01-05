@@ -40,6 +40,7 @@ class UnitDefinition:
         name: str | None = None,
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
+        kind: str = "delta",
     ):
         """Ensures that each unit symbol corresponds to a single instance."""
         key = symbol
@@ -51,6 +52,7 @@ class UnitDefinition:
             instance.name = name
             instance.recipe = recipe
             instance.allow_prefixes = allow_prefixes
+            instance.kind = kind
             return instance
 
         instance = super().__new__(cls)
@@ -65,6 +67,7 @@ class UnitDefinition:
         name: str | None = None,
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
+        kind: str = "delta",
     ):
         """Initializes the attributes of the instance."""
         self.symbol = symbol
@@ -73,6 +76,7 @@ class UnitDefinition:
         self.name = name
         self.recipe = recipe
         self.allow_prefixes = allow_prefixes
+        self.kind = kind
 
     def __getnewargs__(self):
         """Arguments for __new__ during unpickling."""
@@ -83,6 +87,7 @@ class UnitDefinition:
             self.name,
             self.recipe,
             self.allow_prefixes,
+            self.kind,
         )
 
     @property

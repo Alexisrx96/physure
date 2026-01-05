@@ -105,6 +105,7 @@ class UnitSystem(IUnitRepository):
         *aliases: str,
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
+        kind: str = "delta",
     ) -> None:
         """Registers a unit and its aliases with the system."""
         unit_def = UnitDefinition(
@@ -114,6 +115,7 @@ class UnitSystem(IUnitRepository):
             name,
             recipe=recipe,
             allow_prefixes=allow_prefixes,
+            kind=kind,
         )
 
         all_names = set([symbol] + list(aliases))
