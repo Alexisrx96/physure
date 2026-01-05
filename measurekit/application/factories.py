@@ -49,6 +49,7 @@ class SpecializedQuantityFactory:
         value: ValueType | Quantity = 1,
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
+        symbol: str | None = None,
     ) -> Quantity[ValueType, UncType]: ...
 
     def __call__(
@@ -56,6 +57,7 @@ class SpecializedQuantityFactory:
         value: ValueType | Quantity = 1,
         from_unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
+        symbol: str | None = None,
     ) -> Quantity:
         """Creates a Quantity with the factory's default unit."""
         system = (
@@ -67,7 +69,9 @@ class SpecializedQuantityFactory:
                 if isinstance(from_unit, str)
                 else from_unit
             )
-            temp_q = Quantity.from_input(value, temp_unit, system, uncertainty)
+            temp_q = Quantity.from_input(
+                value, temp_unit, system, uncertainty, symbol
+            )
             return temp_q.to(self._default_unit)
 
         return Quantity.from_input(
@@ -75,6 +79,7 @@ class SpecializedQuantityFactory:
             unit=self._default_unit,
             system=system,
             uncertainty=uncertainty,
+            symbol=symbol,
         )
 
     def __repr__(self) -> str:
@@ -85,7 +90,7 @@ class SpecializedQuantityFactory:
 class QuantityFactory:
     """The main facade for creating quantities within a specific UnitSystem."""
 
-    __slots__ = ("_system", "_cache")
+    __slots__ = ("_cache", "_system")
 
     def __init__(self, system: UnitSystem | None = None):
         """Initializes a QuantityFactory.
@@ -102,6 +107,7 @@ class QuantityFactory:
         value: ValueType,
         unit: str | CompoundUnit,
         uncertainty: UncType = 0.0,
+        symbol: str | None = None,
     ) -> Quantity[ValueType, UncType]: ...
 
     @overload
@@ -115,6 +121,7 @@ class QuantityFactory:
         value: ValueType | str = 1,
         unit: str | CompoundUnit | None = None,
         uncertainty: UncType = 0.0,
+        symbol: str | None = None,
     ) -> Quantity:
         """Creates a Quantity, parsing strings if necessary."""
         system = (
@@ -135,6 +142,7 @@ class QuantityFactory:
             unit=unit,
             system=system,
             uncertainty=uncertainty,
+            symbol=symbol,
         )
 
     def __getitem__(
