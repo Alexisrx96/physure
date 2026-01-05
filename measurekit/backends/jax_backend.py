@@ -93,7 +93,16 @@ class JaxBackend(BackendOps):
         """Returns the device identifier for a JAX array."""
         if self.is_array(obj) and not self._is_tracer(obj):
             try:
-                return str(obj.device())
+                # Newer JAX versions use .device (property) or .devices() (set)
+                # But jax.Array typically has .device() method in older versions or .device property in newer?
+                # Actually, in JAX 0.4.x+, .device is often a property on sharded arrays but .devices() returns a set.
+                # However, individual committed arrays (from device_put) have .device() method usually.
+                # Wait, the error is 'Device object is not callable'. This means obj.device IS the object, not a method.
+                # So we should treat it as a property if it's not callable.
+                d = getattr(obj, "device", None)
+                if callable(d):
+                    return str(d())
+                return str(d)
             except (AttributeError, RuntimeError):
                 pass
         return "cpu"
@@ -244,8 +253,10 @@ class JaxBackend(BackendOps):
         """Returns the shape of the array."""
         return jnp.shape(obj)
 
-    def reshape(self, obj: Array, shape: tuple[int, ...]) -> Array:
+    def reshape(self, obj: Any, shape: tuple[int, ...]) -> Any:
         """Reshapes the array."""
+        if hasattr(obj, "reshape"):
+            return obj.reshape(shape)
         return jnp.reshape(obj, shape)
 
     def concatenate(self, arrays: Sequence[Array], axis: int = 0) -> Array:
@@ -286,7 +297,7 @@ class JaxBackend(BackendOps):
         broadcasted = jnp.broadcast_arrays(*inputs)
         return [jnp.ravel(b) for b in broadcasted]
 
-    def identity_operator(self, size: int) -> Any:
+    def identity_operator(self, size: int, reference: Any = None) -> Any:
         """Returns an identity operator (matrix) of the given size."""
         # JAX sparse support is experimental/limited, using dense for now as previous implementation did
         return jnp.eye(size)
@@ -449,14 +460,40 @@ class JaxBackend(BackendOps):
 
     def sparse_matmul(self, a: Any, b: Any) -> Any:
         """Performs matrix multiplication where at least one operand may be sparse."""
-        return jnp.matmul(a, b)
+        return a @ b
 
     def sparse_diagonal(self, a: Any) -> Any:
         """Returns the diagonal elements of a (potentially sparse) matrix."""
+        if hasattr(a, "indices") and hasattr(a, "data"):
+            # JAX BCOO support
+            try:
+                # Assuming 2D matrix
+                if getattr(a, "ndim", 0) == 2:
+                    idxs = a.indices
+                    data = a.data
+                    mask = idxs[:, 0] == idxs[:, 1]
+
+                    diag_idxs = idxs[mask, 0]
+                    diag_vals = data[mask]
+
+                    n = min(a.shape)
+                    res = jnp.zeros((n,), dtype=a.dtype)
+                    # Use .add() to handle uncoalesced duplicates
+                    res = res.at[diag_idxs].add(diag_vals)
+                    return res
+            except Exception:
+                # Fallback to dense if something exotic happens
+                pass
+
+            if hasattr(a, "todense"):
+                return jnp.diagonal(a.todense())
+
         return jnp.diagonal(a)
 
     def transpose(self, a: Any) -> Any:
         """Returns the transpose of an array or matrix."""
+        if hasattr(a, "T"):
+            return a.T
         return jnp.transpose(a)
 
 
