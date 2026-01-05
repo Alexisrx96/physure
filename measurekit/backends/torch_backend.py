@@ -229,6 +229,8 @@ class TorchBackend(BackendOps):
 
     def reshape(self, obj: Array, shape: tuple[int, ...]) -> Array:
         """Reshapes the tensor."""
+        if obj.is_sparse:
+            return obj.to_dense().reshape(shape)
         return torch.reshape(obj, shape)
 
     def concatenate(self, arrays: Sequence[Array], axis: int = 0) -> Array:
@@ -382,6 +384,24 @@ class TorchBackend(BackendOps):
 
     def sparse_matmul(self, a: Any, b: Any) -> Any:
         """Performs matrix multiplication where at least one operand may be sparse."""
+        # Torch matmul does not support sparse @ sparse
+        a_sparse = getattr(a, "is_sparse", False)
+        b_sparse = getattr(b, "is_sparse", False)
+
+        if a_sparse and b_sparse:
+            # Fallback to dense math (warning: memory intensive)
+            # Ideally we would only densify the smaller one or use a third-party kernel
+            return torch.matmul(a.to_dense(), b.to_dense())
+
+        # Sparse @ Dense -> Dense (supported)
+        # Dense @ Sparse -> Dense (supported? Check)
+        # Dense @ Sparse sometimes fails in older torch.
+        if not a_sparse and b_sparse:
+            # Dense @ Sparse
+            # Convert a to sparse? Or b to dense?
+            # b.to_dense() is safer for now.
+            return torch.matmul(a, b.to_dense())
+
         return torch.matmul(a, b)
 
     def sparse_diagonal(self, a: Any) -> Any:
@@ -411,3 +431,45 @@ class TorchBackend(BackendOps):
                 return a.transpose(0, 1)
             return a.t() if a.ndim == 2 else a.transpose(-1, -2)
         return a
+
+    def sparse_slice(
+        self, matrix: Any, row_slice: slice, col_slice: slice
+    ) -> Any:
+        """Slices a sparse matrix."""
+        # Torch sparse tensors do not support start:stop slicing directly.
+        # We must use index_select.
+
+        if not matrix.is_sparse:
+            return matrix[row_slice, col_slice]
+
+        # Convert slices to indices
+        # CAUTION: This requires realizing the indices, which might be large if slice is huge.
+        # But typically we slice to get relatively small blocks.
+
+        # Optimize for full slice
+        if row_slice == slice(None) and col_slice == slice(None):
+            return matrix
+
+        rows = torch.arange(
+            row_slice.start or 0,
+            row_slice.stop if row_slice.stop is not None else matrix.shape[0],
+            row_slice.step or 1,
+            device=matrix.device,
+        )
+        cols = torch.arange(
+            col_slice.start or 0,
+            col_slice.stop if col_slice.stop is not None else matrix.shape[1],
+            col_slice.step or 1,
+            device=matrix.device,
+        )
+
+        # Select rows then cols
+        # index_select(dim, index) -> sparse
+        m = torch.index_select(matrix, 0, rows)
+        m = torch.index_select(m, 1, cols)
+
+        # index_select preserves absolute values but shifts dimensions?
+        # No, it works like numpy indexing?
+        # Actually, for sparse, it keeps the indices?
+        # Let's verify if we need to coalesce.
+        return m.coalesce()
