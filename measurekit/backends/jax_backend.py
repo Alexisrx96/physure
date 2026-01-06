@@ -283,9 +283,10 @@ class JaxBackend(BackendOps):
         """Concatenates arrays."""
         return jnp.concatenate(arrays, axis=axis)
 
-    def eye(self, n: int, format: str = "csr") -> Any:
+    def eye(self, n: int, format: str = "csr", reference: Any = None) -> Any:
         """Returns an identity matrix."""
-        return jnp.eye(n)
+        dtype = getattr(reference, "dtype", None)
+        return jnp.eye(n, dtype=dtype)
 
     def diags(
         self,
@@ -307,7 +308,8 @@ class JaxBackend(BackendOps):
     @enforce_tensor_contract
     def ones(self, shape: tuple[int, ...], reference: Any = None) -> Numeric:
         """Returns an array of ones."""
-        return jnp.ones(shape)
+        dtype = getattr(reference, "dtype", None)
+        return jnp.ones(shape, dtype=dtype)
 
     def size(self, obj: Any) -> int:
         """Returns the total number of elements in the object."""
@@ -321,7 +323,8 @@ class JaxBackend(BackendOps):
     def identity_operator(self, size: int, reference: Any = None) -> Any:
         """Returns an identity operator (matrix) of the given size."""
         # JAX sparse support is experimental; using dense fallback.
-        return jnp.eye(size)
+        dtype = getattr(reference, "dtype", None)
+        return jnp.eye(size, dtype=dtype)
 
     def diagonal_operator(self, diagonal: Any) -> Any:
         """Returns a diagonal operator from the given values."""
@@ -485,16 +488,17 @@ class JaxBackend(BackendOps):
 
     def sparse_eye(self, n: int, reference: Any = None) -> Any:
         """Returns a sparse identity matrix of size n."""
+        dtype = getattr(reference, "dtype", None)
         if self._has_sparse():
             from jax.experimental import sparse
 
             if hasattr(sparse, "eye"):
-                return sparse.eye(n)
+                return sparse.eye(n, dtype=dtype)
 
             indices = jnp.stack([jnp.arange(n), jnp.arange(n)], axis=1)
-            data = jnp.ones(n)
+            data = jnp.ones(n, dtype=dtype)
             return sparse.BCOO((data, indices), shape=(n, n))
-        return jnp.eye(n)
+        return jnp.eye(n, dtype=dtype)
 
     def sparse_diagonal(self, a: Any) -> Any:
         """Returns the diagonal elements of a (potentially sparse) matrix."""
