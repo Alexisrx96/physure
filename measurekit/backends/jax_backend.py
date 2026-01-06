@@ -111,6 +111,11 @@ class JaxBackend(BackendOps):
     @enforce_tensor_contract
     def add(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise addition."""
+        if self._has_sparse():
+            from jax.experimental import sparse
+
+            if isinstance(x, sparse.BCOO) or isinstance(y, sparse.BCOO):
+                return x + y
         return jnp.add(x, y)
 
     @enforce_tensor_contract
@@ -185,9 +190,14 @@ class JaxBackend(BackendOps):
 
     @enforce_tensor_contract
     def sum(
-        self, obj: Numeric, axis: int | Sequence[int] | None = None
+        self, obj: Any, axis: int | Sequence[int] | None = None
     ) -> Numeric:
         """Sum of elements."""
+        if self._has_sparse():
+            from jax.experimental import sparse
+
+            if isinstance(obj, sparse.BCOO):
+                return obj.sum(axis)
         return jnp.sum(obj, axis=axis)
 
     @enforce_tensor_contract
@@ -472,6 +482,19 @@ class JaxBackend(BackendOps):
     def sparse_matmul(self, a: Any, b: Any) -> Any:
         """Matrix multiplication where at least one operand is sparse."""
         return a @ b
+
+    def sparse_eye(self, n: int, reference: Any = None) -> Any:
+        """Returns a sparse identity matrix of size n."""
+        if self._has_sparse():
+            from jax.experimental import sparse
+
+            if hasattr(sparse, "eye"):
+                return sparse.eye(n)
+
+            indices = jnp.stack([jnp.arange(n), jnp.arange(n)], axis=1)
+            data = jnp.ones(n)
+            return sparse.BCOO((data, indices), shape=(n, n))
+        return jnp.eye(n)
 
     def sparse_diagonal(self, a: Any) -> Any:
         """Returns the diagonal elements of a (potentially sparse) matrix."""

@@ -116,7 +116,7 @@ class BackendOps(Protocol):
 
     # Reduction Operations
     def sum(
-        self, obj: Numeric, axis: int | Sequence[int] | None = None
+        self, obj: Any, axis: int | Sequence[int] | None = None
     ) -> Numeric:
         """Computes the sum of elements along the specified axis."""
         ...
@@ -226,6 +226,10 @@ class BackendOps(Protocol):
 
     def sparse_diagonal(self, a: Any) -> Any:
         """Returns the diagonal elements of a (potentially sparse) matrix."""
+        ...
+
+    def sparse_eye(self, n: int, reference: Any = None) -> Any:
+        """Returns a sparse identity matrix of size n x n."""
         ...
 
     def transpose(self, a: Any) -> Any:

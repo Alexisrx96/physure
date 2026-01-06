@@ -142,7 +142,7 @@ class NumpyBackend(BackendOps):
 
     @enforce_tensor_contract
     def sum(
-        self, obj: Numeric, axis: int | Sequence[int] | None = None
+        self, obj: Any, axis: int | Sequence[int] | None = None
     ) -> Numeric:
         """Sum of elements."""
         return np.sum(obj, axis=axis)
@@ -225,6 +225,10 @@ class NumpyBackend(BackendOps):
     def eye(self, n: int, format: str = "csr", reference: Any = None) -> Any:
         """Returns an identity matrix."""
         return sparse.eye(n, format=format)
+
+    def sparse_eye(self, n: int, reference: Any = None) -> Any:
+        """Returns a sparse identity matrix."""
+        return sparse.eye(n, format="csr")
 
     @enforce_tensor_contract
     def diags(

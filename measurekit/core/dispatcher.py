@@ -191,7 +191,7 @@ class PythonBackend(BackendOps):
 
     @enforce_tensor_contract
     def sum(
-        self, obj: Numeric, axis: int | Sequence[int] | None = None
+        self, obj: Any, axis: int | Sequence[int] | None = None
     ) -> Numeric:
         """Computes the sum of elements."""
         if isinstance(obj, (list, tuple)):
@@ -392,6 +392,10 @@ class PythonBackend(BackendOps):
         """Returns a sparse identity matrix (not supported)."""
         return self.identity_operator(n)
 
+    def sparse_eye(self, n: int, reference: Any = None) -> Any:
+        """Returns a sparse identity matrix (not supported)."""
+        return self.identity_operator(n)
+
     def diags(
         self,
         diagonals: Sequence[Any],
@@ -439,7 +443,7 @@ class BackendManager:
 
                 return cls._get_or_load_backend("scipy")
             except ImportError:
-                # If scipy is not installed, fall through to other backends or python
+                # If scipy is not installed, fallback to python
                 pass
 
         # JAX Detection (Prioritize to catch complex Tracers)

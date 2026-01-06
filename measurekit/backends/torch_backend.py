@@ -163,7 +163,7 @@ class TorchBackend(BackendOps):
 
     @enforce_tensor_contract
     def sum(
-        self, obj: Numeric, axis: int | Sequence[int] | None = None
+        self, obj: Any, axis: int | Sequence[int] | None = None
     ) -> Numeric:
         """Sum of elements."""
         if axis is None:
@@ -250,6 +250,14 @@ class TorchBackend(BackendOps):
         device = reference.device if hasattr(reference, "device") else None
         return torch.eye(n, device=device)
 
+    def sparse_eye(self, n: int, reference: Any = None) -> Any:
+        """Returns a sparse identity matrix."""
+        device = reference.device if hasattr(reference, "device") else None
+        # Manual construction for broader compatibility
+        indices = torch.stack([torch.arange(n, device=device)] * 2)
+        values = torch.ones(n, device=device)
+        return torch.sparse_coo_tensor(indices, values, (n, n)).coalesce()
+
     def diags(
         self,
         diagonals: Sequence[Any],
@@ -314,18 +322,48 @@ class TorchBackend(BackendOps):
             n = len(diagonals[0]) + abs(offsets[0])
             shape = (n, n)
 
-        # Simplified implementation: construct dense then convert to sparse
-        # For performance with many diagonals, a COO implementation is better
-        res = torch.zeros(shape, device=self.asarray(diagonals[0]).device)
+        # Optimization: Construct indices directly to avoid dense allocation
+        device = self.asarray(diagonals[0]).device
+
+        all_indices = []
+        all_values = []
+
         for d, o in zip(diagonals, offsets, strict=False):
-            diag_len = len(d)
+            d_tensor = self.asarray(d)
+            n_diag = d_tensor.shape[0]
+
             if o >= 0:
-                indices = torch.arange(diag_len)
-                res[indices, indices + o] = self.asarray(d)
+                row = torch.arange(n_diag, device=device)
+                col = row + o
             else:
-                indices = torch.arange(diag_len)
-                res[indices - o, indices] = self.asarray(d)
-        return res.to_sparse()
+                col = torch.arange(n_diag, device=device)
+                row = col - o
+
+            # Filter out of bounds (though diagonals should align with shape)
+            mask = (row < shape[0]) & (col < shape[1])
+            if not mask.all():
+                row = row[mask]
+                col = col[mask]
+                d_tensor = d_tensor[mask]
+
+            indices = torch.stack([row, col])
+            all_indices.append(indices)
+            all_values.append(d_tensor)
+
+        if not all_indices:
+            # Empty sparse tensor
+            return torch.sparse_coo_tensor(
+                torch.empty((2, 0), device=device),
+                torch.empty(0, device=device),
+                size=shape,
+            ).coalesce()
+
+        final_indices = torch.cat(all_indices, dim=1)
+        final_values = torch.cat(all_values)
+
+        return torch.sparse_coo_tensor(
+            final_indices, final_values, size=shape
+        ).coalesce()
 
     def sparse_bmat(
         self,
