@@ -88,6 +88,11 @@ class Uncertainty(ABC, Generic[UncType]):
 
         Checks global context to select CovarianceModel or VarianceModel.
         """
+        # JAX structure validation uses object() sentinels
+        if type(std_dev) is object:
+            # Return a valid model structure without computation
+            return VarianceModel(variance=std_dev)
+
         # Auto-detect requirement for CovarianceModel
         backend = BackendManager.get_backend(std_dev)
         if backend.is_array(std_dev) and backend.size(std_dev) > 1:
