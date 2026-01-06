@@ -224,11 +224,13 @@ class NumpyBackend(BackendOps):
 
     def eye(self, n: int, format: str = "csr", reference: Any = None) -> Any:
         """Returns an identity matrix."""
-        return sparse.eye(n, format=format)
+        dtype = getattr(reference, "dtype", None)
+        return sparse.eye(n, format=format, dtype=dtype)
 
     def sparse_eye(self, n: int, reference: Any = None) -> Any:
         """Returns a sparse identity matrix."""
-        return sparse.eye(n, format="csr")
+        dtype = getattr(reference, "dtype", None)
+        return sparse.eye(n, format="csr", dtype=dtype)
 
     @enforce_tensor_contract
     def diags(
@@ -247,7 +249,10 @@ class NumpyBackend(BackendOps):
             reference: Reference object for device/type inference.
         """
         return sparse.diags(
-            diagonals=diagonals, offsets=offsets, format=format
+            diagonals=diagonals,
+            offsets=offsets,
+            format=format,
+            dtype=getattr(reference, "dtype", None),
         )
 
     def size(self, obj: Any) -> int:
@@ -322,4 +327,5 @@ class NumpyBackend(BackendOps):
     @enforce_tensor_contract
     def ones(self, shape: tuple[int, ...], reference: Any = None) -> Numeric:
         """Returns an array of ones."""
-        return np.ones(shape)
+        dtype = getattr(reference, "dtype", None)
+        return np.ones(shape, dtype=dtype)
