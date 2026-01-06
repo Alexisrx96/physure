@@ -232,8 +232,8 @@ class Quantity(Generic[ValueType, UncType]):
         ):
             try:
                 shape = backend.shape(value)
-                # Create array of ones with same shape
-                ones = backend.ones(shape)
+                # Create array of ones with same shape, inheriting device/dtype
+                ones = backend.ones(shape, reference=value)
                 # Multiply by scalar uncertainty to broadcast
                 uncertainty = backend.mul(ones, uncertainty)
             except (AttributeError, NotImplementedError):
