@@ -503,6 +503,12 @@ class BackendManager:
             cls._python_backend = PythonBackend()
         return cls._python_backend
 
+    @classmethod
+    def clear_backends(cls) -> None:
+        """Clears all cached backends. Useful for test isolation."""
+        cls._backends.clear()
+        cls._python_backend = None
+
 
 @enforce_tensor_contract
 def get_backend(data_obj: Any) -> BackendOps:

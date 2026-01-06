@@ -20,6 +20,12 @@ class UnitRegistry:
         self._lazy_loaders: dict[str, Any] = {}
         self._discovered = False
 
+    def clear(self) -> None:
+        """Clears all registered units and loaders. Useful for test isolation."""
+        self._registry.clear()
+        self._lazy_loaders.clear()
+        self._discovered = False
+
     def register(self, name: str, unit: Any) -> None:
         """Adds a concrete unit to the registry.
 

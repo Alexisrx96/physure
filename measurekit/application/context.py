@@ -122,3 +122,15 @@ def get_propagation_mode() -> str:
 
 # For backward compatibility if needed, though get_current_system is preferred.
 get_active_system = get_current_system
+
+
+def reset_context() -> None:
+    """Resets the global context state.
+
+    Clears the global default system cache and resets context variables
+    to their default values.
+    """
+    global _global_default_system
+    _global_default_system = None
+    _current_unit_system.set(None)
+    _propagation_mode.set("correlated")

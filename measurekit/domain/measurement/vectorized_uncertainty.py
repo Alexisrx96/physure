@@ -297,3 +297,12 @@ def ensure_store(backend: BackendOps) -> CovarianceStore:
         _global_stores[bk_type] = CovarianceStore(backend=backend)
 
     return _global_stores[bk_type]
+
+
+def clear_global_stores() -> None:
+    """Clears all global covariance stores and active context stores.
+
+    Useful for resetting state between tests to prevent pollution.
+    """
+    _global_stores.clear()
+    _current_store.set(None)

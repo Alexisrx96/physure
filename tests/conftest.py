@@ -3,7 +3,46 @@ import pytest
 from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.system import UnitSystem
-from measurekit.domain.measurement.units import CompoundUnit
+from measurekit.domain.measurement.units import CompoundUnit, units
+
+
+@pytest.fixture(autouse=True)
+def clean_state():
+    """Resets all global state before and after each test to ensure isolation.
+
+    This targets the global CovarianceStore, the active UnitSystem context,
+    cached backends, and the Flyweight caches of units and dimensions.
+    It also resets the UnitRegistry to its initial core state.
+    """
+    from measurekit.application.context import reset_context
+    from measurekit.core.dispatcher import BackendManager
+    from measurekit.domain.measurement.units import _register_core_units
+    from measurekit.domain.measurement.vectorized_uncertainty import (
+        clear_global_stores,
+    )
+
+    def _reset_all():
+        # 1. Clear Uncertainty Stores
+        clear_global_stores()
+
+        # 2. Reset Unit System Context
+        reset_context()
+
+        # 3. Clear Backend Manager Cache
+        BackendManager.clear_backends()
+
+        # 4. Clear Flyweight Caches
+        CompoundUnit._cache.clear()
+        Dimension._cache.clear()
+
+        # 5. Reset Unit Registry to core state
+        units.clear()
+        _register_core_units()
+        units.discover_plugins()
+
+    _reset_all()
+    yield
+    _reset_all()
 
 
 @pytest.fixture
