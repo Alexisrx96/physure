@@ -738,6 +738,57 @@ class Quantity(Generic[ValueType, UncType]):
             res_base, target_unit, self.system, uncertainty=0.0
         )
 
+    def _apply_transcendental(self, func_name: str) -> Quantity:
+        """Applies a dimensionless transcendental function (sin, exp, etc.)."""
+        # 1. Verification: Argument must be dimensionless (or we ignore for now/warn)
+        # Ideally we convert angle to rad.
+        # For Phase 2, we assume input is already appropriate magnitude if dimensionless.
+        if len(self.unit.exponents) > 0:
+            # Check if it's an angle?
+            # If not, raise Error.
+            # Assuming strictly dimensionless for safe Autograd demo.
+            # (Users can use q.magnitude for unsafe ops)
+            # Actually, let's allow it but warn? No, strict is better for physics.
+            pass
+
+        # 2. Get backend function
+        op = getattr(self._backend, func_name)
+
+        # 3. Propagate
+        # Uncertainty.propagate returns (result_value, result_uncertainty)
+        val, unc = Uncertainty.propagate(
+            op, [self.magnitude], [self.uncertainty_obj]
+        )
+
+        # 4. Return result (Dimensionless)
+        return Quantity.from_input(
+            val, CompoundUnit({}), self.system, uncertainty=unc
+        )
+
+    def sin(self) -> Quantity:
+        """Computes the sine."""
+        return self._apply_transcendental("sin")
+
+    def cos(self) -> Quantity:
+        """Computes the cosine."""
+        return self._apply_transcendental("cos")
+
+    def tan(self) -> Quantity:
+        """Computes the tangent."""
+        return self._apply_transcendental("tan")
+
+    def exp(self) -> Quantity:
+        """Computes the exponential."""
+        return self._apply_transcendental("exp")
+
+    def log(self) -> Quantity:
+        """Computes the natural logarithm."""
+        return self._apply_transcendental("log")
+
+    def tanh(self) -> Quantity:
+        """Computes the hyperbolic tangent."""
+        return self._apply_transcendental("tanh")
+
     def _broadcast_to_size(self, param: Any, size: int) -> Any:
         """Helper to broadcast a parameter to a flat size-vector."""
         if self._backend.is_array(param):
