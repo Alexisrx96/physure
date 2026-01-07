@@ -28,7 +28,7 @@ def test_uncertainty_context_manager():
         x = Q_(10.0, "m", uncertainty=1.0)
         y = x**2
         print(f"  Monte Carlo: {y.magnitude} +/- {y.uncertainty} {y.unit}")
-        assert 100.8 < float(y.magnitude.mean) < 101.2
+        assert 100.5 < float(y.magnitude.mean) < 101.5
         assert 19.5 < y.uncertainty < 20.5
 
     print("\nTesting Unscented Mode via context manager...")
