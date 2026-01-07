@@ -218,6 +218,10 @@ class Quantity(Generic[ValueType, UncType]):
         symbol: str | None = None,
     ) -> Self:
         """Creates a Quantity from raw input values."""
+        from measurekit.application.context import _UNCERTAINTY_MODE
+        from measurekit.jit.tracer import _ensure_rational
+        from measurekit_core import QuantityInner
+
         resolved_system = (
             system if system is not None else get_default_system()
         )
@@ -252,6 +256,27 @@ class Quantity(Generic[ValueType, UncType]):
         if not backend.is_array(value):
             with contextlib.suppress(ValueError, TypeError):
                 frac = Fraction(str(value))
+
+        # Core Mode Integration
+        mode, mode_args = _UNCERTAINTY_MODE.get()
+        if ("QuantityInner" in str(type(value))) or (
+            mode != "python" or mode_args
+        ):
+            if "QuantityInner" not in str(type(value)):
+                r_unit = _ensure_rational(unit)
+                std_dev = getattr(uncertainty_obj, "std_dev", uncertainty_obj)
+                # Create core magnitude
+                value = QuantityInner(
+                    float(value),
+                    float(std_dev or 0.0),
+                    r_unit,
+                    mode,
+                    **mode_args,
+                )
+
+            backend = BackendManager.get_backend(value)
+            # Core handles uncertainty
+            uncertainty_obj = None
 
         return cls(
             magnitude=cast("ValueType", value),
@@ -496,6 +521,8 @@ class Quantity(Generic[ValueType, UncType]):
     @property
     def uncertainty(self) -> UncType:
         """Returns the standard deviation of the uncertainty."""
+        if self.uncertainty_obj is None:
+            return getattr(self.magnitude, "std_dev", 0.0)
         return self.uncertainty_obj.std_dev
 
     def to(
@@ -941,6 +968,15 @@ class Quantity(Generic[ValueType, UncType]):
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Any) -> Quantity:
         """Handles arithmetic with Affine Support."""
+        if self.uncertainty_obj is None or (
+            isinstance(other, Quantity) and other.uncertainty_obj is None
+        ):
+            new_val = self._backend.add(
+                self.magnitude,
+                other.magnitude if isinstance(other, Quantity) else other,
+            )
+            return Quantity.from_input(new_val, self.unit, self.system)
+
         if isinstance(other, Quantity):
             # Affine Logic
             res_affine = self._affine_check(other, is_add=True)
@@ -1099,6 +1135,15 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __sub__(self, other: Any) -> Quantity:
         """Handles cases like my_quantity - other."""
+        if self.uncertainty_obj is None or (
+            isinstance(other, Quantity) and other.uncertainty_obj is None
+        ):
+            new_val = self._backend.sub(
+                self.magnitude,
+                other.magnitude if isinstance(other, Quantity) else other,
+            )
+            return Quantity.from_input(new_val, self.unit, self.system)
+
         if isinstance(other, Quantity):
             # Affine Logic
             res_affine = self._affine_check(other, is_add=False)
@@ -1245,6 +1290,18 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __mul__(self, other: Any) -> Quantity:
         """Multiplies two quantities."""
+        if self.uncertainty_obj is None or (
+            isinstance(other, Quantity) and other.uncertainty_obj is None
+        ):
+            new_val = self._backend.mul(
+                self.magnitude,
+                other.magnitude if isinstance(other, Quantity) else other,
+            )
+            new_unit = self.unit * (
+                other.unit if isinstance(other, Quantity) else other
+            )
+            return Quantity.from_input(new_val, new_unit, self.system)
+
         if isinstance(other, (int, float, complex)) or self._backend.is_array(
             other
         ):
@@ -1383,6 +1440,18 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __truediv__(self, other: Any) -> Quantity:
         """Divides two quantities."""
+        if self.uncertainty_obj is None or (
+            isinstance(other, Quantity) and other.uncertainty_obj is None
+        ):
+            new_val = self._backend.truediv(
+                self.magnitude,
+                other.magnitude if isinstance(other, Quantity) else other,
+            )
+            new_unit = self.unit / (
+                other.unit if isinstance(other, Quantity) else other
+            )
+            return Quantity.from_input(new_val, new_unit, self.system)
+
         if isinstance(other, (int, float, complex)) or self._backend.is_array(
             other
         ):
@@ -1537,11 +1606,18 @@ class Quantity(Generic[ValueType, UncType]):
 
     def __pow__(self, exponent: float) -> Quantity:
         """Raises quantity to power."""
+        if self.uncertainty_obj is None:
+            new_val = self._backend.pow(self.magnitude, exponent)
+            new_unit = self.unit**exponent
+            return Quantity.from_input(new_val, new_unit, self.system)
+
         new_value = self._backend.pow(self.magnitude, exponent)
         new_unit = self.unit**exponent
         # Casting to float is tricky if it's array.
-        # But Uncertainty.power expects Any value usually.
-        new_uncertainty_obj = self.uncertainty_obj.power(exponent, new_value)
+        # But Uncertainty.power expects the BASE value.
+        new_uncertainty_obj = self.uncertainty_obj.power(
+            exponent, self.magnitude
+        )
         res = Quantity.from_input(
             new_value, new_unit, self.system, uncertainty=new_uncertainty_obj
         )
