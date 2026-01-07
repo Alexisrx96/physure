@@ -53,6 +53,8 @@ class NumpyBackend(BackendOps):
 
     def asarray(self, obj: Any) -> Array:
         """Converts input to a NumPy array."""
+        if self.is_array(obj):
+            return obj
         return np.asarray(obj)
 
     def to_device(self, obj: Any, device: str) -> Any:
