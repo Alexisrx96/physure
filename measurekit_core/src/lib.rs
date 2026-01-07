@@ -1,11 +1,19 @@
 use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+use pyo3::{Bound, PyResult};
 use std::collections::HashMap;
-use num_rational::Rational64;
+use num_rational::{Rational64, Ratio};
 use std::hash::{Hash, Hasher};
-use ndarray::Array1;
+use ndarray::{Array1, Array2};
 use rand::prelude::*;
-use rand_distr::{Normal, Distribution};
+use rand_distr::{Normal, Distribution, StandardNormal};
+use nalgebra::{DMatrix, DVector};
 use dyn_clone::DynClone;
+use sprs::{CsMatI, TriMatI};
+use arrow::array::{Float64Array, StringArray, ArrayRef, Array};
+use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Field, Schema};
+use std::sync::Arc;
 
 /// A unit representation using rational exponents to avoid floating-point errors.
 #[pyclass]
@@ -14,6 +22,20 @@ pub struct RationalUnit {
     /// Map of base unit names to their exponents as (numerator, denominator).
     #[pyo3(get)]
     pub dimensions: HashMap<String, (i64, i64)>,
+}
+
+impl Hash for RationalUnit {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Commutative hashing (XOR) avoids the need to sort keys (O(N) instead of O(N log N))
+        let mut h: u64 = 0;
+        for (k, v) in &self.dimensions {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            k.hash(&mut hasher);
+            v.hash(&mut hasher);
+            h ^= hasher.finish();
+        }
+        h.hash(state);
+    }
 }
 
 #[pymethods]
@@ -504,6 +526,151 @@ impl QuantityInner {
     }
 }
 
+#[pyclass]
+#[derive(Clone, Copy)]
+pub struct PruningConfig {
+    #[pyo3(get, set)]
+    pub max_age: usize,
+    #[pyo3(get, set)]
+    pub enabled: bool,
+}
+
+#[pymethods]
+impl PruningConfig {
+    #[new]
+    #[pyo3(signature = (max_age = 100, enabled = false))]
+    fn new(max_age: usize, enabled: bool) -> Self {
+        PruningConfig { max_age, enabled }
+    }
+}
+
+#[pyclass]
+pub struct CovarianceStore {
+    matrix: CsMatI<f64, usize>,
+    last_updated: Vec<usize>,
+    current_step: usize,
+    config: PruningConfig,
+    next_idx: usize,
+}
+
+#[pymethods]
+impl CovarianceStore {
+    #[new]
+    #[pyo3(signature = (config = None))]
+    fn new(config: Option<PruningConfig>) -> Self {
+        CovarianceStore {
+            matrix: CsMatI::new_csc((0, 0), vec![0], vec![], vec![]),
+            last_updated: Vec::new(),
+            current_step: 0,
+            config: config.unwrap_or(PruningConfig { max_age: 100, enabled: false }),
+            next_idx: 0,
+        }
+    }
+
+    fn allocate(&mut self, size: usize) -> (usize, usize) {
+        let start = self.next_idx;
+        let end = start + size;
+        self.next_idx = end;
+        self.last_updated.resize(end, self.current_step);
+        (start, end)
+    }
+
+    fn update_covariance(&mut self, _out_idx: (usize, usize), in_indices: Vec<(usize, usize)>) {
+        self.current_step += 1;
+        for (start, end) in in_indices {
+            for i in start..end {
+                self.last_updated[i] = self.current_step;
+            }
+        }
+        if self.config.enabled {
+            self.prune();
+        }
+    }
+
+    fn prune(&mut self) {
+        let max_age = self.config.max_age;
+        let mut to_zero = Vec::new();
+        for (i, &last) in self.last_updated.iter().enumerate() {
+            if self.current_step - last > max_age {
+                to_zero.push(i);
+            }
+        }
+        if to_zero.is_empty() { return; }
+        
+        // Zero out elements associated with pruned variables
+        let mut new_tri = TriMatI::new(self.matrix.shape());
+        for (&val, (r, c)) in self.matrix.iter() {
+            if !to_zero.contains(&r) && !to_zero.contains(&c) {
+                new_tri.add_triplet(r, c, val);
+            }
+        }
+        self.matrix = new_tri.to_csr();
+    }
+}
+
+#[pyfunction]
+pub fn to_arrow_record_batch(quantities: Bound<'_, PyList>) -> PyResult<Vec<u8>> {
+    let len = quantities.len();
+    let mut means = Vec::with_capacity(len);
+    let mut std_devs = Vec::with_capacity(len);
+    
+    // Use Dictionary encoding for units (very efficient for repeated units)
+    let mut unit_values = Vec::new();
+    let mut unit_indices = Vec::with_capacity(len);
+    let mut unit_repr_cache: HashMap<RationalUnit, u32> = HashMap::new();
+
+    for q_any in quantities.iter() {
+        // Optimization: downcast and borrow instead of extract (zero allocation)
+        let q_bound = q_any.downcast::<QuantityInner>()?;
+        let q = q_bound.borrow();
+        
+        means.push(q.mean());
+        std_devs.push(q.std_dev());
+        
+        // Use the RationalUnit itself as the cache key (efficient Hash/Eq)
+        let idx = *unit_repr_cache.entry(q.unit.clone()).or_insert_with(|| {
+            let i = unit_values.len() as u32;
+            unit_values.push(q.unit.__repr__());
+            i
+        });
+        unit_indices.push(Some(idx));
+    }
+
+    let mean_array = Float64Array::from(means);
+    let std_dev_array = Float64Array::from(std_devs);
+    
+    // Build DictionaryArray for units (reduces memory and overhead)
+    let keys = arrow::array::UInt32Array::from(unit_indices);
+    let values = StringArray::from(unit_values);
+    let unit_array = arrow::array::DictionaryArray::<arrow::datatypes::UInt32Type>::try_new(
+        keys,
+        Arc::new(values) as ArrayRef
+    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow dict error: {}", e)))?;
+
+    let schema = Schema::new(vec![
+        Field::new("mean", DataType::Float64, false),
+        Field::new("std_dev", DataType::Float64, false),
+        Field::new("unit", unit_array.data_type().clone(), false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(mean_array) as ArrayRef,
+            Arc::new(std_dev_array) as ArrayRef,
+            Arc::new(unit_array) as ArrayRef,
+        ],
+    ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow error: {}", e)))?;
+
+    let mut buffer = Vec::new();
+    {
+        let mut writer = arrow::ipc::writer::StreamWriter::try_new(&mut buffer, &batch.schema()).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+    }
+    Ok(buffer)
+}
+
 /// A registry to hold unit definitions, ensuring state isolation.
 #[pyclass]
 pub struct UnitRegistry {
@@ -548,5 +715,8 @@ fn measurekit_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RationalUnit>()?;
     m.add_class::<UnitRegistry>()?;
     m.add_class::<QuantityInner>()?;
+    m.add_class::<PruningConfig>()?;
+    m.add_class::<CovarianceStore>()?;
+    m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
     Ok(())
 }
