@@ -528,6 +528,24 @@ class JaxBackend(BackendOps):
 
         return jnp.diagonal(a)
 
+    def to_coo(self, a: Any) -> tuple[Any, Any, Any] | None:
+        """Extracts (data, rows, cols) from a sparse matrix."""
+        # Check for BCOO
+        if hasattr(a, "indices") and hasattr(a, "data"):
+            try:
+                indices = a.indices
+                # JAX BCOO properties might be tracers.
+                # If indices is a property returning array:
+                if hasattr(indices, "shape"):  # It is array-like
+                    rows = indices[:, 0]
+                    cols = indices[:, 1]
+                    return a.data, rows, cols
+            except Exception:
+                pass
+
+        # Check for other JAX sparse types or fallbacks?
+        return None
+
     def transpose(self, a: Any) -> Any:
         """Returns the transpose of an array or matrix."""
         if hasattr(a, "T"):

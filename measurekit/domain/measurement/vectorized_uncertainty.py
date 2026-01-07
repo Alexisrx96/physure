@@ -125,6 +125,18 @@ def _process_jacobian(
         (values, rows, cols) or (None, None, None) if extraction fails/empty.
     """
     # Handle different backend sparse formats
+    # Try backend-specific extraction first
+    if hasattr(backend, "to_coo"):
+        res = backend.to_coo(jac)
+        if res is not None:
+            data, rows, cols = res
+            return (
+                backend.asarray(data),
+                backend.asarray(rows),
+                backend.asarray(cols + start_idx),
+            )
+
+    # Handle different backend sparse formats
     if hasattr(jac, "is_sparse") and jac.is_sparse:
         # Torch specific
         indices = jac.indices()
@@ -137,6 +149,7 @@ def _process_jacobian(
             backend.asarray(coo.row),
             backend.asarray(coo.col + start_idx),
         )
+
     elif hasattr(jac, "to_sparse"):
         # Torch dense to sparse
         sp = jac.to_sparse()
@@ -204,7 +217,17 @@ def propagate_affine(
 
     for slc, jac in zip(in_slices, jacobians, strict=False):
         # Move jac to target device if needed
-        jac = backend.asarray(jac)
+        # Avoid asarray if sparse (BCOO/etc) to prevent densification or error
+        is_sparse = (
+            (hasattr(jac, "is_sparse") and jac.is_sparse)
+            or (hasattr(jac, "indices") and hasattr(jac, "data"))
+            or hasattr(jac, "tocoo")
+            or hasattr(jac, "to_sparse")
+        )
+
+        if not is_sparse:
+            jac = backend.asarray(jac)
+
         if target_device:
             curr_device = backend.get_device(jac)
             if curr_device != target_device:

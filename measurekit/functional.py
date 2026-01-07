@@ -114,6 +114,22 @@ class FunctionalState:
         self.registry[key] = slc
         return slc, new_matrix
 
+    def tree_flatten(self):
+        """Flattens the state for JAX."""
+        children = (self.matrix,)
+        # We treat store and registry as auxiliary data (static metadata)
+        # Note: 'store' is mutable, so this is tricky. Effectively we capture
+        # the state of the store at the time of flattening.
+        aux_data = (self.store, self.registry)
+        return children, aux_data
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        """Reconstructs the state."""
+        matrix = children[0]
+        store, registry = aux_data
+        return cls(store, matrix, registry)
+
 
 def add(
     a: Quantity, b: Quantity, state: FunctionalState
@@ -147,10 +163,6 @@ def _apply_affine(
     state.matrix = mat_2
 
     # 2. Compute Result Magnitude
-    # Naive addition for now, assumes clean units or let Quantity handle it?
-    # Quantity.to() logic might be needed before add.
-    # Assuming units match for this low-level func, or we use a.unit logic.
-    # Simple magnitude op:
     res_mag = (
         backend.add(a.magnitude, b.magnitude)
         if jac_b > 0
@@ -161,16 +173,8 @@ def _apply_affine(
     out_size = backend.size(res_mag)
     out_slice = state.allocate(out_size)
 
-    # Jacobians are identity/scalar for add/sub
-    # We need to broadcast them if they are scalar.
-    # propagate_affine expects array-like or sparse jacobians usually?
-    # The logic in propagate_affine handles 'asarray'.
-
     # Construct Jacobians
-    # Assumes element-wise operation (diagonal jacobian)
-
     val_a_ones = backend.ones((out_size,), reference=res_mag)
-    # If jac_a is scalar, broadcast
     diag_a = backend.mul(val_a_ones, jac_a)
     j_a = backend.sparse_diags([diag_a], [0], shape=(out_size, out_size))
 
@@ -187,43 +191,19 @@ def _apply_affine(
     # 4. Construct Result Quantity
     from measurekit.domain.measurement.uncertainty import CovarianceModel
 
-    # Extract new std_dev from diagonal
-    # This might require sparse slicing or getting diagonal
-    # For JAX compatibility, getting diagonal of a sparse matrix might be tricky?
-    # BCOO diagonal?
-    # BackendOps should support sparse_diagonal.
-
-    # In JAX/Functional, we might lazy-evaluate std_dev?
-    # But Quantity expects an uncertainty object.
-
-    # Note: Retrieving the diagonal here involves reading the properties
-    # of the result matrix.
-    # new_matrix is the state.
-
-    # result block
-    # We can't easily extract just the block without backend support.
-    # But diagonal extraction is usually supported.
-    # Let's assume we can get full diagonal.
-    diag = backend.sparse_diagonal(new_matrix)  # Returns dense vector of diag
-
-    # Slice it
-    # JAX/Numpy slicing
+    diag = backend.sparse_diagonal(new_matrix)
     res_diag = diag[out_slice]
     res_std = backend.sqrt(res_diag)
     res_std = backend.reshape(res_std, backend.shape(res_mag))
 
-    # Result Uncertainty
     res_unc = CovarianceModel(
         std_dev_internal=res_std,
         vector_slice=out_slice,
-        # Lineage is empty/irrelevant for vectorized
     )
 
-    # Result Quantity
-    # Helper to construct
     res_q = a._fast_new(
         res_mag,
-        a.unit,  # Assuming unit match
+        a.unit,
         res_unc,
         a.system,
         a.dimension,
@@ -231,3 +211,17 @@ def _apply_affine(
     )
 
     return res_q, FunctionalState(state.store, new_matrix, state.registry)
+
+
+def register_functional_pytree():
+    """Registers FunctionalState as a JAX Pytree."""
+    try:
+        import jax
+
+        jax.tree_util.register_pytree_node(
+            FunctionalState,
+            FunctionalState.tree_flatten,
+            FunctionalState.tree_unflatten,
+        )
+    except (ImportError, NameError):
+        pass
