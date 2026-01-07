@@ -143,6 +143,18 @@ class CompoundUnit(BaseExponentEntity):
         """Returns a hash value for the compound unit."""
         return super().__hash__()
 
+    @classmethod
+    def from_rational_unit(cls, r_unit) -> CompoundUnit:
+        """Creates a CompoundUnit from a Rust RationalUnit.
+
+        Args:
+            r_unit (measurekit_core.RationalUnit): The Rust unit.
+
+        Returns:
+            CompoundUnit: The corresponding Python unit.
+        """
+        return cls(r_unit.exponents)
+
     # --- System-Dependent Methods ---
     def conversion_factor_to(
         self, target: CompoundUnit, system: UnitSystem | None = None
