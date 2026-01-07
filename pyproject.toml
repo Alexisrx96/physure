@@ -41,6 +41,7 @@ dependencies = [
     "h5py>=3.10.0",
     "pyarrow>=22.0.0",
     "psutil>=7.2.1",
+    "measurekit-core",
 ]
 
 [project.optional-dependencies]
@@ -80,6 +81,7 @@ docs = [
     "mkdocs-htmlproofer-plugin>=0.12.0",
     "nbmake>=1.5.0",
     "papermill>=2.5.0",
+    "matplotlib>=3.8.0",
 ]
 
 [project.urls]
@@ -93,6 +95,9 @@ packages = ["measurekit"]
 
 [tool.uv]
 managed = true
+
+[tool.uv.sources]
+measurekit-core = { path = "./measurekit_core" }
 
 [dependency-groups]
 dev = [
