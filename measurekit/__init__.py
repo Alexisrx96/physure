@@ -25,6 +25,7 @@ from measurekit.application.startup import (
     create_system,
 )
 from measurekit.domain.measurement.units import get_default_system, units
+from measurekit.jit import jit
 
 # Expose the primary factory method (Inbound Port)
 # QuantityFactory uses get_default_system() internally if no system provided.
@@ -78,6 +79,7 @@ __all__ = [
     "get_active_system",
     "get_current_system",
     "get_unit",
+    "jit",
     "units",
     "use_system",
 ]
