@@ -267,7 +267,7 @@ class CompoundUnit(BaseExponentEntity):
             if unit == "noprefix":
                 continue
             if unit in system.UNIT_DIMENSIONS:
-                overall *= system.UNIT_DIMENSIONS[unit] ** exp
+                overall = overall * (system.UNIT_DIMENSIONS[unit] ** exp)
             else:
                 raise ValueError(
                     f"Unknown dimension for unit '{unit}'"

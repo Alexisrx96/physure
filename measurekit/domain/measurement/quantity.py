@@ -258,7 +258,15 @@ class Quantity(Generic[ValueType, UncType]):
                 frac = Fraction(str(value))
 
         # Core Mode Integration
-        mode, mode_args = _UNCERTAINTY_MODE.get()
+        try:
+             import torch
+             if torch.compiler.is_compiling():
+                 mode, mode_args = ("python", None) # Default safe mode
+             else:
+                 mode, mode_args = _UNCERTAINTY_MODE.get()
+        except (ImportError, AttributeError):
+             mode, mode_args = _UNCERTAINTY_MODE.get()
+
         if ("QuantityInner" in str(type(value))) or (
             mode != "python" or mode_args
         ):

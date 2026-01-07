@@ -15,6 +15,16 @@ _current_tracer: ContextVar[Optional["FormulaTracer"]] = ContextVar(
 
 def get_active_tracer() -> Optional["FormulaTracer"]:
     """Returns the currently active FormulaTracer if any."""
+    # During torch.compile tracing, ContextVar often triggers "Unsupported method call".
+    # We disable MeasureKit symbolic tracing inside Torch compilation to avoid
+    # mixing tracing systems and side effects that confuse Dynamo.
+    try:
+        import torch
+        if torch.compiler.is_compiling():
+            return None
+    except (ImportError, AttributeError):
+        pass
+
     return _current_tracer.get()
 
 

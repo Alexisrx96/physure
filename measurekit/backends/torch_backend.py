@@ -237,8 +237,14 @@ class TorchBackend(BackendOps):
 
     def reshape(self, obj: Array, shape: tuple[int, ...]) -> Array:
         """Reshapes the tensor."""
-        if obj.is_sparse:
-            return obj.to_dense().reshape(shape)
+        # Sparse check
+        is_sparse = getattr(obj, "is_sparse", False)
+        # Handle FakeTensor where is_sparse might be symbolic or require special handling?
+        # Typically is_sparse returns a concrete bool even for fake tensors unless it's a tracer.
+        
+        if is_sparse:
+             return obj.to_dense().reshape(shape)
+        
         return torch.reshape(obj, shape)
 
     def concatenate(self, arrays: Sequence[Array], axis: int = 0) -> Array:
@@ -285,8 +291,15 @@ class TorchBackend(BackendOps):
 
     def size(self, obj: Any) -> int:
         """Returns the total number of elements in the object."""
-        if hasattr(obj, "numel"):
-            return obj.numel()
+        # Prefer torch.numel for tensors/proxies to ensure correct counting
+        if self.is_array(obj) or (hasattr(obj, "numel") and callable(obj.numel)):
+             return torch.numel(obj)
+        if hasattr(obj, "size") and not callable(obj.size):
+             # numpy-like .size property
+             return obj.size
+        # Fallback for lists/tuples
+        if hasattr(obj, "__len__"):
+             return len(obj)
         return 1
 
     def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
