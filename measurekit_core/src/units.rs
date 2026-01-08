@@ -147,6 +147,7 @@ impl RationalUnit {
 pub struct UnitRegistry {
     base_units: HashMap<String, RationalUnit>,
     derived_units: HashMap<String, RationalUnit>,
+    aliases: HashMap<String, String>,
 }
 
 #[pymethods]
@@ -156,6 +157,7 @@ impl UnitRegistry {
         UnitRegistry {
             base_units: HashMap::new(),
             derived_units: HashMap::new(),
+            aliases: HashMap::new(),
         }
     }
 
@@ -170,13 +172,46 @@ impl UnitRegistry {
         self.derived_units.insert(name, definition);
     }
 
+    fn register_alias(&mut self, alias: String, symbol: String) -> PyResult<()> {
+        self.aliases.insert(alias, symbol);
+        Ok(())
+    }
+
+    fn resolve_symbol(&self, name: String) -> String {
+        let mut current = name;
+        // Simple non-recursive alias check for now to avoid cycles, 
+        // or a small loop limit
+        for _ in 0..10 {
+            if let Some(target) = self.aliases.get(&current) {
+                current = target.clone();
+            } else {
+                return current;
+            }
+        }
+        current // Return last resolved
+    }
+
     fn get_unit(&self, name: String) -> PyResult<RationalUnit> {
-        if let Some(unit) = self.base_units.get(&name) {
+        let resolved = self.resolve_symbol(name.clone());
+
+        if let Some(unit) = self.base_units.get(&resolved) {
             Ok(unit.clone())
-        } else if let Some(unit) = self.derived_units.get(&name) {
+        } else if let Some(unit) = self.derived_units.get(&resolved) {
             Ok(unit.clone())
         } else {
-            Err(pyo3::exceptions::PyKeyError::new_err(name))
+            // Also check keys directly in case resolve failed or name is direct key
+            if let Some(unit) = self.base_units.get(&name) {
+                return Ok(unit.clone());
+            }
+            if let Some(unit) = self.derived_units.get(&name) {
+               return Ok(unit.clone());
+            }
+            Err(pyo3::exceptions::PyKeyError::new_err(format!("Unit '{}' not found", name)))
         }
+    }
+    
+    fn contains(&self, name: String) -> bool {
+        let resolved = self.resolve_symbol(name.clone());
+        self.base_units.contains_key(&resolved) || self.derived_units.contains_key(&resolved)
     }
 }
