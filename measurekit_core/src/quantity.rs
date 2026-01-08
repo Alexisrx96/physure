@@ -27,7 +27,7 @@ impl Clone for Quantity {
 impl Quantity {
     #[new]
     #[pyo3(signature = (*args, **kwargs))]
-    fn new(args: &Bound<'_, PyTuple>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
+    fn new(py: Python<'_>, args: &Bound<'_, PyTuple>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         // 1. Check for Copy Constructor pattern (magnitude=CoreQuantity)
         let mut existing_core = None;
         if args.len() > 0 {
@@ -44,18 +44,18 @@ impl Quantity {
             return Ok(core.clone());
         }
 
-        let mut mean = 0.0;
-        let mut std_dev = 0.0;
+        let mut mean_val: Option<PyObject> = None;
+        let mut std_dev_val: Option<PyObject> = None;
         let mut unit = None;
         let mut mode = None;
         let mut samples = None;
 
         // Extract from positional args
         if args.len() > 0 {
-            mean = args.get_item(0)?.extract::<f64>()?;
+            mean_val = Some(args.get_item(0)?.unbind());
         }
         if args.len() > 1 {
-            std_dev = args.get_item(1)?.extract::<f64>()?;
+            std_dev_val = Some(args.get_item(1)?.unbind());
         }
         if args.len() > 2 {
             // Only extract if it's actually a RationalUnit
@@ -71,15 +71,10 @@ impl Quantity {
         // Override with keyword args
         if let Some(kw) = kwargs {
             if let Some(v) = kw.get_item("mean")?.or_else(|| kw.get_item("magnitude").ok().flatten()) {
-                // Only extract if it's a float, not a CoreQuantity (already handled above)
-                if let Ok(m) = v.extract::<f64>() {
-                    mean = m;
-                }
+                mean_val = Some(v.unbind());
             }
             if let Some(v) = kw.get_item("std_dev")?.or_else(|| kw.get_item("uncertainty").ok().flatten()) {
-                if let Ok(s) = v.extract::<f64>() {
-                    std_dev = s;
-                }
+                 std_dev_val = Some(v.unbind());
             }
             if let Some(v) = kw.get_item("unit")? {
                 if let Ok(u) = v.extract::<RationalUnit>() {
@@ -95,35 +90,59 @@ impl Quantity {
         }
 
         let u = unit.ok_or_else(|| pyo3::exceptions::PyValueError::new_err("unit is required and must be a RationalUnit"))?;
-
-        let backend: Box<dyn UncertaintyBackend> = match mode.as_deref() {
-            Some("monte_carlo") => Box::new(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
-            Some("unscented") => Box::new(UnscentedBackend::new_scalar(mean, std_dev)),
-            _ => Box::new(GaussianBackend { mean, std_dev }),
+        
+        // Detect Backend Type
+        // If mean_val is float -> Gaussian/MC/US
+        // If mean_val is Array/Tensor -> TensorBackend
+        let mean_obj = mean_val.unwrap_or(0.0.to_object(py));
+        let std_dev_obj = std_dev_val.unwrap_or(0.0.to_object(py));
+        
+        let is_float = mean_obj.bind(py).extract::<f64>().is_ok();
+        
+        let backend: Box<dyn UncertaintyBackend> = if is_float {
+             let mean = mean_obj.bind(py).extract::<f64>()?;
+             let std_dev = std_dev_obj.bind(py).extract::<f64>().unwrap_or(0.0);
+             match mode.as_deref() {
+                Some("monte_carlo") => Box::new(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+                Some("unscented") => Box::new(UnscentedBackend::new_scalar(mean, std_dev)),
+                _ => Box::new(GaussianBackend { mean, std_dev }),
+            }
+        } else {
+            // Tensor Backend
+            use crate::uncertainty::TensorBackend;
+            Box::new(TensorBackend { value: mean_obj, uncertainty: std_dev_obj })
         };
+
         Ok(Quantity { value: backend, unit: u })
     }
 
     #[getter]
-    pub fn mean(&self) -> f64 { self.value.mean() }
+    pub fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { self.value.mean(py) }
 
     #[getter]
-    pub fn std_dev(&self) -> f64 { self.value.std_dev() }
+    pub fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { self.value.std_dev(py) }
 
     #[getter]
     fn core_unit(&self) -> RationalUnit { self.unit.clone() }
 
     fn __add__(&self, other: Bound<'_, PyAny>) -> PyResult<Quantity> {
+        let py = other.py();
         if let Ok(other_qi) = other.extract::<Quantity>() {
             if self.unit != other_qi.unit {
                 return Err(pyo3::exceptions::PyTypeError::new_err("Unit mismatch"));
             }
-            Ok(Quantity { value: self.value.propagate_add(&*other_qi.value), unit: self.unit.clone() })
+            Ok(Quantity { value: self.value.propagate_add(py, &*other_qi.value)?, unit: self.unit.clone() })
         } else if let Ok(val) = other.extract::<f64>() {
+            // Scalar fallback
             let o = GaussianBackend { mean: val, std_dev: 0.0 };
-            Ok(Quantity { value: self.value.propagate_add(&o), unit: self.unit.clone() })
+            Ok(Quantity { value: self.value.propagate_add(py, &o)?, unit: self.unit.clone() })
         } else {
-            Err(pyo3::exceptions::PyTypeError::new_err("Invalid operand for add"))
+             // Assume Tensor/Array
+             // Create a temporary wrapped backend for 'other'
+             use crate::uncertainty::TensorBackend;
+             let val_obj = other.unbind();
+             let o = TensorBackend { value: val_obj, uncertainty: 0.0.to_object(py) }; // zero unc
+             Ok(Quantity { value: self.value.propagate_add(py, &o)?, unit: self.unit.clone() })
         }
     }
 
@@ -132,39 +151,50 @@ impl Quantity {
     }
 
     fn __sub__(&self, other: Bound<'_, PyAny>) -> PyResult<Quantity> {
+        let py = other.py();
         if let Ok(other_qi) = other.extract::<Quantity>() {
             if self.unit != other_qi.unit {
                 return Err(pyo3::exceptions::PyTypeError::new_err("Unit mismatch"));
             }
-            Ok(Quantity { value: self.value.propagate_sub(&*other_qi.value), unit: self.unit.clone() })
+            Ok(Quantity { value: self.value.propagate_sub(py, &*other_qi.value)?, unit: self.unit.clone() })
         } else if let Ok(val) = other.extract::<f64>() {
             let o = GaussianBackend { mean: val, std_dev: 0.0 };
-            Ok(Quantity { value: self.value.propagate_sub(&o), unit: self.unit.clone() })
+            Ok(Quantity { value: self.value.propagate_sub(py, &o)?, unit: self.unit.clone() })
         } else {
-            Err(pyo3::exceptions::PyTypeError::new_err("Invalid operand for sub"))
+             // Assume Tensor/Array
+             use crate::uncertainty::TensorBackend;
+             let val_obj = other.unbind();
+             let o = TensorBackend { value: val_obj, uncertainty: 0.0.to_object(py) }; 
+             Ok(Quantity { value: self.value.propagate_sub(py, &o)?, unit: self.unit.clone() })
         }
     }
 
     fn __rsub__(&self, other: Bound<'_, PyAny>) -> PyResult<Quantity> {
+        let py = other.py();
         if let Ok(val) = other.extract::<f64>() {
             let o = GaussianBackend { mean: val, std_dev: 0.0 };
-            Ok(Quantity { value: o.propagate_sub(&*self.value), unit: self.unit.clone() })
+            Ok(Quantity { value: o.propagate_sub(py, &*self.value)?, unit: self.unit.clone() })
         } else {
             Err(pyo3::exceptions::PyTypeError::new_err("Invalid operand for rsub"))
         }
     }
 
     fn __mul__(&self, other: Bound<'_, PyAny>) -> PyResult<Quantity> {
+        let py = other.py();
         if let Ok(other_qi) = other.extract::<Quantity>() {
             Ok(Quantity {
-                value: self.value.propagate_mul(&*other_qi.value),
+                value: self.value.propagate_mul(py, &*other_qi.value)?,
                 unit: self.unit.__mul__(&other_qi.unit),
             })
         } else if let Ok(val) = other.extract::<f64>() {
             let o = GaussianBackend { mean: val, std_dev: 0.0 };
-            Ok(Quantity { value: self.value.propagate_mul(&o), unit: self.unit.clone() })
+            Ok(Quantity { value: self.value.propagate_mul(py, &o)?, unit: self.unit.clone() })
         } else {
-            Err(pyo3::exceptions::PyTypeError::new_err("Invalid operand for mul"))
+             // Assume Tensor/Array
+             use crate::uncertainty::TensorBackend;
+             let val_obj = other.unbind();
+             let o = TensorBackend { value: val_obj, uncertainty: 0.0.to_object(py) }; 
+             Ok(Quantity { value: self.value.propagate_mul(py, &o)?, unit: self.unit.clone() })
         }
     }
 
@@ -173,35 +203,53 @@ impl Quantity {
     }
 
     fn __truediv__(&self, other: Bound<'_, PyAny>) -> PyResult<Quantity> {
+        let py = other.py();
         if let Ok(other_qi) = other.extract::<Quantity>() {
             Ok(Quantity {
-                value: self.value.propagate_div(&*other_qi.value),
+                value: self.value.propagate_div(py, &*other_qi.value)?,
                 unit: self.unit.__truediv__(&other_qi.unit),
             })
         } else if let Ok(val) = other.extract::<f64>() {
             let o = GaussianBackend { mean: val, std_dev: 0.0 };
-            Ok(Quantity { value: self.value.propagate_div(&o), unit: self.unit.clone() })
+            Ok(Quantity { value: self.value.propagate_div(py, &o)?, unit: self.unit.clone() })
         } else {
-            Err(pyo3::exceptions::PyTypeError::new_err("Invalid operand for div"))
+             // Assume Tensor/Array
+             use crate::uncertainty::TensorBackend;
+             let val_obj = other.unbind();
+             let o = TensorBackend { value: val_obj, uncertainty: 0.0.to_object(py) }; 
+             Ok(Quantity { value: self.value.propagate_div(py, &o)?, unit: self.unit.clone() })
         }
     }
 
     fn __rtruediv__(&self, other: Bound<'_, PyAny>) -> PyResult<Quantity> {
+        let py = other.py();
         if let Ok(val) = other.extract::<f64>() {
             let o = GaussianBackend { mean: val, std_dev: 0.0 };
             Ok(Quantity {
-                value: o.propagate_div(&*self.value),
+                value: o.propagate_div(py, &*self.value)?,
                 unit: RationalUnit::new(None).__truediv__(&self.unit),
             })
         } else {
-            Err(pyo3::exceptions::PyTypeError::new_err("Invalid operand for rtruediv"))
+             // Assume Tensor
+             use crate::uncertainty::TensorBackend;
+             let val_obj = other.unbind();
+             let o = TensorBackend { value: val_obj, uncertainty: 0.0.to_object(py) }; 
+             Ok(Quantity {
+                value: o.propagate_div(py, &*self.value)?,
+                unit: RationalUnit::new(None).__truediv__(&self.unit),
+            })
         }
     }
 
-    fn __float__(&self) -> f64 { self.mean() }
-    fn __int__(&self) -> i64 { self.mean() as i64 }
+    fn __float__(&self, py: Python<'_>) -> PyResult<f64> { self.value.mean(py)?.bind(py).extract() }
+    fn __int__(&self, py: Python<'_>) -> PyResult<i64> { self.value.mean(py)?.bind(py).extract() }
 
-    fn __pow__(&self, exponent: f64, _modulo: Option<Bound<'_, PyAny>>) -> PyResult<Quantity> {
+    fn __pow__(&self, other: Bound<'_, PyAny>, _modulo: Option<Bound<'_, PyAny>>) -> PyResult<Quantity> {
+        // Exponent should be a number for unit logic, but can be a PyObject for values if backend supports it.
+        // MeasureKit usually assumes scalar exponent for units.
+        let exponent: f64 = other.extract()?;
+        let py = other.py();
+
         let mut new_dims = HashMap::new();
         let ratio = if exponent.fract() == 0.0 {
              Rational64::new(exponent as i64, 1)
@@ -217,7 +265,7 @@ impl Quantity {
         }
 
         Ok(Quantity {
-            value: self.value.propagate_pow(exponent),
+            value: self.value.propagate_pow(py, exponent)?,
             unit: RationalUnit { 
                 id: RationalUnit::calculate_id(&new_dims), 
                 dimensions: new_dims 
@@ -226,10 +274,14 @@ impl Quantity {
     }
 
     fn __neg__(&self) -> PyResult<Quantity> {
-        let neg_one = GaussianBackend { mean: -1.0, std_dev: 0.0 };
-        Ok(Quantity { 
-            value: self.value.propagate_mul(&neg_one), 
-            unit: self.unit.clone() 
+        // We don't have python here in signature, but we need it.
+        // Use Python::with_gil
+        Python::with_gil(|py| {
+            let neg_one = GaussianBackend { mean: -1.0, std_dev: 0.0 };
+            Ok(Quantity { 
+                value: self.value.propagate_mul(py, &neg_one)?, 
+                unit: self.unit.clone() 
+            })
         })
     }
 
@@ -237,25 +289,33 @@ impl Quantity {
         self.clone()
     }
 
-    fn __abs__(&self) -> Quantity {
-        self.propagate_function("abs".to_string())
+    fn __abs__(&self) -> PyResult<Quantity> {
+         Python::with_gil(|py| {
+            self.propagate_function(py, "abs".to_string())
+        })
     }
 
-    fn propagate_function(&self, func: String) -> Quantity {
-        Quantity {
-            value: self.value.propagate_function(&func),
+    fn propagate_function(&self, py: Python<'_>, func: String) -> PyResult<Quantity> {
+        Ok(Quantity {
+            value: self.value.propagate_function(py, &func)?,
             unit: self.unit.clone(),
-        }
+        })
     }
 
-    pub fn to_unit(&self, target_unit: RationalUnit, factor: f64) -> Quantity {
-        Quantity {
-            value: self.value.propagate_mul(&GaussianBackend { mean: factor, std_dev: 0.0 }),
-            unit: target_unit,
-        }
+    pub fn to_unit(&self, target_unit: RationalUnit, factor: f64) -> PyResult<Quantity> {
+        Python::with_gil(|py| {
+            Ok(Quantity {
+                value: self.value.propagate_mul(py, &GaussianBackend { mean: factor, std_dev: 0.0 })?,
+                unit: target_unit,
+            })
+        })
     }
 
-    fn __repr__(&self) -> String {
-        format!("{:.4} +/- {:.4} {}", self.mean(), self.std_dev(), self.unit.__repr__())
+    fn __repr__(&self) -> PyResult<String> {
+        Python::with_gil(|py| {
+            let m: f64 = self.value.mean(py)?.bind(py).extract().unwrap_or(0.0);
+            let s: f64 = self.value.std_dev(py)?.bind(py).extract().unwrap_or(0.0);
+            Ok(format!("{:.4} +/- {:.4} {}", m, s, self.unit.__repr__()))
+        })
     }
 }

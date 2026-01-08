@@ -21,13 +21,22 @@ pub fn to_arrow_record_batch(quantities: Bound<'_, PyList>) -> PyResult<Vec<u8>>
     let mut unit_indices = Vec::with_capacity(len);
     let mut unit_repr_cache: HashMap<RationalUnit, u32> = HashMap::new();
 
+    let py = quantities.py();
     for q_any in quantities.iter() {
         // Optimization: downcast and borrow instead of extract (zero allocation)
         let q_bound = q_any.downcast::<Quantity>()?;
         let q = q_bound.borrow();
         
-        means.push(q.mean());
-        std_devs.push(q.std_dev());
+        // Ensure we extract f64; if it's a tensor, this will fail or we need to decide what to do.
+        // For Arrow export, we likely expect scalars.
+        let mean_obj = q.value.mean(py)?;
+        let std_obj = q.value.std_dev(py)?;
+        
+        let m: f64 = mean_obj.bind(py).extract()?;
+        let s: f64 = std_obj.bind(py).extract()?;
+        
+        means.push(m);
+        std_devs.push(s);
         
         // Use the RationalUnit itself as the cache key (efficient Hash/Eq)
         let idx = *unit_repr_cache.entry(q.unit.clone()).or_insert_with(|| {
@@ -38,8 +47,8 @@ pub fn to_arrow_record_batch(quantities: Bound<'_, PyList>) -> PyResult<Vec<u8>>
         unit_indices.push(Some(idx));
     }
 
-    let mean_array = Float64Array::from(means);
-    let std_dev_array = Float64Array::from(std_devs);
+    let mean_array = Float64Array::from_iter_values(means);
+    let std_dev_array = Float64Array::from_iter_values(std_devs);
     
     // Build DictionaryArray for units (reduces memory and overhead)
     let keys = arrow::array::UInt32Array::from(unit_indices);

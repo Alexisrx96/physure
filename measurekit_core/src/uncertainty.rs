@@ -3,15 +3,18 @@ use ndarray::Array1;
 use rand::prelude::*;
 use rand_distr::{Normal, Distribution};
 
+use pyo3::prelude::*;
+// use pyo3::types::{PyFloat, PyTuple};
+
 pub trait UncertaintyBackend: DynClone + Send + Sync {
-    fn mean(&self) -> f64;
-    fn std_dev(&self) -> f64;
-    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend>;
-    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend>;
-    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend>;
-    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend>;
-    fn propagate_pow(&self, exponent: f64) -> Box<dyn UncertaintyBackend>;
-    fn propagate_function(&self, func: &str) -> Box<dyn UncertaintyBackend>;
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject>;
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject>;
+    fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>>;
+    fn propagate_sub(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>>;
+    fn propagate_mul(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>>;
+    fn propagate_div(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>>;
+    fn propagate_pow(&self, py: Python<'_>, exponent: f64) -> PyResult<Box<dyn UncertaintyBackend>>;
+    fn propagate_function(&self, py: Python<'_>, func: &str) -> PyResult<Box<dyn UncertaintyBackend>>;
 }
 
 dyn_clone::clone_trait_object!(UncertaintyBackend);
@@ -23,53 +26,65 @@ pub struct GaussianBackend {
 }
 
 impl UncertaintyBackend for GaussianBackend {
-    fn mean(&self) -> f64 { self.mean }
-    fn std_dev(&self) -> f64 { self.std_dev }
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.mean.to_object(py)) }
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.std_dev.to_object(py)) }
     
-    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let new_mean = self.mean + other.mean();
-        let new_std = (self.std_dev.powi(2) + other.std_dev().powi(2)).sqrt();
-        Box::new(GaussianBackend { mean: new_mean, std_dev: new_std })
+    fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_mean: f64 = other.mean(py)?.bind(py).extract()?;
+        let other_std: f64 = other.std_dev(py)?.bind(py).extract()?;
+
+        let new_mean = self.mean + other_mean;
+        let new_std = (self.std_dev.powi(2) + other_std.powi(2)).sqrt();
+        Ok(Box::new(GaussianBackend { mean: new_mean, std_dev: new_std }))
     }
     
-    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let new_mean = self.mean - other.mean();
-        let new_std = (self.std_dev.powi(2) + other.std_dev().powi(2)).sqrt();
-        Box::new(GaussianBackend { mean: new_mean, std_dev: new_std })
+    fn propagate_sub(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_mean: f64 = other.mean(py)?.bind(py).extract()?;
+        let other_std: f64 = other.std_dev(py)?.bind(py).extract()?;
+
+        let new_mean = self.mean - other_mean;
+        let new_std = (self.std_dev.powi(2) + other_std.powi(2)).sqrt();
+        Ok(Box::new(GaussianBackend { mean: new_mean, std_dev: new_std }))
     }
 
-    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
+    fn propagate_mul(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_mean: f64 = other.mean(py)?.bind(py).extract()?;
+        let other_std: f64 = other.std_dev(py)?.bind(py).extract()?; 
+
         let m1 = self.mean;
         let s1 = self.std_dev;
-        let m2 = other.mean();
-        let s2 = other.std_dev();
+        let m2 = other_mean;
+        let s2 = other_std;
         let new_mean = m1 * m2;
         let new_std = ((m2 * s1).powi(2) + (m1 * s2).powi(2)).sqrt();
-        Box::new(GaussianBackend { mean: new_mean, std_dev: new_std })
+        Ok(Box::new(GaussianBackend { mean: new_mean, std_dev: new_std }))
     }
 
-    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
+    fn propagate_div(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_mean: f64 = other.mean(py)?.bind(py).extract()?;
+        let other_std: f64 = other.std_dev(py)?.bind(py).extract()?;
+
         let m1 = self.mean;
         let s1 = self.std_dev;
-        let m2 = other.mean();
-        let s2 = other.std_dev();
+        let m2 = other_mean;
+        let s2 = other_std;
         let new_mean = m1 / m2;
         let new_std = ((s1 / m2).powi(2) + (m1 * s2 / m2.powi(2)).powi(2)).sqrt();
-        Box::new(GaussianBackend { mean: new_mean, std_dev: new_std })
+        Ok(Box::new(GaussianBackend { mean: new_mean, std_dev: new_std }))
     }
 
-    fn propagate_pow(&self, exponent: f64) -> Box<dyn UncertaintyBackend> {
+    fn propagate_pow(&self, _py: Python<'_>, exponent: f64) -> PyResult<Box<dyn UncertaintyBackend>> {
         let m = self.mean;
         let s = self.std_dev;
         let new_mean = m.powf(exponent);
         if m == 0.0 && exponent > 0.0 {
-             return Box::new(GaussianBackend { mean: 0.0, std_dev: 0.0 });
+             return Ok(Box::new(GaussianBackend { mean: 0.0, std_dev: 0.0 }));
         }
         let new_std = (exponent * m.powf(exponent - 1.0) * s).abs();
-        Box::new(GaussianBackend { mean: new_mean, std_dev: new_std })
+        Ok(Box::new(GaussianBackend { mean: new_mean, std_dev: new_std }))
     }
 
-    fn propagate_function(&self, func: &str) -> Box<dyn UncertaintyBackend> {
+    fn propagate_function(&self, _py: Python<'_>, func: &str) -> PyResult<Box<dyn UncertaintyBackend>> {
         let m = self.mean;
         let s = self.std_dev;
         let (new_mean, new_std) = match func {
@@ -80,7 +95,7 @@ impl UncertaintyBackend for GaussianBackend {
             "abs" => (m.abs(), s),
             _ => (m, s), // Fallback
         };
-        Box::new(GaussianBackend { mean: new_mean, std_dev: new_std })
+        Ok(Box::new(GaussianBackend { mean: new_mean, std_dev: new_std }))
     }
 }
 
@@ -99,43 +114,47 @@ impl MonteCarloBackend {
         MonteCarloBackend { samples: Array1::from_shape_fn(n_samples, |_| dist.sample(&mut rng)) }
     }
 
-    fn ensure_samples(&self, other: &dyn UncertaintyBackend) -> Array1<f64> {
+    fn ensure_samples(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Array1<f64>> {
         let n = self.samples.len();
         let mut rng = thread_rng();
-        let m = other.mean();
-        let s = other.std_dev();
+        
+        // This is risky if other is TensorBackend?
+        // For now, assume MonteCarlo only mixes with Scalars or compatible MC backends.
+        let m: f64 = other.mean(py)?.bind(py).extract()?;
+        let s: f64 = other.std_dev(py)?.bind(py).extract()?;
+        
         if s == 0.0 {
-            return Array1::from_elem(n, m);
+            return Ok(Array1::from_elem(n, m));
         }
-        let dist = Normal::new(m, s).expect("Invalid normal distribution parameters");
-        Array1::from_shape_fn(n, |_| dist.sample(&mut rng))
+        let dist = Normal::new(m, s).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(Array1::from_shape_fn(n, |_| dist.sample(&mut rng)))
     }
 }
 
 impl UncertaintyBackend for MonteCarloBackend {
-    fn mean(&self) -> f64 { self.samples.mean().unwrap_or(0.0) }
-    fn std_dev(&self) -> f64 { self.samples.std(0.0) }
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.samples.mean().unwrap_or(0.0).to_object(py)) }
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.samples.std(0.0).to_object(py)) }
 
-    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let other_samples = self.ensure_samples(other);
-        Box::new(MonteCarloBackend { samples: &self.samples + &other_samples })
+    fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_samples = self.ensure_samples(py, other)?;
+        Ok(Box::new(MonteCarloBackend { samples: &self.samples + &other_samples }))
     }
-    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let other_samples = self.ensure_samples(other);
-        Box::new(MonteCarloBackend { samples: &self.samples - &other_samples })
+    fn propagate_sub(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_samples = self.ensure_samples(py, other)?;
+        Ok(Box::new(MonteCarloBackend { samples: &self.samples - &other_samples }))
     }
-    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let other_samples = self.ensure_samples(other);
-        Box::new(MonteCarloBackend { samples: &self.samples * &other_samples })
+    fn propagate_mul(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_samples = self.ensure_samples(py, other)?;
+        Ok(Box::new(MonteCarloBackend { samples: &self.samples * &other_samples }))
     }
-    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let other_samples = self.ensure_samples(other);
-        Box::new(MonteCarloBackend { samples: &self.samples / &other_samples })
+    fn propagate_div(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let other_samples = self.ensure_samples(py, other)?;
+        Ok(Box::new(MonteCarloBackend { samples: &self.samples / &other_samples }))
     }
-    fn propagate_pow(&self, exponent: f64) -> Box<dyn UncertaintyBackend> {
-        Box::new(MonteCarloBackend { samples: self.samples.mapv(|x| x.powf(exponent)) })
+    fn propagate_pow(&self, _py: Python<'_>, exponent: f64) -> PyResult<Box<dyn UncertaintyBackend>> {
+        Ok(Box::new(MonteCarloBackend { samples: self.samples.mapv(|x| x.powf(exponent)) }))
     }
-    fn propagate_function(&self, func: &str) -> Box<dyn UncertaintyBackend> {
+    fn propagate_function(&self, _py: Python<'_>, func: &str) -> PyResult<Box<dyn UncertaintyBackend>> {
         let new_samples = match func {
             "sin" => self.samples.mapv(|x| x.sin()),
             "cos" => self.samples.mapv(|x| x.cos()),
@@ -144,7 +163,7 @@ impl UncertaintyBackend for MonteCarloBackend {
             "abs" => self.samples.mapv(|x| x.abs()),
             _ => self.samples.clone(),
         };
-        Box::new(MonteCarloBackend { samples: new_samples })
+        Ok(Box::new(MonteCarloBackend { samples: new_samples }))
     }
 }
 
@@ -174,49 +193,62 @@ impl UnscentedBackend {
 }
 
 impl UncertaintyBackend for UnscentedBackend {
-    fn mean(&self) -> f64 { (&self.sigma_points * &self.weights).sum() }
-    fn std_dev(&self) -> f64 {
-        let mu = self.mean();
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok((&self.sigma_points * &self.weights).sum().to_object(py)) }
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let mu = (&self.sigma_points * &self.weights).sum(); // Recompute locally for f64 math
         let var: f64 = self.sigma_points.iter()
             .zip(self.weights.iter())
             .map(|(x, w)| w * (x - mu).powi(2))
             .sum();
-        var.sqrt()
+        Ok(var.sqrt().to_object(py))
     }
 
-    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let m = self.mean() + other.mean();
-        let s = (self.std_dev().powi(2) + other.std_dev().powi(2)).sqrt();
-        Box::new(UnscentedBackend::new_scalar(m, s))
+    fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let m1: f64 = self.mean(py)?.bind(py).extract()?;
+        let s1: f64 = self.std_dev(py)?.bind(py).extract()?;
+        let m2: f64 = other.mean(py)?.bind(py).extract()?;
+        let s2: f64 = other.std_dev(py)?.bind(py).extract()?;
+
+        // Simple Gaussian Approx for addition (UT for addition is just addition of means/vars if independent)
+        let m = m1 + m2;
+        let s = (s1.powi(2) + s2.powi(2)).sqrt();
+        Ok(Box::new(UnscentedBackend::new_scalar(m, s)))
     }
-    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let m = self.mean() - other.mean();
-        let s = (self.std_dev().powi(2) + other.std_dev().powi(2)).sqrt();
-        Box::new(UnscentedBackend::new_scalar(m, s))
+    fn propagate_sub(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let m1: f64 = self.mean(py)?.bind(py).extract()?;
+        let s1: f64 = self.std_dev(py)?.bind(py).extract()?;
+        let m2: f64 = other.mean(py)?.bind(py).extract()?;
+        let s2: f64 = other.std_dev(py)?.bind(py).extract()?;
+
+        let m = m1 - m2;
+        let s = (s1.powi(2) + s2.powi(2)).sqrt();
+        Ok(Box::new(UnscentedBackend::new_scalar(m, s)))
     }
-    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let m1 = self.mean();
-        let m2 = other.mean();
-        let s1 = self.std_dev();
-        let s2 = other.std_dev();
+    fn propagate_mul(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let m1: f64 = self.mean(py)?.bind(py).extract()?;
+        let s1: f64 = self.std_dev(py)?.bind(py).extract()?;
+        let m2: f64 = other.mean(py)?.bind(py).extract()?;
+        let s2: f64 = other.std_dev(py)?.bind(py).extract()?;
+        
         let m = m1 * m2;
         let s = ((m1*s2).powi(2) + (m2*s1).powi(2)).sqrt();
-        Box::new(UnscentedBackend::new_scalar(m, s))
+        Ok(Box::new(UnscentedBackend::new_scalar(m, s)))
     }
-    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> Box<dyn UncertaintyBackend> {
-        let m1 = self.mean();
-        let m2 = other.mean();
-        let s1 = self.std_dev();
-        let s2 = other.std_dev();
+    fn propagate_div(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let m1: f64 = self.mean(py)?.bind(py).extract()?;
+        let s1: f64 = self.std_dev(py)?.bind(py).extract()?;
+        let m2: f64 = other.mean(py)?.bind(py).extract()?;
+        let s2: f64 = other.std_dev(py)?.bind(py).extract()?;
+
         let m = m1 / m2;
         let s = ((s1/m2).powi(2) + (m1*s2/m2.powi(2)).powi(2)).sqrt();
-        Box::new(UnscentedBackend::new_scalar(m, s))
+        Ok(Box::new(UnscentedBackend::new_scalar(m, s)))
     }
-    fn propagate_pow(&self, exponent: f64) -> Box<dyn UncertaintyBackend> {
+    fn propagate_pow(&self, _py: Python<'_>, exponent: f64) -> PyResult<Box<dyn UncertaintyBackend>> {
         let new_points = self.sigma_points.mapv(|x| x.powf(exponent));
-        Box::new(UnscentedBackend { sigma_points: new_points, weights: self.weights.clone() })
+        Ok(Box::new(UnscentedBackend { sigma_points: new_points, weights: self.weights.clone() }))
     }
-    fn propagate_function(&self, func: &str) -> Box<dyn UncertaintyBackend> {
+    fn propagate_function(&self, _py: Python<'_>, func: &str) -> PyResult<Box<dyn UncertaintyBackend>> {
         let new_points = match func {
             "sin" => self.sigma_points.mapv(|x| x.sin()),
             "cos" => self.sigma_points.mapv(|x| x.cos()),
@@ -225,6 +257,64 @@ impl UncertaintyBackend for UnscentedBackend {
             "abs" => self.sigma_points.mapv(|x| x.abs()),
             _ => self.sigma_points.clone(),
         };
-        Box::new(UnscentedBackend { sigma_points: new_points, weights: self.weights.clone() })
+        Ok(Box::new(UnscentedBackend { sigma_points: new_points, weights: self.weights.clone() }))
+    }
+}
+
+// --- Tensor Backend Implementation ---
+pub struct TensorBackend {
+    pub value: PyObject,
+    pub uncertainty: PyObject,
+}
+
+impl Clone for TensorBackend {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| {
+            TensorBackend {
+                value: self.value.clone_ref(py),
+                uncertainty: self.uncertainty.clone_ref(py),
+            }
+        })
+    }
+}
+
+impl UncertaintyBackend for TensorBackend {
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.value.clone_ref(py)) }
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.uncertainty.clone_ref(py)) }
+
+    fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+         // Optimization: If both are Tensors, use Tensor Add.
+         let other_val = other.mean(py)?;
+         let new_val = self.value.bind(py).call_method1("__add__", (other_val,))?.unbind();
+         // Placeholder uncertainty
+         Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }))
+    }
+    
+    fn propagate_sub(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+         let other_val = other.mean(py)?;
+         let new_val = self.value.bind(py).call_method1("__sub__", (other_val,))?.unbind();
+         Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }))
+    }
+
+    fn propagate_mul(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+         let other_val = other.mean(py)?;
+         let new_val = self.value.bind(py).call_method1("__mul__", (other_val,))?.unbind();
+         Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }))
+    }
+
+    fn propagate_div(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
+         let other_val = other.mean(py)?;
+         let new_val = self.value.bind(py).call_method1("__truediv__", (other_val,))?.unbind();
+         Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }))
+    }
+
+    fn propagate_pow(&self, py: Python<'_>, exponent: f64) -> PyResult<Box<dyn UncertaintyBackend>> {
+         let new_val = self.value.bind(py).call_method1("__pow__", (exponent,))?.unbind();
+         Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }))
+    }
+
+    fn propagate_function(&self, py: Python<'_>, func: &str) -> PyResult<Box<dyn UncertaintyBackend>> {
+         let new_val = self.value.bind(py).call_method0(func)?.unbind(); 
+         Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }))
     }
 }
