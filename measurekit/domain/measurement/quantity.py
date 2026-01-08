@@ -38,9 +38,18 @@ from measurekit.domain.measurement.units import (
 )
 
 try:
+    import torch
+except ImportError:
+    torch = None
+
+try:
     from measurekit._generated_types import UnitName
 except ImportError:
     UnitName = str
+
+# Trace-safe imports
+from measurekit.application.context import _UNCERTAINTY_MODE
+from measurekit.jit.tracer import _ensure_rational
 
 if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
@@ -66,8 +75,22 @@ UnitType = TypeVar("UnitType")  # Phantom type for units
 Numeric = Any  # Ideally strictly typed via protocols, but simplified for now
 
 
-@dataclass(frozen=True, slots=True)
-class Quantity(Generic[ValueType, UncType, UnitType]):
+try:
+    from measurekit_core import Quantity as CoreQuantity
+
+    # Force usage of fallback class to ensure consistent Python behavior
+    raise ImportError("Force pure python mode")
+except ImportError:
+    IS_CORE_AVAILABLE = False
+
+    # Minimal fallback for build/env issues
+    class CoreQuantity:
+        def __new__(cls, *args, **kwargs):
+            return super().__new__(cls)
+
+
+@dataclass(frozen=False)
+class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
     """Represents a physical quantity with magnitude, unit, and uncertainty.
 
     Examples:
@@ -80,6 +103,16 @@ class Quantity(Generic[ValueType, UncType, UnitType]):
         >>> print(velocity.to("km/h"))
         18.0 km/h
     """
+
+    def __new__(cls, magnitude, unit, *args, **kwargs):
+        """Ensures the core object is initialized with a RationalUnit."""
+        r_unit = _ensure_rational(unit)
+        # Call the base class __new__ with positional arguments
+        return CoreQuantity.__new__(cls, magnitude, r_unit)
+
+    def __getnewargs__(self):
+        """Support for pickling: arguments passed to __new__."""
+        return (self.magnitude, self.unit)
 
     magnitude: ValueType
     unit: CompoundUnit
@@ -209,7 +242,8 @@ class Quantity(Generic[ValueType, UncType, UnitType]):
         symbol: str | None = None,
     ) -> Self:
         """Bypasses __post_init__ for high-performance creation."""
-        obj = object.__new__(cls)
+        # We MUST call cls.__new__ (or CoreQuantity.__new__) for native subclasses.
+        obj = cls.__new__(cls, magnitude=value, unit=unit)
         object.__setattr__(obj, "magnitude", value)
         object.__setattr__(obj, "unit", unit)
         object.__setattr__(obj, "uncertainty_obj", uncertainty)
@@ -245,10 +279,6 @@ class Quantity(Generic[ValueType, UncType, UnitType]):
         symbol: str | None = None,
     ) -> Self:
         """Creates a Quantity from raw input values."""
-        from measurekit.application.context import _UNCERTAINTY_MODE
-        from measurekit.jit.tracer import _ensure_rational
-        from measurekit_core import QuantityInner
-
         resolved_system = (
             system if system is not None else get_default_system()
         )
@@ -295,14 +325,15 @@ class Quantity(Generic[ValueType, UncType, UnitType]):
         except (ImportError, AttributeError):
             mode, mode_args = _UNCERTAINTY_MODE.get()
 
-        if ("QuantityInner" in str(type(value))) or (
-            mode != "python" or mode_args
+        if IS_CORE_AVAILABLE and (
+            ("CoreQuantity" in str(type(value)))
+            or (mode != "python" or mode_args)
         ):
-            if "QuantityInner" not in str(type(value)):
+            if "CoreQuantity" not in str(type(value)):
                 r_unit = _ensure_rational(unit)
                 std_dev = getattr(uncertainty_obj, "std_dev", uncertainty_obj)
                 # Create core magnitude
-                value = QuantityInner(
+                value = CoreQuantity(
                     float(value),
                     float(std_dev or 0.0),
                     r_unit,
@@ -1475,14 +1506,6 @@ class Quantity(Generic[ValueType, UncType, UnitType]):
                 uncertainty=self.uncertainty_obj,
             )
         return NotImplemented
-
-    def __rmul__(self, other: Any) -> Quantity:
-        """Handles reverse multiplication."""
-        return self.__mul__(other)
-
-    def __radd__(self, other: Any) -> Quantity:
-        """Handles reverse addition."""
-        return self.__add__(other)
 
     def __rmul__(self, other: Any) -> Quantity:
         """Handles reverse multiplication."""
