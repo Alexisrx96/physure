@@ -24,6 +24,15 @@ except (ImportError, ModuleNotFoundError):
 from measurekit.core.dispatcher import enforce_tensor_contract
 from measurekit.core.protocols import BackendOps, Boolean, Numeric
 
+try:
+    from measurekit.backends.kernels.covariance import (
+        apply_covariance_update_triton,
+    )
+
+    HAS_TRITON = True
+except ImportError:
+    HAS_TRITON = False
+
 log = logging.getLogger(__name__)
 
 
@@ -241,10 +250,10 @@ class TorchBackend(BackendOps):
         is_sparse = getattr(obj, "is_sparse", False)
         # Handle FakeTensor where is_sparse might be symbolic or require special handling?
         # Typically is_sparse returns a concrete bool even for fake tensors unless it's a tracer.
-        
+
         if is_sparse:
-             return obj.to_dense().reshape(shape)
-        
+            return obj.to_dense().reshape(shape)
+
         return torch.reshape(obj, shape)
 
     def concatenate(self, arrays: Sequence[Array], axis: int = 0) -> Array:
@@ -292,14 +301,16 @@ class TorchBackend(BackendOps):
     def size(self, obj: Any) -> int:
         """Returns the total number of elements in the object."""
         # Prefer torch.numel for tensors/proxies to ensure correct counting
-        if self.is_array(obj) or (hasattr(obj, "numel") and callable(obj.numel)):
-             return torch.numel(obj)
+        if self.is_array(obj) or (
+            hasattr(obj, "numel") and callable(obj.numel)
+        ):
+            return torch.numel(obj)
         if hasattr(obj, "size") and not callable(obj.size):
-             # numpy-like .size property
-             return obj.size
+            # numpy-like .size property
+            return obj.size
         # Fallback for lists/tuples
         if hasattr(obj, "__len__"):
-             return len(obj)
+            return len(obj)
         return 1
 
     def broadcast_and_flatten(self, inputs: Sequence[Any]) -> Sequence[Any]:
@@ -537,3 +548,46 @@ class TorchBackend(BackendOps):
         # Actually, for sparse, it keeps the indices?
         # Let's verify if we need to coalesce.
         return m.coalesce()
+        return m.coalesce()
+
+    def quadratic_form(self, sigma: Any, jac: Any) -> Any:
+        """Computes J @ Sigma @ J.T efficiently.
+
+        Optimized for diagonal J (vector) using Triton if available.
+        """
+        if (
+            HAS_TRITON
+            and isinstance(sigma, torch.Tensor)
+            and isinstance(jac, torch.Tensor)
+            and sigma.is_cuda
+            and jac.is_cuda
+            and jac.ndim == 1  # Diagonal Jacobian represented as vector
+        ):
+            # Ensure jac is same size as sigma rows
+            if jac.shape[0] == sigma.shape[0]:
+                try:
+                    return apply_covariance_update_triton(sigma, jac)
+                except Exception:
+                    # Fallback if kernel fails (e.g. dimensions/stride)
+                    pass
+
+        # Fallback to standard math
+        # If jac is 1D, it represents diagonal
+        if self.is_array(jac) and getattr(jac, "ndim", 0) == 1:
+            # J @ Sigma @ J.T with J=diag(j) -> (j.reshape(-1,1) * Sigma) * j
+            # Broadcasting: (N,1) * (N,N) * (N,) -> (N,N)
+            j = self.asarray(jac)
+            return (j.unsqueeze(1) * self.asarray(sigma)) * j
+
+        # General case
+        j = self.asarray(jac)
+        s = self.asarray(sigma)
+        # s @ j.T
+        if j.is_sparse:
+            # sparse matmul needed?
+            # j @ s @ j.T
+            # This is (j @ s) @ j.T
+            temp = self.sparse_matmul(j, s)
+            return self.sparse_matmul(temp, self.transpose(j))
+
+        return torch.matmul(torch.matmul(j, s), j.transpose(-1, -2))
