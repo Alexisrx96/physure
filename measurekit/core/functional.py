@@ -37,9 +37,12 @@ def get_xp(*arrays: Any) -> Any:
         The array API namespace (e.g., numpy, torch, jax.numpy).
     """
     try:
-        return array_api_compat.array_namespace(*arrays)
-    except TypeError:
+        if array_api_compat:
+            return array_api_compat.array_namespace(*arrays)
+        raise TypeError("array_api_compat not available")
+    except (TypeError, AttributeError):
         # Fallback for pure Python scalars to numpy if available
+        # Also handles case where array_api_compat is None
         import numpy as xp
 
         return xp
