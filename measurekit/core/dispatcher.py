@@ -479,7 +479,7 @@ class BackendManager:
         if isinstance(data_obj, (int, float, complex, list, tuple)):
             return cls._get_python_backend()
 
-        if "QuantityInner" in str(type(data_obj)):
+        if "measurekit_core.Quantity" in str(type(data_obj)):
             return cls._get_or_load_backend("core")
 
         cls_name = getattr(data_obj.__class__, "__name__", "").lower()
