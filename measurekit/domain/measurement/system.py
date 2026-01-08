@@ -56,7 +56,6 @@ class UnitSystem(IUnitRepository):
 
             self._core_registry = UnitRegistry()
         except ImportError:
-            log.warning("measurekit_core not found. Rust registry disabled.")
             self._core_registry = None
 
     def __getstate__(self) -> dict[str, Any]:

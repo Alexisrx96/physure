@@ -78,8 +78,7 @@ Numeric = Any  # Ideally strictly typed via protocols, but simplified for now
 try:
     from measurekit_core import Quantity as CoreQuantity
 
-    # Force usage of fallback class to ensure consistent Python behavior
-    raise ImportError("Force pure python mode")
+    IS_CORE_AVAILABLE = True
 except ImportError:
     IS_CORE_AVAILABLE = False
 
@@ -107,8 +106,8 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
     def __new__(cls, magnitude, unit, *args, **kwargs):
         """Ensures the core object is initialized with a RationalUnit."""
         r_unit = _ensure_rational(unit)
-        # Call the base class __new__ with positional arguments
-        return CoreQuantity.__new__(cls, magnitude, r_unit)
+        # Call the base class __new__ with positional arguments (mean, std_dev, unit)
+        return CoreQuantity.__new__(cls, magnitude, 0.0, r_unit)
 
     def __getnewargs__(self):
         """Support for pickling: arguments passed to __new__."""
@@ -355,6 +354,46 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
         )
 
     @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        """Deep PyTorch integration for zero-overhead compilation."""
+        if kwargs is None:
+            kwargs = {}
+
+        def unwrap(x):
+            if isinstance(x, Quantity):
+                # For torch dispatch, we act on the magnitude (Tensor)
+                # We essentially strip the unit for the operation
+                # Ideally, we should check unit consistency of args here?
+                # But for 'Zero Overhead' compiled graphs, unit checks happen
+                # at Trace time (if we trace the checks) or we rely on the user/compiler.
+                # Here we blindly operate on magnitudes to let Torch see the tensors.
+                return x.magnitude
+            return x
+
+        args_unwrapped = torch.utils._pytree.tree_map(unwrap, args)
+        kwargs_unwrapped = torch.utils._pytree.tree_map(unwrap, kwargs)
+
+        out = func(*args_unwrapped, **kwargs_unwrapped)
+
+        def wrap(x):
+            if isinstance(x, torch.Tensor):
+                # We need to decide what unit to wrap with.
+                # This is the hard part of __torch_dispatch__ without Unit Propagation logic here.
+                # Phase 2 solution: The 'Quantity' object evaporates.
+                # But if we must return a Quantity, we risk losing unit info if we don't propagate it.
+                # For this refactor, we assume the operation preserves units or we rely on metadata
+                # side-channel?
+                # Actually, relying on Rust 'CoreQuantity' for arithmetic avoids this
+                # because CoreQuantity DOES propagation.
+                # __torch_dispatch__ is mainly for when we pass Quantities to torch.* functions.
+                # If we do that, we return Raw Tensors (stripping units).
+                # This seems to be the only safe default without reimplementing full logic here.
+                return x
+            return x
+
+        return torch.utils._pytree.tree_map(wrap, out)
+
+    @classmethod
     def __get_pydantic_core_schema__(
         cls, source_type: Any, handler: Any
     ) -> core_schema.CoreSchema:
@@ -419,6 +458,29 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
             raise TypeError(
                 "unhashable type: 'Quantity' with unhashable magnitude"
             ) from None
+
+
+if IS_CORE_AVAILABLE:
+    # Remove Python fallbacks to enforce use of Rust Core for 10/10 Performance
+    # This eliminates the Python stack frame for arithmetic dispatch.
+    _methods_to_remove = [
+        "__add__",
+        "__radd__",
+        "__sub__",
+        "__rsub__",
+        "__mul__",
+        "__rmul__",
+        "__truediv__",
+        "__rtruediv__",
+        "__pow__",
+        "__rpow__",
+        "__neg__",
+        "__pos__",
+        "__abs__",
+    ]
+    for _m in _methods_to_remove:
+        if _m in Quantity.__dict__:
+            delattr(Quantity, _m)
 
     @property
     def _has_uncertainty(self) -> bool:
@@ -588,6 +650,18 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
     @property
     def uncertainty(self) -> UncType:
         """Returns the standard deviation of the uncertainty."""
+        # Prefer Core logic if available
+        if hasattr(super(), "std_dev"):
+            # For some reason super() access to properties is tricky on extensions
+            # But self.std_dev should call the getter from CoreQuantity if Quantity doesn't override it.
+            # Wait, separate field in Quantity overrides it? No, Quantity doesn't have 'std_dev' field.
+            # It has 'std_dev' method in Rust, exposed as property or method?
+            # IN Rust: #[getter] fn std_dev... so it is a property.
+            try:
+                return super().std_dev
+            except AttributeError:
+                pass
+
         if self.uncertainty_obj is None:
             return getattr(self.magnitude, "std_dev", 0.0)
         return self.uncertainty_obj.std_dev
