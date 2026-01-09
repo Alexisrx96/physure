@@ -4,6 +4,7 @@ mod units;
 mod uncertainty;
 mod quantity;
 mod covariance;
+mod math;
 mod serialization;
 
 use units::{RationalUnit, UnitRegistry};

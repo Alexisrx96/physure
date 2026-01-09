@@ -1,6 +1,6 @@
 [package]
 name = "measurekit_core"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021" 
 
 [lib]
@@ -20,3 +20,4 @@ dyn-clone = "1.0"
 arrow = "53.0"
 chrono = "0.4"
 sprs = "0.11"
+numpy = "0.23"
