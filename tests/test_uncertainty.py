@@ -18,8 +18,9 @@ def test_uncertainty_modes():
     # x = 10 +/- 1
     # We'll use Quantity directly for now to prove the Rust logic
     u = RationalUnit({"m": (1, 1)})
-    x_g = Quantity(10.0, 1.0, u, mode="gaussian")
-    y_g = x_g**2.0
+    u = RationalUnit({"m": (1, 1)})
+    x_g = Quantity(10.0, u, 1.0, mode="gaussian")
+    y_g = x_g**2
     print(f"  Gaussian: {y_g}")
     # y = 100 +/- 20
     assert math.isclose(y_g.mean, 100.0)
@@ -27,8 +28,8 @@ def test_uncertainty_modes():
 
     print("Testing Monte Carlo Mode...")
     # Larger sample size for stability
-    x_mc = Quantity(10.0, 1.0, u, mode="monte_carlo", samples=100000)
-    y_mc = x_mc**2.0
+    x_mc = Quantity(10.0, u, 1.0, mode="monte_carlo", samples=100000)
+    y_mc = x_mc**2
     print(f"  Monte Carlo: {y_mc}")
     # y_mean should be approx 101.0
     assert 100.8 < y_mc.mean < 101.2
@@ -36,8 +37,8 @@ def test_uncertainty_modes():
     assert 19.5 < y_mc.std_dev < 20.5
 
     print("Testing Unscented Mode...")
-    x_ut = Quantity(10.0, 1.0, u, mode="unscented")
-    y_ut = x_ut**2.0
+    x_ut = Quantity(10.0, u, 1.0, mode="unscented")
+    y_ut = x_ut**2
     print(
         f"  Unscented: {y_ut.mean:.4f} +/- {y_ut.std_dev:.4f} {y_ut.core_unit}"
     )

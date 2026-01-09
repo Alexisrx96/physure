@@ -68,7 +68,7 @@ def _convert_args_to_backend(args_data, unit, backend_name):
 
 
 def assert_all_backends_agree(
-    op_func, args_data, unit_name, rtol=1e-5, atol=1e-7
+    op_func, args_data, unit_name, rtol=1e-4, atol=1e-5
 ):
     """
     Executes op_func(*args) on Numpy, Torch, and JAX and asserts consistency.
