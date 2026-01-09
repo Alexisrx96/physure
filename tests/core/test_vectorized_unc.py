@@ -41,32 +41,22 @@ def test_correlated_arrays():
     # Verify cross-correlation: Cov(q1, q2) = 2*Var(q_base)
     s1 = q1.uncertainty_obj.vector_slice
     s2 = q2.uncertainty_obj.vector_slice
-    try:
-        cov_12 = store.get_covariance_block(s1, s2).toarray()
-        expected_cov_12 = 2.0 * np.diag(unc_base**2)
-        np.testing.assert_allclose(cov_12, expected_cov_12)
-        print("Success: Cross-cov matches theoretical 2 * Var(q_base).")
-    except (AssertionError, ValueError):
-        # ValueError if zero matrix dims mismatch? Or just wrong values.
-        print(
-            "Feature Gap: Cross-covariance block not stored in Immediate Mode."
-        )
+
+    cov_12 = store.get_covariance_block(s1, s2).toarray()
+    expected_cov_12 = 2.0 * np.diag(unc_base**2)
+    np.testing.assert_allclose(
+        cov_12, expected_cov_12, err_msg="Cross-covariance mismatch!"
+    )
+    print("Success: Cross-cov matches theoretical 2 * Var(q_base).")
 
     # Verify q3 = q1 + q2 via full covariance:
     # Var(q3) = Var(q1) + Var(q2) + 2*Cov(q1, q2)
-    # NOTE: This fails in Immediate Mode because specific Cov(q1, q2) block is not stored.
-    # Phase 4 (Autograd Integration) will resolve this by propagating from roots.
-    # For now, we assert that the Rust backend ran without error.
-
-    try:
-        np.testing.assert_allclose(q3.uncertainty, expected_unc)
-        print("Success: Cross-cov matches theoretical 2 * Var(q_base).")
-    except AssertionError:
-        print(
-            "Feature Gap: Implicit cross-correlation propagation requires Autograd (Phase 4)."
-        )
-        print(f"Computed: {q3.uncertainty}")
-        print(f"Expected: {expected_unc}")
+    np.testing.assert_allclose(
+        q3.uncertainty,
+        expected_unc,
+        err_msg="Implicit cross-correlation failed!",
+    )
+    print("Success: q3 uncertainty matches theoretical expectation.")
 
     # Verify Root Propagation (Sanity Check for Rust Backend)
     # q4 = 3 * q_base + 10 meters

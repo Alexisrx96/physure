@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "measurekit_core"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "arrow",
  "chrono",
