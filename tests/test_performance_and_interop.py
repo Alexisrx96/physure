@@ -30,13 +30,21 @@ def test_streaming_pruning():
     process = psutil.Process(os.getpid())
     initial_mem = process.memory_info().rss
 
+    import numpy as np
+
     # Run a loop for 100,000 iterations
-    # In each step, we allocate a new 1x1 block
+    # In each step, we simulate "out = in + noise" chain
+    # This accesses 'i' and 'i+1'. 'i-1' should eventually be pruned.
+
+    dummy_jac = np.array([1.0])
+
     for i in range(100_000):
-        out_idx = store.allocate(1)
-        # Random inputs from previous steps would be more realistic,
-        # but here we just simulate the update call.
-        store.update_covariance(out_idx, [out_idx])
+        in_id = i
+        out_id = i + 1
+
+        # propagate(out_id, [in_id], [jac])
+        # This creates/updates block (out_id, out_id)
+        store.propagate(out_id, [in_id], [dummy_jac])
 
         if i % 20000 == 0:
             curr_mem = process.memory_info().rss / 1024 / 1024

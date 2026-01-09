@@ -16,7 +16,6 @@ def test_functional_add_numpy_basic():
     # State
     bk = NumpyBackend()
     store = CovarianceStore(backend=bk)
-    store._ensure_initialized()
     state = FunctionalState(store)
 
     # Add
