@@ -161,7 +161,11 @@ class VarianceModel(Uncertainty[UncType]):
             return self.variance
 
         backend = BackendManager.get_backend(self.variance)
-        return cast("UncType", backend.sqrt(self.variance))
+        try:
+            return cast("UncType", backend.sqrt(self.variance))
+        except (TypeError, AttributeError):
+            # Fallback for types that backend doesn't support (e.g., SymPy Zero)
+            return self.variance**0.5
 
     @classmethod
     def from_standard(cls, std_dev: UncType) -> VarianceModel[UncType]:
@@ -335,11 +339,15 @@ class VarianceModel(Uncertainty[UncType]):
         return self.add(other, jac_self, jac_other, out_magnitude=result_value)
 
     def power(
-        self, exponent: float, value: Any, jac: Any = None
+        self, exponent: float, value: Any = None, jac: Any = None
     ) -> VarianceModel[Any]:
         """Propagates uncertainty for exponentiation."""
-        backend = BackendManager.get_backend(value)
+        backend = BackendManager.get_backend(self.variance)
         if jac is None:
+            if value is None:
+                raise ValueError(
+                    "Either value or jac must be provided to power()"
+                )
             term = backend.pow(value, exponent - 1)
             jac = backend.mul(term, exponent)
 
@@ -664,11 +672,15 @@ class CovarianceModel(Uncertainty[UncType]):
         )
 
     def power(
-        self, exponent: float, value: Any, jac: Any = None
+        self, exponent: float, value: Any = None, jac: Any = None
     ) -> CovarianceModel[Any]:
         """Propagates uncertainty for exponentiation (correlated)."""
-        backend = BackendManager.get_backend(value)
+        backend = BackendManager.get_backend(self.std_dev_internal)
         if jac is None:
+            if value is None:
+                raise ValueError(
+                    "Either value or jac must be provided to power()"
+                )
             term = backend.pow(value, exponent - 1)
             jac = backend.mul(term, exponent)
 

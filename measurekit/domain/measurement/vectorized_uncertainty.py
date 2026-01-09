@@ -118,25 +118,27 @@ class CovarianceStore:
 
     def register_independent_array(self, std_dev: Any) -> slice:
         """Registers a new independent array and returns its slice."""
-        val = self.backend.asarray(std_dev)
-        size = self.backend.size(val)
+        # Convert std_dev (standard deviation) to variance
+        variance = self.backend.pow(std_dev, 2)
+        size = self.backend.size(std_dev)
         slc = self.allocate(size)
 
-        # Calculate variance as square of std_dev
-        diag_val = self.backend.reshape(self.backend.pow(val, 2), (-1,))
-        variance = self.backend.sparse_diags(
-            [diag_val], [0], shape=(size, size)
+        # Always wrap source variance in a sparse diagonal matrix
+        var_diag = self.backend.sparse_diags(
+            [self.backend.reshape(variance, (size,))], [0], shape=(size, size)
         )
 
         if self._matrix is None or (
             hasattr(self._matrix, "shape") and self._matrix.shape[0] == 0
         ):
-            self._matrix = variance
+            self._matrix = var_diag
             self._initialized = True
         else:
+            # Append variance to diagonal
             self._matrix = self.backend.sparse_bmat(
-                [[self._matrix, None], [None, variance]]
+                [[self._matrix, None], [None, var_diag]]
             )
+
         return slc
 
 
@@ -196,7 +198,7 @@ def _process_jacobian(
                 # Numpy fallback
                 import numpy as np
 
-                jac_np = np.array(jac)
+                jac_np = np.atleast_2d(np.array(jac))
                 rows, cols = jac_np.nonzero()
                 vals = jac_np[rows, cols]
                 return (
@@ -282,7 +284,9 @@ def propagate_affine(
         )
 
     # Calculate cross-covariance: J_in * Sigma_old
+    # print(f"DEBUG: j_in shape={j_in.shape}, current_matrix shape={current_matrix.shape}")
     cross_cov = backend.sparse_matmul(j_in, current_matrix)
+    # print(f"DEBUG: cross_cov nonzero={backend.size(backend.asarray(cross_cov).nonzero()[0]) if not hasattr(cross_cov, 'nnz') else cross_cov.nnz}")
 
     # Calculate output covariance: cross_cov * J_in.T
     j_in_t = j_in.T if hasattr(j_in, "T") else backend.transpose(j_in)
