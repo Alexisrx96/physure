@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 # enabling "extension-module" is required for Python
 pyo3 = { version = "0.23", features = ["extension-module"] } 
 num-rational = "0.4"
+num-traits = "0.2"
 ndarray = "0.15"
 rand = "0.8"
 rand_distr = "0.4"

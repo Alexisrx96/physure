@@ -689,6 +689,7 @@ dependencies = [
  "nalgebra",
  "ndarray",
  "num-rational",
+ "num-traits",
  "pyo3",
  "rand",
  "rand_distr",
