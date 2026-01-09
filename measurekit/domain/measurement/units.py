@@ -84,9 +84,77 @@ def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
     return cls(exponents)
 
 
+try:
+    from measurekit_core import RationalUnit
+
+    IS_CORE_AVAILABLE = True
+except ImportError:
+    # Fallback to local stub if core not available
+    class RationalUnit:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    IS_CORE_AVAILABLE = False
+
+
 @dataclass(frozen=True)
-class CompoundUnit(BaseExponentEntity):
+class CompoundUnit(RationalUnit, BaseExponentEntity):
     """Represents a unit composed of base units raised to various powers."""
+
+    def dimension(self, system: UnitSystem | None = None) -> Dimension:
+        """Calculates the physical dimension of the composite unit."""
+        from measurekit.domain.measurement.dimensions import Dimension
+
+        if system is None:
+            # Import here to avoid circularity
+            from measurekit.domain.measurement.system import get_default_system
+
+            system = get_default_system()
+
+        # Dimension calculation
+        dims = Dimension({})
+        # Use .dimensions (Rust HashMap) if available for speed
+        it = (
+            self.dimensions.items()
+            if hasattr(self, "dimensions")
+            else self.exponents.items()
+        )
+        for unit_name, exp_val in it:
+            exp = (
+                exp_val[0] / exp_val[1]
+                if isinstance(exp_val, tuple)
+                else exp_val
+            )
+            if unit_name in system.UNIT_DIMENSIONS:
+                unit_dim = system.UNIT_DIMENSIONS[unit_name]
+            else:
+                base_unit = system.get_unit(unit_name)
+
+                # Loop detection: If base_unit is effectively self (identity wrapper)
+                # and we haven't found a dimension yet, it's an unknown base unit.
+                is_identity = False
+                if isinstance(
+                    base_unit, CompoundUnit
+                ):  # Check strictly or duck-type
+                    deps = (
+                        base_unit.exponents
+                        if hasattr(base_unit, "exponents")
+                        else base_unit.dimensions
+                    )
+                    if len(deps) == 1 and deps.get(unit_name) == 1:
+                        is_identity = True
+
+                if is_identity:
+                    raise ValueError(
+                        f"Unknown dimension for unit '{unit_name}'"
+                    )
+
+                if hasattr(base_unit, "dimension"):
+                    unit_dim = base_unit.dimension(system)
+                else:
+                    unit_dim = Dimension({unit_name: 1})
+            dims *= unit_dim**exp
+        return dims
 
     _cache: ClassVar[weakref.WeakValueDictionary[tuple, CompoundUnit]] = (
         weakref.WeakValueDictionary()
@@ -96,6 +164,10 @@ class CompoundUnit(BaseExponentEntity):
         """Create or retrieve a cached CompoundUnit instance."""
         normalized_exponents = {}
         for k, v in exponents.items():
+            # Handle rational tuples (num, den) from Rust
+            if isinstance(v, (list, tuple)):
+                v = v[0] / v[1]
+
             if v == 0:
                 continue
             if isinstance(v, float) and v.is_integer():
@@ -156,6 +228,66 @@ class CompoundUnit(BaseExponentEntity):
         return cls(r_unit.exponents)
 
     # --- System-Dependent Methods ---
+    def _compound_factor(self, system: UnitSystem) -> float:
+        """Calculate the unit's total conversion factor relative to SI units."""
+        factor = 1.0
+        it = (
+            self.dimensions.items()
+            if hasattr(self, "dimensions")
+            else self.exponents.items()
+        )
+        for unit, exp in it:
+            if unit == "noprefix":
+                continue
+            _unit = system.get_unit(unit)
+            dim = _unit.dimension(system)
+            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
+            if unit_def and hasattr(unit_def.converter, "scale"):
+                conv_scale = unit_def.converter.scale
+                # Handle tuple exponents (num, den) from RationalUnit
+                if isinstance(exp, (list, tuple)):
+                    exponent_val = exp[0] / exp[1]
+                else:
+                    exponent_val = exp
+                factor *= conv_scale**exponent_val
+        return factor
+
+    def is_linear(self, system: UnitSystem) -> bool:
+        """Checks if all components of the unit use linear converters."""
+        it = (
+            self.dimensions.items()
+            if hasattr(self, "dimensions")
+            else self.exponents.items()
+        )
+        for unit, _ in it:
+            if unit == "noprefix":
+                continue
+            unit_def = system.get_definition(unit)
+            if unit_def and not unit_def.converter.is_linear:
+                return False
+        return True
+
+    def kind(self, system: UnitSystem) -> str:
+        """Determines if the unit is 'absolute' (Point) or 'delta' (Vector)."""
+        it = (
+            self.dimensions.items()
+            if hasattr(self, "dimensions")
+            else self.exponents.items()
+        )
+        e_list = list(it)
+        if len(e_list) == 1:
+            unit_name, exp = e_list[0]
+            # Handle rational tuple
+            is_unity = (exp == 1) or (
+                isinstance(exp, (list, tuple)) and exp[0] == 1 and exp[1] == 1
+            )
+
+            if is_unity and unit_name != "noprefix":
+                unit_def = system.get_definition(unit_name)
+                if unit_def:
+                    return getattr(unit_def, "kind", "delta")
+        return "delta"
+
     def conversion_factor_to(
         self, target: CompoundUnit, system: UnitSystem | None = None
     ) -> float:
@@ -181,99 +313,6 @@ class CompoundUnit(BaseExponentEntity):
         source_factor = self._compound_factor(system)
         target_factor = target._compound_factor(system)
         return source_factor / target_factor
-
-    def _compound_factor(self, system: UnitSystem) -> float:
-        """Calculate the unit's total conversion factor relative to SI units.
-
-        This is a helper method used for conversions.
-
-        Args:
-        system (UnitSystem): The unit system providing conversion definitions.
-
-        Returns:
-        float: The unit's conversion factor.
-
-        Raises:
-        ValueError: If any base unit in the composition is not found in the
-        system.
-        """
-        factor = 1.0
-        for unit, exp in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            _unit = system.get_unit(unit)
-            dim = _unit.dimension(system)
-
-            if dim is None:
-                raise ValueError(
-                    f"Unit '{unit}' not found in system for conversion."
-                )
-            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
-            if unit_def is None:
-                raise ValueError(f"Unit definition for '{unit}' not found.")
-            # Assume Linear for compound factors default path
-            # If not linear, this naive multiplication is wrong,
-            # but _compound_factor is legacy helper only for linear
-            # combinations.
-            if hasattr(unit_def.converter, "scale"):
-                factor *= unit_def.converter.scale**exp
-            else:
-                # Fallback or error for non-linear in compound?
-                # Assuming 1.0 if not scalable (e.g. Identity)?
-                pass
-        return factor
-
-    def is_linear(self, system: UnitSystem) -> bool:
-        """Checks if all components of the unit use linear converters."""
-        for unit, _ in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            unit_def = system.get_definition(unit)
-            if unit_def and not unit_def.converter.is_linear:
-                return False
-        return True
-
-    def kind(self, system: UnitSystem) -> str:
-        """Determines if the unit is 'absolute' (Point) or 'delta' (Vector).
-
-        By default, all units are 'delta' (vectors/magnitudes).
-        Only single units explicitly defined as 'absolute' (e.g. Celsius)
-        without exponents != 1 are considered Absolute.
-        """
-        if len(self.exponents) == 1:
-            unit_name, exp = next(iter(self.exponents.items()))
-            if exp == 1 and unit_name != "noprefix":
-                unit_def = system.get_definition(unit_name)
-                if unit_def:
-                    return getattr(unit_def, "kind", "delta")
-        return "delta"
-
-    def dimension(self, system: UnitSystem) -> Dimension:
-        """Determine the physical dimension of the unit within a system.
-
-        Args:
-        system (UnitSystem): The unit system that defines the dimensions of
-        base units.
-
-        Returns:
-        Dimension: The resulting physical dimension of the compound unit.
-
-        Raises:
-        ValueError: If any base unit in the composition is not found in the
-        system.
-        """
-        overall = Dimension({})
-        for unit, exp in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            if unit in system.UNIT_DIMENSIONS:
-                overall = overall * (system.UNIT_DIMENSIONS[unit] ** exp)
-            else:
-                raise ValueError(
-                    f"Unknown dimension for unit '{unit}'"
-                    " in the provided system."
-                )
-        return overall
 
     @overload
     def __rmul__(self, other: float) -> Quantity[float, float]: ...
@@ -347,6 +386,33 @@ class CompoundUnit(BaseExponentEntity):
         """Format the CompoundUnit using a format specification."""
         return self.to_string(use_alias=format_spec.startswith("alias"))
 
+    def __pow__(self, exponent: float | tuple[int, int]) -> CompoundUnit:
+        """Power support with float-to-rational conversion."""
+        if isinstance(exponent, float):
+            # Check for integer float
+            if exponent.is_integer():
+                exponent = int(exponent)
+            else:
+                # Convert float to decent rational
+                from fractions import Fraction
+
+                frac = Fraction(exponent).limit_denominator(100)
+                exponent = (frac.numerator, frac.denominator)
+
+        # Call Rust implementation
+        res = super().__pow__(exponent)
+
+        # Ensure we return CompoundUnit (wrapping result)
+        if hasattr(res, "dimensions"):  # Check if it's RationalUnit-like
+            return _CompoundUnit(res.dimensions)
+        return res
+
+    def __rtruediv__(self, other: Any) -> CompoundUnit:
+        """Right division (1 / unit)."""
+        if other == 1:
+            return self**-1
+        return NotImplemented
+
     def to_latex(self) -> str:
         """Generate a LaTeX representation of the unit for display."""
         if not self.exponents:
@@ -356,6 +422,11 @@ class CompoundUnit(BaseExponentEntity):
 
         expr = sp.S.One
         for unit_name, exponent in self.exponents.items():
+            # Clean up exponent if it's a float-int (e.g. 1.0 -> 1)
+            # This ensures latex output is clean: m^1 not m^1.0
+            if isinstance(exponent, float) and exponent.is_integer():
+                exponent = int(exponent)
+
             expr *= symbols[unit_name] ** exponent
 
         return sp.latex(expr, mul_symbol="dot")
@@ -443,3 +514,55 @@ _register_core_units()
 
 # Discover external units via entry points (lazy loading)
 units.discover_plugins()
+
+
+# Inject Python-side functionality into the Rust base class
+# This ensures that results of Rust unit arithmetic (which return raw RationalUnit
+# objects) still have access to the high-level Python methods.
+if IS_CORE_AVAILABLE:
+
+    def wrap_arithmetic(op_name):
+        orig_op = getattr(RationalUnit, op_name, None)
+        if orig_op:
+
+            def wrapped(self, other):
+                res = orig_op(self, other)
+                if isinstance(res, RationalUnit):
+                    # Wrap in CompoundUnit to use Flyweight cache
+                    return _CompoundUnit(res.dimensions)
+                return res
+
+            return wrapped
+        return None
+
+    # Methods to copy from CompoundUnit to RationalUnit
+    for method_name in [
+        "dimension",
+        "simplify",
+        "_compound_factor",
+        "conversion_factor_to",
+        "to_latex",
+        "_repr_latex_",
+        "is_dimensionless",
+        "is_linear",
+        "kind",
+    ]:
+        if hasattr(CompoundUnit, method_name):
+            setattr(
+                RationalUnit, method_name, getattr(CompoundUnit, method_name)
+            )
+
+    # Arithmetic methods to wrap with Flyweight cache
+    for op in [
+        "__mul__",
+        "__rmul__",
+        "__truediv__",
+        "__rtruediv__",
+        "__pow__",
+    ]:
+        wrapped_op = wrap_arithmetic(op)
+        if wrapped_op:
+            setattr(RationalUnit, op, wrapped_op)
+
+# Stable reference for internal use (resilience against shadowing)
+_STABLE_COMPOUND_UNIT = CompoundUnit
