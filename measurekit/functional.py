@@ -48,13 +48,30 @@ class FunctionalState:
             from measurekit.backends.numpy_backend import NumpyBackend
 
             store = CovarianceStore(backend=NumpyBackend())
-            store._ensure_initialized()
 
         self.store = store
         # If matrix is provided, it overrides the store's internal matrix
         # This allows 'threading' the matrix through JAX graph while
         # keeping the store allocator consistent.
-        self.matrix = matrix if matrix is not None else store._matrix
+        if matrix is not None:
+            self.matrix = matrix
+        elif hasattr(store, "_matrix"):
+            self.matrix = store._matrix
+        else:
+            # Initialize empty matrix using backend
+            # We assume dense or sparse depending on backend defaults?
+            # For functional API, usually sparse if possible.
+            # Or call backend.zeros((0,0))?
+            # Or backend.sparse_matrix(..., shape=(0,0))?
+
+            # If backend is known:
+            bk = store.backend
+            if hasattr(bk, "sparse_matrix"):
+                # Create empty sparse matrix
+                self.matrix = bk.sparse_matrix([], ([], []), shape=(0, 0))
+            else:
+                self.matrix = bk.zeros((0, 0))
+
         self.registry = registry if registry is not None else {}
 
     def allocate(self, size: int) -> slice:
