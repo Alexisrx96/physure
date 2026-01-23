@@ -34,16 +34,13 @@ _propagation_mode: ContextVar[str] = ContextVar(
 _global_default_system: UnitSystem | None = None
 
 
-def get_current_system() -> UnitSystem:
-    """Returns the currently active UnitSystem.
+def _get_current_system_impl() -> UnitSystem:
+    """Internal implementation of system retrieval.
 
     Resolution order:
     1. Check `_current_unit_system` ContextVar (set via `use_system`).
     2. Check `_global_default_system` (cache).
     3. Lazily load the default "International" (SI) system.
-
-    Returns:
-        UnitSystem: The active system.
     """
     # 1. Check ContextVar
     system = _current_unit_system.get()
@@ -61,6 +58,42 @@ def get_current_system() -> UnitSystem:
 
     _global_default_system = create_default_system()
     return _global_default_system
+
+
+# Helper for Dynamo: Eager execution to freeze the context
+try:
+    import torch
+
+    @torch.compiler.disable
+    def _get_current_system_eager():
+        return _get_current_system_impl()
+
+    def get_current_system() -> UnitSystem:
+        """Returns the currently active UnitSystem.
+
+        Resolution order:
+        1. ContextVar.
+        2. Global Cache.
+        3. Lazy Load SI.
+
+        Dynamo Note: If compiling, this function runs eagerly to 'freeze' the
+        system into the graph as a constant.
+        """
+        if torch.compiler.is_compiling():
+            return _get_current_system_eager()
+        return _get_current_system_impl()
+
+except (ImportError, AttributeError):
+    # Fallback if torch is missing
+    def get_current_system() -> UnitSystem:
+        """Returns the currently active UnitSystem.
+
+        Resolution order:
+        1. ContextVar.
+        2. Global Cache.
+        3. Lazy Load SI.
+        """
+        return _get_current_system_impl()
 
 
 @contextmanager
