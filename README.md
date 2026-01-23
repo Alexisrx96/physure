@@ -1,167 +1,107 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/Alexisrx96/measurekit/main/MeasureKitLogoBeta.jpg" alt="MeasureKit Logo" width="500">
-  <br>
-  <h1>MeasureKit</h1>
-  <p><b>A Zero-Overhead, Multi-Backend Physical Dimension Engine for Python</b></p>
+# MeasureKit
 
-  <p>
-    <a href="https://pypi.org/project/measurekit/"><img src="https://img.shields.io/pypi/v/measurekit.svg?style=flat-square" alt="PyPI version"></a>
-    <a href="https://github.com/Alexisrx96/measurekit/actions"><img src="https://img.shields.io/github/actions/workflow/status/Alexisrx96/measurekit/tests.yml?branch=main&style=flat-square" alt="Build Status"></a>
-    <a href="https://codecov.io/gh/Alexisrx96/measurekit"><img src="https://img.shields.io/codecov/c/github/Alexisrx96/measurekit?style=flat-square" alt="Coverage"></a>
-    <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License: MIT"></a>
-    <a href="https://astral.sh/uv"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json&style=flat-square" alt="uv"></a>
-  </p>
+<div align="center">
+<img src="https://cdn.irvintorres.com/MeasureKitLogoBeta.jpg" alt="MeasureKit Logo" width="500">
+
+<h3><b>The Over-Engineered Homework Validator</b></h3>
+<p><i>A Multi-Backend Physical Dimension Engine born from a professional dev's obsession with doing simple things the hard way.</i></p>
 </div>
 
 ---
 
-## ⚡ Why MeasureKit?
+## 🛑 What is this actually?
 
-MeasureKit is not just another unit library. It's a high-performance engine designed for modern scientific Python stack. It bridges the gap between scalar physical calculations and vectorized, multi-backend tensor operations.
+MeasureKit didn't start as an enterprise product. It started because I wanted to verify my physics studies. But I'm not a student learning to code; I'm a professional developer who looked at `12 m + 13 m` and thought, _"I could just add them... or I could build a backend-agnostic, JIT-compilable, tensor-compatible engine to do it for me."_
 
-- **🚀 Ultra-Fast:** Optimized `_fast_new` path for zero-overhead arithmetic.
-- **🛡️ Type Safe:** Built-in Pydantic V2 support for robust data validation.
-- **🔌 Backend Agnostic:** Transparently switch between **NumPy**, **PyTorch**, and **JAX**.
-- **📈 Uncertainty Propagation:** Advanced correlated error tracking using the Affine Transformation Formula.
-- **🧩 Symbolic Analysis:** Native SymPy integration for dimensional verification.
-- **⚡ Zero-Overhead Lazy Loading:** Units are transpiled to Python bytecode at build time, ensuring sub-millisecond import costs.
+I chose the latter.
+
+This project is the result of applying enterprise architecture patterns and performance obsessions to a problem that didn't strictly need them. It is a one-man (plus AI) show, pushing Python's dynamic nature to its absolute limit to see what happens when you try to force physics into high-performance compute graphs.
+
+---
+
+---
+
+## ⚡ The "Zero-Overhead" Reality Check
+
+The original marketing says "Zero-Overhead." Let's be precise about what that means, because in standard Python, **there is overhead.**
+
+- **Eager Mode (Standard Python):** 🐢 **Slow.** Creating a `Quantity` object involves allocating Python classes, checking units, and handling validations. It is significantly slower than raw `float` or `torch.Tensor` math (sometimes 10x-100x overhead). Do not use this for tight loops in production unless speed is irrelevant.
+- **Compiled Mode (The Trick):** 🚀 **Fast.** The "Zero-Overhead" claim is only true if you use **JIT Compilation** (`torch.compile` or `jax.jit`).
+- We use `__torch_dispatch__` to strip away the `Quantity` abstraction during the tracing phase.
+- The final execution graph (e.g., Triton kernel) sees only raw tensors. The units evaporate.
+- **Trade-off:** Unit safety checks happen _at compile time_. If you bypass them or have dynamic units that change at runtime, you might break the illusion.
+
+---
+
+## 🛠 Features (The Good & The Complex)
+
+### 1. Homework Syntax (The Original Goal)
+
+This is what it was built for. Simple, intuitive syntax to check your work.
+
+```python
+from measurekit import Q_
+
+# Solving a kinematic problem
+d = Q_(10, "km")
+t = Q_(2, "hr")
+v = d / t
+
+print(f"My answer: {v.to('m/s')}") # 1.3888888888888888 m/s
+
+```
+
+### 2. Multi-Backend Tensors (The Ambition)
+
+We wrap **NumPy**, **PyTorch**, and **JAX**. If you pass a tensor, we try to stay out of the way.
+
+- **Warning:** Broadcasting uncertainty (e.g., adding a scalar error to a tensor value) is mathematically expensive and complex. We handle it, but it's heavy machinery.
+
+### 3. Rust Core (The Optimization)
+
+We integrated a Rust backend (`measurekit_core`) via PyO3 to speed up the heavy lifting.
+
+- **Honesty:** Crossing the Python-Rust boundary isn't free. It helps, but it doesn't magically fix Python's inherent slowness for small scalars.
 
 ---
 
 ## 📦 Installation
 
-We recommend using [uv](https://astral.sh/uv) for lightning-fast installation:
+It's on PyPI. We recommend `uv` because it's fast, and we like fast tools.
 
 ```bash
-# Basic installation
 uv pip install measurekit
 
-# With all backend dependencies (NumPy, Torch, JAX, Pandas)
-uv pip install "measurekit[all]"
 ```
 
 ---
 
-## 🔥 Quick Start
+## 🧪 Benchmarks (No Cherry-Picking)
 
-### 1. Simple Scalar Arithmetic
+We run benchmarks to keep ourselves honest.
 
-```python
-from measurekit import Q_
+- **Pure PyTorch:** 0.0xxx ms
+- **MeasureKit (Eager):** Significantly slower (overhead from Python objects).
+- **MeasureKit (Compiled):** **< 1.1x overhead** compared to raw PyTorch.
 
-dist = Q_(10, "km")
-time = Q_(2, "hr")
-
-speed = dist / time
-print(speed)              # 5.0 km/hr
-print(speed.to("m/s"))    # 1.3889 m/s
-```
-
-### 2. Multi-Backend Vectorization
-
-MeasureKit automatically detects the backend (NumPy, Torch, or JAX) and uses the appropriate high-performance kernels.
-
-```python
-import torch
-from measurekit import Q_
-
-# Initialize with a PyTorch tensor
-tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda")
-q = Q_(tensor, "m/s")
-
-# All operations stay on GPU and use Torch kernels
-res = q * Q_(2, "s")
-print(res.magnitude)  # tensor([2., 4., 6.], device='cuda:0')
-```
-
-### 3. Pydantic Integration
-
-Ensure your data models are physically sound with automatic validation.
-
-```python
-from pydantic import BaseModel
-from measurekit import Quantity
-
-class SensorData(BaseModel):
-    temperature: Quantity
-    pressure: Quantity
-
-# Validates strings, dicts, or objects
-data = SensorData(
-    temperature="25 degC",
-    pressure={"magnitude": 101.3, "unit": "kPa"}
-)
-```
+_If you need raw speed, you MUST compile your code. If you just need to check unit consistency for data processing, eager mode is fine._
 
 ---
 
-## 🧪 Advanced Features
+## Contributing & Vision
 
-- **Correlation Tracking:** Uncertainties are propagated through the global `CovarianceStore`, keeping track of dependencies between measured quantities.
-- **Unit Systems:** Easily define and switch between SI, Imperial, and custom unit systems.
-- **Commutativity & Invariants:** Strictly follows physical laws for group operations.
+This project is what happens when a Senior Engineer treats a "side project" with the same intensity as a production system.
 
-### Adding Custom Units (The Transpiler)
+It is complex—sometimes intentionally, sometimes because I was learning how to bend PyTorch's dispatcher to my will. It is a testbed for architectural concepts as much as it is a physics library.
 
-MeasureKit uses a "Python-as-Database" approach. Instead of parsing slow TOML/YAML files at runtime, we **transpile** definitions into optimized Python modules.
+I am trying to build something robust that bridges the gap between "handwritten math" and "GPU-accelerated tensors." If you see code that looks incredibly dense or abstracted, it's not because I didn't know better—it's because I was trying to make it _perfect_ (and probably overcooked it).
 
-1. **Define:** Add your unit to `definitions/your_scope.toml`.
-   ```toml
-   [volt]
-   symbol = "V"
-   definition = "kg * m^2 * s^-3 * A^-1"
-   ```
-2. **Compile:** Run the transpiler to generate the Python code.
-   ```bash
-   python scripts/compile_units.py
-   ```
-3. **Use:** Access it immediately with zero runtime parsing cost.
-   ```python
-   import measurekit as mk
-   print(mk.units.volt)
-   ```
-
----
-
-## 📊 Benchmarks
-
-MeasureKit is designed for high performance. To run the benchmark suite:
-
-```bash
-uv run pytest --benchmark-enable tests/performance/benchmarks.py
-```
-
-CI/CD automatically tracks performance regressions using `pytest-benchmark`.
-
-## 📚 Documentation
-
-The documentation is built with **MkDocs Material** and includes API references and interactive Jupyter tutorials.
-
-To build and serve the documentation locally:
-
-```bash
-uv run mkdocs serve
-```
-
-Documentation includes:
-
-- **API Reference**: Automatically generated from docstrings.
-- **Tutorials**: Executable Jupyter notebooks (e.g., getting started with JAX).
-- **Core Concepts**: Explanations of the Quantity and UnitSystem.
-
-## 🤝 Contributing
-
-Contributions are welcome! Please see our [ROADMAP.md](ROADMAP.md) for future vision and [MK-001_Best_Practices.md](MK-001_Best_Practices.md) for coding standards.
-
-1. Fork the repository
-2. Install dev dependencies: `uv sync --all-extras`
-3. Run tests: `uv run pytest`
-4. Submit a PR
+Contributions are welcome. Just know that you are stepping into a codebase built by one guy who refused to compromise on features, even when he probably should have.
 
 ---
 
 ## 📄 License
 
-MeasureKit is open-source software licensed under the **MIT License**.
+**MIT License**. Use it, break it, inspect the architecture.
 
-Built with ❤️ by **Irvin Torres** and the Scientific Python community.
+Built with ☕, 🤖, and years of accumulated dev trauma by **Irvin Torres**.
