@@ -10,32 +10,54 @@ from measurekit.core.protocols import BackendOps, Boolean, Numeric
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-try:
-    from jaxtyping import Array, Bool, Float, typecheck
-except ImportError:
-    # Fallback if jaxtyping or its dependencies (jax) are missing
-    from typing import Any
+    try:
+        from jaxtyping import Array, Bool, Float, typecheck
+    except ImportError:
+        Array = Any
+        Bool = Any
+        Float = Any
 
+        def typecheck(func):
+            return func
+
+    try:
+        from beartype import beartype
+    except ImportError:
+        beartype = typecheck
+else:
     Array = Any
     Bool = Any
     Float = Any
-
-    def typecheck(func):
-        """No-op decorator if jaxtyping is unavailable."""
-        return func
-
-
-try:
-    from beartype import beartype
-except ImportError:
-    beartype = typecheck  # Fallback to typecheck or identity
 
 
 def enforce_tensor_contract(func):
     """Decorator to enforce jaxtyping contracts at runtime."""
     if os.environ.get("MEASUREKIT_DEBUG") == "1":
-        return beartype(func)
+        try:
+            from beartype import beartype
+
+            return beartype(func)
+        except ImportError:
+            return func
     return func
+
+
+import functools
+
+
+def ensure_backend_compatible(func):
+    """Ensures that inputs are converted to backend-compatible arrays."""
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # 'self' is the backend
+        converted_args = [
+            self.asarray(arg) if isinstance(arg, (list, tuple)) else arg
+            for arg in args
+        ]
+        return func(self, *converted_args, **kwargs)
+
+    return wrapper
 
 
 class PythonBackend(BackendOps):

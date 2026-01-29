@@ -70,6 +70,10 @@ class UnitRegistry:
         if name in self._registry:
             return self._registry[name]
 
+        # Trigger discovery lazily
+        if not self._discovered:
+            self.discover_plugins()
+
         if name in self._lazy_loaders:
             loader = self._lazy_loaders.pop(name)
             try:
@@ -99,12 +103,16 @@ class UnitRegistry:
     @property
     def available_units(self) -> list[str]:
         """Returns a list of all available unit names."""
+        if not self._discovered:
+            self.discover_plugins()
         return sorted(
             list(self._registry.keys()) + list(self._lazy_loaders.keys())
         )
 
     def __dir__(self) -> list[str]:
         """Lists all available units for discovery (e.g. in notebooks)."""
+        if not self._discovered:
+            self.discover_plugins()
         return sorted(
             list(self._registry.keys()) + list(self._lazy_loaders.keys())
         )
