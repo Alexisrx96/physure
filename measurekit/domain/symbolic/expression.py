@@ -165,7 +165,9 @@ class SymbolicExpression:
         """Returns a string representation for debugging."""
         return f"Expression({self.expr}) [{self.unit}]"
 
-    def to_function(self, *args: SymbolicExpression) -> Function:
+    def to_function(
+        self, *args: SymbolicExpression, backend: str = "numpy"
+    ) -> Function:
         """Converts this expression into a callable Function object."""
         params = {str(arg.expr): arg.unit for arg in args}
         return Function(
@@ -173,7 +175,22 @@ class SymbolicExpression:
             output_unit=self.unit,
             symbolic_func=self.expr,
             system=self.system,
+            backend=backend,
         )
+
+    def compile(self, backend: str = "numpy") -> Function:
+        """Compiles the expression into a backend-optimized function.
+
+        Args:
+           backend: 'numpy', 'torch', 'jax', etc.
+
+        Returns:
+           A Function object that accepts arguments matching the variables.
+        """
+        # Automatically determine arguments from tracked variables
+        args_list = list(self.variables)
+        args_list.sort(key=lambda v: v.expr.name)
+        return self.to_function(*args_list, backend=backend)
 
     def simplify(self) -> SymbolicExpression:
         """Simplifies the underlying symbolic expression."""

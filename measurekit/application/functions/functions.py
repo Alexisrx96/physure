@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
 import sympy as sp
 
 from measurekit import default_system
@@ -25,8 +24,9 @@ class Function:
     output_unit: CompoundUnit  # FIX: Store Output Unit
     symbolic_func: sp.Expr
     system: UnitSystem = field(default=default_system, repr=False)
+    backend: str = field(default="numpy", repr=False)
     arg_names: tuple[str, ...] = field(init=False, repr=False)
-    numeric_func: Callable[..., np.ndarray] = field(init=False, repr=False)
+    numeric_func: Callable[..., Any] = field(init=False, repr=False)
 
     def __post_init__(self):
         """Initializes the numeric version of the function."""
@@ -41,9 +41,14 @@ class Function:
             tuple(str(s.name) for s in sorted_symbols),
         )
 
-        # Compile numeric function using NumPy
+        # Compile numeric function
+        # Sympy supports 'numpy', 'tensorflow', 'jax', 'math', etc.
+        # We need to ensure we map our backend names to sympy's if they differ
+        # 'torch' requires explicit module usually for older sympy, but modern sympy supports it?
+        # Sympy 1.12+ supports 'torch' often via 'numpy' or mapped modules.
+        # Let's pass it through.
         callable_func = sp.lambdify(
-            sorted_symbols, self.symbolic_func, "numpy"
+            sorted_symbols, self.symbolic_func, self.backend
         )
         object.__setattr__(self, "numeric_func", callable_func)
 
