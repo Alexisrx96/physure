@@ -3,6 +3,14 @@ use sprs::{CsMat, TriMat};
 use std::collections::HashMap;
 use numpy::{PyReadonlyArrayDyn, PyArray1, IntoPyArray};
 use numpy::ndarray::{Ix1, Ix2};
+use arrow::array::{UInt64Array, UInt32Array, Float64Array, ListBuilder, PrimitiveBuilder, Array, ArrayRef};
+use arrow::datatypes::{DataType, Field, Schema, UInt64Type, UInt32Type, Float64Type, Int32Type};
+use arrow::record_batch::RecordBatch;
+use arrow::ipc::writer::StreamWriter;
+use arrow::ipc::reader::StreamReader;
+use arrow::array::{AsArray, ListArray};
+use std::sync::Arc;
+use std::io::Cursor;
 
 type VariableID = u64;
 
@@ -24,6 +32,16 @@ impl PruningConfig {
     #[pyo3(signature = (max_age = 100, enabled = false, corr_threshold = 1e-6))]
     fn new(max_age: usize, enabled: bool, corr_threshold: f64) -> Self {
         PruningConfig { max_age, enabled, corr_threshold }
+    }
+
+    fn __getstate__(&self) -> (usize, bool, f64) {
+        (self.max_age, self.enabled, self.corr_threshold)
+    }
+
+    fn __setstate__(&mut self, state: (usize, bool, f64)) {
+        self.max_age = state.0;
+        self.enabled = state.1;
+        self.corr_threshold = state.2;
     }
 }
 
@@ -261,6 +279,140 @@ impl CovarianceStore {
         Ok(())
     }
     
+    fn to_arrow(&self) -> PyResult<Vec<u8>> {
+        let mut keys: Vec<_> = self.blocks.keys().collect();
+        keys.sort();
+
+        let mut row_ids = Vec::with_capacity(keys.len());
+        let mut col_ids = Vec::with_capacity(keys.len());
+        let mut shapes_rows = Vec::with_capacity(keys.len());
+        let mut shapes_cols = Vec::with_capacity(keys.len());
+        
+        let mut data_builder = ListBuilder::new(PrimitiveBuilder::<Float64Type>::new());
+        let mut indices_builder = ListBuilder::new(PrimitiveBuilder::<Int32Type>::new());
+        let mut indptr_builder = ListBuilder::new(PrimitiveBuilder::<Int32Type>::new());
+
+        for &&(r, c) in &keys {
+            let mat = &self.blocks[&(r, c)];
+            row_ids.push(r);
+            col_ids.push(c);
+            shapes_rows.push(mat.rows() as u32);
+            shapes_cols.push(mat.cols() as u32);
+            
+            // Robust extraction: Clone to get ownership of raw vecs
+            // This avoids fighting with IndPtr views.
+            let mat_owned = mat.clone();
+            let (indptr, indices, data) = mat_owned.into_raw_storage();
+            
+            // Data
+            data_builder.values().append_slice(&data);
+            data_builder.append(true);
+            
+            // Indices
+            for idx in indices {
+                indices_builder.values().append_value(idx as i32);
+            }
+            indices_builder.append(true);
+
+            // Indptr
+            for ptr in indptr {
+                indptr_builder.values().append_value(ptr as i32);
+            }
+            indptr_builder.append(true);
+        }
+        
+        // Build Arrays
+        let row_id_array = UInt64Array::from(row_ids);
+        let col_id_array = UInt64Array::from(col_ids);
+        let rows_array = UInt32Array::from(shapes_rows);
+        let cols_array = UInt32Array::from(shapes_cols);
+        let data_array = data_builder.finish();
+        let indices_array = indices_builder.finish();
+        let indptr_array = indptr_builder.finish();
+
+        // Schema
+        let schema = Schema::new(vec![
+            Field::new("row_id", DataType::UInt64, false),
+            Field::new("col_id", DataType::UInt64, false),
+            Field::new("rows", DataType::UInt32, false),
+            Field::new("cols", DataType::UInt32, false),
+            Field::new("data", DataType::List(Arc::new(Field::new("item", DataType::Float64, true))), false),
+            Field::new("indices", DataType::List(Arc::new(Field::new("item", DataType::Int32, true))), false),
+            Field::new("indptr", DataType::List(Arc::new(Field::new("item", DataType::Int32, true))), false),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(row_id_array) as ArrayRef,
+                Arc::new(col_id_array) as ArrayRef,
+                Arc::new(rows_array) as ArrayRef,
+                Arc::new(cols_array) as ArrayRef,
+                Arc::new(data_array) as ArrayRef,
+                Arc::new(indices_array) as ArrayRef,
+                Arc::new(indptr_array) as ArrayRef,
+            ],
+        ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow error: {}", e)))?;
+
+        let mut buffer = Vec::new();
+        {
+            let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        Ok(buffer)
+    }
+
+    fn __getstate__(&self) -> PyResult<Vec<u8>> {
+        self.to_arrow()
+    }
+
+    fn __setstate__(&mut self, state: Vec<u8>) -> PyResult<()> {
+        let cursor = Cursor::new(state);
+        let mut reader = StreamReader::try_new(cursor, None)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow reader error: {}", e)))?;
+        
+        // Clear existing blocks
+        self.blocks.clear();
+
+        while let Some(batch_result) = reader.next() {
+             let batch = batch_result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow batch error: {}", e)))?;
+             
+             let row_ids = batch.column(0).as_primitive::<UInt64Type>();
+             let col_ids = batch.column(1).as_primitive::<UInt64Type>();
+             let rows_arr = batch.column(2).as_primitive::<UInt32Type>();
+             let cols_arr = batch.column(3).as_primitive::<UInt32Type>();
+             
+             let data_list = batch.column(4).as_list::<i32>();
+             let indices_list = batch.column(5).as_list::<i32>();
+             let indptr_list = batch.column(6).as_list::<i32>();
+
+             for i in 0..batch.num_rows() {
+                 let r_id = row_ids.value(i);
+                 let c_id = col_ids.value(i);
+                 let n_rows = rows_arr.value(i) as usize;
+                 let n_cols = cols_arr.value(i) as usize;
+                 
+                 // Extract CsMat components
+                 // Data
+                 let data_vals: Vec<f64> = data_list.value(i).as_primitive::<Float64Type>().values().to_vec();
+                 
+                 // Indices
+                 let indices_vals: Vec<usize> = indices_list.value(i).as_primitive::<Int32Type>().values().iter().map(|&x| x as usize).collect();
+
+                 // Indptr
+                 let indptr_vals: Vec<usize> = indptr_list.value(i).as_primitive::<Int32Type>().values().iter().map(|&x| x as usize).collect();
+
+                 // Reconstruct CsMat
+                 // Note: CsMat::new takes validation, might panic if data invalid. Use try_new ideally.
+                 let mat = CsMat::new((n_rows, n_cols), indptr_vals, indices_vals, data_vals);
+                 self.blocks.insert((r_id, c_id), mat);
+             }
+        }
+        
+        Ok(())
+    }
+
     #[pyo3(name = "get_block_csr")] 
     fn get_block_csr_py<'py>(
         &self,

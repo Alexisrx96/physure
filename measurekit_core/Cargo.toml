@@ -1,7 +1,12 @@
 [package]
-name = "measurekit_core"
-version = "0.1.6"
-edition = "2021" 
+name = "measurekit-core"
+version = "0.1.8"
+edition = "2021"
+description = "Core Rust implementation for MeasureKit"
+license = "MIT"
+repository = "https://github.com/Alexisrx96/measurekit"
+homepage = "https://github.com/Alexisrx96/measurekit"
+readme = "README.md"
 
 [lib]
 name = "measurekit_core"
