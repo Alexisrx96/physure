@@ -713,7 +713,7 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
 
         Examples:
             >>> from measurekit import Q_
-            >>> q = Q_(10, "m/s^2")
+            >>> q = Q_(10.0, "m/s^2")
             >>> print(q.to_latex())
             10.0 \; \frac{m}{s^{2}}
         """

@@ -1,19 +1,25 @@
 # Build and Upload
 
-To build and upload the package to PyPI, run the following commands:
+## Prerequisites
 
-```cmd
-python setup.py sdist bdist_wheel
-```
+Ensure you have the build tools installed:
+pip install build twine maturin
 
-To check the package, run:
+## 1. Publish Core (Rust)
 
-```cmd
-twine check dist/*
-```
+The core must be published first as it is a dependency.
 
-To upload the package, run:
+cd measurekit_core
+maturin publish
+cd ..
 
-```cmd
-twine upload dist/*
-```
+## 2. Publish Main Package (Python)
+
+To build the package (uses hatchling backend):
+python -m build
+
+To check the package artifacts:
+twine check dist/\*
+
+To upload to PyPI:
+twine upload dist/\*
