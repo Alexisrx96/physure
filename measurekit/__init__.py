@@ -123,6 +123,16 @@ def __getattr__(name: str) -> Any:
 
         return ConfigProxy()
 
+    if name in ("MeasureKitContext", "PruningConfig"):
+        from measurekit.domain.measurement.vectorized_uncertainty import (
+            MeasureKitContext,
+            PruningConfig,
+        )
+
+        if name == "MeasureKitContext":
+            return MeasureKitContext
+        return PruningConfig
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -143,7 +153,9 @@ __all__ = [
     "Q_",
     "CompoundUnit",
     "ConversionError",
+    "MeasureKitContext",
     "MeasureKitError",
+    "PruningConfig",
     "Quantity",
     "Uncertainty",
     "UnitNotFoundError",
