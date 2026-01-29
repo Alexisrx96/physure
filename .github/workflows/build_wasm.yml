@@ -1,0 +1,43 @@
+name: Build WASM Wheel
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install Maturin
+        run: pip install maturin
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v11
+        with:
+          version: 3.1.45
+          actions-cache-folder: "emsdk-cache"
+
+      - name: Build Wheel
+        working-directory: measurekit_core
+        run: |
+          maturin build --release --target wasm32-unknown-emscripten -o ../dist
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: wasm-wheels
+          path: dist/*.whl
