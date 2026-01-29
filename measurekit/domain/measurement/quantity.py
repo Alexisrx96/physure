@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import operator
+import sys
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import (
@@ -41,10 +42,9 @@ from measurekit.domain.measurement.units import (
     get_default_system,
 )
 
-try:
-    import torch
-except ImportError:
-    torch = None
+# torch and sympy are imported lazily when needed to improve startup time.
+torch = None
+sp = None
 
 try:
     from measurekit._generated_types import UnitName
@@ -52,15 +52,15 @@ except ImportError:
     UnitName = str
 
 # Trace-safe imports
+from measurekit._jit.tracer import _ensure_rational
 from measurekit.application.context import _UNCERTAINTY_MODE
-from measurekit.jit.tracer import _ensure_rational
 
 if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
 
 # Lazy import for converters to avoid circular dependencies if possible,
 # or assume available since we are in domain.
-import sympy as sp
+# sympy (sp) moved to lazy loading helper if needed.
 
 from measurekit.domain.measurement.converters import (
     LinearConverter,
@@ -200,25 +200,21 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
         """Initializes the entity, ignoring magnitude and unit if already set by core."""
         # Check if already initialized (subclassing) or fresh
 
-        # Populate _unit cache immediately for Zero-Overhead access
-        # Get raw unit from core (super implementation)
+        # Reconstruct CompoundUnit wrapper ensuring we hit the Python-side Flyweight cache
+        import measurekit.domain.measurement.units as units_module
+
+        CU = getattr(
+            units_module,
+            "_STABLE_COMPOUND_UNIT",
+            units_module.CompoundUnit,
+        )
         u = super().unit
+        dims = getattr(u, "dimensions", None)
+        if dims is None:
+            dims = getattr(u, "exponents", {})
 
-        if getattr(u, "_is_compound", False):
-            object.__setattr__(self, "_unit", u)
-        else:
-            # Fast path wrapper
-            import measurekit.domain.measurement.units as units_module
-
-            CU = getattr(
-                units_module,
-                "_STABLE_COMPOUND_UNIT",
-                units_module.CompoundUnit,
-            )
-            dims = getattr(u, "dimensions", None)
-            if dims is None:
-                dims = getattr(u, "exponents", {})
-            object.__setattr__(self, "_unit", CU(dims))
+        # Always call CU(dims) to ensure we get the cached singleton instance
+        object.__setattr__(self, "_unit", CU(dims))
 
         # magnitude and unit are handled by CoreQuantity properties.
         # We manually set the other fields.
@@ -243,31 +239,12 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
         if system is not None:
             object.__setattr__(self, "system", system)
         else:
+            from measurekit.domain.measurement.units import get_default_system
+
             object.__setattr__(self, "system", get_default_system())
 
         if symbol is not None:
             object.__setattr__(self, "symbol", symbol)
-
-        # Zero-Overhead Optimization: Store unit in python attribute
-        # to avoid dynamic property lookups on hot path.
-        u = super().unit
-        # Dynamo Optimization: Avoid isinstance() check on potential Proxies
-        if getattr(u, "_is_compound", False):
-            object.__setattr__(self, "_unit", u)
-        else:
-            # Reconstruct CompoundUnit wrapper ensuring we hit the Python-side Flyweight cache
-            import measurekit.domain.measurement.units as units_module
-
-            CU = getattr(
-                units_module,
-                "_STABLE_COMPOUND_UNIT",
-                units_module.CompoundUnit,
-            )
-
-            dims = getattr(u, "dimensions", None)
-            if dims is None:
-                dims = getattr(u, "exponents", {})
-            object.__setattr__(self, "_unit", CU(dims))
 
         # After fields are basic-set, run logic
         self.__post_init__()
@@ -275,11 +252,17 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
         # Trace-Safe Optimization:
         # Tell Dynamo that the 'unit' field is constant for this instance.
         # This prevents it from trying to guard/check it repeatedly.
-        if torch is not None and hasattr(torch, "_dynamo"):
+        if "torch" in sys.modules:
             try:
-                torch._dynamo.mark_static(self, "unit")
-                torch._dynamo.mark_static(self, "_unit")
-            except Exception:
+                import torch as _torch
+
+                if (
+                    hasattr(_torch, "_dynamo")
+                    and _torch.compiler.is_compiling()
+                ):
+                    _torch._dynamo.mark_static(self, "unit")
+                    _torch._dynamo.mark_static(self, "_unit")
+            except (ImportError, AttributeError, Exception):
                 pass
 
     def __post_init__(self):
@@ -465,8 +448,11 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
             else Uncertainty.from_standard(uncertainty)
         )
 
+        # Cast scalar int to float for consistency with test expectations
+        if isinstance(value, int):
+            value = float(value)
+
         # Check for fraction support (Python backend only usually)
-        frac = None
         frac = None
         if not backend.is_array(value):
             with contextlib.suppress(ValueError, TypeError):
@@ -474,9 +460,9 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
 
         # Core Mode Integration
         try:
-            import torch
+            import torch as _torch
 
-            if torch.compiler.is_compiling():
+            if _torch.compiler.is_compiling():
                 mode, mode_args = ("python", None)  # Default safe mode
             else:
                 mode, mode_args = _UNCERTAINTY_MODE.get()
@@ -839,14 +825,12 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
                 units_module.CompoundUnit,
             )
             u = super().unit
-            if getattr(u, "_is_compound", False):
-                # cache it for next time
-                object.__setattr__(self, "_unit", u)
-                return u
 
             dims = getattr(u, "dimensions", None)
             if dims is None:
                 dims = getattr(u, "exponents", {})
+
+            # Always use CU(dims) to ensure identity preservation via Flyweight cache
             compound = CU(dims)
             object.__setattr__(self, "_unit", compound)
             return compound
@@ -1011,11 +995,15 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
             d_var = variable.magnitude
             d_unit_exponents = variable.unit.exponents
         else:
+            import sympy as sp
+
             d_var = sp.Symbol(variable)
             d_unit_exponents = {}
 
         # Differentiate magnitude
         try:
+            import sympy as sp
+
             new_mag = sp.diff(self.magnitude, d_var, order)
         except Exception as e:
             # Fallback for array/tensor backends or non-symbolic magnitudes
@@ -2109,7 +2097,15 @@ class Quantity(CoreQuantity, Generic[ValueType, UncType, UnitType]):
                 # If dimensionless, units are dropped/cleared
                 # Verify dimensionless; result is pure number.
                 if inp.dimension.is_dimensionless:
-                    if inp.uncertainty_obj and inp.uncertainty_obj.std_dev != 0:
+                    has_uncertainty = False
+                    if inp.uncertainty_obj is not None:
+                        std_dev = inp.uncertainty_obj.std_dev
+                        if hasattr(std_dev, "any"):
+                            has_uncertainty = std_dev.any()
+                        else:
+                            has_uncertainty = std_dev != 0
+
+                    if has_uncertainty:
                         # Propagate uncertainty
                         res_mag, res_unc = Uncertainty.propagate(
                             ufunc, [inp.magnitude], [inp.uncertainty_obj]
@@ -2541,7 +2537,7 @@ def _create_core_quantity_from_dims(magnitude, unit_dims, uncertainty):
         from measurekit_core import RationalUnit
     except ImportError:
         # Should not happen in this path if IS_CORE_AVAILABLE, but safety first
-        from measurekit.jit.tracer import RationalUnit
+        from measurekit._jit.tracer import RationalUnit
 
     unit = RationalUnit(unit_dims)
     return CoreQuantity.__new__(Quantity, magnitude, unit, uncertainty)
@@ -2552,8 +2548,8 @@ def _create_full_quantity(
 ):
     """Creates and fully initializes a Quantity in one opaque step."""
     # Always use Python-based RationalUnit for full Dynamo traceablity (Zero-Overhead)
+    from measurekit._jit.tracer import RationalUnit
     from measurekit.domain.measurement.uncertainty import Uncertainty
-    from measurekit.jit.tracer import RationalUnit
 
     # Re-derive dependencies inside the opaque op to avoid passing complex objects through the graph
     backend = BackendManager.get_backend(magnitude)
@@ -2568,11 +2564,8 @@ def _create_full_quantity(
     CU = getattr(
         units_module, "_STABLE_COMPOUND_UNIT", units_module.CompoundUnit
     )
-    # Bypass Flyweight Cache (__new__) because WeakRef dictionary lookup breaks Dynamo
-    # We manually create the object and set the frozen field.
-    unit_obj = object.__new__(CU)
-    object.__setattr__(unit_obj, "exponents", unit_dims)
-    # unit_obj = CU(unit_dims) # <--- OLD
+    # Use cached creation which handles sorting and flyweight pattern
+    unit_obj = CU(unit_dims)
 
     dimension = unit_obj.dimension(system)
 

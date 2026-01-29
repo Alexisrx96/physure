@@ -3,13 +3,11 @@
 
 from __future__ import annotations
 
-import weakref
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
-import sympy as sp
-
+# sympy imported lazily in to_latex()
 from measurekit.core.dispatcher import BackendManager
 from measurekit.core.registry import UnitRegistry
 from measurekit.domain.exceptions import IncompatibleUnitsError
@@ -29,6 +27,23 @@ if TYPE_CHECKING:
 
 
 # --- Dependency Injection for System ---
+
+
+def normalize_exponents(exponents: ExponentsDict) -> dict[str, float | int]:
+    """Normalizes a dictionary of exponents, removing zeros and converting tuples."""
+    normalized = {}
+    for k, v in exponents.items():
+        if isinstance(v, (list, tuple)):
+            v = v[0] / v[1]
+
+        if v == 0:
+            continue
+
+        if isinstance(v, float) and v.is_integer():
+            normalized[k] = int(v)
+        else:
+            normalized[k] = v
+    return normalized
 
 
 def get_default_system() -> UnitSystem:
@@ -158,41 +173,27 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
             dims = dims * (unit_dim**exp)
         return dims
 
-    _cache: ClassVar[weakref.WeakValueDictionary[tuple, CompoundUnit]] = (
-        weakref.WeakValueDictionary()
-    )
+    _cache: ClassVar[dict[tuple, CompoundUnit]] = {}
 
     def __new__(cls, exponents: ExponentsDict):
         """Create or retrieve a cached CompoundUnit instance."""
-        normalized_exponents = {}
-        for k, v in exponents.items():
-            # Handle rational tuples (num, den) from Rust
-            if isinstance(v, (list, tuple)):
-                v = v[0] / v[1]
+        normalized_exponents = normalize_exponents(exponents)
+        # Sort keys to ensure consistent repr and hash
+        sorted_items = sorted(normalized_exponents.items())
+        key = tuple(sorted_items)
 
-            if v == 0:
-                continue
-            if isinstance(v, float) and v.is_integer():
-                normalized_exponents[k] = int(v)
-            else:
-                normalized_exponents[k] = v
-
-        key = tuple(sorted(normalized_exponents.items()))
-
-        # Check raw cache to avoid resurrection issues if needed,
-        # but WeakValueDictionary handles this.
+        # Check raw cache
         instance = cls._cache.get(key)
         if instance is not None:
             return instance
 
         instance = super().__new__(cls, normalized_exponents)
-        # We need to initialize the object here because __init__ is not called
-        # efficiently if we returned cached. Use object.__setattr__ if needed
-        # but BaseExponentEntity sets exponents in __new__?
-        # Actually Base is standard class?
-        # But if we return existing, __init__ runs again for
-        # dataclasses usually?
-        # Singleton pattern in __new__:
+
+        # Consistent order for exponents dict to ensure uniform __repr__
+        ordered_exponents = dict(sorted_items)
+        object.__setattr__(instance, "exponents", ordered_exponents)
+
+        # Singleton pattern
         cls._cache[key] = cast("CompoundUnit", instance)
         return cast("CompoundUnit", instance)
 
@@ -227,7 +228,7 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
         Returns:
             CompoundUnit: The corresponding Python unit.
         """
-        return cls(r_unit.exponents)
+        return cls(r_unit.dimensions)
 
     # --- System-Dependent Methods ---
     def _compound_factor(self, system: UnitSystem) -> float:
@@ -420,6 +421,8 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
         if not self.exponents:
             return ""
 
+        import sympy as sp
+
         symbols = {name: sp.Symbol(name) for name in self.exponents}
 
         expr = sp.S.One
@@ -515,7 +518,7 @@ def _register_core_units():
 _register_core_units()
 
 # Discover external units via entry points (lazy loading)
-units.discover_plugins()
+# units.discover_plugins() is now called lazily in UnitRegistry
 
 
 # Inject Python-side functionality into the Rust base class
