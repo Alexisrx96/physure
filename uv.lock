@@ -1982,7 +1982,7 @@ wheels = [
 
 [[package]]
 name = "measurekit"
-version = "0.0.3.dev0"
+version = "0.1.7"
 source = { editable = "." }
 dependencies = [
     { name = "array-api-compat" },
@@ -2027,6 +2027,7 @@ dev = [
     { name = "hypothesis" },
     { name = "maturin" },
     { name = "mypy" },
+    { name = "pandas" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-benchmark" },
@@ -2081,6 +2082,7 @@ dev = [
     { name = "maturin" },
     { name = "mypy" },
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -2117,7 +2119,8 @@ requires-dist = [
     { name = "numba", marker = "extra == 'numpy'", specifier = ">=0.59.0" },
     { name = "numpy", marker = "extra == 'all'", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.26.0" },
-    { name = "pandas", marker = "extra == 'all'", specifier = ">=2.2.0" },
+    { name = "pandas", marker = "extra == 'all'", specifier = ">=2.3.3" },
+    { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.3.3" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.0" },
     { name = "papermill", marker = "extra == 'docs'", specifier = ">=2.5.0" },
     { name = "psutil", specifier = ">=7.2.1" },
@@ -2149,6 +2152,7 @@ dev = [
     { name = "maturin", specifier = ">=1.11.2" },
     { name = "mypy", specifier = ">=1.9.0" },
     { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.25.0" },
     { name = "pytest-benchmark", specifier = ">=4.0.0" },
     { name = "pytest-cov", specifier = ">=4.1.0" },
     { name = "ruff", specifier = ">=0.3.0" },
