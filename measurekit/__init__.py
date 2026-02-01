@@ -4,7 +4,7 @@ import sys
 from typing import Any
 
 # Version
-__version__ = "0.0.3"
+__version__ = "0.1.8"
 
 
 def __getattr__(name: str) -> Any:
