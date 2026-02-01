@@ -20,5 +20,6 @@ fn measurekit_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PruningConfig>()?;
     m.add_class::<CovarianceStore>()?;
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
