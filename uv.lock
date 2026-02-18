@@ -1982,7 +1982,6 @@ wheels = [
 
 [[package]]
 name = "measurekit"
-version = "0.1.7"
 source = { editable = "." }
 dependencies = [
     { name = "array-api-compat" },
@@ -2144,7 +2143,7 @@ requires-dist = [
     { name = "xarray", marker = "extra == 'all'", specifier = ">=2024.1.0" },
     { name = "xarray", marker = "extra == 'io'", specifier = ">=2024.1.0" },
 ]
-provides-extras = ["numpy", "torch", "jax", "pandas", "pydantic", "rich", "io", "all", "dev", "docs"]
+provides-extras = ["all", "dev", "docs", "io", "jax", "numpy", "pandas", "pydantic", "rich", "torch"]
 
 [package.metadata.requires-dev]
 dev = [
