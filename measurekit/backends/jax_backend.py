@@ -171,6 +171,9 @@ class JaxBackend(BackendOps):
     @enforce_tensor_contract
     def dot(self, x: Numeric, y: Numeric) -> Numeric:
         """Dot product or matrix multiplication."""
+        # Fix for 0D arrays in JAX matmul
+        if self.shape(x) == () or self.shape(y) == ():
+            return self.mul(x, y)
         return jnp.matmul(x, y)
 
     @enforce_tensor_contract
@@ -551,6 +554,18 @@ class JaxBackend(BackendOps):
         if hasattr(a, "T"):
             return a.T
         return jnp.transpose(a)
+
+    def sparse_slice(
+        self, matrix: Any, row_slice: slice, col_slice: slice
+    ) -> Any:
+        """Slices a sparse matrix (or dense fallback)."""
+        if matrix is None:
+            # Determine shapes? This is hard without more info.
+            # But propagate_affine should probably handle this.
+            return None
+
+        # JAX BCOO slicing returns BCOO
+        return matrix[row_slice, col_slice]
 
 
 _jax_registered = False
