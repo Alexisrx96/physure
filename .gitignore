@@ -67,3 +67,17 @@ GEMINI.md
 # MeasureKit Generated Types
 measurekit/_generated_types.py
 measurekit/core/registry.pyi
+
+# SonarQube local config (contains secrets)
+.env
+.env.local
+.claude/settings.local.json
+
+# CI/CD generated reports
+coverage.xml
+test-results.xml
+measurekit_core/lcov.info
+
+# Tool caches / generated indexes
+.sonar/
+.codegraph/
