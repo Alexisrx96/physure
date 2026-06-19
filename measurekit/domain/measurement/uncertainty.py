@@ -96,29 +96,11 @@ class Uncertainty(ABC, Generic[UncType]):
         # Auto-detect requirement for CovarianceModel
         backend = BackendManager.get_backend(std_dev)
 
-        # DEBUG LOGGING
-        with open("debug_unc.txt", "a") as f:
-            f.write(
-                f"DEBUG: from_standard type={type(std_dev)} is_array={backend.is_array(std_dev)}\n"
-            )
-            if backend.is_array(std_dev):
-                f.write(f"DEBUG: size={backend.size(std_dev)}\n")
-
         if backend.is_array(std_dev) and backend.size(std_dev) > 1:
             # Check if all elements are zero to avoid unnecessary store registration
             mask = backend.not_equal(std_dev, 0)
-            with open("debug_unc.txt", "a") as f:
-                f.write(
-                    f"DEBUG: Entering array > 1 block. any(mask)={backend.any(mask)}\n"
-                )
-
             if not backend.any(mask):
-                with open("debug_unc.txt", "a") as f:
-                    f.write("DEBUG: Returning VarianceModel (zeros)\n")
                 return VarianceModel(variance=std_dev)
-
-            with open("debug_unc.txt", "a") as f:
-                f.write("DEBUG: Returning CovarianceModel\n")
             return CovarianceModel.from_standard(std_dev, measurement_id)
 
         # Scalar Context-aware dispatch

@@ -266,6 +266,13 @@ class CovarianceStore:
                     else:
                         val = np.asarray(val, dtype=np.float64)
 
+                # Broadcasting logic above may produce sparse matrices (e.g. identity_operator).
+                # Rust core requires dense numpy arrays.
+                if hasattr(val, "toarray"):
+                    val = val.toarray()
+                elif hasattr(val, "todense"):
+                    val = np.asarray(val.todense())
+
             final_jacs.append(val)
 
         self._core.propagate(out_id, input_ids, final_jacs)
