@@ -47,6 +47,33 @@ impl Hash for RationalUnit {
 }
 
 impl RationalUnit {
+    fn parse_exponent(v: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
+        if let Ok((n, den)) = v.extract::<(i64, i64)>() {
+            if n != 0 { return Some((n, den)); }
+        } else if let Ok(n) = v.extract::<i64>() {
+            if n != 0 { return Some((n, 1)); }
+        } else if let Ok(f) = v.extract::<f64>() {
+            if f != 0.0 {
+                let r = Rational64::from_f64(f).unwrap_or(Rational64::new(0, 1));
+                return Some((*r.numer(), *r.denom()));
+            }
+        }
+        None
+    }
+
+    fn parse_dimensions_dict(d: &Bound<'_, PyAny>) -> PyResult<HashMap<String, (i64, i64)>> {
+        let mut dimensions = HashMap::new();
+        if let Ok(dict) = d.downcast::<PyDict>() {
+            for (k, v) in dict.iter() {
+                let key = k.extract::<String>()?;
+                if let Some(val) = Self::parse_exponent(&v) {
+                    dimensions.insert(key, val);
+                }
+            }
+        }
+        Ok(dimensions)
+    }
+
     pub fn calculate_id(dimensions: &HashMap<String, (i64, i64)>) -> u64 {
         let mut h: u64 = 0;
         for (k, v) in dimensions {
@@ -114,7 +141,6 @@ impl RationalUnit {
     #[new]
     #[pyo3(signature = (*args, **kwargs))]
     pub fn new(args: &Bound<'_, PyTuple>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let mut dimensions = HashMap::new();
         let dims_obj = if !args.is_empty() {
             Some(args.get_item(0)?)
         } else if let Some(kw) = kwargs {
@@ -122,28 +148,7 @@ impl RationalUnit {
         } else {
             None
         };
-
-        if let Some(d) = dims_obj {
-            if let Ok(dict) = d.downcast::<PyDict>() {
-                for (k, v) in dict.iter() {
-                    let key = k.extract::<String>()?;
-                    if let Ok((n, den)) = v.extract::<(i64, i64)>() {
-                        if n != 0 {
-                            dimensions.insert(key, (n, den));
-                        }
-                    } else if let Ok(n) = v.extract::<i64>() {
-                        if n != 0 {
-                            dimensions.insert(key, (n, 1));
-                        }
-                    } else if let Ok(f) = v.extract::<f64>() {
-                        if f != 0.0 {
-                            let r = Rational64::from_f64(f).unwrap_or(Rational64::new(0, 1));
-                            dimensions.insert(key, (*r.numer(), *r.denom()));
-                        }
-                    }
-                }
-            }
-        }
+        let dimensions = dims_obj.map(|d| Self::parse_dimensions_dict(&d)).transpose()?.unwrap_or_default();
         Ok(Self::new_from_dimensions(dimensions))
     }
 

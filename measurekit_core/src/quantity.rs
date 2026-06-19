@@ -42,11 +42,98 @@ impl Quantity {
         } else if let Ok(val) = other.extract::<f64>() {
             Ok((Box::new(GaussianBackend { mean: val, std_dev: 0.0 }), RationalUnit::new_from_dimensions(HashMap::new())))
         } else {
-             // Assume Tensor
              use crate::uncertainty::TensorBackend;
              let val_obj = other.unbind();
              Ok((Box::new(TensorBackend { value: val_obj, uncertainty: (0.0).into_py(py) }), RationalUnit::new_from_dimensions(HashMap::new())))
         }
+    }
+
+    fn try_extract_core(
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Option<Quantity>> {
+        if !args.is_empty() {
+            if let Ok(core) = args.get_item(0)?.extract::<Quantity>() {
+                return Ok(Some(core));
+            }
+        }
+        if let Some(kw) = kwargs {
+            if let Some(core_val) = kw.get_item("_core")? {
+                if let Ok(core) = core_val.extract::<Quantity>() {
+                    return Ok(Some(core));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn apply_kwargs(
+        kw: &Bound<'_, PyDict>,
+        mean_val: &mut Option<PyObject>,
+        std_dev_val: &mut Option<PyObject>,
+        unit: &mut Option<RationalUnit>,
+        mode: &mut Option<String>,
+        samples: &mut Option<usize>,
+    ) -> PyResult<()> {
+        if let Some(v) = kw.get_item("magnitude")?.or_else(|| kw.get_item("mean").ok().flatten()) {
+            *mean_val = Some(v.unbind());
+        }
+        if let Some(v) = kw.get_item("uncertainty")?.or_else(|| kw.get_item("std_dev").ok().flatten()) {
+            *std_dev_val = Some(v.unbind());
+        }
+        if let Some(v) = kw.get_item("unit")? {
+            if let Ok(u) = v.extract::<RationalUnit>() { *unit = Some(u); }
+        }
+        if let Some(v) = kw.get_item("mode")? { *mode = v.extract::<String>().ok(); }
+        if let Some(v) = kw.get_item("samples")? { *samples = v.extract::<usize>().ok(); }
+        Ok(())
+    }
+
+    fn parse_quantity_args(
+        args: &Bound<'_, PyTuple>,
+        kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<(Option<PyObject>, Option<RationalUnit>, Option<PyObject>, Option<String>, Option<usize>)> {
+        let mut mean_val: Option<PyObject> = None;
+        let mut std_dev_val: Option<PyObject> = None;
+        let mut unit: Option<RationalUnit> = None;
+        let mut mode: Option<String> = None;
+        let mut samples: Option<usize> = None;
+
+        if args.len() > 0 { mean_val = Some(args.get_item(0)?.unbind()); }
+        if args.len() > 1 { unit = args.get_item(1)?.extract::<RationalUnit>().ok(); }
+        if args.len() > 2 { std_dev_val = Some(args.get_item(2)?.unbind()); }
+        if args.len() > 3 { mode = args.get_item(3)?.extract::<String>().ok(); }
+        if args.len() > 4 { samples = args.get_item(4)?.extract::<usize>().ok(); }
+
+        if let Some(kw) = kwargs {
+            Self::apply_kwargs(kw, &mut mean_val, &mut std_dev_val, &mut unit, &mut mode, &mut samples)?;
+        }
+
+        Ok((mean_val, unit, std_dev_val, mode, samples))
+    }
+
+    fn build_backend(
+        py: Python<'_>,
+        mean_obj: PyObject,
+        std_dev_obj: PyObject,
+        mode: Option<String>,
+        samples: Option<usize>,
+    ) -> PyResult<Box<dyn UncertaintyBackend>> {
+        let is_scalar = mean_obj.bind(py).is_instance_of::<pyo3::types::PyFloat>()
+            || mean_obj.bind(py).is_instance_of::<pyo3::types::PyInt>();
+
+        if is_scalar {
+            let mean = mean_obj.bind(py).extract::<f64>()?;
+            if let Ok(std_dev) = std_dev_obj.bind(py).extract::<f64>() {
+                return Ok(match mode.as_deref() {
+                    Some("monte_carlo") => Box::new(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+                    Some("unscented") => Box::new(UnscentedBackend::new_scalar(mean, std_dev)),
+                    _ => Box::new(GaussianBackend { mean, std_dev }),
+                });
+            }
+        }
+        use crate::uncertainty::TensorBackend;
+        Ok(Box::new(TensorBackend { value: mean_obj, uncertainty: std_dev_obj }))
     }
 }
 
@@ -55,92 +142,14 @@ impl Quantity {
     #[new]
     #[pyo3(signature = (*args, **kwargs))]
     pub fn new(py: Python<'_>, args: &Bound<'_, PyTuple>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
-        let mut existing_core: Option<Quantity> = None;
-        if !args.is_empty() {
-             if let Ok(core) = args.get_item(0)?.extract::<Quantity>() {
-                 existing_core = Some(core);
-             }
+        if let Some(core) = Self::try_extract_core(args, kwargs)? {
+            return Ok(core);
         }
-        if let Some(kw) = kwargs {
-            if let Some(core_val) = kw.get_item("_core")? {
-                if let Ok(core) = core_val.extract::<Quantity>() {
-                    existing_core = Some(core);
-                }
-            }
-        }
-        if let Some(core) = existing_core {
-            return Ok(core.clone());
-        }
-
-        let mut mean_val: Option<PyObject> = None;
-        let mut std_dev_val: Option<PyObject> = None;
-        let mut unit = None;
-        let mut mode = None;
-        let mut samples = None;
-
-        // Extract from positional args
-        if args.len() > 0 {
-            mean_val = Some(args.get_item(0)?.unbind());
-        }
-        if args.len() > 1 {
-            unit = args.get_item(1)?.extract::<RationalUnit>().ok();
-        }
-        if args.len() > 2 {
-            std_dev_val = Some(args.get_item(2)?.unbind());
-        }
-        if args.len() > 3 {
-            mode = args.get_item(3)?.extract::<String>().ok();
-        }
-        if args.len() > 4 {
-            samples = args.get_item(4)?.extract::<usize>().ok();
-        }
-
-        // Override with keyword args
-        if let Some(kw) = kwargs {
-            if let Some(v) = kw.get_item("magnitude")?.or_else(|| kw.get_item("mean").ok().flatten()) {
-                mean_val = Some(v.unbind());
-            }
-            if let Some(v) = kw.get_item("uncertainty")?.or_else(|| kw.get_item("std_dev").ok().flatten()) {
-                 std_dev_val = Some(v.unbind());
-            }
-            if let Some(v) = kw.get_item("unit")? {
-                if let Ok(u) = v.extract::<RationalUnit>() {
-                    unit = Some(u);
-                }
-            }
-            if let Some(v) = kw.get_item("mode")? {
-                mode = v.extract::<String>().ok();
-            }
-            if let Some(v) = kw.get_item("samples")? {
-                samples = v.extract::<usize>().ok();
-            }
-        }
-
+        let (mean_val, unit, std_dev_val, mode, samples) = Self::parse_quantity_args(args, kwargs)?;
         let u = unit.ok_or_else(|| pyo3::exceptions::PyValueError::new_err("unit is required and must be a RationalUnit"))?;
-        
         let mean_obj = mean_val.unwrap_or_else(|| (0.0).into_py(py));
         let std_dev_obj = std_dev_val.unwrap_or_else(|| (0.0).into_py(py));
-        
-        let is_float = mean_obj.bind(py).is_instance_of::<pyo3::types::PyFloat>() || mean_obj.bind(py).is_instance_of::<pyo3::types::PyInt>();
-        
-        let backend: Box<dyn UncertaintyBackend> = if is_float {
-             let mean = mean_obj.bind(py).extract::<f64>()?;
-             if let Ok(std_dev) = std_dev_obj.bind(py).extract::<f64>() {
-                 match mode.as_deref() {
-                    Some("monte_carlo") => Box::new(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
-                    Some("unscented") => Box::new(UnscentedBackend::new_scalar(mean, std_dev)),
-                    _ => Box::new(GaussianBackend { mean, std_dev }),
-                 }
-             } else {
-                 use crate::uncertainty::TensorBackend;
-                 Box::new(TensorBackend { value: mean_obj, uncertainty: std_dev_obj })
-             }
-        } else {
-            use crate::uncertainty::TensorBackend;
-            Box::new(TensorBackend { value: mean_obj, uncertainty: std_dev_obj })
-        };
-
-        Ok(Quantity { value: backend, unit: u })
+        Ok(Quantity { value: Self::build_backend(py, mean_obj, std_dev_obj, mode, samples)?, unit: u })
     }
 
     fn __reduce__<'py>(self_: Bound<'py, Self>, py: Python<'py>) -> PyResult<(PyObject, (PyObject, PyObject, PyObject), Option<PyObject>)> {
