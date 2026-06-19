@@ -1985,11 +1985,8 @@ name = "measurekit"
 source = { editable = "." }
 dependencies = [
     { name = "array-api-compat" },
-    { name = "beartype" },
     { name = "filelock" },
     { name = "h5py" },
-    { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxtyping" },
     { name = "measurekit-core" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -1998,7 +1995,6 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "sympy" },
-    { name = "typeguard" },
     { name = "typing-extensions" },
 ]
 
@@ -2023,6 +2019,7 @@ all = [
     { name = "xarray", version = "2025.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 dev = [
+    { name = "beartype" },
     { name = "hypothesis" },
     { name = "maturin" },
     { name = "mypy" },
@@ -2077,6 +2074,7 @@ torch = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "beartype" },
     { name = "hypothesis" },
     { name = "maturin" },
     { name = "mypy" },
@@ -2090,13 +2088,12 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "array-api-compat", specifier = ">=1.4" },
-    { name = "beartype", specifier = ">=0.19.0" },
+    { name = "beartype", marker = "extra == 'dev'", specifier = ">=0.19.0" },
     { name = "filelock", specifier = ">=3.20.1" },
     { name = "h5py", specifier = ">=3.10.0" },
     { name = "h5py", marker = "extra == 'all'", specifier = ">=3.10.0" },
     { name = "h5py", marker = "extra == 'io'", specifier = ">=3.10.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.98.0" },
-    { name = "jax", specifier = ">=0.4.25" },
     { name = "jax", marker = "extra == 'all'", specifier = ">=0.4.25" },
     { name = "jax", marker = "extra == 'jax'", specifier = ">=0.4.25" },
     { name = "jaxlib", marker = "extra == 'all'", specifier = ">=0.4.25" },
@@ -2138,7 +2135,6 @@ requires-dist = [
     { name = "sympy", specifier = ">=1.13.0" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.2.0" },
-    { name = "typeguard", specifier = ">=4.4.1" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "xarray", marker = "extra == 'all'", specifier = ">=2024.1.0" },
     { name = "xarray", marker = "extra == 'io'", specifier = ">=2024.1.0" },
@@ -2147,6 +2143,7 @@ provides-extras = ["all", "dev", "docs", "io", "jax", "numpy", "pandas", "pydant
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "beartype", specifier = ">=0.19.0" },
     { name = "hypothesis", specifier = ">=6.98.0" },
     { name = "maturin", specifier = ">=1.11.2" },
     { name = "mypy", specifier = ">=1.9.0" },
@@ -4548,18 +4545,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/37/92/e97fcc6b2c27cdb87ce5ee063d77f8f26f19f06916aa680464c8104ef0f6/triton-3.5.1-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0b4d2c70127fca6a23e247f9348b8adde979d2e7a20391bfbabaac6aebc7e6a8", size = 170579924, upload-time = "2025-11-11T17:41:12.455Z" },
     { url = "https://files.pythonhosted.org/packages/a4/e6/c595c35e5c50c4bc56a7bac96493dad321e9e29b953b526bbbe20f9911d0/triton-3.5.1-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d0637b1efb1db599a8e9dc960d53ab6e4637db7d4ab6630a0974705d77b14b60", size = 170480488, upload-time = "2025-11-11T17:41:18.222Z" },
     { url = "https://files.pythonhosted.org/packages/16/b5/b0d3d8b901b6a04ca38df5e24c27e53afb15b93624d7fd7d658c7cd9352a/triton-3.5.1-cp314-cp314t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bac7f7d959ad0f48c0e97d6643a1cc0fd5786fe61cb1f83b537c6b2d54776478", size = 170582192, upload-time = "2025-11-11T17:41:23.963Z" },
-]
-
-[[package]]
-name = "typeguard"
-version = "4.4.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "typing-extensions" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c7/68/71c1a15b5f65f40e91b65da23b8224dad41349894535a97f63a52e462196/typeguard-4.4.4.tar.gz", hash = "sha256:3a7fd2dffb705d4d0efaed4306a704c89b9dee850b688f060a8b1615a79e5f74", size = 75203, upload-time = "2025-06-18T09:56:07.624Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1b/a9/e3aee762739c1d7528da1c3e06d518503f8b6c439c35549b53735ba52ead/typeguard-4.4.4-py3-none-any.whl", hash = "sha256:b5f562281b6bfa1f5492470464730ef001646128b180769880468bd84b68b09e", size = 34874, upload-time = "2025-06-18T09:56:05.999Z" },
 ]
 
 [[package]]
