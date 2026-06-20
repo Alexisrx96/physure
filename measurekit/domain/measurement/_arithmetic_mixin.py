@@ -94,7 +94,6 @@ class ArithmeticMixin:
         if self._backend.is_array(u_other):
             u_other = self._backend.reshape(u_other, (-1,))
 
-        # u_out^2 = (J_self^2 @ u_self^2) + (J_other^2 @ u_other^2)
         var_self = self._backend.pow(u_self, 2)
         # Force numeric array once and for all to avoid dtype('O') issues
         var_self = self._backend.asarray(var_self)
@@ -194,7 +193,7 @@ class ArithmeticMixin:
                             term2 = term2.diagonal()
                         else:
                             term2 = np.diag(term2)
-                    except:
+                    except Exception:
                         pass
 
             res_var = self._backend.add(res_var, term2)
@@ -255,7 +254,6 @@ class ArithmeticMixin:
         # Update units: u_new = u_old / (u_var)^order
         new_exponents = dict(self.unit.exponents)
         for u, e in d_unit_exponents.items():
-            # u_new = u_old * u_var^(-order)
             new_exponents[u] = new_exponents.get(u, 0) - (e * order)
 
         new_unit = CompoundUnit(new_exponents)
@@ -561,12 +559,12 @@ class ArithmeticMixin:
 
         if (
             u_self is None
-            or (isinstance(u_self, (int, float)) and u_self == 0.0)
+            or (isinstance(u_self, (int, float)) and u_self == 0.0)  # NOSONAR
         ) and (
             not is_other_q
             or (
                 u_other is None
-                or (isinstance(u_other, (int, float)) and u_other == 0.0)
+                or (isinstance(u_other, (int, float)) and u_other == 0.0)  # NOSONAR
             )
         ):
             if is_other_q:
@@ -698,12 +696,12 @@ class ArithmeticMixin:
 
         if (
             u_self is None
-            or (isinstance(u_self, (int, float)) and u_self == 0.0)
+            or (isinstance(u_self, (int, float)) and u_self == 0.0)  # NOSONAR
         ) and (
             not is_other_q
             or (
                 u_other is None
-                or (isinstance(u_other, (int, float)) and u_other == 0.0)
+                or (isinstance(u_other, (int, float)) and u_other == 0.0)  # NOSONAR
             )
         ):
             if is_other_q:
@@ -845,12 +843,12 @@ class ArithmeticMixin:
 
         if (
             u_self is None
-            or (isinstance(u_self, (int, float)) and u_self == 0.0)
+            or (isinstance(u_self, (int, float)) and u_self == 0.0)  # NOSONAR
         ) and (
             not is_other_q
             or (
                 u_other is None
-                or (isinstance(u_other, (int, float)) and u_other == 0.0)
+                or (isinstance(u_other, (int, float)) and u_other == 0.0)  # NOSONAR
             )
         ):
             new_val = self._backend.mul(
@@ -972,7 +970,6 @@ class ArithmeticMixin:
             new_dimension = self.dimension * other.dimension
 
             if self._backend.is_array(new_magnitude):
-                size = self._backend.size(new_magnitude)
                 self_flat, other_flat = self._backend.broadcast_and_flatten(
                     [self.magnitude, other.magnitude]
                 )
@@ -1068,7 +1065,6 @@ class ArithmeticMixin:
             )
 
         return NotImplemented
-        return NotImplemented
 
     def __rmul__(self, other: Any) -> Quantity:
         """Handles reverse multiplication."""
@@ -1106,12 +1102,12 @@ class ArithmeticMixin:
 
         if (
             u_self is None
-            or (isinstance(u_self, (int, float)) and u_self == 0.0)
+            or (isinstance(u_self, (int, float)) and u_self == 0.0)  # NOSONAR
         ) and (
             not is_other_q
             or (
                 u_other is None
-                or (isinstance(u_other, (int, float)) and u_other == 0.0)
+                or (isinstance(u_other, (int, float)) and u_other == 0.0)  # NOSONAR
             )
         ):
             new_val = self._backend.truediv(
@@ -1234,8 +1230,7 @@ class ArithmeticMixin:
             new_dimension = self.dimension / other.dimension
 
             if self._backend.is_array(new_magnitude):
-                size = self._backend.size(new_magnitude)
-                self_flat, other_flat = self._backend.broadcast_and_flatten(
+                _, other_flat = self._backend.broadcast_and_flatten(
                     [self.magnitude, other.magnitude]
                 )
 
@@ -1332,13 +1327,12 @@ class ArithmeticMixin:
             return res
 
         return NotImplemented
-        return NotImplemented
 
     def __pow__(self, exponent: float) -> Quantity[Any, Any, Any]:
         """Raises quantity to power."""
         u_self = self.uncertainty
         if u_self is None or (
-            isinstance(u_self, (int, float)) and u_self == 0.0
+            isinstance(u_self, (int, float)) and u_self == 0.0  # NOSONAR
         ):
             new_val = self._backend.pow(self.magnitude, exponent)
             new_unit = self.unit**exponent

@@ -59,7 +59,7 @@ class Equation:
         if lhs.dimension != rhs.dimension:
             raise IncompatibleUnitsError(lhs.unit, rhs.unit)
 
-        self.equation = sp.Eq(lhs.expr, rhs.expr)
+        self.sympy_eq = sp.Eq(lhs.expr, rhs.expr)
         self.lhs = lhs
         self.rhs = rhs
         self.system = lhs.system
@@ -72,14 +72,14 @@ class Equation:
 
     def __repr__(self) -> str:
         """Returns a string representation of the equation."""
-        return str(self.equation)
+        return str(self.sympy_eq)
 
     # --- NEW: Jupyter Pretty Printing ---
     def _repr_latex_(self):
         """Returns the LaTeX representation for Jupyter rendering."""
         from sympy import latex
 
-        return f"${latex(self.equation)}$"
+        return f"${latex(self.sympy_eq)}$"
 
     def solve_for(
         self, target: str | SymbolicQuantity
@@ -96,14 +96,14 @@ class Equation:
                     break
 
         if target_symbol is None:
-            for sym in self.equation.free_symbols:
+            for sym in self.sympy_eq.free_symbols:
                 if str(sym) == str(target):
                     target_symbol = sym
                     break
             if target_symbol is None:
                 raise ValueError(f"Symbol '{target}' not found in equation.")
 
-        solutions = sp.solve(self.equation, target_symbol)
+        solutions = sp.solve(self.sympy_eq, target_symbol)
         if not solutions:
             return None
 

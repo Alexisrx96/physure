@@ -28,6 +28,8 @@ from measurekit.domain.measurement.dimensions import (
 from measurekit.domain.measurement.system import UnitSystem
 from measurekit.domain.measurement.units import CompoundUnit
 
+_CONF_FILE = "measurekit.conf"
+
 
 def _load_all_configurations_into(
     parser: configparser.ConfigParser, verbose: bool
@@ -42,7 +44,7 @@ def _load_all_configurations_into(
 
     # 1. Define the list of internal configuration files
     config_files = [
-        "measurekit.conf",
+        _CONF_FILE,
         "systems/international.conf",
         "systems/imperial.conf",
     ]
@@ -75,7 +77,7 @@ def _load_all_configurations_into(
     # 3. Add the user's override configuration file (High Priority)
     # Check the Current Working Directory (CWD), which is typically the
     # application's root.
-    user_config_path = Path.cwd() / "measurekit.conf"
+    user_config_path = Path.cwd() / _CONF_FILE
 
     if user_config_path.is_file():
         # Append the path LAST. The last file read overrides previous values.
@@ -328,7 +330,7 @@ def _get_config_parser(
     try:
         base_config_path = resources.files(
             "measurekit.infrastructure.config"
-        ).joinpath("measurekit.conf")
+        ).joinpath(_CONF_FILE)
         with resources.as_file(base_config_path) as base_config:
             parser.read(str(base_config), encoding="utf-8")
             if verbose:
@@ -358,7 +360,7 @@ def _get_config_parser(
                     print(f"  -> Config file not found: {file_name}")
 
     # 3. Load user override (measurekit.conf in CWD)
-    user_config_path = Path.cwd() / "measurekit.conf"
+    user_config_path = Path.cwd() / _CONF_FILE
     if user_config_path.is_file():
         parser.read(str(user_config_path), encoding="utf-8")
         if verbose:

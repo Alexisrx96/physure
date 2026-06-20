@@ -8,12 +8,12 @@ if TYPE_CHECKING:
 
 try:
     import torch
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     torch = None
 
 try:
     from jaxtyping import Array, Bool, Float
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     from typing import Any
 
     Array = Any

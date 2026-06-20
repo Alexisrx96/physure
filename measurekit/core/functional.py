@@ -7,11 +7,12 @@ backend-agnostic execution via the Array API standard.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 try:
     import array_api_compat
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     array_api_compat = None
 
 
@@ -68,7 +69,7 @@ def _find_linear_unit_for_dimension(
     for name, u_def in system.UNIT_REGISTRY.get(dimension, {}).items():
         if (
             isinstance(u_def.converter, LinearConverter)
-            and u_def.converter.scale == 1.0
+            and math.isclose(u_def.converter.scale, 1.0)
         ):
             return system.get_unit(name)
     return None
@@ -337,22 +338,7 @@ def pow_quantities(
     xp = get_xp(val1)
     result_mag = xp.pow(val1, exponent)
 
-    try:
-        # Check if we can extract a constant scalar (safe for static units)
-        # If it's a JAX Tracer, this might fail or return a Tracer which fails float() cast
-        # We try to keep it as is if it's array-like
-        if hasattr(exponent, "shape") and exponent.shape == ():
-            # It's a scalar array/tensor
-            # If we invoke float(), it forces concretization -> Error in JIT
-            # So we shoud NOT cast to float if it's an array/tracer.
-            scalar_exp = exponent
-        elif isinstance(exponent, (int, float)):
-            scalar_exp = exponent
-        else:
-            # Fallback
-            scalar_exp = exponent
-    except Exception:
-        scalar_exp = exponent
+    scalar_exp = exponent
 
     # Update units
     # If scalar_exp is a Tracer, we CANNOT update unit exponents (which keys must be values)

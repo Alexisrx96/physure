@@ -110,7 +110,7 @@ except ImportError:
     # Fallback to local stub if core not available
     class RationalUnit:
         def __init__(self, *args, **kwargs):
-            pass
+            ...  # intentionally empty stub; replaced by measurekit_core at runtime
 
     IS_CORE_AVAILABLE = False
 

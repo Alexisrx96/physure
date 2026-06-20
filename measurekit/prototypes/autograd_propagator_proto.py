@@ -27,7 +27,6 @@ def prototype_torch():
     print("\n--- Torch Autograd Prototype ---")
 
     # Dummy inputs
-    # x = 2.0 +/- 0.1
     val = torch.tensor([2.0], requires_grad=True)
     covariance = torch.tensor([[0.01]])  # Variance = 0.1^2
 
@@ -66,7 +65,6 @@ def prototype_torch():
 
     J_multi = torch.func.jacrev(func_multi)(inputs)
     print(f"Multi-dim Jacobian:\n{J_multi}")
-    # J = [[y, x], [1, 1]] = [[3, 2], [1, 1]]
 
     new_cov_multi = J_multi @ cov_inputs @ J_multi.T
     print(f"Propagated Covariance:\n{new_cov_multi}")
@@ -85,8 +83,8 @@ def prototype_jax():
     def func_to_diff(x):
         return jnp.sin(x)
 
-    J_fn = jax.jacfwd(func_to_diff)
-    J = J_fn(val)
+    j_fn = jax.jacfwd(func_to_diff)
+    J = j_fn(val)
     print(f"Jacobian: {J}")
 
     new_cov = J @ covariance @ J.T

@@ -21,7 +21,7 @@ def null_space_basis(matrix: Any, rcond: float | None = None) -> Any:
         This function dispatches to the appropriate backend implementation
         (NumPy, PyTorch, or JAX) based on the input type.
     """
-    backend = BackendManager.get_backend(matrix)
+    _ = BackendManager.get_backend(matrix)
 
     # Check for PyTorch tensor
     module_name = getattr(matrix.__class__, "__module__", "")
@@ -31,7 +31,7 @@ def null_space_basis(matrix: Any, rcond: float | None = None) -> Any:
 
         if isinstance(matrix, torch.Tensor):
             # Use strict full_matrices=True to get the complete Vh
-            u, s, vh = torch.linalg.svd(matrix, full_matrices=True)
+            _, s, vh = torch.linalg.svd(matrix, full_matrices=True)
 
             # Determine rank
             m, n = matrix.shape
@@ -60,14 +60,12 @@ def null_space_basis(matrix: Any, rcond: float | None = None) -> Any:
         import jax.numpy as jnp
 
         # Use simple svd
-        u, s, vh = jnp.linalg.svd(matrix, full_matrices=True)
+        _, s, vh = jnp.linalg.svd(matrix, full_matrices=True)
 
         m, n = matrix.shape
         # Handle case where s might be empty or zero-rank?
         # jnp.sum returns a tracer or value.
 
-        # Safely compute tolerance
-        max_s = jnp.max(s) if s.size > 0 else 0.0
         # Safely compute tolerance
         # rcond logic
         if rcond is None:
@@ -176,7 +174,7 @@ def extract_dimension_matrix(
             # best effort
             pass
 
-    sorted_bases = sorted(list(all_bases), key=str)
+    sorted_bases = sorted(all_bases, key=str)
 
     # 3. Build Matrix
     import numpy as np

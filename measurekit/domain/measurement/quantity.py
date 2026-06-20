@@ -222,18 +222,12 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         if symbol is not None:
             object.__setattr__(self, "symbol", symbol)
 
-        # DEBUG INIT
-        # with open("debug_init.txt", "a") as f:
-        #    f.write(f"DEBUG: Quantity.__init__ uncertainty type={type(uncertainty)}\n")
-
         # Store rich uncertainty model if provided (Phase 5 Fix)
         if "_uncertainty_obj" in kwargs:
             object.__setattr__(
                 self, "_uncertainty_obj", kwargs["_uncertainty_obj"]
             )
         elif isinstance(uncertainty, Uncertainty):
-            # with open("debug_init.txt", "a") as f:
-            #    f.write(f"DEBUG: Setting _uncertainty_obj to {uncertainty}\n")
             object.__setattr__(self, "_uncertainty_obj", uncertainty)
 
         # After fields are basic-set, run logic
@@ -400,7 +394,7 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
                 # Fallback if backend implementation is incomplete
                 pass
 
-        uncertainty_val = (
+        _ = (
             uncertainty
             if isinstance(uncertainty, (int, float, complex))
             else getattr(uncertainty, "std_dev", uncertainty)
@@ -411,10 +405,9 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
             value = float(value)
 
         # Check for fraction support (Python backend only usually)
-        frac = None
         if not backend.is_array(value):
             with contextlib.suppress(ValueError, TypeError):
-                frac = Fraction(str(value))
+                Fraction(str(value))
 
         # Core Mode Integration
         try:
