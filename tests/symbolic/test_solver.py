@@ -91,7 +91,7 @@ def test_equation_creation_and_solving(symbolic_system):
     a = SymbolicQuantity("a", "m/s^2", system=symbolic_system)
 
     newtons_law = Equation(f, m * a, variables=[f, m, a])
-    assert newtons_law.equation == sympy.Eq(f.symbol, m.symbol * a.symbol)
+    assert newtons_law.sympy_eq == sympy.Eq(f.symbol, m.symbol * a.symbol)
 
     # Solve for a
     solution_a = newtons_law.solve_for(a)

@@ -12,7 +12,7 @@ try:
     import jax
     import jax.numpy as jnp
     from jax.core import Tracer
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     jax = None
     jnp = None
     Tracer = None

@@ -40,5 +40,5 @@ class MeasureKitPlugin(Plugin):
 
         return ret_type
 
-def plugin(version: str) -> Type[MeasureKitPlugin]:
+def plugin(_version: str) -> Type[MeasureKitPlugin]:
     return MeasureKitPlugin

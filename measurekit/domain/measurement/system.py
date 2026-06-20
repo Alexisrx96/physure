@@ -319,7 +319,7 @@ class UnitSystem(IUnitRepository):
                 self._core_registry.register_alias(
                     prefixed_name, prefixed_symbol
                 )
-        except (ImportError, KeyError, Exception):
+        except Exception:
             pass
 
     def get_unit(self, unit_expression: str) -> CompoundUnit:

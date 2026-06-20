@@ -30,9 +30,10 @@ class Function:
 
     def __post_init__(self):
         """Initializes the numeric version of the function."""
-        arg_symbols = tuple(self.symbolic_func.free_symbols)
         # Sort symbols by name to ensure consistent argument order
-        sorted_symbols = sorted(arg_symbols, key=lambda s: str(s.name))
+        sorted_symbols = sorted(
+            self.symbolic_func.free_symbols, key=lambda s: str(s.name)
+        )
 
         # Store argument names
         object.__setattr__(

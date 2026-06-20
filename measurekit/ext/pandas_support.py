@@ -25,7 +25,7 @@ except (ImportError, AttributeError):
     pd = None
 
     # Define a dummy decorator if pandas is not available or broken
-    def register_series_accessor(name: str):
+    def register_series_accessor(_name: str):
         """Dummy decorator if pandas is not available."""
         return lambda cls: cls
 
@@ -171,7 +171,7 @@ class MeasureKitAccessor:
         # To maintain index and NaNs from the original Series:
         res_data = np.empty(len(self._obj), dtype=object)
         valid_mask = self._obj.notna()
-        valid_indices = np.where(valid_mask)[0]
+        valid_indices = np.nonzero(valid_mask)[0]
 
         magnitudes = vec_q.magnitude
         stds = vec_q.uncertainty

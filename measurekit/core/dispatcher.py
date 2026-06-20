@@ -432,8 +432,9 @@ class PythonBackend(BackendOps):
         """Returns an array of ones with the specified shape."""
         if len(shape) == 0:
             return 1.0
-        # ... simplified recursive or fixed ones
-        return 1.0
+        if len(shape) == 1:
+            return [1.0] * shape[0]
+        return [[1.0] * shape[-1] for _ in range(shape[-2])] if len(shape) == 2 else [1.0]
 
 
 class CoreBackend(BackendOps):
@@ -544,7 +545,7 @@ class BackendManager:
 
         try:
             return cls._get_or_load_backend("numpy")
-        except (ImportError, ModuleNotFoundError):
+        except ImportError:
             return cls._get_python_backend()
 
     @classmethod

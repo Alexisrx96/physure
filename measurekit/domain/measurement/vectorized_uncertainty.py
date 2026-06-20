@@ -42,7 +42,7 @@ except ImportError:
                 )
 
         def register_diagonal(self, var_id, variance_diag):
-            size = len(variance_diag)
+            _ = len(variance_diag)
             sp = scipy.sparse.diags([variance_diag], [0], format="csr")
             self.register_variable(var_id, sp)
 
@@ -52,7 +52,6 @@ except ImportError:
             out_slice = slice(out_id, out_id + out_size)
 
             in_slices = []
-            curr_idx = 0
             for i, i_id in enumerate(input_ids):
                 in_size = jacobians[i].shape[1]
                 in_slices.append(slice(i_id, i_id + in_size))
@@ -417,9 +416,6 @@ def propagate_affine(
 
         # term = jac @ sigma_part
         term = backend.sparse_matmul(jac, sigma_part)
-        print(
-            f"DEBUG: term shape={backend.shape(term)}, sum={backend.sum(term)}"
-        )
 
         if c_accum is None:
             c_accum = term
@@ -457,14 +453,13 @@ def propagate_affine(
     # Handling None c_accum (e.g. if jacobians empty)
     if c_accum is None:
         # Need zero block M x N.
-        n_size = backend.shape(matrix)[0]
+        _ = backend.shape(matrix)[0]
         # This is hard without explicit zero constructor for sparse M x N
         # unless backend supports generic zeros.
         # Assuming sparse_matmul returned something valid or loop didn't run.
         # If loop didn't run, matrix has N rows.
         # Construct zero matrix?
         # For now assume jacobians not empty.
-        pass
 
     new_mat = backend.sparse_bmat(
         [[matrix, backend.transpose(c_accum)], [c_accum, v_accum]]

@@ -41,11 +41,11 @@ try:
             D, _ = extract_dimension_matrix(units, system)
 
             # Convert to torch tensor for null space computation
-            D_tensor = torch.as_tensor(D, dtype=torch.float32)
+            d_tensor = torch.as_tensor(D, dtype=torch.float32)
 
             # 2. Compute Null Space Basis V (N_in x N_null)
             # V columns form the basis.
-            V = null_space_basis(D_tensor)
+            V = null_space_basis(d_tensor)
 
             if V.shape[1] == 0:
                 # No null space means no dimensionless group can be formed!
@@ -103,15 +103,15 @@ try:
             # 2. Log Transform
             # Use abs to handle negative inputs safely, assuming physical magnitudes
             # Add epsilon for numerical stability
-            log_X = torch.log(torch.abs(X) + 1e-9)
+            log_x = torch.log(torch.abs(X) + 1e-9)
 
             # 3. Constrained Linear Layer
             # W = V * theta
             # W shape: (N_in, N_null) @ (N_null, N_out) -> (N_in, N_out)
             W = self.V_null @ self.theta
 
-            # Y = log_X @ W
-            Y = log_X @ W
+            # Y = log_x @ W
+            Y = log_x @ W
 
             # 4. Exponential
             out = torch.exp(Y)
@@ -182,13 +182,13 @@ try:
             X = jnp.concatenate(processed_mags, axis=-1)
 
             # 2. Log Transform
-            log_X = jnp.log(jnp.abs(X) + 1e-9)
+            log_x = jnp.log(jnp.abs(X) + 1e-9)
 
             # 3. Constrained Weights
             W = self.V_null @ self.theta
 
             # 4. Compute
-            Y = log_X @ W
+            Y = log_x @ W
             return jnp.exp(Y)
 
 except ImportError:

@@ -10,7 +10,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command")
 
     # sync-types command
-    sync_types_parser = subparsers.add_parser(
+    _ = subparsers.add_parser(
         "sync-types", help="Generate type hints for available units."
     )
 

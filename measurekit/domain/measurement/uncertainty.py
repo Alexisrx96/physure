@@ -83,7 +83,7 @@ class Uncertainty(ABC, Generic[UncType]):
     @classmethod
     def from_standard(
         cls, std_dev: UncType, measurement_id: str | None = None
-    ) -> Uncertainty[UncType]:
+    ) -> Uncertainty[UncType] | None:
         """Factory method to create the appropriate uncertainty model.
 
         Checks global context to select CovarianceModel or VarianceModel.
@@ -202,7 +202,6 @@ class VarianceModel(Uncertainty[UncType]):
         backend = BackendManager.get_backend(values[0])
 
         total_var = 0.0
-        # Var_out = sum( (J_i)^2 * Var_i )
 
         for i, (u, jac) in enumerate(zip(uncertainties, jacs, strict=False)):
             if u is None:
@@ -505,7 +504,6 @@ class CovarianceModel(Uncertainty[UncType]):
                 src_lineage = {uid: u.std_dev}
 
             for uid, coeff in src_lineage.items():
-                # contribution = jac * coeff
                 term = backend.mul(coeff, jac)
                 if uid in new_lineage:
                     new_lineage[uid] = backend.add(new_lineage[uid], term)
