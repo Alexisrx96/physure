@@ -51,17 +51,17 @@ class BackendMixin:
     def _numpy_ufunc_arithmetic(self, ufunc, inputs):
         """Dispatch np.add/subtract/multiply/true_divide/power; return NotImplemented if no match."""
         import numpy as np
-        if ufunc == np.add:
-            val = inputs[1] if inputs[0] is self else inputs[0]
-            self._numpy_ufunc_check_compatible(val)
-            return self.__add__(val)
-        if ufunc == np.subtract:
-            val = inputs[1] if inputs[0] is self else inputs[0]
-            self._numpy_ufunc_check_compatible(val)
-            return self.__sub__(val) if inputs[0] is self else self.__rsub__(val)
-        if ufunc == np.multiply:
-            val = inputs[1] if inputs[0] is self else inputs[0]
-            return self.__mul__(val)
+        if ufunc in (np.add, np.subtract, np.multiply):
+            other = inputs[1] if inputs[0] is self else inputs[0]
+            if ufunc == np.add:
+                self._numpy_ufunc_check_compatible(other)
+                return self.__add__(other)
+            if ufunc == np.multiply:
+                return self.__mul__(other)
+            self._numpy_ufunc_check_compatible(other)
+            if inputs[0] is self:
+                return self.__sub__(other)
+            return self.__rsub__(other)
         if ufunc == np.true_divide:
             return self.__truediv__(inputs[1]) if inputs[0] is self else self.__rtruediv__(inputs[0])
         if ufunc == np.power and inputs[0] is self:

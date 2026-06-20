@@ -417,11 +417,6 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
                     **mode_args,
                 )
 
-            backend = BackendManager.get_backend(value)
-            # Core handles uncertainty, but we keep the object if it's a specific model
-            # For Phase 1, we don't store the rich model in Python anymore.
-            pass
-
         # Extract raw standard deviation if it's a rich model
         raw_uncertainty = getattr(uncertainty, "std_dev", uncertainty)
 

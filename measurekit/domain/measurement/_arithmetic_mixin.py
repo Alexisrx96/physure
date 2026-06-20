@@ -40,9 +40,7 @@ class ArithmeticMixin:
     @staticmethod
     def _is_zero_uncertainty(u: Any) -> bool:
         """Return True when *u* is absent or a scalar zero."""
-        return u is None or (  # NOSONAR
-            isinstance(u, (int, float)) and u == 0.0
-        )
+        return u is None or (isinstance(u, (int, float)) and not u)
 
     def _record_op(self, op_name: str, other: Any, res: Any) -> None:
         """Record an arithmetic operation in the active tracer (if any)."""

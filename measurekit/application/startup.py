@@ -247,7 +247,6 @@ class UnitSystemBuilder:
             return
 
         all_aliases = [key, *aliases]
-        symbol = aliases[0] if aliases else key  # noqa: F841
 
         # Obtain the CompoundUnit object from the recipe.
         recipe_unit = self._system.get_unit(recipe_str)
