@@ -19,7 +19,7 @@ if HAS_TRITON:
         jac_ptr,
         out_ptr,
         n_elements,
-        BLOCK_SIZE: tl.constexpr,
+        block_size: tl.constexpr,
     ):
         """Computes Out = Jac * Sigma * Jac^T where Jac is diagonal (represented by vector).
         Formula: Out[i, j] = Jac[i] * Sigma[i, j] * Jac[j]
@@ -28,8 +28,8 @@ if HAS_TRITON:
         pid_n = tl.program_id(axis=1)
 
         # Range of indices handled by this block
-        offs_am = (pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)) % n_elements
-        offs_bn = (pid_n * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)) % n_elements
+        offs_am = (pid_m * block_size + tl.arange(0, block_size)) % n_elements
+        offs_bn = (pid_n * block_size + tl.arange(0, block_size)) % n_elements
 
         # Load Jacobian values for rows (i) and cols (j)
         jac_m = tl.load(
@@ -73,8 +73,8 @@ if HAS_TRITON:
         out = torch.empty_like(sigma)
 
         grid = lambda META: (
-            triton.cdiv(n, META["BLOCK_SIZE"]),
-            triton.cdiv(n, META["BLOCK_SIZE"]),
+            triton.cdiv(n, META["block_size"]),
+            triton.cdiv(n, META["block_size"]),
         )
 
         covariance_update_kernel[grid](
@@ -82,7 +82,7 @@ if HAS_TRITON:
             jac,
             out,
             n,
-            BLOCK_SIZE=32,
+            block_size=32,
         )
         return out
 

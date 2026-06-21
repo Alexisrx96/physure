@@ -45,7 +45,7 @@ class AutogradCovarianceStore:
         self._sizes[start] = size
         return slice(start, start + size)
 
-    def register_variable(self, var_id: int, variance: Any):
+    def register_variable(self, _var_id: int, variance: Any):
         """Registers a variable with a variance matrix block."""
         variance = self.backend.asarray(variance)
         if hasattr(variance, "to_sparse"):

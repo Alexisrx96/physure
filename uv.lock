@@ -1985,16 +1985,7 @@ name = "measurekit"
 source = { editable = "." }
 dependencies = [
     { name = "array-api-compat" },
-    { name = "filelock" },
-    { name = "h5py" },
-    { name = "jaxtyping" },
     { name = "measurekit-core" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "psutil" },
-    { name = "pyarrow" },
-    { name = "pydantic" },
-    { name = "sympy" },
     { name = "typing-extensions" },
 ]
 
@@ -2005,30 +1996,21 @@ all = [
     { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxlib", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jaxlib", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "jaxtyping" },
     { name = "netcdf4", version = "1.7.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and platform_machine == 'ARM64' and sys_platform == 'win32'" },
     { name = "netcdf4", version = "1.7.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or platform_machine != 'ARM64' or sys_platform != 'win32'" },
     { name = "numba" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pandas" },
+    { name = "pyarrow" },
     { name = "pydantic" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "sympy" },
     { name = "torch" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2025.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-]
-dev = [
-    { name = "beartype" },
-    { name = "hypothesis" },
-    { name = "maturin" },
-    { name = "mypy" },
-    { name = "pandas" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-benchmark" },
-    { name = "pytest-cov" },
-    { name = "ruff" },
 ]
 docs = [
     { name = "matplotlib" },
@@ -2043,6 +2025,7 @@ io = [
     { name = "h5py" },
     { name = "netcdf4", version = "1.7.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and platform_machine == 'ARM64' and sys_platform == 'win32'" },
     { name = "netcdf4", version = "1.7.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or platform_machine != 'ARM64' or sys_platform != 'win32'" },
+    { name = "pyarrow" },
     { name = "xarray", version = "2025.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "xarray", version = "2025.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
@@ -2051,8 +2034,10 @@ jax = [
     { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxlib", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jaxlib", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "jaxtyping" },
 ]
 numpy = [
+    { name = "jaxtyping" },
     { name = "numba" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -2068,7 +2053,11 @@ pydantic = [
 rich = [
     { name = "rich" },
 ]
+symbolic = [
+    { name = "sympy" },
+]
 torch = [
+    { name = "jaxtyping" },
     { name = "torch" },
 ]
 
@@ -2078,6 +2067,8 @@ dev = [
     { name = "hypothesis" },
     { name = "maturin" },
     { name = "mypy" },
+    { name = "psutil" },
+    { name = "pyarrow" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-benchmark" },
@@ -2088,58 +2079,48 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "array-api-compat", specifier = ">=1.4" },
-    { name = "beartype", marker = "extra == 'dev'", specifier = ">=0.19.0" },
-    { name = "filelock", specifier = ">=3.20.1" },
-    { name = "h5py", specifier = ">=3.10.0" },
     { name = "h5py", marker = "extra == 'all'", specifier = ">=3.10.0" },
     { name = "h5py", marker = "extra == 'io'", specifier = ">=3.10.0" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.98.0" },
     { name = "jax", marker = "extra == 'all'", specifier = ">=0.4.25" },
     { name = "jax", marker = "extra == 'jax'", specifier = ">=0.4.25" },
     { name = "jaxlib", marker = "extra == 'all'", specifier = ">=0.4.25" },
     { name = "jaxlib", marker = "extra == 'jax'", specifier = ">=0.4.25" },
-    { name = "jaxtyping", specifier = ">=0.2.28" },
+    { name = "jaxtyping", marker = "extra == 'all'", specifier = ">=0.2.28" },
+    { name = "jaxtyping", marker = "extra == 'jax'", specifier = ">=0.2.28" },
+    { name = "jaxtyping", marker = "extra == 'numpy'", specifier = ">=0.2.28" },
+    { name = "jaxtyping", marker = "extra == 'torch'", specifier = ">=0.2.28" },
     { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.8.0" },
-    { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.11.2" },
     { name = "measurekit-core", directory = "measurekit_core" },
     { name = "mkdocs-htmlproofer-plugin", marker = "extra == 'docs'", specifier = ">=0.12.0" },
     { name = "mkdocs-jupyter", marker = "extra == 'docs'", specifier = ">=0.24.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.0" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.24.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9.0" },
     { name = "nbmake", marker = "extra == 'docs'", specifier = ">=1.5.0" },
     { name = "netcdf4", marker = "extra == 'all'", specifier = ">=1.6.0" },
     { name = "netcdf4", marker = "extra == 'io'", specifier = ">=1.6.0" },
-    { name = "networkx", specifier = ">=3.4.2" },
     { name = "numba", marker = "extra == 'all'", specifier = ">=0.59.0" },
     { name = "numba", marker = "extra == 'numpy'", specifier = ">=0.59.0" },
     { name = "numpy", marker = "extra == 'all'", specifier = ">=1.26.0" },
     { name = "numpy", marker = "extra == 'numpy'", specifier = ">=1.26.0" },
-    { name = "pandas", marker = "extra == 'all'", specifier = ">=2.3.3" },
-    { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.3.3" },
+    { name = "pandas", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.0" },
     { name = "papermill", marker = "extra == 'docs'", specifier = ">=2.5.0" },
-    { name = "psutil", specifier = ">=7.2.1" },
-    { name = "pyarrow", specifier = ">=22.0.0" },
-    { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pydantic", marker = "extra == 'all'", specifier = ">=2.6.0" },
-    { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.6.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.0" },
-    { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "pyarrow", marker = "extra == 'all'", specifier = ">=22.0.0" },
+    { name = "pyarrow", marker = "extra == 'io'", specifier = ">=22.0.0" },
+    { name = "pydantic", marker = "extra == 'all'", specifier = ">=2.10.0" },
+    { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.10.0" },
     { name = "rich", marker = "extra == 'rich'", specifier = ">=13.0.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3.0" },
     { name = "scipy", marker = "extra == 'all'", specifier = ">=1.12.0" },
     { name = "scipy", marker = "extra == 'numpy'", specifier = ">=1.12.0" },
-    { name = "sympy", specifier = ">=1.13.0" },
+    { name = "sympy", marker = "extra == 'all'", specifier = ">=1.13.0" },
+    { name = "sympy", marker = "extra == 'symbolic'", specifier = ">=1.13.0" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.2.0" },
     { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "xarray", marker = "extra == 'all'", specifier = ">=2024.1.0" },
     { name = "xarray", marker = "extra == 'io'", specifier = ">=2024.1.0" },
 ]
-provides-extras = ["all", "dev", "docs", "io", "jax", "numpy", "pandas", "pydantic", "rich", "torch"]
+provides-extras = ["all", "docs", "io", "jax", "numpy", "pandas", "pydantic", "rich", "symbolic", "torch"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2147,6 +2128,8 @@ dev = [
     { name = "hypothesis", specifier = ">=6.98.0" },
     { name = "maturin", specifier = ">=1.11.2" },
     { name = "mypy", specifier = ">=1.9.0" },
+    { name = "psutil", specifier = ">=7.2.1" },
+    { name = "pyarrow", specifier = ">=22.0.0" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.25.0" },
     { name = "pytest-benchmark", specifier = ">=4.0.0" },

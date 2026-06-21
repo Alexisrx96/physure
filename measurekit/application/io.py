@@ -70,4 +70,3 @@ def load_state(filepath: str | Path) -> None:
 
         # If store is loaded, backend needs to be set if None?
         # Typically pickle saves backend if it's serializable (like NumpyBackend).
-        pass

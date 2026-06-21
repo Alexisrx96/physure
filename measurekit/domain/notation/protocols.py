@@ -48,4 +48,4 @@ class ExponentEntityProtocol(Protocol):
 
     def __hash__(self) -> int:
         """Returns a hash value for the exponent entity."""
-        ...
+        raise TypeError

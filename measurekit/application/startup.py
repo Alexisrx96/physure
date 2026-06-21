@@ -72,7 +72,6 @@ def _load_all_configurations_into(
             "[WARNING] Could not locate built-in library configuration files."
         )
         # Continue to check for user config even if library defaults fail
-        pass
 
     # 3. Add the user's override configuration file (High Priority)
     # Check the Current Working Directory (CWD), which is typically the
@@ -247,7 +246,6 @@ class UnitSystemBuilder:
             return
 
         all_aliases = [key, *aliases]
-        symbol = aliases[0] if aliases else key  # noqa: F841
 
         # Obtain the CompoundUnit object from the recipe.
         recipe_unit = self._system.get_unit(recipe_str)

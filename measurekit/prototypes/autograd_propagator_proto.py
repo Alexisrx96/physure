@@ -28,7 +28,7 @@ def prototype_torch():
 
     # Dummy inputs
     val = torch.tensor([2.0], requires_grad=True)
-    covariance = torch.tensor([[0.01]])  # Variance = 0.1^2
+    covariance = torch.tensor([[0.01]])
 
     def func_to_differentiate(x):
         return torch.sin(x)
@@ -63,10 +63,10 @@ def prototype_torch():
         x, y = inputs[0], inputs[1]
         return torch.stack([x * y, x + y])
 
-    J_multi = torch.func.jacrev(func_multi)(inputs)
-    print(f"Multi-dim Jacobian:\n{J_multi}")
+    j_multi = torch.func.jacrev(func_multi)(inputs)
+    print(f"Multi-dim Jacobian:\n{j_multi}")
 
-    new_cov_multi = J_multi @ cov_inputs @ J_multi.T
+    new_cov_multi = j_multi @ cov_inputs @ j_multi.T
     print(f"Propagated Covariance:\n{new_cov_multi}")
 
 

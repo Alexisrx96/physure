@@ -110,7 +110,6 @@ try:
             # W shape: (N_in, N_null) @ (N_null, N_out) -> (N_in, N_out)
             W = self.V_null @ self.theta
 
-            # Y = log_x @ W
             Y = log_x @ W
 
             # 4. Exponential
@@ -148,10 +147,10 @@ try:
 
             # 1. Compute Dimensional Matrix D
             D, _ = extract_dimension_matrix(units, system)
-            D_array = jnp.array(D)
+            d_array = jnp.array(D)
 
             # 2. Compute Null Space Basis
-            self.V_null = null_space_basis(D_array)
+            self.V_null = null_space_basis(d_array)
 
             # 3. Initialize Theta
             n_null = self.V_null.shape[1]

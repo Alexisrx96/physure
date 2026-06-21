@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 try:
     import numpy as np
     from scipy.integrate import solve_ivp
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     np = None
     solve_ivp = None
 

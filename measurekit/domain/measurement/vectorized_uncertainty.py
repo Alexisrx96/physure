@@ -33,7 +33,7 @@ except ImportError:
             self.config = config or PruningConfig()
             self.matrix = None
 
-        def register_variable(self, var_id, variance):
+        def register_variable(self, _var_id, variance):
             if self.matrix is None:
                 self.matrix = scipy.sparse.csr_matrix(variance)
             else:
@@ -412,7 +412,6 @@ def propagate_affine(
         # Sigma subset: rows corresponding to input
         sigma_part = backend.sparse_slice(matrix, in_slc, slice(None))
 
-        # term = jac @ sigma_part
         term = backend.sparse_matmul(jac, sigma_part)
 
         if c_accum is None:
@@ -428,10 +427,7 @@ def propagate_affine(
     v_accum = None
     if c_accum is not None:
         for in_slc, jac in zip(in_slices, jacobians, strict=False):
-            # c_part = C[:, in_slc]
             c_part = backend.sparse_slice(c_accum, slice(None), in_slc)
-
-            # term = c_part @ jac.T
             term = backend.sparse_matmul(c_part, backend.transpose(jac))
 
             if v_accum is None:
