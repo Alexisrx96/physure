@@ -208,10 +208,7 @@ class VarianceModel(Uncertainty[UncType]):
                 continue  # Treat as zero uncertainty?
 
             # Get variance
-            if isinstance(u, VarianceModel):
-                var_i = u.variance
-            else:
-                var_i = backend.pow(u.std_dev, 2)
+            var_i = u.variance if isinstance(u, VarianceModel) else backend.pow(u.std_dev, 2)
 
             # Apply J^2
             # Use _apply_jacobian helper logic for consistency?
@@ -223,10 +220,7 @@ class VarianceModel(Uncertainty[UncType]):
             # Assuming broadcast compatibility between J and Var
             term = backend.mul(jac_sq, var_i)
 
-            if i == 0:
-                total_var = term
-            else:
-                total_var = backend.add(total_var, term)
+            total_var = term if i == 0 else backend.add(total_var, term)
 
         return cls(variance=total_var)
 
@@ -419,7 +413,9 @@ class CovarianceModel(Uncertainty[UncType]):
         backend: Any,
     ) -> CovarianceModel:
         """Propagates via covariance store (vector/array path)."""
-        from measurekit.domain.measurement.vectorized_uncertainty import ensure_store
+        from measurekit.domain.measurement.vectorized_uncertainty import (
+            ensure_store,
+        )
 
         store = ensure_store(backend)
         in_slices = []
@@ -562,7 +558,9 @@ class CovarianceModel(Uncertainty[UncType]):
         backend: Any,
     ) -> CovarianceModel:
         """Vector-path implementation of add() — uses the covariance store."""
-        from measurekit.domain.measurement.vectorized_uncertainty import ensure_store
+        from measurekit.domain.measurement.vectorized_uncertainty import (
+            ensure_store,
+        )
 
         store = ensure_store(backend)
         in_slices = [self.ensure_vector_slice(backend)]

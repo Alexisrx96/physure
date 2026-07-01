@@ -4,7 +4,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class SymbolicNode(ABC):
+class SymbolicNode(ABC):  # noqa: B024 — marker base class
     """Base class for symbolic expression nodes."""
 
     pass

@@ -26,7 +26,7 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 try:
-    import jax
+    import jax  # noqa: F401
     import jax.numpy as jnp
 
     JAX_AVAILABLE = True

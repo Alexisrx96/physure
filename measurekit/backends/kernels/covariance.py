@@ -21,8 +21,9 @@ if HAS_TRITON:
         n_elements,
         block_size: tl.constexpr,
     ):
-        """Computes Out = Jac * Sigma * Jac^T where Jac is diagonal (represented by vector).
-        Formula: Out[i, j] = Jac[i] * Sigma[i, j] * Jac[j]
+        """Computes Out = Jac * Sigma * Jac^T for diagonal Jac.
+
+        Formula: Out[i, j] = Jac[i] * Sigma[i, j] * Jac[j].
         """
         pid_m = tl.program_id(axis=0)
         pid_n = tl.program_id(axis=1)
@@ -68,14 +69,16 @@ if HAS_TRITON:
 
     def apply_covariance_update_triton(sigma: Any, jac: Any) -> Any:
         """Applies J * Sigma * J^T assuming J is diagonal (vector)."""
-        assert sigma.is_cuda and jac.is_cuda
+        assert sigma.is_cuda
+        assert jac.is_cuda
         n = sigma.shape[0]
         out = torch.empty_like(sigma)
 
-        grid = lambda META: (
-            triton.cdiv(n, META["block_size"]),
-            triton.cdiv(n, META["block_size"]),
-        )
+        def grid(META):
+            return (
+                    triton.cdiv(n, META["block_size"]),
+                    triton.cdiv(n, META["block_size"]),
+                )
 
         covariance_update_kernel[grid](
             sigma,
@@ -90,4 +93,5 @@ else:
     from typing import Any
 
     def apply_covariance_update_triton(sigma: Any, jac: Any) -> Any:
+        """Stub that fails loudly when Triton is unavailable."""
         raise RuntimeError("Triton kernels are not available on this system.")

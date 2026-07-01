@@ -1,10 +1,18 @@
-from typing import Callable, Optional, Type, Any
-from mypy.plugin import Plugin, FunctionContext
-from mypy.types import Type as MypyType, Instance, LiteralType
-from mypy.nodes import CallExpr, StrExpr
+from collections.abc import Callable
+
+from mypy.nodes import StrExpr
+from mypy.plugin import FunctionContext, Plugin
+from mypy.types import Instance, LiteralType
+from mypy.types import Type as MypyType
+
 
 class MeasureKitPlugin(Plugin):
-    def get_function_hook(self, fullname: str) -> Optional[Callable[[FunctionContext], MypyType]]:
+    """Narrows Q_(value, "unit") return types to Literal unit strings."""
+
+    def get_function_hook(
+        self, fullname: str
+    ) -> Callable[[FunctionContext], MypyType] | None:
+        """Returns the Q_ hook for measurekit factory callables."""
         if fullname in (
             "measurekit.domain.measurement.quantity.Q_", 
             "measurekit.Q_", 
@@ -26,9 +34,12 @@ class MeasureKitPlugin(Plugin):
             if isinstance(unit_arg, StrExpr):
                 unit_str = unit_arg.value
         
-        if unit_str and isinstance(ret_type, Instance):
-            # Quantity(Generic[Value, Unc, Unit])
-            if len(ret_type.args) >= 3:
+        # Quantity(Generic[Value, Unc, Unit])
+        if (
+            unit_str
+            and isinstance(ret_type, Instance)
+            and len(ret_type.args) >= 3
+        ):
                 str_type = ctx.api.named_generic_type("builtins.str", [])
                 literal_unit = LiteralType(
                     value=unit_str,
@@ -40,5 +51,6 @@ class MeasureKitPlugin(Plugin):
 
         return ret_type
 
-def plugin(_version: str) -> Type[MeasureKitPlugin]:
+def plugin(_version: str) -> type[MeasureKitPlugin]:
+    """Mypy plugin entry point."""
     return MeasureKitPlugin

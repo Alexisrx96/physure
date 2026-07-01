@@ -1,7 +1,9 @@
 [env]
 PYO3_USE_ABI3_FORWARD_COMPATIBILITY = "1"
-PYTHONPATH = "/mnt/d/Projects/measurekit/.venv/lib/python3.14/site-packages:/mnt/d/Projects/measurekit"
 
-# Link Python for `cargo test` — extension-module feature skips this for release builds
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-L/usr/lib", "-lpython3.14"]
+# Do NOT commit machine-specific rustflags/PYTHONPATH here: a hardcoded
+# `-lpython3.X` gets injected into every rustc invocation (including
+# build scripts) and breaks the build on any other machine and on CI.
+#
+# For local `cargo test`, link your interpreter explicitly instead:
+#   RUSTFLAGS="-L$(python3-config --prefix)/lib $(python3-config --libs --embed)" cargo test

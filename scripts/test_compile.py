@@ -37,7 +37,7 @@ def test_compile_unit_check():
     # Wrong unit
     try:
         func(output_unit="m^2", x=Q_(10, "s"))
-        assert False, "Should have raised mismatch error"
+        raise AssertionError("Should have raised mismatch error")
     except Exception as e:
         # IncompatibleUnitsError or ValueError during conversion
         print(f"Caught expected error: {e}")

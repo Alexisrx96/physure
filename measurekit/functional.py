@@ -92,7 +92,8 @@ class FunctionalState:
             return self.registry[key], self.matrix
 
         # Access internal Uncertainty
-        # We check if it's a CovarianceModel. It might be stored in Rust's value.uncertainty (TensorBackend)
+        # We check if it's a CovarianceModel. It might be stored in
+        # Rust's value.uncertainty (TensorBackend)
         # or it might be the result of a property access.
         unc = q.uncertainty
         from measurekit.domain.measurement.uncertainty import CovarianceModel

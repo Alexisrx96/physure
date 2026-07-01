@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import re
+from typing import ClassVar
 
 
 class UnitSanitizer:
     """Sanitizes raw unit strings for SymPy parsing."""
 
     # Unicode superscript map
-    _SUPERSCRIPTS = {
+    _SUPERSCRIPTS: ClassVar[dict[str, str]] = {
         "⁰": "0",
         "¹": "1",
         "²": "2",
@@ -23,7 +24,7 @@ class UnitSanitizer:
         "⁻": "-",
         "⋅": "*",
         "·": "*",
-        "×": "*",  # Add operators here for convenience
+        "×": "*",  # noqa: RUF001 — intentional unicode operator
     }
 
     @classmethod
@@ -45,7 +46,7 @@ class UnitSanitizer:
         # We handle this manually or via loop, doing explicit replace is safer for distinct chars
         expr = expr.replace("⋅", "*")
         expr = expr.replace("·", "*")
-        expr = expr.replace("×", "*")
+        expr = expr.replace("×", "*")  # noqa: RUF001
 
         # 2. Normalize degrees
         # "°" -> "deg"
@@ -57,10 +58,10 @@ class UnitSanitizer:
             # Filter out non-superscript chars if any (though regex handles it)
             normal_chars = []
             for c in sup_str:
-                if c in cls._SUPERSCRIPTS:
-                    # Note: we kept operators in the dict, but this regex only matches sups
-                    if c in "⁰¹²³⁴⁵⁶⁷⁸⁹⁻":
-                        normal_chars.append(cls._SUPERSCRIPTS[c])
+                # Operators live in the dict too, but this regex only
+                # matches superscripts.
+                if c in cls._SUPERSCRIPTS and c in "⁰¹²³⁴⁵⁶⁷⁸⁹⁻":
+                    normal_chars.append(cls._SUPERSCRIPTS[c])
 
             normal_str = "".join(normal_chars)
             return f"**{normal_str}"

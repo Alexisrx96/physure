@@ -6,9 +6,12 @@ for entities with exponents.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from typing_extensions import Protocol
 
-from measurekit.domain.notation.typing import ExponentsDict
+if TYPE_CHECKING:
+    from measurekit.domain.notation.typing import ExponentsDict
 
 
 class ExponentEntityProtocol(Protocol):

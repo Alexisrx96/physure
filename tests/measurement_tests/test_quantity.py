@@ -433,6 +433,7 @@ def test_scalar_unpack(quantity_system, units):
 def test_scalar_unpack_numpy_scalar(quantity_system, units):
     """numpy 0-d arrays should unpack as (magnitude, unit) not return []."""
     import numpy as np
+
     from measurekit.domain.measurement.quantity import Quantity
     q = Quantity(np.float64(42.0), units["meter"], system=quantity_system)
     mag, unit = q

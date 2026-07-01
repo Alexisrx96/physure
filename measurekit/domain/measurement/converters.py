@@ -55,6 +55,7 @@ class LinearConverter(UnitConverter):
 
     @property
     def is_linear(self) -> bool:
+        """Returns True: plain scale conversion."""
         return True
 
     def to_base(self, value: float) -> float:
@@ -83,6 +84,7 @@ class OffsetConverter(UnitConverter):
 
     @property
     def is_linear(self) -> bool:
+        """Returns False: conversion has an offset."""
         return False
 
     def to_base(self, value: float) -> float:
@@ -120,6 +122,7 @@ class LogarithmicConverter(UnitConverter):
 
     @property
     def is_linear(self) -> bool:
+        """Returns False: conversion is logarithmic."""
         return False
 
     def to_base(self, value: float) -> float:

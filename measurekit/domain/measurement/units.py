@@ -18,12 +18,12 @@ from measurekit.domain.measurement.converters import (
     LinearConverter,
     UnitConverter,
 )
-from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.notation.base_entity import BaseExponentEntity
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from measurekit.domain.measurement.dimensions import Dimension
     from measurekit.domain.measurement.quantity import Quantity
     from measurekit.domain.measurement.system import UnitSystem
     from measurekit.domain.notation.typing import ExponentsDict
@@ -144,6 +144,8 @@ try:
 except ImportError:
     # Fallback to local stub if core not available
     class RationalUnit:
+        """Inert stub used when measurekit_core is unavailable."""
+
         def __init__(self, *args, **kwargs):
             ...  # intentionally empty stub; replaced by measurekit_core at runtime
 
@@ -257,10 +259,7 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
             if unit_def and hasattr(unit_def.converter, "scale"):
                 conv_scale = unit_def.converter.scale
                 # Handle tuple exponents (num, den) from RationalUnit
-                if isinstance(exp, (list, tuple)):
-                    exponent_val = exp[0] / exp[1]
-                else:
-                    exponent_val = exp
+                exponent_val = exp[0] / exp[1] if isinstance(exp, (list, tuple)) else exp
                 factor *= conv_scale**exponent_val
         return factor
 
@@ -538,6 +537,7 @@ _register_core_units()
 if IS_CORE_AVAILABLE:
 
     def wrap_arithmetic(op_name):
+        """Wraps a RationalUnit operator to coerce plain numbers."""
         orig_op = getattr(RationalUnit, op_name, None)
         if orig_op:
 

@@ -17,15 +17,19 @@ entity class that adheres to the ExponentEntityProtocol.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 from measurekit.domain.notation.lexer import (
     TokenType,
     UnitToken,
     parse_superscript,
 )
-from measurekit.domain.notation.protocols import ExponentEntityProtocol
 from measurekit.domain.notation.token_buffer import TokenBuffer
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from measurekit.domain.notation.protocols import ExponentEntityProtocol
 
 
 class NotationParser:

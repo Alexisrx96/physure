@@ -237,9 +237,12 @@ def test_unit_invariance(qs):
     
     # helper to normalize for comparison
     def to_np(x):
-        if hasattr(x, "toarray"): return x.toarray()
-        if hasattr(x, "todense"): return x.todense()
-        if hasattr(x, "numpy"): return x.numpy()
+        if hasattr(x, "toarray"):
+            return x.toarray()
+        if hasattr(x, "todense"):
+            return x.todense()
+        if hasattr(x, "numpy"):
+            return x.numpy()
         return np.asarray(x)
 
     np.testing.assert_allclose(to_np(m_lhs), to_np(m_rhs), rtol=1e-5, atol=1e-8)

@@ -1,5 +1,6 @@
 """MeasureKit: A Python Library for Unit-Aware Scientific Calculations."""
 
+import contextlib
 import sys
 from typing import Any
 
@@ -153,16 +154,12 @@ def __getattr__(name: str) -> Any:
 
 # Register Extensions only if libraries are already loaded
 if "pandas" in sys.modules:
-    try:
+    with contextlib.suppress(ImportError, AttributeError):
         from measurekit.ext import pandas_support
-    except (ImportError, AttributeError):
-        pass
 
 if "numba" in sys.modules:
-    try:
+    with contextlib.suppress(ImportError, AttributeError):
         import measurekit.ext.numba_support
-    except (ImportError, AttributeError):
-        pass
 
 __all__ = [
     "Q_",

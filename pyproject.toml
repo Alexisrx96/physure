@@ -121,8 +121,15 @@ exclude = [
 select = [
     "E", "F", "UP", "B", "SIM", "I", "D", "N", "RUF", "TCH", "PT", "PYI"
 ]
-ignore = ["D100", "D104", "N816"]
+# N806/N803: uppercase locals (D, V, N, J...) follow physics/matrix notation
+# D105/D107: magic methods and __init__ are covered by class docstrings
+ignore = ["D100", "D104", "N816", "N806", "N803", "D105", "D107"]
 fixable = ["ALL"]
+
+[tool.ruff.lint.pycodestyle]
+# The formatter targets 79; only lines it cannot split (long strings,
+# comments, URLs) may run past, capped at 100.
+max-line-length = 100
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -132,8 +139,16 @@ known-first-party = ["measurekit"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402", "F401"]
-"tests/*" = ["D", "S101"]
+"tests/*" = ["D", "S101", "E501", "E402"]
 "manual_sandbox/*" = ["ALL"]
+# Generated unit namespace ('l' = liter is E741 ambiguous but part of API)
+"measurekit/units/core.py" = ["E741"]
+# Dev tooling: docstring/style rules are noise outside the library
+"benchmarks/*" = ["D", "E501", "E402", "F841", "RUF001"]
+"examples/*" = ["D", "E501", "E402"]
+"scripts/*" = ["D", "E501", "E402", "F841"]
+"measurekit_core/scripts/*" = ["D", "E501"]
+"measurekit/prototypes/*" = ["D", "E501", "E402"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -164,7 +179,8 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+# numpy >= 2.1 stubs use PEP 695 syntax; needs a 3.12+ target
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true

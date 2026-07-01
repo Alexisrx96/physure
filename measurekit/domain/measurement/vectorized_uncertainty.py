@@ -22,6 +22,8 @@ except ImportError:
 
     @dataclass
     class PruningConfig:
+        """Python fallback for the Rust covariance pruning config."""
+
         max_age: int = 100
         enabled: bool = False
         corr_threshold: float = 1e-6
@@ -34,6 +36,7 @@ except ImportError:
             self.matrix = None
 
         def register_variable(self, _var_id, variance):
+            """Appends a variance block to the covariance matrix."""
             if self.matrix is None:
                 self.matrix = scipy.sparse.csr_matrix(variance)
             else:
@@ -42,11 +45,13 @@ except ImportError:
                 )
 
         def register_diagonal(self, var_id, variance_diag):
+            """Registers a diagonal variance vector."""
             _ = len(variance_diag)
             sp = scipy.sparse.diags([variance_diag], [0], format="csr")
             self.register_variable(var_id, sp)
 
         def propagate(self, out_id, input_ids, jacobians):
+            """Applies Jacobians to propagate covariance to the output."""
             # Compute sizes from jacobians
             out_size = jacobians[0].shape[0]
             out_slice = slice(out_id, out_id + out_size)
@@ -68,6 +73,7 @@ except ImportError:
         def get_covariance_block(
             self, row_slice: slice, col_slice: slice
         ) -> Any:
+            """Returns the covariance sub-matrix for the given slices."""
             if self.matrix is None:
                 return None
             return self.matrix[row_slice, col_slice]
@@ -229,6 +235,10 @@ class CovarianceStore:
         """Casts val to float64; also re-densifies any sparse result."""
         if self.backend.__class__.__name__ == "TorchBackend":
             import torch
+
+            if not isinstance(val, torch.Tensor):
+                # Scalar jacobians arrive as numpy arrays
+                val = torch.as_tensor(val)
             if val.dtype != torch.float64:
                 val = val.to(torch.float64)
             return val
@@ -249,7 +259,11 @@ class CovarianceStore:
         """Full pipeline: densify → to numpy/tensor → broadcast → float64."""
         val = self._densify_sparse(jac)
         val = self._to_numpy_or_tensor(val)
-        if not isinstance(val, (np.ndarray, np.generic)):
+        if not isinstance(
+            val, (np.ndarray, np.generic)
+        ) and not self.backend.is_array(val):
+            # Wrap plain scalars; backend arrays (torch tensors) must
+            # pass through untouched or autograd gradients are lost.
             val = np.array(val)
         val = self._broadcast_jacobian(val, out_size, in_size)
         return self._ensure_float64_jac(val)
@@ -293,18 +307,23 @@ class CovarianceStore:
         val = val.reshape(-1)
         has_non_float64 = hasattr(val, "dtype") and str(val.dtype) != "float64"
         if has_non_float64:
-            val = val.astype(np.float64, copy=False) if hasattr(val, "astype") else np.asarray(val, dtype=np.float64)
+            if hasattr(val, "astype"):
+                val = val.astype(np.float64, copy=False)
+            else:
+                val = np.asarray(val, dtype=np.float64)
         return val
 
     def _register_diagonal_with_fallback(self, idx: int, diag: Any, size: int) -> None:
         """Calls register_diagonal on the core store, falling back to register_variable."""
         try:
             self._core.register_diagonal(idx, diag)
-        except AttributeError:
+        except AttributeError as err:
             if size < 1000:
                 self._core.register_variable(idx, np.diag(diag))
             else:
-                raise RuntimeError("Rust CoreStore.register_diagonal missing.")
+                raise RuntimeError(
+                    "Rust CoreStore.register_diagonal missing."
+                ) from err
 
     def register_independent_array(self, std_dev: Any) -> slice:
         """Registers a new independent array and returns its slice."""
@@ -322,6 +341,8 @@ _current_store: contextvars.ContextVar[CovarianceStore | None] = (
 
 
 class MeasureKitContext:
+    """Context manager providing a scoped CovarianceStore."""
+
     def __init__(
         self,
         backend_type: str = "numpy",
@@ -343,6 +364,7 @@ class MeasureKitContext:
 
 
 def get_current_store() -> CovarianceStore | None:
+    """Returns the context-local covariance store, if any."""
     return _current_store.get()
 
 
@@ -360,6 +382,7 @@ _global_stores: dict[type, CovarianceStore] = {}
 
 
 def ensure_store(backend: BackendOps) -> CovarianceStore:
+    """Returns the active store, creating a per-backend global if needed."""
     store = get_current_store()
     if store is not None:
         if store.backend is None:
@@ -374,6 +397,7 @@ def ensure_store(backend: BackendOps) -> CovarianceStore:
 
 
 def clear_global_stores() -> None:
+    """Clears all global stores (used between tests)."""
     _global_stores.clear()
     _current_store.set(None)
 
@@ -414,10 +438,7 @@ def propagate_affine(
 
         term = backend.sparse_matmul(jac, sigma_part)
 
-        if c_accum is None:
-            c_accum = term
-        else:
-            c_accum = backend.add(c_accum, term)
+        c_accum = term if c_accum is None else backend.add(c_accum, term)
 
     # c_accum is now C (M x N)
 
@@ -430,10 +451,7 @@ def propagate_affine(
             c_part = backend.sparse_slice(c_accum, slice(None), in_slc)
             term = backend.sparse_matmul(c_part, backend.transpose(jac))
 
-            if v_accum is None:
-                v_accum = term
-            else:
-                v_accum = backend.add(v_accum, term)
+            v_accum = term if v_accum is None else backend.add(v_accum, term)
 
     if v_accum is None:
         # Fallback for empty jacobians (should unlikely happen in affine)

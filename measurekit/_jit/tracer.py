@@ -7,9 +7,11 @@ for exact dimensional validation.
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable
 from fractions import Fraction
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 try:
     from measurekit_core import RationalUnit
@@ -210,7 +212,7 @@ def _trace_and_bake(
     """Traces func and bakes a kernel. Returns (kernel, out_unit) or None."""
     tracer_args = []
     arg_names = []
-    for i, (arg, u_hash) in enumerate(zip(args, unit_sig)):
+    for i, (arg, u_hash) in enumerate(zip(args, unit_sig, strict=False)):
         name = f"a{i}"
         arg_names.append(name)
         if u_hash is not None:

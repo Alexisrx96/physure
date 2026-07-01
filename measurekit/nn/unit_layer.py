@@ -1,6 +1,7 @@
 try:
     import torch
     import torch.nn as nn
+
     from measurekit_core import RationalUnit
 
     class UnitAutogradFunction(torch.autograd.Function):
@@ -55,10 +56,10 @@ try:
             dims = {}
             # We use a precision-based rounding to map floats to rationals
             for name, val in zip(
-                self.base_dimensions, self.exponents.detach().cpu().numpy()
+                self.base_dimensions, self.exponents.detach().cpu().numpy(), strict=False
             ):
                 # Round to nearest 1/100th for rational representation
-                num = int(round(float(val) * 100))
+                num = round(float(val) * 100)
                 if num != 0:
                     dims[name] = (num, 100)
             return RationalUnit(dims)

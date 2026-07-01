@@ -29,7 +29,7 @@ class SymPyTransformer:
         Raises:
             UnitParsingError: If the expression contains unsupported operations.
         """
-        import sympy as sp  # noqa: PLC0415
+        import sympy as sp
 
         # 1. Base Case: Symbol -> Unit
         if isinstance(expr, sp.Symbol):

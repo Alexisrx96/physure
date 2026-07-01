@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 # Add project root to sys.path relative to this test file
 _ROOT = Path(__file__).resolve().parent.parent
@@ -48,12 +49,8 @@ def test_jit_dimensional_error():
     def invalid_op(a, b):
         return a + b
 
-    try:
+    with pytest.raises(Exception, match="Incompatible units"):
         invalid_op(Q_(1, "m"), Q_(1, "s"))
-        assert False, "Should have raised DimensionalError"
-    except Exception as e:
-        print(f"  Caught expected error: {type(e).__name__}: {e}")
-        assert "Incompatible units" in str(e)
 
     print("  Success: JIT caught dimensional error at trace-time")
 

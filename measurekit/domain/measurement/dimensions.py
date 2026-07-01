@@ -10,15 +10,17 @@ library, enabling it to check for dimensional consistency in calculations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import ClassVar, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from typing_extensions import Self
 
 from measurekit.core.formatting import to_superscript
 from measurekit.domain.exceptions import DimensionError
 from measurekit.domain.notation.base_entity import BaseExponentEntity
-from measurekit.domain.notation.protocols import ExponentEntityProtocol
-from measurekit.domain.notation.typing import ExponentsDict
+
+if TYPE_CHECKING:
+    from measurekit.domain.notation.protocols import ExponentEntityProtocol
+    from measurekit.domain.notation.typing import ExponentsDict
 
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
@@ -181,14 +183,14 @@ class Dimension(BaseExponentEntity):
             # If multiplying by something else (e.g. CompoundUnit),
             # let it handle it
             return NotImplemented
-        new_vector = tuple(a + b for a, b in zip(self._vector, other._vector))
+        new_vector = tuple(a + b for a, b in zip(self._vector, other._vector, strict=False))
         return Dimension(new_vector)
 
     def __truediv__(self, other: ExponentEntityProtocol) -> Dimension:
         """Divides two dimensions by subtracting their exponent vectors."""
         if not isinstance(other, Dimension):
             return NotImplemented
-        new_vector = tuple(a - b for a, b in zip(self._vector, other._vector))
+        new_vector = tuple(a - b for a, b in zip(self._vector, other._vector, strict=False))
         return Dimension(new_vector)
 
     def __pow__(self, power: float) -> Dimension:

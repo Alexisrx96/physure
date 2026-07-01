@@ -6,6 +6,7 @@ from measurekit.scripts.generate_types import generate
 
 
 def main():
+    """Entry point for the MeasureKit CLI."""
     parser = argparse.ArgumentParser(description="MeasureKit CLI Tool")
     subparsers = parser.add_subparsers(dest="command")
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import operator
-from typing import Any
 
 from typing_extensions import Self
 
@@ -43,13 +42,16 @@ class BackendMixin:
         return type(self).from_input(res_mag, inp.unit, self.system)
 
     def _numpy_ufunc_check_compatible(self, val):
-        """Raise IncompatibleUnitsError when val is a Quantity with mismatched dimension."""
-        if isinstance(val, _q()) and self.unit != val.unit:
-            if self.dimension != val.dimension:
-                raise IncompatibleUnitsError(self.unit, val.unit)
+        """Raise IncompatibleUnitsError on dimension mismatch."""
+        if (
+            isinstance(val, _q())
+            and self.unit != val.unit
+            and self.dimension != val.dimension
+        ):
+            raise IncompatibleUnitsError(self.unit, val.unit)
 
     def _numpy_ufunc_arithmetic(self, ufunc, inputs):
-        """Dispatch np.add/subtract/multiply/true_divide/power; return NotImplemented if no match."""
+        """Dispatch numpy arithmetic ufuncs (add/sub/mul/div/pow)."""
         import numpy as np
         if ufunc in (np.add, np.subtract, np.multiply):
             other = inputs[1] if inputs[0] is self else inputs[0]
@@ -63,7 +65,9 @@ class BackendMixin:
                 return self.__sub__(other)
             return self.__rsub__(other)
         if ufunc == np.true_divide:
-            return self.__truediv__(inputs[1]) if inputs[0] is self else self.__rtruediv__(inputs[0])
+            if inputs[0] is self:
+                return self.__truediv__(inputs[1])
+            return self.__rtruediv__(inputs[0])
         if ufunc == np.power and inputs[0] is self:
             return self.__pow__(inputs[1])
         return NotImplemented
@@ -175,7 +179,7 @@ class BackendMixin:
         return obj
 
     def _torch_arithmetic(self, func, args):
-        """Delegate torch arithmetic functions to Python operators; return NotImplemented if no match."""
+        """Delegate torch arithmetic to Python operators."""
         import torch
         if func == torch.add:
             return operator.add(args[0], args[1])  # type: ignore
@@ -190,7 +194,7 @@ class BackendMixin:
         return NotImplemented
 
     def _torch_unary_math(self, func, args, kwargs):
-        """Handle torch unary math (sqrt, abs, trig); return NotImplemented if func not in trig_map."""
+        """Handle torch unary math (sqrt, abs, trig)."""
         import torch
         trig_map = {
             torch.sin, torch.cos, torch.tan, torch.exp,

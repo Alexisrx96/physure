@@ -71,11 +71,7 @@ def test_arrow_speed():
 
     # Verify we can read it back
     reader = pa.ipc.open_stream(bytes_data)
-    # Different pyarrow versions might use different method names
-    if hasattr(reader, "read_all"):
-        table = reader.read_all()
-    else:
-        table = reader.read_all()  # Fallback, usually read_all is standard
+    table = reader.read_all()
     end = time.perf_counter()
 
     duration_ms = (end - start) * 1000

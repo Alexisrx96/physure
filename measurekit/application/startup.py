@@ -12,10 +12,9 @@ from __future__ import annotations
 import configparser
 from importlib import resources
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from measurekit.application.context import use_system
-from measurekit.domain.measurement.conversions import UnitDefinition
 from measurekit.domain.measurement.converters import (
     LinearConverter,
     LogarithmicConverter,
@@ -27,6 +26,9 @@ from measurekit.domain.measurement.dimensions import (
 )
 from measurekit.domain.measurement.system import UnitSystem
 from measurekit.domain.measurement.units import CompoundUnit
+
+if TYPE_CHECKING:
+    from measurekit.domain.measurement.conversions import UnitDefinition
 
 _CONF_FILE = "measurekit.conf"
 

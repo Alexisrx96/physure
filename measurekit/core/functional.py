@@ -205,7 +205,8 @@ def _add_nonlinear(val1, unit1, val2, unit2, system):
     # Fallback to linear if we missed a case or mixed types essentially treated as linear
     # This effectively recurses to linear behavior manually
     # But for safety, we implement the conversion here if mixed types fell through
-    # (e.g. one Log, one Linear? usually undefined or strict error, but let's assume valid linear-ish op)
+    # (e.g. one Log, one Linear? usually undefined or strict error,
+    # but let's assume a valid linear-ish op)
     # Ideally should not happen if _check_nonlinear was accurate.
     # We'll just define it as "Linear fallback"
     factor = unit2.conversion_factor_to(unit1, system)
@@ -343,7 +344,8 @@ def pow_quantities(
     # Update units
     # If scalar_exp is a Tracer, we CANNOT update unit exponents (which keys must be values)
     # Unit exponents are static metadata.
-    # Therefore, we CANNOT raise a Quantity to a dynamic (traced) power if that power affects dimensions.
+    # Therefore, we CANNOT raise a Quantity to a dynamic (traced)
+    # power if that power affects dimensions.
     # e.g. m^x where x is input to JIT -> m^x is not a valid static unit unless x is constant.
     # JAX JIT requires static shapes/units.
     # If x is dynamic, the unit is undefined/dynamic.

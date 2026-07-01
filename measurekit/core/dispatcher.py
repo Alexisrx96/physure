@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         Float = Any
 
         def typecheck(func):
+            """No-op fallback when jaxtyping is unavailable."""
             return func
 
     try:
@@ -42,7 +43,7 @@ def enforce_tensor_contract(func):
     return func
 
 
-import functools
+import functools  # noqa: E402
 
 
 def ensure_backend_compatible(func):
@@ -347,10 +348,7 @@ class PythonBackend(BackendOps):
         # Basic scalar/list broadcasting simulation
         max_len = 0
         for x in inputs:
-            if isinstance(x, (list, tuple)):
-                max_len = max(max_len, len(x))
-            else:
-                max_len = max(max_len, 1)
+            max_len = max(max_len, len(x)) if isinstance(x, (list, tuple)) else max(max_len, 1)
 
         results = []
         for x in inputs:
@@ -441,9 +439,11 @@ class CoreBackend(BackendOps):
     """Backend for the Rust-based QuantityInner core."""
 
     def is_array(self, obj: Any) -> bool:
+        """Core quantities are scalars, never arrays."""
         return False
 
     def is_tracing(self, obj: Any) -> bool:
+        """The core backend never traces."""
         return False
 
     def add(self, x: Any, y: Any) -> Any:

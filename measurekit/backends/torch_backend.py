@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 
 def _torch_block_offsets(
-    blocks: "Sequence[Sequence[Any | None]]",
+    blocks: Sequence[Sequence[Any | None]],
 ) -> tuple[list[int], list[int]]:
     """Computes row and column offsets for a block matrix."""
     row_offsets = [0]
@@ -600,14 +600,13 @@ class TorchBackend(BackendOps):
             and sigma.is_cuda
             and jac.is_cuda
             and jac.ndim == 1  # Diagonal Jacobian represented as vector
+            and jac.shape[0] == sigma.shape[0]  # same size as sigma rows
         ):
-            # Ensure jac is same size as sigma rows
-            if jac.shape[0] == sigma.shape[0]:
-                try:
-                    return apply_covariance_update_triton(sigma, jac)
-                except Exception:
-                    # Fallback if kernel fails (e.g. dimensions/stride)
-                    pass
+            try:
+                return apply_covariance_update_triton(sigma, jac)
+            except Exception:
+                # Fallback if kernel fails (e.g. dimensions/stride)
+                pass
 
         # Fallback to standard math
         # If jac is 1D, it represents diagonal

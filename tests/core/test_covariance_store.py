@@ -3,19 +3,17 @@ import numpy as np
 import pytest
 
 try:
-    from measurekit_core import CovarianceStore as RustCovarianceStore, PruningConfig
+    from measurekit_core import CovarianceStore as RustCovarianceStore
+    from measurekit_core import PruningConfig
 
     HAS_RUST = True
 except ImportError:
     HAS_RUST = False
 
+from measurekit.backends.numpy_backend import NumpyBackend
 from measurekit.domain.measurement.vectorized_uncertainty import (
     CovarianceStore,
-    ensure_store,
-    get_current_store,
 )
-from measurekit.backends.numpy_backend import NumpyBackend
-
 
 # ---------------------------------------------------------------------------
 # Rust CovarianceStore direct tests
@@ -43,7 +41,7 @@ class TestRustCovarianceStore:
         self.store.register_variable(10, cov)
         result = self.store.get_block_csr(10, 10)
         assert result is not None
-        data, indices, indptr, shape = result
+        _data, _indices, _indptr, shape = result
         assert shape == (2, 2)
 
     def test_propagate_scales_variance(self):
@@ -103,7 +101,6 @@ class TestPythonCoreStoreFallback:
 
     def _make_store(self):
         backend = NumpyBackend()
-        from measurekit.domain.measurement.vectorized_uncertainty import CovarianceStore, PruningConfig
         return CovarianceStore(backend=backend)
 
     def test_allocate_returns_sequential_slices(self):

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from measurekit.domain.measurement.quantity import Quantity
-from measurekit.domain.measurement.units import CompoundUnit
 from measurekit.nn.utils import extract_dimension_matrix, null_space_basis
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from measurekit.domain.measurement.units import CompoundUnit
 
 # --- PyTorch Implementation ---
 try:

@@ -9,7 +9,6 @@ preventing common errors in physics and engineering simulations.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 try:
@@ -22,6 +21,8 @@ except ImportError:
 from measurekit.domain.measurement.quantity import Quantity
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from numpy.typing import NDArray
 
 

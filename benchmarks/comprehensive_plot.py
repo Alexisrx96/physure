@@ -123,7 +123,7 @@ def bench_jax_jit():
 
 def plot():
     logger.info(">>> Generating Plots...")
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    _fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     axes = axes.flatten()
 
     for i, (title, data) in enumerate(results.items()):

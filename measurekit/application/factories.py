@@ -14,10 +14,10 @@ from measurekit.application.context import get_active_system
 from measurekit.domain.measurement.quantity import (
     Quantity,
 )
-from measurekit.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
+    from measurekit.domain.measurement.units import CompoundUnit
 
 # Regex to separate magnitude (int/float) from unit string
 # Matches: start, optional sign, digits, optional dot, digits,

@@ -79,7 +79,7 @@ def test_jax_functional_add_jit_execution():
 
     register_functional_pytree()
 
-    res_out, state_out = graph_op(q1, q2, state)
+    res_out, _state_out = graph_op(q1, q2, state)
 
     # 5. Verify Results
     assert isinstance(res_out.magnitude, jax.Array)

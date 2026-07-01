@@ -25,7 +25,10 @@ jobs:
       run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
-      run: uv sync --all-extras --dev
+      # Pin to the matrix interpreter; otherwise uv resolves the newest
+      # available Python and maturin links measurekit_core against a
+      # libpython that isn't installed.
+      run: uv sync --all-extras --dev --python ${{ matrix.python-version }}
 
     - name: Run Tests
       run: uv run pytest --ignore=tests/core/test_serialization.py

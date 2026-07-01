@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import sympy as sp
@@ -10,11 +9,13 @@ import sympy as sp
 from measurekit import default_system
 from measurekit.application.functions.functions import Function
 from measurekit.domain.exceptions import IncompatibleUnitsError
-from measurekit.domain.measurement.quantity import Quantity
-from measurekit.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from measurekit.domain.measurement.quantity import Quantity
     from measurekit.domain.measurement.system import UnitSystem
+    from measurekit.domain.measurement.units import CompoundUnit
     from measurekit.domain.symbolic.quantity import SymbolicQuantity
 
 

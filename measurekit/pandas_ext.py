@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -19,11 +18,16 @@ except (ImportError, AttributeError):
     ExtensionDtype = object
 
     def register_extension_dtype(cls):
+        """No-op decorator when pandas is unavailable."""
         return cls
 
 
 from measurekit.domain.measurement.quantity import Quantity
-from measurekit.domain.measurement.units import CompoundUnit
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from measurekit.domain.measurement.units import CompoundUnit
 
 
 @register_extension_dtype

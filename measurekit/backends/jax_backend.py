@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 
 
 def _jax_block_offsets(
-    blocks: "Sequence[Sequence[Any | None]]",
+    blocks: Sequence[Sequence[Any | None]],
 ) -> tuple[list[int], list[int]]:
     """Computes row and column offsets for a JAX block matrix."""
     row_offsets = [0]
@@ -60,7 +60,7 @@ def _jax_bcoo_coo(b: Any, sparse: Any) -> tuple[Any, Any]:
 
 
 def _jax_sparse_bmat(
-    blocks: "Sequence[Sequence[Any | None]]", sparse: Any
+    blocks: Sequence[Sequence[Any | None]], sparse: Any
 ) -> Any:
     """Assembles a JAX BCOO sparse block matrix."""
     row_offsets, col_offsets = _jax_block_offsets(blocks)
@@ -88,7 +88,7 @@ def _jax_sparse_bmat(
     )
 
 
-def _jax_dense_bmat(blocks: "Sequence[Sequence[Any | None]]") -> Any:
+def _jax_dense_bmat(blocks: Sequence[Sequence[Any | None]]) -> Any:
     """Assembles a dense block matrix, filling None slots with zeros."""
     processed_blocks = []
     for row in blocks:

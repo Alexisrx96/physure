@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import singledispatchmethod
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
 from measurekit.core.formatting import to_superscript
-from measurekit.domain.notation.typing import ExponentsDict
+
+if TYPE_CHECKING:
+    from measurekit.domain.notation.typing import ExponentsDict
 
 
 @dataclass(frozen=True)

@@ -45,11 +45,13 @@ def _translate_op(node: OpNode, args: list, sympy: Any) -> Any:
 
 class SympyTranslator:
     """Translates a SymbolicNode graph into a SymPy expression.
+
     SymPy is imported lazily inside methods.
     """
 
     @classmethod
     def translate(cls, node: SymbolicNode) -> Any:
+        """Recursively converts a node tree to a SymPy expression."""
         import sympy
 
         if isinstance(node, LeafNode):

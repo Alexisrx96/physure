@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections import defaultdict
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from measurekit.application.factories import QuantityFactory
 from measurekit.application.parsing import parse_unit_string
@@ -18,7 +18,9 @@ from measurekit.domain.measurement.converters import (
 from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.ports.unit_repository import IUnitRepository
 from measurekit.domain.measurement.units import CompoundUnit
-from measurekit.domain.notation.typing import ExponentsDict
+
+if TYPE_CHECKING:
+    from measurekit.domain.notation.typing import ExponentsDict
 
 log = logging.getLogger(__name__)
 
@@ -175,7 +177,7 @@ class UnitSystem(IUnitRepository):
             kind=kind,
         )
 
-        all_names = set([symbol] + list(aliases))
+        all_names = set([symbol, *list(aliases)])
         sorted_names = sorted(all_names, key=lambda x: (x != symbol, x))
 
         for unit_name in sorted_names:

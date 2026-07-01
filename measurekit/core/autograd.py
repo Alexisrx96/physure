@@ -63,8 +63,8 @@ class AutogradPropagator:
         try:
             import torch
             import torch.func
-        except ImportError:
-            raise ImportError("Torch not available for Autograd.")
+        except ImportError as err:
+            raise ImportError("Torch not available for Autograd.") from err
 
         # primals might be a mix of tensors and scalars.
         inputs_t = []
@@ -100,8 +100,8 @@ class AutogradPropagator:
         try:
             import jax
             import jax.numpy as jnp
-        except ImportError:
-            raise ImportError("JAX not available for Autograd.")
+        except ImportError as err:
+            raise ImportError("JAX not available for Autograd.") from err
 
         # Ensure arrays
         inputs = [jnp.asarray(p) for p in primals]

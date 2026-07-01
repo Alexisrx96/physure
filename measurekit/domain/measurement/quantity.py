@@ -51,8 +51,8 @@ except ImportError:
     UnitName = str
 
 # Trace-safe imports
-from measurekit._jit.tracer import _ensure_rational
-from measurekit.application.context import _UNCERTAINTY_MODE
+from measurekit._jit.tracer import _ensure_rational  # noqa: E402
+from measurekit.application.context import _UNCERTAINTY_MODE  # noqa: E402
 
 if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
@@ -61,10 +61,6 @@ if TYPE_CHECKING:
 # or assume available since we are in domain.
 # sympy (sp) moved to lazy loading helper if needed.
 
-from measurekit.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-)
 
 # pydantic_core is imported lazily inside __get_pydantic_core_schema__
 
@@ -89,7 +85,10 @@ except ImportError:
 
     # Minimal fallback for build/env issues
     class CoreQuantity:
+        """Pure-Python stand-in when measurekit_core is unavailable."""
+
         def __new__(cls, magnitude, unit, uncertainty, *args, **kwargs):
+            """Stores magnitude/unit/uncertainty on the instance."""
             obj = super().__new__(cls)
             object.__setattr__(obj, "_core_magnitude", magnitude)
             object.__setattr__(obj, "_core_unit", unit)
@@ -98,14 +97,17 @@ except ImportError:
 
         @property
         def magnitude(self):
+            """Returns the stored magnitude."""
             return self._core_magnitude
 
         @property
         def unit(self):
+            """Returns the stored unit."""
             return self._core_unit
 
         @property
         def std_dev(self):
+            """Returns the stored uncertainty."""
             return self._core_uncertainty
 
 
@@ -113,8 +115,12 @@ except ImportError:
 
 
 
-from measurekit.domain.measurement._arithmetic_mixin import ArithmeticMixin
-from measurekit.domain.measurement._backend_mixin import BackendMixin
+from measurekit.domain.measurement._arithmetic_mixin import (  # noqa: E402
+    ArithmeticMixin,
+)
+from measurekit.domain.measurement._backend_mixin import (  # noqa: E402
+    BackendMixin,
+)
 
 
 @dataclass(frozen=False)
@@ -142,10 +148,7 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         uncertainty = kwargs.get("uncertainty")
 
         if uncertainty is None:
-            if args:
-                uncertainty = args[0]
-            else:
-                uncertainty = 0.0
+            uncertainty = args[0] if args else 0.0
 
         # Ensure we pass the numerical standard deviation to Rust ONLY if it's a simple type.
         # If it's a rich Uncertainty model, pass it as-is so Rust can store it in TensorBackend.
@@ -162,9 +165,11 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
 
         dims = getattr(r_unit, "dimensions", None) or getattr(r_unit, "exponents", {})
         try:
-            from measurekit_core import RationalUnit as _RU
+            from measurekit_core import RationalUnit as _RU  # noqa: N814
         except ImportError:
-            from measurekit._jit.tracer import RationalUnit as _RU
+            from measurekit._jit.tracer import (
+                RationalUnit as _RU,  # noqa: N814
+            )
         return CoreQuantity.__new__(cls, magnitude, _RU(dims), raw_uncertainty)
 
     def __reduce__(self):
@@ -173,7 +178,7 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         res = super().__reduce__()
         # If it returns (func, args, state), replace func with this class
         if isinstance(res, tuple) and len(res) >= 2:
-            return (self.__class__,) + res[1:]
+            return (self.__class__, *res[1:])
         return res
 
     magnitude: ValueType
@@ -842,7 +847,7 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
             return "gaussian"
 
     @property
-    def uncertainty(self) -> Any:
+    def uncertainty(self) -> Any:  # noqa: F811
         """Returns the standard deviation of the uncertainty."""
         # Source of truth: Rust Core std_dev
         try:
@@ -888,7 +893,7 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
     def _convert_via_converters(
         self,
         target_unit: CompoundUnit,
-    ) -> "Quantity[ValueType, UncType] | None":
+    ) -> Quantity[ValueType, UncType] | None:
         """Converts using unit-specific converters when both units are simple.
 
         Returns a converted Quantity, or None if this path does not apply.

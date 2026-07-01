@@ -5,7 +5,7 @@ import os
 
 _STUB_ELLIPSIS = "        ...\n"
 
-from measurekit.domain.measurement.units import units
+from measurekit.domain.measurement.units import units  # noqa: E402
 
 
 def generate():

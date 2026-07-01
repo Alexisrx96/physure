@@ -14,11 +14,11 @@ from measurekit.domain.exceptions import (
     DimensionError,
     IncompatibleUnitsError,
 )
-from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.converters import (
     LinearConverter,
     LogarithmicConverter,
 )
+from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.uncertainty import Uncertainty
 from measurekit.domain.measurement.units import CompoundUnit
 

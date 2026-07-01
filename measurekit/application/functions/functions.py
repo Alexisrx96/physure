@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import sympy as sp
 
 from measurekit import default_system
-from measurekit.domain.measurement.quantity import Quantity
-from measurekit.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from measurekit.domain.measurement.quantity import Quantity
     from measurekit.domain.measurement.system import UnitSystem
+    from measurekit.domain.measurement.units import CompoundUnit
 
 
 @dataclass(frozen=True)

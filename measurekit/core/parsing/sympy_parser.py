@@ -23,9 +23,9 @@ def _get_safe_globals():
     return _SAFE_GLOBALS
 
 
-from measurekit.core.parsing.sanitizer import UnitSanitizer
-from measurekit.core.parsing.transformer import SymPyTransformer
-from measurekit.domain.measurement.units import CompoundUnit
+from measurekit.core.parsing.sanitizer import UnitSanitizer  # noqa: E402
+from measurekit.core.parsing.transformer import SymPyTransformer  # noqa: E402
+from measurekit.domain.measurement.units import CompoundUnit  # noqa: E402
 
 
 class SymPyUnitParser:
