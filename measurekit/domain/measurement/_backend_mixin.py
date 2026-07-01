@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import operator
+from typing import TYPE_CHECKING
 
-from typing_extensions import Self
+if TYPE_CHECKING:
+    from typing_extensions import Self
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.uncertainty import Uncertainty

@@ -11,6 +11,9 @@ core_path = os.path.join(root, "measurekit_core", "target", "release")
 sys.path.insert(0, root)
 sys.path.insert(0, core_path)
 
+import pytest
+
+pytest.importorskip("measurekit_core")
 from measurekit_core import CovarianceStore as CoreStore
 from measurekit_core import (
     PruningConfig,

@@ -13,11 +13,11 @@ from dataclasses import dataclass
 from functools import singledispatchmethod
 from typing import TYPE_CHECKING, Any
 
-from typing_extensions import Self
-
 from measurekit.core.formatting import to_superscript
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from measurekit.domain.notation.typing import ExponentsDict
 
 

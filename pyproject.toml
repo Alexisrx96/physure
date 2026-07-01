@@ -29,22 +29,24 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = [
-    "typing-extensions>=4.15.0",
-    "array-api-compat>=1.4",
-    "measurekit-core",
-]
+# Zero runtime dependencies: the Rust core and every integration are
+# optional extras with pure-Python fallbacks.
+dependencies = []
 
 [project.optional-dependencies]
-numpy = ["numpy>=1.26.0", "scipy>=1.12.0", "numba>=0.59.0", "jaxtyping>=0.2.28"]
-torch = ["torch>=2.2.0", "jaxtyping>=0.2.28"]
-jax = ["jax>=0.4.25", "jaxlib>=0.4.25", "jaxtyping>=0.2.28"]
+# Rust-accelerated core (RationalUnit, UnitRegistry, CovarianceStore)
+native = ["measurekit-core"]
+numpy = ["numpy>=1.26.0", "scipy>=1.12.0", "numba>=0.59.0", "jaxtyping>=0.2.28", "array-api-compat>=1.4"]
+torch = ["torch>=2.2.0", "jaxtyping>=0.2.28", "array-api-compat>=1.4"]
+jax = ["jax>=0.4.25", "jaxlib>=0.4.25", "jaxtyping>=0.2.28", "array-api-compat>=1.4"]
 pandas = ["pandas>=2.2.0"]
 pydantic = ["pydantic>=2.10.0"]
 symbolic = ["sympy>=1.13.0"]
 rich = ["rich>=13.0.0"]
 io = ["h5py>=3.10.0", "pyarrow>=22.0.0", "xarray>=2024.1.0", "netCDF4>=1.6.0"]
 all = [
+    "measurekit-core",
+    "array-api-compat>=1.4",
     "numpy>=1.26.0",
     "scipy>=1.12.0",
     "numba>=0.59.0",
@@ -93,6 +95,8 @@ path = "measurekit/__init__.py"
 
 [dependency-groups]
 dev = [
+    "measurekit-core",
+    "typing-extensions>=4.15.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.25.0",
     "pytest-cov>=4.1.0",

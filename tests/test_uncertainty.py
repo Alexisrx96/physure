@@ -10,6 +10,9 @@ core_path = os.path.abspath(
 )
 sys.path.insert(0, core_path)
 
+import pytest
+
+pytest.importorskip("measurekit_core")
 from measurekit_core import Quantity, RationalUnit
 
 

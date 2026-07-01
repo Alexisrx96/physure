@@ -1983,20 +1983,17 @@ wheels = [
 [[package]]
 name = "measurekit"
 source = { editable = "." }
-dependencies = [
-    { name = "array-api-compat" },
-    { name = "measurekit-core" },
-    { name = "typing-extensions" },
-]
 
 [package.optional-dependencies]
 all = [
+    { name = "array-api-compat" },
     { name = "h5py" },
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxlib", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jaxlib", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxtyping" },
+    { name = "measurekit-core" },
     { name = "netcdf4", version = "1.7.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' and platform_machine == 'ARM64' and sys_platform == 'win32'" },
     { name = "netcdf4", version = "1.7.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or platform_machine != 'ARM64' or sys_platform != 'win32'" },
     { name = "numba" },
@@ -2030,13 +2027,18 @@ io = [
     { name = "xarray", version = "2025.12.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 jax = [
+    { name = "array-api-compat" },
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jax", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxlib", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jaxlib", version = "0.8.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jaxtyping" },
 ]
+native = [
+    { name = "measurekit-core" },
+]
 numpy = [
+    { name = "array-api-compat" },
     { name = "jaxtyping" },
     { name = "numba" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -2057,6 +2059,7 @@ symbolic = [
     { name = "sympy" },
 ]
 torch = [
+    { name = "array-api-compat" },
     { name = "jaxtyping" },
     { name = "torch" },
 ]
@@ -2066,6 +2069,7 @@ dev = [
     { name = "beartype" },
     { name = "hypothesis" },
     { name = "maturin" },
+    { name = "measurekit-core" },
     { name = "mypy" },
     { name = "psutil" },
     { name = "pyarrow" },
@@ -2074,11 +2078,15 @@ dev = [
     { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "typing-extensions" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "array-api-compat", specifier = ">=1.4" },
+    { name = "array-api-compat", marker = "extra == 'all'", specifier = ">=1.4" },
+    { name = "array-api-compat", marker = "extra == 'jax'", specifier = ">=1.4" },
+    { name = "array-api-compat", marker = "extra == 'numpy'", specifier = ">=1.4" },
+    { name = "array-api-compat", marker = "extra == 'torch'", specifier = ">=1.4" },
     { name = "h5py", marker = "extra == 'all'", specifier = ">=3.10.0" },
     { name = "h5py", marker = "extra == 'io'", specifier = ">=3.10.0" },
     { name = "jax", marker = "extra == 'all'", specifier = ">=0.4.25" },
@@ -2090,7 +2098,8 @@ requires-dist = [
     { name = "jaxtyping", marker = "extra == 'numpy'", specifier = ">=0.2.28" },
     { name = "jaxtyping", marker = "extra == 'torch'", specifier = ">=0.2.28" },
     { name = "matplotlib", marker = "extra == 'docs'", specifier = ">=3.8.0" },
-    { name = "measurekit-core", directory = "measurekit_core" },
+    { name = "measurekit-core", marker = "extra == 'all'", directory = "measurekit_core" },
+    { name = "measurekit-core", marker = "extra == 'native'", directory = "measurekit_core" },
     { name = "mkdocs-htmlproofer-plugin", marker = "extra == 'docs'", specifier = ">=0.12.0" },
     { name = "mkdocs-jupyter", marker = "extra == 'docs'", specifier = ">=0.24.0" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.0" },
@@ -2116,17 +2125,17 @@ requires-dist = [
     { name = "sympy", marker = "extra == 'symbolic'", specifier = ">=1.13.0" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.2.0" },
-    { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "xarray", marker = "extra == 'all'", specifier = ">=2024.1.0" },
     { name = "xarray", marker = "extra == 'io'", specifier = ">=2024.1.0" },
 ]
-provides-extras = ["all", "docs", "io", "jax", "numpy", "pandas", "pydantic", "rich", "symbolic", "torch"]
+provides-extras = ["all", "docs", "io", "jax", "native", "numpy", "pandas", "pydantic", "rich", "symbolic", "torch"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "beartype", specifier = ">=0.19.0" },
     { name = "hypothesis", specifier = ">=6.98.0" },
     { name = "maturin", specifier = ">=1.11.2" },
+    { name = "measurekit-core", directory = "measurekit_core" },
     { name = "mypy", specifier = ">=1.9.0" },
     { name = "psutil", specifier = ">=7.2.1" },
     { name = "pyarrow", specifier = ">=22.0.0" },
@@ -2135,6 +2144,7 @@ dev = [
     { name = "pytest-benchmark", specifier = ">=4.0.0" },
     { name = "pytest-cov", specifier = ">=4.1.0" },
     { name = "ruff", specifier = ">=0.3.0" },
+    { name = "typing-extensions", specifier = ">=4.15.0" },
 ]
 
 [[package]]

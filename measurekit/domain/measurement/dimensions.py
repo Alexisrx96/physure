@@ -12,13 +12,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 
-from typing_extensions import Self
-
 from measurekit.core.formatting import to_superscript
 from measurekit.domain.exceptions import DimensionError
 from measurekit.domain.notation.base_entity import BaseExponentEntity
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from measurekit.domain.notation.protocols import ExponentEntityProtocol
     from measurekit.domain.notation.typing import ExponentsDict
 

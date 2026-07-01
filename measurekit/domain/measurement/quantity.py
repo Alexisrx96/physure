@@ -24,11 +24,11 @@ from typing import (
     overload,
 )
 
-from typing_extensions import Self
-
 from measurekit.core.dispatcher import BackendManager
 
 if TYPE_CHECKING:
+    from typing_extensions import Self
+
     from measurekit.core.protocols import BackendOps
     from measurekit.domain.measurement.dimensions import Dimension
 
@@ -111,6 +111,14 @@ except ImportError:
             return self._core_uncertainty
 
 
+# Resolved once at import time: doing this inside __new__ would re-run a
+# failing import on every Quantity construction when the core is absent.
+try:
+    from measurekit_core import RationalUnit as _CoreRationalUnit
+except ImportError:
+    from measurekit._jit.tracer import RationalUnit as _CoreRationalUnit
+
+
 # Helpers moved to end of file to resolve circular reference with Quantity class
 
 
@@ -164,13 +172,9 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
             raw_uncertainty = uncertainty.std_dev
 
         dims = getattr(r_unit, "dimensions", None) or getattr(r_unit, "exponents", {})
-        try:
-            from measurekit_core import RationalUnit as _RU  # noqa: N814
-        except ImportError:
-            from measurekit._jit.tracer import (
-                RationalUnit as _RU,  # noqa: N814
-            )
-        return CoreQuantity.__new__(cls, magnitude, _RU(dims), raw_uncertainty)
+        return CoreQuantity.__new__(
+            cls, magnitude, _CoreRationalUnit(dims), raw_uncertainty
+        )
 
     def __reduce__(self):
         """Custom reduce to ensuring proper subclass reconstruction."""
@@ -589,12 +593,16 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
     @property
     def _numeric_std_dev(self) -> Any:
         """Returns the numeric standard deviation, even if std_dev returns a model."""
-        import numpy as np
+        scalar_types: tuple[type, ...] = (int, float, complex)
+        try:
+            import numpy as np
+
+            scalar_types = (*scalar_types, np.ndarray)
+        except ImportError:
+            pass
 
         u = self.std_dev
-        if hasattr(u, "std_dev") and not isinstance(
-            u, (int, float, complex, np.ndarray)
-        ):
+        if hasattr(u, "std_dev") and not isinstance(u, scalar_types):
             return u.std_dev
         return u
 

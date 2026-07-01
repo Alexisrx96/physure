@@ -6,9 +6,9 @@ import contextlib
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from measurekit.domain.measurement.quantity import Quantity
+    from typing_extensions import Self
 
-from typing_extensions import Self
+    from measurekit.domain.measurement.quantity import Quantity
 
 from measurekit.domain.exceptions import (
     DimensionError,
