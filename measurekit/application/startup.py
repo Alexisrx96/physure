@@ -245,6 +245,15 @@ class UnitSystemBuilder:
         if not unit_def or unit_def.recipe:
             return
 
+        # Recipe substitution replaces the unit by its recipe at lookup
+        # time, so it is only valid when the unit IS its recipe (scale
+        # exactly 1.0, e.g. N = kg*m/s^2). For scaled units such as
+        # degree = 0.0174... rad, substituting silently dropped the
+        # scale factor (Q_(90, "deg") used to become 90 rad).
+        scale = getattr(unit_def.converter, "scale", None)
+        if scale != 1.0:
+            return
+
         all_aliases = [key, *aliases]
 
         # Obtain the CompoundUnit object from the recipe.

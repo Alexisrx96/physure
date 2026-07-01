@@ -105,17 +105,17 @@ class Equation:
                 return sol
         return solutions[0]
 
-    def solve_for(
+    def solve_all(
         self, target: str | SymbolicQuantity
-    ) -> SymbolicExpression | None:
-        """Solves the equation for a specific target variable."""
+    ) -> list[SymbolicExpression]:
+        """Returns every symbolic root for the target variable.
+
+        Physical equations often have multiple valid roots (e.g. the two
+        times a projectile crosses a given height); this returns all of
+        them so the caller can pick the physically meaningful one.
+        """
         target_symbol = self._find_target_symbol(target)
-
         solutions = sp.solve(self.sympy_eq, target_symbol)
-        if not solutions:
-            return None
-
-        chosen_sol = self._pick_positive_solution(solutions)
 
         result_unit = CompoundUnit({})
         if target_symbol in self.variable_map:
@@ -123,6 +123,28 @@ class Equation:
 
         result_vars = set(self.variable_map.values())
 
-        return SymbolicExpression(
-            chosen_sol, result_unit, self.system, result_vars
+        return [
+            SymbolicExpression(sol, result_unit, self.system, result_vars)
+            for sol in solutions
+        ]
+
+    def solve_for(
+        self, target: str | SymbolicQuantity
+    ) -> SymbolicExpression | None:
+        """Solves the equation for a single root of the target variable.
+
+        Selection policy: returns the first root SymPy can prove
+        positive, else the first root found. Use :meth:`solve_all` when
+        the equation may have several physically meaningful roots.
+        """
+        solutions = self.solve_all(target)
+        if not solutions:
+            return None
+
+        chosen_expr = self._pick_positive_solution(
+            [sol.expr for sol in solutions]
         )
+        for sol in solutions:
+            if sol.expr == chosen_expr:
+                return sol
+        return solutions[0]

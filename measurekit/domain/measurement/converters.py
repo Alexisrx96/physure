@@ -1,15 +1,18 @@
 """Unit conversion strategies."""
 
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+_LN10 = math.log(10.0)
+
 
 class UnitConverter(ABC):
-    """Clase base abstracta para cualquier conversión de unidades."""
+    """Abstract base class for any unit conversion."""
 
     @abstractmethod
     def to_base(self, value: float) -> float:
-        """Convierte valor de la unidad actual a la unidad base del sistema."""
+        """Converts a value from this unit to the system's base unit."""
         pass
 
     @property
@@ -20,17 +23,33 @@ class UnitConverter(ABC):
 
     @abstractmethod
     def from_base(self, value: float) -> float:
-        """Convierte valor de la unidad base a la unidad actual."""
+        """Converts a value from the base unit to this unit."""
         pass
 
     def convert(self, value: float, from_base: bool) -> float:
-        """Realiza la conversión genérica según la dirección."""
+        """Performs the generic conversion in the given direction."""
         return self.from_base(value) if from_base else self.to_base(value)
+
+    def to_base_derivative(self, value: float) -> float:
+        """d(to_base)/d(value), used to propagate uncertainty.
+
+        Central-difference fallback for custom converters; subclasses
+        override with exact derivatives.
+        """
+        h = 1e-7
+        return (self.to_base(value + h) - self.to_base(value - h)) / (2 * h)
+
+    def from_base_derivative(self, value: float) -> float:
+        """d(from_base)/d(value), used to propagate uncertainty."""
+        h = 1e-7
+        return (self.from_base(value + h) - self.from_base(value - h)) / (
+            2 * h
+        )
 
 
 @dataclass(frozen=True)
 class LinearConverter(UnitConverter):
-    """Para la mayoría de unidades: y = ax (ej: Metros a Kilómetros)."""
+    """For most units: y = ax (e.g. meters to kilometers)."""
 
     scale: float
 
@@ -46,10 +65,18 @@ class LinearConverter(UnitConverter):
         """Converts value from base unit."""
         return value / self.scale
 
+    def to_base_derivative(self, value: float) -> float:
+        """Exact derivative: constant scale."""
+        return self.scale
+
+    def from_base_derivative(self, value: float) -> float:
+        """Exact derivative: constant 1/scale."""
+        return 1.0 / self.scale
+
 
 @dataclass(frozen=True)
 class OffsetConverter(UnitConverter):
-    """Para unidades con desplazamiento: y = ax + b (ej: Celsius a Kelvin)."""
+    """For units with an offset: y = ax + b (e.g. Celsius to Kelvin)."""
 
     scale: float
     offset: float
@@ -65,6 +92,14 @@ class OffsetConverter(UnitConverter):
     def from_base(self, value: float) -> float:
         """Converts value from base unit."""
         return (value - self.offset) / self.scale
+
+    def to_base_derivative(self, value: float) -> float:
+        """Exact derivative: the offset vanishes."""
+        return self.scale
+
+    def from_base_derivative(self, value: float) -> float:
+        """Exact derivative: the offset vanishes."""
+        return 1.0 / self.scale
 
 
 # Alias for backward compatibility
@@ -93,6 +128,17 @@ class LogarithmicConverter(UnitConverter):
 
     def from_base(self, value: float) -> float:
         """Converts linear base value to logarithmic value."""
+        if isinstance(value, (int, float)):
+            return self.factor * math.log10(value / self.reference)
+        # Array input (numpy is only required on this path)
         import numpy as np
 
         return self.factor * np.log10(value / self.reference)
+
+    def to_base_derivative(self, value: float) -> float:
+        """Exact derivative: to_base(v) * ln(10) / factor."""
+        return self.to_base(value) * _LN10 / self.factor
+
+    def from_base_derivative(self, value: float) -> float:
+        """Exact derivative: factor / (value * ln(10))."""
+        return self.factor / (value * _LN10)

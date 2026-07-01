@@ -913,14 +913,16 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         base_val = source_def.converter.to_base(self.magnitude)
         new_magnitude = target_def.converter.from_base(base_val)
 
-        s_scale = getattr(source_def.converter, "scale", 1.0)
-        t_scale = getattr(target_def.converter, "scale", 1.0)
-        is_numeric_scales = isinstance(s_scale, (int, float)) and isinstance(
-            t_scale, (int, float)
+        # Chain rule: d(new)/d(old) = from_base'(base) * to_base'(old).
+        # Exact for linear/offset units and correct for nonlinear (log)
+        # units, where a plain scale ratio would be wrong.
+        jac = self._backend.mul(
+            source_def.converter.to_base_derivative(self.magnitude),
+            target_def.converter.from_base_derivative(base_val),
         )
-        scale_ratio = s_scale / t_scale if is_numeric_scales else 1.0
-
-        new_uncertainty = self._backend.mul(self.uncertainty, scale_ratio)
+        new_uncertainty = self._backend.mul(
+            self.uncertainty, self._backend.abs(jac)
+        )
         return cast(
             "Quantity[ValueType, UncType]",
             Quantity.from_input(

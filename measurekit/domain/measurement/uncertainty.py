@@ -321,28 +321,17 @@ class VarianceModel(Uncertainty[UncType]):
         jac_self: Any = None,
         jac_other: Any = None,
     ) -> VarianceModel[Any]:
-        """Propagates uncertainty for multiplication/division."""
-        backend = BackendManager.get_backend(val1)
+        """Propagates uncertainty for multiplication/division.
 
+        Callers must pass explicit Jacobians; the operation cannot be
+        reliably inferred from the values (comparing result_value to
+        val1/val2 misclassifies mul as div when val2 is close to +/-1).
+        """
         if jac_self is None or jac_other is None:
-            # Fallback calculation of Jacobians
-            is_v2_zero = backend.all(backend.equal(val2, 0))
-            is_division = False
-            try:
-                if not is_v2_zero:
-                    quotient = backend.truediv(val1, val2)
-                    if backend.allclose(result_value, quotient):
-                        is_division = True
-            except (ValueError, TypeError, AttributeError):
-                pass
-
-            if is_division:
-                jac_self = backend.truediv(1.0, val2)
-                denom = backend.pow(val2, 2)
-                jac_other = backend.truediv(backend.mul(val1, -1.0), denom)
-            else:
-                jac_self = val2
-                jac_other = val1
+            raise ValueError(
+                "propagate_mul_div requires explicit jac_self and "
+                "jac_other."
+            )
 
         return self.add(other, jac_self, jac_other, out_magnitude=result_value)
 
@@ -654,30 +643,17 @@ class CovarianceModel(Uncertainty[UncType]):
         jac_self: Any = None,
         jac_other: Any = None,
     ) -> CovarianceModel[Any]:
-        """Propagates uncertainty for multiplication/division (correlated)."""
-        backend = BackendManager.get_backend(val1)
+        """Propagates uncertainty for multiplication/division (correlated).
+
+        Callers must pass explicit Jacobians; the operation cannot be
+        reliably inferred from the values (comparing result_value to
+        val1/val2 misclassifies mul as div when val2 is close to +/-1).
+        """
         if jac_self is None or jac_other is None:
-            is_v1_zero = backend.all(backend.equal(val1, 0))
-            is_v2_zero = backend.all(backend.equal(val2, 0))
-            if is_v1_zero and is_v2_zero:
-                return CovarianceModel(backend.mul(result_value, 0))
-
-            is_division = False
-            try:
-                if not is_v2_zero:
-                    quotient = backend.truediv(val1, val2)
-                    if backend.allclose(result_value, quotient):
-                        is_division = True
-            except (ValueError, TypeError, AttributeError):
-                pass
-
-            if is_division:
-                jac_self = backend.truediv(1.0, val2)
-                denom = backend.pow(val2, 2)
-                jac_other = backend.truediv(backend.mul(val1, -1.0), denom)
-            else:
-                jac_self = val2
-                jac_other = val1
+            raise ValueError(
+                "propagate_mul_div requires explicit jac_self and "
+                "jac_other."
+            )
 
         return cast(
             "CovarianceModel",

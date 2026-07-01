@@ -10,7 +10,11 @@ if TYPE_CHECKING:
 
 from typing_extensions import Self
 
-from measurekit.domain.exceptions import IncompatibleUnitsError
+from measurekit.domain.exceptions import (
+    DimensionError,
+    IncompatibleUnitsError,
+)
+from measurekit.domain.measurement.dimensions import Dimension
 from measurekit.domain.measurement.converters import (
     LinearConverter,
     LogarithmicConverter,
@@ -695,47 +699,61 @@ class ArithmeticMixin:
         return self._affine_result_delta(res_base)
 
     def _apply_transcendental(self, func_name: str) -> Quantity:
-        """Applies a dimensionless transcendental function (sin, exp, etc.)."""
-        # 1. Verification: Argument must be dimensionless
+        """Applies a dimensionless transcendental function (sin, exp, etc.).
+
+        Pure angles are converted to radians first (the SI dimensionless
+        angle); dimensionless compounds (e.g. m/km) are collapsed to their
+        scale factor; any other dimension raises DimensionError.
+        """
+        # 1. Verification: Argument must be dimensionless (or an angle)
+        q = self
         if len(self.unit.exponents) > 0:
-            # For now, we allow it but in strict mode we should raise.
-            pass
+            dim = self.unit.dimension(self.system)
+            if dim == Dimension({"A": 1}):
+                q = self.to("rad")
+            elif dim == Dimension({}):
+                q = self.to(CompoundUnit({}))
+            else:
+                raise DimensionError(
+                    f"Argument of {func_name}() must be dimensionless or "
+                    f"an angle, got unit '{self.unit}'."
+                )
 
         # 2. Get backend function
         op = getattr(self._backend, func_name)
 
         # 3. Propagate with explicit derivatives for accuracy
         if func_name == "sin":
-            val = self._backend.sin(self.magnitude)
-            der = self._backend.cos(self.magnitude)
+            val = self._backend.sin(q.magnitude)
+            der = self._backend.cos(q.magnitude)
         elif func_name == "cos":
-            val = self._backend.cos(self.magnitude)
-            der = self._backend.mul(-1.0, self._backend.sin(self.magnitude))
+            val = self._backend.cos(q.magnitude)
+            der = self._backend.mul(-1.0, self._backend.sin(q.magnitude))
         elif func_name == "tan":
-            val = self._backend.tan(self.magnitude)
+            val = self._backend.tan(q.magnitude)
             der = self._backend.add(1.0, self._backend.pow(val, 2))
         elif func_name == "exp":
-            val = self._backend.exp(self.magnitude)
+            val = self._backend.exp(q.magnitude)
             der = val
         elif func_name == "log":
-            val = self._backend.log(self.magnitude)
-            der = self._backend.truediv(1.0, self.magnitude)
+            val = self._backend.log(q.magnitude)
+            der = self._backend.truediv(1.0, q.magnitude)
         elif func_name == "tanh":
-            val = self._backend.tanh(self.magnitude)
+            val = self._backend.tanh(q.magnitude)
             der = self._backend.sub(1.0, self._backend.pow(val, 2))
         else:
             # Fallback to finite difference if no explicit derivative
             h = 1e-7
             der = self._backend.truediv(
                 self._backend.sub(
-                    op(self._backend.add(self.magnitude, h)),
-                    op(self._backend.sub(self.magnitude, h)),
+                    op(self._backend.add(q.magnitude, h)),
+                    op(self._backend.sub(q.magnitude, h)),
                 ),
                 2 * h,
             )
-            val = op(self.magnitude)
+            val = op(q.magnitude)
 
-        unc = self._backend.mul(self._backend.abs(der), self.uncertainty)
+        unc = self._backend.mul(self._backend.abs(der), q.uncertainty)
 
         # 4. Return result (Dimensionless)
         return type(self).from_input(
