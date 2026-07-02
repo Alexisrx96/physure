@@ -1,1 +1,112 @@
-« Release workflow file 1 »
+# Release pipeline: push a tag `vX.Y.Z` to publish measurekit and
+# measurekit-core to PyPI.
+#
+# One-time setup (repo owner):
+#   1. PyPI: add a Trusted Publisher to BOTH projects (measurekit,
+#      measurekit-core): repo Alexisrx96/measurekit, workflow release.yml,
+#      environment pypi.
+#   2. GitHub: create the `pypi` environment (Settings -> Environments).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match measurekit.__version__
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(grep -Po '(?<=__version__ = ")[^"]*' measurekit/__init__.py)"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag v$tag does not match __version__ $version" >&2
+            exit 1
+          fi
+
+  core-wheels:
+    needs: check-version
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+          - os: ubuntu-latest
+            target: aarch64
+          - os: windows-latest
+            target: x64
+          - os: macos-latest
+            target: universal2-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: measurekit_core
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.os }}-${{ matrix.target }}
+          path: measurekit_core/dist
+
+  core-sdist:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: measurekit_core
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-sdist
+          path: measurekit_core/dist
+
+  measurekit-dist:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv build --out-dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: measurekit-dist
+          path: dist
+
+  publish:
+    needs: [core-wheels, core-sdist, measurekit-dist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          merge-multiple: true
+          path: dist-core
+      - uses: actions/download-artifact@v4
+        with:
+          name: measurekit-dist
+          path: dist-py
+      # Two publish steps: trusted-publishing tokens are minted per project
+      - name: Publish measurekit-core
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-core
+          skip-existing: true
+      - name: Publish measurekit
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-py
+          skip-existing: true
