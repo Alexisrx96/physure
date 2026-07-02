@@ -74,11 +74,11 @@ if HAS_TRITON:
         n = sigma.shape[0]
         out = torch.empty_like(sigma)
 
-        def grid(META):
+        def grid(meta):
             return (
-                    triton.cdiv(n, META["block_size"]),
-                    triton.cdiv(n, META["block_size"]),
-                )
+                triton.cdiv(n, meta["block_size"]),
+                triton.cdiv(n, meta["block_size"]),
+            )
 
         covariance_update_kernel[grid](
             sigma,

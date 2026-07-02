@@ -10,6 +10,7 @@ constants into a coherent, usable system.
 from __future__ import annotations
 
 import configparser
+import math
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -253,7 +254,7 @@ class UnitSystemBuilder:
         # degree = 0.0174... rad, substituting silently dropped the
         # scale factor (Q_(90, "deg") used to become 90 rad).
         scale = getattr(unit_def.converter, "scale", None)
-        if scale != 1.0:
+        if scale is None or not math.isclose(scale, 1.0):
             return
 
         all_aliases = [key, *aliases]

@@ -38,7 +38,7 @@ def _run_source(source: str) -> int:
     return 0
 
 
-def _repl() -> int:
+def _repl() -> None:
     import contextlib
     import threading
 
@@ -65,12 +65,12 @@ def _repl() -> int:
             line = input("mk> ")
         except EOFError:
             print()
-            return 0
+            return
         except KeyboardInterrupt:
             print()
             continue
         if line.strip() in ("exit", "quit"):
-            return 0
+            return
         warm.join()
         try:
             _print_results(interp.run(line))
@@ -85,7 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_source(" ".join(args))
     if not sys.stdin.isatty():
         return _run_source(sys.stdin.read())
-    return _repl()
+    _repl()
+    return 0
 
 
 if __name__ == "__main__":

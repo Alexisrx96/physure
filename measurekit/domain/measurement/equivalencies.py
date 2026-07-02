@@ -21,36 +21,41 @@ def spectral():
 
     from measurekit.domain.measurement.dimensions import Dimension
 
-    dim_L = Dimension({"L": 1})
-    dim_T_inv = Dimension({"T": -1})
-    dim_E = Dimension({"M": 1, "L": 2, "T": -2})
-    dim_L_inv = Dimension({"L": -1})
+    dim_length = Dimension({"L": 1})
+    dim_inv_time = Dimension({"T": -1})
+    dim_energy = Dimension({"M": 1, "L": 2, "T": -2})
+    dim_inv_length = Dimension({"L": -1})
 
     return [
         # L <-> T^-1
-        (dim_L, dim_T_inv, lambda x: c / x, lambda x: c / x),
+        (dim_length, dim_inv_time, lambda x: c / x, lambda x: c / x),
         # L <-> E
-        (dim_L, dim_E, lambda x: h * c / x, lambda x: h * c / x),
+        (dim_length, dim_energy, lambda x: h * c / x, lambda x: h * c / x),
         # T^-1 <-> E
-        (dim_T_inv, dim_E, lambda x: h * x, lambda x: x / h),
+        (dim_inv_time, dim_energy, lambda x: h * x, lambda x: x / h),
         # L <-> L^-1
-        (dim_L, dim_L_inv, lambda x: 1.0 / x, lambda x: 1.0 / x),
+        (dim_length, dim_inv_length, lambda x: 1.0 / x, lambda x: 1.0 / x),
         # L^-1 <-> T^-1
-        (dim_L_inv, dim_T_inv, lambda x: c * x, lambda x: x / c),
+        (dim_inv_length, dim_inv_time, lambda x: c * x, lambda x: x / c),
         # L^-1 <-> E
-        (dim_L_inv, dim_E, lambda x: h * c * x, lambda x: x / (h * c)),
+        (
+            dim_inv_length,
+            dim_energy,
+            lambda x: h * c * x,
+            lambda x: x / (h * c),
+        ),
     ]
 
 
 def thermodynamic():
-    """Equivalency between temperature and energy (E = k_B * T)."""
-    k_B = 1.380649e-23
+    """Equivalency between temperature and energy (E = k_b * T)."""
+    k_b = 1.380649e-23
     from measurekit.domain.measurement.dimensions import Dimension
 
     dim_temp = Dimension({"O": 1})
-    dim_E = Dimension({"M": 1, "L": 2, "T": -2})
+    dim_energy = Dimension({"M": 1, "L": 2, "T": -2})
 
-    return [(dim_temp, dim_E, lambda x: k_B * x, lambda x: x / k_B)]
+    return [(dim_temp, dim_energy, lambda x: k_b * x, lambda x: x / k_b)]
 
 
 @contextmanager
@@ -104,7 +109,5 @@ def find_conversion_path(dim_from, dim_to, active_eqs):
 
 def numerical_derivative(f, x, dx=1e-8):
     """Central-difference derivative, used to propagate uncertainty."""
-    if x == 0.0:
-        return (f(dx) - f(-dx)) / (2 * dx)
-    h = x * dx
+    h = abs(x) * dx or dx  # falls back to dx at exactly zero
     return (f(x + h) - f(x - h)) / (2 * h)

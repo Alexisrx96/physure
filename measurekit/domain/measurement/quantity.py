@@ -45,6 +45,8 @@ from measurekit.domain.measurement.units import (
 torch = None
 sp = None
 
+_CORE_QUANTITY_TYPE = "measurekit_core.Quantity"
+
 try:
     from measurekit._generated_types import UnitName
 except ImportError:
@@ -99,7 +101,7 @@ except ImportError:
         def magnitude(self):
             """Returns the stored magnitude."""
             val = self._core_magnitude
-            if "measurekit_core.Quantity" in str(type(val)):
+            if _CORE_QUANTITY_TYPE in str(type(val)):
                 return val.magnitude
             return val
 
@@ -112,7 +114,7 @@ except ImportError:
         def std_dev(self):
             """Returns the stored uncertainty."""
             val = self._core_magnitude
-            if "measurekit_core.Quantity" in str(type(val)):
+            if _CORE_QUANTITY_TYPE in str(type(val)):
                 return val.std_dev
             return self._core_uncertainty
 
@@ -420,41 +422,11 @@ class Quantity(
                 Fraction(str(value))
 
         # Core Mode Integration
-        mode, mode_args = cls._resolve_uncertainty_mode()
-
-        has_rust_core = False
-        rust_core_qty_cls = None
-        try:
-            from measurekit_core import Quantity as RustCoreQuantity
-
-            has_rust_core = True
-            rust_core_qty_cls = RustCoreQuantity
-        except ImportError:
-            pass
-
-        if (
-            has_rust_core
-            and "Quantity" not in str(type(value))
-            and (mode in ("monte_carlo", "unscented", "gaussian"))
-        ):
-            r_unit = _ensure_rational(unit)
-            std_dev = getattr(uncertainty, "std_dev", uncertainty)
-            if hasattr(std_dev, "std_dev"):
-                std_dev = std_dev.std_dev
-            val_f = float(value)
-            std_f = float(std_dev or 0.0)
-            samples = mode_args.get("samples", 1000) if mode_args else 1000
-            value = rust_core_qty_cls(
-                val_f,
-                r_unit,
-                std_f,
-                mode,
-                samples,
-            )
+        value = cls._maybe_wrap_in_rust_core(value, unit, uncertainty)
 
         # Extract raw standard deviation if it's a rich model
         raw_uncertainty = getattr(uncertainty, "std_dev", uncertainty)
-        if "measurekit_core.Quantity" in str(type(value)):
+        if _CORE_QUANTITY_TYPE in str(type(value)):
             raw_uncertainty = value.std_dev
 
         u_obj = None
@@ -471,6 +443,34 @@ class Quantity(
             system=resolved_system,
             symbol=symbol,
             _uncertainty_obj=u_obj,
+        )
+
+    @classmethod
+    def _maybe_wrap_in_rust_core(
+        cls, value: Any, unit: Any, uncertainty: Any
+    ) -> Any:
+        """Wraps a scalar in a measurekit_core.Quantity for sampling modes."""
+        mode, mode_args = cls._resolve_uncertainty_mode()
+
+        try:
+            from measurekit_core import Quantity as RustCoreQuantity
+        except ImportError:
+            return value
+
+        if "Quantity" in str(type(value)) or mode not in (
+            "monte_carlo",
+            "unscented",
+            "gaussian",
+        ):
+            return value
+
+        r_unit = _ensure_rational(unit)
+        std_dev = getattr(uncertainty, "std_dev", uncertainty)
+        if hasattr(std_dev, "std_dev"):
+            std_dev = std_dev.std_dev
+        samples = mode_args.get("samples", 1000) if mode_args else 1000
+        return RustCoreQuantity(
+            float(value), r_unit, float(std_dev or 0.0), mode, samples
         )
 
     @classmethod
@@ -526,7 +526,7 @@ class Quantity(
     ) -> Self:
         """Bypasses some validation for high-performance creation."""
         # If value is a Rust Quantity, use its std_dev as the uncertainty
-        if "measurekit_core.Quantity" in str(type(value)):
+        if _CORE_QUANTITY_TYPE in str(type(value)):
             uncertainty = value.std_dev
         return cls(
             magnitude=value,
@@ -1016,82 +1016,7 @@ class Quantity(
             return self
 
         if self.dimension != target_unit.dimension(self.system):
-            from measurekit.domain.measurement.equivalencies import (
-                _ACTIVE_EQUIVALENCIES,
-                find_conversion_path,
-                numerical_derivative,
-            )
-
-            active_eqs = list(_ACTIVE_EQUIVALENCIES.get())
-            if equivalencies is not None:
-                if callable(equivalencies):
-                    equivalencies = equivalencies()
-                active_eqs.extend(equivalencies)
-
-            path = find_conversion_path(
-                self.dimension,
-                target_unit.dimension(self.system),
-                active_eqs,
-            )
-            if path is None:
-                raise IncompatibleUnitsError(self.unit, target_unit)
-
-            # Helper to get canonical base unit for a dimension
-            def get_base_unit_for_dimension(dimension, system):
-                base_unit_names = {
-                    "L": "m",
-                    "M": "kg",
-                    "T": "s",
-                    "I": "A",
-                    "O": "K",
-                    "N": "mol",
-                    "J": "cd",
-                    "A": "rad",
-                    "$": "USD",
-                }
-                terms = []
-                from measurekit.domain.measurement.dimensions import SI_ORDER
-
-                for dim_name, exp in zip(
-                    SI_ORDER, dimension._vector, strict=False
-                ):
-                    if exp != 0:
-                        unit_name = base_unit_names[dim_name]
-                        terms.append(f"{unit_name}^{exp}")
-                unit_str = "*".join(terms) if terms else "1"
-                return system.get_unit(unit_str)
-
-            base_unit_from = get_base_unit_for_dimension(
-                self.dimension, self.system
-            )
-            base_unit_to = get_base_unit_for_dimension(
-                target_unit.dimension(self.system), self.system
-            )
-
-            # 1. Convert self to base_unit_from
-            val = self.to(base_unit_from)
-
-            # 2. Apply conversion path step-by-step
-            current_val = val.magnitude
-            current_unc = val.uncertainty
-
-            for func in path:
-                next_val = func(current_val)
-                deriv = numerical_derivative(func, current_val)
-                next_unc = abs(deriv) * current_unc
-                current_val = next_val
-                current_unc = next_unc
-
-            # 3. Create target base quantity
-            target_base = Quantity.from_input(
-                current_val,
-                base_unit_to,
-                self.system,
-                uncertainty=current_unc,
-            )
-
-            # 4. Convert target base quantity to target_unit
-            return target_base.to(target_unit)
+            return self._convert_via_equivalencies(target_unit, equivalencies)
 
         # --- Polymorphic Conversion (Generic) ---
         # Handle cases where units are simple single-component units
@@ -1119,6 +1044,78 @@ class Quantity(
                 uncertainty=new_uncertainty,
             ),
         )
+
+    def _base_unit_for_dimension(self, dimension: Any) -> Any:
+        """Returns the canonical base unit for a dimension (e.g. L*T^-1 -> m*s^-1)."""
+        base_unit_names = {
+            "L": "m",
+            "M": "kg",
+            "T": "s",
+            "I": "A",
+            "O": "K",
+            "N": "mol",
+            "J": "cd",
+            "A": "rad",
+            "$": "USD",
+        }
+        from measurekit.domain.measurement.dimensions import SI_ORDER
+
+        terms = [
+            f"{base_unit_names[dim_name]}^{exp}"
+            for dim_name, exp in zip(SI_ORDER, dimension._vector, strict=False)
+            if exp != 0
+        ]
+        unit_str = "*".join(terms) if terms else "1"
+        return self.system.get_unit(unit_str)
+
+    def _convert_via_equivalencies(
+        self, target_unit: Any, equivalencies: Any
+    ) -> Quantity[ValueType, UncType]:
+        """Cross-dimension conversion through active/passed equivalencies."""
+        from measurekit.domain.measurement.equivalencies import (
+            _ACTIVE_EQUIVALENCIES,
+            find_conversion_path,
+            numerical_derivative,
+        )
+
+        active_eqs = list(_ACTIVE_EQUIVALENCIES.get())
+        if equivalencies is not None:
+            if callable(equivalencies):
+                equivalencies = equivalencies()
+            active_eqs.extend(equivalencies)
+
+        path = find_conversion_path(
+            self.dimension,
+            target_unit.dimension(self.system),
+            active_eqs,
+        )
+        if path is None:
+            raise IncompatibleUnitsError(self.unit, target_unit)
+
+        base_unit_from = self._base_unit_for_dimension(self.dimension)
+        base_unit_to = self._base_unit_for_dimension(
+            target_unit.dimension(self.system)
+        )
+
+        # 1. Convert self to base_unit_from
+        val = self.to(base_unit_from)
+
+        # 2. Apply conversion path step-by-step, propagating uncertainty
+        current_val = val.magnitude
+        current_unc = val.uncertainty
+        for func in path:
+            deriv = numerical_derivative(func, current_val)
+            current_unc = abs(deriv) * current_unc
+            current_val = func(current_val)
+
+        # 3. Land in the target's base unit, then convert to target_unit
+        target_base = Quantity.from_input(
+            current_val,
+            base_unit_to,
+            self.system,
+            uncertainty=current_unc,
+        )
+        return target_base.to(target_unit)
 
     def __int__(self) -> int:
         """Converts to int."""

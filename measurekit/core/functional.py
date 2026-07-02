@@ -67,9 +67,8 @@ def _find_linear_unit_for_dimension(
     # This searches the registry for a base unit or standard linear unit
     # to return results of difference operations (e.g. T - T)
     for name, u_def in system.UNIT_REGISTRY.get(dimension, {}).items():
-        if (
-            isinstance(u_def.converter, LinearConverter)
-            and math.isclose(u_def.converter.scale, 1.0)
+        if isinstance(u_def.converter, LinearConverter) and math.isclose(
+            u_def.converter.scale, 1.0
         ):
             return system.get_unit(name)
     return None

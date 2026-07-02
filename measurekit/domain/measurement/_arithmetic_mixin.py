@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import operator
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -55,88 +56,79 @@ class ArithmeticMixin:
                 op_name, operands=(self, other), result=res
             )
 
+    def _has_rust_operand(self, other: Any) -> bool:
+        try:
+            from measurekit_core import Quantity as RustCoreQuantity
+        except ImportError:
+            return False
+        return isinstance(self._core_magnitude, RustCoreQuantity) or (
+            isinstance(other, _q())
+            and isinstance(other._core_magnitude, RustCoreQuantity)
+        )
+
+    def _rust_align_operand(self, other: Any, op_name: str) -> Any:
+        """Converts a Quantity operand to self's unit for add/sub ops."""
+        if (
+            isinstance(other, _q())
+            and op_name in ("add", "sub", "rsub")
+            and self.unit is not other.unit
+        ):
+            if self.dimension != other.dimension:
+                raise IncompatibleUnitsError(self.unit, other.unit)
+            return other.to(self.unit)
+        return other
+
+    def _rust_mul_div(
+        self, op_name: str, other: Any, other_val: Any
+    ) -> tuple[Any, Any]:
+        self_core = self._core_magnitude
+        apply = operator.mul if op_name == "mul" else operator.truediv
+        if isinstance(other, CompoundUnit):
+            return apply(self_core, 1.0), apply(self.unit, other)
+        if isinstance(other, _q()):
+            return apply(self_core, other_val), apply(self.unit, other.unit)
+        return apply(self_core, other_val), self.unit
+
+    def _rust_pow(self, exponent: Any) -> tuple[Any, Any]:
+        from fractions import Fraction
+
+        new_core = self._core_magnitude**exponent
+        exp_r = Fraction(str(exponent))
+        if exp_r.denominator == 1:
+            return new_core, self.unit ** int(exp_r.numerator)
+        return new_core, self.unit ** (exp_r.numerator, exp_r.denominator)
+
+    def _rust_op_result(
+        self, op_name: str, other: Any, other_val: Any
+    ) -> tuple[Any, Any] | None:
+        self_core = self._core_magnitude
+        simple = {
+            "add": lambda: (self_core + other_val, self.unit),
+            "sub": lambda: (self_core - other_val, self.unit),
+            "rsub": lambda: (other_val - self_core, self.unit),
+            "rtruediv": lambda: (other_val / self_core, 1 / self.unit),
+            "neg": lambda: (-self_core, self.unit),
+            "abs": lambda: (abs(self_core), self.unit),
+        }
+        if op_name in simple:
+            return simple[op_name]()
+        if op_name in ("mul", "truediv"):
+            return self._rust_mul_div(op_name, other, other_val)
+        if op_name == "pow":
+            return self._rust_pow(other_val)
+        return None
+
     def _check_and_handle_rust_propagation(
         self, other: Any, op_name: str
     ) -> Any:
-        try:
-            from measurekit_core import Quantity as RustCoreQuantity
-
-            is_self_rust = isinstance(self._core_magnitude, RustCoreQuantity)
-            is_other_rust = isinstance(other, _q()) and isinstance(
-                other._core_magnitude, RustCoreQuantity
-            )
-        except ImportError:
-            is_self_rust = False
-            is_other_rust = False
-
-        if not (is_self_rust or is_other_rust):
+        if not self._has_rust_operand(other):
             return None
-
-        # Resolve other
-        if isinstance(other, _q()):
-            if (
-                op_name in ("add", "sub", "rsub")
-                and self.unit is not other.unit
-            ):
-                if self.dimension != other.dimension:
-                    raise IncompatibleUnitsError(self.unit, other.unit)
-                other = other.to(self.unit)
-            other_val = other._core_magnitude
-        else:
-            other_val = other
-
-        # Run Rust operation
-        self_core = self._core_magnitude
-        if op_name == "add":
-            new_core = self_core + other_val
-            new_unit = self.unit
-        elif op_name == "sub":
-            new_core = self_core - other_val
-            new_unit = self.unit
-        elif op_name == "rsub":
-            new_core = other_val - self_core
-            new_unit = self.unit
-        elif op_name == "mul":
-            if isinstance(other, CompoundUnit):
-                new_core = self_core * 1.0
-                new_unit = self.unit * other
-            elif isinstance(other, _q()):
-                new_core = self_core * other_val
-                new_unit = self.unit * other.unit
-            else:
-                new_core = self_core * other_val
-                new_unit = self.unit
-        elif op_name == "truediv":
-            if isinstance(other, CompoundUnit):
-                new_core = self_core / 1.0
-                new_unit = self.unit / other
-            elif isinstance(other, _q()):
-                new_core = self_core / other_val
-                new_unit = self.unit / other.unit
-            else:
-                new_core = self_core / other_val
-                new_unit = self.unit
-        elif op_name == "rtruediv":
-            new_core = other_val / self_core
-            new_unit = 1 / self.unit
-        elif op_name == "pow":
-            new_core = self_core**other_val
-            from fractions import Fraction
-
-            exp_r = Fraction(str(other_val))
-            if exp_r.denominator == 1:
-                new_unit = self.unit ** int(exp_r.numerator)
-            else:
-                new_unit = self.unit ** (exp_r.numerator, exp_r.denominator)
-        elif op_name == "neg":
-            new_core = -self_core
-            new_unit = self.unit
-        elif op_name == "abs":
-            new_core = abs(self_core)
-            new_unit = self.unit
-        else:
+        other = self._rust_align_operand(other, op_name)
+        other_val = other._core_magnitude if isinstance(other, _q()) else other
+        result = self._rust_op_result(op_name, other, other_val)
+        if result is None:
             return None
-
+        new_core, new_unit = result
         return type(self).from_input(new_core, new_unit, self.system)
 
     def _add_sub_array_path(
@@ -1015,55 +1007,83 @@ class ArithmeticMixin:
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Handles arithmetic with Affine Support."""
-        rust_res = self._check_and_handle_rust_propagation(other, "add")
+        return self._add_sub_impl(other, is_add=True)
+
+    def __sub__(self, other: Any) -> Quantity[Any, Any, Any]:
+        """Handles subtraction."""
+        return self._add_sub_impl(other, is_add=False)
+
+    def _add_sub_same_unit(
+        self, other: Any, u_other: Any, is_add: bool, op: str
+    ) -> Quantity[Any, Any, Any]:
+        """Same-unit add/sub with uncertainty (array or scalar path)."""
+        backend_op = self._backend.add if is_add else self._backend.sub
+        new_magnitude = backend_op(self.magnitude, other.magnitude)
+
+        if self._backend.is_array(new_magnitude):
+            size = self._backend.size(new_magnitude)
+            # Jacobians are (signed) identity matrices for addition
+            j_self = self._backend.identity_operator(
+                size, reference=self.magnitude
+            )
+            j_other = self._backend.identity_operator(
+                size, reference=other.magnitude
+            )
+            if not is_add:
+                j_other = self._backend.mul(j_other, -1.0)
+            return self._add_sub_array_path(
+                other, new_magnitude, j_self, j_other, op
+            )
+
+        return self._add_sub_scalar_path(
+            other, new_magnitude, u_other, 1.0, 1.0 if is_add else -1.0, op
+        )
+
+    def _add_sub_no_unc_path(
+        self, other: Any, is_other_q: bool, is_add: bool, op: str
+    ) -> Quantity[Any, Any, Any] | None:
+        """Fast add/sub when neither operand carries uncertainty."""
+        u_other = other.uncertainty if is_other_q else 0.0
+        no_unc = self._is_zero_uncertainty(self.uncertainty) and (
+            not is_other_q or self._is_zero_uncertainty(u_other)
+        )
+        if not no_unc:
+            return None
+        other_val = self._resolve_compatible_magnitude(other, is_other_q)
+        backend_op = self._backend.add if is_add else self._backend.sub
+        new_val = backend_op(self.magnitude, other_val)
+        res = type(self).from_input(new_val, self.unit, self.system)
+        self._record_op(op, other, res)
+        return res
+
+    def _add_sub_impl(
+        self, other: Any, is_add: bool
+    ) -> Quantity[Any, Any, Any]:
+        op = "add" if is_add else "sub"
+        rust_res = self._check_and_handle_rust_propagation(other, op)
         if rust_res is not None:
             return rust_res
 
         if isinstance(other, _q()):
             # 1. Affine and Logarithmic Logic (MUST BE ABOVE INITIAL CHECKS)
-            res_affine = self._affine_check(other, is_add=True)
+            res_affine = self._affine_check(other, is_add=is_add)
             if res_affine is not None:
                 return res_affine
 
-            res_log = self._logarithmic_add_sub(other, is_add=True)
+            res_log = self._logarithmic_add_sub(other, is_add=is_add)
             if res_log is not None:
                 return res_log
 
         # 2. Optimized path for no uncertainty
         is_other_q = isinstance(other, _q())
-        u_self = self.uncertainty
-        u_other = other.uncertainty if is_other_q else 0.0
-        no_unc = self._is_zero_uncertainty(u_self) and (
-            not is_other_q or self._is_zero_uncertainty(u_other)
-        )
+        fast = self._add_sub_no_unc_path(other, is_other_q, is_add, op)
+        if fast is not None:
+            return fast
 
-        if no_unc:
-            other_val = self._resolve_compatible_magnitude(other, is_other_q)
-            new_val = self._backend.add(self.magnitude, other_val)
-            res = type(self).from_input(new_val, self.unit, self.system)
-            self._record_op("add", other, res)
-            return res
-
-        # 3. Vectorized / Scalar Path (Same Unit)
+        # 3/4. Vectorized / Scalar Path (Same Unit)
         if is_other_q and self.unit is other.unit:
-            new_magnitude = self._backend.add(self.magnitude, other.magnitude)
-
-            if self._backend.is_array(new_magnitude):
-                size = self._backend.size(new_magnitude)
-                # Jacobians are identity matrices for addition
-                j_self = self._backend.identity_operator(
-                    size, reference=self.magnitude
-                )
-                j_other = self._backend.identity_operator(
-                    size, reference=other.magnitude
-                )
-                return self._add_sub_array_path(
-                    other, new_magnitude, j_self, j_other, "add"
-                )
-
-            # 4. Scalar Path (Same Unit)
-            return self._add_sub_scalar_path(
-                other, new_magnitude, u_other, 1.0, 1.0, "add"
+            return self._add_sub_same_unit(
+                other, other.uncertainty, is_add, op
             )
 
         # 5. Generic Path (Unit Conversion Required)
@@ -1074,77 +1094,16 @@ class ArithmeticMixin:
             raise IncompatibleUnitsError(self.unit, other.unit)
 
         # Recurse with unit-converted other
-        return self + other.to(self.unit)
-
-    def __sub__(self, other: Any) -> Quantity[Any, Any, Any]:
-        """Handles subtraction."""
-        rust_res = self._check_and_handle_rust_propagation(other, "sub")
-        if rust_res is not None:
-            return rust_res
-
-        if isinstance(other, _q()):
-            # 1. Affine and Logarithmic Logic
-            res_affine = self._affine_check(other, is_add=False)
-            if res_affine is not None:
-                return res_affine
-
-            res_log = self._logarithmic_add_sub(other, is_add=False)
-            if res_log is not None:
-                return res_log
-
-        # 2. Optimized path for no uncertainty
-        is_other_q = isinstance(other, _q())
-        u_self = self.uncertainty
-        u_other = other.uncertainty if is_other_q else 0.0
-        no_unc = self._is_zero_uncertainty(u_self) and (
-            not is_other_q or self._is_zero_uncertainty(u_other)
-        )
-
-        if no_unc:
-            other_val = self._resolve_compatible_magnitude(other, is_other_q)
-            new_val = self._backend.sub(self.magnitude, other_val)
-            res = type(self).from_input(new_val, self.unit, self.system)
-            self._record_op("sub", other, res)
-            return res
-
-        # 3. Vectorized / Scalar Path (Same Unit)
-        if is_other_q and self.unit is other.unit:
-            new_magnitude = self._backend.sub(self.magnitude, other.magnitude)
-            if self._backend.is_array(new_magnitude):
-                size = self._backend.size(new_magnitude)
-                j_self = self._backend.identity_operator(
-                    size, reference=self.magnitude
-                )
-                j_other = self._backend.mul(
-                    self._backend.identity_operator(
-                        size, reference=other.magnitude
-                    ),
-                    -1.0,
-                )
-                return self._add_sub_array_path(
-                    other, new_magnitude, j_self, j_other, "sub"
-                )
-
-            # 4. Scalar Path (Same Unit)
-            return self._add_sub_scalar_path(
-                other, new_magnitude, u_other, 1.0, -1.0, "sub"
-            )
-
-        # 5. Generic Path (Unit Conversion Required)
-        if not is_other_q:
-            return NotImplemented
-
-        if self.dimension != other.dimension:
-            raise IncompatibleUnitsError(self.unit, other.unit)
-
-        return self - other.to(self.unit)
+        return self._add_sub_impl(other.to(self.unit), is_add)
 
     def __rsub__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Right subtraction."""
         rust_res = self._check_and_handle_rust_propagation(other, "rsub")
         if rust_res is not None:
             return rust_res
-        return NotImplemented
+        # other - self == (-self) + other; reuses __add__'s compatibility
+        # checks and uncertainty propagation.
+        return (-self) + other
 
     def __mul__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Multiplies two quantities."""
@@ -1191,32 +1150,36 @@ class ArithmeticMixin:
 
         # 3. Quantity * Quantity multiplication
         if is_other_q:
-            new_magnitude = self._backend.mul(self.magnitude, other.magnitude)
-            new_unit = self.unit * other.unit
-            new_dimension = self.dimension * other.dimension
-
-            if self._backend.is_array(new_magnitude):
-                self_flat, other_flat = self._backend.broadcast_and_flatten(
-                    [self.magnitude, other.magnitude]
-                )
-                # Jacobians: dz/dx = y, dz/dy = x
-                j_self = self._backend.diagonal_operator(other_flat)
-                j_other = self._backend.diagonal_operator(self_flat)
-            else:
-                j_self = other.magnitude
-                j_other = self.magnitude
-
-            return self._mul_qq_path(
-                other,
-                new_magnitude,
-                new_unit,
-                new_dimension,
-                j_self,
-                j_other,
-                "mul",
-            )
+            return self._mul_quantities(other)
 
         return NotImplemented
+
+    def _mul_quantities(self, other: Any) -> Quantity[Any, Any, Any]:
+        """Quantity * Quantity with uncertainty propagation."""
+        new_magnitude = self._backend.mul(self.magnitude, other.magnitude)
+        new_unit = self.unit * other.unit
+        new_dimension = self.dimension * other.dimension
+
+        if self._backend.is_array(new_magnitude):
+            self_flat, other_flat = self._backend.broadcast_and_flatten(
+                [self.magnitude, other.magnitude]
+            )
+            # Jacobians: dz/dx = y, dz/dy = x
+            j_self = self._backend.diagonal_operator(other_flat)
+            j_other = self._backend.diagonal_operator(self_flat)
+        else:
+            j_self = other.magnitude
+            j_other = self.magnitude
+
+        return self._mul_qq_path(
+            other,
+            new_magnitude,
+            new_unit,
+            new_dimension,
+            j_self,
+            j_other,
+            "mul",
+        )
 
     def __rmul__(self, other: Any) -> Quantity:
         """Handles reverse multiplication."""
@@ -1271,38 +1234,40 @@ class ArithmeticMixin:
 
         # 4. Quantity / Quantity Path
         if is_other_q:
-            new_magnitude = self._backend.truediv(
-                self.magnitude, other.magnitude
-            )
-            new_unit = self.unit / other.unit
-            new_dimension = self.dimension / other.dimension
-
-            if self._backend.is_array(new_magnitude):
-                _, other_flat = self._backend.broadcast_and_flatten(
-                    [self.magnitude, other.magnitude]
-                )
-                recip_flat = self._backend.truediv(1.0, other_flat)
-                j_self = self._backend.diagonal_operator(recip_flat)
-                neg_z_over_y = self._backend.mul(
-                    self._backend.truediv(new_magnitude.ravel(), other_flat),
-                    -1.0,
-                )
-                j_other = self._backend.diagonal_operator(neg_z_over_y)
-            else:
-                j_self = 1.0 / other.magnitude
-                j_other = -self.magnitude / (other.magnitude**2)
-
-            return self._div_qq_path(
-                other,
-                new_magnitude,
-                new_unit,
-                new_dimension,
-                j_self,
-                j_other,
-                "truediv",
-            )
+            return self._div_quantities(other)
 
         return NotImplemented
+
+    def _div_quantities(self, other: Any) -> Quantity[Any, Any, Any]:
+        """Quantity / Quantity with uncertainty propagation."""
+        new_magnitude = self._backend.truediv(self.magnitude, other.magnitude)
+        new_unit = self.unit / other.unit
+        new_dimension = self.dimension / other.dimension
+
+        if self._backend.is_array(new_magnitude):
+            _, other_flat = self._backend.broadcast_and_flatten(
+                [self.magnitude, other.magnitude]
+            )
+            recip_flat = self._backend.truediv(1.0, other_flat)
+            j_self = self._backend.diagonal_operator(recip_flat)
+            neg_z_over_y = self._backend.mul(
+                self._backend.truediv(new_magnitude.ravel(), other_flat),
+                -1.0,
+            )
+            j_other = self._backend.diagonal_operator(neg_z_over_y)
+        else:
+            j_self = 1.0 / other.magnitude
+            j_other = -self.magnitude / (other.magnitude**2)
+
+        return self._div_qq_path(
+            other,
+            new_magnitude,
+            new_unit,
+            new_dimension,
+            j_self,
+            j_other,
+            "truediv",
+        )
 
     def __pow__(self, exponent: float) -> Quantity[Any, Any, Any]:
         """Raises quantity to power."""

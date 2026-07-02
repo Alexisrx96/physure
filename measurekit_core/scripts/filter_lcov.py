@@ -1,14 +1,21 @@
 """Remove DA:N,0 entries for lines that are only macro attributes (#[pymethods], etc.)."""
+
 import re
 import sys
 
-ATTR_PATTERN = re.compile(r"^#\[(pymethods|pyclass|pyfn|pyfunction|new|getter|setter|staticmethod)\]$")
+ATTR_PATTERN = re.compile(
+    r"^#\[(pymethods|pyclass|pyfn|pyfunction|new|getter|setter|staticmethod)\]$"
+)
 
 
 def attr_only_lines(src_path: str) -> set[int]:
     try:
         with open(src_path) as f:
-            return {i for i, ln in enumerate(f, 1) if ATTR_PATTERN.match(ln.strip())}
+            return {
+                i
+                for i, ln in enumerate(f, 1)
+                if ATTR_PATTERN.match(ln.strip())
+            }
     except FileNotFoundError:
         return set()
 

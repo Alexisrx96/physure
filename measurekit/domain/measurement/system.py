@@ -184,7 +184,7 @@ class UnitSystem(IUnitRepository):
             kind=kind,
         )
 
-        all_names = set([symbol, *list(aliases)])
+        all_names = {symbol, *aliases}
         sorted_names = sorted(all_names, key=lambda x: (x != symbol, x))
 
         for unit_name in sorted_names:

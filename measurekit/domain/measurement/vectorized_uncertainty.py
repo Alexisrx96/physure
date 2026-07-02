@@ -340,6 +340,16 @@ class CovarianceStore:
         """Calls register_diagonal on the core store, falling back to register_variable."""
         try:
             self._core.register_diagonal(idx, diag)
+        except TypeError:
+            # Rust core only accepts numpy arrays; torch tensors reach here
+            # when the torch backend is active.
+            import numpy
+
+            if hasattr(diag, "detach"):
+                diag = diag.detach().cpu()
+            self._core.register_diagonal(
+                idx, numpy.asarray(diag, dtype=numpy.float64)
+            )
         except AttributeError as err:
             if size < 1000:
                 self._core.register_variable(idx, np.diag(diag))

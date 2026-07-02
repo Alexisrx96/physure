@@ -26,7 +26,6 @@ try:
             # is usually a linear scaling in log-space.
             return grad_output, None
 
-
     class UnitLayer(nn.Module):
         """Learnable unit for Physics-Informed Neural Networks (PINNs).
 
@@ -44,7 +43,9 @@ try:
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             """Applies the differentiable unit logic to the input tensor."""
             # The learnable exponents are mediated by the custom autograd function
-            _ = UnitAutogradFunction.apply(self.exponents, self.base_dimensions)
+            _ = UnitAutogradFunction.apply(
+                self.exponents, self.base_dimensions
+            )
             return x
 
         def get_unit(self) -> RationalUnit:
@@ -56,7 +57,9 @@ try:
             dims = {}
             # We use a precision-based rounding to map floats to rationals
             for name, val in zip(
-                self.base_dimensions, self.exponents.detach().cpu().numpy(), strict=False
+                self.base_dimensions,
+                self.exponents.detach().cpu().numpy(),
+                strict=False,
             ):
                 # Round to nearest 1/100th for rational representation
                 num = round(float(val) * 100)

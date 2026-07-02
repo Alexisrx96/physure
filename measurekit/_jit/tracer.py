@@ -216,7 +216,9 @@ def _trace_and_bake(
         name = f"a{i}"
         arg_names.append(name)
         if u_hash is not None:
-            tracer_args.append(TracerQuantity(name, _ensure_rational(arg.unit)))
+            tracer_args.append(
+                TracerQuantity(name, _ensure_rational(arg.unit))
+            )
         else:
             tracer_args.append(arg)
 
@@ -228,7 +230,9 @@ def _trace_and_bake(
     return kernel, trace_result.unit
 
 
-def _rational_unit_to_exponents(r_unit: RationalUnit) -> dict[str, int | float]:
+def _rational_unit_to_exponents(
+    r_unit: RationalUnit,
+) -> dict[str, int | float]:
     """Converts a RationalUnit's dimensions to a CompoundUnit exponents dict."""
     exponents: dict[str, int | float] = {}
     for base, (num, den) in r_unit.dimensions.items():

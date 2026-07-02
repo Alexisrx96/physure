@@ -208,7 +208,11 @@ class VarianceModel(Uncertainty[UncType]):
                 continue  # Treat as zero uncertainty?
 
             # Get variance
-            var_i = u.variance if isinstance(u, VarianceModel) else backend.pow(u.std_dev, 2)
+            var_i = (
+                u.variance
+                if isinstance(u, VarianceModel)
+                else backend.pow(u.std_dev, 2)
+            )
 
             # Apply J^2
             # Use _apply_jacobian helper logic for consistency?
@@ -267,6 +271,7 @@ class VarianceModel(Uncertainty[UncType]):
         res = self._matmul_jac_sq_var(jac_sq, var_flat, var, backend)
 
         import math
+
         orig_size = math.prod(original_shape) if original_shape else 1
         shape_changed = backend.size(res) != orig_size
         if shape_changed:
@@ -323,8 +328,7 @@ class VarianceModel(Uncertainty[UncType]):
         """
         if jac_self is None or jac_other is None:
             raise ValueError(
-                "propagate_mul_div requires explicit jac_self and "
-                "jac_other."
+                "propagate_mul_div requires explicit jac_self and jac_other."
             )
 
         return self.add(other, jac_self, jac_other, out_magnitude=result_value)
@@ -404,7 +408,6 @@ class CovarianceModel(Uncertainty[UncType]):
         return cls(std_dev_internal=std_dev, lineage=lineage)
 
     @classmethod
-    @classmethod
     def _vector_propagation_path(
         cls,
         jacs: tuple[Any, ...],
@@ -458,9 +461,13 @@ class CovarianceModel(Uncertainty[UncType]):
         """Internal propagation for CovarianceModel."""
         backend = BackendManager.get_backend(values[0])
 
-        is_vector_result = backend.is_array(result) and backend.size(result) > 1
+        is_vector_result = (
+            backend.is_array(result) and backend.size(result) > 1
+        )
         if is_vector_result:
-            return cls._vector_propagation_path(jacs, uncertainties, result, backend)
+            return cls._vector_propagation_path(
+                jacs, uncertainties, result, backend
+            )
 
         # Scalar Path (Lineage): merge coeff_new(uid) = sum(J_k * coeff_k(uid))
         new_lineage: dict = {}
@@ -484,7 +491,9 @@ class CovarianceModel(Uncertainty[UncType]):
         dummy_inst = cls(std_dev_internal=0.0)
         new_std = dummy_inst._compute_std_dev(filtered_lineage, backend)
 
-        needs_reshape = backend.is_array(result) and backend.shape(result) != ()
+        needs_reshape = (
+            backend.is_array(result) and backend.shape(result) != ()
+        )
         if needs_reshape:
             new_std = backend.reshape(new_std, backend.shape(result))
 
@@ -565,15 +574,21 @@ class CovarianceModel(Uncertainty[UncType]):
         store = ensure_store(backend)
         in_slices = [self.ensure_vector_slice(backend)]
         jacobians = [jac_self]
-        self._add_other_to_store(other, jac_other, store, backend, in_slices, jacobians)
+        self._add_other_to_store(
+            other, jac_other, store, backend, in_slices, jacobians
+        )
 
         out_slice = store.allocate(backend.size(out_magnitude))
         store.update_from_propagation(out_slice, in_slices, jacobians)
 
         out_cov = store.get_covariance_block(out_slice, out_slice)
         diag = backend.sparse_diagonal(out_cov)
-        std_dev = backend.reshape(backend.sqrt(diag), backend.shape(out_magnitude))
-        return CovarianceModel(std_dev_internal=std_dev, vector_slice=out_slice)
+        std_dev = backend.reshape(
+            backend.sqrt(diag), backend.shape(out_magnitude)
+        )
+        return CovarianceModel(
+            std_dev_internal=std_dev, vector_slice=out_slice
+        )
 
     def _merge_lineage_with_jac(
         self, other: Uncertainty, jac_self: Any, jac_other: Any, backend: Any
@@ -613,12 +628,18 @@ class CovarianceModel(Uncertainty[UncType]):
         """Adds two uncertainty models (correlated)."""
         backend = BackendManager.get_backend(self.std_dev_internal)
 
-        is_vector_path = out_magnitude is not None and backend.is_array(out_magnitude)
+        is_vector_path = out_magnitude is not None and backend.is_array(
+            out_magnitude
+        )
         if is_vector_path:
-            return self._add_vector_path(other, jac_self, jac_other, out_magnitude, backend)
+            return self._add_vector_path(
+                other, jac_self, jac_other, out_magnitude, backend
+            )
 
         # Scalar Path (Lineage)
-        filtered_lineage = self._merge_lineage_with_jac(other, jac_self, jac_other, backend)
+        filtered_lineage = self._merge_lineage_with_jac(
+            other, jac_self, jac_other, backend
+        )
         new_std = self._compute_std_dev(filtered_lineage, backend)
 
         needs_reshape = (
@@ -649,8 +670,7 @@ class CovarianceModel(Uncertainty[UncType]):
         """
         if jac_self is None or jac_other is None:
             raise ValueError(
-                "propagate_mul_div requires explicit jac_self and "
-                "jac_other."
+                "propagate_mul_div requires explicit jac_self and jac_other."
             )
 
         return cast(

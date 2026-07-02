@@ -42,16 +42,22 @@ if TYPE_CHECKING:
 
     from measurekit.domain.measurement.system import UnitSystem
 
+# The tokenizer regex, built from one small pattern per token kind.
+_NUMBER_PAT = r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?"
+_IDENT_PAT = r"[^\W\d]\w*"
+_SUP_PAT = r"[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+"
+_OP_PAT = r"\+/-|±|==|=>|->|\*\*|[-+*/^()=?]"
 _TOKEN_RE = re.compile(
-    r"""
-      (?P<NUMBER>\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)
-    | (?P<IDENT>[^\W\d]\w*)
-    | (?P<SUP>[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+)
-    | (?P<OP>\+/-|±|==|=>|->|\*\*|[-+*/^()=?])
-    | (?P<WS>[ \t]+)
-    | (?P<BAD>.)
-    """,
-    re.VERBOSE,
+    "|".join(
+        (
+            f"(?P<NUMBER>{_NUMBER_PAT})",
+            f"(?P<IDENT>{_IDENT_PAT})",
+            f"(?P<SUP>{_SUP_PAT})",
+            f"(?P<OP>{_OP_PAT})",
+            r"(?P<WS>[ \t]+)",
+            r"(?P<BAD>.)",
+        )
+    )
 )
 
 
@@ -252,16 +258,11 @@ class GrammarInterpreter:
 
     # --- statement handling -------------------------------------------
 
-    def _eval_statement(self, stmt: str) -> Any:
-        tokens = _tokenize(stmt)
-
-        eq_idx = _top_level_index(tokens, "==")
-        if eq_idx != -1:
-            lhs = self._eval_expr(tokens[:eq_idx])
-            rhs = self._eval_expr(tokens[eq_idx + 1 :])
-            return self._is_close(lhs, rhs)
-
-        # Trailing `= ?` -> return the value even when assigning.
+    @staticmethod
+    def _strip_value_query(
+        tokens: list[Token],
+    ) -> tuple[list[Token], bool | str]:
+        """Strips a trailing `= ?`; returns tokens and the want_value flag."""
         want_value: bool | str = True
         if (
             len(tokens) >= 2
@@ -274,34 +275,55 @@ class GrammarInterpreter:
                 or _top_level_index(tokens, "->") != -1
             ):
                 want_value = "assign"
+        return tokens, want_value
 
-        # Trailing `=> unit` conversion (unit slice taken from source text).
-        target_unit = None
+    @staticmethod
+    def _split_conversion(
+        tokens: list[Token], stmt: str
+    ) -> tuple[list[Token], str | None]:
+        """Strips a trailing `=> unit`; returns tokens and the target unit."""
         conv_idx = _top_level_index(tokens, "=>")
-        if conv_idx != -1:
-            unit_start = (
-                tokens[conv_idx + 1].pos
-                if conv_idx + 1 < len(tokens)
-                else None
-            )
-            if unit_start is None:
-                raise GrammarError(f"Missing unit after '=>' in: {stmt!r}")
-            end = tokens[-1].pos + len(tokens[-1].value)
-            target_unit = stmt[unit_start:end].strip()
-            tokens = tokens[:conv_idx]
+        if conv_idx == -1:
+            return tokens, None
+        unit_start = (
+            tokens[conv_idx + 1].pos if conv_idx + 1 < len(tokens) else None
+        )
+        if unit_start is None:
+            raise GrammarError(f"Missing unit after '=>' in: {stmt!r}")
+        end = tokens[-1].pos + len(tokens[-1].value)
+        return tokens[:conv_idx], stmt[unit_start:end].strip()
 
+    @staticmethod
+    def _split_assignment(
+        tokens: list[Token], stmt: str
+    ) -> tuple[list[Token], str | None]:
+        """Strips a leading `name =` / `name ->`; returns tokens and name."""
         assign_idx = _top_level_index(tokens, "=")
         if assign_idx == -1:
             assign_idx = _top_level_index(tokens, "->")
-        name = None
-        if assign_idx != -1:
-            lhs_tokens = tokens[:assign_idx]
-            if len(lhs_tokens) != 1 or lhs_tokens[0].type != "IDENT":
-                raise GrammarError(
-                    f"Assignment target must be a single name in: {stmt!r}"
-                )
-            name = lhs_tokens[0].value
-            tokens = tokens[assign_idx + 1 :]
+        if assign_idx == -1:
+            return tokens, None
+        lhs_tokens = tokens[:assign_idx]
+        if len(lhs_tokens) != 1 or lhs_tokens[0].type != "IDENT":
+            raise GrammarError(
+                f"Assignment target must be a single name in: {stmt!r}"
+            )
+        return tokens[assign_idx + 1 :], lhs_tokens[0].value
+
+    def _eval_statement(self, stmt: str) -> Any:
+        tokens = _tokenize(stmt)
+
+        eq_idx = _top_level_index(tokens, "==")
+        if eq_idx != -1:
+            lhs = self._eval_expr(tokens[:eq_idx])
+            rhs = self._eval_expr(tokens[eq_idx + 1 :])
+            return self._is_close(lhs, rhs)
+
+        # Trailing `= ?` -> return the value even when assigning.
+        tokens, want_value = self._strip_value_query(tokens)
+        # Trailing `=> unit` conversion (unit slice taken from source text).
+        tokens, target_unit = self._split_conversion(tokens, stmt)
+        tokens, name = self._split_assignment(tokens, stmt)
 
         value = self._eval_expr(tokens)
         if target_unit is not None:

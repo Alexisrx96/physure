@@ -67,9 +67,7 @@ class UnitNotFoundError(MeasureKitError, KeyError):
 class UnknownUnitError(MeasureKitError, ValueError):
     """Raised when a unit string has no registered dimension."""
 
-    def __init__(
-        self, unit_name: str, suggestions: list[str] | None = None
-    ):
+    def __init__(self, unit_name: str, suggestions: list[str] | None = None):
         """Initialize exception with unknown unit name and suggestions.
 
         :param unit_name: The name of the unit that was not recognized.
@@ -78,9 +76,7 @@ class UnknownUnitError(MeasureKitError, ValueError):
         self.unit_name = unit_name
         self.suggestions = suggestions
         hint = (
-            f" Did you mean: {', '.join(suggestions)}?"
-            if suggestions
-            else ""
+            f" Did you mean: {', '.join(suggestions)}?" if suggestions else ""
         )
         super().__init__(f"Unknown unit '{unit_name}'.{hint}")
 

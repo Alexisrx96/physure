@@ -41,8 +41,13 @@ def load_state(filepath: str | Path) -> None:
 
     Restores the CovarianceStore to the active context.
 
+    Warning:
+        This uses :mod:`pickle`. Unpickling a file can execute arbitrary
+        code — only load state files you created yourself or otherwise
+        fully trust. Never load files received from untrusted sources.
+
     Args:
-        filepath: Path to the input file.
+        filepath: Path to the input file (must be trusted).
     """
     path = Path(filepath)
     if not path.exists():

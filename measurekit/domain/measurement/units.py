@@ -104,7 +104,9 @@ def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
 
 def _is_identity_unit(base_unit: Any, unit_name: str) -> bool:
     """Returns True if base_unit is a trivial identity wrapper for unit_name."""
-    if not (hasattr(base_unit, "exponents") or hasattr(base_unit, "dimensions")):
+    if not (
+        hasattr(base_unit, "exponents") or hasattr(base_unit, "dimensions")
+    ):
         return False
     deps = (
         base_unit.exponents
@@ -146,8 +148,9 @@ except ImportError:
     class RationalUnit:
         """Inert stub used when measurekit_core is unavailable."""
 
-        def __init__(self, *args, **kwargs):
-            ...  # intentionally empty stub; replaced by measurekit_core at runtime
+        def __init__(
+            self, *args, **kwargs
+        ): ...  # intentionally empty stub; replaced by measurekit_core at runtime
 
     IS_CORE_AVAILABLE = False
 
@@ -259,7 +262,9 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
             if unit_def and hasattr(unit_def.converter, "scale"):
                 conv_scale = unit_def.converter.scale
                 # Handle tuple exponents (num, den) from RationalUnit
-                exponent_val = exp[0] / exp[1] if isinstance(exp, (list, tuple)) else exp
+                exponent_val = (
+                    exp[0] / exp[1] if isinstance(exp, (list, tuple)) else exp
+                )
                 factor *= conv_scale**exponent_val
         return factor
 

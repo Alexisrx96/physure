@@ -183,14 +183,18 @@ class Dimension(BaseExponentEntity):
             # If multiplying by something else (e.g. CompoundUnit),
             # let it handle it
             return NotImplemented
-        new_vector = tuple(a + b for a, b in zip(self._vector, other._vector, strict=False))
+        new_vector = tuple(
+            a + b for a, b in zip(self._vector, other._vector, strict=False)
+        )
         return Dimension(new_vector)
 
     def __truediv__(self, other: ExponentEntityProtocol) -> Dimension:
         """Divides two dimensions by subtracting their exponent vectors."""
         if not isinstance(other, Dimension):
             return NotImplemented
-        new_vector = tuple(a - b for a, b in zip(self._vector, other._vector, strict=False))
+        new_vector = tuple(
+            a - b for a, b in zip(self._vector, other._vector, strict=False)
+        )
         return Dimension(new_vector)
 
     def __pow__(self, power: float) -> Dimension:

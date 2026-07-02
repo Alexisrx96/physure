@@ -1,4 +1,5 @@
 """NumPy and PyTorch integration mixin for Quantity."""
+
 from __future__ import annotations
 
 import operator
@@ -18,6 +19,7 @@ def _q():
     global _Quantity
     if _Quantity is None:
         from measurekit.domain.measurement.quantity import Quantity
+
         _Quantity = Quantity
     return _Quantity
 
@@ -27,14 +29,27 @@ class BackendMixin:
 
     # --- NumPy Integration (Soft Dependency) ---
 
-    _NUMPY_TRIG_NAMES = frozenset((
-        "sin", "cos", "tan", "exp", "log", "log10",
-        "arcsin", "arccos", "arctan", "tanh", "sinh", "cosh",
-    ))
+    _NUMPY_TRIG_NAMES = frozenset(
+        (
+            "sin",
+            "cos",
+            "tan",
+            "exp",
+            "log",
+            "log10",
+            "arcsin",
+            "arccos",
+            "arctan",
+            "tanh",
+            "sinh",
+            "cosh",
+        )
+    )
 
     def _numpy_ufunc_reduce(self, ufunc, inputs, kwargs):
         """Handle np.add.reduce (e.g. np.sum); return NotImplemented for others."""
         import numpy as np
+
         if ufunc != np.add:
             return NotImplemented
         inp = inputs[0]
@@ -55,6 +70,7 @@ class BackendMixin:
     def _numpy_ufunc_arithmetic(self, ufunc, inputs):
         """Dispatch numpy arithmetic ufuncs (add/sub/mul/div/pow)."""
         import numpy as np
+
         if ufunc in (np.add, np.subtract, np.multiply):
             other = inputs[1] if inputs[0] is self else inputs[0]
             if ufunc == np.add:
@@ -74,7 +90,9 @@ class BackendMixin:
             return self.__pow__(inputs[1])
         return NotImplemented
 
-    def _numpy_ufunc_trig_with_uncertainty(self, ufunc, inp, res_mag, u_inp, **kwargs):
+    def _numpy_ufunc_trig_with_uncertainty(
+        self, ufunc, inp, res_mag, u_inp, **kwargs
+    ):
         """Propagate uncertainty through a trig ufunc; returns a Quantity."""
         h = 1e-7
         m_plus = inp._backend.add(inp.magnitude, h)
@@ -183,6 +201,7 @@ class BackendMixin:
     def _torch_arithmetic(self, func, args):
         """Delegate torch arithmetic to Python operators."""
         import torch
+
         if func == torch.add:
             return operator.add(args[0], args[1])  # type: ignore
         if func == torch.sub:
@@ -198,9 +217,16 @@ class BackendMixin:
     def _torch_unary_math(self, func, args, kwargs):
         """Handle torch unary math (sqrt, abs, trig)."""
         import torch
+
         trig_map = {
-            torch.sin, torch.cos, torch.tan, torch.exp,
-            torch.log, torch.log10, torch.abs, torch.sqrt,
+            torch.sin,
+            torch.cos,
+            torch.tan,
+            torch.exp,
+            torch.log,
+            torch.log10,
+            torch.abs,
+            torch.sqrt,
         }
         if func not in trig_map:
             return NotImplemented
@@ -220,12 +246,17 @@ class BackendMixin:
     def _torch_fallback(self, func, args, kwargs):
         """Unwrap args, call func, and re-wrap the result with the first Quantity's unit."""
         import torch
+
         unwrapped_args = tuple(self._torch_unwrap(arg) for arg in args)
-        unwrapped_kwargs = {k: self._torch_unwrap(v) for k, v in kwargs.items()}
+        unwrapped_kwargs = {
+            k: self._torch_unwrap(v) for k, v in kwargs.items()
+        }
         result = func(*unwrapped_args, **unwrapped_kwargs)
         source_q = next((arg for arg in args if isinstance(arg, _q())), None)
         if source_q is not None and isinstance(result, torch.Tensor):
-            return type(self).from_input(result, source_q.unit, source_q.system)
+            return type(self).from_input(
+                result, source_q.unit, source_q.system
+            )
         return result
 
     def __torch_function__(self, func, types, args=(), kwargs=None):
@@ -268,4 +299,3 @@ class BackendMixin:
             )
 
     # --- Representation ---
-
