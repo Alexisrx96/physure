@@ -6,8 +6,8 @@ from measurekit import Q_, propagation_mode
 
 def test_new_units():
     # 1. CGS units
-    # 100 gal = 1 m/s^2
-    gal_q = Q_(100.0, "gal")
+    # 100 Gal (galileo) = 1 m/s^2
+    gal_q = Q_(100.0, "Gal")
     assert math.isclose(gal_q.to("m/s^2").magnitude, 1.0, rel_tol=1e-5)
 
     # 10000 gauss = 1 tesla
