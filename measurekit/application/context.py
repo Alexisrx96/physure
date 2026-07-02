@@ -129,9 +129,13 @@ def propagation_mode(mode: str) -> Iterator[None]:
     """Context manager to temporarily switch the active propagation mode.
 
     Args:
-        mode: The propagation strategy to use ("correlated" or "uncorrelated").
+        mode: The propagation strategy to use ("correlated", "uncorrelated",
+              "montecarlo", "monte_carlo", "unscented").
     """
-    token = _propagation_mode.set(mode)
+    normalized_mode = mode.lower()
+    if normalized_mode == "montecarlo":
+        normalized_mode = "monte_carlo"
+    token = _propagation_mode.set(normalized_mode)
     try:
         yield
     finally:

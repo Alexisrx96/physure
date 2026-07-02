@@ -149,6 +149,20 @@ def __getattr__(name: str) -> Any:
     if name in _VECTORIZED_ATTRS:
         return _load_vectorized_attr(name)
 
+    if name in {"equivalencies", "spectral", "thermodynamic"}:
+        from measurekit.domain.measurement.equivalencies import (
+            equivalencies,
+            spectral,
+            thermodynamic,
+        )
+
+        _eq_map = {
+            "equivalencies": equivalencies,
+            "spectral": spectral,
+            "thermodynamic": thermodynamic,
+        }
+        return _eq_map[name]
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -175,13 +189,16 @@ __all__ = [
     "create_default_system",
     "create_system",
     "default_system",
+    "equivalencies",
     "get_active_system",
     "get_current_system",
     "get_unit",
     "jit",
     "load_state",
     "save_state",
+    "spectral",
     "system_context",
+    "thermodynamic",
     "uncertainty_mode",
     "units",
 ]

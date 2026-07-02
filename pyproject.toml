@@ -147,6 +147,9 @@ known-first-party = ["measurekit"]
 "manual_sandbox/*" = ["ALL"]
 # Generated unit namespace ('l' = liter is E741 ambiguous but part of API)
 "measurekit/units/core.py" = ["E741"]
+# Generated artifacts: unit-name casing and line length are not ours to style
+"measurekit/core/registry.pyi" = ["N815", "I001"]
+"measurekit/_generated_types.py" = ["E501", "F401"]
 # Dev tooling: docstring/style rules are noise outside the library
 "benchmarks/*" = ["D", "E501", "E402", "F841", "RUF001"]
 "examples/*" = ["D", "E501", "E402"]

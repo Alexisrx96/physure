@@ -98,7 +98,10 @@ except ImportError:
         @property
         def magnitude(self):
             """Returns the stored magnitude."""
-            return self._core_magnitude
+            val = self._core_magnitude
+            if "measurekit_core.Quantity" in str(type(val)):
+                return val.magnitude
+            return val
 
         @property
         def unit(self):
@@ -108,6 +111,9 @@ except ImportError:
         @property
         def std_dev(self):
             """Returns the stored uncertainty."""
+            val = self._core_magnitude
+            if "measurekit_core.Quantity" in str(type(val)):
+                return val.std_dev
             return self._core_uncertainty
 
 
@@ -122,7 +128,6 @@ except ImportError:
 # Helpers moved to end of file to resolve circular reference with Quantity class
 
 
-
 from measurekit.domain.measurement._arithmetic_mixin import (  # noqa: E402
     ArithmeticMixin,
 )
@@ -132,7 +137,12 @@ from measurekit.domain.measurement._backend_mixin import (  # noqa: E402
 
 
 @dataclass(frozen=False)
-class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, UncType, UnitType]):
+class Quantity(
+    ArithmeticMixin,
+    BackendMixin,
+    CoreQuantity,
+    Generic[ValueType, UncType, UnitType],
+):
     """Represents a physical quantity with magnitude, unit, and uncertainty.
 
     Examples:
@@ -171,7 +181,9 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         elif hasattr(uncertainty, "std_dev"):
             raw_uncertainty = uncertainty.std_dev
 
-        dims = getattr(r_unit, "dimensions", None) or getattr(r_unit, "exponents", {})
+        dims = getattr(r_unit, "dimensions", None) or getattr(
+            r_unit, "exponents", {}
+        )
         return CoreQuantity.__new__(
             cls, magnitude, _CoreRationalUnit(dims), raw_uncertainty
         )
@@ -410,22 +422,40 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         # Core Mode Integration
         mode, mode_args = cls._resolve_uncertainty_mode()
 
-        if IS_CORE_AVAILABLE and "CoreQuantity" not in str(type(value)) and (
-            mode != "python" or mode_args
+        has_rust_core = False
+        rust_core_qty_cls = None
+        try:
+            from measurekit_core import Quantity as RustCoreQuantity
+
+            has_rust_core = True
+            rust_core_qty_cls = RustCoreQuantity
+        except ImportError:
+            pass
+
+        if (
+            has_rust_core
+            and "Quantity" not in str(type(value))
+            and (mode in ("monte_carlo", "unscented", "gaussian"))
         ):
             r_unit = _ensure_rational(unit)
             std_dev = getattr(uncertainty, "std_dev", uncertainty)
-            # Create core magnitude
-            value = CoreQuantity(
-                float(value),
+            if hasattr(std_dev, "std_dev"):
+                std_dev = std_dev.std_dev
+            val_f = float(value)
+            std_f = float(std_dev or 0.0)
+            samples = mode_args.get("samples", 1000) if mode_args else 1000
+            value = rust_core_qty_cls(
+                val_f,
                 r_unit,
-                float(std_dev or 0.0),
+                std_f,
                 mode,
-                **mode_args,
+                samples,
             )
 
         # Extract raw standard deviation if it's a rich model
         raw_uncertainty = getattr(uncertainty, "std_dev", uncertainty)
+        if "measurekit_core.Quantity" in str(type(value)):
+            raw_uncertainty = value.std_dev
 
         u_obj = None
         if isinstance(uncertainty, Uncertainty):
@@ -465,10 +495,20 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
             import torch as _torch
 
             if _torch.compiler.is_compiling():
-                return ("python", None)
-            return _UNCERTAINTY_MODE.get()
+                return ("python", {})
         except (ImportError, AttributeError):
-            return _UNCERTAINTY_MODE.get()
+            pass
+
+        from measurekit.application.context import get_propagation_mode
+
+        prop_mode = get_propagation_mode()
+        if prop_mode in ("monte_carlo", "montecarlo", "unscented"):
+            mode = "monte_carlo" if prop_mode == "montecarlo" else prop_mode
+            _, mode_args = _UNCERTAINTY_MODE.get()
+            return (mode, mode_args or {})
+
+        mode, mode_args = _UNCERTAINTY_MODE.get()
+        return mode, mode_args or {}
 
     @classmethod
     def _fast_new(
@@ -482,8 +522,9 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         symbol: str | None = None,
     ) -> Self:
         """Bypasses some validation for high-performance creation."""
-        # Now that we've removed shadow state, this can be a simple call to cls()
-        # or we could optimize further if needed.
+        # If value is a Rust Quantity, use its std_dev as the uncertainty
+        if "measurekit_core.Quantity" in str(type(value)):
+            uncertainty = value.std_dev
         return cls(
             magnitude=value,
             unit=unit,
@@ -775,19 +816,17 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         if self._has_uncertainty:
             return (
                 f'<span style="font-family:monospace">'
-                f'{mag} &plusmn; {self.uncertainty} '
+                f"{mag} &plusmn; {self.uncertainty} "
                 f'<span style="color:#888">{unit_str}</span>'
-                f'</span>'
+                f"</span>"
             )
         return (
             f'<span style="font-family:monospace">'
             f'{mag} <span style="color:#888">{unit_str}</span>'
-            f'</span>'
+            f"</span>"
         )
 
-    def _repr_mimebundle_(
-        self, include=None, exclude=None, **kwargs
-    ) -> dict:
+    def _repr_mimebundle_(self, include=None, exclude=None, **kwargs) -> dict:
         """MIME bundle for Jupyter — lets the frontend pick the best format."""
         bundle = {
             "text/plain": repr(self),
@@ -947,7 +986,10 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
         )
 
     def to(
-        self, target_unit: CompoundUnit | UnitName
+        self,
+        target_unit: CompoundUnit | UnitName,
+        *,
+        equivalencies: Any = None,
     ) -> Quantity[ValueType, UncType]:
         """Converts the quantity to a different unit or moves to a device.
 
@@ -971,7 +1013,82 @@ class Quantity(ArithmeticMixin, BackendMixin, CoreQuantity, Generic[ValueType, U
             return self
 
         if self.dimension != target_unit.dimension(self.system):
-            raise IncompatibleUnitsError(self.unit, target_unit)
+            from measurekit.domain.measurement.equivalencies import (
+                _ACTIVE_EQUIVALENCIES,
+                find_conversion_path,
+                numerical_derivative,
+            )
+
+            active_eqs = list(_ACTIVE_EQUIVALENCIES.get())
+            if equivalencies is not None:
+                if callable(equivalencies):
+                    equivalencies = equivalencies()
+                active_eqs.extend(equivalencies)
+
+            path = find_conversion_path(
+                self.dimension,
+                target_unit.dimension(self.system),
+                active_eqs,
+            )
+            if path is None:
+                raise IncompatibleUnitsError(self.unit, target_unit)
+
+            # Helper to get canonical base unit for a dimension
+            def get_base_unit_for_dimension(dimension, system):
+                base_unit_names = {
+                    "L": "m",
+                    "M": "kg",
+                    "T": "s",
+                    "I": "A",
+                    "O": "K",
+                    "N": "mol",
+                    "J": "cd",
+                    "A": "rad",
+                    "$": "USD",
+                }
+                terms = []
+                from measurekit.domain.measurement.dimensions import SI_ORDER
+
+                for dim_name, exp in zip(
+                    SI_ORDER, dimension._vector, strict=False
+                ):
+                    if exp != 0:
+                        unit_name = base_unit_names[dim_name]
+                        terms.append(f"{unit_name}^{exp}")
+                unit_str = "*".join(terms) if terms else "1"
+                return system.get_unit(unit_str)
+
+            base_unit_from = get_base_unit_for_dimension(
+                self.dimension, self.system
+            )
+            base_unit_to = get_base_unit_for_dimension(
+                target_unit.dimension(self.system), self.system
+            )
+
+            # 1. Convert self to base_unit_from
+            val = self.to(base_unit_from)
+
+            # 2. Apply conversion path step-by-step
+            current_val = val.magnitude
+            current_unc = val.uncertainty
+
+            for func in path:
+                next_val = func(current_val)
+                deriv = numerical_derivative(func, current_val)
+                next_unc = abs(deriv) * current_unc
+                current_val = next_val
+                current_unc = next_unc
+
+            # 3. Create target base quantity
+            target_base = Quantity.from_input(
+                current_val,
+                base_unit_to,
+                self.system,
+                uncertainty=current_unc,
+            )
+
+            # 4. Convert target base quantity to target_unit
+            return target_base.to(target_unit)
 
         # --- Polymorphic Conversion (Generic) ---
         # Handle cases where units are simple single-component units

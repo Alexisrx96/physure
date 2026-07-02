@@ -298,6 +298,7 @@ class UnitSystemBuilder:
         """Adds constants from a dictionary of constant definitions."""
         if not constants_data:
             return self
+        self._system.constant_definitions.update(constants_data)
         if self._verbose:
             print("\n--- Phase 5: Initializing Constants ---")
         for value_str in constants_data.values():

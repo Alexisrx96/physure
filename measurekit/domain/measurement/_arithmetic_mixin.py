@@ -55,6 +55,90 @@ class ArithmeticMixin:
                 op_name, operands=(self, other), result=res
             )
 
+    def _check_and_handle_rust_propagation(
+        self, other: Any, op_name: str
+    ) -> Any:
+        try:
+            from measurekit_core import Quantity as RustCoreQuantity
+
+            is_self_rust = isinstance(self._core_magnitude, RustCoreQuantity)
+            is_other_rust = isinstance(other, _q()) and isinstance(
+                other._core_magnitude, RustCoreQuantity
+            )
+        except ImportError:
+            is_self_rust = False
+            is_other_rust = False
+
+        if not (is_self_rust or is_other_rust):
+            return None
+
+        # Resolve other
+        if isinstance(other, _q()):
+            if (
+                op_name in ("add", "sub", "rsub")
+                and self.unit is not other.unit
+            ):
+                if self.dimension != other.dimension:
+                    raise IncompatibleUnitsError(self.unit, other.unit)
+                other = other.to(self.unit)
+            other_val = other._core_magnitude
+        else:
+            other_val = other
+
+        # Run Rust operation
+        self_core = self._core_magnitude
+        if op_name == "add":
+            new_core = self_core + other_val
+            new_unit = self.unit
+        elif op_name == "sub":
+            new_core = self_core - other_val
+            new_unit = self.unit
+        elif op_name == "rsub":
+            new_core = other_val - self_core
+            new_unit = self.unit
+        elif op_name == "mul":
+            if isinstance(other, CompoundUnit):
+                new_core = self_core * 1.0
+                new_unit = self.unit * other
+            elif isinstance(other, _q()):
+                new_core = self_core * other_val
+                new_unit = self.unit * other.unit
+            else:
+                new_core = self_core * other_val
+                new_unit = self.unit
+        elif op_name == "truediv":
+            if isinstance(other, CompoundUnit):
+                new_core = self_core / 1.0
+                new_unit = self.unit / other
+            elif isinstance(other, _q()):
+                new_core = self_core / other_val
+                new_unit = self.unit / other.unit
+            else:
+                new_core = self_core / other_val
+                new_unit = self.unit
+        elif op_name == "rtruediv":
+            new_core = other_val / self_core
+            new_unit = 1 / self.unit
+        elif op_name == "pow":
+            new_core = self_core**other_val
+            from fractions import Fraction
+
+            exp_r = Fraction(str(other_val))
+            if exp_r.denominator == 1:
+                new_unit = self.unit ** int(exp_r.numerator)
+            else:
+                new_unit = self.unit ** (exp_r.numerator, exp_r.denominator)
+        elif op_name == "neg":
+            new_core = -self_core
+            new_unit = self.unit
+        elif op_name == "abs":
+            new_core = abs(self_core)
+            new_unit = self.unit
+        else:
+            return None
+
+        return type(self).from_input(new_core, new_unit, self.system)
+
     def _add_sub_array_path(
         self,
         other: Any,
@@ -867,7 +951,9 @@ class ArithmeticMixin:
             )
         return None
 
-    def _resolve_compatible_magnitude(self, other: Any, is_other_q: bool) -> Any:
+    def _resolve_compatible_magnitude(
+        self, other: Any, is_other_q: bool
+    ) -> Any:
         """Return the numeric value of other, converting units if needed for add/sub."""
         if not is_other_q:
             return other
@@ -877,7 +963,9 @@ class ArithmeticMixin:
             return other.to(self.unit).magnitude
         return other.magnitude
 
-    def _mul_numeric_internal(self, other: Any, new_magnitude: Any, new_unit: Any) -> Any:
+    def _mul_numeric_internal(
+        self, other: Any, new_magnitude: Any, new_unit: Any
+    ) -> Any:
         """Jacobian + dispatch for numeric multiplication path."""
         if self._backend.is_array(new_magnitude):
             size = self._backend.size(new_magnitude)
@@ -888,14 +976,20 @@ class ArithmeticMixin:
                 j_self = self._backend.diagonal_operator(other_flat)
             else:
                 j_self = self._backend.mul(
-                    self._backend.identity_operator(size, reference=self.magnitude),
+                    self._backend.identity_operator(
+                        size, reference=self.magnitude
+                    ),
                     other,
                 )
         else:
             j_self = other
-        return self._mul_numeric_path(other, new_magnitude, new_unit, j_self, "mul")
+        return self._mul_numeric_path(
+            other, new_magnitude, new_unit, j_self, "mul"
+        )
 
-    def _div_numeric_internal(self, other: Any, new_magnitude: Any, new_unit: Any) -> Any:
+    def _div_numeric_internal(
+        self, other: Any, new_magnitude: Any, new_unit: Any
+    ) -> Any:
         """Jacobian + dispatch for numeric division path."""
         if self._backend.is_array(new_magnitude):
             size = self._backend.size(new_magnitude)
@@ -907,16 +1001,24 @@ class ArithmeticMixin:
                 j_self = self._backend.diagonal_operator(recip_flat)
             else:
                 j_self = self._backend.mul(
-                    self._backend.identity_operator(size, reference=self.magnitude),
+                    self._backend.identity_operator(
+                        size, reference=self.magnitude
+                    ),
                     1.0 / other,
                 )
         else:
             j_self = 1.0 / other
-        return self._div_numeric_path(other, new_magnitude, new_unit, j_self, "truediv")
+        return self._div_numeric_path(
+            other, new_magnitude, new_unit, j_self, "truediv"
+        )
 
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Handles arithmetic with Affine Support."""
+        rust_res = self._check_and_handle_rust_propagation(other, "add")
+        if rust_res is not None:
+            return rust_res
+
         if isinstance(other, _q()):
             # 1. Affine and Logarithmic Logic (MUST BE ABOVE INITIAL CHECKS)
             res_affine = self._affine_check(other, is_add=True)
@@ -976,6 +1078,10 @@ class ArithmeticMixin:
 
     def __sub__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Handles subtraction."""
+        rust_res = self._check_and_handle_rust_propagation(other, "sub")
+        if rust_res is not None:
+            return rust_res
+
         if isinstance(other, _q()):
             # 1. Affine and Logarithmic Logic
             res_affine = self._affine_check(other, is_add=False)
@@ -1035,10 +1141,17 @@ class ArithmeticMixin:
 
     def __rsub__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Right subtraction."""
+        rust_res = self._check_and_handle_rust_propagation(other, "rsub")
+        if rust_res is not None:
+            return rust_res
         return NotImplemented
 
     def __mul__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Multiplies two quantities."""
+        rust_res = self._check_and_handle_rust_propagation(other, "mul")
+        if rust_res is not None:
+            return rust_res
+
         if isinstance(other, CompoundUnit):
             new_unit = self.unit * other
             return type(self).from_input(
@@ -1115,6 +1228,10 @@ class ArithmeticMixin:
 
     def __truediv__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Divides two quantities."""
+        rust_res = self._check_and_handle_rust_propagation(other, "truediv")
+        if rust_res is not None:
+            return rust_res
+
         if isinstance(other, CompoundUnit):
             new_unit = self.unit / other
             return type(self).from_input(
@@ -1189,6 +1306,10 @@ class ArithmeticMixin:
 
     def __pow__(self, exponent: float) -> Quantity[Any, Any, Any]:
         """Raises quantity to power."""
+        rust_res = self._check_and_handle_rust_propagation(exponent, "pow")
+        if rust_res is not None:
+            return rust_res
+
         u_self = self.uncertainty
         if u_self is None or (
             isinstance(u_self, (int, float)) and u_self == 0.0  # NOSONAR
@@ -1221,14 +1342,16 @@ class ArithmeticMixin:
             )
         return res
 
-
-
     def __rpow__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Right power."""
         return NotImplemented
 
     def __rtruediv__(self, other: Any) -> Quantity[Any, Any, Any]:
         """Right division."""
+        rust_res = self._check_and_handle_rust_propagation(other, "rtruediv")
+        if rust_res is not None:
+            return rust_res
+
         new_magnitude = self._backend.truediv(other, self.magnitude)
         new_unit = 1 / self.unit
 
@@ -1263,6 +1386,10 @@ class ArithmeticMixin:
 
     def __neg__(self) -> Self:
         """Returns the negation of the quantity."""
+        rust_res = self._check_and_handle_rust_propagation(None, "neg")
+        if rust_res is not None:
+            return rust_res
+
         return cast(
             "Self",
             type(self).from_input(
@@ -1279,6 +1406,10 @@ class ArithmeticMixin:
 
     def __abs__(self) -> Self:
         """Returns the absolute value of the quantity."""
+        rust_res = self._check_and_handle_rust_propagation(None, "abs")
+        if rust_res is not None:
+            return rust_res
+
         return cast(
             "Self",
             type(self).from_input(

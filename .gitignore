@@ -81,3 +81,6 @@ measurekit_core/lcov.info
 # Tool caches / generated indexes
 .sonar/
 .codegraph/
+
+# Local scratch area (never committed)
+scratch/
