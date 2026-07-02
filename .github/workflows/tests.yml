@@ -7,6 +7,25 @@ on:
     branches: [ main ]
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+
+    - name: Install dependencies
+      run: uv sync --all-extras --dev --python 3.12
+
+    - name: Ruff lint
+      run: uv run ruff check .
+
+    - name: Ruff format
+      run: uv run ruff format --check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -31,7 +50,8 @@ jobs:
       run: uv sync --all-extras --dev --python ${{ matrix.python-version }}
 
     - name: Run Tests
-      run: uv run pytest --ignore=tests/core/test_serialization.py
+      # --cov enables the fail_under=80 coverage gate from pyproject.toml
+      run: uv run pytest --ignore=tests/core/test_serialization.py --cov=measurekit
 
     - name: Run Benchmarks
       # Enable benchmarks explicitly since they are disabled in pyproject.toml

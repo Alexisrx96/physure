@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest*)",
+      "Bash(uv run ruff*)",
+      "Bash(uv run mypy*)",
+      "Bash(uv run python scripts/*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -Eq '\"file_path\"[[:space:]]*:[[:space:]]*\"[^\"]*measurekit_core/src' || exit 0; echo 'Rust core changed — rebuild before testing: cd measurekit_core && maturin develop' >&2; exit 2"
+          }
+        ]
+      }
+    ]
+  }
+}

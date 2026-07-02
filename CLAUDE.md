@@ -90,3 +90,26 @@ Set globally with `measurekit.propagation_mode("correlated" | "uncorrelated")` o
 ### mypy plugin
 
 `measurekit.static.mypy_plugin` narrows `Q_("value", "unit_str")` return types to `Quantity[..., ..., Literal["unit_str"]]` at static analysis time. Configured in both `pyproject.toml` and `mypy.ini`.
+
+## Philosophy & Correctness
+
+These are the project's non-negotiable invariants, learned the hard way. Violating one is a bug even if all tests pass.
+
+- **Unit correctness is the product.** Never silently drop a dimension, a conversion factor, or an uncertainty. If an operation can't preserve them, raise — a wrong answer with confident units is worse than an exception.
+- **The Rust core is always optional.** Every `from measurekit_core import ...` must have a working pure-Python fallback. New Rust features land with the fallback in the same PR.
+- **Zero runtime dependencies is policy.** `dependencies = []` in pyproject.toml stays empty. Anything new goes in an optional extra (`[native]`, `[numpy]`, ...) with a lazy import.
+- **First use must stay fast (~0.5s budget).** `import measurekit` and the first `Q_()` evaluation must not pull in torch, scipy, or build more than one `UnitSystem`. Check with `time python -m measurekit "500 N / 2 m^2 => kPa"` after touching import paths (see PR #18 for the history).
+- **Unit aliases collide silently.** `UnitSystem` logs a warning and the *later* definition wins (the `gal` gallon/galileo incident, PR #17). Before adding any unit or alias, grep the existing symbol across all `.conf` files — use the `add-unit` skill.
+- **Global state must be resettable.** `CompoundUnit._cache`, `Dimension._cache`, and the global `CovarianceStore` are cleared by the `clean_state` autouse fixture. New global caches must be added to that fixture.
+- **Doctests are tests.** pytest runs `--doctest-modules`; every docstring example in `measurekit/` executes on every run. Keep examples runnable or don't write them.
+- **Never commit machine-specific config.** `.env`, `measurekit_core/.cargo/config.toml` with local rustflags, and `.claude/settings.local.json` broke or nearly broke CI before — they are gitignored; keep it that way.
+
+### Code quality policy (enforced)
+
+Nothing merges to main unless all of these hold. CI enforces the first three; the Sonar gate is checked locally with `make sonar`.
+
+1. **Ruff clean**: `uv run ruff check .` and `uv run ruff format --check .` pass (CI `quality` job).
+2. **Tests green with coverage ≥ 80%** total (`fail_under = 80` in pyproject.toml; CI runs pytest with `--cov`). New code should be born tested — if a module drops below the bar, add tests in the same PR, don't lower the bar.
+3. **All three Python versions** (3.10–3.12) pass.
+4. **SonarQube quality gate green** on new code: coverage ≥ 80%, duplication ≤ 3%, zero new violations.
+5. **mypy is advisory, not gated** (~1100 pre-existing errors). Don't add new errors to files you touch; burn down the backlog opportunistically.
