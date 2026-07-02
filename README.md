@@ -63,16 +63,88 @@ We integrated a Rust backend (`measurekit_core`) via PyO3 to speed up the heavy 
 
 - **Honesty:** Crossing the Python-Rust boundary isn't free. It helps, but it doesn't magically fix Python's inherent slowness for small scalars.
 
+### 4. Engineering Notes as Code (The Grammar Extension)
+
+`measurekit.ext.grammar` evaluates [MeasureNote](https://github.com/Alexisrx96/MeasureNote)-style meta-language: write physics like you'd write it on paper, and let the unit system keep you honest. Zero extra dependencies.
+
+```python
+from measurekit.ext.grammar import GrammarInterpreter
+
+mn = GrammarInterpreter()
+mn.run("""
+force = 500 N              # assignment (`->` works too)
+area = 2 m^2
+stress = force / area
+""")
+mn.eval("stress => kPa")       # Quantity(0.25, kPa)
+mn.eval("stress == 250 Pa")    # True — assertions validate your work
+mn.eval("g = 9.81 +/- 0.02 m/s^2 = ?")  # uncertainty literals, query with `= ?`
+```
+
+- Units are just identifiers: `500 N` is implicit multiplication against the active `UnitSystem`, so every registered unit (and typo suggestion) works out of the box.
+- **Honesty:** it covers the core statements (assign, query, convert, assert). Function definitions, derivatives, and Monte Carlo commands live in the `symbolic` module, not here.
+
+### 5. Terminal Calculator (The Freebie)
+
+The grammar extension powers a REPL, so measurekit works without writing any Python — like GNU `units`, but with uncertainty propagation:
+
+```console
+$ python -m measurekit "500 N / 2 m^2 => kPa"
+0.25 kPa
+
+$ python -m measurekit < notes.mnml   # evaluate a file of statements
+
+$ python -m measurekit                # interactive session
+mk> g = 9.81 +/- 0.02 m/s^2
+mk> g => ft/s^2
+```
+
+Also available as `measurekit repl` from the CLI.
+
+### 📚 Supported Units & Constants Reference
+For a complete, dynamically generated list of all supported dimensions, prefixes, physical units, and CODATA 2022 physical constants, see [docs/UNITS.md](docs/UNITS.md).
+
 ---
 
 ## 📦 Installation
 
-It's on PyPI. We recommend `uv` because it's fast, and we like fast tools.
+### 1. From PyPI
+We recommend using `uv` or `pip` to install. You can customize the installation using extras depending on your use case:
 
-```bash
-uv pip install measurekit
+* **Minimal installation** (pure Python fallback, zero runtime dependencies):
+  ```bash
+  pip install measurekit
+  ```
 
-```
+* **With native Rust acceleration** (highly recommended for eager mode scalar speedups):
+  ```bash
+  pip install "measurekit[native]"
+  ```
+
+* **With all backend integrations** (NumPy, PyTorch, JAX, SymPy, Pandas, etc.):
+  ```bash
+  pip install "measurekit[all]"
+  ```
+
+### 2. Building from Source (Local Development)
+Because MeasureKit uses a hybrid Python-Rust architecture, building from source requires the Rust toolchain and `maturin`.
+
+1. **Prerequisites**:
+   Ensure you have Rust installed (via `rustup`) and the `uv` virtual environment configured.
+
+2. **Compile and develop the Rust Core backend**:
+   ```bash
+   cd measurekit_core
+   # This builds the Rust extension and registers it in the active virtualenv
+   maturin develop --release
+   cd ..
+   ```
+
+3. **Install the Python package in editable mode**:
+   ```bash
+   # Install MeasureKit along with all optional and development dependencies
+   pip install -e ".[all]"
+   ```
 
 ---
 
