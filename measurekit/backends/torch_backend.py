@@ -48,7 +48,11 @@ def _torch_block_offsets(
     col_offsets = [0]
     for j in range(len(blocks[0])):
         width = next(
-            (blocks[i][j].shape[1] for i in range(len(blocks)) if blocks[i][j] is not None),
+            (
+                blocks[i][j].shape[1]
+                for i in range(len(blocks))
+                if blocks[i][j] is not None
+            ),
             0,
         )
         col_offsets.append(col_offsets[-1] + width)
@@ -82,11 +86,24 @@ class TorchBackend(BackendOps):
         return False
 
     def asarray(self, obj: Any) -> Array:
-        """Converts input to a torch Tensor."""
+        """Converts input to a torch Tensor, preserving gradients if tensors are present."""
         if isinstance(obj, torch.Tensor):
             return obj
         if isinstance(obj, (float, complex)):
             return torch.as_tensor(obj, dtype=torch.float64)
+        if isinstance(obj, (list, tuple)):
+            if not obj:
+                return torch.tensor([], dtype=torch.float64)
+            elements = [self.asarray(x) for x in obj]
+            if any(isinstance(x, torch.Tensor) for x in elements):
+                # Ensure float64 elements are promoted if needed, stack tensors
+                return torch.stack(
+                    [
+                        x.to(torch.float64) if x.dtype != torch.float64 else x
+                        for x in elements
+                    ]
+                )
+            return torch.as_tensor(obj)
         return torch.as_tensor(obj)
 
     def to_device(self, obj: Any, device: str) -> Any:

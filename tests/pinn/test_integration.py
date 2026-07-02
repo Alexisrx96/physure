@@ -139,3 +139,58 @@ def test_pinn_friction_factor_learning():
     assert (
         err.item() < 0.1
     )  # Should generalize reasonably well due to physics structure
+
+
+@pytest.mark.skipif(not HAS_TORCH, reason="PyTorch not installed")
+def test_dimensional_homogeneity_loss():
+    from measurekit.nn.loss import dimensional_homogeneity_loss
+
+    # We mock soft Dimension, Unit, and Quantity objects with PyTorch parameters
+    class SoftDimension:
+        def __init__(self, exponents):
+            self.exponents = exponents
+
+    class SoftUnit:
+        def __init__(self, dimension_obj):
+            self.dimension_obj = dimension_obj
+
+        def dimension(self, system=None):
+            return self.dimension_obj
+
+    class SoftQuantity:
+        def __init__(self, unit, system=None):
+            self.unit = unit
+            self.system = system
+
+    # Define soft exponents as PyTorch parameters
+    # term 1: [L^a]
+    # term 2: [L^b]
+    # We want a and b to converge to the same value (variance = 0)
+    a = torch.tensor(1.0, requires_grad=True)
+    b = torch.tensor(2.0, requires_grad=True)
+
+    dim1 = SoftDimension({"L": a})
+    dim2 = SoftDimension({"L": b})
+
+    q1 = SoftQuantity(SoftUnit(dim1))
+    q2 = SoftQuantity(SoftUnit(dim2))
+
+    # Compute loss
+    loss = dimensional_homogeneity_loss([q1, q2])
+
+    # Check loss value (variance between [1.0] and [2.0] is 0.25)
+    import math
+
+    assert math.isclose(loss.item(), 0.25, rel_tol=1e-5)
+
+    # Perform backward pass to verify differentiability
+    loss.backward()
+
+    # Check gradients
+    assert a.grad is not None
+    assert b.grad is not None
+    # dLoss/da at a=1.0, b=2.0 (mean=1.5, loss = 0.5 * ((a - 1.5)^2 + (b - 1.5)^2) = 0.25 * (a - b)^2)
+    # dLoss/da = 0.5 * (a - b) = -0.5
+    # dLoss/db = 0.5 * (b - a) = 0.5
+    assert math.isclose(a.grad.item(), -0.5, rel_tol=1e-5)
+    assert math.isclose(b.grad.item(), 0.5, rel_tol=1e-5)

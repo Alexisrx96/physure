@@ -119,6 +119,13 @@ class UnitSystem(IUnitRepository):
         """
         return self.settings.get(key, default)
 
+    def get_constant(self, name: str) -> Any:
+        """Retrieves a physical constant by name from the system's definitions."""
+        defn = self.constant_definitions.get(name)
+        if defn is None:
+            return None
+        return self.Q_(defn)
+
     def register_alias(self, exponents: ExponentsDict, *aliases: str) -> None:
         """Registers aliases for a given set of exponents."""
         # Normalizar exponentes a enteros para el registro de alias
