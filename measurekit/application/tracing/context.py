@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -18,12 +19,16 @@ def get_active_tracer() -> Optional["FormulaTracer"]:
     # During torch.compile tracing, ContextVar often triggers "Unsupported method call".
     # We disable MeasureKit symbolic tracing inside Torch compilation to avoid
     # mixing tracing systems and side effects that confuse Dynamo.
-    try:
-        import torch
-        if torch.compiler.is_compiling():
-            return None
-    except (ImportError, AttributeError):
-        pass
+    # sys.modules guard: a bare `import torch` would load all of torch (~2s)
+    # for users who never touch it.
+    if "torch" in sys.modules:
+        try:
+            import torch
+
+            if torch.compiler.is_compiling():
+                return None
+        except (ImportError, AttributeError):
+            pass
 
     return _current_tracer.get()
 

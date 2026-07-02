@@ -261,10 +261,10 @@ class Quantity(
             try:
                 import torch as _torch
 
-                if (
-                    hasattr(_torch, "_dynamo")
-                    and _torch.compiler.is_compiling()
-                ):
+                # Check is_compiling() first: it is cheap and never imports
+                # torch._dynamo, while hasattr(_torch, "_dynamo") triggers a
+                # ~1s lazy import. If we are compiling, _dynamo is loaded.
+                if _torch.compiler.is_compiling():
                     _torch._dynamo.mark_static(self, "unit")
                     _torch._dynamo.mark_static(self, "_unit")
             except Exception:
@@ -491,13 +491,16 @@ class Quantity(
     @classmethod
     def _resolve_uncertainty_mode(cls) -> tuple:
         """Returns (mode, mode_args) from torch compiler state or context var."""
-        try:
-            import torch as _torch
+        # sys.modules guard: a bare `import torch` here would load all of
+        # torch (~2s) for numpy/python users the first time they propagate.
+        if "torch" in sys.modules:
+            try:
+                import torch as _torch
 
-            if _torch.compiler.is_compiling():
-                return ("python", {})
-        except (ImportError, AttributeError):
-            pass
+                if _torch.compiler.is_compiling():
+                    return ("python", {})
+            except (ImportError, AttributeError):
+                pass
 
         from measurekit.application.context import get_propagation_mode
 
@@ -1370,8 +1373,18 @@ class Quantity(
 
 
 # --- PyTorch Integration ---
-try:
-    from torch.utils import _pytree
+_TORCH_PYTREE_REGISTERED = False
+
+
+def _register_torch_pytree() -> None:
+    """Register Quantity as a torch pytree node. Idempotent; no-op without torch."""
+    global _TORCH_PYTREE_REGISTERED
+    if _TORCH_PYTREE_REGISTERED:
+        return
+    try:
+        from torch.utils import _pytree
+    except (ImportError, AttributeError):
+        return
 
     def _torch_flatten_quantity(q):
         children, context = q.tree_flatten()
@@ -1385,5 +1398,11 @@ try:
         _torch_flatten_quantity,
         _torch_unflatten_quantity,
     )
-except (ImportError, AttributeError):
-    pass
+    _TORCH_PYTREE_REGISTERED = True
+
+
+# Registering eagerly here used to `from torch.utils import _pytree`, pulling
+# all of torch (~2s) into every first use. Only register if torch is already
+# imported; torch users who arrive later get it via the torch backend load.
+if "torch" in sys.modules:
+    _register_torch_pytree()

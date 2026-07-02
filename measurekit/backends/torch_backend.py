@@ -645,3 +645,11 @@ class TorchBackend(BackendOps):
             return self.sparse_matmul(temp, self.transpose(j))
 
         return torch.matmul(torch.matmul(j, s), j.transpose(-1, -2))
+
+
+if torch is not None:
+    # Quantity defers its torch pytree registration until torch is in play;
+    # loading this backend is the signal that it is.
+    from measurekit.domain.measurement.quantity import _register_torch_pytree
+
+    _register_torch_pytree()

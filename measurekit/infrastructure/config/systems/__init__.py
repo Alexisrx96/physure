@@ -1,9 +1,19 @@
-"""Pre-configured unit systems."""
+"""Pre-configured unit systems.
 
-from measurekit.application.startup import create_system
+`imperial` and `international` are built lazily on first attribute access:
+startup.py imports this package via ``importlib.resources`` just to locate
+the .conf files, and building both systems eagerly tripled bootstrap time.
+"""
 
-# Create the Imperial system instance by loading its configuration.
-imperial = create_system("imperial.conf")
+_SYSTEMS = {"imperial": "imperial.conf", "international": "international.conf"}
 
-# Create the International (SI) system instance.
-international = create_system("international.conf")
+
+def __getattr__(name: str):
+    conf = _SYSTEMS.get(name)
+    if conf is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from measurekit.application.startup import create_system
+
+    system = create_system(conf)
+    globals()[name] = system  # cache: __getattr__ won't be called again
+    return system

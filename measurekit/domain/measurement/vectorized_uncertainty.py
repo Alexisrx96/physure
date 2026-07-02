@@ -10,10 +10,25 @@ try:
 except ImportError:
     np = None
 
-try:
-    import scipy.sparse
-except ImportError:
-    scipy = None
+
+def _scipy():
+    """Return the scipy module, or None if not installed.
+
+    Lazy import: scipy costs ~0.2s and most sessions never build a sparse
+    covariance, so importing it at module load taxed every bootstrap.
+    """
+    global _scipy_mod
+    if _scipy_mod is False:
+        try:
+            import scipy.sparse
+
+            _scipy_mod = scipy
+        except ImportError:
+            _scipy_mod = None
+    return _scipy_mod
+
+
+_scipy_mod: Any = False
 
 try:
     from measurekit_core import CovarianceStore as CoreStore
@@ -37,6 +52,7 @@ except ImportError:
 
         def register_variable(self, _var_id, variance):
             """Appends a variance block to the covariance matrix."""
+            scipy = _scipy()
             if self.matrix is None:
                 self.matrix = scipy.sparse.csr_matrix(variance)
             else:
@@ -47,7 +63,7 @@ except ImportError:
         def register_diagonal(self, var_id, variance_diag):
             """Registers a diagonal variance vector."""
             _ = len(variance_diag)
-            sp = scipy.sparse.diags([variance_diag], [0], format="csr")
+            sp = _scipy().sparse.diags([variance_diag], [0], format="csr")
             self.register_variable(var_id, sp)
 
         def propagate(self, out_id, input_ids, jacobians):
@@ -130,6 +146,7 @@ class CovarianceStore:
         if res is not None:
             data, indices, indptr, shape = res
 
+            scipy = _scipy()
             if scipy is None:
                 raise ImportError(
                     "Scipy is required for sparse matrix reconstruction"
@@ -163,6 +180,7 @@ class CovarianceStore:
 
             return torch.sparse_coo_tensor(size=shape, dtype=torch.float64)
 
+        scipy = _scipy()
         if scipy:
             return scipy.sparse.csr_matrix(shape)
 
@@ -212,7 +230,9 @@ class CovarianceStore:
         np.fill_diagonal(arr, scalar)
         return self.backend.asarray(arr)
 
-    def _broadcast_jacobian(self, val: Any, out_size: int, in_size: int) -> Any:
+    def _broadcast_jacobian(
+        self, val: Any, out_size: int, in_size: int
+    ) -> Any:
         """Expands scalar or 1-D jacobian values to matrix form."""
         is_scalar = val.ndim == 0 or (
             val.ndim == 1 and self.backend.size(val) == 1
@@ -294,6 +314,7 @@ class CovarianceStore:
         """Converts a variance array to a flat float64 diagonal ready for the core."""
         if self.backend.__class__.__name__ == "TorchBackend":
             import torch
+
             val = self.backend.reshape(variance, (-1,))
             if val.dtype != torch.float64:
                 val = val.to(torch.float64)
@@ -313,7 +334,9 @@ class CovarianceStore:
                 val = np.asarray(val, dtype=np.float64)
         return val
 
-    def _register_diagonal_with_fallback(self, idx: int, diag: Any, size: int) -> None:
+    def _register_diagonal_with_fallback(
+        self, idx: int, diag: Any, size: int
+    ) -> None:
         """Calls register_diagonal on the core store, falling back to register_variable."""
         try:
             self._core.register_diagonal(idx, diag)

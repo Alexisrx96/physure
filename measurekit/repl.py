@@ -40,11 +40,23 @@ def _run_source(source: str) -> int:
 
 def _repl() -> int:
     import contextlib
+    import threading
 
     with contextlib.suppress(ImportError):
         import readline  # noqa: F401  # line editing + history
 
     from measurekit.ext.grammar import GrammarInterpreter
+
+    # Build the unit system while the user types their first line; join
+    # before evaluating so the main thread never races the build.
+    def _warm() -> None:
+        with contextlib.suppress(Exception):
+            from measurekit.application.context import get_current_system
+
+            get_current_system()
+
+    warm = threading.Thread(target=_warm, daemon=True)
+    warm.start()
 
     interp = GrammarInterpreter()
     print(_BANNER)
@@ -59,6 +71,7 @@ def _repl() -> int:
             continue
         if line.strip() in ("exit", "quit"):
             return 0
+        warm.join()
         try:
             _print_results(interp.run(line))
         except Exception as e:  # keep the session alive on any error
