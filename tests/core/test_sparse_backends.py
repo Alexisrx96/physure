@@ -62,7 +62,11 @@ def test_sparse_diags(backend_name):
         total_sum = backend.sum(sp_mat)
 
         # Handle potential scalar array wrapper
-        val = total_sum.item() if hasattr(total_sum, "item") else float(total_sum)
+        val = (
+            total_sum.item()
+            if hasattr(total_sum, "item")
+            else float(total_sum)
+        )
 
         # 5 + 4 + 4 = 13
         # allow small float error

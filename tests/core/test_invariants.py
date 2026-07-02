@@ -195,7 +195,7 @@ def test_unit_invariance(qs):
     try:
         dim_key = a.dimension
         if hasattr(dim_key, "to_string"):
-            dim_key = dim_key.to_string() # Normalize if needed
+            dim_key = dim_key.to_string()  # Normalize if needed
         candidates = system.UNIT_REGISTRY.get(dim_key, {})
     except TypeError:
         candidates = {}
@@ -218,12 +218,12 @@ def test_unit_invariance(qs):
         # (a + b) -> target
         sum_orig = a + b
         lhs = sum_orig.to(target_unit)
-        
+
         # a -> target + b -> target
         a_conv = a.to(target_unit)
         b_conv = b.to(target_unit)
         rhs = a_conv + b_conv
-        
+
     except (ValueError, RuntimeError, TypeError) as e:
         note(f"Operation failed with {e}")
         assume(False)
@@ -231,10 +231,10 @@ def test_unit_invariance(qs):
     # FP errors accumulate more here due to conversions
     # Increased tolerance to 1e-4 for robustness during heavy random testing
     # Check if backends match (handling potential array mismatches in property tests)
-    
+
     m_lhs = lhs.magnitude
     m_rhs = rhs.magnitude
-    
+
     # helper to normalize for comparison
     def to_np(x):
         if hasattr(x, "toarray"):
@@ -245,7 +245,9 @@ def test_unit_invariance(qs):
             return x.numpy()
         return np.asarray(x)
 
-    np.testing.assert_allclose(to_np(m_lhs), to_np(m_rhs), rtol=1e-5, atol=1e-8)
+    np.testing.assert_allclose(
+        to_np(m_lhs), to_np(m_rhs), rtol=1e-5, atol=1e-8
+    )
 
 
 @given(

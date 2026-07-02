@@ -1,4 +1,5 @@
 """Tests for the Rust CovarianceStore and its Python fallback CoreStore."""
+
 import numpy as np
 import pytest
 
@@ -19,6 +20,7 @@ from measurekit.domain.measurement.vectorized_uncertainty import (
 # Rust CovarianceStore direct tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(not HAS_RUST, reason="measurekit_core not available")
 class TestRustCovarianceStore:
     def setup_method(self):
@@ -33,6 +35,7 @@ class TestRustCovarianceStore:
         assert shape == (3, 3)
         # Reconstruct and check diagonal
         import scipy.sparse
+
         mat = scipy.sparse.csr_matrix((data, indices, indptr), shape=shape)
         np.testing.assert_allclose(mat.diagonal(), diag)
 
@@ -55,6 +58,7 @@ class TestRustCovarianceStore:
         assert result is not None
         data, indices, indptr, shape = result
         import scipy.sparse
+
         mat = scipy.sparse.csr_matrix((data, indices, indptr), shape=shape)
         np.testing.assert_allclose(mat.diagonal(), [4.0, 16.0])
 
@@ -72,6 +76,7 @@ class TestRustCovarianceStore:
         assert result is not None
         data, indices, indptr, shape = result
         import scipy.sparse
+
         mat = scipy.sparse.csr_matrix((data, indices, indptr), shape=shape)
         np.testing.assert_allclose(mat.diagonal(), [6.0, 6.0])
 
@@ -95,6 +100,7 @@ class TestRustCovarianceStore:
 # ---------------------------------------------------------------------------
 # Python fallback CoreStore tests (always run)
 # ---------------------------------------------------------------------------
+
 
 class TestPythonCoreStoreFallback:
     """Tests the Python fallback CoreStore via the CovarianceStore wrapper."""
@@ -139,8 +145,9 @@ class TestPythonCoreStoreFallback:
         store.update_from_propagation(out_slc, [in_slc], [jac])
         block = store.get_covariance_block(out_slc, out_slc)
         import scipy.sparse
+
         if scipy.sparse.issparse(block):
             diag = block.diagonal()
         else:
-            diag = np.diag(block) if hasattr(block, 'diagonal') else block
+            diag = np.diag(block) if hasattr(block, "diagonal") else block
         np.testing.assert_allclose(np.sort(np.abs(diag)), np.sort(std_dev**2))
