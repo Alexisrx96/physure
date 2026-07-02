@@ -19,11 +19,13 @@ if TYPE_CHECKING:
     from measurekit.domain.measurement.system import UnitSystem
     from measurekit.domain.measurement.units import CompoundUnit
 
-# Regex to separate magnitude (int/float) from unit string
-# Matches: start, optional sign, digits, optional dot, digits,
-#   optional exponent, space, unit string
-_STRING_PARSE_REGEX = re.compile(
-    r"^\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*(.*)$"
+# Matches only the leading numeric literal (optional sign, int/float, optional
+# exponent); the unit is whatever text follows and is sliced off in Python.
+# No trailing `.*$` wildcard and an unambiguous digit pattern
+# (`\d+\.?\d*|\.\d+`, not `\d*\.?\d+`), so there is nothing to force the engine
+# to re-partition a long digit run — immune to ReDoS backtracking.
+_NUMBER_PREFIX_REGEX = re.compile(
+    r"\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
 )
 
 
@@ -217,11 +219,12 @@ class QuantityFactory:
         self, value_str: str, system: UnitSystem
     ) -> tuple[Any, CompoundUnit]:
         """Parses a string like '10 m/s' into a value and a unit."""
-        match = _STRING_PARSE_REGEX.match(value_str)
+        match = _NUMBER_PREFIX_REGEX.match(value_str)
         if not match:
             return value_str, system.get_unit("dimensionless")
 
-        num_str, unit_str = match.groups()
+        num_str = match.group(1)
+        unit_str = value_str[match.end() :].strip()
         try:
             parsed_value = float(num_str)
             # If the number was an integer (e.g., "10"), convert back to int
@@ -236,7 +239,7 @@ class QuantityFactory:
             return value_str, system.get_unit("dimensionless")
 
         unit = (
-            system.get_unit(unit_str.strip())
+            system.get_unit(unit_str)
             if unit_str
             else system.get_unit("dimensionless")
         )
