@@ -15,7 +15,22 @@ def main():
         "sync-types", help="Generate type hints for available units."
     )
 
+    # repl command
+    repl_parser = subparsers.add_parser(
+        "repl", help="Interactive unit-aware calculator (MNML syntax)."
+    )
+    repl_parser.add_argument(
+        "expression",
+        nargs="*",
+        help="Evaluate this expression and exit instead of starting a REPL.",
+    )
+
     args = parser.parse_args()
+
+    if args.command == "repl":
+        from measurekit.repl import main as repl_main
+
+        sys.exit(repl_main(args.expression))
 
     if args.command == "sync-types":
         print("Synchronizing types for MeasureKit units...")
