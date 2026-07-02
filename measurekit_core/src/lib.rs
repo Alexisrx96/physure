@@ -1,3 +1,8 @@
+// ponytail: allow pyo3 0.23 deprecations (IntoPy/ToPyObject -> IntoPyObject, ~22 sites)
+// and clippy style lints; drop these when migrating to pyo3 0.24+.
+#![allow(deprecated)]
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
 use pyo3::prelude::*;
 
 mod units;

@@ -81,6 +81,11 @@ docs = [
 [tool.hatch.build.targets.wheel]
 packages = ["measurekit"]
 
+[tool.hatch.build.targets.sdist]
+# ignore-vcs means .gitignore is not consulted; without this the sdist
+# crawls .venv/ and measurekit_core/target/ (13+ GB)
+only-include = ["measurekit"]
+
 [tool.hatch.build]
 ignore-vcs = true
 

@@ -1,14 +1,14 @@
 use pyo3::prelude::*;
 use sprs::{CsMat, TriMat};
 use std::collections::HashMap;
-use numpy::{PyReadonlyArrayDyn, PyArray1, IntoPyArray};
+use numpy::{PyReadonlyArrayDyn, PyArray1};
 use numpy::ndarray::{Ix1, Ix2};
-use arrow::array::{UInt64Array, UInt32Array, Float64Array, ListBuilder, PrimitiveBuilder, Array, ArrayRef};
+use arrow::array::{UInt64Array, UInt32Array, ListBuilder, PrimitiveBuilder, ArrayRef};
 use arrow::datatypes::{DataType, Field, Schema, UInt64Type, UInt32Type, Float64Type, Int32Type};
 use arrow::record_batch::RecordBatch;
 use arrow::ipc::writer::StreamWriter;
 use arrow::ipc::reader::StreamReader;
-use arrow::array::{AsArray, ListArray};
+use arrow::array::AsArray;
 use std::sync::Arc;
 use std::io::Cursor;
 
@@ -161,7 +161,7 @@ impl CovarianceStore {
 
     fn prune_by_age(&mut self) {
         let max_age = self.config.max_age as u64;
-        let limit = if self.current_step > max_age { self.current_step - max_age } else { 0 };
+        let limit = self.current_step.saturating_sub(max_age);
         let expired: Vec<VariableID> = self.access_ledger.iter()
             .filter(|(_, &last)| last < limit)
             .map(|(&id, _)| id)
@@ -354,13 +354,13 @@ impl CovarianceStore {
 
     fn __setstate__(&mut self, state: Vec<u8>) -> PyResult<()> {
         let cursor = Cursor::new(state);
-        let mut reader = StreamReader::try_new(cursor, None)
+        let reader = StreamReader::try_new(cursor, None)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow reader error: {}", e)))?;
         
         // Clear existing blocks
         self.blocks.clear();
 
-        while let Some(batch_result) = reader.next() {
+        for batch_result in reader {
              let batch = batch_result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow batch error: {}", e)))?;
              
              let row_ids = batch.column(0).as_primitive::<UInt64Type>();
