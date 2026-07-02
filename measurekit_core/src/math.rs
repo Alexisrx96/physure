@@ -1,4 +1,4 @@
-use sprs::{CsMat, SpIndex};
+use sprs::CsMat;
 
 pub trait SandwichProduct {
     fn sandwich_product(&self, center: &CsMat<f64>) -> CsMat<f64>;
