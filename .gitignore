@@ -75,6 +75,7 @@ measurekit/core/registry.pyi
 
 # CI/CD generated reports
 coverage.xml
+coverage.json
 test-results.xml
 measurekit_core/lcov.info
 

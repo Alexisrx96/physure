@@ -19,19 +19,22 @@ pip install measurekit
 ## Quick Start
 
 ```python
-from measurekit.domain.measurement.quantity import Quantity as Q
-from measurekit.domain.measurement.system import UnitSystem
+from measurekit import Q_
 
-# Initialize a standard unit system (usually done automatically via startup)
-# For demonstration, we assume a system exists or use the default if configured.
-
-# Create a quantity
-q = Q(10, "m")
-print(q)
-# Output: Quantity(10, m)
-
-# Convert units
+q = Q_(10, "m")
 q_km = q.to("km")
-print(q_km)
-# Output: Quantity(0.01, km)
+
+# With uncertainty — correlations propagate automatically
+a = Q_(10, "m", 0.1)
+b = Q_(5, "m", 0.05)
+c = a + b
 ```
+
+## Best Practices
+
+- **Use the `Q_` factory** for everything: it parses units and dispatches backends automatically (`Q_(np.array([1, 2, 3]), "m/s")` stays in NumPy; a torch tensor stays in torch).
+- **Let uncertainty propagate itself.** Never add standard deviations manually — correlated errors are tracked through the covariance store.
+- **In hot loops, do arithmetic in identical units**: same-unit operations take a fast path that bypasses parsing and validation.
+- **Validate with Pydantic** by annotating model fields as `Quantity`; strings like `"101.3 kPa"` are parsed and dimension-checked on model construction.
+- **Scope unit-system overrides** with `system_context(...)` instead of mutating global state.
+- **With `torch.compile`**, prefer `fullgraph=True` and keep symbolic tracing out of compiled functions — see [torch.compile integration](torch_compile_integration.md).
