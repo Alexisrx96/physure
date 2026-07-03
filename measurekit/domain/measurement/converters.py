@@ -2,7 +2,8 @@
 
 import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from fractions import Fraction
 
 _LN10 = math.log(10.0)
 
@@ -52,6 +53,10 @@ class LinearConverter(UnitConverter):
     """For most units: y = ax (e.g. meters to kilometers)."""
 
     scale: float
+    # Exact rational value of the declared scale (from the .conf string),
+    # or None when it is not exactly representable. Only consumed by
+    # CompoundUnit._compound_factor_exact; all value math stays float.
+    exact: Fraction | None = field(default=None, compare=False, repr=False)
 
     @property
     def is_linear(self) -> bool:

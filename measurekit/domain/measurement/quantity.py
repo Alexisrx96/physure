@@ -965,6 +965,16 @@ class Quantity(
         if not (source_def and target_def):
             return None
 
+        # Plain linear pairs go through conversion_factor_to instead:
+        # it computes the ratio exactly (one rounding) when the .conf
+        # scales are rational, vs. two roundings via to_base/from_base.
+        from measurekit.domain.measurement.converters import LinearConverter
+
+        if isinstance(source_def.converter, LinearConverter) and isinstance(
+            target_def.converter, LinearConverter
+        ):
+            return None
+
         base_val = source_def.converter.to_base(self.magnitude)
         new_magnitude = target_def.converter.from_base(base_val)
 

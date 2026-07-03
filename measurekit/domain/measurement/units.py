@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
@@ -268,6 +269,37 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
                 factor *= conv_scale**exponent_val
         return factor
 
+    def _compound_factor_exact(self, system: UnitSystem) -> Fraction | None:
+        """Exact rational compound factor, or None if not representable.
+
+        Returns None when any component's converter lacks an exact scale
+        or has a non-integer exponent; callers fall back to float math.
+        """
+        factor = Fraction(1)
+        it = (
+            self.dimensions.items()
+            if hasattr(self, "dimensions")
+            else self.exponents.items()
+        )
+        for unit, exp in it:
+            if unit == "noprefix":
+                continue
+            _unit = system.get_unit(unit)
+            dim = _unit.dimension(system)
+            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
+            if not (unit_def and hasattr(unit_def.converter, "scale")):
+                continue
+            exact = getattr(unit_def.converter, "exact", None)
+            if isinstance(exp, (list, tuple)):
+                num, den = exp
+                if den != 1:
+                    return None
+                exp = num
+            if exact is None or exp != int(exp):
+                return None
+            factor *= exact ** int(exp)
+        return factor
+
     def is_linear(self, system: UnitSystem) -> bool:
         """Checks if all components of the unit use linear converters."""
         it = (
@@ -326,6 +358,12 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
 
         if self.dimension(system) != target.dimension(system):
             raise IncompatibleUnitsError(self, target)
+        source_exact = self._compound_factor_exact(system)
+        if source_exact is not None:
+            target_exact = target._compound_factor_exact(system)
+            if target_exact is not None:
+                # Single rounding at the boundary instead of one per scale.
+                return float(source_exact / target_exact)
         source_factor = self._compound_factor(system)
         target_factor = target._compound_factor(system)
         return source_factor / target_factor

@@ -20,6 +20,8 @@ from measurekit.domain.measurement.ports.unit_repository import IUnitRepository
 from measurekit.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
+    from fractions import Fraction
+
     from measurekit.domain.notation.typing import ExponentsDict
 
 log = logging.getLogger(__name__)
@@ -146,7 +148,11 @@ class UnitSystem(IUnitRepository):
             self.ALIAS_TO_EXPONENTS[alias] = key
 
     def register_prefix(
-        self, symbol: str, factor: float, name: str | None = None
+        self,
+        symbol: str,
+        factor: float,
+        name: str | None = None,
+        exact: Fraction | None = None,
     ) -> None:
         """Registers a prefix with its symbol, factor, and optional name."""
         if symbol in self.PREFIX_REGISTRY:
@@ -154,6 +160,7 @@ class UnitSystem(IUnitRepository):
         self.PREFIX_REGISTRY[symbol] = {
             "factor": factor,
             "name": name or symbol,
+            "exact": exact,
         }
 
     def register_dimension(self, dimension: Dimension, name: str):
@@ -251,7 +258,7 @@ class UnitSystem(IUnitRepository):
                 continue
 
             self._apply_prefixes_to_unit(
-                unit_name, base_symbol, dimension, converter.scale, base_name
+                unit_name, base_symbol, dimension, converter, base_name
             )
 
     def _apply_prefixes_to_unit(
@@ -259,7 +266,7 @@ class UnitSystem(IUnitRepository):
         unit_name: str,
         base_symbol: str,
         dimension: Dimension,
-        scale: float,
+        converter: LinearConverter,
         base_name: str | None,
     ) -> None:
         """Applies all prefixes to a single unit name."""
@@ -274,7 +281,13 @@ class UnitSystem(IUnitRepository):
                 else unit_name
             )
             prefixed_name = prefix_data["name"] + desc_name
-            prefixed_factor = prefix_data["factor"] * scale
+            prefixed_factor = prefix_data["factor"] * converter.scale
+            prefix_exact = prefix_data.get("exact")
+            prefixed_exact = (
+                prefix_exact * converter.exact
+                if prefix_exact is not None and converter.exact is not None
+                else None
+            )
 
             self._create_prefixed_unit(
                 prefixed_symbol,
@@ -282,6 +295,7 @@ class UnitSystem(IUnitRepository):
                 prefixed_factor,
                 prefixed_name,
                 prefixed_symbol,
+                exact=prefixed_exact,
             )
 
             # Also name alias (e.g. kilometer)
@@ -292,6 +306,7 @@ class UnitSystem(IUnitRepository):
                     prefixed_factor,
                     prefixed_name,  # Name is same
                     prefixed_symbol,  # Original symbol context
+                    exact=prefixed_exact,
                 )
 
             # Rust Registration
@@ -307,12 +322,13 @@ class UnitSystem(IUnitRepository):
         factor: float,
         name: str | None,
         base_prefixed_symbol: str,  # For alias tracking
+        exact: Fraction | None = None,
     ) -> None:
         """Registers a single prefixed unit instance."""
         prefixed_def = UnitDefinition(
             symbol,
             dimension,
-            LinearConverter(factor),
+            LinearConverter(factor, exact=exact),
             name,
             recipe=None,
             allow_prefixes=False,

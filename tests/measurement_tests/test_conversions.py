@@ -97,3 +97,44 @@ def test_compound_unit_conversion_factor(system, dims):
     time_unit = CompoundUnit({"s": 1})
     with pytest.raises(IncompatibleUnitsError):
         length_unit.conversion_factor_to(time_unit)
+
+
+def test_exact_rational_conversion_factors():
+    """Conversion factors defined exactly in .conf must not drift in float.
+
+    0.3048 / 0.0254 in f64 is 12.000000000000002; exact rational
+    arithmetic on the .conf-declared factors gives exactly 12.
+    """
+    from measurekit import Q_
+
+    assert Q_(1.0, "ft").to("in").magnitude == 12.0
+    assert Q_(1.0, "mi").to("in").magnitude == 63360.0
+    assert Q_(1.0, "lb").to("oz").magnitude == 16.0
+
+
+def test_exact_factors_survive_prefixes():
+    """Prefixed units (built as prefix_factor * scale) keep an exact scale."""
+    from fractions import Fraction
+
+    from measurekit import Q_
+    from measurekit.application.context import get_current_system
+
+    assert Q_(1.0, "km").to("mm").magnitude == 1_000_000.0
+    assert Q_(1.0, "kg").to("g").magnitude == 1000.0
+
+    system = get_current_system()
+    km = system.UNIT_SYMBOL_REGISTRY["km"].converter
+    assert km.exact == Fraction(1000)
+    # prefix * imperial scale: milli-foot = 3048/10^7 m exactly
+    mft = system.UNIT_SYMBOL_REGISTRY["mft"].converter
+    assert mft.exact == Fraction(3048, 10_000_000)
+
+
+def test_fractional_exponent_falls_back_to_float():
+    """Non-integer exponents can't use the exact path; float fallback."""
+    from measurekit.application.context import get_current_system
+
+    u = CompoundUnit({"km": (1, 2)})
+    v = CompoundUnit({"m": (1, 2)})
+    factor = u.conversion_factor_to(v, get_current_system())
+    assert factor == pytest.approx(1000.0**0.5)
