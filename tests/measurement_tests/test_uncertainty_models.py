@@ -238,10 +238,20 @@ def test_autograd_jax_jacobians():
     assert math.isclose(float(jacs[0]), 6.0)
 
 
-def test_triton_stub_raises_without_triton():
+def test_triton_stub_raises_without_triton(monkeypatch):
+    import importlib
+    import sys
+
     from measurekit.backends.kernels import covariance
 
-    if covariance.HAS_TRITON:
-        pytest.skip("Triton available; stub not in play")
-    with pytest.raises(RuntimeError, match="Triton"):
-        covariance.apply_covariance_update_triton(None, None)
+    # Reload with the triton import blocked so the stub path is exercised
+    # even on machines where triton is installed.
+    monkeypatch.setitem(sys.modules, "triton", None)
+    try:
+        stubbed = importlib.reload(covariance)
+        assert not stubbed.HAS_TRITON
+        with pytest.raises(RuntimeError, match="Triton"):
+            stubbed.apply_covariance_update_triton(None, None)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(covariance)
