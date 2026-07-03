@@ -1,8 +1,0 @@
-[ampere]
-symbol = "A"
-dimension = "Q/T"
-scale = 1.0
-
-[volt]
-symbol = "V"
-definition = "kg * m^2 * s^-3 * A^-1"

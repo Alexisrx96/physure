@@ -52,5 +52,8 @@ nav:
   - Tutorials:
       - Best Practices: tutorials/01_best_practices.ipynb
       - JAX Integration: tutorials/jax_tutorial.ipynb
+  - Guides:
+      - torch.compile Integration: torch_compile_integration.md
   - API Reference:
       - Quantity: reference/quantity.md
+      - Units & Constants Catalog: UNITS.md
