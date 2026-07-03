@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 from measurekit import Q_
@@ -14,6 +16,10 @@ def simple_fn(a, b):
 
 
 @pytest.mark.skipif(torch is None, reason="PyTorch not installed")
+@pytest.mark.skipif(
+    sys.version_info >= (3, 14),
+    reason="torch.compile is not supported on Python 3.14+ (torch 2.9 raises)",
+)
 def test_compile_quantity():
     # Only run if torch.compile is available (torch 2.0+)
     if not hasattr(torch, "compile"):
