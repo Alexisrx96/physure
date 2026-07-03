@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import configparser
 import math
+from fractions import Fraction
 from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -32,6 +33,14 @@ if TYPE_CHECKING:
     from measurekit.domain.measurement.conversions import UnitDefinition
 
 _CONF_FILE = "measurekit.conf"
+
+
+def _exact_scale(text: str) -> Fraction | None:
+    """Exact rational value of a .conf factor string, or None."""
+    try:
+        return Fraction(text)
+    except (ValueError, ZeroDivisionError):
+        return None
 
 
 def _load_all_configurations_into(
@@ -119,7 +128,10 @@ class UnitSystemBuilder:
         for name, value_str in prefixes_data.items():
             symbol, factor_str = [p.strip() for p in value_str.split(",")]
             self._system.register_prefix(
-                symbol=symbol, factor=float(factor_str), name=name
+                symbol=symbol,
+                factor=float(factor_str),
+                name=name,
+                exact=_exact_scale(factor_str),
             )
         return self
 
@@ -186,7 +198,11 @@ class UnitSystemBuilder:
 
         if offset != 0:
             return dimension, OffsetConverter(factor, offset), "absolute"
-        return dimension, LinearConverter(factor), "delta"
+        return (
+            dimension,
+            LinearConverter(factor, exact=_exact_scale(parts[0])),
+            "delta",
+        )
 
     def _register_unit_pass1(self, key: str, value_str: str) -> None:
         """Registers a single unit (pass 1: base registration)."""
