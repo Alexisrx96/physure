@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 use pyo3::Bound;
 use pyo3::PyResult;
 use pyo3::types::{PyTuple, PyDict};
@@ -153,11 +154,11 @@ impl RationalUnit {
     }
 
     pub fn __mul__(&self, py: Python<'_>, other: &RationalUnit) -> PyResult<PyObject> {
-        Ok(get_cached_unit(py, self.mul(other))?.into_py(py))
+        Ok(get_cached_unit(py, self.mul(other))?.into_any())
     }
 
     pub fn __truediv__(&self, py: Python<'_>, other: &RationalUnit) -> PyResult<PyObject> {
-        Ok(get_cached_unit(py, self.div(other))?.into_py(py))
+        Ok(get_cached_unit(py, self.div(other))?.into_any())
     }
 
     pub fn __pow__(&self, py: Python<'_>, exponent: Bound<'_, PyAny>, _modulo: Option<Bound<'_, PyAny>>) -> PyResult<PyObject> {
@@ -170,7 +171,7 @@ impl RationalUnit {
                 "Exponent must be an integer or a tuple (numerator, denominator)",
             ));
         };
-        Ok(get_cached_unit(py, self.pow(exp_r))?.into_py(py))
+        Ok(get_cached_unit(py, self.pow(exp_r))?.into_any())
     }
 
     fn __eq__(&self, other: &RationalUnit) -> bool {
@@ -210,9 +211,9 @@ impl RationalUnit {
 
     pub fn __reduce__(&self, py: Python<'_>) -> PyResult<PyObject> {
         let factory = py.import("measurekit.domain.measurement.units")?.getattr("reconstruct_compound_unit")?;
-        let dict = self.dimensions().to_object(py);
+        let dict = self.dimensions().into_py_any(py)?;
         let args = PyTuple::new(py, vec![dict])?;
-        Ok((factory, args).to_object(py))
+        (factory, args).into_py_any(py)
     }
 
     #[pyo3(signature = (_system = None, _use_alias = false, _alias_preference = None))]
@@ -271,15 +272,15 @@ impl UnitRegistry {
     fn get_unit(&self, py: Python<'_>, name: String) -> PyResult<PyObject> {
         let resolved = self.resolve_symbol(name.clone());
         if let Some(unit) = self.base_units.get(&resolved) {
-            Ok(get_cached_unit(py, unit.clone())?.into_py(py))
+            Ok(get_cached_unit(py, unit.clone())?.into_any())
         } else if let Some(unit) = self.derived_units.get(&resolved) {
-            Ok(get_cached_unit(py, unit.clone())?.into_py(py))
+            Ok(get_cached_unit(py, unit.clone())?.into_any())
         } else {
             if let Some(unit) = self.base_units.get(&name) {
-                return Ok(get_cached_unit(py, unit.clone())?.into_py(py));
+                return Ok(get_cached_unit(py, unit.clone())?.into_any());
             }
             if let Some(unit) = self.derived_units.get(&name) {
-               return Ok(get_cached_unit(py, unit.clone())?.into_py(py));
+               return Ok(get_cached_unit(py, unit.clone())?.into_any());
             }
             Err(pyo3::exceptions::PyKeyError::new_err(format!("Unit '{}' not found", name)))
         }
