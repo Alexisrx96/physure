@@ -4,6 +4,7 @@ use rand::prelude::*;
 use rand_distr::{Normal, Distribution};
 
 use pyo3::prelude::*;
+use pyo3::IntoPyObjectExt;
 // use pyo3::types::{PyFloat, PyTuple};
 
 pub trait UncertaintyBackend: DynClone + Send + Sync {
@@ -27,8 +28,8 @@ pub struct GaussianBackend {
 }
 
 impl UncertaintyBackend for GaussianBackend {
-    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.mean.to_object(py)) }
-    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.std_dev.to_object(py)) }
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { self.mean.into_py_any(py) }
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { self.std_dev.into_py_any(py) }
     
     fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
         let other_mean: f64 = other.mean(py)?.bind(py).extract()?;
@@ -135,8 +136,8 @@ impl MonteCarloBackend {
 }
 
 impl UncertaintyBackend for MonteCarloBackend {
-    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.samples.mean().unwrap_or(0.0).to_object(py)) }
-    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { Ok(self.samples.std(0.0).to_object(py)) }
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { self.samples.mean().unwrap_or(0.0).into_py_any(py) }
+    fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> { self.samples.std(0.0).into_py_any(py) }
 
     fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {
         let other_samples = self.ensure_samples(py, other)?;
@@ -198,14 +199,14 @@ impl UnscentedBackend {
 }
 
 impl UncertaintyBackend for UnscentedBackend {
-    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { Ok((&self.sigma_points * &self.weights).sum().to_object(py)) }
+    fn mean(&self, py: Python<'_>) -> PyResult<PyObject> { (&self.sigma_points * &self.weights).sum().into_py_any(py) }
     fn std_dev(&self, py: Python<'_>) -> PyResult<PyObject> {
         let mu = (&self.sigma_points * &self.weights).sum(); // Recompute locally for f64 math
         let var: f64 = self.sigma_points.iter()
             .zip(self.weights.iter())
             .map(|(x, w)| w * (x - mu).powi(2))
             .sum();
-        Ok(var.sqrt().to_object(py))
+        var.sqrt().into_py_any(py)
     }
 
     fn propagate_add(&self, py: Python<'_>, other: &dyn UncertaintyBackend) -> PyResult<Box<dyn UncertaintyBackend>> {

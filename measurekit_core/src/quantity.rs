@@ -3,7 +3,7 @@ use pyo3::Bound;
 use pyo3::PyResult;
 use pyo3::types::{PyTuple, PyDict};
 use std::collections::HashMap;
-use pyo3::IntoPy;
+use pyo3::IntoPyObjectExt;
 
 use num_rational::Rational64;
 use num_traits::FromPrimitive;
@@ -44,7 +44,7 @@ impl Quantity {
         } else {
              use crate::uncertainty::TensorBackend;
              let val_obj = other.unbind();
-             Ok((Box::new(TensorBackend { value: val_obj, uncertainty: (0.0).into_py(py) }), RationalUnit::new_from_dimensions(HashMap::new())))
+             Ok((Box::new(TensorBackend { value: val_obj, uncertainty: (0.0).into_py_any(py)? }), RationalUnit::new_from_dimensions(HashMap::new())))
         }
     }
 
@@ -147,8 +147,8 @@ impl Quantity {
         }
         let (mean_val, unit, std_dev_val, mode, samples) = Self::parse_quantity_args(args, kwargs)?;
         let u = unit.ok_or_else(|| pyo3::exceptions::PyValueError::new_err("unit is required and must be a RationalUnit"))?;
-        let mean_obj = mean_val.unwrap_or_else(|| (0.0).into_py(py));
-        let std_dev_obj = std_dev_val.unwrap_or_else(|| (0.0).into_py(py));
+        let mean_obj = match mean_val { Some(v) => v, None => (0.0).into_py_any(py)? };
+        let std_dev_obj = match std_dev_val { Some(v) => v, None => (0.0).into_py_any(py)? };
         Ok(Quantity { value: Self::build_backend(py, mean_obj, std_dev_obj, mode, samples)?, unit: u })
     }
 
@@ -156,9 +156,9 @@ impl Quantity {
         let cls = self_.get_type();
         let val = self_.borrow();
         let mean = val.value.mean(py)?;
-        let unit = val.unit.clone().into_py(py);
+        let unit = val.unit.clone().into_py_any(py)?;
         let std_dev = val.value.std_dev(py)?;
-        let dict = self_.getattr("__dict__").ok().map(|d| d.into_py(py));
+        let dict = self_.getattr("__dict__").ok().map(|d| d.unbind());
         Ok((cls.into(), (mean, unit, std_dev), dict))
     }
 
@@ -179,7 +179,7 @@ impl Quantity {
 
     #[getter]
     pub fn unit(&self, py: Python<'_>) -> PyResult<PyObject> {
-        Ok(crate::units::get_cached_unit(py, self.unit.clone())?.into_py(py))
+        Ok(crate::units::get_cached_unit(py, self.unit.clone())?.into_any())
     }
 
     #[getter]

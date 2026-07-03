@@ -15,7 +15,7 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 # enabling "extension-module" is required for Python
 # abi3-py310: one wheel per platform, forward-compatible with future CPythons
-pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"] }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }
 num-rational = "0.4"
 num-traits = "0.2"
 ndarray = "0.15"
@@ -26,7 +26,7 @@ dyn-clone = "1.0"
 arrow = "53.0"
 chrono = "0.4"
 sprs = "0.11"
-numpy = "0.23"
+numpy = "0.25"
 
 [profile.release]
 panic = "abort"
