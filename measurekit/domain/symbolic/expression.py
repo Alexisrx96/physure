@@ -52,15 +52,18 @@ class SymbolicExpression:
     def expr(self) -> sp.Expr:
         """Returns the expression converted to a SymPy Expr for external compatibility."""
         if HAVE_SYMENGINE:
-            sp_expr = sp.sympify(self._expr)
-            symbols = {
-                s: sp.Symbol(s.name, positive=True)
-                for s in sp_expr.free_symbols
-                if isinstance(s, sp.Symbol)
-            }
-            if symbols:
-                return sp_expr.xreplace(symbols)
-            return sp_expr
+            if not hasattr(self, "_sympy_expr_cached"):
+                sp_expr = sp.sympify(self._expr)
+                symbols = {
+                    s: sp.Symbol(s.name, positive=True)
+                    for s in sp_expr.free_symbols
+                    if isinstance(s, sp.Symbol)
+                }
+                if symbols:
+                    self._sympy_expr_cached = sp_expr.xreplace(symbols)
+                else:
+                    self._sympy_expr_cached = sp_expr
+            return self._sympy_expr_cached
         return self._expr
 
     @property

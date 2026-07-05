@@ -660,9 +660,14 @@ class ArithmeticMixin:
 
         # Differentiate magnitude
         try:
-            import sympy as sp
+            try:
+                import symengine as se
 
-            new_mag = sp.diff(self.magnitude, d_var, order)
+                new_mag = se.diff(self.magnitude, se.sympify(d_var), order)
+            except Exception:
+                import sympy as sp
+
+                new_mag = sp.diff(self.magnitude, d_var, order)
         except Exception as e:
             # Fallback for array/tensor backends or non-symbolic magnitudes
             # For Phase 3, we focus on SymPy support.

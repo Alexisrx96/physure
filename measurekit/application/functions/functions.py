@@ -7,6 +7,14 @@ from typing import TYPE_CHECKING, Any
 
 import sympy as sp
 
+try:
+    import symengine as se
+
+    HAVE_SYMENGINE = True
+except ImportError:
+    se = None  # type: ignore
+    HAVE_SYMENGINE = False
+
 from measurekit import default_system
 
 if TYPE_CHECKING:
@@ -49,9 +57,41 @@ class Function:
         # 'torch' requires explicit module usually for older sympy, but modern sympy supports it?
         # Sympy 1.12+ supports 'torch' often via 'numpy' or mapped modules.
         # Let's pass it through.
-        callable_func = sp.lambdify(
-            sorted_symbols, self.symbolic_func, self.backend
-        )
+        callable_func = None
+        if (
+            HAVE_SYMENGINE
+            and self.backend in ("numpy", "math")
+            and sorted_symbols
+        ):
+            try:
+                import numpy as np
+
+                se_symbols = [se.Symbol(s.name) for s in sorted_symbols]
+                se_expr = se.sympify(self.symbolic_func)
+                se_func = se.lambdify(se_symbols, [se_expr])
+
+                def symengine_wrapped_func(*args):
+                    is_any_array = False
+                    for a in args:
+                        if isinstance(a, np.ndarray):
+                            is_any_array = True
+                            break
+                    if is_any_array:
+                        broadcasted = np.broadcast_arrays(*args)
+                        stacked = np.stack(broadcasted, axis=-1)
+                        return se_func(stacked)
+                    else:
+                        res = se_func(args)
+                        return res.item() if res.ndim == 0 else res
+
+                callable_func = symengine_wrapped_func
+            except Exception:
+                pass
+
+        if callable_func is None:
+            callable_func = sp.lambdify(
+                sorted_symbols, self.symbolic_func, self.backend
+            )
         object.__setattr__(self, "numeric_func", callable_func)
 
     def __call__(
