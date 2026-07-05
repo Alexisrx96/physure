@@ -6,20 +6,21 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from numpy.typing import NDArray
+
 try:
     import numpy as np
 except ImportError:
     np = None
 
 
-try:
-    from jaxtyping import Array, Bool, Float
-except ImportError:
-    from typing import Any
-
-    Array = Any
-    Bool = Any
-    Float = Any
+if TYPE_CHECKING:
+    Array = NDArray[Any]
+else:
+    try:
+        from jaxtyping import Array
+    except ImportError:
+        Array = Any
 
 try:
     from scipy import sparse

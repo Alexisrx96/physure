@@ -11,7 +11,15 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     try:
-        from jaxtyping import Array, Bool, Float, typecheck
+        from jaxtyping import Array, Bool, Float
+
+        try:
+            from jaxtyping import typecheck
+        except ImportError:
+
+            def typecheck(func):
+                """Fallback."""
+                return func
     except ImportError:
         Array = Any
         Bool = Any

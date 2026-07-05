@@ -4,6 +4,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Protocol,
+    TypeAlias,
     TypeVar,
     runtime_checkable,
 )
@@ -23,12 +24,20 @@ else:
     Float = Any
     Sequence = Any
 
+if TYPE_CHECKING:
+    from typing import TypeAlias
+
+    import jax
+    import numpy as np
+    import torch
+
+    Numeric: TypeAlias = np.ndarray | torch.Tensor | jax.Array | float | int
+    Boolean: TypeAlias = np.ndarray | torch.Tensor | jax.Array | bool
+else:
+    Numeric = Any
+    Boolean = Any
 
 T = TypeVar("T")
-
-# Unified type for methods that support both arrays and scalars
-Numeric = "Float[Array, '...'] | float | int"
-Boolean = "Bool[Array, '...'] | bool"
 
 
 @runtime_checkable

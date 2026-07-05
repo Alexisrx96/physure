@@ -6,6 +6,15 @@ from typing import TYPE_CHECKING, Any
 
 import sympy as sp
 
+try:
+    import symengine as se
+
+    HAVE_SYMENGINE = True
+except ImportError:
+    se = None  # type: ignore
+    HAVE_SYMENGINE = False
+
+
 from measurekit import default_system
 from measurekit.application.functions.functions import Function
 from measurekit.domain.exceptions import IncompatibleUnitsError
@@ -24,17 +33,38 @@ class SymbolicExpression:
 
     def __init__(
         self,
-        sympy_expr: sp.Expr,
+        sympy_expr: Any,
         unit: CompoundUnit,
         system: UnitSystem = default_system,
         variables: set[Any] | None = None,
     ):
         """Initializes a symbolic expression."""
-        self.expr = sympy_expr
+        if HAVE_SYMENGINE:
+            self._expr = se.sympify(sympy_expr)  # type: ignore
+        else:
+            self._expr = sympy_expr
         self.unit = unit
         self.system = system
         # Track the atomic variables that make up this expression
         self.variables = variables or set()
+
+    @property
+    def expr(self) -> sp.Expr:
+        """Returns the expression converted to a SymPy Expr for external compatibility."""
+        if HAVE_SYMENGINE:
+            if not hasattr(self, "_sympy_expr_cached"):
+                sp_expr = sp.sympify(self._expr)
+                symbols = {
+                    s: sp.Symbol(s.name, positive=True)
+                    for s in sp_expr.free_symbols
+                    if isinstance(s, sp.Symbol)
+                }
+                if symbols:
+                    self._sympy_expr_cached = sp_expr.xreplace(symbols)
+                else:
+                    self._sympy_expr_cached = sp_expr
+            return self._sympy_expr_cached
+        return self._expr
 
     @property
     def dimension(self):
@@ -94,14 +124,14 @@ class SymbolicExpression:
                 raise ValueError(
                     "Cannot operate between different UnitSystems."
                 )
-            new_expr = op(self.expr, other.expr)
+            new_expr = op(self._expr, other._expr)
             new_unit = unit_op(self.unit, other.unit)
             new_vars = self.variables | other.variables
             return SymbolicExpression(
                 new_expr, new_unit, self.system, new_vars
             )
 
-        new_expr = op(self.expr, other)
+        new_expr = op(self._expr, other)
         return SymbolicExpression(
             new_expr, self.unit, self.system, self.variables
         )
@@ -113,7 +143,7 @@ class SymbolicExpression:
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)
         return SymbolicExpression(
-            self.expr + other.expr,
+            self._expr + other._expr,
             self.unit,
             self.system,
             self.variables | other.variables,
@@ -126,7 +156,7 @@ class SymbolicExpression:
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)
         return SymbolicExpression(
-            self.expr - other.expr,
+            self._expr - other._expr,
             self.unit,
             self.system,
             self.variables | other.variables,
@@ -148,7 +178,7 @@ class SymbolicExpression:
         """Divides two symbolic expressions (reflected)."""
         if not isinstance(other, (int, float)):
             return NotImplemented
-        new_expr = other / self.expr
+        new_expr = other / self._expr
         new_unit = 1 / self.unit
         return SymbolicExpression(
             new_expr, new_unit, self.system, self.variables
@@ -156,7 +186,7 @@ class SymbolicExpression:
 
     def __pow__(self, power: float) -> SymbolicExpression:
         """Raises the expression to a power."""
-        new_expr = self.expr**power
+        new_expr = self._expr**power
         new_unit = self.unit**power
         return SymbolicExpression(
             new_expr, new_unit, self.system, self.variables
@@ -164,13 +194,13 @@ class SymbolicExpression:
 
     def __repr__(self) -> str:
         """Returns a string representation for debugging."""
-        return f"Expression({self.expr}) [{self.unit}]"
+        return f"Expression({self._expr}) [{self.unit}]"
 
     def to_function(
         self, *args: SymbolicExpression, backend: str = "numpy"
     ) -> Function:
         """Converts this expression into a callable Function object."""
-        params = {str(arg.expr): arg.unit for arg in args}
+        params = {str(arg._expr): arg.unit for arg in args}
         return Function(
             parameters=params,
             output_unit=self.unit,
@@ -202,7 +232,9 @@ class SymbolicExpression:
 
     def expand(self) -> SymbolicExpression:
         """Expands the underlying symbolic expression."""
-        new_expr = sp.expand(self.expr)
+        new_expr = (
+            se.expand(self._expr) if HAVE_SYMENGINE else sp.expand(self._expr)  # type: ignore
+        )
         return SymbolicExpression(
             new_expr, self.unit, self.system, self.variables
         )
@@ -219,8 +251,12 @@ class SymbolicExpression:
                 "Differentiation variable must be a SymbolicQuantity"
             )
 
-        # 1. SymPy Operation
-        new_expr = sp.diff(self.expr, variable.expr, n)
+        # 1. SymPy / SymEngine Operation
+        new_expr = (
+            se.diff(self._expr, variable._expr, n)  # type: ignore
+            if HAVE_SYMENGINE
+            else sp.diff(self._expr, variable._expr, n)
+        )
 
         # 2. Unit Operation (Derivative rule: unit / var_unit^n)
         variable_unit = variable.unit

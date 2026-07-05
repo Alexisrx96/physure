@@ -167,9 +167,6 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
         from measurekit.domain.measurement.dimensions import Dimension
 
         if system is None:
-            # Import here to avoid circularity
-            from measurekit.domain.measurement.system import get_default_system
-
             system = get_default_system()
 
         dims = Dimension({})

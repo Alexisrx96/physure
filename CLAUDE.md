@@ -22,7 +22,7 @@ uv run ruff check .
 uv run ruff format .
 
 # Type check
-uv run mypy measurekit
+uv run ty check
 
 # Enable runtime beartype contracts (slow, for debugging)
 MEASUREKIT_DEBUG=1 uv run pytest
@@ -112,4 +112,4 @@ Nothing merges to main unless all of these hold. CI enforces the first three; th
 2. **Tests green with coverage ≥ 80%** total (`fail_under = 80` in pyproject.toml; CI runs pytest with `--cov`). New code should be born tested — if a module drops below the bar, add tests in the same PR, don't lower the bar.
 3. **All five Python versions** (3.10–3.14) pass.
 4. **SonarQube quality gate green** on new code: coverage ≥ 80%, duplication ≤ 3%, zero new violations.
-5. **mypy is advisory, not gated** (~1100 pre-existing errors). Don't add new errors to files you touch; burn down the backlog opportunistically.
+5. **ty is advisory, not gated** (~900 pre-existing errors). Don't add new errors to files you touch; burn down the backlog opportunistically.

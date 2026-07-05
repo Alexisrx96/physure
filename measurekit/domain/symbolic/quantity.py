@@ -4,6 +4,15 @@ from typing import Any
 
 import sympy as sp
 
+try:
+    import symengine as se
+
+    HAVE_SYMENGINE = True
+except ImportError:
+    se = None  # type: ignore
+    HAVE_SYMENGINE = False
+
+
 from measurekit import default_system
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.system import UnitSystem
@@ -21,7 +30,11 @@ class SymbolicQuantity(SymbolicExpression):
         system: UnitSystem = default_system,
     ):
         """Initializes a SymbolicQuantity."""
-        symbol = sp.Symbol(name, positive=True)
+        symbol = (
+            se.Symbol(name)
+            if HAVE_SYMENGINE
+            else sp.Symbol(name, positive=True)  # type: ignore
+        )
         resolved_unit = (
             system.get_unit(unit) if isinstance(unit, str) else unit
         )
