@@ -1,3 +1,7 @@
+# pyright: reportAny=false, reportExplicitAny=false, reportUnknownParameterType=false
+# ponytail: BackendOps is the adapter contract every concrete backend
+# implements at the raw array/scalar boundary — Numeric/Any here is the
+# interface, not a typing gap.
 from __future__ import annotations
 
 from typing import (

@@ -256,20 +256,22 @@ include = ["measurekit"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.10"
-# ponytail: rules below are inherent to this codebase's design (dynamic
-# `magnitude: Any`, optional-dep None fallbacks, lazy __getattr__ exports
-# for the import-time budget, untyped third-party libs) — advisory like ty,
-# not gated. Real diagnostics are fixed in code instead of suppressed.
-reportAny = false
-reportExplicitAny = false
-reportUnknownMemberType = false
-reportUnknownVariableType = false
-reportUnknownArgumentType = false
-reportUnknownParameterType = false
+# ponytail: rules below are inherent to this codebase's design (optional-dep
+# None fallbacks, lazy __getattr__ exports for the import-time budget,
+# untyped third-party libs) — advisory like ty, not gated. Real diagnostics
+# are fixed in code instead of suppressed. The unknown/any family is enforced
+# (see below) for everything except the adapter paths re-exempted under
+# [tool.basedpyright.executionEnvironments] and the protocols.py header.
+reportAny = "error"
+reportExplicitAny = "error"
+reportUnknownMemberType = "error"
+reportUnknownVariableType = "error"
+reportUnknownArgumentType = "error"
+reportUnknownParameterType = "error"
+reportMissingParameterType = "error"
 reportUnknownLambdaType = false
 reportMissingTypeStubs = false
 reportMissingTypeArgument = false
-reportMissingParameterType = false
 reportImplicitOverride = false
 reportUnusedCallResult = false
 reportUnannotatedClassAttribute = false
@@ -290,6 +292,30 @@ not-subscriptable = "ignore"
 invalid-overload = "ignore"
 unknown-argument = "ignore"
 invalid-parameter-default = "ignore"
+
+# ponytail: backend adapters and generated unit stubs work at the raw
+# array/scalar boundary by design (Numeric = ndarray | Tensor | jax.Array |
+# float, never narrowed there) — re-exempt the unknown/any family enforced
+# above instead of sprinkling per-line ignores across every adapter method.
+[[tool.basedpyright.executionEnvironments]]
+root = "measurekit/backends"
+reportAny = false
+reportExplicitAny = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownParameterType = false
+reportMissingParameterType = false
+
+[[tool.basedpyright.executionEnvironments]]
+root = "measurekit/units"
+reportAny = false
+reportExplicitAny = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownParameterType = false
+reportMissingParameterType = false
 
 [project.scripts]
 measurekit = "measurekit.cli:main"
