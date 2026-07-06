@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
     from measurekit.domain.measurement.system import UnitSystem
 
@@ -80,12 +80,15 @@ def get_current_system() -> UnitSystem:
             import torch
 
             if torch.compiler.is_compiling():
-
+                # ponytail: torch.compiler.disable's stub overloads
+                # resolve the bare-decorator usage to the decorator-factory
+                # branch, so pyright thinks _eager still expects an `fn`
+                # argument; at runtime it's already the wrapped callable.
                 @torch.compiler.disable
                 def _eager():
                     return _get_current_system_impl()
 
-                return _eager()
+                return _eager()  # pyright: ignore[reportCallIssue]
     except (ImportError, AttributeError):
         pass
 
@@ -93,7 +96,7 @@ def get_current_system() -> UnitSystem:
 
 
 @contextmanager
-def use_system(system_name_or_obj: str | UnitSystem) -> Iterator[None]:
+def use_system(system_name_or_obj: str | UnitSystem) -> Generator[None]:
     """Context manager to temporarily switch the active unit system.
 
     This change is isolated to the current thread or asyncio task.
@@ -125,7 +128,7 @@ def use_system(system_name_or_obj: str | UnitSystem) -> Iterator[None]:
 
 
 @contextmanager
-def propagation_mode(mode: str) -> Iterator[None]:
+def propagation_mode(mode: str) -> Generator[None]:
     """Context manager to temporarily switch the active propagation mode.
 
     Args:
@@ -148,7 +151,7 @@ _UNCERTAINTY_MODE: ContextVar[tuple[str, dict[str, Any]]] = ContextVar(
 
 
 @contextmanager
-def uncertainty_mode(mode: str, **kwargs) -> Iterator[None]:
+def uncertainty_mode(mode: str, **kwargs) -> Generator[None]:
     """Context manager to swap the uncertainty propagation strategy."""
     token = _UNCERTAINTY_MODE.set((mode.lower(), kwargs))
     try:

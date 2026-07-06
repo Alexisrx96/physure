@@ -38,32 +38,40 @@ def _q():
 class ArithmeticMixin:
     """Arithmetic operators, uncertainty propagation, and transcendentals."""
 
+    # ponytail: these declarations describe attributes/methods that the
+    # concrete host class (Quantity) provides; ArithmeticMixin never
+    # instantiates on its own, so basedpyright's init/unused-param checks
+    # (designed for concrete classes) are false positives here.
     if TYPE_CHECKING:
-        _core_magnitude: Any
-        unit: CompoundUnit
-        dimension: Dimension
-        system: Any
-        magnitude: Any
-        uncertainty: Uncertainty | None
-        _backend: Any
-        _uncertainty_obj: Any
+        _core_magnitude: Any  # pyright: ignore[reportUninitializedInstanceVariable]
+        unit: CompoundUnit  # pyright: ignore[reportUninitializedInstanceVariable]
+        dimension: Dimension  # pyright: ignore[reportUninitializedInstanceVariable]
+        system: Any  # pyright: ignore[reportUninitializedInstanceVariable]
+        magnitude: Any  # pyright: ignore[reportUninitializedInstanceVariable]
+        uncertainty: Uncertainty | None  # pyright: ignore[reportUninitializedInstanceVariable]
+        _backend: Any  # pyright: ignore[reportUninitializedInstanceVariable]
+        _uncertainty_obj: Any  # pyright: ignore[reportUninitializedInstanceVariable]
 
         @classmethod
         def _fast_new(
             cls,
-            magnitude: Any,
-            unit: CompoundUnit,
-            uncertainty: Any = None,
-            system: Any = None,
+            value: Any,  # pyright: ignore[reportUnusedParameter]
+            unit: CompoundUnit,  # pyright: ignore[reportUnusedParameter]
+            uncertainty: Any,  # pyright: ignore[reportUnusedParameter]
+            system: Any,  # pyright: ignore[reportUnusedParameter]
+            dimension: Any,  # pyright: ignore[reportUnusedParameter]
+            backend: Any = None,  # pyright: ignore[reportUnusedParameter]
+            symbol: str | None = None,  # pyright: ignore[reportUnusedParameter]
         ) -> Quantity: ...
 
         @classmethod
         def from_input(
             cls,
-            magnitude: Any,
-            unit: CompoundUnit,
-            uncertainty: Any = None,
-            system: Any = None,
+            value: Any,  # pyright: ignore[reportUnusedParameter]
+            unit: CompoundUnit,  # pyright: ignore[reportUnusedParameter]
+            system: Any,  # pyright: ignore[reportUnusedParameter]
+            uncertainty: Any = 0.0,  # pyright: ignore[reportUnusedParameter]
+            symbol: str | None = None,  # pyright: ignore[reportUnusedParameter]
         ) -> Quantity: ...
 
     # ------------------------------------------------------------------
@@ -747,7 +755,7 @@ class ArithmeticMixin:
         return self._backend.mul(q.magnitude, factor)
 
     def _affine_result_absolute(
-        self, res_base: Any, result_unit: CompoundUnit
+        self, res_base: Any, result_unit: CompoundUnit | None
     ) -> Any:
         """Convert *res_base* back through *result_unit* and return a Quantity."""
         if not result_unit:
@@ -931,7 +939,9 @@ class ArithmeticMixin:
                 # P + V -> P (self)
                 return self._affine_add_sub(other, True, "absolute", self.unit)
             # V + P -> P (other)
-            return other._affine_add_sub(self, True, "absolute", other.unit)
+            return other._affine_add_sub(
+                cast("Quantity", self), True, "absolute", other.unit
+            )
 
         # Subtraction
         if is_absolute_self and is_absolute_other:

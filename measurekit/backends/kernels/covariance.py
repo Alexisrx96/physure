@@ -1,3 +1,5 @@
+from typing import Any
+
 try:
     import torch
 except ImportError:
@@ -8,10 +10,6 @@ try:
     import triton.language as tl
 
     HAS_TRITON = True
-except ImportError:
-    HAS_TRITON = False
-
-if HAS_TRITON:
 
     @triton.jit
     def covariance_update_kernel(
@@ -65,9 +63,12 @@ if HAS_TRITON:
             & (offs_bn[None, :] < n_elements),
         )
 
-    from typing import Any
-
-    def apply_covariance_update_triton(sigma: Any, jac: Any) -> Any:
+    # ponytail: fallback stub for the ImportError branch below has the
+    # same name by design (optional-dependency pattern); not a real
+    # redeclaration bug.
+    def apply_covariance_update_triton(  # pyright: ignore[reportRedeclaration]
+        sigma: Any, jac: Any
+    ) -> Any:
         """Applies J * Sigma * J^T assuming J is diagonal (vector)."""
         assert sigma.is_cuda
         assert jac.is_cuda
@@ -85,13 +86,15 @@ if HAS_TRITON:
             jac,
             out,
             n,
-            block_size=32,
+            block_size=32,  # pyright: ignore[reportArgumentType]
         )
         return out
 
-else:
-    from typing import Any
+except ImportError:
+    # ponytail: HAS_TRITON toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    HAS_TRITON = False  # pyright: ignore[reportConstantRedefinition]
 
-    def apply_covariance_update_triton(sigma: Any, jac: Any) -> Any:
+    def apply_covariance_update_triton(_sigma: Any, _jac: Any) -> Any:
         """Stub that fails loudly when Triton is unavailable."""
         raise RuntimeError("Triton kernels are not available on this system.")

@@ -169,11 +169,16 @@ def __getattr__(name: str) -> Any:
 # Register Extensions only if libraries are already loaded
 if "pandas" in sys.modules:
     with contextlib.suppress(ImportError, AttributeError):
-        from measurekit.ext import pandas_support
+        # ponytail: side-effecting import, registers the pandas extension
+        # type on module load; the name itself is never referenced.
+        from measurekit.ext import (
+            pandas_support,  # pyright: ignore[reportUnusedImport]
+        )
 
 if "numba" in sys.modules:
     with contextlib.suppress(ImportError, AttributeError):
-        import measurekit.ext.numba_support
+        # ponytail: same side-effecting-import pattern as above.
+        import measurekit.ext.numba_support  # pyright: ignore[reportUnusedImport]
 
 __all__ = [
     "Q_",

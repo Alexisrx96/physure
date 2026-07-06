@@ -19,11 +19,7 @@ try:
     )
 
     HAS_NUMBA = True
-except (ImportError, AttributeError):
-    HAS_NUMBA = False
 
-
-if HAS_NUMBA:
     # --- 1. Definir el Tipo en Numba ---
     class QuantityType(types.Type):
         """Representa una Quantity en el sistema de tipos de Numba.
@@ -136,3 +132,8 @@ if HAS_NUMBA:
         c.pyapi.decref(mag_obj)
 
         return res
+
+except (ImportError, AttributeError):
+    # ponytail: HAS_NUMBA toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    HAS_NUMBA = False  # pyright: ignore[reportConstantRedefinition]

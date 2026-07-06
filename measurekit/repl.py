@@ -43,7 +43,9 @@ def _repl() -> None:
     import threading
 
     with contextlib.suppress(ImportError):
-        import readline  # noqa: F401  # line editing + history
+        # ponytail: side-effecting import, enables line editing + history
+        # on stdin; the name itself is never referenced.
+        import readline  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
     from measurekit.ext.grammar import GrammarInterpreter
 

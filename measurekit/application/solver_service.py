@@ -68,6 +68,12 @@ def solve_unit_aware_ivp(
     users to define their differential equations using `measurekit.Quantity`
     objects. It ensures that all calculations are dimensionally consistent.
     """
+    if solve_ivp is None:
+        raise ImportError(
+            "solve_unit_aware_ivp requires scipy. Install it with "
+            "'pip install scipy'."
+        )
+
     # --- 1. Unit Unpacking (ONCE) ---
     t_unit = t_span[0].unit
     y0_magnitudes = np.array([q.magnitude for q in y0])

@@ -61,7 +61,7 @@ def _null_space_numpy(matrix: Any, rcond: float | None) -> Any:
         return vh[0:0].T.conj()
 
     eps = np.finfo(matrix.dtype).eps
-    rcond_val = _compute_rcond_val(rcond, eps, m, n)
+    rcond_val = _compute_rcond_val(rcond, float(eps), m, n)
     tol = np.max(s) * rcond_val
     rank = int(np.sum(s > tol))
     return vh[rank:].T.conj()

@@ -169,6 +169,10 @@ def _apply_affine(
 ) -> tuple[Quantity, FunctionalState]:
     """Helper for affine operations."""
     backend = state.store.backend
+    if backend is None:
+        raise ValueError(
+            "FunctionalState's CovarianceStore has no backend set."
+        )
 
     # 1. Register inputs in state
     slc_a, mat_1 = state.ensure_registered(a)

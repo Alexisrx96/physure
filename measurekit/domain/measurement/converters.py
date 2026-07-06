@@ -136,12 +136,19 @@ class LogarithmicConverter(UnitConverter):
 
     def from_base(self, value: float) -> float:
         """Converts linear base value to logarithmic value."""
-        if isinstance(value, (int, float)):
+        # ponytail: `value: float` is a simplification for the common case;
+        # callers may pass numpy arrays at runtime, which this branch
+        # handles even though it's unreachable for the declared type.
+        if isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
+            value, (int, float)
+        ):
             return self.factor * math.log10(value / self.reference)
         # Array input (numpy is only required on this path)
         import numpy as np
 
-        return self.factor * np.log10(value / self.reference)
+        return self.factor * np.log10(  # pyright: ignore[reportUnreachable]
+            value / self.reference
+        )
 
     def to_base_derivative(self, value: float) -> float:
         """Exact derivative: to_base(v) * ln(10) / factor."""

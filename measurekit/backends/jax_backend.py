@@ -18,12 +18,11 @@ except ImportError:
     Tracer = None
 
 try:
-    from jaxtyping import Array, Bool, Float
+    from jaxtyping import Array, Float
 except ImportError:
     from typing import Any
 
     Array = Any
-    Bool = Any
     Float = Any
 
 
@@ -188,58 +187,58 @@ class JaxBackend(BackendOps):
             from jax.experimental import sparse
 
             if isinstance(x, sparse.BCOO) or isinstance(y, sparse.BCOO):
-                return x + y
-        return jnp.add(x, y)
+                return x + y  # pyright: ignore[reportOperatorIssue]
+        return jnp.add(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def sub(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise subtraction."""
-        return jnp.subtract(x, y)
+        return jnp.subtract(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def mul(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise multiplication."""
-        return jnp.multiply(x, y)
+        return jnp.multiply(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def truediv(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise true division."""
-        return jnp.true_divide(x, y)
+        return jnp.true_divide(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def pow(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise power."""
-        return jnp.power(x, y)
+        return jnp.power(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def sqrt(self, x: Numeric) -> Numeric:
         """Element-wise square root."""
-        return jnp.sqrt(x)
+        return jnp.sqrt(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def exp(self, x: Numeric) -> Numeric:
         """Element-wise exponential."""
-        return jnp.exp(x)
+        return jnp.exp(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def log(self, x: Numeric) -> Numeric:
         """Element-wise natural logarithm."""
-        return jnp.log(x)
+        return jnp.log(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def sin(self, x: Numeric) -> Numeric:
         """Element-wise sine."""
-        return jnp.sin(x)
+        return jnp.sin(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def cos(self, x: Numeric) -> Numeric:
         """Element-wise cosine."""
-        return jnp.cos(x)
+        return jnp.cos(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def tan(self, x: Numeric) -> Numeric:
         """Element-wise tangent."""
-        return jnp.tan(x)
+        return jnp.tan(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def dot(self, x: Numeric, y: Numeric) -> Numeric:
@@ -247,22 +246,22 @@ class JaxBackend(BackendOps):
         # Fix for 0D arrays in JAX matmul
         if self.shape(x) == () or self.shape(y) == ():
             return self.mul(x, y)
-        return jnp.matmul(x, y)
+        return jnp.matmul(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def cross(self, x: Numeric, y: Numeric) -> Numeric:
         """Cross product."""
-        return jnp.cross(x, y)
+        return jnp.cross(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def abs(self, x: Numeric) -> Numeric:
         """Element-wise absolute value."""
-        return jnp.abs(x)
+        return jnp.abs(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def sign(self, x: Numeric) -> Numeric:
         """Element-wise sign."""
-        return jnp.sign(x)
+        return jnp.sign(x)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def sum(
@@ -273,7 +272,9 @@ class JaxBackend(BackendOps):
             from jax.experimental import sparse
 
             if isinstance(obj, sparse.BCOO):
-                return obj.sum(axis)
+                return obj.sum(
+                    axis=axis  # pyright: ignore[reportCallIssue]
+                )
         return jnp.sum(obj, axis=axis)
 
     @enforce_tensor_contract
@@ -281,21 +282,21 @@ class JaxBackend(BackendOps):
         self, obj: Numeric, axis: int | Sequence[int] | None = None
     ) -> Numeric:
         """Mean of elements."""
-        return jnp.mean(obj, axis=axis)
+        return jnp.mean(obj, axis=axis)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def any(self, obj: Boolean) -> bool:
         """Returns True if any element is True. Returns False for Tracers."""
         if self._is_tracer(obj):
             return False
-        return bool(jnp.any(obj))
+        return bool(jnp.any(obj))  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def all(self, obj: Boolean) -> bool:
         """Returns True if all elements are True. Returns False for Tracers."""
         if self._is_tracer(obj):
             return False
-        return bool(jnp.all(obj))
+        return bool(jnp.all(obj))  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def allclose(
@@ -308,37 +309,44 @@ class JaxBackend(BackendOps):
         """Checks if all elements are close. Returns False for Tracers."""
         if self._is_tracer(a) or self._is_tracer(b):
             return False
-        return bool(jnp.allclose(a, b, rtol=rtol, atol=atol))
+        return bool(
+            jnp.allclose(
+                a,  # pyright: ignore[reportArgumentType]
+                b,  # pyright: ignore[reportArgumentType]
+                rtol=rtol,
+                atol=atol,
+            )
+        )
 
     @enforce_tensor_contract
     def equal(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise equality."""
-        return jnp.equal(x, y)
+        return jnp.equal(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def not_equal(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise inequality."""
-        return jnp.not_equal(x, y)
+        return jnp.not_equal(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def less(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise less than."""
-        return jnp.less(x, y)
+        return jnp.less(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def less_equal(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise less than or equal."""
-        return jnp.less_equal(x, y)
+        return jnp.less_equal(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def greater(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise greater than."""
-        return jnp.greater(x, y)
+        return jnp.greater(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def greater_equal(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise greater than or equal."""
-        return jnp.greater_equal(x, y)
+        return jnp.greater_equal(x, y)  # pyright: ignore[reportArgumentType]
 
     @enforce_tensor_contract
     def shape(self, obj: Any) -> tuple[int, ...]:
@@ -359,8 +367,17 @@ class JaxBackend(BackendOps):
         """Concatenates arrays."""
         return jnp.concatenate(arrays, axis=axis)
 
-    def eye(self, n: int, format: str = "csr", reference: Any = None) -> Any:
-        """Returns an identity matrix."""
+    def eye(
+        self,
+        n: int,
+        format: str = "csr",  # pyright: ignore[reportUnusedParameter]
+        reference: Any = None,
+    ) -> Any:
+        """Returns an identity matrix.
+
+        format is kept for parity with numpy_backend's signature; JAX has
+        no dense/sparse format switch here.
+        """
         dtype = getattr(reference, "dtype", None)
         return jnp.eye(n, dtype=dtype)
 
@@ -368,9 +385,13 @@ class JaxBackend(BackendOps):
         self,
         diagonals: Sequence[Any],
         offsets: Sequence[int],
-        format: str = "csr",
+        format: str = "csr",  # pyright: ignore[reportUnusedParameter]
     ) -> Float[Array, ...]:
-        """Constructs a diagonal matrix."""
+        """Constructs a diagonal matrix.
+
+        format is kept for parity with numpy_backend's signature; JAX
+        has no dense/sparse format switch here.
+        """
         if not diagonals:
             return jnp.zeros((0, 0))
         max_offset = max(offsets)
@@ -614,7 +635,7 @@ def register_jax_behavior():
         def var_flatten(m):
             return (m.variance,), ()
 
-        def var_unflatten(aux, children):
+        def var_unflatten(_aux, children):
             return VarianceModel(variance=children[0])
 
         jax.tree_util.register_pytree_node(

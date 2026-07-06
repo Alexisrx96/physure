@@ -26,7 +26,11 @@ def _get_sympy_parser():
         try:
             from measurekit.core.parsing.sympy_parser import SymPyUnitParser
 
-            _SYMPY_PARSER = SymPyUnitParser()
+            # ponytail: lazy singleton reassigns this "constant" once,
+            # from None to a real parser instance.
+            _SYMPY_PARSER = (  # pyright: ignore[reportConstantRedefinition]
+                SymPyUnitParser()
+            )
         except ImportError as e:
             raise ImportError(
                 "sympy is required to parse this unit expression. "
@@ -42,7 +46,9 @@ def _native_parse(expression: str, entity_cls: type[T]) -> T:
     expr = _IMPLICIT_MUL.sub("*", expr)
     tokens = generate_tokens(expr)
     parser = NotationParser(tokens, entity_cls)
-    return parser.parse()
+    # ponytail: NotationParser is typed against the ExponentEntityProtocol,
+    # not generic over T; it always builds an instance of entity_cls though.
+    return parser.parse()  # pyright: ignore[reportReturnType]
 
 
 @functools.lru_cache(maxsize=2048)
@@ -67,5 +73,7 @@ def parse_unit_string(expression: str, entity_cls: type[T]) -> T:
         raise ValueError(f"Parsing failed: {e}") from e
 
     if issubclass(entity_cls, type(compound_unit)):
-        return compound_unit  # type: ignore[return-value]
+        # ponytail: verified at runtime by the issubclass check above;
+        # pyright can't narrow CompoundUnit to the generic T.
+        return compound_unit  # pyright: ignore[reportReturnType]
     return entity_cls(compound_unit.exponents)

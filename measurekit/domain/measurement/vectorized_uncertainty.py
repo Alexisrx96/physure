@@ -20,7 +20,10 @@ def _scipy():
     global _scipy_mod
     if _scipy_mod is False:
         try:
-            import scipy.sparse
+            # ponytail: bare `scipy` is used below, but basedpyright's
+            # unused-import check for dotted `import a.b` only credits
+            # explicit `a.b` attribute access, not the bare-name use.
+            import scipy.sparse  # pyright: ignore[reportUnusedImport]
 
             _scipy_mod = scipy
         except ImportError:
@@ -31,8 +34,15 @@ def _scipy():
 _scipy_mod: Any = False
 
 try:
-    from measurekit_core import CovarianceStore as CoreStore
-    from measurekit_core import PruningConfig
+    # ponytail: Rust core is always optional (CLAUDE.md); the fallback
+    # classes below are structurally different types by design, so
+    # pyright can't verify the two branches are interchangeable.
+    from measurekit_core import (
+        CovarianceStore as CoreStore,  # pyright: ignore[reportAssignmentType]
+    )
+    from measurekit_core import (
+        PruningConfig,  # pyright: ignore[reportAssignmentType]
+    )
 except ImportError:
 
     @dataclass
@@ -46,7 +56,7 @@ except ImportError:
     class CoreStore:
         """Python fallback for CovarianceStore where Rust is missing."""
 
-        def __init__(self, config: PruningConfig = None):
+        def __init__(self, config: PruningConfig | None = None):
             self.config = config or PruningConfig()
             self.matrix = None
 
@@ -105,7 +115,7 @@ T = TypeVar("T")
 class CovarianceStore:
     """Stateless-ready store for covariance management using Rust core."""
 
-    backend: BackendOps
+    backend: BackendOps | None
     config: PruningConfig = field(default_factory=PruningConfig)
     _core: CoreStore = field(init=False)
     _next_idx: int = 0
@@ -129,14 +139,6 @@ class CovarianceStore:
         """Retrieves a block from the global covariance matrix."""
         if hasattr(self._core, "get_covariance_block"):
             return self._core.get_covariance_block(row_slice, col_slice)
-
-        if row_slice is None or col_slice is None:
-            # Return zero block if no slice info (e.g. independent variables)
-            # We don't have enough shape info here to return a specific size
-            # but usually this is called when slices are expected to exist.
-            # Returning None or raising a clearer error might be better,
-            # but let's try to infer if we can.
-            return None
 
         id1 = row_slice.start
         id2 = col_slice.start
@@ -178,7 +180,12 @@ class CovarianceStore:
         if self.backend.__class__.__name__ == "TorchBackend":
             import torch
 
-            return torch.sparse_coo_tensor(size=shape, dtype=torch.float64)
+            # ponytail: torch.sparse_coo_tensor(size=...) creates an
+            # empty sparse tensor at runtime, but the stub only declares
+            # the (indices, values, size) overload.
+            return torch.sparse_coo_tensor(  # pyright: ignore[reportCallIssue]
+                size=shape, dtype=torch.float64
+            )
 
         scipy = _scipy()
         if scipy:
@@ -388,12 +395,15 @@ class MeasureKitContext:
     def __enter__(self) -> CovarianceStore:
         # Use default config if none provided
         config = self.pruning_config or PruningConfig()
-        store = CovarianceStore(backend=None, config=config)  # type: ignore
+        # backend is assigned lazily by ensure_store() on first real use.
+        store = CovarianceStore(backend=None, config=config)
         self.token = _current_store.set(store)
         return store
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        _current_store.reset(self.token)
+        # ponytail: self.token is None only if __enter__ never ran; the
+        # context-manager protocol guarantees __exit__ only runs after it.
+        _current_store.reset(self.token)  # pyright: ignore[reportArgumentType]
 
 
 def get_current_store() -> CovarianceStore | None:

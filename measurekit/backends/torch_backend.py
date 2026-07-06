@@ -31,7 +31,15 @@ try:
 
     HAS_TRITON = True
 except ImportError:
-    HAS_TRITON = False
+    # ponytail: HAS_TRITON toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    HAS_TRITON = False  # pyright: ignore[reportConstantRedefinition]
+
+    def apply_covariance_update_triton(sigma: Any, jac: Any) -> Any:
+        """Stub that fails loudly when Triton is unavailable."""
+        del sigma, jac
+        raise RuntimeError("Triton kernels are not available on this system.")
+
 
 log = logging.getLogger(__name__)
 
@@ -225,7 +233,12 @@ class TorchBackend(BackendOps):
         """Sum of elements."""
         if axis is None:
             return torch.sum(self.asarray(obj))
-        return torch.sum(self.asarray(obj), dim=axis)
+        # ponytail: torch's dim overloads are typed for named dims;
+        # int | Sequence[int] is the real (positional) accepted type.
+        return torch.sum(
+            self.asarray(obj),
+            dim=axis,  # pyright: ignore[reportArgumentType, reportCallIssue]
+        )
 
     @enforce_tensor_contract
     def mean(
@@ -234,7 +247,12 @@ class TorchBackend(BackendOps):
         """Mean of elements."""
         if axis is None:
             return torch.mean(self.asarray(obj))
-        return torch.mean(self.asarray(obj), dim=axis)
+        # ponytail: torch's dim overloads are typed for named dims;
+        # int | Sequence[int] is the real (positional) accepted type.
+        return torch.mean(
+            self.asarray(obj),
+            dim=axis,  # pyright: ignore[reportArgumentType, reportCallIssue]
+        )
 
     @enforce_tensor_contract
     def any(self, obj: Boolean) -> bool:
@@ -306,10 +324,21 @@ class TorchBackend(BackendOps):
 
     def concatenate(self, arrays: Sequence[Array], axis: int = 0) -> Array:
         """Concatenates tensors."""
-        return torch.cat(arrays, dim=axis)
+        # ponytail: torch.cat is typed for tuple[Tensor,...]|list[Tensor];
+        # any Sequence[Tensor] works at runtime.
+        return torch.cat(arrays, dim=axis)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
-    def eye(self, n: int, format: str = "csr", reference: Any = None) -> Any:
-        """Returns an identity matrix."""
+    def eye(
+        self,
+        n: int,
+        format: str = "csr",  # pyright: ignore[reportUnusedParameter]
+        reference: Any = None,
+    ) -> Any:
+        """Returns an identity matrix.
+
+        format is kept for parity with numpy_backend's signature; torch
+        has no dense/sparse format switch here.
+        """
         device = getattr(reference, "device", None)
         dtype = getattr(reference, "dtype", torch.float64)
         if dtype is None:
@@ -333,9 +362,13 @@ class TorchBackend(BackendOps):
         self,
         diagonals: Sequence[Any],
         offsets: Sequence[int],
-        format: str = "csr",
+        format: str = "csr",  # pyright: ignore[reportUnusedParameter]
     ) -> Float[Array, ...]:
-        """Constructs a diagonal matrix."""
+        """Constructs a diagonal matrix.
+
+        format is kept for parity with numpy_backend's signature; torch
+        has no dense/sparse format switch here.
+        """
         if len(diagonals) == 1:
             return torch.diag(diagonals[0], diagonal=offsets[0])
 

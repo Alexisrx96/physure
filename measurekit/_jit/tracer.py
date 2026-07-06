@@ -14,7 +14,12 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 try:
-    from measurekit_core import RationalUnit
+    # ponytail: the Rust RationalUnit and the pure-Python fallback below
+    # are structurally different types by design (Rust core is always
+    # optional); callers only ever see one or the other.
+    from measurekit_core import (
+        RationalUnit,  # pyright: ignore[reportAssignmentType]
+    )
 except ImportError:
 
     class RationalUnit:
@@ -154,7 +159,9 @@ class TracerQuantity:
         return other, RationalUnit({})
 
 
-def bake_kernel(result_node: Node, arg_names: list[str]) -> Callable:
+def bake_kernel(
+    result_node: Node | str | float, arg_names: list[str]
+) -> Callable:
     """Compiles a DAG into a Python function for maximum execution speed."""
     code_lines = []
     memo = {}

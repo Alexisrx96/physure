@@ -250,6 +250,40 @@ unresolved-import = "ignore"
 invalid-type-arguments = "ignore"
 unused-type-ignore-comment = "ignore"
 redundant-cast = "ignore"
+
+[tool.basedpyright]
+include = ["measurekit"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.10"
+# ponytail: rules below are inherent to this codebase's design (dynamic
+# `magnitude: Any`, optional-dep None fallbacks, lazy __getattr__ exports
+# for the import-time budget, untyped third-party libs) — advisory like ty,
+# not gated. Real diagnostics are fixed in code instead of suppressed.
+reportAny = false
+reportExplicitAny = false
+reportUnknownMemberType = false
+reportUnknownVariableType = false
+reportUnknownArgumentType = false
+reportUnknownParameterType = false
+reportUnknownLambdaType = false
+reportMissingTypeStubs = false
+reportMissingTypeArgument = false
+reportMissingParameterType = false
+reportImplicitOverride = false
+reportUnusedCallResult = false
+reportUnannotatedClassAttribute = false
+reportImplicitStringConcatenation = false
+reportPrivateUsage = false
+reportPrivateLocalImportUsage = false
+reportUntypedBaseClass = false
+reportImportCycles = false
+reportOptionalMemberAccess = false
+reportAttributeAccessIssue = false
+reportInvalidTypeForm = false
+reportUnsupportedDunderAll = false
+reportUntypedFunctionDecorator = false
+reportUntypedClassDecorator = false
 too-many-positional-arguments = "ignore"
 unsupported-base = "ignore"
 not-subscriptable = "ignore"

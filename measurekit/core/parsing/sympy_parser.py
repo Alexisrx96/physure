@@ -11,7 +11,9 @@ def _get_safe_globals():
     if _SAFE_GLOBALS is None:
         import sympy as sp
 
-        _SAFE_GLOBALS = {
+        # ponytail: lazy singleton reassigns this "constant" once,
+        # from None to a real dict.
+        _SAFE_GLOBALS = {  # pyright: ignore[reportConstantRedefinition]
             "Mul": sp.Mul,
             "Add": sp.Add,
             "Pow": sp.Pow,

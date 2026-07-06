@@ -94,6 +94,10 @@ class BackendMixin:
         self, ufunc, inp, res_mag, u_inp, **kwargs
     ):
         """Propagate uncertainty through a trig ufunc; returns a Quantity."""
+        # ponytail: kwargs is part of the call signature forwarded from
+        # __array_ufunc__ (numpy ufunc kwargs like `where=`) but the
+        # finite-difference derivative below never needs them.
+        del kwargs
         h = 1e-7
         m_plus = inp._backend.add(inp.magnitude, h)
         m_minus = inp._backend.sub(inp.magnitude, h)
@@ -141,14 +145,17 @@ class BackendMixin:
         if method != "__call__":
             return NotImplemented
 
+        # ponytail: BackendMixin is only ever mixed into Quantity, which
+        # defines __pow__/__abs__; pyright analyzes the mixin in isolation
+        # and can't see those operators on Self@BackendMixin.
         # Unary math that changes unit
         if ufunc == np.sqrt:
-            return self**0.5
+            return self**0.5  # pyright: ignore[reportOperatorIssue]
         if ufunc == np.square:
-            return self**2
+            return self**2  # pyright: ignore[reportOperatorIssue]
         # Unary math that preserves unit
         if ufunc == np.absolute:
-            return abs(self)
+            return abs(self)  # pyright: ignore[reportArgumentType]
 
         arith = self._numpy_ufunc_arithmetic(ufunc, inputs)
         if arith is not NotImplemented:
@@ -169,7 +176,14 @@ class BackendMixin:
                 return NotImplemented  # Strict unit check
             mags.append(arg.magnitude)
         res_mag = np.concatenate(mags, **kwargs)
-        return type(self)(res_mag, unit, system=self.system)
+        # ponytail: BackendMixin is only ever mixed into Quantity, whose
+        # real __init__ takes (magnitude, unit, system=...); pyright sees
+        # only object.__init__ from the mixin's own MRO.
+        return type(self)(
+            res_mag,  # pyright: ignore[reportCallIssue]
+            unit,
+            system=self.system,
+        )
 
     def __array_function__(self, func, types, args, kwargs):
         """Handles NumPy functions like np.concatenate, np.mean."""
@@ -184,8 +198,11 @@ class BackendMixin:
         if func == np.mean:
             q = args[0]
             if isinstance(q, _q()):
+                # ponytail: same mixin-blindness as _numpy_concatenate above.
                 return type(self)(
-                    np.mean(q.magnitude, **kwargs), q.unit, system=q.system
+                    np.mean(q.magnitude, **kwargs),  # pyright: ignore[reportCallIssue]
+                    q.unit,
+                    system=q.system,
                 )
 
         return NotImplemented

@@ -97,7 +97,10 @@ def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
 
     # Use the stable reference if the public one is corrupted
     cls = CompoundUnit
-    if not isinstance(cls, type):
+    # ponytail: guards against the public CompoundUnit name being
+    # monkeypatched/corrupted at runtime; statically cls is always a
+    # type, but this is a deliberate defensive check, not dead code.
+    if not isinstance(cls, type):  # pyright: ignore[reportUnnecessaryIsInstance]
         cls = _CompoundUnit
 
     return cls(exponents)
@@ -141,7 +144,13 @@ def _resolve_unit_dim(unit_name: str, system: Any, Dimension: type) -> Any:
 
 
 try:
-    from measurekit_core import RationalUnit
+    # ponytail: the Rust RationalUnit and the pure-Python fallback below
+    # are structurally different types by design (Rust core is always
+    # optional, per CLAUDE.md); pyright can't verify they're
+    # interchangeable, but callers only ever see one or the other.
+    from measurekit_core import (
+        RationalUnit,  # pyright: ignore[reportAssignmentType]
+    )
 
     IS_CORE_AVAILABLE = True
 except ImportError:
@@ -153,11 +162,18 @@ except ImportError:
             self, *args, **kwargs
         ): ...  # intentionally empty stub; replaced by measurekit_core at runtime
 
-    IS_CORE_AVAILABLE = False
+    # ponytail: IS_CORE_AVAILABLE toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    IS_CORE_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
 
 
+# ponytail: intentional Flyweight/PyO3-hybrid multiple inheritance —
+# __new__ builds the cached singleton and __init__ below is a deliberate
+# no-op, so neither base's __init__/__new__ needs to run independently.
 @dataclass(frozen=True)
-class CompoundUnit(RationalUnit, BaseExponentEntity):
+class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
+    RationalUnit, BaseExponentEntity
+):
     """Represents a unit composed of base units raised to various powers."""
 
     _is_compound: ClassVar[bool] = True
@@ -209,9 +225,13 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
         cls._cache[key] = cast("CompoundUnit", instance)
         return cast("CompoundUnit", instance)
 
-    def __init__(self, exponents: ExponentsDict) -> None:
+    # ponytail: real initialization happens in __new__'s singleton cache;
+    # this __init__ is intentionally a no-op, so it deliberately skips
+    # calling super().__init__().
+    def __init__(  # pyright: ignore[reportMissingSuperCall]
+        self, exponents: ExponentsDict
+    ) -> None:
         """Initializes the compound unit with a dictionary of exponents."""
-        pass
 
     def __post_init__(self):
         """Eliminamos cualquier unidad con exponente 0."""
@@ -366,12 +386,12 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
         return source_factor / target_factor
 
     @overload
-    def __rmul__(self, other: float) -> Quantity[float, float]: ...
+    def __rmul__(self, other: float) -> Quantity[float, float, Any]: ...
 
     @overload
     def __rmul__(
         self, other: NDArray[Any]
-    ) -> Quantity[NDArray[Any], NDArray[Any]]: ...
+    ) -> Quantity[NDArray[Any], NDArray[Any], Any]: ...
 
     def __rmul__(self, other: Any) -> Any:
         """Handle right-side multiplication, typically for creating a Quantity.
@@ -452,15 +472,21 @@ class CompoundUnit(RationalUnit, BaseExponentEntity):
             return _CompoundUnit(new_exponents)
 
         # For rational tuples, we use Rust core if available
-        if isinstance(exponent, tuple):
-            res = super().__pow__(exponent)
-            if hasattr(res, "dimensions"):
-                return _CompoundUnit(res.dimensions)
-            return res
+        # ponytail: the Rust RationalUnit core accepts a rational
+        # (numerator, denominator) tuple here even though the Python
+        # stub's __pow__ only declares float (same "Rust core is
+        # optional/dynamic" pattern as elsewhere in this file).
+        res = super().__pow__(exponent)  # pyright: ignore[reportArgumentType]
+        if hasattr(res, "dimensions"):
+            return _CompoundUnit(res.dimensions)
+        return res
 
-        return super().__pow__(exponent)
-
-    def __rtruediv__(self, other: Any) -> CompoundUnit:
+    # ponytail: BaseExponentEntity.__rtruediv__ is a singledispatchmethod;
+    # CompoundUnit intentionally replaces it with a plain method for the
+    # `1 / unit` case instead of participating in the dispatch.
+    def __rtruediv__(  # pyright: ignore[reportIncompatibleVariableOverride]
+        self, other: Any
+    ) -> CompoundUnit:
         """Right division (1 / unit)."""
         if other == 1:
             return self**-1

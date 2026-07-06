@@ -95,12 +95,8 @@ class UnitSystem(IUnitRepository):
 
         dims = {}
         for base, exp in cu.exponents.items():
-            if isinstance(exp, (int, float)):
-                f = Fraction(exp).limit_denominator()
-                dims[base] = (f.numerator, f.denominator)
-            else:
-                # Fallback/Error
-                pass
+            f = Fraction(exp).limit_denominator()
+            dims[base] = (f.numerator, f.denominator)
         return RationalUnit(dims)
 
     def _from_rational_unit(self, ru: Any) -> CompoundUnit:

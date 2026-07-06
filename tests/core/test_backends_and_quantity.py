@@ -11,12 +11,8 @@ except (ImportError, AttributeError):
     NumpyBackend = None
 
 
-# PythonBackend is defined in dispatcher usually or separate file but we put it in dispatcher.py
-from measurekit.core.dispatcher import (
-    BackendManager,
-    PythonBackend,
-    get_backend,
-)
+from measurekit.backends.python_backend import PythonBackend
+from measurekit.core.dispatcher import BackendManager, get_backend
 from measurekit.core.protocols import BackendOps
 from measurekit.domain.measurement.converters import LinearConverter
 from measurekit.domain.measurement.dimensions import Dimension

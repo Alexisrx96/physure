@@ -220,7 +220,12 @@ class NotationParser:
         # Case 2: Caret exponent (e.g., ^2, **2).
         elif self.current.type == TokenType.EXP:
             self.eat(TokenType.EXP)
-            if self.current.type == TokenType.NUMBER:
+            # ponytail: self.eat() mutates self.current to the next token;
+            # pyright can't see that and keeps the narrower EXP type.
+            if (
+                self.current.type  # pyright: ignore[reportUnnecessaryComparison]
+                == TokenType.NUMBER
+            ):
                 token = self.eat(TokenType.NUMBER)
                 return int(token.value)
             # If there's a caret but no number, it's a syntax error.

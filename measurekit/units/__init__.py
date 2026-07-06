@@ -10,7 +10,10 @@ if typing.TYPE_CHECKING:
 try:
     from ._index import UNIT_INDEX
 except ImportError:
-    UNIT_INDEX = {}
+    # ponytail: UNIT_INDEX toggles between the generated index and an empty
+    # fallback across the try/except branches by design; not a real
+    # constant-redefinition bug.
+    UNIT_INDEX = {}  # pyright: ignore[reportConstantRedefinition]
 
 
 def __getattr__(name: str) -> CompoundUnit:

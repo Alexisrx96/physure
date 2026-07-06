@@ -12,7 +12,9 @@ try:
     HAVE_SYMENGINE = True
 except ImportError:
     se = None  # type: ignore
-    HAVE_SYMENGINE = False
+    # ponytail: HAVE_SYMENGINE toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    HAVE_SYMENGINE = False  # pyright: ignore[reportConstantRedefinition]
 
 
 from measurekit import default_system
@@ -47,23 +49,23 @@ class SymbolicExpression:
         self.system = system
         # Track the atomic variables that make up this expression
         self.variables = variables or set()
+        self._sympy_expr_cached: sp.Expr | None = None
 
     @property
     def expr(self) -> sp.Expr:
         """Returns the expression converted to a SymPy Expr for external compatibility."""
         if HAVE_SYMENGINE:
-            if not hasattr(self, "_sympy_expr_cached"):
+            cached = self._sympy_expr_cached
+            if cached is None:
                 sp_expr = sp.sympify(self._expr)
                 symbols = {
                     s: sp.Symbol(s.name, positive=True)
                     for s in sp_expr.free_symbols
                     if isinstance(s, sp.Symbol)
                 }
-                if symbols:
-                    self._sympy_expr_cached = sp_expr.xreplace(symbols)
-                else:
-                    self._sympy_expr_cached = sp_expr
-            return self._sympy_expr_cached
+                cached = sp_expr.xreplace(symbols) if symbols else sp_expr
+                self._sympy_expr_cached = cached
+            return cached
         return self._expr
 
     @property

@@ -17,11 +17,18 @@ try:
     # Verify minimal functionality to avoid broken installations
     _ = pd.Series
     _ = pd.DataFrame
-    from pandas.api.extensions import register_series_accessor
+    # ponytail: the real pandas decorator and the dummy fallback below are
+    # structurally different callables by design (pandas is optional);
+    # callers only ever see one or the other.
+    from pandas.api.extensions import (
+        register_series_accessor,  # pyright: ignore[reportAssignmentType]
+    )
 
     HAS_PANDAS = True
 except (ImportError, AttributeError):
-    HAS_PANDAS = False
+    # ponytail: HAS_PANDAS toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    HAS_PANDAS = False  # pyright: ignore[reportConstantRedefinition]
     pd = None
 
     # Define a dummy decorator if pandas is not available or broken

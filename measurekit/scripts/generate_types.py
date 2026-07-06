@@ -33,7 +33,7 @@ def generate():
     with open(generated_types_path, "w", encoding="utf-8") as f:
         f.write(_HEADER_EDIT_WARNING)
         f.write(_HEADER_SYNC_WARNING)
-        f.write("from typing import Literal, Union\n\n")
+        f.write("from typing import Literal\n\n")
         f.write(f"UnitName = {literal_type}\n")
 
     # 2. Generate Stub for Registry attributes

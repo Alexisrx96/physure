@@ -65,7 +65,9 @@ def equivalencies(*eq_lists):
     for eq_list in eq_lists:
         if callable(eq_list):
             eq_list = eq_list()
-        flat_eqs.extend(eq_list)
+        # ponytail: each vararg is duck-typed as either a callable
+        # returning a list of equivalency tuples, or the list itself.
+        flat_eqs.extend(eq_list)  # pyright: ignore[reportArgumentType]
 
     current = _ACTIVE_EQUIVALENCIES.get()
     token = _ACTIVE_EQUIVALENCIES.set((*current, *flat_eqs))

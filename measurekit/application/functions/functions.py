@@ -13,7 +13,9 @@ try:
     HAVE_SYMENGINE = True
 except ImportError:
     se = None  # type: ignore
-    HAVE_SYMENGINE = False
+    # ponytail: HAVE_SYMENGINE toggles between True/False across the
+    # try/except branches by design; not a real constant-redefinition bug.
+    HAVE_SYMENGINE = False  # pyright: ignore[reportConstantRedefinition]
 
 from measurekit import default_system
 

@@ -121,7 +121,7 @@ class Dimension(BaseExponentEntity):
         object.__setattr__(instance, "exponents", display_exp_dict)
 
         cls._cache[vector] = cast("Dimension", instance)
-        return cast("Self", instance)
+        return instance
 
     @classmethod
     def _calculate_representation(
@@ -156,11 +156,12 @@ class Dimension(BaseExponentEntity):
                 raise DimensionError(f"Unknown base dimension symbol: {k}")
         return tuple(v_list)
 
-    def __init__(
+    # ponytail: real initialization happens in __new__'s Flyweight cache;
+    # this __init__ is intentionally a no-op.
+    def __init__(  # pyright: ignore[reportMissingSuperCall]
         self, exponents: ExponentsDict | tuple[int, ...] | None = None
     ):
         """Initializes the dimension. Logic is handled in __new__."""
-        pass
 
     def __hash__(self) -> int:
         """Returns a hash value for the dimension based on its vector."""
@@ -199,8 +200,13 @@ class Dimension(BaseExponentEntity):
 
     def __pow__(self, power: float) -> Dimension:
         """Raises a dimension to a power by scaling its exponent vector."""
-        if not isinstance(power, (int, float)):
-            return NotImplemented
+        # ponytail: defensive runtime guard against misuse by callers that
+        # ignore the type hint (e.g. dynamically-typed callers); the
+        # `power: float` annotation makes this unreachable statically.
+        if not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
+            power, (int, float)
+        ):
+            return NotImplemented  # pyright: ignore[reportUnreachable]
         # Dimensions typically have integer exponents
         new_vector = tuple(int(v * power) for v in self._vector)
         return Dimension(new_vector)

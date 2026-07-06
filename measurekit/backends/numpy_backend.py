@@ -69,15 +69,21 @@ class NumpyBackend(BackendOps):
     @enforce_tensor_contract
     def add(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise addition."""
+        # ponytail: Numeric is a broad union (may include sparse
+        # matrices); the static operator check can't verify every member
+        # supports "+".
         if sparse is not None and (sparse.issparse(x) or sparse.issparse(y)):
-            return x + y
+            return x + y  # pyright: ignore[reportOperatorIssue]
         return np.add(x, y)
 
     @enforce_tensor_contract
     def sub(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise subtraction."""
+        # ponytail: Numeric is a broad union (may include sparse
+        # matrices); the static operator check can't verify every member
+        # supports "-".
         if sparse is not None and (sparse.issparse(x) or sparse.issparse(y)):
-            return x - y
+            return x - y  # pyright: ignore[reportOperatorIssue]
         return np.subtract(x, y)
 
     @enforce_tensor_contract
@@ -87,18 +93,23 @@ class NumpyBackend(BackendOps):
             # Scipy sparse multiplication (*) is element-wise for some, but @ is matmul.
             # Scipy 1.x * is element-wise for some types, matmul for others.
             # Better use .multiply() for explicit element-wise.
+            # ponytail: Numeric is a broad union; static checker can't
+            # verify x/y satisfy scipy's Number|complex "other" param.
             if hasattr(x, "multiply"):
-                return x.multiply(y)
+                return x.multiply(y)  # pyright: ignore[reportArgumentType, reportCallIssue]
             if hasattr(y, "multiply"):
-                return y.multiply(x)
-            return x * y
+                return y.multiply(x)  # pyright: ignore[reportArgumentType, reportCallIssue]
+            return x * y  # pyright: ignore[reportOperatorIssue]
         return np.multiply(x, y)
 
     @enforce_tensor_contract
     def truediv(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise true division."""
+        # ponytail: Numeric is a broad union (may include sparse
+        # matrices); the static operator check can't verify every member
+        # supports "/".
         if sparse is not None and sparse.issparse(x):
-            return x / y
+            return x / y  # pyright: ignore[reportOperatorIssue]
         return np.true_divide(x, y)
 
     @enforce_tensor_contract
@@ -245,12 +256,24 @@ class NumpyBackend(BackendOps):
     def eye(self, n: int, format: str = "csr", reference: Any = None) -> Any:
         """Returns an identity matrix."""
         dtype = getattr(reference, "dtype", None)
-        return sparse.eye(n, format=format, dtype=dtype)
+        # ponytail: scipy-stubs types dtype as type[float]; None/arbitrary
+        # dtypes work fine at runtime.
+        return sparse.eye(
+            n,
+            format=format,
+            dtype=dtype,  # pyright: ignore[reportArgumentType]
+        )
 
     def sparse_eye(self, n: int, reference: Any = None) -> Any:
         """Returns a sparse identity matrix."""
         dtype = getattr(reference, "dtype", None)
-        return sparse.eye(n, format="csr", dtype=dtype)
+        # ponytail: scipy-stubs types dtype as type[float]; None/arbitrary
+        # dtypes work fine at runtime.
+        return sparse.eye(
+            n,
+            format="csr",
+            dtype=dtype,  # pyright: ignore[reportArgumentType]
+        )
 
     @enforce_tensor_contract
     def diags(
@@ -268,9 +291,11 @@ class NumpyBackend(BackendOps):
             format: Sparse format (default 'csr').
             reference: Reference object for device/type inference.
         """
+        # ponytail: scipy-stubs types offsets as a single int; a
+        # Sequence[int] of multiple offsets works fine at runtime.
         return sparse.diags(
             diagonals=diagonals,
-            offsets=offsets,
+            offsets=offsets,  # pyright: ignore[reportArgumentType]
             format=format,
             dtype=getattr(reference, "dtype", None),
         )
@@ -302,7 +327,13 @@ class NumpyBackend(BackendOps):
 
     def diagonal_operator(self, diagonal: Any) -> Any:
         """Returns a diagonal operator from the given values."""
-        return sparse.diags([diagonal], [0], format="csr")
+        # ponytail: scipy-stubs types offsets as a single int; a list
+        # works fine at runtime.
+        return sparse.diags(
+            [diagonal],
+            [0],  # pyright: ignore[reportArgumentType]
+            format="csr",
+        )
 
     def sparse_matrix(
         self,
@@ -320,7 +351,14 @@ class NumpyBackend(BackendOps):
         shape: tuple[int, int] | None = None,
     ) -> Any:
         """Constructs a sparse matrix from diagonals."""
-        return sparse.diags(diagonals, offsets, shape=shape, format="csr")
+        # ponytail: scipy-stubs types offsets as a single int; a
+        # Sequence[int] of multiple offsets works fine at runtime.
+        return sparse.diags(
+            diagonals,
+            offsets,  # pyright: ignore[reportArgumentType]
+            shape=shape,
+            format="csr",
+        )
 
     def sparse_bmat(
         self,

@@ -43,69 +43,6 @@ def _exact_scale(text: str) -> Fraction | None:
         return None
 
 
-def _load_all_configurations_into(
-    parser: configparser.ConfigParser, verbose: bool
-):
-    """Reads all configuration files and loads them into the given parser.
-
-    This function prioritizes the user's custom 'measurekit.conf' file
-    found in the application's root (CWD) over the packaged defaults.
-    """
-    if verbose:
-        print("\n--- Phase 1: Loading Configuration Files ---")
-
-    # 1. Define the list of internal configuration files
-    config_files = [
-        _CONF_FILE,
-        "systems/international.conf",
-        "systems/imperial.conf",
-    ]
-
-    paths_to_read = []
-
-    # 2. Add packaged library configuration files (Low Priority)
-    try:
-        lib_config_dir = resources.files("measurekit.infrastructure.config")
-        for file_name in config_files:
-            # Note: We must use str() because configparser.read()
-            # might not support Path objects across all Python versions
-            file_path = lib_config_dir / file_name
-            if file_path.is_file():
-                paths_to_read.append(str(file_path))
-                if verbose:
-                    print(
-                        f"  -> Found (Library Default): {file_path.name} from"
-                        " package"
-                    )
-            elif verbose:
-                print(f"  -> Not found (Library Default): {file_path.name}")
-    except ModuleNotFoundError:
-        print(
-            "[WARNING] Could not locate built-in library configuration files."
-        )
-        # Continue to check for user config even if library defaults fail
-
-    # 3. Add the user's override configuration file (High Priority)
-    # Check the Current Working Directory (CWD), which is typically the
-    # application's root.
-    user_config_path = Path.cwd() / _CONF_FILE
-
-    if user_config_path.is_file():
-        # Append the path LAST. The last file read overrides previous values.
-        paths_to_read.append(str(user_config_path))
-        if verbose:
-            print(f"  -> Found (User Override): {user_config_path.resolve()}")
-    elif verbose:
-        print(
-            f"  -> Not found (User Override): {user_config_path.name} in CWD."
-        )
-
-    if paths_to_read:
-        parser.read(paths_to_read, encoding="utf-8")
-    else:
-        print("[WARNING] No configuration files were loaded.")
-
-
 class UnitSystemBuilder:
     """A builder class for constructing a UnitSystem instance."""
 
