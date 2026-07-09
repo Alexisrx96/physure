@@ -214,7 +214,7 @@ class QuantityFactory:
 
     def _parse_string_value(
         self, value_str: str, system: UnitSystem
-    ) -> tuple[Any, CompoundUnit]:
+    ) -> tuple[float | str, CompoundUnit]:
         """Parses a string like '10 m/s' into a value and a unit."""
         match = _NUMBER_PREFIX_REGEX.match(value_str)
         if not match:
