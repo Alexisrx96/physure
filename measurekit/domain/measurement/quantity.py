@@ -31,7 +31,9 @@ if TYPE_CHECKING:
     from typing_extensions import Self
 
     from measurekit.core.protocols import BackendOps, Numeric
+    from measurekit.domain.measurement.converters import UnitConverter
     from measurekit.domain.measurement.dimensions import Dimension
+    from measurekit.domain.notation.typing import ExponentsDict
 
 from measurekit.domain.exceptions import IncompatibleUnitsError
 from measurekit.domain.measurement.uncertainty import (
@@ -993,6 +995,27 @@ class Quantity(
             ":" in s and s.split(":")[0].lower() in devices
         )
 
+    def _single_named_converter(
+        self, exponents: ExponentsDict
+    ) -> UnitConverter | None:
+        """The converter for a single named unit's exponents dict.
+
+        A truly empty (dimensionless) exponents dict -- e.g. the target of
+        `Q_(20, "dB").to("1")` -- has no UnitDefinition of its own, but is
+        dimensionally the identity: its "converter" is a scale-1.0 no-op.
+        Returns None when `exponents` is neither a single named unit nor
+        empty (e.g. a genuine multi-symbol compound), so the caller can
+        fall back to the generic dimensional-analysis conversion path.
+        """
+        from measurekit.domain.measurement.converters import LinearConverter
+
+        if not exponents:
+            return LinearConverter(1.0)
+        if len(exponents) == 1 and next(iter(exponents.values())) == 1:
+            defn = self.system.get_definition(next(iter(exponents)))
+            return defn.converter if defn else None
+        return None
+
     def _convert_via_converters(
         self,
         target_unit: CompoundUnit,
@@ -1001,21 +1024,9 @@ class Quantity(
 
         Returns a converted Quantity, or None if this path does not apply.
         """
-        is_simple_unit = (
-            len(self.unit.exponents) == 1
-            and next(iter(self.unit.exponents.values())) == 1
-            and len(target_unit.exponents) == 1
-            and next(iter(target_unit.exponents.values())) == 1
-        )
-        if not is_simple_unit:
-            return None
-
-        source_name = next(iter(self.unit.exponents))
-        target_name = next(iter(target_unit.exponents))
-        source_def = self.system.get_definition(source_name)
-        target_def = self.system.get_definition(target_name)
-
-        if not (source_def and target_def):
+        source_converter = self._single_named_converter(self.unit.exponents)
+        target_converter = self._single_named_converter(target_unit.exponents)
+        if source_converter is None or target_converter is None:
             return None
 
         # Plain linear pairs go through conversion_factor_to instead:
@@ -1023,24 +1034,24 @@ class Quantity(
         # scales are rational, vs. two roundings via to_base/from_base.
         from measurekit.domain.measurement.converters import LinearConverter
 
-        if isinstance(source_def.converter, LinearConverter) and isinstance(
-            target_def.converter, LinearConverter
+        if isinstance(source_converter, LinearConverter) and isinstance(
+            target_converter, LinearConverter
         ):
             return None
 
-        base_val = source_def.converter.to_base(
+        base_val = source_converter.to_base(
             self.magnitude  # pyright: ignore[reportArgumentType]
         )
-        new_magnitude = target_def.converter.from_base(base_val)
+        new_magnitude = target_converter.from_base(base_val)
 
         # Chain rule: d(new)/d(old) = from_base'(base) * to_base'(old).
         # Exact for linear/offset units and correct for nonlinear (log)
         # units, where a plain scale ratio would be wrong.
         jac = self._backend.mul(
-            source_def.converter.to_base_derivative(
+            source_converter.to_base_derivative(
                 self.magnitude  # pyright: ignore[reportArgumentType]
             ),
-            target_def.converter.from_base_derivative(base_val),
+            target_converter.from_base_derivative(base_val),
         )
         new_uncertainty = self._backend.mul(
             self.uncertainty, self._backend.abs(jac)

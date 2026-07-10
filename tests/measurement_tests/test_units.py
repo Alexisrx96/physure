@@ -118,6 +118,57 @@ def test_get_unit_complex():
     assert get_unit("(kg*m)/s^2").exponents == {"kg": 1, "m": 1, "s": -2}
 
 
+def test_get_unit_recipe_applies_to_every_alias(system):
+    """Regression: a recipe registered via register_unit() must resolve
+    for every alias of the unit, not just the canonical `symbol` argument.
+
+    _UNIT_RECIPES used to be keyed only by `symbol`, so get_unit() on any
+    OTHER alias silently fell back to treating it as an atomic unit
+    (e.g. {"N": 1}) instead of substituting the derived recipe
+    ({"kg": 1, "m": 1, "s": -2}). Real-world instance: "ohm" (an alias of
+    the canonical "Ohm") returned {"ohm": 1} while "Ohm" correctly
+    returned the SI-decomposed form, making dimensionally-identical
+    quantities compare unequal depending on which alias was used.
+    """
+    length = Dimension({"L": 1})
+    time = Dimension({"T": 1})
+    mass = Dimension({"M": 1})
+    system.register_unit("m", length, LinearConverter(1.0), "meter")
+    system.register_unit("s", time, LinearConverter(1.0), "second")
+    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
+    system.register_unit(
+        "Newton",
+        Dimension({"M": 1, "L": 1, "T": -2}),
+        LinearConverter(1.0),
+        "newton",
+        "N",
+        recipe=CompoundUnit({"kg": 1, "m": 1, "s": -2}),
+    )
+
+    canonical = system.get_unit("Newton")
+    alias = system.get_unit("N")
+
+    assert canonical.exponents == {"kg": 1, "m": 1, "s": -2}
+    assert alias.exponents == {"kg": 1, "m": 1, "s": -2}
+    assert alias == canonical
+
+
+def test_get_unit_dimensionless_unit_has_empty_exponents(system):
+    """Regression: a unit registered with the dimensionless Dimension({})
+    and no explicit recipe (measurekit.conf's "unity" = "1") must resolve
+    to CompoundUnit({}), not the atomic {symbol: 1}.
+
+    Otherwise the symbol survives arithmetic as a bogus unpruned exponent
+    key and breaks equality against quantities that never touched it
+    (e.g. a dimensionless coefficient multiplied into a force * distance
+    chain made the resulting Joules compare unequal to a clean Joule).
+    """
+    system.register_unit("one", Dimension({}), LinearConverter(1.0), "unity")
+
+    assert system.get_unit("one") == CompoundUnit({})
+    assert system.get_unit("one").exponents == {}
+
+
 def test_unknown_unit_error_is_value_error():
     """Test that UnknownUnitError is also a ValueError."""
     err = UnknownUnitError("xyz")
