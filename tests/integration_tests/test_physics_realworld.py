@@ -133,6 +133,41 @@ def test_ohms_law_voltage_across_resistor():
     assert v.to("V").unit.exponents == {"kg": 1, "m": 2, "s": -3, "A": -1}
 
 
+def test_dimensionless_coefficient_does_not_pollute_resulting_unit():
+    # Regression: Q_(x, "1") ("unity", measurekit.conf's documented idiom
+    # for a dimensionless coefficient) used to register as the atomic
+    # {"1": 1} instead of the truly-empty CompoundUnit({}), because
+    # "unity" has no explicit recipe string in its .conf entry -- it fell
+    # through to the atomic-unit branch. That "1" key then survived
+    # multiplication (kinetic-friction coefficient * normal force * a
+    # distance, mirroring Sears & Zemansky ch.6's work-energy example)
+    # and made the resulting Joules compare unequal to a clean Joule unit.
+    system = get_current_system()
+    mu_k = Q_(0.3, "1")
+    normal_force = Q_(19.6, "N")
+    friction_work = -(mu_k * normal_force) * Q_(2.5, "m")
+    assert math.isclose(friction_work.to("J").magnitude, -14.7, rel_tol=1e-9)
+    assert friction_work.unit == system.get_unit("J")
+
+
+def test_ohm_alias_is_dimensionally_equal_to_its_canonical_symbol():
+    # Regression: get_unit("ohm") used to return the atomic {"ohm": 1}
+    # form instead of the SI-decomposed recipe that get_unit("Ohm")
+    # (the canonical alias from measurekit.conf's [Ohm, ohm, ohms, Ω])
+    # correctly returned. That made a resistance arrived at via V / A
+    # arithmetic compare unequal to Q_(x, "ohm").unit despite being the
+    # same physical unit -- .to() always gave the right number, only the
+    # unit-object equality was broken.
+    system = get_current_system()
+    assert system.get_unit("ohm") == system.get_unit("Ohm")
+    assert system.get_unit("ohm").exponents == system.get_unit("Ohm").exponents
+
+    i = Q_(2.0, "A")
+    v = Q_(10.0, "V")
+    r = (v / i).to("ohm")
+    assert r.unit == system.get_unit("ohm")
+
+
 def test_electrical_power_dissipated_in_a_household_appliance():
     # P = I*V. A 120 V, 5 A appliance (e.g. a toaster) draws 600 W.
     i = Q_(5.0, "A")

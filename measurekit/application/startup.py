@@ -221,7 +221,11 @@ class UnitSystemBuilder:
 
         # Assign the simplified recipe to the unit definition object.
         unit_def.recipe = simplified_recipe
-        self._system._UNIT_RECIPES[unit_def.symbol] = simplified_recipe
+        # Index the recipe under every alias (not just unit_def.symbol,
+        # the canonical one): get_unit() looks up by whatever alias the
+        # caller used, e.g. "ohm" as well as "Ohm".
+        for alias_name in all_aliases:
+            self._system._UNIT_RECIPES[alias_name] = simplified_recipe
         # Register the alias for the simplified recipe so that
         # to_string(use_alias=True) works for base-unit quantities.
         self._system.register_alias(

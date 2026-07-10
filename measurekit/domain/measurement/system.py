@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, cast
 
@@ -214,8 +215,30 @@ class UnitSystem(IUnitRepository):
         *aliases: str,
     ) -> None:
         """Registers the recipe (derived) or base-unit alias and Rust entry."""
+        if recipe is None and self.UNIT_DIMENSIONS[symbol] == Dimension({}):
+            # A unit explicitly declared with the dimensionless Dimension
+            # and a linear, scale-1.0 converter (e.g. "unity" / "1") is
+            # the multiplicative identity of the unit algebra: give it an
+            # empty recipe so it resolves to CompoundUnit({}) instead of
+            # persisting as a bogus, unpruned {symbol: 1} exponent that
+            # survives arithmetic and breaks equality against quantities
+            # that never touched it. Logarithmic dimensionless units
+            # (dB, etc.) must NOT collapse this way -- their symbol is
+            # load-bearing for LogarithmicConverter lookups -- so this
+            # only applies to a scale-1.0 linear converter, matching the
+            # guard already used for ordinary derived-unit recipes.
+            scale = getattr(
+                self.UNIT_SYMBOL_REGISTRY[symbol].converter, "scale", None
+            )
+            if scale is not None and math.isclose(scale, 1.0):
+                recipe = CompoundUnit({})
+
         if recipe:
-            self._UNIT_RECIPES[symbol] = recipe
+            # Index the recipe under every alias, not just the canonical
+            # symbol: get_unit() looks up by whatever name the caller used,
+            # and all aliases refer to the same derived unit.
+            for alias_name in (symbol, *aliases):
+                self._UNIT_RECIPES[alias_name] = recipe
             self.register_alias(recipe.exponents, symbol, *aliases)
 
             if self._core_registry:
