@@ -183,7 +183,7 @@ def parse_formula(formula: str) -> dict[str, int]:
         elif element:
             _add_element(stack, element, count, formula)
 
-    if pos != len(formula) or len(stack) != 1:
+    if pos != len(formula) or len(stack) != 1 or not stack[0]:
         raise ValueError(f"Invalid formula: {formula!r}")
     return stack[0]
 
