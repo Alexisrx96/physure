@@ -130,8 +130,8 @@ results = rxn.calculate(H2=h2_input, O2=o2_input)
 print(f"Limiting reactant: {results.limiting_reactant}")
 print(f"Theoretical water yield: {results.yields['H2O'].to('g')}")
 # Output:
-# Limiting reactant: H2
-# Theoretical water yield: 89.26 +/- 0.89 g
+# Limiting reactant: O2
+# Theoretical water yield: 56.31 +/- 0.23 g
 ```
 
 ### 4.3. Physical-Chemical Interactions: Ideal Gas Law
@@ -181,7 +181,7 @@ T = Q_(298.15, "K")
 exponent = E_a / (R * T) # Exp evaluates to dimensionless Quantity!
 
 k = A * math.exp(-exponent.magnitude)
-print(f"Rate constant: {k}") # 10.3 s^-1
+print(f"Rate constant: {k}") # 0.72 s^-1
 ```
 
 ---
