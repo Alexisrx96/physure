@@ -1,6 +1,19 @@
 # Symbolic Math & Algebraic Simplification Roadmap
 
-This document outlines the architectural justifications, design specifications, algebraic rule-engine, and pattern-matching system required to build a lightweight, high-performance, pure-Rust symbolic mathematics engine inside **`measurekit_core`**.
+**Status: ✅ Implemented** (PR #30, `main`). This document outlines the architectural justifications, design specifications, algebraic rule-engine, and pattern-matching system required to build a lightweight, high-performance, pure-Rust symbolic mathematics engine inside **`measurekit_core`**.
+
+| Section | Status | Implementation |
+|---|---|---|
+| §2 AST | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
+| §3 Simplification engine | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
+| §4.1 Symbolic differentiation | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
+| §4.2 Indefinite integration | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
+| §5 SymEngine/SymPy-aligned tests | ✅ | `tests/symbolic/test_native_expr.py` (Rust engine + Python fallback) |
+| §6 Unit integration | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
+| §7 AOT physics compilation | ✅ | `measurekit/ext/compiler.py`, `tests/ext/test_compiler.py` |
+| §8 Dimensionally constrained symbolic regression | ✅ | `measurekit/ext/symbolic_regression.py`, `tests/ext/test_symbolic_regression.py` |
+
+The existing sympy-based `SymbolicExpression` (`measurekit/domain/symbolic/expression.py`) is untouched, and none of this engine is wired into `Quantity`/`Dimension` — it is a self-contained engine surfaced under `domain/symbolic/` and `ext/`.
 
 ---
 
