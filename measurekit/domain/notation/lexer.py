@@ -15,6 +15,17 @@ _SUPERSCRIPT_CHARS = "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻"
 _SUPERSCRIPT_MAP = str.maketrans("0123456789.-", _SUPERSCRIPT_CHARS)
 _SUPERSCRIPT_REVERSE_MAP = str.maketrans(_SUPERSCRIPT_CHARS, "0123456789.-")
 _SUBSCRIPT_MAP = str.maketrans("0123456789-", "₀₁₂₃₄₅₆₇₈₉₋")
+_SUBSCRIPT_REVERSE_MAP = str.maketrans("₀₁₂₃₄₅₆₇₈₉₋", "0123456789-")
+
+
+def subscript_to_ascii(s: str) -> str:
+    """Normalize Unicode subscript digits to ASCII.
+
+    Example:
+        >>> subscript_to_ascii("H₂O")
+        'H2O'
+    """
+    return s.translate(_SUBSCRIPT_REVERSE_MAP)
 
 
 def to_superscript(n: str | float) -> str:

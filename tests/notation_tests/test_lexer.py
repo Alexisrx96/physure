@@ -7,6 +7,7 @@ from measurekit.domain.notation.lexer import (
     UnitToken,
     generate_tokens,
     parse_superscript,
+    subscript_to_ascii,
     to_subscript,
     to_superscript,
 )
@@ -31,6 +32,14 @@ def test_to_subscript():
     assert "-" not in to_subscript(-123)
     assert to_subscript("1.23") == "₁₂₃"
     assert "." not in to_subscript("1.23")
+
+
+def test_subscript_to_ascii():
+    """Test normalizing Unicode subscript digits back to ASCII."""
+    assert subscript_to_ascii("H₂O") == "H2O"
+    assert subscript_to_ascii("C₆H₁₂O₆") == "C6H12O6"
+    assert subscript_to_ascii("CO₋₁") == "CO-1"
+    assert subscript_to_ascii("H2O") == "H2O"  # already ASCII: no-op
 
 
 def test_parse_superscript():
