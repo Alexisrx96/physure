@@ -169,7 +169,7 @@ class Reaction:
         arrows (``⇌``, ``<=>``); the latter set `reversible` to `True`.
         """
         match = _ARROW_RE.search(equation)
-        if not match:
+        if match is None or _ARROW_RE.search(equation, match.end()):
             raise ValueError(f"Invalid reaction equation: {equation!r}")
         lhs, rhs = equation[: match.start()], equation[match.end() :]
         reversible = match.group() in ("<=>", "⇌")

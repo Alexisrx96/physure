@@ -120,6 +120,11 @@ def test_malformed_equation_raises():
         Reaction.from_string("H2 + O2")
 
 
+def test_multiple_arrows_raises():
+    with pytest.raises(ValueError, match="Invalid reaction equation"):
+        Reaction.from_string("H2 -> O2 -> H2O")
+
+
 def test_missing_reactant_input_raises():
     rxn = Reaction.from_string("2 H2 + O2 -> 2 H2O")
     with pytest.raises(ValueError, match="Missing input for reactant 'O2'"):
