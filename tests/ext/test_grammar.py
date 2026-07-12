@@ -3,10 +3,16 @@ import math
 import pytest
 
 from measurekit.domain.exceptions import (
+    DimensionError,
     IncompatibleUnitsError,
     UnknownUnitError,
 )
-from measurekit.ext.grammar import GrammarError, GrammarInterpreter, evaluate
+from measurekit.ext.grammar import (
+    _FUNCTIONS,
+    GrammarError,
+    GrammarInterpreter,
+    evaluate,
+)
 
 
 @pytest.fixture
@@ -146,6 +152,115 @@ def test_sqrt_ascii_function_form(mn):
     assert math.isclose(result.to("m").magnitude, 3)
 
 
-def test_sqrt_is_reserved_assignment_target(mn):
+def test_abs_function(mn):
+    result = mn.eval("abs(-3 m)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_abs_function_on_bare_number(mn):
+    assert mn.eval("abs(-5)") == 5
+
+
+def test_function_call_wrong_arity_raises(mn):
+    with pytest.raises(GrammarError, match="abs"):
+        mn.eval("abs(1 m, 2 m)")
+
+
+def test_sqrt_function_still_works_after_migration(mn):
+    # Regression: sqrt(...) used to be a hardcoded special case in _atom();
+    # it now goes through the generic _FUNCTIONS dispatch table instead.
+    result = mn.eval("sqrt(9 m^2)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_round_function(mn):
+    result = mn.eval("round(3.7 m)")
+    assert math.isclose(result.to("m").magnitude, 4)
+
+
+def test_round_function_with_ndigits(mn):
+    result = mn.eval("round(3.14159 m, 2)")
+    assert math.isclose(result.to("m").magnitude, 3.14)
+
+
+def test_round_function_wrong_arity_raises(mn):
+    with pytest.raises(GrammarError, match="round"):
+        mn.eval("round(3.14 m, 1, 2)")
+
+
+def test_floor_function(mn):
+    result = mn.eval("floor(3.7 m)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_ceil_function(mn):
+    result = mn.eval("ceil(3.2 m)")
+    assert math.isclose(result.to("m").magnitude, 4)
+
+
+def test_min_function_cross_unit(mn):
+    # 200 cm == 2 m, so the smaller of (3 m, 200 cm) is 200 cm/2 m.
+    result = mn.eval("min(3 m, 200 cm)")
+    assert math.isclose(result.to("m").magnitude, 2)
+
+
+def test_max_function_cross_unit(mn):
+    result = mn.eval("max(3 m, 200 cm)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_min_function_incompatible_units_raises(mn):
+    with pytest.raises(IncompatibleUnitsError):
+        mn.eval("min(3 m, 2 s)")
+
+
+def test_min_function_variadic(mn):
+    result = mn.eval("min(5 m, 1 m, 3 m)")
+    assert math.isclose(result.to("m").magnitude, 1)
+
+
+def test_sin_function_dimensionless(mn):
+    assert math.isclose(mn.eval("sin(0)"), 0.0, abs_tol=1e-12)
+
+
+def test_sin_function_angle_unit(mn):
+    result = mn.eval("sin(90 deg)")
+    assert math.isclose(result.magnitude, 1.0, abs_tol=1e-9)
+
+
+def test_cos_function_angle_unit(mn):
+    result = mn.eval("cos(0 rad)")
+    assert math.isclose(result.magnitude, 1.0, abs_tol=1e-9)
+
+
+def test_tan_function_dimensionless(mn):
+    assert math.isclose(mn.eval("tan(0)"), 0.0, abs_tol=1e-12)
+
+
+def test_sin_function_wrong_dimension_raises(mn):
+    with pytest.raises(DimensionError):
+        mn.eval("sin(3 kg)")
+
+
+def test_exp_function_dimensionless(mn):
+    assert math.isclose(mn.eval("exp(0)"), 1.0)
+
+
+def test_log_function_dimensionless(mn):
+    assert math.isclose(mn.eval("log(1)"), 0.0, abs_tol=1e-12)
+
+
+def test_ln_function_is_natural_log(mn):
+    # ln and log are the same implementation (no log10 exists in the engine).
+    assert mn.eval("ln(1)") == mn.eval("log(1)")
+
+
+def test_log_function_wrong_dimension_raises(mn):
+    with pytest.raises(DimensionError):
+        mn.eval("log(3 kg)")
+
+
+@pytest.mark.parametrize("name", sorted(_FUNCTIONS))
+def test_function_names_are_reserved_assignment_targets(mn, name):
     with pytest.raises(GrammarError):
-        mn.eval("sqrt = 5 m")
+        mn.eval(f"{name} = 5 m")

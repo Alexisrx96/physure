@@ -54,7 +54,7 @@ _NUMBER_PAT = r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?"
 _IDENT_PAT = r"[^\W\d]\w*"
 _SUP_PAT = r"[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+"
 _SQRT_PAT = r"√"
-_OP_PAT = r"\+/-|±|==|=>|->|\*\*|[-+*/^()=?×÷]"  # noqa: RUF001
+_OP_PAT = r"\+/-|±|==|=>|->|\*\*|[-+*/^()=?×÷,]"  # noqa: RUF001
 _OP_ALIASES = {"×": "*", "÷": "/"}  # noqa: RUF001
 _TOKEN_RE = re.compile(
     "|".join(
@@ -192,19 +192,29 @@ class _ExprParser:
             return base ** parse_superscript(tok.value)
         return base
 
+    def _is_function_call(self, tok: Token) -> bool:
+        return (
+            tok.type == "IDENT"
+            and tok.value in _FUNCTIONS
+            and self._i + 1 < len(self._tokens)
+            and self._tokens[self._i + 1].value == "("
+        )
+
     def _atom(self) -> GrammarValue:
         tok = self._peek()
         if tok is None:
             raise GrammarError("Unexpected end of expression")
-        if tok.type == "SQRT" or (
-            tok.type == "IDENT"
-            and tok.value == "sqrt"
-            and self._i + 1 < len(self._tokens)
-            and self._tokens[self._i + 1].value == "("
-        ):
+        if tok.type == "SQRT":
             self._next()
             operand = self._atom()
             return operand**0.5
+        if self._is_function_call(tok):
+            name = tok.value
+            self._next()
+            args = self._call_args()
+            lo, hi, fn = _FUNCTIONS[name]
+            _check_arity(name, args, lo, hi)
+            return fn(*args)
         if tok.value == "(":
             self._next()
             result = self._sum()
@@ -229,12 +239,78 @@ class _ExprParser:
             return self._resolve(tok.value)
         raise GrammarError(f"Unexpected token {tok.value!r}")
 
+    def _call_args(self) -> list[GrammarValue]:
+        self._next()  # consume "("
+        args: list[GrammarValue] = []
+        tok = self._peek()
+        if tok is not None and tok.value == ")":
+            self._next()
+            return args
+        args.append(self._sum())
+        while (tok := self._peek()) and tok.value == ",":
+            self._next()
+            args.append(self._sum())
+        closing = self._peek()
+        if closing is None or closing.value != ")":
+            raise GrammarError("Missing closing parenthesis in function call")
+        self._next()
+        return args
+
 
 def _to_number(text: str) -> int | float:
     value = float(text)
     if value.is_integer() and "." not in text and "e" not in text.lower():
         return int(value)
     return value
+
+
+def _transcendental(x: GrammarValue, name: str) -> GrammarValue:
+    """Calls `x.<name>()` (Quantity) or falls back to `math.<name>(x)`."""
+    if hasattr(x, name):
+        return getattr(x, name)()
+    return getattr(math, name)(x)
+
+
+def _check_arity(
+    name: str, args: list[GrammarValue], lo: int, hi: float
+) -> None:
+    if lo <= len(args) <= hi:
+        return
+    if hi == math.inf:
+        expected = f"at least {lo}"
+    elif lo == hi:
+        expected = str(lo)
+    else:
+        expected = f"{lo}-{int(hi)}"
+    raise GrammarError(
+        f"{name}() expects {expected} argument(s), got {len(args)}"
+    )
+
+
+# name -> (min_arity, max_arity, implementation). Dispatched from
+# _ExprParser._atom() whenever an IDENT token here is immediately followed
+# by "(". Delegates to Quantity's own dunder/bound methods wherever
+# possible; no unit-handling logic lives here.
+# ponytail: "min" shadows the pre-existing "min" unit alias (minutes, see
+# measurekit.conf:123). Only affects the narrow case of writing `min(` with
+# no operator meaning "N minutes times (...)"; that now raises an arity
+# error instead of silently misparsing. Accepted trade-off, confirmed with
+# user rather than renaming the function.
+_FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
+    "abs": (1, 1, lambda x: abs(x)),
+    "sqrt": (1, 1, lambda x: x**0.5),
+    "round": (1, 2, lambda *a: round(*a)),
+    "floor": (1, 1, math.floor),
+    "ceil": (1, 1, math.ceil),
+    "min": (2, math.inf, lambda *a: min(*a)),
+    "max": (2, math.inf, lambda *a: max(*a)),
+    "sin": (1, 1, lambda x: _transcendental(x, "sin")),
+    "cos": (1, 1, lambda x: _transcendental(x, "cos")),
+    "tan": (1, 1, lambda x: _transcendental(x, "tan")),
+    "exp": (1, 1, lambda x: _transcendental(x, "exp")),
+    "log": (1, 1, lambda x: _transcendental(x, "log")),
+    "ln": (1, 1, lambda x: _transcendental(x, "log")),
+}
 
 
 class GrammarInterpreter:
@@ -330,8 +406,10 @@ class GrammarInterpreter:
             raise GrammarError(
                 f"Assignment target must be a single name in: {stmt!r}"
             )
-        if lhs_tokens[0].value == "sqrt":
-            raise GrammarError(f"'sqrt' is reserved in: {stmt!r}")
+        if lhs_tokens[0].value in _FUNCTIONS:
+            raise GrammarError(
+                f"{lhs_tokens[0].value!r} is reserved in: {stmt!r}"
+            )
         return tokens[assign_idx + 1 :], lhs_tokens[0].value
 
     def _eval_statement(self, stmt: str) -> GrammarValue | None:
