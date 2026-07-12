@@ -192,6 +192,14 @@ class _ExprParser:
             return base ** parse_superscript(tok.value)
         return base
 
+    def _is_function_call(self, tok: Token) -> bool:
+        return (
+            tok.type == "IDENT"
+            and tok.value in _FUNCTIONS
+            and self._i + 1 < len(self._tokens)
+            and self._tokens[self._i + 1].value == "("
+        )
+
     def _atom(self) -> GrammarValue:
         tok = self._peek()
         if tok is None:
@@ -200,12 +208,7 @@ class _ExprParser:
             self._next()
             operand = self._atom()
             return operand**0.5
-        if (
-            tok.type == "IDENT"
-            and tok.value in _FUNCTIONS
-            and self._i + 1 < len(self._tokens)
-            and self._tokens[self._i + 1].value == "("
-        ):
+        if self._is_function_call(tok):
             name = tok.value
             self._next()
             args = self._call_args()

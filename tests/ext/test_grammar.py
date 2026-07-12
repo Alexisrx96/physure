@@ -183,6 +183,11 @@ def test_round_function_with_ndigits(mn):
     assert math.isclose(result.to("m").magnitude, 3.14)
 
 
+def test_round_function_wrong_arity_raises(mn):
+    with pytest.raises(GrammarError, match="round"):
+        mn.eval("round(3.14 m, 1, 2)")
+
+
 def test_floor_function(mn):
     result = mn.eval("floor(3.7 m)")
     assert math.isclose(result.to("m").magnitude, 3)
