@@ -190,3 +190,24 @@ def test_floor_function(mn):
 def test_ceil_function(mn):
     result = mn.eval("ceil(3.2 m)")
     assert math.isclose(result.to("m").magnitude, 4)
+
+
+def test_min_function_cross_unit(mn):
+    # 200 cm == 2 m, so the smaller of (3 m, 200 cm) is 200 cm/2 m.
+    result = mn.eval("min(3 m, 200 cm)")
+    assert math.isclose(result.to("m").magnitude, 2)
+
+
+def test_max_function_cross_unit(mn):
+    result = mn.eval("max(3 m, 200 cm)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_min_function_incompatible_units_raises(mn):
+    with pytest.raises(IncompatibleUnitsError):
+        mn.eval("min(3 m, 2 s)")
+
+
+def test_min_function_variadic(mn):
+    result = mn.eval("min(5 m, 1 m, 3 m)")
+    assert math.isclose(result.to("m").magnitude, 1)
