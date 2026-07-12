@@ -3,6 +3,7 @@ import math
 import pytest
 
 from measurekit.domain.exceptions import (
+    DimensionError,
     IncompatibleUnitsError,
     UnknownUnitError,
 )
@@ -211,3 +212,26 @@ def test_min_function_incompatible_units_raises(mn):
 def test_min_function_variadic(mn):
     result = mn.eval("min(5 m, 1 m, 3 m)")
     assert math.isclose(result.to("m").magnitude, 1)
+
+
+def test_sin_function_dimensionless(mn):
+    assert math.isclose(mn.eval("sin(0)"), 0.0, abs_tol=1e-12)
+
+
+def test_sin_function_angle_unit(mn):
+    result = mn.eval("sin(90 deg)")
+    assert math.isclose(result.magnitude, 1.0, abs_tol=1e-9)
+
+
+def test_cos_function_angle_unit(mn):
+    result = mn.eval("cos(0 rad)")
+    assert math.isclose(result.magnitude, 1.0, abs_tol=1e-9)
+
+
+def test_tan_function_dimensionless(mn):
+    assert math.isclose(mn.eval("tan(0)"), 0.0, abs_tol=1e-12)
+
+
+def test_sin_function_wrong_dimension_raises(mn):
+    with pytest.raises(DimensionError):
+        mn.eval("sin(3 kg)")

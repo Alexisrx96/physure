@@ -301,6 +301,9 @@ _FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
     "ceil": (1, 1, math.ceil),
     "min": (2, math.inf, lambda *a: min(*a)),
     "max": (2, math.inf, lambda *a: max(*a)),
+    "sin": (1, 1, lambda x: _transcendental(x, "sin")),
+    "cos": (1, 1, lambda x: _transcendental(x, "cos")),
+    "tan": (1, 1, lambda x: _transcendental(x, "tan")),
 }
 
 
