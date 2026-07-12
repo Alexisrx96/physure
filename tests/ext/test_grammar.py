@@ -235,3 +235,21 @@ def test_tan_function_dimensionless(mn):
 def test_sin_function_wrong_dimension_raises(mn):
     with pytest.raises(DimensionError):
         mn.eval("sin(3 kg)")
+
+
+def test_exp_function_dimensionless(mn):
+    assert math.isclose(mn.eval("exp(0)"), 1.0)
+
+
+def test_log_function_dimensionless(mn):
+    assert math.isclose(mn.eval("log(1)"), 0.0, abs_tol=1e-12)
+
+
+def test_ln_function_is_natural_log(mn):
+    # ln and log are the same implementation (no log10 exists in the engine).
+    assert mn.eval("ln(1)") == mn.eval("log(1)")
+
+
+def test_log_function_wrong_dimension_raises(mn):
+    with pytest.raises(DimensionError):
+        mn.eval("log(3 kg)")

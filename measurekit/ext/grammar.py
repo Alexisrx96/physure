@@ -304,6 +304,9 @@ _FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
     "sin": (1, 1, lambda x: _transcendental(x, "sin")),
     "cos": (1, 1, lambda x: _transcendental(x, "cos")),
     "tan": (1, 1, lambda x: _transcendental(x, "tan")),
+    "exp": (1, 1, lambda x: _transcendental(x, "exp")),
+    "log": (1, 1, lambda x: _transcendental(x, "log")),
+    "ln": (1, 1, lambda x: _transcendental(x, "log")),
 }
 
 
