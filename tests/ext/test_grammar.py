@@ -258,13 +258,18 @@ def test_sqrt_of_negative_returns_complex(mn):
     assert math.isclose(result.imag, 2.0)
 
 
+_LOG_DOMAIN_ERROR = "domain error|positive input"
+
+
 def test_log_of_zero_raises(mn):
-    with pytest.raises(ValueError, match="math domain error"):
+    # Message wording varies by Python version ("math domain error" vs.
+    # "expected a positive input" on 3.14+).
+    with pytest.raises(ValueError, match=_LOG_DOMAIN_ERROR):
         mn.eval("log(0)")
 
 
 def test_log_of_negative_raises(mn):
-    with pytest.raises(ValueError, match="math domain error"):
+    with pytest.raises(ValueError, match=_LOG_DOMAIN_ERROR):
         mn.eval("log(-1)")
 
 
