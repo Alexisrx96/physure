@@ -53,6 +53,7 @@ else:
 _NUMBER_PAT = r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?"
 _IDENT_PAT = r"[^\W\d]\w*"
 _SUP_PAT = r"[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+"
+_SQRT_PAT = r"√"
 _OP_PAT = r"\+/-|±|==|=>|->|\*\*|[-+*/^()=?×÷]"  # noqa: RUF001
 _OP_ALIASES = {"×": "*", "÷": "/"}  # noqa: RUF001
 _TOKEN_RE = re.compile(
@@ -61,6 +62,7 @@ _TOKEN_RE = re.compile(
             f"(?P<NUMBER>{_NUMBER_PAT})",
             f"(?P<IDENT>{_IDENT_PAT})",
             f"(?P<SUP>{_SUP_PAT})",
+            f"(?P<SQRT>{_SQRT_PAT})",
             f"(?P<OP>{_OP_PAT})",
             r"(?P<WS>[ \t]+)",
             r"(?P<BAD>.)",
@@ -194,6 +196,15 @@ class _ExprParser:
         tok = self._peek()
         if tok is None:
             raise GrammarError("Unexpected end of expression")
+        if tok.type == "SQRT" or (
+            tok.type == "IDENT"
+            and tok.value == "sqrt"
+            and self._i + 1 < len(self._tokens)
+            and self._tokens[self._i + 1].value == "("
+        ):
+            self._next()
+            operand = self._atom()
+            return operand**0.5
         if tok.value == "(":
             self._next()
             result = self._sum()
@@ -319,6 +330,8 @@ class GrammarInterpreter:
             raise GrammarError(
                 f"Assignment target must be a single name in: {stmt!r}"
             )
+        if lhs_tokens[0].value == "sqrt":
+            raise GrammarError(f"'sqrt' is reserved in: {stmt!r}")
         return tokens[assign_idx + 1 :], lhs_tokens[0].value
 
     def _eval_statement(self, stmt: str) -> GrammarValue | None:

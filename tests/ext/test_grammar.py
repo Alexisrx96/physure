@@ -129,3 +129,23 @@ def test_negative_and_scientific(mn):
 def test_unicode_multiplication_and_division_operators(mn):
     assert mn.eval("2 × 3") == 6  # noqa: RUF001
     assert mn.eval("6 ÷ 2") == 3
+
+
+def test_sqrt_unicode_prefix_parenthesized(mn):
+    result = mn.eval("√(9 m^2)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_sqrt_unicode_prefix_bare(mn):
+    mn.run("x = 16")
+    assert math.isclose(mn.eval("√x"), 4)
+
+
+def test_sqrt_ascii_function_form(mn):
+    result = mn.eval("sqrt(9 m^2)")
+    assert math.isclose(result.to("m").magnitude, 3)
+
+
+def test_sqrt_is_reserved_assignment_target(mn):
+    with pytest.raises(GrammarError):
+        mn.eval("sqrt = 5 m")
