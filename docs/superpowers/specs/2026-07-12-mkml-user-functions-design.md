@@ -1,4 +1,4 @@
-# Structural grammar: user-defined functions, typed params, `let` (MKML Phase 2, slice 2)
+# Structural grammar: user-defined functions, typed params, `let`, display-text blocks (MKML Phase 2, slice 2)
 
 ## Context
 
@@ -13,6 +13,12 @@ legitimate use case blocks would have served (a named intermediate value inside 
 function body) without introducing a multi-statement block construct. Vectors are also out of scope
 here, tracked as a separate spec/plan (a distinct subsystem: a new value type built on `Quantity`'s
 existing array-magnitude support, vs. this spec's pure grammar/evaluation-control work).
+
+This slice also adds **display-text blocks**: a way to embed human-facing explanatory text directly
+in a `.mkml` script, distinct from `#` comments (which are silently stripped — for the script's
+author only). Unrelated to functions/`let` mechanically, but small enough, and part of the same
+statement-level layer of `GrammarInterpreter`, to fold into this slice rather than open a third
+spec.
 
 ## Scope
 
@@ -109,6 +115,36 @@ error, not an uncaught Python `RecursionError`.
 - Redefining an existing user function (same name, new params/body) is allowed and simply
   overwrites the `_functions` entry — consistent with variables already being freely reassignable.
 
+### 6. Display-text blocks: ```` ```text``` ````
+
+A triple-backtick-delimited block, inline (```` ```text``` ````) or spanning multiple lines,
+marks literal text to be shown to whoever runs the script — the opposite of `#` comments, which are
+silently discarded. Markdown-fenced-code-block syntax, deliberately, since that's already familiar
+notation for "verbatim text block."
+
+`GrammarInterpreter.run(source)` extracts every ```` ```...``` ```` span from the raw source with a
+single non-greedy, `DOTALL` regex match (`` r"```(.*?)```" ``), *before* the existing per-line
+`\n`/`;` splitting and `#`-comment stripping — so text inside a block is never tokenized as MKML and
+never has a `#` inside it treated as a comment marker. Each extracted block becomes one statement in
+its original source position, evaluating to the enclosed text as a plain `str` (only a single
+leading/trailing blank line, if present, is trimmed — no dedenting, no other normalization).
+
+`GrammarValue` (currently `Quantity[Any, Any, Any] | int | float`) widens to include `str`. Since
+`run()` performs no I/O itself — it only returns `list[GrammarValue | None]` — a display-text block
+needs no interpreter-level printing logic: it's just a `str` entry in that list, and `repl.py`'s
+existing `_print_results` (`if result is not None: print(result)`) already prints it unchanged.
+
+**Scope:** top-level only, exactly where `#` comments are valid today — never inside a function body
+or a `let...in` expression (both are single expressions; allowing a display block inside either
+reopens the "blocks" question already rejected for this phase). The interactive REPL (`_repl()` in
+`repl.py`, which reads one line at a time via `input()`) only supports the inline single-line form;
+true multi-line blocks require the whole source to be evaluated at once (piped stdin, a `.mkml` file,
+or a direct `GrammarInterpreter.run(source)` call) — no continuation-prompt buffering is added to the
+REPL's input loop.
+
+**No variable interpolation.** Text is always literal, exactly as written between the fences. If
+interpolating a computed value is ever needed, that's a separate, later addition.
+
 ## Non-goals
 
 - Blocks (multi-statement function bodies) — explicitly rejected; `let...in` covers the one real use
@@ -120,6 +156,10 @@ error, not an uncaught Python `RecursionError`.
   engine.
 - Tail-call optimization or any recursion performance work — the 100-call default depth is a safety
   net for formulas (factorial, Fibonacci, small recurrences), not deep algorithmic recursion.
+- Variable interpolation inside display-text blocks.
+- Multi-line display-text block entry directly in the interactive REPL (continuation-prompt
+  buffering) — only the single-line inline form works there.
+- Display-text blocks inside function bodies or `let...in` expressions.
 
 ## Testing
 
@@ -140,6 +180,10 @@ prior phases:
   configured recursion limit and raises `GrammarError` (not `RecursionError`); a custom
   `mkml_recursion_limit` value in a test `UnitSystem` changes the threshold.
 - Each touched function gains one runnable doctest example (pytest runs `--doctest-modules`).
+- Display-text block: inline single-line form, multi-line form, a block containing `#` and
+  backtick-adjacent characters (verifying no comment-stripping or tokenization touches it), a block
+  interleaved with normal statements (verifying source-order is preserved in the results list), and
+  a script with no blocks at all (regression case, unaffected by the extraction step).
 
 ## Risks / open questions
 
