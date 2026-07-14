@@ -55,6 +55,7 @@ nav:
   - Guides:
       - torch.compile Integration: torch_compile_integration.md
       - Chemistry Integration Roadmap: chemistry_roadmap.md
+      - Diagramming Engine Roadmap: diagrams_roadmap.md
       - Scientific Companion Roadmap: scientific_roadmap.md
       - Symbolic Math Engine Roadmap: symbolic_math_roadmap.md
   - API Reference:
