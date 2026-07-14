@@ -611,13 +611,17 @@ class GrammarInterpreter:
             raise GrammarError(f"Missing closing parenthesis in: {stmt!r}")
         if close_idx + 1 >= len(tokens) or tokens[close_idx + 1].value != "=":
             return False
+        if tokens[-1].value == "?":
+            return False
+        try:
+            params = self._param_list(tokens[2:close_idx], stmt)
+        except GrammarError:
+            return False
         name = tokens[0].value
         if name in _FUNCTIONS:
             raise GrammarError(f"{name!r} is reserved in: {stmt!r}")
         if name in self.env:
             raise GrammarError(f"{name!r} is already a variable in: {stmt!r}")
-        param_tokens = tokens[2:close_idx]
-        params = self._param_list(param_tokens, stmt)
         body_tokens = tokens[close_idx + 2 :]
         if not body_tokens:
             raise GrammarError(f"Empty function body in: {stmt!r}")
