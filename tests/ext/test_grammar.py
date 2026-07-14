@@ -462,4 +462,25 @@ def test_typed_and_untyped_parameters_mixed(mn):
     assert math.isclose(result.to("m").magnitude, 6)
 
 
+def test_let_binding_inside_function_body(mn):
+    mn.run("f(x) = let y = x^2 in y + 1")
+    assert mn.eval("f(3)") == 10
+
+
+def test_let_binding_nested(mn):
+    mn.run("f(x) = let a = x + 1 in let b = a * 2 in b")
+    assert mn.eval("f(3)") == 8
+
+
+def test_let_at_top_level_raises(mn):
+    with pytest.raises(GrammarError, match="only valid inside a function body"):
+        mn.eval("let y = 5 in y + 1")
+
+
+def test_in_still_resolves_as_inches_outside_let(mn):
+    result = mn.eval("5 in")
+    assert math.isclose(result.to("in").magnitude, 5)
+
+
+
 

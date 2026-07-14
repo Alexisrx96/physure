@@ -37,6 +37,9 @@ Example:
     >>> _ = mn.run("double_len(x: m) = x * 2")
     >>> mn.eval("double_len(3 m)")
     Quantity(6.0, m)
+    >>> _ = mn.run("g(x) = let y = x^2 in y + 1")
+    >>> mn.eval("g(3)")
+    10
 """
 
 from __future__ import annotations
@@ -178,7 +181,35 @@ class _ExprParser:
         return result
 
     def _expr(self) -> GrammarValue:
+        tok = self._peek()
+        if tok and tok.type == "IDENT" and tok.value == "let":
+            return self._let_expr()
         return self._ternary()
+
+    def _let_expr(self) -> GrammarValue:
+        self._next()  # consume "let"
+        name_tok = self._peek()
+        if name_tok is None or name_tok.type != "IDENT":
+            raise GrammarError("Expected a name after 'let'")
+        self._next()
+        self._expect("=")
+        value = self._expr()
+        in_tok = self._peek()
+        if in_tok is None or in_tok.value != "in":
+            raise GrammarError("Expected 'in' after let binding")
+        self._next()
+        outer_resolve = self._resolve
+
+        def resolve(ident: str) -> GrammarValue:
+            if ident == name_tok.value:
+                return value
+            return outer_resolve(ident)
+
+        self._resolve = resolve
+        try:
+            return self._expr()
+        finally:
+            self._resolve = outer_resolve
 
     def _ternary(self) -> GrammarValue:
         cond = self._comparison()
@@ -253,8 +284,13 @@ class _ExprParser:
         while (tok := self._peek()) and (
             tok.type in ("NUMBER", "IDENT") or tok.value == "("
         ):
+            if tok.value == "in" and self._i + 1 < len(self._tokens):
+                nxt = self._tokens[self._i + 1]
+                if nxt.type in ("NUMBER", "IDENT") or nxt.value in ("(", "-"):
+                    break
             result = result * self._power()
         return result
+
 
     def _unary(self) -> GrammarValue:
         if (tok := self._peek()) and tok.value == "-":
@@ -610,6 +646,8 @@ class GrammarInterpreter:
 
         if self._try_define_function(tokens, stmt):
             return None
+        if tokens and tokens[0].type == "IDENT" and tokens[0].value == "let":
+            raise GrammarError("'let' is only valid inside a function body")
 
         eq_idx = _top_level_index(tokens, "==")
         if eq_idx != -1:
