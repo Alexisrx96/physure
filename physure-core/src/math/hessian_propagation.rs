@@ -39,4 +39,41 @@ impl HessianPropagation {
 
         linear_var + curvature_var
     }
+
+    /// Slice overload for FFI interoperability.
+    pub fn propagate_mean_slices(
+        f_mean: f64,
+        hessian_slice: &[f64],
+        covariance_slice: &[f64],
+        rows: usize,
+        cols: usize,
+    ) -> f64 {
+        if let (Ok(h), Ok(cov)) = (
+            Array2::from_shape_vec((rows, cols), hessian_slice.to_vec()),
+            Array2::from_shape_vec((rows, cols), covariance_slice.to_vec()),
+        ) {
+            Self::propagate_mean(f_mean, &h, &cov)
+        } else {
+            f_mean
+        }
+    }
+
+    /// Slice overload for FFI interoperability.
+    pub fn propagate_variance_slices(
+        jacobian_slice: &[f64],
+        hessian_slice: &[f64],
+        covariance_slice: &[f64],
+        rows: usize,
+        cols: usize,
+    ) -> f64 {
+        if let (Ok(j), Ok(h), Ok(cov)) = (
+            Array1::from_shape_vec(jacobian_slice.len(), jacobian_slice.to_vec()),
+            Array2::from_shape_vec((rows, cols), hessian_slice.to_vec()),
+            Array2::from_shape_vec((rows, cols), covariance_slice.to_vec()),
+        ) {
+            Self::propagate_variance(&j, &h, &cov)
+        } else {
+            0.0
+        }
+    }
 }

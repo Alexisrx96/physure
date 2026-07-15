@@ -44,9 +44,9 @@ Rendimiento al propagar matrices de covarianza esparsas sobre arrays de gran dim
 
 | Dimensión de Array ($N$) | Modo Correlacionado | Modo No Correlacionado | Incremento Memoria |
 | :---: | :---: | :---: | :---: |
-| **$N = 100$** | **1.9 ms** (`0.0019 s`) | **0.9 ms** (`0.0009 s`) | ~146.4 MB (Base Scipy Sparse) |
-| **$N = 1,000$** | **30.2 ms** (`0.0302 s`) | **14.3 ms** (`0.0143 s`) | +0.27 MB |
-| **$N = 5,000$** | **1.70 s** (`1.7045 s`) | **1.37 s** (`1.3735 s`) | +2.13 MB |
+| **$N = 100$** | **3.5 ms** (`0.0035 s`) | **0.8 ms** (`0.0008 s`) | ~143.5 MB (Base Scipy Sparse) |
+| **$N = 1,000$** | **54.9 ms** (`0.0549 s`) | **44.2 ms** (`0.0442 s`) | +0.24 MB |
+| **$N = 5,000$** | **0.99 s** (`0.9977 s`) | **1.27 s** (`1.2783 s`) | +2.04 MB |
 
 ---
 
@@ -56,9 +56,24 @@ Benchmarking de operaciones algebraicas sobre tensores de **1,000,000 de element
 
 | Modo de Ejecución | Tiempo por Iteración | Overhead vs PyTorch Nativo |
 | :--- | :---: | :---: |
-| **Pure PyTorch (Baseline)** | **0.2196 ms** | $1.00\times$ (Referencia) |
-| **Physure Eager Mode** | **0.6771 ms** | $3.08\times$ |
-| **Physure `@torch.compile`** | **0.2675 ms** | **$1.22\times$** *(Prácticamente Zero Overhead)* |
+| **Pure PyTorch (Baseline)** | **0.2251 ms** | $1.00\times$ (Referencia) |
+| **Physure Eager Mode** | **0.7078 ms** | $3.14\times$ |
+| **Physure `@torch.compile`** | **0.2643 ms** | **$1.17\times$** *(Prácticamente Zero Overhead)* |
+
+---
+
+## ⚡ 5. Micro-Benchmarks Nativos de Rust (`physure-core` Criterion)
+
+Medición directa sin overhead FFI realizada con la suite de Criterion en Rust (`cargo bench`):
+
+| Micro-Benchmark | Tiempo Promedio | Descripción |
+| :--- | :---: | :--- |
+| **`unit_mul`** | **53.84 ns** | Multiplicación directa de exponentes de `RationalUnit`. |
+| **`unit_div`** | **53.83 ns** | División directa de exponentes de `RationalUnit`. |
+| **`quantity_add_scalar`** | **40.42 ns** | Suma escalar con validación dimensional. |
+| **`quantity_mul_scalar`** | **65.55 ns** | Multiplicación escalar con acumulación dimensional. |
+| **`compiled_symbolic_eval`** | **13.59 ns** | Evaluación de pila en expresiones simbólicas optimizadas. |
+| **`covariance_propagate`** | **7.16 µs** | Propagación de covarianza esparsa de bloques matriciales. |
 
 ---
 

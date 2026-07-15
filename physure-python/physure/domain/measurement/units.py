@@ -163,7 +163,7 @@ except ImportError:
 
         def __eq__(self, other: object) -> bool:
             if hasattr(self, "exponents") and hasattr(other, "exponents"):
-                return getattr(self, "exponents") == getattr(other, "exponents")
+                return self.exponents == other.exponents
             return super().__eq__(other)
 
     # ponytail: IS_CORE_AVAILABLE toggles between True/False across the

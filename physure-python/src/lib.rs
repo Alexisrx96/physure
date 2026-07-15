@@ -290,6 +290,16 @@ impl PyUnitRegistry {
     fn contains(&self, name: String) -> bool {
         self.0.contains(&name)
     }
+
+    #[staticmethod]
+    fn default_si() -> Self {
+        PyUnitRegistry(UnitRegistry::build_default_si())
+    }
+
+    #[staticmethod]
+    fn default_imperial() -> Self {
+        PyUnitRegistry(UnitRegistry::build_default_imperial())
+    }
 }
 
 // ── PyQuantity ──────────────────────────────────────────────────────────────
@@ -600,6 +610,65 @@ fn step_euler_inplace(
     Ok(())
 }
 
+/// Scale and shift buffer elements in-place: y = val * scale + shift.
+#[pyfunction]
+fn batch_scale_and_shift_inplace(
+    py: Python<'_>,
+    buf: PyBuffer<f64>,
+    scale: f64,
+    shift: f64,
+) -> PyResult<()> {
+    let slice = buf.as_slice(py).ok_or_else(|| pyo3::exceptions::PyBufferError::new_err("Invalid buffer"))?;
+    let data = unsafe {
+        let ptr = slice.as_ptr() as *mut f64;
+        std::slice::from_raw_parts_mut(ptr, slice.len())
+    };
+    ::physure_core::batch_scale_and_shift(data, scale, shift);
+    Ok(())
+}
+
+/// Parse unit string expression directly via native Rust parser.
+#[pyfunction]
+fn parse_unit_expression(py: Python<'_>, expr: &str) -> PyResult<PyObject> {
+    let unit = ::physure_core::units::Parser::parse_expression(expr)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    get_cached_unit(py, unit)
+}
+
+/// Evaluate dual number auto-differentiation operation in native Rust.
+#[pyfunction]
+fn eval_dual_number(val: f64, der: f64, op: &str) -> PyResult<(f64, f64)> {
+    let d = ::physure_core::math::DualNumber { value: val, derivative: der };
+    let res = match op {
+        "sin" => d.sin(),
+        "cos" => d.cos(),
+        "exp" => d.exp(),
+        "ln"  => d.ln(),
+        "sqrt" => d.sqrt(),
+        _ => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unsupported op: {}", op))),
+    };
+    Ok((res.value, res.derivative))
+}
+
+/// 2nd-order Hessian Non-Linear Uncertainty Propagation in native Rust.
+#[pyfunction]
+fn propagate_hessian_uncertainty(
+    f_mean: f64,
+    jacobian: numpy::PyReadonlyArray1<'_, f64>,
+    hessian: numpy::PyReadonlyArray2<'_, f64>,
+    covariance: numpy::PyReadonlyArray2<'_, f64>,
+) -> PyResult<(f64, f64)> {
+    let j_slice = jacobian.as_slice().unwrap();
+    let h_slice = hessian.as_slice().unwrap();
+    let cov_slice = covariance.as_slice().unwrap();
+    let shape = hessian.shape();
+
+    let mean_out = ::physure_core::math::HessianPropagation::propagate_mean_slices(f_mean, h_slice, cov_slice, shape[0], shape[1]);
+    let var_out = ::physure_core::math::HessianPropagation::propagate_variance_slices(j_slice, h_slice, cov_slice, shape[0], shape[1]);
+
+    Ok((mean_out, var_out))
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 fn build_backend(
@@ -668,6 +737,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCovarianceStore>()?;
     m.add_function(wrap_pyfunction!(batch_to_si_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(step_euler_inplace, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_scale_and_shift_inplace, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_unit_expression, m)?)?;
+    m.add_function(wrap_pyfunction!(eval_dual_number, m)?)?;
+    m.add_function(wrap_pyfunction!(propagate_hessian_uncertainty, m)?)?;
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())

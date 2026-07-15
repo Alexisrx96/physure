@@ -10,6 +10,7 @@ pub enum PhysureError {
     UnsupportedIntegration(String),
     ArrowError(String),
     CovarianceError(String),
+    ParseError(String),
     Generic(String),
 }
 
@@ -32,6 +33,7 @@ impl fmt::Display for PhysureError {
             }
             PhysureError::ArrowError(msg) => write!(f, "Arrow error: {}", msg),
             PhysureError::CovarianceError(msg) => write!(f, "Covariance error: {}", msg),
+            PhysureError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             PhysureError::Generic(msg) => write!(f, "{}", msg),
         }
     }

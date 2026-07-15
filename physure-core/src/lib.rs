@@ -29,3 +29,11 @@ pub fn step_euler(positions: &mut [f64], velocities: &[f64], dt: f64) {
         positions[i] += velocities[i] * dt;
     }
 }
+
+/// Scale and shift buffer elements in place: y = val * scale + shift.
+pub fn batch_scale_and_shift(data: &mut [f64], scale: f64, shift: f64) {
+    for val in data.iter_mut() {
+        *val = *val * scale + shift;
+    }
+}
+
