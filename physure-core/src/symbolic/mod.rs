@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod diff;
 pub mod integrate;
+pub mod factor;
 pub mod compiler;
 pub mod expr;
 

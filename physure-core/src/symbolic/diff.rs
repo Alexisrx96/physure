@@ -1,4 +1,4 @@
-use crate::error::{PhysureError, PhysureResult};
+use crate::error::PhysureResult;
 use super::ast::Node;
 
 impl Node {
@@ -41,8 +41,30 @@ impl Node {
                         Node::Pow(base.clone(), Box::new(Node::Number(n - 1.0))),
                         db,
                     ])
+                } else if !exp.depends_on(var) {
+                    let db = base.diff_node(var)?;
+                    Node::Mul(vec![
+                        (**exp).clone(),
+                        Node::Pow(base.clone(), Box::new(Node::Sub(exp.clone(), Box::new(Node::Number(1.0))))),
+                        db,
+                    ])
+                } else if !base.depends_on(var) {
+                    let dv = exp.diff_node(var)?;
+                    Node::Mul(vec![
+                        self.clone(),
+                        Node::Ln(base.clone()),
+                        dv,
+                    ])
                 } else {
-                    return Err(PhysureError::NonConstantExponent("Differentiation of non-constant exponents is not supported yet".to_string()));
+                    // General Power Rule: d/dx [u(x)^v(x)] = u^v * (v' * ln(u) + v * u' / u)
+                    let du = base.diff_node(var)?;
+                    let dv = exp.diff_node(var)?;
+                    let term1 = Node::Mul(vec![dv, Node::Ln(base.clone())]);
+                    let term2 = Node::Div(Box::new(Node::Mul(vec![(**exp).clone(), du])), base.clone());
+                    Node::Mul(vec![
+                        self.clone(),
+                        Node::Add(vec![term1, term2]),
+                    ])
                 }
             }
             Node::Sin(u) => Node::Mul(vec![Node::Cos(u.clone()), u.diff_node(var)?]),

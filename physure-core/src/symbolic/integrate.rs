@@ -178,6 +178,18 @@ fn try_u_substitution(p: &Node, q: &Node, var: &str, coeff: f64) -> Option<(Node
     }
 }
 
+fn try_integration_by_parts(u: &Node, dv: &Node, var: &str) -> Option<Node> {
+    // Check if u is polynomial in var and dv is integrable (sin, cos, exp)
+    if matches!(u, Node::Symbol(s) if s == var) || matches!(u, Node::Quantity(s, _) if s == var) {
+        let v = dv.integrate_node(var).ok()?;
+        let du = u.diff_node(var).ok()?;
+        let v_du = Node::Mul(vec![v.clone(), du]).integrate_node(var).ok()?;
+        let u_v = Node::Mul(vec![u.clone(), v]);
+        return Some(Node::Sub(Box::new(u_v), Box::new(v_du)));
+    }
+    None
+}
+
 fn integrate_mul(factors: &[Node], var: &str) -> PhysureResult<Node> {
     let (const_factors, non_const): (Vec<&Node>, Vec<&Node>) =
         factors.iter().partition(|f| !f.depends_on(var));
@@ -218,7 +230,16 @@ fn integrate_mul(factors: &[Node], var: &str) -> PhysureResult<Node> {
                     return Ok(Node::Mul(vec![Node::Number(remaining), antideriv]));
                 }
             }
-            Err(PhysureError::UnsupportedIntegration("No u-substitution pattern matched product".into()))
+            // Try Integration by Parts: ∫ u dv = u v - ∫ v du
+            for (u, dv) in [(non_const[0], non_const[1]), (non_const[1], non_const[0])] {
+                if let Some(res) = try_integration_by_parts(u, dv, var) {
+                    if coeff == 1.0 {
+                        return Ok(res);
+                    }
+                    return Ok(Node::Mul(vec![Node::Number(coeff), res]));
+                }
+            }
+            Err(PhysureError::UnsupportedIntegration("No u-substitution or integration-by-parts pattern matched product".into()))
         }
         _ => Err(PhysureError::UnsupportedIntegration("Product with >2 non-constant factors".into())),
     }
@@ -239,6 +260,14 @@ fn integrate_div(a: &Node, b: &Node, var: &str) -> PhysureResult<Node> {
                 ));
             }
             _ => {}
+        }
+    }
+    // Logarithmic Quotient Rule: ∫ g'(x)/g(x) dx = ln|g(x)|
+    if let Ok(db) = b.diff_node(var) {
+        let db_simp = db.simplify();
+        let a_simp = a.simplify();
+        if db_simp == a_simp {
+            return Ok(Node::Ln(Box::new(b.clone())));
         }
     }
     Err(PhysureError::UnsupportedIntegration("Quotient integration not supported".into()))

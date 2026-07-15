@@ -89,6 +89,12 @@ impl Expr {
         }
     }
 
+    pub fn factor(&self) -> Expr {
+        Expr {
+            node: self.node.factor(),
+        }
+    }
+
     pub fn diff(&self, var: &str, n: usize) -> PhysureResult<Expr> {
         let mut cur = self.node.clone();
         for _ in 0..n {
