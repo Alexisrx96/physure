@@ -135,12 +135,7 @@ except ImportError:
             return self._core_uncertainty
 
 
-# Resolved once at import time: doing this inside __new__ would re-run a
-# failing import on every Quantity construction when the core is absent.
-try:
-    from physure._core import RationalUnit as _CoreRationalUnit
-except ImportError:
-    from physure._jit.tracer import RationalUnit as _CoreRationalUnit
+from physure._core import RationalUnit as _CoreRationalUnit
 
 
 # Helpers moved to end of file to resolve circular reference with Quantity class
@@ -212,9 +207,13 @@ class Quantity(
         dims = getattr(r_unit, "dimensions", None) or getattr(
             r_unit, "exponents", {}
         )
-        return CoreQuantity.__new__(
+        obj = CoreQuantity.__new__(
             cls, magnitude, _CoreRationalUnit(dims), raw_uncertainty
         )
+        object.__setattr__(obj, "_core_magnitude", magnitude)
+        object.__setattr__(obj, "_core_unit", r_unit)
+        object.__setattr__(obj, "_core_uncertainty", uncertainty)
+        return obj
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         """Custom reduce to ensuring proper subclass reconstruction."""
