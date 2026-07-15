@@ -22,6 +22,15 @@ if TYPE_CHECKING:
     from physure.domain.notation.protocols import ExponentEntityProtocol
     from physure.domain.notation.typing import ExponentsDict
 
+try:
+    from physure._core import DimVector as _RustDimVector
+    from physure._core import dim_vector_from_dict as _rust_dim_from_dict
+    _RUST_DIM_AVAILABLE = True
+except ImportError:
+    _RustDimVector = None  # type: ignore[assignment]
+    _rust_dim_from_dict = None  # type: ignore[assignment]
+    _RUST_DIM_AVAILABLE = False
+
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
 DIMENSIONLESS = None
@@ -182,7 +191,16 @@ class Dimension(BaseExponentEntity):
         """Multiplies two dimensions by adding their exponent vectors."""
         vector = getattr(other, "_vector", None)
         if vector is None:
-            return NotImplemented
+            return NotImplemented  # type: ignore[return-value]
+        if _RUST_DIM_AVAILABLE and len(vector) == 9:
+            rv_self = _RustDimVector.from_pairs(
+                [(SI_ORDER[i], int(self._vector[i])) for i in range(9) if self._vector[i] != 0]
+            )
+            rv_other = _RustDimVector.from_pairs(
+                [(SI_ORDER[i], int(vector[i])) for i in range(9) if vector[i] != 0]
+            )
+            result = rv_self * rv_other
+            return Dimension(tuple(result.vector))
         new_vector = tuple(
             a + b for a, b in zip(self._vector, vector, strict=False)
         )
@@ -192,7 +210,16 @@ class Dimension(BaseExponentEntity):
         """Divides two dimensions by subtracting their exponent vectors."""
         vector = getattr(other, "_vector", None)
         if vector is None:
-            return NotImplemented
+            return NotImplemented  # type: ignore[return-value]
+        if _RUST_DIM_AVAILABLE and len(vector) == 9:
+            rv_self = _RustDimVector.from_pairs(
+                [(SI_ORDER[i], int(self._vector[i])) for i in range(9) if self._vector[i] != 0]
+            )
+            rv_other = _RustDimVector.from_pairs(
+                [(SI_ORDER[i], int(vector[i])) for i in range(9) if vector[i] != 0]
+            )
+            result = rv_self / rv_other
+            return Dimension(tuple(result.vector))
         new_vector = tuple(
             a - b for a, b in zip(self._vector, vector, strict=False)
         )
@@ -207,7 +234,13 @@ class Dimension(BaseExponentEntity):
             power, (int, float)
         ):
             return NotImplemented  # pyright: ignore[reportUnreachable]
-        # Dimensions typically have integer exponents
+        if _RUST_DIM_AVAILABLE:
+            rv = _RustDimVector.from_pairs(
+                [(SI_ORDER[i], int(self._vector[i])) for i in range(9) if self._vector[i] != 0]
+            )
+            result = rv ** int(power)
+            return Dimension(tuple(result.vector))
+        # Fallback: Dimensions typically have integer exponents
         new_vector = tuple(int(v * power) for v in self._vector)
         return Dimension(new_vector)
 

@@ -16,7 +16,7 @@ from physure.domain.measurement.converters import (
     LinearConverter,
     UnitConverter,
 )
-from physure.domain.measurement.dimensions import Dimension
+from physure.domain.measurement.dimensions import Dimension, SI_ORDER
 from physure.domain.measurement.ports.unit_repository import IUnitRepository
 from physure.domain.measurement.units import CompoundUnit
 
@@ -25,7 +25,17 @@ if TYPE_CHECKING:
 
     from physure.domain.notation.typing import ExponentsDict
 
+try:
+    from physure._core import DimVector as _RustDimVector
+    from physure._core import UnitDefinition as _RustUnitDef
+    _RUST_UNITS_AVAILABLE = True
+except ImportError:
+    _RustDimVector = None  # type: ignore[assignment]
+    _RustUnitDef = None  # type: ignore[assignment]
+    _RUST_UNITS_AVAILABLE = False
+
 log = logging.getLogger(__name__)
+
 
 
 class UnitSystem(IUnitRepository):
@@ -255,6 +265,11 @@ class UnitSystem(IUnitRepository):
             if self._core_registry:
                 self._core_registry.add_base_unit(symbol)
 
+        # ── Rust UnitDefinition registration (Fase 4) ───────────────────
+        if _RUST_UNITS_AVAILABLE:
+            self._register_rust_unit_definition(symbol)
+
+
     def _register_rust_aliases(self, symbol: str, *aliases: str) -> None:
         """Registers all aliases in the Rust core registry."""
         if not self._core_registry:
@@ -262,6 +277,46 @@ class UnitSystem(IUnitRepository):
         for alias in aliases:
             with contextlib.suppress(Exception):
                 self._core_registry.register_alias(alias, symbol)
+
+    def _register_rust_unit_definition(self, symbol: str) -> None:
+        """Creates and stores a native _core.UnitDefinition for fast Rust-side lookups."""
+        unit_def = self.UNIT_SYMBOL_REGISTRY.get(symbol)
+        dim = self.UNIT_DIMENSIONS.get(symbol)
+        if unit_def is None or dim is None:
+            return
+
+        try:
+            # Build native DimVector from Dimension._vector
+            pairs = [(SI_ORDER[i], int(dim._vector[i])) for i in range(9) if dim._vector[i] != 0]
+            rust_dim = _RustDimVector.from_pairs(pairs)
+
+            conv = unit_def.converter
+            kind_str = getattr(unit_def, "kind", "delta")
+
+            if isinstance(conv, LinearConverter):
+                _RustUnitDef(
+                    symbol, rust_dim, "linear",
+                    scale=conv.scale, kind=kind_str,
+                    allow_prefixes=unit_def.allow_prefixes,
+                    name=unit_def.name,
+                )
+            elif hasattr(conv, "offset"):  # OffsetConverter
+                _RustUnitDef(
+                    symbol, rust_dim, "offset",
+                    scale=conv.scale, offset=conv.offset, kind=kind_str,
+                    allow_prefixes=unit_def.allow_prefixes,
+                    name=unit_def.name,
+                )
+            elif hasattr(conv, "factor"):  # LogarithmicConverter
+                _RustUnitDef(
+                    symbol, rust_dim, "logarithmic",
+                    factor=conv.factor, reference=getattr(conv, "reference", 1.0),
+                    kind=kind_str, allow_prefixes=unit_def.allow_prefixes,
+                    name=unit_def.name,
+                )
+        except Exception as e:
+            log.debug("Could not register Rust UnitDef for '%s': %s", symbol, e)
+
 
     def _register_prefixed_units(
         self,

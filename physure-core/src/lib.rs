@@ -10,7 +10,7 @@ pub mod serialization;
 pub mod symbolic;
 
 pub use error::{PhysureError, PhysureResult};
-pub use units::{RationalUnit, UnitRegistry};
+pub use units::{RationalUnit, UnitRegistry, UnitConverter, DimVector, UnitDefinition, UnitKind};
 pub use quantity::Quantity;
 pub use covariance::{CovarianceStore, PruningConfig};
 pub use uncertainty::{UncertaintyBackend, UncertaintyValue, GaussianBackend, MonteCarloBackend, UnscentedBackend};

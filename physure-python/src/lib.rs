@@ -30,6 +30,7 @@ use ::physure_core::{
     RationalUnit, UnitRegistry, Quantity, PruningConfig, CovarianceStore,
     GaussianBackend, MonteCarloBackend, UnscentedBackend, UncertaintyBackend, UncertaintyValue,
     PhysureResult, PhysureError,
+    DimVector, UnitConverter, UnitDefinition, UnitKind,
 };
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
@@ -727,6 +728,225 @@ fn to_arrow_record_batch(py: Python<'_>, quantities: Vec<PyRef<'_, PyQuantity>>)
     Ok(pyo3::types::PyBytes::new(py, &bytes).into_py_any(py)?)
 }
 
+// ── PyDimVector ─────────────────────────────────────────────────────────────
+/// Python-visible wrapper around the native SI dimension vector.
+/// Exposed as `physure._core.DimVector`.
+#[pyclass(name = "DimVector", module = "physure._core")]
+#[derive(Clone)]
+struct PyDimVector(DimVector);
+
+#[pymethods]
+impl PyDimVector {
+    #[new]
+    fn new(pairs: &Bound<'_, pyo3::types::PyDict>) -> PyResult<Self> {
+        // Collect owned Strings first, then borrow within the same scope.
+        let owned: Vec<(String, i64)> = pairs
+            .iter()
+            .map(|(k, v)| -> PyResult<(String, i64)> {
+                Ok((k.extract::<String>()?, v.extract::<i64>()?))
+            })
+            .collect::<PyResult<_>>()?;
+        DimVector::from_pairs(owned.iter().map(|(s, e)| (s.as_str(), *e)))
+            .map(PyDimVector)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    }
+
+    #[staticmethod]
+    fn dimensionless() -> Self {
+        PyDimVector(DimVector::DIMENSIONLESS)
+    }
+
+    #[staticmethod]
+    fn from_pairs(pairs: Vec<(String, i64)>) -> PyResult<Self> {
+        DimVector::from_pairs(pairs.iter().map(|(s, e)| (s.as_str(), *e)))
+            .map(PyDimVector)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+    }
+
+    fn is_dimensionless(&self) -> bool {
+        self.0.is_dimensionless()
+    }
+
+    fn __mul__(&self, other: &PyDimVector) -> PyDimVector {
+        PyDimVector(self.0.mul(&other.0))
+    }
+
+    fn __truediv__(&self, other: &PyDimVector) -> PyDimVector {
+        PyDimVector(self.0.div(&other.0))
+    }
+
+    fn __pow__(&self, exp: i32, _modulo: Option<i32>) -> PyDimVector {
+        PyDimVector(self.0.pow(exp))
+    }
+
+    fn __eq__(&self, other: &PyDimVector) -> bool {
+        self.0 == other.0
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.0.hash(&mut h);
+        h.finish()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("DimVector(\"{}\")", self.0)
+    }
+
+    fn __str__(&self) -> String {
+        self.0.to_string()
+    }
+
+    /// Return non-zero exponents as a Python dict {symbol: exponent}.
+    fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyDict>> {
+        let d = pyo3::types::PyDict::new(py);
+        for (sym, exp) in self.0.to_pairs() {
+            d.set_item(sym, exp as i32)?;
+        }
+        Ok(d)
+    }
+
+    #[getter]
+    fn vector(&self) -> Vec<i32> {
+        self.0.0.iter().map(|&x| x as i32).collect()
+    }
+}
+
+// ── PyUnitDefinition ─────────────────────────────────────────────────────────
+/// Python-visible wrapper around the native UnitDefinition.
+/// Exposed as `physure._core.UnitDefinition`.
+#[pyclass(name = "UnitDefinition", module = "physure._core")]
+#[derive(Clone)]
+struct PyUnitDefinition(UnitDefinition);
+
+#[pymethods]
+impl PyUnitDefinition {
+    #[new]
+    #[pyo3(signature = (symbol, dimension, converter_kind, scale=1.0, offset=0.0, factor=10.0, reference=1.0, name=None, kind="delta", allow_prefixes=true))]
+    fn new(
+        symbol: String,
+        dimension: &PyDimVector,
+        converter_kind: &str,
+        scale: f64,
+        offset: f64,
+        factor: f64,
+        reference: f64,
+        name: Option<String>,
+        kind: &str,
+        allow_prefixes: bool,
+    ) -> PyResult<Self> {
+        let converter = match converter_kind {
+            "linear" => UnitConverter::linear(scale),
+            "offset" => UnitConverter::offset(scale, offset),
+            "logarithmic" => UnitConverter::logarithmic(factor, reference),
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    format!("Unknown converter_kind: {other}. Expected 'linear', 'offset', or 'logarithmic'"),
+                ));
+            }
+        };
+        let mut def = UnitDefinition::new(symbol, dimension.0, converter)
+            .with_kind(UnitKind::from_str(kind))
+            .with_allow_prefixes(allow_prefixes);
+        if let Some(n) = name {
+            def = def.with_name(n);
+        }
+        Ok(PyUnitDefinition(def))
+    }
+
+    #[getter]
+    fn symbol(&self) -> &str {
+        &self.0.symbol
+    }
+
+    #[getter]
+    fn dimension(&self) -> PyDimVector {
+        PyDimVector(self.0.dimension)
+    }
+
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.0.name.as_deref()
+    }
+
+    #[getter]
+    fn allow_prefixes(&self) -> bool {
+        self.0.allow_prefixes
+    }
+
+    #[getter]
+    fn kind(&self) -> &str {
+        match self.0.kind {
+            UnitKind::Point => "point",
+            UnitKind::Delta => "delta",
+        }
+    }
+
+    #[getter]
+    fn is_linear(&self) -> bool {
+        self.0.converter.is_linear()
+    }
+
+    fn scale(&self) -> Option<f64> {
+        self.0.scale()
+    }
+
+    fn offset(&self) -> f64 {
+        self.0.offset()
+    }
+
+    fn to_base(&self, value: f64) -> f64 {
+        self.0.converter.to_base(value)
+    }
+
+    fn from_base(&self, value: f64) -> f64 {
+        self.0.converter.from_base(value)
+    }
+
+    fn convert_to(&self, value: f64, target: &PyUnitDefinition) -> f64 {
+        self.0.converter.convert_value(value, &target.0.converter)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("UnitDefinition('{}', {})", self.0.symbol, self.0.dimension)
+    }
+}
+
+// ── pyfunction: convert_units ─────────────────────────────────────────────
+/// Fast batch unit conversion: converts `data` in-place from `src` to `dst`.
+#[pyfunction]
+fn convert_units_inplace(
+    data: &Bound<'_, pyo3::types::PyAny>,
+    src: &PyUnitDefinition,
+    dst: &PyUnitDefinition,
+) -> PyResult<()> {
+    let buf: PyBuffer<f64> = PyBuffer::get(data)?;
+    let slice = unsafe {
+        std::slice::from_raw_parts_mut(
+            buf.buf_ptr() as *mut f64,
+            buf.len_bytes() / std::mem::size_of::<f64>(),
+        )
+    };
+    src.0.converter.convert_batch(slice, &dst.0.converter);
+    Ok(())
+}
+
+// ── pyfunction: dim_vector_from_dict ──────────────────────────────────────
+/// Create a DimVector from a Python dict {symbol: exponent}.
+#[pyfunction]
+fn dim_vector_from_dict(pairs: &Bound<'_, pyo3::types::PyDict>) -> PyResult<PyDimVector> {
+    let mut vec_pairs: Vec<(String, i64)> = Vec::new();
+    for (k, v) in pairs.iter() {
+        let sym: String = k.extract()?;
+        let exp: i64 = v.extract()?;
+        vec_pairs.push((sym, exp));
+    }
+    DimVector::from_pairs(vec_pairs.iter().map(|(s, e)| (s.as_str(), *e)))
+        .map(PyDimVector)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -735,6 +955,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyPruningConfig>()?;
     m.add_class::<PyCovarianceStore>()?;
+    m.add_class::<PyDimVector>()?;
+    m.add_class::<PyUnitDefinition>()?;
     m.add_function(wrap_pyfunction!(batch_to_si_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(step_euler_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(batch_scale_and_shift_inplace, m)?)?;
@@ -742,6 +964,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eval_dual_number, m)?)?;
     m.add_function(wrap_pyfunction!(propagate_hessian_uncertainty, m)?)?;
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(convert_units_inplace, m)?)?;
+    m.add_function(wrap_pyfunction!(dim_vector_from_dict, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
