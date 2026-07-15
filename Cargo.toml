@@ -1,0 +1,48 @@
+# physure — Cargo Workspace Orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+# All members share version, edition, license and repository through
+# [workspace.package]. Each crate opts in with `key.workspace = true`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[workspace]
+resolver = "2"
+members  = [
+    "physure-core",
+    "physure-python",
+]
+
+[workspace.package]
+version     = "0.2.0"
+edition     = "2021"
+license     = "MIT"
+repository  = "https://github.com/Alexisrx96/physure"
+homepage    = "https://github.com/Alexisrx96/physure"
+authors     = ["Irvin Torres <irvinrx1996@hotmail.com>"]
+description = "High-performance physical dimension engine — Rust-first, zero-copy FFI."
+
+# ── Shared dependency versions ─────────────────────────────────────────────
+[workspace.dependencies]
+physure-core  = { path = "physure-core" }
+num-rational  = "0.4"
+num-traits    = "0.2"
+ndarray       = "0.15"
+rand          = "0.8"
+rand_distr    = "0.4"
+nalgebra      = "0.32"
+dyn-clone     = "1.0"
+arrow         = "53.0"
+chrono        = "0.4"
+sprs          = "0.11"
+pyo3          = { version = "0.25", features = ["extension-module", "abi3-py310"] }
+numpy         = "0.25"
+
+# ── Shared release profile ──────────────────────────────────────────────────
+[profile.release]
+panic = "abort"
+lto   = true
+codegen-units = 1
+
+[profile.dev]
+# Faster incremental builds during development
+opt-level = 0
+debug     = true

@@ -1,0 +1,38 @@
+# physure-core — The Pure Physics Engine
+# ─────────────────────────────────────────────────────────────────────────────
+# HARD RULE: This crate MUST NOT depend on pyo3, wasm-bindgen, or jni.
+# It is the single source of truth for all physics logic.
+# All FFI wrappers (physure-python, physure-wasm, physure-java) depend on this.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[package]
+name        = "physure-core"
+description = "Pure Rust physics engine. No FFI dependencies. Single source of truth."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+authors.workspace    = true
+
+[lib]
+name       = "physure_core"
+# rlib: used by physure-python (statically linked into the .so)
+# No cdylib here — FFI wrappers declare their own crate-type.
+crate-type = ["rlib"]
+
+[dependencies]
+num-rational.workspace = true
+num-traits.workspace   = true
+ndarray.workspace      = true
+rand.workspace         = true
+rand_distr.workspace   = true
+nalgebra.workspace     = true
+dyn-clone.workspace    = true
+arrow.workspace        = true
+chrono.workspace       = true
+sprs.workspace         = true
+
+[dev-dependencies]
+# Unit tests live here — lightweight test helpers only
+approx = "0.5"

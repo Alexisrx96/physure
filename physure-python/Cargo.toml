@@ -1,0 +1,39 @@
+# physure-python — PyO3 Thin Wrapper
+# ─────────────────────────────────────────────────────────────────────────────
+# This crate ONLY contains PyO3 bindings. No physics logic lives here.
+# All math is delegated to physure-core.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[package]
+name        = "physure-python"
+description = "PyO3 thin wrapper for physure-core. Exposes the physics engine to Python."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+authors.workspace    = true
+
+[lib]
+name       = "physure_core"  # The compiled .so will be named physure._core
+crate-type = ["cdylib"]      # Shared library for Python import
+
+[dependencies]
+physure-core.workspace = true
+pyo3.workspace         = true
+numpy.workspace        = true
+# Re-export workspace deps that physure-core needs, so they link correctly
+num-rational.workspace = true
+num-traits.workspace   = true
+ndarray.workspace      = true
+rand.workspace         = true
+rand_distr.workspace   = true
+nalgebra.workspace     = true
+dyn-clone.workspace    = true
+arrow.workspace        = true
+chrono.workspace       = true
+sprs.workspace         = true
+
+[package.metadata.maturin]
+python-source = "python"
+module-name   = "physure._core"
