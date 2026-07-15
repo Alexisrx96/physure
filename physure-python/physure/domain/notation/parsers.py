@@ -31,20 +31,12 @@ if TYPE_CHECKING:
 
     from physure.domain.notation.protocols import ExponentEntityProtocol
 
-try:
-    from physure._core import parse_unit_expression as _rust_parse_unit_expr
-except ImportError:
-    _rust_parse_unit_expr = None
+from physure._core import parse_unit_expression as _rust_parse_unit_expr
 
 
 def parse_unit_expression(expr: str) -> ExponentEntityProtocol:
     """Parses a unit expression string using the mandatory Rust core parser."""
-    if _rust_parse_unit_expr is not None:
-        return _rust_parse_unit_expr(expr)
-    from physure.domain.measurement.units import CompoundUnit
-    from physure.domain.notation.lexer import generate_tokens
-
-    return NotationParser(generate_tokens(expr), CompoundUnit).parse()
+    return _rust_parse_unit_expr(expr)
 
 
 class NotationParser:

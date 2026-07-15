@@ -25,14 +25,9 @@ if TYPE_CHECKING:
 
     from physure.domain.notation.typing import ExponentsDict
 
-try:
-    from physure._core import DimVector as _RustDimVector
-    from physure._core import UnitDefinition as _RustUnitDef
-    _RUST_UNITS_AVAILABLE = True
-except ImportError:
-    _RustDimVector = None  # type: ignore[assignment]
-    _RustUnitDef = None  # type: ignore[assignment]
-    _RUST_UNITS_AVAILABLE = False
+from physure._core import DimVector as _RustDimVector
+from physure._core import UnitDefinition as _RustUnitDef
+from physure._core import UnitRegistry as _RustUnitRegistry
 
 log = logging.getLogger(__name__)
 
@@ -66,12 +61,7 @@ class UnitSystem(IUnitRepository):
         self.Q_ = QuantityFactory(self)
 
         # Initialize Rust Core Registry
-        try:
-            from physure._core import UnitRegistry
-
-            self._core_registry = UnitRegistry()
-        except ImportError:
-            self._core_registry = None
+        self._core_registry = _RustUnitRegistry()
 
     def __getstate__(self) -> dict[str, Any]:
         """Custom pickling state to exclude unpickleable Rust registry."""
@@ -83,17 +73,7 @@ class UnitSystem(IUnitRepository):
         """Custom unpickling state to restore (empty) Rust registry."""
         self.__dict__.update(state)
         # Re-initialize Rust Core Registry
-        try:
-            from physure._core import UnitRegistry
-
-            self._core_registry = UnitRegistry()
-            # Note: The restored registry is empty! We rely on Python dictionaries
-            # being the source of truth for now. To fully restore Rust state,
-            # we would need to walk UNIT_SYMBOL_REGISTRY and re-register everything.
-            # For "Legacy Code" phase, this empty state is acceptable as get_unit
-            # falls back to Python.
-        except ImportError:
-            self._core_registry = None
+        self._core_registry = _RustUnitRegistry()
 
     def get_definition(self, unit_symbol: str) -> UnitDefinition | None:
         """Retrieves the definition for a given unit symbol."""
@@ -245,8 +225,7 @@ class UnitSystem(IUnitRepository):
                 self._core_registry.add_base_unit(symbol)
 
         # ── Rust UnitDefinition registration (Fase 4) ───────────────────
-        if _RUST_UNITS_AVAILABLE:
-            self._register_rust_unit_definition(symbol)
+        self._register_rust_unit_definition(symbol)
 
 
     def _register_rust_aliases(self, symbol: str, *aliases: str) -> None:

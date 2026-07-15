@@ -145,29 +145,8 @@ def _resolve_unit_dim(unit_name: str, system: Any, Dimension: type) -> Any:
     return Dimension({unit_name: 1})
 
 
-try:
-    from physure._core import (
-        RationalUnit,  # pyright: ignore[reportAssignmentType]
-    )
-
-    IS_CORE_AVAILABLE = True
-except ImportError:
-    # Fallback to local stub if core not available
-    class RationalUnit:
-        """Inert stub used when physure._core is unavailable."""
-
-        def __init__(
-            self, *args: Any, **kwargs: Any
-        ) -> None: ...
-
-        def __eq__(self, other: object) -> bool:
-            if hasattr(self, "exponents") and hasattr(other, "exponents"):
-                return self.exponents == other.exponents
-            return super().__eq__(other)
-
-    # ponytail: IS_CORE_AVAILABLE toggles between True/False across the
-    # try/except branches by design; not a real constant-redefinition bug.
-    IS_CORE_AVAILABLE = False  # pyright: ignore[reportConstantRedefinition]
+from physure._core import RationalUnit
+IS_CORE_AVAILABLE = True
 
 
 # ponytail: intentional Flyweight/PyO3-hybrid multiple inheritance —
@@ -216,15 +195,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         if instance is not None:
             return instance
 
-        # ponytail: call RationalUnit.__new__ directly when Rust is active to
-        # ensure the Rust inner struct gets the dimensions dict. Calling
-        # super().__new__ goes through BaseExponentEntity.__new__ which in
-        # turn calls object.__new__(cls) with no args, leaving the Rust side
-        # with an empty dimensions map. We bypass that with a direct call.
-        if IS_CORE_AVAILABLE:
-            instance = RationalUnit.__new__(cls, normalized_exponents)
-        else:
-            instance = super().__new__(cls, normalized_exponents)
+        instance = RationalUnit.__new__(cls, normalized_exponents)
 
         # Consistent order for exponents dict to ensure uniform __repr__
         ordered_exponents = dict(sorted_items)
@@ -593,61 +564,61 @@ _register_core_units()
 # Inject Python-side functionality into the Rust base class
 # This ensures that results of Rust unit arithmetic (which return raw RationalUnit
 # objects) still have access to the high-level Python methods.
-if IS_CORE_AVAILABLE:
-    # ponytail: monkey-patches an operator onto the Rust RationalUnit class at
-    # runtime via getattr/setattr; both the wrapped operator and its operands
-    # are opaque to the checker at this reflection boundary, so Any is the
-    # honest type here, not a gap in our own annotations.
-    def wrap_arithmetic(
-        op_name: str,
-    ) -> Callable[[Any, Any], Any] | None:  # pyright: ignore[reportExplicitAny]
-        """Wraps a RationalUnit operator to coerce plain numbers."""
-        orig_op = getattr(RationalUnit, op_name, None)
-        if orig_op:
+# ponytail: monkey-patches an operator onto the Rust RationalUnit class at
+# runtime via getattr/setattr; both the wrapped operator and its operands
+# are opaque to the checker at this reflection boundary, so Any is the
+# honest type here, not a gap in our own annotations.
+def wrap_arithmetic(
+    op_name: str,
+) -> Callable[[Any, Any], Any] | None:  # pyright: ignore[reportExplicitAny]
+    """Wraps a RationalUnit operator to coerce plain numbers."""
+    orig_op = getattr(RationalUnit, op_name, None)
+    if orig_op:
 
-            def wrapped(  # pyright: ignore[reportAny]
-                self: Any,  # pyright: ignore[reportAny, reportExplicitAny]
-                other: Any,  # pyright: ignore[reportAny, reportExplicitAny]
-            ) -> Any:
-                if isinstance(other, (int, float, complex)):
-                    return self  # pyright: ignore[reportAny]
-                res = orig_op(self, other)  # pyright: ignore[reportAny]
-                if isinstance(res, RationalUnit):
-                    # Wrap in CompoundUnit to use Flyweight cache
-                    return _CompoundUnit(res.dimensions)
-                return res  # pyright: ignore[reportAny]
+        def wrapped(  # pyright: ignore[reportAny]
+            self: Any,  # pyright: ignore[reportAny, reportExplicitAny]
+            other: Any,  # pyright: ignore[reportAny, reportExplicitAny]
+        ) -> Any:
+            if isinstance(other, (int, float, complex)):
+                return self  # pyright: ignore[reportAny]
+            res = orig_op(self, other)  # pyright: ignore[reportAny]
+            if isinstance(res, RationalUnit):
+                # Wrap in CompoundUnit to use Flyweight cache
+                return _CompoundUnit(res.dimensions)
+            return res  # pyright: ignore[reportAny]
 
-            return wrapped
-        return None
+        return wrapped
+    return None
 
-    # Methods to copy from CompoundUnit to RationalUnit
-    for method_name in [
-        "dimension",
-        "simplify",
-        "_compound_factor",
-        "conversion_factor_to",
-        "to_latex",
-        "_repr_latex_",
-        "is_dimensionless",
-        "is_linear",
-        "kind",
-    ]:
-        if hasattr(CompoundUnit, method_name):
-            setattr(
-                RationalUnit, method_name, getattr(CompoundUnit, method_name)
-            )
 
-    # Arithmetic methods to wrap with Flyweight cache
-    for op in [
-        "__mul__",
-        "__rmul__",
-        "__truediv__",
-        "__rtruediv__",
-        "__pow__",
-    ]:
-        wrapped_op = wrap_arithmetic(op)
-        if wrapped_op:
-            setattr(RationalUnit, op, wrapped_op)
+# Methods to copy from CompoundUnit to RationalUnit
+for method_name in [
+    "dimension",
+    "simplify",
+    "_compound_factor",
+    "conversion_factor_to",
+    "to_latex",
+    "_repr_latex_",
+    "is_dimensionless",
+    "is_linear",
+    "kind",
+]:
+    if hasattr(CompoundUnit, method_name):
+        setattr(
+            RationalUnit, method_name, getattr(CompoundUnit, method_name)
+        )
+
+# Arithmetic methods to wrap with Flyweight cache
+for op in [
+    "__mul__",
+    "__rmul__",
+    "__truediv__",
+    "__rtruediv__",
+    "__pow__",
+]:
+    wrapped_op = wrap_arithmetic(op)
+    if wrapped_op:
+        setattr(RationalUnit, op, wrapped_op)
 
 # Stable reference for internal use (resilience against shadowing)
 _STABLE_COMPOUND_UNIT = CompoundUnit
