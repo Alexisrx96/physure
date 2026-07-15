@@ -17,7 +17,16 @@ if TYPE_CHECKING:
 class MeasureKitError(Exception):
     """Base exception for all MeasureKit errors."""
 
-    pass
+    line: int | None = None
+    column: int | None = None
+
+    def __str__(self) -> str:
+        msg = super().__str__()
+        if self.line is not None and not msg.startswith("line "):
+            if self.column is not None:
+                return f"line {self.line}, column {self.column}: {msg}"
+            return f"line {self.line}: {msg}"
+        return msg
 
 
 class IncompatibleUnitsError(MeasureKitError):

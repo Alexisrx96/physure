@@ -1,4 +1,6 @@
-# Welcome to MeasureKit
+> **⚠️ Deprecation Notice (v0.1.9):** `measurekit` will be renamed to **`physure`** in v0.2.0. The API is identical. See the [Migration Guide](migration.md).
+
+# Welcome to MeasureKit *(deprecated → physure)*
 
 MeasureKit is a high-performance physical dimension handling and unit conversion engine designed for modern scientific computing. It features **multi-backend support** (NumPy, JAX, PyTorch, Python), **static type safety** with `jaxtyping`, and **Pydantic integration**.
 

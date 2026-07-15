@@ -141,8 +141,11 @@ class UnitSystem(IUnitRepository):
 
         for alias in aliases:
             if alias not in self.ALIASES[key]:
-                self.ALIASES[key].insert(0, alias)
+                self.ALIASES[key].append(alias)
             self.ALIAS_TO_EXPONENTS[alias] = key
+
+        # Prioritize short symbols (shortest alias length first)
+        self.ALIASES[key].sort(key=len)
 
     def register_prefix(
         self,

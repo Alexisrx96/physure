@@ -749,19 +749,21 @@ class Quantity(
             )
         return f"Quantity({self.magnitude!r}, {unit_str})"
 
-    def _display_unit_str(self, use_alias: bool = False) -> str:
+    def _display_unit_str(self, use_alias: bool = True) -> str:
         """Returns the unit's display string, or "" if dimensionless."""
         if self.unit.is_dimensionless:
             return ""
+        if getattr(self, "_override_use_alias", None) is not None:
+            use_alias = self._override_use_alias
         return self.unit.to_string(self.system, use_alias=use_alias)
 
     def __str__(self) -> str:
         """Returns a user-friendly string representation."""
-        unit_str = self._display_unit_str()
+        unit_str = self._display_unit_str(use_alias=True)
         if self._has_uncertainty:
             unc_str = str(self.uncertainty)
-            return f"({self.magnitude} ± {unc_str}) {unit_str}".rstrip()
-        return f"{self.magnitude} {unit_str}".rstrip()
+            return f"({self.magnitude} ± {unc_str}) {unit_str}".strip()
+        return f"{self.magnitude} {unit_str}".strip()
 
     def __rich__(self) -> Any:
         """Rich console protocol for beautiful output."""
@@ -770,8 +772,8 @@ class Quantity(
         except ImportError:
             return self.__str__()
 
-        # Unit string
-        unit_str = self._display_unit_str()
+        # Unit string (defaults to alias for clean display)
+        unit_str = self._display_unit_str(use_alias=True)
 
         # Magnitude formatting
         mag_str = str(self.magnitude)
@@ -796,7 +798,7 @@ class Quantity(
 
         try:
             f = Fraction(str(self.magnitude))
-            return f"{f.numerator}/{f.denominator} {unit_str}".rstrip()
+            return f"{f.numerator}/{f.denominator} {unit_str}".strip()
         except (ValueError, TypeError):
             return None
 
@@ -806,28 +808,46 @@ class Quantity(
         """Formats magnitude (and uncertainty) using a Python format spec."""
         formatted_mag = format(self.magnitude, mag_fmt)
         if not self._has_uncertainty:
-            return f"{formatted_mag} {unit_str}".rstrip()
+            return f"{formatted_mag} {unit_str}".strip()
         try:
             formatted_unc = format(self._numeric_std_dev, mag_fmt)
         except (TypeError, ValueError):
             formatted_unc = str(self._numeric_std_dev)
-        return f"({formatted_mag} ± {formatted_unc}) {unit_str}".rstrip()
+        return f"({formatted_mag} ± {formatted_unc}) {unit_str}".strip()
 
     def __format__(self, format_spec: str) -> str:
-        """Formats the quantity according to the specification."""
-        parts = format_spec.split("|")
+        """Formats the quantity according to the specification.
+
+        Supports composable pipe-separated flags, e.g.:
+          - `.2f`          -> 2 decimal places (uses clean alias by default)
+          - `.3e`          -> scientific notation
+          - `base` / `raw` -> force expanded SI base units (deactivates alias)
+          - `alias`        -> force clean alias
+          - `frac`         -> fraction magnitude representation
+          - `.2f|base`     -> 2 decimal places + expanded SI base units
+          - `.3e|base`     -> scientific notation + expanded SI base units
+        """
+        if not format_spec:
+            return str(self)
+
+        parts = [p.strip() for p in format_spec.split("|") if p.strip()]
         mag_fmt = ""
-        use_alias = False
+        use_alias = True
+        is_frac = False
 
         for p in parts:
-            if p == "alias":
+            if p in ("base", "raw", "expand", "noalias"):
+                use_alias = False
+            elif p == "alias":
                 use_alias = True
-            elif p != "frac":
+            elif p == "frac":
+                is_frac = True
+            else:
                 mag_fmt = p
 
         unit_str = self._display_unit_str(use_alias=use_alias)
 
-        if "frac" in parts:
+        if is_frac:
             frac_result = self._format_as_fraction(unit_str)
             if frac_result is not None:
                 return frac_result
@@ -835,13 +855,18 @@ class Quantity(
         if mag_fmt:
             return self._format_with_magnitude_format(mag_fmt, unit_str)
 
-        # Default behavior (handles alias if present)
-        if use_alias:
-            if self._has_uncertainty:
-                return f"({self.magnitude} ± {self._numeric_std_dev}) {unit_str}".rstrip()
-            return f"{self.magnitude} {unit_str}".rstrip()
+        if self._has_uncertainty:
+            unc_str = str(self._numeric_std_dev)
+            return f"({self.magnitude} ± {unc_str}) {unit_str}".strip()
 
-        return self.__str__()
+        return f"{self.magnitude} {unit_str}".strip()
+
+    def to_base_units(self) -> Quantity[ValueType, UncType, UnitType]:
+        """Converts the quantity to its canonical base SI units."""
+        base_unit = self._base_unit_for_dimension(self.dimension)
+        res = self.to(base_unit)
+        object.__setattr__(res, "_override_use_alias", False)
+        return res
 
     def to_latex(self) -> str:
         r"""Returns the LaTeX representation.

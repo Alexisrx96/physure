@@ -1,5 +1,5 @@
-site_name: MeasureKit
-site_description: High-performance physical dimension handling and unit conversion engine with multi-backend support.
+site_name: MeasureKit (deprecated → physure)
+site_description: "[DEPRECATED → physure] High-performance physical dimension handling and unit conversion engine with multi-backend support."
 repo_url: https://github.com/Alexisrx96/measurekit
 repo_name: Alexisrx96/measurekit
 edit_uri: edit/main/docs/
@@ -49,6 +49,7 @@ plugins:
 
 nav:
   - Home: index.md
+  - "⚠️ Migration Guide (→ physure)": migration.md
   - Tutorials:
       - Best Practices: tutorials/01_best_practices.ipynb
       - JAX Integration: tutorials/jax_tutorial.ipynb

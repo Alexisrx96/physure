@@ -1,4 +1,13 @@
-# MeasureKit
+> [!WARNING]
+> **`measurekit` is deprecated as of v0.1.9.** This package will be renamed to **`physure`** in v0.2.0.
+> The API is identical — migration is a one-liner:
+> ```bash
+> pip uninstall measurekit && pip install physure
+> ```
+> Then replace `import measurekit` → `import physure` in your code.
+> See the full **[Migration Guide](MIGRATION.md)** for details.
+
+# MeasureKit *(deprecated → physure)*
 
 <div align="center">
 <img src="https://cdn.irvintorres.com/MeasureKitLogoBeta.jpg" alt="MeasureKit Logo" width="500">

@@ -1,11 +1,29 @@
-"""MeasureKit: A Python Library for Unit-Aware Scientific Calculations."""
+"""MeasureKit: A Python Library for Unit-Aware Scientific Calculations.
+
+.. deprecated:: 0.1.9
+    ``measurekit`` will be renamed to ``physure`` in version 0.2.0.
+    Please migrate: ``pip install physure``.
+    See the migration guide: https://github.com/Alexisrx96/measurekit/blob/main/MIGRATION.md
+"""
 
 import contextlib
 import sys
+import warnings
 from typing import Any
 
 # Version
-__version__ = "0.1.8"
+__version__ = "0.1.9"
+
+warnings.warn(
+    "\n"
+    "  measurekit is deprecated and will be renamed to 'physure' in v0.2.0.\n"
+    "  The API is identical — migration is a one-line change:\n"
+    "    pip uninstall measurekit && pip install physure\n"
+    "    # then replace: import measurekit  →  import physure\n"
+    "  Migration guide: https://github.com/Alexisrx96/measurekit/blob/main/MIGRATION.md\n",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 _IO_ATTRS = {"save_state", "load_state"}
 _UNITS_ATTRS = {"units", "CompoundUnit"}

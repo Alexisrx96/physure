@@ -52,7 +52,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias
 
-from measurekit.domain.exceptions import DimensionError
+from measurekit.domain.exceptions import DimensionError, MeasureKitError
 from measurekit.domain.notation.lexer import parse_superscript
 
 if TYPE_CHECKING:
@@ -69,11 +69,12 @@ else:
     GrammarValue = Any
 
 # The tokenizer regex, built from one small pattern per token kind.
-_NUMBER_PAT = r"\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?"
+_NUMBER_PAT = r"\d+\.?\d*(?:[eE]\s*[+-]?\s*\d+)?|\.\d+(?:[eE]\s*[+-]?\s*\d+)?"
 _IDENT_PAT = r"[^\W\d]\w*"
 _SUP_PAT = r"[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]+"
 _SQRT_PAT = r"√"
-_OP_PAT = r"\+/-|±|<=|>=|!=|==|=>|->|\*\*|[-+*/^()=?<>×÷,:]"  # noqa: RUF001
+_OP_PAT = r"\+/-|±|<=|>=|!=|==|=>|->|\*\s*\*|\*\*|[-+*/^()=?<>×÷,:|]"  # noqa: RUF001
+
 _OP_ALIASES = {"×": "*", "÷": "/"}  # noqa: RUF001
 _TOKEN_RE = re.compile(
     "|".join(
@@ -103,12 +104,24 @@ class Token(NamedTuple):
 class UserFunction:
     """Parsed definition of a user-defined MKML function."""
 
-    params: list[tuple[str, str | None]]  # (name, unit_symbol_or_None)
-    body_tokens: list[Token]
+    params: list[tuple[str, list[Token] | None]]  # (name, unit_tokens_or_None)
+    body_tokens: list[Token] | None = None
+    body_statements: list[list[Token]] | None = None
 
 
-class GrammarError(ValueError):
-    """Raised when a statement cannot be parsed."""
+class GrammarError(MeasureKitError, ValueError):
+    """Raised when a statement cannot be parsed or evaluated."""
+
+    def __init__(
+        self,
+        message: str,
+        line: int | None = None,
+        column: int | None = None,
+    ) -> None:
+        self.raw_message = message
+        self.line = line
+        self.column = column
+        super().__init__(message)
 
 
 def _tokenize(stmt: str) -> list[Token]:
@@ -125,6 +138,8 @@ def _tokenize(stmt: str) -> list[Token]:
         value = m.group()
         if kind == "OP":
             value = _OP_ALIASES.get(value, value)
+            if value.replace(" ", "") == "**":
+                value = "**"
         tokens.append(Token(kind, value, m.start()))
     return tokens
 
@@ -393,7 +408,8 @@ class _ExprParser:
 
 
 def _to_number(text: str) -> int | float:
-    value = float(text)
+    clean_text = text.replace(" ", "")
+    value = float(clean_text)
     if value.is_integer() and "." not in text and "e" not in text.lower():
         return int(value)
     return value
@@ -482,6 +498,28 @@ _FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
 }
 
 
+def _format_sig_figs(val: GrammarValue, sig_figs: int) -> GrammarValue:
+    """Formats a scalar or Quantity magnitude to sig_figs significant figures."""
+    mag = getattr(val, "magnitude", val)
+    if mag == 0:
+        rounded_mag = 0.0
+    else:
+        mag_abs = abs(mag)
+        digits = sig_figs - math.floor(math.log10(mag_abs)) - 1
+        rounded_mag = round(mag, max(0, digits))
+        if digits < 0:
+            factor = 10 ** (-digits)
+            rounded_mag = round(mag / factor) * factor
+
+    if hasattr(val, "unit"):
+        from measurekit.domain.measurement.quantity import Quantity
+
+        return Quantity.from_input(
+            rounded_mag, val.unit, val.system, val.uncertainty
+        )
+    return rounded_mag
+
+
 class GrammarInterpreter:
     """Stateful interpreter for MKML statements.
 
@@ -517,25 +555,148 @@ class GrammarInterpreter:
         """
         results: list[GrammarValue | None] = []
         pos = 0
+        current_line = 1
         for match in _TEXT_BLOCK_RE.finditer(source):
-            results.extend(self._run_segment(source[pos : match.start()]))
+            prefix = source[pos : match.start()]
+            results.extend(
+                self._run_segment(prefix, start_line_num=current_line)
+            )
+            current_line += prefix.count("\n")
+
             text = match.group(1)
             if text.startswith("\n"):
                 text = text[1:]
             if text.endswith("\n"):
                 text = text[:-1]
             results.append(text)
+            current_line += match.group(0).count("\n")
             pos = match.end()
-        results.extend(self._run_segment(source[pos:]))
+
+        tail = source[pos:]
+        results.extend(self._run_segment(tail, start_line_num=current_line))
         return results
 
-    def _run_segment(self, segment: str) -> list[GrammarValue | None]:
+    def _run_segment(
+        self, segment: str, start_line_num: int = 1
+    ) -> list[GrammarValue | None]:
         results: list[GrammarValue | None] = []
-        for raw in re.split(r"[\n;]", segment):
-            stmt = raw.split("#", 1)[0].strip()
-            if stmt:
-                results.append(self._eval_statement(stmt))
+        raw_lines = segment.split("\n")
+        i = 0
+        while i < len(raw_lines):
+            line = raw_lines[i]
+            current_line = start_line_num + i
+            stmt = line.split("#", 1)[0].rstrip()
+            stripped_stmt = stmt.strip()
+            if not stripped_stmt:
+                i += 1
+                continue
+
+            sub_stmts = [
+                s.strip() for s in stripped_stmt.split(";") if s.strip()
+            ]
+            try:
+                first_tokens = _tokenize(sub_stmts[0]) if sub_stmts else []
+            except GrammarError:
+                raise
+            except MeasureKitError as err:
+                col = line.find(sub_stmts[0]) + 1 if sub_stmts else 1
+                if err.line is None:
+                    err.line = current_line
+                    err.column = col
+                raise
+            except Exception as err:
+                col = line.find(sub_stmts[0]) + 1 if sub_stmts else 1
+                raise GrammarError(
+                    str(err), line=current_line, column=col
+                ) from err
+
+            if len(sub_stmts) == 1 and self._is_multiline_func_header(
+                first_tokens
+            ):
+                header_line_num = current_line
+                header_col = line.find(stripped_stmt) + 1
+                i += 1
+                body_lines: list[str] = []
+                while i < len(raw_lines):
+                    sub_line = raw_lines[i]
+                    sub_comment_stripped = sub_line.split("#", 1)[0].rstrip()
+                    if not sub_comment_stripped.strip():
+                        i += 1
+                        continue
+                    indent = len(sub_line) - len(sub_line.lstrip())
+                    if indent > 0:
+                        body_lines.append(sub_comment_stripped.strip())
+                        i += 1
+                    else:
+                        break
+                try:
+                    self._define_multiline_function(
+                        first_tokens, body_lines, stripped_stmt
+                    )
+                except GrammarError:
+                    raise
+                except MeasureKitError as err:
+                    if err.line is None:
+                        err.line = header_line_num
+                        err.column = header_col
+                    raise
+                except Exception as err:
+                    raise GrammarError(
+                        str(err), line=header_line_num, column=header_col
+                    ) from err
+                results.append(None)
+                continue
+
+            for part_stmt in sub_stmts:
+                col = line.find(part_stmt) + 1
+                try:
+                    results.append(self._eval_statement(part_stmt))
+                except GrammarError:
+                    raise
+                except MeasureKitError as err:
+                    if err.line is None:
+                        err.line = current_line
+                        err.column = col
+                    raise
+                except Exception as err:
+                    msg = str(err)
+                    raise GrammarError(
+                        msg, line=current_line, column=col
+                    ) from err
+            i += 1
+
         return results
+
+    def _is_multiline_func_header(self, tokens: list[Token]) -> bool:
+        if len(tokens) < 3:
+            return False
+        if tokens[0].type != "IDENT" or tokens[1].value != "(":
+            return False
+        close_idx = _find_matching_paren(tokens, 1)
+        if close_idx == -1:
+            return False
+        return (
+            close_idx + 2 == len(tokens)
+            and tokens[close_idx].value == ")"
+            and tokens[-1].value == "="
+        )
+
+    def _define_multiline_function(
+        self, header_tokens: list[Token], body_lines: list[str], stmt: str
+    ) -> None:
+        if not body_lines:
+            raise GrammarError(
+                f"Indented multi-line function {stmt!r} has no body statements"
+            )
+        close_idx = _find_matching_paren(header_tokens, 1)
+        params = self._param_list(header_tokens[2:close_idx], stmt)
+        name = header_tokens[0].value
+        if name in _FUNCTIONS:
+            raise GrammarError(f"{name!r} is reserved in: {stmt!r}")
+        body_statements = [_tokenize(b_line) for b_line in body_lines]
+        self._functions[name] = UserFunction(
+            params=params, body_statements=body_statements
+        )
 
     def eval(self, source: str) -> GrammarValue | None:
         """Evaluates statements and returns the last result."""
@@ -545,22 +706,47 @@ class GrammarInterpreter:
     # --- statement handling -------------------------------------------
 
     @staticmethod
+    def _split_format_spec(
+        tokens: list[Token], stmt: str
+    ) -> tuple[list[Token], str | int | None]:
+        """Strips a trailing `: spec` (e.g. `: .2f`, `: .3e`, `: base`, `: .2f|base`, `: 3`)."""
+        colon_idx = _top_level_index(tokens, ":")
+        question_idx = _top_level_index(tokens, "?")
+        if colon_idx == -1 or (
+            question_idx != -1 and question_idx < colon_idx
+        ):
+            return tokens, None
+
+        spec_start = (
+            tokens[colon_idx + 1].pos if colon_idx + 1 < len(tokens) else None
+        )
+        if spec_start is None:
+            return tokens, None
+
+        end = tokens[-1].pos + len(tokens[-1].value)
+        spec_str = stmt[spec_start:end].strip()
+
+        try:
+            return tokens[:colon_idx], int(spec_str)
+        except ValueError:
+            return tokens[:colon_idx], spec_str
+
+    @staticmethod
     def _strip_value_query(
         tokens: list[Token],
     ) -> tuple[list[Token], bool | str]:
-        """Strips a trailing `= ?`; returns tokens and the want_value flag."""
+        """Strips a trailing `?` or `= ?`; returns tokens and the want_value flag."""
         want_value: bool | str = True
-        if (
-            len(tokens) >= 2
-            and tokens[-1].value == "?"
-            and tokens[-2].value == "="
-        ):
-            tokens = tokens[:-2]
-            if (
-                _top_level_index(tokens, "=") != -1
-                or _top_level_index(tokens, "->") != -1
-            ):
-                want_value = "assign"
+        if tokens and tokens[-1].value == "?":
+            if len(tokens) >= 2 and tokens[-2].value == "=":
+                tokens = tokens[:-2]
+                if (
+                    _top_level_index(tokens, "=") != -1
+                    or _top_level_index(tokens, "->") != -1
+                ):
+                    want_value = "assign"
+            else:
+                tokens = tokens[:-1]
         return tokens, want_value
 
     @staticmethod
@@ -624,55 +810,67 @@ class GrammarInterpreter:
             raise GrammarError(f"{name!r} is already a variable in: {stmt!r}")
         body_tokens = tokens[close_idx + 2 :]
         if not body_tokens:
-            raise GrammarError(f"Empty function body in: {stmt!r}")
+            return False
         self._functions[name] = UserFunction(
             params=params, body_tokens=body_tokens
         )
         return True
 
+    def _eval_unit_expr(self, tokens: list[Token]) -> GrammarValue:
+        if not tokens:
+            raise GrammarError("Empty unit specifier")
+        return _ExprParser(
+            tokens,
+            self.system.get_unit,
+            self._q,
+            self._functions,
+            self._call_user_function,
+        ).parse()
+
     def _param_list(
         self, tokens: list[Token], stmt: str
-    ) -> list[tuple[str, str | None]]:
+    ) -> list[tuple[str, list[Token] | None]]:
         if not tokens:
             return []
-        params: list[tuple[str, str | None]] = []
+        params: list[tuple[str, list[Token] | None]] = []
         for part in _split_on_commas(tokens):
             if not part or part[0].type != "IDENT":
                 raise GrammarError(f"Invalid parameter list in: {stmt!r}")
             if len(part) == 1:
                 params.append((part[0].value, None))
                 continue
-            if (
-                len(part) == 3
-                and part[1].value == ":"
-                and part[2].type == "IDENT"
-            ):
-                self.system.get_unit(
-                    part[2].value
-                )  # validates the unit exists
-                params.append((part[0].value, part[2].value))
+            if len(part) >= 3 and part[1].value == ":":
+                unit_tokens = part[2:]
+                expected = self._eval_unit_expr(unit_tokens)
+                expected_unit = getattr(expected, "unit", expected)
+                if not hasattr(expected_unit, "dimension"):
+                    raise GrammarError(
+                        f"Invalid unit specifier in parameter list: {stmt!r}"
+                    )
+                params.append((part[0].value, unit_tokens))
                 continue
             raise GrammarError(f"Invalid parameter list in: {stmt!r}")
         return params
 
     def _bind_param(
-        self, name: str, unit_symbol: str | None, arg: GrammarValue
+        self, name: str, unit_tokens: list[Token] | None, arg: GrammarValue
     ) -> GrammarValue:
-        if unit_symbol is None:
+        if unit_tokens is None:
             return arg
-        expected = self.system.get_unit(unit_symbol)
+        expected = self._eval_unit_expr(unit_tokens)
+        expected_unit = getattr(expected, "unit", expected)
         actual_dim = getattr(arg, "unit", None)
         if actual_dim is None:
             raise DimensionError(
                 f"Parameter {name!r} expects a quantity with dimension "
-                f"{expected.dimension(self.system)!r}, got a bare number"
+                f"{expected_unit.dimension(self.system)!r}, got a bare number"
             )
-        if actual_dim.dimension(self.system) != expected.dimension(
+        if actual_dim.dimension(self.system) != expected_unit.dimension(
             self.system
         ):
             raise DimensionError(
                 f"Parameter {name!r} expects dimension "
-                f"{expected.dimension(self.system)!r}, "
+                f"{expected_unit.dimension(self.system)!r}, "
                 f"got {actual_dim.dimension(self.system)!r}"
             )
         return arg
@@ -693,17 +891,33 @@ class GrammarInterpreter:
 
         # Trailing `= ?` -> return the value even when assigning.
         tokens, want_value = self._strip_value_query(tokens)
+        # Trailing `: format_spec` (e.g. `: .2f`, `: .3e`, `: base`, `: .2f|base`, `: 3`).
+        tokens, format_spec = self._split_format_spec(tokens, stmt)
         # Trailing `=> unit` conversion (unit slice taken from source text).
         tokens, target_unit = self._split_conversion(tokens, stmt)
         tokens, name = self._split_assignment(tokens, stmt)
 
         value = self._eval_expr(tokens)
         if target_unit is not None:
-            value = value.to(target_unit)
+            is_base = target_unit.lower() in ("base", "si", "raw", "expand")
+            if hasattr(value, "to_base_units") and is_base:
+                value = value.to_base_units()
+            else:
+                value = value.to(target_unit)
+
         if name is not None:
             self.env[name] = value
-            return value if want_value == "assign" else None
-        return value
+
+        display_val: Any = value
+        if format_spec is not None:
+            if isinstance(format_spec, int) and format_spec > 0:
+                display_val = _format_sig_figs(value, format_spec)
+            elif isinstance(format_spec, str) and format_spec:
+                display_val = format(value, format_spec)
+
+        if name is not None:
+            return display_val if want_value == "assign" else None
+        return display_val
 
     def _eval_expr(self, tokens: list[Token]) -> GrammarValue:
         if not tokens:
@@ -739,18 +953,94 @@ class GrammarInterpreter:
             return self._resolve(ident)
 
         try:
-            return _ExprParser(
-                fn.body_tokens,
-                resolve,
-                self._q,
-                self._functions,
-                self._call_user_function,
-                depth + 1,
-            ).parse()
+            if fn.body_statements is not None:
+                last_val: GrammarValue | None = None
+                for stmt_tokens in fn.body_statements:
+                    last_val = self._eval_tokens_with_scope(
+                        stmt_tokens, resolve, depth + 1
+                    )
+                if last_val is None:
+                    raise GrammarError(
+                        f"Function {name!r} ended without returning a value"
+                    )
+                return last_val
+            elif fn.body_tokens is not None:
+                return _ExprParser(
+                    fn.body_tokens,
+                    resolve,
+                    self._q,
+                    self._functions,
+                    self._call_user_function,
+                    depth + 1,
+                ).parse()
+            else:
+                raise GrammarError(f"Function {name!r} has no body")
         except RecursionError as err:
             raise GrammarError(
                 f"recursion limit ({limit}) exceeded calling {name!r}"
             ) from err
+
+    def _eval_tokens_with_scope(
+        self,
+        tokens: list[Token],
+        resolve_fn: Callable[[str], GrammarValue],
+        depth: int,
+    ) -> GrammarValue | None:
+        eq_idx = _top_level_index(tokens, "==")
+        if eq_idx != -1:
+            lhs = _ExprParser(
+                tokens[:eq_idx],
+                resolve_fn,
+                self._q,
+                self._functions,
+                self._call_user_function,
+                depth,
+            ).parse()
+            rhs = _ExprParser(
+                tokens[eq_idx + 1 :],
+                resolve_fn,
+                self._q,
+                self._functions,
+                self._call_user_function,
+                depth,
+            ).parse()
+            return self._is_close(lhs, rhs)
+
+        tokens, want_value = self._strip_value_query(tokens)
+        tokens, format_spec = self._split_format_spec(tokens, "")
+        tokens, target_unit = self._split_conversion(tokens, "")
+        tokens, name = self._split_assignment(tokens, "")
+
+        value = _ExprParser(
+            tokens,
+            resolve_fn,
+            self._q,
+            self._functions,
+            self._call_user_function,
+            depth,
+        ).parse()
+        if target_unit is not None:
+            is_base = target_unit.lower() in ("base", "si", "raw", "expand")
+            if hasattr(value, "to_base_units") and is_base:
+                value = value.to_base_units()
+            else:
+                value = value.to(target_unit)
+
+        if name is not None:
+            # Rebind in the local scope layer
+            # Store in local scope closure
+            resolve_fn.__closure__[0].cell_contents[name] = value
+
+        display_val: Any = value
+        if format_spec is not None:
+            if isinstance(format_spec, int) and format_spec > 0:
+                display_val = _format_sig_figs(value, format_spec)
+            elif isinstance(format_spec, str) and format_spec:
+                display_val = format(value, format_spec)
+
+        if name is not None:
+            return display_val if want_value == "assign" else None
+        return display_val
 
     def _resolve(self, name: str) -> GrammarValue:
         if name in self.env:
@@ -777,6 +1067,6 @@ def evaluate(
     Example:
         >>> from measurekit.ext.grammar import evaluate
         >>> str(evaluate("KE = 0.5 * 2 kg * (3 m/s)^2 = ?"))
-        '9.0 kg·m²/s²'
+        '9.0 J'
     """
     return GrammarInterpreter(system=system, rel_tol=rel_tol).eval(source)

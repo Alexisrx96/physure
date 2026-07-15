@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "measurekit"
 dynamic = ["version"]
-description = "High-performance physical dimension handling and unit conversion engine with multi-backend support."
+description = "[DEPRECATED in 0.1.9 → migrate to 'physure'] High-performance physical dimension handling and unit conversion engine with multi-backend support."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -171,6 +171,11 @@ docstring-code-format = true
 testpaths = ["tests", "measurekit"]
 addopts = "-ra --benchmark-disable --doctest-modules"
 asyncio_mode = "strict"
+filterwarnings = [
+    # measurekit emits a DeprecationWarning on import (→ physure migration).
+    # Ignore it in tests so the warning doesn't clutter output or fail -W error runs.
+    "ignore::DeprecationWarning:measurekit",
+]
 
 [tool.coverage.run]
 source = ["measurekit"]

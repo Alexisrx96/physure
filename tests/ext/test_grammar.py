@@ -132,6 +132,12 @@ def test_negative_and_scientific(mn):
     assert math.isclose(result.magnitude, -1.5)
 
 
+def test_grammar_base_conversion(mn):
+    q = mn.eval("500 N => base")
+    assert str(q.unit) == "kg·m/s²"
+    assert math.isclose(q.magnitude, 500)
+
+
 def test_unicode_multiplication_and_division_operators(mn):
     assert mn.eval("2 × 3") == 6  # noqa: RUF001
     assert mn.eval("6 ÷ 2") == 3
@@ -510,3 +516,31 @@ def test_display_text_block_interleaved_with_statements(mn):
 def test_script_with_no_blocks_unaffected(mn):
     results = mn.run("a = 1 m\nb = 2 m\na + b = ?")
     assert math.isclose(results[-1].magnitude, 3)
+
+
+def test_indented_multiline_function(mn):
+    mn.run("""
+calcular_energia_k(m: kg, v: m/s) =
+    v_cuadrado = v^2
+    0.5 * m * v_cuadrado
+""")
+    result = mn.eval("calcular_energia_k(70 kg, 12 m/s)")
+    assert math.isclose(result.to("J").magnitude, 5040)
+
+
+def test_indented_multiline_function_scope_isolation(mn):
+    mn.run("""
+compute_val(x) =
+    temp_var = x * 10
+    temp_var + 5
+""")
+    assert mn.eval("compute_val(2)") == 25
+    with pytest.raises(UnknownUnitError):
+        mn.eval("temp_var")
+
+
+def test_inline_significant_figures_formatting(mn):
+    assert math.isclose(mn.eval("123.456 m : 2").magnitude, 120.0)
+    assert math.isclose(mn.eval("123.456 m : 4").magnitude, 123.5)
+    result = mn.eval("x = 500.123 N => kN : 2 = ?")
+    assert math.isclose(result.magnitude, 0.5)

@@ -218,7 +218,7 @@ def test_vector_and_array_ops(quantity_system):
 
 
 def test_formatting(quantity_system):
-    """Test the __format__ method."""
+    """Test the __format__ method with composable flags and default alias behavior."""
     q = quantity_system.Q_(1234.567, "m/s**2", 0.02)
     assert format(q, ".2f") == "(1234.57 ± 0.02) m/s²"
 
@@ -226,8 +226,33 @@ def test_formatting(quantity_system):
     assert format(q, "alias") == "(1234.567 ± 0.02) acceleration"
     assert format(q, ".1f|alias") == "(1234.6 ± 0.0) acceleration"
 
-    q_frac = quantity_system.Q_(1.5, "m")
-    assert format(q_frac, "frac") == "3/2 m"
+    from measurekit import get_active_system
+
+    sys = get_active_system()
+    q_force = sys.Q_(2.0, "N")
+    assert str(q_force) == "2.0 N"
+    assert format(q_force, ".2f") == "2.00 N"
+    assert format(q_force, ".3e") == "2.000e+00 N"
+    assert format(q_force, "base") == "2.0 kg·m/s²"
+    assert format(q_force, "raw") == "2.0 kg·m/s²"
+    assert format(q_force, ".2f|base") == "2.00 kg·m/s²"
+    assert format(q_force, ".3e|base") == "2.000e+00 kg·m/s²"
+    assert format(q_force, ".4f|alias") == "2.0000 N"
+
+    q_frac = sys.Q_(1.5, "N")
+    assert format(q_frac, "frac") == "3/2 N"
+    assert format(q_frac, "frac|base") == "3/2 kg·m/s²"
+
+
+def test_to_base_units():
+    """Test converting a derived unit quantity to base SI units."""
+    from measurekit import get_active_system
+
+    sys = get_active_system()
+    force = sys.Q_(2.0, "N")
+    base_force = force.to_base_units()
+    assert base_force.unit.to_string(sys) == "kg·m/s²"
+    assert base_force.magnitude == 2.0
 
 
 def test_dimensionless_display_omits_unit(quantity_system):
