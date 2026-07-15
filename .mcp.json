@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "sonarqube": {
+      "command": "npx",
+      "args": ["-y", "sonarqube-api-mcp"],
+      "env": {
+        "SONAR_PROJECT_KEY": "measurekit"
+      }
+    }
+  }
+}

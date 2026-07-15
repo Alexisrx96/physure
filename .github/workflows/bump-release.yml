@@ -1,0 +1,63 @@
+# Manually-triggered version bump: computes the next version, bumps
+# measurekit/__init__.py (and measurekit_core/Cargo.toml if the Rust core
+# changed since the last tag), commits, tags `vX.Y.Z`, and pushes. The tag
+# push then triggers release.yml, which builds and publishes to PyPI.
+name: Bump and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "measurekit version part to bump"
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump measurekit version
+        id: bump
+        run: |
+          current="$(grep -Po '(?<=__version__ = ")[^"]*' measurekit/__init__.py)"
+          IFS=. read -r major minor patch <<< "$current"
+          case "${{ inputs.bump }}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          new="$major.$minor.$patch"
+          sed -i "s/__version__ = \"$current\"/__version__ = \"$new\"/" measurekit/__init__.py
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+
+      - name: Bump core version if Rust changed since last tag
+        run: |
+          last_tag="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          if [ -n "$last_tag" ] && git diff --quiet "$last_tag" -- measurekit_core/src/; then
+            echo "No measurekit_core/src changes since $last_tag; leaving Cargo.toml alone"
+          else
+            core_current="$(grep -Po '(?<=^version = ")[^"]*' measurekit_core/Cargo.toml)"
+            IFS=. read -r cmajor cminor cpatch <<< "$core_current"
+            core_new="$cmajor.$cminor.$((cpatch + 1))"
+            sed -i "0,/^version = \"$core_current\"/s//version = \"$core_new\"/" measurekit_core/Cargo.toml
+            echo "Bumped measurekit_core: $core_current -> $core_new"
+          fi
+
+      - name: Commit, tag, and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add measurekit/__init__.py measurekit_core/Cargo.toml
+          git commit -m "chore: release v${{ steps.bump.outputs.new }}"
+          git tag "v${{ steps.bump.outputs.new }}"
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "v${{ steps.bump.outputs.new }}"

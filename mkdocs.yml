@@ -1,0 +1,64 @@
+site_name: Physure (deprecated → physure)
+site_description: "[DEPRECATED → physure] High-performance physical dimension handling and unit conversion engine with multi-backend support."
+repo_url: https://github.com/Alexisrx96/physure
+repo_name: Alexisrx96/physure
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - content.code.annotation
+    - navigation.expand
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+  palette:
+    # Light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    # Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [physure]
+          options:
+            docstring_style: google
+  - mkdocs-jupyter:
+      include_source: True
+  - htmlproofer:
+      raise_error: True
+
+nav:
+  - Home: index.md
+  - "⚠️ Migration Guide (→ physure)": migration.md
+  - Tutorials:
+      - Best Practices: tutorials/01_best_practices.ipynb
+      - JAX Integration: tutorials/jax_tutorial.ipynb
+  - Guides:
+      - torch.compile Integration: torch_compile_integration.md
+      - Chemistry Integration Roadmap: chemistry_roadmap.md
+      - Diagramming Engine Roadmap: diagrams_roadmap.md
+      - Scientific Companion Roadmap: scientific_roadmap.md
+      - Symbolic Math Engine Roadmap: symbolic_math_roadmap.md
+  - API Reference:
+      - Quantity: reference/quantity.md
+      - Units & Constants Catalog: UNITS.md

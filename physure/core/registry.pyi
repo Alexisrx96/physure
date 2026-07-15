@@ -1,5 +1,5 @@
 # AUTO-GENERATED FILE. DO NOT EDIT.
-# Run 'measurekit sync-types' to update.
+# Run 'physure sync-types' to update.
 
 from typing import Any
 from physure.domain.measurement.units import Unit
