@@ -4,16 +4,16 @@
 
 **Goal:** Add user-defined functions (`f(x) = expr`), optional per-parameter dimension typing (`f(x: m) = expr`), `let...in` local bindings scoped to function bodies, recursion with a configurable depth limit, and display-text blocks (```` ```text``` ````) to MKML — plus a minimal ternary operator and comparison operators, added to the grammar so recursive functions (factorial, Fibonacci) can actually terminate.
 
-**Architecture:** All work lands in the single existing file `measurekit/ext/grammar.py` (the "no-AST" recursive-descent interpreter shared by `.mkml` files and the REPL). Function bodies are stored as raw token lists (`UserFunction.body_tokens`) and re-parsed with a fresh `_ExprParser` on every call — the same "parse and eval in one pass" style already used everywhere else in this file. `let`/`in` and comparison/ternary syntax are recognized by adding new precedence levels to the existing recursive-descent expression grammar, not by introducing a separate reserved-word list.
+**Architecture:** All work lands in the single existing file `physure/ext/grammar.py` (the "no-AST" recursive-descent interpreter shared by `.mkml` files and the REPL). Function bodies are stored as raw token lists (`UserFunction.body_tokens`) and re-parsed with a fresh `_ExprParser` on every call — the same "parse and eval in one pass" style already used everywhere else in this file. `let`/`in` and comparison/ternary syntax are recognized by adding new precedence levels to the existing recursive-descent expression grammar, not by introducing a separate reserved-word list.
 
-**Tech Stack:** Pure Python (`measurekit/ext/grammar.py`), stdlib only (`operator`, `dataclasses`, `re`, `math`). No new dependencies.
+**Tech Stack:** Pure Python (`physure/ext/grammar.py`), stdlib only (`operator`, `dataclasses`, `re`, `math`). No new dependencies.
 
 ---
 
 ## File Structure
 
-- **Modify:** `measurekit/ext/grammar.py` — all 7 tasks land here: tokenizer regex, `_ExprParser` (ternary/comparison/let, user-function-call dispatch), `GrammarInterpreter` (function storage, definition parsing, recursion, typed-parameter binding, display-text extraction).
-- **Modify:** `measurekit/infrastructure/config/measurekit.conf` — Task 3 adds the `mkml_recursion_limit` setting.
+- **Modify:** `physure/ext/grammar.py` — all 7 tasks land here: tokenizer regex, `_ExprParser` (ternary/comparison/let, user-function-call dispatch), `GrammarInterpreter` (function storage, definition parsing, recursion, typed-parameter binding, display-text extraction).
+- **Modify:** `physure/infrastructure/config/physure.conf` — Task 3 adds the `mkml_recursion_limit` setting.
 - **Modify:** `tests/ext/test_grammar.py` — new tests appended per task, following the file's existing `test_<feature>_<case>` naming and the `mn` fixture (bare `GrammarInterpreter()`).
 
 No new files. This mirrors the structure of the prior MKML slice (math functions, PR #36/#37).
@@ -23,7 +23,7 @@ No new files. This mirrors the structure of the prior MKML slice (math functions
 ## Task 1: Ternary operator and comparison operators
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py`
+- Modify: `physure/ext/grammar.py`
 - Test: `tests/ext/test_grammar.py`
 
 - [x] **Step 1: Write the failing tests**
@@ -69,7 +69,7 @@ Expected: FAIL — `?`/`<`/`>` etc. are not recognized operators, or comparisons
 
 - [x] **Step 3: Implement**
 
-**3a. Add the `operator` import.** In `measurekit/ext/grammar.py`, change:
+**3a. Add the `operator` import.** In `physure/ext/grammar.py`, change:
 
 ```python
 import math
@@ -241,7 +241,7 @@ to:
     g = 9.81 +/- 0.02 m/s^2  # uncertainty (also `±`)
 
 Example:
-    >>> from measurekit.ext.grammar import GrammarInterpreter
+    >>> from physure.ext.grammar import GrammarInterpreter
     >>> mn = GrammarInterpreter()
     >>> _ = mn.run('''
     ... force = 500 N
@@ -261,7 +261,7 @@ to:
     1 < 2 ? 10 : 20          # ternary -> value
 
 Example:
-    >>> from measurekit.ext.grammar import GrammarInterpreter
+    >>> from physure.ext.grammar import GrammarInterpreter
     >>> mn = GrammarInterpreter()
     >>> _ = mn.run('''
     ... force = 500 N
@@ -280,13 +280,13 @@ Example:
 Run: `uv run pytest tests/ext/test_grammar.py -v` (full file — Steps 3f/3g touch shared code paths, so run the whole file, not just the new tests)
 Expected: PASS, all tests including pre-existing ones.
 
-Also run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Also run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add ternary operator and comparison operators to MKML grammar"
 ```
 
@@ -295,7 +295,7 @@ git commit -m "feat: add ternary operator and comparison operators to MKML gramm
 ## Task 2: User-defined function definitions and calls
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py`
+- Modify: `physure/ext/grammar.py`
 - Test: `tests/ext/test_grammar.py`
 
 - [x] **Step 1: Write the failing tests**
@@ -666,7 +666,7 @@ to:
     def __init__(
         self, system: UnitSystem | None = None, rel_tol: float = 1e-9
     ) -> None:
-        from measurekit.application.factories import QuantityFactory
+        from physure.application.factories import QuantityFactory
 
         self._q = QuantityFactory(system)
         self.rel_tol = rel_tol
@@ -679,7 +679,7 @@ to:
     def __init__(
         self, system: UnitSystem | None = None, rel_tol: float = 1e-9
     ) -> None:
-        from measurekit.application.factories import QuantityFactory
+        from physure.application.factories import QuantityFactory
 
         self._q = QuantityFactory(system)
         self.rel_tol = rel_tol
@@ -712,13 +712,13 @@ Example:
 Run: `uv run pytest tests/ext/test_grammar.py -v`
 Expected: PASS, all tests including pre-existing ones.
 
-Also run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Also run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add user-defined function definitions and calls to MKML"
 ```
 
@@ -727,8 +727,8 @@ git commit -m "feat: add user-defined function definitions and calls to MKML"
 ## Task 3: Recursion (depth limit, configurable setting)
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py`
-- Modify: `measurekit/infrastructure/config/measurekit.conf`
+- Modify: `physure/ext/grammar.py`
+- Modify: `physure/infrastructure/config/physure.conf`
 - Test: `tests/ext/test_grammar.py`
 
 - [x] **Step 1: Write the failing tests**
@@ -773,7 +773,7 @@ Expected: FAIL — `fact(5)` currently either infinite-loops into a raw Python `
 
 - [x] **Step 3: Implement**
 
-**3a. Add the recursion-limit setting.** In `measurekit/infrastructure/config/measurekit.conf`, change:
+**3a. Add the recursion-limit setting.** In `physure/infrastructure/config/physure.conf`, change:
 
 ```
 [Settings]
@@ -808,7 +808,7 @@ mkml_recursion_limit = 100
     def __init__(
         self, system: UnitSystem | None = None, rel_tol: float = 1e-9
     ) -> None:
-        from measurekit.application.factories import QuantityFactory
+        from physure.application.factories import QuantityFactory
 
         self._q = QuantityFactory(system)
         self.rel_tol = rel_tol
@@ -822,8 +822,8 @@ to:
     def __init__(
         self, system: UnitSystem | None = None, rel_tol: float = 1e-9
     ) -> None:
-        from measurekit.application.context import get_active_system
-        from measurekit.application.factories import QuantityFactory
+        from physure.application.context import get_active_system
+        from physure.application.factories import QuantityFactory
 
         self._q = QuantityFactory(system)
         self.rel_tol = rel_tol
@@ -942,7 +942,7 @@ becomes:
     f(3)                     # -> 9
 
 Example:
-    >>> from measurekit.ext.grammar import GrammarInterpreter
+    >>> from physure.ext.grammar import GrammarInterpreter
     >>> mn = GrammarInterpreter()
     >>> _ = mn.run('''
     ... force = 500 N
@@ -966,13 +966,13 @@ Example:
 Run: `uv run pytest tests/ext/test_grammar.py -v`
 Expected: PASS, all tests including pre-existing ones.
 
-Also run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Also run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py measurekit/infrastructure/config/measurekit.conf tests/ext/test_grammar.py
+git add physure/ext/grammar.py physure/infrastructure/config/physure.conf tests/ext/test_grammar.py
 git commit -m "feat: add recursion support with configurable depth limit to MKML functions"
 ```
 
@@ -981,7 +981,7 @@ git commit -m "feat: add recursion support with configurable depth limit to MKML
 ## Task 4: Typed parameters (`f(x: m) = expr`)
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py`
+- Modify: `physure/ext/grammar.py`
 - Test: `tests/ext/test_grammar.py`
 
 - [x] **Step 1: Write the failing tests**
@@ -1036,14 +1036,14 @@ Expected: FAIL — `_param_list` raises `GrammarError("Invalid parameter list...
 **3a. Import `DimensionError`.** Change:
 
 ```python
-from measurekit.domain.notation.lexer import parse_superscript
+from physure.domain.notation.lexer import parse_superscript
 ```
 
 to:
 
 ```python
-from measurekit.domain.exceptions import DimensionError
-from measurekit.domain.notation.lexer import parse_superscript
+from physure.domain.exceptions import DimensionError
+from physure.domain.notation.lexer import parse_superscript
 ```
 
 **3b. Extend `_param_list` to accept an optional `: unit` suffix.** Change:
@@ -1158,16 +1158,16 @@ Run the doctest for this exact line first (see Step 4) — if `Quantity`'s `repr
 Run: `uv run pytest tests/ext/test_grammar.py -v`
 Expected: PASS, all tests including pre-existing ones.
 
-Run: `uv run python -c "from measurekit.ext.grammar import GrammarInterpreter; mn = GrammarInterpreter(); mn.run('double_len(x: m) = x * 2'); print(repr(mn.eval('double_len(3 m)')))"`
+Run: `uv run python -c "from physure.ext.grammar import GrammarInterpreter; mn = GrammarInterpreter(); mn.run('double_len(x: m) = x * 2'); print(repr(mn.eval('double_len(3 m)')))"`
 Use the printed repr to fix the doctest line from 3e if it doesn't match `Quantity(6.0, m)`.
 
-Then run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Then run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add optional typed parameters to MKML function definitions"
 ```
 
@@ -1176,7 +1176,7 @@ git commit -m "feat: add optional typed parameters to MKML function definitions"
 ## Task 5: `let...in` local bindings
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py`
+- Modify: `physure/ext/grammar.py`
 - Test: `tests/ext/test_grammar.py`
 
 - [x] **Step 1: Write the failing tests**
@@ -1313,13 +1313,13 @@ becomes:
 Run: `uv run pytest tests/ext/test_grammar.py -v`
 Expected: PASS, all tests including pre-existing ones.
 
-Also run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Also run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add let...in local bindings to MKML function bodies"
 ```
 
@@ -1328,7 +1328,7 @@ git commit -m "feat: add let...in local bindings to MKML function bodies"
 ## Task 6: Display-text blocks
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py`
+- Modify: `physure/ext/grammar.py`
 - Test: `tests/ext/test_grammar.py`
 
 - [x] **Step 1: Write the failing tests**
@@ -1468,13 +1468,13 @@ becomes:
 Run: `uv run pytest tests/ext/test_grammar.py -v`
 Expected: PASS, all tests including pre-existing ones.
 
-Also run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Also run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS.
 
 - [x] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add display-text blocks to MKML scripts"
 ```
 
@@ -1486,7 +1486,7 @@ git commit -m "feat: add display-text blocks to MKML scripts"
 
 - [x] **Step 1: Full test suite with coverage**
 
-Run: `uv run pytest --cov=measurekit --cov-report=term-missing`
+Run: `uv run pytest --cov=physure --cov-report=term-missing`
 Expected: All tests pass; total coverage ≥ 80% (per `fail_under = 80` in `pyproject.toml`).
 
 - [x] **Step 2: Lint and format**
@@ -1499,20 +1499,20 @@ Expected: No reformatting needed.
 
 - [x] **Step 3: Type check the touched file**
 
-Run: `uv run ty check measurekit/ext/grammar.py`
+Run: `uv run ty check physure/ext/grammar.py`
 Expected: No new errors introduced by this plan (pre-existing repo-wide `ty` errors elsewhere are not this plan's concern — `ty` is advisory per `CLAUDE.md`).
 
 - [x] **Step 4: Doctests**
 
-Run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS — all doctest examples added across Tasks 1–6 execute correctly.
 
 - [x] **Step 5: REPL / CLI smoke test**
 
-Run: `uv run python -m measurekit "fact(n) = n <= 1 ? 1 : n * fact(n - 1); fact(5) = ?"`
+Run: `uv run python -m physure "fact(n) = n <= 1 ? 1 : n * fact(n - 1); fact(5) = ?"`
 Expected: prints `120` (or the equivalent formatted bare-number result) with no traceback.
 
-Run: `uv run python -m measurekit "double_len(x: m) = x * 2; double_len(3 m) => m"`
+Run: `uv run python -m physure "double_len(x: m) = x * 2; double_len(3 m) => m"`
 Expected: prints a `6 m`-equivalent result with no traceback.
 
 - [x] **Step 6: SonarQube quality gate (if `.env` with `SONAR_TOKEN` is configured locally)**

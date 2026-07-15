@@ -157,9 +157,9 @@ def test_consistency_multiplication(data, unit_name):
 @given(st.floats(min_value=0.1, max_value=10.0), st.just("1"))
 def test_consistency_log(val, unit_name):
     """Logarithm consistency (requires dimensionless usually, or handles unit)."""
-    # MeasureKit log returns log of magnitude only if dimensionless?
+    # Physure log returns log of magnitude only if dimensionless?
     # Or computes log(q/q0)?
-    # Quantity.log() implementation in MeasureKit is dimensionless-only usually.
+    # Quantity.log() implementation in Physure is dimensionless-only usually.
     # But let's check `_apply_transcendental`. It propagates on magnitude.
     # If valid, we check consistency.
 

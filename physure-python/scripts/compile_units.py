@@ -3,7 +3,7 @@ import pathlib
 import pprint
 import sys
 
-# Ensure we can import measurekit from the project root
+# Ensure we can import physure from the project root
 PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
@@ -103,7 +103,7 @@ def generate_core_module(unique_units, output_dir):
     """Generates the core unit module."""
     lines = [
         "# GENERATED CODE - DO NOT EDIT",
-        "from measurekit.domain.measurement.units import CompoundUnit",
+        "from physure.domain.measurement.units import CompoundUnit",
         "",
         "# This module defines the static unit objects for the 'core' scope.",
         "# These are simple CompoundUnit wrappers.",
@@ -137,7 +137,7 @@ def generate_init_module(output_dir):
         "import typing",
         "",
         "if typing.TYPE_CHECKING:",
-        "    from measurekit.domain.measurement.units import CompoundUnit",
+        "    from physure.domain.measurement.units import CompoundUnit",
         "",
         "try:",
         "    from ._index import UNIT_INDEX",
@@ -148,7 +148,7 @@ def generate_init_module(output_dir):
         "    if name in UNIT_INDEX:",
         "        scope = UNIT_INDEX[name]",
         "        module = __import__(",
-        '            f"measurekit.units.{scope}", fromlist=[name]',
+        '            f"physure.units.{scope}", fromlist=[name]',
         "        )",
         "        return getattr(module, name)",
         "    raise AttributeError(",
@@ -180,7 +180,7 @@ def compile_units(config_path, output_dir):
 
 
 if __name__ == "__main__":
-    # Point to the measurekit.conf file
-    # We assume CWD is project root d:\measurekit
-    conf_file = "measurekit/infrastructure/config/measurekit.conf"
-    compile_units(conf_file, "measurekit/units")
+    # Point to the physure.conf file
+    # We assume CWD is project root d:\physure
+    conf_file = "physure/infrastructure/config/physure.conf"
+    compile_units(conf_file, "physure/units")

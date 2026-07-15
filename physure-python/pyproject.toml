@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name        = "physure"
 version     = "0.2.0"
-description = "High-performance physical dimension engine. Rust-first, zero-copy FFI. Successor to measurekit."
+description = "High-performance physical dimension engine. Rust-first, zero-copy FFI. Successor to physure."
 readme      = "README.md"
 requires-python = ">=3.10"
 license     = { text = "MIT" }
@@ -82,7 +82,7 @@ docs = [
 # ── Maturin configuration ────────────────────────────────────────────────────
 # maturin builds the Rust extension from physure-python/
 [tool.maturin]
-python-source   = "python"
+python-source   = "."
 manifest-path   = "Cargo.toml"
 module-name     = "physure._core"
 features        = ["pyo3/extension-module"]

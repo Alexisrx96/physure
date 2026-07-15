@@ -45,13 +45,13 @@ jobs:
 
     - name: Install dependencies
       # Pin to the matrix interpreter; otherwise uv resolves the newest
-      # available Python and maturin links measurekit_core against a
+      # available Python and maturin links physure_core against a
       # libpython that isn't installed.
       run: uv sync --all-extras --dev --python ${{ matrix.python-version }}
 
     - name: Run Tests
       # --cov enables the fail_under=80 coverage gate from pyproject.toml
-      run: uv run pytest --ignore=tests/core/test_serialization.py --cov=measurekit
+      run: uv run pytest --ignore=tests/core/test_serialization.py --cov=physure
 
     - name: Run Benchmarks
       # Enable benchmarks explicitly since they are disabled in pyproject.toml

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Unicode scientific notation to measurekit's grammar/chemistry parsers — subscript digits in chemical formulas, the `⇌` equilibrium arrow, `×`/`÷` operators, and a `√` prefix operator — each with a keyboard-typable ASCII fallback, per the approved spec at `docs/superpowers/specs/2026-07-11-notation-layer-design.md`.
+**Goal:** Add Unicode scientific notation to physure's grammar/chemistry parsers — subscript digits in chemical formulas, the `⇌` equilibrium arrow, `×`/`÷` operators, and a `√` prefix operator — each with a keyboard-typable ASCII fallback, per the approved spec at `docs/superpowers/specs/2026-07-11-notation-layer-design.md`.
 
 **Architecture:** Four small, independent additions to existing hand-rolled regex tokenizers (no new files, no new dependencies). A single new helper, `subscript_to_ascii()`, normalizes Unicode subscript digits to ASCII before existing formula/reaction-term regexes run. `×`/`÷` are normalized to `*`/`/` at MKML tokenize time. `√`/`sqrt(...)` is handled as a narrow special case in `_ExprParser._atom()` returning `operand ** 0.5`, which already works correctly on unit-bearing `Quantity` values (verified live: `Q_(9, "m^2") ** 0.5 == 3.0 m`) with zero changes to `CompoundUnit`/`Quantity`.
 
@@ -18,7 +18,7 @@
 ### Task 1: `subscript_to_ascii()` helper
 
 **Files:**
-- Modify: `measurekit/domain/notation/lexer.py:14-17`
+- Modify: `physure/domain/notation/lexer.py:14-17`
 - Test: `tests/notation_tests/test_lexer.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -26,7 +26,7 @@
 Add to `tests/notation_tests/test_lexer.py`, extend the import at the top and add a new test function:
 
 ```python
-from measurekit.domain.notation.lexer import (
+from physure.domain.notation.lexer import (
     TokenType,
     UnitToken,
     generate_tokens,
@@ -53,7 +53,7 @@ Expected: FAIL with `ImportError: cannot import name 'subscript_to_ascii'`
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `measurekit/domain/notation/lexer.py`, immediately after the existing `_SUBSCRIPT_MAP` line (line 17: `_SUBSCRIPT_MAP = str.maketrans("0123456789-", "₀₁₂₃₄₅₆₇₈₉₋")`), add:
+In `physure/domain/notation/lexer.py`, immediately after the existing `_SUBSCRIPT_MAP` line (line 17: `_SUBSCRIPT_MAP = str.maketrans("0123456789-", "₀₁₂₃₄₅₆₇₈₉₋")`), add:
 
 ```python
 _SUBSCRIPT_REVERSE_MAP = str.maketrans("₀₁₂₃₄₅₆₇₈₉₋", "0123456789-")
@@ -74,13 +74,13 @@ def subscript_to_ascii(s: str) -> str:
 Run: `uv run pytest tests/notation_tests/test_lexer.py::test_subscript_to_ascii -xvs`
 Expected: PASS
 
-Also run the doctest: `uv run pytest --doctest-modules measurekit/domain/notation/lexer.py -v`
+Also run the doctest: `uv run pytest --doctest-modules physure/domain/notation/lexer.py -v`
 Expected: PASS (new `subscript_to_ascii` doctest included)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/domain/notation/lexer.py tests/notation_tests/test_lexer.py
+git add physure/domain/notation/lexer.py tests/notation_tests/test_lexer.py
 git commit -m "feat: add subscript_to_ascii normalization helper"
 ```
 
@@ -89,7 +89,7 @@ git commit -m "feat: add subscript_to_ascii normalization helper"
 ### Task 2: Wire `subscript_to_ascii()` into `species.py::parse_formula`
 
 **Files:**
-- Modify: `measurekit/ext/chemistry/species.py:1-11` (imports), `:163-188` (`parse_formula`)
+- Modify: `physure/ext/chemistry/species.py:1-11` (imports), `:163-188` (`parse_formula`)
 - Test: `tests/ext/test_species.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -109,13 +109,13 @@ Expected: FAIL — `parse_formula("H₂O")` raises `ValueError: Invalid formula:
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `measurekit/ext/chemistry/species.py`, add the import (after the existing `import re` at line 10):
+In `physure/ext/chemistry/species.py`, add the import (after the existing `import re` at line 10):
 
 ```python
 import re
 from typing import TYPE_CHECKING
 
-from measurekit.domain.notation.lexer import subscript_to_ascii
+from physure.domain.notation.lexer import subscript_to_ascii
 ```
 
 In `parse_formula` (currently at line 163), normalize the input as the first line of the function body, and add a doctest example:
@@ -157,13 +157,13 @@ def parse_formula(formula: str) -> dict[str, int]:
 Run: `uv run pytest tests/ext/test_species.py::test_parse_unicode_subscript_formula -xvs`
 Expected: PASS
 
-Also run: `uv run pytest tests/ext/test_species.py -v` and `uv run pytest --doctest-modules measurekit/ext/chemistry/species.py -v`
+Also run: `uv run pytest tests/ext/test_species.py -v` and `uv run pytest --doctest-modules physure/ext/chemistry/species.py -v`
 Expected: all PASS (no regressions, new doctest line included)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/chemistry/species.py tests/ext/test_species.py
+git add physure/ext/chemistry/species.py tests/ext/test_species.py
 git commit -m "feat: accept Unicode subscript digits in chemical formulas"
 ```
 
@@ -172,7 +172,7 @@ git commit -m "feat: accept Unicode subscript digits in chemical formulas"
 ### Task 3: Wire `subscript_to_ascii()` into `reaction.py::_parse_species`
 
 **Files:**
-- Modify: `measurekit/ext/chemistry/reaction.py:13-28` (imports + `_parse_species`)
+- Modify: `physure/ext/chemistry/reaction.py:13-28` (imports + `_parse_species`)
 - Test: `tests/ext/test_reaction.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -193,7 +193,7 @@ Expected: FAIL — `_parse_species("H₂")` raises `ValueError: Invalid reaction
 
 - [ ] **Step 3: Write minimal implementation**
 
-In `measurekit/ext/chemistry/reaction.py`, add the import. Current imports (lines 13-25):
+In `physure/ext/chemistry/reaction.py`, add the import. Current imports (lines 13-25):
 
 ```python
 from __future__ import annotations
@@ -204,19 +204,19 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
-from measurekit.ext.chemistry.equivalency import mass_to_moles, moles_to_mass
-from measurekit.ext.chemistry.species import Species
+from physure.ext.chemistry.equivalency import mass_to_moles, moles_to_mass
+from physure.ext.chemistry.species import Species
 
 if TYPE_CHECKING:
-    from measurekit.domain.measurement.quantity import Quantity
+    from physure.domain.measurement.quantity import Quantity
 ```
 
 Add `subscript_to_ascii` to the imports:
 
 ```python
-from measurekit.domain.notation.lexer import subscript_to_ascii
-from measurekit.ext.chemistry.equivalency import mass_to_moles, moles_to_mass
-from measurekit.ext.chemistry.species import Species
+from physure.domain.notation.lexer import subscript_to_ascii
+from physure.ext.chemistry.equivalency import mass_to_moles, moles_to_mass
+from physure.ext.chemistry.species import Species
 ```
 
 Update `_parse_species` (currently lines 35-39):
@@ -240,7 +240,7 @@ Expected: all PASS (no regressions)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/chemistry/reaction.py tests/ext/test_reaction.py
+git add physure/ext/chemistry/reaction.py tests/ext/test_reaction.py
 git commit -m "feat: accept Unicode subscript digits in reaction terms"
 ```
 
@@ -249,7 +249,7 @@ git commit -m "feat: accept Unicode subscript digits in reaction terms"
 ### Task 4: Equilibrium arrow `⇌`, ASCII fallback `<=>`
 
 **Files:**
-- Modify: `measurekit/ext/chemistry/reaction.py:27` (`_ARROW_RE`), `:131-160` (`Reaction` class)
+- Modify: `physure/ext/chemistry/reaction.py:27` (`_ARROW_RE`), `:131-160` (`Reaction` class)
 - Test: `tests/ext/test_reaction.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -373,13 +373,13 @@ class Reaction:
 Run: `uv run pytest tests/ext/test_reaction.py -v`
 Expected: all PASS, including the three new tests and every pre-existing test (`test_malformed_equation_raises` and `test_empty_term_raises` must still pass — `.search()` + span slicing produces identical `lhs`/`rhs` to the old `.split()` for all existing inputs).
 
-Also run: `uv run pytest --doctest-modules measurekit/ext/chemistry/reaction.py -v`
+Also run: `uv run pytest --doctest-modules physure/ext/chemistry/reaction.py -v`
 Expected: PASS (new doctest line included)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/chemistry/reaction.py tests/ext/test_reaction.py
+git add physure/ext/chemistry/reaction.py tests/ext/test_reaction.py
 git commit -m "feat: add equilibrium arrow (⇌, <=>) with reversible flag"
 ```
 
@@ -388,7 +388,7 @@ git commit -m "feat: add equilibrium arrow (⇌, <=>) with reversible flag"
 ### Task 5: `×` `÷` as multiplication/division in MKML
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py:53-68` (tokenizer), `:83-95` (`_tokenize`)
+- Modify: `physure/ext/grammar.py:53-68` (tokenizer), `:83-95` (`_tokenize`)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -451,7 +451,7 @@ Expected: all PASS (no regressions)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: accept × and ÷ as multiplication/division in MKML"
 ```
 
@@ -460,7 +460,7 @@ git commit -m "feat: accept × and ÷ as multiplication/division in MKML"
 ### Task 6: `√` prefix operator and `sqrt(...)` ASCII fallback
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py:53-68` (tokenizer), `:189-215` (`_atom`), `:303-318` (`_split_assignment`)
+- Modify: `physure/ext/grammar.py:53-68` (tokenizer), `:189-215` (`_atom`), `:303-318` (`_split_assignment`)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -588,7 +588,7 @@ Expected: all PASS, including the four new tests and every pre-existing test.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add sqrt prefix operator (√, sqrt(...)) to MKML"
 ```
 
@@ -597,7 +597,7 @@ git commit -m "feat: add sqrt prefix operator (√, sqrt(...)) to MKML"
 ### Task 7: Rename MNML → MKML in `grammar.py` docs/comments
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py:1-30` (module docstring), `:112-116` (`_ExprParser` docstring), `:226-231` (`GrammarInterpreter` docstring)
+- Modify: `physure/ext/grammar.py:1-30` (module docstring), `:112-116` (`_ExprParser` docstring), `:226-231` (`GrammarInterpreter` docstring)
 
 This is a pure documentation/naming change — no behavior changes, no new tests. Existing doctests must still pass unmodified since only prose changes, not code or examples.
 
@@ -614,9 +614,9 @@ Implements the core of the MeasureNote Meta-Language (MNML) as a
 to:
 
 ```python
-"""MKML grammar extension: evaluate MeasureKit-style engineering notes.
+"""MKML grammar extension: evaluate Physure-style engineering notes.
 
-Implements the core of the MeasureKit Meta-Lang (MKML) as a
+Implements the core of the Physure Meta-Lang (MKML) as a
 ```
 
 - [ ] **Step 2: Update the `_ExprParser` class docstring**
@@ -649,13 +649,13 @@ to:
 
 - [ ] **Step 4: Run the full test suite and doctests to confirm no regressions**
 
-Run: `uv run pytest tests/ext/test_grammar.py --doctest-modules measurekit/ext/grammar.py -v`
+Run: `uv run pytest tests/ext/test_grammar.py --doctest-modules physure/ext/grammar.py -v`
 Expected: all PASS (docstring-only change; no example text was altered)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py
+git add physure/ext/grammar.py
 git commit -m "docs: rename MNML to MKML in grammar.py docstrings"
 ```
 
@@ -677,7 +677,7 @@ Expected: both clean (no errors).
 
 - [ ] **Step 3: Confirm no coverage regression**
 
-Run: `uv run pytest --cov=measurekit --cov-report=term-missing`
+Run: `uv run pytest --cov=physure --cov-report=term-missing`
 Expected: total coverage stays ≥ 80% (per CLAUDE.md code quality policy). All new code (the `subscript_to_ascii` helper, the widened `_ARROW_RE`/`reversible` path, the `×`/`÷` alias, and the `√`/`sqrt` branch) is exercised by the tests added in Tasks 1-6, so this should hold without extra tests.
 
 No commit for this task — it's a verification checkpoint before considering Phase 1 complete.

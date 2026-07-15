@@ -1,4 +1,4 @@
-"""Example script demonstrating advanced physics capabilities in MeasureKit.
+"""Example script demonstrating advanced physics capabilities in Physure.
 
 This script demonstrates:
 1. Non-linear unit conversions (Celsius <-> Fahrenheit).
@@ -8,11 +8,11 @@ This script demonstrates:
 
 import sympy as sp
 
-from measurekit import Q_
+from physure import Q_
 
 
 def main():
-    print("--- Advanced Physics in MeasureKit ---\n")
+    print("--- Advanced Physics in Physure ---\n")
 
     # 1. Temperature Conversions (Offset Units)
     print("1. Temperature Conversions:")
@@ -66,7 +66,7 @@ def main():
     db1 = Q_(10, "dB")  # Assuming dB is registered as Logarithmic
     db2 = Q_(20, "dB")
 
-    # Note: MeasureKit default system might define dB as Linear (dimensionless) if not updated.
+    # Note: Physure default system might define dB as Linear (dimensionless) if not updated.
     # But usually startup.py handles Log logic if in config.
     # Let's hope default config or logic handles it.
     # If not, this might do linear addition (30 dB).

@@ -3,7 +3,7 @@ requires = ["maturin>=1.11,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "measurekit_core"
+name = "physure_core"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",

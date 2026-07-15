@@ -1,8 +1,8 @@
 import pandas as pd
 
-from measurekit import Q_
+from physure import Q_
 
-# 1. Create a DataFrame with MeasureKit Quantity objects
+# 1. Create a DataFrame with Physure Quantity objects
 # Note: In a real-world scenario, these might have uncertainties already
 df = pd.DataFrame(
     {

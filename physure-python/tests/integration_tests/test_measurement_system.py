@@ -1,4 +1,4 @@
-"""Integration tests for the MeasureKit measurement system using pytest."""
+"""Integration tests for the Physure measurement system using pytest."""
 
 import math
 

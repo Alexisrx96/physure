@@ -116,7 +116,7 @@ def test_density_from_mass_and_volume_matches_gum_worked_example():
 
 
 # --- Correlated vs uncorrelated: x - x --------------------------------------
-# Outside an active covariance store, MeasureKit treats every `Q_(...,
+# Outside an active covariance store, Physure treats every `Q_(...,
 # uncertainty=...)` as an independent noise source (VarianceModel), so `x - x`
 # adds the uncertainty in quadrature even though the exact answer is 0 +/- 0.
 # Inside `PhysureContext()`, scalar uncertainties are lineage-tracked

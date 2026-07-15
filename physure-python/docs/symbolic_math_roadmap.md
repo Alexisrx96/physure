@@ -1,19 +1,19 @@
 # Symbolic Math & Algebraic Simplification Roadmap
 
-**Status: ✅ Implemented** (PR #30, `main`). This document outlines the architectural justifications, design specifications, algebraic rule-engine, and pattern-matching system required to build a lightweight, high-performance, pure-Rust symbolic mathematics engine inside **`measurekit_core`**.
+**Status: ✅ Implemented** (PR #30, `main`). This document outlines the architectural justifications, design specifications, algebraic rule-engine, and pattern-matching system required to build a lightweight, high-performance, pure-Rust symbolic mathematics engine inside **`physure_core`**.
 
 | Section | Status | Implementation |
 |---|---|---|
-| §2 AST | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
-| §3 Simplification engine | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
-| §4.1 Symbolic differentiation | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
-| §4.2 Indefinite integration | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
+| §2 AST | ✅ | `physure_core/src/symbolic.rs`, `physure/domain/symbolic/native.py` |
+| §3 Simplification engine | ✅ | `physure_core/src/symbolic.rs`, `physure/domain/symbolic/native.py` |
+| §4.1 Symbolic differentiation | ✅ | `physure_core/src/symbolic.rs`, `physure/domain/symbolic/native.py` |
+| §4.2 Indefinite integration | ✅ | `physure_core/src/symbolic.rs`, `physure/domain/symbolic/native.py` |
 | §5 SymEngine/SymPy-aligned tests | ✅ | `tests/symbolic/test_native_expr.py` (Rust engine + Python fallback) |
-| §6 Unit integration | ✅ | `measurekit_core/src/symbolic.rs`, `measurekit/domain/symbolic/native.py` |
-| §7 AOT physics compilation | ✅ | `measurekit/ext/compiler.py`, `tests/ext/test_compiler.py` |
-| §8 Dimensionally constrained symbolic regression | ✅ | `measurekit/ext/symbolic_regression.py`, `tests/ext/test_symbolic_regression.py` |
+| §6 Unit integration | ✅ | `physure_core/src/symbolic.rs`, `physure/domain/symbolic/native.py` |
+| §7 AOT physics compilation | ✅ | `physure/ext/compiler.py`, `tests/ext/test_compiler.py` |
+| §8 Dimensionally constrained symbolic regression | ✅ | `physure/ext/symbolic_regression.py`, `tests/ext/test_symbolic_regression.py` |
 
-The existing sympy-based `SymbolicExpression` (`measurekit/domain/symbolic/expression.py`) is untouched, and none of this engine is wired into `Quantity`/`Dimension` — it is a self-contained engine surfaced under `domain/symbolic/` and `ext/`.
+The existing sympy-based `SymbolicExpression` (`physure/domain/symbolic/expression.py`) is untouched, and none of this engine is wired into `Quantity`/`Dimension` — it is a self-contained engine surfaced under `domain/symbolic/` and `ext/`.
 
 ---
 
@@ -28,7 +28,7 @@ Standard physical unit libraries incur significant runtime performance penalties
 
 ### 1.2. Exact Analytical Uncertainty Propagation
 Numerical uncertainty propagation (e.g., using finite differences or numerical derivatives) suffers from truncation and rounding errors, especially near mathematical singularities or zero.
-*   By maintaining a symbolic differentiation engine, MeasureKit can compute the **exact analytical formula for the propagated uncertainty** (e.g., deriving $u_{xy} = \sqrt{y^2 u_x^2 + x^2 u_y^2}$ analytically).
+*   By maintaining a symbolic differentiation engine, Physure can compute the **exact analytical formula for the propagated uncertainty** (e.g., deriving $u_{xy} = \sqrt{y^2 u_x^2 + x^2 u_y^2}$ analytically).
 *   Evaluating these exact formulas eliminates numerical noise, providing perfect stability for high-precision metrological calculations (GUM compliance).
 
 ### 1.3. Static Dimensional Verification of Physical Laws (Type-Checking Physics)
@@ -55,7 +55,7 @@ A symbolic AST containing both algebraic expressions and physical units is highl
 
 ## 2. Abstract Syntax Tree (AST) Design
 
-To represent mathematical expressions symbolically, we define a recursive `Expr` enumeration in Rust. To ensure seamless physical-chemical integration, the AST is designed to hold both raw symbolic variables and dimensional **MeasureKit Quantities** as leaf nodes.
+To represent mathematical expressions symbolically, we define a recursive `Expr` enumeration in Rust. To ensure seamless physical-chemical integration, the AST is designed to hold both raw symbolic variables and dimensional **Physure Quantities** as leaf nodes.
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -63,7 +63,7 @@ pub enum Expr {
     // Leaf Nodes
     Number(f64),
     Symbol(String),
-    Quantity(Box<Quantity>), // Direct integration with MeasureKit physical quantities
+    Quantity(Box<Quantity>), // Direct integration with Physure physical quantities
     
     // Algebraic Operations
     Add(Vec<Expr>),          // Multi-ary addition for commutative simplification
@@ -316,8 +316,8 @@ graph TD
 ### 7.2. API Design Proposal
 
 ```python
-from measurekit import Q_
-from measurekit.ext.compiler import compile_physics_model
+from physure import Q_
+from physure.ext.compiler import compile_physics_model
 
 # 1. Define model physically using symbolic variables
 def drag_force(density, velocity, area, drag_coeff):
@@ -357,8 +357,8 @@ By enforcing dimensional homogeneity at each step of the genetic tree synthesis:
 ### 8.2. API Design Proposal
 
 ```python
-from measurekit import Q_
-from measurekit.ext.symbolic_regression import SymbolicRegressor
+from physure import Q_
+from physure.ext.symbolic_regression import SymbolicRegressor
 
 # Experimental dataset (with calibration uncertainties)
 t = Q_([1.0, 2.0, 3.0, 4.0, 5.0], "s", uncertainty=0.01)

@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install deps (including dev)
 uv sync --all-extras
 
-# Build Rust core (required after any change to measurekit_core/src/)
-cd measurekit_core && maturin develop && cd ..
+# Build Rust core (required after any change to physure_core/src/)
+cd physure_core && maturin develop && cd ..
 
 # Run all tests
 uv run pytest
@@ -25,10 +25,10 @@ uv run ruff format .
 uv run ty check
 
 # Enable runtime beartype contracts (slow, for debugging)
-MEASUREKIT_DEBUG=1 uv run pytest
+PHYSURE_DEBUG=1 uv run pytest
 
 # SonarQube scan (requires .env with SONAR_TOKEN, server at http://localhost:9000)
-uv run pytest tests/ --cov=measurekit --cov-report=xml --junitxml=test-results.xml
+uv run pytest tests/ --cov=physure --cov-report=xml --junitxml=test-results.xml
 make sonar  # runs pytest+coverage then pysonar
 ```
 
@@ -40,8 +40,8 @@ make sonar  # runs pytest+coverage then pysonar
 
 ### Two packages, one repo
 
-- **`measurekit/`** — pure Python library (the public API)
-- **`measurekit_core/`** — Rust extension via PyO3, built with `maturin`. Provides `RationalUnit`, `UnitRegistry`, `CovarianceStore`, `PruningConfig`. All imports from `measurekit_core` have Python fallbacks so the library still works without it, at reduced performance.
+- **`physure/`** — pure Python library (the public API)
+- **`physure_core/`** — Rust extension via PyO3, built with `maturin`. Provides `RationalUnit`, `UnitRegistry`, `CovarianceStore`, `PruningConfig`. All imports from `physure_core` have Python fallbacks so the library still works without it, at reduced performance.
 
 ### Layer map
 
@@ -73,36 +73,36 @@ static/         ← custom mypy plugin, generated type stubs
 
 **`Uncertainty`** is abstract (`domain/measurement/uncertainty.py`). Concrete subclasses: `CorrelatedUncertainty` (tracks full covariance via `CovarianceStore`) and `UncorrelatedUncertainty`. The global `CovarianceStore` must be cleared between tests — handled by the `clean_state` autouse fixture in `tests/conftest.py`.
 
-**`BackendManager`** (`core/dispatcher.py`) lazily loads backend modules (NumPy, PyTorch, JAX) and caches them. Select via `MEASUREKIT_BACKEND` env var or by passing a tensor to `Q_`.
+**`BackendManager`** (`core/dispatcher.py`) lazily loads backend modules (NumPy, PyTorch, JAX) and caches them. Select via `PHYSURE_BACKEND` env var or by passing a tensor to `Q_`.
 
 ### JIT compilation
 
-`measurekit.jit` wraps a function with symbolic tracing: during the trace, `Quantity` objects are unwrapped and unit arithmetic is validated via `RationalUnit` (Rust). The compiled function operates on raw tensors; unit checks have zero runtime overhead. For PyTorch, this goes through `__torch_dispatch__`.
+`physure.jit` wraps a function with symbolic tracing: during the trace, `Quantity` objects are unwrapped and unit arithmetic is validated via `RationalUnit` (Rust). The compiled function operates on raw tensors; unit checks have zero runtime overhead. For PyTorch, this goes through `__torch_dispatch__`.
 
 ### Unit system bootstrap
 
-`application/startup.py` reads `infrastructure/config/measurekit.conf`, `systems/international.conf`, and `systems/imperial.conf` using `configparser`, then uses `UnitSystemBuilder` to register dimensions, prefixes, units, and constants into a `UnitSystem`. A user-local `measurekit.conf` in the CWD can override defaults.
+`application/startup.py` reads `infrastructure/config/physure.conf`, `systems/international.conf`, and `systems/imperial.conf` using `configparser`, then uses `UnitSystemBuilder` to register dimensions, prefixes, units, and constants into a `UnitSystem`. A user-local `physure.conf` in the CWD can override defaults.
 
 ### Uncertainty propagation modes
 
-Set globally with `measurekit.propagation_mode("correlated" | "uncorrelated")` or scoped with the `uncertainty_mode` context manager. Correlated mode uses a sparse covariance matrix (backed by `measurekit_core.CovarianceStore` when available). For JAX/functional use, `measurekit.functional.FunctionalState` lets you pass the covariance matrix explicitly instead of relying on global state.
+Set globally with `physure.propagation_mode("correlated" | "uncorrelated")` or scoped with the `uncertainty_mode` context manager. Correlated mode uses a sparse covariance matrix (backed by `physure_core.CovarianceStore` when available). For JAX/functional use, `physure.functional.FunctionalState` lets you pass the covariance matrix explicitly instead of relying on global state.
 
 ### mypy plugin
 
-`measurekit.static.mypy_plugin` narrows `Q_("value", "unit_str")` return types to `Quantity[..., ..., Literal["unit_str"]]` at static analysis time. Configured in both `pyproject.toml` and `mypy.ini`.
+`physure.static.mypy_plugin` narrows `Q_("value", "unit_str")` return types to `Quantity[..., ..., Literal["unit_str"]]` at static analysis time. Configured in both `pyproject.toml` and `mypy.ini`.
 
 ## Philosophy & Correctness
 
 These are the project's non-negotiable invariants, learned the hard way. Violating one is a bug even if all tests pass.
 
 - **Unit correctness is the product.** Never silently drop a dimension, a conversion factor, or an uncertainty. If an operation can't preserve them, raise — a wrong answer with confident units is worse than an exception.
-- **The Rust core is always optional.** Every `from measurekit_core import ...` must have a working pure-Python fallback. New Rust features land with the fallback in the same PR.
+- **The Rust core is always optional.** Every `from physure_core import ...` must have a working pure-Python fallback. New Rust features land with the fallback in the same PR.
 - **Zero runtime dependencies is policy.** `dependencies = []` in pyproject.toml stays empty. Anything new goes in an optional extra (`[native]`, `[numpy]`, ...) with a lazy import.
-- **First use must stay fast (~0.5s budget).** `import measurekit` and the first `Q_()` evaluation must not pull in torch, scipy, or build more than one `UnitSystem`. Check with `time python -m measurekit "500 N / 2 m^2 => kPa"` after touching import paths (see PR #18 for the history).
+- **First use must stay fast (~0.5s budget).** `import physure` and the first `Q_()` evaluation must not pull in torch, scipy, or build more than one `UnitSystem`. Check with `time python -m physure "500 N / 2 m^2 => kPa"` after touching import paths (see PR #18 for the history).
 - **Unit aliases collide silently.** `UnitSystem` logs a warning and the *later* definition wins (the `gal` gallon/galileo incident, PR #17). Before adding any unit or alias, grep the existing symbol across all `.conf` files — use the `add-unit` skill.
 - **Global state must be resettable.** `CompoundUnit._cache`, `Dimension._cache`, and the global `CovarianceStore` are cleared by the `clean_state` autouse fixture. New global caches must be added to that fixture.
-- **Doctests are tests.** pytest runs `--doctest-modules`; every docstring example in `measurekit/` executes on every run. Keep examples runnable or don't write them.
-- **Never commit machine-specific config.** `.env`, `measurekit_core/.cargo/config.toml` with local rustflags, and `.claude/settings.local.json` broke or nearly broke CI before — they are gitignored; keep it that way.
+- **Doctests are tests.** pytest runs `--doctest-modules`; every docstring example in `physure/` executes on every run. Keep examples runnable or don't write them.
+- **Never commit machine-specific config.** `.env`, `physure_core/.cargo/config.toml` with local rustflags, and `.claude/settings.local.json` broke or nearly broke CI before — they are gitignored; keep it that way.
 
 ### Code quality policy (enforced)
 

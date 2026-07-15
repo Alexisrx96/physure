@@ -2,7 +2,7 @@
 
 ## Context
 
-`measurekit/ext/grammar.py` currently supports variable assignment (`x = 5 m`) and a fixed table
+`physure/ext/grammar.py` currently supports variable assignment (`x = 5 m`) and a fixed table
 of built-in functions (`_FUNCTIONS`, added in the previous Phase 2 slice: abs, round, sqrt, sin,
 etc. — see `docs/superpowers/specs/2026-07-11-mkml-math-functions-design.md`). There is no way for
 a user to define their own named, callable expression.
@@ -71,7 +71,7 @@ no dimension to match against.
 New reserved words `let`/`in`, recognized **only in their exact expected grammatical position** —
 the same mechanism `sqrt`/`min`/`max`/etc. already use (position-gated, not a global reserved-word
 list). This matters because `in` is already a unit alias for inches
-(`measurekit.conf:102: inch = 0.0254, L, noprefix, [in, inch]`) — outside the `let...in` position,
+(`physure.conf:102: inch = 0.0254, L, noprefix, [in, inch]`) — outside the `let...in` position,
 `in` continues to resolve as inches exactly as it does today (e.g. `5 in`). Documented inline with a
 `# ponytail:` comment, same style as the existing `min`/minute shadow note.
 
@@ -99,7 +99,7 @@ user-function call, checked before evaluating the body). The counter starts at 0
 statement evaluated by `GrammarInterpreter._eval_statement` and is not shared across statements —
 so a script calling the same function many times in sequence (not recursively) never approaches the
 limit. Limit is read from
-`UnitSystem.settings["mkml_recursion_limit"]` (new key in `measurekit.conf`'s `[Settings]` section,
+`UnitSystem.settings["mkml_recursion_limit"]` (new key in `physure.conf`'s `[Settings]` section,
 default `100` if the active system's `.conf` doesn't define it — keeps user-local `.conf` overrides
 working without a hard requirement to update them). Exceeding the limit raises
 `GrammarError(f"recursion limit ({limit}) exceeded calling {name!r}")` — a controlled MKML-level

@@ -1,9 +1,9 @@
-# Release pipeline: push a tag `vX.Y.Z` to publish measurekit and
-# measurekit-core to PyPI.
+# Release pipeline: push a tag `vX.Y.Z` to publish physure and
+# physure-core to PyPI.
 #
 # One-time setup (repo owner):
-#   1. PyPI: add a Trusted Publisher to BOTH projects (measurekit,
-#      measurekit-core): repo Alexisrx96/measurekit, workflow release.yml,
+#   1. PyPI: add a Trusted Publisher to BOTH projects (physure,
+#      physure-core): repo Alexisrx96/physure, workflow release.yml,
 #      environment pypi.
 #   2. GitHub: create the `pypi` environment (Settings -> Environments).
 name: Release
@@ -20,10 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Tag must match measurekit.__version__
+      - name: Tag must match physure.__version__
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          version="$(grep -Po '(?<=__version__ = ")[^"]*' measurekit/__init__.py)"
+          version="$(grep -Po '(?<=__version__ = ")[^"]*' physure/__init__.py)"
           if [ "$tag" != "$version" ]; then
             echo "Tag v$tag does not match __version__ $version" >&2
             exit 1
@@ -47,14 +47,14 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
-          working-directory: measurekit_core
+          working-directory: physure_core
           target: ${{ matrix.target }}
           args: --release --out dist
           manylinux: auto
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: core-${{ matrix.os }}-${{ matrix.target }}
-          path: measurekit_core/dist
+          path: physure_core/dist
 
   core-sdist:
     needs: check-version
@@ -63,15 +63,15 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1
         with:
-          working-directory: measurekit_core
+          working-directory: physure_core
           command: sdist
           args: --out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: core-sdist
-          path: measurekit_core/dist
+          path: physure_core/dist
 
-  measurekit-dist:
+  physure-dist:
     needs: check-version
     runs-on: ubuntu-latest
     steps:
@@ -80,11 +80,11 @@ jobs:
       - run: uv build --out-dir dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: measurekit-dist
+          name: physure-dist
           path: dist
 
   publish:
-    needs: [core-wheels, core-sdist, measurekit-dist]
+    needs: [core-wheels, core-sdist, physure-dist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -97,15 +97,15 @@ jobs:
           path: dist-core
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: measurekit-dist
+          name: physure-dist
           path: dist-py
       # Two publish steps: trusted-publishing tokens are minted per project
-      - name: Publish measurekit-core
+      - name: Publish physure-core
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: dist-core
           skip-existing: true
-      - name: Publish measurekit
+      - name: Publish physure
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: dist-py

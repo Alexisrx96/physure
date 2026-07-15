@@ -4,7 +4,7 @@ import traceback
 
 import torch
 
-from measurekit import Q_
+from physure import Q_
 
 # Setup Logging
 logging.basicConfig(

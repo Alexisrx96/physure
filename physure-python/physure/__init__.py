@@ -1,6 +1,6 @@
 """physure — High-performance physical dimension engine.
 
-Successor to ``measurekit`` v0.1.9. Rust-first, zero-copy FFI.
+Successor to ``physure`` v0.1.9. Rust-first, zero-copy FFI.
 
 Quick start::
 
@@ -28,7 +28,7 @@ from typing import Any
 __version__ = "0.2.0"
 
 # ── Rust-first: hard import of native core ────────────────────────────────────
-# Unlike measurekit, physure has NO pure-Python fallback.
+# Unlike physure, physure has NO pure-Python fallback.
 # If the compiled extension is missing, we fail fast with a clear message.
 try:
     from physure._core import (  # type: ignore[import]

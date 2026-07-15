@@ -3,7 +3,7 @@
 <div align="center">
 
 <h3><b>High-Performance Physical Dimension Engine</b></h3>
-<p><i>Rust-first. Zero-copy FFI. Successor to <code>measurekit</code>.</i></p>
+<p><i>Rust-first. Zero-copy FFI. Successor to <code>physure</code>.</i></p>
 
 [![PyPI](https://img.shields.io/pypi/v/physure)](https://pypi.org/project/physure/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -17,7 +17,7 @@
 
 **physure** *(physics + measure)* is a unit-aware, dimension-correct engine for physical quantities — built on a pure Rust core with zero-copy FFI bridges to Python.
 
-Born as the successor to `measurekit`, physure drops the pure-Python fallback in favor of a **Rust-first** architecture: the compiled extension is the only backend.
+Born as the successor to `physure`, physure drops the pure-Python fallback in favor of a **Rust-first** architecture: the compiled extension is the only backend.
 
 ### Architecture
 
@@ -94,19 +94,19 @@ step_euler_inplace(positions, vel, dt=0.016)   # 60 FPS step
 
 ---
 
-## Migrating from measurekit
+## Migrating from physure
 
 `physure` is a **drop-in replacement**. The API is identical.
 
 ```bash
-pip uninstall measurekit
+pip uninstall physure
 pip install physure
 ```
 
 ```python
 # Before
-import measurekit
-from measurekit import Q_
+import physure
+from physure import Q_
 
 # After — one line change
 import physure

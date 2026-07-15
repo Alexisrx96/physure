@@ -142,7 +142,7 @@ def test_symbolic_differentiation():
 
     assert str(v.magnitude) == str(10 * t)
     # Unit should be m/s
-    # MeasureKit might format as 'm/s' or 'm s^-1' depending on implementation
+    # Physure might format as 'm/s' or 'm s^-1' depending on implementation
     u_str = v.unit.to_string()
     assert "m" in u_str
     assert "s" in u_str

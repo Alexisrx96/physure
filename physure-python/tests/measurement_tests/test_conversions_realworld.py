@@ -1,4 +1,4 @@
-"""Real-world unit-conversion checks across every unit system MeasureKit ships.
+"""Real-world unit-conversion checks across every unit system Physure ships.
 
 Every expected value below is a published, independently verifiable conversion
 factor (NIST SP 811 / SP 330, exact SI-2019 definitions, or the international

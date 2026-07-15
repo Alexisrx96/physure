@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a general `name(args)` call-syntax mechanism to MKML (`measurekit/ext/grammar.py`) with a fixed dispatch table of built-in math functions (`abs`, `sqrt`, `round`, `floor`, `ceil`, `min`, `max`, `sin`, `cos`, `tan`, `exp`, `log`, `ln`), migrating the existing hardcoded `sqrt(...)` special case into it. Both `.mkml` file evaluation and the REPL use this automatically since both call `GrammarInterpreter` in this one file.
+**Goal:** Add a general `name(args)` call-syntax mechanism to MKML (`physure/ext/grammar.py`) with a fixed dispatch table of built-in math functions (`abs`, `sqrt`, `round`, `floor`, `ceil`, `min`, `max`, `sin`, `cos`, `tan`, `exp`, `log`, `ln`), migrating the existing hardcoded `sqrt(...)` special case into it. Both `.mkml` file evaluation and the REPL use this automatically since both call `GrammarInterpreter` in this one file.
 
-**Architecture:** Add a `,` token, a `_call_args()` parser method, and a module-level `_FUNCTIONS` dispatch table (`name -> (min_arity, max_arity, callable)`) to `measurekit/ext/grammar.py`. `_ExprParser._atom()` gets one new branch: an `IDENT` token whose value is a `_FUNCTIONS` key and is immediately followed by `(` is parsed as a call and dispatched. Every dispatched callable delegates to Python builtins (`abs`, `round`, `min`, `max`, `math.floor`, `math.ceil`) or to `Quantity`'s own bound methods (`.sin()`, `.cos()`, `.tan()`, `.exp()`, `.log()`, with a `math` module fallback for bare numbers) — no new unit-handling logic is written; `Quantity` already does it correctly.
+**Architecture:** Add a `,` token, a `_call_args()` parser method, and a module-level `_FUNCTIONS` dispatch table (`name -> (min_arity, max_arity, callable)`) to `physure/ext/grammar.py`. `_ExprParser._atom()` gets one new branch: an `IDENT` token whose value is a `_FUNCTIONS` key and is immediately followed by `(` is parsed as a call and dispatched. Every dispatched callable delegates to Python builtins (`abs`, `round`, `min`, `max`, `math.floor`, `math.ceil`) or to `Quantity`'s own bound methods (`.sin()`, `.cos()`, `.tan()`, `.exp()`, `.log()`, with a `math` module fallback for bare numbers) — no new unit-handling logic is written; `Quantity` already does it correctly.
 
 **Tech Stack:** Pure Python, stdlib `math` only (already imported in the file). No new dependencies.
 
@@ -15,9 +15,9 @@
 ## Task 1: Call-syntax mechanism (comma token, `_call_args`, `_FUNCTIONS` table, dispatch in `_atom`) — proven with `abs` and migrated `sqrt`
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py:57` (`_OP_PAT`)
-- Modify: `measurekit/ext/grammar.py:195-230` (`_ExprParser._atom`)
-- Modify: `measurekit/ext/grammar.py:233-238` (insert new module-level helpers after `_to_number`)
+- Modify: `physure/ext/grammar.py:57` (`_OP_PAT`)
+- Modify: `physure/ext/grammar.py:195-230` (`_ExprParser._atom`)
+- Modify: `physure/ext/grammar.py:233-238` (insert new module-level helpers after `_to_number`)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -53,7 +53,7 @@ Expected: FAIL — `abs` is not a registered unit, so `abs(-3 m)` currently rais
 
 - [ ] **Step 3: Add the comma token**
 
-In `measurekit/ext/grammar.py`, change line 57 from:
+In `physure/ext/grammar.py`, change line 57 from:
 
 ```python
 _OP_PAT = r"\+/-|±|==|=>|->|\*\*|[-+*/^()=?×÷]"  # noqa: RUF001
@@ -67,7 +67,7 @@ _OP_PAT = r"\+/-|±|==|=>|->|\*\*|[-+*/^()=?×÷,]"  # noqa: RUF001
 
 - [ ] **Step 4: Add `_transcendental`, `_check_arity`, and `_FUNCTIONS` module-level**
 
-In `measurekit/ext/grammar.py`, insert immediately after the `_to_number` function (after line 237, before `class GrammarInterpreter:` on line 240):
+In `physure/ext/grammar.py`, insert immediately after the `_to_number` function (after line 237, before `class GrammarInterpreter:` on line 240):
 
 ```python
 def _transcendental(x: GrammarValue, name: str) -> GrammarValue:
@@ -96,7 +96,7 @@ def _check_arity(
 # by "(". Delegates to Quantity's own dunder/bound methods wherever
 # possible; no unit-handling logic lives here.
 # ponytail: "min" shadows the pre-existing "min" unit alias (minutes, see
-# measurekit.conf:123). Only affects the narrow case of writing `min(` with
+# physure.conf:123). Only affects the narrow case of writing `min(` with
 # no operator meaning "N minutes times (...)"; that now raises an arity
 # error instead of silently misparsing. Accepted trade-off, confirmed with
 # user rather than renaming the function.
@@ -108,7 +108,7 @@ _FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
 
 - [ ] **Step 5: Add `_call_args()` and the dispatch branch to `_atom()`**
 
-In `measurekit/ext/grammar.py`, replace the `_atom` method (current lines 195-230):
+In `physure/ext/grammar.py`, replace the `_atom` method (current lines 195-230):
 
 ```python
     def _atom(self) -> GrammarValue:
@@ -224,7 +224,7 @@ Expected: PASS — all tests including the new ones and the pre-existing `test_s
 - [ ] **Step 7: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add MKML function-call syntax, migrate sqrt into dispatch table"
 ```
 
@@ -233,7 +233,7 @@ git commit -m "feat: add MKML function-call syntax, migrate sqrt into dispatch t
 ## Task 2: `round`, `floor`, `ceil`
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py` (`_FUNCTIONS` dict added in Task 1)
+- Modify: `physure/ext/grammar.py` (`_FUNCTIONS` dict added in Task 1)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -266,7 +266,7 @@ Expected: FAIL — `round`, `floor`, `ceil` are not yet in `_FUNCTIONS`, so they
 
 - [ ] **Step 3: Add the three entries to `_FUNCTIONS`**
 
-In `measurekit/ext/grammar.py`, extend the `_FUNCTIONS` dict added in Task 1:
+In `physure/ext/grammar.py`, extend the `_FUNCTIONS` dict added in Task 1:
 
 ```python
 _FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
@@ -286,7 +286,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add round, floor, ceil to MKML functions"
 ```
 
@@ -295,7 +295,7 @@ git commit -m "feat: add round, floor, ceil to MKML functions"
 ## Task 3: `min`, `max`
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py` (`_FUNCTIONS` dict)
+- Modify: `physure/ext/grammar.py` (`_FUNCTIONS` dict)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -344,7 +344,7 @@ Expected: PASS. Also re-run the full unit-alias regression: `uv run pytest tests
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add min, max to MKML functions"
 ```
 
@@ -353,7 +353,7 @@ git commit -m "feat: add min, max to MKML functions"
 ## Task 4: `sin`, `cos`, `tan`
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py` (`_FUNCTIONS` dict)
+- Modify: `physure/ext/grammar.py` (`_FUNCTIONS` dict)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -361,7 +361,7 @@ git commit -m "feat: add min, max to MKML functions"
 Add `DimensionError` to the existing import block at the top of `tests/ext/test_grammar.py`:
 
 ```python
-from measurekit.domain.exceptions import (
+from physure.domain.exceptions import (
     DimensionError,
     IncompatibleUnitsError,
     UnknownUnitError,
@@ -415,7 +415,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add sin, cos, tan to MKML functions"
 ```
 
@@ -424,7 +424,7 @@ git commit -m "feat: add sin, cos, tan to MKML functions"
 ## Task 5: `exp`, `log`, `ln`
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py` (`_FUNCTIONS` dict)
+- Modify: `physure/ext/grammar.py` (`_FUNCTIONS` dict)
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -469,7 +469,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "feat: add exp, log, ln to MKML functions"
 ```
 
@@ -478,7 +478,7 @@ git commit -m "feat: add exp, log, ln to MKML functions"
 ## Task 6: Generalize the reserved-word check in `_split_assignment`
 
 **Files:**
-- Modify: `measurekit/ext/grammar.py:333-334`
+- Modify: `physure/ext/grammar.py:333-334`
 - Test: `tests/ext/test_grammar.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -492,10 +492,10 @@ def test_function_names_are_reserved_assignment_targets(mn, name):
         mn.eval(f"{name} = 5 m")
 ```
 
-This requires importing `_FUNCTIONS` in the test file. Add to the existing import from `measurekit.ext.grammar`:
+This requires importing `_FUNCTIONS` in the test file. Add to the existing import from `physure.ext.grammar`:
 
 ```python
-from measurekit.ext.grammar import _FUNCTIONS, GrammarError, GrammarInterpreter, evaluate
+from physure.ext.grammar import _FUNCTIONS, GrammarError, GrammarInterpreter, evaluate
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -505,7 +505,7 @@ Expected: FAIL for every name except `sqrt` (e.g. `abs = 5 m`, `min = 5 m` do no
 
 - [ ] **Step 3: Generalize the check**
 
-In `measurekit/ext/grammar.py`, replace lines 333-334:
+In `physure/ext/grammar.py`, replace lines 333-334:
 
 ```python
         if lhs_tokens[0].value == "sqrt":
@@ -537,7 +537,7 @@ Expected: PASS — all 13 parametrized cases plus the full existing suite.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add measurekit/ext/grammar.py tests/ext/test_grammar.py
+git add physure/ext/grammar.py tests/ext/test_grammar.py
 git commit -m "refactor: generalize MKML reserved-word check to all _FUNCTIONS names"
 ```
 
@@ -549,8 +549,8 @@ git commit -m "refactor: generalize MKML reserved-word check to all _FUNCTIONS n
 
 - [ ] **Step 1: Run the full test suite with coverage**
 
-Run: `uv run pytest --cov=measurekit --cov-report=term-missing`
-Expected: all tests pass; `measurekit/ext/grammar.py` coverage should be at or near 100% given every new branch has a dedicated test; total coverage stays ≥ 80% (`fail_under = 80` in `pyproject.toml`).
+Run: `uv run pytest --cov=physure --cov-report=term-missing`
+Expected: all tests pass; `physure/ext/grammar.py` coverage should be at or near 100% given every new branch has a dedicated test; total coverage stays ≥ 80% (`fail_under = 80` in `pyproject.toml`).
 
 - [ ] **Step 2: Lint and format**
 
@@ -562,18 +562,18 @@ Expected: no reformatting needed (if it reports files, run `uv run ruff format .
 
 - [ ] **Step 3: Type check (advisory)**
 
-Run: `uv run ty check measurekit/ext/grammar.py`
+Run: `uv run ty check physure/ext/grammar.py`
 Expected: no *new* errors introduced by this change (per CLAUDE.md, `ty` is advisory — don't add new errors to touched files, but the ~900 pre-existing repo-wide errors are not this task's concern).
 
 - [ ] **Step 4: Doctest check**
 
-Run: `uv run pytest --doctest-modules measurekit/ext/grammar.py -v`
+Run: `uv run pytest --doctest-modules physure/ext/grammar.py -v`
 Expected: PASS — the module docstring's existing doctest example is unaffected by this change.
 
 - [ ] **Step 5: Manual smoke test via REPL**
 
-Run: `echo 'abs(-3 m) => m' | uv run python -m measurekit`
-Expected output: `3.0 m` (or equivalent representation) confirming the REPL path (`measurekit/repl.py` → `GrammarInterpreter`) picks up the new functions with zero changes to `repl.py`.
+Run: `echo 'abs(-3 m) => m' | uv run python -m physure`
+Expected output: `3.0 m` (or equivalent representation) confirming the REPL path (`physure/repl.py` → `GrammarInterpreter`) picks up the new functions with zero changes to `repl.py`.
 
 - [ ] **Step 6: If SonarQube is configured locally, run the gate check**
 

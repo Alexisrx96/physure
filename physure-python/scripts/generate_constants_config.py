@@ -2,7 +2,7 @@ import re
 
 import scipy.constants
 
-# Base and derived unit symbols supported by measurekit.conf (after CGS/Atomic/Natural expansion)
+# Base and derived unit symbols supported by physure.conf (after CGS/Atomic/Natural expansion)
 VALID_UNITS = {
     "m",
     "kg",

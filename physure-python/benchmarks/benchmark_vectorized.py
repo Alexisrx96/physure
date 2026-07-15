@@ -2,8 +2,8 @@ import time
 
 import numpy as np
 
-from measurekit.domain.measurement.quantity import Quantity
-from measurekit.domain.measurement.units import get_default_system
+from physure.domain.measurement.quantity import Quantity
+from physure.domain.measurement.units import get_default_system
 
 
 def benchmark():

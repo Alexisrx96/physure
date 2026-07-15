@@ -1,8 +1,8 @@
-> **⚠️ Deprecation Notice (v0.1.9):** `measurekit` will be renamed to **`physure`** in v0.2.0. The API is identical. See the [Migration Guide](migration.md).
+> **⚠️ Deprecation Notice (v0.1.9):** `physure` will be renamed to **`physure`** in v0.2.0. The API is identical. See the [Migration Guide](migration.md).
 
-# Welcome to MeasureKit *(deprecated → physure)*
+# Welcome to Physure *(deprecated → physure)*
 
-MeasureKit is a high-performance physical dimension handling and unit conversion engine designed for modern scientific computing. It features **multi-backend support** (NumPy, JAX, PyTorch, Python), **static type safety** with `jaxtyping`, and **Pydantic integration**.
+Physure is a high-performance physical dimension handling and unit conversion engine designed for modern scientific computing. It features **multi-backend support** (NumPy, JAX, PyTorch, Python), **static type safety** with `jaxtyping`, and **Pydantic integration**.
 
 ## Key Features
 
@@ -15,13 +15,13 @@ MeasureKit is a high-performance physical dimension handling and unit conversion
 ## Installation
 
 ```bash
-pip install measurekit
+pip install physure
 ```
 
 ## Quick Start
 
 ```python
-from measurekit import Q_
+from physure import Q_
 
 q = Q_(10, "m")
 q_km = q.to("km")

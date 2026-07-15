@@ -1,6 +1,6 @@
-# Scientific Companion Roadmap: Advanced Features for MeasureKit
+# Scientific Companion Roadmap: Advanced Features for Physure
 
-This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [MeasureKit](file:///home/irvint/Projects/measurekit/README.md).
+This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](file:///home/irvint/Projects/physure/README.md).
 
 ---
 
@@ -27,7 +27,7 @@ Each vector $\vec{x}$ in the basis corresponds to a dimensionless group $\pi_p =
 
 ### 1.2. API Design Proposal
 ```python
-from measurekit.ext.physics import buckingham_pi, ScaleModel
+from physure.ext.physics import buckingham_pi, ScaleModel
 
 # 1. Solve for dimensionless groups
 groups = buckingham_pi(
@@ -81,7 +81,7 @@ Industrial calibration laboratories require uncertainty calculations compliant w
 
 ### 2.2. API Design Proposal
 ```python
-from measurekit.ext.metrology import MetrologyQuantity
+from physure.ext.metrology import MetrologyQuantity
 
 # Define a voltage measurement with Type A (statistical) and Type B inputs
 v_meas = MetrologyQuantity(
@@ -110,8 +110,8 @@ This module wraps standard IF97 computations, ensuring that input properties are
 
 ### 3.2. API Design Proposal
 ```python
-from measurekit import Q_
-from measurekit.ext.iapws import WaterState
+from physure import Q_
+from physure.ext.iapws import WaterState
 
 # Define water state using Temperature and Pressure
 state = WaterState(T=Q_(250, "degC"), P=Q_(50, "bar"))
@@ -137,7 +137,7 @@ We register a custom namespace under `mk` for Polars expressions using its plugi
 
 ```python
 import polars as pl
-import measurekit.ext.polars # Registers the 'mk' namespace
+import physure.ext.polars # Registers the 'mk' namespace
 
 df = pl.DataFrame({
     "distance": [10.0, 20.0, 30.0], # units: m
@@ -160,7 +160,7 @@ print(res)
 
 ```python
 import xarray as xr
-import measurekit.ext.xarray
+import physure.ext.xarray
 
 # DataArray wrapped with Quantity units
 da = xr.DataArray(
@@ -184,7 +184,7 @@ This utilizes PyTorch or JAX to compute thousands of samples in parallel (often 
 
 ### 5.2. API Design Proposal
 ```python
-from measurekit import Q_, uncertainty_mode
+from physure import Q_, uncertainty_mode
 
 # A highly non-linear relationship: y = exp(A * sin(B) / C^2)
 A = Q_(2.0, "s", uncertainty=0.2)
@@ -215,8 +215,8 @@ $$\text{Dimension of } \frac{dy}{dt} = \frac{[y]}{[t]}$$
 
 ### 6.2. API Design Proposal
 ```python
-from measurekit import Q_
-from measurekit.ext.simulation import solve_ivp_safe
+from physure import Q_
+from physure.ext.simulation import solve_ivp_safe
 
 # Define physics variables
 g = Q_(9.81, "m/s^2")
@@ -253,13 +253,13 @@ Let the state vector be $\vec{x}$ (e.g., containing position $[L]$, velocity $[L
 *   **Kalman Gain $K$**: The gain calculation $K = P H^T (H P H^T + R)^{-1}$ is verified to ensure that the units of the correction step $K \vec{y}$ match the state vector $\vec{x}$ exactly:
     $$[K_{i,j}] = \frac{[x_i]}{[y_j]}$$
 
-The symbolic math engine in `measurekit_core` computes these Jacobians analytically, verifying unit consistency across all propagation and update matrices.
+The symbolic math engine in `physure_core` computes these Jacobians analytically, verifying unit consistency across all propagation and update matrices.
 
 ### 7.2. API Design Proposal
 
 ```python
-from measurekit import Q_
-from measurekit.ext.control import UnitAwareEKF
+from physure import Q_
+from physure.ext.control import UnitAwareEKF
 
 # 1. Define non-linear state transition function (projectile with drag)
 def projectile_transition(x, u, dt):

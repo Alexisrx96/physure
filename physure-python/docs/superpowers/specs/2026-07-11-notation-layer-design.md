@@ -2,7 +2,7 @@
 
 ## Naming
 
-The language implemented by `measurekit/ext/grammar.py` is now **MeasureKit Meta-Lang (MKML)**,
+The language implemented by `physure/ext/grammar.py` is now **Physure Meta-Lang (MKML)**,
 file extension `.mkml` — its own identity, not MeasureNote's MNML. MKML is inspired by MNML but is
 deliberately a different (currently smaller, and now diverging) grammar with its own zero-dep,
 fast-parse design goals. Docstrings and comments in `ext/grammar.py` that currently say "MNML"
@@ -10,12 +10,12 @@ should say "MKML" going forward; this spec and its phases use MKML terminology t
 
 ## Context
 
-`measurekit/ext/grammar.py` (MKML expression grammar) and `measurekit/ext/chemistry/{species,reaction}.py`
+`physure/ext/grammar.py` (MKML expression grammar) and `physure/ext/chemistry/{species,reaction}.py`
 (chemical formula/reaction parsing) are hand-rolled, zero-dependency, regex-tokenized
 recursive-descent parsers. MeasureNote's MNML grammar (`../MeasureNote/python/measurenote_core/grammar.lark`)
 covers a much larger surface (functions, derivatives, integrals, vectors, blocks, `let`, `solve`,
 typed function defs) via Lark, but pays for it with an external dependency and a `Lark(...)`
-grammar rebuild on every `MNMLParser()` instantiation — incompatible with measurekit's zero-deps
+grammar rebuild on every `MNMLParser()` instantiation — incompatible with physure's zero-deps
 and fast-startup invariants (CLAUDE.md).
 
 This is Phase 1 of a 4-phase effort:
@@ -54,7 +54,7 @@ Verified live against the current code before designing:
 
 `species.py`'s `_TOKEN_RE` and `reaction.py`'s `_TERM_RE` use ASCII `\d`. Rather than teach three
 regexes to understand Unicode digits, add one normalization helper next to the existing
-`to_subscript`/`parse_superscript` in `measurekit/domain/notation/lexer.py`:
+`to_subscript`/`parse_superscript` in `physure/domain/notation/lexer.py`:
 
 ```python
 _SUBSCRIPT_REVERSE_MAP = str.maketrans("₀₁₂₃₄₅₆₇₈₉₋", "0123456789-")

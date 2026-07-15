@@ -2,8 +2,8 @@ import time
 
 import torch
 
-from measurekit import Quantity
-from measurekit.infrastructure.config import units
+from physure import Quantity
+from physure.infrastructure.config import units
 
 
 def benchmark_comparison():
@@ -26,7 +26,7 @@ def benchmark_comparison():
     torch_time = (end - start) / 100
     print(f"Pure PyTorch Time: {torch_time * 1000:.4f} ms")
 
-    # 2. MeasureKit Eager Mode
+    # 2. Physure Eager Mode
     q1 = Quantity(val1, units.meter)
     q2 = Quantity(val2, units.meter)
 
@@ -40,10 +40,10 @@ def benchmark_comparison():
     end = time.perf_counter()
     mk_eager_time = (end - start) / 100
     print(
-        f"MeasureKit Eager Time: {mk_eager_time * 1000:.4f} ms (Ratio: {mk_eager_time / torch_time:.2f}x)"
+        f"Physure Eager Time: {mk_eager_time * 1000:.4f} ms (Ratio: {mk_eager_time / torch_time:.2f}x)"
     )
 
-    # 3. MeasureKit Compiled Mode (Zero Overhead)
+    # 3. Physure Compiled Mode (Zero Overhead)
     @torch.compile(fullgraph=True)
     def add_quantities(a, b):
         return a + b
@@ -67,7 +67,7 @@ def benchmark_comparison():
     end = time.perf_counter()
     mk_compiled_time = (end - start) / 100
     print(
-        f"MeasureKit Compiled Time: {mk_compiled_time * 1000:.4f} ms (Ratio: {mk_compiled_time / torch_time:.2f}x)"
+        f"Physure Compiled Time: {mk_compiled_time * 1000:.4f} ms (Ratio: {mk_compiled_time / torch_time:.2f}x)"
     )
 
     if mk_compiled_time / torch_time < 1.1:

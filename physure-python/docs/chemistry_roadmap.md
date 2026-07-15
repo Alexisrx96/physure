@@ -1,14 +1,14 @@
 # Chemistry & Physical-Chemical Reaction Tracking Roadmap
 
-This document outlines the roadmap, architectural design, and implementation path for introducing a **Chemistry and Physical-Chemical Reaction Tracking** extension to [MeasureKit](file:///home/irvint/Projects/measurekit/README.md).
+This document outlines the roadmap, architectural design, and implementation path for introducing a **Chemistry and Physical-Chemical Reaction Tracking** extension to [Physure](file:///home/irvint/Projects/physure/README.md).
 
 ---
 
 ## 1. Executive Summary
 
-Integrating chemical reaction and physical-chemical tracking into **MeasureKit** is highly feasible and aligns perfectly with its philosophy as an "over-engineered homework validator" and dynamic tensor-aware engine. 
+Integrating chemical reaction and physical-chemical tracking into **Physure** is highly feasible and aligns perfectly with its philosophy as an "over-engineered homework validator" and dynamic tensor-aware engine. 
 
-By leveraging MeasureKit's existing [equivalency framework](file:///home/irvint/Projects/measurekit/measurekit/domain/measurement/equivalencies.py) (developed for spectral and thermodynamic dimension-crossing), we can achieve substance-aware unit conversions (e.g., converting grams of a specific compound to moles) without subclassing the core [Quantity](file:///home/irvint/Projects/measurekit/measurekit/domain/measurement/quantity.py) class or complicating the base physics engine.
+By leveraging Physure's existing [equivalency framework](file:///home/irvint/Projects/physure/physure/domain/measurement/equivalencies.py) (developed for spectral and thermodynamic dimension-crossing), we can achieve substance-aware unit conversions (e.g., converting grams of a specific compound to moles) without subclassing the core [Quantity](file:///home/irvint/Projects/physure/physure/domain/measurement/quantity.py) class or complicating the base physics engine.
 
 ### Key Value Propositions
 *   **Substance-Aware Conversions:** Perform seamless conversions between mass (`g`, `kg`) and amount of substance (`mol`, `mmol`) using dynamic species-dependent molar masses.
@@ -22,18 +22,18 @@ By leveraging MeasureKit's existing [equivalency framework](file:///home/irvint/
 
 A major challenge in chemical unit tracking is **substance dependency**. In physics, `g` and `mol` are incompatible dimensions. In chemistry, they are linked by a species' **molar mass** ($M_W$). 
 
-Rather than modifying the core [Quantity](file:///home/irvint/Projects/measurekit/measurekit/domain/measurement/quantity.py) class to hold a `species` metadata field (which would pollute the high-performance tensor and JIT compilation paths), we propose a modular architecture utilizing **dynamic equivalencies** and a helper package under `measurekit/ext/chemistry/`.
+Rather than modifying the core [Quantity](file:///home/irvint/Projects/physure/physure/domain/measurement/quantity.py) class to hold a `species` metadata field (which would pollute the high-performance tensor and JIT compilation paths), we propose a modular architecture utilizing **dynamic equivalencies** and a helper package under `physure/ext/chemistry/`.
 
 ### Interaction Diagram
 
 ```mermaid
 graph TD
-    User["User Code / REPL"] --> |"Defines Species & Reactions"| ChemistryExt["measurekit.ext.chemistry"]
+    User["User Code / REPL"] --> |"Defines Species & Reactions"| ChemistryExt["physure.ext.chemistry"]
     ChemistryExt --> |"Parses Formula (e.g., 'H2O')"| FormulaParser["Formula Parser"]
     FormulaParser --> |"Looks up Atomic Weights"| ElementsDB["Periodic Table Database"]
     
     ChemistryExt --> |"Generates Equivalencies"| MolarEq["Molar Mass Equivalency"]
-    MolarEq --> |"Applies with Context Manager"| CoreEquiv["measurekit.domain.measurement.equivalencies"]
+    MolarEq --> |"Applies with Context Manager"| CoreEquiv["physure.domain.measurement.equivalencies"]
     
     User --> |"Converts g <-> mol"| Q["Quantity.to()"]
     Q --> |"Queries Active Equivalencies"| CoreEquiv
@@ -46,7 +46,7 @@ graph TD
 
 ## 3. Detailed Subsystem Design
 
-To maintain the **zero runtime dependencies** policy and keep the **first-use import time under 0.5s**, the chemistry subsystem will reside entirely in the `measurekit/ext/chemistry/` package and be loaded lazily.
+To maintain the **zero runtime dependencies** policy and keep the **first-use import time under 0.5s**, the chemistry subsystem will reside entirely in the `physure/ext/chemistry/` package and be loaded lazily.
 
 ### 3.1. Species Representation (`species.py`)
 A `Species` object represents a chemical compound or element. It parses chemical formulas, calculates their molar masses, and handles uncertainty (e.g., due to isotopic distribution).
@@ -57,7 +57,7 @@ A `Species` object represents a chemical compound or element. It parses chemical
 *   **Uncertainty Integration:** The molar mass is returned as a `Quantity` with an attached `UncorrelatedUncertainty` or `CorrelatedUncertainty`.
 
 ### 3.2. Molar Equivalency (`equivalency.py`)
-This ties `Species` to MeasureKit's existing equivalency framework.
+This ties `Species` to Physure's existing equivalency framework.
 *   In SI, the base unit for Mass (`M`) is `kg`, and the base unit for Amount of Substance (`N`) is `mol`.
 *   If a substance has a molar mass $M_{\text{base}}$ (in `kg/mol`), the conversion functions are:
     *   $\text{Mass (kg)} \rightarrow \text{Amount (mol)}: n = m / M_{\text{base}}$
@@ -68,7 +68,7 @@ def molar_equivalency(species: Species) -> EquivalencyList:
     # Get molar mass in base SI units (kg/mol)
     m_base = species.molar_mass.to("kg/mol").magnitude
     
-    from measurekit.domain.measurement.dimensions import Dimension
+    from physure.domain.measurement.dimensions import Dimension
     dim_mass = Dimension({"M": 1})
     dim_amount = Dimension({"N": 1})
     
@@ -80,21 +80,21 @@ def molar_equivalency(species: Species) -> EquivalencyList:
 ### 3.3. Reaction Balancing & Stoichiometry (`reaction.py`)
 This represents chemical reactions and performs calculations on reactants and products.
 *   **Equation Parsing:** Parses strings like `"2 H2 + O2 -> 2 H2O"`.
-*   **Balancer:** Solves the linear system of elemental conservation equations to find the stoichiometric coefficients (stoichiometric matrix kernel). Since external libraries like SciPy or SymPy are optional, we implement a lightweight Gaussian elimination solver in pure Python (falling back to a compiled Rust routine in `measurekit_core` for complex networks).
+*   **Balancer:** Solves the linear system of elemental conservation equations to find the stoichiometric coefficients (stoichiometric matrix kernel). Since external libraries like SciPy or SymPy are optional, we implement a lightweight Gaussian elimination solver in pure Python (falling back to a compiled Rust routine in `physure_core` for complex networks).
 *   **Yield & Limiting Reactant Calculations:** Given a set of input reactant `Quantity` objects, it identifies the limiting reactant, calculates the theoretical yield of products, and propagates their uncertainties automatically.
 
 ---
 
 ## 4. Key API Examples
 
-Here is how the proposed API will look in practice, following the MeasureKit aesthetic:
+Here is how the proposed API will look in practice, following the Physure aesthetic:
 
 ### 4.1. Substance-Aware Unit Conversion
 Converting mass to moles is normally impossible because their dimensions are different. Using the molar equivalency, it becomes trivial:
 
 ```python
-from measurekit import Q_, equivalencies
-from measurekit.ext.chemistry import Species, molar_equivalency
+from physure import Q_, equivalencies
+from physure.ext.chemistry import Species, molar_equivalency
 
 # 1. Define species (which automatically computes its molar mass)
 water = Species("H2O")  # Molar Mass: 18.01528 +/- 0.0005 g/mol
@@ -114,8 +114,8 @@ print(water_moles)
 We can define a reaction, balance it, and calculate product yield with propagated uncertainties from scale measurements.
 
 ```python
-from measurekit import Q_
-from measurekit.ext.chemistry import Reaction
+from physure import Q_
+from physure.ext.chemistry import Reaction
 
 # 1. Define and parse a chemical reaction
 rxn = Reaction.from_string("2 H2 + O2 -> 2 H2O")
@@ -138,8 +138,8 @@ print(f"Theoretical water yield: {results.yields['H2O'].to('g')}")
 Since species are associated with molar masses, we can easily cross from chemical quantities to physical quantities like pressure, volume, and temperature:
 
 ```python
-from measurekit import Q_
-from measurekit.ext.chemistry import Species
+from physure import Q_
+from physure.ext.chemistry import Species
 
 # Ideal Gas: PV = nRT  => P = nRT/V
 R = Q_(8.314462618, "J/(mol*K)") # Gas Constant
@@ -165,7 +165,7 @@ $$k = A \exp\left(-\frac{E_a}{R T}\right)$$
 
 ```python
 import math
-from measurekit import Q_
+from physure import Q_
 
 # Frequency factor (first-order reaction: s^-1)
 A = Q_(1e13, "s^-1")
@@ -191,10 +191,10 @@ print(f"Rate constant: {k}") # 0.72 s^-1
 | Metric/Constraint | Feasibility Rating | Mitigation Strategy |
 | :--- | :--- | :--- |
 | **Zero Runtime Dependencies** | 🟢 **100% Feasible** | The atomic weight database, formula parser, and reaction balancer can be written in pure Python using basic math/regex, avoiding external dependencies like `scipy` or `sympy`. |
-| **First-Use Import Budget (<0.5s)** | 🟢 **100% Feasible** | Keep the chemistry code inside `measurekit/ext/chemistry/` and do not import it in `measurekit/__init__.py`. Users import it explicitly only when doing chemistry. |
-| **Uncertainty Propagation** | 🟢 **100% Feasible** | Already supported natively by MeasureKit's `equivalencies` and automatic differentiation. Works out-of-the-box. |
+| **First-Use Import Budget (<0.5s)** | 🟢 **100% Feasible** | Keep the chemistry code inside `physure/ext/chemistry/` and do not import it in `physure/__init__.py`. Users import it explicitly only when doing chemistry. |
+| **Uncertainty Propagation** | 🟢 **100% Feasible** | Already supported natively by Physure's `equivalencies` and automatic differentiation. Works out-of-the-box. |
 | **Multi-backend / JIT Compilation** | 🟡 **70% Feasible** | Equivalency conversions and chemical functions will compile fine with `torch.compile` / `jax.jit`. However, reaction *balancing* (which requires solving systems of equations) should be done at configuration time, not within dynamic trace loops. |
-| **Performance Overhead** | 🟢 **90% Feasible** | Pure Python is fast enough for small chemical reactions. For complex reaction networks (e.g., combustion models), we can implement a Rust solver in `measurekit_core` as an optional performance boost. |
+| **Performance Overhead** | 🟢 **90% Feasible** | Pure Python is fast enough for small chemical reactions. For complex reaction networks (e.g., combustion models), we can implement a Rust solver in `physure_core` as an optional performance boost. |
 
 ---
 

@@ -1,3 +1,3 @@
 # Quantity API
 
-::: measurekit.domain.measurement.quantity.Quantity
+::: physure.domain.measurement.quantity.Quantity

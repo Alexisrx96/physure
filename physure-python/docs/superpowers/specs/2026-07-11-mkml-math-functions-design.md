@@ -2,7 +2,7 @@
 
 ## Context
 
-`measurekit/ext/grammar.py` currently supports one special-cased function: `sqrt(...)`, hardcoded
+`physure/ext/grammar.py` currently supports one special-cased function: `sqrt(...)`, hardcoded
 directly in `_ExprParser._atom()` (added in Phase 1, notation layer). There is no general
 `name(args)` call syntax — every other identifier resolves either to a unit or to a previously
 assigned variable.
@@ -32,7 +32,7 @@ Verified live against the current code before designing:
   only implement natural log as `"log"`. Introducing base-10 semantics for `log` would contradict
   the underlying engine and is out of scope. `ln` is therefore a plain alias for the same
   natural-log implementation as `log`.
-- **`min` collides with an existing unit alias.** `measurekit.conf:123`:
+- **`min` collides with an existing unit alias.** `physure.conf:123`:
   `minute = 60.0, T, [min, minute, minutes]`. Grepped every other proposed function name (`abs`,
   `max`, `round`, `floor`, `ceil`, `sin`, `cos`, `tan`, `exp`, `ln`, `sqrt`) against every `.conf`
   file — no other collisions. Because function dispatch only triggers when an `IDENT` token is

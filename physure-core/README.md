@@ -1,10 +1,10 @@
-# MeasureKit Core 🦀
+# Physure Core 🦀
 
 [![Rust](https://img.shields.io/badge/rust-stable-brightgreen.svg)](https://www.rust-lang.org/)
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The high-performance core engine for **MeasureKit**, providing robust unit management, physical quantities with uncertainty propagation, and seamless Python integration.
+The high-performance core engine for **Physure**, providing robust unit management, physical quantities with uncertainty propagation, and seamless Python integration.
 
 ## ✨ Key Features
 
@@ -36,8 +36,8 @@ For development and local testing:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Alexisrx96/measurekit.git
-cd measurekit/measurekit_core
+git clone https://github.com/Alexisrx96/physure.git
+cd physure/physure_core
 
 # Build and install the develop version
 maturin develop
@@ -46,7 +46,7 @@ maturin develop
 ## 📖 Quick Example (Python)
 
 ```python
-from measurekit_core import Quantity, RationalUnit
+from physure_core import Quantity, RationalUnit
 
 # Define units (e.g., meters)
 meter = RationalUnit({"m": 1})

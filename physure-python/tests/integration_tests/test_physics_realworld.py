@@ -1,4 +1,4 @@
-"""End-to-end real-world physics problems solved through MeasureKit's `Q_`.
+"""End-to-end real-world physics problems solved through Physure's `Q_`.
 
 Every problem is a textbook exercise with a hand-checkable numeric answer.
 Each assertion checks BOTH the numeric result (against the published/derived

@@ -6,13 +6,13 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import torch
 
-from measurekit import Q_
+from physure import Q_
 
 # --- 1. CONFIG & LOGGING ---
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
-logger = logging.getLogger("MeasureKit-Bench")
+logger = logging.getLogger("Physure-Bench")
 
 # This is the "Zero Smoke" setting.
 # It will tell us if Torch is actually compiling or falling back to slow mode.
@@ -30,8 +30,8 @@ results = {
 
 def bench_scalar():
     logger.info(">>> Benchmarking Scalar Eager (100k ops)...")
-    setup = "from measurekit import Q_; a=Q_(1,'m'); b=Q_(2,'m')"
-    results["Scalar Eager"]["MeasureKit"] = (
+    setup = "from physure import Q_; a=Q_(1,'m'); b=Q_(2,'m')"
+    results["Scalar Eager"]["Physure"] = (
         min(timeit.repeat("a+b", setup, number=100000)) / 100000
     )
     results["Scalar Eager"]["Raw Python"] = (
@@ -42,8 +42,8 @@ def bench_scalar():
 def bench_vectorized():
     N = 1_000_000
     logger.info(f">>> Benchmarking Vectorized NumPy (N={N})...")
-    setup = f"import numpy as np; from measurekit import Q_; a=Q_(np.ones({N}), 'm'); b=Q_(np.ones({N}), 'm')"
-    results["Vectorized (NumPy)"]["MeasureKit"] = (
+    setup = f"import numpy as np; from physure import Q_; a=Q_(np.ones({N}), 'm'); b=Q_(np.ones({N}), 'm')"
+    results["Vectorized (NumPy)"]["Physure"] = (
         min(timeit.repeat("a+b", setup, number=50)) / 50
     )
     results["Vectorized (NumPy)"]["Raw NumPy"] = (
@@ -73,7 +73,7 @@ def bench_torch_compile():
     logger.info("  - Warming up Torch compiler (this triggers cl.exe)...")
     add(mk_a, mk_b)
 
-    results["Torch Compiled"]["MeasureKit"] = (
+    results["Torch Compiled"]["Physure"] = (
         min(timeit.repeat(lambda: add(mk_a, mk_b), number=100)) / 100
     )
 
@@ -98,7 +98,7 @@ def bench_jax_jit():
         return x + y
 
     add(mk_a, mk_b).magnitude.block_until_ready()  # Warmup
-    results["JAX JIT"]["MeasureKit"] = (
+    results["JAX JIT"]["Physure"] = (
         min(
             timeit.repeat(
                 lambda: add(mk_a, mk_b).magnitude.block_until_ready(),

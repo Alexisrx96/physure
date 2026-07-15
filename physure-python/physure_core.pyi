@@ -1,5 +1,5 @@
-# measurekit_core.pyi
-# Typing stub for the native Rust core module of MeasureKit.
+# physure_core.pyi
+# Typing stub for the native Rust core module of Physure.
 
 from typing import Any
 

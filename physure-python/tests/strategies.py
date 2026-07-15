@@ -1,4 +1,4 @@
-"""Hypothesis strategies for generating MeasureKit objects.
+"""Hypothesis strategies for generating Physure objects.
 
 This module provides data generators for Property-Based Testing (PBT)
 of Quantity objects, Units, and algebraic properties.

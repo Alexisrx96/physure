@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 def enforce_tensor_contract(func: Any) -> Any:
     """Decorator to enforce jaxtyping contracts at runtime."""
-    if os.environ.get("MEASUREKIT_DEBUG") == "1":
+    if os.environ.get("PHYSURE_DEBUG") == "1":
         try:
             from beartype import beartype
 

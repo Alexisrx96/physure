@@ -14,10 +14,10 @@ class TestStubGeneration(unittest.TestCase):
         # Verify files exist
         base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         generated_types_path = os.path.join(
-            base_path, "python", "physure", "_generated_types.py"
+            base_path, "physure", "_generated_types.py"
         )
         registry_stub_path = os.path.join(
-            base_path, "python", "physure", "core", "registry.pyi"
+            base_path, "physure", "core", "registry.pyi"
         )
 
         assert os.path.exists(generated_types_path)
@@ -45,7 +45,7 @@ class TestStubGeneration(unittest.TestCase):
 
         base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         generated_types_path = os.path.join(
-            base_path, "python", "physure", "_generated_types.py"
+            base_path, "physure", "_generated_types.py"
         )
 
         with open(generated_types_path) as f:
@@ -53,7 +53,7 @@ class TestStubGeneration(unittest.TestCase):
             assert '"mock_unit"' in content
 
         registry_stub_path = os.path.join(
-            base_path, "python", "physure", "core", "registry.pyi"
+            base_path, "physure", "core", "registry.pyi"
         )
         with open(registry_stub_path) as f:
             content = f.read()
