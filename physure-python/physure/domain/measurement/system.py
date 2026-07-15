@@ -95,28 +95,6 @@ class UnitSystem(IUnitRepository):
         except ImportError:
             self._core_registry = None
 
-    def _to_rational_unit(self, cu: CompoundUnit) -> Any:
-        """Converts a Python CompoundUnit to a Rust RationalUnit."""
-        from fractions import Fraction
-
-        try:
-            from physure._core import RationalUnit
-        except ImportError:
-            return None
-
-        dims = {}
-        for base, exp in cu.exponents.items():
-            f = Fraction(exp).limit_denominator()
-            dims[base] = (f.numerator, f.denominator)
-        return RationalUnit(dims)
-
-    def _from_rational_unit(self, ru: Any) -> CompoundUnit:
-        """Converts a Rust RationalUnit to a Python CompoundUnit."""
-        exponents = {}
-        for base, (num, den) in ru.dimensions.items():
-            exponents[base] = num if den == 1 else num / den
-        return CompoundUnit(exponents)
-
     def get_definition(self, unit_symbol: str) -> UnitDefinition | None:
         """Retrieves the definition for a given unit symbol."""
         return self.UNIT_SYMBOL_REGISTRY.get(unit_symbol)
@@ -256,9 +234,10 @@ class UnitSystem(IUnitRepository):
             self.register_alias(recipe.exponents, symbol, *aliases)
 
             if self._core_registry:
-                ru = self._to_rational_unit(recipe)
-                if ru:
-                    self._core_registry.add_derived_unit(symbol, ru)
+                # CompoundUnit IS a RationalUnit when Rust is active;
+                # pass it directly without any manual conversion.
+                with contextlib.suppress(Exception):
+                    self._core_registry.add_derived_unit(symbol, recipe)
         else:
             self.register_alias({symbol: 1}, symbol, *aliases)
 
@@ -458,7 +437,7 @@ class UnitSystem(IUnitRepository):
         ):
             try:
                 ru = self._core_registry.get_unit(unit_expression)
-                return self._from_rational_unit(ru)
+                return CompoundUnit(ru.dimensions)
             except Exception as e:
                 log.warning(
                     f"Failed to retrieve unit '{unit_expression}' from Rust: {e}"

@@ -146,7 +146,6 @@ def _resolve_unit_dim(unit_name: str, system: Any, Dimension: type) -> Any:
 
 
 try:
-    raise ImportError("Use Python RationalUnit stub for CompoundUnit")
     from physure._core import (
         RationalUnit,  # pyright: ignore[reportAssignmentType]
     )
@@ -190,12 +189,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
             system = get_default_system()
 
         dims = Dimension({})
-        it = (
-            self.dimensions.items()
-            if hasattr(self, "dimensions")
-            else self.exponents.items()
-        )
-        for unit_name, exp_val in it:
+        for unit_name, exp_val in self.exponents.items():
             exp = (
                 exp_val[0] / exp_val[1]
                 if isinstance(exp_val, tuple)
@@ -222,7 +216,15 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         if instance is not None:
             return instance
 
-        instance = super().__new__(cls, normalized_exponents)
+        # ponytail: call RationalUnit.__new__ directly when Rust is active to
+        # ensure the Rust inner struct gets the dimensions dict. Calling
+        # super().__new__ goes through BaseExponentEntity.__new__ which in
+        # turn calls object.__new__(cls) with no args, leaving the Rust side
+        # with an empty dimensions map. We bypass that with a direct call.
+        if IS_CORE_AVAILABLE:
+            instance = RationalUnit.__new__(cls, normalized_exponents)
+        else:
+            instance = super().__new__(cls, normalized_exponents)
 
         # Consistent order for exponents dict to ensure uniform __repr__
         ordered_exponents = dict(sorted_items)
@@ -273,12 +275,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
     def _compound_factor(self, system: UnitSystem) -> float:
         """Calculate the unit's total conversion factor relative to SI units."""
         factor = 1.0
-        it = (
-            self.dimensions.items()
-            if hasattr(self, "dimensions")
-            else self.exponents.items()
-        )
-        for unit, exp in it:
+        for unit, exp in self.exponents.items():
             if unit == "noprefix":
                 continue
             _unit = system.get_unit(unit)
@@ -300,12 +297,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         or has a non-integer exponent; callers fall back to float math.
         """
         factor = Fraction(1)
-        it = (
-            self.dimensions.items()
-            if hasattr(self, "dimensions")
-            else self.exponents.items()
-        )
-        for unit, exp in it:
+        for unit, exp in self.exponents.items():
             if unit == "noprefix":
                 continue
             _unit = system.get_unit(unit)
@@ -326,12 +318,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
 
     def is_linear(self, system: UnitSystem) -> bool:
         """Checks if all components of the unit use linear converters."""
-        it = (
-            self.dimensions.items()
-            if hasattr(self, "dimensions")
-            else self.exponents.items()
-        )
-        for unit, _ in it:
+        for unit, _ in self.exponents.items():
             if unit == "noprefix":
                 continue
             unit_def = system.get_definition(unit)
@@ -341,12 +328,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
 
     def kind(self, system: UnitSystem) -> str:
         """Determines if the unit is 'absolute' (Point) or 'delta' (Vector)."""
-        it = (
-            self.dimensions.items()
-            if hasattr(self, "dimensions")
-            else self.exponents.items()
-        )
-        e_list = list(it)
+        e_list = list(self.exponents.items())
         if len(e_list) == 1:
             unit_name, exp = e_list[0]
             # Handle rational tuple
