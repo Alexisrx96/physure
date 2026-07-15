@@ -39,7 +39,7 @@ pub struct CovarianceStore {
 }
 
 impl CovarianceStore {
-    fn get_block_internal(&self, id1: VariableID, id2: VariableID) -> Option<CsMat<f64>> {
+    pub fn get_block_internal(&self, id1: VariableID, id2: VariableID) -> Option<CsMat<f64>> {
         let key = if id1 <= id2 { (id1, id2) } else { (id2, id1) };
         let mat = self.blocks.get(&key)?;
         if id1 <= id2 {
@@ -201,6 +201,11 @@ impl CovarianceStore {
         self.access_ledger.insert(var_id, self.current_step);
     }
 
+    pub fn register_variable_slice(&mut self, var_id: VariableID, data: &[f64], shape: &[usize]) {
+        let view = ArrayViewD::from_shape(shape, data).unwrap();
+        self.register_variable(var_id, view);
+    }
+
     pub fn register_diagonal(&mut self, var_id: VariableID, variance_diag: ArrayViewD<'_, f64>) {
         let size = variance_diag.len();
         let mut tri = TriMat::new((size, size));
@@ -211,6 +216,11 @@ impl CovarianceStore {
         }
         self.blocks.insert((var_id, var_id), tri.to_csr());
         self.access_ledger.insert(var_id, self.current_step);
+    }
+
+    pub fn register_diagonal_slice(&mut self, var_id: VariableID, data: &[f64]) {
+        let view = ArrayViewD::from_shape(ndarray::IxDyn(&[data.len()]), data).unwrap();
+        self.register_diagonal(var_id, view);
     }
 
     pub fn propagate(
@@ -233,6 +243,19 @@ impl CovarianceStore {
         if self.config.enabled {
             self.prune();
         }
+    }
+
+    pub fn propagate_slices(
+        &mut self,
+        out_id: VariableID,
+        input_ids: Vec<VariableID>,
+        jacobians: Vec<(&[f64], &[usize])>,
+    ) {
+        let views: Vec<_> = jacobians
+            .into_iter()
+            .map(|(data, shape)| ArrayViewD::from_shape(shape, data).unwrap())
+            .collect();
+        self.propagate(out_id, input_ids, views);
     }
 
     pub fn prune(&mut self) {

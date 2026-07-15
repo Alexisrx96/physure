@@ -34,7 +34,7 @@ try:
     from physure._core import (  # type: ignore[import]
         RationalUnit,
         UnitRegistry,
-        Quantity,
+        Quantity as CoreQuantity,
         PruningConfig,
         CovarianceStore,
         batch_to_si_inplace,
@@ -83,6 +83,10 @@ def __getattr__(name: str) -> Any:
     if name == "Q_":
         from physure.application.factories import QuantityFactory
         return QuantityFactory()
+
+    if name == "Quantity":
+        from physure.domain.measurement.quantity import Quantity
+        return Quantity
 
     if name in _UNITS_ATTRS:
         from physure.domain.measurement.units import CompoundUnit, units

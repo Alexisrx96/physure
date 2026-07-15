@@ -18,6 +18,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use pyo3::IntoPyObjectExt;
 use pyo3::buffer::PyBuffer;
+use numpy::PyUntypedArrayMethods;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -499,6 +500,61 @@ impl PyCovarianceStore {
         let cfg = config.map(|c| c.0).unwrap_or_default();
         PyCovarianceStore(CovarianceStore::new(cfg))
     }
+
+    fn register_variable(&mut self, var_id: u64, variance: numpy::PyReadonlyArrayDyn<'_, f64>) {
+        let slice = variance.as_slice().unwrap();
+        let shape = variance.shape();
+        self.0.register_variable_slice(var_id, slice, shape);
+    }
+
+    fn register_diagonal(&mut self, var_id: u64, variance_diag: numpy::PyReadonlyArrayDyn<'_, f64>) {
+        let slice = variance_diag.as_slice().unwrap();
+        self.0.register_diagonal_slice(var_id, slice);
+    }
+
+    fn propagate(
+        &mut self,
+        out_id: u64,
+        input_ids: Vec<u64>,
+        jacobians: Vec<numpy::PyReadonlyArrayDyn<'_, f64>>,
+    ) {
+        let j_slices: Vec<(&[f64], &[usize])> = jacobians
+            .iter()
+            .map(|j| (j.as_slice().unwrap(), j.shape()))
+            .collect();
+        self.0.propagate_slices(out_id, input_ids, j_slices);
+    }
+
+    #[pyo3(name = "get_block_csr")]
+    fn get_block_csr_py<'py>(
+        &self,
+        py: Python<'py>,
+        id1: u64,
+        id2: u64,
+    ) -> PyResult<Option<(
+        Bound<'py, numpy::PyArray1<f64>>,
+        Bound<'py, numpy::PyArray1<i32>>,
+        Bound<'py, numpy::PyArray1<i32>>,
+        (usize, usize),
+    )>> {
+        if let Some(mat) = self.0.get_block_internal(id1, id2) {
+            let csr = if mat.is_csr() { mat } else { mat.to_csr() };
+            let shape = (csr.rows(), csr.cols());
+            let (indptr, indices, data) = csr.into_raw_storage();
+
+            let py_data = numpy::PyArray1::from_vec(py, data);
+            let py_indices = numpy::PyArray1::from_vec(py, indices.iter().map(|&x| x as i32).collect());
+            let py_indptr = numpy::PyArray1::from_vec(py, indptr.iter().map(|&x| x as i32).collect());
+
+            Ok(Some((py_data, py_indices, py_indptr, shape)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn prune(&mut self) {
+        self.0.prune();
+    }
 }
 
 // ── Zero-copy Buffer Protocol helpers ───────────────────────────────────────
@@ -593,6 +649,14 @@ fn to_backend(
     Ok((Box::new(TensorBackend { value: val_obj, uncertainty }), RationalUnit::dimensionless()))
 }
 
+#[pyfunction]
+fn to_arrow_record_batch(py: Python<'_>, quantities: Vec<PyRef<'_, PyQuantity>>) -> PyResult<PyObject> {
+    let raw: Vec<Quantity> = quantities.iter().map(|q| q.0.clone()).collect();
+    let bytes = ::physure_core::serialization::quantities_to_arrow(&raw)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    Ok(pyo3::types::PyBytes::new(py, &bytes).into_py_any(py)?)
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -603,6 +667,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCovarianceStore>()?;
     m.add_function(wrap_pyfunction!(batch_to_si_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(step_euler_inplace, m)?)?;
+    m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
