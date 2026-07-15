@@ -25,7 +25,7 @@ use std::sync::{Mutex, OnceLock};
 use num_rational::Rational64;
 use num_traits::FromPrimitive;
 
-use physure_core::{
+use ::physure_core::{
     RationalUnit, UnitRegistry, Quantity, PruningConfig, CovarianceStore,
     GaussianBackend, MonteCarloBackend, UnscentedBackend, UncertaintyBackend,
 };
@@ -49,10 +49,18 @@ fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
 // ── TensorBackend (lives here because it holds PyObject) ───────────────────
 // This backend handles numpy/torch/jax arrays as Quantity magnitudes.
 // It CANNOT live in physure-core because it holds Python-owned objects.
-#[derive(Clone)]
 struct TensorBackend {
     pub value: PyObject,
     pub uncertainty: PyObject,
+}
+
+impl Clone for TensorBackend {
+    fn clone(&self) -> Self {
+        Python::with_gil(|py| TensorBackend {
+            value: self.value.clone_ref(py),
+            uncertainty: self.uncertainty.clone_ref(py),
+        })
+    }
 }
 
 impl UncertaintyBackend for TensorBackend {
@@ -205,11 +213,11 @@ impl PyRationalUnit {
     }
 
     fn __hash__(&self) -> u64 { self.0.id }
-    fn __repr__(&self) -> String { self.0.to_repr() }
+    fn __repr__(&self) -> String { self.0.__repr__() }
 
     #[pyo3(signature = (_system = None, _use_alias = false, _alias_preference = None))]
     fn to_string(&self, _system: Option<Bound<'_, PyAny>>, _use_alias: bool, _alias_preference: Option<Bound<'_, PyAny>>) -> String {
-        self.0.to_repr()
+        self.0.__repr__()
     }
 
     fn __reduce__(&self, py: Python<'_>) -> PyResult<PyObject> {
@@ -418,7 +426,7 @@ impl PyQuantity {
         Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.div(&other_unit))))
     }
 
-    fn __pow__(&self, py: Python<'_>, other: Bound<'_, PyAny>, _modulo: Option<Bound<'_, PyAny>>) -> PyResult<PyQuantity> {
+    fn __pow__(&self, _py: Python<'_>, other: Bound<'_, PyAny>, _modulo: Option<Bound<'_, PyAny>>) -> PyResult<PyQuantity> {
         let exp_f = other.extract::<f64>()?;
         let exp_r = Rational64::from_f64(exp_f).unwrap_or(Rational64::new(0, 1));
         let new_val = self.0.value.propagate_pow(exp_f)
@@ -440,7 +448,7 @@ impl PyQuantity {
     }
 
     fn __repr__(&self) -> String {
-        format!("Quantity({}, {})", self.0.value.mean(), self.0.unit.to_repr())
+        format!("Quantity({}, {})", self.0.value.mean(), self.0.unit.__repr__())
     }
 
     fn __reduce__<'py>(self_: Bound<'py, Self>, py: Python<'py>) -> PyResult<(PyObject, (PyObject, PyObject, PyObject))> {
@@ -503,14 +511,12 @@ impl PyCovarianceStore {
 /// Rust reads & writes directly to Python-owned memory.
 #[pyfunction]
 fn batch_to_si_inplace(py: Python<'_>, buf: PyBuffer<f64>, factor: f64) -> PyResult<()> {
-    let slice = buf.as_slice(py)?;
-    // SAFETY: PyBuffer<f64> guarantees alignment, length, and exclusive access
-    // during this GIL-held call.
+    let slice = buf.as_slice(py).ok_or_else(|| pyo3::exceptions::PyBufferError::new_err("Invalid buffer"))?;
     let data = unsafe {
         let ptr = slice.as_ptr() as *mut f64;
         std::slice::from_raw_parts_mut(ptr, slice.len())
     };
-    physure_core::batch_to_si(data, factor);
+    ::physure_core::batch_to_si(data, factor);
     Ok(())
 }
 
@@ -523,8 +529,8 @@ fn step_euler_inplace(
     velocities: PyBuffer<f64>,
     dt: f64,
 ) -> PyResult<()> {
-    let pos_slice = positions.as_slice(py)?;
-    let vel_slice = velocities.as_slice(py)?;
+    let pos_slice = positions.as_slice(py).ok_or_else(|| pyo3::exceptions::PyBufferError::new_err("Invalid positions buffer"))?;
+    let vel_slice = velocities.as_slice(py).ok_or_else(|| pyo3::exceptions::PyBufferError::new_err("Invalid velocities buffer"))?;
     let pos = unsafe {
         let ptr = pos_slice.as_ptr() as *mut f64;
         std::slice::from_raw_parts_mut(ptr, pos_slice.len())
@@ -533,7 +539,7 @@ fn step_euler_inplace(
         let ptr = vel_slice.as_ptr() as *const f64;
         std::slice::from_raw_parts(ptr, vel_slice.len())
     };
-    physure_core::step_euler(pos, vel, dt);
+    ::physure_core::step_euler(pos, vel, dt);
     Ok(())
 }
 

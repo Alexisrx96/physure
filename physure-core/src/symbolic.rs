@@ -1,12 +1,7 @@
-//! Native symbolic-math AST: build, simplify, and differentiate expressions,
-//! with physical-dimension checks (`Expr::Quantity`) threaded through every
-//! operator (roadmap `docs/symbolic_math_roadmap.md` §2-§6).
-
 use crate::units::RationalUnit;
 use num_rational::Rational64;
 use num_traits::FromPrimitive;
-use pyo3::exceptions::{PyNotImplementedError, PyValueError};
-use pyo3::prelude::*;
+
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
@@ -27,7 +22,9 @@ pub enum Node {
 impl Node {
     /// Infers the physical unit of the expression, raising when terms
     /// combine incompatible dimensions (§6.1).
-    fn infer_unit(&self) -> PyResult<Option<RationalUnit>> {
+    /// Infers the physical unit of the expression, raising when terms
+    /// combine incompatible dimensions (§6.1).
+    fn infer_unit(&self) -> Result<Option<RationalUnit>, String> {
         match self {
             Node::Number(_) | Node::Symbol(_) => Ok(None),
             Node::Quantity(_, u) => Ok(Some(u.clone())),
@@ -38,10 +35,10 @@ impl Node {
                         match &result {
                             None => result = Some(u),
                             Some(existing) if *existing != u => {
-                                return Err(PyValueError::new_err(format!(
+                                return Err(format!(
                                     "Incompatible units in Add: {:?} vs {:?}",
                                     existing.dimensions, u.dimensions
-                                )));
+                                ));
                             }
                             _ => {}
                         }
@@ -81,18 +78,14 @@ impl Node {
                         let r = Rational64::from_f64(n).unwrap_or(Rational64::new(0, 1));
                         Ok(Some(u.pow(r)))
                     } else {
-                        Err(PyValueError::new_err(
-                            "Cannot raise a dimensioned quantity to a non-constant power",
-                        ))
+                        Err("Cannot raise a dimensioned quantity to a non-constant power".to_string())
                     }
                 }
             },
             Node::Sin(u) | Node::Cos(u) | Node::Ln(u) | Node::Exp(u) => {
                 if let Some(unit) = u.infer_unit()? {
                     if !unit.dimensions.is_empty() {
-                        return Err(PyValueError::new_err(
-                            "Transcendental function argument must be dimensionless",
-                        ));
+                        return Err("Transcendental function argument must be dimensionless".to_string());
                     }
                 }
                 Ok(None)
@@ -102,7 +95,7 @@ impl Node {
 
     /// Symbolic differentiation (§4), with unit propagation falling out of
     /// `infer_unit` naturally since every rule below is dimensionally sound.
-    fn diff_node(&self, var: &str) -> PyResult<Node> {
+    fn diff_node(&self, var: &str) -> Result<Node, String> {
         Ok(match self {
             Node::Number(_) => Node::Number(0.0),
             Node::Symbol(s) => Node::Number(if s == var { 1.0 } else { 0.0 }),
@@ -111,7 +104,7 @@ impl Node {
                 terms
                     .iter()
                     .map(|t| t.diff_node(var))
-                    .collect::<PyResult<Vec<_>>>()?,
+                    .collect::<Result<Vec<_>, String>>()?,
             ),
             Node::Sub(a, b) => Node::Sub(Box::new(a.diff_node(var)?), Box::new(b.diff_node(var)?)),
             Node::Mul(factors) => {
@@ -142,12 +135,9 @@ impl Node {
                         db,
                     ])
                 } else {
-                    // ponytail: non-constant exponents (x^y) need the
-                    // generalized log-derivative rule; add when needed.
-                    return Err(PyNotImplementedError::new_err(
-                        "Differentiation of non-constant exponents is not supported yet",
-                    ));
+                    return Err("Differentiation of non-constant exponents is not supported yet".to_string());
                 }
+
             }
             Node::Sin(u) => Node::Mul(vec![Node::Cos(u.clone()), u.diff_node(var)?]),
             Node::Cos(u) => Node::Mul(vec![
@@ -216,7 +206,7 @@ impl Node {
     /// Indefinite integration (§4.2, "Level 1"): pattern-table lookup,
     /// linear chain rule, and a narrow g'(x)*F(g(x)) u-substitution.
     /// Bails with `PyNotImplementedError` outside that pattern set.
-    fn integrate_node(&self, var: &str) -> PyResult<Node> {
+    fn integrate_node(&self, var: &str) -> Result<Node, String> {
         Ok(match self {
             Node::Number(c) => Node::Mul(vec![Node::Number(*c), Node::Symbol(var.to_string())]),
             Node::Symbol(s) if s == var => Node::Div(
@@ -240,7 +230,7 @@ impl Node {
                 terms
                     .iter()
                     .map(|t| t.integrate_node(var))
-                    .collect::<PyResult<Vec<_>>>()?,
+                    .collect::<Result<Vec<_>, String>>()?,
             ),
             Node::Sub(a, b) => Node::Sub(
                 Box::new(a.integrate_node(var)?),
@@ -298,9 +288,6 @@ fn flatten_mul(factors: Vec<Node>) -> Vec<Node> {
     out
 }
 
-/// Deterministic ordering key for commutative flattening.
-/// ponytail: Debug-repr sort, not alphabetical-by-symbol; deterministic and
-/// good enough for canonicalization/dedup, upgrade if a specific order is needed.
 fn sort_key(n: &Node) -> String {
     format!("{n:?}")
 }
@@ -424,22 +411,20 @@ fn simplify_pow(base: Node, exp: Node) -> Node {
     }
 }
 
-fn check_add_compat(a: &Node, b: &Node) -> PyResult<()> {
+fn check_add_compat(a: &Node, b: &Node) -> Result<(), String> {
     let ua = a.infer_unit()?;
     let ub = b.infer_unit()?;
     if let (Some(x), Some(y)) = (&ua, &ub) {
         if x != y {
-            return Err(PyValueError::new_err(format!(
+            return Err(format!(
                 "Cannot add term with unit {:?} to term with unit {:?}: incompatible dimensions.",
                 x.dimensions, y.dimensions
-            )));
+            ));
         }
     }
     Ok(())
 }
 
-/// How a transcendental/power argument relates to the integration variable
-/// — the three shapes §4.2's pattern table and linear chain rule cover.
 enum ArgForm {
     Var,
     Linear(f64),
@@ -461,7 +446,7 @@ fn arg_form(u: &Node, var: &str) -> Option<ArgForm> {
     }
 }
 
-fn integrate_sin(u: &Node, var: &str) -> PyResult<Node> {
+fn integrate_sin(u: &Node, var: &str) -> Result<Node, String> {
     let neg_cos = Node::Mul(vec![Node::Number(-1.0), Node::Cos(Box::new(u.clone()))]);
     match arg_form(u, var) {
         Some(ArgForm::Var) => Ok(neg_cos),
@@ -470,13 +455,11 @@ fn integrate_sin(u: &Node, var: &str) -> PyResult<Node> {
             Node::Sin(Box::new(u.clone())),
             Node::Symbol(var.to_string()),
         ])),
-        None => Err(PyNotImplementedError::new_err(
-            "Integration of sin(u) needs u linear in the integration variable",
-        )),
+        None => Err("Integration of sin(u) needs u linear in the integration variable".to_string()),
     }
 }
 
-fn integrate_cos(u: &Node, var: &str) -> PyResult<Node> {
+fn integrate_cos(u: &Node, var: &str) -> Result<Node, String> {
     let sin_u = Node::Sin(Box::new(u.clone()));
     match arg_form(u, var) {
         Some(ArgForm::Var) => Ok(sin_u),
@@ -485,25 +468,21 @@ fn integrate_cos(u: &Node, var: &str) -> PyResult<Node> {
             Node::Cos(Box::new(u.clone())),
             Node::Symbol(var.to_string()),
         ])),
-        None => Err(PyNotImplementedError::new_err(
-            "Integration of cos(u) needs u linear in the integration variable",
-        )),
+        None => Err("Integration of cos(u) needs u linear in the integration variable".to_string()),
     }
 }
 
-fn integrate_exp(u: &Node, var: &str) -> PyResult<Node> {
+fn integrate_exp(u: &Node, var: &str) -> Result<Node, String> {
     let exp_u = Node::Exp(Box::new(u.clone()));
     match arg_form(u, var) {
         Some(ArgForm::Var) => Ok(exp_u),
         Some(ArgForm::Linear(a)) => Ok(Node::Div(Box::new(exp_u), Box::new(Node::Number(a)))),
         Some(ArgForm::Constant) => Ok(Node::Mul(vec![exp_u, Node::Symbol(var.to_string())])),
-        None => Err(PyNotImplementedError::new_err(
-            "Integration of exp(u) needs u linear in the integration variable",
-        )),
+        None => Err("Integration of exp(u) needs u linear in the integration variable".to_string()),
     }
 }
 
-fn integrate_ln(u: &Node, var: &str) -> PyResult<Node> {
+fn integrate_ln(u: &Node, var: &str) -> Result<Node, String> {
     match arg_form(u, var) {
         Some(ArgForm::Var) => Ok(Node::Sub(
             Box::new(Node::Mul(vec![u.clone(), Node::Ln(Box::new(u.clone()))])),
@@ -513,17 +492,13 @@ fn integrate_ln(u: &Node, var: &str) -> PyResult<Node> {
             Node::Ln(Box::new(u.clone())),
             Node::Symbol(var.to_string()),
         ])),
-        _ => Err(PyNotImplementedError::new_err(
-            "Integration of ln(u) only supports u = var or a var-independent constant",
-        )),
+        _ => Err("Integration of ln(u) only supports u = var or a var-independent constant".to_string()),
     }
 }
 
-fn integrate_pow(base: &Node, exp: &Node, var: &str) -> PyResult<Node> {
+fn integrate_pow(base: &Node, exp: &Node, var: &str) -> Result<Node, String> {
     let Node::Number(n) = exp else {
-        return Err(PyNotImplementedError::new_err(
-            "Integration of non-constant exponents is not supported yet",
-        ));
+        return Err("Integration of non-constant exponents is not supported yet".to_string());
     };
     match arg_form(base, var) {
         Some(ArgForm::Var) if *n == -1.0 => Ok(Node::Ln(Box::new(base.clone()))),
@@ -549,14 +524,10 @@ fn integrate_pow(base: &Node, exp: &Node, var: &str) -> PyResult<Node> {
             Node::Pow(Box::new(base.clone()), Box::new(Node::Number(*n))),
             Node::Symbol(var.to_string()),
         ])),
-        None => Err(PyNotImplementedError::new_err(
-            "Integration of base^n needs base linear in the integration variable",
-        )),
+        None => Err("Integration of base^n needs base linear in the integration variable".to_string()),
     }
 }
 
-/// `f` is `F(u)` for a `Sin`/`Cos`/`Exp` outer function; returns the
-/// antiderivative of `F` evaluated at `u` (chain-rule inverse).
 fn antiderivative_of_outer(f: &Node, u: &Node) -> Option<Node> {
     match f {
         Node::Sin(_) => Some(Node::Mul(vec![
@@ -576,12 +547,6 @@ fn inner_arg(f: &Node) -> Option<&Node> {
     }
 }
 
-/// Basic u-substitution (§4.2): matches `p == g'(x)` against `q == F(g(x))`.
-///
-/// Returns `(antiderivative, remaining_coeff)`: `remaining_coeff` is 1.0 when
-/// `coeff` was absorbed into the match (`coeff * p == g'(x)`, e.g. `2x`
-/// stripped to `coeff=2, p=x`), otherwise it's `coeff` itself, still to be
-/// multiplied in by the caller.
 fn try_u_substitution(p: &Node, q: &Node, var: &str, coeff: f64) -> Option<(Node, f64)> {
     let u = inner_arg(q)?;
     let du = u.diff_node(var).ok()?.simplify();
@@ -595,7 +560,7 @@ fn try_u_substitution(p: &Node, q: &Node, var: &str, coeff: f64) -> Option<(Node
     }
 }
 
-fn integrate_mul(factors: &[Node], var: &str) -> PyResult<Node> {
+fn integrate_mul(factors: &[Node], var: &str) -> Result<Node, String> {
     let (const_factors, non_const): (Vec<&Node>, Vec<&Node>) =
         factors.iter().partition(|f| !f.depends_on(var));
     let const_coeff = |fs: &[&Node]| -> Option<f64> {
@@ -635,17 +600,13 @@ fn integrate_mul(factors: &[Node], var: &str) -> PyResult<Node> {
                     return Ok(Node::Mul(vec![Node::Number(remaining), antideriv]));
                 }
             }
-            Err(PyNotImplementedError::new_err(
-                "No u-substitution pattern matched this product",
-            ))
+            Err("No u-substitution pattern matched this product".to_string())
         }
-        _ => Err(PyNotImplementedError::new_err(
-            "Integration of products with more than two non-constant factors is not supported yet",
-        )),
+        _ => Err("Integration of products with more than two non-constant factors is not supported yet".to_string()),
     }
 }
 
-fn integrate_div(a: &Node, b: &Node, var: &str) -> PyResult<Node> {
+fn integrate_div(a: &Node, b: &Node, var: &str) -> Result<Node, String> {
     if !b.depends_on(var) {
         let inner = a.integrate_node(var)?;
         return Ok(Node::Div(Box::new(inner), Box::new(b.clone())));
@@ -662,108 +623,96 @@ fn integrate_div(a: &Node, b: &Node, var: &str) -> PyResult<Node> {
             _ => {}
         }
     }
-    Err(PyNotImplementedError::new_err(
-        "Integration of this quotient is not supported yet",
-    ))
+    Err("Integration of this quotient is not supported yet".to_string())
 }
 
-#[pyclass(module = "measurekit_core")]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Expr {
     pub(crate) node: Node,
 }
 
-#[pymethods]
 impl Expr {
-    #[staticmethod]
-    fn number(v: f64) -> Expr {
+    pub fn number(v: f64) -> Expr {
         Expr {
             node: Node::Number(v),
         }
     }
 
-    #[staticmethod]
-    fn symbol(s: String) -> Expr {
+    pub fn symbol(s: String) -> Expr {
         Expr {
             node: Node::Symbol(s),
         }
     }
 
-    #[staticmethod]
-    fn quantity(name: String, unit: &RationalUnit) -> Expr {
+    pub fn quantity(name: String, unit: &RationalUnit) -> Expr {
         Expr {
             node: Node::Quantity(name, unit.clone()),
         }
     }
 
-    #[staticmethod]
-    fn sin(e: &Expr) -> Expr {
+    pub fn sin(e: &Expr) -> Expr {
         Expr {
             node: Node::Sin(Box::new(e.node.clone())),
         }
     }
 
-    #[staticmethod]
-    fn cos(e: &Expr) -> Expr {
+    pub fn cos(e: &Expr) -> Expr {
         Expr {
             node: Node::Cos(Box::new(e.node.clone())),
         }
     }
 
-    #[staticmethod]
-    fn ln(e: &Expr) -> Expr {
+    pub fn ln(e: &Expr) -> Expr {
         Expr {
             node: Node::Ln(Box::new(e.node.clone())),
         }
     }
 
-    #[staticmethod]
-    fn exp(e: &Expr) -> Expr {
+    pub fn exp(e: &Expr) -> Expr {
         Expr {
             node: Node::Exp(Box::new(e.node.clone())),
         }
     }
 
-    fn __add__(&self, other: &Expr) -> PyResult<Expr> {
+    pub fn add(&self, other: &Expr) -> Result<Expr, String> {
         check_add_compat(&self.node, &other.node)?;
         Ok(Expr {
             node: Node::Add(flatten_add(vec![self.node.clone(), other.node.clone()])),
         })
     }
 
-    fn __sub__(&self, other: &Expr) -> PyResult<Expr> {
+    pub fn sub(&self, other: &Expr) -> Result<Expr, String> {
         check_add_compat(&self.node, &other.node)?;
         Ok(Expr {
             node: Node::Sub(Box::new(self.node.clone()), Box::new(other.node.clone())),
         })
     }
 
-    fn __mul__(&self, other: &Expr) -> Expr {
+    pub fn mul(&self, other: &Expr) -> Expr {
         Expr {
             node: Node::Mul(flatten_mul(vec![self.node.clone(), other.node.clone()])),
         }
     }
 
-    fn __truediv__(&self, other: &Expr) -> Expr {
+    pub fn div(&self, other: &Expr) -> Expr {
         Expr {
             node: Node::Div(Box::new(self.node.clone()), Box::new(other.node.clone())),
         }
     }
 
-    fn __pow__(&self, other: &Expr, _modulo: Option<Bound<'_, PyAny>>) -> Expr {
+    pub fn pow(&self, other: &Expr) -> Expr {
         Expr {
             node: Node::Pow(Box::new(self.node.clone()), Box::new(other.node.clone())),
         }
     }
 
-    fn simplify(&self) -> Expr {
+    pub fn simplify(&self) -> Expr {
         Expr {
             node: self.node.simplify(),
         }
     }
 
-    #[pyo3(signature = (var, n=1))]
-    fn diff(&self, var: &str, n: usize) -> PyResult<Expr> {
+    pub fn diff(&self, var: &str, n: usize) -> Result<Expr, String> {
         let mut cur = self.node.clone();
         for _ in 0..n {
             cur = cur.diff_node(var)?;
@@ -773,21 +722,16 @@ impl Expr {
         })
     }
 
-    /// Indefinite integration w.r.t. `var` (§4.2, "Level 1"): pattern-table
-    /// lookup, linear chain rule, and basic u-substitution. Raises
-    /// `NotImplementedError` outside that pattern set — no general solver.
-    fn integrate(&self, var: &str) -> PyResult<Expr> {
+    pub fn integrate(&self, var: &str) -> Result<Expr, String> {
         Ok(Expr {
             node: self.node.integrate_node(var)?.simplify(),
         })
     }
 
-    fn unit(&self, py: Python<'_>) -> PyResult<Option<Py<RationalUnit>>> {
-        match self.node.infer_unit()? {
-            Some(u) => Ok(Some(crate::units::get_cached_unit(py, u)?)),
-            None => Ok(None),
-        }
+    pub fn unit(&self) -> Result<Option<RationalUnit>, String> {
+        self.node.infer_unit()
     }
+
 
     fn __repr__(&self) -> String {
         format!("{:?}", self.node)

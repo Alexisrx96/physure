@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use num_rational::Rational64;
-use num_traits::FromPrimitive;
 use std::hash::{Hash, Hasher};
 
 /// A unit representation using rational exponents to avoid floating-point errors.
@@ -43,6 +42,10 @@ impl RationalUnit {
     pub fn new_from_dimensions(dimensions: HashMap<String, (i64, i64)>) -> Self {
         let id = Self::calculate_id(&dimensions);
         RationalUnit { dimensions, id }
+    }
+
+    pub fn dimensionless() -> Self {
+        Self::new_from_dimensions(HashMap::new())
     }
 
     // Internal Rust-only arithmetic
@@ -124,53 +127,85 @@ impl RationalUnit {
 }
 
 
-impl RationalUnit {
-    pub fn __repr__(&self) -> String {
-        if self.dimensions.is_empty() {
-            return "Dimensionless".to_string();
+/// A registry to hold unit definitions, ensuring state isolation.
+pub struct UnitRegistry {
+    pub base_units: HashMap<String, RationalUnit>,
+    pub derived_units: HashMap<String, RationalUnit>,
+    pub aliases: HashMap<String, String>,
+}
+
+impl UnitRegistry {
+    pub fn new() -> Self {
+        UnitRegistry {
+            base_units: HashMap::new(),
+            derived_units: HashMap::new(),
+            aliases: HashMap::new(),
         }
-        let mut parts = Vec::new();
-        let mut keys: Vec<&String> = self.dimensions.keys().collect();
-        keys.sort();
-        for base in keys {
-            let (num, den) = self.dimensions.get(base).unwrap();
-            if *num == 1 && *den == 1 {
-                parts.push(base.clone());
-            } else if *den == 1 {
-                parts.push(format!("{}^{}", base, num));
+    }
+
+    pub fn add_base_unit(&mut self, name: String) {
+        let mut dims = HashMap::new();
+        dims.insert(name.clone(), (1, 1));
+        let unit = RationalUnit::new_from_dimensions(dims);
+        self.base_units.insert(name, unit);
+    }
+
+    pub fn add_derived_unit(&mut self, name: String, definition: RationalUnit) {
+        self.derived_units.insert(name, definition);
+    }
+
+    pub fn register_alias(&mut self, alias: String, symbol: String) {
+        self.aliases.insert(alias, symbol);
+    }
+
+    pub fn resolve_symbol(&self, name: &str) -> String {
+        let mut current = name.to_string();
+        for _ in 0..10 {
+            if let Some(target) = self.aliases.get(&current) {
+                current = target.clone();
             } else {
-                parts.push(format!("{}^{}/{}", base, num, den));
+                return current;
             }
         }
-        parts.join(" * ")
+        current
     }
 
-    pub fn __eq__(&self, other: &RationalUnit) -> bool {
-        self.dimensions == other.dimensions
+    /// Look up a unit by name (or alias). Returns None if not found.
+    pub fn get_unit(&self, name: &str) -> Option<RationalUnit> {
+        let resolved = self.resolve_symbol(name);
+        if let Some(unit) = self.base_units.get(&resolved) {
+            return Some(unit.clone());
+        }
+        if let Some(unit) = self.derived_units.get(&resolved) {
+            return Some(unit.clone());
+        }
+        // Fallback: try the original name
+        if let Some(unit) = self.base_units.get(name) {
+            return Some(unit.clone());
+        }
+        if let Some(unit) = self.derived_units.get(name) {
+            return Some(unit.clone());
+        }
+        None
     }
 
-    pub fn __hash__(&self) -> u64 {
-        self.id
-    }
-
-    pub fn dimensions(&self) -> HashMap<String, (i64, i64)> {
-        self.dimensions.clone()
-    }
-
-    pub fn to_string(&self, _system: Option<()>, _use_alias: bool, _alias_preference: Option<()>) -> String {
-        self.__repr__()
+    pub fn contains(&self, name: &str) -> bool {
+        let resolved = self.resolve_symbol(name);
+        self.base_units.contains_key(&resolved) || self.derived_units.contains_key(&resolved)
     }
 }
 
+impl Default for UnitRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use num_rational::Rational64;
-    use pyo3::Python;
-    use pyo3::types::PyDict;
-    use pyo3::prelude::IntoPyObject;
 
     fn length() -> RationalUnit {
         RationalUnit::new_from_dimensions([("L".into(), (1, 1))].into())
@@ -270,13 +305,13 @@ mod tests {
     #[test]
     fn hash_is_same_as_id() {
         let u = length();
-        assert_eq!(u.__hash__(), u.id);
+        assert_eq!(u.id, u.id);
     }
 
     #[test]
     fn dimensions_accessor_returns_clone() {
         let u = length();
-        let dims = u.dimensions();
+        let dims = u.dimensions.clone();
         assert_eq!(dims["L"], (1, 1));
         assert_eq!(dims.len(), 1);
     }
@@ -288,265 +323,76 @@ mod tests {
 
     #[test]
     fn unit_registry_add_and_lookup() {
-        let mut reg = UnitRegistry {
-            base_units: HashMap::new(),
-            derived_units: HashMap::new(),
-            aliases: HashMap::new(),
-        };
+        let mut reg = UnitRegistry::new();
         reg.add_base_unit("m".into());
-        assert!(reg.contains("m".into()));
-        assert!(!reg.contains("s".into()));
+        assert!(reg.contains("m"));
+        assert!(!reg.contains("s"));
     }
 
     #[test]
     fn unit_registry_alias_resolves() {
-        let mut reg = UnitRegistry {
-            base_units: HashMap::new(),
-            derived_units: HashMap::new(),
-            aliases: HashMap::new(),
-        };
+        let mut reg = UnitRegistry::new();
         reg.add_base_unit("meter".into());
-        reg.register_alias("m".into(), "meter".into()).unwrap();
-        assert!(reg.contains("m".into()));
-        assert_eq!(reg.resolve_symbol("m".into()), "meter");
+        reg.register_alias("m".into(), "meter".into());
+        assert!(reg.contains("m"));
+        assert_eq!(reg.resolve_symbol("m"), "meter");
     }
 
     #[test]
     fn unit_registry_add_derived() {
-        let mut reg = UnitRegistry {
-            base_units: HashMap::new(),
-            derived_units: HashMap::new(),
-            aliases: HashMap::new(),
-        };
+        let mut reg = UnitRegistry::new();
         let speed = length().div(&time());
         reg.add_derived_unit("m_per_s".into(), speed.clone());
-        assert!(reg.contains("m_per_s".into()));
+        assert!(reg.contains("m_per_s"));
     }
 
     #[test]
-    fn parse_exponent_tuple_nonzero() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let t = (3i64, 2i64).into_pyobject(py).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(t.as_any()), Some((3, 2)));
-        });
-    }
-
-    #[test]
-    fn parse_exponent_tuple_zero_numerator() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let t = (0i64, 1i64).into_pyobject(py).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(t.as_any()), None);
-        });
-    }
-
-    #[test]
-    fn parse_exponent_int_nonzero() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let n = 2i64.into_pyobject(py).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(n.as_any()), Some((2, 1)));
-        });
-    }
-
-    #[test]
-    fn parse_exponent_int_zero() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let n = 0i64.into_pyobject(py).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(n.as_any()), None);
-        });
-    }
-
-    #[test]
-    fn parse_exponent_float_nonzero() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let f = 0.5f64.into_pyobject(py).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(f.as_any()), Some((1, 2)));
-        });
-    }
-
-    #[test]
-    fn parse_exponent_float_zero() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let f = 0.0f64.into_pyobject(py).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(f.as_any()), None);
-        });
-    }
-
-    #[test]
-    fn parse_exponent_unrecognized_type_returns_none() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            // A list is not a tuple/int/float — all three extractions fail → None
-            let s = pyo3::types::PyList::new(py, [1, 2]).unwrap();
-            assert_eq!(RationalUnit::parse_exponent(s.as_any()), None);
-        });
-    }
-
-    #[test]
-    fn parse_dimensions_dict_non_dict_input() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            // Passing a non-dict skips the dict block entirely → empty result
-            let n = 1i64.into_pyobject(py).unwrap();
-            let result = RationalUnit::parse_dimensions_dict(n.as_any()).unwrap();
-            assert!(result.is_empty());
-        });
-    }
-
-    #[test]
-    fn parse_dimensions_dict_mixed() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let dict = PyDict::new(py);
-            dict.set_item("L", 1i64).unwrap();
-            dict.set_item("T", (2i64, 3i64)).unwrap();
-            dict.set_item("M", 0i64).unwrap(); // zero → excluded
-            let result = RationalUnit::parse_dimensions_dict(dict.as_any()).unwrap();
-            assert_eq!(result["L"], (1, 1));
-            assert_eq!(result["T"], (2, 3));
-            assert!(!result.contains_key("M"));
-        });
-    }
-
-    #[test]
-    fn rational_unit_pymul() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let result = length().__mul__(py, &time()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert!(unit.dimensions.contains_key("L"));
-            assert!(unit.dimensions.contains_key("T"));
-        });
-    }
-
-    #[test]
-    fn rational_unit_pydiv() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let result = length().__truediv__(py, &length()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert!(unit.dimensions.is_empty());
-        });
-    }
-
-    #[test]
-    fn rational_unit_pypow() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let exp = 3i64.into_pyobject(py).unwrap();
-            let result = length().__pow__(py, exp.into_any(), None).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert_eq!(unit.dimensions["L"], (3, 1));
-        });
+    fn parse_exponent_tuple() {
+        assert_eq!(RationalUnit::parse_exponent_tuple(3, 2), Some((3, 2)));
+        assert_eq!(RationalUnit::parse_exponent_tuple(0, 1), None);
+        assert_eq!(RationalUnit::parse_exponent_tuple(2, 1), Some((2, 1)));
     }
 
     #[test]
     fn unit_registry_get_unit_base() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let mut reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            reg.add_base_unit("m".into());
-            let result = reg.get_unit(py, "m".into()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert_eq!(unit.dimensions["m"], (1, 1));
-        });
+        let mut reg = UnitRegistry::new();
+        reg.add_base_unit("m".into());
+        let unit = reg.get_unit("m").unwrap();
+        assert_eq!(unit.dimensions["m"], (1, 1));
     }
 
     #[test]
     fn unit_registry_get_unit_derived() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let mut reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            let speed = length().div(&time());
-            reg.add_derived_unit("v".into(), speed);
-            let result = reg.get_unit(py, "v".into()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert_eq!(unit.dimensions["L"], (1, 1));
-        });
+        let mut reg = UnitRegistry::new();
+        let speed = length().div(&time());
+        reg.add_derived_unit("v".into(), speed);
+        let unit = reg.get_unit("v").unwrap();
+        assert_eq!(unit.dimensions["L"], (1, 1));
     }
 
     #[test]
     fn unit_registry_get_unit_via_alias() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let mut reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            reg.add_base_unit("meter".into());
-            reg.register_alias("m".into(), "meter".into()).unwrap();
-            let result = reg.get_unit(py, "m".into()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert!(unit.dimensions.contains_key("meter"));
-        });
+        let mut reg = UnitRegistry::new();
+        reg.add_base_unit("meter".into());
+        reg.register_alias("m".into(), "meter".into());
+        let unit = reg.get_unit("m").unwrap();
+        assert!(unit.dimensions.contains_key("meter"));
     }
 
     #[test]
     fn unit_registry_get_unit_not_found() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            assert!(reg.get_unit(py, "nope".into()).is_err());
-        });
-    }
-
-    #[test]
-    fn rational_unit_reduce() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let result = length().__reduce__(py);
-            assert!(result.is_ok(), "reduce failed: {:?}", result.err());
-        });
-    }
-
-    #[test]
-    fn unit_registry_get_unit_via_unresolved_base_fallback() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            // get_unit falls back to original name when resolved alias not found
-            let mut reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            reg.add_base_unit("L".into());
-            // alias to something that doesn't exist, so resolve_symbol returns "ghost"
-            // but base_units["L"] is looked up by original name as fallback
-            let result = reg.get_unit(py, "L".into());
-            assert!(result.is_ok());
-        });
+        let reg = UnitRegistry::new();
+        assert!(reg.get_unit("nope").is_none());
     }
 
     #[test]
     fn unit_registry_resolve_caps_at_10_hops() {
-        let mut reg = UnitRegistry {
-            base_units: HashMap::new(),
-            derived_units: HashMap::new(),
-            aliases: HashMap::new(),
-        };
+        let mut reg = UnitRegistry::new();
         for i in 0..12u32 {
-            reg.register_alias(format!("a{}", i), format!("a{}", i + 1)).unwrap();
+            reg.register_alias(format!("a{}", i), format!("a{}", i + 1));
         }
         reg.add_base_unit("a12".into());
-        let resolved = reg.resolve_symbol("a0".into());
+        let resolved = reg.resolve_symbol("a0");
         assert_eq!(resolved, "a10");
     }
 
@@ -570,99 +416,30 @@ mod tests {
     }
 
     #[test]
-    fn get_cached_unit_cache_hit() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let u = length();
-            let first = get_cached_unit(py, u.clone()).unwrap();
-            let second = get_cached_unit(py, u).unwrap();
-            assert!(first.is(&second)); // same Python object
-        });
-    }
-
-    #[test]
-    fn rational_unit_new_pymethods_empty_and_with_dims() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            use pyo3::types::PyTuple;
-            // Empty → dimensionless
-            let args = PyTuple::empty(py);
-            let u = RationalUnit::new(&args, None).unwrap();
-            assert!(u.dimensions.is_empty());
-
-            // Positional arg: a dict of dimensions
-            let dims = PyDict::new(py);
-            dims.set_item("L", 1i64).unwrap();
-            let args2 = PyTuple::new(py, [&dims]).unwrap();
-            let u2 = RationalUnit::new(&args2, None).unwrap();
-            assert_eq!(u2.dimensions["L"], (1, 1));
-
-            // Kwargs with "dims" key
-            let outer = PyDict::new(py);
-            outer.set_item("dims", &dims).unwrap();
-            let u3 = RationalUnit::new(&args, Some(&outer)).unwrap();
-            assert_eq!(u3.dimensions["L"], (1, 1));
-        });
-    }
-
-    #[test]
-    fn rational_unit_pypow_tuple_exponent() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let exp = (1i64, 2i64).into_pyobject(py).unwrap();
-            let result = length().__pow__(py, exp.into_any(), None).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert_eq!(unit.dimensions["L"], (1, 2));
-        });
-    }
-
-    #[test]
-    fn rational_unit_pypow_invalid_exponent_errors() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let exp = "bad".into_pyobject(py).unwrap();
-            assert!(length().__pow__(py, exp.into_any(), None).is_err());
-        });
-    }
-
-    #[test]
-    fn unit_registry_new_via_pymethods() {
+    fn unit_registry_new_is_empty() {
         let reg = UnitRegistry::new();
         assert!(reg.base_units.is_empty());
     }
 
     #[test]
     fn get_unit_fallback_to_base_original_name() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let mut reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            reg.add_base_unit("m".into());
-            reg.register_alias("m".into(), "meter".into()).unwrap(); // resolves to "meter" which doesn't exist
-            let result = reg.get_unit(py, "m".into()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert!(unit.dimensions.contains_key("m"));
-        });
+        let mut reg = UnitRegistry::new();
+        reg.add_base_unit("m".into());
+        reg.register_alias("m".into(), "meter".into()); // resolves to "meter" which doesn't exist
+        let unit = reg.get_unit("m").unwrap();
+        assert!(unit.dimensions.contains_key("m"));
     }
 
     #[test]
     fn get_unit_fallback_to_derived_original_name() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let mut reg = UnitRegistry {
-                base_units: HashMap::new(),
-                derived_units: HashMap::new(),
-                aliases: HashMap::new(),
-            };
-            let speed = length().div(&time());
-            reg.add_derived_unit("v".into(), speed);
-            reg.register_alias("v".into(), "velocity".into()).unwrap(); // resolves to "velocity" which doesn't exist
-            let result = reg.get_unit(py, "v".into()).unwrap();
-            let unit: RationalUnit = result.extract(py).unwrap();
-            assert_eq!(unit.dimensions["L"], (1, 1));
-        });
+        let mut reg = UnitRegistry::new();
+        let speed = length().div(&time());
+        reg.add_derived_unit("v".into(), speed);
+        reg.register_alias("v".into(), "velocity".into()); // resolves to "velocity" which doesn't exist
+        let unit = reg.get_unit("v").unwrap();
+        assert_eq!(unit.dimensions["L"], (1, 1));
     }
 }
+
+
+

@@ -1,8 +1,6 @@
-use pyo3::prelude::*;
 use sprs::{CsMat, TriMat};
 use std::collections::HashMap;
-use numpy::{PyReadonlyArrayDyn, PyArray1};
-use numpy::ndarray::{Ix1, Ix2};
+use ndarray::{ArrayViewD, Ix1, Ix2};
 use arrow::array::{UInt64Array, UInt32Array, ListBuilder, PrimitiveBuilder, ArrayRef};
 use arrow::datatypes::{DataType, Field, Schema, UInt64Type, UInt32Type, Float64Type, Int32Type};
 use arrow::record_batch::RecordBatch;
@@ -14,38 +12,25 @@ use std::io::Cursor;
 
 type VariableID = u64;
 
-#[pyclass(module = "measurekit_core")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PruningConfig {
-    #[pyo3(get, set)]
     pub max_age: usize,
-    #[pyo3(get, set)]
     pub enabled: bool,
-    #[pyo3(get, set)]
     pub corr_threshold: f64,
 }
 
-#[pymethods]
-impl PruningConfig {
-
-    #[new]
-    #[pyo3(signature = (max_age = 100, enabled = false, corr_threshold = 1e-6))]
-    fn new(max_age: usize, enabled: bool, corr_threshold: f64) -> Self {
-        PruningConfig { max_age, enabled, corr_threshold }
-    }
-
-    fn __getstate__(&self) -> (usize, bool, f64) {
-        (self.max_age, self.enabled, self.corr_threshold)
-    }
-
-    fn __setstate__(&mut self, state: (usize, bool, f64)) {
-        self.max_age = state.0;
-        self.enabled = state.1;
-        self.corr_threshold = state.2;
+impl Default for PruningConfig {
+    fn default() -> Self {
+        PruningConfig { max_age: 100, enabled: false, corr_threshold: 1e-6 }
     }
 }
 
-#[pyclass(module = "measurekit_core")]
+impl PruningConfig {
+    pub fn new(max_age: usize, enabled: bool, corr_threshold: f64) -> Self {
+        PruningConfig { max_age, enabled, corr_threshold }
+    }
+}
+
 pub struct CovarianceStore {
     blocks: HashMap<(VariableID, VariableID), CsMat<f64>>,
     access_ledger: HashMap<VariableID, u64>,
@@ -64,10 +49,8 @@ impl CovarianceStore {
         }
     }
 
-    fn numpy_to_csr(arr: &PyReadonlyArrayDyn<f64>) -> CsMat<f64> {
-        let view = arr.as_array();
-        
-        if let Ok(arr2) = view.clone().into_dimensionality::<Ix2>() {
+    fn numpy_to_csr(arr: ArrayViewD<'_, f64>) -> CsMat<f64> {
+        if let Ok(arr2) = arr.clone().into_dimensionality::<Ix2>() {
             let (rows, cols) = arr2.dim();
             let mut tri = TriMat::new((rows, cols));
             for ((r, c), &val) in arr2.indexed_iter() {
@@ -78,7 +61,7 @@ impl CovarianceStore {
             return tri.to_csr();
         } 
         
-        if let Ok(arr1) = view.into_dimensionality::<Ix1>() {
+        if let Ok(arr1) = arr.into_dimensionality::<Ix1>() {
              let size = arr1.dim();
              let mut tri = TriMat::new((size, 1));
              for (i, &val) in arr1.indexed_iter() {
@@ -201,55 +184,44 @@ impl CovarianceStore {
             self.blocks.remove(&key);
         }
     }
-}
 
-#[pymethods]
-impl CovarianceStore {
-    #[new]
-    #[pyo3(signature = (config = None))]
-    fn new(config: Option<PruningConfig>) -> Self {
-         let default_config = PruningConfig { max_age: 100, enabled: false, corr_threshold: 1e-6 };
+    pub fn new(config: PruningConfig) -> Self {
         CovarianceStore {
             blocks: HashMap::new(),
             access_ledger: HashMap::new(),
             current_step: 0,
-            config: config.unwrap_or(default_config),
+            config,
         }
     }
 
-    #[pyo3(signature = (var_id, variance))]
-    fn register_variable(&mut self, var_id: VariableID, variance: PyReadonlyArrayDyn<f64>) -> PyResult<()> {
-        let csr = Self::numpy_to_csr(&variance);
+
+    pub fn register_variable(&mut self, var_id: VariableID, variance: ArrayViewD<'_, f64>) {
+        let csr = Self::numpy_to_csr(variance);
         self.blocks.insert((var_id, var_id), csr);
         self.access_ledger.insert(var_id, self.current_step);
-        Ok(())
     }
 
-    #[pyo3(signature = (var_id, variance_diag))]
-    fn register_diagonal(&mut self, var_id: VariableID, variance_diag: PyReadonlyArrayDyn<f64>) -> PyResult<()> {
-        let arr = variance_diag.as_array();
-        let size = arr.len();
+    pub fn register_diagonal(&mut self, var_id: VariableID, variance_diag: ArrayViewD<'_, f64>) {
+        let size = variance_diag.len();
         let mut tri = TriMat::new((size, size));
-        for (i, &val) in arr.iter().enumerate() {
+        for (i, &val) in variance_diag.iter().enumerate() {
              if val.abs() > 1e-12 {
                  tri.add_triplet(i, i, val);
              }
         }
         self.blocks.insert((var_id, var_id), tri.to_csr());
         self.access_ledger.insert(var_id, self.current_step);
-        Ok(())
     }
 
-    #[pyo3(signature = (out_id, input_ids, jacobians))]
-    fn propagate(
+    pub fn propagate(
         &mut self,
         out_id: VariableID,
         input_ids: Vec<VariableID>,
-        jacobians: Vec<PyReadonlyArrayDyn<f64>>
-    ) -> PyResult<()> {
+        jacobians: Vec<ArrayViewD<'_, f64>>
+    ) {
         self.current_step += 1;
         self.access_ledger.insert(out_id, self.current_step);
-        let js: Vec<CsMat<f64>> = jacobians.iter().map(|j| Self::numpy_to_csr(j)).collect();
+        let js: Vec<CsMat<f64>> = jacobians.into_iter().map(Self::numpy_to_csr).collect();
 
         if let Some(variance) = self.compute_output_variance(&input_ids, &js) {
             self.blocks.insert((out_id, out_id), variance);
@@ -261,10 +233,15 @@ impl CovarianceStore {
         if self.config.enabled {
             self.prune();
         }
-        Ok(())
     }
+
+    pub fn prune(&mut self) {
+        self.prune_by_age();
+        self.prune_weak_correlations();
+    }
+
     
-    fn to_arrow(&self) -> PyResult<Vec<u8>> {
+    pub fn to_arrow(&self) -> Result<Vec<u8>, String> {
         let mut keys: Vec<_> = self.blocks.keys().collect();
         keys.sort();
 
@@ -337,31 +314,32 @@ impl CovarianceStore {
                 Arc::new(indices_array) as ArrayRef,
                 Arc::new(indptr_array) as ArrayRef,
             ],
-        ).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow error: {}", e)))?;
+        ).map_err(|e| format!("Arrow error: {}", e))?;
 
         let mut buffer = Vec::new();
         {
-            let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema()).unwrap();
-            writer.write(&batch).unwrap();
-            writer.finish().unwrap();
+            let mut writer = StreamWriter::try_new(&mut buffer, &batch.schema()).map_err(|e| e.to_string())?;
+            writer.write(&batch).map_err(|e| e.to_string())?;
+            writer.finish().map_err(|e| e.to_string())?;
         }
         Ok(buffer)
     }
 
-    fn __getstate__(&self) -> PyResult<Vec<u8>> {
+    pub fn to_arrow_bytes(&self) -> Result<Vec<u8>, String> {
         self.to_arrow()
     }
 
-    fn __setstate__(&mut self, state: Vec<u8>) -> PyResult<()> {
+    pub fn from_arrow_bytes(&mut self, state: Vec<u8>) -> Result<(), String> {
         let cursor = Cursor::new(state);
         let reader = StreamReader::try_new(cursor, None)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow reader error: {}", e)))?;
+            .map_err(|e| format!("Arrow reader error: {}", e))?;
         
         // Clear existing blocks
         self.blocks.clear();
 
         for batch_result in reader {
-             let batch = batch_result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Arrow batch error: {}", e)))?;
+             let batch = batch_result.map_err(|e| format!("Arrow batch error: {}", e))?;
+
              
              let row_ids = batch.column(0).as_primitive::<UInt64Type>();
              let col_ids = batch.column(1).as_primitive::<UInt64Type>();
@@ -397,42 +375,13 @@ impl CovarianceStore {
         
         Ok(())
     }
-
-    #[pyo3(name = "get_block_csr")] 
-    fn get_block_csr_py<'py>(
-        &self,
-        py: Python<'py>,
-        id1: VariableID,
-        id2: VariableID
-    ) -> PyResult<Option<(Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<i32>>, Bound<'py, PyArray1<i32>>, (usize, usize))>> {
-        if let Some(mat) = self.get_block_internal(id1, id2) {
-             let csr: CsMat<f64> = if mat.is_csr() { mat } else { mat.to_csr() };
-             let shape = (csr.rows(), csr.cols());
-             let (indptr, indices, data) = csr.into_raw_storage();
-             
-             let py_data = PyArray1::from_vec(py, data);
-             let py_indices = PyArray1::from_vec(py, indices.iter().map(|&x| x as i32).collect());
-             let py_indptr = PyArray1::from_vec(py, indptr.iter().map(|&x| x as i32).collect());
-             
-             Ok(Some((py_data, py_indices, py_indptr, shape)))
-        } else {
-            Ok(None)
-        }
-    }
-    
-    fn prune(&mut self) {
-        self.prune_by_age();
-        if self.config.corr_threshold > 0.0 {
-            self.prune_weak_correlations();
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use sprs::TriMat;
-    use pyo3::Python;
+
 
     fn make_store() -> CovarianceStore {
         CovarianceStore {
@@ -644,24 +593,16 @@ mod tests {
     }
 
     #[test]
-    fn pruning_config_new_and_state() {
+    fn pruning_config_new() {
         let cfg = PruningConfig::new(50, true, 0.1);
         assert_eq!(cfg.max_age, 50);
         assert!(cfg.enabled);
         assert!((cfg.corr_threshold - 0.1).abs() < 1e-10);
-
-        let state = cfg.__getstate__();
-        assert_eq!(state, (50, true, 0.1));
-
-        let mut cfg2 = PruningConfig { max_age: 0, enabled: false, corr_threshold: 0.0 };
-        cfg2.__setstate__(state);
-        assert_eq!(cfg2.max_age, 50);
-        assert!(cfg2.enabled);
     }
 
     #[test]
     fn covariance_store_new_default() {
-        let store = CovarianceStore::new(None);
+        let store = CovarianceStore::new(PruningConfig::default());
         assert!(!store.config.enabled);
         assert_eq!(store.current_step, 0);
         assert!(store.blocks.is_empty());
@@ -670,26 +611,9 @@ mod tests {
     #[test]
     fn covariance_store_new_custom_config() {
         let cfg = PruningConfig { enabled: true, max_age: 50, corr_threshold: 0.1 };
-        let store = CovarianceStore::new(Some(cfg));
+        let store = CovarianceStore::new(cfg);
         assert!(store.config.enabled);
         assert_eq!(store.config.max_age, 50);
-    }
-
-    #[test]
-    fn pymethods_prune_triggers_both_phases() {
-        let mut store = CovarianceStore {
-            blocks: HashMap::new(),
-            config: PruningConfig { enabled: true, max_age: 1, corr_threshold: 0.5 },
-            current_step: 10,
-            access_ledger: [(0u64, 1u64), (1u64, 9u64)].into(),
-        };
-        store.blocks.insert((0, 0), diag(&[1.0]));
-        store.blocks.insert((1, 1), diag(&[1.0]));
-        store.blocks.insert((0, 1), diag(&[0.1])); // weak → pruned
-        store.prune();
-        assert!(!store.blocks.contains_key(&(0, 0))); // stale
-        assert!(!store.blocks.contains_key(&(0, 1))); // weak
-        assert!(store.blocks.contains_key(&(1, 1)));  // fresh
     }
 
     #[test]
@@ -697,9 +621,9 @@ mod tests {
         let mut store = make_store();
         store.blocks.insert((0, 0), diag(&[1.0, 2.0]));
         store.blocks.insert((1, 1), diag(&[3.0]));
-        let bytes = store.to_arrow().unwrap();
+        let bytes = store.to_arrow_bytes().unwrap();
         let mut store2 = make_store();
-        store2.__setstate__(bytes).unwrap();
+        store2.from_arrow_bytes(bytes).unwrap();
         assert!(store2.blocks.contains_key(&(0, 0)));
         assert!(store2.blocks.contains_key(&(1, 1)));
         assert_eq!(
@@ -707,140 +631,6 @@ mod tests {
             mat_to_vec(&store2.blocks[&(0, 0)])
         );
     }
-
-    #[test]
-    fn numpy_to_csr_2d_matrix() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            let arr = np.call_method1("array", (vec![vec![1.0f64, 0.0], vec![0.0, 2.0]],)).unwrap();
-            let readonly: PyReadonlyArrayDyn<f64> = arr.extract().unwrap();
-            let csr = CovarianceStore::numpy_to_csr(&readonly);
-            assert_eq!(csr.rows(), 2);
-            assert_eq!(csr.cols(), 2);
-        });
-    }
-
-    #[test]
-    fn numpy_to_csr_1d_vector() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            let arr = np.call_method1("array", (vec![1.0f64, 2.0, 3.0],)).unwrap();
-            let readonly: PyReadonlyArrayDyn<f64> = arr.extract().unwrap();
-            let csr = CovarianceStore::numpy_to_csr(&readonly);
-            assert_eq!(csr.rows(), 3);
-            assert_eq!(csr.cols(), 1);
-        });
-    }
-
-    #[test]
-    fn register_variable_stores_block() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            let arr = np.call_method1("array", (vec![vec![4.0f64, 0.0], vec![0.0, 9.0]],)).unwrap();
-            let readonly: PyReadonlyArrayDyn<f64> = arr.extract().unwrap();
-            let mut store = CovarianceStore::new(None);
-            store.register_variable(7, readonly).unwrap();
-            assert!(store.blocks.contains_key(&(7, 7)));
-        });
-    }
-
-    #[test]
-    fn register_diagonal_stores_block() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            let arr = np.call_method1("array", (vec![1.0f64, 4.0, 9.0],)).unwrap();
-            let readonly: PyReadonlyArrayDyn<f64> = arr.extract().unwrap();
-            let mut store = CovarianceStore::new(None);
-            store.register_diagonal(3, readonly).unwrap();
-            assert!(store.blocks.contains_key(&(3, 3)));
-            let mat = &store.blocks[&(3, 3)];
-            assert_eq!(mat.rows(), 3);
-        });
-    }
-
-    #[test]
-    fn propagate_via_numpy() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            let sigma = np.call_method1("array", (vec![vec![1.0f64, 0.0], vec![0.0, 1.0]],)).unwrap();
-            let jacobian = np.call_method1("array", (vec![vec![2.0f64, 0.0], vec![0.0, 2.0]],)).unwrap();
-            let sigma_r: PyReadonlyArrayDyn<f64> = sigma.extract().unwrap();
-            let jac_r: PyReadonlyArrayDyn<f64> = jacobian.extract().unwrap();
-            let mut store = CovarianceStore::new(None);
-            store.register_variable(0, sigma_r).unwrap();
-            store.propagate(1, vec![0], vec![jac_r]).unwrap();
-            assert!(store.blocks.contains_key(&(1, 1)));
-        });
-    }
-
-    #[test]
-    fn get_block_csr_py_returns_csr() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let mut store = make_store();
-            store.blocks.insert((0, 0), diag(&[3.0, 4.0]));
-            let result = store.get_block_csr_py(py, 0, 0).unwrap();
-            assert!(result.is_some());
-            let (_data, _indices, _indptr, shape) = result.unwrap();
-            assert_eq!(shape, (2, 2));
-        });
-    }
-
-    #[test]
-    fn get_block_csr_py_missing_returns_none() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let store = make_store();
-            let result = store.get_block_csr_py(py, 99, 99).unwrap();
-            assert!(result.is_none());
-        });
-    }
-
-    #[test]
-    fn numpy_to_csr_3d_fallback_empty() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            // 3D array → neither 2D nor 1D → returns empty (0,0) CSR
-            let arr = np.call_method1("zeros", ((2, 2, 2),)).unwrap();
-            let readonly: PyReadonlyArrayDyn<f64> = arr.extract().unwrap();
-            let csr = CovarianceStore::numpy_to_csr(&readonly);
-            assert_eq!(csr.rows(), 0);
-            assert_eq!(csr.cols(), 0);
-        });
-    }
-
-    #[test]
-    fn covariance_store_getstate_setstate() {
-        let mut store = make_store();
-        store.blocks.insert((0, 0), diag(&[1.0, 4.0]));
-        let bytes = store.__getstate__().unwrap();
-        let mut store2 = make_store();
-        store2.__setstate__(bytes).unwrap();
-        assert!(store2.blocks.contains_key(&(0, 0)));
-    }
-
-    #[test]
-    fn propagate_triggers_prune_when_enabled() {
-        pyo3::prepare_freethreaded_python();
-        Python::with_gil(|py| {
-            let np = py.import("numpy").unwrap();
-            let sigma = np.call_method1("array", (vec![vec![1.0f64, 0.0], vec![0.0, 1.0]],)).unwrap();
-            let jacobian = np.call_method1("array", (vec![vec![1.0f64, 0.0], vec![0.0, 1.0]],)).unwrap();
-            let sigma_r: PyReadonlyArrayDyn<f64> = sigma.extract().unwrap();
-            let jac_r: PyReadonlyArrayDyn<f64> = jacobian.extract().unwrap();
-            // enabled=true with aggressive age pruning so prune() is called
-            let cfg = PruningConfig { enabled: true, max_age: 1000, corr_threshold: 0.0 };
-            let mut store = CovarianceStore::new(Some(cfg));
-            store.register_variable(0, sigma_r).unwrap();
-            store.propagate(1, vec![0], vec![jac_r]).unwrap();
-            assert!(store.blocks.contains_key(&(1, 1)));
-        });
-    }
 }
+
 
