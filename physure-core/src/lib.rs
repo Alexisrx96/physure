@@ -1,5 +1,6 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+pub mod error;
 pub mod units;
 pub mod uncertainty;
 pub mod quantity;
@@ -8,10 +9,11 @@ pub mod math;
 pub mod serialization;
 pub mod symbolic;
 
+pub use error::{PhysureError, PhysureResult};
 pub use units::{RationalUnit, UnitRegistry};
 pub use quantity::Quantity;
 pub use covariance::{CovarianceStore, PruningConfig};
-pub use uncertainty::{UncertaintyBackend, GaussianBackend, MonteCarloBackend, UnscentedBackend};
+pub use uncertainty::{UncertaintyBackend, UncertaintyValue, GaussianBackend, MonteCarloBackend, UnscentedBackend};
 
 /// Convert batch values in-place using factor.
 pub fn batch_to_si(data: &mut [f64], factor: f64) {

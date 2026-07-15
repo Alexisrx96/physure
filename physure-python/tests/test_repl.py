@@ -72,12 +72,16 @@ def test_cli_repl_subcommand(monkeypatch, capsys):
 
 
 def test_python_dash_m_entry_point():
+    import os
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"physure-python:{env.get('PYTHONPATH', '')}"
     result = subprocess.run(
         [sys.executable, "-m", "physure", "1 km => m"],
         capture_output=True,
         text=True,
         timeout=120,
         check=False,
+        env=env,
     )
     assert result.returncode == 0
     assert "1000" in result.stdout

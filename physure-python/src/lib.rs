@@ -28,7 +28,8 @@ use num_traits::FromPrimitive;
 
 use ::physure_core::{
     RationalUnit, UnitRegistry, Quantity, PruningConfig, CovarianceStore,
-    GaussianBackend, MonteCarloBackend, UnscentedBackend, UncertaintyBackend,
+    GaussianBackend, MonteCarloBackend, UnscentedBackend, UncertaintyBackend, UncertaintyValue,
+    PhysureResult, PhysureError,
 };
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
@@ -87,65 +88,65 @@ impl UncertaintyBackend for TensorBackend {
         })
     }
 
-    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> Result<Box<dyn UncertaintyBackend>, String> {
+    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         Python::with_gil(|py| {
-            let other_val = other.mean().into_py_any(py).map_err(|e| e.to_string())?;
+            let other_val = other.mean().into_py_any(py).map_err(|e| PhysureError::Generic(e.to_string()))?;
             let new_val = self.value.bind(py)
                 .call_method1("__add__", (other_val,))
-                .map_err(|e| e.to_string())?
+                .map_err(|e| PhysureError::Generic(e.to_string()))?
                 .unbind();
             Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }) as Box<dyn UncertaintyBackend>)
         })
     }
 
-    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> Result<Box<dyn UncertaintyBackend>, String> {
+    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         Python::with_gil(|py| {
-            let other_val = other.mean().into_py_any(py).map_err(|e| e.to_string())?;
+            let other_val = other.mean().into_py_any(py).map_err(|e| PhysureError::Generic(e.to_string()))?;
             let new_val = self.value.bind(py)
                 .call_method1("__sub__", (other_val,))
-                .map_err(|e| e.to_string())?
+                .map_err(|e| PhysureError::Generic(e.to_string()))?
                 .unbind();
             Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }) as Box<dyn UncertaintyBackend>)
         })
     }
 
-    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> Result<Box<dyn UncertaintyBackend>, String> {
+    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         Python::with_gil(|py| {
-            let other_val = other.mean().into_py_any(py).map_err(|e| e.to_string())?;
+            let other_val = other.mean().into_py_any(py).map_err(|e| PhysureError::Generic(e.to_string()))?;
             let new_val = self.value.bind(py)
                 .call_method1("__mul__", (other_val,))
-                .map_err(|e| e.to_string())?
+                .map_err(|e| PhysureError::Generic(e.to_string()))?
                 .unbind();
             Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }) as Box<dyn UncertaintyBackend>)
         })
     }
 
-    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> Result<Box<dyn UncertaintyBackend>, String> {
+    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         Python::with_gil(|py| {
-            let other_val = other.mean().into_py_any(py).map_err(|e| e.to_string())?;
+            let other_val = other.mean().into_py_any(py).map_err(|e| PhysureError::Generic(e.to_string()))?;
             let new_val = self.value.bind(py)
                 .call_method1("__truediv__", (other_val,))
-                .map_err(|e| e.to_string())?
+                .map_err(|e| PhysureError::Generic(e.to_string()))?
                 .unbind();
             Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }) as Box<dyn UncertaintyBackend>)
         })
     }
 
-    fn propagate_pow(&self, exponent: f64) -> Result<Box<dyn UncertaintyBackend>, String> {
+    fn propagate_pow(&self, exponent: f64) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         Python::with_gil(|py| {
             let new_val = self.value.bind(py)
                 .call_method1("__pow__", (exponent,))
-                .map_err(|e| e.to_string())?
+                .map_err(|e| PhysureError::Generic(e.to_string()))?
                 .unbind();
             Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }) as Box<dyn UncertaintyBackend>)
         })
     }
 
-    fn propagate_function(&self, func: &str) -> Result<Box<dyn UncertaintyBackend>, String> {
+    fn propagate_function(&self, func: &str) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         Python::with_gil(|py| {
             let new_val = self.value.bind(py)
                 .call_method0(func)
-                .map_err(|e| e.to_string())?
+                .map_err(|e| PhysureError::Generic(e.to_string()))?
                 .unbind();
             Ok(Box::new(TensorBackend { value: new_val, uncertainty: self.uncertainty.clone_ref(py) }) as Box<dyn UncertaintyBackend>)
         })
@@ -180,7 +181,7 @@ impl PyRationalUnit {
 
     #[getter]
     fn dimensions(&self) -> HashMap<String, (i64, i64)> {
-        self.0.dimensions.clone()
+        self.0.dimensions_map()
     }
 
     #[getter]
@@ -347,7 +348,7 @@ impl PyQuantity {
         let std_dev_obj = std_dev_val.unwrap_or_else(|| Python::with_gil(|p| 0.0_f64.into_py_any(p).unwrap()));
 
         let backend = build_backend(py, mean_obj, std_dev_obj, mode, samples)?;
-        Ok(PyQuantity(Quantity::from_backend(backend, u.0)))
+        Ok(PyQuantity(Quantity::from_value(backend, u.0)))
     }
 
     #[getter]
@@ -390,9 +391,9 @@ impl PyQuantity {
         if self.0.unit != other_unit {
             return Err(pyo3::exceptions::PyTypeError::new_err("Unit mismatch"));
         }
-        let new_val = self.0.value.propagate_add(&*other_val)
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.clone())))
+        let new_val = self.0.value.propagate_add(&other_val)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.clone())))
     }
 
     fn __radd__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<PyQuantity> {
@@ -404,16 +405,16 @@ impl PyQuantity {
         if self.0.unit != other_unit {
             return Err(pyo3::exceptions::PyTypeError::new_err("Unit mismatch"));
         }
-        let new_val = self.0.value.propagate_sub(&*other_val)
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.clone())))
+        let new_val = self.0.value.propagate_sub(&other_val)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.clone())))
     }
 
     fn __mul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         let (other_val, other_unit) = to_backend(py, &other)?;
-        let new_val = self.0.value.propagate_mul(&*other_val)
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.mul(&other_unit))))
+        let new_val = self.0.value.propagate_mul(&other_val)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.mul(&other_unit))))
     }
 
     fn __rmul__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<PyQuantity> {
@@ -422,30 +423,30 @@ impl PyQuantity {
 
     fn __truediv__(&self, py: Python<'_>, other: Bound<'_, PyAny>) -> PyResult<PyQuantity> {
         let (other_val, other_unit) = to_backend(py, &other)?;
-        let new_val = self.0.value.propagate_div(&*other_val)
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.div(&other_unit))))
+        let new_val = self.0.value.propagate_div(&other_val)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.div(&other_unit))))
     }
 
     fn __pow__(&self, _py: Python<'_>, other: Bound<'_, PyAny>, _modulo: Option<Bound<'_, PyAny>>) -> PyResult<PyQuantity> {
         let exp_f = other.extract::<f64>()?;
         let exp_r = Rational64::from_f64(exp_f).unwrap_or(Rational64::new(0, 1));
         let new_val = self.0.value.propagate_pow(exp_f)
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.pow(exp_r))))
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.pow(exp_r))))
     }
 
     fn __neg__(&self) -> PyResult<PyQuantity> {
-        let zero: Box<dyn UncertaintyBackend> = Box::new(GaussianBackend { mean: 0.0, std_dev: 0.0 });
-        let new_val = zero.propagate_sub(&*self.0.value)
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.clone())))
+        let zero = UncertaintyValue::Gaussian(GaussianBackend { mean: 0.0, std_dev: 0.0 });
+        let new_val = zero.propagate_sub(&self.0.value)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.clone())))
     }
 
     fn __abs__(&self) -> PyResult<PyQuantity> {
         let new_val = self.0.value.propagate_function("abs")
-            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e))?;
-        Ok(PyQuantity(Quantity::from_backend(new_val, self.0.unit.clone())))
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
+        Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.clone())))
     }
 
     fn __repr__(&self) -> String {
@@ -607,7 +608,7 @@ fn build_backend(
     std_dev_obj: PyObject,
     mode: Option<String>,
     samples: Option<usize>,
-) -> PyResult<Box<dyn UncertaintyBackend>> {
+) -> PyResult<UncertaintyValue> {
     let is_scalar = mean_obj.bind(py).is_instance_of::<pyo3::types::PyFloat>()
         || mean_obj.bind(py).is_instance_of::<pyo3::types::PyInt>();
 
@@ -615,21 +616,21 @@ fn build_backend(
         let mean = mean_obj.bind(py).extract::<f64>()?;
         if let Ok(std_dev) = std_dev_obj.bind(py).extract::<f64>() {
             return Ok(match mode.as_deref() {
-                Some("monte_carlo") => Box::new(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
-                Some("unscented")   => Box::new(UnscentedBackend::new_scalar(mean, std_dev)),
-                _                   => Box::new(GaussianBackend { mean, std_dev }),
+                Some("monte_carlo") => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+                Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
+                _                   => UncertaintyValue::Gaussian(GaussianBackend { mean, std_dev }),
             });
         }
     }
-    Ok(Box::new(TensorBackend { value: mean_obj, uncertainty: std_dev_obj }))
+    Ok(UncertaintyValue::Custom(Box::new(TensorBackend { value: mean_obj, uncertainty: std_dev_obj })))
 }
 
 fn extract_value_and_unit(
     py: Python<'_>,
     other: &Bound<'_, PyAny>,
-) -> PyResult<(Box<dyn UncertaintyBackend>, RationalUnit)> {
+) -> PyResult<(UncertaintyValue, RationalUnit)> {
     if let Ok(q) = other.extract::<PyQuantity>() {
-        return Ok((dyn_clone::clone_box(&*q.0.value), q.0.unit.clone()));
+        return Ok((q.0.value.clone(), q.0.unit.clone()));
     }
     to_backend(py, other)
 }
@@ -637,23 +638,23 @@ fn extract_value_and_unit(
 fn to_backend(
     py: Python<'_>,
     other: &Bound<'_, PyAny>,
-) -> PyResult<(Box<dyn UncertaintyBackend>, RationalUnit)> {
+) -> PyResult<(UncertaintyValue, RationalUnit)> {
     if let Ok(q) = other.extract::<PyQuantity>() {
-        return Ok((dyn_clone::clone_box(&*q.0.value), q.0.unit.clone()));
+        return Ok((q.0.value.clone(), q.0.unit.clone()));
     }
     if let Ok(val) = other.extract::<f64>() {
-        return Ok((Box::new(GaussianBackend { mean: val, std_dev: 0.0 }), RationalUnit::dimensionless()));
+        return Ok((UncertaintyValue::Gaussian(GaussianBackend { mean: val, std_dev: 0.0 }), RationalUnit::dimensionless()));
     }
     let val_obj = other.clone().unbind();
     let uncertainty = 0.0_f64.into_py_any(py)?;
-    Ok((Box::new(TensorBackend { value: val_obj, uncertainty }), RationalUnit::dimensionless()))
+    Ok((UncertaintyValue::Custom(Box::new(TensorBackend { value: val_obj, uncertainty })), RationalUnit::dimensionless()))
 }
 
 #[pyfunction]
 fn to_arrow_record_batch(py: Python<'_>, quantities: Vec<PyRef<'_, PyQuantity>>) -> PyResult<PyObject> {
     let raw: Vec<Quantity> = quantities.iter().map(|q| q.0.clone()).collect();
     let bytes = ::physure_core::serialization::quantities_to_arrow(&raw)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(pyo3::types::PyBytes::new(py, &bytes).into_py_any(py)?)
 }
 

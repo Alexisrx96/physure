@@ -4,10 +4,11 @@ use arrow::record_batch::RecordBatch;
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
+use crate::error::{PhysureError, PhysureResult};
 use crate::quantity::Quantity;
 use crate::units::RationalUnit;
 
-pub fn quantities_to_arrow(quantities: &[Quantity]) -> Result<Vec<u8>, String> {
+pub fn quantities_to_arrow(quantities: &[Quantity]) -> PhysureResult<Vec<u8>> {
     let len = quantities.len();
     let mut means = Vec::with_capacity(len);
     let mut std_devs = Vec::with_capacity(len);
@@ -36,7 +37,7 @@ pub fn quantities_to_arrow(quantities: &[Quantity]) -> Result<Vec<u8>, String> {
     let unit_array = arrow::array::DictionaryArray::<arrow::datatypes::UInt32Type>::try_new(
         keys,
         Arc::new(values) as ArrayRef
-    ).map_err(|e| format!("Arrow dict error: {}", e))?;
+    ).map_err(|e| PhysureError::ArrowError(format!("Arrow dict error: {}", e)))?;
 
     let schema = Schema::new(vec![
         Field::new("mean", DataType::Float64, false),
@@ -51,14 +52,14 @@ pub fn quantities_to_arrow(quantities: &[Quantity]) -> Result<Vec<u8>, String> {
             Arc::new(std_dev_array) as ArrayRef,
             Arc::new(unit_array) as ArrayRef,
         ],
-    ).map_err(|e| format!("Arrow error: {}", e))?;
+    ).map_err(|e| PhysureError::ArrowError(format!("Arrow error: {}", e)))?;
 
     let mut buffer = Vec::new();
     {
         let mut writer = arrow::ipc::writer::StreamWriter::try_new(&mut buffer, &batch.schema())
-            .map_err(|e| e.to_string())?;
-        writer.write(&batch).map_err(|e| e.to_string())?;
-        writer.finish().map_err(|e| e.to_string())?;
+            .map_err(|e| PhysureError::ArrowError(e.to_string()))?;
+        writer.write(&batch).map_err(|e| PhysureError::ArrowError(e.to_string()))?;
+        writer.finish().map_err(|e| PhysureError::ArrowError(e.to_string()))?;
     }
     Ok(buffer)
 }
