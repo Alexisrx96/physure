@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from physure.core.formatting import to_superscript
 from physure.domain.exceptions import DimensionError
-from physure.domain.notation.base_entity import BaseExponentEntity
 
 if TYPE_CHECKING:
     from typing_extensions import Self
@@ -69,6 +68,9 @@ def register_dimension(dimension: Dimension, name: str):
         name: The human-readable name (e.g., "Length").
     """
     _DIMENSION_NAME_REGISTRY[dimension] = name
+
+
+from physure.domain.notation.base_entity import BaseExponentEntity
 
 
 @dataclass(frozen=True)

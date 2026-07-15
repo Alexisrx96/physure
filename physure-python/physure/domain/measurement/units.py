@@ -19,7 +19,6 @@ from physure.domain.measurement.converters import (
     LinearConverter,
     UnitConverter,
 )
-from physure.domain.notation.base_entity import BaseExponentEntity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -149,9 +148,9 @@ from physure._core import RationalUnit
 IS_CORE_AVAILABLE = True
 
 
-# ponytail: intentional Flyweight/PyO3-hybrid multiple inheritance —
-# __new__ builds the cached singleton and __init__ below is a deliberate
-# no-op, so neither base's __init__/__new__ needs to run independently.
+from physure.domain.notation.base_entity import BaseExponentEntity
+
+
 @dataclass(frozen=True)
 class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
     BaseExponentEntity, RationalUnit
