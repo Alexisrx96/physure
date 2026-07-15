@@ -7,7 +7,7 @@ def benchmark_lineage(n):
     """Benchmarks lineage growth performance."""
     print(f"Benchmarking lineage growth with {n} additions...")
 
-    with mk.config.propagation_mode("correlated"):
+    with mk.propagation_mode("correlated"):
         q = mk.Q_(1.0, "m", uncertainty=0.1)
         start = time.time()
         for _ in range(n):
@@ -16,9 +16,9 @@ def benchmark_lineage(n):
         _ = q.uncertainty
         end = time.time()
         print(f"Correlated Time: {end - start:.4f}s")
-        print(f"Lineage size: {len(q.uncertainty_obj.lineage)}")
+        print(f"Lineage size: {len(q.lineage)}")
 
-    with mk.config.propagation_mode("uncorrelated"):
+    with mk.propagation_mode("uncorrelated"):
         q = mk.Q_(1.0, "m", uncertainty=0.1)
         start = time.time()
         for _ in range(n):

@@ -24,7 +24,7 @@ def benchmark_propagation(size, mode):
 
     mem_start = get_memory_usage()
 
-    with mk.config.propagation_mode(mode):
+    with mk.propagation_mode(mode):
         # Create quantities
         rng = np.random.default_rng(42)  # Fixed seed for reproducibility
         m1 = rng.random(size)

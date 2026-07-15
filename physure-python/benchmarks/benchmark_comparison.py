@@ -2,8 +2,7 @@ import time
 
 import torch
 
-from physure import Quantity
-from physure.infrastructure.config import units
+from physure import Quantity, units
 
 
 def benchmark_comparison():
@@ -44,7 +43,7 @@ def benchmark_comparison():
     )
 
     # 3. Physure Compiled Mode (Zero Overhead)
-    @torch.compile(fullgraph=True)
+    @torch.compile(fullgraph=False)
     def add_quantities(a, b):
         return a + b
 
