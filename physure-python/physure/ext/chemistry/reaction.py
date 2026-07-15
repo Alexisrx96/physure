@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
-from physure.domain.notation.lexer import subscript_to_ascii
+from physure.core.formatting import subscript_to_ascii
 from physure.ext.chemistry.equivalency import mass_to_moles, moles_to_mass
 from physure.ext.chemistry.species import Species
 

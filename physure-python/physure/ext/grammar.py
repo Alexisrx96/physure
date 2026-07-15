@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias
 
 from physure.domain.exceptions import DimensionError, PhysureError
-from physure.domain.notation.lexer import parse_superscript
+from physure.core.formatting import parse_superscript
 
 if TYPE_CHECKING:
     from collections.abc import Callable

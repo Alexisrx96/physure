@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from physure.domain.notation.lexer import subscript_to_ascii
+from physure.core.formatting import subscript_to_ascii
 
 if TYPE_CHECKING:
     from physure.domain.measurement.quantity import Quantity
