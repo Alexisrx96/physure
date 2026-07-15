@@ -38,12 +38,9 @@ except ImportError:
 
 
 def parse_unit_expression(expr: str) -> ExponentEntityProtocol:
-    """Parses a unit expression string using Rust core if available, falling back to Python."""
+    """Parses a unit expression string using the mandatory Rust core parser."""
     if _rust_parse_unit_expr is not None:
-        try:
-            return _rust_parse_unit_expr(expr)
-        except Exception:
-            pass
+        return _rust_parse_unit_expr(expr)
     from physure.domain.measurement.units import CompoundUnit
     from physure.domain.notation.lexer import generate_tokens
 
