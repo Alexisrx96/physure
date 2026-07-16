@@ -138,10 +138,11 @@ one failure mode.
   `(mean, std_dev)`, e.g. `mean=0.5` → `new_mean == 0.5_f64.tan()`,
   `new_std == ((1.0 + 0.5_f64.tan().powi(2)) * std_dev).abs()`.
 - **Rust/Python parity tests** (`tests/`): for each of `sin`/`cos`/`tan`/`exp`/`log`/`tanh`,
-  construct the same scalar `Quantity` under `propagation_mode("gaussian")` (Rust-eligible) and
-  under `"correlated"` (Python-only), call the method on both, assert `magnitude` and `std_dev`
-  match within tolerance. This is what actually proves delegation is behavior-preserving and is
-  the test most likely to catch a tan/tanh formula error before it ships.
+  construct the same scalar `Quantity` under `with physure.propagation_mode("gaussian"):`
+  (Rust-eligible) and under `with physure.propagation_mode("correlated"):` (Python-only), call the
+  method on both, assert `magnitude` and `std_dev` match within tolerance. This is what actually
+  proves delegation is behavior-preserving and is the test most likely to catch a tan/tanh formula
+  error before it ships.
 - **TensorBackend hardening test**: construct a Rust-wrapped scalar `Quantity` (`monte_carlo` or
   `gaussian` mode), add or multiply it with a raw multi-element numpy array, assert it now raises
   instead of returning a `Quantity` with `NaN` magnitude. One test covers `mean()`; a second for
