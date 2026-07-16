@@ -75,64 +75,53 @@ UncType = TypeVar("UncType")
 UnitType = TypeVar("UnitType")  # Phantom type for units
 
 
-try:
-    # High-level Python Quantity uses Python CoreQuantity for PyTorch Dynamo
-    # & multiple inheritance compatibility; high-speed operations delegate
-    # directly to physure._core functions.
-    raise ImportError("Use Python CoreQuantity container")
-    from physure._core import (
-        Quantity as CoreQuantity,
-    )
+class CoreQuantity:
+    """Container base for `Quantity`: holds magnitude/unit/uncertainty as plain attributes.
 
-    IS_CORE_AVAILABLE = True
+    Not a fallback for a missing Rust extension — physure._core.Quantity is a real,
+    always-available PyO3 type (see physure/__init__.py's unconditional import of it).
+    Quantity doesn't inherit that Rust type directly because Quantity needs multiple
+    inheritance (with ArithmeticMixin/BackendMixin) and must stay traceable by PyTorch
+    Dynamo, and a compiled PyO3 base class doesn't reliably support either. High-speed
+    operations still delegate directly to physure._core functions/methods; this class only
+    stores the magnitude/unit/uncertainty triple and exposes it as properties.
+    """
 
+    def __new__(
+        cls,
+        magnitude: Numeric,
+        unit: CompoundUnit,
+        uncertainty: Any,  # pyright: ignore[reportAny, reportExplicitAny]
+        *args: Any,  # pyright: ignore[reportAny, reportExplicitAny]
+        **kwargs: Any,  # pyright: ignore[reportAny, reportExplicitAny]
+    ) -> Self:
+        """Stores magnitude/unit/uncertainty on the instance."""
+        obj = super().__new__(cls)
+        object.__setattr__(obj, "_core_magnitude", magnitude)
+        object.__setattr__(obj, "_core_unit", unit)
+        object.__setattr__(obj, "_core_uncertainty", uncertainty)
+        return obj
 
-except ImportError:
-    IS_CORE_AVAILABLE = False
+    @property
+    def magnitude(self) -> Numeric:
+        """Returns the stored magnitude."""
+        val: Any = self._core_magnitude  # pyright: ignore[reportAny, reportExplicitAny]
+        if _CORE_QUANTITY_TYPE in str(type(val)):
+            return val.magnitude
+        return val
 
-    # Minimal fallback for build/env issues
-    class CoreQuantity:
-        """Pure-Python stand-in when physure._core is unavailable."""
+    @property
+    def unit(self) -> CompoundUnit:
+        """Returns the stored unit."""
+        return self._core_unit
 
-        # ponytail: this class exists only as a drop-in stand-in for the
-        # Rust extension type (physure._core, an exempt adapter boundary)
-        # when the compiled core is unavailable, so it mirrors that type's
-        # dynamic constructor exactly.
-        def __new__(
-            cls,
-            magnitude: Numeric,
-            unit: CompoundUnit,
-            uncertainty: Any,  # pyright: ignore[reportAny, reportExplicitAny]
-            *args: Any,  # pyright: ignore[reportAny, reportExplicitAny]
-            **kwargs: Any,  # pyright: ignore[reportAny, reportExplicitAny]
-        ) -> Self:
-            """Stores magnitude/unit/uncertainty on the instance."""
-            obj = super().__new__(cls)
-            object.__setattr__(obj, "_core_magnitude", magnitude)
-            object.__setattr__(obj, "_core_unit", unit)
-            object.__setattr__(obj, "_core_uncertainty", uncertainty)
-            return obj
-
-        @property
-        def magnitude(self) -> Numeric:
-            """Returns the stored magnitude."""
-            val: Any = self._core_magnitude  # pyright: ignore[reportAny, reportExplicitAny]
-            if _CORE_QUANTITY_TYPE in str(type(val)):
-                return val.magnitude
-            return val
-
-        @property
-        def unit(self) -> CompoundUnit:
-            """Returns the stored unit."""
-            return self._core_unit
-
-        @property
-        def std_dev(self) -> Any:  # pyright: ignore[reportExplicitAny]
-            """Returns the stored uncertainty."""
-            val: Any = self._core_magnitude  # pyright: ignore[reportAny, reportExplicitAny]
-            if _CORE_QUANTITY_TYPE in str(type(val)):
-                return val.std_dev
-            return self._core_uncertainty
+    @property
+    def std_dev(self) -> Any:  # pyright: ignore[reportExplicitAny]
+        """Returns the stored uncertainty."""
+        val: Any = self._core_magnitude  # pyright: ignore[reportAny, reportExplicitAny]
+        if _CORE_QUANTITY_TYPE in str(type(val)):
+            return val.std_dev
+        return self._core_uncertainty
 
 
 from physure._core import RationalUnit as _CoreRationalUnit
