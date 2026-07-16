@@ -803,4 +803,3 @@ class PyExpr:
 
 
 from physure._core import Expr
-IS_CORE_AVAILABLE = True
