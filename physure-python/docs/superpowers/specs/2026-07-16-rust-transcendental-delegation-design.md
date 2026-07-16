@@ -138,15 +138,18 @@ one failure mode.
   `(mean, std_dev)`, e.g. `mean=0.5` → `new_mean == 0.5_f64.tan()`,
   `new_std == ((1.0 + 0.5_f64.tan().powi(2)) * std_dev).abs()`.
 - **Rust/Python parity tests** (`tests/`): for each of `sin`/`cos`/`tan`/`exp`/`log`/`tanh`,
-  construct the same scalar `Quantity` under `with physure.propagation_mode("gaussian"):`
-  (Rust-eligible) and under `with physure.propagation_mode("correlated"):` (Python-only), call the
-  method on both, assert `magnitude` and `std_dev` match within tolerance. This is what actually
-  proves delegation is behavior-preserving and is the test most likely to catch a tan/tanh formula
-  error before it ships.
-- **TensorBackend hardening test**: construct a Rust-wrapped scalar `Quantity` (`monte_carlo` or
-  `gaussian` mode), add or multiply it with a raw multi-element numpy array, assert it now raises
-  instead of returning a `Quantity` with `NaN` magnitude. One test covers `mean()`; a second for
-  `std_dev()` isn't needed since the fix is structurally identical.
+  construct the same scalar `Quantity` under `with physure.uncertainty_mode("gaussian"):`
+  (Rust-eligible — `_maybe_wrap_in_rust_core` checks `get_propagation_mode()` first but falls back
+  to the `uncertainty_mode` context var directly for `"gaussian"`, since `propagation_mode` itself
+  never accepts that mode name) and under `with physure.propagation_mode("correlated"):`
+  (Python-only), call the method on both, assert `magnitude` and `std_dev` match within tolerance.
+  This is what actually proves delegation is behavior-preserving and is the test most likely to
+  catch a tan/tanh formula error before it ships.
+- **TensorBackend hardening test**: construct a Rust-wrapped scalar `Quantity` under
+  `with physure.uncertainty_mode("monte_carlo", samples=1000):` (or `"gaussian"`), add or multiply
+  it with a raw multi-element numpy array, assert it now raises instead of returning a `Quantity`
+  with `NaN` magnitude. One test covers `mean()`; a second for `std_dev()` isn't needed since the
+  fix is structurally identical.
 - No new tests needed for `abs` (already delegates, unaffected), the Python fallback path itself
   (untouched, covered by existing suite), or default-mode behavior (out of scope).
 
