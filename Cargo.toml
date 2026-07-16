@@ -39,8 +39,11 @@ pyo3          = { version = "0.25", features = ["extension-module", "abi3-py311"
 numpy         = "0.25"
 
 # ── Shared release profile ──────────────────────────────────────────────────
+# panic must stay "unwind" (the default): both crates build as PyO3 extension
+# modules (rlib/cdylib, no standalone binaries), and PyO3's panic -> PanicException
+# conversion requires catch_unwind. "abort" would turn any Rust panic into a
+# process-killing SIGABRT instead of a catchable Python exception.
 [profile.release]
-panic = "abort"
 lto   = true
 codegen-units = 1
 
