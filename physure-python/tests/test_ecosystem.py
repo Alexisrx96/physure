@@ -72,7 +72,8 @@ def test_sympy_integration():
 def test_constants():
     assert c.magnitude == 299792458.0
     assert str(c.unit) == "m/s"
-    assert G.uncertainty > 0
+    assert G.magnitude == pytest.approx(6.6743e-11)
+    assert str(G.unit) == "m³/(kg·s²)"
 
 
 def test_latex_repr():
