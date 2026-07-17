@@ -1,5 +1,3 @@
-use crate::error::{PhysureError, PhysureResult};
-
 /// Conversion models supported natively by physure-core.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnitConverter {
