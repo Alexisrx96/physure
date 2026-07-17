@@ -47,7 +47,15 @@ def _native_parse(expression: str, entity_cls: type[T]) -> T:
     expr = _IMPLICIT_MUL.sub("*", expr)
     res = _rust_parse_unit_expr(expr)
     if hasattr(res, "dimensions"):
-        return entity_cls(res.dimensions)
+        exponents = {}
+        for symbol, (num, den) in res.dimensions.items():
+            if den != 1:
+                raise ValueError(
+                    f"Non-integer dimension exponent {num}/{den} for "
+                    f"{symbol!r} in {expression!r} is not supported."
+                )
+            exponents[symbol] = num
+        return entity_cls(exponents)
     return res  # pyright: ignore[reportReturnType]
 
 
