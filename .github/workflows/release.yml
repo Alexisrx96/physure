@@ -32,21 +32,54 @@ jobs:
             exit 1
           fi
 
-  physure-dist:
+  # One abi3 wheel per platform (Python >= 3.11). maturin-action builds
+  # inside manylinux images on Linux so PyPI accepts the wheels — a bare
+  # `uv build` on the runner would produce a rejected linux_x86_64 tag.
+  wheels:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,  target: x86_64 }
+          - { runner: ubuntu-latest,  target: aarch64 }
+          - { runner: macos-latest,   target: x86_64 }
+          - { runner: macos-latest,   target: aarch64 }
+          - { runner: windows-latest, target: x64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          working-directory: physure-python
+          args: --release --out dist
+          manylinux: auto
+          sccache: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: physure-dist-${{ matrix.runner }}-${{ matrix.target }}
+          path: physure-python/dist
+
+  sdist:
     needs: check-version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
-      - run: uv build --out-dir dist
-        working-directory: physure-python
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          working-directory: physure-python
+          args: --out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: physure-dist
+          name: physure-dist-sdist
           path: physure-python/dist
 
   publish:
-    needs: [physure-dist]
+    needs: [wheels, sdist]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -54,7 +87,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: physure-dist
+          pattern: physure-dist-*
+          merge-multiple: true
           path: dist-py
       - name: Publish physure
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
