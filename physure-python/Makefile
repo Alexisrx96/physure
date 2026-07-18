@@ -14,15 +14,15 @@ PYSITE := $(shell $(PY) -c "import site; print(site.getsitepackages()[0])")
 PYENV := RUSTFLAGS="-L$(PYLIBDIR) -lpython$(PYLDVER)" LD_LIBRARY_PATH="$(PYLIBDIR)" PYTHONPATH="$(PYSITE):$(CURDIR)"
 
 sonar:
-	-uv run pytest tests/ --cov=measurekit --cov-report=xml --junitxml=test-results.xml -q
-	cd measurekit_core && $(PYENV) $(CARGO) llvm-cov --lcov --output-path lcov.info
-	python3 measurekit_core/scripts/filter_lcov.py measurekit_core/lcov.info
+	-uv run pytest tests/ --cov=physure --cov-report=xml --junitxml=test-results.xml -q
+	cd ../physure-core && $(PYENV) $(CARGO) llvm-cov --lcov --output-path lcov.info
+	python3 ../physure-core/scripts/filter_lcov.py ../physure-core/lcov.info
 	pysonar \
-		--sonar-host-url=http://localhost:9000 \
-		--sonar-token=$$(grep '^SONAR_TOKEN=' .env | cut -d= -f2) \
-		--sonar-project-key=measurekit
+		--sonar-host-url=http://sonar.localhost \
+		--sonar-token=$$(grep '^SONAR_TOKEN=' ../.env | cut -d= -f2) \
+		--sonar-project-key=physure
 	pysonar \
-		--sonar-host-url=http://localhost:9000 \
-		--sonar-token=$$(grep '^SONAR_TOKEN_CORE=' .env | cut -d= -f2) \
-		--sonar-project-key=measurekit-core \
-		--sonar-project-base-dir=measurekit_core
+		--sonar-host-url=http://sonar.localhost \
+		--sonar-token=$$(grep '^SONAR_TOKEN_CORE=' ../.env | cut -d= -f2) \
+		--sonar-project-key=physure-core \
+		--sonar-project-base-dir=../physure-core

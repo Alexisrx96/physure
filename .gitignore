@@ -89,3 +89,8 @@ physure-core/lcov.info
 
 # Local scratch area (never committed)
 scratch/
+
+# Coverage/test artifacts
+lcov.info
+coverage.xml
+test-results.xml
