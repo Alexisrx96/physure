@@ -96,7 +96,7 @@ line-length    = 79
 target-version = "py311"
 exclude = [
     ".ruff_cache", "__pycache__", "*.ipynb", ".venv",
-    "physure/_generated_types.py",
+    "physure/_generated_types.py", "physure/core/registry.pyi",
 ]
 
 [tool.ruff.lint]
