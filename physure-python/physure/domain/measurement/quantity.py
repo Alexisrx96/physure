@@ -27,8 +27,7 @@ from physure.core.dispatcher import BackendManager
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
-
-    from typing_extensions import Self
+    from typing import Self
 
     from physure.core.protocols import BackendOps, Numeric
     from physure.domain.measurement.base_entity import ExponentsDict

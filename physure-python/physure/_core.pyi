@@ -1,9 +1,7 @@
 # physure_core.pyi
 # Typing stub for the native Rust core module of Physure.
 
-from typing import Any
-
-from typing_extensions import Self
+from typing import Any, Self
 
 class RationalUnit:
     def __new__(cls, *args: Any, **kwargs: Any) -> Self: ...

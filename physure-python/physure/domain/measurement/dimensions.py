@@ -16,7 +16,7 @@ from physure.core.formatting import to_superscript
 from physure.domain.exceptions import DimensionError
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
+    from typing import Self
 
 from physure._core import DimVector as _RustDimVector
 from physure.domain.measurement.base_entity import (

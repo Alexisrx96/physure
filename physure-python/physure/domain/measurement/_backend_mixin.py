@@ -6,7 +6,7 @@ import operator
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from typing_extensions import Self
+    from typing import Self
 
     from physure.core.protocols import Numeric
 
