@@ -1,9 +1,14 @@
+from typing import TYPE_CHECKING
+
 import pytest
 
-try:
+if TYPE_CHECKING:
     import torch
-except ImportError:
-    torch = None
+else:
+    try:
+        import torch
+    except ImportError:
+        torch = None
 
 if torch is not None:
     from physure.backends.torch.autograd_store import (

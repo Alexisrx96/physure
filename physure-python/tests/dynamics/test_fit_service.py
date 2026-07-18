@@ -1,21 +1,32 @@
 """Tests for the unit-aware curve fitter."""
 
-try:
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     import numpy as np
-except (ImportError, ModuleNotFoundError):
-    np = None
 
-import pytest
-
-try:
     from physure.application.fit_service import (
         CurveFitResult,
         unit_aware_curve_fit,
     )
-except (ImportError, AttributeError):
-    # Fit service might fail if numpy/scipy missing
-    CurveFitResult = None
-    unit_aware_curve_fit = None
+else:
+    try:
+        import numpy as np
+    except (ImportError, ModuleNotFoundError):
+        np = None
+
+    try:
+        from physure.application.fit_service import (
+            CurveFitResult,
+            unit_aware_curve_fit,
+        )
+    except (ImportError, AttributeError):
+        # Fit service might fail if numpy/scipy missing
+        CurveFitResult = None
+        unit_aware_curve_fit = None
+
+import pytest
+
 from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 

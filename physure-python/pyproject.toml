@@ -97,6 +97,7 @@ line-length    = 79
 target-version = "py310"
 exclude = [
     ".ruff_cache", "__pycache__", "*.ipynb", ".venv",
+    "physure/_generated_types.py",
 ]
 
 [tool.ruff.lint]
@@ -120,6 +121,8 @@ known-first-party = ["physure"]
 "examples/*"         = ["D", "E501", "E402"]
 "scripts/*"          = ["D", "E501", "E402", "F841"]
 "physure/units/core.py" = ["E741"]
+"physure/core/registry.pyi" = ["N815"]
+"physure/__init__.py" = ["RUF022"]
 
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]

@@ -10,17 +10,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-try:
-    import numpy as np
-    from scipy.optimize import curve_fit
-except ImportError:
-    np = None
-    curve_fit = None
-
-from physure.domain.measurement.quantity import Quantity
-
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    import numpy as np
+    from scipy.optimize import curve_fit
+else:
+    try:
+        import numpy as np
+        from scipy.optimize import curve_fit
+    except ImportError:
+        np = None
+        curve_fit = None
+
+from physure.domain.measurement.quantity import Quantity
 
 
 class CurveFitResult:

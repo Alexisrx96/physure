@@ -31,9 +31,9 @@ if TYPE_CHECKING:
     from typing_extensions import Self
 
     from physure.core.protocols import BackendOps, Numeric
+    from physure.domain.measurement.base_entity import ExponentsDict
     from physure.domain.measurement.converters import UnitConverter
     from physure.domain.measurement.dimensions import Dimension
-    from physure.domain.measurement.base_entity import ExponentsDict
 
 from physure.domain.exceptions import IncompatibleUnitsError
 from physure.domain.measurement.uncertainty import (
@@ -87,6 +87,10 @@ class CoreQuantity:
     stores the magnitude/unit/uncertainty triple and exposes it as properties.
     """
 
+    _core_magnitude: Numeric
+    _core_unit: CompoundUnit
+    _core_uncertainty: Any  # pyright: ignore[reportExplicitAny]
+
     def __new__(
         cls,
         magnitude: Numeric,
@@ -124,12 +128,9 @@ class CoreQuantity:
         return self._core_uncertainty
 
 
-from physure._core import RationalUnit as _CoreRationalUnit
-
+from physure._core import RationalUnit as _CoreRationalUnit  # noqa: E402
 
 # Helpers moved to end of file to resolve circular reference with Quantity class
-
-
 from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
     ArithmeticMixin,
 )
@@ -197,7 +198,10 @@ class Quantity(
             r_unit, "exponents", {}
         )
         obj = CoreQuantity.__new__(
-            cls, magnitude, _CoreRationalUnit(dims), raw_uncertainty
+            cls,
+            magnitude,
+            cast("CompoundUnit", _CoreRationalUnit(dims)),
+            raw_uncertainty,
         )
         object.__setattr__(obj, "_core_magnitude", magnitude)
         object.__setattr__(obj, "_core_unit", r_unit)
@@ -570,6 +574,11 @@ class Quantity(
         kwargs: dict[str, Any] | None = None,  # pyright: ignore[reportExplicitAny]
     ) -> Any:  # pyright: ignore[reportExplicitAny]
         """Deep PyTorch integration for zero-overhead compilation."""
+        # PyTorch's own dispatcher is what invokes __torch_dispatch__, so
+        # torch is guaranteed already loaded here; the module-level `torch`
+        # placeholder (None, for import-time budget) doesn't apply.
+        from torch.utils import _pytree
+
         if kwargs is None:
             kwargs = {}
 
@@ -584,15 +593,15 @@ class Quantity(
                 return x.magnitude
             return x
 
-        args_unwrapped = torch.utils._pytree.tree_map(unwrap, args)
-        kwargs_unwrapped = torch.utils._pytree.tree_map(unwrap, kwargs)
+        args_unwrapped = _pytree.tree_map(unwrap, args)
+        kwargs_unwrapped = _pytree.tree_map(unwrap, kwargs)
 
         out = func(*args_unwrapped, **kwargs_unwrapped)
 
         def wrap(x: Any) -> Any:  # pyright: ignore[reportExplicitAny]
             return x
 
-        return torch.utils._pytree.tree_map(wrap, out)
+        return _pytree.tree_map(wrap, out)
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -746,7 +755,6 @@ class Quantity(
             use_alias = self._override_use_alias
         return self.unit.to_string(self.system, use_alias=use_alias)
 
-
     def __str__(self) -> str:
         """Returns a user-friendly string representation."""
         unit_str = self._display_unit_str(use_alias=True)
@@ -857,8 +865,6 @@ class Quantity(
         res = self.to(base_unit)
         object.__setattr__(res, "_override_use_alias", False)
         return res
-
-
 
     def to_latex(self) -> str:
         r"""Returns the LaTeX representation.

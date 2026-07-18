@@ -198,12 +198,12 @@ class BackendMixin:
             mags.append(arg.magnitude)
         res_mag = np.concatenate(mags, **kwargs)
         # ponytail: BackendMixin is only ever mixed into Quantity, whose
-        # real __init__ takes (magnitude, unit, system=...); pyright sees
+        # real __init__ takes (magnitude, unit, system=...); pyright/ty see
         # only object.__init__ from the mixin's own MRO.
         return type(self)(
-            res_mag,  # pyright: ignore[reportCallIssue]
+            res_mag,  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
             unit,
-            system=self.system,
+            system=self.system,  # ty: ignore[unknown-argument]
         )
 
     def __array_function__(
@@ -227,9 +227,9 @@ class BackendMixin:
             if isinstance(q, _q()):
                 # ponytail: same mixin-blindness as _numpy_concatenate above.
                 return type(self)(
-                    np.mean(q.magnitude, **kwargs),  # pyright: ignore[reportCallIssue]
+                    np.mean(q.magnitude, **kwargs),  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
                     q.unit,
-                    system=q.system,
+                    system=q.system,  # ty: ignore[unknown-argument]
                 )
 
         return NotImplemented
@@ -249,15 +249,15 @@ class BackendMixin:
         import torch
 
         if func == torch.add:
-            return operator.add(args[0], args[1])  # type: ignore
+            return operator.add(args[0], args[1])
         if func == torch.sub:
-            return operator.sub(args[0], args[1])  # type: ignore
+            return operator.sub(args[0], args[1])
         if func == torch.mul:
-            return operator.mul(args[0], args[1])  # type: ignore
+            return operator.mul(args[0], args[1])
         if func in (torch.div, torch.true_divide):
-            return operator.truediv(args[0], args[1])  # type: ignore
+            return operator.truediv(args[0], args[1])
         if func == torch.pow:
-            return operator.pow(args[0], args[1])  # type: ignore
+            return operator.pow(args[0], args[1])
         return NotImplemented
 
     @classmethod

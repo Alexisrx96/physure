@@ -6,10 +6,15 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-try:
     import torch
-except ImportError:
-    torch = None
+else:
+    try:
+        import torch
+    except ImportError:
+        torch = None
+
+from physure.core.dispatcher import enforce_tensor_contract
+from physure.core.protocols import BackendOps, Boolean, Numeric
 
 try:
     from jaxtyping import Array, Bool, Float
@@ -20,9 +25,6 @@ except ImportError:
     Bool = Any
     Float = Any
 
-
-from physure.core.dispatcher import enforce_tensor_contract
-from physure.core.protocols import BackendOps, Boolean, Numeric
 
 try:
     from physure.backends.kernels.covariance import (
@@ -203,9 +205,7 @@ class TorchBackend(BackendOps):
         """Element-wise tangent."""
         return torch.tan(self.asarray(x))
 
-    def dot(
-        self, x: Float[Array, ...], y: Float[Array, ...]
-    ) -> Float[Array, ...]:
+    def dot(self, x: Numeric, y: Numeric) -> Numeric:
         """Dot product or matrix multiplication."""
         if (
             hasattr(x, "ndim")
@@ -216,17 +216,15 @@ class TorchBackend(BackendOps):
             return torch.dot(x, y)
         return torch.matmul(x, y)
 
-    def cross(
-        self, x: Float[Array, ...], y: Float[Array, ...]
-    ) -> Float[Array, ...]:
+    def cross(self, x: Numeric, y: Numeric) -> Numeric:
         """Cross product."""
         return torch.cross(x, y)
 
-    def abs(self, x: Float[Array, ...]) -> Float[Array, ...]:
+    def abs(self, x: Numeric) -> Numeric:
         """Element-wise absolute value."""
         return torch.abs(x)
 
-    def sign(self, x: Float[Array, ...]) -> Float[Array, ...]:
+    def sign(self, x: Numeric) -> Numeric:
         """Element-wise sign."""
         return torch.sign(x)
 
@@ -286,27 +284,19 @@ class TorchBackend(BackendOps):
         """Element-wise inequality."""
         return torch.ne(x, y)
 
-    def less(
-        self, x: Float[Array, ...], y: Float[Array, ...]
-    ) -> Bool[Array, ...]:
+    def less(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise less than."""
         return torch.lt(x, y)
 
-    def less_equal(
-        self, x: Float[Array, ...], y: Float[Array, ...]
-    ) -> Bool[Array, ...]:
+    def less_equal(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise less than or equal."""
         return torch.le(x, y)
 
-    def greater(
-        self, x: Float[Array, ...], y: Float[Array, ...]
-    ) -> Bool[Array, ...]:
+    def greater(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise greater than."""
         return torch.gt(x, y)
 
-    def greater_equal(
-        self, x: Float[Array, ...], y: Float[Array, ...]
-    ) -> Bool[Array, ...]:
+    def greater_equal(self, x: Numeric, y: Numeric) -> Boolean:
         """Element-wise greater than or equal."""
         return torch.ge(x, y)
 

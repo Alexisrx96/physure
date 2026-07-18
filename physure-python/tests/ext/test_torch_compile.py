@@ -1,13 +1,17 @@
 import sys
+from typing import TYPE_CHECKING
 
 import pytest
 
 from physure import Q_
 
-try:
+if TYPE_CHECKING:
     import torch
-except ImportError:
-    torch = None
+else:
+    try:
+        import torch
+    except ImportError:
+        torch = None
 
 
 def simple_fn(a, b):

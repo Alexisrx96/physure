@@ -43,7 +43,7 @@ class SymbolicExpression:
     ):
         """Initializes a symbolic expression."""
         if HAVE_SYMENGINE:
-            self._expr = se.sympify(sympy_expr)  # type: ignore
+            self._expr = se.sympify(sympy_expr)
         else:
             self._expr = sympy_expr
         self.unit = unit
@@ -243,7 +243,7 @@ class SymbolicExpression:
     def expand(self) -> SymbolicExpression:
         """Expands the underlying symbolic expression."""
         new_expr = (
-            se.expand(self._expr) if HAVE_SYMENGINE else sp.expand(self._expr)  # type: ignore
+            se.expand(self._expr) if HAVE_SYMENGINE else sp.expand(self._expr)
         )
         return SymbolicExpression(
             new_expr, self.unit, self.system, self.variables
@@ -263,7 +263,7 @@ class SymbolicExpression:
 
         # 1. SymPy / SymEngine Operation
         new_expr = (
-            se.diff(self._expr, variable._expr, n)  # type: ignore
+            se.diff(self._expr, variable._expr, n)
             if HAVE_SYMENGINE
             else sp.diff(self._expr, variable._expr, n)
         )

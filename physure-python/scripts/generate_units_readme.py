@@ -5,9 +5,7 @@ import os
 def generate_units_markdown():
     parser = configparser.ConfigParser()
     parser.optionxform = str
-    parser.read(
-        "physure/infrastructure/config/physure.conf", encoding="utf-8"
-    )
+    parser.read("physure/infrastructure/config/physure.conf", encoding="utf-8")
 
     md = []
     md.append("# Supported Units, Prefixes, and Constants in Physure\n")

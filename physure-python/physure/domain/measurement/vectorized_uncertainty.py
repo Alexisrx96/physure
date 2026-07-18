@@ -4,11 +4,17 @@ import contextvars
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
+from physure._core import CovarianceStore as CoreStore
+from physure._core import PruningConfig
+
 # Check libraries
-try:
+if TYPE_CHECKING:
     import numpy as np
-except ImportError:
-    np = None
+else:
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
 
 
 def _scipy() -> Any:
@@ -32,12 +38,6 @@ def _scipy() -> Any:
 
 
 _scipy_mod: Any = False
-
-from physure._core import (
-    CovarianceStore as CoreStore,
-    PruningConfig,
-)
-
 
 if TYPE_CHECKING:
     from types import TracebackType

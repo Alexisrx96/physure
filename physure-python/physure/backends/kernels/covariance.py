@@ -1,9 +1,12 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-try:
+if TYPE_CHECKING:
     import torch
-except ImportError:
-    torch = None
+else:
+    try:
+        import torch
+    except ImportError:
+        torch = None
 
 try:
     import triton

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from physure._core import RationalUnit
 
+
 class DimensionalError(TypeError):
     """Raised when units are incompatible during JIT compilation."""
 

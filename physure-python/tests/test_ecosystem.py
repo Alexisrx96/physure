@@ -1,13 +1,18 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-try:
+if TYPE_CHECKING:
     import pandas as pd
+else:
+    try:
+        import pandas as pd
 
-    # Verify minimal functionality
-    _ = pd.Series
-    _ = pd.api
-except (ImportError, AttributeError):
-    pd = None
+        # Verify minimal functionality
+        _ = pd.Series
+        _ = pd.api
+    except (ImportError, AttributeError):
+        pd = None
 
 import pytest
 import sympy as sp

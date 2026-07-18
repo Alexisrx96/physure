@@ -227,6 +227,7 @@ def test_formatting(quantity_system):
     assert format(q, ".1f|alias") == "(1234.6 ± 0.0) acceleration"
 
     from physure import get_active_system
+
     sys = get_active_system()
     q_force = sys.Q_(2.0, "N")
     assert str(q_force) == "2.0 N"
@@ -246,13 +247,12 @@ def test_formatting(quantity_system):
 def test_to_base_units():
     """Test converting a derived unit quantity to base SI units."""
     from physure import get_active_system
+
     sys = get_active_system()
     force = sys.Q_(2.0, "N")
     base_force = force.to_base_units()
     assert base_force.unit.to_string(sys) == "kg·m/s²"
     assert base_force.magnitude == 2.0
-
-
 
 
 def test_dimensionless_display_omits_unit(quantity_system):

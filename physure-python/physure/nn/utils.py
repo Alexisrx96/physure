@@ -12,11 +12,11 @@ if TYPE_CHECKING:
     import numpy as np
 
     from physure.core.protocols import Numeric
+    from physure.domain.measurement.base_entity import ExponentsDict
     from physure.domain.measurement.dimensions import Dimension
     from physure.domain.measurement.quantity import Quantity
     from physure.domain.measurement.system import UnitSystem
     from physure.domain.measurement.units import CompoundUnit
-    from physure.domain.measurement.base_entity import ExponentsDict
 
 
 def _compute_rcond_val(

@@ -12,20 +12,27 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-try:
+if TYPE_CHECKING:
     from pandas.api.extensions import (
         ExtensionArray,
         ExtensionDtype,
         register_extension_dtype,
     )
-except (ImportError, AttributeError):
-    # Fallback if pandas is missing/broken
-    ExtensionArray = object
-    ExtensionDtype = object
+else:
+    try:
+        from pandas.api.extensions import (
+            ExtensionArray,
+            ExtensionDtype,
+            register_extension_dtype,
+        )
+    except (ImportError, AttributeError):
+        # Fallback if pandas is missing/broken
+        ExtensionArray = object
+        ExtensionDtype = object
 
-    def register_extension_dtype(cls: type) -> type:
-        """No-op decorator when pandas is unavailable."""
-        return cls
+        def register_extension_dtype(cls: type) -> type:
+            """No-op decorator when pandas is unavailable."""
+            return cls
 
 
 from physure.domain.measurement.quantity import Quantity
@@ -44,7 +51,7 @@ class PhysureDtype(ExtensionDtype):  # pyright: ignore[reportGeneralTypeIssues]
     """Pandas ExtensionDtype for Physure Quantity."""
 
     name = "physure"
-    type = Quantity
+    type: type[Quantity[Any, Any, Any]] = Quantity
     kind = "O"
 
     def __init__(self, unit: CompoundUnit | str | None = None) -> None:
@@ -62,7 +69,9 @@ class PhysureDtype(ExtensionDtype):  # pyright: ignore[reportGeneralTypeIssues]
         return self._unit
 
     @classmethod
-    def construct_array_type(cls) -> type[PhysureArray]:
+    def construct_array_type(
+        cls,
+    ) -> type[PhysureArray]:
         """Returns the array type for this dtype."""
         return PhysureArray
 
@@ -113,16 +122,25 @@ class PhysureArray(ExtensionArray):  # pyright: ignore[reportGeneralTypeIssues]
         """Returns the length of the array."""
         return len(self._data)
 
-    def __getitem__(self, item: int | slice | np.ndarray) -> Any:
+    # ponytail: pandas' real ExtensionArray.__getitem__ accepts a broader
+    # PositionalIndexer union (incl. Sequence[int]); we only ever call this
+    # with int/slice/ndarray, so the narrower param type is intentional.
+    def __getitem__(  # ty: ignore[invalid-method-override]
+        self, item: int | slice | np.ndarray
+    ) -> Any:
         """Returns the item at the given index or a slice of the array."""
         if isinstance(item, int):
             return self._data[item]
         return type(self)(self._data[item], dtype=self.dtype)
 
     @classmethod
-    def _from_sequence(
+    # ponytail: pandas' real ExtensionArray._from_sequence accepts a
+    # broader Dtype union; we narrow to PhysureDtype intentionally, same
+    # as __getitem__/take above.
+    def _from_sequence(  # ty: ignore[invalid-method-override]
         cls,
         scalars: Sequence[Any],
+        *,
         dtype: PhysureDtype | None = None,  # pyright: ignore[reportGeneralTypeIssues]
         copy: bool = False,
     ) -> PhysureArray:
@@ -142,7 +160,10 @@ class PhysureArray(ExtensionArray):  # pyright: ignore[reportGeneralTypeIssues]
         """Returns a boolean mask of missing values."""
         return np.array([v is None for v in self._data], dtype=bool)
 
-    def take(
+    # ponytail: pandas' real ExtensionArray.take accepts a broader
+    # TakeIndexer union (incl. ndarray) and keyword-only allow_fill/
+    # fill_value; we narrow indices to Sequence[int] intentionally.
+    def take(  # ty: ignore[invalid-method-override]
         self,
         indices: Sequence[int],
         allow_fill: bool = False,

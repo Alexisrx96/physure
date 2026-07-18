@@ -10,11 +10,13 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-try:
+if TYPE_CHECKING:
     import array_api_compat
-except ImportError:
-    array_api_compat = None
-
+else:
+    try:
+        import array_api_compat
+    except ImportError:
+        array_api_compat = None
 
 from physure.domain.exceptions import IncompatibleUnitsError
 from physure.domain.measurement.converters import (

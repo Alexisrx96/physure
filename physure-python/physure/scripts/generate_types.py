@@ -44,7 +44,7 @@ def generate():
     with open(registry_stub_path, "w", encoding="utf-8") as f:
         f.write(_HEADER_EDIT_WARNING)
         f.write(_HEADER_SYNC_WARNING)
-        f.write("from typing import Any\n")
+        f.write("from typing import Any\n\n")
         f.write("from physure.domain.measurement.units import Unit\n\n")
         f.write("class UnitRegistry:\n")
         f.write("    _registry: dict[str, Any]\n")

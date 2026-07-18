@@ -7,37 +7,42 @@ Physure Quantity objects, enabling high-performance vectorized operations.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-try:
-    import pandas as pd
+from physure.domain.measurement.quantity import Quantity
 
-    # Verify minimal functionality to avoid broken installations
-    _ = pd.Series
-    _ = pd.DataFrame
-    # ponytail: the real pandas decorator and the dummy fallback below are
-    # structurally different callables by design (pandas is optional);
-    # callers only ever see one or the other.
-    from pandas.api.extensions import (
-        register_series_accessor,  # pyright: ignore[reportAssignmentType]
-    )
+if TYPE_CHECKING:
+    import pandas as pd
+    from pandas.api.extensions import register_series_accessor
 
     HAS_PANDAS = True
-except (ImportError, AttributeError):
-    # ponytail: HAS_PANDAS toggles between True/False across the
-    # try/except branches by design; not a real constant-redefinition bug.
-    HAS_PANDAS = False  # pyright: ignore[reportConstantRedefinition]
-    pd = None
+else:
+    try:
+        import pandas as pd
 
-    # Define a dummy decorator if pandas is not available or broken
-    def register_series_accessor(_name: str):
-        """Dummy decorator if pandas is not available."""
-        return lambda cls: cls
+        # Verify minimal functionality to avoid broken installations
+        _ = pd.Series
+        _ = pd.DataFrame
+        # ponytail: the real pandas decorator and the dummy fallback below are
+        # structurally different callables by design (pandas is optional);
+        # callers only ever see one or the other.
+        from pandas.api.extensions import (
+            register_series_accessor,  # pyright: ignore[reportAssignmentType]
+        )
 
+        HAS_PANDAS = True
+    except (ImportError, AttributeError):
+        # ponytail: HAS_PANDAS toggles between True/False across the
+        # try/except branches by design; not a real constant-redefinition bug.
+        HAS_PANDAS = False  # pyright: ignore[reportConstantRedefinition]
+        pd = None
 
-from physure.domain.measurement.quantity import Quantity
+        # Define a dummy decorator if pandas is not available or broken
+        def register_series_accessor(_name: str):
+            """Dummy decorator if pandas is not available."""
+            return lambda cls: cls
 
 
 @register_series_accessor("mk")

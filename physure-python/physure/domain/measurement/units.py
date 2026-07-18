@@ -9,11 +9,16 @@ from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
+from physure._core import RationalUnit
 from physure.core.dispatcher import BackendManager
 from physure.core.registry import UnitRegistry
 from physure.domain.exceptions import (
     IncompatibleUnitsError,
     UnknownUnitError,
+)
+from physure.domain.measurement.base_entity import (
+    BaseExponentEntity,
+    ExponentsDict,
 )
 from physure.domain.measurement.converters import (
     LinearConverter,
@@ -28,7 +33,6 @@ if TYPE_CHECKING:
     from physure.domain.measurement.dimensions import Dimension
     from physure.domain.measurement.quantity import Quantity
     from physure.domain.measurement.system import UnitSystem
-    from physure.domain.measurement.base_entity import ExponentsDict
 
 
 # --- Dependency Injection for System ---
@@ -149,15 +153,6 @@ def _resolve_unit_dim(unit_name: str, system: Any, Dimension: type) -> Any:
     if hasattr(base_unit, "dimension"):
         return base_unit.dimension(system)
     return Dimension({unit_name: 1})
-
-
-from physure._core import RationalUnit
-
-
-from physure.domain.measurement.base_entity import (
-    BaseExponentEntity,
-    ExponentsDict,
-)
 
 
 @dataclass(frozen=True)
@@ -425,18 +420,16 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         """Format the CompoundUnit using a format specification."""
         return self.to_string(use_alias=format_spec.startswith("alias"))
 
-    def __pow__(self, exponent: float | tuple[int, int]) -> CompoundUnit:
+    def __pow__(self, power: float | tuple[int, int]) -> CompoundUnit:
         """Power support with float-to-rational conversion."""
-        if isinstance(exponent, (int, float)):
+        if isinstance(power, (int, float)):
             # Use Python-side BaseExponentEntity logic for pure exponents
             # to avoid Rust RationalUnit issues with fractional powers.
             # Convert float to int if integral
-            if isinstance(exponent, float) and exponent.is_integer():
-                exponent = int(exponent)
+            if isinstance(power, float) and power.is_integer():
+                power = int(power)
 
-            new_exponents = {
-                k: v * exponent for k, v in self.exponents.items()
-            }
+            new_exponents = {k: v * power for k, v in self.exponents.items()}
             return _CompoundUnit(new_exponents)
 
         # For rational tuples, we use Rust core if available
@@ -444,7 +437,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         # (numerator, denominator) tuple here even though the Python
         # stub's __pow__ only declares float (same "Rust core is
         # optional/dynamic" pattern as elsewhere in this file).
-        res = super().__pow__(exponent)  # pyright: ignore[reportArgumentType]
+        res = super().__pow__(power)  # pyright: ignore[reportArgumentType]
         if hasattr(res, "dimensions"):
             return _CompoundUnit(res.dimensions)
         return res

@@ -6,27 +6,28 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from numpy.typing import NDArray
-
-try:
     import numpy as np
-except ImportError:
-    np = None
+    from scipy import sparse
 
-
-if TYPE_CHECKING:
-    Array = NDArray[Any]
-else:
     try:
         from jaxtyping import Array
     except ImportError:
         Array = Any
+else:
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
 
-try:
-    from scipy import sparse
-except ImportError:
-    sparse = None
+    try:
+        from scipy import sparse
+    except ImportError:
+        sparse = None
 
+    try:
+        from jaxtyping import Array
+    except ImportError:
+        Array = Any
 
 from physure.core.dispatcher import enforce_tensor_contract
 from physure.core.protocols import BackendOps, Boolean, Numeric

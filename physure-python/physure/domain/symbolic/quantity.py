@@ -35,7 +35,7 @@ class SymbolicQuantity(SymbolicExpression):
         symbol = (
             se.Symbol(name)
             if HAVE_SYMENGINE
-            else sp.Symbol(name, positive=True)  # type: ignore
+            else sp.Symbol(name, positive=True)
         )
         resolved_unit = system.resolve_unit(unit)
 

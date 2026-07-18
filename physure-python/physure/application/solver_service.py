@@ -11,19 +11,21 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-try:
-    import numpy as np
-    from scipy.integrate import solve_ivp
-except ImportError:
-    np = None
-    solve_ivp = None
-
-from physure.domain.measurement.quantity import Quantity
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import numpy as np
     from numpy.typing import NDArray
+    from scipy.integrate import solve_ivp
+else:
+    try:
+        import numpy as np
+        from scipy.integrate import solve_ivp
+    except ImportError:
+        np = None
+        solve_ivp = None
+
+from physure.domain.measurement.quantity import Quantity
 
 
 class ODESolution:

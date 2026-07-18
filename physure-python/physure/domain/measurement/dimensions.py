@@ -18,14 +18,12 @@ from physure.domain.exceptions import DimensionError
 if TYPE_CHECKING:
     from typing_extensions import Self
 
+from physure._core import DimVector as _RustDimVector
 from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentEntityProtocol,
     ExponentsDict,
 )
-
-from physure._core import DimVector as _RustDimVector
-from physure._core import dim_vector_from_dict as _rust_dim_from_dict
 
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
@@ -71,7 +69,6 @@ def register_dimension(dimension: Dimension, name: str):
         name: The human-readable name (e.g., "Length").
     """
     _DIMENSION_NAME_REGISTRY[dimension] = name
-
 
 
 @dataclass(frozen=True)
@@ -191,10 +188,18 @@ class Dimension(BaseExponentEntity):
             return NotImplemented  # type: ignore[return-value]
         if len(vector) == 9:
             rv_self = _RustDimVector.from_pairs(
-                [(SI_ORDER[i], int(self._vector[i])) for i in range(9) if self._vector[i] != 0]
+                [
+                    (SI_ORDER[i], int(self._vector[i]))
+                    for i in range(9)
+                    if self._vector[i] != 0
+                ]
             )
             rv_other = _RustDimVector.from_pairs(
-                [(SI_ORDER[i], int(vector[i])) for i in range(9) if vector[i] != 0]
+                [
+                    (SI_ORDER[i], int(vector[i]))
+                    for i in range(9)
+                    if vector[i] != 0
+                ]
             )
             result = rv_self * rv_other
             return Dimension(tuple(result.vector))
@@ -210,10 +215,18 @@ class Dimension(BaseExponentEntity):
             return NotImplemented  # type: ignore[return-value]
         if len(vector) == 9:
             rv_self = _RustDimVector.from_pairs(
-                [(SI_ORDER[i], int(self._vector[i])) for i in range(9) if self._vector[i] != 0]
+                [
+                    (SI_ORDER[i], int(self._vector[i]))
+                    for i in range(9)
+                    if self._vector[i] != 0
+                ]
             )
             rv_other = _RustDimVector.from_pairs(
-                [(SI_ORDER[i], int(vector[i])) for i in range(9) if vector[i] != 0]
+                [
+                    (SI_ORDER[i], int(vector[i]))
+                    for i in range(9)
+                    if vector[i] != 0
+                ]
             )
             result = rv_self / rv_other
             return Dimension(tuple(result.vector))
@@ -232,7 +245,11 @@ class Dimension(BaseExponentEntity):
         ):
             return NotImplemented  # pyright: ignore[reportUnreachable]
         rv = _RustDimVector.from_pairs(
-            [(SI_ORDER[i], int(self._vector[i])) for i in range(9) if self._vector[i] != 0]
+            [
+                (SI_ORDER[i], int(self._vector[i]))
+                for i in range(9)
+                if self._vector[i] != 0
+            ]
         )
         result = rv ** int(power)
         return Dimension(tuple(result.vector))

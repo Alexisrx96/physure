@@ -66,7 +66,10 @@ class SpecializedQuantityFactory:
         self,
         value: _V,
         from_unit: str | CompoundUnit | None = None,
-        uncertainty: _U = 0.0,
+        # ponytail: _U is an unbound TypeVar; ty can't prove the literal
+        # 0.0 default satisfies an arbitrary _U, but this overload body
+        # never executes (only the untyped implementation below does).
+        uncertainty: _U = 0.0,  # ty: ignore[invalid-parameter-default]
         symbol: str | None = None,
     ) -> Quantity[_V, _U, Any]: ...
 
@@ -120,7 +123,8 @@ class QuantityFactory:
         self,
         value: _V,
         unit: CompoundUnit,
-        uncertainty: _U = 0.0,
+        # ponytail: same unbound-TypeVar-default limitation as above.
+        uncertainty: _U = 0.0,  # ty: ignore[invalid-parameter-default]
         symbol: str | None = None,
     ) -> Quantity[_V, _U, Any]: ...
 
@@ -129,7 +133,8 @@ class QuantityFactory:
         self,
         value: _V,
         unit: _UT,
-        uncertainty: _U = 0.0,
+        # ponytail: same unbound-TypeVar-default limitation as above.
+        uncertainty: _U = 0.0,  # ty: ignore[invalid-parameter-default]
         symbol: str | None = None,
     ) -> Quantity[_V, _U, _UT]: ...
 

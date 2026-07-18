@@ -11,6 +11,7 @@ from physure.ext.grammar import (
     _FUNCTIONS,
     GrammarError,
     GrammarInterpreter,
+    _split_on_commas,
     evaluate,
 )
 
@@ -136,7 +137,6 @@ def test_grammar_base_conversion(mn):
     q = mn.eval("500 N => base")
     assert str(q.unit) == "kg·m/s²"
     assert math.isclose(q.magnitude, 500)
-
 
 
 def test_unicode_multiplication_and_division_operators(mn):
@@ -547,3 +547,239 @@ def test_inline_significant_figures_formatting(mn):
     assert math.isclose(result.magnitude, 0.5)
 
 
+def test_bad_character_token_raises(mn):
+    with pytest.raises(GrammarError, match="Unexpected character"):
+        mn.eval("5 @ 3")
+
+
+def test_power_operator_double_star(mn):
+    assert mn.eval("2**3") == 8
+
+
+def test_unexpected_trailing_token_raises(mn):
+    with pytest.raises(GrammarError, match="Unexpected token"):
+        mn.eval("5, 3")
+
+
+def test_let_expects_name_after_let(mn):
+    mn.run("f(x) = let 5 = 3 in 5")
+    with pytest.raises(GrammarError, match="Expected a name after 'let'"):
+        mn.eval("f(1)")
+
+
+def test_let_expects_in_after_binding(mn):
+    mn.run("f(x) = let y = 3 5")
+    with pytest.raises(GrammarError, match="Expected 'in' after let binding"):
+        mn.eval("f(1)")
+
+
+def test_let_body_references_outer_scope(mn):
+    mn.run("f(x) = let y = x^2 in y + x")
+    assert mn.eval("f(3)") == 12
+
+
+def test_ternary_missing_colon_raises(mn):
+    with pytest.raises(GrammarError, match="Expected ':'"):
+        mn.eval("1 ? 2 3")
+
+
+def test_in_falls_through_to_inches_when_followed_by_power(mn):
+    result = mn.eval("2 in^2")
+    assert math.isclose(result.to("in^2").magnitude, 2)
+
+
+def test_power_exponent_is_dimensionless_quantity(mn):
+    assert mn.eval("2^(4 m / 2 m)") == 4
+
+
+def test_superscript_power_notation(mn):
+    assert math.isclose(mn.eval("5⁻¹"), 0.2)
+
+
+def test_atom_unexpected_end_of_expression(mn):
+    with pytest.raises(GrammarError, match="Unexpected end of expression"):
+        mn.eval("5 +")
+
+
+def test_atom_unexpected_token_fallback(mn):
+    with pytest.raises(GrammarError, match="Unexpected token"):
+        mn.eval("* 5")
+
+
+def test_atom_number_requires_number_after_sign(mn):
+    with pytest.raises(GrammarError, match="Expected a number after"):
+        mn.eval("5 +/- m")
+
+
+def test_call_args_zero_arg_fast_path(mn):
+    with pytest.raises(GrammarError, match="expects"):
+        mn.eval("abs()")
+
+
+def test_call_args_missing_closing_paren(mn):
+    with pytest.raises(GrammarError, match="Missing closing parenthesis"):
+        mn.eval("sin(5")
+
+
+def test_check_arity_at_least_message(mn):
+    with pytest.raises(GrammarError, match="at least 2"):
+        mn.eval("min(1)")
+
+
+def test_unmatched_paren_in_header_raises(mn):
+    with pytest.raises(GrammarError, match=r"[Mm]issing"):
+        mn.run("f(x = 5")
+
+
+def test_find_matching_paren_nested_and_split_on_commas_depth(mn):
+    mn.run("f(x: (m/s)) = x")
+    result = mn.eval("f(3 m/s)")
+    assert math.isclose(result.to("m/s").magnitude, 3)
+
+
+def test_split_on_commas_empty_tokens_direct():
+    assert _split_on_commas([]) == []
+
+
+def test_format_sig_figs_zero_magnitude(mn):
+    result = mn.eval("0 m : 3")
+    assert result.magnitude == 0.0
+
+
+def test_format_sig_figs_bare_number(mn):
+    assert mn.eval("123.456 : 3") == 123
+
+
+def test_setitem(mn):
+    mn["custom"] = 42
+    assert mn["custom"] == 42
+
+
+def test_multiline_function_no_body_statements_raises(mn):
+    with pytest.raises(GrammarError, match="has no body statements"):
+        mn.run("f(x) =\ny = 5")
+
+
+def test_multiline_function_reserved_name_raises(mn):
+    with pytest.raises(GrammarError, match="reserved"):
+        mn.run("""
+sin(x) =
+    x + 1
+""")
+
+
+def test_split_format_spec_empty_after_colon(mn):
+    with pytest.raises(GrammarError):
+        mn.eval("5 m :")
+
+
+def test_split_format_spec_non_integer_spec(mn):
+    assert mn.eval("3.14159 : .2f") == "3.14"
+
+
+def test_strip_value_query_bare_trailing_question_mark(mn):
+    mn.run("x = 5 m")
+    result = mn.eval("x ?")
+    assert math.isclose(result.magnitude, 5)
+
+
+def test_split_conversion_missing_unit_raises(mn):
+    with pytest.raises(GrammarError, match="Missing unit"):
+        mn.eval("5 m =>")
+
+
+def test_try_define_function_trailing_question_mark_falls_through(mn):
+    with pytest.raises((GrammarError, UnknownUnitError)):
+        mn.run("f(x) = ?")
+
+
+def test_try_define_function_invalid_param_falls_through(mn):
+    with pytest.raises(GrammarError):
+        mn.run("f(1) = x")
+
+
+def test_try_define_function_empty_body_falls_through(mn):
+    with pytest.raises(GrammarError):
+        mn.run("f(x) =")
+
+
+def test_try_define_function_empty_body_via_semicolon(mn):
+    with pytest.raises(GrammarError):
+        mn.run("f(x) = ; y = 1")
+
+
+def test_apply_format_spec_non_positive_int_returns_value_unchanged(mn):
+    assert mn.eval("5 : 0") == 5
+
+
+def test_eval_unit_expr_empty_specifier_direct(mn):
+    with pytest.raises(GrammarError, match="Empty unit specifier"):
+        mn._eval_unit_expr([])
+
+
+def test_param_list_empty_params(mn):
+    mn.run("f() = 5")
+    assert mn.eval("f()") == 5
+
+
+def test_param_list_invalid_unit_specifier_raises(mn):
+    with pytest.raises(GrammarError):
+        mn.run("f(x: 5) = x")
+
+
+def test_param_list_malformed_param_raises(mn):
+    with pytest.raises(GrammarError):
+        mn.run("f(x y) = z")
+
+
+def test_eval_expr_empty_raises(mn):
+    with pytest.raises(GrammarError, match="Empty expression"):
+        mn.run("x =")
+
+
+def test_call_user_function_resolves_outer_scope(mn):
+    mn.run("g = 9.8 m/s^2")
+    mn.run("f(x) = x * g")
+    result = mn.eval("f(2)")
+    assert math.isclose(result.to("m/s^2").magnitude, 19.6)
+
+
+def test_multiline_function_statement_without_value_raises(mn):
+    mn.run("""
+f(x) =
+    y = x + 1
+""")
+    with pytest.raises(GrammarError, match="ended without returning a value"):
+        mn.eval("f(2)")
+
+
+def test_multiline_function_conversion_in_body(mn):
+    mn.run("""
+h(x) =
+    x => km
+""")
+    result = mn.eval("h(500 m)")
+    assert math.isclose(result.to("km").magnitude, 0.5)
+
+
+def test_multiline_function_format_spec_in_body(mn):
+    mn.run("""
+h(x) =
+    x : 2
+    x * 2
+""")
+    result = mn.eval("h(3)")
+    assert result == 6
+
+
+def test_multiline_function_equality_in_body(mn):
+    mn.run("""
+f(x) =
+    x == 2
+""")
+    assert mn.eval("f(2)") is True
+    assert mn.eval("f(3)") is False
+
+
+def test_is_close_without_units(mn):
+    assert mn.eval("5 == 5") is True

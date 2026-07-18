@@ -52,8 +52,8 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias
 
-from physure.domain.exceptions import DimensionError, PhysureError
 from physure.core.formatting import parse_superscript
+from physure.domain.exceptions import DimensionError, PhysureError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -107,6 +107,7 @@ class UserFunction:
     params: list[tuple[str, list[Token] | None]]  # (name, unit_tokens_or_None)
     body_tokens: list[Token] | None = None
     body_statements: list[list[Token]] | None = None
+    body_lines: list[str] | None = None
 
 
 class GrammarError(PhysureError, ValueError):
@@ -122,7 +123,6 @@ class GrammarError(PhysureError, ValueError):
         self.line = line
         self.column = column
         super().__init__(message)
-
 
 
 def _tokenize(stmt: str) -> list[Token]:
@@ -351,44 +351,59 @@ class _ExprParser:
         if tok is None:
             raise GrammarError("Unexpected end of expression")
         if tok.type == "SQRT":
-            self._next()
-            operand = self._atom()
-            return operand**0.5
+            return self._atom_sqrt()
         if self._is_function_call(tok):
-            name = tok.value
-            self._next()
-            args = self._call_args()
-            lo, hi, fn = _FUNCTIONS[name]
-            _check_arity(name, args, lo, hi)
-            return fn(*args)
+            return self._atom_builtin_call(tok)
         if self._is_user_function_call(tok):
-            name = tok.value
-            self._next()
-            args = self._call_args()
-            return self._call_user_function(name, args, self._depth)
+            return self._atom_user_call(tok)
         if tok.value == "(":
-            self._next()
-            result = self._expr()
-            closing = self._peek()
-            if closing is None or closing.value != ")":
-                raise GrammarError("Missing closing parenthesis")
-            self._next()
-            return result
+            return self._atom_group()
         if tok.type == "NUMBER":
-            self._next()
-            value = _to_number(tok.value)
-            nxt = self._peek()
-            if nxt and nxt.value in ("+/-", "±"):
-                self._next()
-                err = self._next()
-                if err.type != "NUMBER":
-                    raise GrammarError("Expected a number after '+/-'")
-                return self._q(value, None, uncertainty=_to_number(err.value))
-            return value
+            return self._atom_number(tok)
         if tok.type == "IDENT":
             self._next()
             return self._resolve(tok.value)
         raise GrammarError(f"Unexpected token {tok.value!r}")
+
+    def _atom_sqrt(self) -> GrammarValue:
+        self._next()
+        operand = self._atom()
+        return operand**0.5
+
+    def _atom_builtin_call(self, tok: Token) -> GrammarValue:
+        name = tok.value
+        self._next()
+        args = self._call_args()
+        lo, hi, fn = _FUNCTIONS[name]
+        _check_arity(name, args, lo, hi)
+        return fn(*args)
+
+    def _atom_user_call(self, tok: Token) -> GrammarValue:
+        name = tok.value
+        self._next()
+        args = self._call_args()
+        return self._call_user_function(name, args, self._depth)
+
+    def _atom_group(self) -> GrammarValue:
+        self._next()
+        result = self._expr()
+        closing = self._peek()
+        if closing is None or closing.value != ")":
+            raise GrammarError("Missing closing parenthesis")
+        self._next()
+        return result
+
+    def _atom_number(self, tok: Token) -> GrammarValue:
+        self._next()
+        value = _to_number(tok.value)
+        nxt = self._peek()
+        if nxt and nxt.value in ("+/-", "±"):
+            self._next()
+            err = self._next()
+            if err.type != "NUMBER":
+                raise GrammarError("Expected a number after '+/-'")
+            return self._q(value, None, uncertainty=_to_number(err.value))
+        return value
 
     def _call_args(self) -> list[GrammarValue]:
         self._next()  # consume "("
@@ -506,7 +521,7 @@ def _format_sig_figs(val: GrammarValue, sig_figs: int) -> GrammarValue:
         rounded_mag = 0.0
     else:
         mag_abs = abs(mag)
-        digits = sig_figs - int(math.floor(math.log10(mag_abs))) - 1
+        digits = sig_figs - math.floor(math.log10(mag_abs)) - 1
         rounded_mag = round(mag, max(0, digits))
         if digits < 0:
             factor = 10 ** (-digits)
@@ -559,7 +574,9 @@ class GrammarInterpreter:
         current_line = 1
         for match in _TEXT_BLOCK_RE.finditer(source):
             prefix = source[pos : match.start()]
-            results.extend(self._run_segment(prefix, start_line_num=current_line))
+            results.extend(
+                self._run_segment(prefix, start_line_num=current_line)
+            )
             current_line += prefix.count("\n")
 
             text = match.group(1)
@@ -590,68 +607,115 @@ class GrammarInterpreter:
                 i += 1
                 continue
 
-            sub_stmts = [s.strip() for s in stripped_stmt.split(";") if s.strip()]
+            sub_stmts = [
+                s.strip() for s in stripped_stmt.split(";") if s.strip()
+            ]
+            first_tokens = self._tokenize_located(
+                sub_stmts[0] if sub_stmts else "", line, current_line
+            )
+
+            if len(sub_stmts) == 1 and self._is_multiline_func_header(
+                first_tokens
+            ):
+                header_line_num = current_line
+                header_col = line.find(stripped_stmt) + 1
+                i, body_lines = self._collect_multiline_body(raw_lines, i + 1)
+                self._define_multiline_from(
+                    first_tokens,
+                    body_lines,
+                    stripped_stmt,
+                    header_line_num,
+                    header_col,
+                )
+                results.append(None)
+                continue
+
+            results.extend(
+                self._run_substatements(sub_stmts, line, current_line)
+            )
+            i += 1
+
+        return results
+
+    def _tokenize_located(
+        self, text: str, line: str, current_line: int
+    ) -> list[Token]:
+        try:
+            return _tokenize(text) if text else []
+        except GrammarError:
+            raise
+        except PhysureError as err:
+            col = line.find(text) + 1 if text else 1
+            if err.line is None:
+                err.line = current_line
+                err.column = col
+            raise
+        except Exception as err:
+            col = line.find(text) + 1 if text else 1
+            raise GrammarError(
+                str(err), line=current_line, column=col
+            ) from err
+
+    def _collect_multiline_body(
+        self, raw_lines: list[str], i: int
+    ) -> tuple[int, list[str]]:
+        body_lines: list[str] = []
+        while i < len(raw_lines):
+            sub_line = raw_lines[i]
+            sub_comment_stripped = sub_line.split("#", 1)[0].rstrip()
+            if not sub_comment_stripped.strip():
+                i += 1
+                continue
+            indent = len(sub_line) - len(sub_line.lstrip())
+            if indent > 0:
+                body_lines.append(sub_comment_stripped.strip())
+                i += 1
+            else:
+                break
+        return i, body_lines
+
+    def _define_multiline_from(
+        self,
+        first_tokens: list[Token],
+        body_lines: list[str],
+        stripped_stmt: str,
+        header_line_num: int,
+        header_col: int,
+    ) -> None:
+        try:
+            self._define_multiline_function(
+                first_tokens, body_lines, stripped_stmt
+            )
+        except GrammarError:
+            raise
+        except PhysureError as err:
+            if err.line is None:
+                err.line = header_line_num
+                err.column = header_col
+            raise
+        except Exception as err:
+            raise GrammarError(
+                str(err), line=header_line_num, column=header_col
+            ) from err
+
+    def _run_substatements(
+        self, sub_stmts: list[str], line: str, current_line: int
+    ) -> list[GrammarValue | None]:
+        results: list[GrammarValue | None] = []
+        for part_stmt in sub_stmts:
+            col = line.find(part_stmt) + 1
             try:
-                first_tokens = _tokenize(sub_stmts[0]) if sub_stmts else []
+                results.append(self._eval_statement(part_stmt))
             except GrammarError:
                 raise
             except PhysureError as err:
-                col = line.find(sub_stmts[0]) + 1 if sub_stmts else 1
                 if err.line is None:
                     err.line = current_line
                     err.column = col
                 raise
             except Exception as err:
-                col = line.find(sub_stmts[0]) + 1 if sub_stmts else 1
-                raise GrammarError(str(err), line=current_line, column=col) from err
-
-            if len(sub_stmts) == 1 and self._is_multiline_func_header(first_tokens):
-                header_line_num = current_line
-                header_col = line.find(stripped_stmt) + 1
-                i += 1
-                body_lines: list[str] = []
-                while i < len(raw_lines):
-                    sub_line = raw_lines[i]
-                    sub_comment_stripped = sub_line.split("#", 1)[0].rstrip()
-                    if not sub_comment_stripped.strip():
-                        i += 1
-                        continue
-                    indent = len(sub_line) - len(sub_line.lstrip())
-                    if indent > 0:
-                        body_lines.append(sub_comment_stripped.strip())
-                        i += 1
-                    else:
-                        break
-                try:
-                    self._define_multiline_function(first_tokens, body_lines, stripped_stmt)
-                except GrammarError:
-                    raise
-                except PhysureError as err:
-                    if err.line is None:
-                        err.line = header_line_num
-                        err.column = header_col
-                    raise
-                except Exception as err:
-                    raise GrammarError(str(err), line=header_line_num, column=header_col) from err
-                results.append(None)
-                continue
-
-            for part_stmt in sub_stmts:
-                col = line.find(part_stmt) + 1
-                try:
-                    results.append(self._eval_statement(part_stmt))
-                except GrammarError:
-                    raise
-                except PhysureError as err:
-                    if err.line is None:
-                        err.line = current_line
-                        err.column = col
-                    raise
-                except Exception as err:
-                    msg = str(err)
-                    raise GrammarError(msg, line=current_line, column=col) from err
-            i += 1
-
+                msg = str(err)
+                raise GrammarError(msg, line=current_line, column=col) from err
         return results
 
     def _is_multiline_func_header(self, tokens: list[Token]) -> bool:
@@ -662,13 +726,19 @@ class GrammarInterpreter:
         close_idx = _find_matching_paren(tokens, 1)
         if close_idx == -1:
             return False
-        return close_idx + 2 == len(tokens) and tokens[close_idx].value == ")" and tokens[-1].value == "="
+        return (
+            close_idx + 2 == len(tokens)
+            and tokens[close_idx].value == ")"
+            and tokens[-1].value == "="
+        )
 
     def _define_multiline_function(
         self, header_tokens: list[Token], body_lines: list[str], stmt: str
     ) -> None:
         if not body_lines:
-            raise GrammarError(f"Indented multi-line function {stmt!r} has no body statements")
+            raise GrammarError(
+                f"Indented multi-line function {stmt!r} has no body statements"
+            )
         close_idx = _find_matching_paren(header_tokens, 1)
         params = self._param_list(header_tokens[2:close_idx], stmt)
         name = header_tokens[0].value
@@ -676,7 +746,9 @@ class GrammarInterpreter:
             raise GrammarError(f"{name!r} is reserved in: {stmt!r}")
         body_statements = [_tokenize(b_line) for b_line in body_lines]
         self._functions[name] = UserFunction(
-            params=params, body_statements=body_statements
+            params=params,
+            body_statements=body_statements,
+            body_lines=body_lines,
         )
 
     def eval(self, source: str) -> GrammarValue | None:
@@ -693,7 +765,9 @@ class GrammarInterpreter:
         """Strips a trailing `: spec` (e.g. `: .2f`, `: .3e`, `: base`, `: .2f|base`, `: 3`)."""
         colon_idx = _top_level_index(tokens, ":")
         question_idx = _top_level_index(tokens, "?")
-        if colon_idx == -1 or (question_idx != -1 and question_idx < colon_idx):
+        if colon_idx == -1 or (
+            question_idx != -1 and question_idx < colon_idx
+        ):
             return tokens, None
 
         spec_start = (
@@ -709,7 +783,6 @@ class GrammarInterpreter:
             return tokens[:colon_idx], int(spec_str)
         except ValueError:
             return tokens[:colon_idx], spec_str
-
 
     @staticmethod
     def _strip_value_query(
@@ -728,7 +801,6 @@ class GrammarInterpreter:
             else:
                 tokens = tokens[:-1]
         return tokens, want_value
-
 
     @staticmethod
     def _split_conversion(
@@ -825,7 +897,9 @@ class GrammarInterpreter:
                 expected = self._eval_unit_expr(unit_tokens)
                 expected_unit = getattr(expected, "unit", expected)
                 if not hasattr(expected_unit, "dimension"):
-                    raise GrammarError(f"Invalid unit specifier in parameter list: {stmt!r}")
+                    raise GrammarError(
+                        f"Invalid unit specifier in parameter list: {stmt!r}"
+                    )
                 params.append((part[0].value, unit_tokens))
                 continue
             raise GrammarError(f"Invalid parameter list in: {stmt!r}")
@@ -878,26 +952,39 @@ class GrammarInterpreter:
 
         value = self._eval_expr(tokens)
         if target_unit is not None:
-            if hasattr(value, "to_base_units") and target_unit.lower() in ("base", "si", "raw", "expand"):
-                value = value.to_base_units()
-            else:
-                value = value.to(target_unit)
+            value = self._apply_target_unit(value, target_unit)
 
         if name is not None:
             self.env[name] = value
 
         display_val: Any = value
         if format_spec is not None:
-            if isinstance(format_spec, int) and format_spec > 0:
-                display_val = _format_sig_figs(value, format_spec)
-            elif isinstance(format_spec, str) and format_spec:
-                display_val = format(value, format_spec)
+            display_val = self._apply_format_spec(value, format_spec)
 
         if name is not None:
             return display_val if want_value == "assign" else None
         return display_val
 
+    def _apply_target_unit(
+        self, value: GrammarValue, target_unit: str
+    ) -> GrammarValue:
+        if hasattr(value, "to_base_units") and target_unit.lower() in (
+            "base",
+            "si",
+            "raw",
+            "expand",
+        ):
+            return value.to_base_units()
+        return value.to(target_unit)
 
+    def _apply_format_spec(
+        self, value: GrammarValue, format_spec: int | str
+    ) -> GrammarValue:
+        if isinstance(format_spec, int) and format_spec > 0:
+            return _format_sig_figs(value, format_spec)
+        if isinstance(format_spec, str) and format_spec:
+            return format(value, format_spec)
+        return value
 
     def _eval_expr(self, tokens: list[Token]) -> GrammarValue:
         if not tokens:
@@ -935,10 +1022,17 @@ class GrammarInterpreter:
         try:
             if fn.body_statements is not None:
                 last_val: GrammarValue | None = None
-                for stmt_tokens in fn.body_statements:
-                    last_val = self._eval_tokens_with_scope(stmt_tokens, resolve, depth + 1)
+                body_lines = fn.body_lines or [""] * len(fn.body_statements)
+                for stmt_tokens, stmt_line in zip(
+                    fn.body_statements, body_lines, strict=True
+                ):
+                    last_val = self._eval_tokens_with_scope(
+                        stmt_tokens, stmt_line, resolve, depth + 1
+                    )
                 if last_val is None:
-                    raise GrammarError(f"Function {name!r} ended without returning a value")
+                    raise GrammarError(
+                        f"Function {name!r} ended without returning a value"
+                    )
                 return last_val
             elif fn.body_tokens is not None:
                 return _ExprParser(
@@ -957,42 +1051,70 @@ class GrammarInterpreter:
             ) from err
 
     def _eval_tokens_with_scope(
-        self, tokens: list[Token], resolve_fn: Callable[[str], GrammarValue], depth: int
+        self,
+        tokens: list[Token],
+        stmt: str,
+        resolve_fn: Callable[[str], GrammarValue],
+        depth: int,
     ) -> GrammarValue | None:
         eq_idx = _top_level_index(tokens, "==")
         if eq_idx != -1:
-            lhs = _ExprParser(tokens[:eq_idx], resolve_fn, self._q, self._functions, self._call_user_function, depth).parse()
-            rhs = _ExprParser(tokens[eq_idx + 1 :], resolve_fn, self._q, self._functions, self._call_user_function, depth).parse()
-            return self._is_close(lhs, rhs)
+            return self._eval_scoped_equality(
+                tokens, eq_idx, resolve_fn, depth
+            )
 
         tokens, want_value = self._strip_value_query(tokens)
-        tokens, format_spec = self._split_format_spec(tokens, "")
-        tokens, target_unit = self._split_conversion(tokens, "")
-        tokens, name = self._split_assignment(tokens, "")
+        tokens, format_spec = self._split_format_spec(tokens, stmt)
+        tokens, target_unit = self._split_conversion(tokens, stmt)
+        tokens, name = self._split_assignment(tokens, stmt)
 
-        value = _ExprParser(tokens, resolve_fn, self._q, self._functions, self._call_user_function, depth).parse()
+        value = _ExprParser(
+            tokens,
+            resolve_fn,
+            self._q,
+            self._functions,
+            self._call_user_function,
+            depth,
+        ).parse()
         if target_unit is not None:
-            if hasattr(value, "to_base_units") and target_unit.lower() in ("base", "si", "raw", "expand"):
-                value = value.to_base_units()
-            else:
-                value = value.to(target_unit)
+            value = self._apply_target_unit(value, target_unit)
 
         if name is not None:
-            # Rebind in the local scope layer
-            # Store in local scope closure
+            # Rebind in the local scope layer (closure cell of resolve_fn)
             resolve_fn.__closure__[0].cell_contents[name] = value
 
         display_val: Any = value
         if format_spec is not None:
-            if isinstance(format_spec, int) and format_spec > 0:
-                display_val = _format_sig_figs(value, format_spec)
-            elif isinstance(format_spec, str) and format_spec:
-                display_val = format(value, format_spec)
+            display_val = self._apply_format_spec(value, format_spec)
 
         if name is not None:
             return display_val if want_value == "assign" else None
         return display_val
 
+    def _eval_scoped_equality(
+        self,
+        tokens: list[Token],
+        eq_idx: int,
+        resolve_fn: Callable[[str], GrammarValue],
+        depth: int,
+    ) -> bool:
+        lhs = _ExprParser(
+            tokens[:eq_idx],
+            resolve_fn,
+            self._q,
+            self._functions,
+            self._call_user_function,
+            depth,
+        ).parse()
+        rhs = _ExprParser(
+            tokens[eq_idx + 1 :],
+            resolve_fn,
+            self._q,
+            self._functions,
+            self._call_user_function,
+            depth,
+        ).parse()
+        return self._is_close(lhs, rhs)
 
     def _resolve(self, name: str) -> GrammarValue:
         if name in self.env:
@@ -1014,5 +1136,5 @@ class GrammarInterpreter:
 def evaluate(
     source: str, system: UnitSystem | None = None, rel_tol: float = 1e-9
 ) -> GrammarValue | None:
-    # One-shot evaluation: fresh interpreter, returns the last result.
+    """Evaluate `source` with a fresh interpreter, returning the last result."""
     return GrammarInterpreter(system=system, rel_tol=rel_tol).eval(source)

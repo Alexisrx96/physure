@@ -14,9 +14,11 @@ from physure.application.parsing import parse_unit_string
 from physure.domain.measurement.conversions import UnitDefinition
 from physure.domain.measurement.converters import (
     LinearConverter,
+    LogarithmicConverter,
+    OffsetConverter,
     UnitConverter,
 )
-from physure.domain.measurement.dimensions import Dimension, SI_ORDER
+from physure.domain.measurement.dimensions import SI_ORDER, Dimension
 from physure.domain.measurement.ports.unit_repository import IUnitRepository
 from physure.domain.measurement.units import CompoundUnit
 
@@ -259,7 +261,7 @@ class UnitSystem(IUnitRepository):
                     allow_prefixes=unit_def.allow_prefixes,
                     name=unit_def.name,
                 )
-            elif hasattr(conv, "offset"):  # OffsetConverter
+            elif isinstance(conv, OffsetConverter):
                 _RustUnitDef(
                     symbol,
                     rust_dim,
@@ -270,7 +272,7 @@ class UnitSystem(IUnitRepository):
                     allow_prefixes=unit_def.allow_prefixes,
                     name=unit_def.name,
                 )
-            elif hasattr(conv, "factor"):  # LogarithmicConverter
+            elif isinstance(conv, LogarithmicConverter):
                 _RustUnitDef(
                     symbol,
                     rust_dim,
@@ -387,6 +389,9 @@ class UnitSystem(IUnitRepository):
             else None
         )
         converter = base_def.converter
+        assert isinstance(converter, LinearConverter), (
+            "prefixes only apply to linear-converter units"
+        )
         prefix_exact = prefix_data.get("exact")
         prefixed_factor = prefix_data["factor"] * converter.scale
         prefixed_exact = (

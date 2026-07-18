@@ -1,11 +1,9 @@
 """Tests for the Rust CovarianceStore and its Python fallback CoreStore."""
 
 import numpy as np
-import pytest
 
 from physure._core import CovarianceStore as RustCovarianceStore
 from physure._core import PruningConfig
-
 from physure.backends.numpy_backend import NumpyBackend
 from physure.domain.measurement.vectorized_uncertainty import (
     CovarianceStore,

@@ -5,23 +5,24 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-try:
-    import h5py
-except ImportError:
-    h5py = None
-
-try:
-    import xarray as xr
-except ImportError:
-    xr = None
-
-from physure import __version__
-
 if TYPE_CHECKING:
+    import h5py
+    import xarray as xr
     from h5py import Dataset, Group
 
     from physure.core.protocols import Numeric
     from physure.domain.measurement.quantity import Quantity
+else:
+    try:
+        import h5py
+    except ImportError:
+        h5py = None
+    try:
+        import xarray as xr
+    except ImportError:
+        xr = None
+
+from physure import __version__
 
 
 def to_hdf5(quantity: Quantity, group: Group, dataset_name: str) -> Dataset:

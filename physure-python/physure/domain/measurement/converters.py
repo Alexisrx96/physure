@@ -5,8 +5,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from fractions import Fraction
 
-from physure._core import UnitDefinition as _RustUnitDefinition
-
 _LN10 = math.log(10.0)
 
 

@@ -73,6 +73,7 @@ def test_cli_repl_subcommand(monkeypatch, capsys):
 
 def test_python_dash_m_entry_point():
     import os
+
     env = os.environ.copy()
     env["PYTHONPATH"] = f"physure-python:{env.get('PYTHONPATH', '')}"
     result = subprocess.run(

@@ -720,7 +720,9 @@ def plot_parallel_coordinates(
                 else:
                     col_names.append(f"Dim {idx}")
     elif hasattr(data, "columns"):
-        for col in data.columns:
+        # ponytail: duck-typed DataFrame check so pandas stays optional;
+        # hasattr narrowing can't give ty a real type for `.columns`.
+        for col in data.columns:  # ty: ignore[not-iterable]
             cols.append(data[col])
             col_names.append(col)
     else:
@@ -915,7 +917,9 @@ def plot_pairplot(
             else:
                 col_names.append(f"Dim {idx}")
     elif hasattr(data, "columns"):
-        for col in data.columns:
+        # ponytail: duck-typed DataFrame check so pandas stays optional;
+        # hasattr narrowing can't give ty a real type for `.columns`.
+        for col in data.columns:  # ty: ignore[not-iterable]
             cols.append(data[col])
             col_names.append(col)
     else:

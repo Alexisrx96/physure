@@ -1,23 +1,33 @@
 """Tests for the ODE solver using pytest."""
 
 import math
+from typing import TYPE_CHECKING
 
-try:
+if TYPE_CHECKING:
     import numpy as np
-except (ImportError, ModuleNotFoundError):
-    np = None
 
-import pytest
-
-try:
     from physure.application.solver_service import (
         ODESolution,
         solve_unit_aware_ivp,
     )
-except (ImportError, AttributeError):
-    # Solver service might fail if numpy/scipy missing
-    ODESolution = None
-    solve_unit_aware_ivp = None
+else:
+    try:
+        import numpy as np
+    except (ImportError, ModuleNotFoundError):
+        np = None
+
+    try:
+        from physure.application.solver_service import (
+            ODESolution,
+            solve_unit_aware_ivp,
+        )
+    except (ImportError, AttributeError):
+        # Solver service might fail if numpy/scipy missing
+        ODESolution = None
+        solve_unit_aware_ivp = None
+
+import pytest
+
 from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 

@@ -11,9 +11,14 @@ engine when `physure._core` is importable, else falls back to `PyExpr`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from physure.domain.exceptions import IncompatibleUnitsError
 from physure.domain.measurement.units import CompoundUnit
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import Any
 
 
 @dataclass(frozen=True)
@@ -123,51 +128,6 @@ Node = (
 # --- unit inference (§6) ----------------------------------------------
 
 
-def infer_unit(node: Node) -> CompoundUnit | None:
-    """Infers the physical unit of `node`, raising on incompatible dims."""
-    if isinstance(node, (Number, Symbol)):
-        return None
-    if isinstance(node, Quantity):
-        return node.unit
-    if isinstance(node, Add):
-        return _add_like_unit(node.terms)
-    if isinstance(node, Sub):
-        return _add_like_unit((node.left, node.right))
-    if isinstance(node, Mul):
-        acc: CompoundUnit | None = None
-        for f in node.factors:
-            u = infer_unit(f)
-            if u is not None:
-                acc = u if acc is None else acc * u
-        return acc
-    if isinstance(node, Div):
-        ua, ub = infer_unit(node.left), infer_unit(node.right)
-        if ua is not None and ub is not None:
-            return ua / ub
-        if ua is not None:
-            return ua
-        if ub is not None:
-            return CompoundUnit({}) / ub
-        return None
-    if isinstance(node, Pow):
-        base_unit = infer_unit(node.base)
-        if base_unit is None:
-            return None
-        if isinstance(node.exponent, Number):
-            return base_unit**node.exponent.value
-        raise ValueError(
-            "Cannot raise a dimensioned quantity to a non-constant power"
-        )
-    if isinstance(node, (Sin, Cos, Ln, Exp)):
-        arg_unit = infer_unit(node.arg)
-        if arg_unit is not None and arg_unit.exponents:
-            raise ValueError(
-                "Transcendental function argument must be dimensionless"
-            )
-        return None
-    raise TypeError(f"Unknown node type: {type(node)!r}")
-
-
 def _add_like_unit(nodes: tuple[Node, ...]) -> CompoundUnit | None:
     result: CompoundUnit | None = None
     for t in nodes:
@@ -180,6 +140,88 @@ def _add_like_unit(nodes: tuple[Node, ...]) -> CompoundUnit | None:
     return result
 
 
+def _infer_unit_none(node: Node) -> CompoundUnit | None:
+    return None
+
+
+def _infer_unit_quantity(node: Quantity) -> CompoundUnit | None:
+    return node.unit
+
+
+def _infer_unit_add(node: Add) -> CompoundUnit | None:
+    return _add_like_unit(node.terms)
+
+
+def _infer_unit_sub(node: Sub) -> CompoundUnit | None:
+    return _add_like_unit((node.left, node.right))
+
+
+def _infer_unit_mul(node: Mul) -> CompoundUnit | None:
+    acc: CompoundUnit | None = None
+    for f in node.factors:
+        u = infer_unit(f)
+        if u is not None:
+            acc = u if acc is None else acc * u
+    return acc
+
+
+def _infer_unit_div(node: Div) -> CompoundUnit | None:
+    ua, ub = infer_unit(node.left), infer_unit(node.right)
+    if ua is not None and ub is not None:
+        return ua / ub
+    if ua is not None:
+        return ua
+    if ub is not None:
+        return CompoundUnit({}) / ub
+    return None
+
+
+def _infer_unit_pow(node: Pow) -> CompoundUnit | None:
+    base_unit = infer_unit(node.base)
+    if base_unit is None:
+        return None
+    if isinstance(node.exponent, Number):
+        return base_unit**node.exponent.value
+    raise ValueError(
+        "Cannot raise a dimensioned quantity to a non-constant power"
+    )
+
+
+def _infer_unit_transcendental(
+    node: Sin | Cos | Ln | Exp,
+) -> CompoundUnit | None:
+    arg_unit = infer_unit(node.arg)
+    if arg_unit is not None and arg_unit.exponents:
+        raise ValueError(
+            "Transcendental function argument must be dimensionless"
+        )
+    return None
+
+
+_INFER_UNIT_DISPATCH: dict[type, Callable[[Any], CompoundUnit | None]] = {
+    Number: _infer_unit_none,
+    Symbol: _infer_unit_none,
+    Quantity: _infer_unit_quantity,
+    Add: _infer_unit_add,
+    Sub: _infer_unit_sub,
+    Mul: _infer_unit_mul,
+    Div: _infer_unit_div,
+    Pow: _infer_unit_pow,
+    Sin: _infer_unit_transcendental,
+    Cos: _infer_unit_transcendental,
+    Ln: _infer_unit_transcendental,
+    Exp: _infer_unit_transcendental,
+}
+
+
+def infer_unit(node: Node) -> CompoundUnit | None:
+    """Infers the physical unit of `node`, raising on incompatible dims."""
+    handler = _INFER_UNIT_DISPATCH.get(type(node))
+    if handler is None:
+        raise TypeError(f"Unknown node type: {type(node)!r}")
+    return handler(node)
+
+
 def check_add_compat(a: Node, b: Node) -> None:
     """Raises `IncompatibleUnitsError` if `a` and `b` carry different units."""
     ua, ub = infer_unit(a), infer_unit(b)
@@ -190,52 +232,91 @@ def check_add_compat(a: Node, b: Node) -> None:
 # --- differentiation (§4) ----------------------------------------------
 
 
+def _diff_number(node: Number, var: str) -> Node:
+    return Number(0.0)
+
+
+def _diff_leaf(node: Symbol | Quantity, var: str) -> Node:
+    return Number(1.0 if node.name == var else 0.0)
+
+
+def _diff_add(node: Add, var: str) -> Node:
+    return Add(tuple(diff_node(t, var) for t in node.terms))
+
+
+def _diff_sub(node: Sub, var: str) -> Node:
+    return Sub(diff_node(node.left, var), diff_node(node.right, var))
+
+
+def _diff_mul(node: Mul, var: str) -> Node:
+    factors = node.factors
+    sum_terms = []
+    for i in range(len(factors)):
+        term_factors = list(factors)
+        term_factors[i] = diff_node(factors[i], var)
+        sum_terms.append(Mul(tuple(term_factors)))
+    return Add(tuple(sum_terms))
+
+
+def _diff_div(node: Div, var: str) -> Node:
+    a, b = node.left, node.right
+    da, db = diff_node(a, var), diff_node(b, var)
+    numerator = Sub(Mul((da, b)), Mul((a, db)))
+    denom = Pow(b, Number(2.0))
+    return Div(numerator, denom)
+
+
+def _diff_pow(node: Pow, var: str) -> Node:
+    base, exponent = node.base, node.exponent
+    if isinstance(exponent, Number):
+        n = exponent.value
+        db = diff_node(base, var)
+        return Mul((Number(n), Pow(base, Number(n - 1.0)), db))
+    # ponytail: non-constant exponents (x^y) need the generalized
+    # log-derivative rule; add when needed.
+    raise NotImplementedError(
+        "Differentiation of non-constant exponents is not supported yet"
+    )
+
+
+def _diff_sin(node: Sin, var: str) -> Node:
+    return Mul((Cos(node.arg), diff_node(node.arg, var)))
+
+
+def _diff_cos(node: Cos, var: str) -> Node:
+    return Mul((Number(-1.0), Sin(node.arg), diff_node(node.arg, var)))
+
+
+def _diff_ln(node: Ln, var: str) -> Node:
+    return Div(diff_node(node.arg, var), node.arg)
+
+
+def _diff_exp(node: Exp, var: str) -> Node:
+    return Mul((Exp(node.arg), diff_node(node.arg, var)))
+
+
+_DIFF_DISPATCH: dict[type, Callable[[Any, str], Node]] = {
+    Number: _diff_number,
+    Symbol: _diff_leaf,
+    Quantity: _diff_leaf,
+    Add: _diff_add,
+    Sub: _diff_sub,
+    Mul: _diff_mul,
+    Div: _diff_div,
+    Pow: _diff_pow,
+    Sin: _diff_sin,
+    Cos: _diff_cos,
+    Ln: _diff_ln,
+    Exp: _diff_exp,
+}
+
+
 def diff_node(node: Node, var: str) -> Node:
     """Symbolic differentiation; unit propagation falls out of `infer_unit`."""
-    if isinstance(node, Number):
-        return Number(0.0)
-    if isinstance(node, Symbol):
-        return Number(1.0 if node.name == var else 0.0)
-    if isinstance(node, Quantity):
-        return Number(1.0 if node.name == var else 0.0)
-    if isinstance(node, Add):
-        return Add(tuple(diff_node(t, var) for t in node.terms))
-    if isinstance(node, Sub):
-        return Sub(diff_node(node.left, var), diff_node(node.right, var))
-    if isinstance(node, Mul):
-        factors = node.factors
-        sum_terms = []
-        for i in range(len(factors)):
-            term_factors = list(factors)
-            term_factors[i] = diff_node(factors[i], var)
-            sum_terms.append(Mul(tuple(term_factors)))
-        return Add(tuple(sum_terms))
-    if isinstance(node, Div):
-        a, b = node.left, node.right
-        da, db = diff_node(a, var), diff_node(b, var)
-        numerator = Sub(Mul((da, b)), Mul((a, db)))
-        denom = Pow(b, Number(2.0))
-        return Div(numerator, denom)
-    if isinstance(node, Pow):
-        base, exponent = node.base, node.exponent
-        if isinstance(exponent, Number):
-            n = exponent.value
-            db = diff_node(base, var)
-            return Mul((Number(n), Pow(base, Number(n - 1.0)), db))
-        # ponytail: non-constant exponents (x^y) need the generalized
-        # log-derivative rule; add when needed.
-        raise NotImplementedError(
-            "Differentiation of non-constant exponents is not supported yet"
-        )
-    if isinstance(node, Sin):
-        return Mul((Cos(node.arg), diff_node(node.arg, var)))
-    if isinstance(node, Cos):
-        return Mul((Number(-1.0), Sin(node.arg), diff_node(node.arg, var)))
-    if isinstance(node, Ln):
-        return Div(diff_node(node.arg, var), node.arg)
-    if isinstance(node, Exp):
-        return Mul((Exp(node.arg), diff_node(node.arg, var)))
-    raise TypeError(f"Unknown node type: {type(node)!r}")
+    handler = _DIFF_DISPATCH.get(type(node))
+    if handler is None:
+        raise TypeError(f"Unknown node type: {type(node)!r}")
+    return handler(node, var)
 
 
 # --- integration (§4.2, "Level 1") --------------------------------------
@@ -262,48 +343,73 @@ def depends_on(node: Node, var: str) -> bool:
     raise TypeError(f"Unknown node type: {type(node)!r}")
 
 
+def _linear_coeff_number(node: Number, var: str) -> tuple[float, float] | None:
+    return (0.0, node.value)
+
+
+def _linear_coeff_leaf(
+    node: Symbol | Quantity, var: str
+) -> tuple[float, float] | None:
+    if node.name == var:
+        return (1.0, 0.0)
+    return None
+
+
+def _linear_coeff_add(node: Add, var: str) -> tuple[float, float] | None:
+    a = b = 0.0
+    for t in node.terms:
+        coeffs = linear_coeff(t, var)
+        if coeffs is None:
+            return None
+        a += coeffs[0]
+        b += coeffs[1]
+    return (a, b)
+
+
+def _linear_coeff_sub(node: Sub, var: str) -> tuple[float, float] | None:
+    xa_xb = linear_coeff(node.left, var)
+    ya_yb = linear_coeff(node.right, var)
+    if xa_xb is None or ya_yb is None:
+        return None
+    return (xa_xb[0] - ya_yb[0], xa_xb[1] - ya_yb[1])
+
+
+def _linear_coeff_mul(node: Mul, var: str) -> tuple[float, float] | None:
+    coeff = 1.0
+    lin: tuple[float, float] | None = None
+    for f in node.factors:
+        if depends_on(f, var):
+            if lin is not None:
+                return None
+            lin = linear_coeff(f, var)
+            if lin is None:
+                return None
+        elif isinstance(f, Number):
+            coeff *= f.value
+        else:
+            return None
+    la, lb = lin if lin is not None else (0.0, 1.0)
+    return (coeff * la, coeff * lb)
+
+
+_LINEAR_COEFF_DISPATCH: dict[
+    type, Callable[[Any, str], tuple[float, float] | None]
+] = {
+    Number: _linear_coeff_number,
+    Symbol: _linear_coeff_leaf,
+    Quantity: _linear_coeff_leaf,
+    Add: _linear_coeff_add,
+    Sub: _linear_coeff_sub,
+    Mul: _linear_coeff_mul,
+}
+
+
 def linear_coeff(node: Node, var: str) -> tuple[float, float] | None:
     """Detects `a*var + b`, returning `(a, b)`; `None` if not affine in `var`."""
-    if isinstance(node, Number):
-        return (0.0, node.value)
-    if isinstance(node, Symbol) and node.name == var:
-        return (1.0, 0.0)
-    if isinstance(node, Quantity) and node.name == var:
-        return (1.0, 0.0)
-    if isinstance(node, (Symbol, Quantity)):
+    handler = _LINEAR_COEFF_DISPATCH.get(type(node))
+    if handler is None:
         return None
-    if isinstance(node, Add):
-        a = b = 0.0
-        for t in node.terms:
-            coeffs = linear_coeff(t, var)
-            if coeffs is None:
-                return None
-            a += coeffs[0]
-            b += coeffs[1]
-        return (a, b)
-    if isinstance(node, Sub):
-        xa_xb = linear_coeff(node.left, var)
-        ya_yb = linear_coeff(node.right, var)
-        if xa_xb is None or ya_yb is None:
-            return None
-        return (xa_xb[0] - ya_yb[0], xa_xb[1] - ya_yb[1])
-    if isinstance(node, Mul):
-        coeff = 1.0
-        lin: tuple[float, float] | None = None
-        for f in node.factors:
-            if depends_on(f, var):
-                if lin is not None:
-                    return None
-                lin = linear_coeff(f, var)
-                if lin is None:
-                    return None
-            elif isinstance(f, Number):
-                coeff *= f.value
-            else:
-                return None
-        la, lb = lin if lin is not None else (0.0, 1.0)
-        return (coeff * la, coeff * lb)
-    return None
+    return handler(node, var)
 
 
 def _arg_form(u: Node, var: str) -> tuple[str, float] | None:
@@ -319,7 +425,7 @@ def _arg_form(u: Node, var: str) -> tuple[str, float] | None:
     if not depends_on(u, var):
         return ("const", 0.0)
     coeffs = linear_coeff(u, var)
-    if coeffs is not None and coeffs[0] != 0.0:
+    if coeffs is not None and coeffs[0] != 0.0:  # NOSONAR
         return ("linear", coeffs[0])
     return None
 
@@ -449,43 +555,54 @@ def _try_u_substitution(
     return None
 
 
+def _const_coeff(fs: list[Node]) -> float | None:
+    c = 1.0
+    for f in fs:
+        if not isinstance(f, Number):
+            return None
+        c *= f.value
+    return c
+
+
+def _integrate_mul_single(
+    non_const: list[Node], const_factors: list[Node], var: str
+) -> Node:
+    inner = integrate_node(non_const[0], var)
+    c = _const_coeff(const_factors)
+    if c is not None:
+        return Mul((Number(c), inner))
+    return Mul((*const_factors, inner))
+
+
+def _integrate_mul_pair(
+    non_const: list[Node], const_factors: list[Node], var: str
+) -> Node:
+    c = _const_coeff(const_factors)
+    coeff = 1.0 if c is None else c
+    for p, q in (
+        (non_const[0], non_const[1]),
+        (non_const[1], non_const[0]),
+    ):
+        result = _try_u_substitution(p, q, var, coeff)
+        if result is not None:
+            antideriv, remaining = result
+            if remaining == 1.0:  # NOSONAR
+                return antideriv
+            return Mul((Number(remaining), antideriv))
+    raise NotImplementedError("No u-substitution pattern matched this product")
+
+
 def integrate_mul(factors: tuple[Node, ...], var: str) -> Node:
     """`∫(product)dx`: constant pullout, single-factor rule, u-substitution."""
     const_factors = [f for f in factors if not depends_on(f, var)]
     non_const = [f for f in factors if depends_on(f, var)]
 
-    def const_coeff(fs: list[Node]) -> float | None:
-        c = 1.0
-        for f in fs:
-            if not isinstance(f, Number):
-                return None
-            c *= f.value
-        return c
-
     if len(non_const) == 0:
         return Mul((Mul(tuple(factors)), Symbol(var)))
     if len(non_const) == 1:
-        inner = integrate_node(non_const[0], var)
-        c = const_coeff(const_factors)
-        if c is not None:
-            return Mul((Number(c), inner))
-        return Mul((*const_factors, inner))
+        return _integrate_mul_single(non_const, const_factors, var)
     if len(non_const) == 2:
-        c = const_coeff(const_factors)
-        coeff = 1.0 if c is None else c
-        for p, q in (
-            (non_const[0], non_const[1]),
-            (non_const[1], non_const[0]),
-        ):
-            result = _try_u_substitution(p, q, var, coeff)
-            if result is not None:
-                antideriv, remaining = result
-                if remaining == 1.0:
-                    return antideriv
-                return Mul((Number(remaining), antideriv))
-        raise NotImplementedError(
-            "No u-substitution pattern matched this product"
-        )
+        return _integrate_mul_pair(non_const, const_factors, var)
     raise NotImplementedError(
         "Integration of products with more than two non-constant factors is not supported yet"
     )
@@ -495,7 +612,7 @@ def integrate_div(a: Node, b: Node, var: str) -> Node:
     """`∫(a/b)dx`: constant-denominator pullout, plus `1/linear(x) → ln`."""
     if not depends_on(b, var):
         return Div(integrate_node(a, var), b)
-    if isinstance(a, Number) and a.value == 1.0:
+    if isinstance(a, Number) and a.value == 1.0:  # NOSONAR
         form = _arg_form(b, var)
         if form is not None and form[0] == "var":
             return Ln(b)
@@ -506,6 +623,68 @@ def integrate_div(a: Node, b: Node, var: str) -> Node:
     )
 
 
+def _integrate_number(node: Number, var: str) -> Node:
+    return Mul((Number(node.value), Symbol(var)))
+
+
+def _integrate_leaf(node: Symbol | Quantity, var: str) -> Node:
+    if node.name == var:
+        return Div(Pow(node, Number(2.0)), Number(2.0))
+    return Mul((node, Symbol(var)))
+
+
+def _integrate_add(node: Add, var: str) -> Node:
+    return Add(tuple(integrate_node(t, var) for t in node.terms))
+
+
+def _integrate_sub(node: Sub, var: str) -> Node:
+    return Sub(integrate_node(node.left, var), integrate_node(node.right, var))
+
+
+def _integrate_mul_node(node: Mul, var: str) -> Node:
+    return integrate_mul(node.factors, var)
+
+
+def _integrate_div_node(node: Div, var: str) -> Node:
+    return integrate_div(node.left, node.right, var)
+
+
+def _integrate_pow_node(node: Pow, var: str) -> Node:
+    return integrate_pow(node.base, node.exponent, var)
+
+
+def _integrate_sin_node(node: Sin, var: str) -> Node:
+    return integrate_sin(node.arg, var)
+
+
+def _integrate_cos_node(node: Cos, var: str) -> Node:
+    return integrate_cos(node.arg, var)
+
+
+def _integrate_ln_node(node: Ln, var: str) -> Node:
+    return integrate_ln(node.arg, var)
+
+
+def _integrate_exp_node(node: Exp, var: str) -> Node:
+    return integrate_exp(node.arg, var)
+
+
+_INTEGRATE_DISPATCH: dict[type, Callable[[Any, str], Node]] = {
+    Number: _integrate_number,
+    Symbol: _integrate_leaf,
+    Quantity: _integrate_leaf,
+    Add: _integrate_add,
+    Sub: _integrate_sub,
+    Mul: _integrate_mul_node,
+    Div: _integrate_div_node,
+    Pow: _integrate_pow_node,
+    Sin: _integrate_sin_node,
+    Cos: _integrate_cos_node,
+    Ln: _integrate_ln_node,
+    Exp: _integrate_exp_node,
+}
+
+
 def integrate_node(node: Node, var: str) -> Node:
     """Indefinite integration (§4.2, "Level 1").
 
@@ -513,37 +692,10 @@ def integrate_node(node: Node, var: str) -> Node:
     u-substitution. Raises `NotImplementedError` outside that pattern
     set — no general solver.
     """
-    if isinstance(node, Number):
-        return Mul((Number(node.value), Symbol(var)))
-    if isinstance(node, Symbol):
-        if node.name == var:
-            return Div(Pow(node, Number(2.0)), Number(2.0))
-        return Mul((node, Symbol(var)))
-    if isinstance(node, Quantity):
-        if node.name == var:
-            return Div(Pow(node, Number(2.0)), Number(2.0))
-        return Mul((node, Symbol(var)))
-    if isinstance(node, Add):
-        return Add(tuple(integrate_node(t, var) for t in node.terms))
-    if isinstance(node, Sub):
-        return Sub(
-            integrate_node(node.left, var), integrate_node(node.right, var)
-        )
-    if isinstance(node, Mul):
-        return integrate_mul(node.factors, var)
-    if isinstance(node, Div):
-        return integrate_div(node.left, node.right, var)
-    if isinstance(node, Pow):
-        return integrate_pow(node.base, node.exponent, var)
-    if isinstance(node, Sin):
-        return integrate_sin(node.arg, var)
-    if isinstance(node, Cos):
-        return integrate_cos(node.arg, var)
-    if isinstance(node, Ln):
-        return integrate_ln(node.arg, var)
-    if isinstance(node, Exp):
-        return integrate_exp(node.arg, var)
-    raise TypeError(f"Unknown node type: {type(node)!r}")
+    handler = _INTEGRATE_DISPATCH.get(type(node))
+    if handler is None:
+        raise TypeError(f"Unknown node type: {type(node)!r}")
+    return handler(node, var)
 
 
 # --- simplification (§3.1) ----------------------------------------------
@@ -579,6 +731,19 @@ def sort_key(n: Node) -> str:
     return repr(n)
 
 
+def _collect_with_multiplicity(items: list[Node]) -> list[list]:
+    """Groups structurally-equal nodes into `[[node, count], ...]` pairs."""
+    collected: list[list] = []
+    for item in items:
+        for entry in collected:
+            if entry[0] == item:
+                entry[1] += 1.0
+                break
+        else:
+            collected.append([item, 1.0])
+    return collected
+
+
 def simplify_add(terms: list[Node]) -> Node:
     """Flattens, constant-folds, and collects equal terms of a sum."""
     flat = flatten_add(terms)
@@ -589,19 +754,12 @@ def simplify_add(terms: list[Node]) -> Node:
             const_sum += t.value
         else:
             rest.append(t)
-    collected: list[list] = []
-    for t in rest:
-        for entry in collected:
-            if entry[0] == t:
-                entry[1] += 1.0
-                break
-        else:
-            collected.append([t, 1.0])
+    collected = _collect_with_multiplicity(rest)
     out_terms: list[Node] = [
-        t if count == 1.0 else Mul((Number(count), t))
+        t if count == 1.0 else Mul((Number(count), t))  # NOSONAR
         for t, count in collected
     ]
-    if const_sum != 0.0 or not out_terms:
+    if const_sum != 0.0 or not out_terms:  # NOSONAR
         out_terms.append(Number(const_sum))
     out_terms.sort(key=sort_key)
     if len(out_terms) == 1:
@@ -613,7 +771,7 @@ def simplify_sub(a: Node, b: Node) -> Node:
     """Applies the inverse (`x-x=0`) and identity (`x-0=x`) laws."""
     if a == b:
         return Number(0.0)
-    if isinstance(b, Number) and b.value == 0.0:
+    if isinstance(b, Number) and b.value == 0.0:  # NOSONAR
         return a
     if isinstance(a, Number) and isinstance(b, Number):
         return Number(a.value - b.value)
@@ -630,20 +788,14 @@ def simplify_mul(factors: list[Node]) -> Node:
             const_prod *= f.value
         else:
             rest.append(f)
-    if const_prod == 0.0:
+    if const_prod == 0.0:  # NOSONAR
         return Number(0.0)
-    collected: list[list] = []
-    for f in rest:
-        for entry in collected:
-            if entry[0] == f:
-                entry[1] += 1.0
-                break
-        else:
-            collected.append([f, 1.0])
+    collected = _collect_with_multiplicity(rest)
     out_factors: list[Node] = [
-        f if count == 1.0 else Pow(f, Number(count)) for f, count in collected
+        f if count == 1.0 else Pow(f, Number(count))  # NOSONAR
+        for f, count in collected
     ]
-    if const_prod != 1.0 or not out_factors:
+    if const_prod != 1.0 or not out_factors:  # NOSONAR
         out_factors.append(Number(const_prod))
     out_factors.sort(key=sort_key)
     if len(out_factors) == 1:
@@ -655,9 +807,13 @@ def simplify_div(a: Node, b: Node) -> Node:
     """Applies the inverse (`x/x=1`) and identity (`x/1=x`) laws."""
     if a == b:
         return Number(1.0)
-    if isinstance(b, Number) and b.value == 1.0:
+    if isinstance(b, Number) and b.value == 1.0:  # NOSONAR
         return a
-    if isinstance(a, Number) and isinstance(b, Number) and b.value != 0.0:
+    if (
+        isinstance(a, Number)
+        and isinstance(b, Number)
+        and b.value != 0.0  # NOSONAR
+    ):
         return Number(a.value / b.value)
     return Div(a, b)
 
@@ -666,11 +822,11 @@ def simplify_pow(base: Node, exponent: Node) -> Node:
     """Applies constant-folding and the `x^0=1`/`x^1=x`/`1^x=1` laws."""
     if isinstance(base, Number) and isinstance(exponent, Number):
         return Number(base.value**exponent.value)
-    if isinstance(exponent, Number) and exponent.value == 1.0:
+    if isinstance(exponent, Number) and exponent.value == 1.0:  # NOSONAR
         return base
-    if isinstance(exponent, Number) and exponent.value == 0.0:
+    if isinstance(exponent, Number) and exponent.value == 0.0:  # NOSONAR
         return Number(1.0)
-    if isinstance(base, Number) and base.value == 1.0:
+    if isinstance(base, Number) and base.value == 1.0:  # NOSONAR
         return Number(1.0)
     return Pow(base, exponent)
 
@@ -802,4 +958,6 @@ class PyExpr:
         return hash(repr(self.node))
 
 
-from physure._core import Expr
+from physure._core import (  # noqa: E402
+    Expr,  # noqa: F401 -- re-exported for symbolic/__init__.py
+)

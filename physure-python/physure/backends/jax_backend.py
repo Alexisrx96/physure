@@ -8,14 +8,21 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-try:
     import jax
     import jax.numpy as jnp
     from jax.core import Tracer
-except ImportError:
-    jax = None
-    jnp = None
-    Tracer = None
+else:
+    try:
+        import jax
+        import jax.numpy as jnp
+        from jax.core import Tracer
+    except ImportError:
+        jax = None
+        jnp = None
+        Tracer = None
+
+from physure.core.dispatcher import enforce_tensor_contract
+from physure.core.protocols import BackendOps, Boolean, Numeric
 
 try:
     from jaxtyping import Array, Float
@@ -25,9 +32,6 @@ except ImportError:
     Array = Any
     Float = Any
 
-
-from physure.core.dispatcher import enforce_tensor_contract
-from physure.core.protocols import BackendOps, Boolean, Numeric
 
 log = logging.getLogger(__name__)
 

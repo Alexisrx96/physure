@@ -129,9 +129,7 @@ class BackendManager:
     @classmethod
     def _get_python_backend(cls) -> BackendOps:
         if cls._python_backend is None:
-            module = importlib.import_module(
-                "physure.backends.python_backend"
-            )
+            module = importlib.import_module("physure.backends.python_backend")
             cls._python_backend = module.PythonBackend()
         return cls._python_backend
 

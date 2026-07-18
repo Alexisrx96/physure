@@ -22,7 +22,8 @@ There is no pure-Python fallback — install with::
 
 import contextlib
 import sys
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 # ── Version ───────────────────────────────────────────────────────────────────
 __version__ = "0.2.0"
@@ -32,19 +33,21 @@ __version__ = "0.2.0"
 # If the compiled extension is missing, we fail fast with a clear message.
 try:
     from physure._core import (  # type: ignore[import]
-        RationalUnit,
-        UnitRegistry,
-        Quantity as CoreQuantity,
-        PruningConfig,
         CovarianceStore,
         DimVector,
+        PruningConfig,
+        RationalUnit,
         UnitDefinition,
-        parse_unit_expression,
-        eval_dual_number,
-        propagate_hessian_uncertainty,
-        convert_units_inplace,
+        UnitRegistry,
         batch_to_si_inplace,
+        convert_units_inplace,
+        eval_dual_number,
+        parse_unit_expression,
+        propagate_hessian_uncertainty,
         step_euler_inplace,
+    )
+    from physure._core import (
+        Quantity as CoreQuantity,
     )
 except ImportError as _err:
     raise ImportError(
@@ -58,109 +61,245 @@ except ImportError as _err:
         "  See: https://github.com/Alexisrx96/physure#installation\n"
     ) from _err
 
+if TYPE_CHECKING:
+    from physure._jit import jit
+    from physure.application.context import (
+        get_current_system,
+        get_propagation_mode,
+        propagation_mode,
+        uncertainty_mode,
+    )
+    from physure.application.context import (
+        get_current_system as get_active_system,
+    )
+    from physure.application.context import (
+        use_system as system_context,
+    )
+    from physure.application.factories import QuantityFactory
+    from physure.application.io import load_state, save_state
+    from physure.application.startup import (
+        create_default_system,
+        create_system,
+    )
+    from physure.domain.exceptions import (
+        ConversionError,
+        PhysureError,
+        UnitNotFoundError,
+        UnknownUnitError,
+    )
+    from physure.domain.measurement.equivalencies import (
+        equivalencies,
+        spectral,
+        thermodynamic,
+    )
+    from physure.domain.measurement.quantity import Quantity
+    from physure.domain.measurement.system import UnitSystem
+    from physure.domain.measurement.uncertainty import Uncertainty
+    from physure.domain.measurement.units import CompoundUnit, units
+    from physure.domain.measurement.vectorized_uncertainty import (
+        PhysureContext,
+    )
+    from physure.plotting import (
+        plot,
+        plot_covariance,
+        plot_interactive,
+        plot_pairplot,
+        plot_parallel_coordinates,
+        plot_slices,
+    )
+
+    default_system: UnitSystem
+    Q_: QuantityFactory
+    get_unit: Callable[[str], CompoundUnit]
+
 
 # ── Lazy-loaded public API ────────────────────────────────────────────────────
 # These attributes are deferred to keep the import-time budget low.
 # Only the Rust core and its Python shim load eagerly.
 
-_IO_ATTRS      = {"save_state", "load_state"}
-_UNITS_ATTRS   = {"units", "CompoundUnit"}
+_IO_ATTRS = {"save_state", "load_state"}
+_UNITS_ATTRS = {"units", "CompoundUnit"}
 _STARTUP_ATTRS = {"create_system", "create_default_system"}
 _CONTEXT_ATTRS = {
-    "get_current_system", "get_active_system", "get_propagation_mode",
-    "propagation_mode", "uncertainty_mode", "system_context",
+    "get_current_system",
+    "get_active_system",
+    "get_propagation_mode",
+    "propagation_mode",
+    "uncertainty_mode",
+    "system_context",
 }
 _EXCEPTION_ATTRS = {
-    "ConversionError", "PhysureError", "UnitNotFoundError", "UnknownUnitError",
+    "ConversionError",
+    "PhysureError",
+    "UnitNotFoundError",
+    "UnknownUnitError",
 }
 _VECTORIZED_ATTRS = {"PhysureContext"}
 _PLOT_ATTRS = {
-    "plot", "plot_slices", "plot_interactive",
-    "plot_parallel_coordinates", "plot_pairplot", "plot_covariance",
+    "plot",
+    "plot_slices",
+    "plot_interactive",
+    "plot_parallel_coordinates",
+    "plot_pairplot",
+    "plot_covariance",
 }
+
+
+def _load_io(name: str) -> Any:
+    from physure.application.io import load_state, save_state
+
+    return save_state if name == "save_state" else load_state
+
+
+def _load_q(name: str) -> Any:
+    from physure.application.factories import QuantityFactory
+
+    return QuantityFactory()
+
+
+def _load_quantity(name: str) -> Any:
+    from physure.domain.measurement.quantity import Quantity
+
+    return Quantity
+
+
+def _load_units(name: str) -> Any:
+    from physure.domain.measurement.units import CompoundUnit, units
+
+    return units if name == "units" else CompoundUnit
+
+
+def _load_uncertainty(name: str) -> Any:
+    from physure.domain.measurement.uncertainty import Uncertainty
+
+    return Uncertainty
+
+
+def _load_startup(name: str) -> Any:
+    from physure.application.startup import (
+        create_default_system,
+        create_system,
+    )
+
+    return create_system if name == "create_system" else create_default_system
+
+
+def _load_default_system(name: str) -> Any:
+    from physure.domain.measurement.units import get_default_system
+
+    return get_default_system()
+
+
+def _load_jit(name: str) -> Any:
+    from physure._jit import jit
+
+    return jit
+
+
+def _load_context(name: str) -> Any:
+    from physure.application.context import (
+        get_current_system,
+        get_propagation_mode,
+        propagation_mode,
+        uncertainty_mode,
+        use_system,
+    )
+
+    _map = {
+        "get_current_system": get_current_system,
+        "get_active_system": get_current_system,
+        "get_propagation_mode": get_propagation_mode,
+        "propagation_mode": propagation_mode,
+        "uncertainty_mode": uncertainty_mode,
+        "system_context": use_system,
+    }
+    return _map[name]
+
+
+def _load_get_unit(name: str) -> Any:
+    def get_unit(unit_expression: str) -> RationalUnit:
+        from physure.application.context import get_current_system
+
+        return get_current_system().get_unit(unit_expression)
+
+    return get_unit
+
+
+def _load_exceptions(name: str) -> Any:
+    import physure.domain.exceptions as exc
+
+    return getattr(exc, name)
+
+
+def _load_vectorized(name: str) -> Any:
+    from physure.domain.measurement.vectorized_uncertainty import (
+        PhysureContext,
+    )
+
+    return PhysureContext
+
+
+def _load_equivalencies(name: str) -> Any:
+    from physure.domain.measurement.equivalencies import (
+        equivalencies,
+        spectral,
+        thermodynamic,
+    )
+
+    _eq = {
+        "equivalencies": equivalencies,
+        "spectral": spectral,
+        "thermodynamic": thermodynamic,
+    }
+    return _eq[name]
+
+
+def _load_plotting(name: str) -> Any:
+    import physure.plotting as plotting
+
+    return getattr(plotting, name)
+
+
+_ATTR_LOADERS: dict[str, Callable[[str], Any]] = {}
+for _attr in _IO_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_io
+_ATTR_LOADERS["Q_"] = _load_q
+_ATTR_LOADERS["Quantity"] = _load_quantity
+for _attr in _UNITS_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_units
+_ATTR_LOADERS["Uncertainty"] = _load_uncertainty
+for _attr in _STARTUP_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_startup
+_ATTR_LOADERS["default_system"] = _load_default_system
+_ATTR_LOADERS["jit"] = _load_jit
+for _attr in _CONTEXT_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_context
+_ATTR_LOADERS["get_unit"] = _load_get_unit
+for _attr in _EXCEPTION_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_exceptions
+for _attr in _VECTORIZED_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_vectorized
+for _attr in ("equivalencies", "spectral", "thermodynamic"):
+    _ATTR_LOADERS[_attr] = _load_equivalencies
+for _attr in _PLOT_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_plotting
+del _attr
 
 
 def __getattr__(name: str) -> Any:
     """Lazy-load public API members on first access."""
-    if name in _IO_ATTRS:
-        from physure.application.io import load_state, save_state
-        return save_state if name == "save_state" else load_state
-
-    if name == "Q_":
-        from physure.application.factories import QuantityFactory
-        return QuantityFactory()
-
-    if name == "Quantity":
-        from physure.domain.measurement.quantity import Quantity
-        return Quantity
-
-    if name in _UNITS_ATTRS:
-        from physure.domain.measurement.units import CompoundUnit, units
-        return units if name == "units" else CompoundUnit
-
-    if name == "Uncertainty":
-        from physure.domain.measurement.uncertainty import Uncertainty
-        return Uncertainty
-
-    if name in _STARTUP_ATTRS:
-        from physure.application.startup import create_default_system, create_system
-        return create_system if name == "create_system" else create_default_system
-
-    if name == "default_system":
-        from physure.domain.measurement.units import get_default_system
-        return get_default_system()
-
-    if name == "jit":
-        from physure._jit import jit
-        return jit
-
-    if name in _CONTEXT_ATTRS:
-        from physure.application.context import (
-            get_current_system, get_propagation_mode,
-            propagation_mode, uncertainty_mode, use_system,
-        )
-        _map = {
-            "get_current_system": get_current_system,
-            "get_active_system":  get_current_system,
-            "get_propagation_mode": get_propagation_mode,
-            "propagation_mode":   propagation_mode,
-            "uncertainty_mode":   uncertainty_mode,
-            "system_context":     use_system,
-        }
-        return _map[name]
-
-    if name == "get_unit":
-        def get_unit(unit_expression: str) -> RationalUnit:
-            from physure.application.context import get_current_system
-            return get_current_system().get_unit(unit_expression)
-        return get_unit
-
-    if name in _EXCEPTION_ATTRS:
-        import physure.domain.exceptions as exc
-        return getattr(exc, name)
-
-    if name in _VECTORIZED_ATTRS:
-        from physure.domain.measurement.vectorized_uncertainty import PhysureContext
-        return PhysureContext
-
-    if name in {"equivalencies", "spectral", "thermodynamic"}:
-        from physure.domain.measurement.equivalencies import (
-            equivalencies, spectral, thermodynamic,
-        )
-        _eq = {"equivalencies": equivalencies, "spectral": spectral, "thermodynamic": thermodynamic}
-        return _eq[name]
-
-    if name in _PLOT_ATTRS:
-        import physure.plotting as plotting
-        return getattr(plotting, name)
-
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    loader = _ATTR_LOADERS.get(name)
+    if loader is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return loader(name)
 
 
 # ── Extension auto-registration ───────────────────────────────────────────────
 if "pandas" in sys.modules:
     with contextlib.suppress(ImportError, AttributeError):
-        from physure.ext import pandas_support  # pyright: ignore[reportUnusedImport]
+        from physure.ext import (
+            pandas_support,  # pyright: ignore[reportUnusedImport]
+        )
 
 if "numba" in sys.modules:
     with contextlib.suppress(ImportError, AttributeError):
@@ -170,27 +309,26 @@ if "numba" in sys.modules:
 # ── Public API ────────────────────────────────────────────────────────────────
 __all__ = [
     # Core Rust types (eagerly loaded)
-    "RationalUnit",
-    "UnitRegistry",
-    "Quantity",
-    "PruningConfig",
     "CovarianceStore",
     "DimVector",
+    "PruningConfig",
+    "Quantity",
+    "RationalUnit",
     "UnitDefinition",
-    "parse_unit_expression",
-    "eval_dual_number",
-    "propagate_hessian_uncertainty",
+    "UnitRegistry",
     "convert_units_inplace",
+    "eval_dual_number",
+    "parse_unit_expression",
+    "propagate_hessian_uncertainty",
     # Zero-copy buffer helpers
     "batch_to_si_inplace",
     "step_euler_inplace",
     # Lazy-loaded API
-    "Q_",
     "CompoundUnit",
     "ConversionError",
     "PhysureContext",
     "PhysureError",
-    "PruningConfig",
+    "Q_",
     "Uncertainty",
     "UnitNotFoundError",
     "UnknownUnitError",

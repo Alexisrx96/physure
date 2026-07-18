@@ -7,6 +7,7 @@ import functools
 import re
 from typing import TypeVar
 
+from physure._core import parse_unit_expression as _rust_parse_unit_expr
 from physure.domain.measurement.base_entity import ExponentEntityProtocol
 
 T = TypeVar("T", bound=ExponentEntityProtocol)
@@ -35,9 +36,6 @@ def _get_sympy_parser():
                 "Install it with: pip install physure[symbolic]"
             ) from e
     return _SYMPY_PARSER
-
-
-from physure._core import parse_unit_expression as _rust_parse_unit_expr
 
 
 def _native_parse(expression: str, entity_cls: type[T]) -> T:

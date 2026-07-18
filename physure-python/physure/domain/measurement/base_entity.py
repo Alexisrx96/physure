@@ -1,4 +1,4 @@
-"""Provides protocols, type aliases, and a base class for exponent entities in the measurement domain."""
+"""Protocols, type aliases, and a base class for exponent entities."""
 
 from __future__ import annotations
 
@@ -17,22 +17,22 @@ class ExponentEntityProtocol(Protocol):
 
     @property
     def exponents(self) -> ExponentsDict:
+        """Mapping of base symbol to exponent."""
         ...
 
-    def __init__(self, exponents: ExponentsDict) -> None:
-        ...
+    def __init__(self, exponents: ExponentsDict) -> None: ...
 
-    def __mul__(self, other: ExponentEntityProtocol) -> ExponentEntityProtocol:
-        ...
+    def __mul__(
+        self, other: ExponentEntityProtocol
+    ) -> ExponentEntityProtocol: ...
 
-    def __truediv__(self, other: ExponentEntityProtocol) -> ExponentEntityProtocol:
-        ...
+    def __truediv__(
+        self, other: ExponentEntityProtocol
+    ) -> ExponentEntityProtocol: ...
 
-    def __pow__(self, power: float) -> ExponentEntityProtocol:
-        ...
+    def __pow__(self, power: float) -> ExponentEntityProtocol: ...
 
-    def __eq__(self, other: object) -> bool:
-        ...
+    def __eq__(self, other: object) -> bool: ...
 
     def __hash__(self) -> int:
         raise TypeError
@@ -45,12 +45,15 @@ class BaseExponentEntity:
     exponents: ExponentsDict
 
     def __new__(cls, exponents: ExponentsDict) -> Any:
+        """Create the instance, dropping zero exponents."""
         normalized = {k: v for k, v in exponents.items() if v}
         instance = super().__new__(cls)
         object.__setattr__(instance, "exponents", normalized)
         return instance
 
     def __init__(self, exponents: ExponentsDict) -> None:
+        # No-op: __new__ already builds the frozen instance above; a dataclass
+        # would otherwise generate an __init__ that clobbers it.
         pass
 
     def __mul__(self, other: Any) -> Any:
@@ -92,7 +95,9 @@ class BaseExponentEntity:
     def __str__(self) -> str:
         numerator, denominator = [], []
         for unit, exp in sorted(self.exponents.items()):
-            formatted = f"{unit}{to_superscript(abs(exp)) if abs(exp) != 1 else ''}"
+            formatted = (
+                f"{unit}{to_superscript(abs(exp)) if abs(exp) != 1 else ''}"
+            )
             (numerator if exp > 0 else denominator).append(formatted)
         n = "·".join(numerator)
         d = "·".join(denominator)

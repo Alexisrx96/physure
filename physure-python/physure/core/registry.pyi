@@ -2,6 +2,7 @@
 # Run 'physure sync-types' to update.
 
 from typing import Any
+
 from physure.domain.measurement.units import Unit
 
 class UnitRegistry:

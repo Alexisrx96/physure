@@ -1,15 +1,21 @@
-try:
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     import numpy as np
-except ImportError:
-    np = None
+
+    from physure.backends.numpy_backend import NumpyBackend
+else:
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+
+    try:
+        from physure.backends.numpy_backend import NumpyBackend
+    except (ImportError, AttributeError):
+        NumpyBackend = None
 
 import pytest
-
-try:
-    from physure.backends.numpy_backend import NumpyBackend
-except (ImportError, AttributeError):
-    NumpyBackend = None
-
 
 from physure.backends.python_backend import PythonBackend
 from physure.core.dispatcher import BackendManager, get_backend

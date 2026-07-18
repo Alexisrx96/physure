@@ -82,7 +82,7 @@ def equivalencies(
     """Context manager activating equivalencies for Quantity.to() calls."""
     flat_eqs: EquivalencyList = []
     for eq_list in eq_lists:
-        resolved = eq_list() if callable(eq_list) else eq_list
+        resolved = eq_list if isinstance(eq_list, list) else eq_list()
         flat_eqs.extend(resolved)
 
     current = _ACTIVE_EQUIVALENCIES.get()
