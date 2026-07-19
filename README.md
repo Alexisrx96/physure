@@ -8,10 +8,11 @@
 <h3><b>Unit-aware, dimension-correct computing for Python — powered by a Rust core</b></h3>
 <p><i>Units, dimensions, and correlated uncertainty tracked through every calculation, with zero overhead under <code>torch.compile</code> / <code>jax.jit</code>.</i></p>
 
-[![PyPI](https://img.shields.io/pypi/v/physure)](https://pypi.org/project/physure/)
-[![Python 3.11–3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://pypi.org/project/physure/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust core](https://img.shields.io/badge/core-Rust%20%F0%9F%A6%80-orange)](physure-core/)
+[![PyPI](https://img.shields.io/pypi/v/physure?color=F59E0B&labelColor=18181A)](https://pypi.org/project/physure/)
+[![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
+[![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
+[![Python 3.11–3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-F59E0B?labelColor=18181A)](https://pypi.org/project/physure/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](LICENSE)
 
 </div>
 

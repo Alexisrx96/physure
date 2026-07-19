@@ -5,8 +5,10 @@
 
 # physure 🦀
 
-[![crates.io](https://img.shields.io/crates/v/physure)](https://crates.io/crates/physure)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/Alexisrx96/physure/blob/main/LICENSE)
+[![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
+[![docs.rs](https://img.shields.io/docsrs/physure?labelColor=18181A)](https://docs.rs/physure)
+[![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](https://github.com/Alexisrx96/physure/blob/main/LICENSE)
 
 **Pure Rust physics engine: dimensional analysis with rational exponents, physical quantities, and uncertainty propagation.**
 
