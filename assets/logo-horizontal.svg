@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 320" width="1100" height="320">
+  <defs>
+    <style>
+      .amber { fill: #F59E0B; }
+      .white { fill: #FFFFFF; }
+      .text-phy { fill: #F59E0B; font-family: system-ui, -apple-system, sans-serif; font-weight: 800; font-size: 96px; letter-spacing: 2px; }
+      .text-sure { fill: #FFFFFF; font-family: system-ui, -apple-system, sans-serif; font-weight: 800; font-size: 96px; letter-spacing: 2px; }
+    </style>
+
+    <clipPath id="clip-amber-h">
+      <polygon points="-100,-100 612,-100 612,75.76 427.76,75.76 75.76,427.76 -100,427.76" />
+    </clipPath>
+
+    <clipPath id="clip-white-h">
+      <polygon points="612,612 -100,612 -100,436.24 84.24,436.24 436.24,84.24 612,84.24" />
+    </clipPath>
+  </defs>
+
+  <rect width="1100" height="320" rx="40" fill="#18181A"/>
+
+  <g transform="translate(70, 60) scale(0.390625)">
+    <g clip-path="url(#clip-amber-h)">
+      <rect x="234" y="60" width="44" height="392" class="amber"/>
+      <path d="M 256 86 A 170 170 0 1 0 256 426 A 170 170 0 1 0 256 86 Z M 256 146 A 110 110 0 1 1 256 366 A 110 110 0 1 1 256 146 Z" class="amber" fill-rule="evenodd"/>
+    </g>
+
+    <g clip-path="url(#clip-white-h)">
+      <rect x="234" y="60" width="44" height="392" class="white"/>
+      <path d="M 256 86 A 170 170 0 1 0 256 426 A 170 170 0 1 0 256 86 Z M 256 146 A 110 110 0 1 1 256 366 A 110 110 0 1 1 256 146 Z" class="white" fill-rule="evenodd"/>
+    </g>
+  </g>
+
+  <text x="310" y="194">
+    <tspan class="text-phy">PHY</tspan><tspan class="text-sure">SURE</tspan>
+  </text>
+</svg>

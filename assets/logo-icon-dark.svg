@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <style>
+      .amber { fill: #F59E0B; }
+      .white { fill: #FFFFFF; }
+    </style>
+
+    <clipPath id="clip-amber">
+      <polygon points="-100,-100 612,-100 612,75.76 427.76,75.76 75.76,427.76 -100,427.76" />
+    </clipPath>
+
+    <clipPath id="clip-white">
+      <polygon points="612,612 -100,612 -100,436.24 84.24,436.24 436.24,84.24 612,84.24" />
+    </clipPath>
+  </defs>
+
+  <g transform="translate(0, 0)">
+    <g clip-path="url(#clip-amber)">
+      <rect x="234" y="60" width="44" height="392" class="amber"/>
+      <path d="M 256 86 A 170 170 0 1 0 256 426 A 170 170 0 1 0 256 86 Z M 256 146 A 110 110 0 1 1 256 366 A 110 110 0 1 1 256 146 Z" class="amber" fill-rule="evenodd"/>
+    </g>
+
+    <g clip-path="url(#clip-white)">
+      <rect x="234" y="60" width="44" height="392" class="white"/>
+      <path d="M 256 86 A 170 170 0 1 0 256 426 A 170 170 0 1 0 256 86 Z M 256 146 A 110 110 0 1 1 256 366 A 110 110 0 1 1 256 146 Z" class="white" fill-rule="evenodd"/>
+    </g>
+  </g>
+</svg>

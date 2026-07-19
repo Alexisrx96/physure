@@ -1,6 +1,9 @@
-# physure 🔬
-
 <div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Alexisrx96/physure/main/assets/logo-horizontal-dark.svg">
+  <img src="https://raw.githubusercontent.com/Alexisrx96/physure/main/assets/logo-horizontal-light.svg" alt="physure" width="440">
+</picture>
 
 <h3><b>Unit-aware, dimension-correct computing for Python — powered by a Rust core</b></h3>
 <p><i>Units, dimensions, and correlated uncertainty tracked through every calculation, with zero overhead under <code>torch.compile</code> / <code>jax.jit</code>.</i></p>
