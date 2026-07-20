@@ -11,7 +11,7 @@ name: Core Release
 
 on:
   push:
-    tags: ["core-v*"]
+    tags: ["core-v*", "py-core-v*"]
 
 permissions:
   contents: read
@@ -23,10 +23,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Tag must match workspace.package.version
         run: |
-          tag="${GITHUB_REF_NAME#core-v}"
+          tag="${GITHUB_REF_NAME#py-core-v}"
+          tag="${tag#core-v}"
           version="$(grep -Po '(?<=^version     = ")[^"]*' Cargo.toml)"
           if [ "$tag" != "$version" ]; then
-            echo "Tag core-v$tag does not match workspace version $version" >&2
+            echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match workspace version $version" >&2
             exit 1
           fi
 

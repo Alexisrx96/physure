@@ -13,7 +13,7 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "py-v*", "py-core-v*"]
 
 permissions:
   contents: read
@@ -25,10 +25,12 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Tag must match physure.__version__
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          tag="${GITHUB_REF_NAME#py-core-v}"
+          tag="${tag#py-v}"
+          tag="${tag#v}"
           version="$(grep -Po '(?<=__version__ = ")[^"]*' physure-python/physure/__init__.py)"
           if [ "$tag" != "$version" ]; then
-            echo "Tag v$tag does not match __version__ $version" >&2
+            echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match __version__ $version" >&2
             exit 1
           fi
 
