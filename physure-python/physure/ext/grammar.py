@@ -158,7 +158,9 @@ def _top_level_index(tokens: list[Token], op: str) -> int:
     return -1
 
 
-def _approx_eq(a: Any, b: Any, rel_tol: float = 0.1, abs_tol: float = 1e-5) -> bool:
+def _approx_eq(
+    a: Any, b: Any, rel_tol: float = 0.1, abs_tol: float = 1e-5
+) -> bool:
     a_mag = getattr(a, "magnitude", a)
     b_mag = getattr(b, "magnitude", b)
     if hasattr(a, "to") and hasattr(b, "unit"):
@@ -168,7 +170,9 @@ def _approx_eq(a: Any, b: Any, rel_tol: float = 0.1, abs_tol: float = 1e-5) -> b
         except Exception:
             return False
     try:
-        return math.isclose(float(a_mag), float(b_mag), rel_tol=rel_tol, abs_tol=abs_tol)
+        return math.isclose(
+            float(a_mag), float(b_mag), rel_tol=rel_tol, abs_tol=abs_tol
+        )
     except Exception:
         return False
 
@@ -532,8 +536,11 @@ _FUNCTIONS: dict[str, tuple[int, float, Callable[..., GrammarValue]]] = {
 }
 
 
-def _linspace_fn(start: GrammarValue, stop: GrammarValue, num: GrammarValue = 50) -> Any:
+def _linspace_fn(
+    start: GrammarValue, stop: GrammarValue, num: GrammarValue = 50
+) -> Any:
     import numpy as np
+
     from physure.domain.measurement.quantity import Quantity
 
     start_mag = getattr(start, "magnitude", start)
@@ -560,7 +567,9 @@ def _format_unit_str(unit_raw: str) -> str:
     return aliases.get(u, u)
 
 
-def _draw_ascii_plot(x: Any, y: Any, title: str = "Plot", x_unit: str = "", y_unit: str = "") -> str:
+def _draw_ascii_plot(
+    x: Any, y: Any, title: str = "Plot", x_unit: str = "", y_unit: str = ""
+) -> str:
     import numpy as np
 
     x_arr = np.asarray(x, dtype=float)
@@ -598,19 +607,27 @@ def _draw_ascii_plot(x: Any, y: Any, title: str = "Plot", x_unit: str = "", y_un
                 row_chars.append(" ")
         lines.append("                   │ " + "".join(row_chars))
 
-    lines.append(f"  {y_min:.3e} {fmt_y}".strip().rjust(18) + " └" + "─" * width)
+    lines.append(
+        f"  {y_min:.3e} {fmt_y}".strip().rjust(18) + " └" + "─" * width
+    )
     x_min_str = f"{x_arr.min():.3e} {fmt_x}".strip()
     x_max_str = f"{x_arr.max():.3e} {fmt_x}".strip()
-    lines.append("                     " + x_min_str + " " * max(1, width - len(x_min_str) - len(x_max_str) + 12) + x_max_str)
+    pad_len = max(1, width - len(x_min_str) - len(x_max_str) + 12)
+    lines.append(
+        "                     " + x_min_str + " " * pad_len + x_max_str
+    )
 
     return "\n".join(lines)
 
 
 def _plot_fn(*args: Any, **kwargs: Any) -> Any:
+    import base64
+    import io
+
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import io, base64
     import numpy as np
 
     x_val = args[0] if len(args) >= 2 else None
@@ -629,7 +646,9 @@ def _plot_fn(*args: Any, **kwargs: Any) -> Any:
         x_unit = ""
 
     title = str(kwargs.get("title", "Physure Live Plot"))
-    ascii_plot = _draw_ascii_plot(x_arr, y_arr, title=title, x_unit=x_unit, y_unit=y_unit)
+    ascii_plot = _draw_ascii_plot(
+        x_arr, y_arr, title=title, x_unit=x_unit, y_unit=y_unit
+    )
 
     fig, ax = plt.subplots(figsize=(6.5, 3.8))
     ax.plot(x_arr, y_arr, color="#4ec9b0", linewidth=2.5)
@@ -641,7 +660,9 @@ def _plot_fn(*args: Any, **kwargs: Any) -> Any:
     ax.set_xlabel(x_label_str, color="#cccccc", fontsize=9.5)
     ax.set_ylabel(y_label_str, color="#cccccc", fontsize=9.5)
 
-    ax.set_title(title, color="#569cd6", fontsize=11, fontweight="bold", pad=12)
+    ax.set_title(
+        title, color="#569cd6", fontsize=11, fontweight="bold", pad=12
+    )
     ax.grid(True, linestyle=":", alpha=0.35, color="#666666")
     ax.tick_params(colors="#cccccc", labelsize=8.5)
 

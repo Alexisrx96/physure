@@ -24,14 +24,14 @@ def benchmark_propagation(size, mode):
 
     mem_start = get_memory_usage()
 
-    with mk.propagation_mode(mode):
+    with ps.propagation_mode(mode):
         # Create quantities
         rng = np.random.default_rng(42)  # Fixed seed for reproducibility
         m1 = rng.random(size)
         u1 = np.ones(size) * 0.01
 
-        q1 = mk.Q_(m1, "m", uncertainty=u1)
-        q2 = mk.Q_(m1, "m", uncertainty=u1)
+        q1 = ps.Q_(m1, "m", uncertainty=u1)
+        q2 = ps.Q_(m1, "m", uncertainty=u1)
 
         start_time = time.time()
 

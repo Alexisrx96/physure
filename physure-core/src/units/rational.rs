@@ -63,6 +63,10 @@ impl RationalUnit {
         }
     }
 
+    pub fn base(name: &str) -> Self {
+        Self::new_from_dimensions([(name.to_string(), (1, 1))])
+    }
+
     pub fn get_exponent(&self, base: &str) -> Option<(i64, i64)> {
         self.dimensions
             .binary_search_by(|(k, _)| k.as_str().cmp(base))

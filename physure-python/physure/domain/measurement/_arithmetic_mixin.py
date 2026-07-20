@@ -1144,12 +1144,12 @@ class ArithmeticMixin:
         self._record_op(op, other, res)
         return res
 
-    def _reject_bare_number_add_sub(
-        self, other: Quantity | Numeric
-    ) -> None:
-        """A bare number carries no unit: '5 m + 2' must raise, never
+    def _reject_bare_number_add_sub(self, other: Quantity | Numeric) -> None:
+        """A bare number carries no unit: '5 m + 2' must raise, never.
+
         silently assume the 2 is metres. Only a dimensionless quantity
-        may absorb bare numbers additively."""
+        may absorb bare numbers additively.
+        """
         if isinstance(other, _q()) or self.dimension.is_dimensionless:
             return
         if isinstance(other, (int, float, complex)) or self._backend.is_array(
