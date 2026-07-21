@@ -34,7 +34,6 @@ jobs:
   publish:
     needs: check-version
     runs-on: ubuntu-latest
-    environment: crates-io
     permissions:
       id-token: write
     steps:
