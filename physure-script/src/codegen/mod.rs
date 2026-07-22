@@ -21,15 +21,7 @@ pub trait CodeGenerator {
 
 pub mod python;
 pub mod rust;
-pub mod java {
-    use super::*;
-    pub struct JavaTranspiler;
-    impl CodeGenerator for JavaTranspiler {
-        fn generate_program(&self, _program: &Program) -> Result<String, CodegenError> {
-            Ok(String::new())
-        }
-    }
-}
+pub mod java;
 
 pub enum Target {
     Python,
