@@ -44,5 +44,5 @@ assignment   = { identifier ~ "=" ~ expr }
 function_def = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ "=" ~ expr }
 string_lit   = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
-stmt    = _{ import_stmt | export_stmt | function_def | assignment | expr }
+stmt    = { import_stmt | export_stmt | function_def | assignment | expr }
 program = _{ SOI ~ stmt* ~ EOI }

@@ -1,579 +1,423 @@
+use pest::Parser;
+use pest_derive::Parser;
 use physure_core::error::{PhysureError, PhysureResult};
-use super::ast::{BinaryOp, Expr, ParamDef, Statement, UnaryOp};
-use super::lexer::{PhsToken, TokenKind};
+use crate::ast::*;
 
-pub fn parse_phs(input: &str) -> PhysureResult<Vec<Statement>> {
-    let lexer = super::lexer::PhsLexer::new(input);
-    let tokens = lexer.tokenize()?;
-    let mut parser = PhsParser::new(&tokens);
-    parser.parse_statements()
+#[derive(Parser)]
+#[grammar = "phs.pest"]
+pub struct PhsParser;
+
+pub fn parse_phs(code: &str) -> PhysureResult<Program> {
+    let pairs = PhsParser::parse(Rule::program, code)
+        .map_err(|e| PhysureError::Generic(format!("Parse error: {}", e)))?;
+    
+    let mut statements = Vec::new();
+    for pair in pairs {
+        if pair.as_rule() == Rule::stmt {
+            let inner = pair.into_inner().next().unwrap();
+            statements.push(parse_statement(inner)?);
+        }
+    }
+    
+    Ok(Program { statements })
 }
 
-pub struct PhsParser<'a> {
-    tokens: &'a [PhsToken],
-    pos: usize,
+fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    match pair.as_rule() {
+        Rule::import_stmt => parse_import(pair),
+        Rule::export_stmt => parse_export(pair),
+        Rule::function_def => parse_function_def(pair),
+        Rule::assignment => parse_assignment(pair),
+        Rule::expr => Ok(Statement::Expr(parse_expr(pair)?)),
+        _ => Err(PhysureError::Generic(format!("Unexpected statement rule: {:?}", pair.as_rule()))),
+    }
 }
 
-impl<'a> PhsParser<'a> {
-    pub fn new(tokens: &'a [PhsToken]) -> Self {
-        Self { tokens, pos: 0 }
-    }
-
-    pub fn parse_statements(&mut self) -> PhysureResult<Vec<Statement>> {
-        let mut stmts = Vec::new();
-        while !self.is_at_end() {
-            let stmt = self.parse_statement()?;
-            stmts.push(stmt);
-        }
-        Ok(stmts)
-    }
-
-    pub fn parse_statement(&mut self) -> PhysureResult<Statement> {
-        if let Some(TokenKind::StringLiteral(text)) = self.peek_kind().cloned() {
-            if self.peek_offset_kind(1) == Some(&TokenKind::Op("```".to_string())) {
-                self.pos += 2;
-                return Ok(Statement::DisplayText(text));
-            }
-        }
-
-        // Check if function definition: ident "(" params ")" "=" expr
-        if let Some(stmt) = self.try_parse_fn_def()? {
-            return Ok(stmt);
-        }
-
-        let expr = self.parse_expr_with_modifiers()?;
-
-        if self.match_op("=") || self.match_op("->") {
-            if let Expr::Ident(name) = expr {
-                let is_query = self.match_op("?");
-                let right_expr = self.parse_expr_with_modifiers()?;
-                let is_query_after = self.match_op("?");
-                if is_query || is_query_after {
-                    return Ok(Statement::AssignAndQuery {
-                        name,
-                        expr: right_expr,
-                    });
-                }
-                return Ok(Statement::Assign {
-                    name,
-                    expr: right_expr,
-                });
-            }
-        }
-
-        if self.match_op("?") {
-            return Ok(Statement::Query { expr });
-        }
-
-        Ok(Statement::ExprStmt(expr))
-    }
-
-    /// Parses an expression, folding any trailing `=> unit` / `: spec` modifiers
-    /// into `Expr::Convert`/`Expr::FormatSig` nodes so they can chain (e.g. `500 N => kN : 2`).
-    fn parse_expr_with_modifiers(&mut self) -> PhysureResult<Expr> {
-        let mut expr = self.parse_expr()?;
-        loop {
-            if self.match_op("=>") {
-                let target_unit = self.parse_unit_string()?;
-                expr = Expr::Convert { expr: Box::new(expr), target_unit };
-            } else if self.match_op(":") {
-                if let Some(TokenKind::Number(_)) = self.peek_kind() {
-                    let spec_ident = self.peek_offset_kind(1);
-                    if let Some(TokenKind::Ident(id)) = spec_ident {
-                        if !matches!(id.as_str(), "e" | "f" | "g" | "E" | "F" | "G") {
-                            self.pos -= 1;
-                            break;
-                        }
-                    } else {
-                        self.pos -= 1;
-                        break;
-                    }
-                }
-                let spec = self.parse_unit_string()?;
-                expr = Expr::FormatSig { expr: Box::new(expr), spec };
-            } else {
-                break;
-            }
-        }
-        Ok(expr)
-    }
-
-    fn try_parse_fn_def(&mut self) -> PhysureResult<Option<Statement>> {
-        let saved = self.pos;
-        let fn_name = match self.peek_kind() {
-            Some(TokenKind::Ident(name)) => name.clone(),
-            _ => return Ok(None),
-        };
-        if self.peek_offset_kind(1) == Some(&TokenKind::Op("(".to_string())) {
-            self.pos += 2; // consume name and '('
-            let mut params = Vec::new();
-            while !self.is_at_end() && self.peek_kind() != Some(&TokenKind::Op(")".to_string())) {
-                if let Some(TokenKind::Ident(param_name)) = self.peek_kind().cloned() {
-                    self.pos += 1;
-                    let mut unit = None;
-                    if self.match_op(":") {
-                        let u = self.parse_unit_string()?;
-                        unit = Some(u);
-                    }
-                    params.push(ParamDef { name: param_name, unit });
-                    if !self.match_op(",") {
-                        break;
-                    }
+fn parse_import(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut path = String::new();
+    let mut specifier = ImportSpecifier::Wildcard;
+    let mut is_use = false;
+    let mut alias = None;
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::import_symbols => {
+                is_use = true;
+                let symbols_str = inner.as_str().trim();
+                if symbols_str == "*" {
+                    specifier = ImportSpecifier::Wildcard;
                 } else {
-                    break;
-                }
-            }
-            if self.match_op(")") && (self.match_op("=") || self.match_op("->")) {
-                let mut body_stmts = Vec::new();
-                let param_names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
-                while !self.is_at_end() {
-                    let stmt = self.parse_statement()?;
-                    body_stmts.push(stmt);
-                    if let Some(TokenKind::Ident(id)) = self.peek_kind() {
-                        if id == &fn_name || !param_names.contains(id) {
-                            if self.peek_offset_kind(1) == Some(&TokenKind::Op("(".to_string())) {
-                                break;
+                    let mut symbols = Vec::new();
+                    for sym_pair in inner.into_inner() {
+                        if sym_pair.as_rule() == Rule::import_symbol_item {
+                            let mut name = String::new();
+                            let mut sym_alias = None;
+                            for p in sym_pair.into_inner() {
+                                if name.is_empty() {
+                                    name = p.as_str().to_string();
+                                } else {
+                                    sym_alias = Some(p.as_str().to_string());
+                                }
                             }
+                            symbols.push(ImportSymbol { name, alias: sym_alias });
                         }
                     }
+                    specifier = ImportSpecifier::Symbols(symbols);
                 }
-                return Ok(Some(Statement::FnDef {
-                    name: fn_name,
-                    params,
-                    body: body_stmts,
-                }));
             }
-            self.pos = saved;
-            return Ok(None);
-        }
-        self.pos = saved;
-        Ok(None)
-    }
-
-    pub fn parse_expr(&mut self) -> PhysureResult<Expr> {
-        if self.match_ident("let") {
-            let name = self.expect_any_ident()?;
-            self.expect_op("=")?;
-            let val = Box::new(self.parse_expr()?);
-            self.expect_ident("in")?;
-            let body = Box::new(self.parse_expr()?);
-            return Ok(Expr::Let { name, val, body });
-        }
-
-        if self.match_ident("if") {
-            let cond = Box::new(self.parse_expr()?);
-            let has_brace_then = self.match_op("{");
-            if !has_brace_then {
-                let _ = self.match_ident("then");
+            Rule::string_lit => {
+                path = inner.as_str().trim_matches('"').to_string();
             }
-            let then_expr = Box::new(self.parse_expr()?);
-            if has_brace_then {
-                self.expect_op("}")?;
+            Rule::identifier => {
+                if is_use && path.is_empty() {
+                    path = inner.as_str().to_string();
+                } else if !is_use && path.is_empty() {
+                    path = inner.as_str().to_string();
+                } else {
+                    alias = Some(inner.as_str().to_string());
+                }
             }
-            self.expect_ident("else")?;
-            let has_brace_else = self.match_op("{");
-            let else_expr = Box::new(self.parse_expr()?);
-            if has_brace_else {
-                self.expect_op("}")?;
+            _ => {}
+        }
+    }
+    
+    if !is_use {
+        if let Some(a) = alias {
+            specifier = ImportSpecifier::ModuleAlias(a);
+        } else {
+            specifier = ImportSpecifier::Wildcard; // default for `import "path"`
+        }
+    }
+    
+    Ok(Statement::Import(ImportNode { path, specifier }))
+}
+
+fn parse_export(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut symbol = String::new();
+    let mut export_name = String::new();
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::identifier if symbol.is_empty() => {
+                symbol = inner.as_str().to_string();
+                export_name = symbol.clone();
             }
-            return Ok(Expr::If {
-                cond,
-                then_expr,
-                else_expr,
-            });
-        }
-
-        self.parse_ternary()
-    }
-
-    fn parse_ternary(&mut self) -> PhysureResult<Expr> {
-        let cond = self.parse_comparison()?;
-        if self.match_op("?") {
-            let then_expr = Box::new(self.parse_expr()?);
-            self.expect_op(":")?;
-            let else_expr = Box::new(self.parse_expr()?);
-            return Ok(Expr::Ternary {
-                cond: Box::new(cond),
-                then_expr,
-                else_expr,
-            });
-        }
-        Ok(cond)
-    }
-
-    fn parse_comparison(&mut self) -> PhysureResult<Expr> {
-        let mut left = self.parse_additive()?;
-        loop {
-            let op = if self.match_op("==") {
-                BinaryOp::Eq
-            } else if self.match_op("!=") {
-                BinaryOp::Neq
-            } else if self.match_op("<=") {
-                BinaryOp::Lte
-            } else if self.match_op(">=") {
-                BinaryOp::Gte
-            } else if self.match_op("<") {
-                BinaryOp::Lt
-            } else if self.match_op(">") {
-                BinaryOp::Gt
-            } else if self.match_op("≈") {
-                BinaryOp::ApproxEq
-            } else {
-                break;
-            };
-            let right = self.parse_additive()?;
-            left = Expr::Binary {
-                op,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-        Ok(left)
-    }
-
-    fn parse_additive(&mut self) -> PhysureResult<Expr> {
-        let mut left = self.parse_multiplicative()?;
-        loop {
-            if self.match_op("+") {
-                let right = self.parse_multiplicative()?;
-                left = Expr::Binary {
-                    op: BinaryOp::Add,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            } else if self.match_op("-") {
-                let right = self.parse_multiplicative()?;
-                left = Expr::Binary {
-                    op: BinaryOp::Sub,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                };
-            } else {
-                break;
+            Rule::identifier | Rule::string_lit => {
+                export_name = inner.as_str().trim_matches('"').to_string();
             }
+            _ => {}
         }
-        Ok(left)
     }
+    
+    Ok(Statement::Export(ExportNode { symbol, export_name }))
+}
 
-    fn parse_multiplicative(&mut self) -> PhysureResult<Expr> {
-        let mut left = self.parse_implicit_mul()?;
-        loop {
-            if self.match_op("*") {
-                let right = self.parse_implicit_mul()?;
-                left = Expr::Binary {
+fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut name = String::new();
+    let mut params = Vec::new();
+    let mut body = None;
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::identifier => {
+                name = inner.as_str().to_string();
+            }
+            Rule::params => {
+                for p in inner.into_inner() {
+                    if p.as_rule() == Rule::identifier {
+                        params.push(p.as_str().to_string());
+                    }
+                }
+            }
+            Rule::expr => {
+                body = Some(parse_expr(inner)?);
+            }
+            _ => {}
+        }
+    }
+    
+    Ok(Statement::FunctionDef(FunctionDefNode {
+        name,
+        params,
+        body: body.unwrap(),
+    }))
+}
+
+fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut name = String::new();
+    let mut value = None;
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::identifier => {
+                name = inner.as_str().to_string();
+            }
+            Rule::expr => {
+                value = Some(parse_expr(inner)?);
+            }
+            _ => {}
+        }
+    }
+    
+    Ok(Statement::Assignment(AssignmentNode {
+        name,
+        value: value.unwrap(),
+    }))
+}
+
+fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap(); // term
+    let mut left = parse_term(first)?;
+    
+    while let Some(op_pair) = inner.next() {
+        let op = match op_pair.as_rule() {
+            Rule::op_add => BinaryOp::Add,
+            Rule::op_sub => BinaryOp::Sub,
+            _ => return Err(PhysureError::Generic("Unexpected binary op in expr".to_string())),
+        };
+        let right_pair = inner.next().unwrap();
+        let right = parse_term(right_pair)?;
+        left = Expr::BinaryOp {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        };
+    }
+    
+    Ok(left)
+}
+
+fn parse_term(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap(); // factor
+    let mut left = parse_factor(first)?;
+    
+    while let Some(next_pair) = inner.next() {
+        match next_pair.as_rule() {
+            Rule::op_mul => {
+                let right_pair = inner.next().unwrap();
+                let right = parse_factor(right_pair)?;
+                left = Expr::BinaryOp {
                     op: BinaryOp::Mul,
                     left: Box::new(left),
                     right: Box::new(right),
                 };
-            } else if self.match_op("/") {
-                let right = self.parse_implicit_mul()?;
-                left = Expr::Binary {
+            }
+            Rule::op_div => {
+                let right_pair = inner.next().unwrap();
+                let right = parse_factor(right_pair)?;
+                left = Expr::BinaryOp {
                     op: BinaryOp::Div,
                     left: Box::new(left),
                     right: Box::new(right),
                 };
-            } else {
-                break;
             }
-        }
-        Ok(left)
-    }
-
-    fn parse_implicit_mul(&mut self) -> PhysureResult<Expr> {
-        let mut left = self.parse_power()?;
-        while self.can_start_implicit_mul() {
-            let right = self.parse_power()?;
-            left = Expr::ImplicitMul {
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
-        Ok(left)
-    }
-
-    fn can_start_implicit_mul(&self) -> bool {
-        if self.is_at_end() {
-            return false;
-        }
-        if self.pos > 0 {
-            if let Some(prev_kind) = self.tokens.get(self.pos - 1).map(|t| &t.kind) {
-                if matches!(prev_kind, TokenKind::Ident(_)) && matches!(self.peek_kind(), Some(TokenKind::Ident(_))) {
-                    return false;
-                }
-                if matches!(prev_kind, TokenKind::Ident(_) | TokenKind::StringLiteral(_) | TokenKind::Sup(_)) {
-                    if matches!(self.peek_kind(), Some(TokenKind::Number(_))) {
-                        return false;
-                    }
-                }
+            Rule::factor => {
+                // implicit multiplication
+                let right = parse_factor(next_pair)?;
+                left = Expr::BinaryOp {
+                    op: BinaryOp::Mul,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                };
             }
-        }
-        match self.peek_kind() {
-            Some(TokenKind::Ident(name)) => {
-                if matches!(name.as_str(), "in" | "then" | "else") {
-                    return false;
-                }
-                let next_op = self.peek_offset_kind(1);
-                if next_op == Some(&TokenKind::Op("=".to_string()))
-                    || next_op == Some(&TokenKind::Op("->".to_string()))
-                    || next_op == Some(&TokenKind::Op("=>".to_string()))
-                    || next_op == Some(&TokenKind::Op("(".to_string()))
-                {
-                    return false;
-                }
-                true
-            }
-            Some(TokenKind::Number(_))
-            | Some(TokenKind::Sqrt) => true,
-            Some(TokenKind::Op(op)) => op == "(" || op == "[",
-            _ => false,
+            _ => return Err(PhysureError::Generic(format!("Unexpected rule in term: {:?}", next_pair.as_rule()))),
         }
     }
+    Ok(left)
+}
 
-    fn parse_uncertainty(&mut self) -> PhysureResult<Expr> {
-        let left = self.parse_unary()?;
-        if self.match_op("+/-") || self.match_op("±") {
-            let unc = self.parse_unary()?;
-            return Ok(Expr::Uncertainty {
-                val: Box::new(left),
-                unc: Box::new(unc),
-            });
-        }
-        Ok(left)
-    }
-
-    fn parse_power(&mut self) -> PhysureResult<Expr> {
-        let left = self.parse_uncertainty()?;
-        if self.match_op("^") || self.match_op("**") {
-            let right = self.parse_power()?;
-            return Ok(Expr::Binary {
+fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let primary_pair = inner.next().unwrap();
+    
+    let left = match primary_pair.as_rule() {
+        Rule::quantity => parse_quantity(primary_pair)?,
+        Rule::number => parse_number_quantity(primary_pair)?,
+        Rule::function_call => parse_function_call(primary_pair)?,
+        Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
+        Rule::expr => parse_expr(primary_pair)?,
+        _ => return Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", primary_pair.as_rule()))),
+    };
+    
+    if let Some(op_pair) = inner.next() {
+        if op_pair.as_rule() == Rule::op_pow {
+            let right_pair = inner.next().unwrap();
+            let right = parse_factor(right_pair)?;
+            return Ok(Expr::BinaryOp {
                 op: BinaryOp::Pow,
                 left: Box::new(left),
                 right: Box::new(right),
             });
         }
-        if let Some(TokenKind::Sup(digits)) = self.peek_kind() {
-            let digits_str = digits.clone();
-            self.pos += 1;
-            let val = parse_sup_digits(&digits_str)?;
-            return Ok(Expr::Binary {
-                op: BinaryOp::Pow,
-                left: Box::new(left),
-                right: Box::new(Expr::Number(val)),
-            });
-        }
-        Ok(left)
     }
+    
+    Ok(left)
+}
 
-    fn parse_unary(&mut self) -> PhysureResult<Expr> {
-        if self.match_op("-") {
-            let expr = self.parse_unary()?;
-            return Ok(Expr::Unary {
-                op: UnaryOp::Neg,
-                expr: Box::new(expr),
-            });
+fn parse_number_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mag = pair.as_str().trim().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid number".to_string()))?;
+    Ok(Expr::Quantity(QuantityNode {
+        magnitude: mag,
+        uncertainty: None,
+        unit: None,
+    }))
+}
+
+fn parse_function_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut name = String::new();
+    let mut args = Vec::new();
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::identifier => {
+                name = inner.as_str().to_string();
+            }
+            Rule::expr => {
+                args.push(parse_expr(inner)?);
+            }
+            _ => {}
         }
-        if self.match_kind(&TokenKind::Sqrt) {
-            let expr = self.parse_unary()?;
-            return Ok(Expr::Unary {
-                op: UnaryOp::Sqrt,
-                expr: Box::new(expr),
-            });
-        }
-        self.parse_atom()
     }
+    
+    Ok(Expr::FunctionCall { name, args })
+}
 
-    fn parse_atom(&mut self) -> PhysureResult<Expr> {
-        if let Some(kind) = self.peek_kind().cloned() {
-            match kind {
-                TokenKind::Number(n) => {
-                    self.pos += 1;
-                    return Ok(Expr::Number(n));
-                }
-                TokenKind::StringLiteral(s) => {
-                    self.pos += 1;
-                    return Ok(Expr::StringLiteral(s));
-                }
-                TokenKind::Ident(name) => {
-                    self.pos += 1;
-                    if self.match_op("(") {
-                        let mut args = Vec::new();
-                        if !self.match_op(")") {
-                            loop {
-                                args.push(self.parse_expr()?);
-                                if !self.match_op(",") {
-                                    break;
-                                }
-                            }
-                            self.expect_op(")")?;
+fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut magnitude = None;
+    let mut magnitude_expr = None;
+    let mut uncertainty = None;
+    let mut unit = None;
+    
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::number => {
+                magnitude = Some(inner.as_str().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid number".to_string()))?);
+            }
+            Rule::expr => {
+                magnitude_expr = Some(parse_expr(inner)?);
+            }
+            Rule::uncertainty => {
+                for u_inner in inner.into_inner() {
+                    if u_inner.as_rule() == Rule::uncertainty_val {
+                        let mut val_str = u_inner.as_str().trim().to_string();
+                        let is_percent = val_str.ends_with('%');
+                        if is_percent {
+                            val_str.pop();
                         }
-                        return Ok(Expr::Call { name, args });
+                        let val = val_str.trim().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid uncertainty".to_string()))?;
+                        uncertainty = Some(val);
                     }
-                    return Ok(Expr::Ident(name));
                 }
-                TokenKind::Op(ref op) if op == "(" => {
-                    self.pos += 1;
-                    let inner = self.parse_expr()?;
-                    self.expect_op(")")?;
-                    return Ok(inner);
-                }
-                TokenKind::Op(ref op) if op == "[" => {
-                    self.pos += 1;
-                    let mut items = Vec::new();
-                    if !self.match_op("]") {
-                        loop {
-                            items.push(self.parse_expr()?);
-                            if !self.match_op(",") {
-                                break;
-                            }
-                        }
-                        self.expect_op("]")?;
-                    }
-                    return Ok(Expr::Vector(items));
-                }
-                _ => {}
             }
-        }
-        Err(PhysureError::Generic(format!(
-            "Unexpected token at pos {}",
-            self.pos
-        )))
-    }
-
-    fn parse_unit_string(&mut self) -> PhysureResult<String> {
-        let mut unit_parts = Vec::new();
-        while !self.is_at_end() {
-            match self.peek_kind() {
-                Some(TokenKind::Ident(id)) => {
-                    if !unit_parts.is_empty() {
-                        let last: &String = unit_parts.last().unwrap();
-                        let last_is_num = last.chars().next().map_or(false, |c| c.is_ascii_digit() || c == '.');
-                        if !last_is_num && !matches!(last.as_str(), "*" | "/" | "^") {
-                            break;
-                        }
-                    }
-                    let next_op = self.peek_offset_kind(1);
-                    if next_op == Some(&TokenKind::Op("=".to_string()))
-                        || next_op == Some(&TokenKind::Op("->".to_string()))
-                        || next_op == Some(&TokenKind::Op(":".to_string()))
-                        || next_op == Some(&TokenKind::Op("=>".to_string()))
-                        || next_op == Some(&TokenKind::Op("(".to_string()))
-                    {
-                        break;
-                    }
-                    unit_parts.push(id.clone());
-                    self.pos += 1;
-                }
-                Some(TokenKind::Op(op)) if op == "/" || op == "*" || op == "^" => {
-                    unit_parts.push(op.clone());
-                    self.pos += 1;
-                }
-                Some(TokenKind::Number(n)) => {
-                    unit_parts.push(n.to_string());
-                    self.pos += 1;
-                }
-                Some(TokenKind::Sup(s)) => {
-                    unit_parts.push(s.clone());
-                    self.pos += 1;
-                }
-                _ => break,
+            Rule::unit_expr => {
+                unit = Some(inner.as_str().trim().to_string());
             }
-        }
-        if unit_parts.is_empty() {
-            return Err(PhysureError::Generic("Expected target unit".to_string()));
-        }
-        Ok(unit_parts.join(""))
-    }
-
-    fn peek_kind(&self) -> Option<&TokenKind> {
-        self.tokens.get(self.pos).map(|t| &t.kind)
-    }
-
-    fn peek_offset_kind(&self, offset: usize) -> Option<&TokenKind> {
-        self.tokens.get(self.pos + offset).map(|t| &t.kind)
-    }
-
-    fn match_kind(&mut self, kind: &TokenKind) -> bool {
-        if self.peek_kind() == Some(kind) {
-            self.pos += 1;
-            true
-        } else {
-            false
+            _ => {}
         }
     }
-
-    fn match_op(&mut self, op: &str) -> bool {
-        if let Some(TokenKind::Op(o)) = self.peek_kind() {
-            if o == op {
-                self.pos += 1;
-                return true;
-            }
-        }
-        false
-    }
-
-    fn match_ident(&mut self, ident: &str) -> bool {
-        if let Some(TokenKind::Ident(i)) = self.peek_kind() {
-            if i == ident {
-                self.pos += 1;
-                return true;
-            }
-        }
-        false
-    }
-
-    fn expect_op(&mut self, op: &str) -> PhysureResult<()> {
-        if self.match_op(op) {
-            Ok(())
-        } else {
-            Err(PhysureError::Generic(format!("Expected operator '{}'", op)))
-        }
-    }
-
-    fn expect_ident(&mut self, expected: &str) -> PhysureResult<String> {
-        if let Some(TokenKind::Ident(i)) = self.peek_kind().cloned() {
-            if expected.is_empty() || i == expected {
-                self.pos += 1;
-                return Ok(i);
-            }
-        }
-        Err(PhysureError::Generic(format!(
-            "Expected identifier '{}'",
-            expected
-        )))
-    }
-
-    fn expect_any_ident(&mut self) -> PhysureResult<String> {
-        if let Some(TokenKind::Ident(i)) = self.peek_kind().cloned() {
-            self.pos += 1;
-            return Ok(i);
-        }
-        Err(PhysureError::Generic("Expected identifier".to_string()))
-    }
-
-    fn is_at_end(&self) -> bool {
-        self.pos >= self.tokens.len()
+    
+    if let Some(mag) = magnitude {
+        Ok(Expr::Quantity(QuantityNode {
+            magnitude: mag,
+            uncertainty,
+            unit,
+        }))
+    } else if let Some(_) = magnitude_expr {
+        Err(PhysureError::Generic("Complex quantity expressions not supported in AST".to_string()))
+    } else {
+        Err(PhysureError::Generic("Missing magnitude in quantity".to_string()))
     }
 }
 
-fn parse_sup_digits(s: &str) -> PhysureResult<f64> {
-    let ascii: String = s
-        .chars()
-        .map(|c| match c {
-            '⁻' => '-',
-            '⁰' => '0',
-            '¹' => '1',
-            '²' => '2',
-            '³' => '3',
-            '⁴' => '4',
-            '⁵' => '5',
-            '⁶' => '6',
-            '⁷' => '7',
-            '⁸' => '8',
-            '⁹' => '9',
-            _ => c,
-        })
-        .collect();
-    ascii
-        .parse::<f64>()
-        .map_err(|_| PhysureError::Generic(format!("Invalid superscript digits: {}", s)))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_explicit_imports() {
+        let code1 = "use g, c as speed_of_light from \"physics/constants\"";
+        let prog1 = parse_phs(code1).unwrap();
+        assert_eq!(prog1.statements.len(), 1);
+        if let Statement::Import(imp) = &prog1.statements[0] {
+            assert_eq!(imp.path, "physics/constants");
+            if let ImportSpecifier::Symbols(syms) = &imp.specifier {
+                assert_eq!(syms[0].name, "g");
+                assert_eq!(syms[1].name, "c");
+                assert_eq!(syms[1].alias.as_deref(), Some("speed_of_light"));
+            } else { panic!("expected symbols"); }
+        } else { panic!("expected import"); }
+
+        let code2 = "use * from \"physics/thermodynamics\"";
+        let prog2 = parse_phs(code2).unwrap();
+        if let Statement::Import(imp) = &prog2.statements[0] {
+            assert_eq!(imp.path, "physics/thermodynamics");
+            assert!(matches!(imp.specifier, ImportSpecifier::Wildcard));
+        } else { panic!("expected import"); }
+
+        let code3 = "import \"physics/constants\" as consts";
+        let prog3 = parse_phs(code3).unwrap();
+        if let Statement::Import(imp) = &prog3.statements[0] {
+            assert_eq!(imp.path, "physics/constants");
+            if let ImportSpecifier::ModuleAlias(alias) = &imp.specifier {
+                assert_eq!(alias, "consts");
+            } else { panic!("expected module alias"); }
+        } else { panic!("expected import"); }
+    }
+
+    #[test]
+    fn test_natural_function_definitions() {
+        let code = "fn kinetic_energy(m, v) = 1/2 m v^2";
+        let prog = parse_phs(code).unwrap();
+        if let Statement::FunctionDef(f) = &prog.statements[0] {
+            assert_eq!(f.name, "kinetic_energy");
+            assert_eq!(f.params, vec!["m", "v"]);
+            // 1/2 m v^2
+        } else { panic!("expected func def"); }
+    }
+
+    #[test]
+    fn test_quantity_literals() {
+        let code = "m = 75.0 ± 0.5 kg";
+        let prog = parse_phs(code).unwrap();
+        if let Statement::Assignment(a) = &prog.statements[0] {
+            assert_eq!(a.name, "m");
+            if let Expr::Quantity(q) = &a.value {
+                assert_eq!(q.magnitude, 75.0);
+                assert_eq!(q.uncertainty, Some(0.5));
+                assert_eq!(q.unit.as_deref(), Some("kg"));
+            } else { panic!("expected quantity"); }
+        } else { panic!("expected assignment"); }
+
+        let code = "m = 75.0 +/- 0.5 kg";
+        let prog = parse_phs(code).unwrap();
+        if let Statement::Assignment(a) = &prog.statements[0] {
+            if let Expr::Quantity(q) = &a.value {
+                assert_eq!(q.magnitude, 75.0);
+                assert_eq!(q.uncertainty, Some(0.5));
+                assert_eq!(q.unit.as_deref(), Some("kg"));
+            }
+        }
+
+        let code = "v = 10 m/s";
+        let prog = parse_phs(code).unwrap();
+        if let Statement::Assignment(a) = &prog.statements[0] {
+            if let Expr::Quantity(q) = &a.value {
+                assert_eq!(q.magnitude, 10.0);
+                assert_eq!(q.uncertainty, None);
+                assert_eq!(q.unit.as_deref(), Some("m/s"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_exports() {
+        let code = "export E as \"kinetic_energy\"";
+        let prog = parse_phs(code).unwrap();
+        if let Statement::Export(e) = &prog.statements[0] {
+            assert_eq!(e.symbol, "E");
+            assert_eq!(e.export_name, "kinetic_energy");
+        } else { panic!("expected export"); }
+    }
 }

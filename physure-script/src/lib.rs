@@ -1,8 +1,10 @@
 pub mod ast;
 pub mod lexer;
+pub mod parser;
 
-pub use ast::{Expr, Statement};
+pub use ast::{Expr, Program, Statement};
 pub use lexer::{PhsLexer, PhsToken, TokenKind};
+pub use parser::parse_phs;
 
 #[derive(Default, Clone)]
 pub struct PhsInterpreter {}
@@ -17,10 +19,6 @@ impl PhsInterpreter {
     }
     pub fn get_var(&self, _name: &str) -> Option<PhsValue> { None }
     pub fn get_fn_params(&self, _name: &str) -> Option<Vec<String>> { None }
-}
-
-pub fn parse_phs(_input: &str) -> Result<Vec<Statement>, physure_core::error::PhysureError> {
-    Ok(vec![])
 }
 
 pub fn eval_phs(_input: &str) -> Result<Vec<PhsValue>, physure_core::error::PhysureError> {
