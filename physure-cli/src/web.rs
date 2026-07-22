@@ -85,9 +85,40 @@ fn format_val_latex(val: &PhsValue) -> String {
         }
         PhsValue::Bool(b) => format!("\\implies \\mathbf{{\\text{{{}}}}}", if *b { "True" } else { "False" }),
         _ => {
-            let s = val.to_string();
-            let escaped = s.replace('_', "\\_").replace('&', "\\&");
-            format!("\\implies \\mathbf{{\\text{{{}}}}}", escaped)
+            let raw = val.to_string();
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return String::new();
+            }
+            if trimmed == "True" || trimmed == "False" {
+                return format!("\\implies \\mathbf{{\\text{{{}}}}}", trimmed);
+            }
+
+            let mut parts = trimmed.splitn(2, ' ');
+            let first = parts.next().unwrap_or("");
+            let rest = parts.next().unwrap_or("").trim();
+
+            if let Ok(num) = first.parse::<f64>() {
+                let mut val_s = physure_core::quantity::format_float(num);
+                if val_s.contains('e') || val_s.contains('E') {
+                    let p: Vec<&str> = val_s.split(['e', 'E']).collect();
+                    if p.len() == 2 {
+                        val_s = format!("{} \\times 10^{{{}}}", p[0], p[1].trim_start_matches('+'));
+                    }
+                }
+                if !rest.is_empty() {
+                    let u_s = unit_to_latex(rest);
+                    format!("\\implies \\mathbf{{{}\\; {}}}", val_s, u_s)
+                } else {
+                    format!("\\implies \\mathbf{{{}}}", val_s)
+                }
+            } else {
+                let escaped = trimmed
+                    .replace('\\', "\\backslash ")
+                    .replace('_', "\\_")
+                    .replace('&', "\\&");
+                format!("\\implies \\mathbf{{\\text{{{}}}}}", escaped)
+            }
         }
     }
 }
