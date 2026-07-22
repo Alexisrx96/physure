@@ -77,11 +77,12 @@ impl PythonTranspiler {
                 let l_str = self.generate_expr(left)?;
                 let r_str = self.generate_expr(right)?;
                 let op_str = match op {
-                    BinaryOp::Add => "+",
-                    BinaryOp::Sub => "-",
-                    BinaryOp::Mul => "*",
-                    BinaryOp::Div => "/",
-                    BinaryOp::Pow => "**",
+                    BinaryOp::Add => "+".to_string(),
+                    BinaryOp::Sub => "-".to_string(),
+                    BinaryOp::Mul => "*".to_string(),
+                    BinaryOp::Div => "/".to_string(),
+                    BinaryOp::Pow => "**".to_string(),
+                    BinaryOp::Convert => format!("{}  # => {}", l_str, r_str),
                 };
                 Ok(format!("({} {} {})", l_str, op_str, r_str))
             }

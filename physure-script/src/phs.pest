@@ -22,11 +22,12 @@ op_sub = { "-" }
 op_mul = { "*" }
 op_div = { "/" }
 op_pow = { "^" }
+op_convert = { "=>" }
 
-primary = _{ quantity | function_call | identifier | "(" ~ expr ~ ")" }
+primary = _{ quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
 factor  = { primary ~ (op_pow ~ primary)? }
 term    = { factor ~ ((op_mul | op_div) ~ factor | factor)* }
-expr    = { term ~ ((op_add | op_sub) ~ term)* }
+expr    = { term ~ ((op_add | op_sub | op_convert) ~ term)* }
 
 function_call = { identifier ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
 params        = { identifier ~ ("," ~ identifier)* }

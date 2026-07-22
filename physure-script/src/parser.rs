@@ -174,6 +174,7 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         let op = match op_pair.as_rule() {
             Rule::op_add => BinaryOp::Add,
             Rule::op_sub => BinaryOp::Sub,
+            Rule::op_convert => BinaryOp::Convert,
             _ => return Err(PhysureError::Generic("Unexpected binary op in expr".to_string())),
         };
         let right_pair = inner.next().unwrap();
@@ -237,6 +238,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::number => parse_number_quantity(primary_pair)?,
         Rule::function_call => parse_function_call(primary_pair)?,
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
+        Rule::string_lit => Expr::Identifier(primary_pair.as_str().trim_matches('"').to_string()),
         Rule::expr => parse_expr(primary_pair)?,
         _ => return Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", primary_pair.as_rule()))),
     };

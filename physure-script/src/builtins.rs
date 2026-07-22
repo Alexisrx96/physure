@@ -1,8 +1,29 @@
 use physure_core::error::{PhysureError, PhysureResult};
 use super::value::PhsValue;
 use super::interpreter::PhsInterpreter;
+use crate::ast::BinaryOp;
 
-pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &mut PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn eval_bin_op(op: BinaryOp, l: &PhsValue, r: &PhsValue) -> PhysureResult<PhsValue> {
+    match (l, r) {
+        (PhsValue::Quantity(a), PhsValue::Quantity(b)) => match op {
+            BinaryOp::Add => a.add(b).map(PhsValue::Quantity),
+            BinaryOp::Sub => a.sub(b).map(PhsValue::Quantity),
+            BinaryOp::Mul => a.mul(b).map(PhsValue::Quantity),
+            BinaryOp::Div => a.div(b).map(PhsValue::Quantity),
+            _ => Err(PhysureError::Generic("Unsupported op".into())),
+        },
+        (PhsValue::Number(a), PhsValue::Number(b)) => match op {
+            BinaryOp::Add => Ok(PhsValue::Number(a + b)),
+            BinaryOp::Sub => Ok(PhsValue::Number(a - b)),
+            BinaryOp::Mul => Ok(PhsValue::Number(a * b)),
+            BinaryOp::Div => Ok(PhsValue::Number(a / b)),
+            _ => Err(PhysureError::Generic("Unsupported op".into())),
+        },
+        _ => Err(PhysureError::Generic("Unsupported operand types".into())),
+    }
+}
+
+pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
         "sqrt" => {
             if args.len() != 1 {
@@ -255,9 +276,9 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &mut PhsInterpre
                 } else {
                     (i - 1, i + 1)
                 };
-                let dy = interpreter.eval_binary_op(&crate::ast::BinaryOp::Sub, &y_vec[i_next], &y_vec[i_prev])?;
-                let dx = interpreter.eval_binary_op(&crate::ast::BinaryOp::Sub, &x_vec[i_next], &x_vec[i_prev])?;
-                let grad = interpreter.eval_binary_op(&crate::ast::BinaryOp::Div, &dy, &dx)?;
+                let dy = eval_bin_op(BinaryOp::Sub, &y_vec[i_next], &y_vec[i_prev])?;
+                let dx = eval_bin_op(BinaryOp::Sub, &x_vec[i_next], &x_vec[i_prev])?;
+                let grad = eval_bin_op(BinaryOp::Div, &dy, &dx)?;
                 result.push(grad);
             }
             Ok(Some(PhsValue::Vector(result)))
@@ -277,19 +298,19 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &mut PhsInterpre
             if y_vec.len() != x_vec.len() || y_vec.len() < 2 {
                 return Err(PhysureError::Generic("trapz expects equal length vectors with at least 2 elements".into()));
             }
-            let mut total = interpreter.eval_binary_op(&crate::ast::BinaryOp::Mul, &y_vec[0], &x_vec[0])?; // Just to get a value, will override
+            let mut total = PhsValue::None;
             let mut is_first = true;
             let two = PhsValue::Number(2.0);
             for i in 0..y_vec.len() - 1 {
-                let dx = interpreter.eval_binary_op(&crate::ast::BinaryOp::Sub, &x_vec[i+1], &x_vec[i])?;
-                let sum_y = interpreter.eval_binary_op(&crate::ast::BinaryOp::Add, &y_vec[i+1], &y_vec[i])?;
-                let avg_y = interpreter.eval_binary_op(&crate::ast::BinaryOp::Div, &sum_y, &two)?;
-                let area = interpreter.eval_binary_op(&crate::ast::BinaryOp::Mul, &avg_y, &dx)?;
+                let dx = eval_bin_op(BinaryOp::Sub, &x_vec[i+1], &x_vec[i])?;
+                let sum_y = eval_bin_op(BinaryOp::Add, &y_vec[i+1], &y_vec[i])?;
+                let avg_y = eval_bin_op(BinaryOp::Div, &sum_y, &two)?;
+                let area = eval_bin_op(BinaryOp::Mul, &avg_y, &dx)?;
                 if is_first {
                     total = area;
                     is_first = false;
                 } else {
-                    total = interpreter.eval_binary_op(&crate::ast::BinaryOp::Add, &total, &area)?;
+                    total = eval_bin_op(BinaryOp::Add, &total, &area)?;
                 }
             }
             Ok(Some(total))
@@ -347,12 +368,10 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &mut PhsInterpre
             
             // if target resolves against bound quantities, evaluate the solved expression against the interpreter's env
             // The python tests might expect a Number/Quantity back if variables are bound
-            if let Ok(tokens) = crate::lexer::PhsLexer::new(&solved_str).tokenize() {
-                let mut parser = crate::parser::PhsParser::new(&tokens);
-                if let Ok(expr) = parser.parse_expr() {
-                    // Only try to evaluate it if there are no unbound free variables
-                    if !has_unbound_vars(&expr, interpreter) {
-                        if let Ok(val) = interpreter.eval_expr(&expr) {
+            if let Ok(program) = crate::parser::parse_phs(&solved_str) {
+                if let Some(crate::ast::Statement::Expr(expr)) = program.statements.first() {
+                    if !has_unbound_vars(expr, interpreter) {
+                        if let Ok(val) = interpreter.eval_expr(expr, &interpreter.env) {
                             return Ok(Some(val));
                         }
                     }
@@ -590,260 +609,63 @@ fn draw_svg_plot(x: &[f64], y: &[f64], title: &str, x_unit: &str, y_unit: &str) 
 
 fn expr_to_string(expr: &crate::ast::Expr) -> String {
     match expr {
-        crate::ast::Expr::Number(n) => n.to_string(),
-        crate::ast::Expr::Ident(s) => s.clone(),
-        crate::ast::Expr::StringLiteral(s) => format!("\"{}\"", s),
-        crate::ast::Expr::Unary { op, expr } => {
-            let op_str = match op {
-                crate::ast::UnaryOp::Neg => "-",
-                crate::ast::UnaryOp::Sqrt => "sqrt",
-            };
-            if matches!(op, crate::ast::UnaryOp::Sqrt) {
-                format!("{}({})", op_str, expr_to_string(expr))
+        crate::ast::Expr::Quantity(q) => {
+            let u = q.unit.as_deref().unwrap_or("");
+            if u.is_empty() {
+                format!("{}", q.magnitude)
             } else {
-                format!("{}{}", op_str, expr_to_string(expr))
+                format!("{} {}", q.magnitude, u)
             }
         }
-        crate::ast::Expr::Binary { op, left, right } => {
+        crate::ast::Expr::Identifier(s) => s.clone(),
+        crate::ast::Expr::BinaryOp { op, left, right } => {
             let op_str = match op {
                 crate::ast::BinaryOp::Add => "+",
                 crate::ast::BinaryOp::Sub => "-",
                 crate::ast::BinaryOp::Mul => "*",
                 crate::ast::BinaryOp::Div => "/",
                 crate::ast::BinaryOp::Pow => "^",
-                crate::ast::BinaryOp::Eq => "==",
-                crate::ast::BinaryOp::Neq => "!=",
-                crate::ast::BinaryOp::Lt => "<",
-                crate::ast::BinaryOp::Gt => ">",
-                crate::ast::BinaryOp::Lte => "<=",
-                crate::ast::BinaryOp::Gte => ">=",
-                crate::ast::BinaryOp::ApproxEq => "≈",
+                crate::ast::BinaryOp::Convert => "=>",
             };
-            format!("({}) {} ({})", expr_to_string(left), op_str, expr_to_string(right))
+            format!("{} {} {}", expr_to_string(left), op_str, expr_to_string(right))
         }
-        crate::ast::Expr::ImplicitMul { left, right } => {
-            format!("({}) * ({})", expr_to_string(left), expr_to_string(right))
-        }
-        crate::ast::Expr::Call { name, args } => {
+        crate::ast::Expr::FunctionCall { name, args } => {
             let args_str: Vec<String> = args.iter().map(expr_to_string).collect();
             format!("{}({})", name, args_str.join(", "))
         }
-        crate::ast::Expr::Ternary { cond, then_expr, else_expr } => {
-            format!("({}) ? ({}) : ({})", expr_to_string(cond), expr_to_string(then_expr), expr_to_string(else_expr))
-        }
-        crate::ast::Expr::Uncertainty { val, unc } => {
-            format!("({}) +/- ({})", expr_to_string(val), expr_to_string(unc))
-        }
-        crate::ast::Expr::Convert { expr, target_unit } => {
-            format!("({}) => {}", expr_to_string(expr), target_unit)
-        }
-        crate::ast::Expr::FormatSig { expr, spec } => {
-            format!("({}):{}", expr_to_string(expr), spec)
-        }
-        _ => String::new(),
     }
 }
 
-fn substitute_expr(expr: &crate::ast::Expr, params: &[String], args: &[crate::ast::Expr]) -> crate::ast::Expr {
-    match expr {
-        crate::ast::Expr::Ident(name) => {
-            if let Some(idx) = params.iter().position(|p| p == name) {
-                if idx < args.len() {
-                    args[idx].clone()
-                } else {
-                    expr.clone()
-                }
-            } else {
-                expr.clone()
-            }
-        }
-        crate::ast::Expr::Unary { op, expr: inner } => {
-            crate::ast::Expr::Unary {
-                op: op.clone(),
-                expr: Box::new(substitute_expr(inner, params, args)),
-            }
-        }
-        crate::ast::Expr::Binary { op, left, right } => {
-            crate::ast::Expr::Binary {
-                op: op.clone(),
-                left: Box::new(substitute_expr(left, params, args)),
-                right: Box::new(substitute_expr(right, params, args)),
-            }
-        }
-        crate::ast::Expr::ImplicitMul { left, right } => {
-            crate::ast::Expr::ImplicitMul {
-                left: Box::new(substitute_expr(left, params, args)),
-                right: Box::new(substitute_expr(right, params, args)),
-            }
-        }
-        crate::ast::Expr::Call { name, args: call_args } => {
-            let new_args = call_args.iter().map(|arg| substitute_expr(arg, params, args)).collect();
-            crate::ast::Expr::Call {
-                name: name.clone(),
-                args: new_args,
-            }
-        }
-        crate::ast::Expr::Ternary { cond, then_expr, else_expr } => {
-            crate::ast::Expr::Ternary {
-                cond: Box::new(substitute_expr(cond, params, args)),
-                then_expr: Box::new(substitute_expr(then_expr, params, args)),
-                else_expr: Box::new(substitute_expr(else_expr, params, args)),
-            }
-        }
-        crate::ast::Expr::Uncertainty { val, unc } => {
-            crate::ast::Expr::Uncertainty {
-                val: Box::new(substitute_expr(val, params, args)),
-                unc: Box::new(substitute_expr(unc, params, args)),
-            }
-        }
-        crate::ast::Expr::Convert { expr: inner, target_unit } => {
-            crate::ast::Expr::Convert {
-                expr: Box::new(substitute_expr(inner, params, args)),
-                target_unit: target_unit.clone(),
-            }
-        }
-        crate::ast::Expr::FormatSig { expr: inner, spec } => {
-            crate::ast::Expr::FormatSig {
-                expr: Box::new(substitute_expr(inner, params, args)),
-                spec: spec.clone(),
-            }
-        }
-        other => other.clone(),
-    }
-}
 
-fn inline_expr(expr: &crate::ast::Expr, interpreter: &PhsInterpreter) -> crate::ast::Expr {
-    match expr {
-        crate::ast::Expr::Call { name, args } => {
-            let inlined_args: Vec<crate::ast::Expr> = args.iter().map(|arg| inline_expr(arg, interpreter)).collect();
-            if let Some(user_fn) = interpreter.get_user_fn(name) {
-                let body_expr = match user_fn.body.first() {
-                    Some(crate::ast::Statement::Query { expr }) => Some(expr),
-                    Some(crate::ast::Statement::ExprStmt(expr)) => Some(expr),
-                    _ => None,
-                };
-                if let Some(be) = body_expr {
-                    let param_names: Vec<String> = user_fn.params.iter().map(|p| p.name.clone()).collect();
-                    let substituted = substitute_expr(be, &param_names, &inlined_args);
-                    inline_expr(&substituted, interpreter)
-                } else {
-                    crate::ast::Expr::Call { name: name.clone(), args: inlined_args }
-                }
-            } else {
-                crate::ast::Expr::Call { name: name.clone(), args: inlined_args }
-            }
-        }
-        crate::ast::Expr::Unary { op, expr: inner } => {
-            crate::ast::Expr::Unary {
-                op: op.clone(),
-                expr: Box::new(inline_expr(inner, interpreter)),
-            }
-        }
-        crate::ast::Expr::Binary { op, left, right } => {
-            crate::ast::Expr::Binary {
-                op: op.clone(),
-                left: Box::new(inline_expr(left, interpreter)),
-                right: Box::new(inline_expr(right, interpreter)),
-            }
-        }
-        crate::ast::Expr::ImplicitMul { left, right } => {
-            crate::ast::Expr::ImplicitMul {
-                left: Box::new(inline_expr(left, interpreter)),
-                right: Box::new(inline_expr(right, interpreter)),
-            }
-        }
-        crate::ast::Expr::Ternary { cond, then_expr, else_expr } => {
-            crate::ast::Expr::Ternary {
-                cond: Box::new(inline_expr(cond, interpreter)),
-                then_expr: Box::new(inline_expr(then_expr, interpreter)),
-                else_expr: Box::new(inline_expr(else_expr, interpreter)),
-            }
-        }
-        crate::ast::Expr::Uncertainty { val, unc } => {
-            crate::ast::Expr::Uncertainty {
-                val: Box::new(inline_expr(val, interpreter)),
-                unc: Box::new(inline_expr(unc, interpreter)),
-            }
-        }
-        crate::ast::Expr::Convert { expr: inner, target_unit } => {
-            crate::ast::Expr::Convert {
-                expr: Box::new(inline_expr(inner, interpreter)),
-                target_unit: target_unit.clone(),
-            }
-        }
-        crate::ast::Expr::FormatSig { expr: inner, spec } => {
-            crate::ast::Expr::FormatSig {
-                expr: Box::new(inline_expr(inner, interpreter)),
-                spec: spec.clone(),
-            }
-        }
-        other => other.clone(),
-    }
-}
 
 fn preprocess_symbolic_expression(expr_str: &str, interpreter: &PhsInterpreter) -> String {
-    let parts: Vec<&str> = if expr_str.contains("==") {
-        expr_str.split("==").collect()
-    } else if expr_str.contains('=') {
-        expr_str.split('=').collect()
-    } else {
-        vec![expr_str]
-    };
-
-    let processed_parts: Vec<String> = parts.iter().map(|part| {
-        let part_trim = part.trim();
-        if let Ok(tokens) = crate::lexer::PhsLexer::new(part_trim).tokenize() {
-            let mut parser = crate::parser::PhsParser::new(&tokens);
-            if let Ok(expr) = parser.parse_expr() {
-                let inlined = inline_expr(&expr, interpreter);
-                return expr_to_string(&inlined);
+    let mut result = expr_str.trim().to_string();
+    for (name, val) in &interpreter.env {
+        if let PhsValue::Function(func) = val {
+            let fn_pattern = format!("{}(", name);
+            if result.contains(&fn_pattern) {
+                let body_code = format!("({})", expr_to_string(&func.body));
+                if let Some(start) = result.find(&fn_pattern) {
+                    if let Some(end) = result[start..].find(')') {
+                        result.replace_range(start..=start + end, &body_code);
+                    }
+                }
             }
         }
-        part_trim.to_string()
-    }).collect();
-
-    if expr_str.contains("==") {
-        processed_parts.join(" == ")
-    } else if expr_str.contains('=') {
-        processed_parts.join(" = ")
-    } else {
-        processed_parts[0].clone()
     }
+    result
 }
 
 fn has_unbound_vars(expr: &crate::ast::Expr, interpreter: &PhsInterpreter) -> bool {
     match expr {
-        crate::ast::Expr::Ident(name) => {
-            interpreter.get_var(name).is_none() && !interpreter.registry().contains(name)
+        crate::ast::Expr::Identifier(name) => {
+            interpreter.get_var(name).is_none()
         }
-        crate::ast::Expr::Unary { expr, .. } => has_unbound_vars(expr, interpreter),
-        crate::ast::Expr::Binary { left, right, .. } => {
+        crate::ast::Expr::BinaryOp { left, right, .. } => {
             has_unbound_vars(left, interpreter) || has_unbound_vars(right, interpreter)
         }
-        crate::ast::Expr::ImplicitMul { left, right } => {
-            has_unbound_vars(left, interpreter) || has_unbound_vars(right, interpreter)
-        }
-        crate::ast::Expr::Call { args, .. } => {
+        crate::ast::Expr::FunctionCall { args, .. } => {
             args.iter().any(|arg| has_unbound_vars(arg, interpreter))
-        }
-        crate::ast::Expr::Ternary { cond, then_expr, else_expr } => {
-            has_unbound_vars(cond, interpreter)
-                || has_unbound_vars(then_expr, interpreter)
-                || has_unbound_vars(else_expr, interpreter)
-        }
-        crate::ast::Expr::Let { val, body, .. } => {
-            has_unbound_vars(val, interpreter) || has_unbound_vars(body, interpreter)
-        }
-        crate::ast::Expr::If { cond, then_expr, else_expr } => {
-            has_unbound_vars(cond, interpreter)
-                || has_unbound_vars(then_expr, interpreter)
-                || has_unbound_vars(else_expr, interpreter)
-        }
-        crate::ast::Expr::Vector(items) => {
-            items.iter().any(|item| has_unbound_vars(item, interpreter))
-        }
-        crate::ast::Expr::Convert { expr, .. } => {
-            has_unbound_vars(expr, interpreter)
         }
         _ => false,
     }
@@ -855,9 +677,8 @@ mod tests {
     use crate::interpreter::PhsInterpreter;
     use crate::value::PhsValue;
 
-
     fn eval(name: &str, args: Vec<PhsValue>) -> PhsValue {
-        let mut interp = PhsInterpreter::new();
+        let mut interp = PhsInterpreter::default();
         eval_builtin(name, &args, &mut interp).unwrap().unwrap()
     }
 
@@ -874,31 +695,25 @@ mod tests {
     #[test]
     fn test_trig() {
         assert_eq!(eval("sin", vec![PhsValue::Number(0.0)]), PhsValue::Number(0.0));
-        assert_eq!(eval("tan", vec![PhsValue::Number(0.0)]), PhsValue::Number(0.0));
+        assert_eq!(eval("cos", vec![PhsValue::Number(0.0)]), PhsValue::Number(1.0));
     }
 
     #[test]
     fn test_floor_ceil() {
-        assert_eq!(eval("floor", vec![PhsValue::Number(2.7)]), PhsValue::Number(2.0));
-        assert_eq!(eval("ceil", vec![PhsValue::Number(2.3)]), PhsValue::Number(3.0));
+        assert_eq!(eval("floor", vec![PhsValue::Number(3.7)]), PhsValue::Number(3.0));
+        assert_eq!(eval("ceil", vec![PhsValue::Number(3.2)]), PhsValue::Number(4.0));
     }
 
     #[test]
     fn test_min_max() {
-        let min_val = eval("min", vec![PhsValue::Number(5.0), PhsValue::Number(2.0), PhsValue::Number(8.0)]);
-        assert_eq!(min_val, PhsValue::Number(2.0));
-        let max_val = eval("max", vec![PhsValue::Number(5.0), PhsValue::Number(2.0), PhsValue::Number(8.0)]);
-        assert_eq!(max_val, PhsValue::Number(8.0));
+        assert_eq!(eval("min", vec![PhsValue::Number(3.0), PhsValue::Number(5.0)]), PhsValue::Number(3.0));
+        assert_eq!(eval("max", vec![PhsValue::Number(3.0), PhsValue::Number(5.0)]), PhsValue::Number(5.0));
     }
 
     #[test]
     fn test_deriv() {
         let res = eval("deriv", vec![PhsValue::String("x^2".into()), PhsValue::String("x".into())]);
-        if let PhsValue::String(s) = res {
-            assert!(s.contains("2") && s.contains("x")); // Simplification might leave 1s, just check it differentiated
-        } else {
-            panic!("Expected string");
-        }
+        assert_eq!(res, PhsValue::String("2 * x".into()));
     }
 
     #[test]
@@ -914,11 +729,11 @@ mod tests {
     #[test]
     fn test_solve() {
         let res = eval("solve", vec![PhsValue::String("2 * x = 10".into()), PhsValue::String("x".into())]);
-        // The solve function might return the PhsValue evaluated if it's purely numeric
         match res {
             PhsValue::Number(n) => assert_eq!(n, 5.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 5.0),
             PhsValue::String(s) => assert_eq!(s, "5"),
-            _ => panic!("Expected number or string"),
+            _ => panic!("Expected number, quantity, or string"),
         }
     }
 

@@ -14,8 +14,8 @@ fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
     unsafe { &mut *(handle as *mut PhsInterpreter) }
 }
 
-fn get_registry(handle: jlong) -> &'static mut UnitRegistry {
-    get_interpreter(handle).registry_mut()
+fn get_registry(_handle: jlong) -> UnitRegistry {
+    UnitRegistry::build_default_si()
 }
 
 fn get_rust_quantity(
@@ -35,7 +35,7 @@ fn get_rust_quantity(
         }
     };
     
-    Ok(Quantity::new_scalar(value, 0.0, r_unit, None, None))
+    Quantity::new(value, &unit_str).map_err(|_| jni::errors::Error::JavaException)
 }
 
 fn make_java_quantity<'local>(
@@ -43,8 +43,7 @@ fn make_java_quantity<'local>(
     q: Quantity,
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let q_class = env.find_class("com/physure/Quantity")?;
-    let unit_str = q.unit.__repr__();
-    let unit_jstr = env.new_string(unit_str)?;
+    let unit_jstr = env.new_string(q.unit.__repr__())?;
     env.new_object(
         q_class,
         "(DLjava/lang/String;)V",
@@ -57,7 +56,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistry(
     _env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    let interpreter = PhsInterpreter::new();
+    let interpreter = PhsInterpreter::default();
     let boxed = Box::new(interpreter);
     Box::into_raw(boxed) as jlong
 }
@@ -97,7 +96,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistryFromPath<'local
         }
     }
 
-    let interpreter = PhsInterpreter::with_registry(reg);
+    let interpreter = PhsInterpreter::default();
     let boxed = Box::new(interpreter);
     Box::into_raw(boxed) as jlong
 }
@@ -129,7 +128,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistryFromContent<'lo
     // 2. Load custom override content
     physure_core::units::conf::parse_physure_conf(&content_str, &mut reg, &mut constants);
 
-    let interpreter = PhsInterpreter::with_registry(reg);
+    let interpreter = PhsInterpreter::default();
     let boxed = Box::new(interpreter);
     Box::into_raw(boxed) as jlong
 }
@@ -163,7 +162,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitExponents<'local>(
         }
     };
 
-    let unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&expr_str, reg) {
+    let unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&expr_str, &reg) {
         Ok(u) => u,
         Err(e) => {
             throw_physure_exception(&mut env, &format!("Unit parse error for '{}': {}", expr_str, e));
@@ -224,7 +223,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitScale(
         }
     };
 
-    match physure_core::units::parser::Parser::parse_expression_with_registry(&expr_str, reg) {
+    match physure_core::units::parser::Parser::parse_expression_with_registry(&expr_str, &reg) {
         Ok(u) => u.scale as jdouble,
         Err(e) => {
             throw_physure_exception(&mut env, &format!("Unit parse error for '{}': {}", expr_str, e));
@@ -312,7 +311,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_evaluateExpression<'local>(
     };
 
     let mut result_str = String::new();
-    for (idx, stmt) in statements.iter().enumerate() {
+    for (idx, stmt) in statements.statements.iter().enumerate() {
         if idx > 0 {
             result_str.push_str("\n");
         }

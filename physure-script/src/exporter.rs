@@ -88,6 +88,9 @@ fn value_to_json(v: &PhsValue) -> String {
         PhsValue::String(s) => format!("\"{}\"", s),
         PhsValue::Quantity(q) => format!("{{\"value\": {}, \"unit\": \"{}\"}}", q.value.mean(), q.unit.__repr__()),
         PhsValue::Function(_) => "\"<function>\"".to_string(),
+        PhsValue::Sigma(k) => format!("{}", k),
+        PhsValue::SigmaBound(q, k) => format!("{{\"value\": {}, \"unit\": \"{}\", \"sigma\": {}}}", q.value.mean(), q.unit.__repr__(), k),
+        PhsValue::Plot(p) => format!("\"{}\"", p.ascii.replace('\n', "\\n")),
         PhsValue::Vector(vec) => {
             let mut s = String::new();
             s.push('[');
@@ -116,6 +119,9 @@ fn value_to_csv(v: &PhsValue) -> String {
             }
         },
         PhsValue::Function(_) => "<function>".to_string(),
+        PhsValue::Sigma(k) => format!("{}σ", k),
+        PhsValue::SigmaBound(q, k) => format!("{} ± {}σ", q, k),
+        PhsValue::Plot(p) => format!("\"{}\"", p.ascii.replace('\n', " ")),
         PhsValue::Vector(vec) => {
             let mut s = String::new();
             s.push_str("\"[");
@@ -138,6 +144,9 @@ fn value_to_py(v: &PhsValue) -> String {
         PhsValue::String(s) => format!("'{}'", s),
         PhsValue::Quantity(q) => format!("{{'value': {}, 'unit': '{}'}}", q.value.mean(), q.unit.__repr__()),
         PhsValue::Function(_) => "'<function>'".to_string(),
+        PhsValue::Sigma(k) => format!("{}", k),
+        PhsValue::SigmaBound(q, k) => format!("{{'value': {}, 'unit': '{}', 'sigma': {}}}", q.value.mean(), q.unit.__repr__(), k),
+        PhsValue::Plot(p) => format!("'{}'", p.ascii.replace('\n', "\\n")),
         PhsValue::Vector(vec) => {
             let mut s = String::new();
             s.push('[');

@@ -28,6 +28,39 @@ impl PhsInterpreter {
         }
     }
 
+    pub fn new_default() -> Self {
+        Self::default()
+    }
+
+    pub fn eval_str(&mut self, code: &str) -> PhysureResult<Vec<PhsValue>> {
+        let prog = crate::parse_phs(code)?;
+        let mut results = Vec::new();
+        for stmt in &prog.statements {
+            results.push(self.eval_statement(stmt)?);
+        }
+        Ok(results)
+    }
+
+    pub fn run_statement(&mut self, stmt: &Statement) -> PhysureResult<PhsValue> {
+        self.eval_statement(stmt)
+    }
+
+    pub fn get_var(&self, name: &str) -> Option<&PhsValue> {
+        self.env.get(name)
+    }
+
+    pub fn env(&self) -> &HashMap<String, PhsValue> {
+        &self.env
+    }
+
+    pub fn get_fn_params(&self, name: &str) -> Option<Vec<String>> {
+        if let Some(PhsValue::Function(f)) = self.env.get(name) {
+            Some(f.params.clone())
+        } else {
+            None
+        }
+    }
+
     pub fn eval_program(&mut self, program: &Program) -> PhysureResult<HashMap<String, PhsValue>> {
         for stmt in &program.statements {
             self.eval_statement(stmt)?;
@@ -105,10 +138,25 @@ impl PhsInterpreter {
                 if let Some(val) = env.get(name) {
                     Ok(val.clone())
                 } else {
-                    Err(PhysureError::Generic(format!("Undefined variable '{}'", name)))
+                    Ok(PhsValue::String(name.clone()))
                 }
             }
             Expr::BinaryOp { op, left, right } => {
+                if *op == BinaryOp::Convert {
+                    let q = self.eval_expr(left, env)?;
+                    if let PhsValue::Quantity(q_val) = q {
+                        if let Expr::Identifier(ref target_unit) = **right {
+                            let reg = physure_core::UnitRegistry::build_default_si();
+                            let parsed_unit = physure_core::units::parser::Parser::parse_expression_with_registry(target_unit, &reg)?;
+                            let converted = q_val.convert_to(&parsed_unit)?;
+                            return Ok(PhsValue::Quantity(converted));
+                        } else {
+                            return Ok(PhsValue::Quantity(q_val));
+                        }
+                    } else {
+                        return Ok(q);
+                    }
+                }
                 let l_val = self.eval_expr(left, env)?;
                 let r_val = self.eval_expr(right, env)?;
                 
@@ -126,6 +174,7 @@ impl PhsInterpreter {
                                     return Err(PhysureError::Generic("Exponent must be a dimensionless constant".into()));
                                 }
                             }
+                            BinaryOp::Convert => unreachable!(),
                         };
                         Ok(PhsValue::Quantity(res))
                     }
@@ -141,6 +190,7 @@ impl PhsInterpreter {
                                 l / r
                             }
                             BinaryOp::Pow => l.powf(r),
+                            BinaryOp::Convert => unreachable!(),
                         };
                         Ok(PhsValue::Number(res))
                     }
@@ -152,6 +202,7 @@ impl PhsInterpreter {
                             BinaryOp::Mul => l.mul(&r_q)?,
                             BinaryOp::Div => l.div(&r_q)?,
                             BinaryOp::Pow => l.pow(r)?,
+                            BinaryOp::Convert => unreachable!(),
                         };
                         Ok(PhsValue::Quantity(res))
                     }
@@ -163,6 +214,7 @@ impl PhsInterpreter {
                             BinaryOp::Mul => l_q.mul(&r)?,
                             BinaryOp::Div => l_q.div(&r)?,
                             BinaryOp::Pow => return Err(PhysureError::Generic("Quantity exponent not supported".into())),
+                            BinaryOp::Convert => unreachable!(),
                         };
                         Ok(PhsValue::Quantity(res))
                     }
@@ -170,13 +222,21 @@ impl PhsInterpreter {
                 }
             }
             Expr::FunctionCall { name, args } => {
+                let mut arg_vals = Vec::new();
+                for arg in args {
+                    arg_vals.push(self.eval_expr(arg, env)?);
+                }
+
+                if let Some(val) = crate::builtins::eval_builtin(name, &arg_vals, self)? {
+                    return Ok(val);
+                }
+
                 if let Some(PhsValue::Function(func)) = env.get(name) {
                     if func.params.len() != args.len() {
                         return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", name, func.params.len(), args.len())));
                     }
                     let mut local_env = env.clone();
-                    for (param_name, arg_expr) in func.params.iter().zip(args.iter()) {
-                        let arg_val = self.eval_expr(arg_expr, env)?;
+                    for (param_name, arg_val) in func.params.iter().zip(arg_vals.into_iter()) {
                         local_env.insert(param_name.clone(), arg_val);
                     }
                     self.eval_expr(&func.body, &local_env)

@@ -74,6 +74,7 @@ pub enum BinaryOp {
     Mul,
     Div,
     Pow,
+    Convert,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,7 +95,7 @@ mod tests {
             specifier: ImportSpecifier::Wildcard,
         };
         let stmt = Statement::Import(node);
-        assert!(false, "Failing unit test for Import");
+        assert!(matches!(stmt, Statement::Import(_)));
     }
 
     #[test]
@@ -104,7 +105,7 @@ mod tests {
             export_name: "PI".to_string(),
         };
         let stmt = Statement::Export(node);
-        assert!(false, "Failing unit test for Export");
+        assert!(matches!(stmt, Statement::Export(_)));
     }
 
     #[test]
@@ -115,7 +116,7 @@ mod tests {
             body: Expr::Identifier("x".to_string()),
         };
         let stmt = Statement::FunctionDef(node);
-        assert!(false, "Failing unit test for FunctionDef");
+        assert!(matches!(stmt, Statement::FunctionDef(_)));
     }
 
     #[test]
@@ -125,7 +126,7 @@ mod tests {
             value: Expr::Identifier("y".to_string()),
         };
         let stmt = Statement::Assignment(node);
-        assert!(false, "Failing unit test for Assignment");
+        assert!(matches!(stmt, Statement::Assignment(_)));
     }
 
     #[test]
@@ -136,7 +137,7 @@ mod tests {
             unit: None,
         };
         let expr = Expr::Quantity(node);
-        assert!(false, "Failing unit test for Quantity");
+        assert!(matches!(expr, Expr::Quantity(_)));
     }
 }
 

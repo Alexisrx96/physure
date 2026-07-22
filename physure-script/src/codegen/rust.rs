@@ -84,6 +84,7 @@ impl RustTranspiler {
                         }
                         Ok(format!("{}.powf({})", left_code, right_code))
                     }
+                    BinaryOp::Convert => Ok(format!("{}.convert_to({})", left_code, right_code)),
                 }
             }
             Expr::FunctionCall { name, args } => {

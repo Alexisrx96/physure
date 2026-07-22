@@ -248,10 +248,11 @@ fn test_symbolic_string_parsing_and_solving() {
 
 #[test]
 fn test_kinetic_energy_solve() {
-    let mut interp = crate::interpreter::PhsInterpreter::new();
-    interp.run_statement(&crate::parse_phs("kinetic_energy(m, v) = 0.5 * m * v^2").unwrap()[0]).unwrap();
-    let solve_expr = crate::parse_phs("solve(\"kinetic_energy(m, v) = target\", \"v\")").unwrap();
-    let res = interp.run_statement(&solve_expr[0]).unwrap();
+    let mut interp = crate::interpreter::PhsInterpreter::default();
+    let prog1 = crate::parse_phs("fn kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+    interp.run_statement(&prog1.statements[0]).unwrap();
+    let solve_prog = crate::parse_phs("solve(\"kinetic_energy(m, v) = target\", \"v\")").unwrap();
+    let res = interp.run_statement(&solve_prog.statements[0]).unwrap();
     println!("Res: {:?}", res);
 }
 

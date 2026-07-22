@@ -88,6 +88,7 @@ impl JavaTranspiler {
                     BinaryOp::Mul => "multiply",
                     BinaryOp::Div => "divide",
                     BinaryOp::Pow => "pow",
+                    BinaryOp::Convert => "convertTo",
                 };
                 Ok(format!("{}.{}({})", l, method, r))
             }

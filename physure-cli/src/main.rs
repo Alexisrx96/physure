@@ -49,7 +49,8 @@ fn main() {
                 process::exit(1);
             }
         };
-        let result = transpile(target, &code).expect("Transpilation failed");
+        let program = parse_phs(&code).expect("Parsing failed");
+        let result = transpile(&program, target).expect("Transpilation failed");
         println!("{}", result);
         return;
     }
@@ -72,7 +73,7 @@ fn main() {
         raw_input.to_string()
     };
 
-    let stmts = match parse_phs(&code) {
+    let program = match parse_phs(&code) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error parsing script: {:?}", e);
@@ -80,7 +81,7 @@ fn main() {
         }
     };
 
-    let mut interp = PhsInterpreter::new();
+    let mut interp = PhsInterpreter::default();
     let mut vars_map = HashMap::new();
     let mut steps = Vec::new();
 
@@ -88,7 +89,7 @@ fn main() {
         RichRenderer::render_header(raw_input);
     }
 
-    for stmt in stmts {
+    for stmt in program.statements {
         let (label, expr_code, latex_expr, is_disp) = match stmt {
             physure_script::Statement::Assignment(ref node) => {
                 (node.name.clone(), "expr".to_string(), "latex".to_string(), false)
