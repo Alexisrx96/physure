@@ -4,6 +4,8 @@ use std::fs;
 use physure_script::value::{PhsValue, PlotData};
 use physure_script::ast::unit_to_latex;
 use crate::step::ExecutionStep;
+use crate::katex_assets::{KATEX_CSS, KATEX_JS, AUTO_RENDER_JS};
+use crate::config::PhysureConfig;
 
 struct ScriptMetadata {
     title: Option<String>,
@@ -124,7 +126,10 @@ fn format_val_latex(val: &PhsValue) -> String {
     }
 }
 
-pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = PhysureConfig::load();
+    let i18n = cfg.i18n();
+
     let mut temp_dir = env::temp_dir();
     let file_name = format!("physure_{}.html", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs());
     temp_dir.push(file_name);
@@ -141,9 +146,10 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], va
     if let Some(ref abs_text) = meta.abstract_text {
         abstract_html = format!(
             r#"<div class="latex-abstract">
-                <div class="abstract-title">Resumen / Abstract</div>
+                <div class="abstract-title">{}</div>
                 <p>{}</p>
             </div>"#,
+            i18n.abstract_title,
             escape_html(abs_text)
         );
     }
@@ -173,10 +179,10 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], va
                             {}
                         </div>
                         <figcaption class="fig-caption">
-                            <strong>Figura {}.</strong> {}.
+                            <strong>{} {}.</strong> {}.
                         </figcaption>
                     </figure>"#,
-                    svg, fig_counter, escape_html(p_title)
+                    svg, i18n.fig_prefix, fig_counter, escape_html(p_title)
                 ));
                 fig_counter += 1;
             }
@@ -196,29 +202,15 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], va
         }
     }
 
-    let mut vars_html = String::new();
-    for (k, v) in vars {
-        let val_str = v.to_string();
-        vars_html.push_str(&format!(
-            r#"<tr>
-                <td><code>{}</code></td>
-                <td><strong>{}</strong></td>
-            </tr>"#,
-            escape_html(k), escape_html(&val_str)
-        ));
-    }
-
     let html_content = format!(r#"<!DOCTYPE html>
-<html lang="es">
+<html lang="{}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{} &mdash; Manuscrito Científico Physure</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" media="print" onload="this.media='all'">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
-        onload="if(typeof renderMathInElement==='function')renderMathInElement(document.body,{{delimiters:[{{left:'\\[',right:'\\]',display:true}},{{left:'\\(',right:'\\)',display:false}}],throwOnError:false}});"></script>
     <style>
+        {}
+
         @page {{
             size: A4;
             margin: 25mm 20mm;
@@ -328,37 +320,6 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], va
             user-select: none;
         }}
 
-        .booktabs {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.98rem;
-            margin: 24px 0 36px 0;
-        }}
-
-        .booktabs th {{
-            border-top: 1.5pt solid #000000;
-            border-bottom: 0.75pt solid #000000;
-            padding: 8px 12px;
-            text-align: left;
-            font-weight: bold;
-            color: #000000;
-        }}
-
-        .booktabs td {{
-            padding: 9px 12px;
-            border-bottom: none;
-            color: #111111;
-        }}
-
-        .booktabs tr:last-child td {{
-            border-bottom: 1.5pt solid #000000;
-        }}
-
-        .booktabs code {{
-            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
-            font-size: 0.9rem;
-        }}
-
         .latex-prose {{
             font-size: 1.08rem;
             line-height: 1.72;
@@ -406,38 +367,64 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], va
             }}
         }}
     </style>
+    <script>
+        {}
+    </script>
+    <script>
+        {}
+    </script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {{
+            if (typeof renderMathInElement === 'function') {{
+                renderMathInElement(document.body, {{
+                    delimiters: [
+                        {{left: '\\[', right: '\\]', display: true}},
+                        {{left: '\\(', right: '\\)', display: false}}
+                    ],
+                    throwOnError: false
+                }});
+            }}
+        }});
+    </script>
 </head>
 <body>
     <article class="paper-manuscript">
         <header class="paper-header">
             <div class="paper-institution">{}</div>
             <h1 class="paper-title">{}</h1>
-            <div class="paper-author-meta">{} &bull; {} &bull; Motor Physure Core</div>
+            <div class="paper-author-meta">{} &bull; {} &bull; {}</div>
         </header>
 
         {}
 
-        <h2 class="paper-sec-title">1. Evaluaciones Físicas y Ecuaciones</h2>
+        <h2 class="paper-sec-title">{}</h2>
         {}
 
-        <h2 class="paper-sec-title">2. Apéndice A: Código Fuente PHS</h2>
+        <h2 class="paper-sec-title">{}</h2>
         <pre class="source-code-box">{}</pre>
     </article>
 </body>
 </html>
     "#,
+        i18n.html_lang,
         escape_html(&paper_title),
+        KATEX_CSS,
+        KATEX_JS,
+        AUTO_RENDER_JS,
         escape_html(&paper_inst),
         escape_html(&paper_title),
         escape_html(&paper_author),
         escape_html(&paper_date),
+        i18n.footer_engine,
         abstract_html,
+        i18n.sec_evaluations,
         content_html,
+        i18n.sec_appendix,
         escape_html(code)
     );
 
     fs::write(&temp_dir, html_content)?;
-    println!("\x1b[1;32m📄 Manuscrito científico HTML generado:\x1b[0m {}", temp_dir.display());
+    println!("\x1b[1;32m📄 Manuscrito científico HTML generado (100% offline):\x1b[0m {}", temp_dir.display());
     open::that(&temp_dir)?;
     Ok(())
 }

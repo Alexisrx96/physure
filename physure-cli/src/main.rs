@@ -4,7 +4,9 @@ use std::fs;
 use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
+mod config;
 mod html;
+mod katex_assets;
 mod protocol;
 mod rich;
 mod step;
