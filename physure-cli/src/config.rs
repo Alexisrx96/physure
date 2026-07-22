@@ -18,7 +18,7 @@ pub struct I18nLabels {
 
 impl PhysureConfig {
     pub fn load() -> Self {
-        let mut lang = "es".to_string();
+        let mut lang = "en".to_string();
 
         let mut candidate_paths = vec![
             PathBuf::from("physure.conf"),
@@ -57,13 +57,13 @@ impl PhysureConfig {
 
     pub fn i18n(&self) -> I18nLabels {
         match self.lang.as_str() {
-            "en" | "en-us" | "en-gb" => I18nLabels {
-                abstract_title: "Abstract",
-                sec_evaluations: "1. Physical Evaluations and Equations",
-                sec_appendix: "2. Appendix A: PHS Source Code",
-                fig_prefix: "Figure",
-                footer_engine: "Physure Core Engine",
-                html_lang: "en",
+            "es" | "es-es" | "es-mx" => I18nLabels {
+                abstract_title: "Resumen / Abstract",
+                sec_evaluations: "1. Evaluaciones Físicas y Ecuaciones",
+                sec_appendix: "2. Apéndice A: Código Fuente PHS",
+                fig_prefix: "Figura",
+                footer_engine: "Motor Physure Core",
+                html_lang: "es",
             },
             "fr" => I18nLabels {
                 abstract_title: "Résumé / Abstract",
@@ -82,12 +82,12 @@ impl PhysureConfig {
                 html_lang: "de",
             },
             _ => I18nLabels {
-                abstract_title: "Resumen / Abstract",
-                sec_evaluations: "1. Evaluaciones Físicas y Ecuaciones",
-                sec_appendix: "2. Apéndice A: Código Fuente PHS",
-                fig_prefix: "Figura",
-                footer_engine: "Motor Physure Core",
-                html_lang: "es",
+                abstract_title: "Abstract",
+                sec_evaluations: "1. Physical Evaluations and Equations",
+                sec_appendix: "2. Appendix A: PHS Source Code",
+                fig_prefix: "Figure",
+                footer_engine: "Physure Core Engine",
+                html_lang: "en",
             },
         }
     }
