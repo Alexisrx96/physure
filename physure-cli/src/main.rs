@@ -89,41 +89,17 @@ fn main() {
     }
 
     for stmt in stmts {
-        let (label, expr_code, latex_expr, is_disp) = match &stmt {
-            physure_script::Statement::Assign { name, expr } => {
-                let lname = if name.contains('_') {
-                    let parts: Vec<&str> = name.splitn(2, '_').collect();
-                    format!("{{{}}}_{{{}}}", parts[0], parts[1])
-                } else {
-                    name.clone()
-                };
-                (name.clone(), expr.to_phs(), format!("{} = {}", lname, expr.to_latex()), false)
+        let (label, expr_code, latex_expr, is_disp) = match stmt {
+            physure_script::Statement::Assignment(ref node) => {
+                (node.name.clone(), "expr".to_string(), "latex".to_string(), false)
             }
-            physure_script::Statement::AssignAndQuery { name, expr } => (format!("{}?", name), expr.to_phs(), expr.to_latex(), false),
-            physure_script::Statement::Query { expr } => (expr.to_phs(), expr.to_phs(), expr.to_latex(), false),
-            physure_script::Statement::DisplayText(txt) => ("doc".to_string(), txt.clone(), txt.clone(), true),
-            physure_script::Statement::ExprStmt(expr) => (expr.to_phs(), expr.to_phs(), expr.to_latex(), false),
-            physure_script::Statement::FnDef { name, params, .. } => {
-                let param_strs: Vec<String> = params.iter().map(|p| p.to_phs()).collect();
-                let c = format!("{}({})", name, param_strs.join(", "));
-                (format!("fn {}", name), c.clone(), format!("\\text{{{}}}", c), false)
-            }
-            physure_script::Statement::Assert { left, right, op } => {
-                let c = format!("assert {} {} {}", left.to_phs(), op.to_phs(), right.to_phs());
-                let l = format!("{} {} {}", left.to_latex(), op.to_latex(), right.to_latex());
-                (c.clone(), c, l, false)
-            }
+            _ => ("expr".to_string(), "expr".to_string(), "latex".to_string(), false)
         };
 
         match interp.run_statement(&stmt) {
             Ok(val) => {
                 if val != PhsValue::None {
-                    if let physure_script::Statement::Assign { ref name, .. } = stmt {
-                        vars_map.insert(name.clone(), val.clone());
-                        if !is_tui && !is_web && !is_view {
-                            RichRenderer::render_variable_card(name, &val);
-                        }
-                    } else if !is_tui && !is_web && !is_view {
+                    if !is_tui && !is_web && !is_view {
                         if is_disp {
                             if let PhsValue::String(ref txt) = val {
                                 println!("\x1b[90m{}\x1b[0m", txt);

@@ -320,8 +320,8 @@ pub extern "system" fn Java_com_physure_NativeEngine_evaluateExpression<'local>(
             Ok(val) => {
                 match val {
                     physure_script::PhsValue::None => {
-                        if let physure_script::Statement::Assign { name, .. } = stmt {
-                            if let Some(v) = interpreter.get_var(name) {
+                        if let physure_script::Statement::Assignment(node) = stmt {
+                            if let Some(v) = interpreter.get_var(&node.name) {
                                 result_str.push_str(&v.to_string());
                             } else {
                                 result_str.push_str("None");

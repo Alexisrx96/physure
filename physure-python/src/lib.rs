@@ -1032,12 +1032,12 @@ impl PyExpr {
 
     #[staticmethod]
     fn symbol(s: String) -> Self {
-        PyExpr(Expr::symbol(s))
+        PyExpr(Expr::symbol(&s))
     }
 
     #[staticmethod]
     fn quantity(name: String, unit: &PyRationalUnit) -> Self {
-        PyExpr(Expr::quantity(name, &unit.0))
+        PyExpr(Expr::quantity(&name, &unit.0))
     }
 
     #[staticmethod]
@@ -1175,8 +1175,8 @@ impl PyInterpreter {
 
             let obj = match res {
                 ::physure_script::PhsValue::None => {
-                    if let ::physure_script::Statement::Assign { name, .. } = stmt {
-                        if let Some(v) = self.inner.get_var(&name) {
+                    if let ::physure_script::Statement::Assignment(node) = stmt {
+                        if let Some(v) = self.inner.get_var(&node.name) {
                             match v {
                                 ::physure_script::PhsValue::None => py.None(),
                                 ::physure_script::PhsValue::Number(n) => n.into_py_any(py)?,
