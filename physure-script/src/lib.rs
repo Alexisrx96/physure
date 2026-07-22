@@ -4,6 +4,7 @@ pub mod parser;
 pub mod resolver;
 pub mod interpreter;
 pub mod codegen;
+pub mod exporter;
 
 pub use codegen::{transpile, Target};
 
