@@ -194,8 +194,10 @@ impl Expr {
             }
             Expr::Ident(s) => {
                 if s.contains('_') {
-                    let parts: Vec<&str> = s.splitn(2, '_').collect();
-                    format!("{{{}}}_{{{}}}", parts[0], parts[1])
+                    let parts: Vec<&str> = s.split('_').collect();
+                    let main = parts[0];
+                    let sub = parts[1..].join("\\_");
+                    format!("{{{}}}_{{{}}}", main, sub)
                 } else {
                     s.clone()
                 }
@@ -219,7 +221,10 @@ impl Expr {
                 format!("[{}]", item_strs.join(", "))
             }
             Expr::Uncertainty { val, unc } => format!("{} \\pm {}", val.to_latex(), unc.to_latex()),
-            Expr::Convert { expr, target_unit } => format!("{} \\implies \\text{{{}}}", expr.to_latex(), target_unit),
+            Expr::Convert { expr, target_unit } => {
+                let clean_u = target_unit.replace('_', "\\_").replace('*', " \\cdot ");
+                format!("{} \\implies \\text{{{}}}", expr.to_latex(), clean_u)
+            }
             Expr::FormatSig { expr, .. } => expr.to_latex(),
         }
     }

@@ -54,7 +54,18 @@ fn format_val_latex(val: &PhsValue) -> String {
                     val_s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
                 }
             }
-            let u_s = q.unit.__repr__();
+            let std_dev = q.value.std_dev();
+            if std_dev > 0.0 {
+                let mut unc_s = physure_core::quantity::format_float(std_dev);
+                if unc_s.contains('e') || unc_s.contains('E') {
+                    let parts: Vec<&str> = unc_s.split(['e', 'E']).collect();
+                    if parts.len() == 2 {
+                        unc_s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
+                    }
+                }
+                val_s = format!("({} \\pm {})", val_s, unc_s);
+            }
+            let u_s = q.unit.__repr__().replace('*', " \\cdot ").replace('_', "\\_");
             if u_s.is_empty() {
                 format!("\\implies \\mathbf{{{}}}", val_s)
             } else {
@@ -72,7 +83,7 @@ fn format_val_latex(val: &PhsValue) -> String {
             format!("\\implies \\mathbf{{{}}}", s)
         }
         PhsValue::Bool(b) => format!("\\implies \\mathbf{{\\text{{{}}}}}", if *b { "True" } else { "False" }),
-        _ => format!("\\implies \\mathbf{{\\text{{{}}}}}", val.to_string()),
+        _ => format!("\\implies \\mathbf{{\\text{{{}}}}}", val.to_string().replace('_', "\\_")),
     }
 }
 
@@ -167,13 +178,10 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{} &mdash; Manuscrito Científico Physure</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" media="print" onload="this.media='all'">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"
-        onload="renderMathInElement(document.body);"></script>
+        onload="if(typeof renderMathInElement==='function')renderMathInElement(document.body);"></script>
     <style>
         @page {{
             size: A4;
@@ -181,7 +189,7 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
         }}
 
         body {{
-            font-family: 'Crimson Pro', 'Georgia', 'Times New Roman', serif;
+            font-family: 'Crimson Pro', Georgia, 'Times New Roman', 'Liberation Serif', serif;
             font-size: 11.5pt;
             color: #111111;
             background-color: #ffffff;
@@ -272,6 +280,8 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
             flex-grow: 1;
             text-align: center;
             overflow-x: auto;
+            font-family: 'Crimson Pro', Georgia, serif;
+            font-size: 1.15rem;
         }}
 
         .latex-eq-num {{
@@ -309,7 +319,7 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
         }}
 
         .booktabs code {{
-            font-family: 'Fira Code', monospace;
+            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
             font-size: 0.9rem;
         }}
 
@@ -346,7 +356,7 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
             border: 1px solid #e9ecef;
             border-radius: 3px;
             padding: 18px;
-            font-family: 'Fira Code', monospace;
+            font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;
             font-size: 0.86rem;
             white-space: pre-wrap;
             overflow-x: auto;
