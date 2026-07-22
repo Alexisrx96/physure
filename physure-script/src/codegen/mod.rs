@@ -20,16 +20,7 @@ pub trait CodeGenerator {
 }
 
 pub mod python;
-// Stubs to allow compilation for now while we implement python transpiler
-pub mod rust {
-    use super::*;
-    pub struct RustTranspiler;
-    impl CodeGenerator for RustTranspiler {
-        fn generate_program(&self, _program: &Program) -> Result<String, CodegenError> {
-            Ok(String::new())
-        }
-    }
-}
+pub mod rust;
 pub mod java {
     use super::*;
     pub struct JavaTranspiler;
