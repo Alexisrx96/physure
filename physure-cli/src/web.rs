@@ -420,20 +420,7 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
         <h2 class="paper-sec-title">1. Evaluaciones Físicas y Ecuaciones</h2>
         {}
 
-        <h2 class="paper-sec-title">2. Estado Final de Constantes y Variables</h2>
-        <table class="booktabs">
-            <thead>
-                <tr>
-                    <th style="width: 35%;">Variable</th>
-                    <th style="width: 65%;">Valor Final</th>
-                </tr>
-            </thead>
-            <tbody>
-                {}
-            </tbody>
-        </table>
-
-        <h2 class="paper-sec-title">3. Apéndice A: Código Fuente PHS</h2>
+        <h2 class="paper-sec-title">2. Apéndice A: Código Fuente PHS</h2>
         <pre class="source-code-box">{}</pre>
     </article>
 </body>
@@ -446,7 +433,6 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], vars: 
         escape_html(&paper_date),
         abstract_html,
         content_html,
-        vars_html,
         escape_html(code)
     );
 
