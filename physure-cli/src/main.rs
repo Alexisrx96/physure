@@ -88,13 +88,19 @@ fn main() {
 
     for stmt in stmts {
         let (label, expr_code, is_disp) = match &stmt {
-            physure_script::Statement::Assign { name, expr } => (name.clone(), format!("{:?}", expr), false),
-            physure_script::Statement::AssignAndQuery { name, expr } => (format!("{}?", name), format!("{:?}", expr), false),
-            physure_script::Statement::Query { expr } => ("query".to_string(), format!("{:?}", expr), false),
+            physure_script::Statement::Assign { name, expr } => (name.clone(), expr.to_phs(), false),
+            physure_script::Statement::AssignAndQuery { name, expr } => (format!("{}?", name), expr.to_phs(), false),
+            physure_script::Statement::Query { expr } => (expr.to_phs(), expr.to_phs(), false),
             physure_script::Statement::DisplayText(txt) => ("doc".to_string(), txt.clone(), true),
-            physure_script::Statement::ExprStmt(expr) => ("eval".to_string(), format!("{:?}", expr), false),
-            physure_script::Statement::FnDef { name, .. } => (format!("fn {}", name), "def".to_string(), false),
-            physure_script::Statement::Assert { .. } => ("assert".to_string(), "assert".to_string(), false),
+            physure_script::Statement::ExprStmt(expr) => (expr.to_phs(), expr.to_phs(), false),
+            physure_script::Statement::FnDef { name, params, .. } => {
+                let param_strs: Vec<String> = params.iter().map(|p| p.to_phs()).collect();
+                (format!("fn {}", name), format!("{}({})", name, param_strs.join(", ")), false)
+            }
+            physure_script::Statement::Assert { left, right, op } => {
+                let c = format!("assert {} {} {}", left.to_phs(), op.to_phs(), right.to_phs());
+                (c.clone(), c, false)
+            }
         };
 
         match interp.run_statement(&stmt) {
@@ -106,7 +112,13 @@ fn main() {
                             RichRenderer::render_variable_card(name, &val);
                         }
                     } else if !is_tui && !is_web && !is_view {
-                        RichRenderer::render_variable_card(&label, &val);
+                        if is_disp {
+                            if let PhsValue::String(ref txt) = val {
+                                println!("\x1b[90m{}\x1b[0m", txt);
+                            }
+                        } else {
+                            RichRenderer::render_variable_card(&label, &val);
+                        }
                     }
 
                     steps.push(ExecutionStep {
