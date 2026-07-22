@@ -1,5 +1,6 @@
 use crate::error::{PhysureError, PhysureResult};
 use crate::units::rational::RationalUnit;
+use crate::units::registry::UnitRegistry;
 use num_rational::Rational64;
 use std::collections::HashMap;
 
@@ -143,6 +144,7 @@ fn is_unit_char(c: char) -> bool {
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     current_token: Token,
+    registry: Option<&'a UnitRegistry>,
 }
 
 impl<'a> Parser<'a> {
@@ -152,6 +154,7 @@ impl<'a> Parser<'a> {
         Ok(Parser {
             lexer,
             current_token,
+            registry: None,
         })
     }
 
@@ -161,17 +164,31 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_expression(input: &str) -> PhysureResult<RationalUnit> {
+        let (registry, _) = crate::units::conf::build_registry_from_conf();
+        Self::parse_expression_impl(input, Some(&registry))
+    }
+
+    /// Like `parse_expression`, but resolves each symbol against `registry` first so
+    /// aliases and prefixed units (e.g. "km", "kN") carry their real scale factor.
+    /// Symbols not found in the registry fall back to the atomic (scale-1) behavior.
+    pub fn parse_expression_with_registry(input: &str, registry: &UnitRegistry) -> PhysureResult<RationalUnit> {
+        Self::parse_expression_impl(input, Some(registry))
+    }
+
+    fn parse_expression_impl(input: &str, registry: Option<&UnitRegistry>) -> PhysureResult<RationalUnit> {
         let normalized = normalize_unicode(input);
         let mut lexer = Lexer::new(&normalized);
         let first_tok = lexer.next_token()?;
         let mut p = Parser {
             lexer,
             current_token: first_tok,
+            registry,
         };
-        let res = p.parse_expr()?;
+        let mut res = p.parse_expr()?;
         if p.current_token != Token::Eof {
             return Err(PhysureError::ParseError(format!("Trailing tokens after expression: {:?}", p.current_token)));
         }
+        res.display_name = Some(input.trim().to_string());
         Ok(res)
     }
 
@@ -211,9 +228,14 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 // Check if symbol has embedded exponent like "m2" or "s-1"
                 let (name, exp_opt) = split_embedded_exponent(&symbol_name);
-                let mut dims = HashMap::new();
-                dims.insert(name, (1, 1));
-                let u = RationalUnit::new_from_dimensions(dims);
+                let u = match self.registry.and_then(|r| r.get_unit(&name)) {
+                    Some(registered) => registered,
+                    None => {
+                        let mut dims = HashMap::new();
+                        dims.insert(name, (1, 1));
+                        RationalUnit::new_from_dimensions(dims)
+                    }
+                };
                 if let Some((n, d)) = exp_opt {
                     u.pow(Rational64::new(n, d))
                 } else {

@@ -1,0 +1,17 @@
+[package]
+name        = "physure-cli"
+description = "Command line interface for PhysureScript (.phs)."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+authors.workspace    = true
+
+[[bin]]
+name = "phs"
+path = "src/main.rs"
+
+[dependencies]
+physure-core   = { path = "../physure-core" }
+physure-script = { path = "../physure-script" }

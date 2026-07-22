@@ -20,7 +20,8 @@ name       = "physure_core"  # The compiled .so will be named physure._core
 crate-type = ["cdylib"]      # Shared library for Python import
 
 [dependencies]
-physure.workspace      = true
+physure-core.workspace = true
+physure-script.workspace = true
 pyo3.workspace         = true
 numpy.workspace        = true
 # Re-export workspace deps that physure-core needs, so they link correctly
