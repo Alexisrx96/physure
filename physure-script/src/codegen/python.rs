@@ -198,6 +198,7 @@ mod tests {
         let fn_node = FunctionDefNode {
             name: "foo".to_string(),
             params: vec!["a".to_string(), "b".to_string()],
+            param_units: vec![None, None],
             body_stmts: vec![Statement::Expr(Expr::BinaryOp {
                 op: BinaryOp::Mul,
                 left: Box::new(Expr::Identifier("a".to_string())),

@@ -213,6 +213,7 @@ impl PhsInterpreter {
                         let arg_eval = self.eval_expr(&args[0], env);
                         if let Ok(PhsValue::Function(arg_func)) = arg_eval {
                             let params = arg_func.params.clone();
+                            let param_units = arg_func.param_units.clone();
                             let inner_args: Vec<Expr> = params.iter().map(|p| Expr::Identifier(p.clone())).collect();
                             let body = Statement::Expr(Expr::FunctionCall {
                                 name: func.name.clone(),
@@ -224,6 +225,7 @@ impl PhsInterpreter {
                             return Ok(PhsValue::Function(crate::ast::FunctionDefNode {
                                 name: format!("{}_{}", func.name, arg_func.name),
                                 params,
+                                param_units,
                                 body_stmts: vec![body],
                             }));
                         }
@@ -244,8 +246,9 @@ impl PhsInterpreter {
                         return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", name, func.params.len(), args.len())));
                     }
                     let mut local_env = env.clone();
-                    for (param_name, arg_val) in func.params.iter().zip(arg_vals.into_iter()) {
-                        local_env.insert(param_name.clone(), arg_val);
+                    for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {
+                        let bound_val = self.bind_param_value(name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val)?;
+                        local_env.insert(param_name.clone(), bound_val);
                     }
                     let mut last_val = PhsValue::None;
                     for stmt in &func.body_stmts {
@@ -259,10 +262,50 @@ impl PhsInterpreter {
         }
     }
 
+    /// Binds an argument value to a function parameter, converting it to the parameter's
+    /// declared unit (if any) so that dimensionally-equivalent-but-differently-scaled
+    /// arguments (e.g. `5 cm` passed to a `(r: m)` parameter) produce identical results
+    /// regardless of which unit the caller used.
+    ///
+    /// - If the parameter has no declared unit, the argument is bound as-is (no conversion).
+    /// - If the argument isn't a `Quantity`, it is bound as-is (nothing to convert).
+    /// - If the argument's unit is dimensionally incompatible with the declared unit,
+    ///   this returns a clear error rather than silently producing a wrong result.
+    fn bind_param_value(
+        &self,
+        fn_name: &str,
+        param_name: &str,
+        declared_unit: Option<&String>,
+        arg_val: PhsValue,
+    ) -> PhysureResult<PhsValue> {
+        let Some(unit_str) = declared_unit else {
+            return Ok(arg_val);
+        };
+        let PhsValue::Quantity(q) = arg_val else {
+            return Ok(arg_val);
+        };
+        let clean_unit_str = unit_str.split('#').next().unwrap().split("//").next().unwrap().trim();
+        if clean_unit_str.is_empty() {
+            return Ok(PhsValue::Quantity(q));
+        }
+        let target_unit = UnitParser::parse_expression(clean_unit_str)?;
+        let converted = q.convert_to(&target_unit).map_err(|e| {
+            PhysureError::Generic(format!(
+                "Argument for parameter '{}' of function '{}' has a unit incompatible with declared unit '{}': {:?}",
+                param_name, fn_name, clean_unit_str, e
+            ))
+        })?;
+        Ok(PhsValue::Quantity(converted))
+    }
+
     pub fn eval_binary_op_vals(&self, op: BinaryOp, l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
         match (l_val, r_val) {
             (PhsValue::Function(f), PhsValue::Function(g)) => {
-                let params = if !f.params.is_empty() { f.params.clone() } else { g.params.clone() };
+                let (params, param_units) = if !f.params.is_empty() {
+                    (f.params.clone(), f.param_units.clone())
+                } else {
+                    (g.params.clone(), g.param_units.clone())
+                };
                 let args_expr: Vec<Expr> = params.iter().map(|p| Expr::Identifier(p.clone())).collect();
                 let body = Statement::Expr(Expr::BinaryOp {
                     op,
@@ -279,6 +322,7 @@ impl PhsInterpreter {
                 Ok(PhsValue::Function(crate::ast::FunctionDefNode {
                     name,
                     params,
+                    param_units,
                     body_stmts: vec![body],
                 }))
             }
@@ -455,6 +499,7 @@ mod tests {
             Statement::FunctionDef(FunctionDefNode {
                 name: "kinetic_energy".to_string(),
                 params: vec!["m".to_string(), "v".to_string()],
+                param_units: vec![None, None],
                 body_stmts: vec![Statement::Expr(Expr::BinaryOp {
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::BinaryOp {

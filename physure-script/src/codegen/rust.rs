@@ -144,6 +144,7 @@ mod tests {
             statements: vec![Statement::FunctionDef(FunctionDefNode {
                 name: "kinetic_energy".to_string(),
                 params: vec!["m".to_string(), "v".to_string()],
+                param_units: vec![None, None],
                 body_stmts: vec![Statement::Expr(Expr::BinaryOp {
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::BinaryOp {

@@ -43,6 +43,11 @@ pub struct ExportNode {
 pub struct FunctionDefNode {
     pub name: String,
     pub params: Vec<String>,
+    /// Optional declared unit constraint for each parameter, aligned by index with `params`.
+    /// `None` (or a missing/short entry, for backward compatibility) means the parameter has
+    /// no declared unit, so its argument is bound as-is with no conversion attempted.
+    #[serde(default)]
+    pub param_units: Vec<Option<String>>,
     pub body_stmts: Vec<Statement>,
 }
 
@@ -115,6 +120,7 @@ mod tests {
         let node = FunctionDefNode {
             name: "square".to_string(),
             params: vec!["x".to_string()],
+            param_units: vec![None],
             body_stmts: vec![Statement::Expr(Expr::Identifier("x".to_string()))],
         };
         let stmt = Statement::FunctionDef(node);
