@@ -1,0 +1,29 @@
+[package]
+name        = "physure-cli"
+description = "Command line interface for PhysureScript (.phs)."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+authors.workspace    = true
+
+[[bin]]
+name = "phs"
+path = "src/main.rs"
+
+[dependencies]
+physure-core   = { path = "../physure-core" }
+physure-script = { path = "../physure-script" }
+ratatui        = "0.28"
+crossterm      = "0.28"
+arboard        = "3.4"
+tiny_http      = "0.12"
+open           = "5.3"
+dirs           = "5.0"
+serde          = { version = "1.0", features = ["derive"] }
+serde_json     = "1"
+chrono         = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

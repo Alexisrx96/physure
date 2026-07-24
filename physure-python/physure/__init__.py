@@ -35,6 +35,7 @@ try:
     from physure._core import (  # type: ignore[import]
         CovarianceStore,
         DimVector,
+        Interpreter,
         PruningConfig,
         RationalUnit,
         UnitDefinition,
@@ -286,6 +287,12 @@ def _load_plotting(name: str) -> Any:
     return getattr(plotting, name)
 
 
+def _load_symbolic(name: str) -> Any:
+    from physure.symbolic import PhyFunction
+
+    return PhyFunction
+
+
 _ATTR_LOADERS: dict[str, Callable[[str], Any]] = {}
 for _attr in _IO_ATTRS:
     _ATTR_LOADERS[_attr] = _load_io
@@ -309,6 +316,7 @@ for _attr in ("equivalencies", "spectral", "thermodynamic"):
     _ATTR_LOADERS[_attr] = _load_equivalencies
 for _attr in _PLOT_ATTRS:
     _ATTR_LOADERS[_attr] = _load_plotting
+_ATTR_LOADERS["PhyFunction"] = _load_symbolic
 for _attr in _HELPER_ATTRS:
     _ATTR_LOADERS[_attr] = _load_helpers
 del _attr
@@ -352,6 +360,8 @@ __all__ = [
     "batch_to_si_inplace",
     "step_euler_inplace",
     # Lazy-loaded API
+    "Interpreter",
+    "PhyFunction",
     "CompoundUnit",
     "ConversionError",
     "PhysureContext",

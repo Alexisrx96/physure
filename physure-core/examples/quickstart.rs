@@ -1,5 +1,5 @@
 //! Minimal tour: exact units, dimension-checked arithmetic, uncertainty.
-use physure::{Quantity, RationalUnit};
+use physure_core::{Quantity, RationalUnit};
 
 fn main() {
     let metre = RationalUnit::new_from_dimensions([("m".to_string(), (1, 1))]);

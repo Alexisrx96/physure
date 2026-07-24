@@ -9,7 +9,7 @@
 //   4. Registers the Python module (physure._core).
 //
 // HARD RULE: No physics math lives here. All computation delegates to
-//            physure::*. This is strictly a translation layer.
+//            physure_core::*. This is strictly a translation layer.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -26,12 +26,13 @@ use std::sync::{Mutex, OnceLock};
 use num_rational::Rational64;
 use num_traits::FromPrimitive;
 
-use ::physure::{
+use ::physure_core::{
     RationalUnit, UnitRegistry, Quantity, PruningConfig, CovarianceStore,
     GaussianBackend, MonteCarloBackend, UnscentedBackend, UncertaintyBackend, UncertaintyValue,
     PhysureResult, PhysureError,
-    DimVector, UnitConverter, UnitDefinition, UnitKind, Expr,
+    DimVector, UnitConverter, UnitDefinition, UnitKind,
 };
+use physure_script::symbolic::Expr;
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
 // Avoids allocating duplicate Python wrappers for the same RationalUnit.
@@ -301,6 +302,26 @@ impl PyUnitRegistry {
     #[staticmethod]
     fn default_imperial() -> Self {
         PyUnitRegistry(UnitRegistry::build_default_imperial())
+    }
+
+    fn get_prefixes(&self) -> HashMap<String, f64> {
+        self.0.prefixes.clone()
+    }
+
+    #[staticmethod]
+    fn from_conf() -> Self {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_from_conf();
+        PyUnitRegistry(reg)
+    }
+
+    fn get_categories(&self) -> HashMap<String, Vec<String>> {
+        self.0.categories.clone()
+    }
+
+    fn get_constants_meta(&self) -> HashMap<String, (String, Option<String>, Option<String>)> {
+        self.0.constants_meta.iter().map(|(k, v)| {
+            (k.clone(), (v.value.clone(), v.description.clone(), v.latex_symbol.clone()))
+        }).collect()
     }
 }
 
@@ -633,7 +654,7 @@ fn batch_to_si_inplace(py: Python<'_>, buf: PyBuffer<f64>, factor: f64) -> PyRes
         let ptr = slice.as_ptr() as *mut f64;
         std::slice::from_raw_parts_mut(ptr, slice.len())
     };
-    ::physure::batch_to_si(data, factor);
+    ::physure_core::batch_to_si(data, factor);
     Ok(())
 }
 
@@ -656,7 +677,7 @@ fn step_euler_inplace(
         let ptr = vel_slice.as_ptr() as *const f64;
         std::slice::from_raw_parts(ptr, vel_slice.len())
     };
-    ::physure::step_euler(pos, vel, dt);
+    ::physure_core::step_euler(pos, vel, dt);
     Ok(())
 }
 
@@ -673,14 +694,14 @@ fn batch_scale_and_shift_inplace(
         let ptr = slice.as_ptr() as *mut f64;
         std::slice::from_raw_parts_mut(ptr, slice.len())
     };
-    ::physure::batch_scale_and_shift(data, scale, shift);
+    ::physure_core::batch_scale_and_shift(data, scale, shift);
     Ok(())
 }
 
 /// Parse unit string expression directly via native Rust parser.
 #[pyfunction]
 fn parse_unit_expression(py: Python<'_>, expr: &str) -> PyResult<PyObject> {
-    let unit = ::physure::units::Parser::parse_expression(expr)
+    let unit = ::physure_core::units::Parser::parse_expression(expr)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     get_cached_unit(py, unit)
 }
@@ -688,7 +709,7 @@ fn parse_unit_expression(py: Python<'_>, expr: &str) -> PyResult<PyObject> {
 /// Evaluate dual number auto-differentiation operation in native Rust.
 #[pyfunction]
 fn eval_dual_number(val: f64, der: f64, op: &str) -> PyResult<(f64, f64)> {
-    let d = ::physure::math::DualNumber { value: val, derivative: der };
+    let d = ::physure_core::math::DualNumber { value: val, derivative: der };
     let res = match op {
         "sin" => d.sin(),
         "cos" => d.cos(),
@@ -713,8 +734,8 @@ fn propagate_hessian_uncertainty(
     let cov_slice = covariance.as_slice().unwrap();
     let shape = hessian.shape();
 
-    let mean_out = ::physure::math::HessianPropagation::propagate_mean_slices(f_mean, h_slice, cov_slice, shape[0], shape[1]);
-    let var_out = ::physure::math::HessianPropagation::propagate_variance_slices(j_slice, h_slice, cov_slice, shape[0], shape[1]);
+    let mean_out = ::physure_core::math::HessianPropagation::propagate_mean_slices(f_mean, h_slice, cov_slice, shape[0], shape[1]);
+    let var_out = ::physure_core::math::HessianPropagation::propagate_variance_slices(j_slice, h_slice, cov_slice, shape[0], shape[1]);
 
     Ok((mean_out, var_out))
 }
@@ -772,7 +793,7 @@ fn to_backend(
 #[pyfunction]
 fn to_arrow_record_batch(py: Python<'_>, quantities: Vec<PyRef<'_, PyQuantity>>) -> PyResult<PyObject> {
     let raw: Vec<Quantity> = quantities.iter().map(|q| q.0.clone()).collect();
-    let bytes = ::physure::serialization::quantities_to_arrow(&raw)
+    let bytes = ::physure_core::serialization::quantities_to_arrow(&raw)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(pyo3::types::PyBytes::new(py, &bytes).into_py_any(py)?)
 }
@@ -1110,18 +1131,18 @@ impl PyExpr {
 
 #[pyfunction]
 fn tokenize_phs_expression(_py: Python<'_>, stmt: &str) -> PyResult<Vec<(String, String, usize)>> {
-    let lexer = ::physure::phs::PhsLexer::new(stmt);
+    let lexer = ::physure_script::PhsLexer::new(stmt);
     let tokens = lexer.tokenize()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     let result = tokens.into_iter().map(|t| {
         let kind_str = match t.kind {
-            ::physure::phs::TokenKind::Number(_) => "NUMBER",
-            ::physure::phs::TokenKind::Ident(_) => "IDENT",
-            ::physure::phs::TokenKind::StringLiteral(_) => "STRING",
-            ::physure::phs::TokenKind::Op(_) => "OP",
-            ::physure::phs::TokenKind::Sup(_) => "SUP",
-            ::physure::phs::TokenKind::Sqrt => "SQRT",
+            ::physure_script::TokenKind::Number(_) => "NUMBER",
+            ::physure_script::TokenKind::Ident(_) => "IDENT",
+            ::physure_script::TokenKind::StringLiteral(_) => "STRING",
+            ::physure_script::TokenKind::Op(_) => "OP",
+            ::physure_script::TokenKind::Sup(_) => "SUP",
+            ::physure_script::TokenKind::Sqrt => "SQRT",
         };
         (kind_str.to_string(), t.value, t.pos)
     }).collect();
@@ -1129,28 +1150,122 @@ fn tokenize_phs_expression(_py: Python<'_>, stmt: &str) -> PyResult<Vec<(String,
     Ok(result)
 }
 
+#[pyclass(name = "Interpreter")]
+pub struct PyInterpreter {
+    inner: ::physure_script::PhsInterpreter,
+}
+
+#[pymethods]
+impl PyInterpreter {
+    #[new]
+    fn new() -> Self {
+        PyInterpreter {
+            inner: ::physure_script::PhsInterpreter::default(),
+        }
+    }
+
+    fn evaluate(&mut self, py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {
+        let results = self.inner.eval_str(source)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+        let mut py_results = Vec::new();
+        for val in results {
+            let obj = match val {
+                ::physure_script::PhsValue::None => py.None(),
+                ::physure_script::PhsValue::Number(n) => n.into_py_any(py)?,
+                ::physure_script::PhsValue::Bool(b) => b.into_py_any(py)?,
+                ::physure_script::PhsValue::String(s) => s.into_py_any(py)?,
+                ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py)?,
+                ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py)?,
+                ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py)?,
+                ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py)?,
+                ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py)?,
+                ::physure_script::PhsValue::Vector(v) => {
+                    let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| {
+                        match item {
+                            ::physure_script::PhsValue::None => Ok(py.None()),
+                            ::physure_script::PhsValue::Number(n) => n.into_py_any(py),
+                            ::physure_script::PhsValue::Bool(b) => b.into_py_any(py),
+                            ::physure_script::PhsValue::String(s) => s.into_py_any(py),
+                            ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py),
+                            ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py),
+                            ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py),
+                            ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py),
+                            ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py),
+                            ::physure_script::PhsValue::Vector(_) => Ok(py.None()),
+                        }
+                    }).collect();
+                    items?.into_py_any(py)?
+                }
+            };
+            py_results.push(obj);
+        }
+        Ok(py_results)
+    }
+
+    fn deriv(&self, expression: &str, var: &str) -> PyResult<String> {
+        let call_expr = format!("deriv(\"{}\", \"{}\")", expression, var);
+        let mut interp = ::physure_script::PhsInterpreter::default();
+        let res = interp.eval_str(&call_expr)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(format!("{:?}", res))
+    }
+
+    fn integral(&self, expression: &str, var: &str) -> PyResult<String> {
+        let call_expr = format!("integral(\"{}\", \"{}\")", expression, var);
+        let mut interp = ::physure_script::PhsInterpreter::default();
+        let res = interp.eval_str(&call_expr)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(format!("{:?}", res))
+    }
+
+    fn solve(&self, equation: &str, var: &str) -> PyResult<String> {
+        let call_expr = format!("solve(\"{}\", \"{}\")", equation, var);
+        let mut interp = ::physure_script::PhsInterpreter::default();
+        let res = interp.eval_str(&call_expr)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(format!("{:?}", res))
+    }
+
+    fn get_fn_params(&self, name: &str) -> PyResult<Option<Vec<String>>> {
+        if let Some(::physure_script::PhsValue::Function(f)) = self.inner.env.get(name) {
+            Ok(Some(f.params.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 #[pyfunction]
 fn evaluate_phs_native(py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {
-    let results = ::physure::eval_phs(source)
+    let results = ::physure_script::eval_phs(source)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
     let mut py_results = Vec::new();
-    for res in results {
-        let obj = match res {
-            ::physure::PhsValue::None => py.None(),
-            ::physure::PhsValue::Number(n) => n.into_py_any(py)?,
-            ::physure::PhsValue::Bool(b) => b.into_py_any(py)?,
-            ::physure::PhsValue::String(s) => s.into_py_any(py)?,
-            ::physure::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py)?,
-            ::physure::PhsValue::Vector(v) => {
+    for val in results {
+        let obj = match val {
+            ::physure_script::PhsValue::None => py.None(),
+            ::physure_script::PhsValue::Number(n) => n.into_py_any(py)?,
+            ::physure_script::PhsValue::Bool(b) => b.into_py_any(py)?,
+            ::physure_script::PhsValue::String(s) => s.into_py_any(py)?,
+            ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py)?,
+            ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py)?,
+            ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py)?,
+            ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py)?,
+            ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py)?,
+            ::physure_script::PhsValue::Vector(v) => {
                 let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| {
                     match item {
-                        ::physure::PhsValue::None => Ok(py.None()),
-                        ::physure::PhsValue::Number(n) => n.into_py_any(py),
-                        ::physure::PhsValue::Bool(b) => b.into_py_any(py),
-                        ::physure::PhsValue::String(s) => s.into_py_any(py),
-                        ::physure::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py),
-                        ::physure::PhsValue::Vector(_) => Ok(py.None()),
+                        ::physure_script::PhsValue::None => Ok(py.None()),
+                        ::physure_script::PhsValue::Number(n) => n.into_py_any(py),
+                        ::physure_script::PhsValue::Bool(b) => b.into_py_any(py),
+                        ::physure_script::PhsValue::String(s) => s.into_py_any(py),
+                        ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py),
+                        ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py),
+                        ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py),
+                        ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py),
+                        ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py),
+                        ::physure_script::PhsValue::Vector(_) => Ok(py.None()),
                     }
                 }).collect();
                 items?.into_py_any(py)?
@@ -1167,6 +1282,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add_class::<PyQuantity>()?;
+    m.add_class::<PyInterpreter>()?;
     m.add_class::<PyPruningConfig>()?;
     m.add_class::<PyCovarianceStore>()?;
     m.add_class::<PyDimVector>()?;

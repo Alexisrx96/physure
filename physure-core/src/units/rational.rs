@@ -6,22 +6,29 @@ use smallvec::SmallVec;
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
 
 /// A unit representation using rational exponents to avoid floating-point errors.
-#[derive(Clone, Debug, Eq)]
+#[derive(Clone, Debug)]
 pub struct RationalUnit {
     /// Vector of base unit names to their exponents as (numerator, denominator), maintained sorted by unit name.
     pub dimensions: DimVec,
+    /// Multiplicative factor converting one of this unit to the canonical base-SI magnitude
+    /// for the same `dimensions` (e.g. "m" => 1.0, "km" => 1000.0, "cm" => 0.01).
+    pub scale: f64,
     pub id: u64,
+    pub display_name: Option<String>,
 }
+
+impl Eq for RationalUnit {}
 
 impl PartialEq for RationalUnit {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id == other.id && self.scale.to_bits() == other.scale.to_bits()
     }
 }
 
 impl Hash for RationalUnit {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+        self.scale.to_bits().hash(state);
     }
 }
 
@@ -49,7 +56,13 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, id }
+        RationalUnit { dimensions, scale: 1.0, id, display_name: None }
+    }
+
+    /// Returns a copy of this unit with a different scale factor (same dimensions/id).
+    pub fn with_scale(mut self, scale: f64) -> Self {
+        self.scale = scale;
+        self
     }
 
     pub fn dimensions_map(&self) -> HashMap<String, (i64, i64)> {
@@ -59,12 +72,21 @@ impl RationalUnit {
     pub fn dimensionless() -> Self {
         RationalUnit {
             dimensions: DimVec::new(),
+            scale: 1.0,
             id: 0,
+            display_name: None,
         }
     }
 
     pub fn base(name: &str) -> Self {
-        Self::new_from_dimensions([(name.to_string(), (1, 1))])
+        let mut u = Self::new_from_dimensions([(name.to_string(), (1, 1))]);
+        u.display_name = Some(name.to_string());
+        u
+    }
+
+    /// True if `other` has the same physical dimensions (ignoring scale) as `self`.
+    pub fn same_dimensions(&self, other: &Self) -> bool {
+        self.dimensions == other.dimensions
     }
 
     pub fn get_exponent(&self, base: &str) -> Option<(i64, i64)> {
@@ -110,7 +132,7 @@ impl RationalUnit {
             j += 1;
         }
         let id = Self::calculate_id(&new_dims);
-        RationalUnit { dimensions: new_dims, id }
+        RationalUnit { dimensions: new_dims, scale: self.scale * other.scale, id, display_name: None }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -150,7 +172,7 @@ impl RationalUnit {
             j += 1;
         }
         let id = Self::calculate_id(&new_dims);
-        RationalUnit { dimensions: new_dims, id }
+        RationalUnit { dimensions: new_dims, scale: self.scale / other.scale, id, display_name: None }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -163,12 +185,27 @@ impl RationalUnit {
             }
         }
         let id = Self::calculate_id(&new_dims);
-        RationalUnit { dimensions: new_dims, id }
+        let exp_f = *exp_r.numer() as f64 / *exp_r.denom() as f64;
+        RationalUnit { dimensions: new_dims, scale: self.scale.powf(exp_f), id, display_name: None }
     }
 
-    pub fn __repr__(&self) -> String {
+    pub fn known_derived_symbol(&self) -> Option<&'static str> {
+        let dims: Vec<(&str, i64, i64)> = self.dimensions.iter().map(|(k, (n, d))| (k.as_str(), *n, *d)).collect();
+        match dims.as_slice() {
+            [("kg", 1, 1), ("m", 1, 1), ("s", -2, 1)] => Some("N"),
+            [("kg", 1, 1), ("m", 2, 1), ("s", -2, 1)] => Some("J"),
+            [("kg", 1, 1), ("m", 2, 1), ("s", -3, 1)] => Some("W"),
+            [("kg", 1, 1), ("m", -1, 1), ("s", -2, 1)] => Some("Pa"),
+            [("A", 1, 1), ("s", 1, 1)] => Some("C"),
+            [("s", -1, 1)] => Some("Hz"),
+            [("A", -1, 1), ("kg", 1, 1), ("m", 1, 1), ("s", -3, 1)] => Some("N/C"),
+            _ => None,
+        }
+    }
+
+    pub fn base_repr(&self) -> String {
         if self.dimensions.is_empty() {
-            return "Dimensionless".to_string();
+            return String::new();
         }
         let mut parts = Vec::new();
         for (base, (num, den)) in &self.dimensions {
@@ -181,6 +218,18 @@ impl RationalUnit {
             }
         }
         parts.join(" * ")
+    }
+
+    pub fn __repr__(&self) -> String {
+        if let Some(ref name) = self.display_name {
+            return name.clone();
+        }
+        if (self.scale - 1.0).abs() < 1e-9 {
+            if let Some(known) = self.known_derived_symbol() {
+                return known.to_string();
+            }
+        }
+        self.base_repr()
     }
 
     pub fn __eq__(&self, other: &RationalUnit) -> bool {

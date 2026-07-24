@@ -1,0 +1,17 @@
+[package]
+name = "physure-java"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "JVM JNI bindings for the high-performance physure core physics engine."
+
+[lib]
+name = "physure_java"
+crate-type = ["cdylib"]
+
+[dependencies]
+physure-core = { workspace = true }
+physure-script = { workspace = true }
+jni = "0.21"
+num-rational = { workspace = true }

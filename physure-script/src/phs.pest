@@ -1,0 +1,68 @@
+WHITESPACE = _{ " " | "\t" }
+NEWLINE    = _{ "\r\n" | "\n" | "\r" }
+COMMENT    = _{ ("//" | "#") ~ (!"\n" ~ !"\r" ~ ANY)* }
+
+identifier  = @{ (ASCII_ALPHA | "π" | "θ" | "λ" | "μ" | "Δ" | "σ" | "Ω" | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+number      = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ( ^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+ )? }
+
+sigma_op        = { "sigma" | "σ" }
+uncertainty_op  = { "+/-" | "±" }
+uncertainty_val = { number ~ (sigma_op | "%")? }
+uncertainty     = { uncertainty_op ~ uncertainty_val }
+
+unit_term       = { ASCII_ALPHA+ ~ ("^" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+unit_primary    = _{ unit_term | "(" ~ unit_expr ~ ")" }
+unit_expr       = { unit_primary ~ (("*" | "/" | WHITESPACE+) ~ unit_primary)* }
+
+vector_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" ~ unit_expr? }
+
+quantity = {
+    ("(" ~ expr ~ uncertainty? ~ ")" ~ unit_expr? ~ uncertainty?)
+  | (number ~ uncertainty? ~ unit_expr? ~ uncertainty?)
+}
+
+format_spec = @{ ("." ~ ASCII_DIGIT+ ~ ASCII_ALPHA*) | ASCII_ALPHA+ }
+op_format   = { ":" ~ format_spec }
+
+op_add      = { "+" }
+op_sub      = { "-" }
+op_mul      = { "*" }
+op_div      = { "/" }
+op_pow      = { "^" }
+op_convert  = { "=>" }
+op_compare  = { "==" | "!=" | ">=" | "<=" | ">" | "<" | "≈" }
+
+if_expr     = { "if" ~ expr ~ "then" ~ expr ~ "else" ~ expr }
+
+primary     = _{ if_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
+factor      = { primary ~ (op_pow ~ primary)? }
+term        = { factor ~ ((op_mul | op_div) ~ factor | factor)* }
+comp_expr   = { term ~ (op_compare ~ term)* ~ op_format? }
+base_expr   = { comp_expr ~ ((op_add | op_sub | op_convert) ~ comp_expr)* }
+
+expr        = { base_expr ~ ("?" ~ base_expr ~ ":" ~ base_expr)? }
+
+function_call = { identifier ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+param_item    = { identifier ~ (":" ~ unit_expr)? }
+params        = { param_item ~ ("," ~ param_item)* }
+
+import_symbol_item = { identifier ~ ("as" ~ identifier)? }
+import_symbols     = { "*" | (import_symbol_item ~ ("," ~ import_symbol_item)*) }
+
+import_stmt = {
+    ("use" ~ import_symbols ~ "from" ~ (string_lit | identifier))
+  | ("import" ~ (string_lit | identifier) ~ ("as" ~ identifier)?)
+}
+
+export_stmt   = { "export" ~ identifier ~ ("as" ~ (string_lit | identifier))? }
+assignment    = { identifier ~ "=" ~ (NEWLINE | WHITESPACE)* ~ expr }
+_nl_indent    = @{ NEWLINE ~ (" " | "\t")+ }
+block_body    = { (_nl_indent ~ stmt)+ }
+assignment_fn = { identifier ~ "(" ~ params? ~ ")" ~ "=" ~ (block_body | expr) }
+function_def  = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ "=" ~ (block_body | expr) }
+raw_block     = @{ "```" ~ (!"```" ~ ANY)* ~ "```" }
+string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+
+stmt_term = _{ ";" | NEWLINE }
+stmt      = { import_stmt | export_stmt | function_def | assignment_fn | assignment | raw_block | expr }
+program   = _{ SOI ~ (stmt_term | COMMENT)* ~ (stmt ~ (stmt_term | COMMENT)*)* ~ EOI }
