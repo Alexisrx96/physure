@@ -3,6 +3,12 @@ set -e
 
 # phs (PhysureScript CLI) Installer — Linux & macOS
 # Usage: curl -fsSL https://physure.irvintorres.com/install.sh | bash
+# Install from a specific branch instead of the latest release:
+#   PHS_BRANCH=main curl -fsSL https://physure.irvintorres.com/install.sh | bash
+
+REPO="Alexisrx96/physure"
+INSTALL_DIR="$HOME/.local/bin"
+PHS_BRANCH="${PHS_BRANCH:-}"
 
 BOLD="$(tput bold 2>/dev/null || echo '')"
 GREEN="$(tput setaf 2 2>/dev/null || echo '')"
@@ -11,18 +17,51 @@ RESET="$(tput sgr0 2>/dev/null || echo '')"
 
 echo "${BOLD}${CYAN}⚡ Installing phs (PhysureScript CLI)...${RESET}"
 
-if ! command -v cargo >/dev/null 2>&1; then
-    echo "Rust/cargo not found. Install it from https://rustup.rs then re-run this script." >&2
-    exit 1
+mkdir -p "$INSTALL_DIR"
+
+install_from_source() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "Rust/cargo not found. Install it from https://rustup.rs then re-run this script." >&2
+        exit 1
+    fi
+    if [ -n "$PHS_BRANCH" ]; then
+        echo "Building from source (branch: $PHS_BRANCH)..."
+        cargo install --git "https://github.com/$REPO" --branch "$PHS_BRANCH" physure-cli --bin phs --locked --force
+    else
+        echo "Building from source (default branch)..."
+        cargo install --git "https://github.com/$REPO" physure-cli --bin phs --locked --force
+    fi
+    cp "$HOME/.cargo/bin/phs" "$INSTALL_DIR/phs"
+}
+
+installed=false
+if [ -z "$PHS_BRANCH" ]; then
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64)  ASSET="phs-linux-x86_64.tar.gz" ;;
+        Darwin-x86_64) ASSET="phs-macos-x86_64.tar.gz" ;;
+        Darwin-arm64)  ASSET="phs-macos-aarch64.tar.gz" ;;
+        *)             ASSET="" ;;
+    esac
+
+    if [ -n "$ASSET" ]; then
+        TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases" 2>/dev/null | grep -m1 '"tag_name": *"core-v' | sed -E 's/.*"(core-v[^"]+)".*/\1/')"
+        if [ -n "$TAG" ]; then
+            TMPFILE="$(mktemp)"
+            if curl -fsSL "https://github.com/$REPO/releases/download/$TAG/$ASSET" -o "$TMPFILE"; then
+                tar -xzf "$TMPFILE" -C "$INSTALL_DIR"
+                installed=true
+            fi
+            rm -f "$TMPFILE"
+        fi
+    fi
 fi
 
-# physure-cli (the phs binary) isn't published to crates.io, so install
-# straight from the repo — works identically on Linux and macOS.
-cargo install --git https://github.com/Alexisrx96/physure physure-cli --bin phs --locked --force
-
-INSTALL_DIR="$HOME/.local/bin"
-mkdir -p "$INSTALL_DIR"
-cp "$HOME/.cargo/bin/phs" "$INSTALL_DIR/phs"
+if [ "$installed" = false ]; then
+    if [ -z "$PHS_BRANCH" ]; then
+        echo "No prebuilt binary for $(uname -s)-$(uname -m) — falling back to cargo."
+    fi
+    install_from_source
+fi
 chmod +x "$INSTALL_DIR/phs"
 
 # Add INSTALL_DIR to user PATH if not present
