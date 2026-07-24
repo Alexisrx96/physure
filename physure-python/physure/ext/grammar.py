@@ -900,10 +900,6 @@ def _plot_fn(*args: Any, **kwargs: Any) -> Any:
     import base64
     import io
 
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     import numpy as np
 
     x_val = args[0] if len(args) >= 2 else None
@@ -926,39 +922,47 @@ def _plot_fn(*args: Any, **kwargs: Any) -> Any:
         x_arr, y_arr, title=title, x_unit=x_unit, y_unit=y_unit
     )
 
-    fig, ax = plt.subplots(figsize=(6.5, 3.8))
-    ax.plot(x_arr, y_arr, color="#4ec9b0", linewidth=2.5)
-    ax.fill_between(x_arr, y_arr, color="#4ec9b0", alpha=0.12)
+    try:
+        import matplotlib
 
-    x_label_str = f"x ({x_unit})" if x_unit else "x"
-    y_label_str = f"y ({y_unit})" if y_unit else "y"
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
 
-    ax.set_xlabel(x_label_str, color="#cccccc", fontsize=9.5)
-    ax.set_ylabel(y_label_str, color="#cccccc", fontsize=9.5)
+        fig, ax = plt.subplots(figsize=(6.5, 3.8))
+        ax.plot(x_arr, y_arr, color="#4ec9b0", linewidth=2.5)
+        ax.fill_between(x_arr, y_arr, color="#4ec9b0", alpha=0.12)
 
-    ax.set_title(
-        title, color="#569cd6", fontsize=11, fontweight="bold", pad=12
-    )
-    ax.grid(True, linestyle=":", alpha=0.35, color="#666666")
-    ax.tick_params(colors="#cccccc", labelsize=8.5)
+        x_label_str = f"x ({x_unit})" if x_unit else "x"
+        y_label_str = f"y ({y_unit})" if y_unit else "y"
 
-    for spine in ax.spines.values():
-        spine.set_color("#444444")
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+        ax.set_xlabel(x_label_str, color="#cccccc", fontsize=9.5)
+        ax.set_ylabel(y_label_str, color="#cccccc", fontsize=9.5)
 
-    fig.patch.set_facecolor("#1e1e1e")
-    ax.set_facecolor("#252526")
-    fig.tight_layout()
+        ax.set_title(
+            title, color="#569cd6", fontsize=11, fontweight="bold", pad=12
+        )
+        ax.grid(True, linestyle=":", alpha=0.35, color="#666666")
+        ax.tick_params(colors="#cccccc", labelsize=8.5)
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", dpi=140)
-    buf.seek(0)
-    b64 = base64.b64encode(buf.read()).decode("utf-8")
-    plt.close(fig)
+        for spine in ax.spines.values():
+            spine.set_color("#444444")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
 
-    b64_tag = f"[PLOT_IMAGE:data:image/png;base64,{b64}]"
-    return f"{ascii_plot}\n{b64_tag}"
+        fig.patch.set_facecolor("#1e1e1e")
+        ax.set_facecolor("#252526")
+        fig.tight_layout()
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", bbox_inches="tight", dpi=140)
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode("utf-8")
+        plt.close(fig)
+
+        b64_tag = f"[PLOT_IMAGE:data:image/png;base64,{b64}]"
+        return f"{ascii_plot}\n{b64_tag}"
+    except Exception:
+        return ascii_plot
 
 
 def _format_sig_figs(val: GrammarValue, sig_figs: int) -> GrammarValue:

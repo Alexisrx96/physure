@@ -1543,6 +1543,8 @@ class Quantity(
                 return self.magnitude == other_converted.magnitude
             except Exception:
                 return False
+        if isinstance(other, (int, float)) and self.dimension.is_dimensionless:
+            return self.magnitude == other
         return False
 
     def __ne__(self, other: object) -> Any:

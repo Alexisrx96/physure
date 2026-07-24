@@ -1,3 +1,4 @@
+pub mod conf;
 pub mod converters;
 pub mod definition;
 pub mod dimension;

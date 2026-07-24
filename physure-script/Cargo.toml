@@ -1,0 +1,22 @@
+[package]
+name        = "physure-script"
+description = "PhysureScript (PHS) language engine: Lexer, Parser, AST, Interpreter, and Codegen."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+homepage.workspace   = true
+authors.workspace    = true
+
+[lib]
+name       = "physure_script"
+crate-type = ["rlib"]
+
+[dependencies]
+physure-core = { path = "../physure-core" }
+num-rational.workspace = true
+num-traits.workspace   = true
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+pest        = "2.7"
+pest_derive = "2.7"

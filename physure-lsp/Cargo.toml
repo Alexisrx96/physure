@@ -8,6 +8,7 @@ authors.workspace = true
 description = "Native Language Server Protocol (LSP) server for Physure PHS language written in Rust."
 
 [dependencies]
-physure.workspace = true
+physure-core.workspace = true
+physure-script.workspace = true
 tower-lsp.workspace = true
 tokio.workspace = true

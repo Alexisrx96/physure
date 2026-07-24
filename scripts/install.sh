@@ -1,61 +1,72 @@
 #!/usr/bin/env bash
 set -e
 
-# PHS Native CLI & REPL Installer
+# phs (PhysureScript CLI) Installer — Linux & macOS
 # Usage: curl -fsSL https://physure.irvintorres.com/install.sh | bash
+# Install from a specific branch instead of the latest release:
+#   PHS_BRANCH=main curl -fsSL https://physure.irvintorres.com/install.sh | bash
+
+REPO="Alexisrx96/physure"
+INSTALL_DIR="$HOME/.local/bin"
+PHS_BRANCH="${PHS_BRANCH:-}"
 
 BOLD="$(tput bold 2>/dev/null || echo '')"
 GREEN="$(tput setaf 2 2>/dev/null || echo '')"
 CYAN="$(tput setaf 6 2>/dev/null || echo '')"
-YELLOW="$(tput setaf 3 2>/dev/null || echo '')"
-RESET="$(tput srgb 2>/dev/null || tput sgr0 2>/dev/null || echo '')"
+RESET="$(tput sgr0 2>/dev/null || echo '')"
 
-echo -e "${BOLD}${CYAN}⚡ Installing Standalone PHS Native Executable...${RESET}\n"
+echo "${BOLD}${CYAN}⚡ Installing phs (PhysureScript CLI)...${RESET}"
 
-INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
-BINARY_FOUND=0
-
-# Option 1: Cargo build/install if cargo is available
-if command -v cargo >/dev/null 2>&1; then
-    echo "📦 Rust cargo detected. Building/installing phs..."
-    cargo install --path /home/irvint/Projects/physure/physure-core --bin phs 2>/dev/null || cargo install physure --bin phs 2>/dev/null || true
-fi
-
-# Option 2: Copy existing binary if present
-if [ -f "$HOME/.cargo/bin/phs" ]; then
-    cp "$HOME/.cargo/bin/phs" "$INSTALL_DIR/phs"
-    BINARY_FOUND=1
-elif command -v phs >/dev/null 2>&1; then
-    PHS_PATH="$(which phs)"
-    cp "$PHS_PATH" "$INSTALL_DIR/phs"
-    BINARY_FOUND=1
-fi
-
-if [ "$BINARY_FOUND" -ne 1 ]; then
-    OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-    ARCH="$(uname -m)"
-    
-    echo "📥 Downloading phs binary release for ${OS}-${ARCH}..."
-    RELEASE_URL="https://github.com/Alexisrx96/physure/releases/latest/download/phs-${OS}-${ARCH}"
-    
-    if curl -fsSL "$RELEASE_URL" -o "$INSTALL_DIR/phs" 2>/dev/null; then
-        chmod +x "$INSTALL_DIR/phs"
-        BINARY_FOUND=1
+install_from_source() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "Rust/cargo not found. Install it from https://rustup.rs then re-run this script." >&2
+        exit 1
+    fi
+    if [ -n "$PHS_BRANCH" ]; then
+        echo "Building from source (branch: $PHS_BRANCH)..."
+        cargo install --git "https://github.com/$REPO" --branch "$PHS_BRANCH" physure-cli --bin phs --locked --force
     else
-        echo -e "${YELLOW}Warning: Precompiled binary for ${OS}-${ARCH} not found.${RESET}"
+        echo "Building from source (default branch)..."
+        cargo install --git "https://github.com/$REPO" physure-cli --bin phs --locked --force
+    fi
+    cp "$HOME/.cargo/bin/phs" "$INSTALL_DIR/phs"
+}
+
+installed=false
+if [ -z "$PHS_BRANCH" ]; then
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64)  ASSET="phs-linux-x86_64.tar.gz" ;;
+        Darwin-x86_64) ASSET="phs-macos-x86_64.tar.gz" ;;
+        Darwin-arm64)  ASSET="phs-macos-aarch64.tar.gz" ;;
+        *)             ASSET="" ;;
+    esac
+
+    if [ -n "$ASSET" ]; then
+        TAG="$(curl -fsSL "https://api.github.com/repos/$REPO/releases" 2>/dev/null | grep -m1 '"tag_name": *"core-v' | sed -E 's/.*"(core-v[^"]+)".*/\1/')"
+        if [ -n "$TAG" ]; then
+            TMPFILE="$(mktemp)"
+            if curl -fsSL "https://github.com/$REPO/releases/download/$TAG/$ASSET" -o "$TMPFILE"; then
+                tar -xzf "$TMPFILE" -C "$INSTALL_DIR"
+                installed=true
+            fi
+            rm -f "$TMPFILE"
+        fi
     fi
 fi
 
-if [ "$BINARY_FOUND" -eq 1 ]; then
-    chmod +x "$INSTALL_DIR/phs"
+if [ "$installed" = false ]; then
+    if [ -z "$PHS_BRANCH" ]; then
+        echo "No prebuilt binary for $(uname -s)-$(uname -m) — falling back to cargo."
+    fi
+    install_from_source
 fi
+chmod +x "$INSTALL_DIR/phs"
 
 # Add INSTALL_DIR to user PATH if not present
 SHELL_NAME="$(basename "${SHELL:-bash}")"
 PROFILE=""
-
 case "$SHELL_NAME" in
     bash)
         if [ -f "$HOME/.bashrc" ]; then PROFILE="$HOME/.bashrc"; elif [ -f "$HOME/.bash_profile" ]; then PROFILE="$HOME/.bash_profile"; fi
@@ -77,16 +88,14 @@ if [ "$SHELL_NAME" = "fish" ]; then
 fi
 
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    if [ -n "$PROFILE" ]; then
-        if ! grep -q '\.local/bin' "$PROFILE" 2>/dev/null; then
-            echo "" >> "$PROFILE"
-            echo "# Added by PHS installer" >> "$PROFILE"
-            echo "$PATH_LINE" >> "$PROFILE"
-            echo "✨ Added $INSTALL_DIR to PATH in $PROFILE"
-        fi
+    if [ -n "$PROFILE" ] && ! grep -q '\.local/bin' "$PROFILE" 2>/dev/null; then
+        echo "" >> "$PROFILE"
+        echo "# Added by PHS installer" >> "$PROFILE"
+        echo "$PATH_LINE" >> "$PROFILE"
+        echo "✨ Added $INSTALL_DIR to PATH in $PROFILE (restart your shell)"
     fi
     export PATH="$HOME/.local/bin:$PATH"
 fi
 
-echo -e "\n${BOLD}${GREEN}🎉 PHS successfully installed!${RESET}"
+echo -e "\n${BOLD}${GREEN}🎉 phs successfully installed!${RESET}"
 echo -e "Try running: ${BOLD}phs${RESET} or ${BOLD}phs \"500 N / 2 m^2 => kPa\"${RESET}\n"

@@ -42,8 +42,8 @@ jobs:
     - name: Rust build cache
       uses: Swatinem/rust-cache@v2
 
-    - name: Test physure crate
-      run: cargo test -p physure
+    - name: Test physure crates
+      run: cargo test -p physure-core -p physure-script -p physure-cli
 
   test:
     runs-on: ubuntu-latest

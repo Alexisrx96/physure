@@ -3,7 +3,7 @@ use std::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use physure::PhsLexer;
+use physure_script::PhsLexer;
 
 struct Backend {
     client: Client,
@@ -29,7 +29,7 @@ impl LanguageServer for Backend {
                     completion_item: None,
                     ..Default::default()
                 }),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
+                hover_provider: None,
                 ..Default::default()
             },
             server_info: Some(ServerInfo {

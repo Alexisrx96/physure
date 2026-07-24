@@ -1,66 +1,65 @@
-# PHS Native CLI & REPL Installer for Windows (PowerShell & CMD)
-# Usage in PowerShell:
-#   irm https://physure.irvintorres.com/install.ps1 | iex
-#
-# Usage in CMD:
-#   powershell -ExecutionPolicy Bypass -c "irm https://physure.irvintorres.com/install.ps1 | iex"
+# phs (PhysureScript CLI) Installer for Windows PowerShell
+# Usage: irm https://physure.irvintorres.com/install.ps1 | iex
+# Install from a specific branch instead of the latest release:
+#   $env:PHS_BRANCH = "main"; irm https://physure.irvintorres.com/install.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
+$Repo = "Alexisrx96/physure"
+$InstallDir = "$HOME\.local\bin"
+$Branch = $env:PHS_BRANCH
 
-Write-Host "⚡ Installing Standalone PHS Native Executable for Windows..." -ForegroundColor Cyan
+Write-Host "⚡ Installing phs (PhysureScript CLI)..." -ForegroundColor Cyan
 
-$BinDir = "$HOME\.phs\bin"
-if (-not (Test-Path -Path $BinDir)) {
-    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+function Install-FromSource {
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        Write-Error "Rust/cargo not found. Install it from https://rustup.rs then re-run this script."
+        exit 1
+    }
+    if ($Branch) {
+        Write-Host "Building from source (branch: $Branch)..."
+        cargo install --git "https://github.com/$Repo" --branch $Branch physure-cli --bin phs --locked --force
+    } else {
+        Write-Host "Building from source (default branch)..."
+        cargo install --git "https://github.com/$Repo" physure-cli --bin phs --locked --force
+    }
+    Copy-Item "$HOME\.cargo\bin\phs.exe" "$InstallDir\phs.exe" -Force
 }
 
-$ExePath = "$BinDir\phs.exe"
-$Installed = $false
-
-# 1. Try cargo install if cargo is available
-if (Get-Command cargo -ErrorAction SilentlyContinue) {
-    Write-Host "📦 Rust cargo detected. Installing phs..." -ForegroundColor Yellow
+$installed = $false
+if (-not $Branch) {
     try {
-        cargo install physure --bin phs | Out-Null
-        $CargoExe = "$HOME\.cargo\bin\phs.exe"
-        if (Test-Path $CargoExe) {
-            Copy-Item -Path $CargoExe -Destination $ExePath -Force
-            $Installed = $true
+        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases"
+        $release = $releases | Where-Object { $_.tag_name -like "core-v*" } | Select-Object -First 1
+        if ($release) {
+            $asset = $release.assets | Where-Object { $_.name -eq "phs-windows-x86_64.zip" } | Select-Object -First 1
+            if ($asset) {
+                $zipPath = Join-Path $env:TEMP "phs-windows-x86_64.zip"
+                Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
+                Expand-Archive -Path $zipPath -DestinationPath $InstallDir -Force
+                Remove-Item $zipPath
+                $installed = $true
+            }
         }
     } catch {
-        # continue to fallback
+        $installed = $false
+    }
+    if (-not $installed) {
+        Write-Host "No prebuilt binary found — falling back to cargo."
     }
 }
 
-# 2. Try fetching latest release from GitHub
-if (-not $Installed) {
-    Write-Host "📥 Downloading latest phs.exe release..." -ForegroundColor Yellow
-    $ReleaseUrl = "https://github.com/Alexisrx96/physure/releases/latest/download/phs-windows-amd64.exe"
-    try {
-        Invoke-WebRequest -Uri $ReleaseUrl -OutFile $ExePath -UseBasicParsing
-        $Installed = $true
-    } catch {
-        $CargoExe = "$HOME\.cargo\bin\phs.exe"
-        if (Test-Path $CargoExe) {
-            Copy-Item -Path $CargoExe -Destination $ExePath -Force
-            $Installed = $true
-        }
-    }
+if (-not $installed) {
+    Install-FromSource
 }
 
-if (-not $Installed) {
-    Write-Error "Failed to install phs.exe. Please install Rust and run: cargo install physure --bin phs"
-    exit 1
-}
-
-# Add $BinDir to User Environment PATH if not present
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($UserPath -notlike "*$BinDir*") {
-    $NewPath = "$UserPath;$BinDir"
-    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
-    $env:Path = "$env:Path;$BinDir"
-    Write-Host "✨ Added $BinDir to User PATH environment variable." -ForegroundColor Green
+if ($UserPath -notlike "*$InstallDir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$UserPath;$InstallDir", "User")
+    $env:Path = "$env:Path;$InstallDir"
+    Write-Host "✨ Added $InstallDir to User PATH environment variable." -ForegroundColor Green
 }
 
-Write-Host "`n🎉 PHS successfully installed!" -ForegroundColor Green
+Write-Host "`n🎉 phs successfully installed!" -ForegroundColor Green
 Write-Host "Try running: phs  or  phs `"500 N / 2 m^2 => kPa`"" -ForegroundColor Cyan

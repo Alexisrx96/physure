@@ -94,3 +94,5 @@ scratch/
 lcov.info
 coverage.xml
 test-results.xml
+
+*.pdb
