@@ -20,6 +20,8 @@ pub struct I18nLabels {
     pub if_word: &'static str,
     pub then_word: &'static str,
     pub else_word: &'static str,
+    pub true_word: &'static str,
+    pub false_word: &'static str,
 }
 
 impl PhysureConfig {
@@ -76,6 +78,8 @@ impl PhysureConfig {
                 if_word: "si",
                 then_word: "entonces",
                 else_word: "si no",
+                true_word: "Verdadero",
+                false_word: "Falso",
             },
             "fr" => I18nLabels {
                 abstract_title: "Résumé / Abstract",
@@ -90,6 +94,8 @@ impl PhysureConfig {
                 if_word: "si",
                 then_word: "alors",
                 else_word: "sinon",
+                true_word: "Vrai",
+                false_word: "Faux",
             },
             "de" => I18nLabels {
                 abstract_title: "Zusammenfassung / Abstract",
@@ -104,6 +110,8 @@ impl PhysureConfig {
                 if_word: "wenn",
                 then_word: "dann",
                 else_word: "sonst",
+                true_word: "Wahr",
+                false_word: "Falsch",
             },
             _ => I18nLabels {
                 abstract_title: "Abstract",
@@ -118,6 +126,8 @@ impl PhysureConfig {
                 if_word: "if",
                 then_word: "then",
                 else_word: "else",
+                true_word: "True",
+                false_word: "False",
             },
         }
     }

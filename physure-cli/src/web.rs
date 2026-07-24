@@ -5,7 +5,7 @@ use physure_script::ast::unit_to_latex;
 use crate::step::ExecutionStep;
 use crate::katex_assets::{KATEX_CSS, KATEX_JS, AUTO_RENDER_JS};
 use crate::config::{I18nLabels, PhysureConfig};
-use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text};
+use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text, resolve_comparison_latex};
 
 struct ScriptMetadata {
     title: Option<String>,
@@ -190,17 +190,29 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars:
                 fig_counter += 1;
             }
             _ => {
-                let eval_latex = format_val_latex(&step.value, &i18n);
+                let is_true = matches!(&step.value, PhsValue::Quantity(q) if q.value.mean() > 0.5)
+                    || matches!(&step.value, PhsValue::Bool(true));
                 let eq_num = eq_counter;
                 eq_counter += 1;
 
-                content_html.push_str(&format!(
-                    r#"<div class="latex-eq-container">
-                        <div class="latex-eq-main">\[ {} \quad {} \]</div>
-                        <div class="latex-eq-num">({})</div>
-                    </div>"#,
-                    step.latex_expr, eval_latex, eq_num
-                ));
+                if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, &i18n) {
+                    content_html.push_str(&format!(
+                        r#"<div class="latex-eq-container">
+                            <div class="latex-eq-main">\[ {} \]</div>
+                            <div class="latex-eq-num">({})</div>
+                        </div>"#,
+                        cmp, eq_num
+                    ));
+                } else {
+                    let eval_latex = format_val_latex(&step.value, &i18n);
+                    content_html.push_str(&format!(
+                        r#"<div class="latex-eq-container">
+                            <div class="latex-eq-main">\[ {} \quad {} \]</div>
+                            <div class="latex-eq-num">({})</div>
+                        </div>"#,
+                        step.latex_expr, eval_latex, eq_num
+                    ));
+                }
             }
         }
     }

@@ -59,6 +59,32 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
     }
 }
 
+/// Sentinel used to smuggle a comparison's rendered operands and true/false
+/// symbols through `ExecutionStep::latex_expr` until the evaluated result
+/// (only known after execution) picks which symbol to show.
+const CMP_SENTINEL: char = '\u{E000}';
+
+/// Packs a comparison's rendered sides and truth-dependent symbols into a
+/// single string, to be resolved later by `resolve_comparison_latex`.
+pub fn format_comparison_latex_expr(l: &str, r: &str, true_sym: &str, false_sym: &str) -> String {
+    format!("{l}{CMP_SENTINEL}{r}{CMP_SENTINEL}{true_sym}{CMP_SENTINEL}{false_sym}")
+}
+
+/// If `latex_expr` was built by `format_comparison_latex_expr`, renders it as
+/// `lhs <symbol> rhs`, picking the symbol based on `is_true`. Returns `None`
+/// for any ordinary (non-comparison) `latex_expr`.
+pub fn resolve_comparison_latex(latex_expr: &str, is_true: bool, i18n: &I18nLabels) -> Option<String> {
+    let parts: Vec<&str> = latex_expr.split(CMP_SENTINEL).collect();
+    match parts.as_slice() {
+        [l, r, true_sym, false_sym] => {
+            let sym = if is_true { true_sym } else { false_sym };
+            let verdict = if is_true { i18n.true_word } else { i18n.false_word };
+            Some(format!("{l} {sym} {r} \\quad \\therefore \\text{{{verdict}}}"))
+        }
+        _ => None,
+    }
+}
+
 /// Extracts the raw text of a string-literal argument (e.g. `deriv("t^2", "t")`),
 /// falling back to LaTeX rendering for non-literal expressions.
 pub fn raw_identifier_text(expr: &physure_script::ast::Expr, i18n: &I18nLabels) -> String {

@@ -267,6 +267,18 @@ fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::
             let l = latex::format_expr_latex_summary(left, i18n);
             ("expr".to_string(), "expr".to_string(), format!("{} \\Rightarrow", l), false)
         }
+        physure_script::ast::Statement::Expr(physure_script::ast::Expr::FunctionCall { name, args })
+            if matches!(name.as_str(), "op_==" | "op_eq" | "op_!=" | "op_neq") && args.len() == 2 =>
+        {
+            let l = latex::format_expr_latex_summary(&args[0], i18n);
+            let r = latex::format_expr_latex_summary(&args[1], i18n);
+            let (true_sym, false_sym) = if matches!(name.as_str(), "op_!=" | "op_neq") {
+                ("\\neq", "=")
+            } else {
+                ("=", "\\neq")
+            };
+            ("expr".to_string(), "expr".to_string(), latex::format_comparison_latex_expr(&l, &r, true_sym, false_sym), false)
+        }
         physure_script::ast::Statement::Expr(expr) => {
             let latex_s = latex::format_expr_latex_summary(expr, i18n);
             ("expr".to_string(), "expr".to_string(), latex_s, false)

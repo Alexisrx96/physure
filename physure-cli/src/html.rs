@@ -6,7 +6,7 @@ use physure_script::ast::unit_to_latex;
 use crate::step::ExecutionStep;
 use crate::katex_assets::{KATEX_CSS, KATEX_JS, AUTO_RENDER_JS};
 use crate::config::{I18nLabels, PhysureConfig};
-use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text};
+use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text, resolve_comparison_latex};
 
 struct ScriptMetadata {
     title: Option<String>,
@@ -201,21 +201,27 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
                 fig_counter += 1;
             }
             _ => {
-                let mut eval_latex = format_val_latex(&step.value, &i18n);
-                if !step.latex_expr.is_empty() && eval_latex.starts_with("= ") {
-                    let trimmed_expr = step.latex_expr.trim_end();
-                    if trimmed_expr.ends_with('=') || trimmed_expr.ends_with("\\Rightarrow") {
-                        eval_latex = eval_latex.trim_start_matches("= ").to_string();
+                let is_true = matches!(&step.value, PhsValue::Quantity(q) if q.value.mean() > 0.5)
+                    || matches!(&step.value, PhsValue::Bool(true));
+
+                let math_body = if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, &i18n) {
+                    cmp
+                } else {
+                    let mut eval_latex = format_val_latex(&step.value, &i18n);
+                    if !step.latex_expr.is_empty() && eval_latex.starts_with("= ") {
+                        let trimmed_expr = step.latex_expr.trim_end();
+                        if trimmed_expr.ends_with('=') || trimmed_expr.ends_with("\\Rightarrow") {
+                            eval_latex = eval_latex.trim_start_matches("= ").to_string();
+                        }
                     }
-                }
+                    if step.latex_expr.is_empty() {
+                        eval_latex
+                    } else {
+                        format!("{} {}", step.latex_expr, eval_latex)
+                    }
+                };
                 let eq_num = eq_counter;
                 eq_counter += 1;
-
-                let math_body = if step.latex_expr.is_empty() {
-                    eval_latex
-                } else {
-                    format!("{} {}", step.latex_expr, eval_latex)
-                };
 
                 content_html.push_str(&format!(
                     r#"<div class="latex-eq-container">
