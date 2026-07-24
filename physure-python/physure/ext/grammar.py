@@ -899,6 +899,7 @@ def _draw_ascii_plot(
 def _plot_fn(*args: Any, **kwargs: Any) -> Any:
     import base64
     import io
+
     import numpy as np
 
     x_val = args[0] if len(args) >= 2 else None
@@ -923,6 +924,7 @@ def _plot_fn(*args: Any, **kwargs: Any) -> Any:
 
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 

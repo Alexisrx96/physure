@@ -175,6 +175,21 @@ impl<'a> Parser<'a> {
         Self::parse_expression_impl(input, Some(registry))
     }
 
+    /// Parses a unit expression symbolically, treating every unit token as an atomic
+    /// dimension rather than resolving it against the registry (e.g. "N*m" stays
+    /// `{"N": 1, "m": 1}` instead of being expanded to its base-SI decomposition
+    /// `{"kg": 1, "m": 2, "s": -2}`).
+    ///
+    /// Use this (rather than `parse_expression`/`parse_expression_with_registry`) when the
+    /// caller needs a representation that preserves the literal unit symbols the user wrote
+    /// — e.g. building a Python-facing `CompoundUnit`. `parse_expression` and
+    /// `parse_expression_with_registry` remain the correct choice for internal dimensional
+    /// analysis and magnitude conversion, where derived/prefixed units must be expanded to
+    /// their base-SI dimensions and real scale factors.
+    pub fn parse_expression_atomic(input: &str) -> PhysureResult<RationalUnit> {
+        Self::parse_expression_impl(input, None)
+    }
+
     fn parse_expression_impl(input: &str, registry: Option<&UnitRegistry>) -> PhysureResult<RationalUnit> {
         let normalized = normalize_unicode(input);
         let mut lexer = Lexer::new(&normalized);

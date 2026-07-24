@@ -2,7 +2,8 @@ WHITESPACE = _{ " " | "\t" }
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }
 COMMENT    = _{ ("//" | "#") ~ (!"\n" ~ !"\r" ~ ANY)* }
 
-identifier  = @{ (ASCII_ALPHA | "π" | "θ" | "λ" | "μ" | "Δ" | "σ" | "Ω" | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+keyword     = @{ ("let" | "if" | "then" | "else" | "in") ~ !(ASCII_ALPHANUMERIC | "_") }
+identifier  = @{ !keyword ~ (ASCII_ALPHA | "π" | "θ" | "λ" | "μ" | "Δ" | "σ" | "Ω" | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 number      = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ( ^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+ )? }
 
 sigma_op        = { "sigma" | "σ" }
@@ -10,7 +11,7 @@ uncertainty_op  = { "+/-" | "±" }
 uncertainty_val = { number ~ (sigma_op | "%")? }
 uncertainty     = { uncertainty_op ~ uncertainty_val }
 
-unit_term       = { ASCII_ALPHA+ ~ ("^" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+unit_term       = { !keyword ~ ASCII_ALPHA+ ~ ("^" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
 unit_primary    = _{ unit_term | "(" ~ unit_expr ~ ")" }
 unit_expr       = { unit_primary ~ (("*" | "/" | WHITESPACE+) ~ unit_primary)* }
 
@@ -33,8 +34,9 @@ op_convert  = { "=>" }
 op_compare  = { "==" | "!=" | ">=" | "<=" | ">" | "<" | "≈" }
 
 if_expr     = { "if" ~ expr ~ "then" ~ expr ~ "else" ~ expr }
+let_expr    = { "let" ~ identifier ~ "=" ~ expr ~ "in" ~ expr }
 
-primary     = _{ if_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
+primary     = _{ if_expr | let_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
 factor      = { primary ~ (op_pow ~ primary)? }
 term        = { factor ~ ((op_mul | op_div) ~ factor | factor)* }
 comp_expr   = { term ~ (op_compare ~ term)* ~ op_format? }

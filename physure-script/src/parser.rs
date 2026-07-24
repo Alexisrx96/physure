@@ -337,6 +337,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
         Rule::string_lit => Expr::Identifier(primary_pair.as_str().trim_matches('"').to_string()),
         Rule::if_expr => parse_if_expr(primary_pair)?,
+        Rule::let_expr => parse_let_expr(primary_pair)?,
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
         Rule::expr => parse_expr(primary_pair)?,
         Rule::base_expr => parse_base_expr(primary_pair)?,
@@ -367,6 +368,20 @@ fn parse_if_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(Expr::FunctionCall {
         name: "if_then_else".to_string(),
         args: vec![cond, then_e, else_e],
+    })
+}
+
+/// Desugars `let name = value in body` into `FunctionCall { name: "let", args: [name, value, body] }`,
+/// a form the interpreter special-cases to bind `name` in a local scope before evaluating `body`
+/// (see `PhsInterpreter::eval_expr`) without needing a dedicated `Expr` variant.
+fn parse_let_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let value = parse_expr(inner.next().unwrap())?;
+    let body = parse_expr(inner.next().unwrap())?;
+    Ok(Expr::FunctionCall {
+        name: "let".to_string(),
+        args: vec![Expr::Identifier(name), value, body],
     })
 }
 

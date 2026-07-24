@@ -523,6 +523,17 @@ impl PyQuantity {
         self.0.approx_eq(&other.0, rel_tol, abs_tol)
     }
 
+    fn __eq__(&self, other: Bound<'_, PyAny>) -> bool {
+        if let Ok(q) = other.extract::<PyQuantity>() {
+            return self.0.unit == q.0.unit && self.0.value.mean() == q.0.value.mean();
+        }
+        if let Ok(f) = other.extract::<f64>() {
+            return self.0.unit.same_dimensions(&RationalUnit::dimensionless())
+                && self.0.value.mean() == f;
+        }
+        false
+    }
+
     fn tanh(&self) -> PyResult<PyQuantity> {
         let new_val = self.0.value.propagate_function("tanh")
             .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
@@ -699,9 +710,13 @@ fn batch_scale_and_shift_inplace(
 }
 
 /// Parse unit string expression directly via native Rust parser.
+///
+/// Uses the atomic (non-registry-expanding) parser so named/derived units (e.g. "N", "J",
+/// "km") are preserved as written rather than expanded into their base-SI decomposition —
+/// this is what Python-facing `CompoundUnit` construction expects.
 #[pyfunction]
 fn parse_unit_expression(py: Python<'_>, expr: &str) -> PyResult<PyObject> {
-    let unit = ::physure_core::units::Parser::parse_expression(expr)
+    let unit = ::physure_core::units::Parser::parse_expression_atomic(expr)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     get_cached_unit(py, unit)
 }
@@ -1205,26 +1220,26 @@ impl PyInterpreter {
 
     fn deriv(&self, expression: &str, var: &str) -> PyResult<String> {
         let call_expr = format!("deriv(\"{}\", \"{}\")", expression, var);
-        let mut interp = ::physure_script::PhsInterpreter::default();
+        let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(format!("{:?}", res))
+        Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
     }
 
     fn integral(&self, expression: &str, var: &str) -> PyResult<String> {
         let call_expr = format!("integral(\"{}\", \"{}\")", expression, var);
-        let mut interp = ::physure_script::PhsInterpreter::default();
+        let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(format!("{:?}", res))
+        Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
     }
 
     fn solve(&self, equation: &str, var: &str) -> PyResult<String> {
         let call_expr = format!("solve(\"{}\", \"{}\")", equation, var);
-        let mut interp = ::physure_script::PhsInterpreter::default();
+        let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(format!("{:?}", res))
+        Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
     }
 
     fn get_fn_params(&self, name: &str) -> PyResult<Option<Vec<String>>> {

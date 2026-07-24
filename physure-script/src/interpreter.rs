@@ -41,6 +41,7 @@ fn eval_template_string(text: &str, interp: &PhsInterpreter, env: &HashMap<Strin
     result
 }
 
+#[derive(Clone)]
 pub struct PhsInterpreter {
     pub env: HashMap<String, PhsValue>,
     pub resolver: Arc<dyn ModuleResolver>,
@@ -208,6 +209,15 @@ impl PhsInterpreter {
                 self.eval_binary_op_vals(*op, l_val, r_val)
             }
             Expr::FunctionCall { name, args } => {
+                if name == "let" && args.len() == 3 {
+                    if let Expr::Identifier(var_name) = &args[0] {
+                        let val = self.eval_expr(&args[1], env)?;
+                        let mut local_env = env.clone();
+                        local_env.insert(var_name.clone(), val);
+                        return self.eval_expr(&args[2], &local_env);
+                    }
+                }
+
                 if let Some(PhsValue::Function(func)) = env.get(name) {
                     if args.len() == 1 {
                         let arg_eval = self.eval_expr(&args[0], env);
