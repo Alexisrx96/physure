@@ -263,6 +263,10 @@ fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::
         physure_script::ast::Statement::Expr(physure_script::ast::Expr::Identifier(s)) if s.starts_with('`') => {
             ("note".to_string(), "note".to_string(), String::new(), true)
         }
+        physure_script::ast::Statement::Expr(physure_script::ast::Expr::BinaryOp { op: physure_script::ast::BinaryOp::Convert, left, .. }) => {
+            let l = latex::format_expr_latex_summary(left, i18n);
+            ("expr".to_string(), "expr".to_string(), format!("{} \\Rightarrow", l), false)
+        }
         physure_script::ast::Statement::Expr(expr) => {
             let latex_s = latex::format_expr_latex_summary(expr, i18n);
             ("expr".to_string(), "expr".to_string(), latex_s, false)

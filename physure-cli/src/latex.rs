@@ -53,7 +53,7 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
             } else if (name == "ternary" || name == "if_then_else") && args.len() == 3 {
                 format!("\\text{{{} }} {} \\text{{ {} }} {} \\text{{ {} }} {}", i18n.if_word, args_s[0], i18n.then_word, args_s[1], i18n.else_word, args_s[2])
             } else {
-                format!("\\text{{{}}}({})", name, args_s.join(", "))
+                format!("\\text{{{}}}({})", escape_latex_text(name), args_s.join(", "))
             }
         }
     }

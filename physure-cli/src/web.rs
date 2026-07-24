@@ -5,7 +5,7 @@ use physure_script::ast::unit_to_latex;
 use crate::step::ExecutionStep;
 use crate::katex_assets::{KATEX_CSS, KATEX_JS, AUTO_RENDER_JS};
 use crate::config::{I18nLabels, PhysureConfig};
-use crate::latex::render_raw_math;
+use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text};
 
 struct ScriptMetadata {
     title: Option<String>,
@@ -87,6 +87,12 @@ fn format_val_latex(val: &PhsValue, i18n: &I18nLabels) -> String {
             format!("= {}", s)
         }
         PhsValue::Bool(b) => format!("= \\text{{{}}}", if *b { "True" } else { "False" }),
+        PhsValue::Function(func) => {
+            match func.body_stmts.last() {
+                Some(physure_script::ast::Statement::Expr(e)) => format!("= {}", format_expr_latex_summary(e, i18n)),
+                _ => format!("= \\text{{{}}}", escape_latex_text(&func.name)),
+            }
+        }
         _ => {
             let raw = val.to_string();
             let trimmed = raw.trim();
