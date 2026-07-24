@@ -49,7 +49,7 @@ impl std::fmt::Display for Quantity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let unit_str = self.unit.__repr__();
         let val_str = format_float(self.value.mean());
-        if unit_str.is_empty() {
+        if unit_str.is_empty() || unit_str == "Dimensionless" {
             write!(f, "{}", val_str)
         } else {
             write!(f, "{} {}", val_str, unit_str)

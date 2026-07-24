@@ -27,7 +27,7 @@ fn get_rust_quantity(
     let unit_str: String = env.get_string(&unit_jstr)?.into();
     
     let reg = UnitRegistry::build_default_si();
-    let r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
+    let _r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
             let _ = env.throw_new("com/physure/PhysureException", &format!("Quantity unit parse error for '{}': {}", unit_str, e));

@@ -4,27 +4,96 @@ use super::interpreter::PhsInterpreter;
 use crate::ast::BinaryOp;
 
 fn eval_bin_op(op: BinaryOp, l: &PhsValue, r: &PhsValue) -> PhysureResult<PhsValue> {
-    match (l, r) {
-        (PhsValue::Quantity(a), PhsValue::Quantity(b)) => match op {
-            BinaryOp::Add => a.add(b).map(PhsValue::Quantity),
-            BinaryOp::Sub => a.sub(b).map(PhsValue::Quantity),
-            BinaryOp::Mul => a.mul(b).map(PhsValue::Quantity),
-            BinaryOp::Div => a.div(b).map(PhsValue::Quantity),
-            _ => Err(PhysureError::Generic("Unsupported op".into())),
-        },
-        (PhsValue::Number(a), PhsValue::Number(b)) => match op {
-            BinaryOp::Add => Ok(PhsValue::Number(a + b)),
-            BinaryOp::Sub => Ok(PhsValue::Number(a - b)),
-            BinaryOp::Mul => Ok(PhsValue::Number(a * b)),
-            BinaryOp::Div => Ok(PhsValue::Number(a / b)),
-            _ => Err(PhysureError::Generic("Unsupported op".into())),
-        },
-        _ => Err(PhysureError::Generic("Unsupported operand types".into())),
-    }
+    let interp = PhsInterpreter::default();
+    interp.eval_binary_op_vals(op, l.clone(), r.clone())
 }
 
 pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
+        "format" => {
+            if let Some(val) = args.first() {
+                Ok(Some(val.clone()))
+            } else {
+                Ok(None)
+            }
+        }
+        "op_>" | "op_gt" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() > r.value.mean(),
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l > r,
+                _ => false,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "op_<" | "op_lt" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() < r.value.mean(),
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l < r,
+                _ => false,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "op_>=" | "op_gte" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() >= r.value.mean(),
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l >= r,
+                _ => false,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "op_<=" | "op_lte" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() <= r.value.mean(),
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l <= r,
+                _ => false,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "op_==" | "op_eq" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma))) |
+                (Some(PhsValue::SigmaBound(target_q, k_sigma)), Some(PhsValue::Quantity(l))) => {
+                    let unc = if l.value.std_dev() > 0.0 { l.value.std_dev() } else { 0.05 };
+                    let tol = k_sigma * unc;
+                    (l.value.mean() - target_q.value.mean()).abs() <= tol
+                }
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => (l.value.mean() - r.value.mean()).abs() < 1e-9,
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => (l - r).abs() < 1e-9,
+                _ => false,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "op_!=" | "op_neq" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => (l.value.mean() - r.value.mean()).abs() >= 1e-9,
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => (l - r).abs() >= 1e-9,
+                _ => true,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "op_≈" | "op_approx" => {
+            let res = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => (l.value.mean() - r.value.mean()).abs() < 1e-3,
+                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => (l - r).abs() < 1e-3,
+                _ => false,
+            };
+            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+        }
+        "ternary" | "if_then_else" => {
+            let cond_true = match args.first() {
+                Some(PhsValue::Quantity(q)) => q.value.mean() > 0.0,
+                Some(PhsValue::Number(n)) => *n > 0.0,
+                _ => false,
+            };
+            if cond_true {
+                Ok(args.get(1).cloned())
+            } else {
+                Ok(args.get(2).cloned())
+            }
+        }
+        "vector" => {
+            Ok(Some(PhsValue::Vector(args.to_vec())))
+        }
         "sqrt" => {
             if args.len() != 1 {
                 return Err(PhysureError::Generic("sqrt expects 1 argument".into()));
@@ -644,7 +713,12 @@ fn preprocess_symbolic_expression(expr_str: &str, interpreter: &PhsInterpreter) 
         if let PhsValue::Function(func) = val {
             let fn_pattern = format!("{}(", name);
             if result.contains(&fn_pattern) {
-                let body_code = format!("({})", expr_to_string(&func.body));
+                let body_expr = match func.body_stmts.last() {
+                    Some(crate::ast::Statement::Expr(ref e)) => expr_to_string(e),
+                    Some(crate::ast::Statement::Assignment(ref a)) => expr_to_string(&a.value),
+                    _ => String::new(),
+                };
+                let body_code = format!("({})", body_expr);
                 if let Some(start) = result.find(&fn_pattern) {
                     if let Some(end) = result[start..].find(')') {
                         result.replace_range(start..=start + end, &body_code);

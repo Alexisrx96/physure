@@ -124,6 +124,7 @@ mod tests {
         Expr::Quantity(QuantityNode {
             magnitude: 1.0,
             uncertainty: None,
+            is_sigma: false,
             unit: None,
         })
     }

@@ -43,7 +43,7 @@ pub struct ExportNode {
 pub struct FunctionDefNode {
     pub name: String,
     pub params: Vec<String>,
-    pub body: Expr,
+    pub body_stmts: Vec<Statement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +81,8 @@ pub enum BinaryOp {
 pub struct QuantityNode {
     pub magnitude: f64,
     pub uncertainty: Option<f64>,
+    #[serde(default)]
+    pub is_sigma: bool,
     pub unit: Option<String>,
 }
 
@@ -113,7 +115,7 @@ mod tests {
         let node = FunctionDefNode {
             name: "square".to_string(),
             params: vec!["x".to_string()],
-            body: Expr::Identifier("x".to_string()),
+            body_stmts: vec![Statement::Expr(Expr::Identifier("x".to_string()))],
         };
         let stmt = Statement::FunctionDef(node);
         assert!(matches!(stmt, Statement::FunctionDef(_)));
@@ -134,6 +136,7 @@ mod tests {
         let node = QuantityNode {
             magnitude: 1.0,
             uncertainty: None,
+            is_sigma: false,
             unit: None,
         };
         let expr = Expr::Quantity(node);
@@ -141,6 +144,36 @@ mod tests {
     }
 }
 
-pub fn unit_to_latex(_unit_str: &str) -> String {
-    String::new()
+pub fn unit_to_latex(unit_str: &str) -> String {
+    let u = unit_str.trim();
+    if u.is_empty() || u == "1" || u == "Dimensionless" {
+        return String::new();
+    }
+
+    fn format_part(part: &str) -> String {
+        let terms: Vec<&str> = part.split('*').collect();
+        let mut formatted_terms = Vec::new();
+        for t in terms {
+            let clean = t.trim();
+            if clean.is_empty() { continue; }
+            if let Some((base, exp)) = clean.split_once('^') {
+                formatted_terms.push(format!("\\text{{{}}}^{{{}}}", base.trim(), exp.trim()));
+            } else {
+                formatted_terms.push(format!("\\text{{{}}}", clean));
+            }
+        }
+        formatted_terms.join(" \\cdot ")
+    }
+
+    if let Some((num, den)) = u.split_once('/') {
+        let num_latex = format_part(num);
+        let den_latex = format_part(den);
+        if num_latex.is_empty() {
+            format!("\\frac{{1}}{{{}}}", den_latex)
+        } else {
+            format!("\\frac{{{}}}{{{}}}", num_latex, den_latex)
+        }
+    } else {
+        format_part(u)
+    }
 }

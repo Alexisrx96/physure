@@ -33,8 +33,13 @@ impl fmt::Display for PhsValue {
             PhsValue::Bool(b) => write!(f, "{}", if *b { "True" } else { "False" }),
             PhsValue::String(s) => write!(f, "{}", s),
             PhsValue::Vector(v) => {
-                let items: Vec<String> = v.iter().map(|item| item.to_string()).collect();
-                write!(f, "[{}]", items.join(", "))
+                if v.len() > 4 {
+                    let first_three: Vec<String> = v[..3].iter().map(|item| item.to_string()).collect();
+                    write!(f, "[{}, ... ({} items)]", first_three.join(", "), v.len())
+                } else {
+                    let items: Vec<String> = v.iter().map(|item| item.to_string()).collect();
+                    write!(f, "[{}]", items.join(", "))
+                }
             }
             PhsValue::Sigma(k) => write!(f, "{}σ", physure_core::quantity::format_float(*k)),
             PhsValue::SigmaBound(q, k) => write!(f, "{} ± {}σ", q, physure_core::quantity::format_float(*k)),

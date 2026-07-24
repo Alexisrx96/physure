@@ -205,7 +205,7 @@ impl RationalUnit {
 
     pub fn base_repr(&self) -> String {
         if self.dimensions.is_empty() {
-            return "Dimensionless".to_string();
+            return String::new();
         }
         let mut parts = Vec::new();
         for (base, (num, den)) in &self.dimensions {

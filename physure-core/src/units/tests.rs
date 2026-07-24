@@ -75,7 +75,7 @@ fn mul_then_div_is_identity() {
 #[test]
 fn repr_dimensionless() {
     let u = RationalUnit::dimensionless();
-    assert_eq!(u.__repr__(), "Dimensionless");
+    assert_eq!(u.__repr__(), "");
 }
 
 #[test]
