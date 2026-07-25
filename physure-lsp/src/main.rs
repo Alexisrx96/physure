@@ -71,7 +71,28 @@ impl LanguageServer for Backend {
         }
     }
 
-    async fn completion(&self, _: CompletionParams) -> Result<Option<CompletionResponse>> {
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
+
+        let line_prefix = self.documents.read().unwrap().get(&uri).and_then(|text| {
+            text.lines()
+                .nth(pos.line as usize)
+                .map(|line| line.chars().take(pos.character as usize).collect::<String>())
+        });
+
+        if let Some(prefix) = line_prefix {
+            match use_statement_context(&prefix) {
+                UseContext::FromTarget => {
+                    return Ok(Some(CompletionResponse::Array(from_target_completions(&uri))));
+                }
+                UseContext::Names => {
+                    return Ok(Some(CompletionResponse::Array(use_name_completions())));
+                }
+                UseContext::None => {}
+            }
+        }
+
         let mut items = Vec::new();
 
         // 1. Built-in Functions
@@ -287,6 +308,139 @@ impl Backend {
     }
 }
 
+enum UseContext {
+    /// Cursor is between `use` and `from`, expecting imported name(s).
+    Names,
+    /// Cursor is after `from`, expecting a domain/module/plugin target.
+    FromTarget,
+    None,
+}
+
+/// Classifies the cursor position within a `use name[, ...] [as alias] from <target>` statement,
+/// based on the tokens of the line up to the cursor.
+fn use_statement_context(line_prefix: &str) -> UseContext {
+    let tokens: Vec<&str> = line_prefix.split_whitespace().collect();
+    if tokens.first() != Some(&"use") {
+        return UseContext::None;
+    }
+    if tokens.iter().any(|t| *t == "from") {
+        UseContext::FromTarget
+    } else {
+        UseContext::Names
+    }
+}
+
+/// Completions for the name(s)/wildcard position of a `use` statement: the members of every
+/// gated builtin domain (`calc`/`plot`/`array`; `core` is always-on and never a `use` target).
+fn use_name_completions() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+    for domain in ["calc", "plot", "array"] {
+        if let Some(members) = physure_script::builtins::domain_members(domain) {
+            for name in members {
+                items.push(CompletionItem {
+                    label: name.to_string(),
+                    kind: Some(CompletionItemKind::FUNCTION),
+                    detail: Some(format!("from domain '{domain}'")),
+                    documentation: Some(Documentation::String(format!(
+                        "Member of builtin domain `{domain}`. Completes `use {name} from {domain}`."
+                    ))),
+                    sort_text: Some(format!("m_use_{domain}_{name}")),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    items.push(CompletionItem {
+        label: "*".to_string(),
+        kind: Some(CompletionItemKind::OPERATOR),
+        detail: Some("wildcard import".to_string()),
+        documentation: Some(Documentation::String(
+            "Imports every member of the target domain or module.".to_string(),
+        )),
+        sort_text: Some("m_use_wildcard".to_string()),
+        ..Default::default()
+    });
+    items
+}
+
+/// Completions for the `from` clause of a `use` statement: gated builtin domains, sibling `.phs`
+/// module stems, and native plugin stems discovered under `<dir>/ext/*.<DLL_EXTENSION>`.
+/// Python `.py` ext files are intentionally never suggested — they are no longer a valid `use ... from` target.
+fn from_target_completions(uri: &Url) -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    for (name, doc) in [
+        ("calc", "Symbolic calculus: deriv, diff, integral, integrate, solve"),
+        ("plot", "Plotting: plot"),
+        ("array", "Array/numeric helpers: linspace, gradient, trapz"),
+    ] {
+        items.push(CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::MODULE),
+            detail: Some(format!("builtin domain '{name}'")),
+            documentation: Some(Documentation::String(doc.to_string())),
+            sort_text: Some(format!("m_from_domain_{name}")),
+            ..Default::default()
+        });
+    }
+
+    if let Ok(path) = uri.to_file_path() {
+        if let Some(dir) = path.parent() {
+            let current_stem = path.file_stem().and_then(|s| s.to_str());
+
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let candidate = entry.path();
+                    if candidate.extension().and_then(|e| e.to_str()) != Some("phs") {
+                        continue;
+                    }
+                    let Some(stem) = candidate.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    if Some(stem) == current_stem {
+                        continue;
+                    }
+                    items.push(CompletionItem {
+                        label: stem.to_string(),
+                        kind: Some(CompletionItemKind::MODULE),
+                        detail: Some(format!("PhysureScript module `{stem}.phs`")),
+                        documentation: Some(Documentation::String(format!(
+                            "Local module `{stem}.phs`"
+                        ))),
+                        sort_text: Some(format!("m_from_module_{stem}")),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            let dll_ext = std::env::consts::DLL_EXTENSION;
+            if let Ok(entries) = std::fs::read_dir(dir.join("ext")) {
+                for entry in entries.flatten() {
+                    let candidate = entry.path();
+                    if candidate.extension().and_then(|e| e.to_str()) != Some(dll_ext) {
+                        continue;
+                    }
+                    let Some(stem) = candidate.file_stem().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    items.push(CompletionItem {
+                        label: stem.to_string(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some(format!("Native plugin `ext/{stem}.{dll_ext}`")),
+                        documentation: Some(Documentation::String(format!(
+                            "Native `.rs` plugin loaded from `ext/{stem}.{dll_ext}`"
+                        ))),
+                        sort_text: Some(format!("m_from_plugin_{stem}")),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    items
+}
+
 fn extract_word_at_pos(line: &str, char_idx: usize) -> String {
     let bytes = line.as_bytes();
     if char_idx >= bytes.len() {
@@ -330,6 +484,30 @@ fn lookup_hover_doc(word: &str) -> Option<String> {
         "J" => Some("**Physical Unit**: `J`\n\n* **Quantity**: Energy / Work\n* **SI Base**: `kg·m²·s⁻²`\n* **Dimension**: `[M·L²·T⁻²]`".to_string()),
         "W" => Some("**Physical Unit**: `W`\n\n* **Quantity**: Power (Potencia)\n* **SI Base**: `kg·m²·s⁻³`\n* **Dimension**: `[M·L²·T⁻³]`".to_string()),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn use_statement_context_detects_names_vs_from_target() {
+        assert!(matches!(use_statement_context("let x"), UseContext::None));
+        assert!(matches!(use_statement_context("use "), UseContext::Names));
+        assert!(matches!(use_statement_context("use solve, deriv"), UseContext::Names));
+        assert!(matches!(use_statement_context("use solve from "), UseContext::FromTarget));
+        assert!(matches!(use_statement_context("use solve from ca"), UseContext::FromTarget));
+    }
+
+    #[test]
+    fn use_name_completions_covers_all_gated_domains_plus_wildcard() {
+        let items = use_name_completions();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"solve"));
+        assert!(labels.contains(&"plot"));
+        assert!(labels.contains(&"linspace"));
+        assert!(labels.contains(&"*"));
     }
 }
 
