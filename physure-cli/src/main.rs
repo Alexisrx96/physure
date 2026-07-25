@@ -449,7 +449,10 @@ fn main() {
         }
     };
 
-    let mut interp = PhsInterpreter::default();
+    let mut interp = match std::path::Path::new(raw_input).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => PhsInterpreter::with_base_dir(dir),
+        _ => PhsInterpreter::default(),
+    };
     let vars_map = HashMap::new();
     let mut steps = Vec::new();
     let i18n = PhysureConfig::load().i18n();

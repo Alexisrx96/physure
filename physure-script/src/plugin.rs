@@ -1,0 +1,559 @@
+//! Native `.rs` extensions: compiled `cdylib` plugins dropped in `<script_dir>/ext/`,
+//! discovered and dlopen'd the same way the Python bindings load `ext/*.py`.
+//!
+//! Rust has no interpreter, so a `.rs` file can't be loaded like a `.py` one —
+//! plugin authors compile their extension crate to a `cdylib` and place the
+//! resulting `.so`/`.dylib`/`.dll` under `ext/`. The plugin exports a single
+//! `extern "C" fn phs_plugin_entry() -> PluginRegistry` symbol describing its
+//! functions; each function takes and returns a [`PluginValue`], a tagged union
+//! covering every [`PhsValue`] except `Function`/`Sigma`/`SigmaBound`/`Plot`
+//! (those don't have a stable, useful C representation and aren't supported
+//! across this boundary).
+//!
+//! Plugins can also be hot-reloaded: [`PhsInterpreter::reload_native_ext`]
+//! re-scans `ext/` and swaps in any plugin whose file changed, without
+//! restarting the process.
+
+use std::collections::HashMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::SystemTime;
+
+use physure_core::error::{PhysureError, PhysureResult};
+use physure_core::quantity::Quantity;
+
+use crate::interpreter::ExternalFn;
+use crate::value::PhsValue;
+
+/// Bumped whenever `PluginValue`/`PluginFnEntry`/`PluginRegistry`'s layout changes.
+pub const PHS_PLUGIN_ABI_VERSION: u32 = 2;
+
+/// Discriminant for [`PluginValue`]. `#[repr(u8)]` so it's FFI-safe.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginValueTag {
+    None = 0,
+    Number = 1,
+    Bool = 2,
+    Quantity = 3,
+    String = 4,
+    Vector = 5,
+}
+
+/// A tagged union carrying one [`PhsValue`] across the plugin ABI boundary.
+///
+/// - `Number`/`Bool`: value in `number` (`Bool` as 0.0/1.0).
+/// - `Quantity`: magnitude in `number`, unit expression string (e.g. `"m/s"`)
+///   in `text`.
+/// - `String`: nul-terminated string in `text`.
+/// - `Vector`: `item_count` elements at `items`.
+///
+/// Unused fields are zero/null. All pointers are borrows valid only for the
+/// duration of the call they appear in — a plugin must not retain them.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PluginValue {
+    pub tag: PluginValueTag,
+    pub number: f64,
+    pub text: *const c_char,
+    pub items: *const PluginValue,
+    pub item_count: usize,
+}
+
+impl PluginValue {
+    pub const NONE: PluginValue = PluginValue {
+        tag: PluginValueTag::None,
+        number: 0.0,
+        text: std::ptr::null(),
+        items: std::ptr::null(),
+        item_count: 0,
+    };
+}
+
+/// A native plugin function: takes a borrowed argument array, returns one value.
+pub type PluginFn = extern "C" fn(*const PluginValue, usize) -> PluginValue;
+
+#[repr(C)]
+pub struct PluginFnEntry {
+    pub name: *const c_char,
+    pub func: PluginFn,
+}
+
+#[repr(C)]
+pub struct PluginRegistry {
+    pub abi_version: u32,
+    pub entries: *const PluginFnEntry,
+    pub entry_count: usize,
+}
+
+/// Signature every plugin cdylib must export under the symbol `phs_plugin_entry`.
+pub type PluginEntryPoint = unsafe extern "C" fn() -> PluginRegistry;
+
+/// Owns the conversions' `CString`/`Vec` allocations, keeping them alive for
+/// the duration of a single plugin call (the `PluginValue`s built from them
+/// borrow, they don't own).
+#[derive(Default)]
+struct ValueArena {
+    strings: Vec<CString>,
+    vectors: Vec<Vec<PluginValue>>,
+}
+
+impl ValueArena {
+    fn push(&mut self, value: &PhsValue) -> PhysureResult<PluginValue> {
+        Ok(match value {
+            PhsValue::None => PluginValue::NONE,
+            PhsValue::Number(n) => PluginValue {
+                tag: PluginValueTag::Number,
+                number: *n,
+                ..PluginValue::NONE
+            },
+            PhsValue::Bool(b) => PluginValue {
+                tag: PluginValueTag::Bool,
+                number: if *b { 1.0 } else { 0.0 },
+                ..PluginValue::NONE
+            },
+            PhsValue::Quantity(q) => PluginValue {
+                tag: PluginValueTag::Quantity,
+                number: q.value.mean(),
+                text: self.intern(q.unit.__repr__())?,
+                ..PluginValue::NONE
+            },
+            PhsValue::String(s) => PluginValue {
+                tag: PluginValueTag::String,
+                text: self.intern(s.clone())?,
+                ..PluginValue::NONE
+            },
+            PhsValue::Vector(items) => {
+                let converted = items
+                    .iter()
+                    .map(|v| self.push(v))
+                    .collect::<PhysureResult<Vec<_>>>()?;
+                let (ptr, len) = (converted.as_ptr(), converted.len());
+                self.vectors.push(converted);
+                PluginValue {
+                    tag: PluginValueTag::Vector,
+                    items: ptr,
+                    item_count: len,
+                    ..PluginValue::NONE
+                }
+            }
+            PhsValue::Function(_)
+            | PhsValue::Sigma(_)
+            | PhsValue::SigmaBound(_, _)
+            | PhsValue::Plot(_) => {
+                return Err(PhysureError::Generic(
+                    "native plugin functions don't support function, sigma, or plot values".into(),
+                ));
+            }
+        })
+    }
+
+    fn intern(&mut self, s: String) -> PhysureResult<*const c_char> {
+        let c = CString::new(s).map_err(|e| PhysureError::Generic(e.to_string()))?;
+        let ptr = c.as_ptr();
+        self.strings.push(c);
+        Ok(ptr)
+    }
+}
+
+fn from_plugin_value(value: &PluginValue) -> PhysureResult<PhsValue> {
+    match value.tag {
+        PluginValueTag::None => Ok(PhsValue::None),
+        PluginValueTag::Number => Ok(PhsValue::Number(value.number)),
+        PluginValueTag::Bool => Ok(PhsValue::Bool(value.number != 0.0)),
+        PluginValueTag::Quantity => {
+            // SAFETY: plugin contract requires `text` to be a valid nul-terminated
+            // C string for the `Quantity` tag.
+            let unit = unsafe { CStr::from_ptr(value.text) }.to_string_lossy();
+            Ok(PhsValue::Quantity(Quantity::new(value.number, &unit)?))
+        }
+        PluginValueTag::String => {
+            let s = unsafe { CStr::from_ptr(value.text) }
+                .to_string_lossy()
+                .into_owned();
+            Ok(PhsValue::String(s))
+        }
+        PluginValueTag::Vector => {
+            // SAFETY: plugin contract requires `items`/`item_count` to describe
+            // a valid slice for the `Vector` tag.
+            let items = unsafe { std::slice::from_raw_parts(value.items, value.item_count) };
+            let converted = items
+                .iter()
+                .map(from_plugin_value)
+                .collect::<PhysureResult<Vec<_>>>()?;
+            Ok(PhsValue::Vector(converted))
+        }
+    }
+}
+
+struct LoadedPlugin {
+    mtime: SystemTime,
+    // Kept alive because closures below hold raw function pointers into it.
+    _lib: libloading::Library,
+}
+
+/// Tracks which plugin files have been loaded (and when), so
+/// [`PluginState::reload_into`] can tell which ones changed on disk.
+#[derive(Default)]
+pub struct PluginState {
+    loaded: HashMap<PathBuf, LoadedPlugin>,
+}
+
+impl PluginState {
+    /// Loads every native plugin found under `<base_dir>/ext/`, installing
+    /// their functions directly into `externals`.
+    pub fn load_into(base_dir: &Path, externals: &mut HashMap<String, ExternalFn>) -> Self {
+        let mut state = PluginState::default();
+        state.reload_into(base_dir, externals);
+        state
+    }
+
+    /// Re-scans `<base_dir>/ext/` and (re)loads any plugin whose file is new or
+    /// changed since it was last loaded, installing its functions into
+    /// `externals` (replacing same-named functions from a previous version).
+    /// Returns the names that were (re)installed.
+    ///
+    /// A reloaded plugin's old library isn't dropped until after `externals`
+    /// no longer references it, so a function a new version *kept* exporting
+    /// stays valid throughout; one it *removed* would dangle if called right
+    /// after this returns — plugin authors should keep exported names stable
+    /// across versions they expect to be hot-reloaded.
+    ///
+    /// ponytail: reload is caller-triggered, not automatic — nothing watches
+    /// the filesystem. Callers that want auto-reload can poll this on an
+    /// interval or wire it to a file-watcher themselves.
+    pub fn reload_into(
+        &mut self,
+        base_dir: &Path,
+        externals: &mut HashMap<String, ExternalFn>,
+    ) -> Vec<String> {
+        let ext_dir = base_dir.join("ext");
+        let Ok(read_dir) = std::fs::read_dir(&ext_dir) else {
+            return Vec::new();
+        };
+
+        let mut reloaded = Vec::new();
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some(std::env::consts::DLL_EXTENSION) {
+                continue;
+            }
+            let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            if self.loaded.get(&path).is_some_and(|p| p.mtime == mtime) {
+                continue; // unchanged since last load
+            }
+            match load_plugin_file(&path, mtime) {
+                Ok((lib, functions)) => {
+                    for (name, func) in functions {
+                        externals.insert(name.clone(), func);
+                        reloaded.push(name);
+                    }
+                    // Old library for this path (if any) is dropped here, now
+                    // that `externals` no longer points into it.
+                    self.loaded.insert(path, LoadedPlugin { mtime, _lib: lib });
+                }
+                Err(e) => eprintln!(
+                    "warning: failed to load native extension {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+        reloaded
+    }
+}
+
+fn load_plugin_file(
+    path: &Path,
+    mtime: SystemTime,
+) -> PhysureResult<(libloading::Library, Vec<(String, ExternalFn)>)> {
+    // dlopen caches by path/inode: reopening the same path after a rebuild
+    // would silently hand back the *old* mapping instead of the new bytes. So
+    // each (re)load dlopen's a uniquely-named temp copy instead of `path`
+    // directly. ponytail: copies are left in the temp dir rather than cleaned
+    // up (deleting a mapped library mid-run isn't portable); fine unless a
+    // process reloads plugins so often disk usage becomes a concern.
+    let nanos = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("plugin");
+    let temp_copy = std::env::temp_dir().join(format!(
+        "phs_plugin_{}_{}_{}.{}",
+        stem,
+        nanos,
+        std::process::id(),
+        std::env::consts::DLL_EXTENSION
+    ));
+    std::fs::copy(path, &temp_copy).map_err(|e| PhysureError::Generic(e.to_string()))?;
+
+    // SAFETY: dlopen'ing arbitrary code is inherently unsafe; we trust plugins
+    // placed by the script author under `ext/`, the same trust boundary as the
+    // `ext/*.py` loader on the Python side.
+    let lib = unsafe { libloading::Library::new(&temp_copy) }
+        .map_err(|e| PhysureError::Generic(e.to_string()))?;
+    let entry_point: libloading::Symbol<PluginEntryPoint> =
+        unsafe { lib.get(b"phs_plugin_entry\0") }
+            .map_err(|e| PhysureError::Generic(format!("missing phs_plugin_entry: {}", e)))?;
+    let registry = unsafe { entry_point() };
+
+    if registry.abi_version != PHS_PLUGIN_ABI_VERSION {
+        return Err(PhysureError::Generic(format!(
+            "ABI version mismatch: plugin is v{}, interpreter expects v{}",
+            registry.abi_version, PHS_PLUGIN_ABI_VERSION
+        )));
+    }
+
+    let entries = unsafe { std::slice::from_raw_parts(registry.entries, registry.entry_count) };
+    let mut functions = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let name = unsafe { CStr::from_ptr(entry.name) }
+            .to_string_lossy()
+            .into_owned();
+        let func = entry.func;
+        let external: ExternalFn = Arc::new(move |args: &[PhsValue]| {
+            let mut arena = ValueArena::default();
+            let plugin_args = args
+                .iter()
+                .map(|v| arena.push(v))
+                .collect::<PhysureResult<Vec<_>>>()?;
+            let result = func(plugin_args.as_ptr(), plugin_args.len());
+            from_plugin_value(&result)
+        });
+        functions.push((name, external));
+    }
+
+    Ok((lib, functions))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+    use std::time::Duration;
+
+    const PLUGIN_SRC_V1: &str = r#"
+        #[repr(u8)]
+        #[derive(Clone, Copy)]
+        pub enum PluginValueTag { None = 0, Number = 1, Bool = 2, Quantity = 3, String = 4, Vector = 5 }
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        pub struct PluginValue {
+            pub tag: PluginValueTag,
+            pub number: f64,
+            pub text: *const std::os::raw::c_char,
+            pub items: *const PluginValue,
+            pub item_count: usize,
+        }
+
+        const NONE: PluginValue = PluginValue { tag: PluginValueTag::None, number: 0.0, text: std::ptr::null(), items: std::ptr::null(), item_count: 0 };
+
+        #[repr(C)]
+        pub struct PluginFnEntry {
+            pub name: *const std::os::raw::c_char,
+            pub func: extern "C" fn(*const PluginValue, usize) -> PluginValue,
+        }
+
+        #[repr(C)]
+        pub struct PluginRegistry {
+            pub abi_version: u32,
+            pub entries: *const PluginFnEntry,
+            pub entry_count: usize,
+        }
+
+        extern "C" fn triple(args: *const PluginValue, len: usize) -> PluginValue {
+            let args = unsafe { std::slice::from_raw_parts(args, len) };
+            PluginValue { tag: PluginValueTag::Number, number: args[0].number * 3.0, ..NONE }
+        }
+
+        extern "C" fn shout(args: *const PluginValue, len: usize) -> PluginValue {
+            let args = unsafe { std::slice::from_raw_parts(args, len) };
+            let s = unsafe { std::ffi::CStr::from_ptr(args[0].text) }.to_str().unwrap();
+            let upper = std::ffi::CString::new(s.to_uppercase()).unwrap();
+            PluginValue { tag: PluginValueTag::String, text: upper.into_raw(), ..NONE }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn phs_plugin_entry() -> PluginRegistry {
+            let entries = vec![
+                PluginFnEntry { name: std::ffi::CString::new("triple").unwrap().into_raw(), func: triple },
+                PluginFnEntry { name: std::ffi::CString::new("shout").unwrap().into_raw(), func: shout },
+            ];
+            let entries: &'static [PluginFnEntry] = Box::leak(entries.into_boxed_slice());
+            PluginRegistry { abi_version: 2, entries: entries.as_ptr(), entry_count: entries.len() }
+        }
+    "#;
+
+    /// Same as `PLUGIN_SRC_V1` but `triple` multiplies by 4 instead of 3 — used
+    /// to exercise hot-reload picking up a changed plugin body.
+    const PLUGIN_SRC_V2: &str = r#"
+        #[repr(u8)]
+        #[derive(Clone, Copy)]
+        pub enum PluginValueTag { None = 0, Number = 1, Bool = 2, Quantity = 3, String = 4, Vector = 5 }
+
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        pub struct PluginValue {
+            pub tag: PluginValueTag,
+            pub number: f64,
+            pub text: *const std::os::raw::c_char,
+            pub items: *const PluginValue,
+            pub item_count: usize,
+        }
+
+        const NONE: PluginValue = PluginValue { tag: PluginValueTag::None, number: 0.0, text: std::ptr::null(), items: std::ptr::null(), item_count: 0 };
+
+        #[repr(C)]
+        pub struct PluginFnEntry {
+            pub name: *const std::os::raw::c_char,
+            pub func: extern "C" fn(*const PluginValue, usize) -> PluginValue,
+        }
+
+        #[repr(C)]
+        pub struct PluginRegistry {
+            pub abi_version: u32,
+            pub entries: *const PluginFnEntry,
+            pub entry_count: usize,
+        }
+
+        extern "C" fn triple(args: *const PluginValue, len: usize) -> PluginValue {
+            let args = unsafe { std::slice::from_raw_parts(args, len) };
+            PluginValue { tag: PluginValueTag::Number, number: args[0].number * 4.0, ..NONE }
+        }
+
+        #[no_mangle]
+        pub extern "C" fn phs_plugin_entry() -> PluginRegistry {
+            let entries = vec![
+                PluginFnEntry { name: std::ffi::CString::new("triple").unwrap().into_raw(), func: triple },
+            ];
+            let entries: &'static [PluginFnEntry] = Box::leak(entries.into_boxed_slice());
+            PluginRegistry { abi_version: 2, entries: entries.as_ptr(), entry_count: entries.len() }
+        }
+    "#;
+
+    /// Builds `src` into a real cdylib at `<dir>/fixture_plugin.<DLL_EXTENSION>`
+    /// with `rustc` (always on PATH wherever `cargo test` runs), so tests
+    /// exercise the actual dlopen path, not just the in-process struct layout.
+    fn build_fixture_plugin(dir: &Path, src: &str) -> PathBuf {
+        let src_path = dir.join("fixture_plugin.rs");
+        std::fs::write(&src_path, src).unwrap();
+        let out_path = dir.join(format!(
+            "fixture_plugin.{}",
+            std::env::consts::DLL_EXTENSION
+        ));
+
+        let status = Command::new("rustc")
+            .args(["--edition", "2021", "--crate-type", "cdylib", "-o"])
+            .arg(&out_path)
+            .arg(&src_path)
+            .status()
+            .expect("rustc must be on PATH to build the test fixture plugin");
+        assert!(status.success(), "failed to compile fixture plugin");
+        out_path
+    }
+
+    #[test]
+    fn test_load_native_ext_end_to_end() {
+        let base_dir = std::env::temp_dir().join(format!("phs_plugin_test_{}", std::process::id()));
+        let ext_dir = base_dir.join("ext");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+
+        let mut externals = HashMap::new();
+        let _state = PluginState::load_into(&base_dir, &mut externals);
+        assert_eq!(externals.len(), 2);
+        let result = externals["triple"](&[PhsValue::Number(14.0)]).unwrap();
+        assert_eq!(result, PhsValue::Number(42.0));
+
+        std::fs::remove_dir_all(&base_dir).unwrap();
+    }
+
+    #[test]
+    fn test_load_native_ext_no_ext_dir() {
+        let mut externals = HashMap::new();
+        PluginState::load_into(Path::new("/nonexistent/phs/plugin/dir"), &mut externals);
+        assert!(externals.is_empty());
+    }
+
+    #[test]
+    fn test_plugin_string_round_trip() {
+        let base_dir =
+            std::env::temp_dir().join(format!("phs_plugin_string_test_{}", std::process::id()));
+        let ext_dir = base_dir.join("ext");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+
+        let mut externals = HashMap::new();
+        let _state = PluginState::load_into(&base_dir, &mut externals);
+        let result = externals["shout"](&[PhsValue::String("hi".into())]).unwrap();
+        assert_eq!(result, PhsValue::String("HI".into()));
+
+        std::fs::remove_dir_all(&base_dir).unwrap();
+    }
+
+    #[test]
+    fn test_quantity_round_trip_through_value_arena() {
+        let mut arena = ValueArena::default();
+        let q = Quantity::new(10.0, "m/s").unwrap();
+        let plugin_value = arena.push(&PhsValue::Quantity(q)).unwrap();
+        let back = from_plugin_value(&plugin_value).unwrap();
+        assert_eq!(
+            back,
+            PhsValue::Quantity(Quantity::new(10.0, "m/s").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_vector_round_trip_through_value_arena() {
+        let mut arena = ValueArena::default();
+        let v = PhsValue::Vector(vec![PhsValue::Number(1.0), PhsValue::Bool(true)]);
+        let plugin_value = arena.push(&v).unwrap();
+        let back = from_plugin_value(&plugin_value).unwrap();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn test_hot_reload_picks_up_changed_plugin() {
+        let base_dir =
+            std::env::temp_dir().join(format!("phs_plugin_reload_test_{}", std::process::id()));
+        let ext_dir = base_dir.join("ext");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        let plugin_path = build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+
+        let mut externals = HashMap::new();
+        let mut state = PluginState::load_into(&base_dir, &mut externals);
+        assert_eq!(
+            externals["triple"](&[PhsValue::Number(14.0)]).unwrap(),
+            PhsValue::Number(42.0)
+        );
+
+        // No change: reload should be a no-op.
+        assert!(state.reload_into(&base_dir, &mut externals).is_empty());
+
+        // Rebuild with different behavior, forcing a later mtime so the reload
+        // notices it regardless of filesystem timestamp granularity.
+        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V2);
+        std::fs::File::open(&plugin_path)
+            .unwrap()
+            .set_modified(SystemTime::now() + Duration::from_secs(2))
+            .unwrap();
+
+        let mut reloaded = state.reload_into(&base_dir, &mut externals);
+        reloaded.sort();
+        assert_eq!(reloaded, vec!["triple".to_string()]);
+        assert_eq!(
+            externals["triple"](&[PhsValue::Number(14.0)]).unwrap(),
+            PhsValue::Number(56.0)
+        );
+
+        std::fs::remove_dir_all(&base_dir).unwrap();
+    }
+}

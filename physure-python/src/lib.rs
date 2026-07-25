@@ -1165,6 +1165,51 @@ fn tokenize_phs_expression(_py: Python<'_>, stmt: &str) -> PyResult<Vec<(String,
     Ok(result)
 }
 
+/// Converts a PHS interpreter result into a Python object, recursing into vectors.
+fn phs_value_to_py(py: Python<'_>, val: ::physure_script::PhsValue) -> PyResult<PyObject> {
+    Ok(match val {
+        ::physure_script::PhsValue::None => py.None(),
+        ::physure_script::PhsValue::Number(n) => n.into_py_any(py)?,
+        ::physure_script::PhsValue::Bool(b) => b.into_py_any(py)?,
+        ::physure_script::PhsValue::String(s) => s.into_py_any(py)?,
+        ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py)?,
+        ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py)?,
+        ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py)?,
+        ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py)?,
+        ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py)?,
+        ::physure_script::PhsValue::Vector(v) => {
+            let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| phs_value_to_py(py, item)).collect();
+            items?.into_py_any(py)?
+        }
+    })
+}
+
+/// Converts a Python object passed from a host-registered function back into a PhsValue.
+/// Order matters: bool must be checked before f64, since Python bools coerce to floats.
+fn py_to_phs_value(obj: &Bound<'_, PyAny>) -> PyResult<::physure_script::PhsValue> {
+    use ::physure_script::PhsValue;
+    if obj.is_none() {
+        Ok(PhsValue::None)
+    } else if let Ok(q) = obj.extract::<PyQuantity>() {
+        Ok(PhsValue::Quantity(q.0))
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(PhsValue::Bool(b))
+    } else if let Ok(n) = obj.extract::<f64>() {
+        Ok(PhsValue::Number(n))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(PhsValue::String(s))
+    } else if let Ok(items) = obj.try_iter() {
+        let values = items
+            .map(|item| py_to_phs_value(&item?))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PhsValue::Vector(values))
+    } else {
+        Err(pyo3::exceptions::PyTypeError::new_err(format!(
+            "Cannot convert Python value {obj} to a PHS value"
+        )))
+    }
+}
+
 #[pyclass(name = "Interpreter")]
 pub struct PyInterpreter {
     inner: ::physure_script::PhsInterpreter,
@@ -1172,50 +1217,46 @@ pub struct PyInterpreter {
 
 #[pymethods]
 impl PyInterpreter {
+    /// `base_dir`, if given, resolves `import` statements relative to that directory
+    /// instead of the process's current working directory.
     #[new]
-    fn new() -> Self {
+    #[pyo3(signature = (base_dir=None))]
+    fn new(base_dir: Option<String>) -> Self {
         PyInterpreter {
-            inner: ::physure_script::PhsInterpreter::default(),
+            inner: match base_dir {
+                Some(dir) => ::physure_script::PhsInterpreter::with_base_dir(dir),
+                None => ::physure_script::PhsInterpreter::default(),
+            },
         }
+    }
+
+    /// Registers a Python callable as a PHS function named `name`. The callable
+    /// receives PHS argument values converted to plain Python objects (Quantity,
+    /// float, bool, str, None, or a list) and must return a value convertible back.
+    fn register_function(&mut self, callback: Py<PyAny>, name: String) {
+        self.inner.register_fn(name, move |args: &[::physure_script::PhsValue]| {
+            Python::with_gil(|py| {
+                let py_args = args
+                    .iter()
+                    .cloned()
+                    .map(|v| phs_value_to_py(py, v))
+                    .collect::<PyResult<Vec<_>>>()
+                    .map_err(|e| ::physure_core::error::PhysureError::Generic(e.to_string()))?;
+                let tuple = PyTuple::new(py, py_args)
+                    .map_err(|e| ::physure_core::error::PhysureError::Generic(e.to_string()))?;
+                let result = callback
+                    .call1(py, tuple)
+                    .map_err(|e| ::physure_core::error::PhysureError::Generic(e.to_string()))?;
+                py_to_phs_value(result.bind(py))
+                    .map_err(|e| ::physure_core::error::PhysureError::Generic(e.to_string()))
+            })
+        });
     }
 
     fn evaluate(&mut self, py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {
         let results = self.inner.eval_str(source)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-
-        let mut py_results = Vec::new();
-        for val in results {
-            let obj = match val {
-                ::physure_script::PhsValue::None => py.None(),
-                ::physure_script::PhsValue::Number(n) => n.into_py_any(py)?,
-                ::physure_script::PhsValue::Bool(b) => b.into_py_any(py)?,
-                ::physure_script::PhsValue::String(s) => s.into_py_any(py)?,
-                ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py)?,
-                ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py)?,
-                ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py)?,
-                ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py)?,
-                ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py)?,
-                ::physure_script::PhsValue::Vector(v) => {
-                    let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| {
-                        match item {
-                            ::physure_script::PhsValue::None => Ok(py.None()),
-                            ::physure_script::PhsValue::Number(n) => n.into_py_any(py),
-                            ::physure_script::PhsValue::Bool(b) => b.into_py_any(py),
-                            ::physure_script::PhsValue::String(s) => s.into_py_any(py),
-                            ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py),
-                            ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py),
-                            ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py),
-                            ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py),
-                            ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py),
-                            ::physure_script::PhsValue::Vector(_) => Ok(py.None()),
-                        }
-                    }).collect();
-                    items?.into_py_any(py)?
-                }
-            };
-            py_results.push(obj);
-        }
-        Ok(py_results)
+        results.into_iter().map(|val| phs_value_to_py(py, val)).collect()
     }
 
     fn deriv(&self, expression: &str, var: &str) -> PyResult<String> {
@@ -1249,6 +1290,14 @@ impl PyInterpreter {
             Ok(None)
         }
     }
+
+    /// Re-scans `ext/` for native plugins whose file changed since load (or the
+    /// last reload) and installs their updated functions, without restarting
+    /// the process. No-op if this interpreter wasn't constructed with `base_dir`.
+    /// Returns the names of functions (re)installed.
+    fn reload_native_ext(&mut self) -> Vec<String> {
+        self.inner.reload_native_ext()
+    }
 }
 
 #[pyfunction]
@@ -1258,35 +1307,7 @@ fn evaluate_phs_native(py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> 
 
     let mut py_results = Vec::new();
     for val in results {
-        let obj = match val {
-            ::physure_script::PhsValue::None => py.None(),
-            ::physure_script::PhsValue::Number(n) => n.into_py_any(py)?,
-            ::physure_script::PhsValue::Bool(b) => b.into_py_any(py)?,
-            ::physure_script::PhsValue::String(s) => s.into_py_any(py)?,
-            ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py)?,
-            ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py)?,
-            ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py)?,
-            ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py)?,
-            ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py)?,
-            ::physure_script::PhsValue::Vector(v) => {
-                let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| {
-                    match item {
-                        ::physure_script::PhsValue::None => Ok(py.None()),
-                        ::physure_script::PhsValue::Number(n) => n.into_py_any(py),
-                        ::physure_script::PhsValue::Bool(b) => b.into_py_any(py),
-                        ::physure_script::PhsValue::String(s) => s.into_py_any(py),
-                        ::physure_script::PhsValue::Quantity(q) => PyQuantity(q).into_py_any(py),
-                        ::physure_script::PhsValue::Function(f) => f.name.into_py_any(py),
-                        ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py),
-                        ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py),
-                        ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py),
-                        ::physure_script::PhsValue::Vector(_) => Ok(py.None()),
-                    }
-                }).collect();
-                items?.into_py_any(py)?
-            }
-        };
-        py_results.push(obj);
+        py_results.push(phs_value_to_py(py, val)?);
     }
     Ok(py_results)
 }

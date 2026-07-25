@@ -1,6 +1,10 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use physure_core::error::{PhysureError, PhysureResult};
+
+/// A host-registered function callable from PHS source by name. Lets embedders
+/// (e.g. the PyO3 binding) expose functions without physure-script depending on them.
+pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
 use physure_core::quantity::Quantity;
 use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
@@ -45,11 +49,14 @@ fn eval_template_string(text: &str, interp: &PhsInterpreter, env: &HashMap<Strin
 pub struct PhsInterpreter {
     pub env: HashMap<String, PhsValue>,
     pub resolver: Arc<dyn ModuleResolver>,
+    pub externals: HashMap<String, ExternalFn>,
+    plugin_state: Arc<Mutex<crate::plugin::PluginState>>,
+    plugin_base_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for PhsInterpreter {
     fn default() -> Self {
-        Self::new(Arc::new(FsModuleResolver))
+        Self::new(Arc::new(FsModuleResolver::default()))
     }
 }
 
@@ -58,11 +65,48 @@ impl PhsInterpreter {
         Self {
             env: HashMap::new(),
             resolver,
+            externals: HashMap::new(),
+            plugin_state: Arc::new(Mutex::new(crate::plugin::PluginState::default())),
+            plugin_base_dir: None,
         }
     }
 
     pub fn new_default() -> Self {
         Self::default()
+    }
+
+    /// Like `default()`, but resolves `import` paths relative to `base_dir`
+    /// (typically the directory containing the script being run) instead of `.`,
+    /// and auto-loads any native plugins found under `<base_dir>/ext/`.
+    pub fn with_base_dir(base_dir: impl Into<std::path::PathBuf>) -> Self {
+        let base_dir = base_dir.into();
+        let mut interp = Self::new(Arc::new(FsModuleResolver::new(base_dir.clone())));
+        let state = crate::plugin::PluginState::load_into(&base_dir, &mut interp.externals);
+        interp.plugin_state = Arc::new(Mutex::new(state));
+        interp.plugin_base_dir = Some(base_dir);
+        interp
+    }
+
+    /// Re-scans `<base_dir>/ext/` (the directory passed to [`Self::with_base_dir`])
+    /// for native plugins whose file changed since they were last loaded, and
+    /// installs their updated functions. No-op if the interpreter wasn't
+    /// constructed with a base dir. Returns the names of functions (re)installed.
+    pub fn reload_native_ext(&mut self) -> Vec<String> {
+        let Some(base_dir) = self.plugin_base_dir.clone() else {
+            return Vec::new();
+        };
+        let plugin_state = self.plugin_state.clone();
+        let mut state = plugin_state.lock().unwrap_or_else(|e| e.into_inner());
+        state.reload_into(&base_dir, &mut self.externals)
+    }
+
+    /// Registers a host function under `name`, callable from PHS source like any builtin.
+    /// Takes precedence over user-defined PHS functions but not over builtins.
+    pub fn register_fn<F>(&mut self, name: impl Into<String>, f: F)
+    where
+        F: Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync + 'static,
+    {
+        self.externals.insert(name.into(), Arc::new(f));
     }
 
     pub fn eval_str(&mut self, code: &str) -> PhysureResult<Vec<PhsValue>> {
@@ -249,6 +293,10 @@ impl PhsInterpreter {
 
                 if let Some(val) = crate::builtins::eval_builtin(name, &arg_vals, self)? {
                     return Ok(val);
+                }
+
+                if let Some(f) = self.externals.get(name) {
+                    return f(&arg_vals);
                 }
 
                 if let Some(PhsValue::Function(func)) = env.get(name) {
@@ -605,6 +653,19 @@ mod tests {
         }
     }
     
+    #[test]
+    fn test_register_fn_dispatch() {
+        let mut interp = PhsInterpreter::default();
+        interp.register_fn("double", |args: &[PhsValue]| match args.first() {
+            Some(PhsValue::Quantity(q)) => Ok(PhsValue::Number(q.value.mean() * 2.0)),
+            Some(PhsValue::Number(n)) => Ok(PhsValue::Number(n * 2.0)),
+            _ => Err(PhysureError::Generic("double expects a number".into())),
+        });
+
+        let results = interp.eval_str("double(21)").unwrap();
+        assert_eq!(results, vec![PhsValue::Number(42.0)]);
+    }
+
     #[test]
     fn test_virtual_module_import() {
         let mut resolver = MemoryModuleResolver::new();
