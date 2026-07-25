@@ -10,6 +10,7 @@ mod katex_assets;
 mod latex;
 mod protocol;
 mod rich;
+mod scaffold;
 mod step;
 mod tui;
 mod web;
@@ -26,6 +27,7 @@ fn print_help() {
     println!("    phs --repl");
     println!("    phs transpile <script.phs> [--target <rust|python|java>] [--output <file>]");
     println!("    phs register-protocol");
+    println!("    phs new-plugin <name> [--lang <rust|python|both>] [--dir <path>]");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
@@ -41,6 +43,7 @@ fn print_help() {
     println!("    phs --repl");
     println!("    phs transpile 1_cargas.phs --target python");
     println!("    phs transpile 1_cargas.phs -t java -o Calculator.java");
+    println!("    phs new-plugin myplugin --lang rust");
 }
 
 fn run_repl() {
@@ -102,7 +105,7 @@ fn run_repl() {
     }
 }
 
-fn get_flag_value(args: &[String], flag: &str) -> Option<String> {
+pub(crate) fn get_flag_value(args: &[String], flag: &str) -> Option<String> {
     if let Some(pos) = args.iter().position(|a| a == flag) {
         if pos + 1 < args.len() {
             return Some(args[pos + 1].clone());
@@ -419,6 +422,11 @@ fn main() {
         return;
     }
 
+    if args[1] == "new-plugin" {
+        scaffold::run_new_plugin(&args);
+        return;
+    }
+
     if handle_transpile(&args) {
         return;
     }
@@ -449,10 +457,11 @@ fn main() {
         }
     };
 
-    let mut interp = match std::path::Path::new(raw_input).parent() {
-        Some(dir) if !dir.as_os_str().is_empty() => PhsInterpreter::with_base_dir(dir),
-        _ => PhsInterpreter::default(),
+    let script_dir = match std::path::Path::new(raw_input).parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir,
+        _ => std::path::Path::new("."),
     };
+    let mut interp = PhsInterpreter::with_base_dir(script_dir);
     let vars_map = HashMap::new();
     let mut steps = Vec::new();
     let i18n = PhysureConfig::load().i18n();
