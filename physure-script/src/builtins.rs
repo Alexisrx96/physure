@@ -8,7 +8,25 @@ fn eval_bin_op(op: BinaryOp, l: &PhsValue, r: &PhsValue) -> PhysureResult<PhsVal
     interp.eval_binary_op_vals(op, l.clone(), r.clone())
 }
 
-pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+pub fn domain_members(domain: &str) -> Option<&'static [&'static str]> {
+    match domain {
+        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve"]),
+        "plot" => Some(&["plot"]),
+        "array" => Some(&["linspace", "gradient", "trapz"]),
+        _ => None,
+    }
+}
+
+pub fn eval_domain_builtin(domain: &str, name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    match domain {
+        "calc" => eval_calc_builtin(name, args, interpreter),
+        "plot" => eval_plot_builtin(name, args, interpreter),
+        "array" => eval_array_builtin(name, args, interpreter),
+        _ => Ok(None),
+    }
+}
+
+pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
         "format" => {
             if let Some(val) = args.first() {
@@ -278,6 +296,12 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter)
                 _ => Err(PhysureError::Generic("round expects number or quantity".into())),
             }
         }
+        _ => Ok(None),
+    }
+}
+
+fn eval_array_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    match name {
         "linspace" => {
             if args.len() < 2 {
                 return Err(PhysureError::Generic("linspace expects start and stop".into()));
@@ -384,6 +408,12 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter)
             }
             Ok(Some(total))
         }
+        _ => Ok(None),
+    }
+}
+
+fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    match name {
         "deriv" | "diff" => {
             if args.len() != 2 {
                 return Err(PhysureError::Generic("deriv expects expression string and variable string".into()));
@@ -434,7 +464,7 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter)
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
             let solved_node = node.solve_equation(target_str)?;
             let solved_str = solved_node.to_string();
-            
+
             // if target resolves against bound quantities, evaluate the solved expression against the interpreter's env
             // The python tests might expect a Number/Quantity back if variables are bound
             if let Ok(program) = crate::parser::parse_phs(&solved_str) {
@@ -448,6 +478,12 @@ pub fn eval_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter)
             }
             Ok(Some(PhsValue::String(solved_str)))
         }
+        _ => Ok(None),
+    }
+}
+
+fn eval_plot_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    match name {
         "plot" => {
             if args.is_empty() {
                 return Err(PhysureError::Generic("plot expects at least 1 argument".into()));
@@ -752,8 +788,18 @@ mod tests {
     use crate::value::PhsValue;
 
     fn eval(name: &str, args: Vec<PhsValue>) -> PhsValue {
-        let mut interp = PhsInterpreter::default();
-        eval_builtin(name, &args, &mut interp).unwrap().unwrap()
+        let interp = PhsInterpreter::default();
+        eval_core_builtin(name, &args, &interp).unwrap().unwrap()
+    }
+
+    fn eval_calc(name: &str, args: Vec<PhsValue>) -> PhsValue {
+        let interp = PhsInterpreter::default();
+        eval_calc_builtin(name, &args, &interp).unwrap().unwrap()
+    }
+
+    fn eval_array(name: &str, args: Vec<PhsValue>) -> PhsValue {
+        let interp = PhsInterpreter::default();
+        eval_array_builtin(name, &args, &interp).unwrap().unwrap()
     }
 
     #[test]
@@ -786,15 +832,15 @@ mod tests {
 
     #[test]
     fn test_deriv() {
-        let res = eval("deriv", vec![PhsValue::String("x^2".into()), PhsValue::String("x".into())]);
+        let res = eval_calc("deriv", vec![PhsValue::String("x^2".into()), PhsValue::String("x".into())]);
         assert_eq!(res, PhsValue::String("2 * x".into()));
     }
 
     #[test]
     fn test_integral() {
-        let res = eval("integral", vec![PhsValue::String("2 * x".into()), PhsValue::String("x".into())]);
+        let res = eval_calc("integral", vec![PhsValue::String("2 * x".into()), PhsValue::String("x".into())]);
         if let PhsValue::String(s) = res {
-            assert!(s.contains("2") && s.contains("x")); 
+            assert!(s.contains("2") && s.contains("x"));
         } else {
             panic!("Expected string");
         }
@@ -802,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_solve() {
-        let res = eval("solve", vec![PhsValue::String("2 * x = 10".into()), PhsValue::String("x".into())]);
+        let res = eval_calc("solve", vec![PhsValue::String("2 * x = 10".into()), PhsValue::String("x".into())]);
         match res {
             PhsValue::Number(n) => assert_eq!(n, 5.0),
             PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 5.0),
@@ -813,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_linspace() {
-        let res = eval("linspace", vec![PhsValue::Number(0.0), PhsValue::Number(1.0), PhsValue::Number(3.0)]);
+        let res = eval_array("linspace", vec![PhsValue::Number(0.0), PhsValue::Number(1.0), PhsValue::Number(3.0)]);
         if let PhsValue::Vector(v) = res {
             assert_eq!(v.len(), 3);
             assert_eq!(v[0], PhsValue::Number(0.0));
@@ -828,7 +874,7 @@ mod tests {
     fn test_gradient() {
         let y = PhsValue::Vector(vec![PhsValue::Number(1.0), PhsValue::Number(4.0), PhsValue::Number(9.0)]);
         let x = PhsValue::Vector(vec![PhsValue::Number(1.0), PhsValue::Number(2.0), PhsValue::Number(3.0)]);
-        let res = eval("gradient", vec![y, x]);
+        let res = eval_array("gradient", vec![y, x]);
         if let PhsValue::Vector(v) = res {
             assert_eq!(v.len(), 3);
         } else {
@@ -840,7 +886,7 @@ mod tests {
     fn test_trapz() {
         let y = PhsValue::Vector(vec![PhsValue::Number(1.0), PhsValue::Number(1.0)]);
         let x = PhsValue::Vector(vec![PhsValue::Number(0.0), PhsValue::Number(1.0)]);
-        let res = eval("trapz", vec![y, x]);
+        let res = eval_array("trapz", vec![y, x]);
         assert_eq!(res, PhsValue::Number(1.0));
     }
 }

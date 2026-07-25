@@ -190,57 +190,68 @@ fn from_plugin_value(value: &PluginValue) -> PhysureResult<PhsValue> {
 
 struct LoadedPlugin {
     mtime: SystemTime,
-    // Kept alive because closures below hold raw function pointers into it.
+    functions: HashMap<String, ExternalFn>,
+    // Kept alive because closures above hold raw function pointers into it.
     _lib: libloading::Library,
 }
 
-/// Tracks which plugin files have been loaded (and when), so
-/// [`PluginState::reload_into`] can tell which ones changed on disk.
+/// Tracks which plugin files have been loaded (and when), keyed by their full
+/// path, so [`PluginState::reload_loaded_into`] can tell which ones changed on
+/// disk. Only stems some `use` statement has actually requested end up here —
+/// there is no eager directory scan.
 #[derive(Default)]
 pub struct PluginState {
     loaded: HashMap<PathBuf, LoadedPlugin>,
 }
 
 impl PluginState {
-    /// Loads every native plugin found under `<base_dir>/ext/`, installing
-    /// their functions directly into `externals`.
-    pub fn load_into(base_dir: &Path, externals: &mut HashMap<String, ExternalFn>) -> Self {
-        let mut state = PluginState::default();
-        state.reload_into(base_dir, externals);
-        state
+    /// Loads `<base_dir>/ext/<stem>.<DLL_EXTENSION>` on demand, returning its
+    /// exported `{name: function}` map. Returns `Ok(None)` if no such file
+    /// exists. Reuses the cached load if the file hasn't changed since the
+    /// last call for this stem.
+    pub fn ensure_stem_loaded(
+        &mut self,
+        base_dir: &Path,
+        stem: &str,
+    ) -> PhysureResult<Option<HashMap<String, ExternalFn>>> {
+        let path = base_dir
+            .join("ext")
+            .join(format!("{stem}.{}", std::env::consts::DLL_EXTENSION));
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let mtime = std::fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .map_err(|e| PhysureError::Generic(e.to_string()))?;
+        if let Some(loaded) = self.loaded.get(&path) {
+            if loaded.mtime == mtime {
+                return Ok(Some(loaded.functions.clone()));
+            }
+        }
+        let (lib, functions) = load_plugin_file(&path, mtime)?;
+        let functions: HashMap<String, ExternalFn> = functions.into_iter().collect();
+        self.loaded.insert(
+            path,
+            LoadedPlugin { mtime, functions: functions.clone(), _lib: lib },
+        );
+        Ok(Some(functions))
     }
 
-    /// Re-scans `<base_dir>/ext/` and (re)loads any plugin whose file is new or
-    /// changed since it was last loaded, installing its functions into
-    /// `externals` (replacing same-named functions from a previous version).
-    /// Returns the names that were (re)installed.
-    ///
-    /// A reloaded plugin's old library isn't dropped until after `externals`
-    /// no longer references it, so a function a new version *kept* exporting
-    /// stays valid throughout; one it *removed* would dangle if called right
-    /// after this returns — plugin authors should keep exported names stable
-    /// across versions they expect to be hot-reloaded.
+    /// Re-checks only the plugin files some `use` statement has already
+    /// caused to be loaded (via [`Self::ensure_stem_loaded`]) and reloads any
+    /// whose file changed since. For each reloaded function name that's
+    /// already a key in `externals` (i.e. some `use` actually unlocked it),
+    /// installs the fresh closure there. Functions a plugin exports but that
+    /// were never `use`d are not injected. Returns the names refreshed.
     ///
     /// ponytail: reload is caller-triggered, not automatic — nothing watches
     /// the filesystem. Callers that want auto-reload can poll this on an
     /// interval or wire it to a file-watcher themselves.
-    pub fn reload_into(
-        &mut self,
-        base_dir: &Path,
-        externals: &mut HashMap<String, ExternalFn>,
-    ) -> Vec<String> {
-        let ext_dir = base_dir.join("ext");
-        let Ok(read_dir) = std::fs::read_dir(&ext_dir) else {
-            return Vec::new();
-        };
-
+    pub fn reload_loaded_into(&mut self, externals: &mut HashMap<String, ExternalFn>) -> Vec<String> {
         let mut reloaded = Vec::new();
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some(std::env::consts::DLL_EXTENSION) {
-                continue;
-            }
-            let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+        let paths: Vec<PathBuf> = self.loaded.keys().cloned().collect();
+        for path in paths {
+            let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
                 continue;
             };
             if self.loaded.get(&path).is_some_and(|p| p.mtime == mtime) {
@@ -248,16 +259,19 @@ impl PluginState {
             }
             match load_plugin_file(&path, mtime) {
                 Ok((lib, functions)) => {
-                    for (name, func) in functions {
-                        externals.insert(name.clone(), func);
-                        reloaded.push(name);
+                    let functions: HashMap<String, ExternalFn> = functions.into_iter().collect();
+                    for (name, func) in &functions {
+                        if externals.contains_key(name) {
+                            externals.insert(name.clone(), func.clone());
+                            reloaded.push(name.clone());
+                        }
                     }
                     // Old library for this path (if any) is dropped here, now
                     // that `externals` no longer points into it.
-                    self.loaded.insert(path, LoadedPlugin { mtime, _lib: lib });
+                    self.loaded.insert(path, LoadedPlugin { mtime, functions, _lib: lib });
                 }
                 Err(e) => eprintln!(
-                    "warning: failed to load native extension {}: {}",
+                    "warning: failed to reload native extension {}: {}",
                     path.display(),
                     e
                 ),
@@ -467,10 +481,10 @@ mod tests {
         std::fs::create_dir_all(&ext_dir).unwrap();
         build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
 
-        let mut externals = HashMap::new();
-        let _state = PluginState::load_into(&base_dir, &mut externals);
-        assert_eq!(externals.len(), 2);
-        let result = externals["triple"](&[PhsValue::Number(14.0)]).unwrap();
+        let mut state = PluginState::default();
+        let functions = state.ensure_stem_loaded(&base_dir, "fixture_plugin").unwrap().unwrap();
+        assert_eq!(functions.len(), 2);
+        let result = functions["triple"](&[PhsValue::Number(14.0)]).unwrap();
         assert_eq!(result, PhsValue::Number(42.0));
 
         std::fs::remove_dir_all(&base_dir).unwrap();
@@ -478,9 +492,11 @@ mod tests {
 
     #[test]
     fn test_load_native_ext_no_ext_dir() {
-        let mut externals = HashMap::new();
-        PluginState::load_into(Path::new("/nonexistent/phs/plugin/dir"), &mut externals);
-        assert!(externals.is_empty());
+        let mut state = PluginState::default();
+        let result = state
+            .ensure_stem_loaded(Path::new("/nonexistent/phs/plugin/dir"), "fixture_plugin")
+            .unwrap();
+        assert!(result.is_none());
     }
 
     #[test]
@@ -491,9 +507,9 @@ mod tests {
         std::fs::create_dir_all(&ext_dir).unwrap();
         build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
 
-        let mut externals = HashMap::new();
-        let _state = PluginState::load_into(&base_dir, &mut externals);
-        let result = externals["shout"](&[PhsValue::String("hi".into())]).unwrap();
+        let mut state = PluginState::default();
+        let functions = state.ensure_stem_loaded(&base_dir, "fixture_plugin").unwrap().unwrap();
+        let result = functions["shout"](&[PhsValue::String("hi".into())]).unwrap();
         assert_eq!(result, PhsValue::String("HI".into()));
 
         std::fs::remove_dir_all(&base_dir).unwrap();
@@ -528,15 +544,15 @@ mod tests {
         std::fs::create_dir_all(&ext_dir).unwrap();
         let plugin_path = build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
 
-        let mut externals = HashMap::new();
-        let mut state = PluginState::load_into(&base_dir, &mut externals);
+        let mut state = PluginState::default();
+        let mut externals = state.ensure_stem_loaded(&base_dir, "fixture_plugin").unwrap().unwrap();
         assert_eq!(
             externals["triple"](&[PhsValue::Number(14.0)]).unwrap(),
             PhsValue::Number(42.0)
         );
 
         // No change: reload should be a no-op.
-        assert!(state.reload_into(&base_dir, &mut externals).is_empty());
+        assert!(state.reload_loaded_into(&mut externals).is_empty());
 
         // Rebuild with different behavior, forcing a later mtime so the reload
         // notices it regardless of filesystem timestamp granularity.
@@ -546,13 +562,35 @@ mod tests {
             .set_modified(SystemTime::now() + Duration::from_secs(2))
             .unwrap();
 
-        let mut reloaded = state.reload_into(&base_dir, &mut externals);
+        let mut reloaded = state.reload_loaded_into(&mut externals);
         reloaded.sort();
         assert_eq!(reloaded, vec!["triple".to_string()]);
         assert_eq!(
             externals["triple"](&[PhsValue::Number(14.0)]).unwrap(),
             PhsValue::Number(56.0)
         );
+
+        std::fs::remove_dir_all(&base_dir).unwrap();
+    }
+
+    #[test]
+    fn test_use_statement_native_plugin_round_trip() {
+        use crate::interpreter::PhsInterpreter;
+
+        let base_dir =
+            std::env::temp_dir().join(format!("phs_plugin_use_test_{}", std::process::id()));
+        let ext_dir = base_dir.join("ext");
+        std::fs::create_dir_all(&ext_dir).unwrap();
+        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+
+        let mut interp = PhsInterpreter::with_base_dir(&base_dir);
+        interp
+            .eval_str("use triple, shout from fixture_plugin")
+            .unwrap();
+        let results = interp.eval_str("triple(14)").unwrap();
+        assert_eq!(results[0], PhsValue::Number(42.0));
+        let results = interp.eval_str("shout(\"hi\")").unwrap();
+        assert_eq!(results[0], PhsValue::String("HI".into()));
 
         std::fs::remove_dir_all(&base_dir).unwrap();
     }

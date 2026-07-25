@@ -21,7 +21,8 @@ use pyo3::buffer::PyBuffer;
 use numpy::PyUntypedArrayMethods;
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use num_rational::Rational64;
 use num_traits::FromPrimitive;
@@ -33,6 +34,7 @@ use ::physure_core::{
     DimVector, UnitConverter, UnitDefinition, UnitKind,
 };
 use physure_script::symbolic::Expr;
+use physure_script::{ExternalDomainLoader, ExternalFn};
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
 // Avoids allocating duplicate Python wrappers for the same RationalUnit.
@@ -1210,6 +1212,49 @@ fn py_to_phs_value(obj: &Bound<'_, PyAny>) -> PyResult<::physure_script::PhsValu
     }
 }
 
+/// Bridges the interpreter's lazy `use name from <stem>` resolution to
+/// `physure.ext.phs_loader.load_domain_module`, so Python `ext/*.py` files
+/// are imported only when a script actually asks for them.
+struct PyExtDomainLoader {
+    script_dir: PathBuf,
+    load_domain_module: Py<PyAny>,
+}
+
+impl ExternalDomainLoader for PyExtDomainLoader {
+    fn load(&self, stem: &str) -> PhysureResult<Option<HashMap<String, ExternalFn>>> {
+        Python::with_gil(|py| {
+            let result = self.load_domain_module
+                .call1(py, (&self.script_dir, stem))
+                .map_err(|e| PhysureError::Generic(e.to_string()))?;
+            if result.bind(py).is_none() {
+                return Ok(None);
+            }
+            let dict: HashMap<String, Py<PyAny>> = result.extract(py)
+                .map_err(|e| PhysureError::Generic(e.to_string()))?;
+            Ok(Some(dict.into_iter().map(|(name, callback)| {
+                let f: ExternalFn = Arc::new(move |args: &[::physure_script::PhsValue]| {
+                    Python::with_gil(|py| {
+                        let py_args = args
+                            .iter()
+                            .cloned()
+                            .map(|v| phs_value_to_py(py, v))
+                            .collect::<PyResult<Vec<_>>>()
+                            .map_err(|e| PhysureError::Generic(e.to_string()))?;
+                        let tuple = PyTuple::new(py, py_args)
+                            .map_err(|e| PhysureError::Generic(e.to_string()))?;
+                        let result = callback
+                            .call1(py, tuple)
+                            .map_err(|e| PhysureError::Generic(e.to_string()))?;
+                        py_to_phs_value(result.bind(py))
+                            .map_err(|e| PhysureError::Generic(e.to_string()))
+                    })
+                });
+                (name, f)
+            }).collect()))
+        })
+    }
+}
+
 #[pyclass(name = "Interpreter")]
 pub struct PyInterpreter {
     inner: ::physure_script::PhsInterpreter,
@@ -1218,16 +1263,24 @@ pub struct PyInterpreter {
 #[pymethods]
 impl PyInterpreter {
     /// `base_dir`, if given, resolves `import` statements relative to that directory
-    /// instead of the process's current working directory.
+    /// instead of the process's current working directory, and wires up lazy
+    /// loading of `<base_dir>/ext/*.py` functions via `use name from <stem>`.
     #[new]
     #[pyo3(signature = (base_dir=None))]
-    fn new(base_dir: Option<String>) -> Self {
-        PyInterpreter {
-            inner: match base_dir {
-                Some(dir) => ::physure_script::PhsInterpreter::with_base_dir(dir),
-                None => ::physure_script::PhsInterpreter::default(),
-            },
+    fn new(py: Python<'_>, base_dir: Option<String>) -> PyResult<Self> {
+        let mut inner = match &base_dir {
+            Some(dir) => ::physure_script::PhsInterpreter::with_base_dir(dir.clone()),
+            None => ::physure_script::PhsInterpreter::default(),
+        };
+        if let Some(dir) = base_dir {
+            let phs_loader = py.import("physure.ext.phs_loader")?;
+            let load_domain_module = phs_loader.getattr("load_domain_module")?.unbind();
+            inner.set_ext_domain_loader(Arc::new(PyExtDomainLoader {
+                script_dir: PathBuf::from(dir),
+                load_domain_module,
+            }));
         }
+        Ok(PyInterpreter { inner })
     }
 
     /// Registers a Python callable as a PHS function named `name`. The callable
@@ -1260,7 +1313,7 @@ impl PyInterpreter {
     }
 
     fn deriv(&self, expression: &str, var: &str) -> PyResult<String> {
-        let call_expr = format!("deriv(\"{}\", \"{}\")", expression, var);
+        let call_expr = format!("use deriv from calc\nderiv(\"{}\", \"{}\")", expression, var);
         let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -1268,7 +1321,7 @@ impl PyInterpreter {
     }
 
     fn integral(&self, expression: &str, var: &str) -> PyResult<String> {
-        let call_expr = format!("integral(\"{}\", \"{}\")", expression, var);
+        let call_expr = format!("use integral from calc\nintegral(\"{}\", \"{}\")", expression, var);
         let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
@@ -1276,7 +1329,7 @@ impl PyInterpreter {
     }
 
     fn solve(&self, equation: &str, var: &str) -> PyResult<String> {
-        let call_expr = format!("solve(\"{}\", \"{}\")", equation, var);
+        let call_expr = format!("use solve from calc\nsolve(\"{}\", \"{}\")", equation, var);
         let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;

@@ -5,6 +5,15 @@ use physure_core::error::{PhysureError, PhysureResult};
 /// A host-registered function callable from PHS source by name. Lets embedders
 /// (e.g. the PyO3 binding) expose functions without physure-script depending on them.
 pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
+
+/// Bridges the interpreter to a host's lazy loading of `.py` (or equivalent)
+/// ext files, so `use name from <stem>` can pull in Python functions on
+/// demand without the interpreter having any Python dependency itself.
+pub trait ExternalDomainLoader: Send + Sync {
+    /// Loads `<script_dir>/ext/<stem>.py` (or equivalent) on demand.
+    /// `Ok(None)` means "no such file", not an error.
+    fn load(&self, stem: &str) -> PhysureResult<Option<HashMap<String, ExternalFn>>>;
+}
 use physure_core::quantity::Quantity;
 use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
@@ -52,6 +61,11 @@ pub struct PhsInterpreter {
     pub externals: HashMap<String, ExternalFn>,
     plugin_state: Arc<Mutex<crate::plugin::PluginState>>,
     plugin_base_dir: Option<std::path::PathBuf>,
+    /// call-name -> (domain, canonical builtin name), populated by `use x from calc` etc.
+    unlocked_builtins: Arc<Mutex<HashMap<String, (&'static str, String)>>>,
+    /// Lazily-loaded plugin/ext functions, keyed by their `use`d (possibly aliased) name.
+    dynamic_externals: Arc<Mutex<HashMap<String, ExternalFn>>>,
+    ext_domain_loader: Option<Arc<dyn ExternalDomainLoader>>,
 }
 
 impl Default for PhsInterpreter {
@@ -68,6 +82,9 @@ impl PhsInterpreter {
             externals: HashMap::new(),
             plugin_state: Arc::new(Mutex::new(crate::plugin::PluginState::default())),
             plugin_base_dir: None,
+            unlocked_builtins: Arc::new(Mutex::new(HashMap::new())),
+            dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
+            ext_domain_loader: None,
         }
     }
 
@@ -76,28 +93,34 @@ impl PhsInterpreter {
     }
 
     /// Like `default()`, but resolves `import` paths relative to `base_dir`
-    /// (typically the directory containing the script being run) instead of `.`,
-    /// and auto-loads any native plugins found under `<base_dir>/ext/`.
+    /// (typically the directory containing the script being run) instead of `.`.
+    /// Native plugins under `<base_dir>/ext/` are not loaded eagerly — they're
+    /// dlopen'd on demand the first time a script `use`s a symbol from them.
     pub fn with_base_dir(base_dir: impl Into<std::path::PathBuf>) -> Self {
         let base_dir = base_dir.into();
         let mut interp = Self::new(Arc::new(FsModuleResolver::new(base_dir.clone())));
-        let state = crate::plugin::PluginState::load_into(&base_dir, &mut interp.externals);
-        interp.plugin_state = Arc::new(Mutex::new(state));
         interp.plugin_base_dir = Some(base_dir);
         interp
     }
 
-    /// Re-scans `<base_dir>/ext/` (the directory passed to [`Self::with_base_dir`])
-    /// for native plugins whose file changed since they were last loaded, and
-    /// installs their updated functions. No-op if the interpreter wasn't
-    /// constructed with a base dir. Returns the names of functions (re)installed.
+    /// Registers a loader for lazily-imported ext files (e.g. Python `.py` ext
+    /// functions), wired in by embedders like the PyO3 binding.
+    pub fn set_ext_domain_loader(&mut self, loader: Arc<dyn ExternalDomainLoader>) {
+        self.ext_domain_loader = Some(loader);
+    }
+
+    /// Re-checks only the native plugin stems some `use` statement has already
+    /// caused to be loaded, and installs any updated functions. No-op if the
+    /// interpreter wasn't constructed with a base dir or nothing has been
+    /// `use`d yet. Returns the names of functions (re)installed.
     pub fn reload_native_ext(&mut self) -> Vec<String> {
-        let Some(base_dir) = self.plugin_base_dir.clone() else {
+        if self.plugin_base_dir.is_none() {
             return Vec::new();
-        };
+        }
         let plugin_state = self.plugin_state.clone();
         let mut state = plugin_state.lock().unwrap_or_else(|e| e.into_inner());
-        state.reload_into(&base_dir, &mut self.externals)
+        let mut dynamic_externals = self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner());
+        state.reload_loaded_into(&mut dynamic_externals)
     }
 
     /// Registers a host function under `name`, callable from PHS source like any builtin.
@@ -159,42 +182,124 @@ impl PhsInterpreter {
             Statement::Expr(expr) => {
                 self.eval_expr(expr, env)
             }
-            Statement::Import(node) => {
-                let export = self.resolver.resolve(&node.path).map_err(|e| PhysureError::Generic(format!("{:?}", e)))?;
-                
-                match &node.specifier {
-                    crate::ast::ImportSpecifier::Wildcard => {
-                        for (name, expr) in export.symbols {
-                            let val = self.eval_expr(&expr, env)?;
-                            env.insert(name, val);
-                        }
-                        for (name, func) in export.functions {
-                            env.insert(name, PhsValue::Function(func));
-                        }
-                    }
-                    crate::ast::ImportSpecifier::Symbols(syms) => {
-                        for sym in syms {
-                            if let Some(expr) = export.symbols.get(&sym.name) {
-                                let val = self.eval_expr(expr, env)?;
-                                let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                                env.insert(target_name, val);
-                            } else if let Some(func) = export.functions.get(&sym.name) {
-                                let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                                env.insert(target_name, PhsValue::Function(func.clone()));
-                            } else {
-                                return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, node.path)));
-                            }
-                        }
-                    }
-                    crate::ast::ImportSpecifier::ModuleAlias(_alias) => {
-                        return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
-                    }
-                }
-                
-                Ok(PhsValue::None)
-            }
+            Statement::Import(node) => self.resolve_use(node, env),
             Statement::Export(_node) => Ok(PhsValue::None),
         }
+    }
+
+    /// Resolves a `use` statement against, in order: builtin domains (`core` is
+    /// always on, so this only matters for `calc`/`plot`/`array`), `.phs` modules,
+    /// native plugin stems (`<base_dir>/ext/<stem>.<DLL_EXTENSION>`, dlopen'd lazily),
+    /// and a host-supplied `ExternalDomainLoader` (e.g. Python `.py` ext files).
+    fn resolve_use(&self, node: &crate::ast::ImportNode, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        use crate::ast::ImportSpecifier;
+
+        if let Some(members) = crate::builtins::domain_members(&node.path) {
+            let domain: &'static str = match node.path.as_str() {
+                "calc" => "calc",
+                "plot" => "plot",
+                "array" => "array",
+                _ => unreachable!("domain_members returned Some for unknown domain"),
+            };
+            let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
+            match &node.specifier {
+                ImportSpecifier::Wildcard => {
+                    for &member in members {
+                        unlocked.insert(member.to_string(), (domain, member.to_string()));
+                    }
+                }
+                ImportSpecifier::Symbols(syms) => {
+                    for sym in syms {
+                        if !members.contains(&sym.name.as_str()) {
+                            return Err(PhysureError::Generic(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
+                        }
+                        let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                        unlocked.insert(call_name, (domain, sym.name.clone()));
+                    }
+                }
+                ImportSpecifier::ModuleAlias(_alias) => {
+                    return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
+                }
+            }
+            return Ok(PhsValue::None);
+        }
+
+        if let Ok(export) = self.resolver.resolve(&node.path) {
+            match &node.specifier {
+                ImportSpecifier::Wildcard => {
+                    for (name, expr) in export.symbols {
+                        let val = self.eval_expr(&expr, env)?;
+                        env.insert(name, val);
+                    }
+                    for (name, func) in export.functions {
+                        env.insert(name, PhsValue::Function(func));
+                    }
+                }
+                ImportSpecifier::Symbols(syms) => {
+                    for sym in syms {
+                        if let Some(expr) = export.symbols.get(&sym.name) {
+                            let val = self.eval_expr(expr, env)?;
+                            let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                            env.insert(target_name, val);
+                        } else if let Some(func) = export.functions.get(&sym.name) {
+                            let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                            env.insert(target_name, PhsValue::Function(func.clone()));
+                        } else {
+                            return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, node.path)));
+                        }
+                    }
+                }
+                ImportSpecifier::ModuleAlias(_alias) => {
+                    return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
+                }
+            }
+            return Ok(PhsValue::None);
+        }
+
+        if let Some(base_dir) = &self.plugin_base_dir {
+            let plugin_state = self.plugin_state.clone();
+            let mut state = plugin_state.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(functions) = state.ensure_stem_loaded(base_dir, &node.path)? {
+                self.install_dynamic_externals(&node.specifier, &node.path, &functions)?;
+                return Ok(PhsValue::None);
+            }
+        }
+
+        if let Some(loader) = &self.ext_domain_loader {
+            if let Some(functions) = loader.load(&node.path)? {
+                self.install_dynamic_externals(&node.specifier, &node.path, &functions)?;
+                return Ok(PhsValue::None);
+            }
+        }
+
+        Err(PhysureError::Generic(format!("No such module or domain '{}'", node.path)))
+    }
+
+    /// Installs the requested (possibly aliased) subset of `functions` into
+    /// `dynamic_externals`, erroring if a requested name isn't exported.
+    fn install_dynamic_externals(&self, specifier: &crate::ast::ImportSpecifier, module: &str, functions: &HashMap<String, ExternalFn>) -> PhysureResult<()> {
+        use crate::ast::ImportSpecifier;
+        let mut dynamic = self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner());
+        match specifier {
+            ImportSpecifier::Wildcard => {
+                for (name, f) in functions {
+                    dynamic.insert(name.clone(), f.clone());
+                }
+            }
+            ImportSpecifier::Symbols(syms) => {
+                for sym in syms {
+                    let f = functions.get(&sym.name).ok_or_else(|| {
+                        PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, module))
+                    })?;
+                    let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                    dynamic.insert(target_name, f.clone());
+                }
+            }
+            ImportSpecifier::ModuleAlias(_alias) => {
+                return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
+            }
+        }
+        Ok(())
     }
 
     pub fn eval_statement(&mut self, stmt: &Statement) -> PhysureResult<PhsValue> {
@@ -291,11 +396,19 @@ impl PhsInterpreter {
                     arg_vals.push(self.eval_expr(arg, env)?);
                 }
 
-                if let Some(val) = crate::builtins::eval_builtin(name, &arg_vals, self)? {
+                if let Some(val) = crate::builtins::eval_core_builtin(name, &arg_vals, self)? {
                     return Ok(val);
                 }
 
-                if let Some(f) = self.externals.get(name) {
+                if let Some((domain, canonical)) = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned() {
+                    if let Some(val) = crate::builtins::eval_domain_builtin(domain, &canonical, &arg_vals, self)? {
+                        return Ok(val);
+                    }
+                }
+
+                let external = self.externals.get(name).cloned()
+                    .or_else(|| self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned());
+                if let Some(f) = external {
                     return f(&arg_vals);
                 }
 
@@ -697,5 +810,49 @@ mod tests {
         } else {
             panic!("Expected quantity");
         }
+    }
+
+    fn assert_is_five(val: &PhsValue) {
+        match val {
+            PhsValue::Number(n) => assert_eq!(*n, 5.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 5.0),
+            PhsValue::String(s) => assert_eq!(s, "5"),
+            other => panic!("Expected solve(...) to resolve to 5, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_domain_gated_calc_builtins() {
+        // Ungated call fails with "Undefined function".
+        let mut interp = PhsInterpreter::default();
+        let err = interp
+            .eval_str("solve(\"2 * x = 10\", \"x\")")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Undefined function"),
+            "unexpected error: {}",
+            err
+        );
+
+        // `use solve from calc` unlocks it.
+        let mut interp = PhsInterpreter::default();
+        interp.eval_str("use solve from calc").unwrap();
+        let results = interp.eval_str("solve(\"2 * x = 10\", \"x\")").unwrap();
+        assert_is_five(&results[0]);
+
+        // `use * from calc` unlocks every member.
+        let mut interp = PhsInterpreter::default();
+        interp.eval_str("use * from calc").unwrap();
+        interp.eval_str("deriv(\"x^2\", \"x\")").unwrap();
+        interp.eval_str("integral(\"2 * x\", \"x\")").unwrap();
+        let results = interp.eval_str("solve(\"2 * x = 10\", \"x\")").unwrap();
+        assert_is_five(&results[0]);
+
+        // Requesting an unknown domain member errors clearly.
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("use bogus_fn from calc").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no such function"), "unexpected error: {}", msg);
+        assert!(msg.contains("in domain"), "unexpected error: {}", msg);
     }
 }

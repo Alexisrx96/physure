@@ -16,12 +16,12 @@ from __future__ import annotations
 import importlib.util
 import inspect
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from physure._core import Interpreter
 
-__all__ = ["load_ext_functions"]
+__all__ = ["load_ext_functions", "load_domain_module"]
 
 
 def load_ext_functions(
@@ -52,3 +52,27 @@ def load_ext_functions(
             interp.register_function(obj, name)
             registered.append(name)
     return registered
+
+
+def load_domain_module(script_dir: str | Path, stem: str) -> dict[str, Callable] | None:
+    """Lazily imports ``<script_dir>/ext/<stem>.py``; returns ``{name: fn}``, or
+    ``None`` if no such file exists.
+
+    Used by the interpreter's ``use name from <stem>`` resolution — unlike
+    :func:`load_ext_functions`, this doesn't touch a running interpreter and
+    only loads the one file a script actually asked for.
+    """
+    py_file = Path(script_dir) / "ext" / f"{stem}.py"
+    if not py_file.is_file():
+        return None
+    module_name = f"_phs_ext_{stem}"
+    spec = importlib.util.spec_from_file_location(module_name, py_file)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return {
+        name: obj
+        for name, obj in vars(module).items()
+        if not name.startswith("_") and inspect.isfunction(obj) and obj.__module__ == module_name
+    }

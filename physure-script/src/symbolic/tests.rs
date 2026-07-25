@@ -251,6 +251,8 @@ fn test_kinetic_energy_solve() {
     let mut interp = crate::interpreter::PhsInterpreter::default();
     let prog1 = crate::parse_phs("fn kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
     interp.run_statement(&prog1.statements[0]).unwrap();
+    let use_calc = crate::parse_phs("use solve from calc").unwrap();
+    interp.run_statement(&use_calc.statements[0]).unwrap();
     let solve_prog = crate::parse_phs("solve(\"kinetic_energy(m, v) = target\", \"v\")").unwrap();
     let res = interp.run_statement(&solve_prog.statements[0]).unwrap();
     println!("Res: {:?}", res);
