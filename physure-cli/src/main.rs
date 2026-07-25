@@ -298,6 +298,11 @@ fn run_daemon() {
     struct DaemonRequest {
         id: usize,
         source: String,
+        /// Path of the file being edited, sent by the editor so `use ... from
+        /// <plugin/module>` can be resolved relative to it. `None` for ad-hoc
+        /// snippets with no file (falls back to no plugin/module resolution).
+        #[serde(default)]
+        path: Option<String>,
     }
 
     #[derive(Serialize)]
@@ -342,7 +347,10 @@ fn run_daemon() {
 
         let mut results = Vec::new();
         let mut diagnostics = Vec::new();
-        let interp = PhsInterpreter::default();
+        let interp = match req.path.as_deref().and_then(|p| std::path::Path::new(p).parent()) {
+            Some(dir) if !dir.as_os_str().is_empty() => PhsInterpreter::with_base_dir(dir),
+            _ => PhsInterpreter::default(),
+        };
         let mut env = HashMap::new();
 
         match physure_script::parse_phs_with_lines(&req.source) {
