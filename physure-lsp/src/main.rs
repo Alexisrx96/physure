@@ -29,7 +29,7 @@ impl LanguageServer for Backend {
                     completion_item: None,
                     ..Default::default()
                 }),
-                hover_provider: None,
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -85,13 +85,15 @@ impl LanguageServer for Backend {
             ("exp", "exp(x)", "Exponential e^x"),
             ("log", "log(x)", "Natural logarithm"),
             ("ln", "ln(x)", "Natural logarithm (alias)"),
-            ("solve", "solve(equation, target)", "Solve an equation symbolically"),
-            ("deriv", "deriv(expression, variable)", "Symbolic derivative"),
-            ("diff", "diff(expression, variable)", "Symbolic derivative (alias)"),
-            ("integral", "integral(expression, variable)", "Symbolic indefinite integral"),
-            ("integrate", "integrate(expression, variable)", "Symbolic indefinite integral (alias)"),
-            ("gradient", "gradient(y_array, x_array)", "Numerical derivative dy/dx for vector data"),
-            ("trapz", "trapz(y_array, x_array)", "Numerical integration (area under curve)"),
+            ("solve", "solve(equation, target)", "Solve an equation symbolically — requires `use solve from calc`"),
+            ("deriv", "deriv(expression, variable)", "Symbolic derivative — requires `use deriv from calc`"),
+            ("diff", "diff(expression, variable)", "Symbolic derivative (alias) — requires `use diff from calc`"),
+            ("integral", "integral(expression, variable)", "Symbolic indefinite integral — requires `use integral from calc`"),
+            ("integrate", "integrate(expression, variable)", "Symbolic indefinite integral (alias) — requires `use integrate from calc`"),
+            ("gradient", "gradient(y_array, x_array)", "Numerical derivative dy/dx for vector data — requires `use gradient from array`"),
+            ("trapz", "trapz(y_array, x_array)", "Numerical integration (area under curve) — requires `use trapz from array`"),
+            ("linspace", "linspace(start, stop, n)", "Evenly spaced vector range — requires `use linspace from array`"),
+            ("plot", "plot(x_array, y_array)", "Plot one vector array against another — requires `use plot from plot`"),
         ];
 
         for (name, label, doc) in builtins {
@@ -114,6 +116,11 @@ impl LanguageServer for Backend {
             ("if", "if cond then expr1 else expr2", "Conditional expression"),
             ("then", "then expr1", "Conditional then branch"),
             ("else", "else expr2", "Conditional else branch"),
+            ("use", "use name from <domain|module>", "Import name(s) from a domain (calc/plot/array), .phs module, or plugin/ext file"),
+            ("from", "use name from <domain|module>", "Source clause of a `use` statement"),
+            ("as", "use name as alias from <domain|module>", "Aliases an imported name"),
+            ("import", "import \"path/to/module\"", "Imports an entire module"),
+            ("export", "export name", "Exports a name from the current module"),
         ];
 
         for (kw, label, doc) in keywords {
@@ -123,6 +130,25 @@ impl LanguageServer for Backend {
                 detail: Some(label.to_string()),
                 documentation: Some(Documentation::String(doc.to_string())),
                 sort_text: Some(format!("m_keyword_{}", kw)),
+                ..Default::default()
+            });
+        }
+
+        // 2b. Builtin domains (targets of `use ... from <domain>`)
+        let domains = vec![
+            ("core", "Always-available builtins: format, comparisons, ternary, vector, sqrt, sin, cos, exp, ln, abs, log, tan, floor, ceil, min, max, round"),
+            ("calc", "Symbolic calculus: deriv, diff, integral, integrate, solve"),
+            ("plot", "Plotting: plot"),
+            ("array", "Array/numeric helpers: linspace, gradient, trapz"),
+        ];
+
+        for (name, doc) in domains {
+            items.push(CompletionItem {
+                label: name.to_string(),
+                kind: Some(CompletionItemKind::MODULE),
+                detail: Some(format!("domain '{}'", name)),
+                documentation: Some(Documentation::String(doc.to_string())),
+                sort_text: Some(format!("m_domain_{}", name)),
                 ..Default::default()
             });
         }
@@ -277,15 +303,25 @@ fn extract_word_at_pos(line: &str, char_idx: usize) -> String {
 
 fn lookup_hover_doc(word: &str) -> Option<String> {
     match word {
-        "solve" => Some("**Built-in Function**: `solve(equation, target)`\n\nSolves an equation symbolically for target variable.".to_string()),
-        "deriv" | "diff" => Some("**Built-in Function**: `deriv(expression, variable)`\n\nDifferentiates a mathematical expression symbolically.".to_string()),
-        "integral" | "integrate" => Some("**Built-in Function**: `integral(expression, variable)`\n\nComputes indefinite integral symbolically.".to_string()),
-        "gradient" => Some("**Built-in Function**: `gradient(y_array, x_array)`\n\nComputes numerical derivative dy/dx across vector arrays.".to_string()),
-        "trapz" => Some("**Built-in Function**: `trapz(y_array, x_array)`\n\nComputes trapezoidal numerical integration across vector arrays.".to_string()),
+        "solve" => Some("**Built-in Function**: `solve(equation, target)`\n\nSolves an equation symbolically for target variable.\n\nRequires `use solve from calc`.".to_string()),
+        "deriv" | "diff" => Some("**Built-in Function**: `deriv(expression, variable)`\n\nDifferentiates a mathematical expression symbolically.\n\nRequires `use deriv from calc` (or `use diff from calc`).".to_string()),
+        "integral" | "integrate" => Some("**Built-in Function**: `integral(expression, variable)`\n\nComputes indefinite integral symbolically.\n\nRequires `use integral from calc` (or `use integrate from calc`).".to_string()),
+        "gradient" => Some("**Built-in Function**: `gradient(y_array, x_array)`\n\nComputes numerical derivative dy/dx across vector arrays.\n\nRequires `use gradient from array`.".to_string()),
+        "trapz" => Some("**Built-in Function**: `trapz(y_array, x_array)`\n\nComputes trapezoidal numerical integration across vector arrays.\n\nRequires `use trapz from array`.".to_string()),
+        "linspace" => Some("**Built-in Function**: `linspace(start, stop, n)`\n\nReturns a vector of evenly spaced quantities.\n\nRequires `use linspace from array`.".to_string()),
+        "plot" => Some("**Built-in Function**: `plot(x_array, y_array)`\n\nPlots one vector array against another.\n\nRequires `use plot from plot`.\n\n(`plot` is also the name of the domain that must be `use`d to unlock this function.)".to_string()),
         "if" => Some("**PHS Keyword**: `if`\n\nConditional expression construct: `if cond then expr1 else expr2`".to_string()),
         "then" => Some("**PHS Keyword**: `then`\n\nConditional then-branch.".to_string()),
         "else" => Some("**PHS Keyword**: `else`\n\nConditional else-branch.".to_string()),
         "let" => Some("**PHS Keyword**: `let`\n\nLocal variable binding construct.".to_string()),
+        "use" => Some("**PHS Keyword**: `use`\n\nImports name(s) into scope: `use name1[, name2, ...] from <domain|module>` or `use * from <domain|module>`.\n\nRequired before calling non-core builtins (`calc`, `plot`, `array` domains) or functions from a `.phs` module, native plugin, or Python ext file.".to_string()),
+        "from" => Some("**PHS Keyword**: `from`\n\nSource clause of a `use` statement: `use name from <domain|module>`".to_string()),
+        "as" => Some("**PHS Keyword**: `as`\n\nAliases an imported name: `use name as alias from <domain|module>`".to_string()),
+        "import" => Some("**PHS Keyword**: `import`\n\nImports an entire module: `import \"path/to/module\" [as alias]`".to_string()),
+        "export" => Some("**PHS Keyword**: `export`\n\nExports a name from the current module: `export name [as alias]`".to_string()),
+        "core" => Some("**Builtin domain**: `core`\n\nAlways available without `use`: format, comparisons, ternary, vector, sqrt, sin, cos, exp, ln, abs, log, tan, floor, ceil, min, max, round.".to_string()),
+        "calc" => Some("**Builtin domain**: `calc`\n\n`use ... from calc` unlocks: deriv, diff, integral, integrate, solve.".to_string()),
+        "array" => Some("**Builtin domain**: `array`\n\n`use ... from array` unlocks: linspace, gradient, trapz.".to_string()),
         "m" => Some("**Physical Unit**: `m`\n\n* **Quantity**: Length (Longitud)\n* **Dimension**: `[L]`".to_string()),
         "kg" => Some("**Physical Unit**: `kg`\n\n* **Quantity**: Mass (Masa)\n* **Dimension**: `[M]`".to_string()),
         "s" => Some("**Physical Unit**: `s`\n\n* **Quantity**: Time (Tiempo)\n* **Dimension**: `[T]`".to_string()),
