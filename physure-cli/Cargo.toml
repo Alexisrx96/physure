@@ -13,7 +13,7 @@ name = "phs"
 path = "src/main.rs"
 
 [dependencies]
-physure-core   = { path = "../physure-core" }
+physure-core   = { path = "../physure-core", package = "physure" }
 physure-script = { path = "../physure-script" }
 ratatui        = "0.28"
 crossterm      = "0.28"

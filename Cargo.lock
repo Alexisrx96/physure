@@ -1897,25 +1897,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "physure-cli"
-version = "0.2.2"
-dependencies = [
- "arboard",
- "chrono",
- "crossterm",
- "dirs",
- "open",
- "physure-core",
- "physure-script",
- "ratatui",
- "serde",
- "serde_json",
- "tiny_http",
- "winreg",
-]
-
-[[package]]
-name = "physure-core"
+name = "physure"
 version = "0.2.2"
 dependencies = [
  "approx 0.5.1",
@@ -1936,12 +1918,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "physure-cli"
+version = "0.2.2"
+dependencies = [
+ "arboard",
+ "chrono",
+ "crossterm",
+ "dirs",
+ "open",
+ "physure",
+ "physure-script",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tiny_http",
+ "winreg",
+]
+
+[[package]]
 name = "physure-java"
 version = "0.2.2"
 dependencies = [
  "jni",
  "num-rational",
- "physure-core",
+ "physure",
  "physure-script",
 ]
 
@@ -1949,7 +1949,7 @@ dependencies = [
 name = "physure-lsp"
 version = "0.2.2"
 dependencies = [
- "physure-core",
+ "physure",
  "physure-script",
  "tokio",
  "tower-lsp",
@@ -1967,7 +1967,7 @@ dependencies = [
  "num-rational",
  "num-traits",
  "numpy",
- "physure-core",
+ "physure",
  "physure-script",
  "pyo3",
  "rand",
@@ -1983,7 +1983,7 @@ dependencies = [
  "num-traits",
  "pest",
  "pest_derive",
- "physure-core",
+ "physure",
  "serde",
  "serde_json",
 ]

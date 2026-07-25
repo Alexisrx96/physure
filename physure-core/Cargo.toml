@@ -6,7 +6,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 [package]
-name        = "physure-core"
+name        = "physure"
 description = "Pure Rust physics engine. No FFI dependencies. Single source of truth."
 version.workspace    = true
 edition.workspace    = true
