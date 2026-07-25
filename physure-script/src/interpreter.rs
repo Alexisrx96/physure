@@ -5,15 +5,6 @@ use physure_core::error::{PhysureError, PhysureResult};
 /// A host-registered function callable from PHS source by name. Lets embedders
 /// (e.g. the PyO3 binding) expose functions without physure-script depending on them.
 pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
-
-/// Bridges the interpreter to a host's lazy loading of `.py` (or equivalent)
-/// ext files, so `use name from <stem>` can pull in Python functions on
-/// demand without the interpreter having any Python dependency itself.
-pub trait ExternalDomainLoader: Send + Sync {
-    /// Loads `<script_dir>/ext/<stem>.py` (or equivalent) on demand.
-    /// `Ok(None)` means "no such file", not an error.
-    fn load(&self, stem: &str) -> PhysureResult<Option<HashMap<String, ExternalFn>>>;
-}
 use physure_core::quantity::Quantity;
 use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
@@ -65,7 +56,6 @@ pub struct PhsInterpreter {
     unlocked_builtins: Arc<Mutex<HashMap<String, (&'static str, String)>>>,
     /// Lazily-loaded plugin/ext functions, keyed by their `use`d (possibly aliased) name.
     dynamic_externals: Arc<Mutex<HashMap<String, ExternalFn>>>,
-    ext_domain_loader: Option<Arc<dyn ExternalDomainLoader>>,
 }
 
 impl Default for PhsInterpreter {
@@ -84,7 +74,6 @@ impl PhsInterpreter {
             plugin_base_dir: None,
             unlocked_builtins: Arc::new(Mutex::new(HashMap::new())),
             dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
-            ext_domain_loader: None,
         }
     }
 
@@ -101,12 +90,6 @@ impl PhsInterpreter {
         let mut interp = Self::new(Arc::new(FsModuleResolver::new(base_dir.clone())));
         interp.plugin_base_dir = Some(base_dir);
         interp
-    }
-
-    /// Registers a loader for lazily-imported ext files (e.g. Python `.py` ext
-    /// functions), wired in by embedders like the PyO3 binding.
-    pub fn set_ext_domain_loader(&mut self, loader: Arc<dyn ExternalDomainLoader>) {
-        self.ext_domain_loader = Some(loader);
     }
 
     /// Re-checks only the native plugin stems some `use` statement has already
@@ -189,8 +172,7 @@ impl PhsInterpreter {
 
     /// Resolves a `use` statement against, in order: builtin domains (`core` is
     /// always on, so this only matters for `calc`/`plot`/`array`), `.phs` modules,
-    /// native plugin stems (`<base_dir>/ext/<stem>.<DLL_EXTENSION>`, dlopen'd lazily),
-    /// and a host-supplied `ExternalDomainLoader` (e.g. Python `.py` ext files).
+    /// and native plugin stems (`<base_dir>/ext/<stem>.<DLL_EXTENSION>`, dlopen'd lazily).
     fn resolve_use(&self, node: &crate::ast::ImportNode, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         use crate::ast::ImportSpecifier;
 
@@ -260,13 +242,6 @@ impl PhsInterpreter {
             let plugin_state = self.plugin_state.clone();
             let mut state = plugin_state.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(functions) = state.ensure_stem_loaded(base_dir, &node.path)? {
-                self.install_dynamic_externals(&node.specifier, &node.path, &functions)?;
-                return Ok(PhsValue::None);
-            }
-        }
-
-        if let Some(loader) = &self.ext_domain_loader {
-            if let Some(functions) = loader.load(&node.path)? {
                 self.install_dynamic_externals(&node.specifier, &node.path, &functions)?;
                 return Ok(PhsValue::None);
             }

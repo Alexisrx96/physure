@@ -14,7 +14,7 @@ pub use codegen::{transpile, Target};
 pub use ast::{Expr, Program, Statement};
 pub use lexer::{PhsLexer, PhsToken, TokenKind};
 pub use parser::{parse_phs, parse_phs_with_lines};
-pub use interpreter::{eval_phs, ExternalDomainLoader, ExternalFn, PhsInterpreter};
+pub use interpreter::{eval_phs, ExternalFn, PhsInterpreter};
 pub use value::{PhsValue, PlotData};
 pub use plugin::{
     PluginEntryPoint, PluginFn, PluginFnEntry, PluginRegistry, PluginState, PluginValue,
