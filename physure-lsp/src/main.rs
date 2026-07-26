@@ -25,6 +25,7 @@ impl LanguageServer for Backend {
                         "|".to_string(),
                         ".".to_string(),
                         "\\".to_string(),
+                        " ".to_string(),
                     ]),
                     completion_item: None,
                     ..Default::default()
@@ -74,6 +75,7 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
+        let trigger_character = params.context.and_then(|c| c.trigger_character);
 
         let line_prefix = self.documents.read().unwrap().get(&uri).and_then(|text| {
             text.lines()
@@ -91,6 +93,12 @@ impl LanguageServer for Backend {
                 }
                 UseContext::None => {}
             }
+        }
+
+        if trigger_character.as_deref() == Some(" ") {
+            // Space is only registered as a trigger character so the `use`/`from` cases above
+            // pop up automatically; elsewhere a bare space shouldn't spam the full list.
+            return Ok(Some(CompletionResponse::Array(Vec::new())));
         }
 
         let mut items = Vec::new();
