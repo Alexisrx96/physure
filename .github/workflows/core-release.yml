@@ -46,19 +46,22 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
-  # Prebuilt `phs` binaries so scripts/install.* don't require Rust on the
-  # end user's machine. No linux-aarch64 leg: cross-linking glibc needs a
-  # separate toolchain; installers fall back to `cargo install` for it.
+  # Prebuilt `phs` + `physure-lsp` binaries so scripts/install.* don't require
+  # Rust on the end user's machine, and so the physure-lsp binary lands on
+  # PATH automatically (picked up by the vsc-physure extension's LSP client).
+  # linux-aarch64 builds natively on GitHub's hosted arm64 runner, so it
+  # needs no cross-compilation toolchain.
   phs-binaries:
     needs: check-version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest,  target: x86_64-unknown-linux-gnu, name: phs-linux-x86_64 }
-          - { runner: macos-latest,   target: x86_64-apple-darwin,      name: phs-macos-x86_64 }
-          - { runner: macos-latest,   target: aarch64-apple-darwin,     name: phs-macos-aarch64 }
-          - { runner: windows-latest, target: x86_64-pc-windows-msvc,   name: phs-windows-x86_64 }
+          - { runner: ubuntu-latest,     target: x86_64-unknown-linux-gnu,  name: phs-linux-x86_64 }
+          - { runner: ubuntu-24.04-arm,  target: aarch64-unknown-linux-gnu, name: phs-linux-aarch64 }
+          - { runner: macos-latest,      target: x86_64-apple-darwin,       name: phs-macos-x86_64 }
+          - { runner: macos-latest,      target: aarch64-apple-darwin,      name: phs-macos-aarch64 }
+          - { runner: windows-latest,    target: x86_64-pc-windows-msvc,    name: phs-windows-x86_64 }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -67,17 +70,19 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Build phs
         run: cargo build --release -p physure-cli --bin phs --target ${{ matrix.target }}
+      - name: Build physure-lsp
+        run: cargo build --release -p physure-lsp --target ${{ matrix.target }}
       - name: Package (unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          tar -czf "dist/${{ matrix.name }}.tar.gz" -C "target/${{ matrix.target }}/release" phs
+          tar -czf "dist/${{ matrix.name }}.tar.gz" -C "target/${{ matrix.target }}/release" phs physure-lsp
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive -Path "target/${{ matrix.target }}/release/phs.exe" -DestinationPath "dist/${{ matrix.name }}.zip"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/phs.exe","target/${{ matrix.target }}/release/physure-lsp.exe" -DestinationPath "dist/${{ matrix.name }}.zip"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ matrix.name }}

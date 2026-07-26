@@ -40,6 +40,17 @@ if errorlevel 1 (
 )
 copy /y "%USERPROFILE%\.cargo\bin\phs.exe" "%INSTALL_DIR%\phs.exe" >nul
 
+if defined PHS_BRANCH (
+    cargo install --git https://github.com/Alexisrx96/physure --branch %PHS_BRANCH% physure-lsp --locked --force
+) else (
+    cargo install --git https://github.com/Alexisrx96/physure physure-lsp --locked --force
+)
+if errorlevel 1 (
+    echo Warning: failed to build physure-lsp ^(VS Code language server^); continuing without it.
+) else (
+    copy /y "%USERPROFILE%\.cargo\bin\physure-lsp.exe" "%INSTALL_DIR%\physure-lsp.exe" >nul
+)
+
 :done
 
 echo.

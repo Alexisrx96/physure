@@ -25,6 +25,17 @@ function Install-FromSource {
         cargo install --git "https://github.com/$Repo" physure-cli --bin phs --locked --force
     }
     Copy-Item "$HOME\.cargo\bin\phs.exe" "$InstallDir\phs.exe" -Force
+
+    try {
+        if ($Branch) {
+            cargo install --git "https://github.com/$Repo" --branch $Branch physure-lsp --locked --force
+        } else {
+            cargo install --git "https://github.com/$Repo" physure-lsp --locked --force
+        }
+        Copy-Item "$HOME\.cargo\bin\physure-lsp.exe" "$InstallDir\physure-lsp.exe" -Force
+    } catch {
+        Write-Host "Warning: failed to build physure-lsp (VS Code language server); continuing without it." -ForegroundColor Yellow
+    }
 }
 
 $installed = $false

@@ -27,17 +27,23 @@ install_from_source() {
     if [ -n "$PHS_BRANCH" ]; then
         echo "Building from source (branch: $PHS_BRANCH)..."
         cargo install --git "https://github.com/$REPO" --branch "$PHS_BRANCH" physure-cli --bin phs --locked --force
+        cargo install --git "https://github.com/$REPO" --branch "$PHS_BRANCH" physure-lsp --locked --force \
+            || echo "Warning: failed to build physure-lsp (VS Code language server); continuing without it." >&2
     else
         echo "Building from source (default branch)..."
         cargo install --git "https://github.com/$REPO" physure-cli --bin phs --locked --force
+        cargo install --git "https://github.com/$REPO" physure-lsp --locked --force \
+            || echo "Warning: failed to build physure-lsp (VS Code language server); continuing without it." >&2
     fi
     cp "$HOME/.cargo/bin/phs" "$INSTALL_DIR/phs"
+    [ -f "$HOME/.cargo/bin/physure-lsp" ] && cp "$HOME/.cargo/bin/physure-lsp" "$INSTALL_DIR/physure-lsp"
 }
 
 installed=false
 if [ -z "$PHS_BRANCH" ]; then
     case "$(uname -s)-$(uname -m)" in
         Linux-x86_64)  ASSET="phs-linux-x86_64.tar.gz" ;;
+        Linux-aarch64) ASSET="phs-linux-aarch64.tar.gz" ;;
         Darwin-x86_64) ASSET="phs-macos-x86_64.tar.gz" ;;
         Darwin-arm64)  ASSET="phs-macos-aarch64.tar.gz" ;;
         *)             ASSET="" ;;
@@ -63,6 +69,7 @@ if [ "$installed" = false ]; then
     install_from_source
 fi
 chmod +x "$INSTALL_DIR/phs"
+[ -f "$INSTALL_DIR/physure-lsp" ] && chmod +x "$INSTALL_DIR/physure-lsp"
 
 # Add INSTALL_DIR to user PATH if not present
 SHELL_NAME="$(basename "${SHELL:-bash}")"
