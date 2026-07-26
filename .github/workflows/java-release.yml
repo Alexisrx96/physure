@@ -95,7 +95,7 @@ jobs:
           gpg-passphrase: GPG_PASSPHRASE
       - name: Publish to Maven Central
         working-directory: physure-java
-        run: mvn -B -Prelease clean verify deploy
+        run: mvn -B -Prelease clean deploy
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
