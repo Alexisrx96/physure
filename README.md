@@ -5,18 +5,34 @@
   <img src="assets/logo-horizontal-light.svg" alt="physure" width="440">
 </picture>
 
-<h3><b>Unit-aware, dimension-correct computing for Python — powered by a Rust core</b></h3>
-<p><i>Units, dimensions, and correlated uncertainty tracked through every calculation, with zero overhead under <code>torch.compile</code> / <code>jax.jit</code>.</i></p>
+<h3><b>Unit-aware, dimension-correct physics computing — from a shared Rust core</b></h3>
+<p><i>The same dimensional analysis and uncertainty engine, exposed as a standalone DSL (<code>phs</code>), a Python library, a Rust crate, and a JVM package — with zero overhead under <code>torch.compile</code> / <code>jax.jit</code> where it matters.</i></p>
 
 [![PyPI](https://img.shields.io/pypi/v/physure?color=F59E0B&labelColor=18181A)](https://pypi.org/project/physure/)
 [![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure-java?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java)
 [![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
-[![Python 3.11–3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-F59E0B?labelColor=18181A)](https://pypi.org/project/physure/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](LICENSE)
 
 </div>
 
 ---
+
+## What's in this repo
+
+physure is a Rust physics/measurement engine (`physure-core/`) with four ways to use it. Pick
+the one that matches how you work — none of them require the others:
+
+| | What it is | Needs Python? |
+|---|---|:---:|
+| **[PHS](physure-cli/README.md)** | A standalone DSL + CLI (`phs`) for writing engineering/lab calculations as physics, not code — validates a formula before it's handed to a dev team, and doubles as documentation of the calculation process. | No |
+| **[physure (Python)](physure-python/)** | The library this README focuses on below: `Quantity`, NumPy/PyTorch/JAX backends, `@physure.jit`. | Yes (it *is* the Python package) |
+| **[physure (Rust)](physure-core/README.md)** | The core crate directly, for Rust projects that want dimensional analysis and uncertainty propagation without any FFI. | No |
+| **[physure-java](physure-java/README.md)** | JNI bindings for JVM projects, published to Maven Central. | No |
+
+Full install instructions for all four: **[INSTALL.md](INSTALL.md)**.
+
+The rest of this page covers the **Python library**.
 
 ## Why physure?
 
@@ -44,12 +60,14 @@ E = m * g * Q_(12, "m")
 print(E.to("J"))            # (294.0 ± 0.61) J
 ```
 
-Or straight from the command line — physure ships a unit-aware calculator and REPL:
+The Python package also ships a small unit-aware calculator:
 
 ```bash
 $ python -m physure "500 N / 2 m^2 => kPa"
 0.25 kPa
 ```
+
+Prefer to skip Python entirely and run calculations as standalone scripts? See **[PHS](physure-cli/README.md)** — a single native binary (`phs`), no interpreter or virtualenv required.
 
 ## Highlights
 
@@ -87,7 +105,7 @@ Backends include Gaussian (first-order), Monte Carlo, and Unscented Transform. C
 
 ### Batteries included, loaded lazily
 
-Pandas ExtensionArray, pydantic validation, SymPy symbolic quantities, unit-aware `torch.nn` layers, Arrow IPC serialization, plotting helpers, and a physics-as-text DSL (`stress = 500 N / 2 m^2`) — each activates only when you use it. Cold import stays around **20 ms**.
+Pandas ExtensionArray, pydantic validation, SymPy symbolic quantities, unit-aware `torch.nn` layers, and Arrow IPC serialization each activate only when you use them. Cold import stays around **20 ms**.
 
 ## How it compares
 
@@ -98,10 +116,11 @@ Pandas ExtensionArray, pydantic validation, SymPy symbolic quantities, unit-awar
 | Rust-accelerated core | ✅ | — | — | — |
 | `torch.compile` / `jax.jit` compatible | ✅ | — | — | — |
 | Static unit checking (mypy) | ✅ | — | — | — |
+| Standalone CLI/DSL, no Python required | ✅ ([PHS](physure-cli/README.md)) | — | — | — |
 | Runtime dependencies | none | none | astropy stack | numpy |
 | Ecosystem maturity | new | ✅ mature | ✅ mature | mature |
 
-If you need a battle-tested converter with a decade of integrations, pint and astropy are excellent. physure is for when you also need **uncertainty you can defend** and **units inside compiled ML code**.
+If you need a battle-tested converter with a decade of integrations, pint and astropy are excellent. physure is for when you also need **uncertainty you can defend**, **units inside compiled ML code**, or a way to hand a validated calculation to a dev team without a Python file changing hands.
 
 ## Performance
 
@@ -125,12 +144,15 @@ pip install "physure[jax]"     # + JAX backend
 pip install "physure[all]"     # everything
 ```
 
-### From source
+Installing the `phs` CLI, the Rust crate, the Java bindings, or the VS Code extension instead? See **[INSTALL.md](INSTALL.md)**.
+
+### From source (Python package)
 
 ```bash
 git clone https://github.com/Alexisrx96/physure
 cd physure
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust, if needed
+cd physure-python
 maturin develop --release
 uv sync --group dev
 ```
@@ -142,20 +164,27 @@ physure/                     # Cargo workspace root
 ├── physure-core/            # 🦀 Pure Rust physics engine — no FFI deps
 │   └── src/                 #    units, quantity, covariance, uncertainty,
 │                            #    symbolic, Arrow serialization
-└── physure-python/          # 🐍 PyO3 bindings + Python application layer
-    └── physure/
-        ├── domain/          # Quantity, units, dimensions, uncertainty
-        ├── application/     # Q_ factory, unit-system context, startup
-        ├── backends/        # NumPy / PyTorch / JAX adapters
-        ├── _jit/            # tracing + compile-time dimension checks
-        ├── ext/             # grammar DSL, IO, pandas, numba
-        └── nn/              # unit-aware neural network layers
+├── physure-python/          # 🐍 PyO3 bindings + Python application layer
+│   └── physure/
+│       ├── domain/          # Quantity, units, dimensions, uncertainty
+│       ├── application/     # Q_ factory, unit-system context, startup
+│       ├── backends/        # NumPy / PyTorch / JAX adapters
+│       ├── _jit/            # tracing + compile-time dimension checks
+│       ├── ext/             # grammar DSL, IO, pandas, numba
+│       └── nn/              # unit-aware neural network layers
+├── physure-script/          # PHS language engine — lexer, parser, interpreter, transpiler
+├── physure-cli/             # the `phs` binary: REPL, TUI, web visualizer, HTML reports
+├── physure-lsp/             # language server for PHS (consumed by the VS Code extension)
+└── physure-java/            # JNI bindings, published to Maven Central
 ```
 
-The rule: **physure-core is the single source of truth**. All math lives in Rust; Python is a thin, zero-copy translation layer.
+The rule: **physure-core is the single source of truth**. All dimensional-analysis and
+uncertainty math lives in Rust; every other package — Python, PHS, Java — is a thin translation
+layer on top of it.
 
 ## Documentation
 
+- [PHS README](physure-cli/README.md) — the standalone DSL and CLI
 - [Unit reference](physure-python/docs/UNITS.md) — every unit, prefix, and constant
 - [Tutorials](physure-python/docs/tutorials/) and [examples](physure-python/examples/) — including a unit-checked [PINN notebook](physure-python/examples/pinn_harmonic_oscillator.ipynb)
 - [torch.compile integration](physure-python/docs/torch_compile_integration.md)

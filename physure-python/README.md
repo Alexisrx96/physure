@@ -5,11 +5,12 @@
   <img src="https://raw.githubusercontent.com/Alexisrx96/physure/main/assets/logo-horizontal-light.svg" alt="physure" width="440">
 </picture>
 
-<h3><b>Unit-aware, dimension-correct computing for Python — powered by a Rust core</b></h3>
-<p><i>Units, dimensions, and correlated uncertainty tracked through every calculation, with zero overhead under <code>torch.compile</code> / <code>jax.jit</code>.</i></p>
+<h3><b>Unit-aware, dimension-correct physics computing — from a shared Rust core</b></h3>
+<p><i>The same dimensional analysis and uncertainty engine, exposed as a standalone DSL (<code>phs</code>), this Python library, a Rust crate, and a JVM package — with zero overhead under <code>torch.compile</code> / <code>jax.jit</code> where it matters.</i></p>
 
 [![PyPI](https://img.shields.io/pypi/v/physure?color=F59E0B&labelColor=18181A)](https://pypi.org/project/physure/)
 [![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure-java?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java)
 [![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
 [![Python 3.11–3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-F59E0B?labelColor=18181A)](https://pypi.org/project/physure/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](https://github.com/Alexisrx96/physure/blob/main/LICENSE)
@@ -17,6 +18,12 @@
 </div>
 
 ---
+
+This is the **Python package**. physure also ships as a standalone CLI/DSL that needs no Python
+([PHS](https://github.com/Alexisrx96/physure/blob/main/physure-cli/README.md)), a pure Rust
+crate, and JVM bindings on Maven Central — see the
+[project README](https://github.com/Alexisrx96/physure#readme) for all four and
+[INSTALL.md](https://github.com/Alexisrx96/physure/blob/main/INSTALL.md) for every install path.
 
 ## Why physure?
 
@@ -87,7 +94,7 @@ Backends include Gaussian (first-order), Monte Carlo, and Unscented Transform. C
 
 ### Batteries included, loaded lazily
 
-Pandas ExtensionArray, pydantic validation, SymPy symbolic quantities, unit-aware `torch.nn` layers, Arrow IPC serialization, plotting helpers, and a physics-as-text DSL (`stress = 500 N / 2 m^2`) — each activates only when you use it. Cold import stays around **20 ms**.
+Pandas ExtensionArray, pydantic validation, SymPy symbolic quantities, unit-aware `torch.nn` layers, and Arrow IPC serialization each activate only when you use them. Cold import stays around **20 ms**.
 
 ## How it compares
 
@@ -98,6 +105,7 @@ Pandas ExtensionArray, pydantic validation, SymPy symbolic quantities, unit-awar
 | Rust-accelerated core | ✅ | — | — | — |
 | `torch.compile` / `jax.jit` compatible | ✅ | — | — | — |
 | Static unit checking (mypy) | ✅ | — | — | — |
+| Standalone CLI/DSL, no Python required | ✅ | — | — | — |
 | Runtime dependencies | none | none | astropy stack | numpy |
 | Ecosystem maturity | new | ✅ mature | ✅ mature | mature |
 
@@ -131,6 +139,7 @@ pip install "physure[all]"     # everything
 git clone https://github.com/Alexisrx96/physure
 cd physure
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust, if needed
+cd physure-python
 maturin develop --release
 uv sync --group dev
 ```
@@ -142,7 +151,7 @@ physure/                     # Cargo workspace root
 ├── physure-core/            # 🦀 Pure Rust physics engine — no FFI deps
 │   └── src/                 #    units, quantity, covariance, uncertainty,
 │                            #    symbolic, Arrow serialization
-└── physure-python/          # 🐍 PyO3 bindings + Python application layer
+└── physure-python/          # 🐍 PyO3 bindings + Python application layer (this package)
     └── physure/
         ├── domain/          # Quantity, units, dimensions, uncertainty
         ├── application/     # Q_ factory, unit-system context, startup
