@@ -26,7 +26,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 # ── Version ───────────────────────────────────────────────────────────────────
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 # ── Rust-first: hard import of native core ────────────────────────────────────
 # Unlike physure, physure has NO pure-Python fallback.

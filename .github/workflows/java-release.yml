@@ -1,0 +1,102 @@
+# Release pipeline: push a tag `java-vX.Y.Z` to publish the `physure-java`
+# JNI bindings jar (physure-java/, groupId io.github.alexisrx96) to Maven
+# Central via the Sonatype Central Portal.
+#
+# physure-java is versioned independently from the Rust core and Python
+# wrapper (see core-release.yml / release.yml).
+#
+# One-time setup (repo owner):
+#   1. Create a Sonatype Central Portal account (https://central.sonatype.com)
+#      and verify the io.github.alexisrx96 namespace (GitHub-OAuth based, no
+#      DNS record needed since it reuses your GitHub login).
+#   2. Generate a GPG keypair for signing and publish the public key to a
+#      keyserver (Central verifies signatures against it).
+#   3. Generate a Central Portal user token (Account -> Generate User Token).
+#   4. GitHub: create the `maven-central` environment (Settings -> Environments)
+#      and add these secrets to it: CENTRAL_USERNAME, CENTRAL_TOKEN (the user
+#      token pair), GPG_PRIVATE_KEY (ASCII-armored, exported with
+#      `gpg --export-secret-keys --armor`), GPG_PASSPHRASE.
+name: Java Release
+
+on:
+  push:
+    tags: ["java-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Tag must match physure-java/pom.xml version
+        run: |
+          tag="${GITHUB_REF_NAME#java-v}"
+          version="$(grep -m1 -oP '(?<=<version>)[^<]+' physure-java/pom.xml)"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match pom.xml version $version" >&2
+            exit 1
+          fi
+
+  # Builds the native cdylib for each platform and stages it at the exact
+  # jar-resource path NativeEngine.java's classpath fallback loader expects:
+  # /natives/{linux|macos|windows}/{os.arch}/{mapLibraryName}. os.arch is the
+  # *JVM-reported* architecture name (amd64/aarch64), not the Rust target triple.
+  native-libs:
+    needs: check-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,    target: x86_64-unknown-linux-gnu,  os: linux,   arch: amd64,   libname: libphysure_java.so }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, os: linux,   arch: aarch64, libname: libphysure_java.so }
+          - { runner: macos-latest,     target: x86_64-apple-darwin,       os: macos,   arch: amd64,   libname: libphysure_java.dylib }
+          - { runner: macos-latest,     target: aarch64-apple-darwin,      os: macos,   arch: aarch64, libname: libphysure_java.dylib }
+          - { runner: windows-latest,   target: x86_64-pc-windows-msvc,    os: windows, arch: amd64,   libname: physure_java.dll }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build physure-java native library
+        run: cargo build --release -p physure-java --target ${{ matrix.target }}
+      - name: Stage into natives resource layout
+        shell: bash
+        run: |
+          dest="staged/natives/${{ matrix.os }}/${{ matrix.arch }}"
+          mkdir -p "$dest"
+          cp "target/${{ matrix.target }}/release/${{ matrix.libname }}" "$dest/"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: natives-${{ matrix.os }}-${{ matrix.arch }}
+          path: staged/natives
+
+  publish:
+    needs: native-libs
+    runs-on: ubuntu-latest
+    environment: maven-central
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: natives-*
+          path: physure-java/src/main/resources
+          merge-multiple: true
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_TOKEN
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: GPG_PASSPHRASE
+      - name: Publish to Maven Central
+        working-directory: physure-java
+        run: mvn -B -Prelease clean verify deploy
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

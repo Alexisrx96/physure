@@ -1908,7 +1908,7 @@ dependencies = [
 
 [[package]]
 name = "physure"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "approx 0.5.1",
  "arrow",
@@ -1929,7 +1929,7 @@ dependencies = [
 
 [[package]]
 name = "physure-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arboard",
  "chrono",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "physure-java"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "jni",
  "num-rational",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "physure-lsp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "physure",
  "physure-script",
@@ -1967,7 +1967,7 @@ dependencies = [
 
 [[package]]
 name = "physure-python"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "arrow",
  "chrono",
@@ -1987,7 +1987,7 @@ dependencies = [
 
 [[package]]
 name = "physure-script"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "libloading",
  "num-rational",

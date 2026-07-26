@@ -5,7 +5,8 @@ This package contains JVM JNI bindings for the high-performance `physure` core p
 ## Project Structure
 
 * **`src/lib.rs`**: JNI FFI bindings written in Rust (using the `jni-rs` crate) exporting Java-accessible native functions.
-* **`java/com/physure/`**: High-level Java wrapper classes (`NativeEngine.java`, `UnitRegistry.java`, `Quantity.java`) offering a clean object-oriented interface.
+* **`src/main/java/com/physure/`**: High-level Java wrapper classes (`NativeEngine.java`, `UnitRegistry.java`, `Quantity.java`) offering a clean object-oriented interface.
+* **`pom.xml`**: Maven build (groupId `io.github.alexisrx96`, artifactId `physure-java`) for publishing to Maven Central.
 
 ## How to Build the Native Library
 
@@ -19,6 +20,19 @@ On compilation, cargo outputs the library into `target/release/`:
 * **Windows**: `physure_java.dll`
 * **Linux**: `libphysure_java.so`
 * **macOS**: `libphysure_java.dylib`
+
+## Maven
+
+```xml
+<dependency>
+    <groupId>io.github.alexisrx96</groupId>
+    <artifactId>physure-java</artifactId>
+    <version>0.2.3</version>
+</dependency>
+```
+
+The published jar bundles prebuilt natives for Linux/macOS/Windows (x86_64 + aarch64) under
+`/natives/`, so no `-Djava.library.path` setup is needed.
 
 ## Usage in Java 8+
 
