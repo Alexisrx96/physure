@@ -43,7 +43,7 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Test physure crates
-      run: cargo test -p physure-core -p physure-script -p physure-cli
+      run: cargo test -p physure -p physure-script -p physure-cli -p physure-lsp
 
   test:
     runs-on: ubuntu-latest
