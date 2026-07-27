@@ -28,13 +28,31 @@ fn node_op(op: BinaryOp, a: Node, b: Node) -> PhysureResult<Node> {
 }
 
 /// Converts a non-Equation operand into a symbolic `Node` for equation algebra.
-/// A `Quantity` operand is explicitly out of scope for this pass.
+/// A dimensionless `Quantity` (e.g. a bare scale factor) becomes its numeric value;
+/// a dimensioned one (e.g. `2 m`) is kept as `number * unit_symbol` so the unit isn't
+/// silently dropped from the resulting equation's text.
+/// ponytail: the unit symbol isn't a real bindable variable, so it stays purely
+/// symbolic — collides only if the equation also has a variable named the same as the unit.
 fn value_to_symbolic_node(val: &PhsValue) -> PhysureResult<Node> {
     match val {
         PhsValue::Number(n) => Ok(Node::Number(*n)),
         PhsValue::String(s) => crate::symbolic::SymbolicParser::parse_str(s),
-        _ => Err(PhysureError::Generic("Equation algebra only supports Number, String, or Equation operands".into())),
+        PhsValue::Quantity(q) if q.unit == RationalUnit::dimensionless() => Ok(Node::Number(q.value.mean())),
+        PhsValue::Quantity(q) => Ok(Node::Mul(vec![Node::Number(q.value.mean()), Node::Symbol(q.unit.__repr__())])),
+        _ => Err(PhysureError::Generic("Equation algebra only supports Number, String, Equation, or Quantity operands".into())),
     }
+}
+
+/// A plain string holding `"lhs = rhs"` (e.g. from a bare assignment, not `solve()`)
+/// is coerced into an `Equation` so it supports the same arithmetic. Strings without
+/// a top-level `=` (unit symbols, bare variable names) pass through unchanged.
+fn coerce_equation_string(val: PhsValue) -> PhsValue {
+    if let PhsValue::String(ref s) = val {
+        if let Ok(Some((l, r))) = crate::symbolic::SymbolicParser::parse_equation_str(s) {
+            return PhsValue::Equation(l, r);
+        }
+    }
+    val
 }
 
 fn is_truthy(val: &PhsValue) -> bool {
@@ -377,8 +395,7 @@ impl PhsInterpreter {
                     }
                 }
 
-                if let Some(PhsValue::Equation(_, rhs)) = env.get(name) {
-                    let rhs = rhs.clone();
+                if let Some(PhsValue::Equation(_, rhs)) = env.get(name).cloned().map(coerce_equation_string) {
                     if !args.is_empty() {
                         return Err(PhysureError::Generic(format!(
                             "Calling equation '{}' requires named arguments only, e.g. {}(x=1), got positional arguments",
@@ -555,6 +572,8 @@ impl PhsInterpreter {
     }
 
     pub fn eval_binary_op_vals(&self, op: BinaryOp, l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
+        let l_val = coerce_equation_string(l_val);
+        let r_val = coerce_equation_string(r_val);
         match (l_val, r_val) {
             (PhsValue::Function(f), PhsValue::Function(g)) => {
                 let (params, param_units) = if !f.params.is_empty() {

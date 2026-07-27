@@ -17,6 +17,23 @@ impl SymbolicParser {
         Ok(node.simplify())
     }
 
+    /// Parses `input` as `lhs = rhs` without collapsing to `Sub`, for coercing a
+    /// plain string into a `PhsValue::Equation`. Returns `None` if there's no
+    /// top-level `=`/`==` (i.e. it's a plain expression/symbol, not an equation).
+    pub fn parse_equation_str(input: &str) -> PhysureResult<Option<(Node, Node)>> {
+        let clean_input = input.replace('"', "").replace('\'', "");
+        let lexer = PhsLexer::new(&clean_input);
+        let tokens = lexer.tokenize()?;
+        let mut parser = SymbolicParser { tokens, pos: 0 };
+        let left = parser.parse_sum()?;
+        if parser.match_op("=") || parser.match_op("==") {
+            let right = parser.parse_sum()?;
+            Ok(Some((left.simplify(), right.simplify())))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn peek(&self) -> Option<&PhsToken> {
         self.tokens.get(self.pos)
     }
