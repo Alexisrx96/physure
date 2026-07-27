@@ -2,7 +2,7 @@ WHITESPACE = _{ " " | "\t" }
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }
 COMMENT    = _{ ("//" | "#") ~ (!"\n" ~ !"\r" ~ ANY)* }
 
-keyword     = @{ ("let" | "if" | "then" | "else" | "in") ~ !(ASCII_ALPHANUMERIC | "_") }
+keyword     = @{ ("let" | "if" | "then" | "else" | "in" | "return") ~ !(ASCII_ALPHANUMERIC | "_") }
 identifier  = @{ !keyword ~ (ASCII_ALPHA | "π" | "θ" | "λ" | "μ" | "Δ" | "σ" | "Ω" | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 number      = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ( ^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+ )? }
 
@@ -33,18 +33,20 @@ op_pow      = { "^" }
 op_convert  = { "=>" }
 op_compare  = { "==" | "!=" | ">=" | "<=" | ">" | "<" | "≈" }
 
-if_expr     = { "if" ~ expr ~ "then" ~ expr ~ "else" ~ expr }
+_nl         = _{ NEWLINE* }
+if_expr     = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ expr ~ _nl ~ "else" ~ _nl ~ expr }
 let_expr    = { "let" ~ identifier ~ "=" ~ expr ~ "in" ~ expr }
 
 primary     = _{ if_expr | let_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
-factor      = { primary ~ (op_pow ~ primary)? }
-term        = { factor ~ ((op_mul | op_div) ~ factor | factor)* }
+factor      = { op_sub? ~ primary ~ (op_pow ~ primary)? }
+term        = { factor ~ ((op_mul | op_div) ~ factor | !op_sub ~ factor)* }
 comp_expr   = { term ~ (op_compare ~ term)* ~ op_format? }
 base_expr   = { comp_expr ~ ((op_add | op_sub | op_convert) ~ comp_expr)* }
 
 expr        = { base_expr ~ ("?" ~ base_expr ~ ":" ~ base_expr)? }
 
-function_call = { identifier ~ "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+call_arg      = { (identifier ~ "=" ~ expr) | expr }
+function_call = { identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")" }
 param_item    = { identifier ~ (":" ~ unit_expr)? }
 params        = { param_item ~ ("," ~ param_item)* }
 
@@ -65,6 +67,9 @@ function_def  = { "fn" ~ identifier ~ "(" ~ params? ~ ")" ~ "=" ~ (block_body | 
 raw_block     = @{ "```" ~ (!"```" ~ ANY)* ~ "```" }
 string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
+return_stmt   = { "return" ~ expr }
+guard_if_stmt = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ return_stmt }
+
 stmt_term = _{ ";" | NEWLINE }
-stmt      = { import_stmt | export_stmt | function_def | assignment_fn | assignment | raw_block | expr }
+stmt      = { import_stmt | export_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | raw_block | expr }
 program   = _{ SOI ~ (stmt_term | COMMENT)* ~ (stmt ~ (stmt_term | COMMENT)*)* ~ EOI }

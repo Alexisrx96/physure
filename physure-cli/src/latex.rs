@@ -44,7 +44,7 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
                 physure_script::ast::BinaryOp::Convert => format!("{} \\Rightarrow {}", l, r),
             }
         }
-        physure_script::ast::Expr::FunctionCall { name, args } => {
+        physure_script::ast::Expr::FunctionCall { name, args, .. } => {
             let args_s: Vec<String> = args.iter().map(|a| format_expr_latex_summary(a, i18n)).collect();
             if name == "solve" && args.len() == 2 {
                 let eq_str = args_s[0].trim_matches('"').replace('_', "\\_");

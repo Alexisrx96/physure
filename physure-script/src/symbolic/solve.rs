@@ -51,6 +51,16 @@ impl Node {
                     }
                 } else if **right == Node::Symbol(target.to_string()) {
                     return Ok((**left).clone());
+                } else if let Node::Div(num, den) = &**right {
+                    if num.depends_on(target) && !den.depends_on(target) {
+                        if **num == Node::Symbol(target.to_string()) {
+                            let solution = Node::Mul(vec![(**left).clone(), (**den).clone()]);
+                            return Ok(solution.simplify());
+                        }
+                    } else if den.depends_on(target) && !num.depends_on(target) && **den == Node::Symbol(target.to_string()) {
+                        let solution = Node::Div(num.clone(), left.clone());
+                        return Ok(solution.simplify());
+                    }
                 }
             } else if left.depends_on(target) && !right.depends_on(target) {
                 if let Node::Mul(factors) = &**left {
@@ -86,6 +96,16 @@ impl Node {
                     }
                 } else if **left == Node::Symbol(target.to_string()) {
                     return Ok((**right).clone());
+                } else if let Node::Div(num, den) = &**left {
+                    if num.depends_on(target) && !den.depends_on(target) {
+                        if **num == Node::Symbol(target.to_string()) {
+                            let solution = Node::Mul(vec![(**right).clone(), (**den).clone()]);
+                            return Ok(solution.simplify());
+                        }
+                    } else if den.depends_on(target) && !num.depends_on(target) && **den == Node::Symbol(target.to_string()) {
+                        let solution = Node::Div(num.clone(), right.clone());
+                        return Ok(solution.simplify());
+                    }
                 }
             }
         }

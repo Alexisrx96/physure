@@ -452,16 +452,18 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             if args.len() != 2 {
                 return Err(PhysureError::Generic("solve expects equation string and target string".into()));
             }
-            let eq_str = match &args[0] {
-                PhsValue::String(s) => s,
-                _ => return Err(PhysureError::Generic("solve expects equation string".into())),
-            };
             let target_str = match &args[1] {
                 PhsValue::String(s) => s,
                 _ => return Err(PhysureError::Generic("solve expects target string".into())),
             };
-            let inlined = preprocess_symbolic_expression(eq_str, interpreter);
-            let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
+            let node = match &args[0] {
+                PhsValue::String(eq_str) => {
+                    let inlined = preprocess_symbolic_expression(eq_str, interpreter);
+                    crate::symbolic::SymbolicParser::parse_str(&inlined)?
+                }
+                PhsValue::Equation(l, r) => crate::symbolic::Node::Sub(Box::new(l.clone()), Box::new(r.clone())),
+                _ => return Err(PhysureError::Generic("solve expects an equation string or a previously-solved equation".into())),
+            };
             let solved_node = node.solve_equation(target_str)?;
             let solved_str = solved_node.to_string();
 
@@ -476,7 +478,7 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
                     }
                 }
             }
-            Ok(Some(PhsValue::String(solved_str)))
+            Ok(Some(PhsValue::Equation(crate::symbolic::Node::Symbol(target_str.clone()), solved_node)))
         }
         _ => Ok(None),
     }
@@ -734,7 +736,7 @@ fn expr_to_string(expr: &crate::ast::Expr) -> String {
             };
             format!("{} {} {}", expr_to_string(left), op_str, expr_to_string(right))
         }
-        crate::ast::Expr::FunctionCall { name, args } => {
+        crate::ast::Expr::FunctionCall { name, args, .. } => {
             let args_str: Vec<String> = args.iter().map(expr_to_string).collect();
             format!("{}({})", name, args_str.join(", "))
         }

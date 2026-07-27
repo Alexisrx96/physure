@@ -49,6 +49,10 @@ impl RustTranspiler {
             Statement::FunctionDef(node) => self.generate_function_def(node),
             Statement::Assignment(node) => self.generate_assignment(node),
             Statement::Expr(expr) => self.generate_expr(expr),
+            Statement::Return(expr) => Ok(format!("return {};", self.generate_expr(expr)?)),
+            Statement::GuardReturn { cond, value } => {
+                Ok(format!("if {} {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
+            }
         }
     }
 
@@ -122,7 +126,13 @@ impl RustTranspiler {
                     BinaryOp::Convert => Ok(format!("{}.convert_to({})", left_code, right_code)),
                 }
             }
-            Expr::FunctionCall { name, args } => {
+            Expr::FunctionCall { name, args, kwargs } => {
+                if !kwargs.is_empty() {
+                    return Err(CodegenError::Generic(format!(
+                        "Named arguments are not supported in Rust codegen (call to '{}')",
+                        name
+                    )));
+                }
                 let mut arg_codes = Vec::new();
                 for arg in args {
                     arg_codes.push(self.generate_expr(arg)?);

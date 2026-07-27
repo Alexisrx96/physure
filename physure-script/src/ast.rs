@@ -12,6 +12,8 @@ pub enum Statement {
     FunctionDef(FunctionDefNode),
     Assignment(AssignmentNode),
     Expr(Expr),
+    Return(Expr),
+    GuardReturn { cond: Expr, value: Expr },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -69,6 +71,8 @@ pub enum Expr {
     FunctionCall {
         name: String,
         args: Vec<Expr>,
+        #[serde(default)]
+        kwargs: Vec<(String, Expr)>,
     },
 }
 

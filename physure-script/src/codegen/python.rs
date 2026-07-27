@@ -50,6 +50,10 @@ impl PythonTranspiler {
             Statement::FunctionDef(node) => self.generate_function_def(node),
             Statement::Assignment(node) => self.generate_assignment(node),
             Statement::Expr(expr) => self.generate_expr(expr),
+            Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
+            Statement::GuardReturn { cond, value } => {
+                Ok(format!("if {}: return {}", self.generate_expr(cond)?, self.generate_expr(value)?))
+            }
         }
     }
     
@@ -140,7 +144,7 @@ impl PythonTranspiler {
                     Ok(format!("({} {} {})", l_str, op_str, r_str))
                 }
             }
-            Expr::FunctionCall { name, args } => {
+            Expr::FunctionCall { name, args, kwargs } => {
                 let mut arg_strs = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
                     let arg_s = self.generate_expr(arg)?;
@@ -149,6 +153,10 @@ impl PythonTranspiler {
                     } else {
                         arg_strs.push(arg_s);
                     }
+                }
+                for (kwarg_name, kwarg_expr) in kwargs {
+                    let kwarg_s = self.generate_expr(kwarg_expr)?;
+                    arg_strs.push(format!("{}={}", sanitize_identifier(kwarg_name), kwarg_s));
                 }
                 Ok(format!("{}({})", sanitize_identifier(name), arg_strs.join(", ")))
             }
