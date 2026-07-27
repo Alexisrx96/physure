@@ -11,7 +11,39 @@ use physure_core::units::RationalUnit;
 
 use crate::ast::{BinaryOp, Expr, Program, Statement};
 use crate::resolver::{ModuleResolver, FsModuleResolver};
+use crate::symbolic::Node;
 use crate::PhsValue;
+
+/// Applies a symbolic binary op to two `Node`s. Only `+ - * /` are meaningful for
+/// equation algebra (the linear operations solve_equation and simplify understand);
+/// `^` and `=>` on an equation are explicitly out of scope for this pass.
+fn node_op(op: BinaryOp, a: Node, b: Node) -> PhysureResult<Node> {
+    Ok(match op {
+        BinaryOp::Add => Node::Add(vec![a, b]),
+        BinaryOp::Sub => Node::Sub(Box::new(a), Box::new(b)),
+        BinaryOp::Mul => Node::Mul(vec![a, b]),
+        BinaryOp::Div => Node::Div(Box::new(a), Box::new(b)),
+        _ => return Err(PhysureError::Generic("Pow/Convert are not supported for equation algebra yet".into())),
+    })
+}
+
+/// Converts a non-Equation operand into a symbolic `Node` for equation algebra.
+/// A `Quantity` operand is explicitly out of scope for this pass.
+fn value_to_symbolic_node(val: &PhsValue) -> PhysureResult<Node> {
+    match val {
+        PhsValue::Number(n) => Ok(Node::Number(*n)),
+        PhsValue::String(s) => crate::symbolic::SymbolicParser::parse_str(s),
+        _ => Err(PhysureError::Generic("Equation algebra only supports Number, String, or Equation operands".into())),
+    }
+}
+
+fn is_truthy(val: &PhsValue) -> bool {
+    match val {
+        PhsValue::Quantity(q) => q.value.mean() > 0.0,
+        PhsValue::Number(n) => *n > 0.0,
+        _ => false,
+    }
+}
 
 fn eval_template_string(text: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> String {
     let clean = text.trim_matches('`').trim();
@@ -167,6 +199,15 @@ impl PhsInterpreter {
             }
             Statement::Import(node) => self.resolve_use(node, env),
             Statement::Export(_node) => Ok(PhsValue::None),
+            Statement::Return(expr) => self.eval_expr(expr, env),
+            Statement::GuardReturn { cond, value } => {
+                let cond_val = self.eval_expr(cond, env)?;
+                if is_truthy(&cond_val) {
+                    self.eval_expr(value, env)
+                } else {
+                    Ok(PhsValue::None)
+                }
+            }
         }
     }
 
@@ -313,26 +354,20 @@ impl PhsInterpreter {
             }
             Expr::BinaryOp { op, left, right } => {
                 if *op == BinaryOp::Convert {
-                    let q = self.eval_expr(left, env)?;
-                    if let PhsValue::Quantity(q_val) = q {
-                        if let Expr::Identifier(ref target_unit) = **right {
-                            let clean_target = target_unit.split('#').next().unwrap().split("//").next().unwrap().trim();
-                            let reg = physure_core::UnitRegistry::build_default_si();
-                            let parsed_unit = physure_core::units::parser::Parser::parse_expression_with_registry(clean_target, &reg)?;
-                            let converted = q_val.convert_to(&parsed_unit)?;
-                            return Ok(PhsValue::Quantity(converted));
-                        } else {
-                            return Ok(PhsValue::Quantity(q_val));
-                        }
+                    let l_val = self.eval_expr(left, env)?;
+                    return if let Expr::Identifier(ref target_unit) = **right {
+                        let clean_target = target_unit.split('#').next().unwrap().split("//").next().unwrap().trim();
+                        let parsed_unit = UnitParser::parse_expression(clean_target)?;
+                        self.convert_value_to_unit(l_val, &parsed_unit)
                     } else {
-                        return Ok(q);
-                    }
+                        Ok(l_val)
+                    };
                 }
                 let l_val = self.eval_expr(left, env)?;
                 let r_val = self.eval_expr(right, env)?;
                 self.eval_binary_op_vals(*op, l_val, r_val)
             }
-            Expr::FunctionCall { name, args } => {
+            Expr::FunctionCall { name, args, kwargs } => {
                 if name == "let" && args.len() == 3 {
                     if let Expr::Identifier(var_name) = &args[0] {
                         let val = self.eval_expr(&args[1], env)?;
@@ -340,6 +375,50 @@ impl PhsInterpreter {
                         local_env.insert(var_name.clone(), val);
                         return self.eval_expr(&args[2], &local_env);
                     }
+                }
+
+                if let Some(PhsValue::Equation(_, rhs)) = env.get(name) {
+                    let rhs = rhs.clone();
+                    if !args.is_empty() {
+                        return Err(PhysureError::Generic(format!(
+                            "Calling equation '{}' requires named arguments only, e.g. {}(x=1), got positional arguments",
+                            name, name
+                        )));
+                    }
+                    if kwargs.is_empty() {
+                        return Err(PhysureError::Generic(format!(
+                            "Calling equation '{}' requires at least one named argument",
+                            name
+                        )));
+                    }
+                    let mut local_env = env.clone();
+                    for (kwarg_name, kwarg_expr) in kwargs {
+                        let val = self.eval_expr(kwarg_expr, env)?;
+                        local_env.insert(kwarg_name.clone(), val);
+                    }
+                    let mut free = std::collections::HashSet::new();
+                    rhs.free_symbols(&mut free);
+                    let missing: Vec<&String> = free.iter().filter(|s| !local_env.contains_key(*s)).collect();
+                    if !missing.is_empty() {
+                        return Err(PhysureError::Generic(format!(
+                            "Missing argument(s) for equation '{}': {}",
+                            name,
+                            missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                        )));
+                    }
+                    let solved_str = rhs.to_phs_string();
+                    let program = crate::parser::parse_phs(&solved_str)?;
+                    let Some(Statement::Expr(expr)) = program.statements.first() else {
+                        return Err(PhysureError::Generic(format!("Failed to evaluate equation '{}'", name)));
+                    };
+                    return self.eval_expr(expr, &local_env);
+                }
+
+                if !kwargs.is_empty() {
+                    return Err(PhysureError::Generic(format!(
+                        "Named arguments are only supported when calling an equation, but '{}' is not an equation",
+                        name
+                    )));
                 }
 
                 if let Some(PhsValue::Function(func)) = env.get(name) {
@@ -354,7 +433,9 @@ impl PhsInterpreter {
                                 args: vec![Expr::FunctionCall {
                                     name: arg_func.name.clone(),
                                     args: inner_args,
+                                    kwargs: Vec::new(),
                                 }],
+                                kwargs: Vec::new(),
                             });
                             return Ok(PhsValue::Function(crate::ast::FunctionDefNode {
                                 name: format!("{}_{}", func.name, arg_func.name),
@@ -398,7 +479,22 @@ impl PhsInterpreter {
                     }
                     let mut last_val = PhsValue::None;
                     for stmt in &func.body_stmts {
-                        last_val = self.eval_statement_with_env(stmt, &mut local_env)?;
+                        match stmt {
+                            Statement::Return(expr) => {
+                                last_val = self.eval_expr(expr, &local_env)?;
+                                break;
+                            }
+                            Statement::GuardReturn { cond, value } => {
+                                let cond_val = self.eval_expr(cond, &local_env)?;
+                                if is_truthy(&cond_val) {
+                                    last_val = self.eval_expr(value, &local_env)?;
+                                    break;
+                                }
+                            }
+                            _ => {
+                                last_val = self.eval_statement_with_env(stmt, &mut local_env)?;
+                            }
+                        }
                     }
                     Ok(last_val)
                 } else {
@@ -444,6 +540,20 @@ impl PhsInterpreter {
         Ok(PhsValue::Quantity(converted))
     }
 
+    fn convert_value_to_unit(&self, val: PhsValue, unit: &RationalUnit) -> PhysureResult<PhsValue> {
+        match val {
+            PhsValue::Quantity(q) => Ok(PhsValue::Quantity(q.convert_to(unit)?)),
+            PhsValue::Vector(vec) => {
+                let mut results = Vec::new();
+                for item in vec {
+                    results.push(self.convert_value_to_unit(item, unit)?);
+                }
+                Ok(PhsValue::Vector(results))
+            }
+            other => Ok(other),
+        }
+    }
+
     pub fn eval_binary_op_vals(&self, op: BinaryOp, l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
         match (l_val, r_val) {
             (PhsValue::Function(f), PhsValue::Function(g)) => {
@@ -455,8 +565,8 @@ impl PhsInterpreter {
                 let args_expr: Vec<Expr> = params.iter().map(|p| Expr::Identifier(p.clone())).collect();
                 let body = Statement::Expr(Expr::BinaryOp {
                     op,
-                    left: Box::new(Expr::FunctionCall { name: f.name.clone(), args: args_expr.clone() }),
-                    right: Box::new(Expr::FunctionCall { name: g.name.clone(), args: args_expr }),
+                    left: Box::new(Expr::FunctionCall { name: f.name.clone(), args: args_expr.clone(), kwargs: Vec::new() }),
+                    right: Box::new(Expr::FunctionCall { name: g.name.clone(), args: args_expr, kwargs: Vec::new() }),
                 });
                 let name = match op {
                     BinaryOp::Add => format!("{}_add_{}", f.name, g.name),
@@ -471,6 +581,23 @@ impl PhsInterpreter {
                     param_units,
                     body_stmts: vec![body],
                 }))
+            }
+            (PhsValue::Equation(l1, r1), PhsValue::Equation(l2, r2)) => {
+                let new_l = node_op(op, l1, l2)?.simplify();
+                let new_r = node_op(op, r1, r2)?.simplify();
+                Ok(PhsValue::Equation(new_l, new_r))
+            }
+            (PhsValue::Equation(l, r), other) => {
+                let node = value_to_symbolic_node(&other)?;
+                let new_l = node_op(op, l, node.clone())?.simplify();
+                let new_r = node_op(op, r, node)?.simplify();
+                Ok(PhsValue::Equation(new_l, new_r))
+            }
+            (other, PhsValue::Equation(l, r)) => {
+                let node = value_to_symbolic_node(&other)?;
+                let new_l = node_op(op, node.clone(), l)?.simplify();
+                let new_r = node_op(op, node, r)?.simplify();
+                Ok(PhsValue::Equation(new_l, new_r))
             }
             (PhsValue::Vector(l_vec), PhsValue::Vector(r_vec)) => {
                 if l_vec.len() != r_vec.len() {
@@ -555,7 +682,7 @@ impl PhsInterpreter {
             }
             (PhsValue::Quantity(l), PhsValue::String(r)) => {
                 let clean_r = r.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = physure_core::units::parser::Parser::parse_expression_with_registry(clean_r, &physure_core::UnitRegistry::build_default_si()) {
+                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_r) {
                     let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit.clone(), None, None);
                     let res = match op {
                         BinaryOp::Mul => l.mul(&unit_q)?,
@@ -570,7 +697,7 @@ impl PhsInterpreter {
             }
             (PhsValue::Number(l), PhsValue::String(r)) => {
                 let clean_r = r.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = physure_core::units::parser::Parser::parse_expression_with_registry(clean_r, &physure_core::UnitRegistry::build_default_si()) {
+                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_r) {
                     let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
                     let num_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
                     let res = match op {
@@ -585,7 +712,7 @@ impl PhsInterpreter {
             }
             (PhsValue::String(l), PhsValue::Quantity(r)) => {
                 let clean_l = l.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = physure_core::units::parser::Parser::parse_expression_with_registry(clean_l, &physure_core::UnitRegistry::build_default_si()) {
+                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_l) {
                     let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
                     let res = match op {
                         BinaryOp::Mul => unit_q.mul(&r)?,
@@ -599,7 +726,7 @@ impl PhsInterpreter {
             }
             (PhsValue::String(l), PhsValue::Number(r)) => {
                 let clean_l = l.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = physure_core::units::parser::Parser::parse_expression_with_registry(clean_l, &physure_core::UnitRegistry::build_default_si()) {
+                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_l) {
                     let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
                     let num_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
                     let res = match op {
@@ -637,6 +764,37 @@ mod tests {
     use crate::ast::*;
     use crate::resolver::{MemoryModuleResolver, ModuleExport};
     
+    #[test]
+    fn test_unary_minus_multiline_if_and_guard_return() {
+        let mut interp = PhsInterpreter::default();
+        let code = r#"
+CERO_A = 0 A
+CERO_V = 0 V
+
+circuito_abierto(V: V, I: A) =
+    if I == CERO_A
+    then return 0
+    if V == CERO_V
+    then
+        - 1
+    else
+        1
+
+r1 = circuito_abierto(5 V, 0 A)
+r2 = circuito_abierto(0 V, 2 A)
+r3 = circuito_abierto(5 V, 2 A)
+"#;
+        interp.eval_str(code).unwrap();
+        let num = |name: &str| match interp.get_var(name).unwrap() {
+            PhsValue::Quantity(q) => q.value.mean(),
+            PhsValue::Number(n) => *n,
+            other => panic!("expected numeric value for {name}, got {other:?}"),
+        };
+        assert_eq!(num("r1"), 0.0);
+        assert_eq!(num("r2"), -1.0);
+        assert_eq!(num("r3"), 1.0);
+    }
+
     #[test]
     fn test_kinetic_energy() {
         let mut interp = PhsInterpreter::default();
@@ -696,6 +854,7 @@ mod tests {
                         Expr::Identifier("m".to_string()),
                         Expr::Identifier("v".to_string()),
                     ],
+                    kwargs: Vec::new(),
                 },
             }),
         ];

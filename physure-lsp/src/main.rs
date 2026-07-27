@@ -449,9 +449,21 @@ fn from_target_completions(uri: &Url) -> Vec<CompletionItem> {
     items
 }
 
-fn extract_word_at_pos(line: &str, char_idx: usize) -> String {
-    let bytes = line.as_bytes();
-    if char_idx >= bytes.len() {
+// LSP `Position.character` is a UTF-16 code-unit offset, not a byte offset.
+fn utf16_offset_to_byte_offset(line: &str, utf16_offset: usize) -> usize {
+    let mut utf16_count = 0;
+    for (byte_idx, ch) in line.char_indices() {
+        if utf16_count >= utf16_offset {
+            return byte_idx;
+        }
+        utf16_count += ch.len_utf16();
+    }
+    line.len()
+}
+
+fn extract_word_at_pos(line: &str, utf16_char_idx: usize) -> String {
+    let char_idx = utf16_offset_to_byte_offset(line, utf16_char_idx);
+    if char_idx >= line.len() {
         return "".to_string();
     }
     let start = line[..char_idx]

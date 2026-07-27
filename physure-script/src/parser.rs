@@ -47,6 +47,8 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement
         Rule::export_stmt => parse_export(pair),
         Rule::function_def | Rule::assignment_fn => parse_function_def(pair),
         Rule::assignment => parse_assignment(pair),
+        Rule::guard_if_stmt => parse_guard_if_stmt(pair),
+        Rule::return_stmt => parse_return_stmt(pair),
         Rule::raw_block => Ok(Statement::Expr(Expr::Identifier(pair.as_str().to_string()))),
         Rule::expr => Ok(Statement::Expr(parse_expr(pair)?)),
         _ => Err(PhysureError::Generic(format!("Unexpected statement rule: {:?}", pair.as_rule()))),
@@ -204,6 +206,18 @@ fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statemen
     }))
 }
 
+fn parse_guard_if_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut inner = pair.into_inner();
+    let cond = parse_expr(inner.next().unwrap())?;
+    let return_pair = inner.next().unwrap();
+    let value = parse_expr(return_pair.into_inner().next().unwrap())?;
+    Ok(Statement::GuardReturn { cond, value })
+}
+
+fn parse_return_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    Ok(Statement::Return(parse_expr(pair.into_inner().next().unwrap())?))
+}
+
 fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = match inner.next() {
@@ -223,6 +237,7 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Ok(Expr::FunctionCall {
             name: "ternary".to_string(),
             args: vec![left, then_expr, else_expr],
+            kwargs: Vec::new(),
         })
     } else {
         Ok(left)
@@ -264,6 +279,7 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             left = Expr::FunctionCall {
                 name: "format".to_string(),
                 args: vec![left, Expr::Identifier(spec)],
+                kwargs: Vec::new(),
             };
         } else if op_pair.as_rule() == Rule::op_compare {
             let right_pair = inner.next().unwrap();
@@ -272,6 +288,7 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             left = Expr::FunctionCall {
                 name: format!("op_{}", cmp_op),
                 args: vec![left, right],
+                kwargs: Vec::new(),
             };
         } else {
             let right = parse_term(op_pair)?;
@@ -328,8 +345,12 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
 
 fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
-    let primary_pair = inner.next().unwrap();
-    
+    let mut primary_pair = inner.next().unwrap();
+    let negate = primary_pair.as_rule() == Rule::op_sub;
+    if negate {
+        primary_pair = inner.next().unwrap();
+    }
+
     let left = match primary_pair.as_rule() {
         Rule::quantity => parse_quantity(primary_pair)?,
         Rule::number => parse_number_quantity(primary_pair)?,
@@ -344,20 +365,32 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::comp_expr => parse_comp_expr(primary_pair)?,
         _ => return Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", primary_pair.as_rule()))),
     };
-    
-    if let Some(op_pair) = inner.next() {
+
+    let result = if let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::op_pow {
             let right_pair = inner.next().unwrap();
             let right = parse_factor(right_pair)?;
-            return Ok(Expr::BinaryOp {
+            Expr::BinaryOp {
                 op: BinaryOp::Pow,
                 left: Box::new(left),
                 right: Box::new(right),
-            });
+            }
+        } else {
+            left
         }
+    } else {
+        left
+    };
+
+    if negate {
+        Ok(Expr::BinaryOp {
+            op: BinaryOp::Mul,
+            left: Box::new(Expr::Quantity(QuantityNode { magnitude: -1.0, uncertainty: None, is_sigma: false, unit: None })),
+            right: Box::new(result),
+        })
+    } else {
+        Ok(result)
     }
-    
-    Ok(left)
 }
 
 fn parse_if_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -368,6 +401,7 @@ fn parse_if_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(Expr::FunctionCall {
         name: "if_then_else".to_string(),
         args: vec![cond, then_e, else_e],
+        kwargs: Vec::new(),
     })
 }
 
@@ -382,6 +416,7 @@ fn parse_let_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(Expr::FunctionCall {
         name: "let".to_string(),
         args: vec![Expr::Identifier(name), value, body],
+        kwargs: Vec::new(),
     })
 }
 
@@ -404,6 +439,7 @@ fn parse_vector_literal(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr
     let vec_expr = Expr::FunctionCall {
         name: "vector".to_string(),
         args: elems,
+        kwargs: Vec::new(),
     };
     
     if let Some(u) = unit_str {
@@ -430,20 +466,29 @@ fn parse_number_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
 fn parse_function_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut name = String::new();
     let mut args = Vec::new();
-    
+    let mut kwargs = Vec::new();
+
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::identifier => {
                 name = inner.as_str().to_string();
             }
-            Rule::expr => {
-                args.push(parse_expr(inner)?);
+            Rule::call_arg => {
+                let mut arg_inner = inner.into_inner();
+                let first = arg_inner.next().unwrap();
+                if first.as_rule() == Rule::identifier {
+                    let kwarg_name = first.as_str().to_string();
+                    let value = parse_expr(arg_inner.next().unwrap())?;
+                    kwargs.push((kwarg_name, value));
+                } else {
+                    args.push(parse_expr(first)?);
+                }
             }
             _ => {}
         }
     }
-    
-    Ok(Expr::FunctionCall { name, args })
+
+    Ok(Expr::FunctionCall { name, args, kwargs })
 }
 
 /// Cached default-SI registry used to decide whether a `unit_expr` token names a real unit.

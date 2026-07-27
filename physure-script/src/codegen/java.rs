@@ -111,6 +111,10 @@ impl JavaTranspiler {
     fn generate_statement(&self, stmt: &Statement) -> Result<String, CodegenError> {
         match stmt {
             Statement::FunctionDef(f) => self.generate_function_def_stmt(f),
+            Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
+            Statement::GuardReturn { cond, value } => {
+                Ok(format!("if ({}) {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
+            }
             _ => Ok(String::new()),
         }
     }
@@ -150,7 +154,13 @@ impl JavaTranspiler {
                 };
                 Ok(format!("{}.{}({})", l, method, r))
             }
-            Expr::FunctionCall { name, args } => {
+            Expr::FunctionCall { name, args, kwargs } => {
+                if !kwargs.is_empty() {
+                    return Err(CodegenError::Generic(format!(
+                        "Named arguments are not supported in Java codegen (call to '{}')",
+                        name
+                    )));
+                }
                 let mut arg_strs = Vec::new();
                 for a in args {
                     arg_strs.push(self.generate_expr(a)?);

@@ -91,6 +91,26 @@ impl Node {
         }
     }
 
+    /// Collects the names of every free `Symbol`/`Quantity` node, used to validate
+    /// that a keyword call to an `Equation` binds every variable the solved side needs.
+    pub fn free_symbols(&self, out: &mut std::collections::HashSet<String>) {
+        match self {
+            Node::Number(_) => {}
+            Node::Symbol(s) => {
+                out.insert(s.clone());
+            }
+            Node::Quantity(name, _) => {
+                out.insert(name.clone());
+            }
+            Node::Add(terms) | Node::Mul(terms) => terms.iter().for_each(|t| t.free_symbols(out)),
+            Node::Sub(a, b) | Node::Div(a, b) | Node::Pow(a, b) => {
+                a.free_symbols(out);
+                b.free_symbols(out);
+            }
+            Node::Sin(u) | Node::Cos(u) | Node::Ln(u) | Node::Exp(u) => u.free_symbols(out),
+        }
+    }
+
     pub fn linear_coeff(&self, var: &str) -> Option<(f64, f64)> {
         match self {
             Node::Number(c) => Some((0.0, *c)),

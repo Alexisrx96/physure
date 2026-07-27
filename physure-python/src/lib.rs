@@ -1177,6 +1177,7 @@ fn phs_value_to_py(py: Python<'_>, val: ::physure_script::PhsValue) -> PyResult<
         ::physure_script::PhsValue::Sigma(k) => k.into_py_any(py)?,
         ::physure_script::PhsValue::SigmaBound(q, _) => PyQuantity(q).into_py_any(py)?,
         ::physure_script::PhsValue::Plot(p) => p.ascii.into_py_any(py)?,
+        ::physure_script::PhsValue::Equation(l, r) => format!("{} = {}", l.to_phs_string(), r.to_phs_string()).into_py_any(py)?,
         ::physure_script::PhsValue::Vector(v) => {
             let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| phs_value_to_py(py, item)).collect();
             items?.into_py_any(py)?
@@ -1279,7 +1280,11 @@ impl PyInterpreter {
         let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
+        Ok(match res.last() {
+            Some(::physure_script::PhsValue::Equation(_, rhs)) => rhs.to_phs_string(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        })
     }
 
     fn get_fn_params(&self, name: &str) -> PyResult<Option<Vec<String>>> {

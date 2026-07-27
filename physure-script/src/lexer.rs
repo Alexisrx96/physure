@@ -55,11 +55,10 @@ impl<'a> PhsLexer<'a> {
             // Display text fence: ``` ... ```
             if self.input[self.pos..].starts_with("```") {
                 let fence_start = self.pos;
-                self.pos += 3;
-                let text_start = self.pos;
-                if let Some(end_rel) = self.input[self.pos..].find("```") {
-                    let text = self.input[text_start..self.pos + end_rel].to_string();
-                    self.pos += end_rel + 3;
+                let text_start = fence_start + 3;
+                if let Some(end_rel) = self.input[text_start..].find("```") {
+                    let text = self.input[text_start..text_start + end_rel].to_string();
+                    self.pos = text_start + end_rel + 3;
                     tokens.push(PhsToken {
                         kind: TokenKind::StringLiteral(text.clone()),
                         value: text,
@@ -72,6 +71,10 @@ impl<'a> PhsLexer<'a> {
                     });
                     continue;
                 }
+                // No closing fence on this line (e.g. a fence that spans multiple lines,
+                // when tokenized line-by-line by callers like the LSP). Leave `self.pos`
+                // untouched and fall through so the opening "```" is lexed as a plain
+                // operator instead of leaving `self.pos` stranded past this branch.
             }
 
             // String literals: "..." or '...'

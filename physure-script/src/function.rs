@@ -173,10 +173,10 @@ impl PhyFunction {
         
         let res = interp.run_statement(&statements[0])?;
         let solve_result = match res {
-            PhsValue::String(s) => s,
-            _ => return Err(PhysureError::Generic("solve did not return a string expression".into())),
+            PhsValue::Equation(_, rhs) => rhs.to_phs_string(),
+            _ => return Err(PhysureError::Generic("solve did not return an equation".into())),
         };
-        
+
         let new_name = format!("solve_{}_for_{}", self.name, var);
         
         // Remove the target variable from parameters, and add "target" at the front

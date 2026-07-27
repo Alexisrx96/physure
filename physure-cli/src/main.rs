@@ -232,7 +232,7 @@ fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::
         physure_script::ast::Statement::Assignment(node) => {
             let sym_latex = latex::format_symbol_latex(&node.name);
             match &node.value {
-                physure_script::ast::Expr::FunctionCall { name, args } if name == "solve" && args.len() == 2 => {
+                physure_script::ast::Expr::FunctionCall { name, args, .. } if name == "solve" && args.len() == 2 => {
                     let clean_eq = latex::escape_latex_text(&latex::raw_identifier_text(&args[0], i18n));
                     let clean_var = latex::escape_latex_text(&latex::raw_identifier_text(&args[1], i18n));
                     let precursor = format!(
@@ -241,19 +241,19 @@ fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::
                     );
                     (node.name.clone(), format!("{} = ...", node.name), precursor, false)
                 }
-                physure_script::ast::Expr::FunctionCall { name, args } if (name == "deriv" || name == "diff") && args.len() == 2 => {
+                physure_script::ast::Expr::FunctionCall { name, args, .. } if (name == "deriv" || name == "diff") && args.len() == 2 => {
                     let expr_math = latex::render_raw_math(&latex::raw_identifier_text(&args[0], i18n), i18n);
                     let clean_var = latex::escape_latex_text(&latex::raw_identifier_text(&args[1], i18n));
                     let precursor = format!("{} = \\frac{{d}}{{d {}}}\\!\\left[{}\\right] =", sym_latex, clean_var, expr_math);
                     (node.name.clone(), format!("{} = ...", node.name), precursor, false)
                 }
-                physure_script::ast::Expr::FunctionCall { name, args } if (name == "integral" || name == "integrate") && args.len() == 2 => {
+                physure_script::ast::Expr::FunctionCall { name, args, .. } if (name == "integral" || name == "integrate") && args.len() == 2 => {
                     let expr_math = latex::render_raw_math(&latex::raw_identifier_text(&args[0], i18n), i18n);
                     let clean_var = latex::escape_latex_text(&latex::raw_identifier_text(&args[1], i18n));
                     let precursor = format!("{} = \\int {} \\; d{} =", sym_latex, expr_math, clean_var);
                     (node.name.clone(), format!("{} = ...", node.name), precursor, false)
                 }
-                physure_script::ast::Expr::FunctionCall { name, args } if (name == "ternary" || name == "if_then_else") && args.len() == 3 => {
+                physure_script::ast::Expr::FunctionCall { name, args, .. } if (name == "ternary" || name == "if_then_else") && args.len() == 3 => {
                     let cond_s = latex::format_expr_latex_summary(&args[0], i18n);
                     let precursor = format!("\\text{{{} }} {} \\quad \\Rightarrow \\quad {} =", i18n.given_prefix, cond_s, sym_latex);
                     (node.name.clone(), format!("{} = ...", node.name), precursor, false)
@@ -270,7 +270,7 @@ fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::
             let l = latex::format_expr_latex_summary(left, i18n);
             ("expr".to_string(), "expr".to_string(), format!("{} \\Rightarrow", l), false)
         }
-        physure_script::ast::Statement::Expr(physure_script::ast::Expr::FunctionCall { name, args })
+        physure_script::ast::Statement::Expr(physure_script::ast::Expr::FunctionCall { name, args, .. })
             if matches!(name.as_str(), "op_==" | "op_eq" | "op_!=" | "op_neq") && args.len() == 2 =>
         {
             let l = latex::format_expr_latex_summary(&args[0], i18n);
@@ -359,18 +359,13 @@ fn run_daemon() {
                     match interp.eval_statement_with_env(&stmt, &mut env) {
                         Ok(val) => {
                             if val != PhsValue::None {
-                                let is_raw_block = match &stmt {
-                                    physure_script::Statement::Expr(physure_script::Expr::Identifier(s)) => {
-                                        s.starts_with('`')
+                                let output = match &val {
+                                    PhsValue::Plot(p) => {
+                                        format!("[PLOT_IMAGE:data:image/svg+xml;utf8,{}]", p.svg)
                                     }
-                                    _ => false,
+                                    _ => val.to_string(),
                                 };
-                                if !is_raw_block {
-                                    results.push(DaemonLineResult {
-                                        line: line_num,
-                                        output: val.to_string(),
-                                    });
-                                }
+                                results.push(DaemonLineResult { line: line_num, output });
                             }
                         }
                         Err(e) => {
