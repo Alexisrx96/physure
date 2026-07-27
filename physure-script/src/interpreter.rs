@@ -28,12 +28,18 @@ fn node_op(op: BinaryOp, a: Node, b: Node) -> PhysureResult<Node> {
 }
 
 /// Converts a non-Equation operand into a symbolic `Node` for equation algebra.
-/// A `Quantity` operand is explicitly out of scope for this pass.
+/// A dimensionless `Quantity` (e.g. a bare scale factor) becomes its numeric value;
+/// a dimensioned one (e.g. `2 m`) is kept as `number * unit_symbol` so the unit isn't
+/// silently dropped from the resulting equation's text.
+/// ponytail: the unit symbol isn't a real bindable variable, so it stays purely
+/// symbolic — collides only if the equation also has a variable named the same as the unit.
 fn value_to_symbolic_node(val: &PhsValue) -> PhysureResult<Node> {
     match val {
         PhsValue::Number(n) => Ok(Node::Number(*n)),
         PhsValue::String(s) => crate::symbolic::SymbolicParser::parse_str(s),
-        _ => Err(PhysureError::Generic("Equation algebra only supports Number, String, or Equation operands".into())),
+        PhsValue::Quantity(q) if q.unit == RationalUnit::dimensionless() => Ok(Node::Number(q.value.mean())),
+        PhsValue::Quantity(q) => Ok(Node::Mul(vec![Node::Number(q.value.mean()), Node::Symbol(q.unit.__repr__())])),
+        _ => Err(PhysureError::Generic("Equation algebra only supports Number, String, Equation, or Quantity operands".into())),
     }
 }
 
@@ -389,8 +395,7 @@ impl PhsInterpreter {
                     }
                 }
 
-                if let Some(PhsValue::Equation(_, rhs)) = env.get(name) {
-                    let rhs = rhs.clone();
+                if let Some(PhsValue::Equation(_, rhs)) = env.get(name).cloned().map(coerce_equation_string) {
                     if !args.is_empty() {
                         return Err(PhysureError::Generic(format!(
                             "Calling equation '{}' requires named arguments only, e.g. {}(x=1), got positional arguments",
