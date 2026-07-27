@@ -1280,7 +1280,11 @@ impl PyInterpreter {
         let mut interp = self.inner.clone();
         let res = interp.eval_str(&call_expr)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
+        Ok(match res.last() {
+            Some(::physure_script::PhsValue::Equation(_, rhs)) => rhs.to_phs_string(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        })
     }
 
     fn get_fn_params(&self, name: &str) -> PyResult<Option<Vec<String>>> {
