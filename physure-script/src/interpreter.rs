@@ -37,6 +37,18 @@ fn value_to_symbolic_node(val: &PhsValue) -> PhysureResult<Node> {
     }
 }
 
+/// A plain string holding `"lhs = rhs"` (e.g. from a bare assignment, not `solve()`)
+/// is coerced into an `Equation` so it supports the same arithmetic. Strings without
+/// a top-level `=` (unit symbols, bare variable names) pass through unchanged.
+fn coerce_equation_string(val: PhsValue) -> PhsValue {
+    if let PhsValue::String(ref s) = val {
+        if let Ok(Some((l, r))) = crate::symbolic::SymbolicParser::parse_equation_str(s) {
+            return PhsValue::Equation(l, r);
+        }
+    }
+    val
+}
+
 fn is_truthy(val: &PhsValue) -> bool {
     match val {
         PhsValue::Quantity(q) => q.value.mean() > 0.0,
@@ -555,6 +567,8 @@ impl PhsInterpreter {
     }
 
     pub fn eval_binary_op_vals(&self, op: BinaryOp, l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
+        let l_val = coerce_equation_string(l_val);
+        let r_val = coerce_equation_string(r_val);
         match (l_val, r_val) {
             (PhsValue::Function(f), PhsValue::Function(g)) => {
                 let (params, param_units) = if !f.params.is_empty() {
