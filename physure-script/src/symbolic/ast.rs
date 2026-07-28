@@ -187,57 +187,97 @@ fn simplify_sub(a: Node, b: Node) -> Node {
     Node::Sub(Box::new(a), Box::new(b))
 }
 
+// Recursively decomposes a product into a constant coefficient plus a multiset of
+// (base, signed exponent) pairs, so a `Div` denominator can cancel against a factor
+// appearing elsewhere in the same product (e.g. `(V / I) * I` -> `V`).
+fn collect_mul_powers(
+    nodes: Vec<Node>,
+    sign: f64,
+    const_prod: &mut f64,
+    powers: &mut Vec<(Node, f64)>,
+) {
+    for node in nodes {
+        match node {
+            Node::Number(v) => {
+                if sign > 0.0 {
+                    *const_prod *= v;
+                } else {
+                    *const_prod /= v;
+                }
+            }
+            Node::Mul(inner) => collect_mul_powers(flatten_mul(inner), sign, const_prod, powers),
+            Node::Div(num, denom) => {
+                collect_mul_powers(vec![*num], sign, const_prod, powers);
+                collect_mul_powers(vec![*denom], -sign, const_prod, powers);
+            }
+            Node::Pow(base, exp) => {
+                if let Node::Number(e) = *exp {
+                    add_power(*base, sign * e, powers);
+                } else {
+                    add_power(Node::Pow(base, exp), sign, powers);
+                }
+            }
+            other => add_power(other, sign, powers),
+        }
+    }
+}
+
+fn add_power(node: Node, exp: f64, powers: &mut Vec<(Node, f64)>) {
+    if let Some(entry) = powers.iter_mut().find(|(n, _)| *n == node) {
+        entry.1 += exp;
+    } else {
+        powers.push((node, exp));
+    }
+}
+
 fn simplify_mul(factors: Vec<Node>) -> Node {
     let flat = flatten_mul(factors);
     let mut const_prod = 1.0;
-    let mut rest: Vec<Node> = Vec::new();
-    for f in flat {
-        match f {
-            Node::Number(n) => const_prod *= n,
-            other => rest.push(other),
-        }
-    }
+    let mut powers: Vec<(Node, f64)> = Vec::new();
+    collect_mul_powers(flat, 1.0, &mut const_prod, &mut powers);
     if const_prod == 0.0 {
         return Node::Number(0.0);
     }
-    let mut collected: Vec<(Node, f64)> = Vec::new();
-    for f in rest {
-        let f_clean = if let Node::Div(num, denom) = f {
-            if let Node::Number(d) = *denom {
-                const_prod /= d;
-                *num
-            } else {
-                Node::Div(num, denom)
-            }
-        } else {
-            f
-        };
 
-        if let Some(entry) = collected.iter_mut().find(|(n, _)| *n == f_clean) {
-            entry.1 += 1.0;
-        } else {
-            collected.push((f_clean, 1.0));
+    let mut numerator: Vec<Node> = Vec::new();
+    let mut denominator: Vec<Node> = Vec::new();
+    for (f, exp) in powers {
+        if exp == 0.0 {
+            continue;
         }
+        let dest = if exp > 0.0 {
+            &mut numerator
+        } else {
+            &mut denominator
+        };
+        let abs_exp = exp.abs();
+        dest.push(if abs_exp == 1.0 {
+            f
+        } else {
+            Node::Pow(Box::new(f), Box::new(Node::Number(abs_exp)))
+        });
     }
-    let mut out_factors: Vec<Node> = collected
-        .into_iter()
-        .map(|(f, count)| {
-            if count == 1.0 {
-                f
-            } else {
-                Node::Pow(Box::new(f), Box::new(Node::Number(count)))
-            }
-        })
-        .collect();
-    if const_prod != 1.0 || out_factors.is_empty() {
-        out_factors.push(Node::Number(const_prod));
+
+    if const_prod != 1.0 || numerator.is_empty() {
+        numerator.push(Node::Number(const_prod));
     }
-    out_factors.sort_by_key(sort_key);
-    if out_factors.len() == 1 {
-        out_factors.into_iter().next().unwrap()
+    numerator.sort_by_key(sort_key);
+    let num_node = if numerator.len() == 1 {
+        numerator.into_iter().next().unwrap()
     } else {
-        Node::Mul(out_factors)
+        Node::Mul(numerator)
+    };
+
+    if denominator.is_empty() {
+        return num_node;
     }
+    denominator.sort_by_key(sort_key);
+    let denom_node = if denominator.len() == 1 {
+        denominator.into_iter().next().unwrap()
+    } else {
+        Node::Mul(denominator)
+    };
+    Node::Div(Box::new(num_node), Box::new(denom_node))
 }
 
 fn simplify_div(a: Node, b: Node) -> Node {

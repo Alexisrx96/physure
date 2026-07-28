@@ -697,6 +697,17 @@ mod tests {
     }
 
     #[test]
+    fn test_param_unit_annotation_accepts_ohm_symbol() {
+        let code = "potencia2(i: A, R: \u{3a9}) = i^2 * R";
+        let prog = parse_phs(&code).unwrap();
+        if let Statement::FunctionDef(f) = &prog.statements[0] {
+            assert_eq!(f.param_units, vec![Some("A".to_string()), Some("\u{3a9}".to_string())]);
+        } else {
+            panic!("expected function def");
+        }
+    }
+
+    #[test]
     fn test_natural_function_definitions() {
         let code = "fn kinetic_energy(m, v) = 1/2 m v^2";
         let prog = parse_phs(code).unwrap();

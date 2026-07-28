@@ -47,8 +47,18 @@ pub fn format_float(n: f64) -> String {
 
 impl std::fmt::Display for Quantity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let unit_str = self.unit.__repr__();
-        let val_str = format_float(self.value.mean());
+        // Multiplying/dividing quantities can produce an anonymous (unnamed) compound
+        // unit whose scale isn't 1.0 (e.g. Ohm * milliamp). There's no literal symbol
+        // for such a unit, so fold the scale into the value and display in canonical
+        // (scale-1) terms instead of printing the raw, unscaled magnitude.
+        let (val, unit_str) = if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
+            let mut canonical_unit = self.unit.clone();
+            canonical_unit.scale = 1.0;
+            (self.canonical_magnitude(), canonical_unit.__repr__())
+        } else {
+            (self.value.mean(), self.unit.__repr__())
+        };
+        let val_str = format_float(val);
         if unit_str.is_empty() || unit_str == "Dimensionless" {
             write!(f, "{}", val_str)
         } else {
@@ -186,3 +196,36 @@ impl Quantity {
 }
 
 
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::units::RationalUnit;
+
+    fn ohm_unit() -> RationalUnit {
+        RationalUnit::new_from_dimensions([
+            ("A".to_string(), (-2, 1)),
+            ("kg".to_string(), (1, 1)),
+            ("m".to_string(), (2, 1)),
+            ("s".to_string(), (-3, 1)),
+        ])
+    }
+
+    fn milliamp_unit() -> RationalUnit {
+        RationalUnit::new_from_dimensions([("A".to_string(), (1, 1))]).with_scale(0.001)
+    }
+
+    #[test]
+    fn display_folds_anonymous_compound_scale_and_aliases_to_known_symbol() {
+        // 560 Ohm * 428 mA should display as "239.68 V", not "239680 A^-1 * kg * m^2 * s^-3".
+        let r = Quantity::new_scalar(560.0, 0.0, ohm_unit(), None, None);
+        let i = Quantity::new_scalar(428.0, 0.0, milliamp_unit(), None, None);
+        let v = r.mul(&i).unwrap();
+        assert!((v.canonical_magnitude() - 239.68).abs() < 1e-9);
+        let s = v.to_string();
+        assert!(s.ends_with(" V"), "expected canonical Volt display, got {s}");
+        let printed_value: f64 = s.trim_end_matches(" V").parse().unwrap();
+        assert!((printed_value - 239.68).abs() < 1e-6, "printed value {printed_value} != 239.68");
+    }
+}

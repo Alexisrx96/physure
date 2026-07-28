@@ -395,7 +395,7 @@ impl PhsInterpreter {
                     }
                 }
 
-                if let Some(PhsValue::Equation(_, rhs)) = env.get(name).cloned().map(coerce_equation_string) {
+                if let Some(PhsValue::Equation(lhs, rhs)) = env.get(name).cloned().map(coerce_equation_string) {
                     if !args.is_empty() {
                         return Err(PhysureError::Generic(format!(
                             "Calling equation '{}' requires named arguments only, e.g. {}(x=1), got positional arguments",
@@ -413,17 +413,30 @@ impl PhsInterpreter {
                         let val = self.eval_expr(kwarg_expr, env)?;
                         local_env.insert(kwarg_name.clone(), val);
                     }
-                    let mut free = std::collections::HashSet::new();
-                    rhs.free_symbols(&mut free);
-                    let missing: Vec<&String> = free.iter().filter(|s| !local_env.contains_key(*s)).collect();
-                    if !missing.is_empty() {
-                        return Err(PhysureError::Generic(format!(
-                            "Missing argument(s) for equation '{}': {}",
-                            name,
-                            missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-                        )));
-                    }
-                    let solved_str = rhs.to_phs_string();
+                    // Algebra (e.g. multiplying both sides) can move the unknown to
+                    // either side of the equation, so try whichever side is fully
+                    // bound by the supplied kwargs rather than assuming it's the RHS.
+                    let mut rhs_free = std::collections::HashSet::new();
+                    rhs.free_symbols(&mut rhs_free);
+                    let rhs_missing: Vec<&String> = rhs_free.iter().filter(|s| !local_env.contains_key(*s)).collect();
+                    let solved_node = if rhs_missing.is_empty() {
+                        &rhs
+                    } else {
+                        let mut lhs_free = std::collections::HashSet::new();
+                        lhs.free_symbols(&mut lhs_free);
+                        let lhs_missing: Vec<&String> = lhs_free.iter().filter(|s| !local_env.contains_key(*s)).collect();
+                        if lhs_missing.is_empty() {
+                            &lhs
+                        } else {
+                            let missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
+                            return Err(PhysureError::Generic(format!(
+                                "Missing argument(s) for equation '{}': {}",
+                                name,
+                                missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                            )));
+                        }
+                    };
+                    let solved_str = solved_node.to_phs_string();
                     let program = crate::parser::parse_phs(&solved_str)?;
                     let Some(Statement::Expr(expr)) = program.statements.first() else {
                         return Err(PhysureError::Generic(format!("Failed to evaluate equation '{}'", name)));
@@ -971,6 +984,20 @@ r3 = circuito_abierto(5 V, 2 A)
             PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 5.0),
             PhsValue::String(s) => assert_eq!(s, "5"),
             other => panic!("Expected solve(...) to resolve to 5, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_callable_equation_solves_when_unknown_lands_on_lhs() {
+        // "R = V / I" * "I" simplifies to "I * R = V" -- the unknown (V) ends
+        // up on the RHS-of-assignment side, not the LHS. Calling with I and R
+        // bound must still solve for V by evaluating the fully-bound side.
+        let mut interp = PhsInterpreter::default();
+        interp.eval_str("var = \"R = V / I\" * \"I\"").unwrap();
+        let results = interp.eval_str("var(I = 3 A, R = 3 Ohm)").unwrap();
+        match &results[0] {
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 9.0),
+            other => panic!("Expected quantity, got {:?}", other),
         }
     }
 

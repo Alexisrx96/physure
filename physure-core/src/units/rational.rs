@@ -189,6 +189,13 @@ impl RationalUnit {
         RationalUnit { dimensions: new_dims, scale: self.scale.powf(exp_f), id, display_name: None }
     }
 
+    /// Maps a dimension signature to its named SI derived unit, where one exists.
+    ///
+    /// Only units whose dimensions uniquely identify them are listed: SI defines
+    /// several derived units that are dimensionally identical to another (e.g.
+    /// becquerel and hertz are both `s^-1`; gray and sievert are both `m^2*s^-2`),
+    /// and pure dimensional analysis can't disambiguate those — they're
+    /// intentionally omitted rather than guessed.
     pub fn known_derived_symbol(&self) -> Option<&'static str> {
         let dims: Vec<(&str, i64, i64)> = self.dimensions.iter().map(|(k, (n, d))| (k.as_str(), *n, *d)).collect();
         match dims.as_slice() {
@@ -199,7 +206,15 @@ impl RationalUnit {
             [("A", 1, 1), ("s", 1, 1)] => Some("C"),
             [("s", -1, 1)] => Some("Hz"),
             [("A", -1, 1), ("kg", 1, 1), ("m", 1, 1), ("s", -3, 1)] => Some("N/C"),
+            [("A", -1, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -3, 1)] => Some("V"),
             [("A", -2, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -3, 1)] => Some("Ω"),
+            [("A", 2, 1), ("kg", -1, 1), ("m", -2, 1), ("s", 4, 1)] => Some("F"),
+            [("A", 2, 1), ("kg", -1, 1), ("m", -2, 1), ("s", 3, 1)] => Some("S"),
+            [("A", -1, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -2, 1)] => Some("Wb"),
+            [("A", -1, 1), ("kg", 1, 1), ("s", -2, 1)] => Some("T"),
+            [("A", -2, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -2, 1)] => Some("H"),
+            [("cd", 1, 1), ("m", -2, 1)] => Some("lx"),
+            [("mol", 1, 1), ("s", -1, 1)] => Some("kat"),
             _ => None,
         }
     }

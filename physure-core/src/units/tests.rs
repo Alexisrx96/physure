@@ -95,6 +95,30 @@ fn repr_fractional_power() {
     assert_eq!(sqrt_l.__repr__(), "L^1/2");
 }
 
+fn dims(pairs: &[(&str, i64, i64)]) -> RationalUnit {
+    RationalUnit::new_from_dimensions(pairs.iter().map(|(k, n, d)| (k.to_string(), (*n, *d))))
+}
+
+#[test]
+fn repr_maps_all_distinguishable_si_derived_units() {
+    // Volt: kg*m^2*s^-3*A^-1
+    assert_eq!(dims(&[("A", -1, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -3, 1)]).__repr__(), "V");
+    // Farad: A^2*kg^-1*m^-2*s^4
+    assert_eq!(dims(&[("A", 2, 1), ("kg", -1, 1), ("m", -2, 1), ("s", 4, 1)]).__repr__(), "F");
+    // Siemens: A^2*kg^-1*m^-2*s^3
+    assert_eq!(dims(&[("A", 2, 1), ("kg", -1, 1), ("m", -2, 1), ("s", 3, 1)]).__repr__(), "S");
+    // Weber: A^-1*kg*m^2*s^-2
+    assert_eq!(dims(&[("A", -1, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -2, 1)]).__repr__(), "Wb");
+    // Tesla: A^-1*kg*s^-2
+    assert_eq!(dims(&[("A", -1, 1), ("kg", 1, 1), ("s", -2, 1)]).__repr__(), "T");
+    // Henry: A^-2*kg*m^2*s^-2
+    assert_eq!(dims(&[("A", -2, 1), ("kg", 1, 1), ("m", 2, 1), ("s", -2, 1)]).__repr__(), "H");
+    // Lux: cd*m^-2
+    assert_eq!(dims(&[("cd", 1, 1), ("m", -2, 1)]).__repr__(), "lx");
+    // Katal: mol*s^-1
+    assert_eq!(dims(&[("mol", 1, 1), ("s", -1, 1)]).__repr__(), "kat");
+}
+
 #[test]
 fn hash_is_same_as_id() {
     let u = length();

@@ -247,6 +247,15 @@ fn test_symbolic_string_parsing_and_solving() {
 }
 
 #[test]
+fn test_simplify_mul_cancels_symbolic_denominator() {
+    // (V / I) * I -> V
+    let v = Node::Symbol("V".to_string());
+    let i = Node::Symbol("I".to_string());
+    let expr = Node::Mul(vec![Node::Div(Box::new(v.clone()), Box::new(i.clone())), i]);
+    assert_eq!(expr.simplify(), v);
+}
+
+#[test]
 fn test_kinetic_energy_solve() {
     let mut interp = crate::interpreter::PhsInterpreter::default();
     let prog1 = crate::parse_phs("fn kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
