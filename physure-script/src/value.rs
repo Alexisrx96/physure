@@ -19,6 +19,7 @@ pub enum PhsValue {
     Bool(bool),
     String(String),
     Vector(Vec<PhsValue>),
+    Matrix(physure_core::linalg::QuantityMatrix),
     Function(crate::ast::FunctionDefNode),
     Sigma(f64),
     SigmaBound(Quantity, f64),
@@ -42,6 +43,13 @@ impl fmt::Display for PhsValue {
                     let items: Vec<String> = v.iter().map(|item| item.to_string()).collect();
                     write!(f, "[{}]", items.join(", "))
                 }
+            }
+            PhsValue::Matrix(m) => {
+                let rows: Vec<String> = m.data.iter().map(|r| {
+                    let items: Vec<String> = r.iter().map(|q| q.to_string()).collect();
+                    format!("[{}]", items.join(", "))
+                }).collect();
+                write!(f, "[{}]", rows.join(", "))
             }
             PhsValue::Sigma(k) => write!(f, "{}σ", physure_core::quantity::format_float(*k)),
             PhsValue::SigmaBound(q, k) => write!(f, "{} ± {}σ", q, physure_core::quantity::format_float(*k)),

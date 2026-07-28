@@ -1,5 +1,8 @@
 package com.physure;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Representation of a physical Quantity in Java.
  * Compatible with Java 8+.
@@ -46,6 +49,10 @@ public class Quantity {
         }
     }
 
+    public Quantity sub(Quantity other) {
+        return subtract(other);
+    }
+
     public Quantity subtract(Quantity other) {
         if (!this.unit.equals(other.getUnit()) && !this.unit.isEmpty() && !other.getUnit().isEmpty()) {
             try {
@@ -61,12 +68,20 @@ public class Quantity {
         }
     }
 
+    public Quantity mul(Quantity other) {
+        return multiply(other);
+    }
+
     public Quantity multiply(Quantity other) {
         return NativeEngine.mulQuantities(this, other);
     }
 
     public Quantity multiply(double scalar) {
         return new Quantity(this.value * scalar, this.uncertainty * scalar, this.unit);
+    }
+
+    public Quantity div(Quantity other) {
+        return divide(other);
     }
 
     public Quantity divide(Quantity other) {
@@ -78,21 +93,19 @@ public class Quantity {
     }
 
     public QuantityVector multiply(QuantityVector vec) {
-        double[] newVals = new double[vec.length()];
-        double[] vVals = vec.getValues();
-        for (int i = 0; i < vec.length(); i++) {
-            newVals[i] = this.value * vVals[i];
+        List<Quantity> newComps = new ArrayList<>();
+        for (int i = 0; i < vec.size(); i++) {
+            newComps.add(this.mul(vec.get(i)));
         }
-        return new QuantityVector(newVals, this.unit.isEmpty() ? vec.getUnit() : (vec.getUnit().isEmpty() ? this.unit : this.unit + " * " + vec.getUnit()));
+        return new QuantityVector(newComps);
     }
 
     public QuantityVector divide(QuantityVector vec) {
-        double[] newVals = new double[vec.length()];
-        double[] vVals = vec.getValues();
-        for (int i = 0; i < vec.length(); i++) {
-            newVals[i] = this.value / vVals[i];
+        List<Quantity> newComps = new ArrayList<>();
+        for (int i = 0; i < vec.size(); i++) {
+            newComps.add(this.div(vec.get(i)));
         }
-        return new QuantityVector(newVals, this.unit.isEmpty() ? vec.getUnit() : (vec.getUnit().isEmpty() ? this.unit : this.unit + " / " + vec.getUnit()));
+        return new QuantityVector(newComps);
     }
 
     public Quantity pow(double power) {

@@ -49,6 +49,8 @@ try:
     )
     from physure._core import (
         Quantity as CoreQuantity,
+        QuantityVector,
+        QuantityMatrix,
     )
 except ImportError as _err:
     raise ImportError(
@@ -362,6 +364,9 @@ __all__ = [
     "step_euler_inplace",
     # Lazy-loaded API
     "Interpreter",
+    "Quantity",
+    "QuantityVector",
+    "QuantityMatrix",
     "PhyFunction",
     "PhyEquation",
     "CompoundUnit",
