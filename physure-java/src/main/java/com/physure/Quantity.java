@@ -145,6 +145,26 @@ public class Quantity {
         return NativeEngine.convertQuantity(this, targetUnit);
     }
 
+    public Quantity convertTo(String targetUnit) {
+        return to(targetUnit);
+    }
+
+    public Quantity convertTo(Quantity target) {
+        return to(target.getUnit());
+    }
+
+    public static Quantity of(double value) {
+        return new Quantity(value, "");
+    }
+
+    public static Quantity of(double value, String unit) {
+        return new Quantity(value, unit);
+    }
+
+    public static Quantity withUncertainty(double value, double uncertainty, String unit) {
+        return new Quantity(value, uncertainty, unit);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;

@@ -1316,6 +1316,28 @@ fn evaluate_phs_native(py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> 
     Ok(py_results)
 }
 
+#[pyfunction]
+fn transpile_phs_native(_py: Python<'_>, source: &str, target_str: &str) -> PyResult<String> {
+    let program = ::physure_script::parse_phs(source)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    
+    let target = match target_str {
+        "python" | "py" | "Python" | "PYTHON" => ::physure_script::Target::Python,
+        "rust" | "rs" | "Rust" | "RUST" => ::physure_script::Target::Rust,
+        "java" | "Java" | "JAVA" => ::physure_script::Target::Java,
+        s if s.to_lowercase().starts_with("java:") => {
+            let class_name = &s[5..];
+            ::physure_script::Target::JavaWithClass(class_name.to_string())
+        }
+        _ => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unsupported target: {}", target_str))),
+    };
+
+    let code = ::physure_script::transpile(&program, target)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    
+    Ok(code)
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1339,6 +1361,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dim_vector_from_dict, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_phs_expression, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
+    m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

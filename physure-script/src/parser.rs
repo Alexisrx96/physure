@@ -354,6 +354,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let left = match primary_pair.as_rule() {
         Rule::quantity => parse_quantity(primary_pair)?,
         Rule::number => parse_number_quantity(primary_pair)?,
+        Rule::method_call => parse_method_call(primary_pair)?,
         Rule::function_call => parse_function_call(primary_pair)?,
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
         Rule::string_lit => Expr::Identifier(primary_pair.as_str().trim_matches('"').to_string()),
@@ -454,7 +455,12 @@ fn parse_vector_literal(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr
 }
 
 fn parse_number_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
-    let mag = pair.as_str().trim().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid number".to_string()))?;
+    let s = pair.as_str().trim();
+    let mag = match s {
+        "inf" | "+inf" | "infinity" | "+infinity" | "oo" | "+oo" | "∞" | "+∞" => f64::INFINITY,
+        "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
+        _ => s.parse::<f64>().map_err(|_| PhysureError::Generic(format!("Invalid number: {}", s)))?,
+    };
     Ok(Expr::Quantity(QuantityNode {
         magnitude: mag,
         uncertainty: None,
@@ -491,13 +497,55 @@ fn parse_function_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr>
     Ok(Expr::FunctionCall { name, args, kwargs })
 }
 
-/// Cached default-SI registry used to decide whether a `unit_expr` token names a real unit.
-/// Must match the registry the interpreter resolves quantity units against
-/// (`physure_core::UnitRegistry::build_default_si`, see `interpreter.rs`) so that a token
-/// accepted here is guaranteed to resolve the same way at evaluation time.
+fn parse_method_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let base_pair = inner.next().unwrap();
+    let mut current_expr = match base_pair.as_rule() {
+        Rule::quantity => parse_quantity(base_pair)?,
+        Rule::function_call => parse_function_call(base_pair)?,
+        Rule::identifier => Expr::Identifier(base_pair.as_str().to_string()),
+        Rule::string_lit => Expr::Identifier(base_pair.as_str().trim_matches('"').to_string()),
+        Rule::expr => parse_expr(base_pair)?,
+        _ => parse_base_expr(base_pair)?,
+    };
+
+    while let Some(method_item) = inner.next() {
+        if method_item.as_rule() == Rule::identifier {
+            let method_name = method_item.as_str().to_string();
+            let mut args = vec![current_expr];
+            let mut kwargs = Vec::new();
+
+            while let Some(call_arg_pair) = inner.peek() {
+                if call_arg_pair.as_rule() == Rule::call_arg {
+                    let arg_pair = inner.next().unwrap();
+                    let mut arg_inner = arg_pair.into_inner();
+                    let first = arg_inner.next().unwrap();
+                    if first.as_rule() == Rule::identifier && arg_inner.peek().is_some() {
+                        let kwarg_name = first.as_str().to_string();
+                        let value = parse_expr(arg_inner.next().unwrap())?;
+                        kwargs.push((kwarg_name, value));
+                    } else {
+                        args.push(parse_expr(first)?);
+                    }
+                } else {
+                    break;
+                }
+            }
+            current_expr = Expr::FunctionCall { name: method_name, args, kwargs };
+        }
+    }
+
+    Ok(current_expr)
+}
+
+/// Cached full unit registry (master `physure.conf` + prefixes) used to decide whether a
+/// `unit_expr` token names a real unit. Must match what the interpreter resolves quantity
+/// units against (`physure_core::units::parser::Parser::parse_expression`, see
+/// `interpreter.rs`) so that a token accepted here — including prefixed symbols like "mA"
+/// or "kOhm" — is guaranteed to resolve the same way at evaluation time.
 fn unit_registry() -> &'static UnitRegistry {
     static REGISTRY: OnceLock<UnitRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(UnitRegistry::build_default_si)
+    REGISTRY.get_or_init(|| physure_core::units::conf::build_registry_from_conf().0)
 }
 
 /// The alphabetic symbol a `unit_term` pair (e.g. "r ^ 2") actually looks up in the
@@ -589,7 +637,13 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::number => {
-                magnitude = Some(inner.as_str().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid number".to_string()))?);
+                let s = inner.as_str().trim();
+                let mag = match s {
+                    "inf" | "+inf" | "infinity" | "+infinity" | "oo" | "+oo" | "∞" | "+∞" => f64::INFINITY,
+                    "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
+                    _ => s.parse::<f64>().map_err(|_| PhysureError::Generic(format!("Invalid number: {}", s)))?,
+                };
+                magnitude = Some(mag);
             }
             Rule::expr => {
                 magnitude_expr = Some(parse_expr(inner)?);

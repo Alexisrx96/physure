@@ -4,7 +4,8 @@ COMMENT    = _{ ("//" | "#") ~ (!"\n" ~ !"\r" ~ ANY)* }
 
 keyword     = @{ ("let" | "if" | "then" | "else" | "in" | "return") ~ !(ASCII_ALPHANUMERIC | "_") }
 identifier  = @{ !keyword ~ (ASCII_ALPHA | "π" | "θ" | "λ" | "μ" | "Δ" | "σ" | "Ω" | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-number      = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ( ^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+ )? }
+infinity_lit = @{ ("+" | "-")? ~ ("infinity" | "inf" | "oo" | "∞") }
+number       = @{ infinity_lit | (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ( ^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+ )?) }
 
 sigma_op        = { "sigma" | "σ" }
 uncertainty_op  = { "+/-" | "±" }
@@ -37,7 +38,9 @@ _nl         = _{ NEWLINE* }
 if_expr     = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ expr ~ _nl ~ "else" ~ _nl ~ expr }
 let_expr    = { "let" ~ identifier ~ "=" ~ expr ~ "in" ~ expr }
 
-primary     = _{ if_expr | let_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
+primary_base  = _{ if_expr | let_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
+method_call   = { primary_base ~ ("." ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")+ }
+primary       = _{ method_call | primary_base }
 factor      = { op_sub? ~ primary ~ (op_pow ~ primary)? }
 term        = { factor ~ ((op_mul | op_div) ~ factor | !op_sub ~ factor)* }
 comp_expr   = { term ~ (op_compare ~ term)* ~ op_format? }
