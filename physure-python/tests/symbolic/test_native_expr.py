@@ -72,6 +72,12 @@ def test_constant_folding(engine):
     assert result == engine.number(5.0)
 
 
+def test_mul_cancels_symbolic_denominator(engine):
+    v = engine.symbol("V")
+    i = engine.symbol("I")
+    assert ((v / i) * i).simplify() == v
+
+
 # --- differentiation (§4, SymEngine-aligned §5) --------------------------
 
 

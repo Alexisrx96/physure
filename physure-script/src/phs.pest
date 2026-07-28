@@ -11,7 +11,7 @@ uncertainty_op  = { "+/-" | "±" }
 uncertainty_val = { number ~ (sigma_op | "%")? }
 uncertainty     = { uncertainty_op ~ uncertainty_val }
 
-unit_term       = { !keyword ~ ASCII_ALPHA+ ~ ("^" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+unit_term       = { !keyword ~ (LETTER | "_" | "°" | "%" | "$")+ ~ ("^" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
 unit_primary    = _{ unit_term | "(" ~ unit_expr ~ ")" }
 unit_expr       = { unit_primary ~ (("*" | "/" | WHITESPACE+) ~ unit_primary)* }
 

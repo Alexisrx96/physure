@@ -782,29 +782,73 @@ def simplify_sub(a: Node, b: Node) -> Node:
     return Sub(a, b)
 
 
+def _collect_mul_powers(
+    nodes: list[Node], sign: float, const_prod: list[float], powers: list[list]
+) -> None:
+    """Recursively decomposes a product into (base, signed exponent) pairs.
+
+    Lets a `Div` denominator cancel against a factor elsewhere in the same
+    product, e.g. `(V / I) * I` -> `V`. Mirrors ast.rs's `collect_mul_powers`.
+    """
+    for f in nodes:
+        if isinstance(f, Number):
+            if sign > 0.0:
+                const_prod[0] *= f.value
+            else:
+                const_prod[0] /= f.value
+        elif isinstance(f, Mul):
+            _collect_mul_powers(
+                flatten_mul(list(f.factors)), sign, const_prod, powers
+            )
+        elif isinstance(f, Div):
+            _collect_mul_powers([f.left], sign, const_prod, powers)
+            _collect_mul_powers([f.right], -sign, const_prod, powers)
+        elif isinstance(f, Pow) and isinstance(f.exponent, Number):
+            _add_power(f.base, sign * f.exponent.value, powers)
+        else:
+            _add_power(f, sign, powers)
+
+
+def _add_power(node: Node, exp: float, powers: list[list]) -> None:
+    for entry in powers:
+        if entry[0] == node:
+            entry[1] += exp
+            return
+    powers.append([node, exp])
+
+
 def simplify_mul(factors: list[Node]) -> Node:
     """Flattens, constant-folds, and collects equal factors of a product."""
     flat = flatten_mul(factors)
-    const_prod = 1.0
-    rest: list[Node] = []
-    for f in flat:
-        if isinstance(f, Number):
-            const_prod *= f.value
-        else:
-            rest.append(f)
-    if const_prod == 0.0:  # NOSONAR
+    const_prod = [1.0]
+    powers: list[list] = []
+    _collect_mul_powers(flat, 1.0, const_prod, powers)
+    if const_prod[0] == 0.0:  # NOSONAR
         return Number(0.0)
-    collected = _collect_with_multiplicity(rest)
-    out_factors: list[Node] = [
-        f if count == 1.0 else Pow(f, Number(count))  # NOSONAR
-        for f, count in collected
-    ]
-    if const_prod != 1.0 or not out_factors:  # NOSONAR
-        out_factors.append(Number(const_prod))
-    out_factors.sort(key=sort_key)
-    if len(out_factors) == 1:
-        return out_factors[0]
-    return Mul(tuple(out_factors))
+
+    numerator: list[Node] = []
+    denominator: list[Node] = []
+    for f, exp in powers:
+        if exp == 0.0:  # NOSONAR
+            continue
+        dest = numerator if exp > 0.0 else denominator
+        abs_exp = abs(exp)
+        dest.append(
+            f if abs_exp == 1.0 else Pow(f, Number(abs_exp))
+        )  # NOSONAR
+
+    if const_prod[0] != 1.0 or not numerator:  # NOSONAR
+        numerator.append(Number(const_prod[0]))
+    numerator.sort(key=sort_key)
+    num_node = numerator[0] if len(numerator) == 1 else Mul(tuple(numerator))
+
+    if not denominator:
+        return num_node
+    denominator.sort(key=sort_key)
+    denom_node = (
+        denominator[0] if len(denominator) == 1 else Mul(tuple(denominator))
+    )
+    return Div(num_node, denom_node)
 
 
 def simplify_div(a: Node, b: Node) -> Node:
