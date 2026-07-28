@@ -1,142 +1,88 @@
 package com.physure;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
- * Represents a vector array of physical quantities with a shared physical unit.
- * E.g. new QuantityVector(new double[]{10, 20, 30}, "m/s")
+ * Represents a vector of physical quantities in an N-dimensional space (Order 1 Tensor).
  * Compatible with Java 8+.
  */
 public class QuantityVector {
-    private final double[] values;
-    private final String unit;
+    private final List<Quantity> components;
 
-    public QuantityVector(double[] values, String unit) {
-        if (values == null) {
-            throw new IllegalArgumentException("Values array cannot be null.");
+    public QuantityVector(List<Quantity> components) {
+        if (components == null || components.isEmpty()) {
+            throw new IllegalArgumentException("QuantityVector components cannot be null or empty");
         }
-        this.values = values.clone();
-        this.unit = unit != null ? unit.trim() : "";
+        this.components = Collections.unmodifiableList(new ArrayList<>(components));
     }
 
-    public QuantityVector(List<Double> values, String unit) {
-        if (values == null) {
-            throw new IllegalArgumentException("Values list cannot be null.");
+    public static QuantityVector of(Quantity... components) {
+        List<Quantity> list = new ArrayList<>();
+        Collections.addAll(list, components);
+        return new QuantityVector(list);
+    }
+
+    public int size() {
+        return components.size();
+    }
+
+    public Quantity get(int index) {
+        return components.get(index);
+    }
+
+    public List<Quantity> getComponents() {
+        return components;
+    }
+
+    public Quantity dot(QuantityVector other) {
+        if (size() != other.size()) {
+            throw new IllegalArgumentException("Vector dimension mismatch in dot product");
         }
-        this.values = values.stream().mapToDouble(Double::doubleValue).toArray();
-        this.unit = unit != null ? unit.trim() : "";
-    }
-
-    public double[] getValues() {
-        return values.clone();
-    }
-
-    public String getUnit() {
-        return unit;
-    }
-
-    public int length() {
-        return values.length;
-    }
-
-    public QuantityVector pow(double power) {
-        double[] newVals = new double[values.length];
-        for (int i = 0; i < values.length; i++) {
-            newVals[i] = Math.pow(values[i], power);
+        Quantity sum = components.get(0).mul(other.get(0));
+        for (int i = 1; i < size(); i++) {
+            sum = sum.add(components.get(i).mul(other.get(i)));
         }
-        return new QuantityVector(newVals, unit);
+        return sum;
     }
 
-    public QuantityVector add(Quantity q) {
-        double[] newVals = new double[values.length];
-        for (int i = 0; i < values.length; i++) {
-            newVals[i] = values[i] + q.getValue();
+    public QuantityVector cross(QuantityVector other) {
+        if (size() != 3 || other.size() != 3) {
+            throw new IllegalArgumentException("Cross product requires 3D vectors");
         }
-        return new QuantityVector(newVals, unit);
+        Quantity a1 = get(0), a2 = get(1), a3 = get(2);
+        Quantity b1 = other.get(0), b2 = other.get(1), b3 = other.get(2);
+
+        Quantity c1 = a2.mul(b3).sub(a3.mul(b2));
+        Quantity c2 = a3.mul(b1).sub(a1.mul(b3));
+        Quantity c3 = a1.mul(b2).sub(a2.mul(b1));
+
+        return QuantityVector.of(c1, c2, c3);
     }
 
-    public QuantityVector add(QuantityVector other) {
-        double[] newVals = new double[values.length];
-        double[] oVals = other.getValues();
-        for (int i = 0; i < values.length; i++) {
-            newVals[i] = values[i] + (i < oVals.length ? oVals[i] : 0.0);
+    public Quantity norm() {
+        Quantity dotVal = dot(this);
+        return dotVal.pow(0.5);
+    }
+
+    public QuantityVector unitVector() {
+        Quantity n = norm();
+        List<Quantity> units = new ArrayList<>();
+        for (Quantity c : components) {
+            units.add(c.div(n));
         }
-        return new QuantityVector(newVals, unit);
-    }
-
-    public QuantityVector multiply(Quantity q) {
-        double[] newVals = new double[values.length];
-        for (int i = 0; i < values.length; i++) {
-            newVals[i] = values[i] * q.getValue();
-        }
-        return new QuantityVector(newVals, unit.isEmpty() ? q.getUnit() : (q.getUnit().isEmpty() ? unit : unit + " * " + q.getUnit()));
-    }
-
-    public QuantityVector gradient(QuantityVector t) {
-        double[] g = new double[values.length];
-        if (values.length > 1) {
-            g[0] = (values[1] - values[0]) / (t.values[1] - t.values[0]);
-            for (int i = 1; i < values.length - 1; i++) {
-                g[i] = (values[i + 1] - values[i - 1]) / (t.values[i + 1] - t.values[i - 1]);
-            }
-            g[values.length - 1] = (values[values.length - 1] - values[values.length - 2]) / (t.values[values.length - 1] - t.values[values.length - 2]);
-        }
-        return new QuantityVector(g, this.unit.isEmpty() ? t.unit : (t.unit.isEmpty() ? this.unit : this.unit + " / " + t.unit));
-    }
-
-    public Quantity trapz(QuantityVector x) {
-        double area = 0.0;
-        for (int i = 0; i < values.length - 1; i++) {
-            double dx = x.values[i + 1] - x.values[i];
-            area += 0.5 * (values[i] + values[i + 1]) * dx;
-        }
-        return new Quantity(area, this.unit.isEmpty() ? x.unit : (x.unit.isEmpty() ? this.unit : this.unit + " * " + x.unit));
-    }
-
-    public static QuantityVector linspace(Quantity start, Quantity end, int count) {
-        double s = start.getValue();
-        double e = end.getValue();
-        double step = (count > 1) ? (e - s) / (count - 1) : 0;
-        double[] vals = new double[count];
-        for (int i = 0; i < count; i++) {
-            vals[i] = s + i * step;
-        }
-        return new QuantityVector(vals, start.getUnit());
-    }
-
-    public QuantityVector map(java.util.function.Function<Quantity, Quantity> mapper) {
-        double[] newVals = new double[values.length];
-        String newUnit = this.unit;
-        for (int i = 0; i < values.length; i++) {
-            Quantity res = mapper.apply(new Quantity(values[i], this.unit));
-            newVals[i] = res.getValue();
-            newUnit = res.getUnit();
-        }
-        return new QuantityVector(newVals, newUnit);
-    }
-
-    public static String plot(QuantityVector x, QuantityVector y) {
-        return "[PLOT_IMAGE: Live Plot generated for " + x.length() + " data points]";
-    }
-
-    public QuantityVector to(String targetUnit) {
-        double[] newVals = new double[values.length];
-        for (int i = 0; i < values.length; i++) {
-            newVals[i] = new Quantity(values[i], unit).to(targetUnit).getValue();
-        }
-        return new QuantityVector(newVals, targetUnit);
+        return new QuantityVector(units);
     }
 
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("[");
-        for (int i = 0; i < values.length; i++) {
+        StringBuilder sb = new StringBuilder("QuantityVector([");
+        for (int i = 0; i < components.size(); i++) {
             if (i > 0) sb.append(", ");
-            sb.append(values[i]);
+            sb.append(components.get(i));
         }
-        sb.append("] ").append(unit);
+        sb.append("])");
         return sb.toString();
     }
 }

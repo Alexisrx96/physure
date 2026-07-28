@@ -102,6 +102,7 @@ fn value_to_json(v: &PhsValue) -> String {
             s.push(']');
             s
         }
+        PhsValue::Matrix(m) => format!("{{\"rows\": {}, \"cols\": {}, \"data\": {:?}}}", m.rows, m.cols, m.data),
     }
 }
 
@@ -135,6 +136,7 @@ fn value_to_csv(v: &PhsValue) -> String {
             s.push_str("]\"");
             s
         }
+        PhsValue::Matrix(m) => format!("\"{:?}\"", m.data),
     }
 }
 
@@ -160,6 +162,7 @@ fn value_to_py(v: &PhsValue) -> String {
             s.push(']');
             s
         }
+        PhsValue::Matrix(m) => format!("{:?}", m.data),
     }
 }
 

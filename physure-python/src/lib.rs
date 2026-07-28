@@ -1182,6 +1182,7 @@ fn phs_value_to_py(py: Python<'_>, val: ::physure_script::PhsValue) -> PyResult<
             let items: PyResult<Vec<PyObject>> = v.into_iter().map(|item| phs_value_to_py(py, item)).collect();
             items?.into_py_any(py)?
         }
+        ::physure_script::PhsValue::Matrix(m) => PyQuantityMatrix(m).into_py_any(py)?,
     })
 }
 
@@ -1338,12 +1339,88 @@ fn transpile_phs_native(_py: Python<'_>, source: &str, target_str: &str) -> PyRe
     Ok(code)
 }
 
+#[pyclass(name = "QuantityVector")]
+#[derive(Clone)]
+pub struct PyQuantityVector(pub physure_core::QuantityVector);
+
+#[pymethods]
+impl PyQuantityVector {
+    #[new]
+    pub fn new(components: Vec<PyQuantity>) -> Self {
+        let comps = components.into_iter().map(|q| q.0).collect();
+        PyQuantityVector(physure_core::QuantityVector::new(comps))
+    }
+
+    pub fn dot(&self, other: &PyQuantityVector) -> PyResult<PyQuantity> {
+        let res = self.0.dot(&other.0).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantity(res))
+    }
+
+    pub fn cross(&self, other: &PyQuantityVector) -> PyResult<PyQuantityVector> {
+        let res = self.0.cross(&other.0).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantityVector(res))
+    }
+
+    pub fn norm(&self) -> PyResult<PyQuantity> {
+        let res = self.0.norm().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantity(res))
+    }
+
+    pub fn unit_vector(&self) -> PyResult<PyQuantityVector> {
+        let res = self.0.unit_vector().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantityVector(res))
+    }
+
+    pub fn __repr__(&self) -> String {
+        let comps: Vec<String> = self.0.components.iter().map(|q| q.to_string()).collect();
+        format!("QuantityVector([{}])", comps.join(", "))
+    }
+}
+
+#[pyclass(name = "QuantityMatrix")]
+#[derive(Clone)]
+pub struct PyQuantityMatrix(pub physure_core::QuantityMatrix);
+
+#[pymethods]
+impl PyQuantityMatrix {
+    #[new]
+    pub fn new(data: Vec<Vec<PyQuantity>>) -> PyResult<Self> {
+        let raw_data = data.into_iter().map(|row| row.into_iter().map(|q| q.0).collect()).collect();
+        let mat = physure_core::QuantityMatrix::new(raw_data).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantityMatrix(mat))
+    }
+
+    pub fn transpose(&self) -> PyQuantityMatrix {
+        PyQuantityMatrix(self.0.transpose())
+    }
+
+    pub fn matmul(&self, other: &PyQuantityMatrix) -> PyResult<PyQuantityMatrix> {
+        let res = self.0.matmul(&other.0).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantityMatrix(res))
+    }
+
+    pub fn det(&self) -> PyResult<PyQuantity> {
+        let res = self.0.det().map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyQuantity(res))
+    }
+
+    pub fn __repr__(&self) -> String {
+        let rows: Vec<String> = self.0.data.iter().map(|r| {
+            let items: Vec<String> = r.iter().map(|q| q.to_string()).collect();
+            format!("[{}]", items.join(", "))
+        }).collect();
+        format!("QuantityMatrix([{}])", rows.join(", "))
+    }
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add_class::<PyQuantity>()?;
+    m.add_class::<PyQuantityVector>()?;
+    m.add_class::<PyQuantityMatrix>()?;
     m.add_class::<PyInterpreter>()?;
     m.add_class::<PyPruningConfig>()?;
     m.add_class::<PyCovarianceStore>()?;
