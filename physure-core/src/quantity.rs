@@ -189,9 +189,138 @@ impl Quantity {
         Ok(Quantity { value: new_value, unit: target.clone() })
     }
 
+    pub fn with_uncertainty(mean: f64, std_dev: f64, unit_expr: &str) -> PhysureResult<Self> {
+        let clean_unit = unit_expr.trim().replace(" / ", "/").replace(" * ", "*");
+        if clean_unit.is_empty() {
+            return Ok(Self::new_scalar(mean, std_dev, crate::units::RationalUnit::dimensionless(), None, None));
+        }
+        let unit = crate::units::parser::Parser::parse_expression(&clean_unit)?;
+        Ok(Self::new_scalar(mean, std_dev, unit, None, None))
+    }
+
+    pub fn powi(&self, exp: i32) -> PhysureResult<Quantity> {
+        self.pow(exp as f64)
+    }
+
+    pub fn powf(&self, exp: f64) -> PhysureResult<Quantity> {
+        self.pow(exp)
+    }
+
     pub fn to(&self, target_unit: &str) -> PhysureResult<Quantity> {
         let dummy = Quantity::new(1.0, target_unit)?;
         self.convert_to(&dummy.unit)
+    }
+}
+
+impl std::ops::Add for Quantity {
+    type Output = Quantity;
+    fn add(self, rhs: Quantity) -> Self::Output {
+        Quantity::add(&self, &rhs).unwrap()
+    }
+}
+
+impl<'a, 'b> std::ops::Add<&'b Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn add(self, rhs: &'b Quantity) -> Self::Output {
+        Quantity::add(self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Add<&'a Quantity> for Quantity {
+    type Output = Quantity;
+    fn add(self, rhs: &'a Quantity) -> Self::Output {
+        Quantity::add(&self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Add<Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn add(self, rhs: Quantity) -> Self::Output {
+        Quantity::add(self, &rhs).unwrap()
+    }
+}
+
+impl std::ops::Sub for Quantity {
+    type Output = Quantity;
+    fn sub(self, rhs: Quantity) -> Self::Output {
+        Quantity::sub(&self, &rhs).unwrap()
+    }
+}
+
+impl<'a, 'b> std::ops::Sub<&'b Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn sub(self, rhs: &'b Quantity) -> Self::Output {
+        Quantity::sub(self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Sub<&'a Quantity> for Quantity {
+    type Output = Quantity;
+    fn sub(self, rhs: &'a Quantity) -> Self::Output {
+        Quantity::sub(&self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Sub<Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn sub(self, rhs: Quantity) -> Self::Output {
+        Quantity::sub(self, &rhs).unwrap()
+    }
+}
+
+impl std::ops::Mul for Quantity {
+    type Output = Quantity;
+    fn mul(self, rhs: Quantity) -> Self::Output {
+        Quantity::mul(&self, &rhs).unwrap()
+    }
+}
+
+impl<'a, 'b> std::ops::Mul<&'b Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn mul(self, rhs: &'b Quantity) -> Self::Output {
+        Quantity::mul(self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Mul<&'a Quantity> for Quantity {
+    type Output = Quantity;
+    fn mul(self, rhs: &'a Quantity) -> Self::Output {
+        Quantity::mul(&self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Mul<Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn mul(self, rhs: Quantity) -> Self::Output {
+        Quantity::mul(self, &rhs).unwrap()
+    }
+}
+
+impl std::ops::Div for Quantity {
+    type Output = Quantity;
+    fn div(self, rhs: Quantity) -> Self::Output {
+        Quantity::div(&self, &rhs).unwrap()
+    }
+}
+
+impl<'a, 'b> std::ops::Div<&'b Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn div(self, rhs: &'b Quantity) -> Self::Output {
+        Quantity::div(self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Div<&'a Quantity> for Quantity {
+    type Output = Quantity;
+    fn div(self, rhs: &'a Quantity) -> Self::Output {
+        Quantity::div(&self, rhs).unwrap()
+    }
+}
+
+impl<'a> std::ops::Div<Quantity> for &'a Quantity {
+    type Output = Quantity;
+    fn div(self, rhs: Quantity) -> Self::Output {
+        Quantity::div(self, &rhs).unwrap()
     }
 }
 

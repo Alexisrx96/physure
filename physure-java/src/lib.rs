@@ -15,7 +15,14 @@ fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
 }
 
 fn get_registry(_handle: jlong) -> UnitRegistry {
-    UnitRegistry::build_default_si()
+    let mut reg = UnitRegistry::new();
+    let mut constants = std::collections::HashMap::new();
+    physure_core::units::conf::parse_physure_conf(
+        physure_core::units::conf::DEFAULT_PHYSURE_CONF,
+        &mut reg,
+        &mut constants,
+    );
+    reg
 }
 
 fn get_rust_quantity(
@@ -26,7 +33,7 @@ fn get_rust_quantity(
     let unit_jstr: JString = env.get_field(java_q, "unit", "Ljava/lang/String;")?.l()?.into();
     let unit_str: String = env.get_string(&unit_jstr)?.into();
     
-    let reg = UnitRegistry::build_default_si();
+    let reg = get_registry(0);
     let _r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
@@ -524,7 +531,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let reg = UnitRegistry::build_default_si();
+    let reg = get_registry(0);
     let r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
@@ -535,13 +542,31 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
 
     match q.convert_to(&r_unit) {
         Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
+            let q_class = match env.find_class("com/physure/Quantity") {
+                Ok(c) => c,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            let unit_jstr = match env.new_string(&unit_str) {
+                Ok(s) => s,
+                Err(_) => return std::ptr::null_mut(),
+            };
+            let converted_val = res.canonical_magnitude() / r_unit.scale;
+            let j_q = match env.new_object(
+                q_class,
+                "(DDLjava/lang/String;)V",
+                &[
+                    JValue::Double(converted_val),
+                    JValue::Double(res.value.std_dev() / r_unit.scale),
+                    JValue::Object(&unit_jstr),
+                ],
+            ) {
+                Ok(o) => o,
                 Err(e) => {
                     throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
+                    return std::ptr::null_mut();
                 }
-            }
+            };
+            j_q.into_raw()
         }
         Err(e) => {
             throw_physure_exception(&mut env, &format!("{}", e));

@@ -288,9 +288,8 @@ def _load_plotting(name: str) -> Any:
 
 
 def _load_symbolic(name: str) -> Any:
-    from physure.symbolic import PhyFunction
-
-    return PhyFunction
+    import physure.symbolic as symbolic
+    return getattr(symbolic, name)
 
 
 _ATTR_LOADERS: dict[str, Callable[[str], Any]] = {}
@@ -317,6 +316,8 @@ for _attr in ("equivalencies", "spectral", "thermodynamic"):
 for _attr in _PLOT_ATTRS:
     _ATTR_LOADERS[_attr] = _load_plotting
 _ATTR_LOADERS["PhyFunction"] = _load_symbolic
+_ATTR_LOADERS["PhyEquation"] = _load_symbolic
+_ATTR_LOADERS["phy_function"] = _load_symbolic
 for _attr in _HELPER_ATTRS:
     _ATTR_LOADERS[_attr] = _load_helpers
 del _attr
@@ -362,6 +363,7 @@ __all__ = [
     # Lazy-loaded API
     "Interpreter",
     "PhyFunction",
+    "PhyEquation",
     "CompoundUnit",
     "ConversionError",
     "PhysureContext",

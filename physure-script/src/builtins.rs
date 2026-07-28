@@ -10,7 +10,7 @@ fn eval_bin_op(op: BinaryOp, l: &PhsValue, r: &PhsValue) -> PhysureResult<PhsVal
 
 pub fn domain_members(domain: &str) -> Option<&'static [&'static str]> {
     match domain {
-        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve"]),
+        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim"]),
         "plot" => Some(&["plot"]),
         "array" => Some(&["linspace", "gradient", "trapz"]),
         _ => None,
@@ -277,6 +277,7 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             let decimals = match args.get(1) {
                 Some(PhsValue::Number(d)) => *d as i32,
+                Some(PhsValue::Quantity(q)) => q.canonical_magnitude() as i32,
                 _ => 0,
             };
             let factor = 10.0f64.powi(decimals);
@@ -432,8 +433,37 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             Ok(Some(PhsValue::String(diff_node.to_string())))
         }
         "integral" | "integrate" => {
+            if args.len() == 4 {
+                let expr_str = match &args[0] {
+                    PhsValue::String(s) => s,
+                    _ => return Err(PhysureError::Generic("integral expects expression string".into())),
+                };
+                let var_str = match &args[1] {
+                    PhsValue::String(s) => s,
+                    _ => return Err(PhysureError::Generic("integral expects variable string".into())),
+                };
+
+                let extract_bound = |v: &PhsValue| -> f64 {
+                    match v {
+                        PhsValue::Number(n) => *n,
+                        PhsValue::Quantity(q) => q.value.mean(),
+                        PhsValue::String(s) => match s.trim() {
+                            "inf" | "+inf" | "infinity" | "oo" | "∞" => f64::INFINITY,
+                            "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
+                            _ => 0.0,
+                        },
+                        _ => 0.0,
+                    }
+                };
+
+                let a = extract_bound(&args[2]);
+                let b = extract_bound(&args[3]);
+
+                let res_val = eval_definite_integral(expr_str, var_str, a, b, interpreter)?;
+                return Ok(Some(PhsValue::Number(res_val)));
+            }
             if args.len() != 2 {
-                return Err(PhysureError::Generic("integral expects expression string and variable string".into()));
+                return Err(PhysureError::Generic("integral expects (expression_string, variable_string) or (expression_string, variable_string, a, b)".into()));
             }
             let expr_str = match &args[0] {
                 PhsValue::String(s) => s,
@@ -447,6 +477,65 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
             let int_node = node.integrate_node(var_str)?.simplify();
             Ok(Some(PhsValue::String(int_node.to_string())))
+        }
+        "limit" | "lim" => {
+            if args.len() != 3 {
+                return Err(PhysureError::Generic("limit expects (expression_string, variable_string, target_point)".into()));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("limit expects expression string".into())),
+            };
+            let var_str = match &args[1] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("limit expects variable string".into())),
+            };
+
+            let point_val = match &args[2] {
+                PhsValue::Number(n) => *n,
+                PhsValue::Quantity(q) => q.value.mean(),
+                PhsValue::String(s) => match s.trim() {
+                    "inf" | "+inf" | "infinity" | "oo" | "∞" => f64::INFINITY,
+                    "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
+                    _ => 0.0,
+                },
+                _ => 0.0,
+            };
+
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            if let Ok(program) = crate::parser::parse_phs(&inlined) {
+                if let Some(stmt) = program.statements.first() {
+                    let expr = match stmt {
+                        crate::ast::Statement::Expr(e) => e.clone(),
+                        crate::ast::Statement::Assignment(node) => node.value.clone(),
+                        _ => return Ok(Some(PhsValue::Number(0.0))),
+                    };
+                    let test_val = if point_val.is_infinite() {
+                        if point_val.is_sign_positive() { 1e7 } else { -1e7 }
+                    } else {
+                        point_val + 1e-8
+                    };
+                    let mut local_env = interpreter.env.clone();
+                    let q_val = physure_core::Quantity::new_scalar(test_val, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None);
+                    local_env.insert(var_str.to_string(), PhsValue::Quantity(q_val));
+                    if let Ok(val) = interpreter.eval_expr(&expr, &local_env) {
+                        let num = match &val {
+                            PhsValue::Number(n) => *n,
+                            PhsValue::Quantity(q) => q.value.mean(),
+                            _ => 0.0,
+                        };
+                        if num.abs() < 1e-5 {
+                            return Ok(Some(PhsValue::Number(0.0)));
+                        }
+                        if num.abs() > 1e6 {
+                            let sign = if num.is_sign_positive() { f64::INFINITY } else { f64::NEG_INFINITY };
+                            return Ok(Some(PhsValue::Number(sign)));
+                        }
+                        return Ok(Some(val));
+                    }
+                }
+            }
+            Ok(Some(PhsValue::Number(0.0)))
         }
         "solve" => {
             if args.len() != 2 {
@@ -479,6 +568,52 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
                 }
             }
             Ok(Some(PhsValue::Equation(crate::symbolic::Node::Symbol(target_str.clone()), solved_node)))
+        }
+        "substitute" | "sub" => {
+            if args.len() != 3 {
+                return Err(PhysureError::Generic("substitute expects (equation_or_string, target_symbol, replacement_or_equation)".into()));
+            }
+            let target_str = match &args[1] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("substitute target must be a symbol string".into())),
+            };
+
+            let replacement_str = match &args[2] {
+                PhsValue::String(s) => {
+                    if s.contains('=') {
+                        s.split('=').nth(1).unwrap_or(s).trim().to_string()
+                    } else {
+                        s.clone()
+                    }
+                }
+                PhsValue::Equation(_, r) => r.to_phs_string(),
+                _ => args[2].to_string(),
+            };
+
+            match &args[0] {
+                PhsValue::Equation(l, r) => {
+                    let new_l_str = l.to_phs_string().replace(target_str, &format!("({})", replacement_str));
+                    let new_r_str = r.to_phs_string().replace(target_str, &format!("({})", replacement_str));
+                    let new_l = crate::symbolic::SymbolicParser::parse_str(&new_l_str)?;
+                    let new_r = crate::symbolic::SymbolicParser::parse_str(&new_r_str)?;
+                    Ok(Some(PhsValue::Equation(new_l, new_r)))
+                }
+                PhsValue::String(eq_str) => {
+                    let parts: Vec<&str> = eq_str.split('=').collect();
+                    if parts.len() == 2 {
+                        let new_l_str = parts[0].trim().replace(target_str, &format!("({})", replacement_str));
+                        let new_r_str = parts[1].trim().replace(target_str, &format!("({})", replacement_str));
+                        let new_l = crate::symbolic::SymbolicParser::parse_str(&new_l_str)?;
+                        let new_r = crate::symbolic::SymbolicParser::parse_str(&new_r_str)?;
+                        Ok(Some(PhsValue::Equation(new_l, new_r)))
+                    } else {
+                        let new_str = eq_str.replace(target_str, &format!("({})", replacement_str));
+                        let new_node = crate::symbolic::SymbolicParser::parse_str(&new_str)?;
+                        Ok(Some(PhsValue::String(new_node.to_string())))
+                    }
+                }
+                _ => Err(PhysureError::Generic("substitute base must be an equation or string".into())),
+            }
         }
         _ => Ok(None),
     }
@@ -781,6 +916,72 @@ fn has_unbound_vars(expr: &crate::ast::Expr, interpreter: &PhsInterpreter) -> bo
         }
         _ => false,
     }
+}
+
+fn eval_definite_integral(expr_str: &str, var_str: &str, a: f64, b: f64, interpreter: &PhsInterpreter) -> PhysureResult<f64> {
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let program = crate::parser::parse_phs(&inlined)?;
+    let expr = match program.statements.first() {
+        Some(crate::ast::Statement::Expr(e)) => e.clone(),
+        Some(crate::ast::Statement::Assignment(node)) => node.value.clone(),
+        _ => return Err(PhysureError::Generic("Failed to parse integrand expression".into())),
+    };
+
+    let mut local_env = interpreter.env.clone();
+    let mut eval_at = |x: f64| -> f64 {
+        local_env.insert(var_str.to_string(), PhsValue::Number(x));
+        if let Ok(val) = interpreter.eval_expr(&expr, &local_env) {
+            match val {
+                PhsValue::Number(n) => n,
+                PhsValue::Quantity(q) => q.value.mean(),
+                _ => 0.0,
+            }
+        } else {
+            0.0
+        }
+    };
+
+    if a.is_infinite() || b.is_infinite() {
+        let mut transform_eval = |t: f64| -> f64 {
+            if t.abs() >= 1.0 - 1e-7 {
+                return 0.0;
+            }
+            let x = t / (1.0 - t * t);
+            let dxdt = (1.0 + t * t) / ((1.0 - t * t) * (1.0 - t * t));
+            let fx = eval_at(x);
+            if fx.is_nan() || fx.is_infinite() {
+                0.0
+            } else {
+                fx * dxdt
+            }
+        };
+
+        let t_a = if a == f64::NEG_INFINITY { -1.0 + 1e-6 } else if a == f64::INFINITY { 1.0 - 1e-6 } else { a / (1.0 + (1.0 + a * a).sqrt()) };
+        let t_b = if b == f64::INFINITY { 1.0 - 1e-6 } else if b == f64::NEG_INFINITY { -1.0 + 1e-6 } else { b / (1.0 + (1.0 + b * b).sqrt()) };
+        
+        return Ok(quad_gauss_kronrod(&mut transform_eval, t_a, t_b, 100));
+    }
+
+    Ok(quad_gauss_kronrod(&mut eval_at, a, b, 100))
+}
+
+fn quad_gauss_kronrod<F>(mut f: F, a: f64, b: f64, steps: usize) -> f64
+where F: FnMut(f64) -> f64 {
+    let h = (b - a) / steps as f64;
+    let mut sum = 0.0;
+    for i in 0..steps {
+        let x0 = a + i as f64 * h;
+        let x1 = x0 + h;
+        let mid = 0.5 * (x0 + x1);
+        let half_h = 0.5 * h;
+        let f0 = f(x0);
+        let f1 = f(mid - half_h * 0.5773502691896257);
+        let f2 = f(mid);
+        let f3 = f(mid + half_h * 0.5773502691896257);
+        let f4 = f(x1);
+        sum += (half_h / 9.0) * (f0 + 4.0 * f2 + f4 + 2.0 * (f1 + f3));
+    }
+    sum
 }
 
 #[cfg(test)]

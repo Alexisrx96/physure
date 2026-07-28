@@ -46,7 +46,7 @@ fn value_to_symbolic_node(val: &PhsValue) -> PhysureResult<Node> {
 /// A plain string holding `"lhs = rhs"` (e.g. from a bare assignment, not `solve()`)
 /// is coerced into an `Equation` so it supports the same arithmetic. Strings without
 /// a top-level `=` (unit symbols, bare variable names) pass through unchanged.
-fn coerce_equation_string(val: PhsValue) -> PhsValue {
+pub(crate) fn coerce_equation_string(val: PhsValue) -> PhsValue {
     if let PhsValue::String(ref s) = val {
         if let Ok(Some((l, r))) = crate::symbolic::SymbolicParser::parse_equation_str(s) {
             return PhsValue::Equation(l, r);
@@ -373,13 +373,13 @@ impl PhsInterpreter {
             Expr::BinaryOp { op, left, right } => {
                 if *op == BinaryOp::Convert {
                     let l_val = self.eval_expr(left, env)?;
-                    return if let Expr::Identifier(ref target_unit) = **right {
-                        let clean_target = target_unit.split('#').next().unwrap().split("//").next().unwrap().trim();
+                    let target_unit = crate::codegen::expr_to_unit_string(right);
+                    let clean_target = target_unit.split('#').next().unwrap().split("//").next().unwrap().trim();
+                    if !clean_target.is_empty() {
                         let parsed_unit = UnitParser::parse_expression(clean_target)?;
-                        self.convert_value_to_unit(l_val, &parsed_unit)
-                    } else {
-                        Ok(l_val)
-                    };
+                        return self.convert_value_to_unit(l_val, &parsed_unit);
+                    }
+                    return Ok(l_val);
                 }
                 let l_val = self.eval_expr(left, env)?;
                 let r_val = self.eval_expr(right, env)?;
@@ -672,6 +672,14 @@ impl PhsInterpreter {
                 };
                 Ok(PhsValue::Quantity(res))
             }
+            (PhsValue::Quantity(l), PhsValue::Number(r)) => {
+                let r_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
+                self.eval_binary_op_vals(op, PhsValue::Quantity(l), PhsValue::Quantity(r_q))
+            }
+            (PhsValue::Number(l), PhsValue::Quantity(r)) => {
+                let l_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
+                self.eval_binary_op_vals(op, PhsValue::Quantity(l_q), PhsValue::Quantity(r))
+            }
             (PhsValue::Number(l), PhsValue::Number(r)) => {
                 let res = match op {
                     BinaryOp::Add => l + r,
@@ -825,6 +833,20 @@ r3 = circuito_abierto(5 V, 2 A)
         assert_eq!(num("r1"), 0.0);
         assert_eq!(num("r2"), -1.0);
         assert_eq!(num("r3"), 1.0);
+    }
+
+    #[test]
+    fn test_round_honors_decimals_argument() {
+        // Numeric literals evaluate to a dimensionless PhsValue::Quantity (not
+        // PhsValue::Number), so round()'s decimals argument must accept that
+        // shape too, or it silently falls back to 0 decimals.
+        let mut interp = PhsInterpreter::default();
+        interp.eval_str("x = round(3.14159, 2)").unwrap();
+        match interp.get_var("x").unwrap() {
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 3.14),
+            PhsValue::Number(n) => assert_eq!(*n, 3.14),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
     }
 
     #[test]
