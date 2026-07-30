@@ -1188,15 +1188,13 @@ def _prepare_3d_mesh(
     y_label = (y.symbol or "Y") if y_is_q else "Y"
     ylabel_text = f"{y_label} ({y_unit_str})" if y_unit_str else y_label
 
-    if x_val is None:
-        x_grid_1d = np.arange(cols, dtype=float)
-    else:
-        x_grid_1d = x_val.flatten()
+    x_grid_1d = (
+        np.arange(cols, dtype=float) if x_val is None else x_val.flatten()
+    )
 
-    if y_val is None:
-        y_grid_1d = np.arange(rows, dtype=float)
-    else:
-        y_grid_1d = y_val.flatten()
+    y_grid_1d = (
+        np.arange(rows, dtype=float) if y_val is None else y_val.flatten()
+    )
 
     if (
         x_val is not None
@@ -1255,10 +1253,11 @@ def _map_z_to_rgb(Z: np.ndarray, cmap_name: str = "plasma") -> np.ndarray:
 
     z_flat = Z.ravel()
     z_min, z_max = np.min(z_flat), np.max(z_flat)
-    if z_max > z_min:
-        z_norm = (z_flat - z_min) / (z_max - z_min)
-    else:
-        z_norm = np.zeros_like(z_flat)
+    z_norm = (
+        (z_flat - z_min) / (z_max - z_min)
+        if z_max > z_min
+        else np.zeros_like(z_flat)
+    )
 
     try:
         cm = plt.get_cmap(cmap_name)
@@ -1376,16 +1375,20 @@ def _export_ply(
         "property float z",
     ]
     if colors is not None:
-        lines.extend([
-            "property uchar red",
-            "property uchar green",
-            "property uchar blue",
-        ])
-    lines.extend([
-        f"element face {len(faces)}",
-        "property list uchar int vertex_indices",
-        "end_header",
-    ])
+        lines.extend(
+            [
+                "property uchar red",
+                "property uchar green",
+                "property uchar blue",
+            ]
+        )
+    lines.extend(
+        [
+            f"element face {len(faces)}",
+            "property list uchar int vertex_indices",
+            "end_header",
+        ]
+    )
     for i in range(len(verts)):
         v = verts[i]
         if colors is not None:
@@ -1414,6 +1417,7 @@ def _export_gltf(
 ) -> str:
     import base64
     import json
+
     import numpy as np
 
     v_bytes = verts.astype(np.float32).tobytes()
@@ -1426,10 +1430,9 @@ def _export_gltf(
         c_bytes = b""
         buffer_data = v_bytes + f_bytes
 
-    b64_uri = (
-        "data:application/octet-stream;base64,"
-        + base64.b64encode(buffer_data).decode("ascii")
-    )
+    b64_uri = "data:application/octet-stream;base64," + base64.b64encode(
+        buffer_data
+    ).decode("ascii")
 
     v_len = len(v_bytes)
     c_len = len(c_bytes)
@@ -1456,37 +1459,45 @@ def _export_gltf(
     current_offset = v_len
 
     if colors is not None:
-        buffer_views.append({
-            "buffer": 0,
-            "byteOffset": current_offset,
-            "byteLength": c_len,
-            "target": 34962,
-        })
-        accessors.append({
-            "bufferView": 1,
-            "byteOffset": 0,
-            "componentType": 5126,
-            "count": len(verts),
-            "type": "VEC3",
-        })
+        buffer_views.append(
+            {
+                "buffer": 0,
+                "byteOffset": current_offset,
+                "byteLength": c_len,
+                "target": 34962,
+            }
+        )
+        accessors.append(
+            {
+                "bufferView": 1,
+                "byteOffset": 0,
+                "componentType": 5126,
+                "count": len(verts),
+                "type": "VEC3",
+            }
+        )
         attributes["COLOR_0"] = 1
         current_offset += c_len
 
     indices_view_idx = len(buffer_views)
-    buffer_views.append({
-        "buffer": 0,
-        "byteOffset": current_offset,
-        "byteLength": len(f_bytes),
-        "target": 34963,
-    })
+    buffer_views.append(
+        {
+            "buffer": 0,
+            "byteOffset": current_offset,
+            "byteLength": len(f_bytes),
+            "target": 34963,
+        }
+    )
     indices_acc_idx = len(accessors)
-    accessors.append({
-        "bufferView": indices_view_idx,
-        "byteOffset": 0,
-        "componentType": 5125,
-        "count": len(faces) * 3,
-        "type": "SCALAR",
-    })
+    accessors.append(
+        {
+            "bufferView": indices_view_idx,
+            "byteOffset": 0,
+            "componentType": 5125,
+            "count": len(faces) * 3,
+            "type": "SCALAR",
+        }
+    )
 
     gltf = {
         "asset": {"version": "2.0", "generator": "Physure 3D Exporter"},
@@ -1594,7 +1605,8 @@ def _export_html_threejs(
         <p><strong>Y:</strong> {ylabel}</p>
         <p><strong>Z:</strong> {zlabel}</p>
         <div class="controls-info">
-            🎮 <strong>Controls:</strong> Left click + drag to rotate | Right click + drag to pan | Scroll to zoom
+            🎮 <strong>Controls:</strong> Left click + drag to rotate
+            | Right click + drag to pan | Scroll to zoom
         </div>
     </div>
     <div id="canvas-container"></div>
@@ -1608,7 +1620,9 @@ def _export_html_threejs(
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x0f172a);
 
-        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const camera = new THREE.PerspectiveCamera(
+            45, window.innerWidth / window.innerHeight, 0.1, 1000
+        );
         const renderer = new THREE.WebGLRenderer({{ antialias: true }});
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
@@ -1675,7 +1689,9 @@ def _export_html_threejs(
         scene.add(axesHelper);
 
         // Camera positioning
-        camera.position.set(center.x + maxDim * 1.5, center.y + maxDim * 1.2, center.z + maxDim * 1.8);
+        camera.position.set(
+            center.x + maxDim * 1.5, center.y + maxDim * 1.2, center.z + maxDim * 1.8
+        );
         camera.lookAt(center);
         controls.target.copy(center);
 
@@ -1821,7 +1837,8 @@ def plot_3d(
         return ax
     else:
         raise ValueError(
-            f"Unknown 3D backend: {backend}. Choose from 'auto', 'plotly', 'html'/'threejs', 'matplotlib'."
+            f"Unknown 3D backend: {backend}. "
+            "Choose from 'auto', 'plotly', 'html'/'threejs', 'matplotlib'."
         )
 
 
@@ -1877,7 +1894,15 @@ def export_3d(
             rust_fmt,
         )
 
-        if rust_fmt in ("obj", "gltf", "glb", "ply", "html", "threejs", "stl_ascii"):
+        if rust_fmt in (
+            "obj",
+            "gltf",
+            "glb",
+            "ply",
+            "html",
+            "threejs",
+            "stl_ascii",
+        ):
             res_str = out_bytes.decode("utf-8")
             if filename:
                 with open(filename, "w", encoding="utf-8") as f:
@@ -1913,7 +1938,6 @@ def export_3d(
             )
         else:
             raise ValueError(
-                f"Unsupported 3D export format: {fmt}. Choose from 'stl', 'obj', 'ply', 'gltf', 'glb', 'html'."
-            )
-
-
+                f"Unsupported 3D export format: {fmt}. "
+                "Choose from 'stl', 'obj', 'ply', 'gltf', 'glb', 'html'."
+            ) from None

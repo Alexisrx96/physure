@@ -1,6 +1,9 @@
 """Symbolic mathematics for Physure."""
 
-from physure._core import Interpreter, Quantity as CoreQuantity
+from typing import Any
+
+from physure._core import Interpreter
+from physure._core import Quantity as CoreQuantity
 from physure.domain.measurement.quantity import Quantity
 from physure.domain.symbolic import (
     Equation,
@@ -51,15 +54,21 @@ class PhyFunction:
                 if p in kwargs:
                     arg = kwargs[p]
                     if isinstance(arg, Quantity):
-                        formatted_args.append(f"{arg.magnitude} {clean_unit_str(arg.unit)}")
+                        formatted_args.append(
+                            f"{arg.magnitude} {clean_unit_str(arg.unit)}"
+                        )
                     else:
                         formatted_args.append(str(arg))
                 else:
-                    raise ValueError(f"Missing parameter '{p}' for function '{self.name}'")
+                    raise ValueError(
+                        f"Missing parameter '{p}' for function '{self.name}'"
+                    )
         else:
             for arg in args:
                 if isinstance(arg, Quantity):
-                    formatted_args.append(f"{arg.magnitude} {clean_unit_str(arg.unit)}")
+                    formatted_args.append(
+                        f"{arg.magnitude} {clean_unit_str(arg.unit)}"
+                    )
                 else:
                     formatted_args.append(str(arg))
 
@@ -221,8 +230,8 @@ def clean_unit_str(unit_str: str) -> str:
 
 class PhyEquation:
     """Represents a physical equation (e.g. "V = R * I").
-    
-    Callable by default: invoking the equation with known keyword arguments 
+
+    Callable by default: invoking the equation with known keyword arguments
     dynamically solves and evaluates the remaining unknown variable.
     """
 
@@ -242,13 +251,31 @@ class PhyEquation:
     def __call__(self, **kwargs) -> Quantity:
         """Call this equation with keyword arguments to solve the unknown on the fly."""
         import re
-        tokens = re.findall(r'\b[A-Za-z_][A-Za-z0-9_]*\b', self.expression)
+
+        tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", self.expression)
         known_keys = set(kwargs.keys())
-        builtins_set = {"sin", "cos", "tan", "sqrt", "log", "exp", "pi", "abs", "ln"}
-        missing = [t for t in tokens if t not in known_keys and t not in builtins_set]
-        
-        args_str = ", ".join(f"{k} = ({v.magnitude} {clean_unit_str(v.unit)})" if isinstance(v, Quantity) else f"{k} = {v}" for k, v in kwargs.items())
-        
+        builtins_set = {
+            "sin",
+            "cos",
+            "tan",
+            "sqrt",
+            "log",
+            "exp",
+            "pi",
+            "abs",
+            "ln",
+        }
+        missing = [
+            t for t in tokens if t not in known_keys and t not in builtins_set
+        ]
+
+        args_str = ", ".join(
+            f"{k} = ({v.magnitude} {clean_unit_str(v.unit)})"
+            if isinstance(v, Quantity)
+            else f"{k} = {v}"
+            for k, v in kwargs.items()
+        )
+
         if len(missing) == 1:
             target_var = missing[0]
             script = f"""use solve from calc
@@ -263,6 +290,7 @@ solve_fn = solve(eq_temp)
 solve_fn({args_str})
 """
         from physure._core import evaluate_phs_native
+
         results = evaluate_phs_native(script)
         if not results:
             return None
@@ -294,47 +322,86 @@ solve_fn({args_str})
 
     def __add__(self, other: Any) -> "PhyEquation":
         if isinstance(other, PhyEquation):
-            return PhyEquation(f"({self.lhs}) + ({other.lhs}) = ({self.rhs}) + ({other.rhs})", interpreter=self.interpreter)
+            return PhyEquation(
+                f"({self.lhs}) + ({other.lhs}) = ({self.rhs}) + ({other.rhs})",
+                interpreter=self.interpreter,
+            )
         op_str = self._format_operand(other)
-        return PhyEquation(f"({self.lhs}) + {op_str} = ({self.rhs}) + {op_str}", interpreter=self.interpreter)
+        return PhyEquation(
+            f"({self.lhs}) + {op_str} = ({self.rhs}) + {op_str}",
+            interpreter=self.interpreter,
+        )
 
     def __radd__(self, other: Any) -> "PhyEquation":
         op_str = self._format_operand(other)
-        return PhyEquation(f"{op_str} + ({self.lhs}) = {op_str} + ({self.rhs})", interpreter=self.interpreter)
+        return PhyEquation(
+            f"{op_str} + ({self.lhs}) = {op_str} + ({self.rhs})",
+            interpreter=self.interpreter,
+        )
 
     def __sub__(self, other: Any) -> "PhyEquation":
         if isinstance(other, PhyEquation):
-            return PhyEquation(f"({self.lhs}) - ({other.lhs}) = ({self.rhs}) - ({other.rhs})", interpreter=self.interpreter)
+            return PhyEquation(
+                f"({self.lhs}) - ({other.lhs}) = ({self.rhs}) - ({other.rhs})",
+                interpreter=self.interpreter,
+            )
         op_str = self._format_operand(other)
-        return PhyEquation(f"({self.lhs}) - {op_str} = ({self.rhs}) - {op_str}", interpreter=self.interpreter)
+        return PhyEquation(
+            f"({self.lhs}) - {op_str} = ({self.rhs}) - {op_str}",
+            interpreter=self.interpreter,
+        )
 
     def __rsub__(self, other: Any) -> "PhyEquation":
         op_str = self._format_operand(other)
-        return PhyEquation(f"{op_str} - ({self.lhs}) = {op_str} - ({self.rhs})", interpreter=self.interpreter)
+        return PhyEquation(
+            f"{op_str} - ({self.lhs}) = {op_str} - ({self.rhs})",
+            interpreter=self.interpreter,
+        )
 
     def __mul__(self, other: Any) -> "PhyEquation":
         if isinstance(other, PhyEquation):
-            return PhyEquation(f"({self.lhs}) * ({other.lhs}) = ({self.rhs}) * ({other.rhs})", interpreter=self.interpreter)
+            return PhyEquation(
+                f"({self.lhs}) * ({other.lhs}) = ({self.rhs}) * ({other.rhs})",
+                interpreter=self.interpreter,
+            )
         op_str = self._format_operand(other)
-        return PhyEquation(f"({self.lhs}) * {op_str} = ({self.rhs}) * {op_str}", interpreter=self.interpreter)
+        return PhyEquation(
+            f"({self.lhs}) * {op_str} = ({self.rhs}) * {op_str}",
+            interpreter=self.interpreter,
+        )
 
     def __rmul__(self, other: Any) -> "PhyEquation":
         op_str = self._format_operand(other)
-        return PhyEquation(f"{op_str} * ({self.lhs}) = {op_str} * ({self.rhs})", interpreter=self.interpreter)
+        return PhyEquation(
+            f"{op_str} * ({self.lhs}) = {op_str} * ({self.rhs})",
+            interpreter=self.interpreter,
+        )
 
     def __truediv__(self, other: Any) -> "PhyEquation":
         if isinstance(other, PhyEquation):
-            return PhyEquation(f"({self.lhs}) / ({other.lhs}) = ({self.rhs}) / ({other.rhs})", interpreter=self.interpreter)
+            return PhyEquation(
+                f"({self.lhs}) / ({other.lhs}) = ({self.rhs}) / ({other.rhs})",
+                interpreter=self.interpreter,
+            )
         op_str = self._format_operand(other)
-        return PhyEquation(f"({self.lhs}) / {op_str} = ({self.rhs}) / {op_str}", interpreter=self.interpreter)
+        return PhyEquation(
+            f"({self.lhs}) / {op_str} = ({self.rhs}) / {op_str}",
+            interpreter=self.interpreter,
+        )
 
     def __rtruediv__(self, other: Any) -> "PhyEquation":
         op_str = self._format_operand(other)
-        return PhyEquation(f"{op_str} / ({self.lhs}) = {op_str} / ({self.rhs})", interpreter=self.interpreter)
+        return PhyEquation(
+            f"{op_str} / ({self.lhs}) = {op_str} / ({self.rhs})",
+            interpreter=self.interpreter,
+        )
 
     def __pow__(self, power: Any) -> "PhyEquation":
         op_str = self._format_operand(power)
-        return PhyEquation(f"({self.lhs}) ^ {op_str} = ({self.rhs}) ^ {op_str}", interpreter=self.interpreter)
+        return PhyEquation(
+            f"({self.lhs}) ^ {op_str} = ({self.rhs}) ^ {op_str}",
+            interpreter=self.interpreter,
+        )
 
     def substitute(self, target: str, expr_or_eq: Any) -> "PhyEquation":
         """Substitute symbol `target` in this equation with another expression or equation RHS."""
@@ -343,19 +410,25 @@ solve_fn({args_str})
         else:
             sub_val = f"({expr_or_eq})"
         import re
-        new_lhs = re.sub(rf'\b{re.escape(target)}\b', sub_val, self.lhs)
-        new_rhs = re.sub(rf'\b{re.escape(target)}\b', sub_val, self.rhs)
-        return PhyEquation(f"{new_lhs} = {new_rhs}", interpreter=self.interpreter)
+
+        new_lhs = re.sub(rf"\b{re.escape(target)}\b", sub_val, self.lhs)
+        new_rhs = re.sub(rf"\b{re.escape(target)}\b", sub_val, self.rhs)
+        return PhyEquation(
+            f"{new_lhs} = {new_rhs}",
+            interpreter=self.interpreter,
+        )
 
     def __repr__(self):
-        return f"PhyEquation(\"{self.expression}\")"
+        return f'PhyEquation("{self.expression}")'
 
 
 def phy_function(func=None, *, name=None, params=None, interpreter=None):
     """Decorator to convert a Python function into a physical PhyFunction."""
+
     def decorator(fn):
         fn_name = name or fn.__name__
         import inspect
+
         fn_params = params or list(inspect.signature(fn).parameters.keys())
         pf = PhyFunction._from_existing(interpreter or Interpreter(), fn_name)
         pf._py_callable = fn
@@ -367,4 +440,11 @@ def phy_function(func=None, *, name=None, params=None, interpreter=None):
     return decorator
 
 
-__all__ = ["Equation", "PhyEquation", "PhyFunction", "phy_function", "SymbolicExpression", "SymbolicQuantity"]
+__all__ = [
+    "Equation",
+    "PhyEquation",
+    "PhyFunction",
+    "SymbolicExpression",
+    "SymbolicQuantity",
+    "phy_function",
+]

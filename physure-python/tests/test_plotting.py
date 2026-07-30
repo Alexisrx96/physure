@@ -202,4 +202,3 @@ def test_export_3d_formats(tmp_path):
     html_str = Z.export_3d(filename=str(html_path), fmt="html")
     assert html_path.exists()
     assert "Physure 3D" in html_str
-

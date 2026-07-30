@@ -1177,7 +1177,10 @@ class Quantity(
         binary: bool = True,
         **kwargs: Any,
     ) -> Any:
-        """Exports 3D mesh geometry of this quantity into standard 3D file formats (STL, OBJ, glTF, PLY, HTML)."""
+        """Exports 3D mesh geometry into standard 3D file formats.
+
+        Supported formats: STL, OBJ, glTF, PLY, HTML.
+        """
         from physure.plotting import export_3d
 
         return export_3d(
