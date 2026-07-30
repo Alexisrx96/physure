@@ -163,6 +163,7 @@ impl PythonTranspiler {
                         BinaryOp::Div => "/",
                         BinaryOp::Pow => unreachable!(),
                         BinaryOp::Convert => unreachable!(),
+                        BinaryOp::Range => unreachable!(),
                     };
                     Ok(format!("({} {} {})", l_str, op_str, r_str))
                 }

@@ -7,11 +7,15 @@ pub mod quantity;
 pub mod covariance;
 pub mod math;
 pub mod serialization;
+pub mod linalg;
+pub mod plotting;
 pub use error::{PhysureError, PhysureResult};
 pub use units::{RationalUnit, UnitRegistry, UnitConverter, DimVector, UnitDefinition, UnitKind};
 pub use quantity::Quantity;
+pub use linalg::{QuantityVector, QuantityMatrix};
 pub use covariance::{CovarianceStore, PruningConfig};
 pub use uncertainty::{UncertaintyBackend, UncertaintyValue, GaussianBackend, MonteCarloBackend, UnscentedBackend};
+pub use plotting::Mesh3DData;
 
 /// Convert batch values in-place using factor.
 pub fn batch_to_si(data: &mut [f64], factor: f64) {

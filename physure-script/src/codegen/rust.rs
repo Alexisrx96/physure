@@ -126,6 +126,7 @@ impl RustTranspiler {
                         let unit_str = super::expr_to_unit_string(right);
                         Ok(format!("({}).to(\"{}\").unwrap()", left_code, unit_str))
                     }
+                    BinaryOp::Range => unreachable!(),
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {

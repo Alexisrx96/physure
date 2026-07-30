@@ -425,6 +425,10 @@ def plot(
         plt.close(fig)
         return plot_slices(y, **kwargs)
 
+    elif kind == "3d":
+        plt.close(fig)
+        return plot_3d(y, x=x, **kwargs)
+
     else:
         raise ValueError(f"Unknown plot kind: {kind}")
 
@@ -1140,3 +1144,776 @@ def plot_covariance(
     )
 
     return ax
+
+
+def _prepare_3d_mesh(
+    z: Quantity | Numeric,
+    x: Quantity | Numeric | None = None,
+    y: Quantity | Numeric | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str]:
+    import numpy as np
+
+    from physure.domain.measurement.quantity import Quantity
+
+    z_is_q = isinstance(z, Quantity)
+    z_val = to_numpy(z.magnitude) if z_is_q else to_numpy(z)
+    z_unit_str = str(z.unit) if (z_is_q and z.unit) else ""
+    z_label = (z.symbol or "Z") if z_is_q else "Z"
+    zlabel_text = f"{z_label} ({z_unit_str})" if z_unit_str else z_label
+
+    if z_val.ndim == 1:
+        z_val = z_val.reshape((1, -1))
+    elif z_val.ndim > 2:
+        z_val = z_val.reshape((z_val.shape[0], -1))
+
+    rows, cols = z_val.shape
+
+    x_is_q = isinstance(x, Quantity)
+    x_val = (
+        to_numpy(x.magnitude)
+        if x_is_q
+        else (to_numpy(x) if x is not None else None)
+    )
+    x_unit_str = str(x.unit) if (x_is_q and x.unit) else ""
+    x_label = (x.symbol or "X") if x_is_q else "X"
+    xlabel_text = f"{x_label} ({x_unit_str})" if x_unit_str else x_label
+
+    y_is_q = isinstance(y, Quantity)
+    y_val = (
+        to_numpy(y.magnitude)
+        if y_is_q
+        else (to_numpy(y) if y is not None else None)
+    )
+    y_unit_str = str(y.unit) if (y_is_q and y.unit) else ""
+    y_label = (y.symbol or "Y") if y_is_q else "Y"
+    ylabel_text = f"{y_label} ({y_unit_str})" if y_unit_str else y_label
+
+    if x_val is None:
+        x_grid_1d = np.arange(cols, dtype=float)
+    else:
+        x_grid_1d = x_val.flatten()
+
+    if y_val is None:
+        y_grid_1d = np.arange(rows, dtype=float)
+    else:
+        y_grid_1d = y_val.flatten()
+
+    if (
+        x_val is not None
+        and x_val.ndim == 2
+        and y_val is not None
+        and y_val.ndim == 2
+    ):
+        X_grid, Y_grid = x_val, y_val
+    else:
+        X_grid, Y_grid = np.meshgrid(x_grid_1d[:cols], y_grid_1d[:rows])
+
+    return X_grid, Y_grid, z_val, xlabel_text, ylabel_text, zlabel_text
+
+
+def _mesh_triangles(
+    X: np.ndarray, Y: np.ndarray, Z: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    import numpy as np
+
+    rows, cols = Z.shape
+    verts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+
+    r_idx, c_idx = np.meshgrid(
+        np.arange(rows - 1), np.arange(cols - 1), indexing="ij"
+    )
+    r_idx = r_idx.ravel()
+    c_idx = c_idx.ravel()
+
+    idx00 = r_idx * cols + c_idx
+    idx01 = r_idx * cols + (c_idx + 1)
+    idx10 = (r_idx + 1) * cols + c_idx
+    idx11 = (r_idx + 1) * cols + (c_idx + 1)
+
+    t1 = np.column_stack([idx00, idx10, idx01])
+    t2 = np.column_stack([idx10, idx11, idx01])
+
+    faces = np.vstack([t1, t2])
+    return verts, faces
+
+
+def _compute_face_normals(verts: np.ndarray, faces: np.ndarray) -> np.ndarray:
+    import numpy as np
+
+    v0 = verts[faces[:, 0]]
+    v1 = verts[faces[:, 1]]
+    v2 = verts[faces[:, 2]]
+    normals = np.cross(v1 - v0, v2 - v0)
+    norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return normals / norms
+
+
+def _map_z_to_rgb(Z: np.ndarray, cmap_name: str = "plasma") -> np.ndarray:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    z_flat = Z.ravel()
+    z_min, z_max = np.min(z_flat), np.max(z_flat)
+    if z_max > z_min:
+        z_norm = (z_flat - z_min) / (z_max - z_min)
+    else:
+        z_norm = np.zeros_like(z_flat)
+
+    try:
+        cm = plt.get_cmap(cmap_name)
+    except Exception:
+        cm = plt.get_cmap("plasma")
+
+    colors_rgba = cm(z_norm)
+    return colors_rgba[:, :3]
+
+
+def _export_stl(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    filename: str | None = None,
+    binary: bool = True,
+) -> str | bytes:
+    import struct
+
+    normals = _compute_face_normals(verts, faces)
+    v0 = verts[faces[:, 0]]
+    v1 = verts[faces[:, 1]]
+    v2 = verts[faces[:, 2]]
+
+    if binary:
+        header = b"Physure 3D Mesh Export".ljust(80, b"\x00")
+        num_triangles = len(faces)
+        buffer = bytearray()
+        buffer.extend(header)
+        buffer.extend(struct.pack("<I", num_triangles))
+        for i in range(num_triangles):
+            n = normals[i]
+            p0, p1, p2 = v0[i], v1[i], v2[i]
+            buffer.extend(
+                struct.pack(
+                    "<12fH",
+                    float(n[0]),
+                    float(n[1]),
+                    float(n[2]),
+                    float(p0[0]),
+                    float(p0[1]),
+                    float(p0[2]),
+                    float(p1[0]),
+                    float(p1[1]),
+                    float(p1[2]),
+                    float(p2[0]),
+                    float(p2[1]),
+                    float(p2[2]),
+                    0,
+                )
+            )
+        out_bytes = bytes(buffer)
+        if filename:
+            with open(filename, "wb") as f:
+                f.write(out_bytes)
+        return out_bytes
+    else:
+        lines = ["solid physure_mesh"]
+        for i in range(len(faces)):
+            n = normals[i]
+            p0, p1, p2 = v0[i], v1[i], v2[i]
+            lines.append(f"  facet normal {n[0]:.6e} {n[1]:.6e} {n[2]:.6e}")
+            lines.append("    outer loop")
+            lines.append(f"      vertex {p0[0]:.6e} {p0[1]:.6e} {p0[2]:.6e}")
+            lines.append(f"      vertex {p1[0]:.6e} {p1[1]:.6e} {p1[2]:.6e}")
+            lines.append(f"      vertex {p2[0]:.6e} {p2[1]:.6e} {p2[2]:.6e}")
+            lines.append("    endloop")
+            lines.append("  endfacet")
+        lines.append("endsolid physure_mesh\n")
+        out_str = "\n".join(lines)
+        if filename:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(out_str)
+        return out_str
+
+
+def _export_obj(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    colors: np.ndarray | None = None,
+    filename: str | None = None,
+) -> str:
+    lines = ["# Physure 3D Mesh OBJ Export"]
+    for i in range(len(verts)):
+        v = verts[i]
+        if colors is not None:
+            c = colors[i]
+            lines.append(
+                f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f} {c[0]:.4f} {c[1]:.4f} {c[2]:.4f}"
+            )
+        else:
+            lines.append(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}")
+
+    for f in faces:
+        lines.append(f"f {f[0] + 1} {f[1] + 1} {f[2] + 1}")
+    out_str = "\n".join(lines) + "\n"
+    if filename:
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(out_str)
+    return out_str
+
+
+def _export_ply(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    colors: np.ndarray | None = None,
+    filename: str | None = None,
+) -> str:
+    lines = [
+        "ply",
+        "format ascii 1.0",
+        "comment Created by Physure 3D Exporter",
+        f"element vertex {len(verts)}",
+        "property float x",
+        "property float y",
+        "property float z",
+    ]
+    if colors is not None:
+        lines.extend([
+            "property uchar red",
+            "property uchar green",
+            "property uchar blue",
+        ])
+    lines.extend([
+        f"element face {len(faces)}",
+        "property list uchar int vertex_indices",
+        "end_header",
+    ])
+    for i in range(len(verts)):
+        v = verts[i]
+        if colors is not None:
+            rgb = (colors[i] * 255).astype(int)
+            lines.append(
+                f"{v[0]:.6f} {v[1]:.6f} {v[2]:.6f} {rgb[0]} {rgb[1]} {rgb[2]}"
+            )
+        else:
+            lines.append(f"{v[0]:.6f} {v[1]:.6f} {v[2]:.6f}")
+
+    for f in faces:
+        lines.append(f"3 {f[0]} {f[1]} {f[2]}")
+
+    out_str = "\n".join(lines) + "\n"
+    if filename:
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(out_str)
+    return out_str
+
+
+def _export_gltf(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    colors: np.ndarray | None = None,
+    filename: str | None = None,
+) -> str:
+    import base64
+    import json
+    import numpy as np
+
+    v_bytes = verts.astype(np.float32).tobytes()
+    f_bytes = faces.astype(np.uint32).tobytes()
+
+    if colors is not None:
+        c_bytes = colors.astype(np.float32).tobytes()
+        buffer_data = v_bytes + c_bytes + f_bytes
+    else:
+        c_bytes = b""
+        buffer_data = v_bytes + f_bytes
+
+    b64_uri = (
+        "data:application/octet-stream;base64,"
+        + base64.b64encode(buffer_data).decode("ascii")
+    )
+
+    v_len = len(v_bytes)
+    c_len = len(c_bytes)
+
+    v_min = verts.min(axis=0).tolist()
+    v_max = verts.max(axis=0).tolist()
+
+    buffer_views = [
+        {"buffer": 0, "byteOffset": 0, "byteLength": v_len, "target": 34962}
+    ]
+    accessors = [
+        {
+            "bufferView": 0,
+            "byteOffset": 0,
+            "componentType": 5126,
+            "count": len(verts),
+            "type": "VEC3",
+            "min": v_min,
+            "max": v_max,
+        }
+    ]
+
+    attributes = {"POSITION": 0}
+    current_offset = v_len
+
+    if colors is not None:
+        buffer_views.append({
+            "buffer": 0,
+            "byteOffset": current_offset,
+            "byteLength": c_len,
+            "target": 34962,
+        })
+        accessors.append({
+            "bufferView": 1,
+            "byteOffset": 0,
+            "componentType": 5126,
+            "count": len(verts),
+            "type": "VEC3",
+        })
+        attributes["COLOR_0"] = 1
+        current_offset += c_len
+
+    indices_view_idx = len(buffer_views)
+    buffer_views.append({
+        "buffer": 0,
+        "byteOffset": current_offset,
+        "byteLength": len(f_bytes),
+        "target": 34963,
+    })
+    indices_acc_idx = len(accessors)
+    accessors.append({
+        "bufferView": indices_view_idx,
+        "byteOffset": 0,
+        "componentType": 5125,
+        "count": len(faces) * 3,
+        "type": "SCALAR",
+    })
+
+    gltf = {
+        "asset": {"version": "2.0", "generator": "Physure 3D Exporter"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [
+            {
+                "primitives": [
+                    {
+                        "attributes": attributes,
+                        "indices": indices_acc_idx,
+                        "mode": 4,
+                    }
+                ]
+            }
+        ],
+        "buffers": [{"uri": b64_uri, "byteLength": len(buffer_data)}],
+        "bufferViews": buffer_views,
+        "accessors": accessors,
+    }
+
+    out_str = json.dumps(gltf, indent=2)
+    if filename:
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(out_str)
+    return out_str
+
+
+def _export_html_threejs(
+    verts: np.ndarray,
+    faces: np.ndarray,
+    colors: np.ndarray,
+    xlabel: str = "X",
+    ylabel: str = "Y",
+    zlabel: str = "Z",
+    title: str = "Physure 3D Interactive Viewer",
+    filename: str | None = None,
+) -> str:
+    import json
+
+    v_flat = verts.flatten().tolist()
+    f_flat = faces.flatten().tolist()
+    c_flat = colors.flatten().tolist()
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #f8fafc;
+        }}
+        #canvas-container {{
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }}
+        #hud {{
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            background: rgba(15, 23, 42, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 14px 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            max-width: 320px;
+            z-index: 10;
+        }}
+        #hud h2 {{
+            margin: 0 0 6px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: #38bdf8;
+        }}
+        #hud p {{
+            margin: 4px 0;
+            font-size: 12px;
+            color: #94a3b8;
+        }}
+        .controls-info {{
+            margin-top: 10px;
+            font-size: 11px;
+            color: #64748b;
+            border-top: 1px solid rgba(255,255,255,0.08);
+            padding-top: 8px;
+        }}
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+    <div id="hud">
+        <h2>{title}</h2>
+        <p><strong>X:</strong> {xlabel}</p>
+        <p><strong>Y:</strong> {ylabel}</p>
+        <p><strong>Z:</strong> {zlabel}</p>
+        <div class="controls-info">
+            🎮 <strong>Controls:</strong> Left click + drag to rotate | Right click + drag to pan | Scroll to zoom
+        </div>
+    </div>
+    <div id="canvas-container"></div>
+
+    <script>
+        const vertices = new Float32Array({json.dumps(v_flat)});
+        const indices = new Uint32Array({json.dumps(f_flat)});
+        const colors = new Float32Array({json.dumps(c_flat)});
+
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0f172a);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({{ antialias: true }});
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Build Geometry
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        geometry.computeVertexNormals();
+
+        // Calculate Bounding Box & Center
+        geometry.computeBoundingBox();
+        const bbox = geometry.boundingBox;
+        const center = new THREE.Vector3();
+        bbox.getCenter(center);
+        const size = new THREE.Vector3();
+        bbox.getSize(size);
+
+        // Double Sided Mesh Material
+        const material = new THREE.MeshStandardMaterial({{
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            roughness: 0.3,
+            metalness: 0.2,
+            wireframe: false
+        }});
+        const mesh = new THREE.Mesh(geometry, material);
+        scene.add(mesh);
+
+        // Wireframe Overlay
+        const wireframeMaterial = new THREE.MeshBasicMaterial({{
+            color: 0xffffff,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.1
+        }});
+        const wireframeMesh = new THREE.Mesh(geometry, wireframeMaterial);
+        scene.add(wireframeMesh);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+        scene.add(ambientLight);
+        const dirLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight1.position.set(size.x, size.y * 2, size.z * 2);
+        scene.add(dirLight1);
+        const dirLight2 = new THREE.DirectionalLight(0x38bdf8, 0.4);
+        dirLight2.position.set(-size.x, -size.y, -size.z);
+        scene.add(dirLight2);
+
+        // Grid & Axis Helpers
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const gridHelper = new THREE.GridHelper(maxDim * 2, 20, 0x38bdf8, 0x334155);
+        gridHelper.position.set(center.x, bbox.min.y, center.z);
+        scene.add(gridHelper);
+
+        const axesHelper = new THREE.AxesHelper(maxDim * 0.8);
+        axesHelper.position.copy(bbox.min);
+        scene.add(axesHelper);
+
+        // Camera positioning
+        camera.position.set(center.x + maxDim * 1.5, center.y + maxDim * 1.2, center.z + maxDim * 1.8);
+        camera.lookAt(center);
+        controls.target.copy(center);
+
+        window.addEventListener('resize', () => {{
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }});
+
+        function animate() {{
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }}
+        animate();
+    </script>
+</body>
+</html>
+"""
+    if filename:
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(html_content)
+    return html_content
+
+
+def plot_3d(
+    z: Quantity | Numeric,
+    x: Quantity | Numeric | None = None,
+    y: Quantity | Numeric | None = None,
+    backend: str = "auto",
+    title: str | None = None,
+    filename: str | None = None,
+    cmap: str = "plasma",
+    **kwargs: Any,
+) -> Any:
+    """True interactive 3D surface plot for physical quantities with perspective & WebGL viewer.
+
+    Args:
+        z: 2D heightfield or 3D field Quantity or array.
+        x: Optional X coordinates or Quantity.
+        y: Optional Y coordinates or Quantity.
+        backend: Backend engine ('auto', 'plotly', 'html'/'threejs', 'matplotlib').
+        title: Optional plot title.
+        filename: Optional path to save HTML file or render image.
+        cmap: Colormap for 3D surface.
+        **kwargs: Extra parameters.
+
+    Returns:
+        Plotly Figure object, Three.js HTML string, or Matplotlib Axes3D.
+    """
+    X_grid, Y_grid, Z_grid, xlabel, ylabel, zlabel = _prepare_3d_mesh(z, x, y)
+    title_str = title or f"3D Surface of {zlabel}"
+
+    if backend == "auto":
+        try:
+            import plotly  # noqa: F401
+
+            backend = "plotly"
+        except ImportError:
+            backend = "html"
+
+    backend = backend.lower()
+
+    if backend == "plotly":
+        try:
+            import plotly.graph_objects as go
+        except ImportError as e:
+            raise ImportError(
+                "Plotly is required for the 'plotly' 3D backend. "
+                "Install it via `pip install plotly`."
+            ) from e
+
+        fig = go.Figure(
+            data=[
+                go.Surface(
+                    z=Z_grid,
+                    x=X_grid,
+                    y=Y_grid,
+                    colorscale=cmap,
+                    colorbar=dict(title=zlabel),
+                )
+            ]
+        )
+        fig.update_layout(
+            title=title_str,
+            scene=dict(
+                xaxis_title=xlabel,
+                yaxis_title=ylabel,
+                zaxis_title=zlabel,
+                camera=dict(
+                    eye=dict(x=1.5, y=1.5, z=1.2),
+                    projection=dict(type="perspective"),
+                ),
+            ),
+            margin=dict(l=0, r=0, b=0, t=40),
+        )
+        if filename:
+            if filename.endswith(".html"):
+                fig.write_html(filename)
+            else:
+                fig.write_image(filename)
+        return fig
+
+    elif backend in ("html", "threejs", "webgl"):
+        verts, faces = _mesh_triangles(X_grid, Y_grid, Z_grid)
+        colors = _map_z_to_rgb(Z_grid, cmap_name=cmap)
+        return _export_html_threejs(
+            verts,
+            faces,
+            colors,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            zlabel=zlabel,
+            title=title_str,
+            filename=filename,
+        )
+
+    elif backend in ("matplotlib", "mpl"):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError as e:
+            raise ImportError(
+                "Matplotlib is required for the 'matplotlib' 3D backend."
+            ) from e
+
+        fig = plt.figure(figsize=(9, 7))
+        ax = fig.add_subplot(111, projection="3d")
+        cm = plt.get_cmap(cmap)
+        surf = ax.plot_surface(
+            X_grid, Y_grid, Z_grid, cmap=cm, linewidth=0, antialiased=True
+        )
+        cbar = fig.colorbar(surf, ax=ax, shrink=0.6, aspect=12, pad=0.08)
+        cbar.set_label(
+            zlabel, rotation=270, labelpad=15, fontsize=10, color="#1F2937"
+        )
+        ax.set_xlabel(xlabel, fontsize=10, color="#1F2937", labelpad=8)
+        ax.set_ylabel(ylabel, fontsize=10, color="#1F2937", labelpad=8)
+        ax.set_zlabel(zlabel, fontsize=10, color="#1F2937", labelpad=8)
+        ax.set_title(title_str)
+
+        if filename:
+            fig.savefig(filename)
+        return ax
+    else:
+        raise ValueError(
+            f"Unknown 3D backend: {backend}. Choose from 'auto', 'plotly', 'html'/'threejs', 'matplotlib'."
+        )
+
+
+def export_3d(
+    z: Quantity | Numeric,
+    x: Quantity | Numeric | None = None,
+    y: Quantity | Numeric | None = None,
+    filename: str = "plot_3d.stl",
+    fmt: str | None = None,
+    binary: bool = True,
+    cmap: str = "plasma",
+    **kwargs: Any,
+) -> str | bytes:
+    """Exports 3D mesh geometry of a physical quantity into standard 3D file formats.
+
+    Delegates to 100% native Rust engine (physure._core.export_mesh_3d_native).
+
+    Supports export to:
+    - STL (.stl ASCII or binary): Standard 3D CAD / printing model format.
+    - OBJ (.obj): Wavefront 3D mesh format with vertex coordinates & colors.
+    - glTF / GLB (.gltf, .glb): Khronos Group 3D scene standard for web/AR/VR.
+    - PLY (.ply): Polygon mesh file format.
+    - HTML (.html): Standalone interactive Three.js 3D WebGL viewer.
+    """
+    X_grid, Y_grid, Z_grid, xlabel, ylabel, zlabel = _prepare_3d_mesh(z, x, y)
+    title = kwargs.get("title", f"Physure 3D Mesh: {zlabel}")
+
+    if fmt is None:
+        ext = filename.split(".")[-1].lower() if "." in filename else "stl"
+        fmt = ext
+
+    fmt_req = fmt.lower()
+    rust_fmt = "stl_ascii" if (fmt_req == "stl" and not binary) else fmt_req
+
+    try:
+        from physure._core import export_mesh_3d_native
+
+        rows, cols = Z_grid.shape
+        x_flat = [float(v) for v in X_grid.flatten()]
+        y_flat = [float(v) for v in Y_grid.flatten()]
+        z_flat = [float(v) for v in Z_grid.flatten()]
+
+        out_bytes = export_mesh_3d_native(
+            title,
+            xlabel,
+            ylabel,
+            zlabel,
+            x_flat,
+            y_flat,
+            z_flat,
+            rows,
+            cols,
+            rust_fmt,
+        )
+
+        if rust_fmt in ("obj", "gltf", "glb", "ply", "html", "threejs", "stl_ascii"):
+            res_str = out_bytes.decode("utf-8")
+            if filename:
+                with open(filename, "w", encoding="utf-8") as f:
+                    f.write(res_str)
+            return res_str
+        else:
+            if filename:
+                with open(filename, "wb") as f:
+                    f.write(out_bytes)
+            return out_bytes
+    except (ImportError, AttributeError):
+        verts, faces = _mesh_triangles(X_grid, Y_grid, Z_grid)
+        colors = _map_z_to_rgb(Z_grid, cmap_name=cmap)
+
+        if fmt_req == "stl":
+            return _export_stl(verts, faces, filename=filename, binary=binary)
+        elif fmt_req == "obj":
+            return _export_obj(verts, faces, colors=colors, filename=filename)
+        elif fmt_req == "ply":
+            return _export_ply(verts, faces, colors=colors, filename=filename)
+        elif fmt_req in ("gltf", "glb"):
+            return _export_gltf(verts, faces, colors=colors, filename=filename)
+        elif fmt_req in ("html", "threejs"):
+            return _export_html_threejs(
+                verts,
+                faces,
+                colors,
+                xlabel=xlabel,
+                ylabel=ylabel,
+                zlabel=zlabel,
+                title=title,
+                filename=filename,
+            )
+        else:
+            raise ValueError(
+                f"Unsupported 3D export format: {fmt}. Choose from 'stl', 'obj', 'ply', 'gltf', 'glb', 'html'."
+            )
+
+

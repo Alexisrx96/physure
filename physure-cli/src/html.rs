@@ -49,6 +49,34 @@ fn escape_html(input: &str) -> String {
         .replace('"', "&quot;")
 }
 
+fn base64_encode(input: &str) -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i] as u32;
+        let b1 = if i + 1 < bytes.len() { bytes[i + 1] as u32 } else { 0 };
+        let b2 = if i + 2 < bytes.len() { bytes[i + 2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(CHARSET[((triple >> 18) & 63) as usize] as char);
+        out.push(CHARSET[((triple >> 12) & 63) as usize] as char);
+        if i + 1 < bytes.len() {
+            out.push(CHARSET[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if i + 2 < bytes.len() {
+            out.push(CHARSET[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        i += 3;
+    }
+    out
+}
+
 fn format_val_latex(val: &PhsValue, i18n: &I18nLabels) -> String {
     match val {
         PhsValue::Quantity(q) => {
@@ -187,17 +215,33 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
 
         match &step.value {
             PhsValue::Plot(PlotData { title: p_title, svg, .. }) => {
-                content_html.push_str(&format!(
-                    r#"<figure class="latex-figure">
-                        <div class="fig-frame">
-                            {}
-                        </div>
-                        <figcaption class="fig-caption">
-                            <strong>{} {}.</strong> {}.
-                        </figcaption>
-                    </figure>"#,
-                    svg, i18n.fig_prefix, fig_counter, escape_html(p_title)
-                ));
+                let trimmed_svg = svg.trim_start();
+                if trimmed_svg.starts_with("<!DOCTYPE") || trimmed_svg.starts_with("<html") {
+                    let b64 = base64_encode(svg);
+                    content_html.push_str(&format!(
+                        r#"<figure class="latex-figure native-3d-figure">
+                            <div class="fig-frame-3d">
+                                <iframe src="data:text/html;charset=utf-8;base64,{}" style="width: 100%; height: 100%; border: none;" sandbox="allow-scripts allow-same-origin"></iframe>
+                            </div>
+                            <figcaption class="fig-caption">
+                                <strong>{} {}.</strong> {}.
+                            </figcaption>
+                        </figure>"#,
+                        b64, i18n.fig_prefix, fig_counter, escape_html(p_title)
+                    ));
+                } else {
+                    content_html.push_str(&format!(
+                        r#"<figure class="latex-figure">
+                            <div class="fig-frame">
+                                {}
+                            </div>
+                            <figcaption class="fig-caption">
+                                <strong>{} {}.</strong> {}.
+                            </figcaption>
+                        </figure>"#,
+                        svg, i18n.fig_prefix, fig_counter, escape_html(p_title)
+                    ));
+                }
                 fig_counter += 1;
             }
             _ => {
@@ -250,19 +294,22 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
 
         body {{
             font-family: 'Crimson Pro', Georgia, 'Times New Roman', 'Liberation Serif', serif;
-            font-size: 11.5pt;
-            color: #111111;
-            background-color: #ffffff;
-            line-height: 1.65;
+            font-size: 12pt;
+            color: #0f172a;
+            background-color: #f8fafc;
+            line-height: 1.7;
             margin: 0;
-            padding: 40px 20px;
+            padding: 32px 20px;
         }}
 
         .paper-manuscript {{
-            max-width: 820px;
+            max-width: 1100px;
             margin: 0 auto;
             background: #ffffff;
-            padding: 0;
+            padding: 48px 56px;
+            border-radius: 12px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 10px 40px -10px rgba(15, 23, 42, 0.08);
         }}
 
         .paper-header {{
@@ -288,6 +335,8 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
             margin: 0 0 12px 0;
             line-height: 1.25;
             color: #000000;
+            word-break: break-all;
+            overflow-wrap: break-word;
         }}
 
         .paper-author-meta {{
@@ -373,6 +422,24 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
             border-radius: 2px;
         }}
 
+        .fig-frame-3d {{
+            width: 100%;
+            height: 600px;
+            padding: 0;
+            display: block;
+            border: 1px solid #cbd5e1;
+            background: #0f172a;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.18);
+        }}
+
+        @media (max-width: 768px) {{
+            body {{ padding: 12px 8px; }}
+            .paper-manuscript {{ padding: 24px 18px; border-radius: 8px; }}
+            .fig-frame-3d {{ height: 420px; }}
+        }}
+
         .fig-caption {{
             font-size: 0.9rem;
             color: #333333;
@@ -394,9 +461,8 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
         }}
 
         @media print {{
-            body {{
-                padding: 0;
-            }}
+            body {{ padding: 0; background: #ffffff; }}
+            .paper-manuscript {{ max-width: 100%; padding: 0; border: none; box-shadow: none; }}
         }}
     </style>
     <script>

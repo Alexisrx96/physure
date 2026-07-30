@@ -1146,6 +1146,50 @@ class Quantity(
 
         return plot_covariance(self, ax=ax, **kwargs)
 
+    def plot_3d(
+        self,
+        x: Any = None,
+        y: Any = None,
+        backend: str = "auto",
+        title: str | None = None,
+        filename: str | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """True interactive 3D surface plot for this physical quantity."""
+        from physure.plotting import plot_3d
+
+        return plot_3d(
+            self,
+            x=x,
+            y=y,
+            backend=backend,
+            title=title,
+            filename=filename,
+            **kwargs,
+        )
+
+    def export_3d(
+        self,
+        filename: str = "plot_3d.stl",
+        x: Any = None,
+        y: Any = None,
+        fmt: str | None = None,
+        binary: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Exports 3D mesh geometry of this quantity into standard 3D file formats (STL, OBJ, glTF, PLY, HTML)."""
+        from physure.plotting import export_3d
+
+        return export_3d(
+            self,
+            x=x,
+            y=y,
+            filename=filename,
+            fmt=fmt,
+            binary=binary,
+            **kwargs,
+        )
+
     def to(
         self,
         target_unit: CompoundUnit | UnitName,

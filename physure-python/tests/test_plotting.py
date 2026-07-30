@@ -13,6 +13,8 @@ from physure import Q_
 def test_plot_imports():
     """Ensure plotting functions are lazily exposed at package and class levels."""
     assert hasattr(ps, "plot")
+    assert hasattr(ps, "plot_3d")
+    assert hasattr(ps, "export_3d")
     assert hasattr(ps, "plot_slices")
     assert hasattr(ps, "plot_interactive")
     assert hasattr(ps, "plot_parallel_coordinates")
@@ -21,6 +23,8 @@ def test_plot_imports():
 
     q = Q_(10, "m")
     assert hasattr(q, "plot")
+    assert hasattr(q, "plot_3d")
+    assert hasattr(q, "export_3d")
     assert hasattr(q, "plot_slices")
     assert hasattr(q, "plot_interactive")
     assert hasattr(q, "plot_covariance")
@@ -128,3 +132,74 @@ def test_plot_covariance_matrix():
         ax = q_derived.plot_covariance()
         assert ax is not None
         plt.close(ax.figure)
+
+
+def test_plot_3d_rendering(tmp_path):
+    """Verify true 3D interactive plotting and HTML generation."""
+    x = Q_(np.linspace(-5, 5, 10), "m", symbol="X_Position")
+    y = Q_(np.linspace(-5, 5, 10), "m", symbol="Y_Position")
+    X, Y = np.meshgrid(x.magnitude, y.magnitude)
+    Z = Q_(np.sin(np.sqrt(X**2 + Y**2)), "Pa", symbol="Pressure")
+
+    # Test Matplotlib 3D backend
+    ax_mpl = Z.plot_3d(x=x, y=y, backend="matplotlib")
+    assert ax_mpl is not None
+    plt.close(ax_mpl.figure)
+
+    # Test HTML WebGL Three.js backend
+    html_file = tmp_path / "interactive_3d.html"
+    html_content = Z.plot_3d(x=x, y=y, backend="html", filename=str(html_file))
+    assert "OrbitControls" in html_content
+    assert "WebGLRenderer" in html_content
+    assert html_file.exists()
+
+
+def test_export_3d_formats(tmp_path):
+    """Verify exporting 3D surface meshes to STL, OBJ, glTF, PLY, and HTML formats."""
+    x = Q_(np.linspace(0, 1, 5), "m", symbol="Width")
+    y = Q_(np.linspace(0, 1, 5), "m", symbol="Height")
+    X, Y = np.meshgrid(x.magnitude, y.magnitude)
+    Z = Q_(X + Y, "K", symbol="Temperature")
+
+    # 1. STL Binary
+    stl_bin_path = tmp_path / "mesh.stl"
+    stl_bin = Z.export_3d(filename=str(stl_bin_path), fmt="stl", binary=True)
+    assert stl_bin_path.exists()
+    assert isinstance(stl_bin, bytes)
+    assert stl_bin.startswith(b"Physure 3D")
+
+    # 2. STL ASCII
+    stl_ascii_path = tmp_path / "mesh_ascii.stl"
+    stl_ascii = Z.export_3d(
+        filename=str(stl_ascii_path), fmt="stl", binary=False
+    )
+    assert stl_ascii_path.exists()
+    assert isinstance(stl_ascii, str)
+    assert "solid physure_mesh" in stl_ascii
+
+    # 3. Wavefront OBJ
+    obj_path = tmp_path / "mesh.obj"
+    obj_str = Z.export_3d(filename=str(obj_path), fmt="obj")
+    assert obj_path.exists()
+    assert "v " in obj_str
+    assert "f " in obj_str
+
+    # 4. glTF 2.0
+    gltf_path = tmp_path / "mesh.gltf"
+    gltf_str = Z.export_3d(filename=str(gltf_path), fmt="gltf")
+    assert gltf_path.exists()
+    assert '"asset"' in gltf_str
+    assert "Physure 3D" in gltf_str
+
+    # 5. PLY
+    ply_path = tmp_path / "mesh.ply"
+    ply_str = Z.export_3d(filename=str(ply_path), fmt="ply")
+    assert ply_path.exists()
+    assert "format ascii 1.0" in ply_str
+
+    # 6. HTML Three.js
+    html_path = tmp_path / "viewer.html"
+    html_str = Z.export_3d(filename=str(html_path), fmt="html")
+    assert html_path.exists()
+    assert "Physure 3D" in html_str
+

@@ -229,8 +229,16 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::let_expr => parse_let_expr(first),
         Rule::base_expr => {
             let left = parse_base_expr(first)?;
-            if let Some(then_pair) = inner.next() {
-                let else_pair = inner.next().unwrap();
+            if let Some(tail) = inner.next() {
+                // `ternary_op` is a rule of its own, so the two branches arrive nested
+                // inside it rather than as further children of `expr`.
+                let mut branches = tail.into_inner();
+                let then_pair = branches
+                    .next()
+                    .ok_or_else(|| PhysureError::Generic("Ternary is missing its 'then' branch".into()))?;
+                let else_pair = branches
+                    .next()
+                    .ok_or_else(|| PhysureError::Generic("Ternary is missing its 'else' branch".into()))?;
                 let then_expr = parse_base_expr(then_pair)?;
                 let else_expr = parse_base_expr(else_pair)?;
                 Ok(Expr::FunctionCall {
@@ -256,6 +264,7 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             Rule::op_add => BinaryOp::Add,
             Rule::op_sub => BinaryOp::Sub,
             Rule::op_convert => BinaryOp::Convert,
+            Rule::op_range => BinaryOp::Range,
             _ => return Err(PhysureError::Generic(format!("Unexpected op in base_expr: {:?}", op_pair.as_rule()))),
         };
         let right_pair = inner.next().unwrap();
@@ -741,6 +750,22 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ternary_op` is a rule of its own, so `expr` sees it as a single child rather than
+    /// as two loose `base_expr`s — reading the branches off `expr` panicked on the second.
+    #[test]
+    fn test_ternary_branches_come_from_the_ternary_rule() {
+        for code in ["let z = 3 in z > 2 ? 100 : 200", "5 m > 2 m ? 1 kg : 2 kg", "1 > 0 ? 2 m : 3 m"] {
+            let prog = parse_phs(code).unwrap_or_else(|e| panic!("{code:?} failed to parse: {e:?}"));
+            let expr = match &prog.statements[0] {
+                Statement::Expr(e) => e,
+                other => panic!("{code:?} produced {other:?}"),
+            };
+            // `let ... in` wraps the ternary, so look for the call anywhere in the tree.
+            let rendered = format!("{expr:?}");
+            assert!(rendered.contains("ternary"), "{code:?} did not build a ternary: {rendered}");
+        }
+    }
 
     #[test]
     fn test_explicit_imports() {

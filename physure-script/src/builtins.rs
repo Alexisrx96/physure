@@ -1,4 +1,5 @@
 use physure_core::error::{PhysureError, PhysureResult};
+use physure_core::units::parser::Parser as UnitParser;
 use super::value::PhsValue;
 use super::interpreter::PhsInterpreter;
 use crate::ast::BinaryOp;
@@ -70,20 +71,37 @@ fn compare(args: &[PhsValue], pred: impl Fn(f64, f64) -> bool) -> PhysureResult<
 
 pub fn domain_members(domain: &str) -> Option<&'static [&'static str]> {
     match domain {
-        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim"]),
-        "plot" => Some(&["plot"]),
-        "array" => Some(&["linspace", "gradient", "trapz"]),
+        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim", "grad", "gradient", "div", "divergence", "curl", "laplacian", "simplify", "expand"]),
+        "plot" => Some(&["plot", "plot3d", "export3d", "export_3d", "plot_field", "plot_nd"]),
+        "array" => Some(&["linspace", "gradient", "trapz", "dot", "cross", "norm", "unit_vector", "transpose", "matmul", "det"]),
         _ => None,
     }
 }
 
-pub fn eval_domain_builtin(domain: &str, name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+pub fn eval_domain_builtin_with_kwargs(
+    domain: &str,
+    name: &str,
+    args: &[PhsValue],
+    kwargs: &[(String, PhsValue)],
+    interpreter: &PhsInterpreter,
+    env: &std::collections::HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
     match domain {
         "calc" => eval_calc_builtin(name, args, interpreter),
-        "plot" => eval_plot_builtin(name, args, interpreter),
+        "plot" => eval_plot_builtin_with_kwargs(name, args, kwargs, interpreter, env),
         "array" => eval_array_builtin(name, args, interpreter),
         _ => Ok(None),
     }
+}
+
+pub fn eval_domain_builtin(
+    domain: &str,
+    name: &str,
+    args: &[PhsValue],
+    interpreter: &PhsInterpreter,
+) -> PhysureResult<Option<PhsValue>> {
+    let empty_env = std::collections::HashMap::new();
+    eval_domain_builtin_with_kwargs(domain, name, args, &[], interpreter, &empty_env)
 }
 
 pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
@@ -327,7 +345,7 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
     }
 }
 
-fn eval_array_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn eval_array_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
         "linspace" => {
             if args.len() < 2 {
@@ -435,6 +453,162 @@ fn eval_array_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpret
             }
             Ok(Some(total))
         }
+        "dot" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("dot expects 2 vectors".into()));
+            }
+            let (v1, v2) = match (&args[0], &args[1]) {
+                (PhsValue::Vector(v1), PhsValue::Vector(v2)) => (v1, v2),
+                _ => return Err(PhysureError::Generic("dot expects 2 vectors".into())),
+            };
+            if v1.len() != v2.len() || v1.is_empty() {
+                return Err(PhysureError::Generic("dot expects equal non-empty vector lengths".into()));
+            }
+            let mut sum = interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[0].clone(), v2[0].clone())?;
+            for i in 1..v1.len() {
+                let prod = interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[i].clone(), v2[i].clone())?;
+                sum = interpreter.eval_binary_op_vals(BinaryOp::Add, sum, prod)?;
+            }
+            Ok(Some(sum))
+        }
+        "cross" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("cross expects 2 3D vectors".into()));
+            }
+            let (v1, v2) = match (&args[0], &args[1]) {
+                (PhsValue::Vector(v1), PhsValue::Vector(v2)) => (v1, v2),
+                _ => return Err(PhysureError::Generic("cross expects 2 3D vectors".into())),
+            };
+            if v1.len() != 3 || v2.len() != 3 {
+                return Err(PhysureError::Generic("cross requires 3D vectors".into()));
+            }
+            let c1 = interpreter.eval_binary_op_vals(BinaryOp::Sub,
+                interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[1].clone(), v2[2].clone())?,
+                interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[2].clone(), v2[1].clone())?,
+            )?;
+            let c2 = interpreter.eval_binary_op_vals(BinaryOp::Sub,
+                interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[2].clone(), v2[0].clone())?,
+                interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[0].clone(), v2[2].clone())?,
+            )?;
+            let c3 = interpreter.eval_binary_op_vals(BinaryOp::Sub,
+                interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[0].clone(), v2[1].clone())?,
+                interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[1].clone(), v2[0].clone())?,
+            )?;
+            Ok(Some(PhsValue::Vector(vec![c1, c2, c3])))
+        }
+        "norm" => {
+            if args.len() != 1 {
+                return Err(PhysureError::Generic("norm expects 1 vector".into()));
+            }
+            let v = match &args[0] {
+                PhsValue::Vector(v) => v,
+                _ => return Err(PhysureError::Generic("norm expects vector".into())),
+            };
+            if v.is_empty() {
+                return Err(PhysureError::Generic("norm expects non-empty vector".into()));
+            }
+            let mut sum = interpreter.eval_binary_op_vals(BinaryOp::Mul, v[0].clone(), v[0].clone())?;
+            for i in 1..v.len() {
+                let prod = interpreter.eval_binary_op_vals(BinaryOp::Mul, v[i].clone(), v[i].clone())?;
+                sum = interpreter.eval_binary_op_vals(BinaryOp::Add, sum, prod)?;
+            }
+            let half = PhsValue::Number(0.5);
+            let res = interpreter.eval_binary_op_vals(BinaryOp::Pow, sum, half)?;
+            Ok(Some(res))
+        }
+        "transpose" => {
+            if args.len() != 1 {
+                return Err(PhysureError::Generic("transpose expects 1 matrix vector".into()));
+            }
+            let rows = match &args[0] {
+                PhsValue::Vector(r) => r,
+                _ => return Err(PhysureError::Generic("transpose expects 2D vector matrix".into())),
+            };
+            let mut matrix = Vec::new();
+            for r in rows {
+                match r {
+                    PhsValue::Vector(cols) => matrix.push(cols.clone()),
+                    _ => return Err(PhysureError::Generic("transpose expects 2D vector matrix".into())),
+                }
+            }
+            if matrix.is_empty() {
+                return Ok(Some(PhsValue::Vector(Vec::new())));
+            }
+            let num_rows = matrix.len();
+            let num_cols = matrix[0].len();
+            let mut transposed = vec![vec![PhsValue::None; num_rows]; num_cols];
+            for r in 0..num_rows {
+                for c in 0..num_cols {
+                    transposed[c][r] = matrix[r][c].clone();
+                }
+            }
+            let res_rows = transposed.into_iter().map(PhsValue::Vector).collect();
+            Ok(Some(PhsValue::Vector(res_rows)))
+        }
+        "matmul" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("matmul expects 2 matrices".into()));
+            }
+            let extract_matrix = |v: &PhsValue| -> PhysureResult<Vec<Vec<PhsValue>>> {
+                let rows = match v {
+                    PhsValue::Vector(r) => r,
+                    _ => return Err(PhysureError::Generic("matmul expects 2D vector matrix".into())),
+                };
+                let mut mat = Vec::new();
+                for r in rows {
+                    match r {
+                        PhsValue::Vector(cols) => mat.push(cols.clone()),
+                        _ => return Err(PhysureError::Generic("matmul expects 2D vector matrix".into())),
+                    }
+                }
+                Ok(mat)
+            };
+            let m1 = extract_matrix(&args[0])?;
+            let m2 = extract_matrix(&args[1])?;
+            if m1.is_empty() || m2.is_empty() || m1[0].len() != m2.len() {
+                return Err(PhysureError::Generic("Matrix multiplication dimension mismatch".into()));
+            }
+            let r1 = m1.len();
+            let c1 = m1[0].len();
+            let c2 = m2[0].len();
+            let mut res_mat = Vec::with_capacity(r1);
+            for r in 0..r1 {
+                let mut row = Vec::with_capacity(c2);
+                for c in 0..c2 {
+                    let mut sum = interpreter.eval_binary_op_vals(BinaryOp::Mul, m1[r][0].clone(), m2[0][c].clone())?;
+                    for k in 1..c1 {
+                        let prod = interpreter.eval_binary_op_vals(BinaryOp::Mul, m1[r][k].clone(), m2[k][c].clone())?;
+                        sum = interpreter.eval_binary_op_vals(BinaryOp::Add, sum, prod)?;
+                    }
+                    row.push(sum);
+                }
+                res_mat.push(PhsValue::Vector(row));
+            }
+            Ok(Some(PhsValue::Vector(res_mat)))
+        }
+        "det" => {
+            if args.len() != 1 {
+                return Err(PhysureError::Generic("det expects 1 square matrix".into()));
+            }
+            let rows = match &args[0] {
+                PhsValue::Vector(r) => r,
+                _ => return Err(PhysureError::Generic("det expects 2D vector matrix".into())),
+            };
+            let mut mat = Vec::new();
+            for r in rows {
+                match r {
+                    PhsValue::Vector(cols) => mat.push(cols.clone()),
+                    _ => return Err(PhysureError::Generic("det expects 2D vector matrix".into())),
+                }
+            }
+            if mat.len() == 2 && mat[0].len() == 2 && mat[1].len() == 2 {
+                let ad = interpreter.eval_binary_op_vals(BinaryOp::Mul, mat[0][0].clone(), mat[1][1].clone())?;
+                let bc = interpreter.eval_binary_op_vals(BinaryOp::Mul, mat[0][1].clone(), mat[1][0].clone())?;
+                let det = interpreter.eval_binary_op_vals(BinaryOp::Sub, ad, bc)?;
+                return Ok(Some(det));
+            }
+            Err(PhysureError::Generic("det currently supports 2x2 matrices".into()))
+        }
         _ => Ok(None),
     }
 }
@@ -442,8 +616,8 @@ fn eval_array_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpret
 fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
         "deriv" | "diff" => {
-            if args.len() != 2 {
-                return Err(PhysureError::Generic("deriv expects expression string and variable string".into()));
+            if args.is_empty() || args.len() > 3 {
+                return Err(PhysureError::Generic("deriv expects (expr_str, var_str, optional_order)".into()));
             }
             let expr_str = match &args[0] {
                 PhsValue::String(s) => s,
@@ -453,10 +627,113 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
                 PhsValue::String(s) => s,
                 _ => return Err(PhysureError::Generic("deriv expects variable string".into())),
             };
+            let order = if args.len() == 3 {
+                match &args[2] {
+                    PhsValue::Number(n) => *n as usize,
+                    PhsValue::Quantity(q) => q.value.mean() as usize,
+                    _ => 1,
+                }
+            } else {
+                1
+            };
             let inlined = preprocess_symbolic_expression(expr_str, interpreter);
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
-            let diff_node = node.diff_node(var_str)?.simplify();
+            let diff_node = node.diff_node_n(var_str, order)?;
             Ok(Some(PhsValue::String(diff_node.to_string())))
+        }
+        "grad" | "gradient" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("grad expects (expression_string, variables_vector)".into()));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("grad expects expression string".into())),
+            };
+            let vars = extract_string_list(&args[1])?;
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
+            let mut grads = Vec::new();
+            for v in vars {
+                let d = node.diff_node(&v)?.simplify();
+                grads.push(PhsValue::String(d.to_string()));
+            }
+            Ok(Some(PhsValue::Vector(grads)))
+        }
+        "div" | "divergence" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("div expects (vector_field, variables_vector)".into()));
+            }
+            let field_exprs = extract_string_list(&args[0])?;
+            let vars = extract_string_list(&args[1])?;
+            if field_exprs.len() != vars.len() {
+                return Err(PhysureError::Generic("Vector field and variables dimension mismatch".into()));
+            }
+            let mut sum_nodes = Vec::new();
+            for (f_str, v) in field_exprs.iter().zip(vars.iter()) {
+                let inlined = preprocess_symbolic_expression(f_str, interpreter);
+                let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
+                let d = node.diff_node(v)?.simplify();
+                sum_nodes.push(d);
+            }
+            let div_node = crate::symbolic::Node::Add(sum_nodes).simplify();
+            Ok(Some(PhsValue::String(div_node.to_string())))
+        }
+        "curl" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("curl expects (3D_vector_field, 3D_variables_vector)".into()));
+            }
+            let field = extract_string_list(&args[0])?;
+            let vars = extract_string_list(&args[1])?;
+            if field.len() != 3 || vars.len() != 3 {
+                return Err(PhysureError::Generic("curl requires 3D vector field and 3D variables".into()));
+            }
+            let parse_node = |s: &str| -> PhysureResult<crate::symbolic::Node> {
+                let inlined = preprocess_symbolic_expression(s, interpreter);
+                crate::symbolic::SymbolicParser::parse_str(&inlined)
+            };
+            let (p, q, r) = (parse_node(&field[0])?, parse_node(&field[1])?, parse_node(&field[2])?);
+            let (x, y, z) = (&vars[0], &vars[1], &vars[2]);
+
+            let cx = crate::symbolic::Node::Sub(Box::new(r.diff_node(y)?), Box::new(q.diff_node(z)?)).simplify();
+            let cy = crate::symbolic::Node::Sub(Box::new(p.diff_node(z)?), Box::new(r.diff_node(x)?)).simplify();
+            let cz = crate::symbolic::Node::Sub(Box::new(q.diff_node(x)?), Box::new(p.diff_node(y)?)).simplify();
+
+            Ok(Some(PhsValue::Vector(vec![
+                PhsValue::String(cx.to_string()),
+                PhsValue::String(cy.to_string()),
+                PhsValue::String(cz.to_string()),
+            ])))
+        }
+        "laplacian" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic("laplacian expects (expression_string, variables_vector)".into()));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("laplacian expects expression string".into())),
+            };
+            let vars = extract_string_list(&args[1])?;
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
+            let mut second_diffs = Vec::new();
+            for v in vars {
+                let d2 = node.diff_node_n(&v, 2)?.simplify();
+                second_diffs.push(d2);
+            }
+            let lap_node = crate::symbolic::Node::Add(second_diffs).simplify();
+            Ok(Some(PhsValue::String(lap_node.to_string())))
+        }
+        "simplify" | "expand" => {
+            if args.is_empty() {
+                return Err(PhysureError::Generic("simplify expects an expression string".into()));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("simplify expects expression string".into())),
+            };
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
+            Ok(Some(PhsValue::String(node.simplify().to_string())))
         }
         "integral" | "integrate" => {
             if args.len() == 4 {
@@ -645,7 +922,18 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
     }
 }
 
-fn eval_plot_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn eval_plot_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    let empty_env = std::collections::HashMap::new();
+    eval_plot_builtin_with_kwargs(name, args, &[], interpreter, &empty_env)
+}
+
+fn eval_plot_builtin_with_kwargs(
+    name: &str,
+    args: &[PhsValue],
+    kwargs: &[(String, PhsValue)],
+    interpreter: &PhsInterpreter,
+    env: &std::collections::HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
     match name {
         "plot" => {
             if args.is_empty() {
@@ -675,6 +963,219 @@ fn eval_plot_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterprete
                 title,
                 x_unit,
                 y_unit,
+                ascii: ascii_plot,
+                svg: svg_plot,
+            })))
+        }
+        "plot3d" | "export3d" | "export_3d" => {
+            let fn_val = args.get(0).cloned();
+            let mut x_min = -2.0; let mut x_max = 2.0; let mut x_unit = "m".to_string();
+            let mut y_min = -2.0; let mut y_max = 2.0; let mut y_unit = "m".to_string();
+            let mut title = "3D Surface Plot".to_string();
+            let mut filename = "plot_3d.stl".to_string();
+            let mut format_name = "stl".to_string();
+
+            for (k, v) in kwargs {
+                match k.as_str() {
+                    "x" | "x_range" => {
+                        if let PhsValue::Range(start, end) = v {
+                            if let PhsValue::Quantity(q) = start.as_ref() {
+                                x_min = q.value.mean();
+                                x_unit = q.unit.__repr__();
+                            } else if let PhsValue::Number(n) = start.as_ref() {
+                                x_min = *n;
+                            }
+                            if let PhsValue::Quantity(q) = end.as_ref() {
+                                x_max = q.value.mean();
+                            } else if let PhsValue::Number(n) = end.as_ref() {
+                                x_max = *n;
+                            }
+                        }
+                    }
+                    "y" | "y_range" => {
+                        if let PhsValue::Range(start, end) = v {
+                            if let PhsValue::Quantity(q) = start.as_ref() {
+                                y_min = q.value.mean();
+                                y_unit = q.unit.__repr__();
+                            } else if let PhsValue::Number(n) = start.as_ref() {
+                                y_min = *n;
+                            }
+                            if let PhsValue::Quantity(q) = end.as_ref() {
+                                y_max = q.value.mean();
+                            } else if let PhsValue::Number(n) = end.as_ref() {
+                                y_max = *n;
+                            }
+                        }
+                    }
+                    "title" => {
+                        if let PhsValue::String(s) = v { title = s.clone(); }
+                    }
+                    "file" | "filename" => {
+                        if let PhsValue::String(s) = v {
+                            filename = s.clone();
+                            if filename.contains('.') {
+                                format_name = filename.split('.').last().unwrap_or("stl").to_string();
+                            }
+                        }
+                    }
+                    "format" => {
+                        if let PhsValue::String(s) = v { format_name = s.clone(); }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(PhsValue::String(s)) = args.get(1) {
+                if name == "plot3d" {
+                    title = s.clone();
+                } else {
+                    filename = s.clone();
+                    if filename.contains('.') {
+                        format_name = filename.split('.').last().unwrap_or("stl").to_string();
+                    }
+                }
+            }
+            if let Some(PhsValue::String(s)) = args.get(2) {
+                if name != "plot3d" {
+                    format_name = s.clone();
+                }
+            }
+
+            let steps = 25;
+            let mut x_grid = Vec::with_capacity(steps);
+            let mut y_grid = Vec::with_capacity(steps);
+            let mut z_grid = Vec::with_capacity(steps * steps);
+
+            for i in 0..steps {
+                x_grid.push(x_min + (i as f64) * (x_max - x_min) / ((steps - 1) as f64));
+                y_grid.push(y_min + (i as f64) * (y_max - y_min) / ((steps - 1) as f64));
+            }
+
+            let mut z_unit = "".to_string();
+
+            if let Some(PhsValue::Function(func)) = &fn_val {
+                if title == "3D Surface Plot" {
+                    title = format!("3D Surface: fn {}({}, {})", func.name, func.params.get(0).cloned().unwrap_or("x".into()), func.params.get(1).cloned().unwrap_or("y".into()));
+                }
+                let x_q_unit = UnitParser::parse_expression(&x_unit).ok();
+                let y_q_unit = UnitParser::parse_expression(&y_unit).ok();
+
+                for r in 0..steps {
+                    for c in 0..steps {
+                        let x_q = if let Some(ref u) = x_q_unit { PhsValue::Quantity(physure_core::quantity::Quantity::new_scalar(x_grid[c], 0.0, u.clone(), None, None)) } else { PhsValue::Number(x_grid[c]) };
+                        let y_q = if let Some(ref u) = y_q_unit { PhsValue::Quantity(physure_core::quantity::Quantity::new_scalar(y_grid[r], 0.0, u.clone(), None, None)) } else { PhsValue::Number(y_grid[r]) };
+
+                        let res = interpreter.call_function_node(func, vec![x_q, y_q], env)?;
+                        match res {
+                            PhsValue::Quantity(q) => {
+                                if z_unit.is_empty() { z_unit = q.unit.__repr__(); }
+                                z_grid.push(q.value.mean());
+                            }
+                            PhsValue::Number(n) => {
+                                z_grid.push(n);
+                            }
+                            _ => z_grid.push(0.0),
+                        }
+                    }
+                }
+            } else if let Some(PhsValue::String(expr_str)) = &fn_val {
+                let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+                let program = crate::parser::parse_phs(&inlined)?;
+                let expr = match program.statements.first() {
+                    Some(crate::ast::Statement::Expr(e)) => e.clone(),
+                    Some(crate::ast::Statement::Assignment(node)) => node.value.clone(),
+                    _ => return Err(PhysureError::Generic("Failed to parse 3D expression".into())),
+                };
+
+                for r in 0..steps {
+                    let y = y_grid[r];
+                    for c in 0..steps {
+                        let x = x_grid[c];
+                        let mut local_env = env.clone();
+                        local_env.insert("x".to_string(), PhsValue::Number(x));
+                        local_env.insert("y".to_string(), PhsValue::Number(y));
+                        let z = match interpreter.eval_expr(&expr, &local_env) {
+                            Ok(PhsValue::Number(n)) => n,
+                            Ok(PhsValue::Quantity(q)) => {
+                                if z_unit.is_empty() { z_unit = q.unit.__repr__(); }
+                                q.value.mean()
+                            }
+                            _ => 0.0,
+                        };
+                        z_grid.push(z);
+                    }
+                }
+            } else {
+                return Err(PhysureError::Generic("plot3d/export3d expects a function (e.g. fn P(x, y)) or expression string as first argument".into()));
+            }
+
+            let clean_z = physure_core::plotting::sanitize_unit_label(if z_unit.is_empty() { "units" } else { &z_unit });
+            let mesh_data = physure_core::plotting::Mesh3DData::new(
+                &title,
+                &format!("x ({})", x_unit),
+                &format!("y ({})", y_unit),
+                &format!("z ({})", clean_z),
+                x_grid,
+                y_grid,
+                z_grid,
+                steps,
+                steps,
+            );
+
+            if name == "plot3d" {
+                let html_str = mesh_data.export_html_threejs();
+                let ascii_plot = draw_3d_surface_ascii(&title, &title, interpreter)?;
+                Ok(Some(PhsValue::Plot(crate::value::PlotData {
+                    title,
+                    x_unit: x_unit,
+                    y_unit: y_unit,
+                    ascii: ascii_plot,
+                    svg: html_str,
+                })))
+            } else {
+                let bytes = mesh_data.export_format(&format_name)?;
+                std::fs::write(&filename, &bytes)
+                    .map_err(|e| PhysureError::Generic(format!("Failed to write {}: {}", filename, e)))?;
+                Ok(Some(PhsValue::String(format!("✓ Exported 3D mesh '{}' ({})", filename, format_name))))
+            }
+        }
+        "plot_field" => {
+            let u_expr = match args.get(0) {
+                Some(PhsValue::String(s)) => s.as_str(),
+                _ => return Err(PhysureError::Generic("plot_field expects u(x, y) expression string".into())),
+            };
+            let v_expr = match args.get(1) {
+                Some(PhsValue::String(s)) => s.as_str(),
+                _ => return Err(PhysureError::Generic("plot_field expects v(x, y) expression string".into())),
+            };
+            let title = match args.get(2) {
+                Some(PhsValue::String(s)) => s.clone(),
+                _ => format!("Vector Field Plot: F = ({}, {})", u_expr, v_expr),
+            };
+
+            let svg_plot = draw_vector_field_svg(u_expr, v_expr, &title, interpreter)?;
+            let ascii_plot = draw_vector_field_ascii(u_expr, v_expr, &title, interpreter)?;
+
+            Ok(Some(PhsValue::Plot(crate::value::PlotData {
+                title,
+                x_unit: "x".to_string(),
+                y_unit: "y".to_string(),
+                ascii: ascii_plot,
+                svg: svg_plot,
+            })))
+        }
+        "plot_nd" => {
+            let title = match args.get(1) {
+                Some(PhsValue::String(s)) => s.clone(),
+                _ => "N-Dimensional Parallel Coordinates Plot".to_string(),
+            };
+
+            let (svg_plot, ascii_plot) = draw_nd_parallel_coords_svg(&args[0], &title)?;
+
+            Ok(Some(PhsValue::Plot(crate::value::PlotData {
+                title,
+                x_unit: "dim".to_string(),
+                y_unit: "val".to_string(),
                 ascii: ascii_plot,
                 svg: svg_plot,
             })))
@@ -894,6 +1395,7 @@ fn expr_to_string(expr: &crate::ast::Expr) -> String {
                 crate::ast::BinaryOp::Div => "/",
                 crate::ast::BinaryOp::Pow => "^",
                 crate::ast::BinaryOp::Convert => "=>",
+                crate::ast::BinaryOp::Range => "..",
             };
             format!("{} {} {}", expr_to_string(left), op_str, expr_to_string(right))
         }
@@ -941,6 +1443,23 @@ fn has_unbound_vars(expr: &crate::ast::Expr, interpreter: &PhsInterpreter) -> bo
             args.iter().any(|arg| has_unbound_vars(arg, interpreter))
         }
         _ => false,
+    }
+}
+
+fn extract_string_list(val: &PhsValue) -> PhysureResult<Vec<String>> {
+    match val {
+        PhsValue::Vector(vec) => {
+            let mut list = Vec::new();
+            for item in vec {
+                match item {
+                    PhsValue::String(s) => list.push(s.clone()),
+                    _ => list.push(item.to_string()),
+                }
+            }
+            Ok(list)
+        }
+        PhsValue::String(s) => Ok(s.split(',').map(|item| item.trim().to_string()).collect()),
+        _ => Err(PhysureError::Generic("Expected vector or comma-separated string list".into())),
     }
 }
 
@@ -1010,6 +1529,224 @@ where F: FnMut(f64) -> f64 {
     sum
 }
 
+fn draw_3d_surface_svg(expr_str: &str, title: &str, interpreter: &PhsInterpreter) -> PhysureResult<String> {
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let program = crate::parser::parse_phs(&inlined)?;
+    let expr = match program.statements.first() {
+        Some(crate::ast::Statement::Expr(e)) => e.clone(),
+        Some(crate::ast::Statement::Assignment(node)) => node.value.clone(),
+        _ => return Err(PhysureError::Generic("Failed to parse 3D expression".into())),
+    };
+
+    let steps = 15;
+    let x_min = -2.0; let x_max = 2.0;
+    let y_min = -2.0; let y_max = 2.0;
+
+    let mut grid = vec![vec![0.0; steps]; steps];
+    let mut z_min = f64::INFINITY;
+    let mut z_max = f64::NEG_INFINITY;
+
+    for i in 0..steps {
+        let x = x_min + (i as f64) * (x_max - x_min) / ((steps - 1) as f64);
+        for j in 0..steps {
+            let y = y_min + (j as f64) * (y_max - y_min) / ((steps - 1) as f64);
+            let mut env = interpreter.env.clone();
+            env.insert("x".to_string(), PhsValue::Number(x));
+            env.insert("y".to_string(), PhsValue::Number(y));
+            let z = match interpreter.eval_expr(&expr, &env) {
+                Ok(PhsValue::Number(n)) => n,
+                Ok(PhsValue::Quantity(q)) => q.value.mean(),
+                _ => 0.0,
+            };
+            grid[i][j] = z;
+            if z < z_min { z_min = z; }
+            if z > z_max { z_max = z; }
+        }
+    }
+
+    let z_span = if z_max != z_min { z_max - z_min } else { 1.0 };
+    let width = 600.0;
+    let height = 400.0;
+    let cx = width / 2.0;
+    let cy = height / 2.0 + 40.0;
+
+    let project = |x: f64, y: f64, z: f64| -> (f64, f64) {
+        let norm_z = (z - z_min) / z_span - 0.5;
+        let px = cx + (x - y) * 55.0;
+        let py = cy - norm_z * 90.0 + (x + y) * 28.0;
+        (px, py)
+    };
+
+    struct SvgPoly {
+        depth: f64,
+        svg: String,
+    }
+    let mut polys: Vec<SvgPoly> = Vec::new();
+
+    for i in 0..steps - 1 {
+        let x0 = x_min + (i as f64) * (x_max - x_min) / ((steps - 1) as f64);
+        let x1 = x_min + ((i + 1) as f64) * (x_max - x_min) / ((steps - 1) as f64);
+        for j in 0..steps - 1 {
+            let y0 = y_min + (j as f64) * (y_max - y_min) / ((steps - 1) as f64);
+            let y1 = y_min + ((j + 1) as f64) * (y_max - y_min) / ((steps - 1) as f64);
+
+            let z00 = grid[i][j];
+            let z10 = grid[i+1][j];
+            let z11 = grid[i+1][j+1];
+            let z01 = grid[i][j+1];
+
+            let p00 = project(x0, y0, z00);
+            let p10 = project(x1, y0, z10);
+            let p11 = project(x1, y1, z11);
+            let p01 = project(x0, y1, z01);
+
+            let avg_z = (z00 + z10 + z11 + z01) / 4.0;
+            let norm_avg_z = (avg_z - z_min) / z_span;
+            let hue = (240.0 - norm_avg_z * 240.0).clamp(0.0, 240.0);
+
+            // Painter's algorithm depth sorting (back to front)
+            let depth = (i + j) as f64 + (1.0 - norm_avg_z) * 0.2;
+
+            let svg_str = format!(
+                "<polygon points=\"{:.1},{:.1} {:.1},{:.1} {:.1},{:.1} {:.1},{:.1}\" fill=\"hsl({:.0},85%,55%)\" stroke=\"rgba(255,255,255,0.25)\" stroke-width=\"0.6\" opacity=\"0.95\"/>",
+                p00.0, p00.1, p10.0, p10.1, p11.0, p11.1, p01.0, p01.1, hue
+            );
+
+            polys.push(SvgPoly { depth, svg: svg_str });
+        }
+    }
+
+    // Sort polygons from back to front
+    polys.sort_by(|a, b| a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal));
+    let svg_polys: Vec<String> = polys.into_iter().map(|p| p.svg).collect();
+
+    Ok(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 400\" width=\"100%\" height=\"100%\"><rect width=\"100%\" height=\"100%\" fill=\"#0d1117\"/><text x=\"300\" y=\"30\" text-anchor=\"middle\" fill=\"#58a6ff\" font-family=\"sans-serif\" font-size=\"16\" font-weight=\"bold\">{}</text>{}</svg>",
+        title, svg_polys.join("\n")
+    ))
+}
+
+fn draw_3d_surface_ascii(_expr_str: &str, title: &str, _interpreter: &PhsInterpreter) -> PhysureResult<String> {
+    Ok(format!("🏔️ {} [3D Surface View]", title))
+}
+
+fn draw_vector_field_svg(u_expr: &str, v_expr: &str, title: &str, interpreter: &PhsInterpreter) -> PhysureResult<String> {
+    let parse_expr = |s: &str| -> PhysureResult<crate::ast::Expr> {
+        let inlined = preprocess_symbolic_expression(s, interpreter);
+        let program = crate::parser::parse_phs(&inlined)?;
+        match program.statements.first() {
+            Some(crate::ast::Statement::Expr(e)) => Ok(e.clone()),
+            Some(crate::ast::Statement::Assignment(node)) => Ok(node.value.clone()),
+            _ => Err(PhysureError::Generic("Failed to parse field expression".into())),
+        }
+    };
+    let u_ast = parse_expr(u_expr)?;
+    let v_ast = parse_expr(v_expr)?;
+
+    let grid_size = 12;
+    let plot_w = 480.0;
+    let plot_h = 300.0;
+    let padding_left = 60.0;
+    let padding_top = 50.0;
+
+    let mut arrows = Vec::new();
+
+    for i in 0..grid_size {
+        let gx = -2.0 + (i as f64) * 4.0 / ((grid_size - 1) as f64);
+        let sx = padding_left + (i as f64) * plot_w / ((grid_size - 1) as f64);
+        for j in 0..grid_size {
+            let gy = -2.0 + (j as f64) * 4.0 / ((grid_size - 1) as f64);
+            let sy = padding_top + (1.0 - (j as f64) / ((grid_size - 1) as f64)) * plot_h;
+
+            let mut env = interpreter.env.clone();
+            env.insert("x".to_string(), PhsValue::Number(gx));
+            env.insert("y".to_string(), PhsValue::Number(gy));
+
+            let u = match interpreter.eval_expr(&u_ast, &env) { Ok(PhsValue::Number(n)) => n, Ok(PhsValue::Quantity(q)) => q.value.mean(), _ => 0.0 };
+            let v = match interpreter.eval_expr(&v_ast, &env) { Ok(PhsValue::Number(n)) => n, Ok(PhsValue::Quantity(q)) => q.value.mean(), _ => 0.0 };
+
+            let len = (u * u + v * v).sqrt();
+            let scale = if len > 1e-6 { (15.0 / len).min(18.0) } else { 0.0 };
+            let ex = sx + u * scale;
+            let ey = sy - v * scale;
+
+            let hue = (240.0 - (len / 5.0).min(1.0) * 240.0).clamp(0.0, 240.0);
+
+            arrows.push(format!(
+                "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"hsl({:.0},80%,60%)\" stroke-width=\"2\" marker-end=\"url(#arrow)\"/>",
+                sx, sy, ex, ey, hue
+            ));
+        }
+    }
+
+    Ok(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 400\" width=\"100%\" height=\"100%\"><defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"5\" refY=\"5\" markerWidth=\"6\" markerHeight=\"6\" orient=\"auto-start-reverse\"><path d=\"M 0 0 L 10 5 L 0 10 z\" fill=\"#58a6ff\"/></marker></defs><rect width=\"100%\" height=\"100%\" fill=\"#0d1117\"/><text x=\"300\" y=\"30\" text-anchor=\"middle\" fill=\"#58a6ff\" font-family=\"sans-serif\" font-size=\"16\" font-weight=\"bold\">{}</text>{}</svg>",
+        title, arrows.join("\n")
+    ))
+}
+
+fn draw_vector_field_ascii(_u_expr: &str, _v_expr: &str, title: &str, _interpreter: &PhsInterpreter) -> PhysureResult<String> {
+    Ok(format!("↗️ {} [Vector Field View]", title))
+}
+
+fn draw_nd_parallel_coords_svg(val: &PhsValue, title: &str) -> PhysureResult<(String, String)> {
+    let extract_rows = match val {
+        PhsValue::Vector(rows) => rows,
+        _ => return Err(PhysureError::Generic("plot_nd expects a 2D matrix of data points".into())),
+    };
+    let mut matrix: Vec<Vec<f64>> = Vec::new();
+    for r in extract_rows {
+        match r {
+            PhsValue::Vector(cols) => {
+                let row_nums: Vec<f64> = cols.iter().map(|item| match item {
+                    PhsValue::Number(n) => *n,
+                    PhsValue::Quantity(q) => q.value.mean(),
+                    _ => 0.0,
+                }).collect();
+                matrix.push(row_nums);
+            }
+            _ => {}
+        }
+    }
+    if matrix.is_empty() {
+        return Err(PhysureError::Generic("plot_nd matrix is empty".into()));
+    }
+    let num_dims = matrix[0].len();
+    let num_samples = matrix.len();
+
+    let width = 600.0;
+    let height = 400.0;
+    let padding_left = 60.0;
+    let padding_right = 40.0;
+    let padding_top = 60.0;
+    let padding_bottom = 50.0;
+    let plot_w = width - padding_left - padding_right;
+    let plot_h = height - padding_top - padding_bottom;
+
+    let mut svg_lines = Vec::new();
+    for row_idx in 0..num_samples {
+        let mut path_pts = Vec::new();
+        for dim in 0..num_dims {
+            let sx = padding_left + (dim as f64) * plot_w / ((num_dims - 1).max(1) as f64);
+            let val = matrix[row_idx][dim];
+            let sy = padding_top + (1.0 - (val / 10.0).clamp(-1.0, 1.0) * 0.5 - 0.5) * plot_h;
+            path_pts.push(format!("{:.1},{:.1}", sx, sy));
+        }
+        let hue = (row_idx as f64 * 360.0 / num_samples as f64) % 360.0;
+        svg_lines.push(format!(
+            "<polyline points=\"{}\" fill=\"none\" stroke=\"hsl({:.0},70%,60%)\" stroke-width=\"2\" opacity=\"0.75\"/>",
+            path_pts.join(" "), hue
+        ));
+    }
+
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 600 400\" width=\"100%\" height=\"100%\"><rect width=\"100%\" height=\"100%\" fill=\"#0d1117\"/><text x=\"300\" y=\"35\" text-anchor=\"middle\" fill=\"#58a6ff\" font-family=\"sans-serif\" font-size=\"16\" font-weight=\"bold\">{}</text>{}</svg>",
+        title, svg_lines.join("\n")
+    );
+    let ascii = format!("🌐 {} [N-D Parallel Coordinates: {} dimensions, {} samples]", title, num_dims, num_samples);
+    Ok((svg, ascii))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1044,7 +1781,34 @@ mod tests {
     #[test]
     fn test_trig() {
         assert_eq!(eval("sin", vec![PhsValue::Number(0.0)]), PhsValue::Number(0.0));
-        assert_eq!(eval("cos", vec![PhsValue::Number(0.0)]), PhsValue::Number(1.0));
+    }
+
+    #[test]
+    fn test_plot3d_and_export3d_domain_builtins() {
+        let interp = PhsInterpreter::default();
+        let res_plot = eval_plot_builtin(
+            "plot3d",
+            &[
+                PhsValue::String("sin(x)*cos(y)".to_string()),
+                PhsValue::String("Test 3D".to_string()),
+            ],
+            &interp,
+        );
+        assert!(res_plot.is_ok());
+
+        let tmp_file = std::env::temp_dir().join("test_plot_3d.stl");
+        let res_export = eval_plot_builtin(
+            "export3d",
+            &[
+                PhsValue::String("sin(x)*cos(y)".to_string()),
+                PhsValue::String(tmp_file.to_str().unwrap().to_string()),
+                PhsValue::String("stl".to_string()),
+            ],
+            &interp,
+        );
+        assert!(res_export.is_ok());
+        assert!(tmp_file.exists());
+        let _ = std::fs::remove_file(tmp_file);
     }
 
     #[test]

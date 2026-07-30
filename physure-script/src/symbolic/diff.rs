@@ -147,4 +147,12 @@ impl Node {
             _ => None,
         }
     }
+
+    pub fn diff_node_n(&self, var: &str, n: usize) -> PhysureResult<Node> {
+        let mut cur = self.clone();
+        for _ in 0..n {
+            cur = cur.diff_node(var)?.simplify();
+        }
+        Ok(cur)
+    }
 }

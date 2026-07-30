@@ -103,6 +103,7 @@ fn value_to_json(v: &PhsValue) -> String {
             s
         }
         PhsValue::Matrix(m) => format!("{{\"rows\": {}, \"cols\": {}, \"data\": {:?}}}", m.rows, m.cols, m.data),
+        PhsValue::Range(start, end) => format!("{{\"start\": {}, \"end\": {}}}", value_to_json(start), value_to_json(end)),
     }
 }
 
@@ -137,6 +138,7 @@ fn value_to_csv(v: &PhsValue) -> String {
             s
         }
         PhsValue::Matrix(m) => format!("\"{:?}\"", m.data),
+        PhsValue::Range(start, end) => format!("\"{} .. {}\"", value_to_csv(start), value_to_csv(end)),
     }
 }
 
@@ -163,6 +165,7 @@ fn value_to_py(v: &PhsValue) -> String {
             s
         }
         PhsValue::Matrix(m) => format!("{:?}", m.data),
+        PhsValue::Range(start, end) => format!("{{'start': {}, 'end': {}}}", value_to_py(start), value_to_py(end)),
     }
 }
 
