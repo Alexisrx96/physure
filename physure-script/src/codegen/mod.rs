@@ -232,7 +232,7 @@ fn rewrite_equation_calls(
             left: Box::new(rewrite_equation_calls(left, equations, functions, signatures)?),
             right: Box::new(rewrite_equation_calls(right, equations, functions, signatures)?),
         }),
-        Expr::Quantity(_) | Expr::Identifier(_) => Ok(expr.clone()),
+        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => Ok(expr.clone()),
     }
 }
 

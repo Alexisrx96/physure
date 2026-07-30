@@ -64,9 +64,15 @@ fn is_truthy(val: &PhsValue) -> bool {
 }
 
 fn eval_template_string(text: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> String {
-    let clean = text.trim_matches('`').trim();
+    interpolate(text.trim_matches('`').trim(), interp, env)
+}
+
+/// Substitutes every `{expr}` in `text` with the value of `expr` in `env`, leaving the
+/// braces untouched when the expression does not evaluate. Unlike `eval_template_string`
+/// this keeps the surrounding whitespace, which a quoted string literal is entitled to.
+fn interpolate(text: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> String {
     let mut result = String::new();
-    let mut rest = clean;
+    let mut rest = text;
 
     while let Some(start) = rest.find('{') {
         result.push_str(&rest[..start]);
@@ -366,6 +372,10 @@ impl PhsInterpreter {
                     Ok(PhsValue::Quantity(q))
                 }
             }
+            // A string literal is the text the user wrote, never a variable lookup: with
+            // `v = 3 m/s` in scope, `deriv("0.5*m*v^2", "v")` used to receive the quantity
+            // instead of the name. `{v}` folds a value in explicitly.
+            Expr::Str(text) => Ok(PhsValue::String(interpolate(text, self, env))),
             Expr::Identifier(name) => {
                 if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
                     let text = eval_template_string(name, self, env);

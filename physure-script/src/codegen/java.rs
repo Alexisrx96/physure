@@ -130,6 +130,16 @@ impl JavaTranspiler {
 
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
+            Expr::Str(text) => {
+                // Java has no interpolating literal, and quietly emitting the braces as
+                // text would turn `{v}` into the wrong string rather than an error.
+                if text.contains('{') {
+                    return Err(CodegenError::Generic(format!(
+                        "String interpolation ({:?}) is not supported by the Java target", text
+                    )));
+                }
+                Ok(format!("{:?}", text))
+            }
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
             Expr::Quantity(q) => {
                 let mut args = vec![format!("{:?}", q.magnitude)];
