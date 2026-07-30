@@ -58,7 +58,8 @@ deriv("0.5 * {m} * v^2", "v")   # -> 2 * kg * v   (m ya es constante, con unidad
 ```
 
 Asi una constante se congela en la formula sin alterarla en silencio, y la unidad viaja con
-ella hasta el resultado simbolico.
+ella hasta el resultado simbolico. La interpolacion se transpila a los tres objetivos:
+concatenacion en Python y Java, `format!` en Rust.
 
 ### 1.4 Imports & Domain Modules
 ```phs
