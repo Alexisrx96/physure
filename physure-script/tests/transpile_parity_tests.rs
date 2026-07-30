@@ -61,6 +61,18 @@ fn test_phs_interpreter_parity() {
 #[test]
 fn test_python_transpiler_parity() {
     let py_dir = repo_root().join("physure-python");
+    // The generated code imports `physure`, so this needs both `uv` and a built extension.
+    // The `rust` CI job has neither; `physure-python/tests/test_transpiler_parity.py` runs
+    // the same cases where they can actually pass.
+    let importable = Command::new("uv")
+        .args(["run", "python", "-c", "import physure"])
+        .current_dir(&py_dir)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !importable {
+        eprintln!("skipping: `uv run python -c 'import physure'` does not work here");
+        return;
+    }
     for tc in TEST_CASES {
         let program = parse_phs(tc.script).unwrap();
         let py_code = transpile(&program, Target::Python).unwrap();
