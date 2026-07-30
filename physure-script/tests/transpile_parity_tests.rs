@@ -33,6 +33,11 @@ const TEST_CASES: &[ParityTestCase] = &[
         expected_substring: "50.265",
     },
     ParityTestCase {
+        name: "string_interpolation",
+        script: "m = 2.0 kg\nv = 3.0 m/s\nlabel = \"masa {m} a {v}\"\n",
+        expected_substring: "masa 2.0 kg a 3.0 m/s",
+    },
+    ParityTestCase {
         name: "uncertainty",
         script: "m = 10.0 +/- 0.2 kg\na = 2.5 +/- 0.1 m/s^2\nf = m * a\n",
         expected_substring: "25",

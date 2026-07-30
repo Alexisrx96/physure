@@ -56,6 +56,53 @@ pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenErr
     }
 }
 
+/// One piece of a string literal after `{expr}` interpolation has been read out of it.
+pub(crate) enum StrPart {
+    Text(String),
+    Expr(Expr),
+}
+
+/// Splits a string literal into literal text and the expressions its braces interpolate,
+/// mirroring the interpreter: a `{...}` whose contents do not parse stays literal, braces
+/// and all, and an unclosed `{` is just a brace.
+pub(crate) fn split_interpolated(text: &str) -> Vec<StrPart> {
+    let mut parts = Vec::new();
+    let mut lit = String::new();
+    let mut rest = text;
+
+    while let Some(start) = rest.find('{') {
+        lit.push_str(&rest[..start]);
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find('}') else {
+            lit.push('{');
+            break;
+        };
+        let inner = rest[..end].trim();
+        rest = &rest[end + 1..];
+
+        let parsed = crate::parse_phs(inner)
+            .ok()
+            .and_then(|p| match p.statements.into_iter().next() {
+                Some(Statement::Expr(e)) => Some(e),
+                _ => None,
+            });
+        match parsed {
+            Some(expr) => {
+                if !lit.is_empty() {
+                    parts.push(StrPart::Text(std::mem::take(&mut lit)));
+                }
+                parts.push(StrPart::Expr(expr));
+            }
+            None => lit.push_str(&format!("{{{}}}", inner)),
+        }
+    }
+    lit.push_str(rest);
+    if !lit.is_empty() || parts.is_empty() {
+        parts.push(StrPart::Text(lit));
+    }
+    parts
+}
+
 pub fn expr_to_unit_string(expr: &Expr) -> String {
     match expr {
         Expr::Identifier(name) => name.clone(),

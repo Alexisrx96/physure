@@ -106,13 +106,27 @@ impl RustTranspiler {
                     ))
                 }
             }
-            // `format!` captures named variables from scope, which is exactly what PHS
-            // `{v}` interpolation means; without braces a plain literal is enough.
-            Expr::Str(text) => Ok(if text.contains('{') {
-                format!("format!({:?})", text)
-            } else {
-                format!("{:?}.to_string()", text)
-            }),
+            Expr::Str(text) => {
+                // `format!` is the native equivalent. A brace the user wrote as text has to
+                // be doubled, or it would be read as a placeholder of its own.
+                let parts = super::split_interpolated(text);
+                let mut fmt = String::new();
+                let mut args = Vec::new();
+                for part in &parts {
+                    match part {
+                        super::StrPart::Text(t) => fmt.push_str(&t.replace('{', "{{").replace('}', "}}")),
+                        super::StrPart::Expr(e) => {
+                            fmt.push_str("{}");
+                            args.push(self.generate_expr(e)?);
+                        }
+                    }
+                }
+                Ok(if args.is_empty() {
+                    format!("{:?}.to_string()", fmt)
+                } else {
+                    format!("format!({:?}, {})", fmt, args.join(", "))
+                })
+            }
             Expr::Identifier(name) => Ok(name.clone()),
             Expr::BinaryOp { op, left, right } => {
                 let left_code = self.generate_expr(left)?;

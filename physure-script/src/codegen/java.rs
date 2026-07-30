@@ -43,7 +43,17 @@ impl CodeGenerator for JavaTranspiler {
                 Statement::Assignment(node) => {
                     let val = self.generate_expr(&node.value)?;
                     let var_name = snake_to_camel(&node.name);
-                    if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
+                    // Java is typed, so a string-valued assignment has to be declared as
+                    // one; it used to be declared `Quantity` and refuse to compile. An
+                    // uninterpolated literal spelling an equation stays a PhyEquation.
+                    let literal = match &node.value {
+                        Expr::Str(text) => Some(text.as_str()),
+                        _ => None,
+                    };
+                    let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
+                    if literal.is_some() && !is_equation {
+                        main_stmts.push(format!("        String {} = {};", var_name, val));
+                    } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
                         main_stmts.push(format!("        PhyEquation {} = {};", var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }));
                     } else if val.starts_with("PhyFunction") {
                         main_stmts.push(format!("        PhyFunction {} = {};", var_name, val));
@@ -131,14 +141,24 @@ impl JavaTranspiler {
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
             Expr::Str(text) => {
-                // Java has no interpolating literal, and quietly emitting the braces as
-                // text would turn `{v}` into the wrong string rather than an error.
-                if text.contains('{') {
-                    return Err(CodegenError::Generic(format!(
-                        "String interpolation ({:?}) is not supported by the Java target", text
-                    )));
+                // Java has no interpolating literal, but `+` concatenates and calls
+                // toString() on each operand, which is what the interpreter does too.
+                let parts = super::split_interpolated(text);
+                let mut pieces = Vec::new();
+                for (i, part) in parts.iter().enumerate() {
+                    match part {
+                        super::StrPart::Text(t) => pieces.push(format!("{:?}", t)),
+                        super::StrPart::Expr(e) => {
+                            // The chain has to start from a String, or `+` between two
+                            // numbers would add them instead of concatenating.
+                            if i == 0 {
+                                pieces.push("\"\"".to_string());
+                            }
+                            pieces.push(self.generate_expr(e)?);
+                        }
+                    }
                 }
-                Ok(format!("{:?}", text))
+                Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
             }
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
             Expr::Quantity(q) => {

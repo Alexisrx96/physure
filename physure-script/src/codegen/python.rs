@@ -133,13 +133,19 @@ impl PythonTranspiler {
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
             Expr::Quantity(node) => self.generate_quantity(node),
-            // Python's f-string is the native equivalent of PHS `{v}` interpolation, so a
-            // literal carrying braces keeps working after transpiling.
-            Expr::Str(text) => Ok(if text.contains('{') {
-                format!("f{:?}", text)
-            } else {
-                format!("{:?}", text)
-            }),
+            Expr::Str(text) => {
+                // Not an f-string: `{2 m + 3 m}` is PHS, not Python, so each interpolated
+                // expression is transpiled on its own and concatenated.
+                let parts = super::split_interpolated(text);
+                let mut pieces = Vec::new();
+                for part in &parts {
+                    match part {
+                        super::StrPart::Text(t) => pieces.push(format!("{:?}", t)),
+                        super::StrPart::Expr(e) => pieces.push(format!("str({})", self.generate_expr(e)?)),
+                    }
+                }
+                Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
+            }
             Expr::Identifier(name) => {
                 if name.starts_with('`') || name.contains('\n') {
                     let clean = name.trim_matches('`').trim();
