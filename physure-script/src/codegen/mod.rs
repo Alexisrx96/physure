@@ -36,6 +36,7 @@ pub enum Target {
 }
 
 pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenError> {
+    let program = &inline_bindings_program(program);
     match target {
         Target::Python => {
             let compiled = compile_equations_to_functions(program)?;
@@ -54,6 +55,80 @@ pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenErr
             java::JavaTranspiler::new(&name).generate_program(&compiled)
         }
     }
+}
+
+/// Rewrites the `let(name, value, body)` that a `where` clause desugars to by substituting the
+/// value into the body. None of the three targets has a binding form that works in expression
+/// position, so the call used to be emitted verbatim and the generated file did not compile.
+/// The substitution is exact: PHS expressions are pure and nothing inside a body can rebind a
+/// name, so the only cost is repeating the value when the body uses it more than once.
+fn inline_bindings(expr: &Expr) -> Expr {
+    match expr {
+        Expr::FunctionCall { name, args, kwargs } => {
+            if name == "let" && kwargs.is_empty() && args.len() == 3 {
+                if let Expr::Identifier(bound) = &args[0] {
+                    let value = inline_bindings(&args[1]);
+                    // Expanding the body first means an inner binding of the same name is
+                    // already gone by the time the outer one substitutes, so shadowing works
+                    // without tracking scopes here.
+                    let body = inline_bindings(&args[2]);
+                    return substitute(&body, bound, &value);
+                }
+            }
+            Expr::FunctionCall {
+                name: name.clone(),
+                args: args.iter().map(inline_bindings).collect(),
+                kwargs: kwargs.iter().map(|(k, v)| (k.clone(), inline_bindings(v))).collect(),
+            }
+        }
+        Expr::BinaryOp { op, left, right } => Expr::BinaryOp {
+            op: *op,
+            left: Box::new(inline_bindings(left)),
+            right: Box::new(inline_bindings(right)),
+        },
+        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => expr.clone(),
+    }
+}
+
+fn substitute(expr: &Expr, name: &str, value: &Expr) -> Expr {
+    match expr {
+        Expr::Identifier(id) if id == name => value.clone(),
+        Expr::FunctionCall { name: called, args, kwargs } => Expr::FunctionCall {
+            name: called.clone(),
+            args: args.iter().map(|a| substitute(a, name, value)).collect(),
+            kwargs: kwargs.iter().map(|(k, v)| (k.clone(), substitute(v, name, value))).collect(),
+        },
+        Expr::BinaryOp { op, left, right } => Expr::BinaryOp {
+            op: *op,
+            left: Box::new(substitute(left, name, value)),
+            right: Box::new(substitute(right, name, value)),
+        },
+        other => other.clone(),
+    }
+}
+
+fn inline_bindings_stmt(stmt: &Statement) -> Statement {
+    match stmt {
+        Statement::Assignment(node) => Statement::Assignment(AssignmentNode {
+            name: node.name.clone(),
+            value: inline_bindings(&node.value),
+        }),
+        Statement::Expr(e) => Statement::Expr(inline_bindings(e)),
+        Statement::Return(e) => Statement::Return(inline_bindings(e)),
+        Statement::GuardReturn { cond, value } => Statement::GuardReturn {
+            cond: inline_bindings(cond),
+            value: inline_bindings(value),
+        },
+        Statement::FunctionDef(def) => Statement::FunctionDef(FunctionDefNode {
+            body_stmts: def.body_stmts.iter().map(inline_bindings_stmt).collect(),
+            ..def.clone()
+        }),
+        other => other.clone(),
+    }
+}
+
+fn inline_bindings_program(program: &Program) -> Program {
+    Program { statements: program.statements.iter().map(inline_bindings_stmt).collect() }
 }
 
 /// One piece of a string literal after `{expr}` interpolation has been read out of it.
@@ -286,6 +361,22 @@ fn rewrite_equation_calls(
 #[cfg(test)]
 mod const_fold_tests {
     use super::*;
+
+    /// A `where` clause desugars to `let(name, value, body)`, which every target used to
+    /// emit verbatim as a call to a function that does not exist anywhere.
+    #[test]
+    fn where_bindings_are_inlined_instead_of_emitted_as_a_let_call() {
+        let program =
+            crate::parser::parse_phs("duplo = a + b where a = 2.0 m, b = a * 3.0").unwrap();
+
+        for target in [Target::Python, Target::Rust, Target::Java] {
+            let name = format!("{target:?}");
+            let code = transpile(&program, target).unwrap();
+            assert!(!code.contains("let("), "{name} still emits a let() call:\n{code}");
+            // `b` is `a * 3.0`, so the binding for `a` has to reach inside it too.
+            assert_eq!(code.matches("2.0").count(), 2, "{name} lost a binding:\n{code}");
+        }
+    }
 
     #[test]
     fn named_argument_equation_call_compiles_to_a_real_function() {

@@ -338,9 +338,6 @@ fn ranges_and_named_arguments_parse() {
 const KNOWN_GAPS: &[(&str, &str)] = &[
     // `unity`: dimensionless, prints as the empty string by design.
     ("1", "dimensionless unity has no symbol"),
-    // `in` is a grammar keyword (from `let ... in`), so inches are unusable as a literal.
-    // Fixing it needs a context-sensitive keyword rule, not a symbol change.
-    ("in", "shadowed by the `in` keyword"),
 ];
 
 /// Every symbol in the registry, swept through the literal parser. The prefix bug was a
@@ -409,4 +406,33 @@ fn string_literals_are_text_and_braces_interpolate() {
     // multiplication used to strand `kg` after the number and collapse the result to 0.
     assert_eq!(last_string("use deriv from calc\nm = 2.0 kg\nderiv(\"0.5 * {m} * v^2\", \"v\")"), "2 * kg * v");
     assert_eq!(last_string("use deriv from calc\nderiv(\"2 x^2\", \"x\")"), "4 * x");
+}
+
+/// `in` was a grammar keyword, taken by `let ... in ...`, so the inch symbol was a parse
+/// error and only the `inch` alias worked. Local bindings moved to a postfix `where`, which
+/// cannot collide with a unit, and `in` went back to being what the registry says it is.
+#[test]
+fn inches_parse_and_local_bindings_use_where() {
+    assert_close(eval_quantity("12 in").canonical_magnitude(), 12.0 * 0.0254, "12 in");
+    assert_close(eval_quantity("12 in => cm").canonical_magnitude(), 0.3048, "12 in => cm");
+    assert_close(eval_quantity("1 in^2").canonical_magnitude(), 0.0254 * 0.0254, "1 in^2");
+    assert_close(eval_quantity("2.0 in * 3.0").canonical_magnitude(), 6.0 * 0.0254, "2.0 in * 3.0");
+    assert_eq!(eval_quantity("12 in").unit.__repr__(), "in", "the symbol the user wrote must survive");
+
+    assert_close(eval_quantity("x * 2.0 where x = 10.0 m").canonical_magnitude(), 20.0, "single where");
+    // A later binding sees an earlier one, so the bindings nest in source order.
+    assert_close(
+        eval_quantity("a + b where a = 2.0 m, b = a * 3.0").canonical_magnitude(),
+        8.0,
+        "chained where",
+    );
+    // The clause binds the whole expression that precedes it, ternary included.
+    assert_close(
+        eval_quantity("x > 1.0 m ? x : 0.0 m where x = 3.0 m").canonical_magnitude(),
+        3.0,
+        "where after a ternary",
+    );
+    // The retired `let ... in ...` must fail loudly: read as an expression it would mean
+    // "let times inches", a silently wrong answer.
+    assert!(eval_phs("let x = 10.0 m in x * 2.0").is_err(), "`let ... in` should no longer parse");
 }

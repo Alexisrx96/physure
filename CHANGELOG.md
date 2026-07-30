@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `Quantity.java` now uses `List<Quantity>` instead of raw `double[]` for `QuantityVector` interactions; added `mul()`, `div()`, `sub()` shorthand aliases.
+- **BREAKING (PHS)**: local bindings moved from `let name = value in body` to a postfix `where` clause — `body where name = value[, name2 = value2]`. A later binding can use an earlier one. `let` stays a reserved word with no rule behind it, so the old form fails to parse instead of quietly meaning "let times inches".
+
+### Fixed
+- **Inches are usable again**: `in` was a grammar keyword taken by `let ... in`, so `12 in`, `12 in => cm` and `1.5 in^2` were parse errors and only the `inch` alias worked.
+- Local bindings now transpile to real code in the Python, Rust and Java targets. They used to be emitted as a call to an undefined `let(...)` function, so the generated file did not compile.
 
 ---
 

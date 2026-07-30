@@ -140,8 +140,7 @@ impl LanguageServer for Backend {
 
         // 2. Control Keywords
         let keywords = vec![
-            ("let", "let var = expr1 in expr2", "Local variable binding"),
-            ("in", "in expr2", "Local binding scope boundary"),
+            ("where", "expr where var = value", "Local binding, `a * b where a = 2 m, b = 3 m`"),
             ("if", "if cond then expr1 else expr2", "Conditional expression"),
             ("then", "then expr1", "Conditional then branch"),
             ("else", "else expr2", "Conditional else branch"),
@@ -615,7 +614,7 @@ fn lookup_hover_doc(word: &str) -> Option<String> {
         "if" => Some("**PHS Keyword**: `if`\n\nConditional expression construct: `if cond then expr1 else expr2`".to_string()),
         "then" => Some("**PHS Keyword**: `then`\n\nConditional then-branch.".to_string()),
         "else" => Some("**PHS Keyword**: `else`\n\nConditional else-branch.".to_string()),
-        "let" => Some("**PHS Keyword**: `let`\n\nLocal variable binding construct.".to_string()),
+        "where" => Some("**PHS Keyword**: `where`\n\nLocal binding clause: `expr where name = value[, name2 = value2]`. A later binding can use an earlier one.".to_string()),
         "use" => Some("**PHS Keyword**: `use`\n\nImports name(s) into scope: `use name1[, name2, ...] from <domain|module>` or `use * from <domain|module>`.".to_string()),
         "from" => Some("**PHS Keyword**: `from`\n\nSource clause of a `use` statement: `use name from <domain|module>`".to_string()),
         "as" => Some("**PHS Keyword**: `as`\n\nAliases an imported name: `use name as alias from <domain|module>`".to_string()),

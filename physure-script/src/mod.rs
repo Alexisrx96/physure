@@ -155,8 +155,8 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_ternary_and_let() {
-        let source = "let z = 3 in z > 2 ? 100 : 200";
+    fn test_eval_ternary_and_where() {
+        let source = "z > 2 ? 100 : 200 where z = 3";
         let results = eval_phs(source).unwrap();
         assert_eq!(results, vec![PhsValue::Number(100.0)]);
     }

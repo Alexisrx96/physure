@@ -38,7 +38,8 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m) * cos(y / 1.0 m)
 
 ### 1.3 Control Flow & Local Bindings
 ```phs
-let x = 10.0 m in x * 2.0
+x * 2.0 where x = 10.0 m
+energia where energia = 0.5 * 2.0 kg * (3.0 m/s)^2
 if P > 50.0 kPa then "Alta Presion" else "Presion Normal"
 ```
 
