@@ -12,15 +12,22 @@ uncertainty_op  = { "+/-" | "±" }
 uncertainty_val = { number ~ (sigma_op | "%")? }
 uncertainty     = { uncertainty_op ~ uncertainty_val }
 
-unit_term       = { !keyword ~ (LETTER | "_" | "°" | "%" | "$")+ ~ ("^" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
-unit_primary    = _{ unit_term | "(" ~ unit_expr ~ ")" }
-unit_expr       = { unit_primary ~ (("*" | "/" | WHITESPACE+) ~ unit_primary)* }
+_unit_ws        = _{ (" " | "\t")+ }
+_unit_char      = _{ LETTER | "_" | "°" | "%" | "$" }
+_is_unit_start  = _{ &(!keyword ~ _unit_char) }
+_unit_op_term     = _{ "*" | "/" }
+_has_unit_op      = _{ &(_unit_op_term) | &((" " | "\t")+ ~ _unit_op_term) }
+unit_term         = @{ !keyword ~ _unit_char+ ~ (_unit_ws* ~ "^" ~ _unit_ws* ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+unit_primary      = _{ unit_term | "(" ~ unit_expr ~ ")" }
+unit_expr         = { unit_primary ~ (_has_unit_op ~ (" " | "\t")* ~ ("*" | "/") ~ (" " | "\t")* ~ unit_primary)* }
 
-vector_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" ~ unit_expr? }
+vector_literal  = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" ~ (_no_nl ~ _is_unit_start ~ unit_expr)? }
 
+_is_uncertainty = _{ &("+/-" | "±") }
+_no_nl = _{ !("\r" | "\n") }
 quantity = {
-    ("(" ~ expr ~ uncertainty? ~ ")" ~ unit_expr? ~ uncertainty?)
-  | (number ~ uncertainty? ~ unit_expr? ~ uncertainty?)
+    ("(" ~ expr ~ (_is_uncertainty ~ uncertainty)? ~ ")" ~ (_no_nl ~ _is_unit_start ~ unit_expr)? ~ (_is_uncertainty ~ uncertainty)?)
+  | (number ~ (_is_uncertainty ~ uncertainty)? ~ (_no_nl ~ _is_unit_start ~ unit_expr)? ~ (_is_uncertainty ~ uncertainty)?)
 }
 
 format_spec = @{ ("." ~ ASCII_DIGIT+ ~ ASCII_ALPHA*) | ASCII_ALPHA+ }
@@ -34,22 +41,53 @@ op_pow      = { "^" }
 op_convert  = { "=>" }
 op_compare  = { "==" | "!=" | ">=" | "<=" | ">" | "<" | "≈" }
 
-_nl         = _{ NEWLINE* }
-if_expr     = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ expr ~ _nl ~ "else" ~ _nl ~ expr }
-let_expr    = { "let" ~ identifier ~ "=" ~ expr ~ "in" ~ expr }
+_nl         = _{ (NEWLINE | WHITESPACE)* }
+_is_if      = _{ &"if" }
+if_expr     = { _is_if ~ "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ expr ~ _nl ~ "else" ~ _nl ~ expr }
 
-primary_base  = _{ if_expr | let_expr | vector_literal | quantity | function_call | identifier | string_lit | "(" ~ expr ~ ")" }
-method_call   = { primary_base ~ ("." ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")+ }
-primary       = _{ method_call | primary_base }
-factor      = { op_sub? ~ primary ~ (op_pow ~ primary)? }
-term        = { factor ~ ((op_mul | op_div) ~ factor | !op_sub ~ factor)* }
-comp_expr   = { term ~ (op_compare ~ term)* ~ op_format? }
-base_expr   = { comp_expr ~ ((op_add | op_sub | op_convert) ~ comp_expr)* }
+_is_let     = _{ &"let" }
+let_expr    = { _is_let ~ "let" ~ _nl ~ identifier ~ _nl ~ "=" ~ _nl ~ expr ~ _nl ~ "in" ~ _nl ~ expr }
 
-expr        = { base_expr ~ ("?" ~ base_expr ~ ":" ~ base_expr)? }
+_is_str_start  = _{ &"\"" }
+_is_func_start = _{ &(identifier ~ "(") }
+_is_vec_start  = _{ &"[" }
+_is_num_start  = _{ &(ASCII_DIGIT | "+" | "-" | "infinity" | "inf" | "oo" | "∞" | "(") }
+
+primary_base   = _{
+    (_is_str_start ~ string_lit)
+  | (_is_func_start ~ function_call)
+  | (_is_vec_start ~ vector_literal)
+  | (_is_num_start ~ quantity)
+  | identifier
+  | ("(" ~ expr ~ ")")
+}
+_has_dot      = _{ !".." ~ "." }
+method_call   = { primary_base ~ (_has_dot ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")+ }
+primary       = _{ primary_base ~ (_has_dot ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")* }
+
+_is_pow     = _{ &"^" }
+_is_minus   = _{ &"-" }
+factor      = { (_is_minus ~ op_sub)? ~ primary ~ (_is_pow ~ op_pow ~ primary)? }
+
+_is_delim         = _{ "," | ")" | "]" | "}" | ":" | "=" | "=>" | ".." | "?" | "then" | "else" | "in" | "return" }
+_is_implicit_mul  = _{ _no_nl ~ !op_sub ~ !_is_delim }
+_is_mul_div       = _{ &("*" | "/") }
+term              = { factor ~ ((_is_mul_div ~ (op_mul | op_div) ~ factor) | (_is_implicit_mul ~ factor))* }
+
+_is_compare = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
+_is_format  = _{ &":" }
+comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* ~ (_is_format ~ op_format)? }
+
+_is_add_sub_conv = _{ &("+" | "-" | "=>") }
+base_expr   = { comp_expr ~ (_is_add_sub_conv ~ (op_add | op_sub | op_convert) ~ comp_expr)* }
+
+_is_ternary = _{ &"?" }
+ternary_op  = { "?" ~ _nl ~ base_expr ~ _nl ~ ":" ~ _nl ~ base_expr }
+expr        = { (_is_if ~ if_expr) | (_is_let ~ let_expr) | (base_expr ~ (_is_ternary ~ ternary_op)?) }
 
 call_arg      = { (identifier ~ "=" ~ expr) | expr }
-function_call = { identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")" }
+_is_func_call = _{ &(identifier ~ "(") }
+function_call = { _is_func_call ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")" }
 param_item    = { identifier ~ (":" ~ unit_expr)? }
 params        = { param_item ~ ("," ~ param_item)* }
 
@@ -73,6 +111,7 @@ string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 return_stmt   = { "return" ~ expr }
 guard_if_stmt = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ return_stmt }
 
-stmt_term = _{ ";" | NEWLINE }
-stmt      = { import_stmt | export_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | raw_block | expr }
-program   = _{ SOI ~ (stmt_term | COMMENT)* ~ (stmt ~ (stmt_term | COMMENT)*)* ~ EOI }
+stmt_term       = _{ ";" | NEWLINE }
+stmt            = { import_stmt | export_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | raw_block | expr }
+_is_stmt_start  = _{ !(NEWLINE | COMMENT | EOI) }
+program         = _{ SOI ~ (stmt_term | COMMENT)* ~ (_is_stmt_start ~ stmt ~ (stmt_term | COMMENT)*)* ~ EOI }
