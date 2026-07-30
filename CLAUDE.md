@@ -113,3 +113,29 @@ Nothing merges to main unless all of these hold. CI enforces the first three; th
 3. **All four Python versions** (3.11–3.14) pass.
 4. **SonarQube quality gate green** on new code: coverage ≥ 80%, duplication ≤ 3%, zero new violations.
 5. **ty is advisory, not gated** (~900 pre-existing errors). Don't add new errors to files you touch; burn down the backlog opportunistically.
+
+### Changelog update policy (before every release)
+
+Before tagging any release, `CHANGELOG.md` **must** be updated from the real git history. Never guess or assume which features belong to which release.
+
+```bash
+# 1. Find the last published tag
+git tag -l --sort=-v:refname | head -5
+
+# 2. List the real commits that will enter this release
+git log --oneline --reverse <last-tag>..HEAD
+
+# 3. Move the [Unreleased] section to the new version with today's date and tags
+#    Example:  ## [0.2.4] - 2026-07-28
+#              **Tags:** `v0.2.4`, `core-v0.2.4`
+
+# 4. Create a fresh empty [Unreleased] section at the top
+```
+
+**Rules:**
+- Every entry must correspond to a real commit between the previous tag and the current one.
+- Do NOT attribute features to a release unless the commits prove they were included.
+- Use commit messages as the source of truth for Added / Changed / Fixed / Removed.
+- Follow [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format.
+- The file lives at repository root: `CHANGELOG.md`.
+
