@@ -237,6 +237,83 @@ fn uncertainty_survives_to_display_and_is_readable() {
     assert_eq!(sigma.unit.__repr__(), "m");
 }
 
+/// A unit chain runs `symbol (* symbol)*`, which made every identifier after a `*` look
+/// like a unit — `100 kPa * sin(1.0)` used to consume `sin` as a dimension and drop the
+/// argument list, yielding `100000 kg*m^-1*s^-2*sin`. A call is never a unit.
+#[test]
+fn a_call_after_a_unit_is_a_call_and_not_a_unit() {
+    let cases = [
+        ("100.0 kPa * sin(1.0)", 1.0f64.sin() * 100_000.0, "kPa"),
+        ("100.0 kPa * cos(0.0)", 100_000.0, "kPa"),
+        ("9.8 m/s^2 * sin(0.5)", 0.5f64.sin() * 9.8, "m/s^2"),
+    ];
+    for (src, expected, unit) in cases {
+        let q = eval_quantity(src);
+        assert_close(q.canonical_magnitude(), expected, src);
+        assert_eq!(q.unit.__repr__(), unit, "{src:?} lost its unit");
+    }
+}
+
+/// Conversions leave rounding debris past the 15 digits an f64 carries exactly, and
+/// printing the shortest round-tripping string exposes it: `25 m/s => km/h` read
+/// "89.99999999999999 km/h". Rounding must not eat digits the user actually typed.
+#[test]
+fn conversions_do_not_print_floating_point_debris() {
+    assert_eq!(eval_quantity("25.0 m/s => km/h").to_string(), "90.0 km/h");
+    assert_eq!(eval_quantity("100.0 kPa => bar").to_string(), "1.0 bar");
+    assert_eq!(eval_quantity("0.1 + 0.2").to_string(), "0.3");
+    assert_eq!(eval_quantity("3.14159265358979 m").to_string(), "3.14159265358979 m");
+}
+
+/// `%` is a `_unit_char` in the grammar but had no registry entry, so `5.0 %` was a syntax
+/// error. Registering it as a dimensionless 0.01 also had to skip the `dim_to_base` lookup
+/// that turns dimension "1" into the `unity` unit, or the ratio would carry a dimension.
+#[test]
+fn ratios_are_dimensionless_units_with_a_scale() {
+    assert_close(eval_quantity("5.0 %").canonical_magnitude(), 0.05, "5.0 %");
+    assert_eq!(eval_quantity("5.0 %").to_string(), "5.0 %");
+    assert_close(eval_quantity("5.0 ppm").canonical_magnitude(), 5e-6, "5.0 ppm");
+
+    // A ratio applied to a quantity scales it and leaves the unit alone.
+    let scaled = eval_quantity("200.0 kPa * 5.0 %");
+    assert_close(scaled.canonical_magnitude(), 10_000.0, "200.0 kPa * 5.0 %");
+    assert_eq!(scaled.to_string(), "10000.0 Pa");
+
+    // A trailing comment must not reach the unit parser.
+    assert_close(eval_quantity("5.0 % # relative error").canonical_magnitude(), 0.05, "commented %");
+}
+
+/// `a .. b` builds the range that `plot3d`/`export3d` sample over. Endpoints are ordinary
+/// expressions, so they carry units, and a call argument may be named with `:` or `=`.
+#[test]
+fn ranges_and_named_arguments_parse() {
+    let values = eval_phs("r = -2.0 m .. 2.0 m\nr").expect("range failed to evaluate");
+    match values.into_iter().last() {
+        Some(PhsValue::Range(start, end)) => {
+            match (*start, *end) {
+                (PhsValue::Quantity(s), PhsValue::Quantity(e)) => {
+                    assert_close(s.canonical_magnitude(), -2.0, "range start");
+                    assert_close(e.canonical_magnitude(), 2.0, "range end");
+                }
+                other => panic!("range endpoints came out as {other:?}"),
+            };
+        }
+        other => panic!("`-2.0 m .. 2.0 m` produced {other:?}, expected a range"),
+    }
+
+    // Both spellings of a named argument have to reach the same AST — the guide writes
+    // `plot3d(P, x: r)` while the rest of the language writes `x = r`.
+    let colon = physure_script::parser::parse_phs("plot3d(P, x: r, title: \"t\")");
+    let equals = physure_script::parser::parse_phs("plot3d(P, x = r, title = \"t\")");
+    assert_eq!(
+        format!("{:?}", colon.expect("`x:` form failed to parse")),
+        format!("{:?}", equals.expect("`x =` form failed to parse")),
+    );
+
+    // A format spec is not a named argument: `.2f` is no expression, so `expr` still wins.
+    assert_close(eval_quantity("3.14159:.2f").canonical_magnitude(), 3.14159, "format spec");
+}
+
 /// Unit symbols the literal parser cannot round-trip today, each with the reason. The
 /// sweep below asserts these still fail, so fixing one forces removing it from this list
 /// rather than letting the list quietly go stale.

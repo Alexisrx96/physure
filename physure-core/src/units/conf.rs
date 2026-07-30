@@ -200,17 +200,19 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
     let base_symbol = dim_to_base.get(dim_str).cloned().unwrap_or_default();
 
-    if !base_symbol.is_empty() {
+    // Dimension "1" is tested before `base_symbol`, which maps it to the `unity` unit:
+    // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
+    // dimension "unity", so `2 m * 3 %` printed "m * unity" instead of plain metres.
+    if dim_str == "1" || dim_str.is_empty() {
+        let mut u = RationalUnit::new_from_dimensions([]).with_scale(factor);
+        u.display_name = Some(symbol.clone());
+        registry.add_derived_unit(symbol.clone(), u);
+    } else if !base_symbol.is_empty() {
         if factor == 1.0 && symbol == base_symbol {
             registry.add_base_unit(symbol.clone());
         } else {
             registry.add_scaled_unit(symbol.clone(), &base_symbol, factor);
         }
-    } else if dim_str == "1" || dim_str.is_empty() {
-        let u = RationalUnit::new_from_dimensions([]);
-        let mut u = u.with_scale(factor);
-        u.display_name = Some(symbol.clone());
-        registry.add_derived_unit(symbol.clone(), u);
     } else {
         let recipe_str = if parts.len() >= 3 && !parts[2].is_empty() && parts[2] != "noprefix" {
             parts[2]

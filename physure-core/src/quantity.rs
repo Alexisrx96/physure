@@ -36,7 +36,25 @@ pub fn format_float(n: f64) -> String {
     if abs_n < 1e-4 || abs_n >= 1e16 {
         format!("{:e}", n)
     } else {
-        let s = format!("{}", n);
+        // `{}` prints the shortest string that round-trips the f64, which is honest but
+        // unreadable once a conversion has left rounding debris: 25 m/s => km/h comes out
+        // as 89.99999999999999. An f64 carries 15 decimal digits exactly and the debris
+        // always lands past them, so round to 15 significant digits and keep the result
+        // only when it is genuinely shorter.
+        let s = {
+            let exact = format!("{}", n);
+            let rounded = format!("{:.*}", (15 - (abs_n.log10().floor() as i32 + 1)).clamp(0, 17) as usize, n);
+            let trimmed = if rounded.contains('.') {
+                rounded.trim_end_matches('0').trim_end_matches('.').to_string()
+            } else {
+                rounded
+            };
+            if trimmed.len() < exact.len() && trimmed.parse::<f64>().is_ok() {
+                trimmed
+            } else {
+                exact
+            }
+        };
         if !s.contains('.') && !s.contains('e') && !s.contains('E') {
             format!("{}.0", s)
         } else {

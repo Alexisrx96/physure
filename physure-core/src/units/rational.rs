@@ -132,7 +132,14 @@ impl RationalUnit {
             j += 1;
         }
         let id = Self::calculate_id(&new_dims);
-        RationalUnit { dimensions: new_dims, scale: self.scale * other.scale, id, display_name: None }
+        let display_name = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+            self.display_name.clone()
+        } else if self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9 {
+            other.display_name.clone()
+        } else {
+            None
+        };
+        RationalUnit { dimensions: new_dims, scale: self.scale * other.scale, id, display_name }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -172,7 +179,12 @@ impl RationalUnit {
             j += 1;
         }
         let id = Self::calculate_id(&new_dims);
-        RationalUnit { dimensions: new_dims, scale: self.scale / other.scale, id, display_name: None }
+        let display_name = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+            self.display_name.clone()
+        } else {
+            None
+        };
+        RationalUnit { dimensions: new_dims, scale: self.scale / other.scale, id, display_name }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -236,13 +248,35 @@ impl RationalUnit {
         parts.join(" * ")
     }
 
+    fn si_prefix_for_scale(scale: f64) -> Option<&'static str> {
+        if (scale - 1.0).abs() < 1e-9 {
+            Some("")
+        } else if (scale - 1e3).abs() < 1e-6 {
+            Some("k")
+        } else if (scale - 1e6).abs() < 1e-3 {
+            Some("M")
+        } else if (scale - 1e9).abs() < 1.0 {
+            Some("G")
+        } else if (scale - 1e12).abs() < 1e3 {
+            Some("T")
+        } else if (scale - 1e-3).abs() < 1e-9 {
+            Some("m")
+        } else if (scale - 1e-6).abs() < 1e-12 {
+            Some("µ")
+        } else if (scale - 1e-9).abs() < 1e-15 {
+            Some("n")
+        } else {
+            None
+        }
+    }
+
     pub fn __repr__(&self) -> String {
         if let Some(ref name) = self.display_name {
             return name.clone();
         }
-        if (self.scale - 1.0).abs() < 1e-9 {
-            if let Some(known) = self.known_derived_symbol() {
-                return known.to_string();
+        if let Some(known) = self.known_derived_symbol() {
+            if let Some(prefix) = Self::si_prefix_for_scale(self.scale) {
+                return format!("{}{}", prefix, known);
             }
         }
         self.base_repr()
