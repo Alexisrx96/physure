@@ -32,7 +32,9 @@ quantity = {
   | (number ~ (_is_uncertainty ~ uncertainty)? ~ (_no_nl ~ _is_unit_start ~ unit_expr)? ~ (_is_uncertainty ~ uncertainty)?)
 }
 
-format_spec = @{ ("." ~ ASCII_DIGIT+ ~ ASCII_ALPHA*) | ASCII_ALPHA+ }
+// Only the Python-style `.2f`/`.3e` spec. A bare `ASCII_ALPHA+` also matched, which made
+// `cond ? a : b` unparseable: `: b` looked like a format spec and ate the ternary's colon.
+format_spec = @{ "." ~ ASCII_DIGIT+ ~ ASCII_ALPHA* }
 op_format   = { ":" ~ format_spec }
 
 op_add      = { "+" }
@@ -78,7 +80,7 @@ _is_mul_div       = _{ &("*" | "/") }
 term              = { factor ~ ((_is_mul_div ~ (op_mul | op_div) ~ factor) | (_is_implicit_mul ~ factor))* }
 
 _is_compare = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
-_is_format  = _{ &":" }
+_is_format  = _{ &(":" ~ format_spec) }
 comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* ~ (_is_format ~ op_format)? }
 
 // `..` sits at the same level as `+`/`=>` so a range's endpoints can carry units and
