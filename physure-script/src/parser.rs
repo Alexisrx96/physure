@@ -224,12 +224,15 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Some(f) => f,
         None => return Ok(Expr::Quantity(QuantityNode { magnitude: 0.0, uncertainty: None, is_sigma: false, unit: None })),
     };
-    match first.as_rule() {
-        Rule::if_expr => parse_if_expr(first),
-        Rule::let_expr => parse_let_expr(first),
-        Rule::base_expr => {
-            let left = parse_base_expr(first)?;
-            if let Some(tail) = inner.next() {
+    let mut result = match first.as_rule() {
+        Rule::if_expr => parse_if_expr(first)?,
+        Rule::base_expr => parse_base_expr(first)?,
+        _ => parse_comp_expr(first)?,
+    };
+    // A ternary tail and a `where` clause can both follow, in that order.
+    for tail in inner {
+        result = match tail.as_rule() {
+            Rule::ternary_op => {
                 // `ternary_op` is a rule of its own, so the two branches arrive nested
                 // inside it rather than as further children of `expr`.
                 let mut branches = tail.into_inner();
@@ -241,17 +244,19 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
                     .ok_or_else(|| PhysureError::Generic("Ternary is missing its 'else' branch".into()))?;
                 let then_expr = parse_base_expr(then_pair)?;
                 let else_expr = parse_base_expr(else_pair)?;
-                Ok(Expr::FunctionCall {
+                Expr::FunctionCall {
                     name: "ternary".to_string(),
-                    args: vec![left, then_expr, else_expr],
+                    args: vec![result, then_expr, else_expr],
                     kwargs: Vec::new(),
-                })
-            } else {
-                Ok(left)
+                }
             }
-        }
-        _ => parse_comp_expr(first),
+            Rule::where_expr => parse_where_expr(tail, result)?,
+            other => {
+                return Err(PhysureError::Generic(format!("Unexpected rule after an expression: {:?}", other)))
+            }
+        };
     }
+    Ok(result)
 }
 
 fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -370,7 +375,6 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
         Rule::string_lit => Expr::Str(primary_pair.as_str().trim_matches('"').to_string()),
         Rule::if_expr => parse_if_expr(primary_pair)?,
-        Rule::let_expr => parse_let_expr(primary_pair)?,
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
         Rule::expr => parse_expr(primary_pair)?,
         Rule::base_expr => parse_base_expr(primary_pair)?,
@@ -417,19 +421,29 @@ fn parse_if_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     })
 }
 
-/// Desugars `let name = value in body` into `FunctionCall { name: "let", args: [name, value, body] }`,
-/// a form the interpreter special-cases to bind `name` in a local scope before evaluating `body`
-/// (see `PhsInterpreter::eval_expr`) without needing a dedicated `Expr` variant.
-fn parse_let_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
-    let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-    let value = parse_expr(inner.next().unwrap())?;
-    let body = parse_expr(inner.next().unwrap())?;
-    Ok(Expr::FunctionCall {
+/// Desugars `body where a = 1, b = a * 2` into nested `FunctionCall { name: "let", args: [name,
+/// value, body] }`, a form the interpreter special-cases to bind `name` in a local scope before
+/// evaluating `body` (see `PhsInterpreter::eval_expr`) without needing a dedicated `Expr` variant.
+/// The nesting runs in source order so a later binding can use an earlier one.
+fn parse_where_expr(pair: pest::iterators::Pair<Rule>, body: Expr) -> PhysureResult<Expr> {
+    let mut bindings = Vec::new();
+    for bind in pair.into_inner() {
+        let mut parts = bind.into_inner();
+        let name = parts
+            .next()
+            .ok_or_else(|| PhysureError::Generic("A `where` binding is missing its name".into()))?
+            .as_str()
+            .to_string();
+        let value_pair = parts
+            .next()
+            .ok_or_else(|| PhysureError::Generic(format!("`where {}` is missing its value", name)))?;
+        bindings.push((name, parse_base_expr(value_pair)?));
+    }
+    Ok(bindings.into_iter().rev().fold(body, |acc, (name, value)| Expr::FunctionCall {
         name: "let".to_string(),
-        args: vec![Expr::Identifier(name), value, body],
+        args: vec![Expr::Identifier(name), value, acc],
         kwargs: Vec::new(),
-    })
+    }))
 }
 
 fn parse_vector_literal(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -755,13 +769,13 @@ mod tests {
     /// as two loose `base_expr`s — reading the branches off `expr` panicked on the second.
     #[test]
     fn test_ternary_branches_come_from_the_ternary_rule() {
-        for code in ["let z = 3 in z > 2 ? 100 : 200", "5 m > 2 m ? 1 kg : 2 kg", "1 > 0 ? 2 m : 3 m"] {
+        for code in ["z > 2 ? 100 : 200 where z = 3", "5 m > 2 m ? 1 kg : 2 kg", "1 > 0 ? 2 m : 3 m"] {
             let prog = parse_phs(code).unwrap_or_else(|e| panic!("{code:?} failed to parse: {e:?}"));
             let expr = match &prog.statements[0] {
                 Statement::Expr(e) => e,
                 other => panic!("{code:?} produced {other:?}"),
             };
-            // `let ... in` wraps the ternary, so look for the call anywhere in the tree.
+            // A `where` clause wraps the ternary, so look for the call anywhere in the tree.
             let rendered = format!("{expr:?}");
             assert!(rendered.contains("ternary"), "{code:?} did not build a ternary: {rendered}");
         }

@@ -17,6 +17,6 @@ def test_evaluate_phs_native_variables_and_functions():
     assert results[-1] == 52.0
 
 
-def test_evaluate_phs_native_let_and_ternary():
-    results = evaluate_phs_native("let z = 3 in z > 2 ? 100 : 200")
+def test_evaluate_phs_native_where_and_ternary():
+    results = evaluate_phs_native("z > 2 ? 100 : 200 where z = 3")
     assert results == [100.0]
