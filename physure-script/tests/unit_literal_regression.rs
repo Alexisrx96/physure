@@ -311,7 +311,25 @@ fn ranges_and_named_arguments_parse() {
     );
 
     // A format spec is not a named argument: `.2f` is no expression, so `expr` still wins.
-    assert_close(eval_quantity("3.14159:.2f").canonical_magnitude(), 3.14159, "format spec");
+    // The spec is applied, and a quantity keeps its unit through the formatting.
+    for (src, expected) in [
+        ("3.14159:.2f", "3.14"),
+        ("9.8 m/s^2:.3f", "9.800 m/s^2"),
+        ("1234.5:.2e", "1.23e3"),
+    ] {
+        match eval_phs(src).expect("format spec failed to evaluate").into_iter().last() {
+            Some(PhsValue::String(s)) => assert_eq!(s, expected, "{src:?} formatted wrong"),
+            other => panic!("{src:?} produced {other:?}, expected a formatted string"),
+        }
+    }
+
+    // `a ? b : c` used to be a parse error: `: c` looked like a format spec and consumed
+    // the ternary's colon before the ternary rule could see it.
+    let ternary = eval_phs("a = 5 m\nb = 2 m\n1 > 0 ? a : b").expect("identifier ternary failed");
+    match ternary.into_iter().last() {
+        Some(PhsValue::Quantity(q)) => assert_close(q.canonical_magnitude(), 5.0, "identifier ternary"),
+        other => panic!("`1 > 0 ? a : b` produced {other:?}"),
+    }
 }
 
 /// Unit symbols the literal parser cannot round-trip today, each with the reason. The

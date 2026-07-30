@@ -104,13 +104,43 @@ pub fn eval_domain_builtin(
     eval_domain_builtin_with_kwargs(domain, name, args, &[], interpreter, &empty_env)
 }
 
+/// Renders a value under a Python-style `.<digits><kind>` spec (`x:.2f`, `x:.3e`). A
+/// quantity keeps its unit — formatting is about how many digits to show, not about
+/// discarding the half of the measurement that says what the number means.
+fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
+    let digits = spec.trim_start_matches('.').trim_end_matches(char::is_alphabetic);
+    let precision: usize = digits.parse().unwrap_or(6);
+    let kind = spec.chars().last().filter(|c| c.is_alphabetic()).unwrap_or('f');
+    let render = |n: f64| match kind {
+        'e' => format!("{:.*e}", precision, n),
+        'g' => {
+            let s = format!("{:.*}", precision, n);
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+        _ => format!("{:.*}", precision, n),
+    };
+    match value {
+        PhsValue::Number(n) => render(*n),
+        PhsValue::Quantity(q) => {
+            let unit = q.unit.__repr__();
+            if unit.is_empty() {
+                render(q.value.mean())
+            } else {
+                format!("{} {}", render(q.value.mean()), unit)
+            }
+        }
+        other => other.to_string(),
+    }
+}
+
 pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
         "format" => {
-            if let Some(val) = args.first() {
-                Ok(Some(val.clone()))
-            } else {
-                Ok(None)
+            let Some(val) = args.first() else { return Ok(None) };
+            match args.get(1) {
+                Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+                // No spec, nothing to apply — hand the value back untouched.
+                _ => Ok(Some(val.clone())),
             }
         }
         "op_>" | "op_gt" => compare(args, |l, r| l > r),
