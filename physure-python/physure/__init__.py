@@ -37,6 +37,8 @@ try:
         DimVector,
         Interpreter,
         PruningConfig,
+        QuantityMatrix,
+        QuantityVector,
         RationalUnit,
         UnitDefinition,
         UnitRegistry,
@@ -49,8 +51,6 @@ try:
     )
     from physure._core import (
         Quantity as CoreQuantity,
-        QuantityVector,
-        QuantityMatrix,
     )
 except ImportError as _err:
     raise ImportError(
@@ -295,6 +295,7 @@ def _load_plotting(name: str) -> Any:
 
 def _load_symbolic(name: str) -> Any:
     import physure.symbolic as symbolic
+
     return getattr(symbolic, name)
 
 
