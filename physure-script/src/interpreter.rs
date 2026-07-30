@@ -450,15 +450,19 @@ impl PhsInterpreter {
                     return self.eval_expr(expr, &local_env);
                 }
 
-                if !kwargs.is_empty() {
-                    return Err(PhysureError::Generic(format!(
-                        "Named arguments are only supported when calling an equation, but '{}' is not an equation",
-                        name
-                    )));
+                let mut arg_vals = Vec::new();
+                for arg in args {
+                    arg_vals.push(self.eval_expr(arg, env)?);
+                }
+
+                let mut kwarg_vals = Vec::new();
+                for (kw_name, kw_expr) in kwargs {
+                    let kw_val = self.eval_expr(kw_expr, env)?;
+                    kwarg_vals.push((kw_name.clone(), kw_val));
                 }
 
                 if let Some(PhsValue::Function(func)) = env.get(name) {
-                    if args.len() == 1 {
+                    if args.len() == 1 && kwargs.is_empty() {
                         let arg_eval = self.eval_expr(&args[0], env);
                         if let Ok(PhsValue::Function(arg_func)) = arg_eval {
                             let params = arg_func.params.clone();
@@ -483,17 +487,12 @@ impl PhsInterpreter {
                     }
                 }
 
-                let mut arg_vals = Vec::new();
-                for arg in args {
-                    arg_vals.push(self.eval_expr(arg, env)?);
-                }
-
                 if let Some(val) = crate::builtins::eval_core_builtin(name, &arg_vals, self)? {
                     return Ok(val);
                 }
 
                 if let Some((domain, canonical)) = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned() {
-                    if let Some(val) = crate::builtins::eval_domain_builtin(domain, &canonical, &arg_vals, self)? {
+                    if let Some(val) = crate::builtins::eval_domain_builtin_with_kwargs(domain, &canonical, &arg_vals, &kwarg_vals, self, env)? {
                         return Ok(val);
                     }
                 }
@@ -505,39 +504,48 @@ impl PhsInterpreter {
                 }
 
                 if let Some(PhsValue::Function(func)) = env.get(name) {
-                    if func.params.len() != args.len() {
-                        return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", name, func.params.len(), args.len())));
-                    }
-                    let mut local_env = env.clone();
-                    for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {
-                        let bound_val = self.bind_param_value(name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val)?;
-                        local_env.insert(param_name.clone(), bound_val);
-                    }
-                    let mut last_val = PhsValue::None;
-                    for stmt in &func.body_stmts {
-                        match stmt {
-                            Statement::Return(expr) => {
-                                last_val = self.eval_expr(expr, &local_env)?;
-                                break;
-                            }
-                            Statement::GuardReturn { cond, value } => {
-                                let cond_val = self.eval_expr(cond, &local_env)?;
-                                if is_truthy(&cond_val) {
-                                    last_val = self.eval_expr(value, &local_env)?;
-                                    break;
-                                }
-                            }
-                            _ => {
-                                last_val = self.eval_statement_with_env(stmt, &mut local_env)?;
-                            }
-                        }
-                    }
-                    Ok(last_val)
+                    return self.call_function_node(func, arg_vals, env);
                 } else {
                     Err(PhysureError::Generic(format!("Undefined function '{}'", name)))
                 }
             }
         }
+    }
+
+    pub fn call_function_node(
+        &self,
+        func: &crate::ast::FunctionDefNode,
+        arg_vals: Vec<PhsValue>,
+        env: &HashMap<String, PhsValue>,
+    ) -> PhysureResult<PhsValue> {
+        if func.params.len() != arg_vals.len() {
+            return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", func.name, func.params.len(), arg_vals.len())));
+        }
+        let mut local_env = env.clone();
+        for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {
+            let bound_val = self.bind_param_value(&func.name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val)?;
+            local_env.insert(param_name.clone(), bound_val);
+        }
+        let mut last_val = PhsValue::None;
+        for stmt in &func.body_stmts {
+            match stmt {
+                Statement::Return(expr) => {
+                    last_val = self.eval_expr(expr, &local_env)?;
+                    break;
+                }
+                Statement::GuardReturn { cond, value } => {
+                    let cond_val = self.eval_expr(cond, &local_env)?;
+                    if is_truthy(&cond_val) {
+                        last_val = self.eval_expr(value, &local_env)?;
+                        break;
+                    }
+                }
+                _ => {
+                    last_val = self.eval_statement_with_env(stmt, &mut local_env)?;
+                }
+            }
+        }
+        Ok(last_val)
     }
 
     /// Binds an argument value to a function parameter, converting it to the parameter's
@@ -591,6 +599,9 @@ impl PhsInterpreter {
     }
 
     pub fn eval_binary_op_vals(&self, op: BinaryOp, l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
+        if op == BinaryOp::Range {
+            return Ok(PhsValue::Range(Box::new(l_val), Box::new(r_val)));
+        }
         let l_val = coerce_equation_string(l_val);
         let r_val = coerce_equation_string(r_val);
         match (l_val, r_val) {
@@ -674,7 +685,7 @@ impl PhsInterpreter {
                             return Err(PhysureError::Generic("Exponent must be a dimensionless constant".into()));
                         }
                     }
-                    BinaryOp::Convert => unreachable!(),
+                    BinaryOp::Convert | BinaryOp::Range => unreachable!(),
                 };
                 Ok(PhsValue::Quantity(res))
             }
@@ -698,33 +709,9 @@ impl PhsInterpreter {
                         l / r
                     }
                     BinaryOp::Pow => l.powf(r),
-                    BinaryOp::Convert => unreachable!(),
+                    BinaryOp::Convert | BinaryOp::Range => unreachable!(),
                 };
                 Ok(PhsValue::Number(res))
-            }
-            (PhsValue::Quantity(l), PhsValue::Number(r)) => {
-                let r_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
-                let res = match op {
-                    BinaryOp::Add => l.add(&r_q)?,
-                    BinaryOp::Sub => l.sub(&r_q)?,
-                    BinaryOp::Mul => l.mul(&r_q)?,
-                    BinaryOp::Div => l.div(&r_q)?,
-                    BinaryOp::Pow => l.pow(r)?,
-                    BinaryOp::Convert => unreachable!(),
-                };
-                Ok(PhsValue::Quantity(res))
-            }
-            (PhsValue::Number(l), PhsValue::Quantity(r)) => {
-                let l_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
-                let res = match op {
-                    BinaryOp::Add => l_q.add(&r)?,
-                    BinaryOp::Sub => l_q.sub(&r)?,
-                    BinaryOp::Mul => l_q.mul(&r)?,
-                    BinaryOp::Div => l_q.div(&r)?,
-                    BinaryOp::Pow => return Err(PhysureError::Generic("Quantity exponent not supported".into())),
-                    BinaryOp::Convert => unreachable!(),
-                };
-                Ok(PhsValue::Quantity(res))
             }
             // A bare word that isn't a bound variable arrives here as a String, so these
             // four arms are where `5 foobar` is decided. The unit parser now reports the

@@ -44,4 +44,38 @@ impl RichRenderer {
         }
         println!("\x1b[1;34m╚══════════════════════════════════════════════════════════════╝\x1b[0m");
     }
+
+    pub fn render_parse_error(file: &str, err: &dyn std::fmt::Debug, code: &str) {
+        let raw_err = format!("{:?}", err);
+        let clean_msg = raw_err
+            .trim_start_matches("Generic(\"")
+            .trim_end_matches("\")")
+            .replace("\\n", "\n")
+            .replace("␊", "");
+
+        eprintln!("\n\x1b[1;31m┌── ❌ Physure Syntax Error ──────────────────────────────────────────┐\x1b[0m");
+        eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mFile:\x1b[0m \x1b[36m{}\x1b[0m", file);
+        for line in clean_msg.lines() {
+            if line.contains("-->") {
+                eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;33mLocation: {}\x1b[0m", line.trim());
+            } else if line.contains('|') {
+                eprintln!("\x1b[1;31m│\x1b[0m \x1b[37m{}\x1b[0m", line);
+            } else if line.contains('=') {
+                eprintln!("\x1b[1;31m│\x1b[0m \x1b[36m{}\x1b[0m", line.trim());
+            } else if !line.trim().is_empty() {
+                eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;31m{}\x1b[0m", line.trim());
+            }
+        }
+        eprintln!("\x1b[1;31m└─────────────────────────────────────────────────────────────────────┘\x1b[0m\n");
+    }
+
+    pub fn render_runtime_error(file: &str, err: &dyn std::fmt::Display, stmt_code: &str) {
+        eprintln!("\n\x1b[1;31m┌── ❌ Physure Execution & Dimensional Analysis Error ─────────────────┐\x1b[0m");
+        eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mFile:\x1b[0m \x1b[36m{}\x1b[0m", file);
+        if !stmt_code.is_empty() {
+            eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mStatement:\x1b[0m \x1b[33m{}\x1b[0m", stmt_code.trim());
+        }
+        eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;31mError Details: {}\x1b[0m", err);
+        eprintln!("\x1b[1;31m└─────────────────────────────────────────────────────────────────────┘\x1b[0m\n");
+    }
 }

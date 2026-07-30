@@ -36,17 +36,20 @@ use physure_script::symbolic::Expr;
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
 // Avoids allocating duplicate Python wrappers for the same RationalUnit.
-static UNIT_CACHE: OnceLock<Mutex<HashMap<u64, PyObject>>> = OnceLock::new();
+// `RationalUnit::id` is derived from the dimensions alone, so it cannot be the whole key:
+// J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
+// handed back whichever of them was cached first.
+static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>), PyObject>>> = OnceLock::new();
 
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
-    if let Some(existing) = cache.get(&unit.id) {
+    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone());
+    if let Some(existing) = cache.get(&key) {
         return Ok(existing.clone_ref(py));
     }
-    let id = unit.id;
     let py_unit = PyRationalUnit(unit).into_py_any(py)?;
-    cache.insert(id, py_unit.clone_ref(py));
+    cache.insert(key, py_unit.clone_ref(py));
     Ok(py_unit)
 }
 
@@ -1183,6 +1186,7 @@ fn phs_value_to_py(py: Python<'_>, val: ::physure_script::PhsValue) -> PyResult<
             items?.into_py_any(py)?
         }
         ::physure_script::PhsValue::Matrix(m) => PyQuantityMatrix(m).into_py_any(py)?,
+        ::physure_script::PhsValue::Range(start, end) => format!("{} .. {}", start, end).into_py_any(py)?,
     })
 }
 
@@ -1439,6 +1443,33 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tokenize_phs_expression, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;
+    m.add_function(wrap_pyfunction!(export_mesh_3d_native, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
+}
+
+#[pyfunction]
+#[pyo3(name = "export_mesh_3d_native")]
+fn export_mesh_3d_native(
+    title: String,
+    x_label: String,
+    y_label: String,
+    z_label: String,
+    x_grid: Vec<f64>,
+    y_grid: Vec<f64>,
+    z_grid: Vec<f64>,
+    rows: usize,
+    cols: usize,
+    format: String,
+) -> PyResult<PyObject> {
+    let mesh = physure_core::Mesh3DData::new(
+        title, x_label, y_label, z_label, x_grid, y_grid, z_grid, rows, cols,
+    );
+    let bytes = mesh
+        .export_format(&format)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+    Python::with_gil(|py| {
+        Ok(pyo3::types::PyBytes::new(py, &bytes).into())
+    })
 }

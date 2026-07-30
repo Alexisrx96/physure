@@ -103,7 +103,9 @@ if TYPE_CHECKING:
         PhysureContext,
     )
     from physure.plotting import (
+        export_3d,
         plot,
+        plot_3d,
         plot_covariance,
         plot_interactive,
         plot_pairplot,
@@ -140,6 +142,8 @@ _EXCEPTION_ATTRS = {
 _VECTORIZED_ATTRS = {"PhysureContext"}
 _PLOT_ATTRS = {
     "plot",
+    "plot_3d",
+    "export_3d",
     "plot_slices",
     "plot_interactive",
     "plot_parallel_coordinates",
@@ -390,6 +394,7 @@ __all__ = [
     "e",
     "equivalencies",
     "exp",
+    "export_3d",
     "get_active_system",
     "get_current_system",
     "get_unit",
@@ -400,6 +405,7 @@ __all__ = [
     "log10",
     "pi",
     "plot",
+    "plot_3d",
     "plot_covariance",
     "plot_interactive",
     "plot_pairplot",

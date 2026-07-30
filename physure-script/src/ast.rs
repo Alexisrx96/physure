@@ -84,6 +84,7 @@ pub enum BinaryOp {
     Div,
     Pow,
     Convert,
+    Range,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

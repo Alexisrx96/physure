@@ -25,6 +25,7 @@ pub enum PhsValue {
     SigmaBound(Quantity, f64),
     Plot(PlotData),
     Equation(Node, Node),
+    Range(Box<PhsValue>, Box<PhsValue>),
 }
 
 impl fmt::Display for PhsValue {
@@ -56,6 +57,7 @@ impl fmt::Display for PhsValue {
             PhsValue::Plot(p) => write!(f, "{}", p.ascii),
             PhsValue::Function(func) => write!(f, "fn {}", func.name),
             PhsValue::Equation(lhs, rhs) => write!(f, "{} = {}", lhs.to_phs_string(), rhs.to_phs_string()),
+            PhsValue::Range(start, end) => write!(f, "{} .. {}", start, end),
         }
     }
 }

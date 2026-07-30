@@ -26,14 +26,14 @@ fn print_help() {
     println!("    phs <script.phs> [OPTIONS]");
     println!("    phs --repl");
     println!("    phs transpile <script.phs> [--target <rust|python|java>] [--output <file>]");
-    println!("    phs register-protocol");
-    println!("    phs new-plugin <name> [--lang <rust|python|both>] [--dir <path>]");
+    println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
     println!("    -r, --repl               Start interactive PHS REPL environment");
     println!("    -t, --target <lang>      Transpile target: rust, python, java (default: rust)");
     println!("    -o, --output <file>      Specify output file path (e.g. out.py, Main.java)");
+    println!("    --doc, doc [--save]      Generate full Markdown reference specification");
     println!("    --tui                    Launch terminal UI dashboard mode");
     println!("    --web                    Launch local web visualizer server");
     println!("    --html, --view           Generate and open HTML report");
@@ -41,6 +41,7 @@ fn print_help() {
     println!("EXAMPLES:");
     println!("    phs 1_cargas.phs");
     println!("    phs --repl");
+    println!("    phs doc --save");
     println!("    phs transpile 1_cargas.phs --target python");
     println!("    phs transpile 1_cargas.phs -t java -o Calculator.java");
     println!("    phs new-plugin myplugin --lang rust");
@@ -361,7 +362,13 @@ fn run_daemon() {
                             if val != PhsValue::None {
                                 let output = match &val {
                                     PhsValue::Plot(p) => {
-                                        format!("[PLOT_IMAGE:data:image/svg+xml;utf8,{}]", p.svg)
+                                        let trimmed = p.svg.trim_start();
+                                        if trimmed.starts_with("<!DOCTYPE") || trimmed.starts_with("<html") {
+                                            let b64 = base64_encode_bytes(p.svg.as_bytes());
+                                            format!("[PLOT_HTML:data:text/html;charset=utf-8;base64,{}]", b64)
+                                        } else {
+                                            format!("[PLOT_IMAGE:data:image/svg+xml;utf8,{}]", p.svg)
+                                        }
                                     }
                                     _ => val.to_string(),
                                 };
@@ -400,6 +407,189 @@ fn run_daemon() {
     }
 }
 
+fn base64_encode_bytes(bytes: &[u8]) -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i] as u32;
+        let b1 = if i + 1 < bytes.len() { bytes[i + 1] as u32 } else { 0 };
+        let b2 = if i + 2 < bytes.len() { bytes[i + 2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+
+        out.push(CHARSET[((triple >> 18) & 63) as usize] as char);
+        out.push(CHARSET[((triple >> 12) & 63) as usize] as char);
+        if i + 1 < bytes.len() {
+            out.push(CHARSET[((triple >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if i + 2 < bytes.len() {
+            out.push(CHARSET[(triple & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn generate_language_docs_md() -> String {
+    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
+    let mut md = String::new();
+
+    md.push_str("# 📐 Physure Language & Syntax Reference Specification\n\n");
+    md.push_str("Physure (PHS) is a high-performance domain-specific programming language and computation engine for physical quantities, dimensional analysis, uncertainty propagation, symbolic calculus, and 3D WebGL scientific visualization.\n\n");
+
+    md.push_str("---\n\n");
+    md.push_str("## 1. Syntax & Language Constructs\n\n");
+
+    md.push_str("### 1.1 Physical Quantities & Unit Conversions\n");
+    md.push_str("Quantities consist of a numerical magnitude, an optional uncertainty, and a physical unit expression.\n\n");
+    md.push_str("```phs\n");
+    md.push_str("# Quantity literals with SI or derived units\n");
+    md.push_str("presion = 100.0 kPa\n");
+    md.push_str("velocidad = 25.0 m / s\n");
+    md.push_str("resistencia = 50.0 Ohm\n");
+    md.push_str("medicion = 10.0 +/- 0.5 m        # Measurement with 0.5 m standard deviation\n");
+    md.push_str("porcentaje = 5.0 %               # Relative uncertainty or percentage\n\n");
+    md.push_str("# Unit Conversion Operator '=>'\n");
+    md.push_str("p_bar = 100.0 kPa => bar         # Converts 100.0 kPa to bar\n");
+    md.push_str("v_kmh = 25.0 m / s => km / h     # Converts 25 m/s to km/h\n");
+    md.push_str("```\n\n");
+
+    md.push_str("### 1.2 Function Definitions & Docstrings\n");
+    md.push_str("Functions can be defined with or without the optional `fn` keyword. Unit constraints on parameters are checked automatically.\n\n");
+    md.push_str("```phs\n");
+    md.push_str("/// Computes kinetic energy in Joules\n");
+    md.push_str("/// @param m Mass of the body in kg\n");
+    md.push_str("/// @param v Velocity of the body in m/s\n");
+    md.push_str("/// @returns Energy in Joules\n");
+    md.push_str("fn E_k(m: kg, v: m/s) = 0.5 * m * v^2\n\n");
+    md.push_str("# Direct mathematical function syntax (without 'fn')\n");
+    md.push_str("P(x, y) = 100.0 kPa * sin(x / 1.0 m) * cos(y / 1.0 m)\n");
+    md.push_str("```\n\n");
+
+    md.push_str("### 1.3 Control Flow & Local Bindings\n");
+    md.push_str("```phs\n");
+    md.push_str("duplo = let x = 10.0 m in x * 2.0\n");
+    md.push_str("estado = if presion > 50.0 kPa then \"Alta Presion\" else \"Presion Normal\"\n");
+    md.push_str("```\n\n");
+
+    md.push_str("### 1.4 Imports & Domain Modules\n");
+    md.push_str("```phs\n");
+    md.push_str("use solve, deriv, integral from calc\n");
+    md.push_str("use plot, plot3d, export3d from plot\n");
+    md.push_str("use linspace, gradient, trapz from array\n");
+    md.push_str("```\n\n");
+
+    md.push_str("---\n\n");
+    md.push_str("## 2. 3D WebGL Surface Visualization & Mesh Export\n\n");
+    md.push_str("Physure includes native 3D physical surface rendering (WebGL 100% offline) and CAD/3D mesh export.\n\n");
+    md.push_str("```phs\n");
+    md.push_str("use plot3d, export3d from plot\n\n");
+    md.push_str("fn P(x, y) = 100.0 kPa * sin(x / 1.0 m) * cos(y / 1.0 m)\n");
+    md.push_str("rango_x = -2.0 m .. 2.0 m\n");
+    md.push_str("rango_y = -2.0 m .. 2.0 m\n\n");
+    md.push_str("# 1. Render interactive 3D WebGL viewer\n");
+    md.push_str("plot3d(P, x: rango_x, y: rango_y, title: \"Pressure Surface Distribution P(x, y)\")\n\n");
+    md.push_str("# 2. Export standard 3D CAD meshes\n");
+    md.push_str("export3d(P, x: rango_x, y: rango_y, file: \"mesh.stl\", format: \"stl\")\n");
+    md.push_str("export3d(P, x: rango_x, y: rango_y, file: \"mesh.obj\", format: \"obj\")\n");
+    md.push_str("export3d(P, x: rango_x, y: rango_y, file: \"mesh.gltf\", format: \"gltf\")\n");
+    md.push_str("export3d(P, x: rango_x, y: rango_y, file: \"mesh.ply\", format: \"ply\")\n");
+    md.push_str("```\n\n");
+
+    md.push_str("---\n\n");
+    md.push_str("## 3. Built-in Function Modules\n\n");
+    md.push_str("| Domain / Module | Function | Description | Example |\n");
+    md.push_str("| :--- | :--- | :--- | :--- |\n");
+    md.push_str("| `core` | `sqrt(x)` | Square root | `sqrt(16.0 m^2)` |\n");
+    md.push_str("| `core` | `sin(x)`, `cos(x)`, `tan(x)` | Trigonometric functions | `sin(3.14159 / 2)` |\n");
+    md.push_str("| `core` | `exp(x)`, `ln(x)`, `log(x)` | Exponents and logarithms | `ln(10.0)` |\n");
+    md.push_str("| `core` | `abs(x)` | Absolute value | `abs(-5.0 m)` |\n");
+    md.push_str("| `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |\n");
+    md.push_str("| `calc` | `solve(eq, target)` | Symbolic equation solver | `solve(P == F / A, F)` |\n");
+    md.push_str("| `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv(0.5 * m * v^2, v)` |\n");
+    md.push_str("| `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |\n");
+    md.push_str("| `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |\n");
+    md.push_str("| `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient(presion_vec, pos_vec)` |\n");
+    md.push_str("| `array` | `trapz(y, x)` | Numerical integration (area) | `trapz(fuerza_vec, pos_vec)` |\n\n");
+
+    md.push_str("---\n\n");
+    md.push_str("## 4. Physical Units & Aliases Registry\n\n");
+    md.push_str("| Symbol / Alias | Category | Base SI Dimensions |\n");
+    md.push_str("| :--- | :--- | :--- |\n");
+
+    let mut keys: Vec<&String> = registry.derived_units.keys().collect();
+    keys.sort();
+    for name in keys {
+        let unit = &registry.derived_units[name];
+        let meta = registry.unit_meta.get(name);
+        let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Derived");
+        let dim = unit.base_repr();
+        md.push_str(&format!("| `{}` | {} | `{}` |\n", name, category, if dim.is_empty() { "dimensionless".into() } else { dim }));
+    }
+
+    let mut alias_keys: Vec<&String> = registry.aliases.keys().collect();
+    alias_keys.sort();
+    for alias in alias_keys {
+        let target = &registry.aliases[alias];
+        md.push_str(&format!("| `{}` | Alias -> `{}` | - |\n", alias, target));
+    }
+
+    md.push_str("\n---\n\n");
+    md.push_str("## 5. Greek Letters & Mathematical Symbols\n\n");
+    md.push_str("| Symbol | LaTeX / Name Aliases | Description |\n");
+    md.push_str("| :--- | :--- | :--- |\n");
+    md.push_str("| `Δ` | `delta`, `Delta`, `\\delta` | Difference / Variation / Change |\n");
+    md.push_str("| `σ` | `sigma`, `\\sigma` | Standard deviation / Uncertainty / Stress |\n");
+    md.push_str("| `Ω` | `omega`, `Omega`, `\\Omega` | Electric resistance (Ohm) |\n");
+    md.push_str("| `π` | `pi`, `\\pi` | Circle constant (3.14159...) |\n");
+    md.push_str("| `θ` | `theta`, `\\theta` | Angle / Temperature |\n");
+    md.push_str("| `λ` | `lambda`, `\\lambda` | Wavelength |\n");
+    md.push_str("| `μ` | `mu`, `micro`, `\\mu` | Micro prefix / Friction / Permeability |\n");
+    md.push_str("| `α` | `alpha`, `\\alpha` | Thermal expansion / Alpha coefficient |\n");
+    md.push_str("| `β` | `beta`, `\\beta` | Beta coefficient / Ratio |\n");
+    md.push_str("| `γ` | `gamma`, `\\gamma` | Heat capacity ratio |\n");
+    md.push_str("| `ε` | `epsilon`, `\\epsilon` | Permittivity / Strain |\n");
+    md.push_str("| `η` | `eta`, `\\eta` | Efficiency |\n");
+    md.push_str("| `ρ` | `rho`, `\\rho` | Density / Electrical resistivity |\n");
+    md.push_str("| `τ` | `tau`, `\\tau` | Torque / Time constant |\n");
+    md.push_str("| `ϕ` | `phi`, `\\phi` | Magnetic flux / Phase |\n");
+    md.push_str("| `ψ` | `psi`, `\\psi` | Wavefunction |\n");
+    md.push_str("| `ω` | `omega`, `\\omega` | Lowercase Angular frequency |\n");
+    md.push_str("| `∞` | `infinity`, `\\infty` | Infinity symbol |\n");
+    md.push_str("| `±` | `+/-`, `\\pm` | Plus-minus uncertainty |\n");
+
+    md.push_str("\n---\n\n");
+    md.push_str("## 6. Transpilation & Integration Targets\n\n");
+    md.push_str("Physure scripts (`.phs`) can be transpiled natively into high-performance target code:\n\n");
+    md.push_str("```bash\n");
+    md.push_str("# Transpile to Python with NumPy & SciPy\n");
+    md.push_str("phs transpile script.phs --target python --output script.py\n\n");
+    md.push_str("# Transpile to Rust\n");
+    md.push_str("phs transpile script.phs --target rust --output main.rs\n\n");
+    md.push_str("# Transpile to Java\n");
+    md.push_str("phs transpile script.phs --target java --output Main.java\n");
+    md.push_str("```\n");
+
+    md
+}
+
+fn run_doc_generator(args: &[String]) {
+    let md = generate_language_docs_md();
+    if args.iter().any(|a| a == "--save" || a == "-s") {
+        let out_path = "PHYSURE_LANGUAGE_GUIDE.md";
+        if let Err(e) = fs::write(out_path, &md) {
+            eprintln!("Failed to save documentation: {}", e);
+        } else {
+            println!("📄 Language reference specification saved to: {}", out_path);
+        }
+    } else {
+        println!("{}", md);
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.iter().any(|a| a == "--daemon" || a == "-d" || a == "daemon") {
@@ -409,6 +599,11 @@ fn main() {
 
     if args.len() < 2 || args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
         print_help();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--doc" || a == "doc" || a == "docs" || a == "--docs") {
+        run_doc_generator(&args);
         return;
     }
 
@@ -455,7 +650,7 @@ fn main() {
     let program = match parse_phs(&code) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error parsing script: {:?}", e);
+            RichRenderer::render_parse_error(raw_input, &e, &code);
             process::exit(1);
         }
     };
@@ -499,7 +694,7 @@ fn main() {
                 }
             }
             Err(e) => {
-                eprintln!("error executing statement ({:?}): {:?}", stmt, e);
+                RichRenderer::render_runtime_error(raw_input, &e, &expr_code);
                 process::exit(1);
             }
         }

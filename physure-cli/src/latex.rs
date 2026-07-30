@@ -42,6 +42,7 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
                 physure_script::ast::BinaryOp::Div => format!("\\frac{{{}}}{{{}}}", l, r),
                 physure_script::ast::BinaryOp::Pow => format!("{{{}}}^{{{}}}", l, r),
                 physure_script::ast::BinaryOp::Convert => format!("{} \\Rightarrow {}", l, r),
+                physure_script::ast::BinaryOp::Range => format!("{} .. {}", l, r),
             }
         }
         physure_script::ast::Expr::FunctionCall { name, args, .. } => {

@@ -144,9 +144,10 @@ impl ValueArena {
             | PhsValue::SigmaBound(_, _)
             | PhsValue::Plot(_)
             | PhsValue::Equation(_, _)
-            | PhsValue::Matrix(_) => {
+            | PhsValue::Matrix(_)
+            | PhsValue::Range(_, _) => {
                 return Err(PhysureError::Generic(
-                    "native plugin functions don't support function, sigma, plot, or equation values".into(),
+                    "native plugin functions don't support function, sigma, plot, equation, or range values".into(),
                 ));
             }
         })

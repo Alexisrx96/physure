@@ -76,6 +76,7 @@ pub fn expr_to_unit_string(expr: &Expr) -> String {
                 BinaryOp::Div => "/",
                 BinaryOp::Pow => "^",
                 BinaryOp::Convert => "=>",
+                BinaryOp::Range => "..",
             };
             format!("{}{}{}", l, op_str, r)
         }
