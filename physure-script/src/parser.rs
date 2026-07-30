@@ -224,23 +224,25 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Some(f) => f,
         None => return Ok(Expr::Quantity(QuantityNode { magnitude: 0.0, uncertainty: None, is_sigma: false, unit: None })),
     };
-    let left = if first.as_rule() == Rule::base_expr {
-        parse_base_expr(first)?
-    } else {
-        parse_comp_expr(first)?
-    };
-    
-    if let Some(then_pair) = inner.next() {
-        let else_pair = inner.next().unwrap();
-        let then_expr = parse_base_expr(then_pair)?;
-        let else_expr = parse_base_expr(else_pair)?;
-        Ok(Expr::FunctionCall {
-            name: "ternary".to_string(),
-            args: vec![left, then_expr, else_expr],
-            kwargs: Vec::new(),
-        })
-    } else {
-        Ok(left)
+    match first.as_rule() {
+        Rule::if_expr => parse_if_expr(first),
+        Rule::let_expr => parse_let_expr(first),
+        Rule::base_expr => {
+            let left = parse_base_expr(first)?;
+            if let Some(then_pair) = inner.next() {
+                let else_pair = inner.next().unwrap();
+                let then_expr = parse_base_expr(then_pair)?;
+                let else_expr = parse_base_expr(else_pair)?;
+                Ok(Expr::FunctionCall {
+                    name: "ternary".to_string(),
+                    args: vec![left, then_expr, else_expr],
+                    kwargs: Vec::new(),
+                })
+            } else {
+                Ok(left)
+            }
+        }
+        _ => parse_comp_expr(first),
     }
 }
 
@@ -548,10 +550,31 @@ fn unit_registry() -> &'static UnitRegistry {
     REGISTRY.get_or_init(|| physure_core::units::conf::build_registry_from_conf().0)
 }
 
-/// The alphabetic symbol a `unit_term` pair (e.g. "r ^ 2") actually looks up in the
-/// registry — its optional exponent suffix is irrelevant to whether it names a real unit.
-fn unit_term_base_name(text: &str) -> String {
-    text.trim_start().chars().take_while(|c| c.is_ascii_alphabetic()).collect()
+/// True if a `unit_term` pair (e.g. "kg", "r ^ 2", "m2", "a0", "Å") names a registered
+/// unit. The optional `^exp` suffix is irrelevant to the lookup.
+///
+/// A trailing digit run is ambiguous: in "m2" it is an embedded exponent (metre squared),
+/// in "a0" it is part of the symbol itself (the Bohr radius). `physure_core`'s unit parser
+/// already resolves that ambiguity, so try the whole symbol first and fall back to the
+/// digit-stripped stem — matching what evaluation will do with the same text.
+///
+/// The scan must not be restricted to ASCII: `unit_term` accepts any Unicode `LETTER`, so
+/// an ASCII-only check silently rejects registered symbols like "Å" and "°" and hands them
+/// to the expression parser, where they are not valid identifiers either.
+fn unit_term_is_registered(text: &str, registry: &UnitRegistry) -> bool {
+    let symbol: String = text
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '°' | '%' | '$'))
+        .collect();
+    if symbol.is_empty() {
+        return false;
+    }
+    if registry.get_unit(&symbol).is_some() {
+        return true;
+    }
+    let stem = symbol.trim_end_matches(|c: char| c.is_ascii_digit());
+    stem.len() < symbol.len() && !stem.is_empty() && registry.get_unit(stem).is_some()
 }
 
 /// True if every `unit_term` inside `pair` (recursing through parenthesized groups) names
@@ -559,7 +582,7 @@ fn unit_term_base_name(text: &str) -> String {
 /// wholesale as part of a quantity's unit.
 fn unit_expr_all_valid(pair: pest::iterators::Pair<Rule>, registry: &UnitRegistry) -> bool {
     pair.into_inner().all(|child| match child.as_rule() {
-        Rule::unit_term => registry.get_unit(&unit_term_base_name(child.as_str())).is_some(),
+        Rule::unit_term => unit_term_is_registered(child.as_str(), registry),
         Rule::unit_expr => unit_expr_all_valid(child, registry),
         _ => false,
     })
@@ -584,7 +607,7 @@ fn split_unit_expr(pair: pest::iterators::Pair<Rule>, registry: &UnitRegistry) -
     for child in pair.into_inner() {
         let span = child.as_span();
         let valid = match child.as_rule() {
-            Rule::unit_term => registry.get_unit(&unit_term_base_name(child.as_str())).is_some(),
+            Rule::unit_term => unit_term_is_registered(child.as_str(), registry),
             Rule::unit_expr => unit_expr_all_valid(child, registry),
             _ => false,
         };

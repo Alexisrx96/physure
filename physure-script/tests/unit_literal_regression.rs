@@ -64,6 +64,15 @@ fn prefixed_literals_carry_their_scale() {
         ("1 deg", 0.0174532925, "deg"),
         ("1 min", 60.0, "min"),
         ("1 h", 3600.0, "h"),
+        // Symbols carrying a digit. `a0` parsed as `1 a * 0` — the Bohr radius evaluated
+        // to zero — until `unit_term` accepted digits after the first character.
+        ("1 a0", 5.29177210903e-11, "a0"),
+        ("1 tau0", 2.4188843265e-17, "tau0"),
+        // Non-ASCII symbols. The registry lookup was `is_ascii_alphabetic`-only, so these
+        // resolved to "" and fell through to the expression parser, which rejects them.
+        ("1 Å", 1e-10, "Å"),
+        ("1 °", 0.0174532925, "°"),
+        ("1 Ω", 1.0, "Ω"),
     ];
 
     for (src, expected, unit) in cases {
@@ -117,6 +126,25 @@ fn arithmetic_over_prefixed_literals() {
     assert_close(area.canonical_magnitude(), 0.1, "50.0 cm * 20.0 cm");
 }
 
+/// A digit run at the end of a unit symbol is an embedded exponent ("m2" is metre squared)
+/// unless the whole symbol is registered ("a0" is the Bohr radius). Getting this wrong is
+/// silent: `1 m2` used to evaluate to `2.0 m` and `1 a0` to `0.0 a`, both via an implicit
+/// multiplication by the digit the symbol had been truncated at.
+#[test]
+fn trailing_digits_are_exponents_or_part_of_the_symbol() {
+    let embedded = eval_quantity("1 m2");
+    assert_close(embedded.canonical_magnitude(), 1.0, "1 m2");
+    assert!(
+        embedded.unit.same_dimensions(&eval_quantity("1 m^2").unit),
+        "`1 m2` should be an area, got {}",
+        embedded.unit.__repr__(),
+    );
+
+    // A digit-bearing name that is *not* a unit stays an ordinary identifier.
+    let variable = eval_quantity("x2 = 5.0 m\n1 x2");
+    assert_close(variable.canonical_magnitude(), 5.0, "1 x2");
+}
+
 /// When a `unit_expr` runs past the real unit into an expression — `1.602e-19 C / r ^ 2`,
 /// where `r` is a bound parameter, not a unit — `split_unit_expr` hands the tail back to
 /// the expression grammar. The exponent has to travel with that tail: an atomic
@@ -142,24 +170,11 @@ fn unit_leftover_keeps_exponent_precedence() {
 /// sweep below asserts these still fail, so fixing one forces removing it from this list
 /// rather than letting the list quietly go stale.
 const KNOWN_GAPS: &[(&str, &str)] = &[
-    // physure.conf:186-187 close the alias list early — `[arcmin, arcminute, '] #'` — so
-    // the `'`/`"` aliases register under these mangled names instead.
-    ("'] #'", "malformed alias in physure.conf"),
-    ("\"] #\"", "malformed alias in physure.conf"),
     // `unity`: dimensionless, prints as the empty string by design.
     ("1", "dimensionless unity has no symbol"),
-    // `_unit_char` in phs.pest has no ASCII_DIGIT, so digits are cut off the symbol:
-    // `a0` (Bohr radius) becomes `a` (atto), `tau0` becomes `tau`. Same truncation class
-    // as the `_is_unit_start` bug, still open.
-    ("a0", "digits are not part of _unit_char"),
-    ("tau0", "digits are not part of _unit_char"),
     // `in` is a grammar keyword (from `let ... in`), so inches are unusable as a literal.
+    // Fixing it needs a context-sensitive keyword rule, not a symbol change.
     ("in", "shadowed by the `in` keyword"),
-    // `unit_term_base_name` looks up `is_ascii_alphabetic` only, so a non-ASCII symbol
-    // resolves to "" and is handed back to the expression parser. `Ω` survives only
-    // because it is listed in the `identifier` rule; `Å` and `°` are not.
-    ("Å", "non-ASCII symbol, not in the identifier rule"),
-    ("°", "non-ASCII symbol, not in the identifier rule"),
 ];
 
 /// Every symbol in the registry, swept through the literal parser. The prefix bug was a
