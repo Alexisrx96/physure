@@ -106,6 +106,13 @@ impl RustTranspiler {
                     ))
                 }
             }
+            // `format!` captures named variables from scope, which is exactly what PHS
+            // `{v}` interpolation means; without braces a plain literal is enough.
+            Expr::Str(text) => Ok(if text.contains('{') {
+                format!("format!({:?})", text)
+            } else {
+                format!("{:?}.to_string()", text)
+            }),
             Expr::Identifier(name) => Ok(name.clone()),
             Expr::BinaryOp { op, left, right } => {
                 let left_code = self.generate_expr(left)?;

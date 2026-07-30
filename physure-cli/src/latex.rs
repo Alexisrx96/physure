@@ -28,7 +28,7 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
             }
             s
         }
-        physure_script::ast::Expr::Identifier(s) => {
+        physure_script::ast::Expr::Str(s) | physure_script::ast::Expr::Identifier(s) => {
             let clean = s.trim_matches('"');
             format!("\\text{{{}}}", escape_latex_text(clean))
         }

@@ -63,6 +63,10 @@ pub struct AssignmentNode {
 pub enum Expr {
     Quantity(QuantityNode),
     Identifier(String),
+    /// A quoted string literal. Kept apart from `Identifier` so that a string whose text
+    /// happens to name a variable stays the text the user wrote; `{name}` interpolation is
+    /// the explicit way to fold a value into it.
+    Str(String),
     BinaryOp {
         op: BinaryOp,
         left: Box<Expr>,

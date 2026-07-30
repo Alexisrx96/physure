@@ -133,6 +133,13 @@ impl PythonTranspiler {
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
             Expr::Quantity(node) => self.generate_quantity(node),
+            // Python's f-string is the native equivalent of PHS `{v}` interpolation, so a
+            // literal carrying braces keeps working after transpiling.
+            Expr::Str(text) => Ok(if text.contains('{') {
+                format!("f{:?}", text)
+            } else {
+                format!("{:?}", text)
+            }),
             Expr::Identifier(name) => {
                 if name.starts_with('`') || name.contains('\n') {
                     let clean = name.trim_matches('`').trim();

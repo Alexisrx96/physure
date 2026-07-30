@@ -368,7 +368,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::method_call => parse_method_call(primary_pair)?,
         Rule::function_call => parse_function_call(primary_pair)?,
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
-        Rule::string_lit => Expr::Identifier(primary_pair.as_str().trim_matches('"').to_string()),
+        Rule::string_lit => Expr::Str(primary_pair.as_str().trim_matches('"').to_string()),
         Rule::if_expr => parse_if_expr(primary_pair)?,
         Rule::let_expr => parse_let_expr(primary_pair)?,
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
@@ -515,7 +515,7 @@ fn parse_method_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::quantity => parse_quantity(base_pair)?,
         Rule::function_call => parse_function_call(base_pair)?,
         Rule::identifier => Expr::Identifier(base_pair.as_str().to_string()),
-        Rule::string_lit => Expr::Identifier(base_pair.as_str().trim_matches('"').to_string()),
+        Rule::string_lit => Expr::Str(base_pair.as_str().trim_matches('"').to_string()),
         Rule::expr => parse_expr(base_pair)?,
         _ => parse_base_expr(base_pair)?,
     };

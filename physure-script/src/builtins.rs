@@ -1416,7 +1416,7 @@ fn expr_to_string(expr: &crate::ast::Expr) -> String {
                 format!("{} {}", q.magnitude, u)
             }
         }
-        crate::ast::Expr::Identifier(s) => s.clone(),
+        crate::ast::Expr::Str(s) | crate::ast::Expr::Identifier(s) => s.clone(),
         crate::ast::Expr::BinaryOp { op, left, right } => {
             let op_str = match op {
                 crate::ast::BinaryOp::Add => "+",

@@ -382,3 +382,31 @@ fn every_registered_symbol_round_trips_through_the_literal_parser() {
     }
     assert!(broken.is_empty(), "unit literal sweep:\n{}", broken.join("\n"));
 }
+
+/// A quoted string used to be parsed as an identifier, so it was looked up in the
+/// environment first: with `v = 3.0 m/s` in scope, `deriv("0.5*m*v^2", "v")` received the
+/// quantity instead of the name and failed. A literal is now literal, and `{name}` is the
+/// explicit way to fold a value into it.
+#[test]
+fn string_literals_are_text_and_braces_interpolate() {
+    let last_string = |src: &str| -> String {
+        match eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed: {e:?}")).into_iter().last() {
+            Some(PhsValue::String(s)) => s,
+            other => panic!("{src:?} produced {other:?}, expected a string"),
+        }
+    };
+
+    // The variable does not leak into the literal that happens to share its name.
+    assert_eq!(last_string("v = 3.0 m/s\n\"v\""), "v");
+    assert_eq!(last_string("m = 2.0 kg\n\"0.5 * m * v^2\""), "0.5 * m * v^2");
+    // Braces opt in, and the surrounding text (including spaces) survives.
+    assert_eq!(last_string("m = 2.0 kg\n\"0.5 * {m} * v^2\""), "0.5 * 2.0 kg * v^2");
+    assert_eq!(last_string("x = 3\n\" val {x} end \""), " val 3.0 end ");
+
+    // deriv now sees the name, not the quantity that shares it.
+    assert_eq!(last_string("use deriv from calc\nv = 3.0 m/s\nderiv(\"0.5 * m * v^2\", \"v\")"), "m * v");
+    // An interpolated quantity keeps its unit through the symbolic layer: implicit
+    // multiplication used to strand `kg` after the number and collapse the result to 0.
+    assert_eq!(last_string("use deriv from calc\nm = 2.0 kg\nderiv(\"0.5 * {m} * v^2\", \"v\")"), "2 * kg * v");
+    assert_eq!(last_string("use deriv from calc\nderiv(\"2 x^2\", \"x\")"), "4 * x");
+}

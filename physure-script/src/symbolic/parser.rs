@@ -94,6 +94,13 @@ impl SymbolicParser {
                 self.next();
                 let right = self.parse_power()?;
                 left = Node::Div(Box::new(left), Box::new(right));
+            } else if matches!(t.kind, TokenKind::Ident(_)) {
+                // Implicit multiplication, which is how a quantity reaches the symbolic
+                // layer: `deriv("0.5 * 2.0 kg * v^2", "v")` stranded `kg` after the number
+                // and the whole derivative silently collapsed to 0. The unit rides along as
+                // a symbolic constant, exactly as a bare `kg` already did.
+                let right = self.parse_power()?;
+                left = Node::Mul(vec![left, right]);
             } else {
                 break;
             }
