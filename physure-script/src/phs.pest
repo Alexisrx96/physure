@@ -17,7 +17,7 @@ _unit_char      = _{ LETTER | "_" | "°" | "%" | "$" }
 _is_unit_start  = _{ &(!keyword ~ _unit_char) }
 _unit_op_term     = _{ "*" | "/" }
 _has_unit_op      = _{ &(_unit_op_term) | &((" " | "\t")+ ~ _unit_op_term) }
-unit_term         = @{ !keyword ~ _unit_char+ ~ (_unit_ws* ~ "^" ~ _unit_ws* ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+unit_term         = @{ !keyword ~ _unit_char ~ (_unit_char | ASCII_DIGIT)* ~ (_unit_ws* ~ "^" ~ _unit_ws* ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
 unit_primary      = _{ unit_term | "(" ~ unit_expr ~ ")" }
 unit_expr         = { unit_primary ~ (_has_unit_op ~ (" " | "\t")* ~ ("*" | "/") ~ (" " | "\t")* ~ unit_primary)* }
 
