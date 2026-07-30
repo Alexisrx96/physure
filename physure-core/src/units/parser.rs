@@ -170,7 +170,8 @@ impl<'a> Parser<'a> {
 
     /// Like `parse_expression`, but resolves each symbol against `registry` first so
     /// aliases and prefixed units (e.g. "km", "kN") carry their real scale factor.
-    /// Symbols not found in the registry fall back to the atomic (scale-1) behavior.
+    /// Symbols not found in the registry are an `UnknownUnit` error — use
+    /// `parse_expression_atomic` when unregistered symbols are legitimate.
     pub fn parse_expression_with_registry(input: &str, registry: &UnitRegistry) -> PhysureResult<RationalUnit> {
         Self::parse_expression_impl(input, Some(registry))
     }
@@ -243,9 +244,21 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 // Check if symbol has embedded exponent like "m2" or "s-1"
                 let (name, exp_opt) = split_embedded_exponent(&symbol_name);
-                let u = match self.registry.and_then(|r| r.get_unit(&name)) {
-                    Some(registered) => registered,
-                    None => {
+                let u = match (self.registry, self.registry.and_then(|r| r.get_unit(&name))) {
+                    (_, Some(registered)) => registered,
+                    // A registry was supplied and the symbol isn't in it: this is a typo
+                    // or an invented unit. Fabricating a dimension for it would let
+                    // `5 metre + 5 meter` fail as a dimension mismatch instead of the
+                    // spelling mistake it is, so refuse and suggest the nearest symbol.
+                    (Some(registry), None) => {
+                        return Err(PhysureError::UnknownUnit {
+                            suggestion: registry.closest_symbol(&name),
+                            symbol: name,
+                        })
+                    }
+                    // Atomic mode (`parse_expression_atomic`): every symbol is its own
+                    // dimension by design, so there is nothing to check against.
+                    (None, None) => {
                         let mut dims = HashMap::new();
                         dims.insert(name, (1, 1));
                         RationalUnit::new_from_dimensions(dims)
@@ -351,25 +364,54 @@ mod tests {
 
     #[test]
     fn test_no_split_on_zero_exponent() {
-        let u = Parser::parse_expression("sym0").unwrap();
+        // Unregistered symbols only exist in atomic mode, so that is where the
+        // "trailing 0 is part of the name" rule has to be checked.
+        let u = Parser::parse_expression_atomic("sym0").unwrap();
         let dims = u.dimensions_map();
         assert_eq!(dims.get("sym0"), Some(&(1, 1)));
         assert_eq!(dims.len(), 1);
 
-        let u2 = Parser::parse_expression("dummy0").unwrap();
+        let u2 = Parser::parse_expression_atomic("dummy0").unwrap();
         let dims2 = u2.dimensions_map();
         assert_eq!(dims2.get("dummy0"), Some(&(1, 1)));
         assert_eq!(dims2.len(), 1);
 
         // Compound expressions must not silently drop the atomic symbol.
-        let u3 = Parser::parse_expression("sym0/s").unwrap();
+        let u3 = Parser::parse_expression_atomic("sym0/s").unwrap();
         let dims3 = u3.dimensions_map();
         assert_eq!(dims3.get("sym0"), Some(&(1, 1)));
         assert_eq!(dims3.get("s"), Some(&(-1, 1)));
 
-        let u4 = Parser::parse_expression("kg*sym0").unwrap();
+        let u4 = Parser::parse_expression_atomic("kg*sym0").unwrap();
         let dims4 = u4.dimensions_map();
         assert_eq!(dims4.get("kg"), Some(&(1, 1)));
         assert_eq!(dims4.get("sym0"), Some(&(1, 1)));
+
+        // The registry-backed path keeps the same rule for a real symbol: "a0" is the
+        // Bohr radius, a length, not "a" raised to the zeroth power.
+        let bohr = Parser::parse_expression("a0").unwrap();
+        assert_eq!(bohr.dimensions_map().get("m"), Some(&(1, 1)));
+    }
+
+    /// An unregistered symbol is a typo, not a new dimension. Fabricating one for it turns
+    /// `5 metre + 5 meter` into a dimension mismatch instead of a spelling mistake.
+    #[test]
+    fn test_unknown_symbol_is_an_error_with_a_suggestion() {
+        match Parser::parse_expression("metre") {
+            Err(PhysureError::UnknownUnit { symbol, suggestion }) => {
+                assert_eq!(symbol, "metre");
+                assert!(suggestion.is_some(), "a one-edit typo should get a suggestion");
+            }
+            other => panic!("expected UnknownUnit for 'metre', got {:?}", other),
+        }
+
+        // A word that resembles nothing registered gets no misleading hint.
+        match Parser::parse_expression("foobar") {
+            Err(PhysureError::UnknownUnit { suggestion: None, .. }) => {}
+            other => panic!("expected an unsuggested UnknownUnit for 'foobar', got {:?}", other),
+        }
+
+        // Atomic mode is the documented escape hatch and must stay permissive.
+        assert!(Parser::parse_expression_atomic("foobar").is_ok());
     }
 }

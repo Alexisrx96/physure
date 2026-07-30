@@ -114,6 +114,12 @@ impl Default for PhsInterpreter {
     }
 }
 
+/// Trailing `#` / `//` comments survive into a unit annotation's text; the unit parser
+/// must never see them.
+fn strip_unit_comment(text: &str) -> &str {
+    text.split('#').next().unwrap().split("//").next().unwrap().trim()
+}
+
 impl PhsInterpreter {
     pub fn new(resolver: Arc<dyn ModuleResolver>) -> Self {
         Self {
@@ -348,7 +354,7 @@ impl PhsInterpreter {
             Expr::Quantity(node) => {
                 let mut q = Quantity::new_scalar(node.magnitude, node.uncertainty.unwrap_or(0.0), RationalUnit::dimensionless(), None, None);
                 if let Some(unit_str) = &node.unit {
-                    let clean_unit_str = unit_str.split('#').next().unwrap().split("//").next().unwrap().trim();
+                    let clean_unit_str = strip_unit_comment(unit_str);
                     if !clean_unit_str.is_empty() {
                         let parsed_unit = UnitParser::parse_expression(clean_unit_str)?;
                         q = Quantity::new_scalar(node.magnitude, node.uncertainty.unwrap_or(0.0), parsed_unit, None, None);
@@ -374,7 +380,7 @@ impl PhsInterpreter {
                 if *op == BinaryOp::Convert {
                     let l_val = self.eval_expr(left, env)?;
                     let target_unit = crate::codegen::expr_to_unit_string(right);
-                    let clean_target = target_unit.split('#').next().unwrap().split("//").next().unwrap().trim();
+                    let clean_target = strip_unit_comment(&target_unit);
                     if !clean_target.is_empty() {
                         let parsed_unit = UnitParser::parse_expression(clean_target)?;
                         return self.convert_value_to_unit(l_val, &parsed_unit);
@@ -556,7 +562,7 @@ impl PhsInterpreter {
         let PhsValue::Quantity(q) = arg_val else {
             return Ok(arg_val);
         };
-        let clean_unit_str = unit_str.split('#').next().unwrap().split("//").next().unwrap().trim();
+        let clean_unit_str = strip_unit_comment(unit_str);
         if clean_unit_str.is_empty() {
             return Ok(PhsValue::Quantity(q));
         }
@@ -720,64 +726,52 @@ impl PhsInterpreter {
                 };
                 Ok(PhsValue::Quantity(res))
             }
+            // A bare word that isn't a bound variable arrives here as a String, so these
+            // four arms are where `5 foobar` is decided. The unit parser now reports the
+            // offending symbol and the nearest registered one; swallowing that with `if
+            // let Ok` would replace a usable message with a bare "Unknown unit symbol".
             (PhsValue::Quantity(l), PhsValue::String(r)) => {
-                let clean_r = r.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_r) {
-                    let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit.clone(), None, None);
-                    let res = match op {
-                        BinaryOp::Mul => l.mul(&unit_q)?,
-                        BinaryOp::Div => l.div(&unit_q)?,
-                        BinaryOp::Convert => l.convert_to(&parsed_unit)?,
-                        _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                    };
-                    Ok(PhsValue::Quantity(res))
-                } else {
-                    Err(PhysureError::Generic(format!("Unknown unit symbol: {}", r)))
-                }
+                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&r))?;
+                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit.clone(), None, None);
+                let res = match op {
+                    BinaryOp::Mul => l.mul(&unit_q)?,
+                    BinaryOp::Div => l.div(&unit_q)?,
+                    BinaryOp::Convert => l.convert_to(&parsed_unit)?,
+                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
+                };
+                Ok(PhsValue::Quantity(res))
             }
             (PhsValue::Number(l), PhsValue::String(r)) => {
-                let clean_r = r.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_r) {
-                    let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
-                    let num_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
-                    let res = match op {
-                        BinaryOp::Mul => num_q.mul(&unit_q)?,
-                        BinaryOp::Div => num_q.div(&unit_q)?,
-                        _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                    };
-                    Ok(PhsValue::Quantity(res))
-                } else {
-                    Err(PhysureError::Generic(format!("Unknown unit symbol: {}", r)))
-                }
+                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&r))?;
+                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
+                let num_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
+                let res = match op {
+                    BinaryOp::Mul => num_q.mul(&unit_q)?,
+                    BinaryOp::Div => num_q.div(&unit_q)?,
+                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
+                };
+                Ok(PhsValue::Quantity(res))
             }
             (PhsValue::String(l), PhsValue::Quantity(r)) => {
-                let clean_l = l.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_l) {
-                    let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
-                    let res = match op {
-                        BinaryOp::Mul => unit_q.mul(&r)?,
-                        BinaryOp::Pow => unit_q.pow(r.value.mean())?,
-                        _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                    };
-                    Ok(PhsValue::Quantity(res))
-                } else {
-                    Err(PhysureError::Generic(format!("Unknown unit symbol: {}", l)))
-                }
+                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&l))?;
+                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
+                let res = match op {
+                    BinaryOp::Mul => unit_q.mul(&r)?,
+                    BinaryOp::Pow => unit_q.pow(r.value.mean())?,
+                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
+                };
+                Ok(PhsValue::Quantity(res))
             }
             (PhsValue::String(l), PhsValue::Number(r)) => {
-                let clean_l = l.split('#').next().unwrap().split("//").next().unwrap().trim();
-                if let Ok(parsed_unit) = UnitParser::parse_expression(clean_l) {
-                    let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
-                    let num_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
-                    let res = match op {
-                        BinaryOp::Mul => unit_q.mul(&num_q)?,
-                        BinaryOp::Pow => unit_q.pow(r)?,
-                        _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                    };
-                    Ok(PhsValue::Quantity(res))
-                } else {
-                    Err(PhysureError::Generic(format!("Unknown unit symbol: {}", l)))
-                }
+                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&l))?;
+                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
+                let num_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
+                let res = match op {
+                    BinaryOp::Mul => unit_q.mul(&num_q)?,
+                    BinaryOp::Pow => unit_q.pow(r)?,
+                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
+                };
+                Ok(PhsValue::Quantity(res))
             }
             _ => Err(PhysureError::Generic("Invalid operand types for binary operation".into())),
         }

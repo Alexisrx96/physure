@@ -51,14 +51,21 @@ impl std::fmt::Display for Quantity {
         // unit whose scale isn't 1.0 (e.g. Ohm * milliamp). There's no literal symbol
         // for such a unit, so fold the scale into the value and display in canonical
         // (scale-1) terms instead of printing the raw, unscaled magnitude.
-        let (val, unit_str) = if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
+        let (val, std_dev, unit_str) = if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
             let mut canonical_unit = self.unit.clone();
             canonical_unit.scale = 1.0;
-            (self.canonical_magnitude(), canonical_unit.__repr__())
+            (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
         } else {
-            (self.value.mean(), self.unit.__repr__())
+            (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
         };
-        let val_str = format_float(val);
+        // An uncertainty the user declared has to survive to the output: printing
+        // "10.0 m" for `10.0 +/- 0.5 m` throws away the half of the measurement that
+        // says how much to trust the other half.
+        let val_str = if std_dev > 0.0 {
+            format!("{} ± {}", format_float(val), format_float(std_dev))
+        } else {
+            format_float(val)
+        };
         if unit_str.is_empty() || unit_str == "Dimensionless" {
             write!(f, "{}", val_str)
         } else {

@@ -90,6 +90,44 @@ impl UnitRegistry {
         current
     }
 
+    /// The registered symbol closest to `name`, for a "did you mean" hint when a unit
+    /// lookup fails. Suggestions are capped at roughly one edit per four characters so an
+    /// unrelated word (`foobar`) gets no hint at all, while a plausible typo
+    /// (`metre` → `meter`, `Km` → `km`) does.
+    pub fn closest_symbol(&self, name: &str) -> Option<String> {
+        let budget = 1 + name.chars().count() / 4;
+        let lowercase = name.to_lowercase();
+
+        // Prefixed symbols ("km", "kPa") are synthesised by `get_unit` from a prefix and a
+        // base, never stored as keys, so the edit-distance search below cannot see them.
+        // Case-only slips are the common way to miss one, so retry those first.
+        let first_char_lowered: String =
+            name.chars().enumerate().map(|(i, c)| if i == 0 { c.to_ascii_lowercase() } else { c }).collect();
+        for variant in [&lowercase, &first_char_lowered] {
+            if variant.as_str() != name && self.get_unit(variant).is_some() {
+                return Some(variant.clone());
+            }
+        }
+
+        self.base_units
+            .keys()
+            .chain(self.derived_units.keys())
+            .chain(self.aliases.keys())
+            .map(|candidate| (edit_distance(name, candidate), candidate))
+            .filter(|(distance, _)| *distance <= budget)
+            // Ties go to the candidate that shares the most of the typed prefix, so "wat"
+            // suggests "watt" and not "kat" — both are one edit away from it.
+            .min_by_key(|(distance, candidate)| {
+                let shared = lowercase
+                    .chars()
+                    .zip(candidate.to_lowercase().chars())
+                    .take_while(|(a, b)| a == b)
+                    .count();
+                (*distance, std::cmp::Reverse(shared), candidate.len())
+            })
+            .map(|(_, candidate)| candidate.clone())
+    }
+
     pub fn get_unit(&self, name: &str) -> Option<RationalUnit> {
         let resolved = self.resolve_symbol(name);
         let mut u = if let Some(unit) = self.base_units.get(&resolved) {
@@ -233,4 +271,22 @@ impl Default for UnitRegistry {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Levenshtein distance over `char`s — unit symbols are full of non-ASCII (Å, Ω, °, µ),
+/// so a byte-wise distance would score them wrong.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut previous: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut current = vec![0; b_chars.len() + 1];
+
+    for (i, a_char) in a.chars().enumerate() {
+        current[0] = i + 1;
+        for (j, &b_char) in b_chars.iter().enumerate() {
+            let substitution = previous[j] + usize::from(a_char != b_char);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[b_chars.len()]
 }

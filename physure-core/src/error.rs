@@ -3,6 +3,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub enum PhysureError {
     UnitMismatch { expected: String, actual: String },
+    UnknownUnit { symbol: String, suggestion: Option<String> },
     IncompatibleDimensions { op: &'static str, dim1: String, dim2: String },
     DivisionByZero(String),
     NonConstantExponent(String),
@@ -19,6 +20,12 @@ impl fmt::Display for PhysureError {
         match self {
             PhysureError::UnitMismatch { expected, actual } => {
                 write!(f, "Unit mismatch: expected '{}', got '{}'", expected, actual)
+            }
+            PhysureError::UnknownUnit { symbol, suggestion: Some(hint) } => {
+                write!(f, "Unknown unit '{}' — did you mean '{}'?", symbol, hint)
+            }
+            PhysureError::UnknownUnit { symbol, suggestion: None } => {
+                write!(f, "Unknown unit '{}'", symbol)
             }
             PhysureError::IncompatibleDimensions { op, dim1, dim2 } => {
                 write!(f, "Incompatible dimensions in {}: '{}' vs '{}'", op, dim1, dim2)
