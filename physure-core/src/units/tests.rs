@@ -10,6 +10,16 @@ fn time() -> RationalUnit {
 }
 
 #[test]
+fn test_kpa_unit_repr() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let kpa = reg.get_unit("kPa").unwrap();
+    println!("KPA DIMS: {:?}", kpa.dimensions);
+    println!("KPA SCALE: {:?}", kpa.scale);
+    println!("KPA REPR: {:?}", kpa.__repr__());
+    assert_eq!(kpa.__repr__(), "kPa");
+}
+
+#[test]
 fn dimensionless_is_empty() {
     let u = RationalUnit::dimensionless();
     assert!(u.dimensions.is_empty());
