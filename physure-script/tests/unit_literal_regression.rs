@@ -166,6 +166,77 @@ fn unit_leftover_keeps_exponent_precedence() {
     assert!(spaced.unit.same_dimensions(&eval_quantity("1 m^2").unit));
 }
 
+/// A symbol that isn't registered used to become a brand-new dimension, so `5 foobar`
+/// evaluated to `5.0 foobar` and every typo produced a confident wrong answer. It is now
+/// an error naming the closest registered symbol.
+#[test]
+fn unregistered_symbols_are_errors_not_new_dimensions() {
+    let message = |src: &str| match eval_phs(src) {
+        Err(e) => e.to_string(),
+        Ok(v) => panic!("{src:?} should not evaluate, got {v:?}"),
+    };
+
+    // A plausible typo names its correction.
+    let metre = message("5 metre");
+    assert!(metre.contains("metre") && metre.contains("did you mean"), "{metre}");
+
+    // An invented word gets an error, but no misleading suggestion.
+    let foobar = message("5 foobar");
+    assert!(foobar.contains("foobar"), "{foobar}");
+    assert!(!foobar.contains("did you mean"), "{foobar}");
+
+    // Case slips on a prefixed symbol are the common failure and must be caught even
+    // though "km"/"kPa" are synthesised by the registry rather than stored in it.
+    for (src, expected) in [("5 Km", "km"), ("100 KPa", "kPa"), ("5 Kg", "kg")] {
+        let msg = message(src);
+        assert!(msg.contains(expected), "{src:?} should suggest {expected:?}, said: {msg}");
+    }
+}
+
+/// Comparisons used to read the raw magnitude, so `1 km == 1000 m` was false while
+/// `1 km + 1000 m` converted correctly — the same two quantities disagreeing with
+/// themselves depending on the operator.
+#[test]
+fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
+    let truth = |src: &str| eval_quantity(src).value.mean() > 0.5;
+
+    assert!(truth("1.0 km == 1000.0 m"));
+    assert!(truth("100.0 kPa == 1.0 bar"));
+    assert!(truth("1.0 h == 60.0 min"));
+    assert!(truth("1.0 km > 999.0 m"));
+    assert!(truth("999.0 m < 1.0 km"));
+    assert!(!truth("1.0 km != 1000.0 m"));
+
+    // A sign test against a bare zero stays legal: zero reads the same in every unit.
+    assert!(truth("2.0 m > 0"));
+    assert!(!truth("0.0 m > 0"));
+
+    // Comparing across dimensions has no answer, and answering `false` would let it
+    // pass silently through a conditional.
+    assert!(eval_phs("5.0 m > 2.0 s").is_err(), "m vs s should not compare");
+}
+
+/// A declared uncertainty has to reach the output; printing only the mean discards the
+/// half of a measurement that says how far to trust the other half.
+#[test]
+fn uncertainty_survives_to_display_and_is_readable() {
+    assert_eq!(eval_quantity("10.0 +/- 0.5 m").to_string(), "10.0 ± 0.5 m");
+
+    // Propagation is visible too: 0.5 and 0.2 add in quadrature.
+    let sum = eval_quantity("a = 10.0 +/- 0.5 m\nb = 4.0 +/- 0.2 m\na + b");
+    assert_close(sum.value.std_dev(), (0.5f64 * 0.5 + 0.2 * 0.2).sqrt(), "a + b");
+    assert!(sum.to_string().contains('±'), "{sum} should show its uncertainty");
+
+    // Exact quantities stay clean — no "± 0" noise on every line.
+    assert_eq!(eval_quantity("5.0 m").to_string(), "5.0 m");
+
+    // `uncertainty(x)` hands the standard uncertainty back as a quantity, so it can be
+    // divided by the value to get a relative error.
+    let sigma = eval_quantity("uncertainty(10.0 +/- 0.5 m)");
+    assert_close(sigma.canonical_magnitude(), 0.5, "uncertainty(10.0 +/- 0.5 m)");
+    assert_eq!(sigma.unit.__repr__(), "m");
+}
+
 /// Unit symbols the literal parser cannot round-trip today, each with the reason. The
 /// sweep below asserts these still fail, so fixing one forces removing it from this list
 /// rather than letting the list quietly go stale.

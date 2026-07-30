@@ -8,6 +8,66 @@ fn eval_bin_op(op: BinaryOp, l: &PhsValue, r: &PhsValue) -> PhysureResult<PhsVal
     interp.eval_binary_op_vals(op, l.clone(), r.clone())
 }
 
+/// PHS has no boolean type; comparisons yield a dimensionless 1.0 or 0.0.
+fn boolean(res: bool) -> PhsValue {
+    PhsValue::Quantity(physure_core::Quantity::new_scalar(
+        if res { 1.0 } else { 0.0 },
+        0.0,
+        physure_core::units::RationalUnit::dimensionless(),
+        None,
+        None,
+    ))
+}
+
+/// Two quantities reduced to a pair of numbers that can be compared directly.
+///
+/// Comparing the raw magnitudes makes `1 km == 1000 m` false and `1 km > 999 m` false
+/// as well — the scale factor has to be folded in first, exactly as `add` already does.
+/// Different dimensions are an error rather than `false`: `5 m > 2 s` has no answer, and
+/// answering `false` lets it slip through a conditional as if it did.
+/// A dimensionless zero is comparable with anything: `x > 0` is how a sign test is
+/// written, and zero is the one magnitude that reads the same in every unit.
+fn comparable(l: &physure_core::Quantity, r: &physure_core::Quantity) -> PhysureResult<(f64, f64)> {
+    let dimensionless_zero =
+        |q: &physure_core::Quantity| q.unit.dimensions.is_empty() && q.value.mean() == 0.0;
+    if !l.unit.same_dimensions(&r.unit) && !dimensionless_zero(l) && !dimensionless_zero(r) {
+        return Err(PhysureError::UnitMismatch {
+            expected: l.unit.__repr__(),
+            actual: r.unit.__repr__(),
+        });
+    }
+    Ok((l.canonical_magnitude(), r.canonical_magnitude()))
+}
+
+/// Applies `pred` to the two operands once both are on a common scale. Strings only
+/// support equality, so they collapse to "equal" / "not equal" rather than an ordering.
+fn compare(args: &[PhsValue], pred: impl Fn(f64, f64) -> bool) -> PhysureResult<Option<PhsValue>> {
+    let as_quantity = |v: &PhsValue| match v {
+        PhsValue::Quantity(q) => Some(q.clone()),
+        PhsValue::Number(n) => Some(physure_core::Quantity::new_scalar(
+            *n,
+            0.0,
+            physure_core::units::RationalUnit::dimensionless(),
+            None,
+            None,
+        )),
+        _ => None,
+    };
+    match (args.first(), args.get(1)) {
+        (Some(PhsValue::String(l)), Some(PhsValue::String(r))) => {
+            Ok(Some(boolean(pred(0.0, if l == r { 0.0 } else { 1.0 }))))
+        }
+        (Some(l), Some(r)) => match (as_quantity(l), as_quantity(r)) {
+            (Some(l), Some(r)) => {
+                let (l, r) = comparable(&l, &r)?;
+                Ok(Some(boolean(pred(l, r))))
+            }
+            _ => Ok(Some(boolean(false))),
+        },
+        _ => Ok(Some(boolean(false))),
+    }
+}
+
 pub fn domain_members(domain: &str) -> Option<&'static [&'static str]> {
     match domain {
         "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim"]),
@@ -35,68 +95,25 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
                 Ok(None)
             }
         }
-        "op_>" | "op_gt" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() > r.value.mean(),
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l > r,
-                _ => false,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
-        }
-        "op_<" | "op_lt" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() < r.value.mean(),
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l < r,
-                _ => false,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
-        }
-        "op_>=" | "op_gte" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() >= r.value.mean(),
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l >= r,
-                _ => false,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
-        }
-        "op_<=" | "op_lte" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => l.value.mean() <= r.value.mean(),
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => l <= r,
-                _ => false,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
-        }
+        "op_>" | "op_gt" => compare(args, |l, r| l > r),
+        "op_<" | "op_lt" => compare(args, |l, r| l < r),
+        "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
+        "op_<=" | "op_lte" => compare(args, |l, r| l <= r),
         "op_==" | "op_eq" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma))) |
-                (Some(PhsValue::SigmaBound(target_q, k_sigma)), Some(PhsValue::Quantity(l))) => {
-                    let unc = if l.value.std_dev() > 0.0 { l.value.std_dev() } else { 0.05 };
-                    let tol = k_sigma * unc;
-                    (l.value.mean() - target_q.value.mean()).abs() <= tol
-                }
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => (l.value.mean() - r.value.mean()).abs() < 1e-9,
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => (l - r).abs() < 1e-9,
-                _ => false,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
+            // `x == 5.0 +/- 0.2` asks whether x lies within k sigma of the target, so it
+            // is a tolerance test rather than an ordinary comparison.
+            if let (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma)))
+            | (Some(PhsValue::SigmaBound(target_q, k_sigma)), Some(PhsValue::Quantity(l))) =
+                (args.first(), args.get(1))
+            {
+                let unc = if l.value.std_dev() > 0.0 { l.value.std_dev() } else { 0.05 };
+                let (a, b) = comparable(l, target_q)?;
+                return Ok(Some(boolean((a - b).abs() <= k_sigma * unc)));
+            }
+            compare(args, |l, r| (l - r).abs() < 1e-9)
         }
-        "op_!=" | "op_neq" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => (l.value.mean() - r.value.mean()).abs() >= 1e-9,
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => (l - r).abs() >= 1e-9,
-                _ => true,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
-        }
-        "op_≈" | "op_approx" => {
-            let res = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Quantity(l)), Some(PhsValue::Quantity(r))) => (l.value.mean() - r.value.mean()).abs() < 1e-3,
-                (Some(PhsValue::Number(l)), Some(PhsValue::Number(r))) => (l - r).abs() < 1e-3,
-                _ => false,
-            };
-            Ok(Some(PhsValue::Quantity(physure_core::Quantity::new_scalar(if res { 1.0 } else { 0.0 }, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None))))
-        }
+        "op_!=" | "op_neq" => compare(args, |l, r| (l - r).abs() >= 1e-9),
+        "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
         "ternary" | "if_then_else" => {
             let cond_true = match args.first() {
                 Some(PhsValue::Quantity(q)) => q.value.mean() > 0.0,
@@ -109,6 +126,15 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
                 Ok(args.get(2).cloned())
             }
         }
+        // The standard uncertainty as a quantity in the same unit, so it can be fed back
+        // into arithmetic (`uncertainty(x) / x => %`). Anything without one reports zero.
+        "uncertainty" | "sigma" => match args.first() {
+            Some(PhsValue::Quantity(q)) => Ok(Some(PhsValue::Quantity(
+                physure_core::Quantity::new_scalar(q.value.std_dev(), 0.0, q.unit.clone(), None, None),
+            ))),
+            Some(PhsValue::Number(_)) => Ok(Some(PhsValue::Number(0.0))),
+            _ => Err(PhysureError::Generic("uncertainty expects a quantity".into())),
+        },
         "vector" => {
             Ok(Some(PhsValue::Vector(args.to_vec())))
         }
