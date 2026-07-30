@@ -134,14 +134,17 @@ def test_phy_function_parity():
     # 2. Call function with Quantity args
     res = ke(Q_(10, "kg"), Q_(5, "m/s"))
     assert res.magnitude == 125.0
-    assert str(res.unit) == "J"
+    # Rust collapses kg·m²/s² to "J" for display, Python's CompoundUnit spells it out;
+    # parity is about the unit itself, so compare units instead of their rendering.
+    assert res.unit == Q_(1, "J").unit
+    assert str(res.to("J")) == "125.0 J"
 
     # 3. Symbolic Derivative
     dke_dv = ke.deriv("v")
     assert dke_dv.get_params() == ["m", "v"]
     res_deriv = dke_dv(Q_(10, "kg"), Q_(5, "m/s"))
     assert res_deriv.magnitude == 50.0
-    assert str(res_deriv.unit).replace(" ", "") == "kg*m*s^-1"
+    assert res_deriv.unit == Q_(1, "kg*m/s").unit
 
     # 4. Symbolic Integration
     ike_dv = ke.integral("v")

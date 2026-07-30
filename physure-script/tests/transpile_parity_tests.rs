@@ -55,7 +55,7 @@ fn test_phs_interpreter_parity() {
 
 #[test]
 fn test_python_transpiler_parity() {
-    let py_dir = Path::new("/home/irvint/Projects/physure/physure-python");
+    let py_dir = repo_root().join("physure-python");
     for tc in TEST_CASES {
         let program = parse_phs(tc.script).unwrap();
         let py_code = transpile(&program, Target::Python).unwrap();
@@ -65,7 +65,7 @@ fn test_python_transpiler_parity() {
         
         let output = Command::new("uv")
             .args(["run", "python", temp_file.to_str().unwrap()])
-            .current_dir(py_dir)
+            .current_dir(&py_dir)
             .output()
             .expect("Failed to run python");
 
@@ -83,10 +83,36 @@ fn test_python_transpiler_parity() {
     }
 }
 
+/// Absolute path to the repository root, derived from this crate rather than hard-coded so
+/// the parity tests run from any checkout.
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("physure-script has a parent directory")
+}
+
+/// The JNI bindings are a separate cdylib, so `cargo test` does not necessarily produce
+/// them: the test used to fail with "Native library libphysure_java.so not found", which
+/// reads like a broken binding rather than a missing build step. Build it on demand.
+fn native_lib_dir() -> std::path::PathBuf {
+    let target_dir = repo_root().join("target/debug");
+    if target_dir.join("libphysure_java.so").exists() {
+        return target_dir;
+    }
+    let build = Command::new("cargo")
+        .args(["build", "-p", "physure-java"])
+        .current_dir(repo_root())
+        .output()
+        .expect("Failed to run cargo build for physure-java");
+    assert!(
+        build.status.success(),
+        "Could not build the JNI bindings: {}", String::from_utf8_lossy(&build.stderr)
+    );
+    target_dir
+}
+
 #[test]
 fn test_java_transpiler_parity() {
-    let java_src_dir = Path::new("/home/irvint/Projects/physure/physure-java/src/main/java");
-    let native_lib_dir = Path::new("/home/irvint/Projects/physure/target/debug");
+    let java_src_dir = repo_root().join("physure-java/src/main/java");
+    let native_lib_dir = native_lib_dir();
 
     for tc in TEST_CASES {
         let class_name = format!("Parity{}", tc.name.replace("_", ""));
@@ -143,7 +169,7 @@ fn test_java_transpiler_parity() {
 
 #[test]
 fn test_rust_transpiler_parity() {
-    let core_path = Path::new("/home/irvint/Projects/physure/physure-core");
+    let core_path = repo_root().join("physure-core");
 
     for tc in TEST_CASES {
         let program = parse_phs(tc.script).unwrap();

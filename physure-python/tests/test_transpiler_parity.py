@@ -4,6 +4,23 @@ import tempfile
 import pytest
 from physure._core import evaluate_phs_native, transpile_phs_native
 
+# Derived from this file rather than hard-coded so the parity tests run from any checkout.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def native_lib_dir():
+    """The JNI bindings are a separate cdylib, so nothing in the Python test run produces
+    them: the test used to fail with "Native library libphysure_java.so not found", which
+    reads like a broken binding rather than a missing build step. Build it on demand."""
+    target_dir = os.path.join(REPO_ROOT, "target", "debug")
+    if not os.path.exists(os.path.join(target_dir, "libphysure_java.so")):
+        build = subprocess.run(
+            ["cargo", "build", "-p", "physure-java"],
+            cwd=REPO_ROOT, capture_output=True, text=True
+        )
+        assert build.returncode == 0, f"Could not build the JNI bindings: {build.stderr}"
+    return target_dir
+
 PARITY_TEST_SCRIPTS = [
     # 1. Basic Quantity Arithmetic & Unit Propagation
     ("basic_arithmetic", """d = 100 m
@@ -62,7 +79,7 @@ def test_python_transpiler_parity(name, script, expected_vars):
         proc = subprocess.run(
             ["uv", "run", "python", f_path],
             capture_output=True, text=True, check=True,
-            cwd=os.path.abspath("/home/irvint/Projects/physure/physure-python")
+            cwd=os.path.join(REPO_ROOT, "physure-python")
         )
         out = proc.stdout
         for expected in expected_vars.values():
@@ -76,8 +93,8 @@ def test_java_transpiler_parity(name, script, expected_vars):
     class_name = f"Parity{name.title().replace('_', '')}"
     java_code = transpile_phs_native(script, f"java:{class_name}")
     with tempfile.TemporaryDirectory() as tmpdir:
-        java_src_dir = os.path.abspath("/home/irvint/Projects/physure/physure-java/src/main/java")
-        lib_dir = os.path.abspath("/home/irvint/Projects/physure/target/debug")
+        java_src_dir = os.path.join(REPO_ROOT, "physure-java", "src", "main", "java")
+        lib_dir = native_lib_dir()
         compile_base = subprocess.run(
             f"javac -d {tmpdir} {java_src_dir}/com/physure/*.java",
             shell=True, capture_output=True, text=True
@@ -113,7 +130,7 @@ def test_rust_transpiler_parity(name, script, expected_vars):
         rs_file = os.path.join(src_dir, "main.rs")
         cargo_file = os.path.join(tmpdir, "Cargo.toml")
         
-        core_path = os.path.abspath("/home/irvint/Projects/physure/physure-core")
+        core_path = os.path.join(REPO_ROOT, "physure-core")
         with open(cargo_file, "w") as f:
             f.write(f'''[package]
 name = "parity_test"
