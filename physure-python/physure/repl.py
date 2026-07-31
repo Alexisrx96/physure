@@ -7,7 +7,8 @@ Three entry modes, in order of precedence:
 - ``python -m physure`` — interactive REPL.
 
 Also available as the ``physure repl`` CLI subcommand. Syntax is the
-Physure Script (PHS) language implemented in :mod:`physure.ext.grammar`.
+Physure Script (PHS) language, evaluated by the Rust engine in
+``physure._core``; there is no Python implementation of the language.
 """
 
 from __future__ import annotations
@@ -35,15 +36,23 @@ def _print_results(results: list[Any]) -> None:
                 print(clean_str)
 
 
-def _run_source(source: str) -> int:
-    from physure.application.context import get_current_system
-    from physure.ext.grammar import GrammarInterpreter
-
-    # Ensure UnitSystem is loaded for fast, deterministic evaluation
-    get_current_system()
-
+def _interpreter() -> Any:
+    """The PHS engine. Rust-only by design, so a missing extension is fatal here."""
     try:
-        _print_results(GrammarInterpreter().run(source))
+        from physure._core import Interpreter
+    except (
+        ImportError
+    ) as e:  # pragma: no cover - depends on how physure was installed
+        raise SystemExit(
+            "error: PHS needs the native engine. Install the compiled package "
+            "(`pip install physure`) or build it with `maturin develop`."
+        ) from e
+    return Interpreter()
+
+
+def _run_source(source: str) -> int:
+    try:
+        _print_results(_interpreter().evaluate(source))
     except Exception as e:  # CLI boundary: report, don't traceback
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -52,27 +61,13 @@ def _run_source(source: str) -> int:
 
 def _repl() -> None:
     import contextlib
-    import threading
 
     with contextlib.suppress(ImportError):
         # ponytail: side-effecting import, enables line editing + history
         # on stdin; the name itself is never referenced.
         import readline  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
-    from physure.ext.grammar import GrammarInterpreter
-
-    # Build the unit system while the user types their first line; join
-    # before evaluating so the main thread never races the build.
-    def _warm() -> None:
-        with contextlib.suppress(Exception):
-            from physure.application.context import get_current_system
-
-            get_current_system()
-
-    warm = threading.Thread(target=_warm, daemon=True)
-    warm.start()
-
-    interp = GrammarInterpreter()
+    interp = _interpreter()
     print(_BANNER)
     while True:
         try:
@@ -85,9 +80,8 @@ def _repl() -> None:
             continue
         if line.strip() in ("exit", "quit"):
             return
-        warm.join()
         try:
-            _print_results(interp.run(line))
+            _print_results(interp.evaluate(line))
         except Exception as e:  # keep the session alive on any error
             print(f"error: {e}", file=sys.stderr)
 
