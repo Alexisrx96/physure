@@ -123,10 +123,19 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
         PhsValue::Number(n) => render(*n),
         PhsValue::Quantity(q) => {
             let unit = q.unit.__repr__();
-            if unit.is_empty() {
-                render(q.value.mean())
+            // The spec says how many digits to show, not which half of the measurement to
+            // keep: `g:.2f` on `9.81 +/- 0.05 m/s^2` printed `9.81 m/s^2` and the reader had
+            // no way to tell the uncertainty had ever been there.
+            let std_dev = q.value.std_dev();
+            let value_str = if std_dev > 0.0 {
+                format!("{} ± {}", render(q.value.mean()), render(std_dev))
             } else {
-                format!("{} {}", render(q.value.mean()), unit)
+                render(q.value.mean())
+            };
+            if unit.is_empty() {
+                value_str
+            } else {
+                format!("{} {}", value_str, unit)
             }
         }
         other => other.to_string(),
@@ -359,9 +368,11 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number((n * factor).round() / factor))),
                 PhsValue::Quantity(q) => {
                     use physure_core::quantity::Quantity;
+                    // Rounding the mean says nothing about how well it is known, so the
+                    // uncertainty rides along untouched rather than being reset to zero.
                     let rounded = Quantity::new_scalar(
                         (q.value.mean() * factor).round() / factor,
-                        0.0,
+                        q.value.std_dev(),
                         q.unit.clone(),
                         None,
                         None,

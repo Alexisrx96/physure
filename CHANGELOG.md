@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Inches are usable again**: `in` was a grammar keyword taken by `let ... in`, so `12 in`, `12 in => cm` and `1.5 in^2` were parse errors and only the `inch` alias worked.
 - `physure._core.Quantity.__str__` renders the measurement (`0.25 kPa`) by delegating to the core's `Display`, instead of repeating `__repr__` (`Quantity(0.25, kPa)`); the REPL and `print()` now read like the `phs` CLI.
 - Local bindings now transpile to real code in the Python, Rust and Java targets. They used to be emitted as a call to an undefined `let(...)` function, so the generated file did not compile.
+- **Uncertainties survive formatting, rounding and `repr`.** A format spec (`g:.2f`) printed the mean alone, `round(q, n)` rebuilt the quantity with a zero standard deviation, and `physure._core.Quantity.__repr__` omitted the uncertainty — an uncertain measurement looked exact in all three.
+- **A percent uncertainty is relative again**: `9.81 +/- 0.5% m/s^2` was parsed as ±0.5 instead of ±0.049, a spread twenty times too wide. A percentage applied to a magnitude that is only known at run time is now rejected rather than guessed.
+- `Debug for Quantity` (Rust) prints `std_dev`, so a failing assertion about an uncertain quantity no longer reports what looks like a different measurement.
 
 ---
 

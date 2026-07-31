@@ -436,3 +436,43 @@ fn inches_parse_and_local_bindings_use_where() {
     // "let times inches", a silently wrong answer.
     assert!(eval_phs("let x = 10.0 m in x * 2.0").is_err(), "`let ... in` should no longer parse");
 }
+
+/// Evaluates `src` and returns what the last statement rendered as text.
+fn eval_string(src: &str) -> String {
+    let values = eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed to evaluate: {e:?}"));
+    match values.into_iter().last() {
+        Some(PhsValue::String(s)) => s,
+        other => panic!("{src:?} produced {other:?}, expected a string"),
+    }
+}
+
+/// An uncertainty the user wrote has to survive every path that renders or rebuilds the
+/// quantity. Three of them threw it away: a format spec printed the mean alone, `round`
+/// rebuilt the quantity with a zero std_dev, and a percent uncertainty was parsed as an
+/// absolute one — so `9.81 +/- 0.5%` claimed a spread twenty times too wide.
+#[test]
+fn uncertainty_survives_formatting_rounding_and_percent() {
+    let g = eval_quantity("9.81 +/- 0.05 m / s ^ 2");
+    assert_close(g.value.std_dev(), 0.05, "literal uncertainty");
+    assert_eq!(g.to_string(), "9.81 ± 0.05 m / s ^ 2");
+
+    // A format spec chooses how many digits to show, not which half of the measurement to keep.
+    assert_eq!(eval_string("9.81 +/- 0.05 m/s^2 :.2f"), "9.81 ± 0.05 m/s^2");
+    assert_eq!(eval_string("9.81 +/- 0.05 m/s^2 :.1e"), "9.8e0 ± 5.0e-2 m/s^2");
+    // A quantity with no uncertainty must not grow a "± 0" tail.
+    assert_eq!(eval_string("9.81 m/s^2 :.2f"), "9.81 m/s^2");
+
+    // Rounding the mean says nothing about how well it is known.
+    let rounded = eval_quantity("round(9.81 +/- 0.05 m/s^2, 1)");
+    assert_close(rounded.value.mean(), 9.8, "round keeps the mean");
+    assert_close(rounded.value.std_dev(), 0.05, "round keeps the uncertainty");
+
+    // `+/- 0.5%` is 0.5% *of the magnitude*, not 0.5 in the quantity's own unit.
+    let relative = eval_quantity("9.81 +/- 0.5% m/s^2");
+    assert_close(relative.value.std_dev(), 9.81 * 0.005, "percent uncertainty is relative");
+    // A percentage of a magnitude that only exists at run time is not a number.
+    assert!(
+        eval_phs("(2.0 + 3.0) +/- 1% m").is_err(),
+        "a percent uncertainty on a computed magnitude should be rejected, not guessed"
+    );
+}

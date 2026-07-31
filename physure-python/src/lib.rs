@@ -544,8 +544,21 @@ impl PyQuantity {
     }
 
 
+    /// Matches the pure-Python `Quantity.__repr__`, uncertainty included: the results of
+    /// `Interpreter.evaluate()` are inspected through `repr` (a list, a notebook cell), and
+    /// dropping the `± 0.05` there made an uncertain measurement look exact.
     fn __repr__(&self) -> String {
-        format!("Quantity({}, {})", self.0.value.mean(), self.0.unit.__repr__())
+        let std_dev = self.0.value.std_dev();
+        if std_dev > 0.0 {
+            format!(
+                "Quantity({}, {}, uncertainty={})",
+                self.0.value.mean(),
+                self.0.unit.__repr__(),
+                std_dev
+            )
+        } else {
+            format!("Quantity({}, {})", self.0.value.mean(), self.0.unit.__repr__())
+        }
     }
 
     /// The measurement as a reader sees it (`0.25 kPa`), delegated to the core's `Display`

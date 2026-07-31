@@ -679,6 +679,7 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut unit_leftover: Option<(BinaryOp, String)> = None;
 
     let mut is_sigma = false;
+    let mut is_percent_uncertainty = false;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -708,6 +709,7 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
                         }
                         let val = val_str.trim().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid uncertainty".to_string()))?;
                         uncertainty = Some(val);
+                        is_percent_uncertainty = is_percent;
                     }
                 }
             }
@@ -717,6 +719,27 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
                 unit_leftover = leftover;
             }
             _ => {}
+        }
+    }
+
+    // `+/- 0.5%` is a *relative* uncertainty. The percent sign was stripped and then never
+    // applied, so `9.81 +/- 0.5% m/s^2` claimed ±0.5 instead of ±0.049 — twenty times too
+    // wide, and nothing in the output said so.
+    if is_percent_uncertainty {
+        let percent = uncertainty.unwrap_or(0.0);
+        let base = magnitude.or(match &magnitude_expr {
+            Some(Expr::Quantity(q)) => Some(q.magnitude),
+            _ => None,
+        });
+        match base {
+            Some(mag) => uncertainty = Some(mag.abs() * percent / 100.0),
+            // Anything else only knows its magnitude at run time, and a percentage of an
+            // unknown is not a number: say so instead of inventing one.
+            None => {
+                return Err(PhysureError::Generic(
+                    "A percent uncertainty needs a literal magnitude to apply to; use an absolute value like `+/- 0.05`".into(),
+                ))
+            }
         }
     }
 

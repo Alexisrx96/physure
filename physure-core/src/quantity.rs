@@ -17,6 +17,9 @@ impl std::fmt::Debug for Quantity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Quantity")
             .field("mean", &self.value.mean())
+            // A debug dump that hides the uncertainty turns every test failure and log line
+            // about an uncertain quantity into a report about a different measurement.
+            .field("std_dev", &self.value.std_dev())
             .field("unit", &self.unit)
             .finish()
     }
