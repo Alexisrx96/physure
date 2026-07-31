@@ -41,7 +41,7 @@ make sonar  # runs pytest+coverage then pysonar
 ### Two packages, one repo
 
 - **`physure/`** — pure Python library (the public API)
-- **`physure-core/`** — Rust core engine via PyO3, built with `maturin`. Provides `RationalUnit`, `UnitRegistry`, `CovarianceStore`, `PruningConfig`, and the native PHS engine (`PhsLexer`, `PhsParser`, `PhsInterpreter`, `PhsValue`, `eval_phs`) plus the standalone `phs` CLI binary (`cargo run --bin phs`). All imports from `physure-core` have Python fallbacks so the library still works without it, at reduced performance.
+- **`physure-core/`** — Rust core engine via PyO3, built with `maturin`. Provides `RationalUnit`, `UnitRegistry`, `CovarianceStore`, `PruningConfig`, and the native PHS engine (`PhsLexer`, `PhsParser`, `PhsInterpreter`, `PhsValue`, `eval_phs`) plus the standalone `phs` CLI binary (`cargo run --bin phs`). Most imports from `physure-core` have Python fallbacks so the library still works without it, at reduced performance — **the PHS language is the exception: only Rust implements it**, so `physure.repl` (`python -m physure`) requires the native engine and fails with an install hint without it.
 
 ### Layer map
 

@@ -548,6 +548,12 @@ impl PyQuantity {
         format!("Quantity({}, {})", self.0.value.mean(), self.0.unit.__repr__())
     }
 
+    /// The measurement as a reader sees it (`0.25 kPa`), delegated to the core's `Display`
+    /// so the REPL, `print()` and the `phs` CLI all render a quantity the same way.
+    fn __str__(&self) -> String {
+        self.0.to_string()
+    }
+
     fn __reduce__<'py>(self_: Bound<'py, Self>, py: Python<'py>) -> PyResult<(PyObject, (PyObject, PyObject, PyObject))> {
         let cls = self_.get_type();
         let val = self_.borrow();
