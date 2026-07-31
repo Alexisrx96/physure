@@ -96,3 +96,11 @@ coverage.xml
 test-results.xml
 
 *.pdb
+
+# 3D export artifacts (mesh/plot output written next to the script that made them)
+*.stl
+*.obj
+*.ply
+*.gltf
+*.glb
+interactive_3d.html
