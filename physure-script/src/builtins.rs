@@ -249,7 +249,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.abs()))),
-                _ => Err(PhysureError::Generic("abs expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.abs()?))),
+                _ => Err(PhysureError::Generic("abs expects a number or quantity".into())),
             }
         }
         "log" => {

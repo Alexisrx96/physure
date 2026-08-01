@@ -187,6 +187,13 @@ impl Quantity {
         self.pow(0.5)
     }
 
+    /// Folding the magnitude to its absolute value moves where the measurement sits, not how
+    /// well it is known, so the unit and the standard deviation both carry over untouched.
+    pub fn abs(&self) -> PhysureResult<Quantity> {
+        let new_value = self.value.propagate_function("abs")?;
+        Ok(Quantity { value: new_value, unit: self.unit.clone() })
+    }
+
     pub fn approx_eq(&self, other: &Quantity, rel_tol: f64, abs_tol: f64) -> bool {
         if !self.unit.same_dimensions(&other.unit) {
             return false;

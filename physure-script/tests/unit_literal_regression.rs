@@ -476,3 +476,25 @@ fn uncertainty_survives_formatting_rounding_and_percent() {
         "a percent uncertainty on a computed magnitude should be rejected, not guessed"
     );
 }
+
+/// `abs` rejected quantities outright ("abs expects a number"), so a measurement could not
+/// be passed to it at all. Now that it accepts one, the sign is the only thing it may touch:
+/// a standard deviation is non-negative and |x| says nothing about how well x is known, so
+/// the unit and the uncertainty have to come back exactly as they went in.
+#[test]
+fn abs_keeps_the_unit_and_the_uncertainty() {
+    for src in ["abs(9.81 +/- 0.05 m / s ^ 2)", "abs(-9.81 +/- 0.05 m / s ^ 2)"] {
+        let q = eval_quantity(src);
+        assert_close(q.value.mean(), 9.81, src);
+        assert_eq!(q.unit.__repr__(), "m / s ^ 2", "{src:?} printed the wrong unit");
+        assert_close(q.value.std_dev(), 0.05, src);
+        assert_eq!(q.to_string(), "9.81 ± 0.05 m / s ^ 2");
+    }
+
+    // A bare number keeps the behaviour it always had (the interpreter hands it over as a
+    // dimensionless quantity), and a value with no absolute value to take still has to fail
+    // loudly rather than be coerced into one.
+    let plain = eval_quantity("abs(-3)");
+    assert_close(plain.canonical_magnitude(), 3.0, "abs(-3)");
+    assert!(eval_phs("abs(\"hello\")").is_err(), "abs of a string should be rejected");
+}
