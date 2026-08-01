@@ -1,4 +1,7 @@
+use std::borrow::Cow;
+
 use dyn_clone::DynClone;
+use ndarray::Array1;
 use crate::error::PhysureResult;
 use super::gaussian::GaussianBackend;
 use super::monte_carlo::MonteCarloBackend;
@@ -65,6 +68,36 @@ impl UncertaintyValue {
         }
     }
 
+    /// Picks the sample array that pairs elementwise with `m1.samples`.
+    ///
+    /// Correlation for free is the entire reason to pay for 50_000 samples: when both
+    /// operands already carry sample arrays, elementwise arithmetic cancels the shared
+    /// draws by itself, so `x - x` is exactly zero and `x + x` has twice the spread of
+    /// `x`. Redrawing the right operand from its mean and std_dev — which is what
+    /// `ensure_samples` does — throws that away and silently reports the uncorrelated
+    /// answer for correlated inputs.
+    ///
+    /// Borrowing `other`'s array is the right answer in both situations:
+    /// - shared ancestry (`x` and `x`): the arrays are literally the same draws, so the
+    ///   arithmetic cancels exactly;
+    /// - two independent Monte Carlo quantities: each drew its own independent variates in
+    ///   `from_stats`, so pairing them elementwise is plain Monte Carlo over independent
+    ///   inputs, which still comes out in quadrature.
+    ///
+    /// Differing lengths mean the two arrays were not drawn together and cannot be paired
+    /// at all, so that case falls back to resampling from `other`'s moments.
+    fn mc_operand_samples<'a>(
+        m1: &MonteCarloBackend,
+        other: &'a UncertaintyValue,
+    ) -> PhysureResult<Cow<'a, Array1<f64>>> {
+        if let Self::MonteCarlo(m2) = other {
+            if m2.samples.len() == m1.samples.len() {
+                return Ok(Cow::Borrowed(&m2.samples));
+            }
+        }
+        Ok(Cow::Owned(m1.ensure_samples(other.as_backend_ref())?))
+    }
+
     pub fn propagate_add(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
@@ -73,8 +106,8 @@ impl UncertaintyValue {
                 Ok(Self::Gaussian(GaussianBackend { mean: m, std_dev: s }))
             }
             (Self::MonteCarlo(m1), other_val) => {
-                let other_samples = m1.ensure_samples(other_val.as_backend_ref())?;
-                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples + &other_samples }))
+                let other_samples = Self::mc_operand_samples(m1, other_val)?;
+                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples + &*other_samples }))
             }
             (Self::Unscented(u1), other_val) => {
                 let m = u1.mean() + other_val.mean();
@@ -96,8 +129,8 @@ impl UncertaintyValue {
                 Ok(Self::Gaussian(GaussianBackend { mean: m, std_dev: s }))
             }
             (Self::MonteCarlo(m1), other_val) => {
-                let other_samples = m1.ensure_samples(other_val.as_backend_ref())?;
-                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples - &other_samples }))
+                let other_samples = Self::mc_operand_samples(m1, other_val)?;
+                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples - &*other_samples }))
             }
             (Self::Unscented(u1), other_val) => {
                 let m = u1.mean() - other_val.mean();
@@ -121,8 +154,8 @@ impl UncertaintyValue {
                 Ok(Self::Gaussian(GaussianBackend { mean: new_mean, std_dev: new_std }))
             }
             (Self::MonteCarlo(m1), other_val) => {
-                let other_samples = m1.ensure_samples(other_val.as_backend_ref())?;
-                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples * &other_samples }))
+                let other_samples = Self::mc_operand_samples(m1, other_val)?;
+                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples * &*other_samples }))
             }
             (Self::Unscented(u1), other_val) => {
                 let m1 = u1.mean(); let s1 = u1.std_dev();
@@ -151,8 +184,12 @@ impl UncertaintyValue {
                 Ok(Self::Gaussian(GaussianBackend { mean: new_mean, std_dev: new_std }))
             }
             (Self::MonteCarlo(m1), other_val) => {
-                let other_samples = m1.ensure_samples(other_val.as_backend_ref())?;
-                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples / &other_samples }))
+                // Unlike the Gaussian and Unscented arms, this one has never raised
+                // DivisionByZero: it divides sample by sample, so a zero draw shows up as a
+                // non-finite sample rather than an error. That behaviour is left as it was;
+                // only where the denominator's samples come from changes here.
+                let other_samples = Self::mc_operand_samples(m1, other_val)?;
+                Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples / &*other_samples }))
             }
             (Self::Unscented(u1), other_val) => {
                 let m1 = u1.mean(); let s1 = u1.std_dev();
