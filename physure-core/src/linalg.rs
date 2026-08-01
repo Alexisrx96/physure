@@ -49,8 +49,20 @@ impl QuantityVector {
     }
 
     pub fn norm(&self) -> PhysureResult<Quantity> {
-        let dot_val = self.dot(self)?;
-        dot_val.pow(0.5)
+        if self.components.is_empty() {
+            return Err(PhysureError::Generic("Cannot compute the norm of an empty vector".into()));
+        }
+        // Each component is squared with `pow`, not multiplied by itself via `dot(self, self)`:
+        // `mul` treats its two operands as statistically independent, so squaring a component
+        // that way gives sigma(x^2) = sqrt(2)*x*sigma instead of the correct 2*x*sigma, and the
+        // norm came out with an uncertainty exactly sqrt(2) too small. `pow` uses the analytic
+        // derivative (and maps samples/sigma points elementwise for the sampling backends),
+        // which is right and also preserves the component's uncertainty backend.
+        let mut sum = self.components[0].pow(2.0)?;
+        for c in &self.components[1..] {
+            sum = sum.add(&c.pow(2.0)?)?;
+        }
+        sum.pow(0.5)
     }
 
     pub fn unit_vector(&self) -> PhysureResult<QuantityVector> {
@@ -141,5 +153,66 @@ impl QuantityMatrix {
             return term1.sub(&term2)?.add(&term3);
         }
         Err(PhysureError::Generic("Determinant of matrices > 3x3 not yet supported".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::units::RationalUnit;
+
+    fn meters() -> RationalUnit {
+        RationalUnit::new_from_dimensions([("m".to_string(), (1, 1))])
+    }
+
+    fn m(mean: f64, std_dev: f64) -> Quantity {
+        Quantity::new_scalar(mean, std_dev, meters(), None, None)
+    }
+
+    #[test]
+    fn norm_propagates_uncertainty_by_the_gum_formula() {
+        // v = (1 +/- 0.09, 2 +/- 0.06, 2 +/- 0.18) m, the components mutually independent.
+        //   |v|          = sqrt(1 + 4 + 4)   = 3 m
+        //   d|v|/dx_i    = x_i / |v|         = 1/3, 2/3, 2/3
+        //   contributions = (1/3)(0.09), (2/3)(0.06), (2/3)(0.18) = 0.03, 0.04, 0.12
+        //   sigma(|v|)   = sqrt(0.03^2 + 0.04^2 + 0.12^2)
+        //                = sqrt(0.0009 + 0.0016 + 0.0144) = sqrt(0.0169) = 0.13 m exactly
+        // Squaring each component through `dot(self, self)` uses `mul`, which assumes the two
+        // operands are independent, and would report 0.13/sqrt(2) = 0.09192388 instead.
+        let v = QuantityVector::new(vec![m(1.0, 0.09), m(2.0, 0.06), m(2.0, 0.18)]);
+        let n = v.norm().unwrap();
+
+        assert!(
+            (n.value.mean() - 3.0).abs() < 1e-9,
+            "mean was {}, expected 3.0",
+            n.value.mean()
+        );
+        assert!(
+            (n.value.std_dev() - 0.13).abs() < 1e-9,
+            "std_dev was {}, expected 0.13",
+            n.value.std_dev()
+        );
+    }
+
+    #[test]
+    fn norm_keeps_the_magnitude_and_the_unit() {
+        // A 3-4-5 triangle: |(3 m, 4 m)| = 5 m, and the unit must come back as m, not m^2.
+        let v = QuantityVector::new(vec![m(3.0, 0.0), m(4.0, 0.0)]);
+        let n = v.norm().unwrap();
+
+        assert!(
+            (n.value.mean() - 5.0).abs() < 1e-9,
+            "mean was {}, expected 5.0",
+            n.value.mean()
+        );
+        assert_eq!(n.value.std_dev(), 0.0);
+        assert_eq!(n.unit, meters());
+        assert_eq!(n.unit.dimensions.as_slice(), &[("m".to_string(), (1, 1))]);
+    }
+
+    #[test]
+    fn norm_of_an_empty_vector_is_an_error() {
+        let v = QuantityVector::new(vec![]);
+        assert!(v.norm().is_err());
     }
 }
