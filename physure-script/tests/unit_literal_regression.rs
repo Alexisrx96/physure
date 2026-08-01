@@ -498,3 +498,134 @@ fn abs_keeps_the_unit_and_the_uncertainty() {
     assert_close(plain.canonical_magnitude(), 3.0, "abs(-3)");
     assert!(eval_phs("abs(\"hello\")").is_err(), "abs of a string should be rejected");
 }
+
+/// `floor` and `ceil` rebuilt the quantity with `new_scalar(..., 0.0, ...)`, the same defect
+/// `round` had: `floor(9.81 +/- 0.05 m/s^2)` came back as an exact `9.0 m / s ^ 2`, so a
+/// measurement that was known to ±0.05 printed as if it had been measured perfectly. Moving
+/// the mean to a neighbouring integer says nothing about how well the mean is known, so the
+/// unit and the standard deviation both have to survive the trip.
+#[test]
+fn floor_and_ceil_keep_the_unit_and_the_uncertainty() {
+    let floored = eval_quantity("floor(9.81 +/- 0.05 m / s ^ 2)");
+    assert_close(floored.value.mean(), 9.0, "floor moves the mean down");
+    assert_eq!(floored.unit.__repr__(), "m / s ^ 2", "floor dropped the unit");
+    assert_close(floored.value.std_dev(), 0.05, "floor kept the uncertainty");
+    assert_eq!(floored.to_string(), "9.0 ± 0.05 m / s ^ 2");
+
+    let ceiled = eval_quantity("ceil(9.81 +/- 0.05 m / s ^ 2)");
+    assert_close(ceiled.value.mean(), 10.0, "ceil moves the mean up");
+    assert_eq!(ceiled.unit.__repr__(), "m / s ^ 2", "ceil dropped the unit");
+    assert_close(ceiled.value.std_dev(), 0.05, "ceil kept the uncertainty");
+    assert_eq!(ceiled.to_string(), "10.0 ± 0.05 m / s ^ 2");
+
+    // A dimensionless measurement is the worst case for the old code: every sample of
+    // `0.5 +/- 0.01` floors to zero, so anything that rounds the distribution rather than
+    // sliding it reports a standard deviation of zero and nobody notices.
+    let unit_less = eval_quantity("floor(0.5 +/- 0.01)");
+    assert_eq!(unit_less.value.mean(), 0.0, "floor(0.5) is 0");
+    assert_close(unit_less.value.std_dev(), 0.01, "floor kept the uncertainty");
+    assert_close(eval_quantity("ceil(0.5 +/- 0.01)").value.std_dev(), 0.01, "ceil kept it too");
+
+    // An exact quantity still comes back exact — no "± 0" tail invented on the way.
+    assert_eq!(eval_quantity("floor(9.81 m / s ^ 2)").to_string(), "9.0 m / s ^ 2");
+    assert_eq!(eval_quantity("ceil(9.81 m / s ^ 2)").to_string(), "10.0 m / s ^ 2");
+}
+
+/// `sin`, `cos` and `tan` used to return a bare number built from the mean, throwing away
+/// the unit *and* the uncertainty, and they applied themselves to any quantity at all —
+/// `sin(9.81 m/s^2)` answered -0.379 as though metres per second squared were radians.
+///
+/// The contract now: the argument is an angle (converted to radians through its own scale)
+/// or a dimensionless value (read as radians, exactly as a bare number is); the result is
+/// dimensionless; the uncertainty comes through the derivative. The expected sigmas below
+/// are the analytic ones — σ_sin = |cos x|·σ_x, σ_cos = |sin x|·σ_x, σ_tan = sec²x·σ_x — so
+/// a wrong propagation formula fails here, not just a discarded one.
+#[test]
+fn trig_takes_an_angle_and_propagates_the_derivative() {
+    let sin = eval_quantity("sin(0.5 +/- 0.01)");
+    assert_close(sin.value.mean(), 0.5_f64.sin(), "sin mean");
+    assert!(sin.unit.dimensions.is_empty(), "sin of an angle is a pure ratio");
+    assert_close(sin.value.std_dev(), 0.5_f64.cos().abs() * 0.01, "σ_sin = |cos x|·σ_x");
+
+    let cos = eval_quantity("cos(0.5 +/- 0.01)");
+    assert_close(cos.value.mean(), 0.5_f64.cos(), "cos mean");
+    assert!(cos.unit.dimensions.is_empty(), "cos of an angle is a pure ratio");
+    assert_close(cos.value.std_dev(), 0.5_f64.sin().abs() * 0.01, "σ_cos = |sin x|·σ_x");
+
+    let tan = eval_quantity("tan(0.5 +/- 0.01)");
+    assert_close(tan.value.mean(), 0.5_f64.tan(), "tan mean");
+    assert!(tan.unit.dimensions.is_empty(), "tan of an angle is a pure ratio");
+    assert_close(tan.value.std_dev(), (1.0 + 0.5_f64.tan().powi(2)) * 0.01, "σ_tan = sec²x·σ_x");
+
+    // An angle in its own unit is converted first: `deg` carries the degrees → radians
+    // factor as its scale, so sin(90°) is 1, not sin(90 rad) = 0.894.
+    let deg: f64 = 0.0174532925; // the factor physure.conf gives `deg`
+    assert_close(eval_quantity("sin(90 deg)").value.mean(), 1.0, "sin(90 deg)");
+    let cos_deg = eval_quantity("cos(45 +/- 1 deg)");
+    assert_close(cos_deg.value.mean(), (45.0 * deg).cos(), "cos(45 deg)");
+    assert_close(cos_deg.value.std_dev(), (45.0 * deg).sin() * deg, "one degree of spread");
+    assert!(cos_deg.unit.dimensions.is_empty(), "cos of a degree angle is still a pure ratio");
+
+    // A quantity that is not an angle has no trigonometric value at all. Answering anyway is
+    // the confident wrong answer: 9.81 m/s^2 is not 9.81 radians.
+    for src in ["sin(9.81 +/- 0.05 m / s ^ 2)", "cos(5 m)", "tan(2 kg)"] {
+        assert!(eval_phs(src).is_err(), "{src:?} should be rejected as a dimensional error");
+    }
+
+    // An exact argument still gives an exact answer, with no unit and no invented spread.
+    let exact = eval_quantity("sin(0.5)");
+    assert_close(exact.value.mean(), 0.5_f64.sin(), "sin(0.5)");
+    assert_eq!(exact.value.std_dev(), 0.0, "an exact argument has an exact sine");
+}
+
+/// `exp`, `ln` and `log` rejected every quantity ("exp expects a number"), so they were
+/// unusable even on a dimensionless one — `exp(0.5 +/- 0.01)` could not be evaluated at all.
+/// They are power series in their argument, so the argument must be dimensionless and the
+/// result is too; a dimensioned argument is a physics error and is reported as one rather
+/// than computed from the bare magnitude.
+#[test]
+fn transcendentals_accept_a_dimensionless_quantity_and_reject_a_dimensioned_one() {
+    let exp = eval_quantity("exp(0.5 +/- 0.01)");
+    assert_close(exp.value.mean(), 0.5_f64.exp(), "exp mean");
+    assert!(exp.unit.dimensions.is_empty(), "exp of a pure number is a pure number");
+    assert_close(exp.value.std_dev(), 0.5_f64.exp() * 0.01, "σ_exp = e^x·σ_x");
+
+    let ln = eval_quantity("ln(0.5 +/- 0.01)");
+    assert_close(ln.value.mean(), 0.5_f64.ln(), "ln mean");
+    assert!(ln.unit.dimensions.is_empty(), "ln of a pure number is a pure number");
+    assert_close(ln.value.std_dev(), 0.01 / 0.5, "σ_ln = σ_x/x");
+
+    // `log` is base 10 in PHS, so both the mean and the sigma carry the 1/ln(10) factor.
+    let log = eval_quantity("log(0.5 +/- 0.01)");
+    assert_close(log.value.mean(), 0.5_f64.log10(), "log is base 10");
+    assert!(log.unit.dimensions.is_empty(), "log of a pure number is a pure number");
+    assert_close(log.value.std_dev(), 0.01 / (0.5 * std::f64::consts::LN_10), "σ_log10 = σ_x/(x·ln10)");
+
+    // ln(5 m) is a physics error the tool should catch, not compute.
+    for src in ["exp(9.81 +/- 0.05 m / s ^ 2)", "ln(5 m)", "log(2 kg)"] {
+        assert!(eval_phs(src).is_err(), "{src:?} should be rejected as a dimensional error");
+    }
+
+    // Exact arguments stay exact.
+    assert_eq!(eval_quantity("exp(0.5)").value.std_dev(), 0.0, "an exact argument has an exact exp");
+    assert_close(eval_quantity("ln(0.5)").value.mean(), 0.5_f64.ln(), "ln(0.5)");
+    assert_close(eval_quantity("log(0.5)").value.mean(), 0.5_f64.log10(), "log(0.5)");
+}
+
+/// `physure.conf` declares both `radian` and `steradian` against dimension `A`, and the
+/// loader let the later line win, so the angle dimension's base unit became the steradian:
+/// `deg`, `arcmin` and `arcsec` were registered as scaled steradians. `90 deg => rad` failed
+/// as a unit mismatch while `1 deg + 1 sr` was cheerfully accepted — and trigonometry could
+/// not take a quantity in degrees at all.
+#[test]
+fn degrees_are_an_angle_in_radians_not_in_steradians() {
+    let radians = eval_quantity("90 deg => rad");
+    assert_close(radians.value.mean(), 90.0 * 0.0174532925, "90 deg in radians");
+    assert_eq!(radians.unit.__repr__(), "rad");
+
+    let sum = eval_quantity("30 deg + 15 deg");
+    assert_close(sum.value.mean(), 45.0, "degrees add as degrees");
+
+    // A solid angle is still not a plane angle.
+    assert!(eval_phs("1 deg + 1 sr").is_err(), "a degree is not a steradian");
+}

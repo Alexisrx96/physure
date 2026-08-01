@@ -53,7 +53,13 @@ pub fn parse_physure_conf(
                         let symbol = aliases_str.first().cloned().unwrap_or_default();
                         if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() {
                             if is_single_ident(dim_symbol) {
-                                dim_to_base.insert(dim_symbol.to_string(), symbol.clone());
+                                // The first base declaration for a dimension symbol wins.
+                                // `physure.conf` declares both `radian` and `steradian`
+                                // against dimension `A`, so overwriting made steradian the
+                                // base of angle: `deg`, `arcmin` and `arcsec` came out with
+                                // steradian dimensions, `90 deg => rad` failed as a unit
+                                // mismatch and `1 deg + 1 sr` was accepted instead.
+                                dim_to_base.entry(dim_symbol.to_string()).or_insert_with(|| symbol.clone());
                                 registry.add_base_unit(symbol.clone());
                             }
                         }

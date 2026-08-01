@@ -211,8 +211,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.sin()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Number(q.value.mean().sin()))),
-                _ => Err(PhysureError::Generic("sin expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.sin()?))),
+                _ => Err(PhysureError::Generic("sin expects a number or quantity".into())),
             }
         }
         "cos" => {
@@ -221,8 +221,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.cos()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Number(q.value.mean().cos()))),
-                _ => Err(PhysureError::Generic("cos expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.cos()?))),
+                _ => Err(PhysureError::Generic("cos expects a number or quantity".into())),
             }
         }
         "exp" => {
@@ -231,7 +231,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.exp()))),
-                _ => Err(PhysureError::Generic("exp expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.exp()?))),
+                _ => Err(PhysureError::Generic("exp expects a number or quantity".into())),
             }
         }
         "ln" => {
@@ -240,7 +241,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.ln()))),
-                _ => Err(PhysureError::Generic("ln expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.ln()?))),
+                _ => Err(PhysureError::Generic("ln expects a number or quantity".into())),
             }
         }
         "abs" => {
@@ -259,7 +261,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.log10()))),
-                _ => Err(PhysureError::Generic("log expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.log10()?))),
+                _ => Err(PhysureError::Generic("log expects a number or quantity".into())),
             }
         }
         "tan" => {
@@ -268,8 +271,8 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.tan()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Number(q.value.mean().tan()))),
-                _ => Err(PhysureError::Generic("tan expects a number".into())),
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.tan()?))),
+                _ => Err(PhysureError::Generic("tan expects a number or quantity".into())),
             }
         }
         "floor" => {
@@ -278,16 +281,9 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.floor()))),
-                PhsValue::Quantity(q) => {
-                    use physure_core::quantity::Quantity;
-                    Ok(Some(PhsValue::Quantity(Quantity::new_scalar(
-                        q.value.mean().floor(),
-                        0.0,
-                        q.unit.clone(),
-                        None,
-                        None,
-                    ))))
-                }
+                // Flooring the mean says nothing about how well it is known, so the unit
+                // and the uncertainty ride along instead of being reset to zero.
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.floor()?))),
                 _ => Err(PhysureError::Generic("floor expects number or quantity".into())),
             }
         }
@@ -297,16 +293,7 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpr
             }
             match &args[0] {
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.ceil()))),
-                PhsValue::Quantity(q) => {
-                    use physure_core::quantity::Quantity;
-                    Ok(Some(PhsValue::Quantity(Quantity::new_scalar(
-                        q.value.mean().ceil(),
-                        0.0,
-                        q.unit.clone(),
-                        None,
-                        None,
-                    ))))
-                }
+                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.ceil()?))),
                 _ => Err(PhysureError::Generic("ceil expects number or quantity".into())),
             }
         }

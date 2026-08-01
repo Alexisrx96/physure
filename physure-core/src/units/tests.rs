@@ -230,3 +230,20 @@ fn rational_unit_eq_and_neq() {
     assert!(length().__eq__(&length()));
     assert!(!length().__eq__(&time()));
 }
+
+/// `physure.conf` declares `radian` and `steradian` against the same dimension symbol `A`,
+/// and the loader used to let the last declaration win, making the steradian the base unit
+/// of angle. Every unit defined against `A` — `deg`, `arcmin`, `arcsec` — was then a scaled
+/// *steradian*, so a degree could be added to a solid angle but not converted to a radian.
+#[test]
+fn degree_is_a_scaled_radian_not_a_scaled_steradian() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let deg = reg.get_unit("deg").unwrap();
+    assert_eq!(deg.get_exponent("rad"), Some((1, 1)), "deg should be dimensioned in radians");
+    assert_eq!(deg.get_exponent("sr"), None, "deg is a plane angle, not a solid one");
+    assert!(
+        deg.same_dimensions(&reg.get_unit("rad").unwrap()),
+        "a degree and a radian have to be interconvertible"
+    );
+    assert!((deg.scale - 0.0174532925).abs() < 1e-12, "deg carries the degrees → radians factor");
+}

@@ -129,6 +129,12 @@ impl Quantity {
     /// Rescales an uncertainty value by a plain multiplicative constant (mean and std_dev alike),
     /// reusing the existing propagate_mul machinery with a zero-uncertainty scalar.
     fn scale_value(value: &UncertaintyValue, factor: f64) -> PhysureResult<UncertaintyValue> {
+        // Multiplying by one is not free: the unscented backend rebuilds its sigma points
+        // from (mean, std_dev) and the Monte Carlo backend allocates a second array, so an
+        // identity rescale would quietly resample a value that nobody asked to change.
+        if factor == 1.0 {
+            return Ok(value.clone());
+        }
         value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend { mean: factor, std_dev: 0.0 }))
     }
 
@@ -192,6 +198,117 @@ impl Quantity {
     pub fn abs(&self) -> PhysureResult<Quantity> {
         let new_value = self.value.propagate_function("abs")?;
         Ok(Quantity { value: new_value, unit: self.unit.clone() })
+    }
+
+    /// Moves the mean to the integer below it without touching anything else.
+    ///
+    /// Flooring is a statement about where the measurement sits, not about how well it is
+    /// known, so the unit and the standard deviation both survive.
+    pub fn floor(&self) -> PhysureResult<Quantity> {
+        self.shift_mean_to(self.value.mean().floor())
+    }
+
+    /// The `floor` counterpart: the integer above the mean, same unit, same uncertainty.
+    pub fn ceil(&self) -> PhysureResult<Quantity> {
+        self.shift_mean_to(self.value.mean().ceil())
+    }
+
+    /// Slides the whole distribution so its mean lands on `target`.
+    ///
+    /// The shift is applied as an addition of an exact constant rather than by rebuilding
+    /// the quantity, because that is the only form that keeps a Monte Carlo cloud or a set
+    /// of sigma points intact. Rounding each sample instead would be worse than rebuilding:
+    /// every sample of `9.81 ± 0.05` floors to 9, so the result would come back with a
+    /// standard deviation of zero — an uncertain measurement printed as if it were exact.
+    fn shift_mean_to(&self, target: f64) -> PhysureResult<Quantity> {
+        let offset = UncertaintyValue::Gaussian(GaussianBackend {
+            mean: target - self.value.mean(),
+            std_dev: 0.0,
+        });
+        let new_value = self.value.propagate_add(&offset)?;
+        Ok(Quantity { value: new_value, unit: self.unit.clone() })
+    }
+
+    pub fn sin(&self) -> PhysureResult<Quantity> {
+        self.trig("sin")
+    }
+
+    pub fn cos(&self) -> PhysureResult<Quantity> {
+        self.trig("cos")
+    }
+
+    pub fn tan(&self) -> PhysureResult<Quantity> {
+        self.trig("tan")
+    }
+
+    /// A trigonometric function takes an angle and returns a pure ratio.
+    ///
+    /// Two arguments are admissible: an angle, which is converted to radians by its own
+    /// scale (that scale is defined against the radian, so it is exactly the degrees →
+    /// radians factor for `deg`), and a dimensionless value, which is read as radians —
+    /// the same reading a bare number gets. A length or a mass is a dimensional error:
+    /// `sin(9.81 m/s^2)` has no meaning, and quietly answering -0.379 for it is the
+    /// confident wrong answer this library exists to prevent.
+    ///
+    /// The result is dimensionless, and the uncertainty rides through the core's derivative
+    /// propagation (σ_sin = |cos x|·σ_x), which is also what keeps a Monte Carlo or
+    /// unscented value from being flattened into a Gaussian on the way out.
+    fn trig(&self, func: &str) -> PhysureResult<Quantity> {
+        let radians = self.as_radians(func)?;
+        let new_value = radians.propagate_function(func)?;
+        Ok(Quantity { value: new_value, unit: RationalUnit::dimensionless() })
+    }
+
+    /// This quantity's value in radians, or an error if it is not an angle at all.
+    fn as_radians(&self, func: &str) -> PhysureResult<UncertaintyValue> {
+        if !self.unit.dimensions.is_empty() && !self.unit.same_dimensions(&RationalUnit::base("rad")) {
+            return Err(PhysureError::Generic(format!(
+                "{func} expects an angle or a dimensionless value, got '{}'",
+                self.unit.__repr__()
+            )));
+        }
+        // Folding in the scale is what turns `90 deg` into π/2 and `50 %` into 0.5; for a
+        // plain radian or a bare dimensionless value the factor is 1.0 and nothing moves.
+        Self::scale_value(&self.value, self.unit.scale)
+    }
+
+    pub fn exp(&self) -> PhysureResult<Quantity> {
+        self.transcendental("exp", "exp")
+    }
+
+    /// The natural logarithm. The core calls it `log`; PHS and the rest of the world call
+    /// that one `ln`, so the name is translated here rather than at every call site.
+    pub fn ln(&self) -> PhysureResult<Quantity> {
+        self.transcendental("ln", "log")
+    }
+
+    /// The base-10 logarithm, obtained from the natural one: log10 x = ln x / ln 10.
+    /// Dividing by an exact constant is a plain rescale, so the relative uncertainty — and
+    /// the backend — come through unchanged, which no separate log10 kernel would give us.
+    pub fn log10(&self) -> PhysureResult<Quantity> {
+        let natural = self.transcendental("log", "log")?;
+        let value = Self::scale_value(&natural.value, std::f64::consts::LN_10.recip())?;
+        Ok(Quantity { value, unit: natural.unit })
+    }
+
+    /// Applies a transcendental function to a dimensionless magnitude.
+    ///
+    /// `exp`, `ln` and `log` are power series in their argument: `1 + x + x²/2 + …` can only
+    /// be summed when every term carries the same unit, which is to say when `x` carries
+    /// none. `ln(5 m)` is a physics error, so it is reported as one instead of being
+    /// computed from the bare number 5.
+    fn transcendental(&self, name: &str, core_func: &str) -> PhysureResult<Quantity> {
+        if !self.unit.dimensions.is_empty() {
+            return Err(PhysureError::Generic(format!(
+                "{name} expects a dimensionless value, got '{}'",
+                self.unit.__repr__()
+            )));
+        }
+        // A dimensionless unit can still carry a scale (`%`, `ppm`), and the series is in
+        // the pure ratio: ln(50 %) has to be ln(0.5), not ln(50).
+        let magnitude = Self::scale_value(&self.value, self.unit.scale)?;
+        let new_value = magnitude.propagate_function(core_func)?;
+        Ok(Quantity { value: new_value, unit: RationalUnit::dimensionless() })
     }
 
     pub fn approx_eq(&self, other: &Quantity, rel_tol: f64, abs_tol: f64) -> bool {

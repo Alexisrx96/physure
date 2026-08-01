@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`PhsValue::Matrix`** variant in `physure-script` with full exporter support (JSON, CSV, Python).
 - **Java 8+ classes** `com.physure.QuantityVector` and `com.physure.QuantityMatrix` with idiomatic Java collections API.
 - **Python classes** `physure.QuantityVector` and `physure.QuantityMatrix` exposed via PyO3.
+- **`abs` accepts a quantity**, returning the same unit and the same uncertainty — folding a magnitude to its absolute value moves where a measurement sits, not how well it is known. It delegates to the core's `UncertaintyValue::propagate_function`, so a Monte Carlo or unscented backend is not silently downgraded to Gaussian.
+- **`exp`, `ln` and `log` accept a dimensionless quantity**, propagating its uncertainty, and reject a dimensioned one with a clear error. They used to refuse every quantity ("exp expects a number"), so `exp(0.5 +/- 0.01)` could not be evaluated at all, while `ln(5 m)` — a physics error, since a power series can only be summed over terms that share a unit — was the sort of thing the tool is supposed to catch.
 
 ### Changed
 - `Quantity.java` now uses `List<Quantity>` instead of raw `double[]` for `QuantityVector` interactions; added `mul()`, `div()`, `sub()` shorthand aliases.
@@ -30,9 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **`physure.ext.grammar`**, the Python reimplementation of the PHS language (1655 lines), and its test module. Only Rust implements PHS now: `physure.repl` (`python -m physure`, `physure repl`) evaluates through `physure._core.Interpreter` and reports an install hint if the native engine is missing. Startup for `python -m physure "500 N / 2 m^2 => kPa"` drops from the Python `UnitSystem` build to ~0.09 s.
 
-- **`abs` accepts a quantity**, returning the same unit and the same uncertainty — folding a magnitude to its absolute value moves where a measurement sits, not how well it is known. It delegates to the core's `UncertaintyValue::propagate_function`, so a Monte Carlo or unscented backend is not silently downgraded to Gaussian.
-
 ### Fixed
+- **`floor` and `ceil` keep the uncertainty**, like `round` now does. Both rebuilt the quantity with a zero standard deviation, so `floor(9.81 +/- 0.05 m/s^2)` printed as an exact `9.0 m / s ^ 2`. The mean is moved by adding an exact offset, which slides the whole distribution and leaves a Monte Carlo or unscented backend intact.
+- **`sin`, `cos` and `tan` are dimensionally checked and keep the uncertainty.** They returned a bare number built from the mean — unit and uncertainty both discarded — and applied themselves to anything, so `sin(9.81 m/s^2)` answered -0.379 as though metres per second squared were radians. The argument must now be an angle (converted to radians through its own scale, so `sin(90 deg)` is 1) or a dimensionless value read as radians; the result is dimensionless and the sigma comes from the derivative.
+- **A degree is a plane angle again.** `physure.conf` declares `radian` and `steradian` against the same dimension symbol, and the Rust loader let the last one win, so `deg`, `arcmin` and `arcsec` were registered as scaled *steradians*: `90 deg => rad` failed as a unit mismatch while `1 deg + 1 sr` was accepted.
 - **Inches are usable again**: `in` was a grammar keyword taken by `let ... in`, so `12 in`, `12 in => cm` and `1.5 in^2` were parse errors and only the `inch` alias worked.
 - `physure._core.Quantity.__str__` renders the measurement (`0.25 kPa`) by delegating to the core's `Display`, instead of repeating `__repr__` (`Quantity(0.25, kPa)`); the REPL and `print()` now read like the `phs` CLI.
 - Local bindings now transpile to real code in the Python, Rust and Java targets. They used to be emitted as a call to an undefined `let(...)` function, so the generated file did not compile.
