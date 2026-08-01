@@ -29,8 +29,11 @@ This crate is the core of the [physure](https://github.com/Alexisrx96/physure) p
 physure = "0.2"
 ```
 
+The package is `physure`, but its library target is `physure_core`, so that is the name
+you import under — the two differ on purpose and both are load-bearing.
+
 ```rust
-use physure::{Quantity, RationalUnit};
+use physure_core::{Quantity, RationalUnit};
 
 let metre = RationalUnit::new_from_dimensions([("m".to_string(), (1, 1))]);
 let second = RationalUnit::new_from_dimensions([("s".to_string(), (1, 1))]);

@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Local bindings now transpile to real code in the Python, Rust and Java targets. They used to be emitted as a call to an undefined `let(...)` function, so the generated file did not compile.
 - **Uncertainties survive formatting, rounding and `repr`.** A format spec (`g:.2f`) printed the mean alone, `round(q, n)` rebuilt the quantity with a zero standard deviation, and `physure._core.Quantity.__repr__` omitted the uncertainty — an uncertain measurement looked exact in all three.
 - **A percent uncertainty is relative again**: `9.81 +/- 0.5% m/s^2` was parsed as ±0.5 instead of ±0.049, a spread twenty times too wide. A percentage applied to a magnitude that is only known at run time is now rejected rather than guessed.
+- Transpiled files stamp the compiler's real version. All three targets hardcoded `v0.2.4` while the workspace was on `0.2.3`, so a generated file named a compiler that had never produced it; the banner now comes from `env!("CARGO_PKG_VERSION")`.
+- The `physure` crate README's usage example imported `use physure::{...}`, which does not compile. The package is `physure` but its library target is `physure_core`, and Cargo derives the import path from the latter. The README is not wired in with `include_str!`, so no doctest ever caught it.
 - `Debug for Quantity` (Rust) prints `std_dev`, so a failing assertion about an uncertain quantity no longer reports what looks like a different measurement.
 
 ---
