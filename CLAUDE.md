@@ -27,12 +27,11 @@ uv run ty check
 # Enable runtime beartype contracts (slow, for debugging)
 PHYSURE_DEBUG=1 uv run pytest
 
-# SonarQube scan (requires .env with SONAR_TOKEN, server at http://localhost:9000)
-uv run pytest tests/ --cov=physure --cov-report=xml --junitxml=test-results.xml
-make sonar  # runs pytest+coverage then pysonar
+# SonarQube scan (requires .env with SONAR_TOKEN, see .env.example)
+make sonar  # runs pytest coverage, Rust lcov, and pysonar analysis
 ```
 
-`.env` holds `SONAR_TOKEN` and is gitignored. Never commit it.
+`.env` holds `SONAR_TOKEN` and is gitignored. Copy `.env.example` to `.env` to configure.
 
 `pytest` runs `--doctest-modules` by default, so doctests in source files are always executed.
 
