@@ -19,7 +19,7 @@ fn mc(mean: f64, std_dev: f64) -> Quantity {
 
 #[test]
 fn test_gaussian_tan_enum() {
-    let g = UncertaintyValue::Gaussian(GaussianBackend { mean: 0.5, std_dev: 0.1 });
+    let g = UncertaintyValue::Gaussian(GaussianBackend::new(0.5, 0.1));
     let result = g.propagate_function("tan").unwrap();
     let expected_mean = 0.5_f64.tan();
     let expected_std = ((1.0 + expected_mean.powi(2)) * 0.1).abs();
@@ -29,7 +29,7 @@ fn test_gaussian_tan_enum() {
 
 #[test]
 fn test_gaussian_tanh_enum() {
-    let g = UncertaintyValue::Gaussian(GaussianBackend { mean: 0.5, std_dev: 0.1 });
+    let g = UncertaintyValue::Gaussian(GaussianBackend::new(0.5, 0.1));
     let result = g.propagate_function("tanh").unwrap();
     let expected_mean = 0.5_f64.tanh();
     let expected_std = ((1.0 - expected_mean.powi(2)) * 0.1).abs();
@@ -73,10 +73,7 @@ fn test_montecarlo_tanh_enum() {
 
 #[test]
 fn test_unscented_tan_enum() {
-    let u = UncertaintyValue::Unscented(UnscentedBackend {
-        sigma_points: Array1::from_vec(vec![0.0, 0.5, -0.5]),
-        weights: Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
-    });
+    let u = UncertaintyValue::Unscented(UnscentedBackend::from_measured_points(Array1::from_vec(vec![0.0, 0.5, -0.5]), Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])));
     let result = u.propagate_function("tan").unwrap();
     match result {
         UncertaintyValue::Unscented(uu) => {
@@ -91,10 +88,7 @@ fn test_unscented_tan_enum() {
 
 #[test]
 fn test_unscented_tanh_enum() {
-    let u = UncertaintyValue::Unscented(UnscentedBackend {
-        sigma_points: Array1::from_vec(vec![0.0, 0.5, -0.5]),
-        weights: Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
-    });
+    let u = UncertaintyValue::Unscented(UnscentedBackend::from_measured_points(Array1::from_vec(vec![0.0, 0.5, -0.5]), Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])));
     let result = u.propagate_function("tanh").unwrap();
     match result {
         UncertaintyValue::Unscented(uu) => {
@@ -109,7 +103,7 @@ fn test_unscented_tanh_enum() {
 
 #[test]
 fn test_gaussian_backend_tan_trait_impl() {
-    let g = GaussianBackend { mean: 0.5, std_dev: 0.1 };
+    let g = GaussianBackend::new(0.5, 0.1);
     let result = g.propagate_function("tan").unwrap();
     let expected_mean = 0.5_f64.tan();
     let expected_std = ((1.0 + expected_mean.powi(2)) * 0.1).abs();
@@ -120,7 +114,7 @@ fn test_gaussian_backend_tan_trait_impl() {
 
 #[test]
 fn test_gaussian_backend_tanh_trait_impl() {
-    let g = GaussianBackend { mean: 0.5, std_dev: 0.1 };
+    let g = GaussianBackend::new(0.5, 0.1);
     let result = g.propagate_function("tanh").unwrap();
     let expected_mean = 0.5_f64.tanh();
     let expected_std = ((1.0 - expected_mean.powi(2)) * 0.1).abs();
@@ -147,10 +141,7 @@ fn test_montecarlo_backend_tanh_trait_impl() {
 
 #[test]
 fn test_unscented_backend_tan_trait_impl() {
-    let u = UnscentedBackend {
-        sigma_points: Array1::from_vec(vec![0.1, 0.3, 0.7]),
-        weights: Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
-    };
+    let u = UnscentedBackend::from_measured_points(Array1::from_vec(vec![0.1, 0.3, 0.7]), Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]));
     let result = u.propagate_function("tan").unwrap();
     let expected_mean = (0.1_f64.tan() + 0.3_f64.tan() + 0.7_f64.tan()) / 3.0;
     assert!((result.mean() - expected_mean).abs() < 1e-9);
@@ -272,11 +263,102 @@ fn test_monte_carlo_mismatched_sample_counts_resample() {
 
 #[test]
 fn test_unscented_backend_tanh_trait_impl() {
-    let u = UnscentedBackend {
-        sigma_points: Array1::from_vec(vec![0.1, 0.3, 0.7]),
-        weights: Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]),
-    };
+    let u = UnscentedBackend::from_measured_points(Array1::from_vec(vec![0.1, 0.3, 0.7]), Array1::from_vec(vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]));
     let result = u.propagate_function("tanh").unwrap();
     let expected_mean = (0.1_f64.tanh() + 0.3_f64.tanh() + 0.7_f64.tanh()) / 3.0;
     assert!((result.mean() - expected_mean).abs() < 1e-9);
+}
+
+// --- Self-correlation -------------------------------------------------------------------
+//
+// A standard deviation alone cannot say whether two operands share a source, so before
+// lineage tracking every one of these came out wrong: `x - x` reported sigma*sqrt(2) instead
+// of zero. The cases below are run across all three backends, because the gap was in the
+// propagation model rather than in any one of them.
+
+fn scalar(mean: f64, std_dev: f64, mode: Option<&str>) -> Quantity {
+    Quantity::new_scalar(mean, std_dev, RationalUnit::dimensionless(), mode, Some(50_000))
+}
+
+/// The three built-in models, with the tolerance each one can honestly promise. Monte Carlo
+/// estimates its spread from 50 000 draws, so it gets a sampling band; the analytic models
+/// are exact.
+const MODES: [(Option<&str>, f64); 3] =
+    [(None, 1e-12), (Some("unscented"), 1e-12), (Some("monte_carlo"), 0.02)];
+
+#[test]
+fn a_quantity_cancels_against_itself() {
+    for (mode, tol) in MODES {
+        let x = scalar(3.0, 0.3, mode);
+        let name = mode.unwrap_or("gaussian");
+
+        let diff = x.sub(&x).unwrap();
+        assert!(diff.value.std_dev().abs() < 1e-12, "{name}: x - x kept a spread");
+        assert!(!diff.value.std_dev().is_sign_negative(), "{name}: negative zero sigma");
+
+        let ratio = x.div(&x).unwrap();
+        assert!(ratio.value.std_dev().abs() < 1e-12, "{name}: x / x kept a spread");
+
+        // Doubling, not quadrature: 0.6, not 0.3*sqrt(2) = 0.424.
+        let sum = x.add(&x).unwrap();
+        assert!((sum.value.std_dev() - 0.6).abs() < 0.6 * tol.max(1e-12), "{name}: x + x");
+
+        // d(x^2)/dx = 2x, so 2 * 3.0 * 0.3 = 1.8, not sqrt(2)*3*0.3 = 1.27.
+        let sq = x.mul(&x).unwrap();
+        assert!((sq.value.std_dev() - 1.8).abs() < 1.8 * tol.max(1e-12), "{name}: x * x");
+    }
+}
+
+#[test]
+fn two_measurements_of_the_same_value_stay_independent() {
+    // The guard against over-correlating: these are two separate readings that happen to
+    // agree, so they must still combine in quadrature.
+    for (mode, tol) in MODES {
+        let name = mode.unwrap_or("gaussian");
+        let a = scalar(3.0, 0.3, mode);
+        let b = scalar(3.0, 0.3, mode);
+        let expected = (0.09_f64 + 0.09).sqrt();
+        let got = a.sub(&b).unwrap().value.std_dev();
+        assert!(
+            (got - expected).abs() < expected * tol.max(1e-12),
+            "{name}: expected ~{expected}, got {got}"
+        );
+    }
+}
+
+#[test]
+fn cancellation_survives_scaling_and_intermediate_steps() {
+    for (mode, tol) in MODES {
+        let name = mode.unwrap_or("gaussian");
+        let x = scalar(3.0, 0.3, mode);
+        let two = scalar(2.0, 0.0, mode);
+
+        // 2x - 2x. Proves this is provenance tracking rather than a special case for the
+        // literal `x - x` shape.
+        let two_x = x.mul(&two).unwrap();
+        assert!(
+            two_x.sub(&two_x).unwrap().value.std_dev().abs() < 1e-12,
+            "{name}: 2x - 2x kept a spread"
+        );
+
+        // (x + y) - y must give x back, with x's own uncertainty and nothing more.
+        let y = scalar(5.0, 0.4, mode);
+        let round_trip = x.add(&y).unwrap().sub(&y).unwrap();
+        assert!(
+            (round_trip.value.std_dev() - 0.3).abs() < 0.3 * tol.max(1e-12),
+            "{name}: (x + y) - y gave {}",
+            round_trip.value.std_dev()
+        );
+    }
+}
+
+#[test]
+fn an_exact_constant_never_becomes_a_source() {
+    // A conversion factor or a plain number carries no uncertainty, so it must not mint a
+    // measurement id — otherwise it would leave a term that never cancels.
+    let x = scalar(3.0, 0.3, None);
+    let k = scalar(2.0, 0.0, None);
+    let scaled = x.mul(&k).unwrap();
+    assert!((scaled.value.std_dev() - 0.6).abs() < 1e-12);
+    assert!(scaled.sub(&scaled).unwrap().value.std_dev().abs() < 1e-12);
 }

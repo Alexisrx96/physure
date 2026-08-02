@@ -473,7 +473,7 @@ impl PyQuantity {
     }
 
     fn __neg__(&self) -> PyResult<PyQuantity> {
-        let zero = UncertaintyValue::Gaussian(GaussianBackend { mean: 0.0, std_dev: 0.0 });
+        let zero = UncertaintyValue::Gaussian(GaussianBackend::exact(0.0));
         let new_val = zero.propagate_sub(&self.0.value)
             .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
         Ok(PyQuantity(Quantity::from_value(new_val, self.0.unit.clone())))
@@ -795,7 +795,7 @@ fn build_backend(
             return Ok(match mode.as_deref() {
                 Some("monte_carlo") => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
                 Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
-                _                   => UncertaintyValue::Gaussian(GaussianBackend { mean, std_dev }),
+                _                   => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
             });
         }
     }
@@ -820,7 +820,8 @@ fn to_backend(
         return Ok((q.0.value.clone(), q.0.unit.clone()));
     }
     if let Ok(val) = other.extract::<f64>() {
-        return Ok((UncertaintyValue::Gaussian(GaussianBackend { mean: val, std_dev: 0.0 }), RationalUnit::dimensionless()));
+        // A bare Python number is exact, not a measurement, so it gets no source id.
+        return Ok((UncertaintyValue::Gaussian(GaussianBackend::exact(val)), RationalUnit::dimensionless()));
     }
     let val_obj = other.clone().unbind();
     let uncertainty = 0.0_f64.into_py_any(py)?;

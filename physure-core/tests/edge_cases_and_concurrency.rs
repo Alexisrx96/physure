@@ -71,8 +71,8 @@ fn test_concurrent_unit_registry_lookups() {
 
 #[test]
 fn test_uncertainty_value_send_sync_multithreaded_propagation() {
-    let g1 = Arc::new(UncertaintyValue::Gaussian(GaussianBackend { mean: 10.0, std_dev: 2.0 }));
-    let g2 = Arc::new(UncertaintyValue::Gaussian(GaussianBackend { mean: 5.0, std_dev: 1.0 }));
+    let g1 = Arc::new(UncertaintyValue::Gaussian(GaussianBackend::new(10.0, 2.0)));
+    let g2 = Arc::new(UncertaintyValue::Gaussian(GaussianBackend::new(5.0, 1.0)));
 
     let mut handles = vec![];
     for _ in 0..8 {
@@ -126,8 +126,8 @@ fn test_dual_number_nan_inf_safety() {
 
 #[test]
 fn test_gaussian_propagation_division_by_zero() {
-    let g1 = UncertaintyValue::Gaussian(GaussianBackend { mean: 10.0, std_dev: 1.0 });
-    let g_zero = UncertaintyValue::Gaussian(GaussianBackend { mean: 0.0, std_dev: 1.0 });
+    let g1 = UncertaintyValue::Gaussian(GaussianBackend::new(10.0, 1.0));
+    let g_zero = UncertaintyValue::Gaussian(GaussianBackend::new(0.0, 1.0));
 
     assert!(matches!(g1.propagate_div(&g_zero), Err(PhysureError::DivisionByZero(_))));
 }

@@ -1,4 +1,5 @@
 pub mod trait_def;
+pub mod lineage;
 pub mod gaussian;
 pub mod monte_carlo;
 pub mod unscented;

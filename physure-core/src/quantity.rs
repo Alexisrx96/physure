@@ -110,7 +110,7 @@ impl Quantity {
         let value = match mode {
             Some("monte_carlo") => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
             Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
-            _                   => UncertaintyValue::Gaussian(GaussianBackend { mean, std_dev }),
+            _                   => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
         };
         Quantity { value, unit }
     }
@@ -135,7 +135,10 @@ impl Quantity {
         if factor == 1.0 {
             return Ok(value.clone());
         }
-        value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend { mean: factor, std_dev: 0.0 }))
+        // `exact`, not `new`: a conversion factor is not a measurement, so it must not mint a
+        // source id. Minting one would leave a term that never cancels, and `x - x.to("cm")`
+        // would stop coming out at zero.
+        value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend::exact(factor)))
     }
 
     pub fn add(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -221,10 +224,7 @@ impl Quantity {
     /// every sample of `9.81 ± 0.05` floors to 9, so the result would come back with a
     /// standard deviation of zero — an uncertain measurement printed as if it were exact.
     fn shift_mean_to(&self, target: f64) -> PhysureResult<Quantity> {
-        let offset = UncertaintyValue::Gaussian(GaussianBackend {
-            mean: target - self.value.mean(),
-            std_dev: 0.0,
-        });
+        let offset = UncertaintyValue::Gaussian(GaussianBackend::exact(target - self.value.mean()));
         let new_value = self.value.propagate_add(&offset)?;
         Ok(Quantity { value: new_value, unit: self.unit.clone() })
     }

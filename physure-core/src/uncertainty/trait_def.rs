@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use dyn_clone::DynClone;
 use ndarray::Array1;
+use super::lineage::Lineage;
 use crate::error::PhysureResult;
 use super::gaussian::GaussianBackend;
 use super::monte_carlo::MonteCarloBackend;
@@ -59,6 +60,20 @@ impl UncertaintyValue {
         }
     }
 
+    /// The provenance of this value's uncertainty.
+    ///
+    /// Monte Carlo carries correlation in its sample array rather than in a lineage, and a
+    /// `Custom` backend's provenance is unknowable from here. Both therefore report a fresh
+    /// independent source, which makes a mixed-model operation fall back to quadrature — the
+    /// honest answer when the two sides cannot be related.
+    pub fn lineage(&self) -> Lineage {
+        match self {
+            Self::Gaussian(g) => g.sigma.clone(),
+            Self::Unscented(u) => u.sigma.clone(),
+            Self::MonteCarlo(_) | Self::Custom(_) => Lineage::measured(self.std_dev()),
+        }
+    }
+
     pub fn as_backend_ref(&self) -> &dyn UncertaintyBackend {
         match self {
             Self::Gaussian(g) => g,
@@ -102,8 +117,8 @@ impl UncertaintyValue {
         match (self, other) {
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m = g1.mean + g2.mean;
-                let s = (g1.std_dev.powi(2) + g2.std_dev.powi(2)).sqrt();
-                Ok(Self::Gaussian(GaussianBackend { mean: m, std_dev: s }))
+                let sigma = Lineage::combine(&g1.sigma, 1.0, &g2.sigma, 1.0);
+                Ok(Self::Gaussian(GaussianBackend::derived(m, sigma)))
             }
             (Self::MonteCarlo(m1), other_val) => {
                 let other_samples = Self::mc_operand_samples(m1, other_val)?;
@@ -111,8 +126,8 @@ impl UncertaintyValue {
             }
             (Self::Unscented(u1), other_val) => {
                 let m = u1.mean() + other_val.mean();
-                let s = (u1.std_dev().powi(2) + other_val.std_dev().powi(2)).sqrt();
-                Ok(Self::Unscented(UnscentedBackend::new_scalar(m, s)))
+                let sigma = Lineage::combine(&u1.sigma, 1.0, &other_val.lineage(), 1.0);
+                Ok(Self::Unscented(UnscentedBackend::derived(m, sigma)))
             }
             _ => {
                 let b = self.as_backend_ref().propagate_add(other.as_backend_ref())?;
@@ -125,8 +140,8 @@ impl UncertaintyValue {
         match (self, other) {
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m = g1.mean - g2.mean;
-                let s = (g1.std_dev.powi(2) + g2.std_dev.powi(2)).sqrt();
-                Ok(Self::Gaussian(GaussianBackend { mean: m, std_dev: s }))
+                let sigma = Lineage::combine(&g1.sigma, 1.0, &g2.sigma, -1.0);
+                Ok(Self::Gaussian(GaussianBackend::derived(m, sigma)))
             }
             (Self::MonteCarlo(m1), other_val) => {
                 let other_samples = Self::mc_operand_samples(m1, other_val)?;
@@ -134,8 +149,8 @@ impl UncertaintyValue {
             }
             (Self::Unscented(u1), other_val) => {
                 let m = u1.mean() - other_val.mean();
-                let s = (u1.std_dev().powi(2) + other_val.std_dev().powi(2)).sqrt();
-                Ok(Self::Unscented(UnscentedBackend::new_scalar(m, s)))
+                let sigma = Lineage::combine(&u1.sigma, 1.0, &other_val.lineage(), -1.0);
+                Ok(Self::Unscented(UnscentedBackend::derived(m, sigma)))
             }
             _ => {
                 let b = self.as_backend_ref().propagate_sub(other.as_backend_ref())?;
@@ -147,22 +162,20 @@ impl UncertaintyValue {
     pub fn propagate_mul(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
-                let m1 = g1.mean; let s1 = g1.std_dev;
-                let m2 = g2.mean; let s2 = g2.std_dev;
-                let new_mean = m1 * m2;
-                let new_std = ((m2 * s1).powi(2) + (m1 * s2).powi(2)).sqrt();
-                Ok(Self::Gaussian(GaussianBackend { mean: new_mean, std_dev: new_std }))
+                // d(ab)/da = b, d(ab)/db = a. With disjoint lineages this reproduces the
+                // quadrature form it replaces; with a shared source it does not, which is
+                // the point: x * x is 2*x*sigma, not sqrt(2)*x*sigma.
+                let sigma = Lineage::combine(&g1.sigma, g2.mean, &g2.sigma, g1.mean);
+                Ok(Self::Gaussian(GaussianBackend::derived(g1.mean * g2.mean, sigma)))
             }
             (Self::MonteCarlo(m1), other_val) => {
                 let other_samples = Self::mc_operand_samples(m1, other_val)?;
                 Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples * &*other_samples }))
             }
             (Self::Unscented(u1), other_val) => {
-                let m1 = u1.mean(); let s1 = u1.std_dev();
-                let m2 = other_val.mean(); let s2 = other_val.std_dev();
-                let m = m1 * m2;
-                let s = ((m1 * s2).powi(2) + (m2 * s1).powi(2)).sqrt();
-                Ok(Self::Unscented(UnscentedBackend::new_scalar(m, s)))
+                let m1 = u1.mean(); let m2 = other_val.mean();
+                let sigma = Lineage::combine(&u1.sigma, m2, &other_val.lineage(), m1);
+                Ok(Self::Unscented(UnscentedBackend::derived(m1 * m2, sigma)))
             }
             _ => {
                 let b = self.as_backend_ref().propagate_mul(other.as_backend_ref())?;
@@ -174,14 +187,13 @@ impl UncertaintyValue {
     pub fn propagate_div(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
-                let m1 = g1.mean; let s1 = g1.std_dev;
-                let m2 = g2.mean; let s2 = g2.std_dev;
+                let m1 = g1.mean; let m2 = g2.mean;
                 if m2 == 0.0 {
                     return Err(crate::error::PhysureError::DivisionByZero("Uncertainty propagation denominator is zero".into()));
                 }
-                let new_mean = m1 / m2;
-                let new_std = ((s1 / m2).powi(2) + (m1 * s2 / m2.powi(2)).powi(2)).sqrt();
-                Ok(Self::Gaussian(GaussianBackend { mean: new_mean, std_dev: new_std }))
+                // d(a/b)/da = 1/b, d(a/b)/db = -a/b^2.
+                let sigma = Lineage::combine(&g1.sigma, 1.0 / m2, &g2.sigma, -m1 / m2.powi(2));
+                Ok(Self::Gaussian(GaussianBackend::derived(m1 / m2, sigma)))
             }
             (Self::MonteCarlo(m1), other_val) => {
                 // Unlike the Gaussian and Unscented arms, this one has never raised
@@ -192,14 +204,12 @@ impl UncertaintyValue {
                 Ok(Self::MonteCarlo(MonteCarloBackend { samples: &m1.samples / &*other_samples }))
             }
             (Self::Unscented(u1), other_val) => {
-                let m1 = u1.mean(); let s1 = u1.std_dev();
-                let m2 = other_val.mean(); let s2 = other_val.std_dev();
+                let m1 = u1.mean(); let m2 = other_val.mean();
                 if m2 == 0.0 {
                     return Err(crate::error::PhysureError::DivisionByZero("Uncertainty propagation denominator is zero".into()));
                 }
-                let m = m1 / m2;
-                let s = ((s1 / m2).powi(2) + (m1 * s2 / m2.powi(2)).powi(2)).sqrt();
-                Ok(Self::Unscented(UnscentedBackend::new_scalar(m, s)))
+                let sigma = Lineage::combine(&u1.sigma, 1.0 / m2, &other_val.lineage(), -m1 / m2.powi(2));
+                Ok(Self::Unscented(UnscentedBackend::derived(m1 / m2, sigma)))
             }
             _ => {
                 let b = self.as_backend_ref().propagate_div(other.as_backend_ref())?;
@@ -211,20 +221,23 @@ impl UncertaintyValue {
     pub fn propagate_pow(&self, exponent: f64) -> PhysureResult<UncertaintyValue> {
         match self {
             Self::Gaussian(g) => {
-                let m = g.mean; let s = g.std_dev;
+                let m = g.mean;
                 let new_mean = m.powf(exponent);
                 if m == 0.0 && exponent > 0.0 {
-                    return Ok(Self::Gaussian(GaussianBackend { mean: 0.0, std_dev: 0.0 }));
+                    return Ok(Self::Gaussian(GaussianBackend::exact(0.0)));
                 }
-                let new_std = (exponent * m.powf(exponent - 1.0) * s).abs();
-                Ok(Self::Gaussian(GaussianBackend { mean: new_mean, std_dev: new_std }))
+                // One operand, so there is nothing to merge — the derivative scales the
+                // existing terms and their source ids survive, which is what lets
+                // `x^2 / x^2` cancel instead of accumulating spurious spread.
+                let sigma = g.sigma.scale(exponent * m.powf(exponent - 1.0));
+                Ok(Self::Gaussian(GaussianBackend::derived(new_mean, sigma)))
             }
             Self::MonteCarlo(m) => {
                 Ok(Self::MonteCarlo(MonteCarloBackend { samples: m.samples.mapv(|x| x.powf(exponent)) }))
             }
             Self::Unscented(u) => {
                 let new_points = u.sigma_points.mapv(|x| x.powf(exponent));
-                Ok(Self::Unscented(UnscentedBackend { sigma_points: new_points, weights: u.weights.clone() }))
+                Ok(Self::Unscented(UnscentedBackend::from_points(new_points, u.weights.clone(), &u.sigma)))
             }
             Self::Custom(c) => {
                 let b = c.propagate_pow(exponent)?;
@@ -236,18 +249,8 @@ impl UncertaintyValue {
     pub fn propagate_function(&self, func: &str) -> PhysureResult<UncertaintyValue> {
         match self {
             Self::Gaussian(g) => {
-                let m = g.mean; let s = g.std_dev;
-                let (new_mean, new_std) = match func {
-                    "sin" => (m.sin(), (m.cos() * s).abs()),
-                    "cos" => (m.cos(), (m.sin() * s).abs()),
-                    "exp" => (m.exp(), (m.exp() * s).abs()),
-                    "log" => (m.ln(), (s / m).abs()),
-                    "abs" => (m.abs(), s),
-                    "tan" => (m.tan(), ((1.0 + m.tan().powi(2)) * s).abs()),
-                    "tanh" => (m.tanh(), ((1.0 - m.tanh().powi(2)) * s).abs()),
-                    _ => (m, s),
-                };
-                Ok(Self::Gaussian(GaussianBackend { mean: new_mean, std_dev: new_std }))
+                let (new_mean, jacobian) = super::gaussian::function_mean_and_jacobian(func, g.mean);
+                Ok(Self::Gaussian(GaussianBackend::derived(new_mean, g.sigma.scale(jacobian))))
             }
             Self::MonteCarlo(m) => {
                 let new_samples = match func {
@@ -273,7 +276,7 @@ impl UncertaintyValue {
                     "tanh" => u.sigma_points.mapv(|x| x.tanh()),
                     _ => u.sigma_points.clone(),
                 };
-                Ok(Self::Unscented(UnscentedBackend { sigma_points: new_points, weights: u.weights.clone() }))
+                Ok(Self::Unscented(UnscentedBackend::from_points(new_points, u.weights.clone(), &u.sigma)))
             }
             Self::Custom(c) => {
                 let b = c.propagate_function(func)?;
