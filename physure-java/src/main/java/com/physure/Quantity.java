@@ -34,18 +34,47 @@ public class Quantity {
         return unit;
     }
 
+    /**
+     * The uncertainty of a sum or a difference of two independent measurements.
+     * <p>
+     * They add in quadrature, not linearly: two half-widths of 0.3 give 0.42, not 0.6.
+     * Adding them straight is what a worst-case bound does, and it reported an error
+     * about 40% too large for every quantity Java touched, disagreeing with the same
+     * calculation in Rust and Python.
+     * <p>
+     * {@code Math.hypot} rather than {@code Math.sqrt(a*a + b*b)} so a large uncertainty
+     * cannot overflow on its way to a representable answer.
+     */
+    static double combineUncertainty(double a, double b) {
+        return Math.hypot(a, b);
+    }
+
+    /**
+     * Reports that an operation across two units needs the native engine to convert them.
+     * Adding the raw magnitudes instead — which is what this used to do — silently drops
+     * the conversion factor, and 1 km + 1 m is not 2 of anything.
+     */
+    private PhysureException conversionUnavailable(String op, Quantity other, Exception cause) {
+        return new PhysureException(
+            "Cannot " + op + " " + this.unit + " and " + other.getUnit()
+                + " without the native engine: the conversion between them lives there, and "
+                + "combining the magnitudes as they stand would ignore it.",
+            cause);
+    }
+
     public Quantity add(Quantity other) {
         if (!this.unit.equals(other.getUnit()) && !this.unit.isEmpty() && !other.getUnit().isEmpty()) {
             try {
                 return NativeEngine.addQuantities(this, other.to(this.unit));
             } catch (Exception e) {
-                return new Quantity(this.value + other.getValue(), this.uncertainty + other.getUncertainty(), this.unit);
+                throw conversionUnavailable("add", other, e);
             }
         }
         try {
             return NativeEngine.addQuantities(this, other);
         } catch (Exception e) {
-            return new Quantity(this.value + other.getValue(), this.uncertainty + other.getUncertainty(), this.unit);
+            return new Quantity(this.value + other.getValue(),
+                combineUncertainty(this.uncertainty, other.getUncertainty()), this.unit);
         }
     }
 
@@ -58,13 +87,14 @@ public class Quantity {
             try {
                 return NativeEngine.subQuantities(this, other.to(this.unit));
             } catch (Exception e) {
-                return new Quantity(this.value - other.getValue(), this.uncertainty + other.getUncertainty(), this.unit);
+                throw conversionUnavailable("subtract", other, e);
             }
         }
         try {
             return NativeEngine.subQuantities(this, other);
         } catch (Exception e) {
-            return new Quantity(this.value - other.getValue(), this.uncertainty + other.getUncertainty(), this.unit);
+            return new Quantity(this.value - other.getValue(),
+                combineUncertainty(this.uncertainty, other.getUncertainty()), this.unit);
         }
     }
 
