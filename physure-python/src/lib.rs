@@ -33,6 +33,7 @@ use ::physure_core::{
     DimVector, UnitConverter, UnitDefinition, UnitKind,
 };
 use ::physure_core::uncertainty::lineage::{self, Lineage};
+use ::physure_core::uncertainty::moments::{self, AsymmetricMoments, MomentsBackend};
 use physure_script::symbolic::Expr;
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
@@ -1548,10 +1549,160 @@ impl PyLineage {
     }
 }
 
+// ── PyAsymmetricMoments / PyMomentsBackend ───────────────────────────────────
+// The conversion between a quoted `(σ⁻, σ⁺)` pair and the three moments that propagate.
+//
+// Exported for the same reason as `Lineage`: a second implementation of the forward map
+// and its bisection inverse would drift from this one, and the two would disagree about
+// the skew of the same measurement. Propagation is deliberately not exposed, because the
+// core does not have it yet — a value built here can be measured and reported, and any
+// arithmetic on it raises rather than answering symmetrically.
+#[pyclass(name = "AsymmetricMoments", module = "physure._core")]
+#[derive(Clone, Copy)]
+pub struct PyAsymmetricMoments(pub AsymmetricMoments);
+
+#[pymethods]
+impl PyAsymmetricMoments {
+    /// The moments of the dimidiated Gaussian with these half-widths, both measured
+    /// outwards from the quoted value.
+    #[staticmethod]
+    fn from_sigmas(sigma_minus: f64, sigma_plus: f64) -> PyResult<Self> {
+        moments::moments_from_sigmas(sigma_minus, sigma_plus)
+            .map(PyAsymmetricMoments)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// A value with no spread, and so no shape to be asymmetric.
+    #[staticmethod]
+    fn exact() -> Self {
+        PyAsymmetricMoments(AsymmetricMoments::exact())
+    }
+
+    /// `mean − mode`: how far the mean sits from the number the experimenter wrote.
+    #[getter]
+    fn shift(&self) -> f64 {
+        self.0.shift
+    }
+
+    #[getter]
+    fn variance(&self) -> f64 {
+        self.0.variance
+    }
+
+    /// The third central moment. Zero for any symmetric distribution, which is what lets a
+    /// symmetric caller fall through to the path it already had.
+    #[getter]
+    fn third(&self) -> f64 {
+        self.0.third
+    }
+
+    #[getter]
+    fn std_dev(&self) -> f64 {
+        self.0.std_dev()
+    }
+
+    #[getter]
+    fn skewness(&self) -> f64 {
+        self.0.skewness()
+    }
+
+    /// The `(σ⁻, σ⁺)` pair these moments describe. Raises when the skew is past what a pair
+    /// of half-widths can express rather than returning the closest shape available.
+    fn sigmas(&self) -> PyResult<(f64, f64)> {
+        self.0
+            .sigmas()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    fn __eq__(&self, other: &PyAsymmetricMoments) -> bool {
+        self.0 == other.0
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AsymmetricMoments(shift={}, variance={}, third={})",
+            self.0.shift, self.0.variance, self.0.third
+        )
+    }
+}
+
+/// An asymmetric measurement: the mean, the spread with its provenance, and the third moment.
+#[pyclass(name = "MomentsBackend", module = "physure._core")]
+#[derive(Clone)]
+pub struct PyMomentsBackend(pub MomentsBackend);
+
+#[pymethods]
+impl PyMomentsBackend {
+    /// A quantity quoted as `value +sigma_plus -sigma_minus`. `value` is the mode, so the
+    /// mean lands a little to the long-tailed side of it.
+    #[staticmethod]
+    fn measured(value: f64, sigma_minus: f64, sigma_plus: f64) -> PyResult<Self> {
+        MomentsBackend::measured(value, sigma_minus, sigma_plus)
+            .map(PyMomentsBackend)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// The mean, which for a skewed measurement is not the quoted value. See `mode`.
+    #[getter]
+    fn mean(&self) -> f64 {
+        self.0.mean
+    }
+
+    #[getter]
+    fn third(&self) -> f64 {
+        self.0.third
+    }
+
+    #[getter]
+    fn std_dev(&self) -> f64 {
+        self.0.sigma.std_dev()
+    }
+
+    /// The provenance of the spread, shared with the Gaussian backend so an asymmetric value
+    /// still cancels against itself.
+    #[getter]
+    fn sigma(&self) -> PyLineage {
+        PyLineage(self.0.sigma.clone())
+    }
+
+    fn moments(&self) -> PyAsymmetricMoments {
+        PyAsymmetricMoments(self.0.moments())
+    }
+
+    fn sigmas(&self) -> PyResult<(f64, f64)> {
+        self.0
+            .sigmas()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// The value to quote the half-widths around.
+    fn mode(&self) -> PyResult<f64> {
+        self.0
+            .mode()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    fn __repr__(&self) -> String {
+        match self.0.sigmas() {
+            Ok((lo, hi)) => format!("MomentsBackend(mean={}, -{}, +{})", self.0.mean, lo, hi),
+            Err(_) => format!("MomentsBackend(mean={}, third={})", self.0.mean, self.0.third),
+        }
+    }
+}
+
+/// The largest skewness a pair of half-widths can express, reached only when one side is zero.
+#[pyfunction]
+fn max_skewness() -> f64 {
+    moments::max_skewness()
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLineage>()?;
+    m.add_class::<PyAsymmetricMoments>()?;
+    m.add_class::<PyMomentsBackend>()?;
+    m.add_function(wrap_pyfunction!(max_skewness, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add_class::<PyQuantity>()?;
