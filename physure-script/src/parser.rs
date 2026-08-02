@@ -237,6 +237,7 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut result = match first.as_rule() {
         Rule::if_expr => parse_if_expr(first)?,
         Rule::base_expr => parse_base_expr(first)?,
+        Rule::conv_expr => parse_conv_expr(first)?,
         _ => parse_comp_expr(first)?,
     };
     // A ternary tail and a `where` clause can both follow, in that order.
@@ -269,11 +270,12 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(result)
 }
 
+/// The loosest tier: the one optional `..` and the format spec that closes the expression.
 fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
-    let mut left = parse_comp_expr(first)?;
-    
+    let mut left = parse_conv_expr(first)?;
+
     while let Some(op_pair) = inner.next() {
         // The spec closes the expression — `a + b: .2f` formats the sum, not `b`.
         if op_pair.as_rule() == Rule::op_format {
@@ -285,12 +287,33 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             };
             continue;
         }
+        if op_pair.as_rule() != Rule::op_range {
+            return Err(PhysureError::Generic(format!("Unexpected op in base_expr: {:?}", op_pair.as_rule())));
+        }
+        // A missing endpoint is a grammar error, so `inner.next()` is the endpoint the
+        // grammar already required rather than something that might not be there.
+        let right = parse_conv_expr(inner.next().unwrap())?;
+        left = Expr::BinaryOp {
+            op: BinaryOp::Range,
+            left: Box::new(left),
+            right: Box::new(right),
+        };
+    }
+
+    Ok(left)
+}
+
+fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap();
+    let mut left = parse_comp_expr(first)?;
+
+    while let Some(op_pair) = inner.next() {
         let op = match op_pair.as_rule() {
             Rule::op_add => BinaryOp::Add,
             Rule::op_sub => BinaryOp::Sub,
             Rule::op_convert => BinaryOp::Convert,
-            Rule::op_range => BinaryOp::Range,
-            _ => return Err(PhysureError::Generic(format!("Unexpected op in base_expr: {:?}", op_pair.as_rule()))),
+            _ => return Err(PhysureError::Generic(format!("Unexpected op in conv_expr: {:?}", op_pair.as_rule()))),
         };
         let right_pair = inner.next().unwrap();
         let right = parse_comp_expr(right_pair)?;
@@ -300,7 +323,7 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             right: Box::new(right),
         };
     }
-    
+
     Ok(left)
 }
 
@@ -391,6 +414,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
         Rule::expr => parse_expr(primary_pair)?,
         Rule::base_expr => parse_base_expr(primary_pair)?,
+        Rule::conv_expr => parse_conv_expr(primary_pair)?,
         Rule::comp_expr => parse_comp_expr(primary_pair)?,
         _ => return Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", primary_pair.as_rule()))),
     };

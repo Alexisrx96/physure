@@ -107,14 +107,24 @@ _is_compare = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
 _is_format  = _{ &(":" ~ format_spec) }
 comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* }
 
-// `..` sits at the same level as `+`/`=>` so a range's endpoints can carry units and
-// conversions ("0 m .. 2.0 km => m") without parentheses.
-_is_add_sub_conv = _{ &("+" | "-" | "=>" | "..") }
+_is_add_sub_conv = _{ &("+" | "-" | "=>") }
+conv_expr   = { comp_expr ~ (_is_add_sub_conv ~ (op_add | op_sub | op_convert) ~ comp_expr)* }
+
+// `..` binds looser than everything else, so each endpoint is a whole expression of its
+// own: `0 m .. 100 m => km` converts the endpoint that was written next to `=>` and leaves
+// the other alone, and `(0 m .. 100 m) => km` converts the range. At equal precedence, which
+// is where `..` used to sit, both read as `(0 m .. 100 m) => km` and the distinction had
+// nowhere to live.
+//
+// One `..` per expression, not a repetition: `a .. b .. c` names no interval, and letting it
+// parse would only pick one of the readings and print it as if it were meant.
+//
 // The format spec applies to the whole expression, so it sits here rather than inside
 // `comp_expr`: bound one level down it attached to the *right operand* instead, which made
 // `0.1 + 0.2: base` a parse error and — worse — printed `25 m/s => km/h: base` as 25 m/s,
 // formatting the target and dropping the conversion without a word.
-base_expr   = { comp_expr ~ (_is_add_sub_conv ~ (op_add | op_sub | op_convert | op_range) ~ comp_expr)* ~ (_is_format ~ op_format)? }
+_is_range   = _{ &".." }
+base_expr   = { conv_expr ~ (_is_range ~ op_range ~ conv_expr)? ~ (_is_format ~ op_format)? }
 
 _is_ternary = _{ &"?" }
 ternary_op  = { "?" ~ _nl ~ base_expr ~ _nl ~ ":" ~ _nl ~ base_expr }

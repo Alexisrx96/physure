@@ -117,6 +117,10 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
             other => other.to_string(),
         };
     }
+    // A range is its endpoints: the spec reaches both, or it silently reached neither.
+    if let PhsValue::Range(start, end) = value {
+        return format!("{} .. {}", apply_format_spec(start, spec), apply_format_spec(end, spec));
+    }
     // `frac` writes the number as a fraction and `ifrac` as a mixed one — `1.5` is `3/2`
     // and `1 1/2`. Only when one applies: a number with no small fraction behind it keeps
     // its decimal rather than being rounded into a lie.
