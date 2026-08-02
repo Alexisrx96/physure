@@ -31,6 +31,42 @@ impl PartialEq for Quantity {
     }
 }
 
+/// `n` written as a fraction, when one applies: `1.5` is `3/2`, or `1 1/2` with `mixed`.
+///
+/// `None` when no small fraction says the same thing — π and the irrationals have no
+/// fraction to give, and the decimal is the honest rendering. The caller falls back to it.
+pub fn format_fraction(n: f64, mixed: bool) -> Option<String> {
+    // ponytail: the denominator ceiling. Raise it if ten-thousandths start reading as
+    // decimals; every value above it is one nobody was going to read as a fraction anyway.
+    const MAX_DENOM: i64 = 10_000;
+    if !n.is_finite() {
+        return None;
+    }
+    // Rounding debris is not a fraction. `0.1 + 0.2` is 0.30000000000000004, whose exact
+    // ratio is 1125899906842624/3752999689475413, and `25 m/s => km/h` lands on
+    // 89.99999999999999 rather than 90. An f64 carries 15 decimal digits and the debris
+    // always falls past them, so cut there first — the same cut `format_float` makes.
+    let clean: f64 = format!("{:.14e}", n).parse().unwrap_or(n);
+    let ratio = Rational64::approximate_float(clean)?;
+    let (numer, denom) = (*ratio.numer(), *ratio.denom());
+    if denom > MAX_DENOM {
+        return None;
+    }
+    // A magnitude too small to reach the ceiling approximates to 0/1, and 0 is a different
+    // number: 1e-30 kg is not no mass at all.
+    if numer == 0 && n != 0.0 {
+        return None;
+    }
+    if denom == 1 {
+        return Some(numer.to_string());
+    }
+    let whole = numer / denom;
+    if !mixed || whole == 0 {
+        return Some(format!("{}/{}", numer, denom));
+    }
+    Some(format!("{} {}/{}", whole, (numer % denom).abs(), denom))
+}
+
 pub fn format_float(n: f64) -> String {
     if n == 0.0 {
         return "0.0".to_string();
@@ -542,5 +578,27 @@ mod tests {
         assert!(s.ends_with(" V"), "expected canonical Volt display, got {s}");
         let printed_value: f64 = s.trim_end_matches(" V").parse().unwrap();
         assert!((printed_value - 239.68).abs() < 1e-6, "printed value {printed_value} != 239.68");
+    }
+
+    #[test]
+    fn format_fraction_answers_only_when_a_fraction_applies() {
+        assert_eq!(format_fraction(1.5, false).as_deref(), Some("3/2"));
+        assert_eq!(format_fraction(1.5, true).as_deref(), Some("1 1/2"));
+        assert_eq!(format_fraction(-1.5, true).as_deref(), Some("-1 1/2"));
+        // Below 1 there is no whole part to quote, and `0 1/2` is nobody's notation.
+        assert_eq!(format_fraction(0.5, true).as_deref(), Some("1/2"));
+        // A whole number is a whole number, not `4/1`.
+        assert_eq!(format_fraction(4.0, true).as_deref(), Some("4"));
+        assert_eq!(format_fraction(0.0, false).as_deref(), Some("0"));
+        // The debris cut: the exact ratio of 0.30000000000000004 is
+        // 1125899906842624/3752999689475413, which is true and useless.
+        assert_eq!(format_fraction(0.1 + 0.2, false).as_deref(), Some("3/10"));
+        assert_eq!(format_fraction(25.0 * 3.6, false).as_deref(), Some("90"));
+        // Past the ceiling, and past anything a reader would take for a fraction.
+        assert_eq!(format_fraction(std::f64::consts::PI, false), None);
+        // 1e-30 kg approximates to 0/1, and no mass at all is a different measurement.
+        assert_eq!(format_fraction(1e-30, false), None);
+        assert_eq!(format_fraction(f64::NAN, false), None);
+        assert_eq!(format_fraction(f64::INFINITY, false), None);
     }
 }

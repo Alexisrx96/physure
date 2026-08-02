@@ -751,3 +751,35 @@ fn a_format_spec_applies_to_the_whole_expression() {
     // A comparison keeps its own operands — the spec lands on the result of the test.
     assert_eq!(formatted("2 m > 1 m:.1f"), "1.0");
 }
+
+/// `frac` and `ifrac` write a magnitude as a common and as a mixed fraction. "When one
+/// applies" is the whole contract: a number with no small fraction behind it keeps its
+/// decimal instead of being rounded into a tidier lie.
+#[test]
+fn the_frac_format_spec_writes_a_number_as_a_fraction() {
+    assert_eq!(formatted("1.5: frac"), "3/2");
+    assert_eq!(formatted("1.5: ifrac"), "1 1/2");
+    // A value below 1 has no whole part to quote, and `0 1/2` is nobody's notation.
+    assert_eq!(formatted("0.5: ifrac"), "1/2");
+    assert_eq!(formatted("-1.5: ifrac"), "-1 1/2");
+    assert_eq!(formatted("-1.5: frac"), "-3/2");
+    // A whole number is a whole number, not `3/1`.
+    assert_eq!(formatted("3.0: frac"), "3");
+    assert_eq!(formatted("1.5 m: frac"), "3/2 m");
+    assert_eq!(formatted("2.75 kg: ifrac"), "2 3/4 kg");
+    // Both halves of a measurement are quoted, not just the mean.
+    assert_eq!(formatted("9.81 +/- 0.05 m/s^2: frac"), "981/100 ± 1/20 m/s^2");
+    // Rounding debris is not a fraction: `0.1 + 0.2` is 0.30000000000000004 and `25 m/s`
+    // in km/h lands on 89.99999999999999, whose exact ratios are astronomical.
+    assert_eq!(formatted("0.1 + 0.2: frac"), "3/10");
+    assert_eq!(formatted("25 m/s => km/h: frac"), "90 km/h");
+    // π has no fraction to give, so the decimal stands.
+    assert_eq!(formatted("3.14159265358979: frac"), "3.14159265358979");
+    // The words are matched exactly: a longer name is an ordinary expression, so a ternary
+    // whose else branch merely starts with those letters still parses.
+    let ternary = eval_phs("fraction = 5 m\n1 > 0 ? fraction : 2 m").expect("`: fraction` broke the ternary");
+    match ternary.into_iter().last() {
+        Some(PhsValue::Quantity(q)) => assert_close(q.canonical_magnitude(), 5.0, "`: fraction` ternary"),
+        other => panic!("`1 > 0 ? fraction : 2 m` produced {other:?}"),
+    }
+}

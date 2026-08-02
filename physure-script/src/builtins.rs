@@ -117,16 +117,28 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
             other => other.to_string(),
         };
     }
+    // `frac` writes the number as a fraction and `ifrac` as a mixed one — `1.5` is `3/2`
+    // and `1 1/2`. Only when one applies: a number with no small fraction behind it keeps
+    // its decimal rather than being rounded into a lie.
+    let mixed_frac = match spec {
+        "frac" => Some(false),
+        "ifrac" => Some(true),
+        _ => None,
+    };
     let digits = spec.trim_start_matches('.').trim_end_matches(char::is_alphabetic);
     let precision: usize = digits.parse().unwrap_or(6);
     let kind = spec.chars().last().filter(|c| c.is_alphabetic()).unwrap_or('f');
-    let render = |n: f64| match kind {
-        'e' => format!("{:.*e}", precision, n),
-        'g' => {
-            let s = format!("{:.*}", precision, n);
-            s.trim_end_matches('0').trim_end_matches('.').to_string()
-        }
-        _ => format!("{:.*}", precision, n),
+    let render = |n: f64| match mixed_frac {
+        Some(mixed) => physure_core::quantity::format_fraction(n, mixed)
+            .unwrap_or_else(|| physure_core::quantity::format_float(n)),
+        None => match kind {
+            'e' => format!("{:.*e}", precision, n),
+            'g' => {
+                let s = format!("{:.*}", precision, n);
+                s.trim_end_matches('0').trim_end_matches('.').to_string()
+            }
+            _ => format!("{:.*}", precision, n),
+        },
     };
     match value {
         PhsValue::Number(n) => render(*n),
