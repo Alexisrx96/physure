@@ -779,6 +779,9 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         }
     }
 
+    // `+/- (0.5, 0.4)` is +0.5 and -0.4: upper half first, in the order the operator reads.
+    // That convention lives here and nowhere else — swapping these two lines (and the
+    // matching note in `phs.pest`) is the whole change if the other order ever wins.
     let uncertainty = halves.first().map(|(v, _)| *v);
     let uncertainty_lower = halves.get(1).map(|(v, _)| *v);
 

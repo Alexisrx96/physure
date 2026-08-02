@@ -14,9 +14,12 @@ sigma_op        = { "sigma" | "σ" }
 uncertainty_op  = { "+/-" | "±" }
 uncertainty_val = { number ~ (sigma_op | "%")? }
 // An asymmetric measurement, written the way a paper writes it: `12.3 +/- (0.5, 0.4) pb` is
-// +0.5 and -0.4, upper first, in the order `+/-` reads. The parentheses are what keep this out
-// of the binary operators' way: `12.3 + (0.5)` never reaches here, because the `+/-` and `±`
-// lookahead that guards the whole rule fails on a bare `+`.
+// +0.5 and -0.4, upper first, in the order `+/-` reads. The grammar only says there are two
+// halves; which one is which is decided in `parser.rs`, where two adjacent lines assign them,
+// so the other order costs one swap there and this note here.
+// The parentheses are what keep this out of the binary operators' way: `12.3 + (0.5)` never
+// reaches here, because the `+/-` and `±` lookahead that guards the whole rule fails on a
+// bare `+`.
 uncertainty_pair = { "(" ~ uncertainty_val ~ "," ~ uncertainty_val ~ ")" }
 uncertainty     = { uncertainty_op ~ (uncertainty_pair | uncertainty_val) }
 
