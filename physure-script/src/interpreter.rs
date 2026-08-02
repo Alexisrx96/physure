@@ -112,6 +112,11 @@ pub struct PhsInterpreter {
     unlocked_builtins: Arc<Mutex<HashMap<String, (&'static str, String)>>>,
     /// Lazily-loaded plugin/ext functions, keyed by their `use`d (possibly aliased) name.
     dynamic_externals: Arc<Mutex<HashMap<String, ExternalFn>>>,
+    // TODO: a `context: PhsContext` belongs here, next to `unlocked_builtins` -- the one
+    // thing this interpreter already scopes to a program. A script cannot say how its
+    // uncertainties should propagate; it depends on a `physure.conf` it never mentions,
+    // and the transpilers drop that dependency entirely. See
+    // docs/superpowers/specs/2026-08-02-phs-execution-context.md.
 }
 
 impl Default for PhsInterpreter {
