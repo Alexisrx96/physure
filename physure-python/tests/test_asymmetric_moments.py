@@ -9,6 +9,7 @@ import math
 
 import pytest
 
+from physure import Q_
 from physure._core import AsymmetricMoments, MomentsBackend, max_skewness
 
 
@@ -66,3 +67,15 @@ def test_a_skew_beyond_the_shape_is_reported_not_rounded_down():
     # pair available would understate the tail by an unbounded amount.
     beyond = AsymmetricMoments.from_sigmas(0.0, 1.0)
     assert math.isclose(beyond.skewness, max_skewness(), rel_tol=1e-6)
+
+
+def test_a_pair_on_a_scalar_says_what_it_cannot_do_yet():
+    # The message PHS gives for `12.3 +/- (0.5, 0.4)`, rather than a TypeError from float().
+    with pytest.raises(NotImplementedError, match="asymmetric uncertainty"):
+        Q_(12.3, "m", uncertainty=(0.5, 0.4))
+
+
+def test_a_pair_on_an_array_is_still_two_ordinary_uncertainties():
+    np = pytest.importorskip("numpy")
+    q = Q_(np.array([1.0, 2.0]), "m", uncertainty=(0.1, 0.2))
+    assert list(q.uncertainty) == [0.1, 0.2]
