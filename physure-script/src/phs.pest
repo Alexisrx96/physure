@@ -48,13 +48,14 @@ quantity = {
   | (number ~ (_is_uncertainty ~ uncertainty)? ~ (_no_nl ~ _is_unit_start ~ unit_expr)? ~ (_is_uncertainty ~ uncertainty)?)
 }
 
-// The Python-style `.2f`/`.3e` spec, plus the one word `base`, which quotes a quantity in
-// the units it is built from. A bare `ASCII_ALPHA+` used to match here, which made
-// `cond ? a : b` unparseable: `: b` looked like a format spec and ate the ternary's colon.
-// Naming the word exactly, with a boundary so `: based` is still an expression, keeps that
-// to a single collision: a variable literally called `base` in a ternary's else branch,
-// which needs parentheses — `c ? a : (base)`.
-format_spec = @{ ("." ~ ASCII_DIGIT+ ~ ASCII_ALPHA*) | ("base" ~ !(ASCII_ALPHANUMERIC | "_")) }
+// The Python-style `.2f`/`.3e` spec, plus the named specs: `base` quotes a quantity in the
+// units it is built from, `frac`/`ifrac` write it as a fraction. A bare `ASCII_ALPHA+` used
+// to match here, which made `cond ? a : b` unparseable: `: b` looked like a format spec and
+// ate the ternary's colon. Naming the words exactly, with a boundary so `: based` is still
+// an expression, keeps that to one collision per word: a variable literally called `base`,
+// `frac` or `ifrac` in a ternary's else branch needs parentheses — `c ? a : (base)`.
+_format_word = _{ "base" | "ifrac" | "frac" }
+format_spec  = @{ ("." ~ ASCII_DIGIT+ ~ ASCII_ALPHA*) | (_format_word ~ !(ASCII_ALPHANUMERIC | "_")) }
 op_format   = { ":" ~ format_spec }
 
 op_add      = { "+" }
