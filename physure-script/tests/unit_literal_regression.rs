@@ -340,6 +340,20 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
     ("1", "dimensionless unity has no symbol"),
 ];
 
+/// Symbols that cannot be written after `=>` today, each with the reason. The sweep below
+/// asserts these still fail, so fixing one forces removing it from this list.
+///
+/// Both are the same gap: the right-hand side of `=>` is parsed as an ordinary expression,
+/// so the target has to be an `identifier`, and an identifier is made of `LETTER`s. `°` and
+/// `%` are units the grammar accepts in `_unit_char` but that no identifier may contain —
+/// and it cannot, or `x%` would be a name. Closing this means deciding that the operand of
+/// `=>` is a *unit expression* rather than any expression, which would also stop a variable
+/// holding a unit name from being used as a target.
+const KNOWN_CONVERSION_GAPS: &[(&str, &str)] = &[
+    ("°", "not a LETTER, so no identifier can spell it; use `deg`"),
+    ("%", "not a LETTER, so no identifier can spell it; use `percent`"),
+];
+
 /// Every symbol in the registry, swept through the literal parser. The prefix bug was a
 /// grammar defect, not a per-unit one — a hand-written list of examples would have missed
 /// it just like the rest of the suite did, so this asserts the whole registry at once.
@@ -378,6 +392,48 @@ fn every_registered_symbol_round_trips_through_the_literal_parser() {
         }
     }
     assert!(broken.is_empty(), "unit literal sweep:\n{}", broken.join("\n"));
+}
+
+/// The same registry, swept through the *conversion target* position.
+///
+/// A unit symbol is read by more than one rule: `unit_term` for the unit of a literal,
+/// `identifier` for a bare name like the right-hand side of `=>`. They did not agree on
+/// what a symbol may contain — `identifier` was ASCII after its first character — so
+/// `1 kΩ` parsed as a quantity while `2 Ω => kΩ` cut the target down to `k`, a prefix that
+/// is not a unit. One position passing is no evidence about the other, so both are swept.
+#[test]
+fn every_registered_symbol_is_a_usable_conversion_target() {
+    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
+    let mut symbols: Vec<String> = registry
+        .base_units
+        .keys()
+        .chain(registry.derived_units.keys())
+        .chain(registry.aliases.keys())
+        .cloned()
+        .collect();
+    symbols.sort();
+    symbols.dedup();
+    assert!(symbols.len() > 200, "only {} symbols in the registry", symbols.len());
+
+    let converts = |symbol: &str| -> bool {
+        matches!(
+            eval_phs(&format!("1 {symbol} => {symbol}")).as_deref().map(<[PhsValue]>::last),
+            Ok(Some(PhsValue::Quantity(q))) if (q.value.mean() - 1.0).abs() < 1e-9
+        )
+    };
+
+    let mut broken = Vec::new();
+    for symbol in &symbols {
+        let known_gap = KNOWN_CONVERSION_GAPS.iter().find(|(s, _)| s == symbol);
+        match (converts(symbol), known_gap) {
+            (false, None) => broken.push(format!("  {symbol:?} is not usable after `=>`")),
+            (true, Some((_, reason))) => {
+                broken.push(format!("  {symbol:?} now works — drop it from KNOWN_CONVERSION_GAPS ({reason})"))
+            }
+            _ => {}
+        }
+    }
+    assert!(broken.is_empty(), "conversion target sweep:\n{}", broken.join("\n"));
 }
 
 /// A quoted string used to be parsed as an identifier, so it was looked up in the
@@ -628,4 +684,24 @@ fn degrees_are_an_angle_in_radians_not_in_steradians() {
 
     // A solid angle is still not a plane angle.
     assert!(eval_phs("1 deg + 1 sr").is_err(), "a degree is not a steradian");
+}
+
+/// A unit symbol has to mean the same thing wherever it is written. `identifier` was ASCII
+/// after its first character while `unit_term` took any `LETTER`, so a prefixed non-ASCII
+/// symbol parsed as a literal and not as a conversion target: `2 Ω => kΩ` reported
+/// "Unknown unit 'k'", the prefix left over once `Ω` had been cut off it.
+#[test]
+fn a_prefixed_non_ascii_symbol_is_a_valid_conversion_target() {
+    let converted = eval_quantity("2 Ω => kΩ");
+    assert_close(converted.canonical_magnitude(), 2.0, "2 Ω => kΩ");
+    assert_eq!(converted.unit.__repr__(), "kΩ");
+    assert!((converted.value.mean() - 0.002).abs() < 1e-12, "expected 0.002 kΩ");
+
+    // The ASCII spelling of the same unit was never broken; both must agree.
+    let ascii = eval_quantity("2 Ohm => kOhm");
+    assert_close(ascii.canonical_magnitude(), converted.canonical_magnitude(), "2 Ohm => kOhm");
+
+    // A non-ASCII symbol is also a usable name, not only a unit.
+    let bound = eval_quantity("Δx = 3 m\nΔx + 1 m");
+    assert_close(bound.canonical_magnitude(), 4.0, "Δx + 1 m");
 }
