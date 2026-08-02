@@ -69,9 +69,11 @@ if TYPE_CHECKING:
     from physure.application.context import (
         get_current_system,
         get_propagation_mode,
+        get_uncertainty_model,
         propagation_mode,
         python_lineage,
         uncertainty_mode,
+        uncertainty_model,
     )
     from physure.application.context import (
         get_current_system as get_active_system,
@@ -130,9 +132,11 @@ _CONTEXT_ATTRS = {
     "get_current_system",
     "get_active_system",
     "get_propagation_mode",
+    "get_uncertainty_model",
     "propagation_mode",
     "python_lineage",
     "uncertainty_mode",
+    "uncertainty_model",
     "system_context",
 }
 _EXCEPTION_ATTRS = {
@@ -235,9 +239,11 @@ def _load_context(name: str) -> Any:
     from physure.application.context import (
         get_current_system,
         get_propagation_mode,
+        get_uncertainty_model,
         propagation_mode,
         python_lineage,
         uncertainty_mode,
+        uncertainty_model,
         use_system,
     )
 
@@ -248,6 +254,8 @@ def _load_context(name: str) -> Any:
         "propagation_mode": propagation_mode,
         "python_lineage": python_lineage,
         "uncertainty_mode": uncertainty_mode,
+        "uncertainty_model": uncertainty_model,
+        "get_uncertainty_model": get_uncertainty_model,
         "system_context": use_system,
     }
     return _map[name]
@@ -426,5 +434,6 @@ __all__ = [
     "tanh",
     "thermodynamic",
     "uncertainty_mode",
+    "uncertainty_model",
     "units",
 ]

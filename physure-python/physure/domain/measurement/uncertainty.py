@@ -97,6 +97,20 @@ class Uncertainty(ABC, Generic[UncType]):
             # Return a valid model structure without computation
             return VarianceModel(variance=std_dev)
 
+        from physure.application.context import get_uncertainty_model
+
+        if get_uncertainty_model() == "moments":
+            # The core carries the three moments but does not yet propagate them,
+            # and Python has no model over them at all. Building a gaussian here
+            # would answer every question symmetrically under a context that was
+            # entered to say the measurement is not.
+            raise NotImplementedError(
+                "The 'moments' uncertainty model is not implemented yet: "
+                "physure_core::uncertainty::moments can convert a (sigma-, "
+                "sigma+) pair to moments and back, but nothing propagates them. "
+                "Use physure.uncertainty_model('gaussian') until it lands."
+            )
+
         # Auto-detect requirement for CovarianceModel
         backend = BackendManager.get_backend(std_dev)
 

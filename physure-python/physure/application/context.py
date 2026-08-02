@@ -178,6 +178,59 @@ def using_python_lineage() -> bool:
     return _python_lineage.get()
 
 
+#: The uncertainty models a quantity can be built with. "gaussian" describes a
+#: measurement by a single standard deviation; "moments" keeps the first three
+#: moments, so a result quoted as `12.3 +0.5 -0.4` keeps its skew instead of
+#: being averaged into a symmetric one.
+UNCERTAINTY_MODELS = ("gaussian", "moments")
+
+_uncertainty_model: ContextVar[str] = ContextVar(
+    "uncertainty_model", default="gaussian"
+)
+
+
+@contextmanager
+def uncertainty_model(model: str) -> Generator[None]:
+    """Context manager to choose the uncertainty model quantities are built with.
+
+    This is the shape of the distribution, not how correlations are handled —
+    that stays with `propagation_mode`. Keeping the two apart is what lets an
+    asymmetric measurement be the exception rather than the default: carrying
+    three moments through a large dataset costs more than carrying one standard
+    deviation, so it is asked for per scope instead of paid for everywhere.
+
+    Args:
+        model: One of `UNCERTAINTY_MODELS`.
+
+    Raises:
+        ValueError: If the model is not one of `UNCERTAINTY_MODELS`. A typo that
+            quietly left the previous model in place would report symmetric
+            answers for asymmetric measurements and look like it had worked.
+
+    Examples:
+        >>> import physure
+        >>> with physure.uncertainty_model("gaussian"):
+        ...     physure.get_uncertainty_model()
+        'gaussian'
+    """
+    normalized = model.lower()
+    if normalized not in UNCERTAINTY_MODELS:
+        raise ValueError(
+            f"Unknown uncertainty model {model!r}. "
+            f"Expected one of: {', '.join(UNCERTAINTY_MODELS)}."
+        )
+    token = _uncertainty_model.set(normalized)
+    try:
+        yield
+    finally:
+        _uncertainty_model.reset(token)
+
+
+def get_uncertainty_model() -> str:
+    """Returns the uncertainty model quantities are currently built with."""
+    return _uncertainty_model.get()
+
+
 _UNCERTAINTY_MODE: ContextVar[tuple[str, dict[str, Any]]] = ContextVar(
     "uncertainty_mode", default=("python", {})
 )
@@ -223,3 +276,4 @@ def reset_context() -> None:
     _global_default_system = None
     _current_unit_system.set(None)
     _propagation_mode.set("correlated")
+    _uncertainty_model.set("gaussian")

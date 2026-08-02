@@ -233,3 +233,37 @@ def test_jax_under_jit_agrees_with_the_core_once_opted_in():
 
     with python_lineage():
         assert math.isclose(float(x_minus_x(10.0, 1.0)), 0.0, abs_tol=1e-9)
+
+
+# --- Model selection ---------------------------------------------------------
+def test_the_uncertainty_model_is_chosen_per_scope_and_restored_after():
+    import physure
+
+    assert physure.get_uncertainty_model() == "gaussian"
+    with physure.uncertainty_model("moments"):
+        assert physure.get_uncertainty_model() == "moments"
+    assert physure.get_uncertainty_model() == "gaussian"
+
+
+def test_a_misspelled_model_is_rejected_instead_of_leaving_the_old_one():
+    # Silently keeping "gaussian" here would report symmetric answers inside a
+    # block entered to say the measurement is not symmetric.
+    import physure
+
+    with (
+        pytest.raises(ValueError, match="Unknown uncertainty model"),
+        physure.uncertainty_model("gausian"),
+    ):
+        pass
+
+
+def test_the_moments_model_refuses_rather_than_building_a_gaussian():
+    # The core can convert a (sigma-, sigma+) pair to moments and back, but
+    # nothing propagates them yet, and Python has no model over them at all.
+    import physure
+
+    with (
+        physure.uncertainty_model("moments"),
+        pytest.raises(NotImplementedError, match="not implemented yet"),
+    ):
+        Q_(12.3, "pb", uncertainty=0.4)
