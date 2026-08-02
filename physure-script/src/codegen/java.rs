@@ -203,7 +203,7 @@ impl JavaTranspiler {
                         BinaryOp::Div => "divide",
                         BinaryOp::Pow => unreachable!(),
                         BinaryOp::Convert => unreachable!(),
-                        BinaryOp::Range => unreachable!(),
+                        BinaryOp::Range => return Err(super::range_is_not_transpilable()),
                     };
                     Ok(format!("{}.{}({})", l, method, r))
                 }
