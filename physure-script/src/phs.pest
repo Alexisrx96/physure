@@ -82,7 +82,7 @@ primary_base   = _{
 }
 _has_dot      = _{ !".." ~ "." }
 method_call   = { primary_base ~ (_has_dot ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")+ }
-primary       = _{ primary_base ~ (_has_dot ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")* }
+primary       = _{ method_call | primary_base }
 
 _is_pow     = _{ &"^" }
 _is_minus   = _{ &"-" }
