@@ -426,6 +426,8 @@ class Quantity(
         # Lazy imports to avoid circularity
         from physure.domain.measurement.uncertainty import Uncertainty
 
+        cls._reject_asymmetric_pair(backend, value, uncertainty)
+
         # Ensure uncertainty matches backend type if array
         needs_broadcast = (
             backend.is_array(value)
@@ -468,6 +470,31 @@ class Quantity(
             system=resolved_system,
             symbol=symbol,
             _uncertainty_obj=u_obj,
+        )
+
+    @staticmethod
+    def _reject_asymmetric_pair(
+        backend: Any, value: Any, uncertainty: Any
+    ) -> None:
+        """Refuses `Q_(12.3, "pb", (0.5, 0.4))`, the way PHS refuses `12.3 +/- (0.5, 0.4)`.
+
+        A scalar has no second element for a second uncertainty to belong to, so a pair on
+        one can only mean an asymmetric measurement. Nothing propagates a third moment yet,
+        and the pair used to reach `float()` and come back as
+        `TypeError: float() argument must be a string or a real number` — a message about
+        the plumbing rather than about the measurement. An array magnitude keeps taking a
+        tuple, which is an ordinary per-element uncertainty and has always worked.
+        """
+        if not isinstance(uncertainty, tuple) or len(uncertainty) != 2:
+            return
+        if backend.is_array(value):
+            return
+        raise NotImplementedError(
+            f"An asymmetric uncertainty {uncertainty} cannot be propagated yet: "
+            "physure_core::uncertainty::moments converts a (sigma-, sigma+) pair to "
+            "moments and back, but nothing propagates the third moment they carry, and "
+            "using one half alone would report the measurement as symmetric. Pass a "
+            "single standard deviation if that is what you meant."
         )
 
     @classmethod
