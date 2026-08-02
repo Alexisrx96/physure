@@ -477,3 +477,34 @@ fn monte_carlo_stops_sharing_its_draws_when_asked_to_be_uncorrelated() {
         diff.value.std_dev()
     );
 }
+
+
+#[test]
+fn a_constant_cannot_change_the_model_by_standing_on_the_left() {
+    // `new_scalar` leaves exact values Gaussian, so once a `physure.conf` names a model every
+    // plain number in a script still arrives as a Gaussian. Propagation dispatches on the left
+    // operand, so `3 + x` used to fall to the generic arm -- dropping x's samples and reporting
+    // "gaussian" -- while `x + 3` kept them. Which side the constant sat on decided the model.
+    for model in ["monte_carlo", "unscented"] {
+        let _guard = mode::scoped(model.parse().unwrap());
+        let exact = scalar(3.0, 0.0, None);
+        let unc = scalar(10.0, 0.5, None);
+        assert_eq!(unc.value.get_model_name(), model, "the scope was not honoured");
+
+        let cases = [
+            ("+", exact.add(&unc).unwrap(), unc.add(&exact).unwrap(), true),
+            ("-", exact.sub(&unc).unwrap(), unc.sub(&exact).unwrap(), true),
+            ("*", exact.mul(&unc).unwrap(), unc.mul(&exact).unwrap(), true),
+            // a/b and b/a do not share a spread, so only the model is comparable here.
+            ("/", exact.div(&unc).unwrap(), unc.div(&exact).unwrap(), false),
+        ];
+        for (op, left, right, same_sigma) in cases {
+            assert_eq!(left.value.get_model_name(), model, "{model}: 3 {op} x lost the model");
+            assert_eq!(right.value.get_model_name(), model, "{model}: x {op} 3 lost the model");
+            if same_sigma {
+                let (l, r) = (left.value.std_dev(), right.value.std_dev());
+                assert!((l - r).abs() < 0.05, "{model}: 3 {op} x gave {l}, x {op} 3 gave {r}");
+            }
+        }
+    }
+}
