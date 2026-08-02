@@ -191,7 +191,7 @@ layer on top of it.
 
 ## Contributing
 
-Issues and PRs are welcome. The quality bar is enforced in CI: ruff clean, tests green on Python 3.11–3.14 with ≥ 80 % coverage, and zero new SonarQube violations. See [CLAUDE.md](CLAUDE.md) for the full development guide.
+Issues and PRs are welcome. The quality bar is enforced in CI: ruff clean, tests green on Python 3.11–3.14 with ≥ 80 % coverage, and zero new SonarQube violations. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build and test the workspace, the invariants a change has to hold, and the commit conventions.
 
 ## License
 
