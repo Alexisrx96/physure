@@ -275,6 +275,16 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut left = parse_comp_expr(first)?;
     
     while let Some(op_pair) = inner.next() {
+        // The spec closes the expression — `a + b: .2f` formats the sum, not `b`.
+        if op_pair.as_rule() == Rule::op_format {
+            let spec = op_pair.into_inner().next().map(|p| p.as_str().to_string()).unwrap_or_default();
+            left = Expr::FunctionCall {
+                name: "format".to_string(),
+                args: vec![left, Expr::Identifier(spec)],
+                kwargs: Vec::new(),
+            };
+            continue;
+        }
         let op = match op_pair.as_rule() {
             Rule::op_add => BinaryOp::Add,
             Rule::op_sub => BinaryOp::Sub,
@@ -300,14 +310,7 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut left = parse_term(first)?;
     
     while let Some(op_pair) = inner.next() {
-        if op_pair.as_rule() == Rule::op_format {
-            let spec = op_pair.into_inner().next().map(|p| p.as_str().to_string()).unwrap_or_default();
-            left = Expr::FunctionCall {
-                name: "format".to_string(),
-                args: vec![left, Expr::Identifier(spec)],
-                kwargs: Vec::new(),
-            };
-        } else if op_pair.as_rule() == Rule::op_compare {
+        if op_pair.as_rule() == Rule::op_compare {
             let right_pair = inner.next().unwrap();
             let right = parse_term(right_pair)?;
             let cmp_op = op_pair.as_str().to_string();

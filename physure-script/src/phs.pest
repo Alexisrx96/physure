@@ -104,12 +104,16 @@ term              = { factor ~ ((_is_mul_div ~ (op_mul | op_div) ~ factor) | (_i
 
 _is_compare = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
 _is_format  = _{ &(":" ~ format_spec) }
-comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* ~ (_is_format ~ op_format)? }
+comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* }
 
 // `..` sits at the same level as `+`/`=>` so a range's endpoints can carry units and
 // conversions ("0 m .. 2.0 km => m") without parentheses.
 _is_add_sub_conv = _{ &("+" | "-" | "=>" | "..") }
-base_expr   = { comp_expr ~ (_is_add_sub_conv ~ (op_add | op_sub | op_convert | op_range) ~ comp_expr)* }
+// The format spec applies to the whole expression, so it sits here rather than inside
+// `comp_expr`: bound one level down it attached to the *right operand* instead, which made
+// `0.1 + 0.2: base` a parse error and — worse — printed `25 m/s => km/h: base` as 25 m/s,
+// formatting the target and dropping the conversion without a word.
+base_expr   = { comp_expr ~ (_is_add_sub_conv ~ (op_add | op_sub | op_convert | op_range) ~ comp_expr)* ~ (_is_format ~ op_format)? }
 
 _is_ternary = _{ &"?" }
 ternary_op  = { "?" ~ _nl ~ base_expr ~ _nl ~ ":" ~ _nl ~ base_expr }
