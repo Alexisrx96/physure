@@ -95,14 +95,59 @@ pub enum BinaryOp {
 pub struct QuantityNode {
     pub magnitude: f64,
     pub uncertainty: Option<f64>,
+    /// The lower half-width of an asymmetric measurement, when one was written.
+    ///
+    /// `12.3 +/- (0.5, 0.4)` puts 0.5 in `uncertainty` and 0.4 here, so a symmetric quantity
+    /// reads exactly as it did before. That is also the trap: anything that reads `uncertainty`
+    /// alone silently reports an asymmetric measurement as symmetric, which is the one answer
+    /// it must not give. Consumers either handle both halves or refuse.
+    #[serde(default)]
+    pub uncertainty_lower: Option<f64>,
     #[serde(default)]
     pub is_sigma: bool,
     pub unit: Option<String>,
 }
 
+impl QuantityNode {
+    /// The reason this quantity cannot be used yet, if it is asymmetric.
+    ///
+    /// The grammar accepts `12.3 +/- (0.5, 0.4) pb` so the notation is settled and one place
+    /// holds both halves. Nothing propagates a third moment yet, though, and every consumer
+    /// downstream takes a single standard deviation, so an asymmetric measurement would come
+    /// out looking symmetric with no sign that half of what was written had been dropped.
+    pub fn asymmetric_refusal(&self) -> Option<String> {
+        self.uncertainty_lower.map(|lower| {
+            format!(
+                "An asymmetric uncertainty (+{}, -{}) parses but cannot be evaluated yet: \
+                 nothing propagates the third moment it needs, and using only the upper half \
+                 would report the measurement as symmetric. Write a single value like \
+                 `+/- {}` if that is what you meant.",
+                self.uncertainty.unwrap_or(0.0),
+                lower,
+                self.uncertainty.unwrap_or(0.0),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_asymmetric_quantity_says_why_it_cannot_be_used() {
+        let node = QuantityNode {
+            magnitude: 12.3,
+            uncertainty: Some(0.5),
+            uncertainty_lower: Some(0.4),
+            is_sigma: false,
+            unit: Some("pb".to_string()),
+        };
+        assert!(node.asymmetric_refusal().unwrap().contains("cannot be evaluated yet"));
+
+        let symmetric = QuantityNode { uncertainty_lower: None, ..node };
+        assert!(symmetric.asymmetric_refusal().is_none());
+    }
 
     #[test]
     fn test_construct_import() {
@@ -151,6 +196,7 @@ mod tests {
         let node = QuantityNode {
             magnitude: 1.0,
             uncertainty: None,
+            uncertainty_lower: None,
             is_sigma: false,
             unit: None,
         };

@@ -95,6 +95,9 @@ impl RustTranspiler {
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
             Expr::Quantity(node) => {
+                if let Some(reason) = node.asymmetric_refusal() {
+                    return Err(CodegenError::Generic(reason));
+                }
                 let unit = match &node.unit {
                     Some(u) => format!("\"{}\"", u),
                     None => "\"\"".to_string(),
@@ -195,6 +198,7 @@ mod tests {
                             right: Box::new(Expr::Quantity(QuantityNode {
                                 magnitude: 2.0,
                                 uncertainty: None,
+                                uncertainty_lower: None,
                                 is_sigma: false,
                                 unit: None,
                             })),
@@ -203,6 +207,7 @@ mod tests {
                     right: Box::new(Expr::Quantity(QuantityNode {
                         magnitude: 0.5,
                         uncertainty: None,
+                        uncertainty_lower: None,
                         is_sigma: false,
                         unit: None,
                     })),
@@ -221,6 +226,7 @@ mod tests {
             statements: vec![Statement::Expr(Expr::Quantity(QuantityNode {
                 magnitude: 75.0,
                 uncertainty: Some(0.5),
+                uncertainty_lower: None,
                 is_sigma: false,
                 unit: Some("kg".to_string()),
             }))],

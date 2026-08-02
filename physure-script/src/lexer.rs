@@ -255,3 +255,29 @@ impl<'a> PhsLexer<'a> {
 fn is_superscript(c: char) -> bool {
     matches!(c, '⁻' | '⁰' | '¹' | '²' | '³' | '⁴' | '⁵' | '⁶' | '⁷' | '⁸' | '⁹')
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ops(input: &str) -> Vec<String> {
+        PhsLexer::new(input)
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .filter(|t| matches!(t.kind, TokenKind::Op(_)))
+            .map(|t| t.value)
+            .collect()
+    }
+
+    #[test]
+    fn an_uncertainty_pair_does_not_collide_with_the_binary_operators() {
+        // The multi-character forms come first in the operator table, so `+/-` is never read
+        // as `+` followed by `/`, and the parentheses that follow it stay ordinary tokens.
+        assert_eq!(ops("12.3 +/- (0.5, 0.4) pb"), ["+/-", "(", ",", ")"]);
+        assert_eq!(ops("12.3 ± (0.5, 0.4) pb"), ["±", "(", ",", ")"]);
+        // A bare sign is still addition, whatever follows it.
+        assert_eq!(ops("12.3 + (0.5)"), ["+", "(", ")"]);
+        assert_eq!(ops("12.3 - 0.5"), ["-"]);
+    }
+}

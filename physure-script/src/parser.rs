@@ -232,7 +232,7 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = match inner.next() {
         Some(f) => f,
-        None => return Ok(Expr::Quantity(QuantityNode { magnitude: 0.0, uncertainty: None, is_sigma: false, unit: None })),
+        None => return Ok(Expr::Quantity(QuantityNode { magnitude: 0.0, uncertainty: None, uncertainty_lower: None, is_sigma: false, unit: None })),
     };
     let mut result = match first.as_rule() {
         Rule::if_expr => parse_if_expr(first)?,
@@ -411,7 +411,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     if negate {
         Ok(Expr::BinaryOp {
             op: BinaryOp::Mul,
-            left: Box::new(Expr::Quantity(QuantityNode { magnitude: -1.0, uncertainty: None, is_sigma: false, unit: None })),
+            left: Box::new(Expr::Quantity(QuantityNode { magnitude: -1.0, uncertainty: None, uncertainty_lower: None, is_sigma: false, unit: None })),
             right: Box::new(result),
         })
     } else {
@@ -499,6 +499,7 @@ fn parse_number_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
     Ok(Expr::Quantity(QuantityNode {
         magnitude: mag,
         uncertainty: None,
+        uncertainty_lower: None,
         is_sigma: false,
         unit: None,
     }))
@@ -681,15 +682,35 @@ fn parse_unit_leftover(text: &str) -> PhysureResult<Expr> {
     parse_expr(pair)
 }
 
+/// Reads one half of an uncertainty — `0.5`, `0.5%` or `2 sigma` — into its value and whether
+/// it was written as a percentage. `is_sigma` is shared across the halves because it describes
+/// the whole measurement, not one side of it.
+fn parse_uncertainty_val(raw: &str, is_sigma: &mut bool) -> PhysureResult<(f64, bool)> {
+    let mut val_str = raw.trim().to_string();
+    let is_percent = val_str.ends_with('%');
+    if is_percent {
+        val_str.pop();
+    }
+    if val_str.contains("sigma") || val_str.contains("σ") {
+        *is_sigma = true;
+        val_str = val_str.replace("sigma", "").replace("σ", "");
+    }
+    let value = val_str
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| PhysureError::Generic("Invalid uncertainty".to_string()))?;
+    Ok((value, is_percent))
+}
+
 fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut magnitude = None;
     let mut magnitude_expr = None;
-    let mut uncertainty = None;
     let mut unit = None;
     let mut unit_leftover: Option<(BinaryOp, String)> = None;
 
     let mut is_sigma = false;
-    let mut is_percent_uncertainty = false;
+    // (value, was written as a percentage), upper half first.
+    let mut halves: Vec<(f64, bool)> = Vec::new();
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -706,20 +727,20 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
                 magnitude_expr = Some(parse_expr(inner)?);
             }
             Rule::uncertainty => {
+                // One value for `+/- 0.5`, two for the asymmetric `+/- (0.5, 0.4)`, upper
+                // first. `uncertainty_pair` nests them, so the halves are collected by rule
+                // rather than by position.
                 for u_inner in inner.into_inner() {
-                    if u_inner.as_rule() == Rule::uncertainty_val {
-                        let mut val_str = u_inner.as_str().trim().to_string();
-                        let is_percent = val_str.ends_with('%');
-                        if is_percent {
-                            val_str.pop();
+                    match u_inner.as_rule() {
+                        Rule::uncertainty_val => halves.push(parse_uncertainty_val(u_inner.as_str(), &mut is_sigma)?),
+                        Rule::uncertainty_pair => {
+                            for half in u_inner.into_inner() {
+                                if half.as_rule() == Rule::uncertainty_val {
+                                    halves.push(parse_uncertainty_val(half.as_str(), &mut is_sigma)?);
+                                }
+                            }
                         }
-                        if val_str.contains("sigma") || val_str.contains("σ") {
-                            is_sigma = true;
-                            val_str = val_str.replace("sigma", "").replace("σ", "");
-                        }
-                        let val = val_str.trim().parse::<f64>().map_err(|_| PhysureError::Generic("Invalid uncertainty".to_string()))?;
-                        uncertainty = Some(val);
-                        is_percent_uncertainty = is_percent;
+                        _ => {}
                     }
                 }
             }
@@ -735,14 +756,19 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     // `+/- 0.5%` is a *relative* uncertainty. The percent sign was stripped and then never
     // applied, so `9.81 +/- 0.5% m/s^2` claimed ±0.5 instead of ±0.049 — twenty times too
     // wide, and nothing in the output said so.
-    if is_percent_uncertainty {
-        let percent = uncertainty.unwrap_or(0.0);
+    if halves.iter().any(|(_, is_percent)| *is_percent) {
         let base = magnitude.or(match &magnitude_expr {
             Some(Expr::Quantity(q)) => Some(q.magnitude),
             _ => None,
         });
         match base {
-            Some(mag) => uncertainty = Some(mag.abs() * percent / 100.0),
+            Some(mag) => {
+                for (value, is_percent) in halves.iter_mut() {
+                    if *is_percent {
+                        *value = mag.abs() * *value / 100.0;
+                    }
+                }
+            }
             // Anything else only knows its magnitude at run time, and a percentage of an
             // unknown is not a number: say so instead of inventing one.
             None => {
@@ -753,10 +779,14 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         }
     }
 
+    let uncertainty = halves.first().map(|(v, _)| *v);
+    let uncertainty_lower = halves.get(1).map(|(v, _)| *v);
+
     let quantity_expr = if let Some(mag) = magnitude {
         Expr::Quantity(QuantityNode {
             magnitude: mag,
             uncertainty,
+            uncertainty_lower,
             is_sigma,
             unit,
         })
@@ -766,6 +796,7 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
                 q.unit = Some(u);
                 q.is_sigma = is_sigma;
                 q.uncertainty = uncertainty.or(q.uncertainty);
+                q.uncertainty_lower = uncertainty_lower.or(q.uncertainty_lower);
                 Expr::Quantity(q)
             } else {
                 Expr::BinaryOp {
@@ -1091,6 +1122,51 @@ mod tests {
                 assert_eq!(q.unit.as_deref(), Some("m/s"));
             }
         }
+    }
+
+    /// Pulls the quantity out of `x = <quantity>`, panicking if it is anything else.
+    fn parse_one_quantity(code: &str) -> QuantityNode {
+        let prog = parse_phs(code).unwrap_or_else(|e| panic!("{code} did not parse: {e}"));
+        match &prog.statements[0] {
+            Statement::Assignment(a) => match &a.value {
+                Expr::Quantity(q) => q.clone(),
+                other => panic!("{code} parsed as {other:?}"),
+            },
+            other => panic!("{code} parsed as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_asymmetric_uncertainty_keeps_both_halves() {
+        // `12.3 +/- (0.5, 0.4)` reads in the order the operator does: upper first.
+        for code in ["x = 12.3 +/- (0.5, 0.4) m", "x = 12.3 ± (0.5, 0.4) m"] {
+            let q = parse_one_quantity(code);
+            assert_eq!(q.magnitude, 12.3);
+            assert_eq!(q.uncertainty, Some(0.5), "{code}");
+            assert_eq!(q.uncertainty_lower, Some(0.4), "{code}");
+            assert_eq!(q.unit.as_deref(), Some("m"));
+        }
+    }
+
+    #[test]
+    fn a_parenthesised_addend_is_not_an_uncertainty_pair() {
+        // The whole risk in the notation is that `(` after a sign could be read two ways.
+        // `+` alone never reaches the uncertainty rule, so this stays an addition.
+        let prog = parse_phs("x = 12.3 + (0.5)").unwrap();
+        let Statement::Assignment(a) = &prog.statements[0] else { panic!("expected assignment") };
+        assert!(matches!(a.value, Expr::BinaryOp { op: BinaryOp::Add, .. }), "{:?}", a.value);
+    }
+
+    #[test]
+    fn each_half_of_a_pair_takes_its_own_percentage() {
+        let q = parse_one_quantity("x = 200.0 +/- (1%, 0.5) m");
+        assert_eq!(q.uncertainty, Some(2.0));
+        assert_eq!(q.uncertainty_lower, Some(0.5));
+    }
+
+    #[test]
+    fn a_symmetric_uncertainty_has_no_lower_half() {
+        assert_eq!(parse_one_quantity("x = 75.0 +/- 0.5 kg").uncertainty_lower, None);
     }
 
     #[test]

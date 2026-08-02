@@ -358,6 +358,9 @@ impl PhsInterpreter {
     pub fn eval_expr(&self, expr: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         match expr {
             Expr::Quantity(node) => {
+                if let Some(reason) = node.asymmetric_refusal() {
+                    return Err(PhysureError::Generic(reason));
+                }
                 let mut q = Quantity::new_scalar(node.magnitude, node.uncertainty.unwrap_or(0.0), RationalUnit::dimensionless(), None, None);
                 if let Some(unit_str) = &node.unit {
                     let clean_unit_str = strip_unit_comment(unit_str);
@@ -796,6 +799,18 @@ mod tests {
     use crate::resolver::{MemoryModuleResolver, ModuleExport};
     
     #[test]
+    fn an_asymmetric_measurement_refuses_instead_of_using_half_of_it() {
+        // The notation parses so the grammar is settled, but nothing propagates a third
+        // moment yet. Evaluating it would keep the upper half and report a symmetric
+        // measurement — the one answer the notation exists to avoid.
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("x = 12.3 +/- (0.5, 0.4) m").unwrap_err();
+        assert!(err.to_string().contains("cannot be evaluated yet"), "{err}");
+
+        interp.eval_str("y = 12.3 +/- 0.5 m").expect("a symmetric measurement still evaluates");
+    }
+
+    #[test]
     fn test_unary_minus_multiline_if_and_guard_return() {
         let mut interp = PhsInterpreter::default();
         let code = r#"
@@ -856,6 +871,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         left: Box::new(Expr::Quantity(QuantityNode {
                             magnitude: 0.5,
                             uncertainty: None,
+                            uncertainty_lower: None,
                             is_sigma: false,
                             unit: None,
                         })),
@@ -867,6 +883,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         right: Box::new(Expr::Quantity(QuantityNode {
                             magnitude: 2.0,
                             uncertainty: None,
+                            uncertainty_lower: None,
                             is_sigma: false,
                             unit: None,
                         })),
@@ -878,6 +895,7 @@ r3 = circuito_abierto(5 V, 2 A)
                 value: Expr::Quantity(QuantityNode {
                     magnitude: 10.0,
                     uncertainty: None,
+                    uncertainty_lower: None,
                     is_sigma: false,
                     unit: Some("kg".to_string()),
                 }),
@@ -887,6 +905,7 @@ r3 = circuito_abierto(5 V, 2 A)
                 value: Expr::Quantity(QuantityNode {
                     magnitude: 2.0,
                     uncertainty: None,
+                    uncertainty_lower: None,
                     is_sigma: false,
                     unit: Some("m/s".to_string()),
                 }),
@@ -928,6 +947,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     value: Expr::Quantity(QuantityNode {
                         magnitude: 75.0,
                         uncertainty: Some(0.5),
+                        uncertainty_lower: None,
                         is_sigma: false,
                         unit: Some("kg".to_string()),
                     }),
@@ -968,6 +988,7 @@ r3 = circuito_abierto(5 V, 2 A)
         export.symbols.insert("G".to_string(), Expr::Quantity(QuantityNode {
             magnitude: 6.674e-11,
             uncertainty: None,
+            uncertainty_lower: None,
             is_sigma: false,
             unit: Some("m^3 / (kg * s^2)".to_string()),
         }));

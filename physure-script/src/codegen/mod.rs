@@ -214,6 +214,7 @@ fn node_to_expr(node: &Node) -> Expr {
         Node::Number(n) => Expr::Quantity(QuantityNode {
             magnitude: *n,
             uncertainty: None,
+            uncertainty_lower: None,
             is_sigma: false,
             unit: None,
         }),

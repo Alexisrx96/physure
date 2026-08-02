@@ -162,6 +162,9 @@ impl JavaTranspiler {
             }
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
             Expr::Quantity(q) => {
+                if let Some(reason) = q.asymmetric_refusal() {
+                    return Err(CodegenError::Generic(reason));
+                }
                 let mut args = vec![format!("{:?}", q.magnitude)];
                 
                 let is_with_unc = q.uncertainty.is_some();
@@ -252,6 +255,7 @@ mod tests {
         let q = Expr::Quantity(QuantityNode {
             magnitude: 75.0,
             uncertainty: Some(0.5),
+            uncertainty_lower: None,
             is_sigma: false,
             unit: Some("kg".to_string()),
         });
