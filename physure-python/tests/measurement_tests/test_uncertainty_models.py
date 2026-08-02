@@ -15,11 +15,13 @@ from physure.domain.measurement.uncertainty import (
 # --- Uncertainty.from_standard dispatch --------------------------------------
 
 
-def test_from_standard_scalar_returns_variance_model():
+def test_from_standard_scalar_returns_lineage_tracking_model():
+    # A scalar is lineage-tracked with no store active, so it is not treated as
+    # independent of itself.
     u = Uncertainty.from_standard(2.0)
-    assert isinstance(u, VarianceModel)
-    assert math.isclose(u.variance, 4.0)
+    assert isinstance(u, CovarianceModel)
     assert math.isclose(u.std_dev, 2.0)
+    assert list(u.lineage.values()) == [2.0]
 
 
 def test_from_standard_zero_scalar_returns_none():

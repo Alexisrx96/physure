@@ -11,7 +11,7 @@ propagation by default -- the same rules a textbook lab report uses.
 
 import math
 
-from physure import Q_, PhysureContext
+from physure import Q_, PhysureContext, propagation_mode
 
 
 # --- Sum/difference: absolute uncertainties add in quadrature (GUM 5.1.2) -----
@@ -116,19 +116,38 @@ def test_density_from_mass_and_volume_matches_gum_worked_example():
 
 
 # --- Correlated vs uncorrelated: x - x --------------------------------------
-# Outside an active covariance store, Physure treats every `Q_(...,
-# uncertainty=...)` as an independent noise source (VarianceModel), so `x - x`
-# adds the uncertainty in quadrature even though the exact answer is 0 +/- 0.
-# Inside `PhysureContext()`, scalar uncertainties are lineage-tracked
-# (CovarianceModel), so the engine recognizes `x` correlated with itself and
-# the propagated uncertainty on `x - x` collapses to exactly zero -- the
-# textbook-correct answer for a perfectly correlated difference.
-def test_x_minus_x_has_nonzero_uncertainty_without_correlation_tracking():
+# Scalar uncertainties are lineage-tracked (CovarianceModel) whether or not a
+# covariance store is active, matching the Rust core. The engine therefore
+# recognizes `x` as correlated with itself and `x - x` collapses to exactly
+# zero -- the textbook-correct answer for a perfectly correlated difference.
+# Two *separate* measurements of the same value stay independent and still add
+# in quadrature, which is what keeps this from being a special case for the
+# literal `x - x` shape.
+def test_x_minus_x_is_zero_without_an_explicit_context():
     x = Q_(10.0, "m", uncertainty=1.0)
     y = x - x
     assert math.isclose(y.magnitude, 0.0, abs_tol=1e-12)
+    assert math.isclose(y.uncertainty, 0.0, abs_tol=1e-12)
+
+
+def test_uncorrelated_mode_opts_out_of_provenance_tracking():
+    # The escape hatch: every input is treated as its own noise source again,
+    # so a quantity is independent of itself and x - x adds in quadrature.
+    with propagation_mode("uncorrelated"):
+        x = Q_(10.0, "m", uncertainty=1.0)
+        assert math.isclose((x - x).uncertainty, math.sqrt(2.0), rel_tol=1e-9)
+        # Genuinely independent inputs are unaffected by the mode.
+        y = Q_(4.0, "m", uncertainty=1.0)
+        assert math.isclose((x - y).uncertainty, math.sqrt(2.0), rel_tol=1e-9)
+
+
+def test_two_measurements_of_the_same_value_still_add_in_quadrature():
+    a = Q_(10.0, "m", uncertainty=1.0)
+    b = Q_(10.0, "m", uncertainty=1.0)
+    d = a - b
+    assert math.isclose(d.magnitude, 0.0, abs_tol=1e-12)
     assert math.isclose(
-        y.uncertainty, math.sqrt(1.0**2 + 1.0**2), rel_tol=1e-9
+        d.uncertainty, math.sqrt(1.0**2 + 1.0**2), rel_tol=1e-9
     )
 
 

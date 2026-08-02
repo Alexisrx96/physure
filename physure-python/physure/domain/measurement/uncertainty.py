@@ -114,19 +114,34 @@ class Uncertainty(ABC, Generic[UncType]):
                 return VarianceModel(variance=std_dev)
             return CovarianceModel.from_standard(std_dev, measurement_id)
 
-        # Scalar Context-aware dispatch
+        # Scalar dispatch. Lineage tracking is always on, matching the Rust core:
+        # without it a quantity is treated as independent of itself and `x - x`
+        # comes out at std_dev*sqrt(2) instead of zero. CovarianceModel is what
+        # records provenance, so a plain scalar goes through it too — not only the
+        # ones that happen to have a vector store active, which this path never uses.
         from physure.domain.measurement.vectorized_uncertainty import (
             get_current_store,
         )
 
-        if get_current_store() is not None:
-            return CovarianceModel.from_standard(std_dev, measurement_id)
-
-        # For simple scalars with no active store, return None to keep Quantity "simple"
-        nonzero = backend.not_equal(std_dev, 0)  # pyright: ignore[reportArgumentType]
-        if backend.is_array(std_dev) or backend.any(nonzero):
+        if backend.is_array(std_dev):
+            # A size-1 array still belongs to the array machinery.
+            if get_current_store() is not None:
+                return CovarianceModel.from_standard(std_dev, measurement_id)
             return VarianceModel.from_standard(std_dev)
-        return None
+
+        # An exact scalar gets no model at all, so Quantity stays "simple".
+        nonzero = backend.not_equal(std_dev, 0)  # pyright: ignore[reportArgumentType]
+        if not backend.any(nonzero):
+            return None
+
+        # `propagation_mode("uncorrelated")` is the opt-out: it drops provenance
+        # and treats every input as its own noise source. It has to be honoured
+        # here, or the flag silently does nothing now that tracking is the default.
+        from physure.application.context import get_propagation_mode
+
+        if get_propagation_mode() == "uncorrelated":
+            return VarianceModel.from_standard(std_dev)
+        return CovarianceModel.from_standard(std_dev, measurement_id)
 
     @classmethod
     def propagate(

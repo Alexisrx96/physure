@@ -725,21 +725,20 @@ class Quantity(
         """Returns string representation."""
         unit_str = self.unit.to_string(self.system)
         if self._has_uncertainty:
-            # Prefer simple float repr for scalar VarianceModel to keep repr clean (Phase 5 Reg Fix)
-            from physure.domain.measurement.uncertainty import VarianceModel
-
-            if (
-                isinstance(self._uncertainty_obj, VarianceModel)
-                and self._uncertainty_obj.vector_slice is None
-                and not self._backend.is_array(self._uncertainty_obj.variance)
-            ):
-                unc_repr = repr(self.uncertainty)
-            else:
-                unc_repr = (
-                    repr(self._uncertainty_obj)
-                    if self._uncertainty_obj is not None
-                    else repr(self.uncertainty)
-                )
+            # A scalar model reprs as a plain float. Dumping the model itself
+            # would put its internals in the repr, and for a lineage-tracking
+            # model that means a UUID the user never chose.
+            unc = self._uncertainty_obj
+            is_scalar_model = (
+                unc is not None
+                and getattr(unc, "vector_slice", None) is None
+                and not self._backend.is_array(unc.std_dev)
+            )
+            unc_repr = (
+                repr(self.uncertainty)
+                if unc is None or is_scalar_model
+                else repr(unc)
+            )
             return (
                 f"Quantity({self.magnitude!r}, {unit_str}, "
                 f"uncertainty={unc_repr})"
