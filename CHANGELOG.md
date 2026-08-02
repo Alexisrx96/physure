@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Transpiled files stamp the compiler's real version. All three targets hardcoded `v0.2.4` while the workspace was on `0.2.3`, so a generated file named a compiler that had never produced it; the banner now comes from `env!("CARGO_PKG_VERSION")`.
 - The `physure` crate README's usage example imported `use physure::{...}`, which does not compile. The package is `physure` but its library target is `physure_core`, and Cargo derives the import path from the latter. The README is not wired in with `include_str!`, so no doctest ever caught it.
 - `Debug for Quantity` (Rust) prints `std_dev`, so a failing assertion about an uncertain quantity no longer reports what looks like a different measurement.
+- **A PHS format spec applies to the whole expression, not to its right operand.** `op_format` sat inside `comp_expr`, one precedence level below `+ - => ..`, so the spec bound to whatever stood immediately to its left inside that level. `0.1 + 0.2: .2f` was a parse error, and `25 m/s => km/h: .2f` printed `25.00 m/s` — the spec formatted the conversion *target* and the conversion was dropped without a word, the one failure a unit library may never have quietly. Parenthesising the expression was the workaround and still works; it is no longer needed.
 
 ---
 

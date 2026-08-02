@@ -22,6 +22,14 @@ fn eval_quantity(src: &str) -> Quantity {
     }
 }
 
+/// Evaluates `src` and returns the string its last statement formatted.
+fn formatted(src: &str) -> String {
+    match eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed: {e:?}")).into_iter().last() {
+        Some(PhsValue::String(s)) => s,
+        other => panic!("{src:?} produced {other:?}, expected a formatted string"),
+    }
+}
+
 fn assert_close(actual: f64, expected: f64, src: &str) {
     let tolerance = expected.abs() * 1e-9;
     assert!(
@@ -692,13 +700,6 @@ fn degrees_are_an_angle_in_radians_not_in_steradians() {
 /// one honest failure mode of the three but still not the documented one.
 #[test]
 fn the_base_format_spec_quotes_a_quantity_in_its_base_units() {
-    let formatted = |src: &str| -> String {
-        match eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed: {e:?}")).into_iter().last() {
-            Some(PhsValue::String(s)) => s,
-            other => panic!("{src:?} produced {other:?}, expected a formatted string"),
-        }
-    };
-
     assert_eq!(formatted("2 Ohm: base"), "2.0 A^-2 * kg * m^2 * s^-3");
     // The prefix's factor moves into the magnitude: the physical value is the same one
     // `Display` prints, only the terms it is quoted in change.
@@ -733,4 +734,20 @@ fn a_prefixed_non_ascii_symbol_is_a_valid_conversion_target() {
     // A non-ASCII symbol is also a usable name, not only a unit.
     let bound = eval_quantity("Δx = 3 m\nΔx + 1 m");
     assert_close(bound.canonical_magnitude(), 4.0, "Δx + 1 m");
+}
+
+/// A format spec closes the expression it is written on. Bound one level too low, inside
+/// `comp_expr`, it took the *right operand* instead: `0.1 + 0.2: base` was a parse error,
+/// and `25 m/s => km/h: base` printed `25.0 m/s` — the spec formatted the conversion target
+/// and the conversion itself was dropped without a word, which is the one thing a unit
+/// library may never do quietly.
+#[test]
+fn a_format_spec_applies_to_the_whole_expression() {
+    assert_eq!(formatted("25 m/s => km/h:.2f"), "90.00 km/h");
+    assert_eq!(formatted("0.1 + 0.2:.2f"), "0.30");
+    assert_eq!(formatted("1 m + 50 cm: base"), "1.5 m");
+    // Parenthesising was the workaround; it still parses and still means the same thing.
+    assert_eq!(formatted("(25 m/s => km/h):.2f"), "90.00 km/h");
+    // A comparison keeps its own operands — the spec lands on the result of the test.
+    assert_eq!(formatted("2 m > 1 m:.1f"), "1.0");
 }
