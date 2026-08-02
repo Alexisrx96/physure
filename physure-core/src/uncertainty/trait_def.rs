@@ -113,9 +113,14 @@ impl UncertaintyValue {
         m1: &MonteCarloBackend,
         other: &'a UncertaintyValue,
     ) -> PhysureResult<Cow<'a, Array1<f64>>> {
-        if let Self::MonteCarlo(m2) = other {
-            if m2.samples.len() == m1.samples.len() {
-                return Ok(Cow::Borrowed(&m2.samples));
+        // Sharing an array is how correlation reaches the Monte Carlo arm, which is exactly
+        // what `uncorrelated` asks to switch off. It cannot be reached from the conf, since
+        // that key names one mode or the other, but a caller can name the backend by hand.
+        if super::mode::propagation_mode() != super::mode::PropagationMode::Uncorrelated {
+            if let Self::MonteCarlo(m2) = other {
+                if m2.samples.len() == m1.samples.len() {
+                    return Ok(Cow::Borrowed(&m2.samples));
+                }
             }
         }
         Ok(Cow::Owned(m1.ensure_samples(other.as_backend_ref())?))

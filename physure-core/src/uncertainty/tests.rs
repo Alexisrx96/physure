@@ -401,3 +401,79 @@ fn arithmetic_on_an_asymmetric_value_refuses_instead_of_symmetrising() {
     assert!(x.propagate_pow(2.0).is_err());
     assert!(x.propagate_function("sin").is_err());
 }
+
+// --- The uncorrelated opt-out ------------------------------------------------------------
+#[test]
+fn uncorrelated_mode_stops_a_value_from_cancelling_against_itself() {
+    let _guard = mode::scoped(PropagationMode::Uncorrelated);
+
+    let x = scalar(10.0, 1.0, None);
+    let diff = x.sub(&x).unwrap();
+    assert!(
+        (diff.value.std_dev() - 2.0f64.sqrt()).abs() < 1e-12,
+        "x - x should add in quadrature here, got {}",
+        diff.value.std_dev()
+    );
+    assert!(diff.value.mean().abs() < 1e-12, "only the uncertainty changes, not the value");
+
+    // Genuinely independent operands are unaffected: quadrature is what they did anyway.
+    let y = scalar(4.0, 1.0, None);
+    assert!((x.sub(&y).unwrap().value.std_dev() - 2.0f64.sqrt()).abs() < 1e-12);
+}
+
+#[test]
+fn a_result_built_uncorrelated_does_not_cancel_later_either() {
+    // Keeping the operands' ids on the result would let a second operation find the shared
+    // source the first one was told to ignore, so `(x + x) - x` would come back below x's
+    // own sigma -- correlated arithmetic reached through an uncorrelated step.
+    let _guard = mode::scoped(PropagationMode::Uncorrelated);
+
+    let x = scalar(10.0, 1.0, None);
+    let sum = x.add(&x).unwrap();
+    let back = sum.sub(&x).unwrap();
+    assert!(
+        (back.value.std_dev() - 3.0f64.sqrt()).abs() < 1e-12,
+        "expected sqrt(2 + 1), got {}",
+        back.value.std_dev()
+    );
+}
+
+#[test]
+fn the_scope_ends_where_the_guard_does() {
+    {
+        let _guard = mode::scoped(PropagationMode::Uncorrelated);
+        assert_eq!(propagation_mode(), PropagationMode::Uncorrelated);
+    }
+    assert_eq!(propagation_mode(), PropagationMode::Correlated);
+    let x = scalar(10.0, 1.0, None);
+    assert!(x.sub(&x).unwrap().value.std_dev() < 1e-12, "cancellation is back");
+}
+
+#[test]
+fn an_exact_value_stays_gaussian_whatever_the_configured_model_is() {
+    // A plain number has no distribution to sample. Drawing a thousand identical samples
+    // for every literal in a script would be a cost with nothing behind it.
+    let _guard = mode::scoped(PropagationMode::MonteCarlo);
+
+    assert_eq!(scalar(3.0, 0.0, None).value.get_model_name(), "gaussian");
+    assert_eq!(scalar(3.0, 0.5, None).value.get_model_name(), "monte_carlo");
+    // An explicit request still wins over the setting.
+    let named = Quantity::new_scalar(3.0, 0.5, RationalUnit::dimensionless(), Some("unscented"), None);
+    assert_eq!(named.value.get_model_name(), "unscented");
+}
+
+#[test]
+fn monte_carlo_stops_sharing_its_draws_when_asked_to_be_uncorrelated() {
+    // The Monte Carlo arm carries correlation in the sample array rather than the lineage,
+    // so it needs its own answer to the mode -- otherwise a hand-picked backend would keep
+    // cancelling inside a scope that exists to switch cancellation off.
+    let _guard = mode::scoped(PropagationMode::Uncorrelated);
+
+    let x = mc(10.0, 1.0);
+    let diff = x.sub(&x).unwrap();
+    assert!(
+        (diff.value.std_dev() - 2.0f64.sqrt()).abs() < 0.05,
+        "expected ~sqrt(2), got {}",
+        diff.value.std_dev()
+    );
+}

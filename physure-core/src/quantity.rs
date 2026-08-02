@@ -106,11 +106,23 @@ impl Quantity {
         Ok(Self::new_scalar(mean, 0.0, unit, None, None))
     }
 
+    /// A measured scalar.
+    ///
+    /// `mode` names the backend explicitly; `None` defers to `[Settings] propagation_mode`
+    /// in `physure.conf`, which is how PHS gets to honour the file without every call site
+    /// having to read it. An exact value stays Gaussian whatever the setting says: there is
+    /// no distribution to sample or to place sigma points on, and drawing a thousand
+    /// identical samples for every plain number in a script is a cost with nothing behind it.
     pub fn new_scalar(mean: f64, std_dev: f64, unit: RationalUnit, mode: Option<&str>, samples: Option<usize>) -> Self {
-        let value = match mode {
-            Some("monte_carlo") => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
-            Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
-            _                   => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
+        let resolved = match mode {
+            Some(named) => named.to_string(),
+            None if std_dev == 0.0 => "gaussian".to_string(),
+            None => crate::uncertainty::propagation_mode().name().to_string(),
+        };
+        let value = match resolved.as_str() {
+            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+            "unscented"   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
+            _             => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
         };
         Quantity { value, unit }
     }

@@ -14,7 +14,7 @@ pub use units::{RationalUnit, UnitRegistry, UnitConverter, DimVector, UnitDefini
 pub use quantity::Quantity;
 pub use linalg::{QuantityVector, QuantityMatrix};
 pub use covariance::{CovarianceStore, PruningConfig};
-pub use uncertainty::{UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, UnscentedBackend};
+pub use uncertainty::{UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, PropagationMode, UnscentedBackend, propagation_mode, set_propagation_mode};
 pub use plotting::Mesh3DData;
 
 /// Convert batch values in-place using factor.

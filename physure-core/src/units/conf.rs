@@ -1,3 +1,4 @@
+use crate::uncertainty::{PropagationMode, set_propagation_mode};
 use crate::units::rational::RationalUnit;
 use crate::units::registry::UnitRegistry;
 use std::collections::HashMap;
@@ -31,6 +32,22 @@ pub fn parse_physure_conf(
         }
 
         match current_section {
+            "Settings" => {
+                if let Some(("propagation_mode", raw)) =
+                    line.split_once('=').map(|(k, v)| (k.trim(), v))
+                {
+                    match raw.parse::<PropagationMode>() {
+                        Ok(mode) => {
+                            set_propagation_mode(mode);
+                        }
+                        // A conf is read before there is anywhere to report to, and the mode
+                        // it names is not worth refusing to start over. Saying so on stderr
+                        // beats falling back to correlated with nothing on screen: that is
+                        // the wrong answer that looks right.
+                        Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
+                    }
+                }
+            }
             "Prefixes" => {
                 if let Some((_name, val_part)) = line.split_once('=') {
                     let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();

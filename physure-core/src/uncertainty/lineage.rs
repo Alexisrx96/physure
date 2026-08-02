@@ -20,6 +20,8 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use super::mode::{PropagationMode, propagation_mode};
+
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 
 /// Mints an id for a newly measured quantity.
@@ -169,12 +171,28 @@ impl Lineage {
         self.scale(target / current)
     }
 
+    /// Merges two lineages as if they shared no source: `sqrt((ja*sa)^2 + (jb*sb)^2)`.
+    ///
+    /// The result is a fresh measurement, not a derivation — under `uncorrelated` nothing
+    /// downstream is entitled to know where it came from, so keeping the old ids would let
+    /// a later operation cancel against them and reintroduce exactly the behaviour the mode
+    /// was chosen to switch off.
+    fn combine_independent(a: &Lineage, ja: f64, b: &Lineage, jb: f64) -> Self {
+        Self::measured((ja * a.std_dev()).hypot(jb * b.std_dev()))
+    }
+
     /// Merges two lineages under the chain rule: `c_new(id) = ja * a(id) + jb * b(id)`.
     ///
     /// A term that cancels to exactly zero is dropped rather than kept at 0.0, so a lineage
     /// never grows with dead sources — that is what keeps `x - x` at an empty lineage
     /// instead of one term holding zero.
+    ///
+    /// This is the one place where `correlated` and `uncorrelated` differ, so both the
+    /// Gaussian and the unscented arms get the mode by going through here.
     pub fn combine(a: &Lineage, ja: f64, b: &Lineage, jb: f64) -> Self {
+        if propagation_mode() == PropagationMode::Uncorrelated {
+            return Self::combine_independent(a, ja, b, jb);
+        }
         let (at, bt) = (a.terms(), b.terms());
         let mut out: Vec<(u32, f64)> = Vec::with_capacity(at.len() + bt.len());
         let (mut i, mut j) = (0, 0);
