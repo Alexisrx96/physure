@@ -31,16 +31,36 @@ pub fn fresh_id() -> u32 {
     NEXT_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Keeps future `fresh_id` calls above `id`.
+///
+/// A lineage can enter this process from outside it — deserialized, or rebuilt by a
+/// wrapper language that kept its own source ids. Those ids were never minted by this
+/// counter, so without reserving them a later `fresh_id` could hand out one again and
+/// two unrelated measurements would start cancelling against each other.
+fn reserve_id(id: u32) {
+    NEXT_ID.fetch_max(id.saturating_add(1), Ordering::Relaxed);
+}
+
 /// Which measurements a value came from, and how strongly each one still moves it.
 ///
 /// Terms are kept sorted by id so merging is a linear walk. `Leaf` holds its single term
 /// inline: a measured quantity is the common case and should not pay for a heap allocation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum Lineage {
     /// One source measurement, contributing its own standard deviation.
     Leaf([(u32, f64); 1]),
     /// Zero or more sources. Empty means exact — a constant with no uncertainty.
     Derived(Vec<(u32, f64)>),
+}
+
+/// Compared by terms, never by variant: `Leaf` is a storage optimization for the
+/// single-source case, so a one-term `Derived` describes the same provenance and has
+/// to compare equal. A derived `PartialEq` would say otherwise, and a lineage that
+/// made a round trip through `from_terms` would stop matching the one it came from.
+impl PartialEq for Lineage {
+    fn eq(&self, other: &Self) -> bool {
+        self.terms() == other.terms()
+    }
 }
 
 impl Lineage {
@@ -57,6 +77,42 @@ impl Lineage {
     /// A value with no uncertainty at all.
     pub fn exact() -> Self {
         Self::Derived(Vec::new())
+    }
+
+    /// A measured quantity tied to a caller-supplied source id rather than a fresh one.
+    ///
+    /// Two values built with the same id are the *same* measurement and cancel against
+    /// each other. A wrapper language that lets the user name a measurement needs this:
+    /// without it, naming the same measurement twice would mint two ids and the two
+    /// would stop being correlated.
+    pub fn measured_with_id(id: u32, std_dev: f64) -> Self {
+        reserve_id(id);
+        if std_dev == 0.0 || !std_dev.is_finite() {
+            Self::exact()
+        } else {
+            Self::Leaf([(id, std_dev)])
+        }
+    }
+
+    /// Rebuilds a lineage from raw terms, restoring the invariants the rest of this
+    /// module relies on: sorted by id, one term per id, no dead coefficients.
+    ///
+    /// Needed for terms that made a round trip through another language or a
+    /// serialization format, where nothing enforced those invariants on the way.
+    pub fn from_terms(mut terms: Vec<(u32, f64)>) -> Self {
+        if let Some(&(max_id, _)) = terms.iter().max_by_key(|&&(id, _)| id) {
+            reserve_id(max_id);
+        }
+        terms.sort_unstable_by_key(|&(id, _)| id);
+        let mut out: Vec<(u32, f64)> = Vec::with_capacity(terms.len());
+        for (id, coeff) in terms {
+            match out.last_mut() {
+                Some((last_id, last_coeff)) if *last_id == id => *last_coeff += coeff,
+                _ => out.push((id, coeff)),
+            }
+        }
+        out.retain(|&(_, c)| c != 0.0 && c.is_finite());
+        Self::Derived(out)
     }
 
     /// The terms, sorted by id.
@@ -224,6 +280,44 @@ mod tests {
         assert_eq!(merged.terms().len(), 3);
         assert!(merged.terms().windows(2).all(|w| w[0].0 < w[1].0));
         assert!((merged.std_dev() - (1.0f64 + 4.0 + 1.0).sqrt()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_named_source_stays_the_same_measurement() {
+        // What a wrapper language needs: naming the same measurement twice must not
+        // produce two independent sources.
+        let a = Lineage::measured_with_id(7, 0.3);
+        let b = Lineage::measured_with_id(7, 0.3);
+        assert!(Lineage::combine(&a, 1.0, &b, -1.0).is_exact());
+    }
+
+    #[test]
+    fn an_imported_id_is_never_minted_again() {
+        // A lineage that came from another process carries ids this counter never
+        // issued. Handing one of them out again would correlate two unrelated
+        // measurements.
+        let imported = 900_000_u32;
+        let _ = Lineage::from_terms(vec![(imported, 0.5)]);
+        assert!(fresh_id() > imported);
+        let _ = Lineage::measured_with_id(imported + 5_000, 0.5);
+        assert!(fresh_id() > imported + 5_000);
+    }
+
+    #[test]
+    fn equality_ignores_which_variant_holds_the_terms() {
+        let leaf = Lineage::measured(0.3);
+        let derived = Lineage::from_terms(leaf.terms().to_vec());
+        assert_eq!(leaf, derived);
+        assert_eq!(Lineage::exact(), Lineage::from_terms(vec![]));
+    }
+
+    #[test]
+    fn from_terms_restores_the_invariants() {
+        // Unsorted, duplicated and dead terms — what a round trip through another
+        // language can hand back.
+        let l = Lineage::from_terms(vec![(9, 1.0), (2, 0.5), (9, -1.0), (5, 0.0), (2, 0.5)]);
+        assert_eq!(l.terms(), &[(2, 1.0)]);
+        assert!((l.std_dev() - 1.0).abs() < 1e-12);
     }
 
     #[test]

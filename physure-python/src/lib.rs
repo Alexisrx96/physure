@@ -32,6 +32,7 @@ use ::physure_core::{
     PhysureResult, PhysureError,
     DimVector, UnitConverter, UnitDefinition, UnitKind,
 };
+use ::physure_core::uncertainty::lineage::{self, Lineage};
 use physure_script::symbolic::Expr;
 
 // ── Unit cache (Python object interning) ───────────────────────────────────
@@ -1437,9 +1438,120 @@ impl PyQuantityMatrix {
     }
 }
 
+// ── PyLineage ─────────────────────────────────────────────────────────────────
+// Provenance for one scalar uncertainty: which measurements it came from, and how
+// strongly each one still moves it.
+//
+// Exported so Python does not need a second implementation of the merge rule. Two
+// implementations mean two answers, and the whole point of the lineage is that PHS,
+// Rust and Python agree on what `x - x` is.
+#[pyclass(name = "Lineage", module = "physure._core")]
+#[derive(Clone)]
+pub struct PyLineage(pub Lineage);
+
+#[pymethods]
+impl PyLineage {
+    /// A newly measured quantity. Passing `source_id` reuses an existing source
+    /// instead of minting one, so a caller that names its measurements keeps them
+    /// correlated across calls. A zero or non-finite `std_dev` is exact and gets no id.
+    #[new]
+    #[pyo3(signature = (std_dev, source_id = None))]
+    fn new(std_dev: f64, source_id: Option<u32>) -> Self {
+        match source_id {
+            Some(id) => PyLineage(Lineage::measured_with_id(id, std_dev)),
+            None => PyLineage(Lineage::measured(std_dev)),
+        }
+    }
+
+    /// A value with no uncertainty. It is not a source, so two exact constants never
+    /// cancel against each other.
+    #[staticmethod]
+    fn exact() -> Self {
+        PyLineage(Lineage::exact())
+    }
+
+    /// Rebuilds from `(source_id, coefficient)` pairs as produced by `terms()`.
+    #[staticmethod]
+    fn from_terms(terms: Vec<(u32, f64)>) -> Self {
+        PyLineage(Lineage::from_terms(terms))
+    }
+
+    /// Mints a source id that no other lineage will reuse.
+    #[staticmethod]
+    fn fresh_id() -> u32 {
+        lineage::fresh_id()
+    }
+
+    /// Merges two lineages under the chain rule: `c_new(id) = ja*a(id) + jb*b(id)`.
+    #[staticmethod]
+    fn combine(a: &PyLineage, ja: f64, b: &PyLineage, jb: f64) -> Self {
+        PyLineage(Lineage::combine(&a.0, ja, &b.0, jb))
+    }
+
+    /// Applies a single partial derivative, as for a one-argument function.
+    fn scale(&self, jacobian: f64) -> Self {
+        PyLineage(self.0.scale(jacobian))
+    }
+
+    /// Keeps the dependency shape but resizes it to report `target` as its sigma.
+    fn rescaled_to(&self, target: f64) -> Self {
+        PyLineage(self.0.rescaled_to(target))
+    }
+
+    /// The `(source_id, coefficient)` pairs, sorted by id.
+    fn terms(&self) -> Vec<(u32, f64)> {
+        self.0.terms().to_vec()
+    }
+
+    #[getter]
+    fn std_dev(&self) -> f64 {
+        self.0.std_dev()
+    }
+
+    #[getter]
+    fn is_exact(&self) -> bool {
+        self.0.is_exact()
+    }
+
+    fn __len__(&self) -> usize {
+        self.0.terms().len()
+    }
+
+    fn __eq__(&self, other: &PyLineage) -> bool {
+        self.0 == other.0
+    }
+
+    fn __hash__(&self) -> u64 {
+        // f64 is not Hash, so the coefficients go in by bit pattern. Terms are kept
+        // sorted, so equal lineages always hash the same.
+        let mut h: u64 = 1469598103934665603;
+        for &(id, coeff) in self.0.terms() {
+            for byte in id.to_le_bytes().iter().chain(coeff.to_bits().to_le_bytes().iter()) {
+                h ^= u64::from(*byte);
+                h = h.wrapping_mul(1099511628211);
+            }
+        }
+        h
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Lineage(std_dev={}, terms={:?})", self.0.std_dev(), self.0.terms())
+    }
+
+    // Rebuilt through `from_terms` rather than `__new__`, which would mint a new
+    // source id and leave the restored value uncorrelated with its own siblings.
+    // `from_terms` also reserves the ids it sees, so a lineage restored in a fresh
+    // process cannot collide with one minted there later.
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (Vec<(u32, f64)>,))> {
+        let from_terms = py.get_type::<PyLineage>().getattr("from_terms")?;
+        Ok((from_terms.unbind(), (self.0.terms().to_vec(),)))
+    }
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyLineage>()?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add_class::<PyQuantity>()?;

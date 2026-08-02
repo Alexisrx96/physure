@@ -70,6 +70,7 @@ if TYPE_CHECKING:
         get_current_system,
         get_propagation_mode,
         propagation_mode,
+        python_lineage,
         uncertainty_mode,
     )
     from physure.application.context import (
@@ -130,6 +131,7 @@ _CONTEXT_ATTRS = {
     "get_active_system",
     "get_propagation_mode",
     "propagation_mode",
+    "python_lineage",
     "uncertainty_mode",
     "system_context",
 }
@@ -234,6 +236,7 @@ def _load_context(name: str) -> Any:
         get_current_system,
         get_propagation_mode,
         propagation_mode,
+        python_lineage,
         uncertainty_mode,
         use_system,
     )
@@ -243,6 +246,7 @@ def _load_context(name: str) -> Any:
         "get_active_system": get_current_system,
         "get_propagation_mode": get_propagation_mode,
         "propagation_mode": propagation_mode,
+        "python_lineage": python_lineage,
         "uncertainty_mode": uncertainty_mode,
         "system_context": use_system,
     }

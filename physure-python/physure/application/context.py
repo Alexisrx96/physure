@@ -145,6 +145,39 @@ def propagation_mode(mode: str) -> Generator[None]:
         _propagation_mode.reset(token)
 
 
+_python_lineage: ContextVar[bool] = ContextVar("python_lineage", default=False)
+
+
+@contextmanager
+def python_lineage() -> Generator[None]:
+    """Opts into the Python implementation of scalar lineage tracking.
+
+    Scalar provenance normally lives in the Rust core, so PHS, the Rust API and
+    Python cannot drift apart on what `x - x` is. The core keys sources by `u32`
+    and holds coefficients as `f64`, which a JAX tracer or a PyTorch tensor cannot
+    be converted to, so those need the Python implementation instead.
+
+    That path is opt-in rather than automatic: a second implementation is a second
+    set of answers waiting to happen, and falling back silently would hide which
+    one produced a given number.
+
+    Examples:
+        >>> import physure
+        >>> with physure.python_lineage():
+        ...     pass
+    """
+    token = _python_lineage.set(True)
+    try:
+        yield
+    finally:
+        _python_lineage.reset(token)
+
+
+def using_python_lineage() -> bool:
+    """Whether the Python lineage implementation has been opted into."""
+    return _python_lineage.get()
+
+
 _UNCERTAINTY_MODE: ContextVar[tuple[str, dict[str, Any]]] = ContextVar(
     "uncertainty_mode", default=("python", {})
 )

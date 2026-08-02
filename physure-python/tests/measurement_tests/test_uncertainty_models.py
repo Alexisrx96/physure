@@ -8,6 +8,7 @@ import pytest
 from physure.core.autograd import AutogradPropagator
 from physure.domain.measurement.uncertainty import (
     CovarianceModel,
+    LineageModel,
     Uncertainty,
     VarianceModel,
 )
@@ -16,12 +17,13 @@ from physure.domain.measurement.uncertainty import (
 
 
 def test_from_standard_scalar_returns_lineage_tracking_model():
-    # A scalar is lineage-tracked with no store active, so it is not treated as
-    # independent of itself.
+    # A scalar is lineage-tracked by the Rust core with no store active, so it is
+    # not treated as independent of itself.
     u = Uncertainty.from_standard(2.0)
-    assert isinstance(u, CovarianceModel)
+    assert isinstance(u, LineageModel)
     assert math.isclose(u.std_dev, 2.0)
     assert list(u.lineage.values()) == [2.0]
+    assert math.isclose(u.add(u, 1.0, -1.0).std_dev, 0.0)
 
 
 def test_from_standard_zero_scalar_returns_none():

@@ -114,14 +114,43 @@ class Uncertainty(ABC, Generic[UncType]):
                 return VarianceModel(variance=std_dev)
             return CovarianceModel.from_standard(std_dev, measurement_id)
 
-        # Scalar dispatch. Lineage tracking is always on, matching the Rust core:
+        # Scalar dispatch. Provenance tracking is always on, matching the Rust core:
         # without it a quantity is treated as independent of itself and `x - x`
-        # comes out at std_dev*sqrt(2) instead of zero. CovarianceModel is what
-        # records provenance, so a plain scalar goes through it too — not only the
-        # ones that happen to have a vector store active, which this path never uses.
+        # comes out at std_dev*sqrt(2) instead of zero. It used to be reached only
+        # when a vector store happened to be active — a store this path never uses.
+        from physure.application.context import (
+            get_propagation_mode,
+            using_python_lineage,
+        )
         from physure.domain.measurement.vectorized_uncertainty import (
             get_current_store,
         )
+
+        # `propagation_mode("uncorrelated")` is the opt-out: it drops provenance
+        # and treats every input as its own noise source. It has to be honoured
+        # here, or the flag silently does nothing now that tracking is the default.
+        uncorrelated = get_propagation_mode() == "uncorrelated"
+
+        if _is_tracing_backend_scalar(std_dev):
+            # A 0-d tracer or a scalar tensor is a scalar, but it used to fall into
+            # the array machinery below, which drops provenance: under `jax.jit`,
+            # `x - x` came back as 0.1414 while PHS, Rust and eager Python all said
+            # 0. Its coefficients carry an autograd graph and cannot become the f64
+            # the core keys on, so this is the one case the Python implementation is
+            # allowed to serve -- and only when asked for, since a second
+            # implementation answering silently is how the two drift apart.
+            if uncorrelated:
+                return VarianceModel.from_standard(std_dev)
+            if not using_python_lineage():
+                raise TypeError(
+                    f"Cannot track provenance for a {type(std_dev).__name__} "
+                    "uncertainty: the Rust core holds coefficients as f64, and "
+                    "converting one would detach it from its autograd graph. Wrap "
+                    "the call in `physure.python_lineage()` to use the Python "
+                    "implementation, or `physure.propagation_mode('uncorrelated')` "
+                    "to drop provenance entirely."
+                )
+            return CovarianceModel.from_standard(std_dev, measurement_id)
 
         if backend.is_array(std_dev):
             # A size-1 array still belongs to the array machinery.
@@ -134,13 +163,14 @@ class Uncertainty(ABC, Generic[UncType]):
         if not backend.any(nonzero):
             return None
 
-        # `propagation_mode("uncorrelated")` is the opt-out: it drops provenance
-        # and treats every input as its own noise source. It has to be honoured
-        # here, or the flag silently does nothing now that tracking is the default.
-        from physure.application.context import get_propagation_mode
-
-        if get_propagation_mode() == "uncorrelated":
+        if uncorrelated:
             return VarianceModel.from_standard(std_dev)
+
+        # Provenance lives in the Rust core so that PHS, the Rust API and Python
+        # cannot drift apart on what `x - x` is.
+        if _native_lineage_cls() is not None and not using_python_lineage():
+            return LineageModel.from_standard(std_dev, measurement_id)
+
         return CovarianceModel.from_standard(std_dev, measurement_id)
 
     @classmethod
@@ -176,8 +206,14 @@ class Uncertainty(ABC, Generic[UncType]):
                 ),
             )
 
+        # Native lineage wins when any operand carries it, so a merge never drops
+        # provenance just because the other side was a plain variance.
+        if any(isinstance(u, LineageModel) for u in uncertainties):
+            new_unc = LineageModel._propagate_from_jacobians(
+                jacs, uncertainties, values, result
+            )
         # If any is CovarianceModel, we use Covariance logic
-        if any(isinstance(u, CovarianceModel) for u in uncertainties):
+        elif any(isinstance(u, CovarianceModel) for u in uncertainties):
             new_unc = CovarianceModel._propagate_from_jacobians(
                 jacs, uncertainties, values, result
             )
@@ -188,6 +224,235 @@ class Uncertainty(ABC, Generic[UncType]):
             )
 
         return result, new_unc
+
+
+def _is_tracing_backend_scalar(std_dev: Any) -> bool:
+    """Whether this is a single value that is *live* inside a JAX or torch graph.
+
+    Only a value with a graph behind it needs the Python implementation: converting
+    one to the `f64` the core keys on would silently detach it from that graph. A
+    concrete tensor or array carries no graph, so nothing is lost by sending it to
+    the core, and it takes the same path as any other scalar.
+
+    Detected by module, the way `BackendManager.get_backend` does it, so the two
+    cannot disagree about what a JAX or torch value is.
+    """
+    module = getattr(type(std_dev), "__module__", "")
+    name = type(std_dev).__name__.lower()
+    is_jax = module.startswith("jax") or "jax" in module or "tracer" in name
+    is_torch = module.startswith("torch")
+    if not (is_jax or is_torch):
+        return False
+
+    if is_torch and not (
+        getattr(std_dev, "requires_grad", False)
+        or getattr(std_dev, "grad_fn", None) is not None
+    ):
+        return False
+    if is_jax and "tracer" not in name:
+        # A committed JAX array is concrete; only a tracer stands for a value that
+        # does not exist yet.
+        return False
+
+    backend = BackendManager.get_backend(std_dev)
+    return not backend.is_array(std_dev) or backend.size(std_dev) <= 1
+
+
+def _native_lineage_cls() -> type | None:
+    """The Rust `Lineage` class, or None when the native core is not installed."""
+    global _NATIVE_LINEAGE
+    if _NATIVE_LINEAGE is _UNPROBED:
+        try:
+            from physure._core import Lineage
+
+            _NATIVE_LINEAGE = Lineage
+        except ImportError:
+            _NATIVE_LINEAGE = None
+    return _NATIVE_LINEAGE
+
+
+_UNPROBED = object()
+_NATIVE_LINEAGE: Any = _UNPROBED
+
+_SOURCE_IDS: dict[str, int] = {}
+
+
+def _source_id_for(name: str) -> int:
+    """Maps a caller-supplied measurement name onto a native source id.
+
+    The core keys sources by `u32`, so a string name has to be interned. Interning
+    is what makes the name mean one measurement across calls: minting a new id each
+    time would leave two quantities built from the same named source uncorrelated.
+    """
+    cls = _native_lineage_cls()
+    assert cls is not None
+    # setdefault so two threads racing on the same name still settle on one id.
+    return _SOURCE_IDS.setdefault(name, cls.fresh_id())
+
+
+@dataclass(frozen=True, slots=True)
+class LineageModel(Uncertainty[UncType]):
+    """Scalar uncertainty whose provenance is tracked by the Rust core.
+
+    A thin wrapper: every merge is `physure._core.Lineage.combine`, so PHS, the Rust
+    API and Python cannot disagree about whether a quantity is independent of itself.
+
+    Arrays are deliberately not handled here — the native lineage is `(u32, f64)`
+    pairs. They keep going through `CovarianceModel` and the native `CovarianceStore`,
+    which is Rust-backed as well.
+    """
+
+    native: Any
+    # Present so the other models' `vector_slice` checks work on this one too.
+    vector_slice: None = None
+
+    @property
+    def std_dev(self) -> UncType:
+        """Returns the standard deviation."""
+        return cast("UncType", self.native.std_dev)
+
+    @property
+    def lineage(self) -> dict[str, Numeric]:
+        """The provenance as a mapping, for callers that expect the dict shape."""
+        return {str(sid): coeff for sid, coeff in self.native.terms()}
+
+    @classmethod
+    def from_standard(
+        cls, std_dev: UncType, measurement_id: str | None = None
+    ) -> LineageModel[UncType]:
+        """Creates a lineage-tracked model, minting a source for this measurement."""
+        native_cls = _native_lineage_cls()
+        assert native_cls is not None
+        source_id = (
+            _source_id_for(measurement_id)
+            if measurement_id is not None
+            else None
+        )
+        return cls(native=native_cls(float(cast("Any", std_dev)), source_id))
+
+    @staticmethod
+    def _native_of(u: Uncertainty | None) -> Any:
+        """The native lineage of an operand.
+
+        An operand that is not lineage-tracked is an independent noise source, so it
+        gets a fresh id — that keeps it from accidentally cancelling against anything.
+        """
+        native_cls = _native_lineage_cls()
+        assert native_cls is not None
+        if isinstance(u, LineageModel):
+            return u.native
+        if u is None:
+            return native_cls.exact()
+        return native_cls(float(cast("Any", u.std_dev)))
+
+    def _degrade_to_covariance(self) -> CovarianceModel:
+        """This model as a CovarianceModel, for the array paths it cannot serve."""
+        return CovarianceModel(
+            std_dev_internal=self.std_dev, lineage=self.lineage
+        )
+
+    def add(
+        self,
+        other: Uncertainty[UncType] | None,
+        jac_self: Numeric = 1.0,
+        jac_other: Numeric = 1.0,
+        out_magnitude: Numeric | None = None,
+    ) -> Uncertainty[UncType]:
+        """Propagates uncertainty for addition/subtraction."""
+        native_cls = _native_lineage_cls()
+        assert native_cls is not None
+
+        backend = BackendManager.get_backend(out_magnitude)
+        if out_magnitude is not None and backend.is_array(out_magnitude):
+            # A scalar promoted to an array leaves what the core can represent.
+            return self._degrade_to_covariance().add(
+                other, jac_self, jac_other, out_magnitude
+            )
+
+        return LineageModel(
+            native=native_cls.combine(
+                self.native,
+                float(cast("Any", jac_self)),
+                self._native_of(other),
+                float(cast("Any", jac_other)),
+            )
+        )
+
+    def propagate_mul_div(
+        self,
+        other: Uncertainty[Any] | None,
+        val1: Numeric,
+        val2: Numeric,
+        result_value: Numeric,
+        jac_self: Numeric | None = None,
+        jac_other: Numeric | None = None,
+    ) -> Uncertainty[Any]:
+        """Propagates uncertainty for multiplication or division.
+
+        Callers must pass explicit Jacobians; the operation cannot be reliably
+        inferred from the values.
+        """
+        if jac_self is None or jac_other is None:
+            raise ValueError(
+                "propagate_mul_div requires explicit jac_self and jac_other."
+            )
+        return self.add(other, jac_self, jac_other, out_magnitude=result_value)
+
+    def power(
+        self,
+        exponent: float,
+        value: Numeric | None = None,
+        jac: Numeric | None = None,
+    ) -> Uncertainty[Any]:
+        """Propagates uncertainty for exponentiation."""
+        if jac is None:
+            if value is None:
+                raise ValueError(
+                    "Either value or jac must be provided to power()"
+                )
+            jac = exponent * cast("Any", value) ** (exponent - 1)
+        return self.scale(jac)
+
+    def scale(self, factor: Numeric) -> Uncertainty[UncType]:
+        """Scales the uncertainty by a factor, keeping its provenance."""
+        return LineageModel(
+            native=self.native.scale(float(cast("Any", factor)))
+        )
+
+    @classmethod
+    def _propagate_from_jacobians(
+        cls,
+        jacs: tuple[Numeric, ...],
+        uncertainties: Sequence[Uncertainty | None],
+        values: Sequence[Numeric],
+        _result: Numeric,
+    ) -> LineageModel:
+        """Internal propagation using pre-computed Jacobians."""
+        native_cls = _native_lineage_cls()
+        assert native_cls is not None
+
+        merged = native_cls.exact()
+        for u, jac in zip(uncertainties, jacs, strict=False):
+            if u is None:
+                continue
+            merged = native_cls.combine(
+                merged, 1.0, cls._native_of(u), float(cast("Any", jac))
+            )
+        return cls(native=merged)
+
+    def __eq__(self, other: object) -> bool:
+        """Two models are equal when they describe the same provenance."""
+        if not isinstance(other, LineageModel):
+            return NotImplemented
+        return bool(self.native == other.native)
+
+    def __hash__(self) -> int:
+        """Hashes the underlying provenance."""
+        return hash(self.native)
+
+    def __repr__(self) -> str:
+        """Returns string representation."""
+        return f"LineageModel(std_dev={self.std_dev!r})"
 
 
 @dataclass(frozen=True, slots=True)

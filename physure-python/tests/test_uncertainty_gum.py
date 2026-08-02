@@ -11,7 +11,14 @@ propagation by default -- the same rules a textbook lab report uses.
 
 import math
 
-from physure import Q_, PhysureContext, propagation_mode
+import pytest
+
+from physure import (
+    Q_,
+    PhysureContext,
+    propagation_mode,
+    python_lineage,
+)
 
 
 # --- Sum/difference: absolute uncertainties add in quadrature (GUM 5.1.2) -----
@@ -167,3 +174,62 @@ def test_two_x_minus_two_x_has_zero_uncertainty_with_correlation_tracking():
         w = 2.0 * x - 2.0 * x
         assert math.isclose(w.magnitude, 0.0, abs_tol=1e-12)
         assert math.isclose(w.uncertainty, 0.0, abs_tol=1e-12)
+
+
+# --- Provenance lives in the Rust core --------------------------------------
+def test_scalar_provenance_is_delegated_to_the_native_core():
+    # Python is a thin wrapper here: the merge itself must be the core's, so PHS,
+    # the Rust API and Python cannot drift apart on what `x - x` is.
+    from physure._core import Lineage
+    from physure.domain.measurement.uncertainty import LineageModel
+
+    model = Q_(10.0, "m", uncertainty=1.0)._uncertainty_obj
+    assert isinstance(model, LineageModel)
+    assert isinstance(model.native, Lineage)
+
+
+def test_a_traced_uncertainty_refuses_rather_than_answering_differently():
+    # A live torch tensor cannot become the f64 the core keys on, and converting it
+    # would cut it out of its autograd graph. Refusing names the opt-in instead of
+    # quietly answering from the other implementation.
+    torch = pytest.importorskip("torch")
+    from physure.domain.measurement.uncertainty import (
+        CovarianceModel,
+        Uncertainty,
+        VarianceModel,
+    )
+
+    live = torch.tensor(0.1, requires_grad=True)
+    with pytest.raises(TypeError, match="python_lineage"):
+        Uncertainty.from_standard(live)
+
+    with python_lineage():
+        assert isinstance(Uncertainty.from_standard(live), CovarianceModel)
+
+    # KNOWN GAP: a concrete tensor has no graph to lose, but it still goes through
+    # the array machinery, which keeps its tensor dtype and drops provenance. So a
+    # torch scalar is the one place left where `x - x` disagrees with the core.
+    # Routing it to the core would return a plain float instead of a tensor, which
+    # is a deliberate call, not something to change silently.
+    plain = torch.tensor(0.1)
+    assert isinstance(Uncertainty.from_standard(plain), VarianceModel)
+    q = Q_(torch.tensor(3.0), "m", uncertainty=plain)
+    assert float((q - q).uncertainty) > 0.0
+
+
+def test_jax_under_jit_agrees_with_the_core_once_opted_in():
+    # This is the disparity the opt-in exists to surface: before, tracing silently
+    # dropped provenance and `x - x` came back as sqrt(2) under `jit` while every
+    # other environment said 0.
+    jax = pytest.importorskip("jax")
+
+    @jax.jit
+    def x_minus_x(value, sigma):
+        x = Q_(value, "m", uncertainty=sigma)
+        return (x - x).uncertainty
+
+    with pytest.raises(TypeError, match="python_lineage"):
+        x_minus_x(10.0, 1.0)
+
+    with python_lineage():
+        assert math.isclose(float(x_minus_x(10.0, 1.0)), 0.0, abs_tol=1e-9)
