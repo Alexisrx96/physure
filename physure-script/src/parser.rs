@@ -15,14 +15,17 @@ pub fn parse_phs(code: &str) -> PhysureResult<Program> {
         .map_err(|e| PhysureError::Generic(format!("Parse error: {}", e)))?;
     
     let mut statements = Vec::new();
+    let mut statement_pos = Vec::new();
     for pair in pairs {
         if pair.as_rule() == Rule::stmt {
+            let (line, col) = pair.line_col();
             let inner = pair.into_inner().next().unwrap();
             statements.push(parse_statement(inner)?);
+            statement_pos.push((line, col));
         }
     }
 
-    validate_unit_shadowing(&statements)?;
+    validate_unit_shadowing(&statements, &statement_pos)?;
     Ok(Program { statements })
 }
 
@@ -31,21 +34,18 @@ pub fn parse_phs_with_lines(code: &str) -> PhysureResult<Vec<(usize, Statement)>
         .map_err(|e| PhysureError::Generic(format!("Parse error: {}", e)))?;
 
     let mut statements = Vec::new();
+    let mut statement_pos = Vec::new();
     for pair in pairs {
         if pair.as_rule() == Rule::stmt {
-            let line = pair.line_col().0 - 1;
+            let (line, col) = pair.line_col();
             let inner = pair.into_inner().next().unwrap();
-            statements.push((line, parse_statement(inner)?));
+            statements.push((line - 1, parse_statement(inner)?));
+            statement_pos.push((line, col));
         }
     }
 
-    // The line-annotated form feeds the LSP and the step-by-step renderer, which must reject
-    // the same programs the plain parse does — otherwise an editor would happily show a result
-    // for a script `phs run` refuses.
-    let mut bound = HashSet::new();
-    for (_, stmt) in &statements {
-        check_statement_shadowing(stmt, &mut bound)?;
-    }
+    let stmts_only: Vec<Statement> = statements.iter().map(|(_, s)| s.clone()).collect();
+    validate_unit_shadowing(&stmts_only, &statement_pos)?;
 
     Ok(statements)
 }
@@ -902,7 +902,7 @@ fn unit_chain_tokens(unit: &str) -> Vec<UnitToken> {
 /// parenthesising the number ends the unit chain so the word reaches the expression parser as
 /// an ordinary variable reference, and quoting it keeps it a unit because a string operand is
 /// resolved against the unit registry.
-fn unit_shadowing_error(magnitude: f64, unit: &str, token: &UnitToken) -> PhysureError {
+fn unit_shadowing_error(magnitude: f64, unit: &str, token: &UnitToken, line: usize, col: usize) -> PhysureError {
     let literal = format!("{} {}", magnitude, unit);
 
     // `op` is always present: only a word introduced by an explicit `*` or `/` gets here.
@@ -916,9 +916,11 @@ fn unit_shadowing_error(magnitude: f64, unit: &str, token: &UnitToken) -> Physur
     let as_unit = format!("{} {} {} \"{}\"", magnitude, head, op_char, tail);
 
     PhysureError::Generic(format!(
-        "Ambiguous '{token}' in the quantity literal `{literal}`: '{token}' is a registered unit \
+        "--> {line}:{col}\nAmbiguous '{token}' in the quantity literal `{literal}`: '{token}' is a registered unit \
 symbol and also a name this script binds earlier, and PhysureScript will not guess which one you \
 meant. Write `{as_variable}` to multiply by the variable, or `{as_unit}` to keep the unit.",
+        line = line,
+        col = col,
         token = token.text,
     ))
 }
@@ -933,18 +935,19 @@ meant. Write `{as_variable}` to multiply by the variable, or `{as_unit}` to keep
 /// The walk is in source order because a name bound *after* a use site does not shadow it; in
 /// particular `g = 9.81 m / s ^ 2` must not flag its own `g`, whose binding only takes effect
 /// once the right-hand side has been read.
-fn validate_unit_shadowing(statements: &[Statement]) -> PhysureResult<()> {
+fn validate_unit_shadowing(statements: &[Statement], statement_pos: &[(usize, usize)]) -> PhysureResult<()> {
     let mut bound: HashSet<String> = HashSet::new();
-    for stmt in statements {
-        check_statement_shadowing(stmt, &mut bound)?;
+    for (i, stmt) in statements.iter().enumerate() {
+        let (line, col) = statement_pos.get(i).copied().unwrap_or((1, 1));
+        check_statement_shadowing(stmt, &mut bound, line, col)?;
     }
     Ok(())
 }
 
-fn check_statement_shadowing(stmt: &Statement, bound: &mut HashSet<String>) -> PhysureResult<()> {
+fn check_statement_shadowing(stmt: &Statement, bound: &mut HashSet<String>, line: usize, col: usize) -> PhysureResult<()> {
     match stmt {
         Statement::Assignment(node) => {
-            check_expr_shadowing(&node.value, bound)?;
+            check_expr_shadowing(&node.value, bound, line, col)?;
             bound.insert(node.name.clone());
         }
         Statement::FunctionDef(node) => {
@@ -955,20 +958,20 @@ fn check_statement_shadowing(stmt: &Statement, bound: &mut HashSet<String>) -> P
             let mut local = bound.clone();
             local.extend(node.params.iter().cloned());
             for body_stmt in &node.body_stmts {
-                check_statement_shadowing(body_stmt, &mut local)?;
+                check_statement_shadowing(body_stmt, &mut local, line, col)?;
             }
         }
-        Statement::Expr(expr) | Statement::Return(expr) => check_expr_shadowing(expr, bound)?,
+        Statement::Expr(expr) | Statement::Return(expr) => check_expr_shadowing(expr, bound, line, col)?,
         Statement::GuardReturn { cond, value } => {
-            check_expr_shadowing(cond, bound)?;
-            check_expr_shadowing(value, bound)?;
+            check_expr_shadowing(cond, bound, line, col)?;
+            check_expr_shadowing(value, bound, line, col)?;
         }
         Statement::Import(_) | Statement::Export(_) => {}
     }
     Ok(())
 }
 
-fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>) -> PhysureResult<()> {
+fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: usize) -> PhysureResult<()> {
     match expr {
         Expr::Quantity(node) => {
             let Some(unit) = &node.unit else { return Ok(()) };
@@ -976,32 +979,32 @@ fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>) -> PhysureResult<(
                 // The first word is attached by juxtaposition, which is never multiplication in
                 // PhysureScript, so `3 m` stays a quantity even in a script that binds `m`.
                 if token.op.is_some() && bound.contains(&token.text) {
-                    return Err(unit_shadowing_error(node.magnitude, unit, &token));
+                    return Err(unit_shadowing_error(node.magnitude, unit, &token, line, col));
                 }
             }
             Ok(())
         }
         Expr::Identifier(_) | Expr::Str(_) => Ok(()),
         Expr::BinaryOp { left, right, .. } => {
-            check_expr_shadowing(left, bound)?;
-            check_expr_shadowing(right, bound)
+            check_expr_shadowing(left, bound, line, col)?;
+            check_expr_shadowing(right, bound, line, col)
         }
         Expr::FunctionCall { name, args, kwargs } => {
             // `where` desugars to `let(name, value, body)` (see `parse_where_expr`), and the
             // binding is only visible in the body — its own value expression predates it.
             if name == "let" && args.len() == 3 {
                 if let Expr::Identifier(var) = &args[0] {
-                    check_expr_shadowing(&args[1], bound)?;
+                    check_expr_shadowing(&args[1], bound, line, col)?;
                     let mut local = bound.clone();
                     local.insert(var.clone());
-                    return check_expr_shadowing(&args[2], &local);
+                    return check_expr_shadowing(&args[2], &local, line, col);
                 }
             }
             for arg in args {
-                check_expr_shadowing(arg, bound)?;
+                check_expr_shadowing(arg, bound, line, col)?;
             }
             for (_, value) in kwargs {
-                check_expr_shadowing(value, bound)?;
+                check_expr_shadowing(value, bound, line, col)?;
             }
             Ok(())
         }
