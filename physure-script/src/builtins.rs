@@ -108,6 +108,15 @@ pub fn eval_domain_builtin(
 /// quantity keeps its unit — formatting is about how many digits to show, not about
 /// discarding the half of the measurement that says what the number means.
 fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
+    // `base` quotes the measurement in the units it is built from — `2 kΩ: base` is
+    // `2000 A^-2 * kg * m^2 * s^-3`. The scale moves into the magnitude, so the physical
+    // value is untouched; only the terms change.
+    if spec == "base" {
+        return match value {
+            PhsValue::Quantity(q) => q.base_display(),
+            other => other.to_string(),
+        };
+    }
     let digits = spec.trim_start_matches('.').trim_end_matches(char::is_alphabetic);
     let precision: usize = digits.parse().unwrap_or(6);
     let kind = spec.chars().last().filter(|c| c.is_alphabetic()).unwrap_or('f');
