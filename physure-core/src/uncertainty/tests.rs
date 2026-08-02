@@ -362,3 +362,42 @@ fn an_exact_constant_never_becomes_a_source() {
     assert!((scaled.value.std_dev() - 0.6).abs() < 1e-12);
     assert!(scaled.sub(&scaled).unwrap().value.std_dev().abs() < 1e-12);
 }
+
+#[test]
+fn a_moments_value_reads_back_through_the_enum() {
+    let x = UncertaintyValue::Moments(MomentsBackend::measured(12.3, 0.4, 0.5).unwrap());
+    assert_eq!(x.get_model_name(), "moments");
+    assert!(x.mean() > 12.3, "the long tail is upwards, so the mean sits above the quoted mode");
+    assert!(x.std_dev() > 0.0);
+    assert_eq!(x.lineage().terms().len(), 1, "a measurement is one source");
+}
+
+#[test]
+fn arithmetic_on_an_asymmetric_value_refuses_instead_of_symmetrising() {
+    // Until moment propagation lands, every route through the symmetric arms would return a
+    // plausible-looking number with the asymmetry quietly averaged out. Each one must refuse,
+    // whichever side the asymmetric operand is on.
+    let x = UncertaintyValue::Moments(MomentsBackend::measured(12.3, 0.4, 0.5).unwrap());
+    let g = UncertaintyValue::Gaussian(GaussianBackend::new(1.0, 0.3));
+    let mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.3, 1000));
+    let u = UncertaintyValue::Unscented(UnscentedBackend::new_scalar(2.0, 0.3));
+
+    for other in [&g, &mc, &u, &x] {
+        for (name, result) in [
+            ("add", x.propagate_add(other)),
+            ("sub", x.propagate_sub(other)),
+            ("mul", x.propagate_mul(other)),
+            ("div", x.propagate_div(other)),
+            ("add-rhs", other.propagate_add(&x)),
+            ("sub-rhs", other.propagate_sub(&x)),
+            ("mul-rhs", other.propagate_mul(&x)),
+            ("div-rhs", other.propagate_div(&x)),
+        ] {
+            let Err(err) = result else { panic!("{name} answered instead of refusing") };
+            assert!(err.to_string().contains("not yet propagated"), "{name}: {err}");
+        }
+    }
+
+    assert!(x.propagate_pow(2.0).is_err());
+    assert!(x.propagate_function("sin").is_err());
+}

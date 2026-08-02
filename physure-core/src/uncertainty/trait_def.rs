@@ -5,6 +5,7 @@ use ndarray::Array1;
 use super::lineage::Lineage;
 use crate::error::PhysureResult;
 use super::gaussian::GaussianBackend;
+use super::moments::MomentsBackend;
 use super::monte_carlo::MonteCarloBackend;
 use super::unscented::UnscentedBackend;
 
@@ -27,6 +28,8 @@ dyn_clone::clone_trait_object!(UncertaintyBackend);
 #[derive(Clone)]
 pub enum UncertaintyValue {
     Gaussian(GaussianBackend),
+    /// An asymmetric measurement, kept as moments so its skew survives propagation.
+    Moments(MomentsBackend),
     MonteCarlo(MonteCarloBackend),
     Unscented(UnscentedBackend),
     Custom(Box<dyn UncertaintyBackend>),
@@ -36,6 +39,7 @@ impl UncertaintyValue {
     pub fn mean(&self) -> f64 {
         match self {
             Self::Gaussian(g) => g.mean(),
+            Self::Moments(m) => m.mean(),
             Self::MonteCarlo(m) => m.mean(),
             Self::Unscented(u) => u.mean(),
             Self::Custom(c) => c.mean(),
@@ -45,6 +49,7 @@ impl UncertaintyValue {
     pub fn std_dev(&self) -> f64 {
         match self {
             Self::Gaussian(g) => g.std_dev(),
+            Self::Moments(m) => m.std_dev(),
             Self::MonteCarlo(m) => m.std_dev(),
             Self::Unscented(u) => u.std_dev(),
             Self::Custom(c) => c.std_dev(),
@@ -54,6 +59,7 @@ impl UncertaintyValue {
     pub fn get_model_name(&self) -> &str {
         match self {
             Self::Gaussian(g) => g.get_model_name(),
+            Self::Moments(m) => m.get_model_name(),
             Self::MonteCarlo(m) => m.get_model_name(),
             Self::Unscented(u) => u.get_model_name(),
             Self::Custom(c) => c.get_model_name(),
@@ -69,6 +75,7 @@ impl UncertaintyValue {
     pub fn lineage(&self) -> Lineage {
         match self {
             Self::Gaussian(g) => g.sigma.clone(),
+            Self::Moments(m) => m.sigma.clone(),
             Self::Unscented(u) => u.sigma.clone(),
             Self::MonteCarlo(_) | Self::Custom(_) => Lineage::measured(self.std_dev()),
         }
@@ -77,6 +84,7 @@ impl UncertaintyValue {
     pub fn as_backend_ref(&self) -> &dyn UncertaintyBackend {
         match self {
             Self::Gaussian(g) => g,
+            Self::Moments(m) => m,
             Self::MonteCarlo(m) => m,
             Self::Unscented(u) => u,
             Self::Custom(c) => c.as_ref(),
@@ -115,6 +123,9 @@ impl UncertaintyValue {
 
     pub fn propagate_add(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
+            // Refused rather than approximated: every arm below is symmetric, so any of
+            // them would drop the skew and look like it had worked.
+            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("addition")),
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m = g1.mean + g2.mean;
                 let sigma = Lineage::combine(&g1.sigma, 1.0, &g2.sigma, 1.0);
@@ -138,6 +149,9 @@ impl UncertaintyValue {
 
     pub fn propagate_sub(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
+            // Refused rather than approximated: every arm below is symmetric, so any of
+            // them would drop the skew and look like it had worked.
+            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("subtraction")),
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m = g1.mean - g2.mean;
                 let sigma = Lineage::combine(&g1.sigma, 1.0, &g2.sigma, -1.0);
@@ -161,6 +175,9 @@ impl UncertaintyValue {
 
     pub fn propagate_mul(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
+            // Refused rather than approximated: every arm below is symmetric, so any of
+            // them would drop the skew and look like it had worked.
+            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("multiplication")),
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 // d(ab)/da = b, d(ab)/db = a. With disjoint lineages this reproduces the
                 // quadrature form it replaces; with a shared source it does not, which is
@@ -186,6 +203,9 @@ impl UncertaintyValue {
 
     pub fn propagate_div(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
+            // Refused rather than approximated: every arm below is symmetric, so any of
+            // them would drop the skew and look like it had worked.
+            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("division")),
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m1 = g1.mean; let m2 = g2.mean;
                 if m2 == 0.0 {
@@ -232,6 +252,7 @@ impl UncertaintyValue {
                 let sigma = g.sigma.scale(exponent * m.powf(exponent - 1.0));
                 Ok(Self::Gaussian(GaussianBackend::derived(new_mean, sigma)))
             }
+            Self::Moments(_) => Err(super::moments::not_implemented("exponentiation")),
             Self::MonteCarlo(m) => {
                 Ok(Self::MonteCarlo(MonteCarloBackend { samples: m.samples.mapv(|x| x.powf(exponent)) }))
             }
@@ -252,6 +273,7 @@ impl UncertaintyValue {
                 let (new_mean, jacobian) = super::gaussian::function_mean_and_jacobian(func, g.mean);
                 Ok(Self::Gaussian(GaussianBackend::derived(new_mean, g.sigma.scale(jacobian))))
             }
+            Self::Moments(_) => Err(super::moments::not_implemented(func)),
             Self::MonteCarlo(m) => {
                 let new_samples = match func {
                     "sin" => m.samples.mapv(|x| x.sin()),
