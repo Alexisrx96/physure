@@ -155,7 +155,7 @@ impl RustTranspiler {
                         let unit_str = super::expr_to_unit_string(right);
                         Ok(format!("({}).to(\"{}\").unwrap()", left_code, unit_str))
                     }
-                    BinaryOp::Range => unreachable!(),
+                    BinaryOp::Range => return Err(super::range_is_not_transpilable()),
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {

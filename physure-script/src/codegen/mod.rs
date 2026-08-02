@@ -178,6 +178,18 @@ pub(crate) fn split_interpolated(text: &str) -> Vec<StrPart> {
     parts
 }
 
+/// A range reaching a code generator is a script that asked for one where the target has
+/// none. Every target says so with this, rather than with `unreachable!()`, which crashed
+/// `phs transpile` on `r = 0 m .. 100 m` instead of reporting it.
+pub(crate) fn range_is_not_transpilable() -> CodegenError {
+    CodegenError::Generic(
+        "A range (`a .. b`) has no equivalent in the generated code: it is an interval for a \
+         builtin to sample, not a value a variable can hold. Pass it to the call that consumes \
+         it, or transpile its endpoints separately."
+            .to_string(),
+    )
+}
+
 pub fn expr_to_unit_string(expr: &Expr) -> String {
     match expr {
         Expr::Identifier(name) => name.clone(),
