@@ -16,7 +16,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from physure.application.context import use_system
+from physure.application.context import normalize_propagation_mode, use_system
 from physure.domain.measurement.converters import (
     LinearConverter,
     LogarithmicConverter,
@@ -52,7 +52,20 @@ class UnitSystemBuilder:
         self._verbose = verbose
 
     def add_settings(self, settings_data: dict[str, str]) -> UnitSystemBuilder:
-        """Adds settings from a dictionary of key-value pairs."""
+        """Adds settings from a dictionary of key-value pairs.
+
+        Raises:
+            ValueError: If `propagation_mode` names a strategy that does not
+                exist. It is checked here, once, rather than on every read: a
+                misspelt mode would otherwise fall back to "correlated" and
+                report correlated results for a file that asked not to.
+        """
+        mode = settings_data.get("propagation_mode")
+        if mode is not None:
+            settings_data = dict(settings_data)
+            settings_data["propagation_mode"] = normalize_propagation_mode(
+                mode, source="[Settings] in physure.conf"
+            )
         self._system.settings.update(settings_data)
         return self
 

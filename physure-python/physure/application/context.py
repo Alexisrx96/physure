@@ -24,9 +24,18 @@ _current_unit_system: ContextVar[UnitSystem | None] = ContextVar(
     "current_unit_system", default=None
 )
 
-# Stores the active error propagation mode (e.g. "correlated", "uncorrelated").
-_propagation_mode: ContextVar[str] = ContextVar(
-    "propagation_mode", default="correlated"
+#: The propagation strategies `propagation_mode` accepts. "montecarlo" is also
+#: taken, as a spelling of "monte_carlo".
+PROPAGATION_MODES = ("correlated", "uncorrelated", "monte_carlo", "unscented")
+
+#: The mode used when neither a scope nor a unit system asks for one.
+DEFAULT_PROPAGATION_MODE = "correlated"
+
+# Stores the active error propagation mode. `None` means "nobody asked", which is
+# what lets the active system's `physure.conf` setting be heard; an explicit
+# "correlated" from a `propagation_mode` block has to outrank the file.
+_propagation_mode: ContextVar[str | None] = ContextVar(
+    "propagation_mode", default=None
 )
 
 # 2. Global fallback for the default system (SI)
@@ -127,6 +136,37 @@ def use_system(system_name_or_obj: str | UnitSystem) -> Generator[None]:
         _current_unit_system.reset(token)
 
 
+def normalize_propagation_mode(
+    mode: str, source: str = "propagation_mode"
+) -> str:
+    """Canonicalizes a propagation mode, rejecting the ones nothing implements.
+
+    Args:
+        mode: The strategy as written, in any case.
+        source: Where it came from, quoted back in the error so a typo in a
+            `physure.conf` says so instead of blaming the caller.
+
+    Returns:
+        One of `PROPAGATION_MODES`.
+
+    Raises:
+        ValueError: If the mode is not one physure knows how to propagate.
+
+    Examples:
+        >>> normalize_propagation_mode("MonteCarlo")
+        'monte_carlo'
+    """
+    normalized = mode.strip().lower()
+    if normalized == "montecarlo":
+        normalized = "monte_carlo"
+    if normalized not in PROPAGATION_MODES:
+        raise ValueError(
+            f"Unknown propagation mode {mode!r} in {source}. "
+            f"Expected one of: {', '.join(PROPAGATION_MODES)}."
+        )
+    return normalized
+
+
 @contextmanager
 def propagation_mode(mode: str) -> Generator[None]:
     """Context manager to temporarily switch the active propagation mode.
@@ -134,10 +174,11 @@ def propagation_mode(mode: str) -> Generator[None]:
     Args:
         mode: The propagation strategy to use ("correlated", "uncorrelated",
               "montecarlo", "monte_carlo", "unscented").
+
+    Raises:
+        ValueError: If the mode is not one of `PROPAGATION_MODES`.
     """
-    normalized_mode = mode.lower()
-    if normalized_mode == "montecarlo":
-        normalized_mode = "monte_carlo"
+    normalized_mode = normalize_propagation_mode(mode)
     token = _propagation_mode.set(normalized_mode)
     try:
         yield
@@ -252,14 +293,36 @@ def get_uncertainty_mode() -> tuple[str, dict[str, Any]]:
 
 
 def get_propagation_mode() -> str:
-    """Returns the currently active propagation mode."""
-    mode = _propagation_mode.get()
+    """Returns the currently active propagation mode.
 
-    # Fallback to system settings if not explicitly set in context
-    # Usually the default "correlated" is set, but we might want to check
-    # the active system's settings if we want it to be configurable per system.
-    # For now, we follow the spec which suggests a global/context mechanism.
-    return mode
+    A `propagation_mode` block wins; failing that the active unit system's
+    `[Settings] propagation_mode` from `physure.conf` is used, so a project can
+    set the default once in a file instead of wrapping every call site.
+
+    Returns:
+        One of `PROPAGATION_MODES`.
+
+    Examples:
+        >>> import physure
+        >>> with physure.propagation_mode("uncorrelated"):
+        ...     physure.get_propagation_mode()
+        'uncorrelated'
+    """
+    mode = _propagation_mode.get()
+    if mode is not None:
+        return mode
+
+    # Only a system that is already resolved gets a say. Building one here would
+    # read the conf to answer a question asked *while* reading the conf, and it
+    # would put a full unit-system build behind the first uncertainty.
+    system = _current_unit_system.get() or _global_default_system
+    if system is not None:
+        # Already validated by `UnitSystemBuilder.add_settings`.
+        configured = system.get_setting("propagation_mode")
+        if configured:
+            return configured
+
+    return DEFAULT_PROPAGATION_MODE
 
 
 # For backward compatibility if needed, though get_current_system is preferred.
@@ -275,5 +338,5 @@ def reset_context() -> None:
     global _global_default_system
     _global_default_system = None
     _current_unit_system.set(None)
-    _propagation_mode.set("correlated")
+    _propagation_mode.set(None)
     _uncertainty_model.set("gaussian")

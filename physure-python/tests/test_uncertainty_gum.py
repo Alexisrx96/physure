@@ -267,3 +267,52 @@ def test_the_moments_model_refuses_rather_than_building_a_gaussian():
         pytest.raises(NotImplementedError, match="not implemented yet"),
     ):
         Q_(12.3, "pb", uncertainty=0.4)
+
+
+# --- Propagation mode from physure.conf --------------------------------------
+def test_the_propagation_mode_falls_back_to_the_active_systems_setting():
+    # Nothing wraps this call, so the answer has to come out of the conf file.
+    import physure
+    from physure.application.context import get_current_system
+
+    system = get_current_system()
+    assert system.get_setting("propagation_mode") == "correlated"
+
+    system.settings["propagation_mode"] = "uncorrelated"
+    try:
+        assert physure.get_propagation_mode() == "uncorrelated"
+        # A block still outranks the file, including when it asks for the value
+        # the file already had -- "correlated" from a scope is not "unset".
+        with physure.propagation_mode("correlated"):
+            assert physure.get_propagation_mode() == "correlated"
+        assert physure.get_propagation_mode() == "uncorrelated"
+    finally:
+        system.settings["propagation_mode"] = "correlated"
+
+
+def test_a_misspelled_mode_in_the_conf_is_rejected_at_load_time():
+    # Falling back to "correlated" would report correlated results for a file
+    # that asked for something else, with nothing on screen to say so.
+    from physure.application.startup import UnitSystemBuilder
+
+    with pytest.raises(ValueError, match=r"physure\.conf"):
+        UnitSystemBuilder().add_settings({"propagation_mode": "uncorelated"})
+
+
+def test_the_conf_spelling_of_monte_carlo_is_normalized_once():
+    from physure.application.startup import UnitSystemBuilder
+
+    builder = UnitSystemBuilder().add_settings(
+        {"propagation_mode": "MonteCarlo"}
+    )
+    assert builder.build().get_setting("propagation_mode") == "monte_carlo"
+
+
+def test_a_misspelled_mode_in_a_block_is_rejected():
+    import physure
+
+    with (
+        pytest.raises(ValueError, match="Unknown propagation mode"),
+        physure.propagation_mode("corelated"),
+    ):
+        pass
