@@ -126,6 +126,31 @@ impl UncertaintyValue {
         Ok(Cow::Owned(m1.ensure_samples(other.as_backend_ref())?))
     }
 
+    /// Re-expresses an exact operand in `other`'s model, when there is one to match.
+    ///
+    /// Every arm below dispatches on `self`, so a constant on the *left* of a Monte Carlo
+    /// or Unscented operand falls through to the generic arm and comes back as a
+    /// `Custom(GaussianBackend)`: the samples are dropped and `3 m + x` disagrees with
+    /// `x + 3 m`. A value with no spread has no distribution to lose, so re-expressing it
+    /// is exact — n copies of the mean, or a zero-width sigma point — and it lets the
+    /// richer arm run whichever side the constant landed on.
+    ///
+    /// Only exact values are lifted. Turning a measured Gaussian into samples would be a
+    /// silent change of model, and picking which of two models wins is a decision for the
+    /// caller, not for an operator.
+    fn lifted_to_match(&self, other: &UncertaintyValue) -> Option<UncertaintyValue> {
+        if self.std_dev() != 0.0 {
+            return None;
+        }
+        match other {
+            Self::MonteCarlo(m) => Some(Self::MonteCarlo(MonteCarloBackend {
+                samples: Array1::from_elem(m.samples.len(), self.mean()),
+            })),
+            Self::Unscented(_) => Some(Self::Unscented(UnscentedBackend::new_scalar(self.mean(), 0.0))),
+            _ => None,
+        }
+    }
+
     pub fn propagate_add(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
             // Refused rather than approximated: every arm below is symmetric, so any of
@@ -146,6 +171,9 @@ impl UncertaintyValue {
                 Ok(Self::Unscented(UnscentedBackend::derived(m, sigma)))
             }
             _ => {
+                if let Some(lifted) = self.lifted_to_match(other) {
+                    return lifted.propagate_add(other);
+                }
                 let b = self.as_backend_ref().propagate_add(other.as_backend_ref())?;
                 Ok(Self::Custom(b))
             }
@@ -172,6 +200,9 @@ impl UncertaintyValue {
                 Ok(Self::Unscented(UnscentedBackend::derived(m, sigma)))
             }
             _ => {
+                if let Some(lifted) = self.lifted_to_match(other) {
+                    return lifted.propagate_sub(other);
+                }
                 let b = self.as_backend_ref().propagate_sub(other.as_backend_ref())?;
                 Ok(Self::Custom(b))
             }
@@ -200,6 +231,9 @@ impl UncertaintyValue {
                 Ok(Self::Unscented(UnscentedBackend::derived(m1 * m2, sigma)))
             }
             _ => {
+                if let Some(lifted) = self.lifted_to_match(other) {
+                    return lifted.propagate_mul(other);
+                }
                 let b = self.as_backend_ref().propagate_mul(other.as_backend_ref())?;
                 Ok(Self::Custom(b))
             }
@@ -237,6 +271,9 @@ impl UncertaintyValue {
                 Ok(Self::Unscented(UnscentedBackend::derived(m1 / m2, sigma)))
             }
             _ => {
+                if let Some(lifted) = self.lifted_to_match(other) {
+                    return lifted.propagate_div(other);
+                }
                 let b = self.as_backend_ref().propagate_div(other.as_backend_ref())?;
                 Ok(Self::Custom(b))
             }

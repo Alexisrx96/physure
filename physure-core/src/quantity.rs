@@ -115,11 +115,11 @@ impl Quantity {
     /// identical samples for every plain number in a script is a cost with nothing behind it.
     pub fn new_scalar(mean: f64, std_dev: f64, unit: RationalUnit, mode: Option<&str>, samples: Option<usize>) -> Self {
         let resolved = match mode {
-            Some(named) => named.to_string(),
-            None if std_dev == 0.0 => "gaussian".to_string(),
-            None => crate::uncertainty::propagation_mode().name().to_string(),
+            Some(named) => named,
+            None if std_dev == 0.0 => "gaussian",
+            None => crate::uncertainty::propagation_mode().name(),
         };
-        let value = match resolved.as_str() {
+        let value = match resolved {
             "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
             "unscented"   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
             _             => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
