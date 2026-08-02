@@ -101,7 +101,8 @@ developer *as* the specification: it shows its work.
 - **Units are load-bearing, not decorative.** `5 m + 2 kg` and `5 pound + 2 kg` are compile-time
   errors; every arithmetic operation checks and carries dimensions.
 - **Conversions and formatting are part of the expression.** `F => nN` converts on the spot;
-  `F: .3e`, `F: base`, `F: frac` format without changing the value.
+  `F: .3e` sets the digits and `F: base` quotes the measurement in the units it is built
+  from (`2 kΩ: base` is `2000 A^-2 * kg * m^2 * s^-3`), neither changing the value.
 - **Uncertainty propagates automatically.** `25.0 +/- 0.5 m/s` carries its error bar through
   every subsequent operation; `a == b +/- N sigma` asserts agreement within tolerance.
 - **Vectors and array math.** `linspace`, `gradient`, `trapz`, and elementwise arithmetic on

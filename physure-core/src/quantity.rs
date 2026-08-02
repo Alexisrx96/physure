@@ -339,6 +339,28 @@ impl Quantity {
         self.value.mean() * self.unit.scale
     }
 
+    /// The measurement quoted in the base units it is built from: `2 kΩ` reads
+    /// `2000 A^-2 * kg * m^2 * s^-3`. The scale rides into the magnitude, so the physical
+    /// value is the same one `Display` prints — only the terms change. This is what `x: base`
+    /// spells in PHS.
+    pub fn base_display(&self) -> String {
+        let mut base_unit = self.unit.clone();
+        base_unit.scale = 1.0;
+        base_unit.display_name = None;
+        let std_dev = self.value.std_dev() * self.unit.scale;
+        let val_str = if std_dev > 0.0 {
+            format!("{} ± {}", format_float(self.canonical_magnitude()), format_float(std_dev))
+        } else {
+            format_float(self.canonical_magnitude())
+        };
+        let unit_str = base_unit.base_repr();
+        if unit_str.is_empty() {
+            val_str
+        } else {
+            format!("{} {}", val_str, unit_str)
+        }
+    }
+
     /// Converts this quantity to an equivalent one expressed in `target`'s unit/scale.
     /// Errors if `target` has different physical dimensions.
     pub fn convert_to(&self, target: &RationalUnit) -> PhysureResult<Quantity> {

@@ -686,6 +686,35 @@ fn degrees_are_an_angle_in_radians_not_in_steradians() {
     assert!(eval_phs("1 deg + 1 sr").is_err(), "a degree is not a steradian");
 }
 
+/// `x: base` quotes a quantity in the units it is built from. `physure-cli/README.md` has
+/// advertised it alongside `.3e` since the CLI's first page, while `format_spec` only ever
+/// accepted the numeric form — so it was a parse error, not a wrong answer, which is the
+/// one honest failure mode of the three but still not the documented one.
+#[test]
+fn the_base_format_spec_quotes_a_quantity_in_its_base_units() {
+    let formatted = |src: &str| -> String {
+        match eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed: {e:?}")).into_iter().last() {
+            Some(PhsValue::String(s)) => s,
+            other => panic!("{src:?} produced {other:?}, expected a formatted string"),
+        }
+    };
+
+    assert_eq!(formatted("2 Ohm: base"), "2.0 A^-2 * kg * m^2 * s^-3");
+    // The prefix's factor moves into the magnitude: the physical value is the same one
+    // `Display` prints, only the terms it is quoted in change.
+    assert_eq!(formatted("2 kOhm: base"), "2000.0 A^-2 * kg * m^2 * s^-3");
+    assert_eq!(formatted("100 kPa: base"), "100000.0 kg * m^-1 * s^-2");
+    // The uncertainty is carried through the rescaling rather than dropped.
+    assert_eq!(formatted("9.81 +/- 0.05 m/s^2: base"), "9.81 ± 0.05 m * s^-2");
+    // The word is matched exactly: a longer name is an ordinary expression, so a ternary
+    // whose else branch merely starts with those letters still parses.
+    let ternary = eval_phs("based = 5 m\n1 > 0 ? based : 2 m").expect("`: based` broke the ternary");
+    match ternary.into_iter().last() {
+        Some(PhsValue::Quantity(q)) => assert_close(q.canonical_magnitude(), 5.0, "`: based` ternary"),
+        other => panic!("`1 > 0 ? based : 2 m` produced {other:?}"),
+    }
+}
+
 /// A unit symbol has to mean the same thing wherever it is written. `identifier` was ASCII
 /// after its first character while `unit_term` took any `LETTER`, so a prefixed non-ASCII
 /// symbol parsed as a literal and not as a conversion target: `2 Ω => kΩ` reported
