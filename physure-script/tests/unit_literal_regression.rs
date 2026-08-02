@@ -783,3 +783,55 @@ fn the_frac_format_spec_writes_a_number_as_a_fraction() {
         other => panic!("`1 > 0 ? fraction : 2 m` produced {other:?}"),
     }
 }
+
+/// `..` binds looser than everything else, so each endpoint is a whole expression: it is
+/// the conversion written next to `=>` that moves, and only a parenthesised range converts
+/// as a range. At the precedence `..` used to have — the same level as `+` and `=>`, left
+/// associative — `0 m .. 100 m => km` read as `(0 m .. 100 m) => km`, and since nothing
+/// converted a range the `=> km` was dropped without a word.
+#[test]
+fn a_range_binds_looser_than_the_operators_inside_it() {
+    let range = |src: &str| -> String { eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed: {e:?}")).into_iter().last().expect("no value").to_string() };
+
+    // A unit written outside the parentheses reaches both endpoints.
+    assert_eq!(range("(0 .. 100) m"), "0.0 m .. 100.0 m");
+    // An endpoint with no dimension of its own takes the other's unit.
+    assert_eq!(range("0 .. 100 m"), "0.0 m .. 100.0 m");
+    // The conversion belongs to the endpoint it was written on...
+    assert_eq!(range("0 m .. 100 m => km"), "0.0 m .. 0.1 km");
+    assert_eq!(range("0 m => km .. 100 m"), "0.0 km .. 100.0 m");
+    // ...unless the range is parenthesised, which converts both.
+    assert_eq!(range("(0 m .. 100 m) => km"), "0.0 km .. 0.1 km");
+    // A dimensionless range stays dimensionless.
+    assert_eq!(range("-2 .. 2"), "-2.0 .. 2.0");
+    // Endpoints may be names, and a range may be held in one.
+    assert_eq!(range("a = 0 m\nb = 100 m\na .. b"), "0.0 m .. 100.0 m");
+    assert_eq!(range("r = 0 m .. 100 m\nr => km"), "0.0 km .. 0.1 km");
+    // A format spec reaches both endpoints rather than neither.
+    assert_eq!(range("0 m .. 100 m: .2f"), "0.00 m .. 100.00 m");
+    assert_eq!(range("0.5 m .. 1.5 m: ifrac"), "1/2 m .. 1 1/2 m");
+}
+
+/// A range that is not an interval is refused rather than built. Nothing downstream — a
+/// plot's sampling, an integration limit — has an answer for one that measures two
+/// different things or does not run upwards, and inventing an order for it produces a
+/// figure that looks fine and is not.
+#[test]
+fn a_range_that_is_not_an_interval_is_refused() {
+    let refused = |src: &str| -> String {
+        match eval_phs(src) {
+            Err(e) => e.to_string(),
+            Ok(v) => panic!("{src:?} was accepted, producing {:?}", v.last()),
+        }
+    };
+
+    assert!(refused("0 m .. 100 s").contains("Incompatible dimensions in range"));
+    assert!(refused("100 m .. 0 m").contains("not below"));
+    // The bounds must be distinct: an empty interval has no points to sample.
+    assert!(refused("5 m .. 5 m").contains("not below"));
+    assert!(refused("\"a\" .. 100 m").contains("runs between two magnitudes"));
+    // A missing endpoint, and a third one, are grammar errors — `..` takes exactly two.
+    assert!(eval_phs("0 m ..").is_err(), "`0 m ..` parsed with no upper bound");
+    assert!(eval_phs(".. 100 m").is_err(), "`.. 100 m` parsed with no lower bound");
+    assert!(eval_phs("0 m .. 100 m .. 200 m").is_err(), "`a .. b .. c` parsed as a range");
+}

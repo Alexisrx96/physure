@@ -55,6 +55,68 @@ pub(crate) fn coerce_equation_string(val: PhsValue) -> PhsValue {
     val
 }
 
+/// The magnitude a range endpoint denotes, or `None` when it denotes none.
+fn range_endpoint(val: &PhsValue) -> Option<Quantity> {
+    match val {
+        PhsValue::Quantity(q) => Some(q.clone()),
+        PhsValue::Number(n) => Some(Quantity::new_scalar(*n, 0.0, RationalUnit::dimensionless(), None, None)),
+        _ => None,
+    }
+}
+
+/// Builds `min .. max`, after checking that it names an interval at all.
+///
+/// An endpoint with no dimension of its own takes the other's unit, so `0 .. 100 m` reads
+/// as `0 m .. 100 m` — on paper the lower bound of an interval does not repeat the unit
+/// either. Everything else is refused rather than repaired: a range whose sides measure
+/// different things, one that does not run upwards, and anything that is not a magnitude.
+/// A missing endpoint never reaches here; the grammar requires both.
+fn make_range(l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
+    let (Some(mut min), Some(mut max)) = (range_endpoint(&l_val), range_endpoint(&r_val)) else {
+        return Err(PhysureError::Generic(format!(
+            "A range runs between two magnitudes, and `{} .. {}` has something else on at least one side",
+            l_val, r_val,
+        )));
+    };
+
+    if min.unit.dimensions.is_empty() && !max.unit.dimensions.is_empty() {
+        min.unit = max.unit.clone();
+    } else if max.unit.dimensions.is_empty() && !min.unit.dimensions.is_empty() {
+        max.unit = min.unit.clone();
+    } else if !min.unit.same_dimensions(&max.unit) {
+        return Err(PhysureError::IncompatibleDimensions {
+            op: "range",
+            dim1: min.unit.__repr__(),
+            dim2: max.unit.__repr__(),
+        });
+    }
+
+    let (lo, hi) = (min.canonical_magnitude(), max.canonical_magnitude());
+    if lo.is_nan() || hi.is_nan() {
+        return Err(PhysureError::Generic(format!(
+            "A range needs two magnitudes that can be ordered, and `{} .. {}` has one that cannot",
+            min, max,
+        )));
+    }
+    if lo >= hi {
+        return Err(PhysureError::Generic(format!(
+            "A range runs from its minimum to its maximum: `{}` is not below `{}`",
+            min, max,
+        )));
+    }
+
+    // A bare number stays a bare number when nothing was adopted — a dimensionless range is
+    // written `-2 .. 2` and the consumers that read one distinguish the two cases.
+    let rewrap = |original: PhsValue, q: Quantity| match original {
+        PhsValue::Number(_) if q.unit.dimensions.is_empty() => original,
+        _ => PhsValue::Quantity(q),
+    };
+    Ok(PhsValue::Range(
+        Box::new(rewrap(l_val, min)),
+        Box::new(rewrap(r_val, max)),
+    ))
+}
+
 fn is_truthy(val: &PhsValue) -> bool {
     match val {
         PhsValue::Quantity(q) => q.value.mean() > 0.0,
@@ -612,16 +674,35 @@ impl PhsInterpreter {
                 }
                 Ok(PhsValue::Vector(results))
             }
+            // A range is its endpoints, so converting it converts both: `(0 m .. 100 m) => km`
+            // is `0 km .. 0.1 km`. Without this arm it fell to the catch-all below and came
+            // back as the metres it went in as, with nothing said about the `=> km`.
+            PhsValue::Range(start, end) => make_range(
+                self.convert_value_to_unit(*start, unit)?,
+                self.convert_value_to_unit(*end, unit)?,
+            ),
             other => Ok(other),
         }
     }
 
     pub fn eval_binary_op_vals(&self, op: BinaryOp, l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
         if op == BinaryOp::Range {
-            return Ok(PhsValue::Range(Box::new(l_val), Box::new(r_val)));
+            return make_range(l_val, r_val);
         }
         let l_val = coerce_equation_string(l_val);
         let r_val = coerce_equation_string(r_val);
+        // A range is its two endpoints and nothing else, so an operation on one is that
+        // operation on both: `(0 .. 100) m` is `0 m .. 100 m` and `(0 m .. 100 m) => km` is
+        // `0 km .. 0.1 km`. Only the operations that keep it a range are distributed —
+        // adding two ranges asks a question about intervals that PHS has not been told the
+        // answer to, and guessing one is worse than refusing.
+        if let PhsValue::Range(start, end) = &l_val {
+            if matches!(op, BinaryOp::Mul | BinaryOp::Div | BinaryOp::Convert) {
+                let lo = self.eval_binary_op_vals(op, (**start).clone(), r_val.clone())?;
+                let hi = self.eval_binary_op_vals(op, (**end).clone(), r_val)?;
+                return make_range(lo, hi);
+            }
+        }
         match (l_val, r_val) {
             (PhsValue::Function(f), PhsValue::Function(g)) => {
                 let (params, param_units) = if !f.params.is_empty() {
