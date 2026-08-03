@@ -71,7 +71,7 @@ def _repl() -> None:
     print(_BANNER)
     while True:
         try:
-            line = input("mk> ")
+            line = input("phs> ")
         except EOFError:
             print()
             return

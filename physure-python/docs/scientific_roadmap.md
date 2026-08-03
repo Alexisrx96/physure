@@ -146,8 +146,8 @@ df = pl.DataFrame({
 
 # Calculate speed and convert directly in the query engine
 res = df.select([
-    (pl.col("distance").mk.quantity("m") / pl.col("time").mk.quantity("s"))
-    .mk.to("km/h")
+    (pl.col("distance").phs.quantity("m") / pl.col("time").phs.quantity("s"))
+    .phs.to("km/h")
     .alias("speed_kph")
 ])
 

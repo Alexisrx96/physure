@@ -1,12 +1,17 @@
 """Pandas Accessor for Physure.
 
-This module provides a custom Pandas accessor `.mk` for Series containing
+This module provides a custom Pandas accessor `.phs` for Series containing
 Physure Quantity objects, enabling high-performance vectorized operations.
+
+`.mk` is kept as a deprecated alias: `mk` was this project's provisional name
+before it settled on physure, and the accessor was the last public API still
+carrying it. It warns and will be removed.
 """
 
 from __future__ import annotations
 
 import json
+import warnings
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -45,7 +50,7 @@ else:
             return lambda cls: cls
 
 
-@register_series_accessor("mk")
+@register_series_accessor("phs")
 class PhysureAccessor:
     """Pandas accessor for Physure quantities."""
 
@@ -197,3 +202,24 @@ class PhysureAccessor:
             )
 
         return pd.Series(res_data, index=self._obj.index)
+
+
+@register_series_accessor("mk")
+class _DeprecatedMkAccessor(PhysureAccessor):
+    """Deprecated alias for `.phs`.
+
+    `mk` was the project's provisional name. Registering the alias rather than
+    dropping it means existing code keeps working and is told what to change,
+    instead of failing with `AttributeError: 'Series' object has no attribute
+    'mk'` — which says nothing about where the name went.
+    """
+
+    def __init__(self, pandas_obj: Any):
+        """Warns, then behaves exactly like `.phs`."""
+        warnings.warn(
+            "The `.mk` Series accessor is deprecated and will be removed; "
+            "use `.phs` instead. `mk` was this project's provisional name.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(pandas_obj)
