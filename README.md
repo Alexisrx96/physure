@@ -95,13 +95,15 @@ Choose the propagation mode globally or per-block:
 ```python
 import physure
 
-physure.propagation_mode("correlated")     # full covariance (default: uncorrelated)
+physure.propagation_mode("uncorrelated")   # independent errors (default: correlated)
 
 with physure.uncertainty_mode("uncorrelated"):
     ...                                    # scoped override
 ```
 
 Backends include Gaussian (first-order), Monte Carlo, and Unscented Transform. Covariance lives in a sparse Rust store, so large lineages stay fast and memory stays flat.
+
+The default is correlated because the alternative is quietly wrong: with independent errors `x - x` reports `σ·√2` instead of zero, which looks plausible enough to publish. `[Settings] propagation_mode` in `physure.conf` sets it for a project, and both the core and PHS read it, so they cannot disagree.
 
 ### Batteries included, loaded lazily
 
@@ -170,7 +172,8 @@ physure/                     # Cargo workspace root
 │       ├── application/     # Q_ factory, unit-system context, startup
 │       ├── backends/        # NumPy / PyTorch / JAX adapters
 │       ├── _jit/            # tracing + compile-time dimension checks
-│       ├── ext/             # grammar DSL, IO, pandas, numba
+│       ├── ext/             # IO, pandas, numba, chemistry, symbolic regression,
+│       │                    #   AOT compiler, PHS plugin loader
 │       └── nn/              # unit-aware neural network layers
 ├── physure-script/          # PHS language engine — lexer, parser, interpreter, transpiler
 ├── physure-cli/             # the `phs` binary: REPL, TUI, web visualizer, HTML reports

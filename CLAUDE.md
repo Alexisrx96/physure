@@ -96,7 +96,7 @@ These are the project's non-negotiable invariants, learned the hard way. Violati
 
 - **Unit correctness is the product.** Never silently drop a dimension, a conversion factor, or an uncertainty. If an operation can't preserve them, raise — a wrong answer with confident units is worse than an exception.
 - **The Rust core comes first.** If Rust provides an implementation, Python MUST delegate to it directly; if no 3rd-party dependencies are involved, Rust delegation is mandatory.
-- **Zero runtime dependencies is policy.** `dependencies = []` in pyproject.toml stays empty. Anything new goes in an optional extra (`[native]`, `[numpy]`, ...) with a lazy import.
+- **Zero runtime dependencies is policy.** `dependencies = []` in pyproject.toml stays empty. Anything new goes in an optional extra (`[numpy]`, `[torch]`, `[io]`, ...) with a lazy import. The Rust core is not an extra — it ships compiled inside every wheel.
 - **First use must stay fast (~0.5s budget).** `import physure` and the first `Q_()` evaluation must not pull in torch, scipy, or build more than one `UnitSystem`. Check with `time python -m physure "500 N / 2 m^2 => kPa"` after touching import paths (see PR #18 for the history).
 - **Unit aliases collide silently.** `UnitSystem` logs a warning and the *later* definition wins (the `gal` gallon/galileo incident, PR #17). Before adding any unit or alias, grep the existing symbol across all `.conf` files — use the `add-unit` skill.
 - **Global state must be resettable.** `CompoundUnit._cache`, `Dimension._cache`, and the global `CovarianceStore` are cleared by the `clean_state` autouse fixture. New global caches must be added to that fixture.
