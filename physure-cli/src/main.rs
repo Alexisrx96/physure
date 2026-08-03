@@ -20,7 +20,10 @@ use rich::RichRenderer;
 use step::ExecutionStep;
 
 fn print_help() {
-    println!("PhysureScript (PHS) CLI & Transpiler Engine v0.2.4");
+    println!(
+        "PhysureScript (PHS) CLI & Transpiler Engine v{}",
+        env!("CARGO_PKG_VERSION")
+    );
     println!();
     println!("USAGE:");
     println!("    phs <script.phs> [OPTIONS]");
@@ -49,10 +52,17 @@ fn print_help() {
 
 fn run_repl() {
     use std::io::{self, Write};
-    println!("┌──────────────────────────────────────────────────────────────┐");
-    println!("│ Physure Interactive REPL (PHS v0.2.4)                       │");
-    println!("│ Type 'exit', 'quit', or 'help' for instructions.            │");
-    println!("└──────────────────────────────────────────────────────────────┘");
+    // Padded to the frame's inner width so the right edge lines up whatever
+    // the version string's length turns out to be.
+    const W: usize = 62;
+    let title = format!(
+        " Physure Interactive REPL (PHS v{})",
+        env!("CARGO_PKG_VERSION")
+    );
+    println!("┌{}┐", "─".repeat(W));
+    println!("│{title:<W$}│");
+    println!("│{:<W$}│", " Type 'exit', 'quit', or 'help' for instructions.");
+    println!("└{}┘", "─".repeat(W));
 
     let interp = PhsInterpreter::default();
     let mut env = HashMap::new();

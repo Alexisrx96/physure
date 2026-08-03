@@ -43,7 +43,10 @@ pub fn run_tui(code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsV
                 ])
                 .split(f.area());
 
-            let header = Paragraph::new("Physure TUI Dashboard v0.2.4 — Interactive Physical Computation")
+            let header = Paragraph::new(format!(
+                "Physure TUI Dashboard v{} — Interactive Physical Computation",
+                env!("CARGO_PKG_VERSION")
+            ))
                 .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                 .block(Block::default().borders(Borders::ALL).title("Physure Interactive Inspector"));
             f.render_widget(header, chunks[0]);
