@@ -48,7 +48,12 @@ impl SymbolicParser {
 
     fn match_op(&mut self, op_str: &str) -> bool {
         if let Some(t) = self.peek() {
-            if (matches!(&t.kind, TokenKind::Op(_)) || t.value == op_str) && t.value == op_str {
+            // The kind check this used to carry was `(is_op || matches) && matches`,
+            // which is just `matches` — the disjunction made it unreachable, so the
+            // token's kind was never actually consulted. Only `=` and `==` are
+            // passed here and both only ever lex as `Op`, so comparing the text is
+            // the whole test.
+            if t.value == op_str {
                 self.pos += 1;
                 return true;
             }
