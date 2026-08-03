@@ -139,10 +139,14 @@ impl RustTranspiler {
             Expr::BinaryOp { op, left, right } => {
                 let left_code = self.generate_expr(left)?;
                 match op {
-                    BinaryOp::Add => Ok(format!("{} + {}", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Sub => Ok(format!("{} - {}", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Mul => Ok(format!("{} * {}", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Div => Ok(format!("{} / {}", left_code, self.generate_expr(right)?)),
+                    // Parenthesised like the Python target: without it a nested
+                    // operand is re-associated by Rust's own precedence, so
+                    // `12 m / (3 s * 2)` emitted as `12 / 3 * 2` and answered 8
+                    // where PHS answers 2.
+                    BinaryOp::Add => Ok(format!("({} + {})", left_code, self.generate_expr(right)?)),
+                    BinaryOp::Sub => Ok(format!("({} - {})", left_code, self.generate_expr(right)?)),
+                    BinaryOp::Mul => Ok(format!("({} * {})", left_code, self.generate_expr(right)?)),
+                    BinaryOp::Div => Ok(format!("({} / {})", left_code, self.generate_expr(right)?)),
                     BinaryOp::Pow => {
                         if let Expr::Quantity(q) = &**right {
                             if q.magnitude.fract() == 0.0 {
