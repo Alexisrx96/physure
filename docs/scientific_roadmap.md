@@ -1,6 +1,10 @@
 # Scientific Companion Roadmap: Advanced Features for Physure
 
-This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](file:///home/irvint/Projects/physure/README.md).
+**Status: 🚧 In Progress (Buckingham $\pi$ & EKF in progress)**
+
+> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+
+This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](../README.md).
 
 ---
 
@@ -314,3 +318,19 @@ gantt
     Unit-Aware ODE Solvers      : 2026-09-27, 21d
     Unit-Aware State Estimation : 2026-10-18, 18d
 ```
+
+---
+
+## 9. Scientific References
+
+| Feature / Domain | Paper / Standard Citation | Public Link / DOI |
+|:---|:---|:---|
+| **Buckingham $\pi$ Theorem** | Buckingham, E. (1914). *On physically similar systems; illustrations of the use of dimensional equations*. Physical Review, 4(4), 345–376. | [DOI: 10.1103/PhysRev.4.345](https://doi.org/10.1103/PhysRev.4.345) |
+| **GUM Uncertainty Framework** | Joint Committee for Guides in Metrology (JCGM). (2008). *Evaluation of measurement data — Guide to the expression of uncertainty in measurement* (GUM 1995). JCGM 100:2008 / ISO/IEC Guide 98-3:2008. | [BIPM JCGM 100:2008](https://www.bipm.org/documents/20126/2071204/JCGM_100_2008_E.pdf) |
+| **Welch-Satterthwaite $\nu_{\text{eff}}$** | Welch, B. L. (1947). *The generalization of 'Student's' problem when several different population variances are involved*. Biometrika, 34(1/2), 28–35. | [DOI: 10.2307/2332510](https://doi.org/10.2307/2332510) |
+| **Monte Carlo GUM Supplement 1** | Joint Committee for Guides in Metrology (JCGM). (2008). *Evaluation of measurement data — Supplement 1 to the GUM — Propagation of distributions using a Monte Carlo method*. JCGM 101:2008. | [DOI: 10.59161/JCGM101-2008](https://doi.org/10.59161/JCGM101-2008) |
+| **IAPWS-IF97 Water & Steam** | Wagner, W., et al. (2000). *The IAPWS Formulation 1995 for the Thermodynamic Properties of Ordinary Water Substance for General and Scientific Use*. Journal of Physical and Chemical Reference Data, 29(5), 1413–1437. | [DOI: 10.1063/1.1461829](https://doi.org/10.1063/1.1461829) |
+| **Extended Kalman Filter (EKF)** | Schmidt, S. F. (1966). *Applications of state-space methods to navigation problems*. Advances in Control Systems, 3, 293–340. | [DOI: 10.1016/B978-1-4831-6716-9.50011-4](https://doi.org/10.1016/B978-1-4831-6716-9.50011-4) |
+| **Unit Types in Computing** | Kennedy, A. (2010). *Types for units-of-measure: theory and practice*. CEFP 2009, LNCS 6299, pp. 268–305. | [DOI: 10.1007/978-3-642-17685-2_8](https://doi.org/10.1007/978-3-642-17685-2_8) |
+
+

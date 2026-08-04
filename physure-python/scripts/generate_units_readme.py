@@ -1,5 +1,6 @@
 import configparser
 import os
+from pathlib import Path
 
 
 def generate_units_markdown():
@@ -77,10 +78,12 @@ def generate_units_markdown():
     for const_name, val in parser.items("Constants"):
         md.append(f"| `{const_name}` | `{val}` |")
 
-    os.makedirs("docs", exist_ok=True)
-    with open("docs/UNITS.md", "w", encoding="utf-8") as f:
+    root_docs = Path(__file__).resolve().parents[2] / "docs"
+    root_docs.mkdir(parents=True, exist_ok=True)
+    target_file = root_docs / "UNITS.md"
+    with open(target_file, "w", encoding="utf-8") as f:
         f.write("\n".join(md))
-    print("Successfully generated docs/UNITS.md")
+    print(f"Successfully generated {target_file}")
 
 
 if __name__ == "__main__":
