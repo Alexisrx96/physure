@@ -508,3 +508,72 @@ fn test_series_expansion_and_factorization_extended_req() {
     let poly2 = Expr::parse("x^2 - y^2").unwrap().node.factor();
     assert_eq!(poly2.to_phs_string(), "x^2 - y^2");
 }
+
+#[test]
+fn test_ode_solver_suite() {
+    use super::ode::dsolve_str;
+
+    // 2nd order harmonic oscillator: y'' + y = 0 -> y = C1 * cos(x) + C2 * sin(x)
+    let sol1 = dsolve_str("y'' + y = 0", "y", "x").unwrap();
+    assert!(sol1.contains("C1") && sol1.contains("C2") && sol1.contains("cos(x)") && sol1.contains("sin(x)"));
+
+    // 2nd order repeated root: y'' - 2*y' + y = 0 -> y = (C1 + C2 * x) * exp(x)
+    let sol2 = dsolve_str("y'' - 2 * y' + y = 0", "y", "x").unwrap();
+    assert!(sol2.contains("C1") && sol2.contains("C2") && sol2.contains("exp("));
+
+    // 1st order linear ODE: y' + y = 0 -> y = C1 / exp(x) or y = (0 + C1) / exp(x)
+    let sol3 = dsolve_str("y' + y = 0", "y", "x").unwrap();
+    assert!(sol3.contains("C1") && sol3.contains("exp("));
+
+    // 1st order separable ODE: y' = x * y
+    let sol4 = dsolve_str("y' = x * y", "y", "x").unwrap();
+    assert!(sol4.contains("C1") || sol4.contains("ln("));
+}
+
+#[test]
+fn test_laplace_transform_suite() {
+    use super::transforms::{laplace_str, inv_laplace_str};
+
+    // L{t^2} = 2 / s^3
+    let l_t2 = laplace_str("t^2", "t", "s").unwrap();
+    assert_eq!(l_t2, "2/s^3");
+
+    // L{exp(3 * t)} = 1 / (s - 3)
+    let l_exp = laplace_str("exp(3 * t)", "t", "s").unwrap();
+    assert_eq!(l_exp, "1/(s - 3)");
+
+    // L{sin(2 * t)} = 2 / (s^2 + 4) or 2 / (4 + s^2)
+    let l_sin = laplace_str("sin(2 * t)", "t", "s").unwrap();
+    assert!(l_sin.contains('2') && l_sin.contains("s^2") && l_sin.contains('4'));
+
+    // L^-1{1 / (s - 3)} = exp(3 * t)
+    let il_exp = inv_laplace_str("1 / (s - 3)", "s", "t").unwrap();
+    assert_eq!(il_exp, "exp(3 * t)");
+}
+
+#[test]
+fn test_symbolic_matrix_suite() {
+    use super::sym_matrix::SymMatrix;
+
+    let mat = SymMatrix::parse_str("[[a, b], [c, d]]").unwrap();
+    assert_eq!(mat.rows, 2);
+    assert_eq!(mat.cols, 2);
+
+    // det([[a, b], [c, d]]) = a * d - b * c
+    let det = mat.det().unwrap();
+    assert_eq!(det.to_phs_string(), "a * d - b * c");
+
+    // trace([[a, b], [c, d]]) = a + d
+    let tr = mat.trace().unwrap();
+    assert_eq!(tr.to_phs_string(), "a + d");
+
+    // Transpose
+    let trans = mat.transpose();
+    assert_eq!(trans.to_phs_string(), "[[a, c], [b, d]]");
+
+    // Eigenvalues of diagonal matrix [[3, 0], [0, 5]] -> [4 + 1, 4 - 1] = [5, 3]
+    let diag_mat = SymMatrix::parse_str("[[3, 0], [0, 5]]").unwrap();
+    let eigs = diag_mat.eigenvalues("lambda").unwrap();
+    let eigs_str: Vec<String> = eigs.iter().map(|e| e.to_string()).collect();
+    assert!(eigs_str.contains(&"5".to_string()) && eigs_str.contains(&"3".to_string()));
+}

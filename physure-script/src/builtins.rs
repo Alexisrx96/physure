@@ -71,9 +71,9 @@ fn compare(args: &[PhsValue], pred: impl Fn(f64, f64) -> bool) -> PhysureResult<
 
 pub fn domain_members(domain: &str) -> Option<&'static [&'static str]> {
     match domain {
-        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim", "grad", "gradient", "div", "divergence", "curl", "laplacian", "simplify", "expand", "series", "taylor"]),
+        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim", "grad", "gradient", "div", "divergence", "curl", "laplacian", "simplify", "expand", "series", "taylor", "dsolve", "laplace", "inv_laplace", "inverse_laplace", "sym_det", "sym_trace", "sym_charpoly", "sym_eigenvalues", "sym_transpose"]),
         "plot" => Some(&["plot", "plot3d", "export3d", "export_3d", "plot_field", "plot_nd"]),
-        "array" => Some(&["linspace", "gradient", "trapz", "dot", "cross", "norm", "unit_vector", "transpose", "matmul", "det"]),
+        "array" | "matrix" => Some(&["linspace", "gradient", "trapz", "dot", "cross", "norm", "unit_vector", "transpose", "matmul", "det", "sym_det", "sym_trace", "sym_charpoly", "sym_eigenvalues", "sym_transpose"]),
         _ => None,
     }
 }
@@ -1141,6 +1141,125 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
                 }
                 _ => Err(PhysureError::Generic("substitute base must be an equation or string".into())),
             }
+        }
+        "dsolve" => {
+            if args.len() < 3 {
+                return Err(PhysureError::Generic("dsolve expects 3 arguments: dsolve(eq_str, dep_var, indep_var)".into()));
+            }
+            let eq_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("dsolve expects equation string".into())),
+            };
+            let dep_var = match &args[1] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("dsolve expects dependent variable string".into())),
+            };
+            let indep_var = match &args[2] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("dsolve expects independent variable string".into())),
+            };
+            let inlined = preprocess_symbolic_expression(eq_str, interpreter);
+            let res = crate::symbolic::dsolve_str(&inlined, dep_var, indep_var)?;
+            Ok(Some(PhsValue::String(res)))
+        }
+        "laplace" => {
+            if args.len() < 3 {
+                return Err(PhysureError::Generic("laplace expects 3 arguments: laplace(expr_str, t_var, s_var)".into()));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("laplace expects expression string".into())),
+            };
+            let t_var = match &args[1] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("laplace expects time variable string".into())),
+            };
+            let s_var = match &args[2] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("laplace expects s variable string".into())),
+            };
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            let res = crate::symbolic::laplace_str(&inlined, t_var, s_var)?;
+            Ok(Some(PhsValue::String(res)))
+        }
+        "inv_laplace" | "inverse_laplace" => {
+            if args.len() < 3 {
+                return Err(PhysureError::Generic("inv_laplace expects 3 arguments: inv_laplace(expr_str, s_var, t_var)".into()));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("inv_laplace expects expression string".into())),
+            };
+            let s_var = match &args[1] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("inv_laplace expects s variable string".into())),
+            };
+            let t_var = match &args[2] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("inv_laplace expects time variable string".into())),
+            };
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            let res = crate::symbolic::inv_laplace_str(&inlined, s_var, t_var)?;
+            Ok(Some(PhsValue::String(res)))
+        }
+        "sym_det" => {
+            let mat_str = match args.first() {
+                Some(PhsValue::String(s)) => s.as_str(),
+                _ => return Err(PhysureError::Generic("sym_det expects a symbolic matrix string, e.g. sym_det(\"[[a, b], [c, d]]\")".into())),
+            };
+            let mat = crate::symbolic::SymMatrix::parse_str(mat_str)?;
+            let det_node = mat.det()?;
+            Ok(Some(PhsValue::String(det_node.to_string())))
+        }
+        "sym_trace" => {
+            let mat_str = match args.first() {
+                Some(PhsValue::String(s)) => s.as_str(),
+                _ => return Err(PhysureError::Generic("sym_trace expects a symbolic matrix string".into())),
+            };
+            let mat = crate::symbolic::SymMatrix::parse_str(mat_str)?;
+            let tr_node = mat.trace()?;
+            Ok(Some(PhsValue::String(tr_node.to_string())))
+        }
+        "sym_charpoly" => {
+            if args.len() < 1 {
+                return Err(PhysureError::Generic("sym_charpoly expects a matrix string and optional lambda variable".into()));
+            }
+            let mat_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("sym_charpoly expects a symbolic matrix string".into())),
+            };
+            let lambda_var = if args.len() > 1 {
+                match &args[1] {
+                    PhsValue::String(s) => s.as_str(),
+                    _ => "lambda",
+                }
+            } else {
+                "lambda"
+            };
+            let mat = crate::symbolic::SymMatrix::parse_str(mat_str)?;
+            let poly_node = mat.charpoly(lambda_var)?;
+            Ok(Some(PhsValue::String(poly_node.to_string())))
+        }
+        "sym_eigenvalues" => {
+            if args.is_empty() {
+                return Err(PhysureError::Generic("sym_eigenvalues expects a symbolic matrix string".into()));
+            }
+            let mat_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("sym_eigenvalues expects a symbolic matrix string".into())),
+            };
+            let mat = crate::symbolic::SymMatrix::parse_str(mat_str)?;
+            let eigs = mat.eigenvalues("lambda")?;
+            let eigs_str: Vec<String> = eigs.iter().map(|e| e.to_string()).collect();
+            Ok(Some(PhsValue::String(format!("[{}]", eigs_str.join(", ")))))
+        }
+        "sym_transpose" => {
+            let mat_str = match args.first() {
+                Some(PhsValue::String(s)) => s.as_str(),
+                _ => return Err(PhysureError::Generic("sym_transpose expects a symbolic matrix string".into())),
+            };
+            let mat = crate::symbolic::SymMatrix::parse_str(mat_str)?;
+            Ok(Some(PhsValue::String(mat.transpose().to_phs_string())))
         }
         _ => Ok(None),
     }
