@@ -47,3 +47,26 @@ fn test_cli_run_subcommand() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("4"));
 }
+
+#[test]
+fn test_cli_advanced_script() {
+    let temp_file = "temp_test_advanced_script.phs";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"use deriv, integral from calc\n\
+v = 3.0 m/s\n\
+d = deriv(\"v^2\", \"v\")\n\
+i = integral(\"v\", \"v\")\n\
+36 km/h => m/s\n\
+").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("10"));
+}

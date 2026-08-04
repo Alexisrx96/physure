@@ -439,6 +439,7 @@ fn base64_encode_bytes(bytes: &[u8]) -> String {
         } else {
             out.push('=');
         }
+        i += 3;
     }
     out
 }
