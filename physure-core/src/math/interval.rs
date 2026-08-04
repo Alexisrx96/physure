@@ -1,6 +1,11 @@
 use std::ops::{Add, Sub, Mul, Div, Neg};
 
 /// Closed Real Interval [min, max] representing rigorous numerical physical bounds.
+///
+/// References:
+///     - Moore, R. E. (1966). Interval Analysis. Prentice-Hall.
+///     - IEEE Std 1788-2015: IEEE Standard for Interval Arithmetic.
+///       DOI: https://doi.org/10.1109/IEEESTD.2015.7140721
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Interval {
     pub min: f64,

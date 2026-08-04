@@ -5,6 +5,10 @@ use super::trait_def::UncertaintyBackend;
 
 /// An unscented-transform uncertainty that remembers where it came from.
 ///
+/// Implements derivative-free non-linear uncertainty propagation via deterministic
+/// sigma-point sampling (Julier, S. J., & Uhlmann, J. K., 2004, "Unscented filtering and
+/// nonlinear estimation", Proc. IEEE, 92(3), 401-422, DOI: 10.1109/JPROC.2003.823141).
+///
 /// The sigma points stay the source of truth for the spread, since propagating them through a
 /// nonlinear function is the whole point of the transform. `sigma` runs alongside them
 /// recording *which* measurements produced that spread, so shared sources still cancel. The

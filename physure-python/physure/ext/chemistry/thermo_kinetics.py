@@ -2,6 +2,14 @@
 
 Pulls the gas constant from the active UnitSystem (`molar_gas_constant`,
 already defined in physure.conf) rather than hardcoding it.
+
+References:
+    - Arrhenius Rate Law: Arrhenius, S. (1889). Z. Phys. Chem., 4, 226-248.
+      DOI: https://doi.org/10.1515/zpch-1889-0416
+    - Gibbs Free Energy: Gibbs, J. W. (1876). Trans. Conn. Acad. Arts Sci., 3, 108-248.
+      DOI: https://doi.org/10.1080/14786447808639542
+    - Thermochemical Tables: Chase, M. W. (1998). NIST-JANAF Thermochemical Tables.
+      J. Phys. Chem. Ref. Data, Monograph 9. DOI: https://doi.org/10.18434/T42S31
 """
 
 from __future__ import annotations

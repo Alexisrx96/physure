@@ -3,6 +3,12 @@
 Pure-Python, zero-dependency: a compact IUPAC standard-atomic-weight table
 plus a regex/stack formula parser. Molar mass uncertainty combines each
 element's tabulated uncertainty in quadrature, weighted by atom count.
+
+References:
+    - IUPAC Atomic Weights 2021: Meija, J. et al. (2016). Atomic weights of the
+      elements 2013. Pure and Applied Chemistry, 88(3), 265-291.
+      DOI: https://doi.org/10.1515/pac-2015-0305
+    - GUM Uncertainty Quadrature: JCGM 100:2008 / ISO/IEC Guide 98-3:2008 §5.1.
 """
 
 from __future__ import annotations

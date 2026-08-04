@@ -4,6 +4,11 @@ use rand_distr::{Normal, Distribution};
 use crate::error::{PhysureError, PhysureResult};
 use super::trait_def::UncertaintyBackend;
 
+/// Monte Carlo uncertainty propagation backend.
+///
+/// Implements probability distribution propagation compliant with GUM Supplement 1
+/// (JCGM 101:2008: Evaluation of measurement data — Supplement 1 to the GUM — Propagation
+/// of distributions using a Monte Carlo method).
 #[derive(Clone)]
 pub struct MonteCarloBackend {
     pub samples: Array1<f64>,
