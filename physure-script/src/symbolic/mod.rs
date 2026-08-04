@@ -6,6 +6,7 @@ pub mod compiler;
 pub mod expr;
 pub mod display;
 pub mod parser;
+pub mod series;
 pub mod solve;
 
 pub use ast::Node;

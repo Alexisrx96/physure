@@ -192,7 +192,11 @@ fn test_rust_transpiler_parity() {
         let program = parse_phs(tc.script).unwrap();
         let rust_code = transpile(&program, Target::Rust).unwrap();
 
-        let temp_dir = std::env::temp_dir().join(format!("phs_rust_{}", tc.name));
+        let unique_id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!("phs_rust_{}_{}_{}", tc.name, std::process::id(), unique_id));
         let src_dir = temp_dir.join("src");
         let _ = fs::create_dir_all(&src_dir);
 
@@ -205,6 +209,7 @@ fn test_rust_transpiler_parity() {
 
         let run = Command::new("cargo")
             .args(["run", "--quiet"])
+            .env("RUSTFLAGS", "-A unused_parens")
             .current_dir(&temp_dir)
             .output()
             .expect("Failed to run cargo");

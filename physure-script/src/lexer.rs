@@ -144,10 +144,11 @@ impl<'a> PhsLexer<'a> {
                 continue;
             }
 
-            // Identifiers: letters, underscores
+            // Identifiers: letters, underscores, and trailing prime marks (')
             if ch.is_alphabetic() || ch == '_' {
-                let end = self.consume_while(|c| c.is_alphanumeric() || c == '_');
-                let val = self.input[start..end].to_string();
+                self.consume_while(|c| c.is_alphanumeric() || c == '_');
+                self.consume_while(|c| c == '\'');
+                let val = self.input[start..self.pos].to_string();
                 tokens.push(PhsToken {
                     kind: TokenKind::Ident(val.clone()),
                     value: val,

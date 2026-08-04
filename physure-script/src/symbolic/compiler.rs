@@ -96,6 +96,7 @@ impl CompiledExpr {
                 Self::compile_node(u, vars, insts)?;
                 insts.push(Instruction::Exp);
             }
+            _ => return Err(PhysureError::Generic(format!("Compilation not implemented for this node"))),
         }
         Ok(())
     }

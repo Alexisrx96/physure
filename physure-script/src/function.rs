@@ -347,4 +347,45 @@ mod tests {
         let res_comp = comp_f_g.call(&[x_val]).unwrap();
         assert_eq!(res_comp.value.mean(), 12.0);
     }
+
+    #[test]
+    fn test_phy_function_trig_and_exp_calculus() {
+        let interp = PhsInterpreter::new();
+        
+        // f(x) = sin(x)
+        let mut f = PhyFunction::new(interp.clone(), "f", "f(x) = sin(x)").unwrap();
+        let mut df = f.deriv("x").unwrap();
+        assert_eq!(df.body(), "d_f_d_x(x) = cos(x)");
+        
+        let x_0 = Quantity::new_scalar(0.0, 0.0, RationalUnit::dimensionless(), None, None);
+        let res_df = df.call(&[x_0.clone()]).unwrap();
+        assert_eq!(res_df.value.mean(), 1.0);
+        
+        // g(x) = exp(2*x)
+        let mut g = PhyFunction::new(interp.clone(), "g", "g(x) = exp(2 * x)").unwrap();
+        let mut dg = g.deriv("x").unwrap();
+        let res_dg = dg.call(&[x_0.clone()]).unwrap();
+        assert_eq!(res_dg.value.mean(), 2.0);
+        
+        // Integral of g(x) -> exp(2*x)/2
+        let mut ig = g.integral("x").unwrap();
+        let res_ig = ig.call(&[x_0.clone()]).unwrap();
+        assert_eq!(res_ig.value.mean(), 0.5);
+    }
+
+    #[test]
+    fn test_phy_function_sub_mul_div_ops() {
+        let interp = PhsInterpreter::new();
+        let f = PhyFunction::new(interp.clone(), "f", "f(x) = 10 * x").unwrap();
+        let g = PhyFunction::new(interp, "g", "g(x) = 2 * x").unwrap();
+        
+        let mut diff_f_g = f.sub(&g).unwrap();
+        let mut prod_f_g = f.mul(&g).unwrap();
+        let mut div_f_g = f.div(&g).unwrap();
+        
+        let x_val = Quantity::new_scalar(3.0, 0.0, RationalUnit::dimensionless(), None, None);
+        assert_eq!(diff_f_g.call(&[x_val.clone()]).unwrap().value.mean(), 24.0); // 30 - 6
+        assert_eq!(prod_f_g.call(&[x_val.clone()]).unwrap().value.mean(), 180.0); // 30 * 6
+        assert_eq!(div_f_g.call(&[x_val]).unwrap().value.mean(), 5.0); // 30 / 6
+    }
 }

@@ -3,7 +3,39 @@ use super::ast::Node;
 
 impl Node {
     pub fn solve_equation(&self, target: &str) -> PhysureResult<Node> {
-        let simplified = self.simplify();
+        let simplified = match self.simplify() {
+            Node::Equation(l, r) => {
+                if matches!(*l, Node::Number(c) if c == 0.0) {
+                    if let Node::Add(terms) = &*r {
+                        let neg_terms = terms
+                            .iter()
+                            .map(|t| Node::Mul(vec![Node::Number(-1.0), t.clone()]).simplify())
+                            .collect();
+                        Node::Add(neg_terms).simplify()
+                    } else {
+                        Node::Mul(vec![Node::Number(-1.0), (*r).clone()]).simplify()
+                    }
+                } else {
+                    Node::Sub(l, r)
+                }
+            }
+            Node::Sub(l, r) => {
+                if matches!(*l, Node::Number(c) if c == 0.0) {
+                    if let Node::Add(terms) = &*r {
+                        let neg_terms = terms
+                            .iter()
+                            .map(|t| Node::Mul(vec![Node::Number(-1.0), t.clone()]).simplify())
+                            .collect();
+                        Node::Add(neg_terms).simplify()
+                    } else {
+                        Node::Mul(vec![Node::Number(-1.0), (*r).clone()]).simplify()
+                    }
+                } else {
+                    Node::Sub(l, r)
+                }
+            }
+            other => other,
+        };
 
         // Check if expression is linear: a * target + b = 0
         if let Some((a, b)) = simplified.linear_coeff(target) {
@@ -53,10 +85,7 @@ impl Node {
                     return Ok((**left).clone());
                 } else if let Node::Div(num, den) = &**right {
                     if num.depends_on(target) && !den.depends_on(target) {
-                        if **num == Node::Symbol(target.to_string()) {
-                            let solution = Node::Mul(vec![(**left).clone(), (**den).clone()]);
-                            return Ok(solution.simplify());
-                        }
+                        return Node::Sub(Box::new(Node::Mul(vec![(**left).clone(), (**den).clone()])), num.clone()).solve_equation(target);
                     } else if den.depends_on(target) && !num.depends_on(target) && **den == Node::Symbol(target.to_string()) {
                         let solution = Node::Div(num.clone(), left.clone());
                         return Ok(solution.simplify());
@@ -98,10 +127,7 @@ impl Node {
                     return Ok((**right).clone());
                 } else if let Node::Div(num, den) = &**left {
                     if num.depends_on(target) && !den.depends_on(target) {
-                        if **num == Node::Symbol(target.to_string()) {
-                            let solution = Node::Mul(vec![(**right).clone(), (**den).clone()]);
-                            return Ok(solution.simplify());
-                        }
+                        return Node::Sub(num.clone(), Box::new(Node::Mul(vec![(**right).clone(), (**den).clone()]))).solve_equation(target);
                     } else if den.depends_on(target) && !num.depends_on(target) && **den == Node::Symbol(target.to_string()) {
                         let solution = Node::Div(num.clone(), right.clone());
                         return Ok(solution.simplify());
@@ -110,8 +136,40 @@ impl Node {
             }
         }
 
-        // Try power rule equation: a * target^n + b = 0 => target = (-b / a)^(1/n)
         if let Node::Add(terms) = &simplified {
+            let (target_terms, other_terms): (Vec<_>, Vec<_>) =
+                terms.iter().partition(|t| t.depends_on(target));
+            if target_terms.len() == 1 {
+                let target_node = target_terms[0];
+                let other_sum = if other_terms.is_empty() {
+                    Node::Number(0.0)
+                } else if other_terms.len() == 1 {
+                    other_terms[0].clone()
+                } else {
+                    Node::Add(other_terms.into_iter().cloned().collect())
+                };
+
+                let neg_other = Node::Mul(vec![Node::Number(-1.0), other_sum]);
+
+                if target_node == &Node::Symbol(target.to_string()) {
+                    return Ok(neg_other.simplify());
+                } else if let Node::Mul(factors) = target_node {
+                    let (t_factors, o_factors): (Vec<_>, Vec<_>) =
+                        factors.iter().partition(|f| f.depends_on(target));
+                    if t_factors.len() == 1 && *t_factors[0] == Node::Symbol(target.to_string()) {
+                        let coeff = if o_factors.is_empty() {
+                            Node::Number(1.0)
+                        } else if o_factors.len() == 1 {
+                            o_factors[0].clone()
+                        } else {
+                            Node::Mul(o_factors.into_iter().cloned().collect())
+                        };
+                        let sol = Node::Div(Box::new(neg_other), Box::new(coeff));
+                        return Ok(sol.simplify());
+                    }
+                }
+            }
+
             let mut target_term: Option<&Node> = None;
             let mut const_val = 0.0;
 

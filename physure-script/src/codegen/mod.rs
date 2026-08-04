@@ -190,6 +190,38 @@ pub(crate) fn range_is_not_transpilable() -> CodegenError {
     )
 }
 
+pub fn expr_to_phs_string(expr: &Expr) -> String {
+    match expr {
+        Expr::Quantity(q) => {
+            if let Some(u) = &q.unit {
+                format!("{} {}", q.magnitude, u)
+            } else {
+                format!("{}", q.magnitude)
+            }
+        }
+        Expr::Str(s) => s.clone(),
+        Expr::Identifier(name) => name.clone(),
+        Expr::BinaryOp { op, left, right } => {
+            let l = expr_to_phs_string(left);
+            let r = expr_to_phs_string(right);
+            let op_str = match op {
+                BinaryOp::Add => " + ",
+                BinaryOp::Sub => " - ",
+                BinaryOp::Mul => " * ",
+                BinaryOp::Div => "/",
+                BinaryOp::Pow => "^",
+                BinaryOp::Convert => " => ",
+                BinaryOp::Range => " .. ",
+            };
+            format!("({}{}{})", l, op_str, r)
+        }
+        Expr::FunctionCall { name, args, kwargs: _ } => {
+            let arg_strs: Vec<String> = args.iter().map(expr_to_phs_string).collect();
+            format!("{}({})", name, arg_strs.join(", "))
+        }
+    }
+}
+
 pub fn expr_to_unit_string(expr: &Expr) -> String {
     match expr {
         Expr::Identifier(name) => name.clone(),
@@ -240,6 +272,26 @@ fn node_to_expr(node: &Node) -> Expr {
         Node::Cos(x) => call1("cos", x),
         Node::Ln(x) => call1("ln", x),
         Node::Exp(x) => call1("exp", x),
+        Node::Tan(x) => call1("tan", x),
+        Node::Cot(x) => call1("cot", x),
+        Node::Sec(x) => call1("sec", x),
+        Node::Csc(x) => call1("csc", x),
+        Node::Arcsin(x) => call1("arcsin", x),
+        Node::Arccos(x) => call1("arccos", x),
+        Node::Arctan(x) => call1("arctan", x),
+        Node::Arccot(x) => call1("arccot", x),
+        Node::Arcsec(x) => call1("arcsec", x),
+        Node::Arccsc(x) => call1("arccsc", x),
+        Node::Sinh(x) => call1("sinh", x),
+        Node::Cosh(x) => call1("cosh", x),
+        Node::Tanh(x) => call1("tanh", x),
+        Node::Coth(x) => call1("coth", x),
+        Node::Sech(x) => call1("sech", x),
+        Node::Csch(x) => call1("csch", x),
+        Node::Abs(x) => call1("abs", x),
+        Node::Sqrt(x) => call1("sqrt", x),
+        Node::Equation(a, b) => binary(BinaryOp::Sub, a, b),
+        Node::Integral(u, _) => call1("integrate", u),
     }
 }
 

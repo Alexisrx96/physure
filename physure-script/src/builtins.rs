@@ -71,7 +71,7 @@ fn compare(args: &[PhsValue], pred: impl Fn(f64, f64) -> bool) -> PhysureResult<
 
 pub fn domain_members(domain: &str) -> Option<&'static [&'static str]> {
     match domain {
-        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim", "grad", "gradient", "div", "divergence", "curl", "laplacian", "simplify", "expand"]),
+        "calc" => Some(&["deriv", "diff", "integral", "integrate", "solve", "substitute", "sub", "limit", "lim", "grad", "gradient", "div", "divergence", "curl", "laplacian", "simplify", "expand", "series", "taylor"]),
         "plot" => Some(&["plot", "plot3d", "export3d", "export_3d", "plot_field", "plot_nd"]),
         "array" => Some(&["linspace", "gradient", "trapz", "dot", "cross", "norm", "unit_vector", "transpose", "matmul", "det"]),
         _ => None,
@@ -167,7 +167,7 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
     }
 }
 
-pub fn eval_core_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+pub fn eval_core_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
         "format" => {
             let Some(val) = args.first() else { return Ok(None) };
@@ -667,32 +667,156 @@ fn eval_array_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterprete
     }
 }
 
+pub(crate) fn clean_diff_var(v: &str) -> &str {
+    let s = v.trim();
+    if s.starts_with("d(") && s.ends_with(')') && s.len() > 3 {
+        &s[2..s.len() - 1]
+    } else if s.starts_with('d') && s.len() > 1 && s[1..].chars().all(|c| c.is_alphanumeric() || c == '_') {
+        &s[1..]
+    } else {
+        s
+    }
+}
+
+pub(crate) fn parse_leibniz_single_arg(spec: &str) -> Option<(String, String, usize)> {
+    let s = spec.trim();
+    if s.contains('/') {
+        let parts: Vec<&str> = s.splitn(2, '/').collect();
+        let num = parts[0].trim();
+        let den = parts[1].trim();
+
+        if num == "d" || num.starts_with("d/") {
+            if den.contains('(') && den.ends_with(')') {
+                let p1 = den.find('(')?;
+                let v = &den[..p1];
+                let expr = &den[p1 + 1..den.len() - 1];
+                return Some((expr.to_string(), clean_diff_var(v).to_string(), 1));
+            }
+        }
+
+        let den_var = if den.starts_with('d') {
+            let v = &den[1..];
+            if let Some(hat_idx) = v.find('^') {
+                clean_diff_var(&v[..hat_idx])
+            } else if v.starts_with('(') && v.ends_with(')') {
+                clean_diff_var(v)
+            } else if v.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                clean_diff_var(den)
+            } else {
+                clean_diff_var(v)
+            }
+        } else {
+            den
+        };
+
+        let (order, expr) = if num.starts_with("d^") {
+            let hat_idx = num.find('^').unwrap();
+            let rest = &num[hat_idx + 1..];
+            let end_digit = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+            let ord = rest[..end_digit].parse::<usize>().unwrap_or(1);
+            let e = rest[end_digit..].trim();
+            (ord, e)
+        } else if num.starts_with("d2") || num.starts_with("d3") || num.starts_with("d4") {
+            let ord = num[1..2].parse::<usize>().unwrap_or(1);
+            (ord, num[2..].trim())
+        } else if num.starts_with('d') && num.len() > 1 {
+            (1, num[1..].trim())
+        } else {
+            (1, num)
+        };
+
+        let expr_clean = if expr.starts_with('(') && expr.ends_with(')') {
+            &expr[1..expr.len() - 1]
+        } else {
+            expr
+        };
+
+        if !expr_clean.is_empty() && !den_var.is_empty() {
+            return Some((expr_clean.to_string(), den_var.to_string(), order));
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_differential_integrand(s: &str) -> Option<(String, String)> {
+    let trimmed = s.trim();
+    if let Some(space_idx) = trimmed.rfind(' ') {
+        let last_word = trimmed[space_idx + 1..].trim();
+        if last_word.starts_with('d') && last_word.len() > 1 && last_word[1..].chars().all(|c| c.is_alphanumeric() || c == '_') {
+            let expr = trimmed[..space_idx].trim();
+            let var = clean_diff_var(last_word);
+            if !expr.is_empty() && !var.is_empty() {
+                return Some((expr.to_string(), var.to_string()));
+            }
+        }
+    }
+    None
+}
+
 fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     match name {
-        "deriv" | "diff" => {
+        "deriv" | "derivative" | "diff" => {
             if args.is_empty() || args.len() > 3 {
-                return Err(PhysureError::Generic("deriv expects (expr_str, var_str, optional_order)".into()));
+                return Err(PhysureError::Generic("deriv expects 1, 2, or 3 arguments: deriv(expr, [var], [order])".into()));
             }
-            let expr_str = match &args[0] {
-                PhsValue::String(s) => s,
-                _ => return Err(PhysureError::Generic("deriv expects expression string".into())),
-            };
-            let var_str = match &args[1] {
-                PhsValue::String(s) => s,
-                _ => return Err(PhysureError::Generic("deriv expects variable string".into())),
-            };
-            let order = if args.len() == 3 {
-                match &args[2] {
-                    PhsValue::Number(n) => *n as usize,
-                    PhsValue::Quantity(q) => q.value.mean() as usize,
-                    _ => 1,
+            let (expr_str, var_str, order, explicit_dep) = if args.len() == 1 {
+                let spec = match &args[0] {
+                    PhsValue::String(s) => s.as_str(),
+                    _ => return Err(PhysureError::Generic("deriv expects expression string".into())),
+                };
+                if let Some((e, v, o)) = parse_leibniz_single_arg(spec) {
+                    let dep = if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '\'') {
+                        Some(e.clone())
+                    } else {
+                        None
+                    };
+                    (e, v, o, dep)
+                } else {
+                    return Err(PhysureError::Generic("deriv expects (expr_str, var_str) or Leibniz notation string like deriv(\"dy/dx\")".into()));
                 }
             } else {
-                1
+                let e = match &args[0] {
+                    PhsValue::String(s) => s.to_string(),
+                    _ => return Err(PhysureError::Generic("deriv expects expression string".into())),
+                };
+                let raw_v = match &args[1] {
+                    PhsValue::String(s) => s.as_str(),
+                    _ => return Err(PhysureError::Generic("deriv expects variable string".into())),
+                };
+                let v = clean_diff_var(raw_v).to_string();
+                let o = if args.len() == 3 {
+                    match &args[2] {
+                        PhsValue::Number(n) => *n as usize,
+                        PhsValue::Quantity(q) => q.value.mean() as usize,
+                        _ => 1,
+                    }
+                } else {
+                    1
+                };
+                let dep = if e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '\'') {
+                    Some(e.clone())
+                } else {
+                    None
+                };
+                (e, v, o, dep)
             };
-            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+
+            let inlined = preprocess_symbolic_expression(&expr_str, interpreter);
+            if let Some(idx) = inlined.find('=') {
+                let lhs_str = &inlined[..idx];
+                let rhs_str = &inlined[idx + 1..];
+                let lhs = crate::symbolic::SymbolicParser::parse_str(lhs_str)?;
+                let rhs = crate::symbolic::SymbolicParser::parse_str(rhs_str)?;
+                let eq_node = crate::symbolic::Node::Equation(Box::new(lhs), Box::new(rhs));
+                let diff_eq = eq_node.diff_node_n(&var_str, order)?;
+                return Ok(Some(PhsValue::String(diff_eq.to_string())));
+            }
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
-            let diff_node = node.diff_node_n(var_str, order)?;
+            let dep_var_ref = explicit_dep.as_deref();
+            let mut diff_node = node;
+            for _ in 0..order {
+                diff_node = diff_node.diff_node_implicit(&var_str, dep_var_ref)?.simplify();
+            }
             Ok(Some(PhsValue::String(diff_node.to_string())))
         }
         "grad" | "gradient" => {
@@ -708,7 +832,8 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
             let mut grads = Vec::new();
             for v in vars {
-                let d = node.diff_node(&v)?.simplify();
+                let clean_v = clean_diff_var(&v);
+                let d = node.diff_node(clean_v)?.simplify();
                 grads.push(PhsValue::String(d.to_string()));
             }
             Ok(Some(PhsValue::Vector(grads)))
@@ -724,9 +849,10 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             }
             let mut sum_nodes = Vec::new();
             for (f_str, v) in field_exprs.iter().zip(vars.iter()) {
+                let clean_v = clean_diff_var(v);
                 let inlined = preprocess_symbolic_expression(f_str, interpreter);
                 let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
-                let d = node.diff_node(v)?.simplify();
+                let d = node.diff_node(clean_v)?.simplify();
                 sum_nodes.push(d);
             }
             let div_node = crate::symbolic::Node::Add(sum_nodes).simplify();
@@ -746,7 +872,7 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
                 crate::symbolic::SymbolicParser::parse_str(&inlined)
             };
             let (p, q, r) = (parse_node(&field[0])?, parse_node(&field[1])?, parse_node(&field[2])?);
-            let (x, y, z) = (&vars[0], &vars[1], &vars[2]);
+            let (x, y, z) = (clean_diff_var(&vars[0]), clean_diff_var(&vars[1]), clean_diff_var(&vars[2]));
 
             let cx = crate::symbolic::Node::Sub(Box::new(r.diff_node(y)?), Box::new(q.diff_node(z)?)).simplify();
             let cy = crate::symbolic::Node::Sub(Box::new(p.diff_node(z)?), Box::new(r.diff_node(x)?)).simplify();
@@ -771,11 +897,49 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
             let mut second_diffs = Vec::new();
             for v in vars {
-                let d2 = node.diff_node_n(&v, 2)?.simplify();
+                let clean_v = clean_diff_var(&v);
+                let d2 = node.diff_node_n(clean_v, 2)?.simplify();
                 second_diffs.push(d2);
             }
             let lap_node = crate::symbolic::Node::Add(second_diffs).simplify();
             Ok(Some(PhsValue::String(lap_node.to_string())))
+        }
+        "series" | "taylor" => {
+            if args.len() < 2 || args.len() > 4 {
+                return Err(PhysureError::Generic(
+                    "series expects (expression_string, variable_string, [about], [order]); `order` is the highest power kept, default 6".into(),
+                ));
+            }
+            let expr_str = match &args[0] {
+                PhsValue::String(s) => s.as_str(),
+                _ => return Err(PhysureError::Generic("series expects expression string".into())),
+            };
+            let var = match &args[1] {
+                PhsValue::String(s) => clean_diff_var(s).to_string(),
+                _ => return Err(PhysureError::Generic("series expects variable string".into())),
+            };
+            let about = match args.get(2) {
+                None => crate::symbolic::Node::Number(0.0),
+                Some(PhsValue::Number(n)) => crate::symbolic::Node::Number(*n),
+                Some(PhsValue::Quantity(q)) => crate::symbolic::Node::Number(q.value.mean()),
+                Some(PhsValue::String(s)) => crate::symbolic::SymbolicParser::parse_str(s)?,
+                Some(_) => {
+                    return Err(PhysureError::Generic(
+                        "series expansion point must be a number or an expression string".into(),
+                    ))
+                }
+            };
+            let order = match args.get(3) {
+                None => 6,
+                Some(PhsValue::Number(n)) => *n as usize,
+                Some(PhsValue::Quantity(q)) => q.value.mean() as usize,
+                Some(_) => {
+                    return Err(PhysureError::Generic("series order must be a number".into()))
+                }
+            };
+            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+            let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
+            Ok(Some(PhsValue::String(node.series(&var, &about, order)?.to_string())))
         }
         "simplify" | "expand" => {
             if args.is_empty() {
@@ -790,16 +954,32 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
             Ok(Some(PhsValue::String(node.simplify().to_string())))
         }
         "integral" | "integrate" => {
-            if args.len() == 4 {
-                let expr_str = match &args[0] {
-                    PhsValue::String(s) => s,
+            if args.is_empty() || args.len() > 4 {
+                return Err(PhysureError::Generic("integral expects (expression_string, variable_string) or (expression_string, variable_string, a, b)".into()));
+            }
+            let (expr_str, var_str) = if args.len() == 1 {
+                let s = match &args[0] {
+                    PhsValue::String(s) => s.as_str(),
                     _ => return Err(PhysureError::Generic("integral expects expression string".into())),
                 };
-                let var_str = match &args[1] {
-                    PhsValue::String(s) => s,
+                if let Some((e, v)) = parse_differential_integrand(s) {
+                    (e, v)
+                } else {
+                    return Err(PhysureError::Generic("integral expects (expression_string, variable_string) or single differential string like integral(\"sin(x) dx\")".into()));
+                }
+            } else {
+                let e = match &args[0] {
+                    PhsValue::String(s) => s.clone(),
+                    _ => return Err(PhysureError::Generic("integral expects expression string".into())),
+                };
+                let raw_v = match &args[1] {
+                    PhsValue::String(s) => s.as_str(),
                     _ => return Err(PhysureError::Generic("integral expects variable string".into())),
                 };
+                (e, clean_diff_var(raw_v).to_string())
+            };
 
+            if args.len() == 4 {
                 let extract_bound = |v: &PhsValue| -> f64 {
                     match v {
                         PhsValue::Number(n) => *n,
@@ -816,23 +996,13 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
                 let a = extract_bound(&args[2]);
                 let b = extract_bound(&args[3]);
 
-                let res_val = eval_definite_integral(expr_str, var_str, a, b, interpreter)?;
+                let res_val = eval_definite_integral(&expr_str, &var_str, a, b, interpreter)?;
                 return Ok(Some(PhsValue::Number(res_val)));
             }
-            if args.len() != 2 {
-                return Err(PhysureError::Generic("integral expects (expression_string, variable_string) or (expression_string, variable_string, a, b)".into()));
-            }
-            let expr_str = match &args[0] {
-                PhsValue::String(s) => s,
-                _ => return Err(PhysureError::Generic("integral expects expression string".into())),
-            };
-            let var_str = match &args[1] {
-                PhsValue::String(s) => s,
-                _ => return Err(PhysureError::Generic("integral expects variable string".into())),
-            };
-            let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+
+            let inlined = preprocess_symbolic_expression(&expr_str, interpreter);
             let node = crate::symbolic::SymbolicParser::parse_str(&inlined)?;
-            let int_node = node.integrate_node(var_str)?.simplify();
+            let int_node = node.integrate_node(&var_str)?.simplify();
             Ok(Some(PhsValue::String(int_node.to_string())))
         }
         "limit" | "lim" => {
@@ -976,6 +1146,7 @@ fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter
     }
 }
 
+#[allow(dead_code)]
 fn eval_plot_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
     let empty_env = std::collections::HashMap::new();
     eval_plot_builtin_with_kwargs(name, args, &[], interpreter, &empty_env)
@@ -1540,6 +1711,38 @@ fn eval_definite_integral(expr_str: &str, var_str: &str, a: f64, b: f64, interpr
         }
     };
 
+    // Try Symbolic First
+    if !a.is_infinite() && !b.is_infinite() {
+        if let Ok(node) = crate::symbolic::SymbolicParser::parse_str(&inlined) {
+            if let Ok(int_node) = node.integrate_node(var_str) {
+                let int_str = int_node.simplify().to_string();
+                if let Ok(int_prog) = crate::parser::parse_phs(&int_str) {
+                    if let Some(crate::ast::Statement::Expr(int_expr)) = int_prog.statements.first() {
+                        let mut env_a = interpreter.env.clone();
+                        env_a.insert(var_str.to_string(), PhsValue::Number(a));
+                        let mut env_b = interpreter.env.clone();
+                        env_b.insert(var_str.to_string(), PhsValue::Number(b));
+                        
+                        let val_b = interpreter.eval_expr(int_expr, &env_b);
+                        let val_a = interpreter.eval_expr(int_expr, &env_a);
+
+                        let get_num = |v: PhysureResult<PhsValue>| -> Option<f64> {
+                            match v.ok()? {
+                                PhsValue::Number(n) => Some(n),
+                                PhsValue::Quantity(q) => Some(q.value.mean()),
+                                _ => None,
+                            }
+                        };
+                        if let (Some(nb), Some(na)) = (get_num(val_b), get_num(val_a)) {
+                            return Ok(nb - na);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
     if a.is_infinite() || b.is_infinite() {
         let mut transform_eval = |t: f64| -> f64 {
             if t.abs() >= 1.0 - 1e-7 {
@@ -1583,6 +1786,7 @@ where F: FnMut(f64) -> f64 {
     sum
 }
 
+#[allow(dead_code)]
 fn draw_3d_surface_svg(expr_str: &str, title: &str, interpreter: &PhsInterpreter) -> PhysureResult<String> {
     let inlined = preprocess_symbolic_expression(expr_str, interpreter);
     let program = crate::parser::parse_phs(&inlined)?;
@@ -1905,6 +2109,98 @@ mod tests {
     }
 
     #[test]
+    fn test_deriv_extended_script_suite() {
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("e^2x".into()), PhsValue::String("x".into())]),
+            PhsValue::String("2 * e^(2 * x)".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("0 = sin(x)^2 + cosec(y)^2".into()), PhsValue::String("x".into())]),
+            PhsValue::String("y' = (cos(x) * sin(x))/(cot(y) * csc(y)^2)".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("5 * (A * (X + 2))^X".into()), PhsValue::String("X".into())]),
+            PhsValue::String("5 * (X/(2 + X) + ln((2 + X) * A)) * ((2 + X) * A)^X".into())
+        );
+        // Single-arg Leibniz notation: dy/dx, d^2y/dx^2, d/dx(sin(x))
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("dy/dx".into())]),
+            PhsValue::String("y'".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("d^2y/dx^2".into())]),
+            PhsValue::String("y''".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("d/dx(sin(x))".into())]),
+            PhsValue::String("cos(x)".into())
+        );
+        // Differential variable parameter: dx, d(x)
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("y".into()), PhsValue::String("dx".into())]),
+            PhsValue::String("y'".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("y".into()), PhsValue::String("dx".into()), PhsValue::Number(2.0)]),
+            PhsValue::String("y''".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("x^4".into()), PhsValue::String("dx".into()), PhsValue::Number(3.0)]),
+            PhsValue::String("24 * x".into())
+        );
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("cos(x)".into()), PhsValue::String("dx".into()), PhsValue::Number(4.0)]),
+            PhsValue::String("cos(x)".into())
+        );
+    }
+
+    #[test]
+    fn test_integral_extended_script_suite() {
+        assert_eq!(
+            eval_calc("integral", vec![PhsValue::String("xe^x".into()), PhsValue::String("x".into())]),
+            PhsValue::String("e^x * x - e^x".into())
+        );
+        assert_eq!(
+            eval_calc("integral", vec![PhsValue::String("1 / (1 + x^2)".into()), PhsValue::String("x".into())]),
+            PhsValue::String("atan(x)".into())
+        );
+        // Single-arg differential integrand: integral("sin(x) dx")
+        assert_eq!(
+            eval_calc("integral", vec![PhsValue::String("sin(x) dx".into())]),
+            PhsValue::String("cos(x) * -1".into())
+        );
+        // Definite integral with differential variable
+        let def_res = eval_calc("integral", vec![
+            PhsValue::String("x^2".into()),
+            PhsValue::String("dx".into()),
+            PhsValue::Number(0.0),
+            PhsValue::Number(3.0),
+        ]);
+        assert_eq!(def_res, PhsValue::Number(9.0));
+    }
+
+    #[test]
+    fn test_vector_calculus_fields_suite() {
+        let interp = PhsInterpreter::default();
+        
+        // grad("x^2 + y^2", ["dx", "dy"]) -> ["2 * x", "2 * y"]
+        let res_grad = eval_calc_builtin("grad", &[PhsValue::String("x^2 + y^2".into()), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into())])], &interp).unwrap().unwrap();
+        assert_eq!(res_grad, PhsValue::Vector(vec![PhsValue::String("2 * x".into()), PhsValue::String("2 * y".into())]));
+        
+        // div(["x^2", "y^2"], ["dx", "dy"]) -> "2 * x + 2 * y"
+        let res_div = eval_calc_builtin("div", &[PhsValue::Vector(vec![PhsValue::String("x^2".into()), PhsValue::String("y^2".into())]), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into())])], &interp).unwrap().unwrap();
+        assert_eq!(res_div, PhsValue::String("2 * x + 2 * y".into()));
+        
+        // curl(["y", "-x", "0"], ["dx", "dy", "dz"]) -> ["0", "0", "-2"]
+        let res_curl = eval_calc_builtin("curl", &[PhsValue::Vector(vec![PhsValue::String("y".into()), PhsValue::String("-1 * x".into()), PhsValue::String("0".into())]), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into()), PhsValue::String("dz".into())])], &interp).unwrap().unwrap();
+        assert_eq!(res_curl, PhsValue::Vector(vec![PhsValue::String("0".into()), PhsValue::String("0".into()), PhsValue::String("-2".into())]));
+        
+        // laplacian("x^2 + y^2", ["dx", "dy"]) -> "4"
+        let res_lap = eval_calc_builtin("laplacian", &[PhsValue::String("x^2 + y^2".into()), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into())])], &interp).unwrap().unwrap();
+        assert_eq!(res_lap, PhsValue::String("4".into()));
+    }
+
+    #[test]
     fn test_linspace() {
         let res = eval_array("linspace", vec![PhsValue::Number(0.0), PhsValue::Number(1.0), PhsValue::Number(3.0)]);
         if let PhsValue::Vector(v) = res {
@@ -1935,5 +2231,37 @@ mod tests {
         let x = PhsValue::Vector(vec![PhsValue::Number(0.0), PhsValue::Number(1.0)]);
         let res = eval_array("trapz", vec![y, x]);
         assert_eq!(res, PhsValue::Number(1.0));
+    }
+
+    #[test]
+    fn test_exhaustive_requested_features() {
+        assert_eq!(
+            eval_calc("integral", vec![PhsValue::String("cos(x) dx".into())]),
+            PhsValue::String("sin(x)".into())
+        );
+        let def_res = eval_calc("integral", vec![
+            PhsValue::String("x^3".into()),
+            PhsValue::String("dx".into()),
+            PhsValue::Number(0.0),
+            PhsValue::Number(2.0),
+        ]);
+        assert_eq!(def_res, PhsValue::Number(4.0));
+        
+        let res_grad = eval_calc("grad", vec![PhsValue::String("x*y*z".into()), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into()), PhsValue::String("dz".into())])]);
+        assert_eq!(res_grad, PhsValue::Vector(vec![PhsValue::String("y * z".into()), PhsValue::String("x * z".into()), PhsValue::String("x * y".into())]));
+        
+        let res_div = eval_calc("div", vec![PhsValue::Vector(vec![PhsValue::String("x".into()), PhsValue::String("y".into()), PhsValue::String("z".into())]), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into()), PhsValue::String("dz".into())])]);
+        assert_eq!(res_div, PhsValue::String("3".into()));
+        
+        let res_curl = eval_calc("curl", vec![PhsValue::Vector(vec![PhsValue::String("y*z".into()), PhsValue::String("x*z".into()), PhsValue::String("x*y".into())]), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into()), PhsValue::String("dz".into())])]);
+        assert_eq!(res_curl, PhsValue::Vector(vec![PhsValue::String("0".into()), PhsValue::String("0".into()), PhsValue::String("0".into())]));
+        
+        let res_lap = eval_calc("laplacian", vec![PhsValue::String("x^2 + y^2 + z^2".into()), PhsValue::Vector(vec![PhsValue::String("dx".into()), PhsValue::String("dy".into()), PhsValue::String("dz".into())])]);
+        assert_eq!(res_lap, PhsValue::String("6".into()));
+        
+        assert_eq!(
+            eval_calc("deriv", vec![PhsValue::String("x^4".into()), PhsValue::String("dx".into()), PhsValue::Number(4.0)]),
+            PhsValue::String("24".into())
+        );
     }
 }

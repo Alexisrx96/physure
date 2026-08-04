@@ -360,6 +360,9 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
 const KNOWN_CONVERSION_GAPS: &[(&str, &str)] = &[
     ("°", "not a LETTER, so no identifier can spell it; use `deg`"),
     ("%", "not a LETTER, so no identifier can spell it; use `percent`"),
+    ("°C", "leading ° is not a LETTER, so no identifier can spell it; use `degC`"),
+    ("°F", "leading ° is not a LETTER, so no identifier can spell it; use `degF`"),
+    ("°R", "leading ° is not a LETTER, so no identifier can spell it; use `degR`"),
 ];
 
 /// Every symbol in the registry, swept through the literal parser. The prefix bug was a
@@ -834,4 +837,83 @@ fn a_range_that_is_not_an_interval_is_refused() {
     assert!(eval_phs("0 m ..").is_err(), "`0 m ..` parsed with no upper bound");
     assert!(eval_phs(".. 100 m").is_err(), "`.. 100 m` parsed with no lower bound");
     assert!(eval_phs("0 m .. 100 m .. 200 m").is_err(), "`a .. b .. c` parsed as a range");
+}
+
+/// The temperature scales are the only *affine* units: converting them needs an additive
+/// zero point, not just a scale factor. Every other unit in the registry is purely
+/// multiplicative, so nothing in the engine used to carry an offset and `degC`/`degF` were
+/// simply absent — calorimetry (`m * cap * (T2 - T1)`) could not be written at all.
+///
+/// The rule these cases pin down: an absolute temperature normalises to K the moment it
+/// takes part in arithmetic, so a *difference* is a true interval, while an explicit `=>`
+/// back onto a scale restores its zero point.
+#[test]
+fn affine_temperature_scales_carry_their_zero_point() {
+    // Absolute conversions both ways, including the two freezing/boiling anchors.
+    assert_close(eval_quantity("20.0 degC => K").value.mean(), 293.15, "20 degC in K");
+    assert_close(eval_quantity("0.0 degC => degF").value.mean(), 32.0, "0 degC in degF");
+    assert_close(eval_quantity("100.0 degC => degF").value.mean(), 212.0, "100 degC in degF");
+    // Expected zero, so `assert_close`'s relative tolerance does not apply here.
+    let freezing = eval_quantity("32.0 degF => degC").value.mean();
+    assert!(freezing.abs() < 1e-9, "32 degF should be 0 degC, got {freezing}");
+    assert_close(eval_quantity("300.0 K => degC").value.mean(), 26.85, "300 K in degC");
+    // Rankine shares Fahrenheit's step but starts at absolute zero, so it has no offset.
+    assert_close(eval_quantity("491.67 degR => K").value.mean(), 273.15, "491.67 degR in K");
+
+    // Round-tripping a scale onto itself must not shift the value twice.
+    assert_close(eval_quantity("20.0 degC => degC").value.mean(), 20.0, "degC round trip");
+
+    // A difference is an interval: the zero points cancel instead of being subtracted twice.
+    assert_close(
+        eval_quantity("120.0 degF - 20.0 degC").value.mean(),
+        28.888888888888889,
+        "120 degF - 20 degC",
+    );
+
+    // The case that motivated all of the above: specific-heat calorimetry across two scales.
+    assert_close(
+        eval_quantity("100.0 gram * (4.18 J / (gram * K)) * (120.0 degF - 20.0 degC) => J")
+            .value
+            .mean(),
+        12075.555555555555,
+        "calorimetry across degC and degF",
+    );
+
+    // The degree-sign spellings are aliases of the same units in a literal, even though
+    // `identifier` cannot spell them after `=>` (see KNOWN_CONVERSION_GAPS).
+    assert_close(eval_quantity("20.0 °C => K").value.mean(), 293.15, "20 °C in K");
+}
+
+/// A unit symbol inside an equation *string* is a unit, not an unbound variable. The
+/// symbolic layer has no notion of units, so it parses `2.0 J / (gram * K)` into plain
+/// algebra over the symbols J, gram and K; those used to be reported as missing arguments,
+/// and once supplied past that check they evaluated as bare strings and failed to multiply.
+#[test]
+fn equation_strings_may_carry_units() {
+    // The unit is not a missing argument, and it survives into the result.
+    assert_close(
+        eval_quantity("f = \"y = x * 2.0 m\"\nf(x = 3.0)").value.mean(),
+        6.0,
+        "unit in an equation string",
+    );
+    // A unit in a denominator only ever appears as a bare symbol, never next to a number.
+    assert_close(
+        eval_quantity("cap = 4.18 J / (gram * K)\ne = \"Q = m * {cap} * (T2 - T1)\"\ne(m = 100.0 gram, T1 = 20.0 degC, T2 = 120.0 degF) => J")
+            .value
+            .mean(),
+        12075.555555555555,
+        "interpolated compound unit in an equation string",
+    );
+    // A unit-named unknown is still solved for, rather than read as the unit: the `V` here
+    // is the unknown, not one volt, because the opposite side is fully bound by name.
+    assert_close(
+        eval_quantity("var = \"R = V / I\" * \"I\"\nvar(I = 3 A, R = 3 Ohm)").value.mean(),
+        9.0,
+        "unit-named unknown on the other side",
+    );
+    // A genuinely missing argument must still be reported.
+    assert!(
+        eval_phs("f = \"y = a * b\"\nf(a = 2.0)").is_err(),
+        "a missing non-unit argument was accepted",
+    );
 }
