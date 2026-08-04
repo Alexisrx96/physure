@@ -247,3 +247,82 @@ fn degree_is_a_scaled_radian_not_a_scaled_steradian() {
     );
     assert!((deg.scale - 0.0174532925).abs() < 1e-12, "deg carries the degrees → radians factor");
 }
+
+/// The temperature scales are the registry's only affine units: their conversion needs an
+/// additive zero point on top of the scale factor. Nothing else in the registry has one, so
+/// the offset must be the exception it looks like — every other unit stays at zero, or the
+/// purely multiplicative fast paths in `Quantity` would quietly take the wrong branch.
+#[test]
+fn temperature_scales_are_the_only_affine_units() {
+    let (reg, _) = conf::build_registry_from_conf();
+
+    let degc = reg.get_unit("degC").unwrap();
+    assert!((degc.offset - 273.15).abs() < 1e-12, "degC must carry the Kelvin zero point");
+    assert!((degc.scale - 1.0).abs() < 1e-12, "a degC step is a Kelvin step");
+    assert!(degc.is_affine());
+    assert!(
+        degc.same_dimensions(&reg.get_unit("K").unwrap()),
+        "degC and K have to be interconvertible"
+    );
+
+    let degf = reg.get_unit("degF").unwrap();
+    assert!((degf.scale - 5.0 / 9.0).abs() < 1e-12, "a degF step is 5/9 of a Kelvin");
+    assert!((degf.offset - 255.37222222222223).abs() < 1e-9, "degF zero point in Kelvin");
+
+    // Rankine starts at absolute zero, so it is scaled but *not* affine.
+    let degr = reg.get_unit("degR").unwrap();
+    assert!(!degr.is_affine(), "degR shares K's zero point, so it carries no offset");
+    assert!((degr.scale - 5.0 / 9.0).abs() < 1e-12);
+
+    // A delta unit is the interval scale: same step, no zero point.
+    let delta = reg.get_unit("delta_degC").unwrap();
+    assert!(!delta.is_affine(), "a temperature *difference* has no zero point");
+
+    // Nothing else may have acquired an offset from the conf parser's new offset field.
+    let affine: Vec<&String> = reg
+        .base_units
+        .keys()
+        .chain(reg.derived_units.keys())
+        .filter(|name| reg.get_unit(name).is_some_and(|u| u.is_affine()))
+        .collect();
+    let mut affine: Vec<&str> = affine.into_iter().map(String::as_str).collect();
+    affine.sort_unstable();
+    assert_eq!(affine, ["degC", "degF"], "only Celsius and Fahrenheit are affine");
+}
+
+/// `degC` and `K` share dimensions *and* scale, differing only in their zero point, so unit
+/// equality has to take the offset into account or a degC → K conversion looks like a no-op.
+#[test]
+fn an_offset_makes_a_unit_distinct_from_its_base() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let degc = reg.get_unit("degC").unwrap();
+    let kelvin = reg.get_unit("K").unwrap();
+    assert!(degc.same_dimensions(&kelvin), "same physical dimension");
+    assert!((degc.scale - kelvin.scale).abs() < 1e-12, "same step size");
+    assert_ne!(degc, kelvin, "but not the same unit — the zero point differs");
+    assert_eq!(degc.to_delta(), kelvin.to_delta(), "dropping the zero point makes them equal");
+}
+
+#[test]
+fn test_unit_conversions() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    
+    let kmh = reg.get_unit("km").unwrap().div(&reg.get_unit("h").unwrap());
+    let ms = reg.get_unit("m").unwrap().div(&reg.get_unit("s").unwrap());
+    let speed = Quantity::new_scalar(36.0, 0.0, kmh, None, None);
+    let speed_ms = speed.convert_to(&ms).unwrap();
+    assert!((speed_ms.value.mean() - 10.0).abs() < 1e-9);
+
+    let degc = reg.get_unit("degC").unwrap();
+    let k = reg.get_unit("K").unwrap();
+    let temp = Quantity::new_scalar(25.0, 0.0, degc, None, None);
+    let temp_k = temp.convert_to(&k).unwrap();
+    assert!((temp_k.value.mean() - 298.15).abs() < 1e-9);
+
+    let j = reg.get_unit("J").unwrap();
+    let kwh = reg.get_unit("kWh").unwrap();
+    let energy = Quantity::new_scalar(3_600_000.0, 0.0, j, None, None);
+    let energy_kwh = energy.convert_to(&kwh).unwrap();
+    assert!((energy_kwh.value.mean() - 1.0).abs() < 1e-9);
+}

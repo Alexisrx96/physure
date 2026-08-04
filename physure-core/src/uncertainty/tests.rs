@@ -508,3 +508,27 @@ fn a_constant_cannot_change_the_model_by_standing_on_the_left() {
         }
     }
 }
+
+#[test]
+fn test_gaussian_vs_monte_carlo_propagation() {
+    let g_x = scalar(3.0, 0.5, Some("gaussian"));
+    let g_y = scalar(4.0, 0.6, Some("gaussian"));
+    let mc_x = scalar(3.0, 0.5, Some("monte_carlo"));
+    let mc_y = scalar(4.0, 0.6, Some("monte_carlo"));
+
+    let g_sum = g_x.add(&g_y).unwrap();
+    let mc_sum = mc_x.add(&mc_y).unwrap();
+    assert!((g_sum.value.mean() - mc_sum.value.mean()).abs() < 0.05);
+    assert!((g_sum.value.std_dev() - mc_sum.value.std_dev()).abs() < 0.05);
+}
+
+#[test]
+fn test_asymmetric_measurement_handling() {
+    let m = MomentsBackend::measured(10.0, 1.0, 2.0).unwrap();
+    assert!(m.mean() > 10.0);
+    assert!(m.std_dev() > 1.0 && m.std_dev() < 2.0);
+    
+    let u = UncertaintyValue::Moments(m);
+    let u_mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(1.0, 0.1, 1000));
+    assert!(u.propagate_add(&u_mc).is_err());
+}

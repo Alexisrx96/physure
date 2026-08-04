@@ -74,6 +74,17 @@ impl UnitRegistry {
         self.derived_units.insert(name, u);
     }
 
+    /// Registers an absolute affine unit against an already-registered `base`, e.g.
+    /// `add_affine_unit("degC", "K", 1.0, 273.15)`: one degC is `scale` base units wide and
+    /// its zero sits `offset` base units above the base unit's zero.
+    pub fn add_affine_unit(&mut self, name: String, base: &str, scale: f64, offset: f64) {
+        let base_unit = self.get_unit(base).expect("base unit must be registered first");
+        let new_scale = base_unit.scale * scale;
+        let mut u = base_unit.with_scale(new_scale).with_offset(offset);
+        u.display_name = Some(name.clone());
+        self.derived_units.insert(name, u);
+    }
+
     pub fn register_alias(&mut self, alias: String, symbol: String) {
         self.aliases.insert(alias, symbol);
     }
