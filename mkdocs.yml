@@ -55,6 +55,7 @@ nav:
       - JAX Integration: tutorials/jax_tutorial.ipynb
   - Guides:
       - Master Roadmap: ROADMAP.md
+      - Implementation Plan: implementation_plan.md
       - torch.compile Integration: torch_compile_integration.md
       - Chemistry Integration Roadmap: chemistry_roadmap.md
       - Diagramming Engine Roadmap: diagrams_roadmap.md
