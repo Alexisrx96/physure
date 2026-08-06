@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 try:
     import sympy as sp
