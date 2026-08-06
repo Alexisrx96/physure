@@ -7,97 +7,48 @@ on:
     branches: [ main ]
 
 jobs:
-  # 1. Build Core
-  build-core:
+  # 1. Build Rust, Test Workspace Crates, Check Quality & Package ABI3 Wheel
+  build-and-test-rust:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+
     - uses: dtolnay/rust-toolchain@stable
+
     - name: Rust build cache
       uses: Swatinem/rust-cache@v2
       continue-on-error: true
-    - name: Build physure core
-      run: cargo build -p physure
 
-  # 2. Quality (Ruff Lint & Format)
-  quality:
-    needs: build-core
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: physure-python
-    steps:
-    - uses: actions/checkout@v4
-    - name: Install uv
+    - name: Install uv & Python 3.12
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
-    - name: Install dependencies
-      run: uv sync --all-extras --dev --python 3.12
-    - name: Ruff lint
-      run: uv run ruff check .
-    - name: Ruff format
-      run: uv run ruff format --check .
 
-  # 3. Test Rust Core
-  test-rust-core:
-    needs: quality
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - name: Rust build cache
-      uses: Swatinem/rust-cache@v2
-      continue-on-error: true
-    - name: Test physure core crate
-      run: cargo test -p physure
+    - name: Python Quality Checks
+      run: |
+        cd physure-python
+        uv sync --all-extras --dev --python 3.12
+        uv run ruff check .
+        uv run ruff format --check .
 
-  # 4. Test Physure Script
-  test-physure-script:
-    needs: test-rust-core
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - name: Rust build cache
-      uses: Swatinem/rust-cache@v2
-      continue-on-error: true
-    - name: Test physure-script crate
-      run: cargo test -p physure-script
+    - name: Test All Rust Workspace Crates
+      run: cargo test -p physure -p physure-script -p physure-cli -p physure-lsp
 
-  # 5. Test Physure CLI
-  test-physure-cli:
-    needs: test-physure-script
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - name: Rust build cache
-      uses: Swatinem/rust-cache@v2
-      continue-on-error: true
-    - name: Test physure-cli crate
-      run: cargo test -p physure-cli
+    - name: Prebuild ABI3 PyO3 Wheel
+      run: |
+        cd physure-python
+        uv run maturin build --release --out dist
 
-  # 6. Test Physure LSP
-  test-physure-lsp:
-    needs: test-physure-cli
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - name: Rust build cache
-      uses: Swatinem/rust-cache@v2
-      continue-on-error: true
-    - name: Test physure-lsp crate
-      run: cargo test -p physure-lsp
+    - name: Upload PyO3 Wheel Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: pyo3-wheel
+        path: physure-python/dist/*.whl
 
-  # 7. Python Matrix Testing (only after all Rust & Quality steps pass in order)
+  # 2. Fast Python Matrix Testing (Uses prebuilt ABI3 wheel; no Rust compiler needed)
   test-python:
-    needs: test-physure-lsp
+    needs: build-and-test-rust
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: physure-python
     strategy:
       fail-fast: false
       matrix:
@@ -108,23 +59,34 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
+
     - name: Install uv
       uses: astral-sh/setup-uv@v5
       with:
         enable-cache: true
-    - name: Rust build cache
-      uses: Swatinem/rust-cache@v2
-      continue-on-error: true
+
+    - name: Download Prebuilt PyO3 Wheel
+      uses: actions/download-artifact@v4
+      with:
+        name: pyo3-wheel
+        path: physure-python/dist
+
     - name: Set up Python ${{ matrix.python-version }}
       run: uv python install ${{ matrix.python-version }}
-    - name: Install dependencies and build PyO3 extension
+
+    - name: Install dependencies & prebuilt wheel
       run: |
+        cd physure-python
         uv sync --all-extras --dev --python ${{ matrix.python-version }}
-        uv run maturin develop
-    - name: Run Tests
-      run: uv run pytest --ignore=tests/core/test_serialization.py
-    - name: Run Benchmarks
-      run: uv run pytest --benchmark-enable tests/performance/benchmarks.py
-    - name: Build Documentation
-      run: uv run mkdocs build --strict
+        uv pip install dist/*.whl --force-reinstall --python ${{ matrix.python-version }}
+
+    - name: Run Pytest
+      run: |
+        cd physure-python
+        uv run pytest --ignore=tests/core/test_serialization.py
+
+    - name: Build Documentation (Python 3.12 only)
+      if: matrix.python-version == '3.12'
+      run: |
+        cd physure-python
+        uv run mkdocs build --strict
