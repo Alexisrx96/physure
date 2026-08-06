@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Pre-push testing script for Physure.
 
-Executes sequential Rust crate tests and creates fresh, isolated virtual environments
-for each target Python version configured in `.env` / `.env.example` to verify
-clean `maturin develop` compilation and PyO3 test pass rates before pushing.
+Executes strict sequential steps matching CI pipeline order:
+1. Build Core (cargo build -p physure)
+2. Quality (ruff check & format)
+3. Test rust-core (cargo test -p physure)
+4. Test physure-script (cargo test -p physure-script)
+5. Test physure-cli (cargo test -p physure-cli)
+6. Test physure-lsp (cargo test -p physure-lsp)
+7. Python matrix testing in clean, isolated virtual environments
 """
 
 import os
@@ -11,7 +16,6 @@ import sys
 import subprocess
 from pathlib import Path
 
-# Set headless Matplotlib backend globally
 os.environ["MPLBACKEND"] = "Agg"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -42,10 +46,17 @@ def load_env():
     return config
 
 
-def run_command(cmd, cwd=None, env=None):
-    """Executes a command and streams output, returning exit code."""
-    print(f"\n[EXEC] {' '.join(cmd)} (in {cwd or REPO_ROOT})")
-    res = subprocess.run(cmd, cwd=cwd or REPO_ROOT, env=env or os.environ.copy())
+def run_command(cmd, cwd=None, env=None, retries=1):
+    """Executes a command and streams output, with retry support for Windows file locks."""
+    for attempt in range(retries):
+        print(f"\n[EXEC] {' '.join(cmd)} (in {cwd or REPO_ROOT})")
+        res = subprocess.run(cmd, cwd=cwd or REPO_ROOT, env=env or os.environ.copy())
+        if res.returncode == 0:
+            return 0
+        if attempt < retries - 1:
+            print(f"\n[RETRY] Retrying command (attempt {attempt + 2}/{retries})...")
+            import time
+            time.sleep(2)
     return res.returncode
 
 
@@ -58,31 +69,68 @@ def main():
     fail_fast = config.get("FAIL_FAST", "true").lower() == "true"
 
     print("==========================================================")
-    print(" Physure Pre-Push Clean Environment Verification")
+    print(" Physure Sequential CI Pipeline Verification")
     print(f" Target Python Versions: {', '.join(python_versions)}")
     print(f" Fresh Venv Base Dir:    {venv_base_dir}")
     print("==========================================================")
 
-    # 1. Rust Workspace Crates Test
-    if run_rust:
-        print("\n--- [Step 1/2] Running Rust Workspace Tests ---")
-        code = run_command(["cargo", "test", "-p", "physure", "-p", "physure-script", "-p", "physure-cli", "-p", "physure-lsp"])
-        for attempt in range(2):
-            if code == 0:
-                break
-            print(f"\n[RETRY] Retrying Rust tests (attempt {attempt + 2}/3) due to Windows file lock...")
-            import time
-            time.sleep(2)
-            code = run_command(["cargo", "test", "-p", "physure", "-p", "physure-script", "-p", "physure-cli", "-p", "physure-lsp"])
-        if code != 0:
-            print("\n[FAIL] Rust tests failed!")
-            sys.exit(code)
-        print("[OK] Rust workspace tests passed!")
+    # 1. Build Core
+    print("\n--- [Step 1/7] Building Core Crate (physure) ---")
+    code = run_command(["cargo", "build", "-p", "physure"])
+    if code != 0:
+        print("\n[FAIL] Step 1: Core build failed!")
+        sys.exit(code)
+    print("[OK] Step 1: Core built successfully!")
 
-    # 2. Sequential Python Matrix Testing in Fresh Venvs
+    # 2. Quality (Ruff lint & format)
+    print("\n--- [Step 2/7] Python Quality Checks (Ruff Lint & Format) ---")
+    python_dir = REPO_ROOT / "physure-python"
+    code = run_command(["uv", "run", "ruff", "check", "."], cwd=python_dir)
+    if code != 0:
+        print("\n[FAIL] Step 2: Ruff lint failed!")
+        sys.exit(code)
+    code = run_command(["uv", "run", "ruff", "format", "--check", "."], cwd=python_dir)
+    if code != 0:
+        print("\n[FAIL] Step 2: Ruff format check failed!")
+        sys.exit(code)
+    print("[OK] Step 2: Quality checks passed!")
+
+    if run_rust:
+        # 3. Test rust-core
+        print("\n--- [Step 3/7] Testing Rust Core Crate (physure) ---")
+        code = run_command(["cargo", "test", "-p", "physure"], retries=2)
+        if code != 0:
+            print("\n[FAIL] Step 3: Rust core tests failed!")
+            sys.exit(code)
+        print("[OK] Step 3: Rust core tests passed!")
+
+        # 4. Test physure-script
+        print("\n--- [Step 4/7] Testing Physure Script Crate (physure-script) ---")
+        code = run_command(["cargo", "test", "-p", "physure-script"], retries=2)
+        if code != 0:
+            print("\n[FAIL] Step 4: Physure script tests failed!")
+            sys.exit(code)
+        print("[OK] Step 4: Physure script tests passed!")
+
+        # 5. Test physure-cli
+        print("\n--- [Step 5/7] Testing Physure CLI Crate (physure-cli) ---")
+        code = run_command(["cargo", "test", "-p", "physure-cli"], retries=2)
+        if code != 0:
+            print("\n[FAIL] Step 5: Physure CLI tests failed!")
+            sys.exit(code)
+        print("[OK] Step 5: Physure CLI tests passed!")
+
+        # 6. Test physure-lsp
+        print("\n--- [Step 6/7] Testing Physure LSP Crate (physure-lsp) ---")
+        code = run_command(["cargo", "test", "-p", "physure-lsp"], retries=2)
+        if code != 0:
+            print("\n[FAIL] Step 6: Physure LSP tests failed!")
+            sys.exit(code)
+        print("[OK] Step 6: Physure LSP tests passed!")
+
+    # 7. Sequential Python Matrix Testing in Fresh Venvs
     if run_python:
-        print("\n--- [Step 2/2] Sequential Python Matrix Testing ---")
-        python_dir = REPO_ROOT / "physure-python"
+        print("\n--- [Step 7/7] Sequential Python Matrix Testing ---")
         
         for py_ver in python_versions:
             print(f"\n==========================================================")
@@ -91,10 +139,8 @@ def main():
             
             fresh_venv = venv_base_dir / f"env-{py_ver}"
             
-            # Ensure target python interpreter is installed via uv
             run_command(["uv", "python", "install", py_ver])
 
-            # Sync dependencies into isolated virtual environment
             env_vars = os.environ.copy()
             env_vars["UV_PROJECT_ENVIRONMENT"] = str(fresh_venv)
             
@@ -109,7 +155,6 @@ def main():
                     sys.exit(sync_code)
                 continue
 
-            # Build PyO3 maturin extension inside fresh venv
             maturin_code = run_command(
                 ["uv", "run", "maturin", "develop"],
                 cwd=python_dir,
@@ -121,7 +166,6 @@ def main():
                     sys.exit(maturin_code)
                 continue
 
-            # Run pytest
             pytest_code = run_command(
                 ["uv", "run", "pytest", "--ignore=tests/core/test_serialization.py"],
                 cwd=python_dir,
@@ -136,7 +180,7 @@ def main():
             print(f"[OK] Python {py_ver} tests passed cleanly!")
 
     print("\n==========================================================")
-    print(" All pre-push verification checks passed cleanly!")
+    print(" All sequential CI verification steps passed cleanly!")
     print("==========================================================")
 
 

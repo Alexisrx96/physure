@@ -7,45 +7,88 @@ on:
     branches: [ main ]
 
 jobs:
+  # 1. Build Core
+  build-core:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Rust build cache
+      uses: Swatinem/rust-cache@v2
+    - name: Build physure core
+      run: cargo build -p physure
+
+  # 2. Quality (Ruff Lint & Format)
   quality:
+    needs: build-core
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: physure-python
     steps:
     - uses: actions/checkout@v4
-
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
         enable-cache: true
-
-    - name: Rust build cache
-      uses: Swatinem/rust-cache@v2
-
     - name: Install dependencies
       run: uv sync --all-extras --dev --python 3.12
-
     - name: Ruff lint
       run: uv run ruff check .
-
     - name: Ruff format
       run: uv run ruff format --check .
 
-  rust:
+  # 3. Test Rust Core
+  test-rust-core:
+    needs: quality
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
     - uses: dtolnay/rust-toolchain@stable
-
     - name: Rust build cache
       uses: Swatinem/rust-cache@v2
+    - name: Test physure core crate
+      run: cargo test -p physure
 
-    - name: Test physure crates
-      run: cargo test -p physure -p physure-script -p physure-cli -p physure-lsp
+  # 4. Test Physure Script
+  test-physure-script:
+    needs: test-rust-core
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Rust build cache
+      uses: Swatinem/rust-cache@v2
+    - name: Test physure-script crate
+      run: cargo test -p physure-script
 
-  test:
+  # 5. Test Physure CLI
+  test-physure-cli:
+    needs: test-physure-script
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Rust build cache
+      uses: Swatinem/rust-cache@v2
+    - name: Test physure-cli crate
+      run: cargo test -p physure-cli
+
+  # 6. Test Physure LSP
+  test-physure-lsp:
+    needs: test-physure-cli
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Rust build cache
+      uses: Swatinem/rust-cache@v2
+    - name: Test physure-lsp crate
+      run: cargo test -p physure-lsp
+
+  # 7. Python Matrix Testing (only after all Rust & Quality steps pass in order)
+  test-python:
+    needs: test-physure-lsp
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,7 +96,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.11 floor: the abi3-py311 wheel requires it (pyo3 buffer API)
         python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     env:
@@ -61,31 +103,22 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
     - uses: dtolnay/rust-toolchain@stable
-
     - name: Install uv
       uses: astral-sh/setup-uv@v3
       with:
         enable-cache: true
-
     - name: Rust build cache
       uses: Swatinem/rust-cache@v2
-
     - name: Set up Python ${{ matrix.python-version }}
       run: uv python install ${{ matrix.python-version }}
-
     - name: Install dependencies and build PyO3 extension
       run: |
         uv sync --all-extras --dev --python ${{ matrix.python-version }}
         uv run maturin develop
-
     - name: Run Tests
       run: uv run pytest --ignore=tests/core/test_serialization.py
-
     - name: Run Benchmarks
-      # Enable benchmarks explicitly since they are disabled in pyproject.toml
       run: uv run pytest --benchmark-enable tests/performance/benchmarks.py
-
     - name: Build Documentation
       run: uv run mkdocs build --strict
