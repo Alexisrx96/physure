@@ -1,5 +1,7 @@
 """Provides classes for atomic symbolic quantities and equations."""
 
+from __future__ import annotations
+
 from typing import Any
 
 try:

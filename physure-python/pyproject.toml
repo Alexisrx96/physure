@@ -133,7 +133,7 @@ asyncio_mode = "strict"
 [tool.coverage.run]
 source = ["physure"]
 branch = true
-omit   = ["**/__init__.py", "tests/*"]
+omit   = ["**/__init__.py", "tests/*", "**/_core*", "**/*.so", "**/*.pyd"]
 
 [tool.coverage.report]
 fail_under   = 80
