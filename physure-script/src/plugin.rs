@@ -294,6 +294,8 @@ fn load_plugin_file(
     // directly. ponytail: copies are left in the temp dir rather than cleaned
     // up (deleting a mapped library mid-run isn't portable); fine unless a
     // process reloads plugins so often disk usage becomes a concern.
+    static TEMP_COPY_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = TEMP_COPY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = mtime
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -303,18 +305,19 @@ fn load_plugin_file(
         .and_then(|s| s.to_str())
         .unwrap_or("plugin");
     let temp_copy = std::env::temp_dir().join(format!(
-        "phs_plugin_{}_{}_{}.{}",
+        "phs_plugin_{}_{}_{}_{}.{}",
         stem,
         nanos,
         std::process::id(),
+        count,
         std::env::consts::DLL_EXTENSION
     ));
     let mut copy_result = std::fs::copy(path, &temp_copy);
-    for _ in 0..5 {
+    for _ in 0..20 {
         if copy_result.is_ok() {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::thread::sleep(std::time::Duration::from_millis(25));
         copy_result = std::fs::copy(path, &temp_copy);
     }
     copy_result.map_err(|e| PhysureError::Generic(e.to_string()))?;
@@ -323,11 +326,11 @@ fn load_plugin_file(
     // placed by the script author under `ext/`, the same trust boundary as the
     // `ext/*.py` loader on the Python side.
     let mut lib_result = unsafe { libloading::Library::new(&temp_copy) };
-    for _ in 0..5 {
+    for _ in 0..20 {
         if lib_result.is_ok() {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(15));
+        std::thread::sleep(std::time::Duration::from_millis(25));
         lib_result = unsafe { libloading::Library::new(&temp_copy) };
     }
     let lib = lib_result.map_err(|e| PhysureError::Generic(e.to_string()))?;
