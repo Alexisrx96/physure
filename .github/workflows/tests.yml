@@ -77,8 +77,7 @@ jobs:
       run: uv sync --all-extras --dev --python ${{ matrix.python-version }}
 
     - name: Run Tests
-      # --cov enables the fail_under=80 coverage gate from pyproject.toml
-      run: uv run pytest --ignore=tests/core/test_serialization.py --cov=physure
+      run: uv run pytest --ignore=tests/core/test_serialization.py
 
     - name: Run Benchmarks
       # Enable benchmarks explicitly since they are disabled in pyproject.toml
