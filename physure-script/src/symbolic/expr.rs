@@ -57,6 +57,114 @@ impl Expr {
         }
     }
 
+    pub fn tan(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Tan(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn cot(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Cot(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn sec(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Sec(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn csc(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Csc(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn arcsin(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Arcsin(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn arccos(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Arccos(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn arctan(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Arctan(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn arccot(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Arccot(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn arcsec(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Arcsec(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn arccsc(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Arccsc(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn sinh(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Sinh(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn cosh(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Cosh(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn tanh(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Tanh(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn coth(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Coth(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn sech(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Sech(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn csch(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Csch(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn abs(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Abs(Box::new(e.node.clone())),
+        }
+    }
+
+    pub fn sqrt(e: &Expr) -> Expr {
+        Expr {
+            node: Node::Sqrt(Box::new(e.node.clone())),
+        }
+    }
+
     pub fn add(&self, other: &Expr) -> PhysureResult<Expr> {
         check_add_compat(&self.node, &other.node)?;
         Ok(Expr {

@@ -611,6 +611,13 @@ fn unit_registry() -> &'static UnitRegistry {
     REGISTRY.get_or_init(|| physure_core::units::conf::build_registry_from_conf().0)
 }
 
+/// True if `name` resolves to a registered unit. Used to tell a unit symbol apart from an
+/// unbound variable when checking that a keyword call to an equation supplies every unknown:
+/// in `"y = x * 2.0 m"` the `m` is metres, not a variable the caller forgot to pass.
+pub(crate) fn is_known_unit_symbol(name: &str) -> bool {
+    unit_registry().get_unit(name).is_some()
+}
+
 /// True if a `unit_term` pair (e.g. "kg", "r ^ 2", "m2", "a0", "Å") names a registered
 /// unit. The optional `^exp` suffix is irrelevant to the lookup.
 ///

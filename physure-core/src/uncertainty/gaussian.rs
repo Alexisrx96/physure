@@ -4,6 +4,9 @@ use super::trait_def::UncertaintyBackend;
 
 /// A first-order Gaussian uncertainty that remembers where it came from.
 ///
+/// Implements 1st-order Taylor series uncertainty propagation compliant with the
+/// ISO/IEC Guide 98-3:2008 / JCGM 100:2008 (Guide to the Expression of Uncertainty in Measurement, GUM §5.1).
+///
 /// `sigma` carries the standard deviation *and* its provenance, so two values derived from
 /// the same measurement cancel instead of adding in quadrature. See [`Lineage`].
 #[derive(Clone)]

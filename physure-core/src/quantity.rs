@@ -189,7 +189,23 @@ impl Quantity {
         value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend::exact(factor)))
     }
 
+    /// Shifts an uncertainty value by an exact additive constant. A zero point carries no
+    /// uncertainty of its own, so `exact` is used for the same reason as in `scale_value`:
+    /// minting a source id here would leave a term that never cancels.
+    fn shift_value(value: &UncertaintyValue, offset: f64) -> PhysureResult<UncertaintyValue> {
+        if offset == 0.0 {
+            return Ok(value.clone());
+        }
+        value.propagate_add(&UncertaintyValue::Gaussian(GaussianBackend::exact(offset)))
+    }
+
     pub fn add(&self, other: &Quantity) -> PhysureResult<Quantity> {
+        // An absolute temperature has no additive algebra of its own — `20 degC + 5 degC` is
+        // only meaningful once both sides are on an interval scale. Normalising to K first
+        // keeps every operation below purely multiplicative, as the rest of this file assumes.
+        if self.unit.is_affine() || other.unit.is_affine() {
+            return self.to_delta()?.add(&other.to_delta()?);
+        }
         if !self.unit.same_dimensions(&other.unit) {
             return Err(PhysureError::UnitMismatch {
                 expected: self.unit.__repr__(),
@@ -206,6 +222,11 @@ impl Quantity {
     }
 
     pub fn sub(&self, other: &Quantity) -> PhysureResult<Quantity> {
+        // `T2 - T1` across Celsius/Fahrenheit is the calorimetry case: both sides go to K, so
+        // the difference comes out as a true interval instead of subtracting two zero points.
+        if self.unit.is_affine() || other.unit.is_affine() {
+            return self.to_delta()?.sub(&other.to_delta()?);
+        }
         if !self.unit.same_dimensions(&other.unit) {
             return Err(PhysureError::UnitMismatch {
                 expected: self.unit.__repr__(),
@@ -222,18 +243,27 @@ impl Quantity {
     }
 
     pub fn mul(&self, other: &Quantity) -> PhysureResult<Quantity> {
+        if self.unit.is_affine() || other.unit.is_affine() {
+            return self.to_delta()?.mul(&other.to_delta()?);
+        }
         let new_value = self.value.propagate_mul(&other.value)?;
         let new_unit = self.unit.mul(&other.unit);
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
     pub fn div(&self, other: &Quantity) -> PhysureResult<Quantity> {
+        if self.unit.is_affine() || other.unit.is_affine() {
+            return self.to_delta()?.div(&other.to_delta()?);
+        }
         let new_value = self.value.propagate_div(&other.value)?;
         let new_unit = self.unit.div(&other.unit);
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
     pub fn pow(&self, exponent: f64) -> PhysureResult<Quantity> {
+        if self.unit.is_affine() {
+            return self.to_delta()?.pow(exponent);
+        }
         let exp_r = Rational64::from_f64(exponent).unwrap_or(Rational64::new(0, 1));
         let new_value = self.value.propagate_pow(exponent)?;
         let new_unit = self.unit.pow(exp_r);
@@ -406,9 +436,33 @@ impl Quantity {
                 actual: target.__repr__(),
             });
         }
+        // Affine scales (degC, degF) cannot be converted with a single ratio: go through the
+        // canonical base magnitude so the zero points are subtracted, not scaled.
+        if self.unit.is_affine() || target.is_affine() {
+            let base = Self::shift_value(
+                &Self::scale_value(&self.value, self.unit.scale)?,
+                self.unit.offset,
+            )?;
+            let new_value =
+                Self::scale_value(&Self::shift_value(&base, -target.offset)?, 1.0 / target.scale)?;
+            return Ok(Quantity { value: new_value, unit: target.clone() });
+        }
         let ratio = self.unit.scale / target.scale;
         let new_value = Self::scale_value(&self.value, ratio)?;
         Ok(Quantity { value: new_value, unit: target.clone() })
+    }
+
+    /// This quantity restated in its canonical base unit, so that arithmetic is meaningful:
+    /// `20 degC` becomes `293.15 K`. A non-affine quantity is returned untouched, which is
+    /// every quantity except a temperature written on the Celsius or Fahrenheit scale.
+    fn to_delta(&self) -> PhysureResult<Quantity> {
+        if !self.unit.is_affine() {
+            return Ok(self.clone());
+        }
+        let mut base = self.unit.to_delta().with_scale(1.0);
+        // Drop the affine name so the result renders as "K" and not as the scale it came from.
+        base.display_name = None;
+        self.convert_to(&base)
     }
 
     pub fn with_uncertainty(mean: f64, std_dev: f64, unit_expr: &str) -> PhysureResult<Self> {
@@ -600,5 +654,35 @@ mod tests {
         assert_eq!(format_fraction(1e-30, false), None);
         assert_eq!(format_fraction(f64::NAN, false), None);
         assert_eq!(format_fraction(f64::INFINITY, false), None);
+    }
+
+    /// Affine conversion is not a single ratio: the zero point has to be added on the way to
+    /// the base unit and taken off again on the way out. A degC and a Kelvin are the same
+    /// size, so a scale-only conversion between them is the identity and silently wrong.
+    #[test]
+    fn affine_conversion_moves_the_zero_point() {
+        let celsius = RationalUnit::base("K").with_offset(273.15);
+        let kelvin = RationalUnit::base("K");
+        let fahrenheit = RationalUnit::base("K").with_scale(5.0 / 9.0).with_offset(255.37222222222223);
+
+        let boiling = Quantity::new_scalar(100.0, 0.0, celsius.clone(), None, None);
+        assert!((boiling.convert_to(&kelvin).unwrap().value.mean() - 373.15).abs() < 1e-9);
+        assert!((boiling.convert_to(&fahrenheit).unwrap().value.mean() - 212.0).abs() < 1e-9);
+        // Converting a scale onto itself must not shift the value twice.
+        assert!((boiling.convert_to(&celsius).unwrap().value.mean() - 100.0).abs() < 1e-9);
+
+        // A difference is an interval: both sides normalise to K, so the zero points cancel
+        // instead of being subtracted twice. 120 degF - 20 degC = 28.888... K, not -244 K.
+        let hot = Quantity::new_scalar(120.0, 0.0, fahrenheit, None, None);
+        let warm = Quantity::new_scalar(20.0, 0.0, celsius.clone(), None, None);
+        let delta = hot.sub(&warm).unwrap();
+        assert!((delta.value.mean() - 28.888888888888889).abs() < 1e-9, "got {}", delta.value.mean());
+        assert!(!delta.unit.is_affine(), "a difference of temperatures is an interval");
+
+        // Multiplying an absolute temperature normalises it first: the product of an affine
+        // unit has no zero point to inherit, so the result must be plain Kelvin-dimensioned.
+        let doubled = warm.mul(&Quantity::new_scalar(2.0, 0.0, RationalUnit::dimensionless(), None, None)).unwrap();
+        assert!((doubled.value.mean() - 586.3).abs() < 1e-9, "got {}", doubled.value.mean());
+        assert!(!doubled.unit.is_affine());
     }
 }

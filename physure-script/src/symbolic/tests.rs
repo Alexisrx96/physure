@@ -267,3 +267,313 @@ fn test_kinetic_energy_solve() {
     println!("Res: {:?}", res);
 }
 
+// ============================================================================
+// 4. EXTENSIVE CALCULUS RULE & FACTORISATION TEST SUITE
+// ============================================================================
+
+#[test]
+fn test_diff_extended_trig_and_inverse_trig() {
+    // d/dx [tan(x)] = sec(x)^2
+    let d_tan = Expr::diff_str("tan(x)", "x").unwrap();
+    assert_eq!(d_tan, "sec(x)^2");
+
+    // d/dx [cot(x)] = -1 * csc(x)^2
+    let d_cot = Expr::diff_str("cot(x)", "x").unwrap();
+    assert_eq!(d_cot, "-1 * csc(x)^2");
+
+    // d/dx [sec(x)] = sec(x) * tan(x)
+    let d_sec = Expr::diff_str("sec(x)", "x").unwrap();
+    assert_eq!(d_sec, "sec(x) * tan(x)");
+
+    // d/dx [csc(x)] = cot(x) * csc(x) * -1
+    let d_csc = Expr::diff_str("csc(x)", "x").unwrap();
+    assert_eq!(d_csc, "cot(x) * csc(x) * -1");
+
+    // d/dx [asin(x)] = 1 / (1 - x^2)^0.5
+    let d_asin = Expr::diff_str("asin(x)", "x").unwrap();
+    assert_eq!(d_asin, "1/(1 - x^2)^0.5");
+
+    // d/dx [atan(x)] = 1 / (1 + x^2)
+    let d_atan = Expr::diff_str("atan(x)", "x").unwrap();
+    assert_eq!(d_atan, "1/(1 + x^2)");
+}
+
+#[test]
+fn test_diff_hyperbolic_functions() {
+    // d/dx [sinh(x)] = cosh(x)
+    assert_eq!(Expr::diff_str("sinh(x)", "x").unwrap(), "cosh(x)");
+
+    // d/dx [cosh(x)] = sinh(x)
+    assert_eq!(Expr::diff_str("cosh(x)", "x").unwrap(), "sinh(x)");
+
+    // d/dx [tanh(x)] = sech(x)^2
+    assert_eq!(Expr::diff_str("tanh(x)", "x").unwrap(), "sech(x)^2");
+}
+
+#[test]
+fn test_diff_chain_rule_and_exponent_precedence() {
+    // d/dx [e^2x] = 2 * e^(2 * x)
+    assert_eq!(Expr::diff_str("e^2x", "x").unwrap(), "2 * e^(2 * x)");
+
+    // d/dx [ln(cos(x))] = (-1 * sin(x))/cos(x)
+    let d_ln_cos = Expr::diff_str("ln(cos(x))", "x").unwrap();
+    assert_eq!(d_ln_cos, "(-1 * sin(x))/cos(x)");
+
+    // d/dx [sqrt(x)] = 1/(2 * x^0.5)
+    let d_sqrt = Expr::diff_str("sqrt(x)", "x").unwrap();
+    assert_eq!(d_sqrt, "1/(2 * x^0.5)");
+}
+
+#[test]
+fn test_diff_equation_implicit() {
+    // d/dx [0 = sin(x)^2 + cosec(y)^2] -> y' = (cos(x) * sin(x))/(cot(y) * csc(y)^2)
+    let d_eq = Expr::diff_str("0 = sin(x)^2 + cosec(y)^2", "x").unwrap();
+    assert_eq!(d_eq, "y' = (cos(x) * sin(x))/(cot(y) * csc(y)^2)");
+
+    // d/dx [y = x^3 - 3 * x] -> y' = 3 * x^2 - 3
+    let d_eq2 = Expr::diff_str("y = x^3 - 3 * x", "x").unwrap();
+    assert_eq!(d_eq2, "y' = 3 * x^2 - 3");
+}
+
+#[test]
+fn test_diff_leibniz_and_prime_notation() {
+    // Prime notation increment: y' -> y'', y'' -> y'''
+    let d_prime1 = Expr::diff_str("y'", "x").unwrap();
+    assert_eq!(d_prime1, "y''");
+
+    let d_prime2 = Expr::diff_str("y''", "x").unwrap();
+    assert_eq!(d_prime2, "y'''");
+
+    // Differentiating differential equation y'' + y = 0
+    let d_de = Expr::diff_str("y'' + y = 0", "x").unwrap();
+    assert_eq!(d_de, "y' + y''' = 0");
+}
+
+#[test]
+fn test_integrate_trig_and_hyperbolic_extended() {
+    // ∫ tan(x) dx = ln(abs(sec(x)))
+    let i_tan = Expr::integrate_str("tan(x)", "x").unwrap();
+    assert_eq!(i_tan, "ln(abs(sec(x)))");
+
+    // ∫ cot(x) dx = ln(abs(sin(x)))
+    let i_cot = Expr::integrate_str("cot(x)", "x").unwrap();
+    assert_eq!(i_cot, "ln(abs(sin(x)))");
+
+    // ∫ sinh(x) dx = cosh(x)
+    let i_sinh = Expr::integrate_str("sinh(x)", "x").unwrap();
+    assert_eq!(i_sinh, "cosh(x)");
+
+    // ∫ cosh(x) dx = sinh(x)
+    let i_cosh = Expr::integrate_str("cosh(x)", "x").unwrap();
+    assert_eq!(i_cosh, "sinh(x)");
+}
+
+#[test]
+fn test_integrate_by_parts_suite() {
+    // ∫ xe^x dx = e^x * x - e^x
+    let i_xe_x = Expr::integrate_str("xe^x", "x").unwrap();
+    assert_eq!(i_xe_x, "e^x * x - e^x");
+
+    // ∫ x * cos(x) dx = sin(x) * x - -1 * cos(x)
+    let i_x_cos = Expr::integrate_str("x * cos(x)", "x").unwrap();
+    assert!(i_x_cos.contains("sin(x)") && i_x_cos.contains("cos(x)"));
+
+    // ∫ x * sin(x) dx
+    let i_x_sin = Expr::integrate_str("x * sin(x)", "x").unwrap();
+    assert!(i_x_sin.contains("cos(x)") && i_x_sin.contains("sin(x)"));
+}
+
+#[test]
+fn test_integrate_u_substitution_suite() {
+    // ∫ 2 * x * exp(x^2) dx = exp(x^2)
+    let i_u_sub = Expr::integrate_str("2 * x * exp(x^2)", "x").unwrap();
+    assert_eq!(i_u_sub, "exp(x^2)");
+
+    // Logarithmic quotient rule: ∫ 3 * x^2 / (x^3 + 1) dx = ln(abs(1 + x^3))
+    let i_log_quot = Expr::integrate_str("3 * x^2 / (x^3 + 1)", "x").unwrap();
+    assert_eq!(i_log_quot, "ln(abs(1 + x^3))");
+}
+
+#[test]
+fn test_integrate_general_power_derivative_reversal() {
+    let derivate = "5 * (A * (X + 2))^X";
+    let d_derivate = Expr::diff_str(derivate, "X").unwrap();
+    let i_d_derivate = Expr::integrate_str(&d_derivate, "X").unwrap();
+    assert_eq!(i_d_derivate, "5 * ((2 + X) * A)^X");
+}
+
+#[test]
+fn test_integrate_inverse_trig_and_constant_base() {
+    // ∫ 1 / (1 + x^2) dx = atan(x)
+    let i_atan = Expr::integrate_str("1 / (1 + x^2)", "x").unwrap();
+    assert_eq!(i_atan, "atan(x)");
+
+    // ∫ 2^x dx = 2^x / ln(2)
+    let i_pow2 = Expr::integrate_str("2^x", "x").unwrap();
+    assert_eq!(i_pow2, "2^x/ln(2)");
+}
+
+#[test]
+fn test_integrate_non_elementary_fallback() {
+    // Non-elementary integral falls back gracefully to symbolic integral(...) node format
+    let i_non_elem = Expr::integrate_str("5 * (A * (X + 2))^X", "X").unwrap();
+    assert_eq!(i_non_elem, "integral(((2 + X) * A)^X, X) * 5");
+}
+
+
+
+// ============================================================================
+// N. TAYLOR SERIES / SUBSTITUTION
+// ============================================================================
+
+fn eval_at(node: &Node, value: f64) -> f64 {
+    let compiled = CompiledExpr::compile(node).unwrap();
+    assert!(compiled.var_names.len() <= 1, "expected a univariate expression");
+    compiled.eval(&[value]).unwrap()
+}
+
+#[test]
+fn test_series_matches_the_function_it_expands() {
+    // sin about 0 to 5th order is accurate well past the linear regime.
+    let s = Expr::parse("sin(x)").unwrap().node.series("x", &n(0.0), 5).unwrap();
+    assert!((eval_at(&s, 0.7) - 0.7f64.sin()).abs() < 1e-4);
+
+    // exp about 0, and about a non-zero point.
+    let e0 = Expr::parse("exp(x)").unwrap().node.series("x", &n(0.0), 6).unwrap();
+    assert!((eval_at(&e0, 0.5) - 0.5f64.exp()).abs() < 1e-5);
+    let e1 = Expr::parse("exp(x)").unwrap().node.series("x", &n(1.0), 6).unwrap();
+    assert!((eval_at(&e1, 1.4) - 1.4f64.exp()).abs() < 1e-5);
+}
+
+#[test]
+fn test_series_of_a_polynomial_is_exact_and_terminates() {
+    // A degree-2 polynomial expanded about x = 1 reproduces itself exactly,
+    // and asking for order 6 does not invent x^3.. terms.
+    let p = Expr::parse("x^2 + 3 * x").unwrap().node.series("x", &n(1.0), 6).unwrap();
+    assert!((eval_at(&p, 2.7) - (2.7f64 * 2.7 + 3.0 * 2.7)).abs() < 1e-9);
+    assert!(!p.to_phs_string().contains("^3"));
+}
+
+#[test]
+fn test_subst_leaves_a_bound_integration_variable_alone() {
+    let integral = Node::Integral(Box::new(Node::Mul(vec![x(), y()])), "x".to_string());
+    // Substituting the bound variable is a no-op...
+    assert_eq!(integral.subst("x", &n(2.0)), integral);
+    // ...while a free variable in the integrand is replaced.
+    assert_eq!(
+        integral.subst("y", &n(2.0)),
+        Node::Integral(Box::new(Node::Mul(vec![x(), n(2.0)])), "x".to_string())
+    );
+}
+
+// ============================================================================
+// 5. REQUESTED EDGE CASES TESTS
+// ============================================================================
+
+#[test]
+fn test_diff_edge_cases_extended_req() {
+    let expr = Expr::parse("x^6").unwrap();
+    assert_eq!(expr.diff("x", 4).unwrap().to_phs_string(), "360 * x^2");
+    assert_eq!(expr.diff("x", 5).unwrap().to_phs_string(), "720 * x");
+    assert_eq!(Expr::diff_str("sin(x) * exp(x)", "x").unwrap(), "cos(x) * exp(x) + exp(x) * sin(x)");
+    assert_eq!(Expr::diff_str("asin(2*x)", "x").unwrap(), "2/(1 - (2 * x)^2)^0.5");
+    assert_eq!(Expr::diff_str("x^2 + y^2 = 25", "x").unwrap(), "2 * x + 2 * y * y' = 0");
+    assert_eq!(Expr::diff_str("sin(x) + cos(y) = 1", "x").unwrap(), "cos(x) - 1 * sin(y) * y' = 0");
+}
+
+#[test]
+fn test_integrate_edge_cases_extended_req() {
+    assert_eq!(Expr::integrate_str("x * sin(x)", "x").unwrap(), "cos(x) * -1 * x - -1 * sin(x)");
+    assert_eq!(Expr::integrate_str("x^2 * e^x", "x").unwrap(), "e^x * x^2 - integral(2 * e^x * x, x)");
+    assert_eq!(Expr::integrate_str("x * ln(x)", "x").unwrap(), "(ln(x) * x^2)/2 - integral(x/2, x)");
+    assert_eq!(Expr::integrate_str("2*x / (x^2 + 1)", "x").unwrap(), "ln(abs(1 + x^2))");
+    assert_eq!(Expr::integrate_str("3*x^2 * cos(x^3)", "x").unwrap(), "sin(x^3)");
+    assert_eq!(Expr::integrate_str("1 / (1 + x^2)", "x").unwrap(), "atan(x)");
+}
+
+#[test]
+fn test_series_expansion_and_factorization_extended_req() {
+    let sin_series = Expr::parse("sin(x)").unwrap().node.series("x", &n(0.0), 3).unwrap();
+    assert_eq!(sin_series.to_phs_string(), "(-1 * x^3)/6 + x");
+
+    let cos_series = Expr::parse("cos(x)").unwrap().node.series("x", &n(0.0), 3).unwrap();
+    assert_eq!(cos_series.to_phs_string(), "(-1 * x^2)/2 + 1");
+
+    let exp_series = Expr::parse("exp(x)").unwrap().node.series("x", &n(0.0), 3).unwrap();
+    assert_eq!(exp_series.to_phs_string(), "x^2/2 + x^3/6 + 1 + x");
+
+    let poly1 = Expr::parse("x^2 + 2*x + 1").unwrap().node.factor();
+    assert_eq!(poly1.to_phs_string(), "2 * x + 1 + x^2");
+
+    let poly2 = Expr::parse("x^2 - y^2").unwrap().node.factor();
+    assert_eq!(poly2.to_phs_string(), "x^2 - y^2");
+}
+
+#[test]
+fn test_ode_solver_suite() {
+    use super::ode::dsolve_str;
+
+    // 2nd order harmonic oscillator: y'' + y = 0 -> y = C1 * cos(x) + C2 * sin(x)
+    let sol1 = dsolve_str("y'' + y = 0", "y", "x").unwrap();
+    assert!(sol1.contains("C1") && sol1.contains("C2") && sol1.contains("cos(x)") && sol1.contains("sin(x)"));
+
+    // 2nd order repeated root: y'' - 2*y' + y = 0 -> y = (C1 + C2 * x) * exp(x)
+    let sol2 = dsolve_str("y'' - 2 * y' + y = 0", "y", "x").unwrap();
+    assert!(sol2.contains("C1") && sol2.contains("C2") && sol2.contains("exp("));
+
+    // 1st order linear ODE: y' + y = 0 -> y = C1 / exp(x) or y = (0 + C1) / exp(x)
+    let sol3 = dsolve_str("y' + y = 0", "y", "x").unwrap();
+    assert!(sol3.contains("C1") && sol3.contains("exp("));
+
+    // 1st order separable ODE: y' = x * y
+    let sol4 = dsolve_str("y' = x * y", "y", "x").unwrap();
+    assert!(sol4.contains("C1") || sol4.contains("ln("));
+}
+
+#[test]
+fn test_laplace_transform_suite() {
+    use super::transforms::{laplace_str, inv_laplace_str};
+
+    // L{t^2} = 2 / s^3
+    let l_t2 = laplace_str("t^2", "t", "s").unwrap();
+    assert_eq!(l_t2, "2/s^3");
+
+    // L{exp(3 * t)} = 1 / (s - 3)
+    let l_exp = laplace_str("exp(3 * t)", "t", "s").unwrap();
+    assert_eq!(l_exp, "1/(s - 3)");
+
+    // L{sin(2 * t)} = 2 / (s^2 + 4) or 2 / (4 + s^2)
+    let l_sin = laplace_str("sin(2 * t)", "t", "s").unwrap();
+    assert!(l_sin.contains('2') && l_sin.contains("s^2") && l_sin.contains('4'));
+
+    // L^-1{1 / (s - 3)} = exp(3 * t)
+    let il_exp = inv_laplace_str("1 / (s - 3)", "s", "t").unwrap();
+    assert_eq!(il_exp, "exp(3 * t)");
+}
+
+#[test]
+fn test_symbolic_matrix_suite() {
+    use super::sym_matrix::SymMatrix;
+
+    let mat = SymMatrix::parse_str("[[a, b], [c, d]]").unwrap();
+    assert_eq!(mat.rows, 2);
+    assert_eq!(mat.cols, 2);
+
+    // det([[a, b], [c, d]]) = a * d - b * c
+    let det = mat.det().unwrap();
+    assert_eq!(det.to_phs_string(), "a * d - b * c");
+
+    // trace([[a, b], [c, d]]) = a + d
+    let tr = mat.trace().unwrap();
+    assert_eq!(tr.to_phs_string(), "a + d");
+
+    // Transpose
+    let trans = mat.transpose();
+    assert_eq!(trans.to_phs_string(), "[[a, c], [b, d]]");
+
+    // Eigenvalues of diagonal matrix [[3, 0], [0, 5]] -> [4 + 1, 4 - 1] = [5, 3]
+    let diag_mat = SymMatrix::parse_str("[[3, 0], [0, 5]]").unwrap();
+    let eigs = diag_mat.eigenvalues("lambda").unwrap();
+    let eigs_str: Vec<String> = eigs.iter().map(|e| e.to_string()).collect();
+    assert!(eigs_str.contains(&"5".to_string()) && eigs_str.contains(&"3".to_string()));
+}

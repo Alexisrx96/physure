@@ -11,7 +11,7 @@ keyword     = @{ ("let" | "if" | "then" | "else" | "where" | "return") ~ !(ASCII
 // read, so an identifier that stopped at ASCII made the same symbol legal in one position
 // and illegal in the next: `1 kΩ` parsed as a quantity while the conversion target in
 // `2 Ω => kΩ` was cut down to `k`, which is a prefix and not a unit.
-identifier  = @{ !keyword ~ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_")* }
+identifier  = @{ !keyword ~ (LETTER | "_") ~ (LETTER | ASCII_DIGIT | "_")* ~ "'"* }
 infinity_lit = @{ ("+" | "-")? ~ ("infinity" | "inf" | "oo" | "∞") }
 number       = @{ infinity_lit | (ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ( ^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+ )?) }
 

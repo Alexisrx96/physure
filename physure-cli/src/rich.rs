@@ -45,7 +45,7 @@ impl RichRenderer {
         println!("\x1b[1;34m╚══════════════════════════════════════════════════════════════╝\x1b[0m");
     }
 
-    pub fn render_parse_error(file: &str, err: &dyn std::fmt::Debug, code: &str) {
+    pub fn render_parse_error(file: &str, err: &dyn std::fmt::Debug, _code: &str) {
         let raw_err = format!("{:?}", err);
         let clean_msg = raw_err
             .trim_start_matches("Generic(\"")

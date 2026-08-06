@@ -1,6 +1,10 @@
 # Physical & Scientific Diagramming Engine Roadmap
 
-This document outlines the roadmap, architectural design, and implementation path for introducing a **Parametric Physical & Scientific Diagramming Engine** (`physure.diagrams`) to [Physure](file:///home/irvint/Projects/physure/README.md).
+**Status: 📋 Planned / Specification Defined**
+
+> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+
+This document outlines the roadmap, architectural design, and implementation path for introducing a **Parametric Physical & Scientific Diagramming Engine** (`physure.diagrams`) to [Physure](../README.md).
 
 ---
 
@@ -9,10 +13,10 @@ This document outlines the roadmap, architectural design, and implementation pat
 Integrating a parametric diagramming engine into **Physure** expands the library beyond *solving physics equations* to *visually modeling physical systems*. 
 
 Unlike standard drawing software (e.g., Illustrator, Canva) or generic plotting libraries, diagrams in Physure are **physically parameter-driven**:
-* **Live Physical Quantities:** Vectors, dimensions, angles, and forces are defined using Physure's [Quantity](file:///home/irvint/Projects/physure/physure/domain/measurement/quantity.py) objects (`Q_(50, "N")`, `Q_(30, "deg")`).
+* **Live Physical Quantities:** Vectors, dimensions, angles, and forces are defined using Physure's [Quantity](../physure-python/physure/domain/measurement/quantity.py) objects (`Q_(50, "N")`, `Q_(30, "deg")`).
 * **Proportional Scaling & Physics Consistency:** If a mass or angle changes, the diagram auto-scales and recomputes resultant vectors ($\Sigma \vec{F}$), normal forces ($\vec{N}$), and trajectories while maintaining correct physical proportions.
 * **Uncertainty Visualization:** Leverages Physure's uncertainty engine to render **error cones** around vectors and **covariance ellipses** around particle positions.
-* **Multi-Backend Rendering:** Exports cleanly to standalone **SVG**, **Matplotlib** (integrating with [plotting.py](file:///home/irvint/Projects/physure/physure/plotting.py)), **Plotly**, **LaTeX (TikZ)** for academic papers, and **ASCII/Unicode** for terminal CLI previsualization.
+* **Multi-Backend Rendering:** Exports cleanly to standalone **SVG**, **Matplotlib** (integrating with [plotting.py](../physure-python/physure/plotting.py)), **Plotly**, **LaTeX (TikZ)** for academic papers, and **ASCII/Unicode** for terminal CLI previsualization.
 
 ---
 
@@ -82,7 +86,7 @@ Leverages Physure's core uncertainty engine:
 * **Thermodynamic Processes:** Interactive $P-V$, $T-S$, and $P-T$ diagrams with automatic shaded work integrals ($W = \int P \, dV$).
 
 ### 3.6. Chemistry & Physical-Chemical Diagrams (`chemistry.py`)
-Integrates with the [Chemistry Roadmap](file:///home/irvint/Projects/physure/docs/chemistry_roadmap.md):
+Integrates with the [Chemistry Roadmap](chemistry_roadmap.md):
 * **Reaction Energy Profiles:** Activation energy ($E_a$), reactants, transition state (activated complex), and enthalpy change ($\Delta H$) for exothermic/endothermic reactions.
 * **VSEPR Molecular Geometry:** 2D/3D geometry representation (linear, trigonal planar, tetrahedral, octahedral) with bond angle annotations.
 * **Electrochemical Cells:** Voltaic/electrolytic cell diagrams showing anode, cathode, electron flow ($e^-$), and cell potential ($E^\circ$).
@@ -94,7 +98,7 @@ Integrates with the [Chemistry Roadmap](file:///home/irvint/Projects/physure/doc
 | Backend | File | Primary Use Case | Features |
 | :--- | :--- | :--- | :--- |
 | **SVG (Native)** | `renderers/svg.py` | Web, Jupyter Notebooks, HTML reports | Zero dependencies, crisp vector scaling, interactive tooltips |
-| **Matplotlib** | `renderers/matplotlib.py` | Python scripts, publication figures | Integrates with [physure.plotting](file:///home/irvint/Projects/physure/physure/plotting.py) |
+| **Matplotlib** | `renderers/matplotlib.py` | Python scripts, publication figures | Integrates with [physure.plotting](../physure-python/physure/plotting.py) |
 | **Plotly** | `renderers/plotly.py` | Interactive 3D visualization | 3D field lines, interactive rotations |
 | **TikZ (LaTeX)** | `renderers/tikz.py` | Overleaf, LaTeX academic papers | Generates clean native TikZ code (`\draw`, `\node`) |
 | **ASCII / Console** | `renderers/ascii.py` | Terminal CLI REPL | Instant terminal preview (`python -m physure`) |
@@ -190,3 +194,15 @@ particle.add_velocity(magnitude=v0, angle=angle0) # Generates uncertainty cone
 # Plot trajectory with confidence bands
 diagram.show(show_uncertainty=True)
 ```
+
+---
+
+## 7. Scientific References
+
+| Feature / Domain | Paper / Standard Citation | Public Link / DOI |
+|:---|:---|:---|
+| **Free-Body Diagrams in Physics AI** | Novak, G. S. (1977). *Representations of knowledge in a program for solving physics problems*. Proc. 5th IJCAI, pp. 286–291. | [IJCAI-77 Proceedings](https://www.ijcai.org/Proceedings/77-1/Papers/044.pdf) |
+| **Bivariate Covariance Ellipses** | Pearson, K. (1901). *On lines and planes of closest fit to systems of points in space*. Philosophical Magazine, 2(11), 559–572. | [DOI: 10.1080/14786440109462720](https://doi.org/10.1080/14786440109462720) |
+| **VSEPR Molecular Geometry** | Gillespie, R. J., & Nyholm, R. S. (1957). *Inorganic stereochemistry*. Quarterly Reviews, Chemical Society, 11(4), 339–380. | [DOI: 10.1039/QR9571100339](https://doi.org/10.1039/QR9571100339) |
+| **Transition State Profiles** | Eyring, H. (1935). *The Activated Complex in Chemical Reactions*. Journal of Chemical Physics, 3(2), 107–115. | [DOI: 10.1063/1.1749604](https://doi.org/10.1063/1.1749604) |
+

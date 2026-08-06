@@ -187,10 +187,14 @@ layer on top of it.
 
 ## Documentation
 
+- [Master Roadmap](ROADMAP.md) — central status & subsystem progress tracker
 - [PHS README](physure-cli/README.md) — the standalone DSL and CLI
-- [Unit reference](physure-python/docs/UNITS.md) — every unit, prefix, and constant
-- [Tutorials](physure-python/docs/tutorials/) and [examples](physure-python/examples/) — including a unit-checked [PINN notebook](physure-python/examples/pinn_harmonic_oscillator.ipynb)
-- [torch.compile integration](physure-python/docs/torch_compile_integration.md)
+- [Unit reference](docs/UNITS.md) — every unit, prefix, and constant
+- [Tutorials](docs/tutorials/) and [examples](physure-python/examples/) — including a unit-checked [PINN notebook](physure-python/examples/pinn_harmonic_oscillator.ipynb)
+- [torch.compile integration](docs/torch_compile_integration.md)
+- [Symbolic Math & CAS Roadmap](docs/symbolic_math_roadmap.md)
+- [Scientific Gaps & Metrological Rigor](docs/scientific_gaps_and_rigor.md)
+- [Paper Compliance & Validation](docs/paper_compliance_and_validation.md)
 
 ## Contributing
 

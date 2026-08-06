@@ -13,6 +13,11 @@ pub struct RationalUnit {
     /// Multiplicative factor converting one of this unit to the canonical base-SI magnitude
     /// for the same `dimensions` (e.g. "m" => 1.0, "km" => 1000.0, "cm" => 0.01).
     pub scale: f64,
+    /// Additive term applied *after* `scale` when converting to the canonical base-SI
+    /// magnitude, i.e. `base = value * scale + offset`. Non-zero only for absolute affine
+    /// units — in practice the temperature scales ("degC" => 273.15, "degF" => 255.372…).
+    /// A zero offset means the unit is purely multiplicative, which is every other unit.
+    pub offset: f64,
     pub id: u64,
     pub display_name: Option<String>,
 }
@@ -20,8 +25,12 @@ pub struct RationalUnit {
 impl Eq for RationalUnit {}
 
 impl PartialEq for RationalUnit {
+    // The offset takes part in equality: "degC" and "K" share dimensions *and* scale, so
+    // without it the two would compare equal and a degC->K conversion would look like a no-op.
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.scale.to_bits() == other.scale.to_bits()
+        self.id == other.id
+            && self.scale.to_bits() == other.scale.to_bits()
+            && self.offset.to_bits() == other.offset.to_bits()
     }
 }
 
@@ -29,6 +38,7 @@ impl Hash for RationalUnit {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state);
         self.scale.to_bits().hash(state);
+        self.offset.to_bits().hash(state);
     }
 }
 
@@ -56,13 +66,35 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, id, display_name: None }
+        RationalUnit { dimensions, scale: 1.0, offset: 0.0, id, display_name: None }
     }
 
     /// Returns a copy of this unit with a different scale factor (same dimensions/id).
     pub fn with_scale(mut self, scale: f64) -> Self {
         self.scale = scale;
         self
+    }
+
+    /// Returns a copy of this unit with an additive offset, making it an absolute affine
+    /// unit (`base = value * scale + offset`), e.g. `K.with_offset(273.15)` is degC.
+    pub fn with_offset(mut self, offset: f64) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    /// True for absolute affine units — the temperature scales. Their arithmetic is not
+    /// closed (5 degC * 2 is not 10 degC), so operations normalise them via `to_delta` first.
+    pub fn is_affine(&self) -> bool {
+        self.offset != 0.0
+    }
+
+    /// The purely multiplicative unit measuring *intervals* on this scale: degC => K,
+    /// degF => 5/9 K. Dropping the offset is what makes a temperature *difference*
+    /// meaningful, so this is the form every arithmetic operation works in.
+    pub fn to_delta(&self) -> Self {
+        let mut u = self.clone();
+        u.offset = 0.0;
+        u
     }
 
     pub fn dimensions_map(&self) -> HashMap<String, (i64, i64)> {
@@ -73,6 +105,7 @@ impl RationalUnit {
         RationalUnit {
             dimensions: DimVec::new(),
             scale: 1.0,
+            offset: 0.0,
             id: 0,
             display_name: None,
         }
@@ -139,7 +172,9 @@ impl RationalUnit {
         } else {
             None
         };
-        RationalUnit { dimensions: new_dims, scale: self.scale * other.scale, id, display_name }
+        // No offset on a product: `degC * m` has no zero point to speak of. Callers that hold
+        // an affine operand must `to_delta` it (and shift its magnitude) before multiplying.
+        RationalUnit { dimensions: new_dims, scale: self.scale * other.scale, offset: 0.0, id, display_name }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -184,7 +219,7 @@ impl RationalUnit {
         } else {
             None
         };
-        RationalUnit { dimensions: new_dims, scale: self.scale / other.scale, id, display_name }
+        RationalUnit { dimensions: new_dims, scale: self.scale / other.scale, offset: 0.0, id, display_name }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -198,7 +233,7 @@ impl RationalUnit {
         }
         let id = Self::calculate_id(&new_dims);
         let exp_f = *exp_r.numer() as f64 / *exp_r.denom() as f64;
-        RationalUnit { dimensions: new_dims, scale: self.scale.powf(exp_f), id, display_name: None }
+        RationalUnit { dimensions: new_dims, scale: self.scale.powf(exp_f), offset: 0.0, id, display_name: None }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

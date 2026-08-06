@@ -193,6 +193,17 @@ fn strip_unit_comment(text: &str) -> &str {
     text.split('#').next().unwrap().split("//").next().unwrap().trim()
 }
 
+/// `Some(1 <unit>)` if `name` is a registered unit symbol, so that a bare unit symbol left
+/// behind by the symbolic layer multiplies as the unit it names instead of degrading to a
+/// string. Returns `None` for any name that is not a unit, which stays a plain identifier.
+fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
+    if !crate::parser::is_known_unit_symbol(name) {
+        return None;
+    }
+    let unit = UnitParser::parse_expression(name).ok()?;
+    Some(Quantity::new_scalar(1.0, 0.0, unit, None, None))
+}
+
 impl PhsInterpreter {
     pub fn new(resolver: Arc<dyn ModuleResolver>) -> Self {
         Self {
@@ -452,6 +463,13 @@ impl PhsInterpreter {
                     Ok(PhsValue::String(text))
                 } else if let Some(val) = env.get(name) {
                     Ok(val.clone())
+                } else if let Some(unit) = unit_symbol_as_quantity(name) {
+                    // The symbolic layer has no notion of units: it parses `2.0 J / (gram * K)`
+                    // into plain algebra over the symbols J, gram and K. Re-evaluating such a
+                    // symbol as one of its unit reassembles the right dimensions, which is what
+                    // makes a unit-bearing equation string survive the round-trip. A binding in
+                    // `env` still wins, so this only ever fires for an otherwise-free name.
+                    Ok(PhsValue::Quantity(unit))
                 } else {
                     Ok(PhsValue::String(name.clone()))
                 }
@@ -502,24 +520,41 @@ impl PhsInterpreter {
                     // Algebra (e.g. multiplying both sides) can move the unknown to
                     // either side of the equation, so try whichever side is fully
                     // bound by the supplied kwargs rather than assuming it's the RHS.
+                    let unbound = |s: &&String| !local_env.contains_key(*s);
                     let mut rhs_free = std::collections::HashSet::new();
                     rhs.free_symbols(&mut rhs_free);
-                    let rhs_missing: Vec<&String> = rhs_free.iter().filter(|s| !local_env.contains_key(*s)).collect();
+                    let rhs_missing: Vec<&String> = rhs_free.iter().filter(unbound).collect();
                     let solved_node = if rhs_missing.is_empty() {
                         &rhs
                     } else {
                         let mut lhs_free = std::collections::HashSet::new();
                         lhs.free_symbols(&mut lhs_free);
-                        let lhs_missing: Vec<&String> = lhs_free.iter().filter(|s| !local_env.contains_key(*s)).collect();
+                        let lhs_missing: Vec<&String> = lhs_free.iter().filter(unbound).collect();
                         if lhs_missing.is_empty() {
                             &lhs
                         } else {
-                            let missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
-                            return Err(PhysureError::Generic(format!(
-                                "Missing argument(s) for equation '{}': {}",
-                                name,
-                                missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-                            )));
+                            // Neither side is fully bound by name alone, which is what a unit in
+                            // the equation text looks like: `"Q = m * 4.18 J/(g*K) * (T2 - T1)"`
+                            // leaves J, g and K free on the right and the unknown Q on the left.
+                            // Ignoring unit symbols separates the two, and only here — after both
+                            // strict passes have failed — so a unit-named unknown (solving for
+                            // `V`, `T`, `A`) is still picked up by the passes above.
+                            let rhs_units_only =
+                                rhs_missing.iter().all(|s| crate::parser::is_known_unit_symbol(s));
+                            let lhs_units_only =
+                                lhs_missing.iter().all(|s| crate::parser::is_known_unit_symbol(s));
+                            if rhs_units_only {
+                                &rhs
+                            } else if lhs_units_only {
+                                &lhs
+                            } else {
+                                let missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
+                                return Err(PhysureError::Generic(format!(
+                                    "Missing argument(s) for equation '{}': {}",
+                                    name,
+                                    missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                                )));
+                            }
                         }
                     };
                     let solved_str = solved_node.to_phs_string();
@@ -585,11 +620,93 @@ impl PhsInterpreter {
 
                 if let Some(PhsValue::Function(func)) = env.get(name) {
                     return self.call_function_node(func, arg_vals, env);
-                } else {
-                    Err(PhysureError::Generic(format!("Undefined function '{}'", name)))
                 }
+
+                if name.ends_with('\'') {
+                    let base_name = name.trim_end_matches('\'');
+                    let order = name.len() - base_name.len();
+                    if let Some(res) = self.eval_prime_function_call(base_name, order, &arg_vals, args, env)? {
+                        return Ok(res);
+                    }
+                }
+
+                Err(PhysureError::Generic(format!("Undefined function '{}'", name)))
             }
         }
+    }
+
+    fn eval_prime_function_call(
+        &self,
+        base_name: &str,
+        order: usize,
+        arg_vals: &[PhsValue],
+        args: &[crate::ast::Expr],
+        env: &HashMap<String, PhsValue>,
+    ) -> PhysureResult<Option<PhsValue>> {
+        if let Some(val) = env.get(base_name) {
+            match val {
+                PhsValue::Function(func) => {
+                    if func.params.is_empty() {
+                        return Err(PhysureError::Generic(format!("Function {} has no parameters to differentiate", base_name)));
+                    }
+                    let var_name = &func.params[0];
+                    let mut body_str = String::new();
+                    for stmt in &func.body_stmts {
+                        match stmt {
+                            crate::ast::Statement::Return(expr) | crate::ast::Statement::Expr(expr) => {
+                                body_str = crate::codegen::expr_to_phs_string(expr);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if body_str.is_empty() {
+                        return Err(PhysureError::Generic(format!("Cannot extract expression for function {}", base_name)));
+                    }
+                    let node = crate::symbolic::SymbolicParser::parse_str(&body_str)?;
+                    let diff_node = node.diff_node_n(var_name, order)?;
+
+                    if !arg_vals.is_empty() {
+                        let first_arg = &arg_vals[0];
+                        match first_arg {
+                            PhsValue::Number(num) => {
+                                let mut local_env = env.clone();
+                                local_env.insert(var_name.clone(), PhsValue::Number(*num));
+                                let expr_node = crate::parser::parse_phs(&diff_node.to_phs_string())?;
+                                if let Some(crate::ast::Statement::Expr(e)) = expr_node.statements.first() {
+                                    return Ok(Some(self.eval_expr(e, &local_env)?));
+                                }
+                            }
+                            PhsValue::Quantity(q) => {
+                                let mut local_env = env.clone();
+                                local_env.insert(var_name.clone(), PhsValue::Quantity(q.clone()));
+                                let expr_node = crate::parser::parse_phs(&diff_node.to_phs_string())?;
+                                if let Some(crate::ast::Statement::Expr(e)) = expr_node.statements.first() {
+                                    return Ok(Some(self.eval_expr(e, &local_env)?));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Ok(Some(PhsValue::String(diff_node.to_string())));
+                }
+                PhsValue::String(expr_str) => {
+                    let var_name = if !args.is_empty() {
+                        if let crate::ast::Expr::Identifier(v) = &args[0] {
+                            v.as_str()
+                        } else {
+                            "x"
+                        }
+                    } else {
+                        "x"
+                    };
+                    let node = crate::symbolic::SymbolicParser::parse_str(expr_str)?;
+                    let diff_node = node.diff_node_n(var_name, order)?;
+                    return Ok(Some(PhsValue::String(diff_node.to_string())));
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     pub fn call_function_node(
@@ -1065,6 +1182,29 @@ r3 = circuito_abierto(5 V, 2 A)
     }
 
     #[test]
+    fn test_prime_function_call_eval() {
+        let mut interp = PhsInterpreter::default();
+        interp.eval_str("f(x) = x^3 - 3*x").unwrap();
+        
+        let res_symbolic = interp.eval_str("f'(x)").unwrap();
+        assert_eq!(res_symbolic, vec![PhsValue::String("3 * x^2 - 3".to_string())]);
+
+        let res_num1 = interp.eval_str("f'(2)").unwrap();
+        match &res_num1[0] {
+            PhsValue::Number(n) => assert_eq!(*n, 9.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 9.0),
+            _ => panic!("Expected number or quantity"),
+        }
+
+        let res_num2 = interp.eval_str("f''(2)").unwrap();
+        match &res_num2[0] {
+            PhsValue::Number(n) => assert_eq!(*n, 12.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 12.0),
+            _ => panic!("Expected number or quantity"),
+        }
+    }
+
+    #[test]
     fn test_virtual_module_import() {
         let mut resolver = MemoryModuleResolver::new();
         let mut export = ModuleExport {
@@ -1154,5 +1294,58 @@ r3 = circuito_abierto(5 V, 2 A)
         let msg = err.to_string();
         assert!(msg.contains("no such function"), "unexpected error: {}", msg);
         assert!(msg.contains("in domain"), "unexpected error: {}", msg);
+    }
+
+    #[test]
+    fn test_exhaustive_interpreter_features() {
+        let mut interp = PhsInterpreter::default();
+        interp.eval_str("f(x) = sin(x)").unwrap();
+        
+        assert_eq!(interp.eval_str("f'(x)").unwrap()[0], PhsValue::String("cos(x)".into()));
+        assert_eq!(interp.eval_str("f''(x)").unwrap()[0], PhsValue::String("-1 * sin(x)".into()));
+        
+        match &interp.eval_str("f'(0)").unwrap()[0] {
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 1.0),
+            _ => panic!("Expected quantity"),
+        }
+        
+        match &interp.eval_str("f''(3)").unwrap()[0] {
+            PhsValue::Quantity(q) => assert!((q.value.mean() - -0.1411200080598672).abs() < 1e-10),
+            _ => panic!("Expected quantity"),
+        }
+        
+        // function composition with derivatives
+        interp.eval_str("g(x) = sin(cos(x))").unwrap();
+        let res = interp.eval_str("g'(x)").unwrap();
+        assert_eq!(res[0], PhsValue::String("cos(cos(x)) * -1 * sin(x)".into()));
+        
+        // solve multi-variable
+        interp.eval_str("use solve from calc").unwrap();
+        let res = interp.eval_str("solve(\"2*x + 3 = 11\", \"x\")").unwrap();
+        match &res[0] {
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 4.0),
+            _ => panic!("Expected quantity 4"),
+        }
+        
+        // uncertainty propagation through trig and exp
+        interp.eval_str("u = 0 +/- 0.1").unwrap();
+        let res_sin = interp.eval_str("sin(u)").unwrap();
+        match &res_sin[0] {
+            PhsValue::Quantity(q) => {
+                assert_eq!(q.value.mean(), 0.0);
+                assert_eq!(q.value.std_dev(), 0.1);
+            }
+            _ => panic!("Expected quantity"),
+        }
+        
+        interp.eval_str("v = 1 +/- 0.1").unwrap();
+        let res_exp = interp.eval_str("exp(v)").unwrap();
+        match &res_exp[0] {
+            PhsValue::Quantity(q) => {
+                assert!((q.value.mean() - 2.718281828459045).abs() < 1e-10);
+                assert!((q.value.std_dev() - 0.27182818284590454).abs() < 1e-10);
+            }
+            _ => panic!("Expected quantity"),
+        }
     }
 }

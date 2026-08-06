@@ -1,9 +1,9 @@
 site_name: physure
-site_description: "Unit-aware, dimension-correct computing for Python — Rust core, correlated uncertainty, torch.compile/jax.jit ready."
+site_description: "Unit-aware, dimension-correct computing — Rust core, correlated uncertainty, CAS, symbolic math, and multi-language bindings."
 repo_url: https://github.com/Alexisrx96/physure
 repo_name: Alexisrx96/physure
 edit_uri: edit/main/docs/
-docs_dir: ../docs
+docs_dir: docs
 
 theme:
   name: material
@@ -40,7 +40,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: [physure]
+          paths: [physure-python/physure]
           options:
             docstring_style: google
   - mkdocs-jupyter:
@@ -55,6 +55,7 @@ nav:
       - JAX Integration: tutorials/jax_tutorial.ipynb
   - Guides:
       - Master Roadmap: ROADMAP.md
+      - Implementation Plan: implementation_plan.md
       - torch.compile Integration: torch_compile_integration.md
       - Chemistry Integration Roadmap: chemistry_roadmap.md
       - Diagramming Engine Roadmap: diagrams_roadmap.md

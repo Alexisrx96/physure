@@ -219,7 +219,19 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         Err(_) => return,
     };
 
-    let dim_str = if parts.len() >= 2 { parts[1] } else { "1" };
+    // Absolute affine units carry a zero point between the factor and the dimension:
+    // `celsius = 1.0, 273.15, O`. Only a 3+ field line can be one, so `unity = 1.0, 1` and
+    // friends — where field 2 is the dimension "1" — keep reading field 2 as the dimension.
+    let mut offset = 0.0;
+    let mut dim_index = 1;
+    if parts.len() > 2 {
+        if let Ok(parsed) = parts[1].parse::<f64>() {
+            offset = parsed;
+            dim_index = 2;
+        }
+    }
+
+    let dim_str = if parts.len() > dim_index { parts[dim_index] } else { "1" };
 
     let base_symbol = dim_to_base.get(dim_str).cloned().unwrap_or_default();
 
@@ -231,14 +243,20 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         u.display_name = Some(symbol.clone());
         registry.add_derived_unit(symbol.clone(), u);
     } else if !base_symbol.is_empty() {
-        if factor == 1.0 && symbol == base_symbol {
+        if offset != 0.0 {
+            registry.add_affine_unit(symbol.clone(), &base_symbol, factor, offset);
+        } else if factor == 1.0 && symbol == base_symbol {
             registry.add_base_unit(symbol.clone());
         } else {
             registry.add_scaled_unit(symbol.clone(), &base_symbol, factor);
         }
     } else {
-        let recipe_str = if parts.len() >= 3 && !parts[2].is_empty() && parts[2] != "noprefix" {
-            parts[2]
+        let recipe_index = dim_index + 1;
+        let recipe_str = if parts.len() > recipe_index
+            && !parts[recipe_index].is_empty()
+            && parts[recipe_index] != "noprefix"
+        {
+            parts[recipe_index]
         } else {
             ""
         };
@@ -256,7 +274,9 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
         if let Some(parsed_unit) = parsed_unit_opt {
             let new_scale = parsed_unit.scale * factor;
-            let mut u = parsed_unit.with_scale(new_scale);
+            // Carry the zero point through here too: dropping it would silently turn an
+            // affine definition into a purely multiplicative one.
+            let mut u = parsed_unit.with_scale(new_scale).with_offset(offset);
             u.display_name = Some(symbol.clone());
             registry.add_derived_unit(symbol.clone(), u);
         }

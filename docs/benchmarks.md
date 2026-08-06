@@ -68,7 +68,7 @@ Para verificar estas métricas localmente en tu sistema:
 
 ```bash
 # Entrar al repositorio
-cd /home/irvint/Projects/physure
+cd physure
 
 # Asegurar que el modulo C está compilado
 uv run --directory physure-python maturin develop --release

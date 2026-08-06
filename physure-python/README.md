@@ -168,9 +168,9 @@ The rule: **physure-core is the single source of truth**. All math lives in Rust
 
 ## Documentation
 
-- [Unit reference](https://github.com/Alexisrx96/physure/blob/main/physure-python/docs/UNITS.md) — every unit, prefix, and constant
-- [Tutorials](https://github.com/Alexisrx96/physure/tree/main/physure-python/docs/tutorials/) and [examples](https://github.com/Alexisrx96/physure/tree/main/physure-python/examples/) — including a unit-checked [PINN notebook](https://github.com/Alexisrx96/physure/blob/main/physure-python/examples/pinn_harmonic_oscillator.ipynb)
-- [torch.compile integration](https://github.com/Alexisrx96/physure/blob/main/physure-python/docs/torch_compile_integration.md)
+- [Unit reference](https://github.com/Alexisrx96/physure/blob/main/docs/UNITS.md) — every unit, prefix, and constant
+- [Tutorials](https://github.com/Alexisrx96/physure/tree/main/docs/tutorials/) and [examples](https://github.com/Alexisrx96/physure/tree/main/physure-python/examples/) — including a unit-checked [PINN notebook](https://github.com/Alexisrx96/physure/blob/main/physure-python/examples/pinn_harmonic_oscillator.ipynb)
+- [torch.compile integration](https://github.com/Alexisrx96/physure/blob/main/docs/torch_compile_integration.md)
 
 ## Contributing
 

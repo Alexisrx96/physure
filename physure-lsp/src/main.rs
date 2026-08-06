@@ -407,9 +407,40 @@ fn clean_error_message(err_str: &str) -> String {
 
 impl Backend {
     async fn on_change(&self, uri: Url, text: String) {
-        let mut diagnostics = Vec::new();
+        // Analysing a half-typed buffer must never take the process down. A panic here used to
+        // exit(101); the client restarts a few times, then gives up and the user loses
+        // diagnostics for the rest of the session. Degrade to one diagnostic instead.
+        let diagnostics = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            analyze(&text)
+        })) {
+            Ok(diagnostics) => diagnostics,
+            Err(_) => vec![Diagnostic {
+                range: Range {
+                    start: Position { line: 0, character: 0 },
+                    end: Position { line: 0, character: 1 },
+                },
+                severity: Some(DiagnosticSeverity::WARNING),
+                code: None,
+                code_description: None,
+                source: Some("physure-lsp".to_string()),
+                message: "Internal error while analysing this file — \
+                          diagnostics are unavailable until it changes again. \
+                          Please report the buffer contents."
+                    .to_string(),
+                related_information: None,
+                tags: None,
+                data: None,
+            }],
+        };
 
-        match physure_script::parser::parse_phs_with_lines(&text) {
+        self.client.publish_diagnostics(uri, diagnostics, None).await;
+    }
+}
+
+fn analyze(text: &str) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+
+    match physure_script::parser::parse_phs_with_lines(text) {
             Ok(statements) => {
                 let mut interp = physure_script::interpreter::PhsInterpreter::default();
                 for (line_idx, stmt) in statements {
@@ -465,8 +496,7 @@ impl Backend {
             }
         }
 
-        self.client.publish_diagnostics(uri, diagnostics, None).await;
-    }
+    diagnostics
 }
 
 enum UseContext {

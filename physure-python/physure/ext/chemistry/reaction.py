@@ -3,11 +3,10 @@
 Balancing solves the element-conservation null space with pure-Python exact
 (Fraction-based) Gaussian elimination -- no numpy/scipy/sympy dependency.
 
-# ponytail: assumes exactly one degree of freedom (a single equation set of
-# stoichiometric coefficients), true for ordinary homework-scale reactions.
-# Multi-reaction networks with several independent solutions are out of
-# scope; a Rust solver in physure._core is the upgrade path if that's
-# ever needed (roadmap §5).
+References:
+    - Stoichiometric Matrix Methods: Smith, W.R. & Missen, R.W. (1999).
+      Chemical Reaction Stoichiometry (CRS): A Tutorial. Chemical Engineering Education, 33(1).
+      https://uwaterloo.ca/chemical-engineering/sites/default/files/uploads/documents/experiment4-crs_tutorial.pdf
 """
 
 from __future__ import annotations

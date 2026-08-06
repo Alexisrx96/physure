@@ -2,6 +2,9 @@ use std::ops::{Add, Sub, Mul, Div, Neg};
 
 /// First-Order Dual Number: x = val + der * ε where ε² = 0.
 /// Provides exact machine-precision automatic differentiation in a single pass.
+///
+/// Reference: Clifford, W. K. (1873). Preliminary Sketch of Biquaternions.
+/// Proceedings of the London Mathematical Society, 4(1), 381-395.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DualNumber {
     pub value: f64,
