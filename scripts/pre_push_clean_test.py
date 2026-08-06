@@ -67,6 +67,13 @@ def main():
     if run_rust:
         print("\n--- [Step 1/2] Running Rust Workspace Tests ---")
         code = run_command(["cargo", "test", "-p", "physure", "-p", "physure-script", "-p", "physure-cli", "-p", "physure-lsp"])
+        for attempt in range(2):
+            if code == 0:
+                break
+            print(f"\n[RETRY] Retrying Rust tests (attempt {attempt + 2}/3) due to Windows file lock...")
+            import time
+            time.sleep(2)
+            code = run_command(["cargo", "test", "-p", "physure", "-p", "physure-script", "-p", "physure-cli", "-p", "physure-lsp"])
         if code != 0:
             print("\n[FAIL] Rust tests failed!")
             sys.exit(code)
