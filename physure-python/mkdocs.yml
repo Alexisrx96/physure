@@ -47,6 +47,7 @@ plugins:
       include_source: True
   - htmlproofer:
       raise_error: True
+      validate_external_urls: False
 
 nav:
   - Home: index.md

@@ -1,8 +1,16 @@
 """Provides classes for atomic symbolic quantities and equations."""
 
-from typing import Any
+from __future__ import annotations
 
-import sympy as sp
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from physure.domain.measurement.system import UnitSystem
+
+try:
+    import sympy as sp
+except ImportError:
+    sp = None  # type: ignore
 
 try:
     import symengine as se
@@ -17,7 +25,6 @@ except ImportError:
 
 from physure import default_system
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.system import UnitSystem
 from physure.domain.measurement.units import CompoundUnit
 from physure.domain.symbolic.expression import SymbolicExpression
 

@@ -4,7 +4,7 @@
 
 > 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
 
-This document outlines the roadmap, architectural design, and implementation path for introducing a **Parametric Physical & Scientific Diagramming Engine** (`physure.diagrams`) to [Physure](../README.md).
+This document outlines the roadmap, architectural design, and implementation path for introducing a **Parametric Physical & Scientific Diagramming Engine** (`physure.diagrams`) to [Physure](https://github.com/Alexisrx96/physure).
 
 ---
 
@@ -13,10 +13,10 @@ This document outlines the roadmap, architectural design, and implementation pat
 Integrating a parametric diagramming engine into **Physure** expands the library beyond *solving physics equations* to *visually modeling physical systems*. 
 
 Unlike standard drawing software (e.g., Illustrator, Canva) or generic plotting libraries, diagrams in Physure are **physically parameter-driven**:
-* **Live Physical Quantities:** Vectors, dimensions, angles, and forces are defined using Physure's [Quantity](../physure-python/physure/domain/measurement/quantity.py) objects (`Q_(50, "N")`, `Q_(30, "deg")`).
+* **Live Physical Quantities:** Vectors, dimensions, angles, and forces are defined using Physure's [Quantity](https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/domain/measurement/quantity.py) objects (`Q_(50, "N")`, `Q_(30, "deg")`).
 * **Proportional Scaling & Physics Consistency:** If a mass or angle changes, the diagram auto-scales and recomputes resultant vectors ($\Sigma \vec{F}$), normal forces ($\vec{N}$), and trajectories while maintaining correct physical proportions.
 * **Uncertainty Visualization:** Leverages Physure's uncertainty engine to render **error cones** around vectors and **covariance ellipses** around particle positions.
-* **Multi-Backend Rendering:** Exports cleanly to standalone **SVG**, **Matplotlib** (integrating with [plotting.py](../physure-python/physure/plotting.py)), **Plotly**, **LaTeX (TikZ)** for academic papers, and **ASCII/Unicode** for terminal CLI previsualization.
+* **Multi-Backend Rendering:** Exports cleanly to standalone **SVG**, **Matplotlib** (integrating with [plotting.py](https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/plotting.py)), **Plotly**, **LaTeX (TikZ)** for academic papers, and **ASCII/Unicode** for terminal CLI previsualization.
 
 ---
 
@@ -98,7 +98,7 @@ Integrates with the [Chemistry Roadmap](chemistry_roadmap.md):
 | Backend | File | Primary Use Case | Features |
 | :--- | :--- | :--- | :--- |
 | **SVG (Native)** | `renderers/svg.py` | Web, Jupyter Notebooks, HTML reports | Zero dependencies, crisp vector scaling, interactive tooltips |
-| **Matplotlib** | `renderers/matplotlib.py` | Python scripts, publication figures | Integrates with [physure.plotting](../physure-python/physure/plotting.py) |
+| **Matplotlib** | `renderers/matplotlib.py` | Python scripts, publication figures | Integrates with [physure.plotting](https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/plotting.py) |
 | **Plotly** | `renderers/plotly.py` | Interactive 3D visualization | 3D field lines, interactive rotations |
 | **TikZ (LaTeX)** | `renderers/tikz.py` | Overleaf, LaTeX academic papers | Generates clean native TikZ code (`\draw`, `\node`) |
 | **ASCII / Console** | `renderers/ascii.py` | Terminal CLI REPL | Instant terminal preview (`python -m physure`) |

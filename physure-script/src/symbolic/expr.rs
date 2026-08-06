@@ -220,9 +220,11 @@ impl Expr {
     }
 
     pub fn integrate(&self, var: &str) -> PhysureResult<Expr> {
-        Ok(Expr {
-            node: self.node.integrate_node(var)?.simplify(),
-        })
+        let res = self.node.integrate_node(var)?.simplify();
+        if matches!(res, Node::Integral(..)) {
+            return Err(physure_core::error::PhysureError::Generic(format!("Cannot integrate pattern: {}", self.node)));
+        }
+        Ok(Expr { node: res })
     }
 
     pub fn compile(&self) -> PhysureResult<CompiledExpr> {

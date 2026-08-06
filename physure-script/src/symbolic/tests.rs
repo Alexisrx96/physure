@@ -484,8 +484,8 @@ fn test_diff_edge_cases_extended_req() {
 #[test]
 fn test_integrate_edge_cases_extended_req() {
     assert_eq!(Expr::integrate_str("x * sin(x)", "x").unwrap(), "cos(x) * -1 * x - -1 * sin(x)");
-    assert_eq!(Expr::integrate_str("x^2 * e^x", "x").unwrap(), "e^x * x^2 - integral(2 * e^x * x, x)");
-    assert_eq!(Expr::integrate_str("x * ln(x)", "x").unwrap(), "(ln(x) * x^2)/2 - integral(x/2, x)");
+    assert_eq!(Expr::integrate_str("x^2 * e^x", "x").unwrap(), "e^x * x^2 - 2 * (e^x * x - e^x)");
+    assert_eq!(Expr::integrate_str("x * ln(x)", "x").unwrap(), "(ln(x) * x^2)/2 - x^2/4");
     assert_eq!(Expr::integrate_str("2*x / (x^2 + 1)", "x").unwrap(), "ln(abs(1 + x^2))");
     assert_eq!(Expr::integrate_str("3*x^2 * cos(x^3)", "x").unwrap(), "sin(x^3)");
     assert_eq!(Expr::integrate_str("1 / (1 + x^2)", "x").unwrap(), "atan(x)");

@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import sympy as sp
+try:
+    import sympy as sp
+
+    HAVE_SYMPY = True
+except ImportError:
+    sp = None  # type: ignore
+    HAVE_SYMPY = False
 
 try:
     import symengine as se

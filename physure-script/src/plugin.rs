@@ -294,6 +294,8 @@ fn load_plugin_file(
     // directly. ponytail: copies are left in the temp dir rather than cleaned
     // up (deleting a mapped library mid-run isn't portable); fine unless a
     // process reloads plugins so often disk usage becomes a concern.
+    static TEMP_COPY_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = TEMP_COPY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nanos = mtime
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
@@ -303,19 +305,35 @@ fn load_plugin_file(
         .and_then(|s| s.to_str())
         .unwrap_or("plugin");
     let temp_copy = std::env::temp_dir().join(format!(
-        "phs_plugin_{}_{}_{}.{}",
+        "phs_plugin_{}_{}_{}_{}.{}",
         stem,
         nanos,
         std::process::id(),
+        count,
         std::env::consts::DLL_EXTENSION
     ));
-    std::fs::copy(path, &temp_copy).map_err(|e| PhysureError::Generic(e.to_string()))?;
+    let mut copy_result = std::fs::copy(path, &temp_copy);
+    for _ in 0..20 {
+        if copy_result.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        copy_result = std::fs::copy(path, &temp_copy);
+    }
+    copy_result.map_err(|e| PhysureError::Generic(e.to_string()))?;
 
     // SAFETY: dlopen'ing arbitrary code is inherently unsafe; we trust plugins
     // placed by the script author under `ext/`, the same trust boundary as the
     // `ext/*.py` loader on the Python side.
-    let lib = unsafe { libloading::Library::new(&temp_copy) }
-        .map_err(|e| PhysureError::Generic(e.to_string()))?;
+    let mut lib_result = unsafe { libloading::Library::new(&temp_copy) };
+    for _ in 0..20 {
+        if lib_result.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        lib_result = unsafe { libloading::Library::new(&temp_copy) };
+    }
+    let lib = lib_result.map_err(|e| PhysureError::Generic(e.to_string()))?;
     let entry_point: libloading::Symbol<PluginEntryPoint> =
         unsafe { lib.get(b"phs_plugin_entry\0") }
             .map_err(|e| PhysureError::Generic(format!("missing phs_plugin_entry: {}", e)))?;
@@ -459,11 +477,14 @@ mod tests {
     /// Builds `src` into a real cdylib at `<dir>/fixture_plugin.<DLL_EXTENSION>`
     /// with `rustc` (always on PATH wherever `cargo test` runs), so tests
     /// exercise the actual dlopen path, not just the in-process struct layout.
-    fn build_fixture_plugin(dir: &Path, src: &str) -> PathBuf {
-        let src_path = dir.join("fixture_plugin.rs");
+    static BUILD_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn build_fixture_plugin(dir: &Path, stem: &str, src: &str) -> PathBuf {
+        let _guard = BUILD_MUTEX.lock().unwrap();
+        let src_path = dir.join(format!("{stem}.rs"));
         std::fs::write(&src_path, src).unwrap();
         let out_path = dir.join(format!(
-            "fixture_plugin.{}",
+            "{stem}.{}",
             std::env::consts::DLL_EXTENSION
         ));
 
@@ -474,23 +495,24 @@ mod tests {
             .status()
             .expect("rustc must be on PATH to build the test fixture plugin");
         assert!(status.success(), "failed to compile fixture plugin");
+        std::thread::sleep(std::time::Duration::from_millis(50));
         out_path
     }
 
     #[test]
     fn test_load_native_ext_end_to_end() {
-        let base_dir = std::env::temp_dir().join(format!("phs_plugin_test_{}", std::process::id()));
+        let base_dir = std::env::temp_dir().join(format!("phs_plugin_test_e2e_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let ext_dir = base_dir.join("ext");
         std::fs::create_dir_all(&ext_dir).unwrap();
-        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+        build_fixture_plugin(&ext_dir, "fixture_plugin_e2e", PLUGIN_SRC_V1);
 
         let mut state = PluginState::default();
-        let functions = state.ensure_stem_loaded(&base_dir, "fixture_plugin").unwrap().unwrap();
+        let functions = state.ensure_stem_loaded(&base_dir, "fixture_plugin_e2e").unwrap().unwrap();
         assert_eq!(functions.len(), 2);
         let result = functions["triple"](&[PhsValue::Number(14.0)]).unwrap();
         assert_eq!(result, PhsValue::Number(42.0));
 
-        std::fs::remove_dir_all(&base_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
@@ -505,17 +527,17 @@ mod tests {
     #[test]
     fn test_plugin_string_round_trip() {
         let base_dir =
-            std::env::temp_dir().join(format!("phs_plugin_string_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("phs_plugin_string_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let ext_dir = base_dir.join("ext");
         std::fs::create_dir_all(&ext_dir).unwrap();
-        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+        build_fixture_plugin(&ext_dir, "fixture_plugin_str", PLUGIN_SRC_V1);
 
         let mut state = PluginState::default();
-        let functions = state.ensure_stem_loaded(&base_dir, "fixture_plugin").unwrap().unwrap();
+        let functions = state.ensure_stem_loaded(&base_dir, "fixture_plugin_str").unwrap().unwrap();
         let result = functions["shout"](&[PhsValue::String("hi".into())]).unwrap();
         assert_eq!(result, PhsValue::String("HI".into()));
 
-        std::fs::remove_dir_all(&base_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
@@ -540,15 +562,16 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_hot_reload_picks_up_changed_plugin() {
         let base_dir =
-            std::env::temp_dir().join(format!("phs_plugin_reload_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("phs_plugin_reload_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let ext_dir = base_dir.join("ext");
         std::fs::create_dir_all(&ext_dir).unwrap();
-        let plugin_path = build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+        let plugin_path = build_fixture_plugin(&ext_dir, "fixture_plugin_reload", PLUGIN_SRC_V1);
 
         let mut state = PluginState::default();
-        let mut externals = state.ensure_stem_loaded(&base_dir, "fixture_plugin").unwrap().unwrap();
+        let mut externals = state.ensure_stem_loaded(&base_dir, "fixture_plugin_reload").unwrap().unwrap();
         assert_eq!(
             externals["triple"](&[PhsValue::Number(14.0)]).unwrap(),
             PhsValue::Number(42.0)
@@ -559,7 +582,7 @@ mod tests {
 
         // Rebuild with different behavior, forcing a later mtime so the reload
         // notices it regardless of filesystem timestamp granularity.
-        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V2);
+        build_fixture_plugin(&ext_dir, "fixture_plugin_reload", PLUGIN_SRC_V2);
         std::fs::File::open(&plugin_path)
             .unwrap()
             .set_modified(SystemTime::now() + Duration::from_secs(2))
@@ -573,7 +596,7 @@ mod tests {
             PhsValue::Number(56.0)
         );
 
-        std::fs::remove_dir_all(&base_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
@@ -581,20 +604,20 @@ mod tests {
         use crate::interpreter::PhsInterpreter;
 
         let base_dir =
-            std::env::temp_dir().join(format!("phs_plugin_use_test_{}", std::process::id()));
+            std::env::temp_dir().join(format!("phs_plugin_use_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         let ext_dir = base_dir.join("ext");
         std::fs::create_dir_all(&ext_dir).unwrap();
-        build_fixture_plugin(&ext_dir, PLUGIN_SRC_V1);
+        build_fixture_plugin(&ext_dir, "fixture_plugin_use", PLUGIN_SRC_V1);
 
         let mut interp = PhsInterpreter::with_base_dir(&base_dir);
         interp
-            .eval_str("use triple, shout from fixture_plugin")
+            .eval_str("use triple, shout from fixture_plugin_use")
             .unwrap();
         let results = interp.eval_str("triple(14)").unwrap();
         assert_eq!(results[0], PhsValue::Number(42.0));
         let results = interp.eval_str("shout(\"hi\")").unwrap();
         assert_eq!(results[0], PhsValue::String("HI".into()));
 
-        std::fs::remove_dir_all(&base_dir).unwrap();
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

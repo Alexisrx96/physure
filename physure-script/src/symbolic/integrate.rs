@@ -317,9 +317,10 @@ fn try_integration_by_parts(u: &Node, dv: &Node, var: &str) -> Option<Node> {
     if matches!(u, Node::Ln(_)) {
         let v = dv.integrate_node(var).ok()?;
         let du = u.diff_node(var).ok()?;
-        let v_du = Node::Mul(vec![v.clone(), du]).integrate_node(var).ok()?;
+        let v_du = Node::Mul(vec![v.clone(), du]).simplify();
+        let v_du_integrated = v_du.integrate_node(var).ok()?;
         let u_v = Node::Mul(vec![u.clone(), v]);
-        return Some(Node::Sub(Box::new(u_v), Box::new(v_du)));
+        return Some(Node::Sub(Box::new(u_v), Box::new(v_du_integrated)));
     }
     
     // Poly * Exp / Trig
@@ -332,9 +333,10 @@ fn try_integration_by_parts(u: &Node, dv: &Node, var: &str) -> Option<Node> {
     if u_is_poly {
         let v = dv.integrate_node(var).ok()?;
         let du = u.diff_node(var).ok()?;
-        let v_du = Node::Mul(vec![v.clone(), du]).integrate_node(var).ok()?;
+        let v_du = Node::Mul(vec![v.clone(), du]).simplify();
+        let v_du_integrated = v_du.integrate_node(var).ok()?;
         let u_v = Node::Mul(vec![u.clone(), v]);
-        return Some(Node::Sub(Box::new(u_v), Box::new(v_du)));
+        return Some(Node::Sub(Box::new(u_v), Box::new(v_du_integrated)));
     }
     
     None

@@ -1,7 +1,14 @@
-from types import ModuleType
-from typing import Any
+from __future__ import annotations
 
-import sympy as sp
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
+try:
+    import sympy as sp
+except ImportError:
+    sp = None  # type: ignore
 
 from physure.domain.symbolic.graph import (
     LeafNode,

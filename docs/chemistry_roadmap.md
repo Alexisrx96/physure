@@ -8,7 +8,7 @@
 
 A major challenge in chemical unit tracking is **substance dependency**. In physics, `g` and `mol` are incompatible dimensions. In chemistry, they are linked by a species' **molar mass** ($M_W$). 
 
-Rather than modifying the core [Quantity](../physure-python/physure/domain/measurement/quantity.py) class to hold a `species` metadata field (which would pollute the high-performance tensor and JIT compilation paths), we propose a modular architecture utilizing **dynamic equivalencies** and a helper package under `physure/ext/chemistry/`.
+Rather than modifying the core [Quantity](https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/domain/measurement/quantity.py) class to hold a `species` metadata field (which would pollute the high-performance tensor and JIT compilation paths), we propose a modular architecture utilizing **dynamic equivalencies** and a helper package under `physure/ext/chemistry/`.
 
 ### Interaction Diagram
 
