@@ -2,7 +2,10 @@
 
 from typing import Any
 
-import sympy as sp
+try:
+    import sympy as sp
+except ImportError:
+    sp = None  # type: ignore
 
 try:
     import symengine as se

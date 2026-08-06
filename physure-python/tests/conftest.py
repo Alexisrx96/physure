@@ -1,4 +1,7 @@
+import os
 import pytest
+
+os.environ["MPLBACKEND"] = "Agg"
 
 from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension

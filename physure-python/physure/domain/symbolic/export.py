@@ -1,7 +1,10 @@
 from types import ModuleType
 from typing import Any
 
-import sympy as sp
+try:
+    import sympy as sp
+except ImportError:
+    sp = None  # type: ignore
 
 from physure.domain.symbolic.graph import (
     LeafNode,
