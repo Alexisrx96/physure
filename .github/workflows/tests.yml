@@ -3,11 +3,23 @@ name: Tests & Benchmarks
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # 1. Build Rust, Test Workspace Crates, Check Quality & Package ABI3 Wheel
+  # 1. Build Rust, Test Workspace Crates, Check Quality & Package Stripped ABI3 Wheel
   build-and-test-rust:
     runs-on: ubuntu-latest
     steps:
@@ -34,18 +46,19 @@ jobs:
     - name: Test All Rust Workspace Crates
       run: cargo test -p physure -p physure-script -p physure-cli -p physure-lsp
 
-    - name: Prebuild ABI3 PyO3 Wheel
+    - name: Prebuild Stripped ABI3 PyO3 Wheel
       run: |
         cd physure-python
-        uv run maturin build --release --out dist
+        uv run maturin build --release --strip --out dist
 
     - name: Upload PyO3 Wheel Artifact
       uses: actions/upload-artifact@v4
       with:
         name: pyo3-wheel
         path: physure-python/dist/*.whl
+        retention-days: 1
 
-  # 2. Fast Python Matrix Testing (Uses prebuilt ABI3 wheel; no Rust compiler needed)
+  # 2. Fast Python Matrix Testing (Uses prebuilt stripped ABI3 wheel; no Rust compiler needed)
   test-python:
     needs: build-and-test-rust
     runs-on: ubuntu-latest
