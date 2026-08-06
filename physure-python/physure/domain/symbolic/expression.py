@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 try:
     import sympy as sp
+
     HAVE_SYMPY = True
 except ImportError:
     sp = None  # type: ignore
