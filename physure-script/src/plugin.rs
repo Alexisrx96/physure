@@ -492,6 +492,7 @@ mod tests {
             .status()
             .expect("rustc must be on PATH to build the test fixture plugin");
         assert!(status.success(), "failed to compile fixture plugin");
+        std::thread::sleep(std::time::Duration::from_millis(50));
         out_path
     }
 
