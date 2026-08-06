@@ -125,7 +125,7 @@ known-first-party = ["physure"]
 
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
-testpaths = ["tests", "physure"]
+testpaths = ["tests"]
 addopts   = "-ra --benchmark-disable"
 asyncio_mode = "strict"
 
