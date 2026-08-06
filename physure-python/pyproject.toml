@@ -125,8 +125,8 @@ known-first-party = ["physure"]
 
 # ── Pytest ────────────────────────────────────────────────────────────────────
 [tool.pytest.ini_options]
-testpaths = ["tests", "python/physure"]
-addopts   = "-ra --benchmark-disable --doctest-modules"
+testpaths = ["tests", "physure"]
+addopts   = "-ra --benchmark-disable"
 asyncio_mode = "strict"
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
