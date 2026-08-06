@@ -4,7 +4,7 @@
 
 > 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
 
-This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](../README.md).
+This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](https://github.com/Alexisrx96/physure).
 
 ---
 
