@@ -158,7 +158,7 @@ def test_integrate_reciprocal_is_ln(engine):
 def test_integrate_non_matching_pattern_raises(engine):
     x = engine.symbol("x")
     with pytest.raises((NotImplementedError, ValueError)):
-        (x * engine.ln(x)).integrate("x")
+        (engine.exp(x ** engine.number(2.0))).integrate("x")
 
 
 # --- unit-awareness (§6) --------------------------------------------------
