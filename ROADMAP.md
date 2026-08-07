@@ -19,6 +19,7 @@ This document serves as the **single source of truth** for tracking project-wide
 | **5. Diagramming Engine (`physure.diagrams`)**| 📋 Planned | 10% | [Diagramming Engine Roadmap](docs/diagrams_roadmap.md) | Free-body diagrams, vectors, circuits, TikZ/SVG |
 | **6. Scientific Companion & Metrology** | 🚧 In Progress | 40% | [Scientific Companion Roadmap](docs/scientific_roadmap.md) | Buckingham $\pi$, IAPWS-IF97, EKF, Polars/Xarray |
 | **7. Metrological Rigor & Physical Reality Gaps**| 📋 Planned | 15% | [Scientific Gaps & Rigor](docs/scientific_gaps_and_rigor.md) | Welch-Satterthwaite, DAEs, Real EOS, Intervals |
+| **8. PHS Language Readiness (LAB-READY)** | 📋 Planned | 0% | [Language Readiness Roadmap](docs/language_readiness_roadmap.md) | `physure-script` loops/concurrency, `physure-cli` debugger, `DebugHook` |
 
 ---
 
@@ -45,6 +46,9 @@ For detailed architectural designs, mathematical specifications, API proposals, 
 
 6. 📜 **[Paper Compliance, Validation & Theoretical Reconciliation](docs/paper_compliance_and_validation.md)**
    * Codebase vs. paper compliance matrix, computational limitations, theoretical contradictions resolution (GUM 1st order vs Monte Carlo, Interval vs Affine, Buchberger vs F4/F5), and open `[TODO: Paper Compliance Verification]` registry.
+
+7. 🧵 **[PHS Language Readiness Roadmap](docs/language_readiness_roadmap.md)**
+   * `for`/`while` loops, `rayon`-backed data-parallelism and `parallel_map`, and an interpreter `DebugHook` powering a `phs debug` CLI debugger (DAP adapter staged as a stretch goal) — the path to the LAB-READY milestone.
 
 ---
 
