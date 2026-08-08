@@ -752,6 +752,11 @@ impl PhsInterpreter {
     /// erroring on the first one that is not truthy. Conditions are ordinary `Expr`s —
     /// a comparison like `m > 0.0` is a `FunctionCall { name: "op_>", .. }` under the
     /// hood, so this needs no evaluator support beyond `eval_expr`/`is_truthy`.
+    ///
+    /// Note: conditions must evaluate to a numeric/`Quantity` truthy value (as produced by
+    /// comparison operators like `op_>`); a plugin-provided `PhsValue::Bool` is currently
+    /// always treated as falsy by `is_truthy`, so boolean-returning plugin predicates are
+    /// not yet safe to use directly as `@requires`/`@ensures` conditions.
     fn check_requires(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         for dec in &func.decorators {
             if dec.name == "requires" {
@@ -769,6 +774,8 @@ impl PhsInterpreter {
     /// return value. `validate_decorators` (Task 5) already rejects `@ensures` on any
     /// function with a parameter literally named `result`, so this insert can never
     /// silently shadow a caller-visible binding.
+    ///
+    /// See `check_requires`'s note on `PhsValue::Bool`.
     fn check_ensures(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>, result: &PhsValue) -> PhysureResult<()> {
         if !func.decorators.iter().any(|d| d.name == "ensures") {
             return Ok(());
@@ -1094,6 +1101,41 @@ mod tests {
             PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 1.0),
             other => panic!("expected numeric value, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn requires_and_ensures_together_compose_independently() {
+        let mut interp = PhsInterpreter::default();
+
+        // Both satisfied: m=5.0 passes @requires (m > 0.0), result=10.0 passes @ensures (result > 0.0)
+        let results = interp
+            .eval_str(
+                "@requires(m > 0.0, \"m must be positive\")\n@ensures(result > 0.0, \"result must be positive\")\nfn double_mass(m) = m * 2.0\ndouble_mass(5.0)",
+            )
+            .unwrap();
+        match results.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 10.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 10.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+
+        // @requires fails independently: m=-1.0 violates @requires before @ensures is ever checked
+        let mut interp2 = PhsInterpreter::default();
+        let err = interp2
+            .eval_str(
+                "@requires(m > 0.0, \"m must be positive\")\n@ensures(result > 0.0, \"result must be positive\")\nfn double_mass(m) = m * 2.0\ndouble_mass(-1.0)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "requires"));
+
+        // @ensures fails independently: m=0.5 passes @requires but body output (0.5) fails @ensures's `result > 1.0`
+        let mut interp3 = PhsInterpreter::default();
+        let err = interp3
+            .eval_str(
+                "@requires(m > 0.0, \"m must be positive\")\n@ensures(result > 1.0, \"result must exceed 1\")\nfn identity(m) = m\nidentity(0.5)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "ensures"));
     }
 
     #[test]
