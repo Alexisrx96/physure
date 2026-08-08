@@ -1317,6 +1317,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_phs_attaches_stacked_decorators_to_function_def() {
+        let program = parse_phs("@stable\n@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.decorators.len(), 2);
+                assert_eq!(node.decorators[0].name, "stable");
+                assert_eq!(node.decorators[1].name, "requires");
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_phs_attaches_decorator_to_assignment() {
+        let program = parse_phs("@stable\nx = 5").unwrap();
+        match &program.statements[0] {
+            Statement::Assignment(node) => {
+                assert_eq!(node.decorators.len(), 1);
+                assert_eq!(node.decorators[0].name, "stable");
+            }
+            other => panic!("expected Assignment, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_1_cargas() {
         if let Ok(code) = std::fs::read_to_string("D:/Projects/test_physure/1_cargas.phs") {
             let res = parse_phs(&code);
