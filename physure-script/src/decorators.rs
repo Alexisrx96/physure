@@ -263,6 +263,28 @@ mod tests {
     }
 
     #[test]
+    fn validate_decorators_rejects_ensures_wrong_arity() {
+        let stmt = function_with_decorators(vec![DecoratorNode {
+            name: "ensures".to_string(),
+            args: vec![Expr::Identifier("result".to_string())],
+        }]);
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_ensures_on_assignment() {
+        let stmt = Statement::Assignment(crate::ast::AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode {
+                name: "ensures".to_string(),
+                args: vec![Expr::Identifier("result".to_string()), Expr::Str("must hold".to_string())],
+            }],
+        });
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
     fn validate_decorators_rejects_stable_with_args() {
         let stmt = function_with_decorators(vec![DecoratorNode {
             name: "stable".to_string(),
