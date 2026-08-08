@@ -1242,6 +1242,13 @@ mod tests {
     }
 
     #[test]
+    fn test_decorated_stmt_rule_parses_stacked_decorators() {
+        let code = "@stable\n@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x";
+        let pairs = PhsParser::parse(Rule::decorated_stmt, code);
+        assert!(pairs.is_ok(), "expected stacked decorated_stmt to parse: {:?}", pairs.err());
+    }
+
+    #[test]
     fn test_parse_1_cargas() {
         if let Ok(code) = std::fs::read_to_string("D:/Projects/test_physure/1_cargas.phs") {
             let res = parse_phs(&code);
