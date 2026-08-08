@@ -26,6 +26,7 @@ pub fn parse_phs(code: &str) -> PhysureResult<Program> {
     }
 
     validate_unit_shadowing(&statements, &statement_pos)?;
+    crate::decorators::validate_decorators(&statements)?;
     Ok(Program { statements })
 }
 
@@ -46,6 +47,7 @@ pub fn parse_phs_with_lines(code: &str) -> PhysureResult<Vec<(usize, Statement)>
 
     let stmts_only: Vec<Statement> = statements.iter().map(|(_, s)| s.clone()).collect();
     validate_unit_shadowing(&stmts_only, &statement_pos)?;
+    crate::decorators::validate_decorators(&stmts_only)?;
 
     Ok(statements)
 }
@@ -227,7 +229,9 @@ fn parse_decorated_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Stat
         match inner.as_rule() {
             Rule::decorator => {
                 let raw = parse_decorator(inner)?;
-                decorators.push(raw);
+                for lowered in crate::decorators::lower_range(raw)? {
+                    decorators.push(lowered);
+                }
             }
             Rule::function_def | Rule::assignment_fn => {
                 target = Some(parse_function_def(inner)?);
@@ -1338,6 +1342,23 @@ mod tests {
                 assert_eq!(node.decorators[0].name, "stable");
             }
             other => panic!("expected Assignment, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_phs_rejects_unknown_decorator() {
+        assert!(parse_phs("@bogus\nfn f(x) = x").is_err());
+    }
+
+    #[test]
+    fn test_parse_phs_lowers_range_into_two_requires() {
+        let program = parse_phs("@range(v, 0.0, 10.0)\nfn f(v) = v").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.decorators.len(), 2);
+                assert!(node.decorators.iter().all(|d| d.name == "requires"));
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
         }
     }
 
