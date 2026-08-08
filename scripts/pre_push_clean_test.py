@@ -144,6 +144,7 @@ def main():
 
             env_vars = os.environ.copy()
             env_vars["UV_PROJECT_ENVIRONMENT"] = str(fresh_venv)
+            env_vars["VIRTUAL_ENV"] = str(fresh_venv)
             env_vars["UV_LINK_MODE"] = "copy"
             
             sync_code = run_command(
