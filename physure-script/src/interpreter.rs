@@ -1148,6 +1148,25 @@ mod tests {
     }
 
     #[test]
+    fn stable_and_experimental_decorators_do_not_affect_evaluation() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("@stable\nfn f(x) = x * 2.0\nf(3.0)").unwrap();
+        match results.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 6.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 6.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+
+        let mut interp2 = PhsInterpreter::default();
+        let results2 = interp2.eval_str("@experimental\nfn g(x) = x * 3.0\ng(2.0)").unwrap();
+        match results2.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 6.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 6.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn an_asymmetric_measurement_refuses_instead_of_using_half_of_it() {
         // The notation parses so the grammar is settled, but nothing propagates a third
         // moment yet. Evaluating it would keep the upper half and report a symmetric
