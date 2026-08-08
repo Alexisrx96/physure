@@ -199,7 +199,9 @@ def test_rust_transpiler_parity(name, script, expected_vars):
         rs_file = os.path.join(src_dir, "main.rs")
         cargo_file = os.path.join(tmpdir, "Cargo.toml")
 
-        core_path = os.path.join(REPO_ROOT, "physure-core")
+        core_path = os.path.join(REPO_ROOT, "physure-core").replace(
+            os.sep, "/"
+        )
         with open(cargo_file, "w") as f:
             f.write(f'''[package]
 name = "parity_test"
