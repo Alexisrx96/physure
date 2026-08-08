@@ -158,7 +158,13 @@ string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 return_stmt   = { "return" ~ expr }
 guard_if_stmt = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ return_stmt }
 
+decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
+// One or more `@name(...)` lines immediately above the definition they annotate. `_nl`
+// (already used by `if_expr`/`where_expr`) absorbs the newline between each decorator
+// and the next, and between the last decorator and the definition itself.
+decorated_stmt  = { (decorator ~ _nl)+ ~ (function_def | assignment_fn | assignment) }
+
 stmt_term       = _{ ";" | NEWLINE }
-stmt            = { import_stmt | export_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | raw_block | expr }
+stmt            = { import_stmt | export_stmt | decorated_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | raw_block | expr }
 _is_stmt_start  = _{ !(NEWLINE | COMMENT | EOI) }
 program         = _{ SOI ~ (stmt_term | COMMENT)* ~ (_is_stmt_start ~ stmt ~ (stmt_term | COMMENT)*)* ~ EOI }

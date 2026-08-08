@@ -1229,6 +1229,19 @@ mod tests {
     }
 
     #[test]
+    fn test_decorated_stmt_rule_parses() {
+        let code = "@stable\nfn f(x) = x";
+        let pairs = PhsParser::parse(Rule::decorated_stmt, code);
+        assert!(pairs.is_ok(), "expected decorated_stmt to parse: {:?}", pairs.err());
+    }
+
+    #[test]
+    fn test_decorator_with_args_rule_parses() {
+        let pairs = PhsParser::parse(Rule::decorator, "@requires(x > 0.0, \"x must be positive\")");
+        assert!(pairs.is_ok(), "expected decorator with args to parse: {:?}", pairs.err());
+    }
+
+    #[test]
     fn test_parse_1_cargas() {
         if let Ok(code) = std::fs::read_to_string("D:/Projects/test_physure/1_cargas.phs") {
             let res = parse_phs(&code);
