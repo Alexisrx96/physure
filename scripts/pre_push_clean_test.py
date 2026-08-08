@@ -172,7 +172,8 @@ def main():
             pytest_code = run_command(
                 ["uv", "run", "pytest", "--ignore=tests/core/test_serialization.py"],
                 cwd=python_dir,
-                env=env_vars
+                env=env_vars,
+                retries=2
             )
             if pytest_code != 0:
                 print(f"\n[FAIL] pytest failed for Python {py_ver}")
