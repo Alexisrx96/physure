@@ -90,7 +90,7 @@ fn check_decorator_list(decorators: &[DecoratorNode], func: Option<&FunctionDefN
             "requires" | "ensures" => {
                 if func.is_none() {
                     return Err(PhysureError::Generic(format!(
-                        "@{} is only valid on a function definition, not a variable assignment",
+                        "@{} (or @range, which desugars into @requires) is only valid on a function definition, not a variable assignment",
                         dec.name
                     )));
                 }
@@ -229,5 +229,71 @@ mod tests {
             args: vec![Expr::Identifier("x".to_string()), Expr::Str("x must be positive".to_string())],
         }]);
         assert!(validate_decorators(&[stmt]).is_ok());
+    }
+
+    #[test]
+    fn lower_range_rejects_non_identifier_first_arg() {
+        let raw = DecoratorNode {
+            name: "range".to_string(),
+            args: vec![quantity(1.0), quantity(0.0), quantity(10.0)],
+        };
+        assert!(lower_range(raw).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_requires_wrong_arity() {
+        let stmt = function_with_decorators(vec![DecoratorNode {
+            name: "requires".to_string(),
+            args: vec![Expr::Identifier("x".to_string())],
+        }]);
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_requires_on_assignment() {
+        let stmt = Statement::Assignment(crate::ast::AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode {
+                name: "requires".to_string(),
+                args: vec![Expr::Identifier("x".to_string()), Expr::Str("must hold".to_string())],
+            }],
+        });
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_stable_with_args() {
+        let stmt = function_with_decorators(vec![DecoratorNode {
+            name: "stable".to_string(),
+            args: vec![Expr::Identifier("x".to_string())],
+        }]);
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_experimental_with_args() {
+        let stmt = function_with_decorators(vec![DecoratorNode {
+            name: "experimental".to_string(),
+            args: vec![Expr::Identifier("x".to_string())],
+        }]);
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_range_on_assignment_error_mentions_range() {
+        let stmt = Statement::Assignment(crate::ast::AssignmentNode {
+            name: "v".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode {
+                name: "requires".to_string(),
+                args: vec![
+                    Expr::Identifier("v".to_string()),
+                    Expr::Str("v must be >= the @range lower bound".to_string()),
+                ],
+            }],
+        });
+        let err = validate_decorators(&[stmt]).unwrap_err();
+        assert!(err.to_string().contains("@range"));
     }
 }
