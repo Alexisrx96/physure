@@ -13,6 +13,10 @@ pub enum PhysureError {
     CovarianceError(String),
     ParseError(String),
     Generic(String),
+    /// A `@requires`/`@ensures` condition evaluated to false. `decorator` is the
+    /// decorator name without the `@` (`"requires"` or `"ensures"`); `message` is the
+    /// user-supplied explanation string from the decorator's second argument.
+    ContractViolation { decorator: String, message: String },
 }
 
 impl fmt::Display for PhysureError {
@@ -42,6 +46,9 @@ impl fmt::Display for PhysureError {
             PhysureError::CovarianceError(msg) => write!(f, "Covariance error: {}", msg),
             PhysureError::ParseError(msg) => write!(f, "Parse error: {}", msg),
             PhysureError::Generic(msg) => write!(f, "{}", msg),
+            PhysureError::ContractViolation { decorator, message } => {
+                write!(f, "@{} violated: {}", decorator, message)
+            }
         }
     }
 }
@@ -59,5 +66,19 @@ impl From<String> for PhysureError {
 impl From<&str> for PhysureError {
     fn from(msg: &str) -> Self {
         PhysureError::Generic(msg.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contract_violation_displays_decorator_and_message() {
+        let err = PhysureError::ContractViolation {
+            decorator: "requires".to_string(),
+            message: "x must be positive".to_string(),
+        };
+        assert_eq!(err.to_string(), "@requires violated: x must be positive");
     }
 }
