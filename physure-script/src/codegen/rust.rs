@@ -216,6 +216,7 @@ mod tests {
                         unit: None,
                     })),
                 })],
+                decorators: Vec::new(),
             })],
         };
         let code = transpiler.generate_program(&ast).unwrap();

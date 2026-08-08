@@ -242,6 +242,7 @@ mod tests {
                 left: Box::new(Expr::Identifier("m".to_string())),
                 right: Box::new(Expr::Identifier("v".to_string())),
             })],
+            decorators: Vec::new(),
         });
         
         let result = transpiler.generate_statement(&func).unwrap();

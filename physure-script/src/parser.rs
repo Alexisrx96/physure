@@ -191,6 +191,7 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         params,
         param_units,
         body_stmts,
+        decorators: Vec::new(),
     }))
 }
 
@@ -213,6 +214,7 @@ fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statemen
     Ok(Statement::Assignment(AssignmentNode {
         name,
         value: value.unwrap(),
+        decorators: Vec::new(),
     }))
 }
 

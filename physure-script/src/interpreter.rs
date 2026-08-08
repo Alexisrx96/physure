@@ -597,6 +597,7 @@ impl PhsInterpreter {
                                 params,
                                 param_units,
                                 body_stmts: vec![body],
+                                decorators: Vec::new(),
                             }));
                         }
                     }
@@ -845,6 +846,7 @@ impl PhsInterpreter {
                     params,
                     param_units,
                     body_stmts: vec![body],
+                    decorators: Vec::new(),
                 }))
             }
             (PhsValue::Equation(l1, r1), PhsValue::Equation(l2, r2)) => {
@@ -1091,7 +1093,8 @@ r3 = circuito_abierto(5 V, 2 A)
                             unit: None,
                         })),
                     })
-                })]
+                })],
+                decorators: Vec::new(),
             }),
             Statement::Assignment(AssignmentNode {
                 name: "m".to_string(),
@@ -1102,6 +1105,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     is_sigma: false,
                     unit: Some("kg".to_string()),
                 }),
+                decorators: Vec::new(),
             }),
             Statement::Assignment(AssignmentNode {
                 name: "v".to_string(),
@@ -1112,6 +1116,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     is_sigma: false,
                     unit: Some("m/s".to_string()),
                 }),
+                decorators: Vec::new(),
             }),
             Statement::Assignment(AssignmentNode {
                 name: "E".to_string(),
@@ -1123,6 +1128,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     ],
                     kwargs: Vec::new(),
                 },
+                decorators: Vec::new(),
             }),
         ];
         
@@ -1154,6 +1160,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         is_sigma: false,
                         unit: Some("kg".to_string()),
                     }),
+                    decorators: Vec::new(),
                 }),
             ],
         };
