@@ -130,6 +130,42 @@ symlink-based install instructions.
 > highlighting, diagnostics, and hover docs come from the native `physure-lsp` server and work
 > without Python.
 
+### Windows: "Physure Language Server (Rust) client: couldn't create connection" / `spawn UNKNOWN`
+
+`physure-lsp.exe` isn't code-signed (we don't have a paid code-signing certificate yet), and
+**Windows Smart App Control** silently blocks unsigned binaries it doesn't recognize — VS Code
+just reports the generic `spawn UNKNOWN`. Running the exe directly shows the real reason:
+`"An Application Control policy blocked this file"`.
+
+Check whether Smart App Control is on:
+
+```powershell
+Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -Name VerifiedAndReputablePolicyState
+```
+
+If it returns `1`, self-sign the binary so your machine trusts it (free, but only trusts *your*
+copy — repeat after every rebuild/reinstall of `physure-lsp`):
+
+```powershell
+# 1. Create a code-signing certificate (once)
+$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Physure Local Dev" `
+  -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy Exportable -KeyUsage DigitalSignature `
+  -FriendlyName "Physure Local Dev Code Signing" -NotAfter (Get-Date).AddYears(5)
+
+# 2. Trust it locally (current user only, no admin required)
+Export-Certificate -Cert $cert -FilePath "$env:TEMP\physure-dev.cer" | Out-Null
+certutil -user -addstore Root "$env:TEMP\physure-dev.cer"
+certutil -user -addstore TrustedPublisher "$env:TEMP\physure-dev.cer"
+
+# 3. Sign the binary (needs signtool.exe from the Windows SDK)
+signtool sign /sha1 $cert.Thumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `
+  "$HOME\.cargo\bin\physure-lsp.exe"
+```
+
+Reload VS Code and the LSP should connect. Once we can afford a real code-signing certificate
+(or set up [Microsoft Trusted Signing](https://learn.microsoft.com/en-us/azure/trusted-signing/overview)),
+prebuilt release binaries will ship pre-signed and this step won't be necessary.
+
 ---
 
 ## Building from source

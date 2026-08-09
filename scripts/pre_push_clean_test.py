@@ -50,17 +50,36 @@ def load_env():
     return config
 
 
+def auto_sign_windows_binaries():
+    """On Windows, auto-sign compiled binaries with local dev cert if available."""
+    if sys.platform != "win32":
+        return
+    ps_cmd = (
+        "$cert = Get-ChildItem Cert:\\CurrentUser\\My | Where-Object { $_.Subject -like '*Physure Local Dev*' } | Select-Object -First 1; "
+        "if ($cert) { "
+        "Get-ChildItem -Path 'target\\debug', 'target\\release', 'physure-python\\physure', '.fresh_test_venvs' -Recurse -Include *.exe, *.pyd -ErrorAction SilentlyContinue | "
+        "ForEach-Object { Set-AuthenticodeSignature -FilePath $_.FullName -Certificate $cert -ErrorAction SilentlyContinue } "
+        "}"
+    )
+    try:
+        subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd], cwd=REPO_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def run_command(cmd, cwd=None, env=None, retries=1):
-    """Executes a command and streams output, with retry support for Windows file locks."""
+    """Executes a command and streams output, with retry support and auto-signing for Windows file locks."""
     for attempt in range(retries):
         print(f"\n[EXEC] {' '.join(cmd)} (in {cwd or REPO_ROOT})")
         res = subprocess.run(cmd, cwd=cwd or REPO_ROOT, env=env or os.environ.copy())
         if res.returncode == 0:
             return 0
         if attempt < retries - 1:
-            print(f"\n[RETRY] Retrying command (attempt {attempt + 2}/{retries})...")
+            delay = (attempt + 1) * 3
+            print(f"\n[RETRY] Command failed (attempt {attempt + 1}/{retries}). Auto-signing binaries & waiting {delay}s for Windows file locks/AV release...")
+            auto_sign_windows_binaries()
             import time
-            time.sleep(2)
+            time.sleep(delay)
     return res.returncode
 
 
@@ -71,7 +90,8 @@ def main():
     args = parser.parse_args()
 
     config = load_env()
-    if args.quick:
+    is_quick = args.quick or os.environ.get("PREPUSH_QUICK", "").lower() in ("true", "1")
+    if is_quick:
         current_py = f"{sys.version_info.major}.{sys.version_info.minor}"
         python_versions = [current_py]
     else:
@@ -106,7 +126,7 @@ def main():
         print("\n--- [Step 2/4] Testing All Rust Workspace Crates ---")
         code = run_command(
             ["cargo", "test", "-p", "physure", "-p", "physure-script", "-p", "physure-cli", "-p", "physure-lsp"],
-            retries=3
+            retries=5
         )
         if code != 0:
             print("\n[FAIL] Step 2: Rust workspace tests failed!")
@@ -169,11 +189,13 @@ def main():
                     sys.exit(install_code)
                 continue
 
+            auto_sign_windows_binaries()
+
             pytest_code = run_command(
                 ["uv", "run", "pytest", "--ignore=tests/core/test_serialization.py"],
                 cwd=python_dir,
                 env=env_vars,
-                retries=2
+                retries=4
             )
             if pytest_code != 0:
                 print(f"\n[FAIL] pytest failed for Python {py_ver}")
