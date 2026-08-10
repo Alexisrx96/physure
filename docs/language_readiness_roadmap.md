@@ -174,7 +174,7 @@ decorator_registry -.->|"future sugar, e.g. @export\nas an alias for Statement::
 
   **Why `declared` has to be tracked explicitly**: `call_function_node` builds each call's env by
   cloning whatever was visible at the call site and overlaying params
-  ([interpreter.rs:721](../physure-script/src/interpreter.rs#L721)) — there is no parent-scope
+  ([interpreter.rs:721](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L721)) — there is no parent-scope
   pointer to walk. So `ctx.env` inside a one-line helper contains the helper's params *and* every
   global, indistinguishably, in the same flat map. `StackFrame::declared` is what lets the debugger
   tell them apart without re-walking values: a name is local to a frame if it's a parameter or is
@@ -234,7 +234,7 @@ decorator_registry -.->|"future sugar, e.g. @export\nas an alias for Statement::
   under it), `break <line>[:cond]` / `break fn <name>`, and `step`/`next`/`finish`/`continue`
   mapping to the four `DebugAction`s. Splitting `locals`/`globals` instead of one flat dump matters
   precisely because `ctx.env` is a full clone-and-overlay of everything visible at the call site
-  ([interpreter.rs:721](../physure-script/src/interpreter.rs#L721)) — without the split, `locals`
+  ([interpreter.rs:721](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L721)) — without the split, `locals`
   inside a one-line helper would print every global too. First consumer of `DebugHook` — proves the
   hook and `Inspection` design before DAP commits to them.
 
@@ -258,7 +258,7 @@ decorator_registry -.->|"future sugar, e.g. @export\nas an alias for Statement::
 
 Confirmed directly in the current code: `physure-lsp`'s `on_change` builds a fresh
 `PhsInterpreter::default()` and calls `run_statement` for every statement in the file, on every
-keystroke, with no caching ([main.rs:409-447](../physure-lsp/src/main.rs#L409-L447)). This track
+keystroke, with no caching ([main.rs:409-447](https://github.com/Alexisrx96/physure/blob/main/physure-lsp/src/main.rs#L409-L447)). This track
 replaces that with dependency-aware incremental re-evaluation, scoped to a single open document.
 
 - **Dependency graph**: for each statement, its *writes* (the name an `AssignmentNode`/`FunctionDef`
@@ -296,7 +296,7 @@ artifact. This is deliberately *not* the curated "formula repository" idea (a br
 many documented formulas with hosted on-demand builds) — that stays parked for later; Track E is
 only the single-function compile step it would eventually sit on top of.
 
-- **Trigger**: the existing `Statement::Export`/`ExportNode` ([ast.rs:39](../physure-script/src/ast.rs#L39))
+- **Trigger**: the existing `Statement::Export`/`ExportNode` ([ast.rs:39](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/ast.rs#L39))
   already names which symbols are meant to be visible outside the script. Track E reuses it as the
   compile target list rather than inventing new annotation syntax.
 - **`.proto` generation**: a new `codegen::proto::ProtoGenerator`, a sibling to `python.rs`/`rust.rs`/
@@ -307,7 +307,7 @@ only the single-function compile step it would eventually sit on top of.
   contract for external consumers to generate bindings against in their own language; it is
   documentation-and-interop, not a network service PHS itself runs.
 - **`.dll`/`.so` generation**: `RustTranspiler::generate_function_def` already emits a pure-Rust
-  function, but its signature takes `Quantity` structs ([rust.rs:64](../physure-script/src/codegen/rust.rs#L64)),
+  function, but its signature takes `Quantity` structs ([rust.rs:64](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/codegen/rust.rs#L64)),
   which is not `extern "C"`-safe. Track E adds an FFI shim: flat `f64` in, `f64` out, with each
   parameter's unit fixed at generation time (baked in, not passed at runtime — unit-safety is
   already a compile-time property once the export's declared units are chosen). The shim
@@ -355,7 +355,7 @@ only the single-function compile step it would eventually sit on top of.
 
 A generic `@name(args)` annotation mechanism attachable to a function or a variable, purely so future
 tracks stop reinventing a bespoke keyword/statement every time they need to mark something. `@` is
-completely unused in the grammar today ([phs.pest:1-3](../physure-script/src/phs.pest#L1-L3) — only
+completely unused in the grammar today ([phs.pest:1-3](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/phs.pest#L1-L3) — only
 `#`/`//` are taken, as comment markers), so it's free to claim.
 
 - **Grammar**: one new rule, tried before the bare alternatives it wraps:
@@ -415,7 +415,7 @@ without touching the algorithm body or writing it into engineering's control flo
 - **Propagation is mandatory, not optional**: `@requires`/`@ensures`/`@range` are transpiled into the
   Track E FFI shim exactly once, via the same `RustTranspiler::generate_expr` already used for the
   function body (comparisons already lower to plain `FunctionCall`s like `op_<`
-  ([parser.rs:339](../physure-script/src/parser.rs#L339)), so no new expression machinery is needed) —
+  ([parser.rs:339](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/parser.rs#L339)), so no new expression machinery is needed) —
   see Track E's "Fallible exports" note. A contract that only the interpreter enforces and the
   compiled artifact silently ignores would defeat the reason these decorators exist.
 
