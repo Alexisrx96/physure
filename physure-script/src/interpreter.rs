@@ -597,6 +597,7 @@ impl PhsInterpreter {
                                 params,
                                 param_units,
                                 body_stmts: vec![body],
+                                decorators: Vec::new(),
                             }));
                         }
                     }
@@ -723,6 +724,7 @@ impl PhsInterpreter {
             let bound_val = self.bind_param_value(&func.name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val)?;
             local_env.insert(param_name.clone(), bound_val);
         }
+        self.check_requires(func, &local_env)?;
         let mut last_val = PhsValue::None;
         for stmt in &func.body_stmts {
             match stmt {
@@ -742,7 +744,54 @@ impl PhsInterpreter {
                 }
             }
         }
+        self.check_ensures(func, &local_env, &last_val)?;
         Ok(last_val)
+    }
+
+    /// Evaluates every `@requires` condition against the already-bound parameters,
+    /// erroring on the first one that is not truthy. Conditions are ordinary `Expr`s —
+    /// a comparison like `m > 0.0` is a `FunctionCall { name: "op_>", .. }` under the
+    /// hood, so this needs no evaluator support beyond `eval_expr`/`is_truthy`.
+    ///
+    /// Note: conditions must evaluate to a numeric/`Quantity` truthy value (as produced by
+    /// comparison operators like `op_>`); a plugin-provided `PhsValue::Bool` is currently
+    /// always treated as falsy by `is_truthy`, so boolean-returning plugin predicates are
+    /// not yet safe to use directly as `@requires`/`@ensures` conditions.
+    fn check_requires(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
+        for dec in &func.decorators {
+            if dec.name == "requires" {
+                let cond = &dec.args[0];
+                if !is_truthy(&self.eval_expr(cond, local_env)?) {
+                    let message = self.eval_expr(&dec.args[1], local_env)?.to_string();
+                    return Err(PhysureError::ContractViolation { decorator: "requires".to_string(), message });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Evaluates every `@ensures` condition with `result` bound to the function's
+    /// return value. `validate_decorators` (Task 5) already rejects `@ensures` on any
+    /// function with a parameter literally named `result`, so this insert can never
+    /// silently shadow a caller-visible binding.
+    ///
+    /// See `check_requires`'s note on `PhsValue::Bool`.
+    fn check_ensures(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>, result: &PhsValue) -> PhysureResult<()> {
+        if !func.decorators.iter().any(|d| d.name == "ensures") {
+            return Ok(());
+        }
+        let mut result_env = local_env.clone();
+        result_env.insert("result".to_string(), result.clone());
+        for dec in &func.decorators {
+            if dec.name == "ensures" {
+                let cond = &dec.args[0];
+                if !is_truthy(&self.eval_expr(cond, &result_env)?) {
+                    let message = self.eval_expr(&dec.args[1], &result_env)?.to_string();
+                    return Err(PhysureError::ContractViolation { decorator: "ensures".to_string(), message });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Binds an argument value to a function parameter, converting it to the parameter's
@@ -845,6 +894,7 @@ impl PhsInterpreter {
                     params,
                     param_units,
                     body_stmts: vec![body],
+                    decorators: Vec::new(),
                 }))
             }
             (PhsValue::Equation(l1, r1), PhsValue::Equation(l2, r2)) => {
@@ -1000,7 +1050,122 @@ mod tests {
     use super::*;
     use crate::ast::*;
     use crate::resolver::{MemoryModuleResolver, ModuleExport};
-    
+
+    #[test]
+    fn requires_violation_returns_contract_violation_error() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp
+            .eval_str(
+                "@requires(m > 0.0, \"mass must be positive\")\nfn double_mass(m) = m * 2.0\ndouble_mass(-1.0)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "requires"));
+    }
+
+    #[test]
+    fn requires_satisfied_returns_normally() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp
+            .eval_str(
+                "@requires(m > 0.0, \"mass must be positive\")\nfn double_mass(m) = m * 2.0\ndouble_mass(1.0)",
+            )
+            .unwrap();
+        match results.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 2.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 2.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensures_violation_returns_contract_violation_error() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp
+            .eval_str(
+                "@ensures(result > 100.0, \"result must exceed 100\")\nfn small(m) = m\nsmall(1.0)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "ensures"));
+    }
+
+    #[test]
+    fn ensures_satisfied_returns_normally() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp
+            .eval_str(
+                "@ensures(result > 0.0, \"result must be positive\")\nfn small(m) = m\nsmall(1.0)",
+            )
+            .unwrap();
+        match results.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 1.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 1.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn requires_and_ensures_together_compose_independently() {
+        let mut interp = PhsInterpreter::default();
+
+        // Both satisfied: m=5.0 passes @requires (m > 0.0), result=10.0 passes @ensures (result > 0.0)
+        let results = interp
+            .eval_str(
+                "@requires(m > 0.0, \"m must be positive\")\n@ensures(result > 0.0, \"result must be positive\")\nfn double_mass(m) = m * 2.0\ndouble_mass(5.0)",
+            )
+            .unwrap();
+        match results.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 10.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 10.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+
+        // @requires fails independently: m=-1.0 violates @requires before @ensures is ever checked
+        let mut interp2 = PhsInterpreter::default();
+        let err = interp2
+            .eval_str(
+                "@requires(m > 0.0, \"m must be positive\")\n@ensures(result > 0.0, \"result must be positive\")\nfn double_mass(m) = m * 2.0\ndouble_mass(-1.0)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "requires"));
+
+        // @ensures fails independently: m=0.5 passes @requires but body output (0.5) fails @ensures's `result > 1.0`
+        let mut interp3 = PhsInterpreter::default();
+        let err = interp3
+            .eval_str(
+                "@requires(m > 0.0, \"m must be positive\")\n@ensures(result > 1.0, \"result must exceed 1\")\nfn identity(m) = m\nidentity(0.5)",
+            )
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "ensures"));
+    }
+
+    #[test]
+    fn range_lowered_to_requires_is_enforced_at_call_time() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp
+            .eval_str("@range(v, 0.0, 10.0)\nfn identity(v) = v\nidentity(20.0)")
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "requires"));
+    }
+
+    #[test]
+    fn stable_and_experimental_decorators_do_not_affect_evaluation() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("@stable\nfn f(x) = x * 2.0\nf(3.0)").unwrap();
+        match results.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 6.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 6.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+
+        let mut interp2 = PhsInterpreter::default();
+        let results2 = interp2.eval_str("@experimental\nfn g(x) = x * 3.0\ng(2.0)").unwrap();
+        match results2.last().unwrap() {
+            PhsValue::Number(n) => assert_eq!(*n, 6.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 6.0),
+            other => panic!("expected numeric value, got {other:?}"),
+        }
+    }
+
     #[test]
     fn an_asymmetric_measurement_refuses_instead_of_using_half_of_it() {
         // The notation parses so the grammar is settled, but nothing propagates a third
@@ -1091,7 +1256,8 @@ r3 = circuito_abierto(5 V, 2 A)
                             unit: None,
                         })),
                     })
-                })]
+                })],
+                decorators: Vec::new(),
             }),
             Statement::Assignment(AssignmentNode {
                 name: "m".to_string(),
@@ -1102,6 +1268,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     is_sigma: false,
                     unit: Some("kg".to_string()),
                 }),
+                decorators: Vec::new(),
             }),
             Statement::Assignment(AssignmentNode {
                 name: "v".to_string(),
@@ -1112,6 +1279,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     is_sigma: false,
                     unit: Some("m/s".to_string()),
                 }),
+                decorators: Vec::new(),
             }),
             Statement::Assignment(AssignmentNode {
                 name: "E".to_string(),
@@ -1123,6 +1291,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     ],
                     kwargs: Vec::new(),
                 },
+                decorators: Vec::new(),
             }),
         ];
         
@@ -1154,6 +1323,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         is_sigma: false,
                         unit: Some("kg".to_string()),
                     }),
+                    decorators: Vec::new(),
                 }),
             ],
         };

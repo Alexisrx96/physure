@@ -26,6 +26,7 @@ pub fn parse_phs(code: &str) -> PhysureResult<Program> {
     }
 
     validate_unit_shadowing(&statements, &statement_pos)?;
+    crate::decorators::validate_decorators(&statements)?;
     Ok(Program { statements })
 }
 
@@ -46,6 +47,7 @@ pub fn parse_phs_with_lines(code: &str) -> PhysureResult<Vec<(usize, Statement)>
 
     let stmts_only: Vec<Statement> = statements.iter().map(|(_, s)| s.clone()).collect();
     validate_unit_shadowing(&stmts_only, &statement_pos)?;
+    crate::decorators::validate_decorators(&stmts_only)?;
 
     Ok(statements)
 }
@@ -55,6 +57,7 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement
         Rule::stmt => parse_statement(pair.into_inner().next().unwrap()),
         Rule::import_stmt => parse_import(pair),
         Rule::export_stmt => parse_export(pair),
+        Rule::decorated_stmt => parse_decorated_stmt(pair),
         Rule::function_def | Rule::assignment_fn => parse_function_def(pair),
         Rule::assignment => parse_assignment(pair),
         Rule::guard_if_stmt => parse_guard_if_stmt(pair),
@@ -191,6 +194,7 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         params,
         param_units,
         body_stmts,
+        decorators: Vec::new(),
     }))
 }
 
@@ -213,7 +217,51 @@ fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statemen
     Ok(Statement::Assignment(AssignmentNode {
         name,
         value: value.unwrap(),
+        decorators: Vec::new(),
     }))
+}
+
+fn parse_decorated_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut decorators = Vec::new();
+    let mut target = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::decorator => {
+                let raw = parse_decorator(inner)?;
+                for lowered in crate::decorators::lower_range(raw)? {
+                    decorators.push(lowered);
+                }
+            }
+            Rule::function_def | Rule::assignment_fn => {
+                target = Some(parse_function_def(inner)?);
+            }
+            Rule::assignment => {
+                target = Some(parse_assignment(inner)?);
+            }
+            _ => {}
+        }
+    }
+
+    let mut stmt = target.ok_or_else(|| {
+        PhysureError::Generic("decorated statement is missing its function or assignment".to_string())
+    })?;
+    match &mut stmt {
+        Statement::FunctionDef(node) => node.decorators = decorators,
+        Statement::Assignment(node) => node.decorators = decorators,
+        _ => unreachable!("decorated_stmt only ever wraps function_def, assignment_fn, or assignment"),
+    }
+    Ok(stmt)
+}
+
+fn parse_decorator(pair: pest::iterators::Pair<Rule>) -> PhysureResult<DecoratorNode> {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let mut args = Vec::new();
+    for arg_pair in inner {
+        args.push(parse_expr(arg_pair)?);
+    }
+    Ok(DecoratorNode { name, args })
 }
 
 fn parse_guard_if_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
@@ -1224,6 +1272,94 @@ mod tests {
         let code = "f(v: m / s) =\n    resta = 1 m / s\n    v * 2 - resta";
         let pairs = PhsParser::parse(Rule::assignment_fn, code);
         assert!(pairs.is_ok());
+    }
+
+    #[test]
+    fn test_decorated_stmt_rule_parses() {
+        let code = "@stable\nfn f(x) = x";
+        let pairs = PhsParser::parse(Rule::decorated_stmt, code);
+        assert!(pairs.is_ok(), "expected decorated_stmt to parse: {:?}", pairs.err());
+    }
+
+    #[test]
+    fn test_decorator_with_args_rule_parses() {
+        let pairs = PhsParser::parse(Rule::decorator, "@requires(x > 0.0, \"x must be positive\")");
+        assert!(pairs.is_ok(), "expected decorator with args to parse: {:?}", pairs.err());
+    }
+
+    #[test]
+    fn test_decorated_stmt_rule_parses_stacked_decorators() {
+        let code = "@stable\n@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x";
+        let pairs = PhsParser::parse(Rule::decorated_stmt, code);
+        assert!(pairs.is_ok(), "expected stacked decorated_stmt to parse: {:?}", pairs.err());
+    }
+
+    #[test]
+    fn test_parse_phs_attaches_decorators_to_function_def() {
+        let program = parse_phs("@stable\nfn f(x) = x").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.decorators.len(), 1);
+                assert_eq!(node.decorators[0].name, "stable");
+                assert!(node.decorators[0].args.is_empty());
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_phs_attaches_decorator_args() {
+        let program = parse_phs("@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.decorators.len(), 1);
+                assert_eq!(node.decorators[0].name, "requires");
+                assert_eq!(node.decorators[0].args.len(), 2);
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_phs_attaches_stacked_decorators_to_function_def() {
+        let program = parse_phs("@stable\n@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.decorators.len(), 2);
+                assert_eq!(node.decorators[0].name, "stable");
+                assert_eq!(node.decorators[1].name, "requires");
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_phs_attaches_decorator_to_assignment() {
+        let program = parse_phs("@stable\nx = 5").unwrap();
+        match &program.statements[0] {
+            Statement::Assignment(node) => {
+                assert_eq!(node.decorators.len(), 1);
+                assert_eq!(node.decorators[0].name, "stable");
+            }
+            other => panic!("expected Assignment, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_phs_rejects_unknown_decorator() {
+        assert!(parse_phs("@bogus\nfn f(x) = x").is_err());
+    }
+
+    #[test]
+    fn test_parse_phs_lowers_range_into_two_requires() {
+        let program = parse_phs("@range(v, 0.0, 10.0)\nfn f(v) = v").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.decorators.len(), 2);
+                assert!(node.decorators.iter().all(|d| d.name == "requires"));
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
     }
 
     #[test]

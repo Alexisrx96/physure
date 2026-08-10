@@ -112,6 +112,7 @@ fn inline_bindings_stmt(stmt: &Statement) -> Statement {
         Statement::Assignment(node) => Statement::Assignment(AssignmentNode {
             name: node.name.clone(),
             value: inline_bindings(&node.value),
+            decorators: node.decorators.clone(),
         }),
         Statement::Expr(e) => Statement::Expr(inline_bindings(e)),
         Statement::Return(e) => Statement::Return(inline_bindings(e)),
@@ -344,6 +345,7 @@ fn compile_equations_to_functions(program: &Program) -> Result<Program, CodegenE
             Statement::Assignment(node) => Statement::Assignment(AssignmentNode {
                 name: node.name.clone(),
                 value: rewrite_equation_calls(&node.value, &equations, &mut functions, &mut signatures)?,
+                decorators: node.decorators.clone(),
             }),
             Statement::Expr(expr) => {
                 Statement::Expr(rewrite_equation_calls(expr, &equations, &mut functions, &mut signatures)?)
@@ -389,6 +391,7 @@ fn rewrite_equation_calls(
                         params: kwarg_names.clone(),
                         param_units: vec![None; kwarg_names.len()],
                         body_stmts: vec![Statement::Expr(node_to_expr(chosen))],
+                        decorators: Vec::new(),
                     });
                     signatures.insert(name.clone(), kwarg_names.clone());
                 }

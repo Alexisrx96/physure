@@ -253,6 +253,7 @@ mod tests {
                 left: Box::new(Expr::Identifier("a".to_string())),
                 right: Box::new(Expr::Identifier("b".to_string())),
             })],
+            decorators: Vec::new(),
         };
 
         let prog = Program {

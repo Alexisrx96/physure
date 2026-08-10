@@ -51,12 +51,27 @@ pub struct FunctionDefNode {
     #[serde(default)]
     pub param_units: Vec<Option<String>>,
     pub body_stmts: Vec<Statement>,
+    #[serde(default)]
+    pub decorators: Vec<DecoratorNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssignmentNode {
     pub name: String,
     pub value: Expr,
+    #[serde(default)]
+    pub decorators: Vec<DecoratorNode>,
+}
+
+/// A single `@name(args...)` annotation attached to a `FunctionDefNode` or an
+/// `AssignmentNode`. `args` are ordinary expressions — a decorator that takes a
+/// condition (`@requires`, `@ensures`) reuses the same `Expr` machinery as any other
+/// call, since comparisons already desugar to `FunctionCall { name: "op_>", .. }` at
+/// parse time and need no new evaluator support.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecoratorNode {
+    pub name: String,
+    pub args: Vec<Expr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,7 +191,13 @@ mod tests {
             params: vec!["x".to_string()],
             param_units: vec![None],
             body_stmts: vec![Statement::Expr(Expr::Identifier("x".to_string()))],
+            decorators: vec![DecoratorNode {
+                name: "stable".to_string(),
+                args: vec![],
+            }],
         };
+        assert_eq!(node.decorators.len(), 1);
+        assert_eq!(node.decorators[0].name, "stable");
         let stmt = Statement::FunctionDef(node);
         assert!(matches!(stmt, Statement::FunctionDef(_)));
     }
@@ -186,6 +207,7 @@ mod tests {
         let node = AssignmentNode {
             name: "x".to_string(),
             value: Expr::Identifier("y".to_string()),
+            decorators: Vec::new(),
         };
         let stmt = Statement::Assignment(node);
         assert!(matches!(stmt, Statement::Assignment(_)));
