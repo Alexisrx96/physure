@@ -66,7 +66,7 @@ f = m * a
 """,
         {"f": "25"},
     ),
-    # 6. Equation Solving
+    # 7. Equation Solving
     (
         "equations",
         """use solve from calc
@@ -75,6 +75,13 @@ eq5 = solve(eq1, "R")
 r = eq5(I = -2mA, V = -12V) => kOhm
 """,
         {"r": "6"},
+    ),
+    # 8. `where` clause: inline local bindings scoped to a single expression
+    (
+        "where_clause",
+        """duplo = a + b where a = 2.0 m, b = a * 3.0
+""",
+        {"duplo": "8"},
     ),
 ]
 

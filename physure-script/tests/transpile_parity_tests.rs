@@ -42,6 +42,16 @@ const TEST_CASES: &[ParityTestCase] = &[
         script: "m = 10.0 +/- 0.2 kg\na = 2.5 +/- 0.1 m/s^2\nf = m * a\n",
         expected_substring: "25",
     },
+    ParityTestCase {
+        name: "equations",
+        script: "use solve from calc\neq1 = \"V = R * I\"\neq5 = solve(eq1, \"R\")\nr = eq5(I = -2mA, V = -12V) => kOhm\n",
+        expected_substring: "6",
+    },
+    ParityTestCase {
+        name: "where_clause",
+        script: "duplo = a + b where a = 2.0 m, b = a * 3.0\n",
+        expected_substring: "8",
+    },
 ];
 
 #[test]
