@@ -131,29 +131,31 @@ fn test_java_transpiler_parity() {
     let java_src_dir = repo_root().join("physure-java/src/main/java");
     let native_lib_dir = native_lib_dir();
 
+    // Shared across all cases: the base `com/physure/*.java` sources are identical every
+    // iteration, so compile them once instead of 7 times.
+    let temp_dir = std::env::temp_dir().join("phs_java_parity_shared");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let compile_base = match Command::new("sh")
+        .arg("-c")
+        .arg(format!("javac -d {} {}/com/physure/*.java", temp_dir.to_str().unwrap().replace('\\', "/"), java_src_dir.to_str().unwrap().replace('\\', "/")))
+        .output() {
+            Ok(out) => out,
+            Err(_) => {
+                eprintln!("Skipping Java parity test: 'sh' or 'javac' not found");
+                return;
+            }
+        };
+
+    if !compile_base.status.success() {
+        eprintln!("Skipping Java parity test: javac failed: {}", String::from_utf8_lossy(&compile_base.stderr));
+        return;
+    }
+
     for tc in TEST_CASES {
         let class_name = format!("Parity{}", tc.name.replace("_", ""));
         let program = parse_phs(tc.script).unwrap();
         let java_code = transpile(&program, Target::JavaWithClass(class_name.clone())).unwrap();
-
-        let temp_dir = std::env::temp_dir().join(format!("phs_java_{}", class_name));
-        let _ = fs::create_dir_all(&temp_dir);
-
-        let compile_base = match Command::new("sh")
-            .arg("-c")
-            .arg(format!("javac -d {} {}/com/physure/*.java", temp_dir.to_str().unwrap().replace('\\', "/"), java_src_dir.to_str().unwrap().replace('\\', "/")))
-            .output() {
-                Ok(out) => out,
-                Err(_) => {
-                    eprintln!("Skipping Java parity test: 'sh' or 'javac' not found");
-                    return;
-                }
-            };
-
-        if !compile_base.status.success() {
-            eprintln!("Skipping Java parity test: javac failed: {}", String::from_utf8_lossy(&compile_base.stderr));
-            return;
-        }
 
         let gen_file = temp_dir.join(format!("{}.java", class_name));
         fs::write(&gen_file, &java_code).unwrap();
@@ -174,7 +176,6 @@ fn test_java_transpiler_parity() {
             .args(["-cp", temp_dir.to_str().unwrap(), &class_name])
             .output();
 
-        let _ = fs::remove_dir_all(&temp_dir);
         let run = match run {
             Ok(r) if r.status.success() => r,
             Ok(r) => {
@@ -193,38 +194,43 @@ fn test_java_transpiler_parity() {
             "Java output for {} expected '{}', got:\n{}", tc.name, tc.expected_substring, stdout
         );
     }
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_rust_transpiler_parity() {
     let core_path = repo_root().join("physure-core");
+    // Reuse the workspace's own already-built target dir: `cargo test` just compiled
+    // physure_core into it, so pointing every temp crate's CARGO_TARGET_DIR here lets
+    // cargo skip recompiling that dependency for each of the 6 cases (it used to be a
+    // fresh from-scratch compile per case — the dominant cost and the historical source
+    // of Windows AppLocker flakiness from repeated brand-new `cargo run` invocations).
+    let target_dir = repo_root().join("target");
+
+    // One shared crate directory, one shared Cargo.toml; only main.rs changes per case.
+    let temp_dir = std::env::temp_dir().join("phs_rust_parity_shared");
+    let src_dir = temp_dir.join("src");
+    let _ = fs::create_dir_all(&src_dir);
+
+    let cargo_toml = format!(
+        "[package]\nname = \"parity_test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nphysure_core = {{ package = \"physure\", path = \"{}\" }}\n",
+        core_path.to_str().unwrap().replace('\\', "/")
+    );
+    fs::write(temp_dir.join("Cargo.toml"), cargo_toml).unwrap();
 
     for tc in TEST_CASES {
         let program = parse_phs(tc.script).unwrap();
         let rust_code = transpile(&program, Target::Rust).unwrap();
-
-        let unique_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let temp_dir = std::env::temp_dir().join(format!("phs_rust_{}_{}_{}", tc.name, std::process::id(), unique_id));
-        let src_dir = temp_dir.join("src");
-        let _ = fs::create_dir_all(&src_dir);
-
-        let cargo_toml = format!(
-            "[package]\nname = \"parity_test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nphysure_core = {{ package = \"physure\", path = \"{}\" }}\n",
-            core_path.to_str().unwrap().replace('\\', "/")
-        );
-        fs::write(temp_dir.join("Cargo.toml"), cargo_toml).unwrap();
         fs::write(src_dir.join("main.rs"), &rust_code).unwrap();
 
         let run = Command::new("cargo")
             .args(["run", "--quiet"])
             .env("RUSTFLAGS", "-A unused_parens")
+            .env("CARGO_TARGET_DIR", &target_dir)
             .current_dir(&temp_dir)
             .output();
 
-        let _ = fs::remove_dir_all(&temp_dir);
         let run = match run {
             Ok(r) if r.status.success() => r,
             Ok(r) => {
@@ -243,4 +249,6 @@ fn test_rust_transpiler_parity() {
             "Rust output for {} expected '{}', got:\n{}", tc.name, tc.expected_substring, stdout
         );
     }
+
+    let _ = fs::remove_dir_all(&temp_dir);
 }
