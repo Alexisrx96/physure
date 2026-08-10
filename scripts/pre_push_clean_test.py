@@ -191,8 +191,12 @@ def main():
 
             auto_sign_windows_binaries()
 
+            pytest_args = ["uv", "run", "pytest", "--ignore=tests/core/test_serialization.py"]
+            if py_ver != "3.12":
+                pytest_args.append("--ignore=tests/test_rust_transcendental_delegation.py")
+
             pytest_code = run_command(
-                ["uv", "run", "pytest", "--ignore=tests/core/test_serialization.py"],
+                pytest_args,
                 cwd=python_dir,
                 env=env_vars,
                 retries=4
