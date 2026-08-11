@@ -91,16 +91,26 @@ fn format_call_arg(arg: &JsValue) -> Result<String, JsValue> {
     if let Some(s) = arg.as_string() {
         return Ok(s);
     }
+    if let Ok(to_string_val) = js_sys::Reflect::get(arg, &JsValue::from_str("toString")) {
+        if to_string_val.is_function() {
+            let func: js_sys::Function = to_string_val.unchecked_into();
+            if let Ok(res) = js_sys::Reflect::apply(&func, arg, &js_sys::Array::new()) {
+                if let Some(s) = res.as_string() {
+                    return Ok(s);
+                }
+            }
+        }
+    }
     Err(js_sys::Error::new("PhyFunction.call: each argument must be a Quantity or a string").into())
 }
+
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::registry::UnitRegistry;
     use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_node);
 
     #[wasm_bindgen_test]
     fn constructs_registers_and_reports_params_and_name() {
@@ -117,5 +127,28 @@ mod tests {
         let result = ke.call(vec![JsValue::from_str("10 kg"), JsValue::from_str("5 m/s")]).unwrap();
         assert_eq!(result.value(), 125.0);
         assert_eq!(result.unit(), "J");
+    }
+
+    #[wasm_bindgen_test]
+    fn call_with_quantity_arguments() {
+        use crate::quantity::Quantity;
+
+        let registry = UnitRegistry::new();
+        let ke = PhyFunction::new(&registry, "kinetic_energy", "kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+        let mass = Quantity::new(10.0, "kg").unwrap();
+        let speed = Quantity::new(5.0, "m/s").unwrap();
+        let result = ke.call(vec![JsValue::from(mass), JsValue::from(speed)]).unwrap();
+        assert_eq!(result.value(), 125.0);
+        assert_eq!(result.unit(), "J");
+    }
+
+    #[wasm_bindgen_test]
+    fn call_rejects_an_argument_that_is_neither_a_quantity_nor_a_string() {
+        let registry = UnitRegistry::new();
+        let ke = PhyFunction::new(&registry, "kinetic_energy", "kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+        let err = ke.call(vec![JsValue::from_f64(10.0)]).unwrap_err();
+        use wasm_bindgen::JsCast;
+        let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_error.message()).contains("must be a Quantity or a string"));
     }
 }
