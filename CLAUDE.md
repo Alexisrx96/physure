@@ -110,7 +110,9 @@ Nothing merges to main unless all of these hold. CI enforces the first three; th
 1. **Ruff clean**: `uv run ruff check .` and `uv run ruff format --check .` pass (CI `quality` job).
 2. **Tests green with coverage ≥ 80%** total (`fail_under = 80` in pyproject.toml; CI runs pytest with `--cov`). New code should be born tested — if a module drops below the bar, add tests in the same PR, don't lower the bar.
 3. **All four Python versions** (3.11–3.14) pass.
-4. **SonarQube quality gate green** on new code: coverage ≥ 80%, duplication ≤ 3%, zero new violations.
+4. **SonarQube quality gate green** on new code, tiered by blast radius:
+   - **`physure-core` and `physure-script`** (custom gate "Physure Core Strict"): new coverage ≥ 90%, new duplication ≤ 2%, zero new violations, security hotspots 100% reviewed. These are the no-fallback backbone — per the Philosophy section, "the Rust core comes first" and PHS ("only Rust implements it") has no Python fallback, so every other language binding (Python, WASM, CLI, LSP, Java) transitively depends on their correctness. A defect here has the widest blast radius in the repo, so it's held to a stricter bar.
+   - **All other subprojects** (physure-python, physure-wasm, physure-cli, physure-lsp, physure-java) — baseline "Sonar way" gate: new coverage ≥ 80%, new duplication ≤ 3%, zero new violations, security hotspots 100% reviewed. These are thinner binding/delegation layers with lower intrinsic logic risk, and physure-python already has its own stricter 80%-coverage floor enforced separately in CI (see #2 above).
 5. **ty is advisory, not gated** (~900 pre-existing errors). Don't add new errors to files you touch; burn down the backlog opportunistically.
 
 ### Changelog update policy (before every release)
