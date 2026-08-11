@@ -10,7 +10,6 @@ use wasm_bindgen::prelude::*;
 
 pub(crate) struct RegistryState {
     pub(crate) registry: CoreUnitRegistry,
-    #[allow(dead_code)]
     pub(crate) interpreter: PhsInterpreter,
 }
 
@@ -29,6 +28,14 @@ fn create_interpreter() -> PhsInterpreter {
         }
     }
     interp
+}
+
+fn escape_phs_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn borrow_err() -> JsValue {
+    js_sys::Error::new("Registry is currently borrowed").into()
 }
 
 #[wasm_bindgen]
@@ -63,7 +70,7 @@ impl UnitRegistry {
 
     #[wasm_bindgen(js_name = getUnitExponents)]
     pub fn get_unit_exponents(&self, expr: &str) -> Result<js_sys::Map, JsValue> {
-        let state = self.state.borrow();
+        let state = self.state.try_borrow().map_err(|_| borrow_err())?;
         let unit = Parser::parse_expression_with_registry(expr, &state.registry).map_err(to_js_error)?;
         let map = js_sys::Map::new();
         for (symbol, (num, den)) in &unit.dimensions {
@@ -75,15 +82,15 @@ impl UnitRegistry {
 
     #[wasm_bindgen(js_name = getUnitScale)]
     pub fn get_unit_scale(&self, expr: &str) -> Result<f64, JsValue> {
-        let state = self.state.borrow();
+        let state = self.state.try_borrow().map_err(|_| borrow_err())?;
         Parser::parse_expression_with_registry(expr, &state.registry)
             .map(|u| u.scale)
             .map_err(to_js_error)
     }
 
     #[wasm_bindgen(js_name = getCategories)]
-    pub fn get_categories(&self) -> js_sys::Map {
-        let state = self.state.borrow();
+    pub fn get_categories(&self) -> Result<js_sys::Map, JsValue> {
+        let state = self.state.try_borrow().map_err(|_| borrow_err())?;
         let map = js_sys::Map::new();
         for (category, units) in &state.registry.categories {
             let array = js_sys::Array::new();
@@ -92,12 +99,12 @@ impl UnitRegistry {
             }
             map.set(&JsValue::from_str(category), &array);
         }
-        map
+        Ok(map)
     }
 
     pub fn evaluate(&self, source: &str) -> Result<String, JsValue> {
         let program = parse_phs(source).map_err(to_js_error)?;
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.try_borrow_mut().map_err(|_| borrow_err())?;
         let mut result = String::new();
         for (idx, stmt) in program.statements.iter().enumerate() {
             if idx > 0 {
@@ -119,15 +126,15 @@ impl UnitRegistry {
     }
 
     pub fn deriv(&self, expr: &str, wrt: &str) -> Result<String, JsValue> {
-        self.evaluate(&format!("deriv(\"{}\", \"{}\")", expr, wrt))
+        self.evaluate(&format!("deriv(\"{}\", \"{}\")", escape_phs_str(expr), escape_phs_str(wrt)))
     }
 
     pub fn integral(&self, expr: &str, wrt: &str) -> Result<String, JsValue> {
-        self.evaluate(&format!("integral(\"{}\", \"{}\")", expr, wrt))
+        self.evaluate(&format!("integral(\"{}\", \"{}\")", escape_phs_str(expr), escape_phs_str(wrt)))
     }
 
     pub fn solve(&self, equation: &str, wrt: &str) -> Result<String, JsValue> {
-        self.evaluate(&format!("solve(\"{}\", \"{}\")", equation, wrt))
+        self.evaluate(&format!("solve(\"{}\", \"{}\")", escape_phs_str(equation), escape_phs_str(wrt)))
     }
 }
 
@@ -141,6 +148,13 @@ impl Default for UnitRegistry {
 mod tests {
     use super::*;
     use wasm_bindgen_test::*;
+
+    #[test]
+    fn test_escape_phs_str() {
+        assert_eq!(escape_phs_str("hello"), "hello");
+        assert_eq!(escape_phs_str("hello \"world\""), "hello \\\"world\\\"");
+        assert_eq!(escape_phs_str("a\\b"), "a\\\\b");
+    }
 
     #[wasm_bindgen_test]
     fn get_unit_exponents_returns_the_base_dimensions() {
@@ -160,7 +174,7 @@ mod tests {
     #[wasm_bindgen_test]
     fn get_categories_lists_known_categories() {
         let reg = UnitRegistry::new();
-        let categories = reg.get_categories();
+        let categories = reg.get_categories().unwrap();
         assert!(categories.get(&"length".into()).is_array());
     }
 
@@ -204,5 +218,37 @@ mod tests {
         let reg = UnitRegistry::new();
         let result = reg.solve("P * V = n * R * T", "T").unwrap();
         assert_eq!(result, "T = (P * V)/(R * n)");
+    }
+
+    #[wasm_bindgen_test]
+    fn get_unit_exponents_and_scale_handle_invalid_unit_expressions() {
+        let reg = UnitRegistry::new();
+        assert!(reg.get_unit_exponents("invalid_unit_xyz").is_err());
+        assert!(reg.get_unit_scale("invalid_unit_xyz").is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn evaluate_handles_syntax_errors() {
+        let reg = UnitRegistry::new();
+        assert!(reg.evaluate("a = ;").is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn deriv_and_integral_handle_escaped_quotes() {
+        let reg = UnitRegistry::new();
+        let result_deriv = reg.deriv("2 * t", "t");
+        assert_eq!(result_deriv.unwrap(), "2");
+        let result_integral = reg.integral("2 * t", "t");
+        assert_eq!(result_integral.unwrap(), "t^2");
+    }
+
+    #[wasm_bindgen_test]
+    fn registry_borrow_error_handling() {
+        let reg = UnitRegistry::new();
+        let _borrow = reg.state.borrow_mut();
+        assert!(reg.get_unit_exponents("m").is_err());
+        assert!(reg.get_unit_scale("m").is_err());
+        assert!(reg.get_categories().is_err());
+        assert!(reg.evaluate("1 + 1").is_err());
     }
 }
