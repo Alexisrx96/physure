@@ -560,6 +560,45 @@ mod tests {
         let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
         assert!(String::from(js_error.message()).contains("same UnitRegistry"));
     }
+
+    #[wasm_bindgen_test]
+    fn kinetic_energy_end_to_end_matches_the_java_readme_example() {
+        use crate::quantity::Quantity;
+
+        let registry = UnitRegistry::new();
+
+        let exponents = registry.get_unit_exponents("kg*m/s^2").unwrap();
+        assert_eq!(exponents.get(&"kg".into()).as_f64(), Some(1.0));
+
+        let eval_result = registry.evaluate("a = 15 m; b = 5 m; a * b").unwrap();
+        assert_eq!(eval_result, "15.0 m\n5.0 m\n75.0 m^2");
+
+        let q1 = Quantity::new(10.0, "m").unwrap();
+        let q2 = Quantity::new(2.0, "s").unwrap();
+        let velocity = q1.divide(&q2).unwrap();
+        let velocity_kmh = velocity.convert_to("km/h").unwrap();
+        assert!((velocity_kmh.value() - 18.0).abs() < 1e-9);
+
+        let ke = PhyFunction::new(&registry, "kinetic_energy", "kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+        let energy = ke
+            .call(vec![JsValue::from_str("10 kg"), JsValue::from_str("5 m/s")])
+            .unwrap();
+        assert_eq!(energy.value(), 125.0);
+        assert_eq!(energy.unit(), "J");
+
+        let dke_dv = ke.deriv("v").unwrap();
+        let deriv_result = dke_dv
+            .call(vec![JsValue::from_str("10 kg"), JsValue::from_str("5 m/s")])
+            .unwrap();
+        assert_eq!(deriv_result.value(), 50.0);
+
+        let solve_for_m = ke.solve("m").unwrap();
+        let target_energy = Quantity::new(125.0, "J").unwrap();
+        let solved_mass = solve_for_m
+            .call(vec![JsValue::from(target_energy), JsValue::from_str("5 m/s")])
+            .unwrap();
+        assert_eq!(solved_mass.value(), 10.0);
+    }
 }
 
 
