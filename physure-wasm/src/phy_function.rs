@@ -286,6 +286,8 @@ impl PhyFunction {
         match state.interpreter.run_statement(stmt).map_err(to_js_error)? {
             PhsValue::String(s) => Ok(s),
             PhsValue::Equation(_, rhs) => Ok(rhs.to_phs_string()),
+            PhsValue::Quantity(q) => Ok(q.to_string()),
+            PhsValue::Number(n) => Ok(n.to_string()),
             other => Err(to_js_error(PhysureError::Generic(format!(
                 "Expected a string or equation result, got: {:?}",
                 other
@@ -484,13 +486,13 @@ mod tests {
     #[wasm_bindgen_test]
     fn solve_handles_parameter_collision_with_target() {
         let registry = UnitRegistry::new();
-        let f = PhyFunction::new(&registry, "f", "f(target, x) = target + x").unwrap();
+        let f = PhyFunction::new(&registry, "f", "f(target, x) = target * x").unwrap();
         let solve_x = f.solve("x").unwrap();
         assert_eq!(solve_x.get_params(), vec!["target_1".to_string(), "target".to_string()]);
         let result = solve_x
-            .call(vec![JsValue::from_str("10"), JsValue::from_str("3")])
+            .call(vec![JsValue::from_str("12"), JsValue::from_str("3")])
             .unwrap();
-        assert_eq!(result.value(), 7.0);
+        assert_eq!(result.value(), 4.0);
     }
 
     #[wasm_bindgen_test]
