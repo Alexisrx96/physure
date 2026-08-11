@@ -26,9 +26,9 @@ use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-use physure_core::error::PhysureResult;
 #[cfg(not(target_arch = "wasm32"))]
 use physure_core::error::PhysureError;
+use physure_core::error::PhysureResult;
 #[cfg(not(target_arch = "wasm32"))]
 use physure_core::quantity::Quantity;
 
