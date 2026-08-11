@@ -13,6 +13,7 @@ members  = [
     "physure-python",
     "physure-lsp",
     "physure-java",
+    "physure-wasm",
 ]
 
 [workspace.package]
