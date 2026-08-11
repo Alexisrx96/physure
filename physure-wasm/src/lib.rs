@@ -1,6 +1,9 @@
 mod error;
+mod quantity;
 
 use wasm_bindgen::prelude::*;
+
+pub use quantity::Quantity;
 
 #[wasm_bindgen(start)]
 pub fn init() {
