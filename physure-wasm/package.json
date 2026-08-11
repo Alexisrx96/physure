@@ -3,16 +3,23 @@
   "version": "0.2.3",
   "description": "Unit-aware, dimension-correct physics computing — WebAssembly bindings for the physure core physics engine.",
   "license": "MIT",
-  "repository": "https://github.com/Alexisrx96/physure",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Alexisrx96/physure.git"
+  },
+  "main": "./pkg-node/physure_wasm.js",
+  "module": "./pkg-bundler/physure_wasm.js",
+  "types": "./pkg-bundler/physure_wasm.d.ts",
   "files": [
     "pkg-bundler",
     "pkg-node"
   ],
   "exports": {
     ".": {
+      "types": "./pkg-bundler/physure_wasm.d.ts",
       "node": "./pkg-node/physure_wasm.js",
       "import": "./pkg-bundler/physure_wasm.js",
-      "types": "./pkg-bundler/physure_wasm.d.ts"
+      "default": "./pkg-bundler/physure_wasm.js"
     }
   }
 }
