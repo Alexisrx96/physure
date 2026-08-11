@@ -20,6 +20,15 @@
             "command": "grep -Eq '\"file_path\"[[:space:]]*:[[:space:]]*\"[^\"]*physure-core/src' || exit 0; echo 'Rust core changed — rebuild before testing: cd physure-core && maturin develop' >&2; exit 2"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -Eq '\"file_path\"[[:space:]]*:[[:space:]]*\"[^\"/]*Cargo\\.toml\"' || exit 0; missing=\"\"; for m in $(sed -n '/^members *= *\\[/,/\\]/p' Cargo.toml | grep -oE '\"[a-z0-9_-]+\"' | tr -d '\"'); do grep -q \"$m\" structure.md || missing=\"$missing $m\"; done; [ -z \"$missing\" ] && exit 0; echo \"structure.md may be missing crate(s):$missing — run the update-structure skill\" >&2; exit 2"
+          }
+        ]
       }
     ]
   }
