@@ -315,18 +315,21 @@ fn format_call_arg(arg: &JsValue) -> Result<String, JsValue> {
         return Ok(s);
     }
     if is_quantity_instance(arg) {
-        if let Ok(to_string_val) = js_sys::Reflect::get(arg, &JsValue::from_str("toString")) {
-            if to_string_val.is_function() {
-                let func: js_sys::Function = to_string_val.unchecked_into();
-                if let Ok(res) = js_sys::Reflect::apply(&func, arg, &js_sys::Array::new()) {
-                    if let Some(s) = res.as_string() {
-                        return Ok(s);
-                    }
-                }
-            }
+        if let Some(s) = quantity_to_string(arg) {
+            return Ok(s);
         }
     }
     Err(js_sys::Error::new("PhyFunction.call: each argument must be a Quantity or a string").into())
+}
+
+fn quantity_to_string(arg: &JsValue) -> Option<String> {
+    let to_string_val = js_sys::Reflect::get(arg, &JsValue::from_str("toString")).ok()?;
+    if !to_string_val.is_function() {
+        return None;
+    }
+    let func: js_sys::Function = to_string_val.unchecked_into();
+    let res = js_sys::Reflect::apply(&func, arg, &js_sys::Array::new()).ok()?;
+    res.as_string()
 }
 
 fn is_quantity_instance(arg: &JsValue) -> bool {
