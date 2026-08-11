@@ -43,6 +43,31 @@ impl Quantity {
     pub fn unit(&self) -> String {
         self.inner.unit.__repr__()
     }
+
+    pub fn add(&self, other: &Quantity) -> Result<Quantity, JsValue> {
+        self.inner.add(&other.inner).map(Quantity::from_core).map_err(to_js_error)
+    }
+
+    pub fn subtract(&self, other: &Quantity) -> Result<Quantity, JsValue> {
+        self.inner.sub(&other.inner).map(Quantity::from_core).map_err(to_js_error)
+    }
+
+    pub fn multiply(&self, other: &Quantity) -> Result<Quantity, JsValue> {
+        self.inner.mul(&other.inner).map(Quantity::from_core).map_err(to_js_error)
+    }
+
+    pub fn divide(&self, other: &Quantity) -> Result<Quantity, JsValue> {
+        self.inner.div(&other.inner).map(Quantity::from_core).map_err(to_js_error)
+    }
+
+    pub fn pow(&self, exponent: f64) -> Result<Quantity, JsValue> {
+        self.inner.pow(exponent).map(Quantity::from_core).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = convertTo)]
+    pub fn convert_to(&self, unit: &str) -> Result<Quantity, JsValue> {
+        self.inner.to(unit).map(Quantity::from_core).map_err(to_js_error)
+    }
 }
 
 impl Quantity {
@@ -87,5 +112,38 @@ mod tests {
             .dyn_into::<js_sys::Error>()
             .expect("should be a JS Error");
         assert!(String::from(js_error.message()).contains("Unknown unit"));
+    }
+
+    #[wasm_bindgen_test]
+    fn arithmetic_and_conversion_between_compatible_units() {
+        let d = Quantity::new(10.0, "m").unwrap();
+        let t = Quantity::new(2.0, "s").unwrap();
+        let v = d.divide(&t).unwrap();
+        assert_eq!(v.value(), 5.0);
+        assert_eq!(v.unit(), "m * s^-1");
+
+        let v_kmh = v.convert_to("km/h").unwrap();
+        assert!((v_kmh.value() - 18.0).abs() < 1e-9);
+
+        let doubled = v.multiply(&Quantity::new(2.0, "").unwrap()).unwrap();
+        assert_eq!(doubled.value(), 10.0);
+
+        let squared = v.pow(2.0).unwrap();
+        assert_eq!(squared.value(), 25.0);
+        assert_eq!(squared.unit(), "m^2 * s^-2");
+    }
+
+    #[wasm_bindgen_test]
+    fn add_and_subtract_require_compatible_dimensions() {
+        let m = Quantity::new(5.0, "m").unwrap();
+        let s = Quantity::new(5.0, "s").unwrap();
+        let err = m.add(&s).unwrap_err();
+        let js_error = err
+            .dyn_into::<js_sys::Error>()
+            .expect("should be a JS Error");
+        assert!(
+            String::from(js_error.message()).contains("Unit mismatch")
+                || String::from(js_error.message()).contains("Incompatible dimensions")
+        );
     }
 }
