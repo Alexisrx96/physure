@@ -23,15 +23,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - name: Tag must match physure-wasm/Cargo.toml version
+      - name: Tag must match Cargo.toml and package.json version
         run: |
           tag="${GITHUB_REF_NAME#wasm-v}"
+          
+          # Check physure-wasm/Cargo.toml (or workspace root Cargo.toml if workspace inherited)
           version="$(grep -m1 -oP '(?<=^version = ")[^"]+' physure-wasm/Cargo.toml || true)"
           if [ -z "$version" ]; then
-            version="$(grep -m1 -oP '(?<=^version.workspace = )true' Cargo.toml > /dev/null && grep -m1 -oP '(?<=^version *= *")[^"]+' Cargo.toml)"
+            if grep -m1 -q 'version.workspace *= *true' physure-wasm/Cargo.toml; then
+              version="$(grep -m1 -oP '(?<=^version *= *")[^"]+' Cargo.toml)"
+            fi
           fi
           if [ "$tag" != "$version" ]; then
             echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
+          # Check physure-wasm/package.json
+          pkg_version="$(grep -m1 -oP '(?<="version": ")[^"]+' physure-wasm/package.json || true)"
+          if [ "$tag" != "$pkg_version" ]; then
+            echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match package.json version $pkg_version" >&2
             exit 1
           fi
 
@@ -44,7 +55,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c3800040652e1a4d1d2345e4 # v4.1.0
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
