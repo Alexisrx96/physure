@@ -1,9 +1,11 @@
 mod error;
 mod quantity;
+mod registry;
 
 use wasm_bindgen::prelude::*;
 
 pub use quantity::Quantity;
+pub use registry::UnitRegistry;
 
 #[wasm_bindgen(start)]
 pub fn init() {

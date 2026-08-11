@@ -188,7 +188,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         None => return,
     };
 
-    let aliases: Vec<String> = if !aliases_str.is_empty() {
+    let mut aliases: Vec<String> = if !aliases_str.is_empty() {
         aliases_str
             .split(',')
             .map(|s| s.trim().to_string())
@@ -198,17 +198,24 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         vec![]
     };
 
-    if aliases.is_empty() {
-        return;
+    if !aliases.contains(&key.to_string()) {
+        aliases.insert(0, key.to_string());
     }
 
     let symbol = aliases[0].clone();
 
-    let parts: Vec<&str> = val_part
+    let mut parts: Vec<&str> = val_part
         .split(',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && *s != "noprefix")
         .collect();
+
+    if parts.len() == 1 && parts[0].contains(' ') {
+        parts = parts[0]
+            .split_whitespace()
+            .filter(|s| !s.is_empty() && *s != "noprefix")
+            .collect();
+    }
 
     if parts.is_empty() {
         return;
