@@ -2,7 +2,7 @@ use crate::error::to_js_error;
 use physure_core::units::conf::{parse_physure_conf, DEFAULT_PHYSURE_CONF};
 use physure_core::units::parser::Parser;
 use physure_core::UnitRegistry as CoreUnitRegistry;
-use physure_script::PhsInterpreter;
+use physure_script::{parse_phs, PhsInterpreter, PhsValue, Statement};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -21,6 +21,16 @@ fn load_default() -> CoreUnitRegistry {
     registry
 }
 
+fn create_interpreter() -> PhsInterpreter {
+    let mut interp = PhsInterpreter::default();
+    if let Ok(program) = parse_phs("use * from calc;") {
+        for stmt in &program.statements {
+            let _ = interp.run_statement(stmt);
+        }
+    }
+    interp
+}
+
 #[wasm_bindgen]
 pub struct UnitRegistry {
     pub(crate) state: Rc<RefCell<RegistryState>>,
@@ -33,7 +43,7 @@ impl UnitRegistry {
         UnitRegistry {
             state: Rc::new(RefCell::new(RegistryState {
                 registry: load_default(),
-                interpreter: PhsInterpreter::default(),
+                interpreter: create_interpreter(),
             })),
         }
     }
@@ -46,7 +56,7 @@ impl UnitRegistry {
         UnitRegistry {
             state: Rc::new(RefCell::new(RegistryState {
                 registry,
-                interpreter: PhsInterpreter::default(),
+                interpreter: create_interpreter(),
             })),
         }
     }
@@ -83,6 +93,41 @@ impl UnitRegistry {
             map.set(&JsValue::from_str(category), &array);
         }
         map
+    }
+
+    pub fn evaluate(&self, source: &str) -> Result<String, JsValue> {
+        let program = parse_phs(source).map_err(to_js_error)?;
+        let mut state = self.state.borrow_mut();
+        let mut result = String::new();
+        for (idx, stmt) in program.statements.iter().enumerate() {
+            if idx > 0 {
+                result.push('\n');
+            }
+            let value = state.interpreter.run_statement(stmt).map_err(to_js_error)?;
+            match value {
+                PhsValue::None => match stmt {
+                    Statement::Assignment(node) => match state.interpreter.get_var(&node.name) {
+                        Some(v) => result.push_str(&v.to_string()),
+                        None => result.push_str("None"),
+                    },
+                    _ => result.push_str("None"),
+                },
+                other => result.push_str(&other.to_string()),
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn deriv(&self, expr: &str, wrt: &str) -> Result<String, JsValue> {
+        self.evaluate(&format!("deriv(\"{}\", \"{}\")", expr, wrt))
+    }
+
+    pub fn integral(&self, expr: &str, wrt: &str) -> Result<String, JsValue> {
+        self.evaluate(&format!("integral(\"{}\", \"{}\")", expr, wrt))
+    }
+
+    pub fn solve(&self, equation: &str, wrt: &str) -> Result<String, JsValue> {
+        self.evaluate(&format!("solve(\"{}\", \"{}\")", equation, wrt))
     }
 }
 
@@ -131,5 +176,33 @@ mod tests {
         let reg = UnitRegistry::new();
         let map = reg.get_unit_exponents("m^(1/2)").unwrap();
         assert_eq!(map.get(&"m".into()).as_f64(), Some(0.5));
+    }
+
+    #[wasm_bindgen_test]
+    fn evaluate_runs_statements_and_returns_the_result_as_a_string() {
+        let reg = UnitRegistry::new();
+        let result = reg.evaluate("a = 15 m; b = 5 m; a * b").unwrap();
+        assert_eq!(result, "15.0 m\n5.0 m\n75.0 m^2");
+    }
+
+    #[wasm_bindgen_test]
+    fn deriv_computes_a_symbolic_derivative() {
+        let reg = UnitRegistry::new();
+        let result = reg.deriv("v0 * t + 0.5 * a * t^2", "t").unwrap();
+        assert_eq!(result, "a * t + v0");
+    }
+
+    #[wasm_bindgen_test]
+    fn integral_computes_a_symbolic_integral() {
+        let reg = UnitRegistry::new();
+        let result = reg.integral("3 * t^2", "t").unwrap();
+        assert_eq!(result, "t^3");
+    }
+
+    #[wasm_bindgen_test]
+    fn solve_isolates_the_requested_variable() {
+        let reg = UnitRegistry::new();
+        let result = reg.solve("P * V = n * R * T", "T").unwrap();
+        assert_eq!(result, "T = (P * V)/(R * n)");
     }
 }
