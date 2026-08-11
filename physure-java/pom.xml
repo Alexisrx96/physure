@@ -8,11 +8,11 @@
        Cargo.toml by hand, mirroring physure-python/physure/__init__.py's
        __version__ - there is no cross-ecosystem version-sync tooling here. -->
   <groupId>io.github.alexisrx96</groupId>
-  <artifactId>physure-java</artifactId>
+  <artifactId>physure</artifactId>
   <version>0.2.3</version>
   <packaging>jar</packaging>
 
-  <name>physure-java</name>
+  <name>physure</name>
   <description>JVM JNI bindings for the high-performance physure core physics engine.</description>
   <url>https://github.com/Alexisrx96/physure</url>
 

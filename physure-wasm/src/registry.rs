@@ -56,8 +56,9 @@ impl UnitRegistry {
         let state = self.state.borrow();
         let unit = Parser::parse_expression_with_registry(expr, &state.registry).map_err(to_js_error)?;
         let map = js_sys::Map::new();
-        for (symbol, (num, _den)) in &unit.dimensions {
-            map.set(&JsValue::from_str(symbol), &JsValue::from_f64(*num as f64));
+        for (symbol, (num, den)) in &unit.dimensions {
+            let exp = (*num as f64) / (*den as f64);
+            map.set(&JsValue::from_str(symbol), &JsValue::from_f64(exp));
         }
         Ok(map)
     }
@@ -123,5 +124,12 @@ mod tests {
         let reg = UnitRegistry::from_content("[Units]\nfurlong = 201.168 m\n");
         let scale = reg.get_unit_scale("furlong").unwrap();
         assert!((scale - 201.168).abs() < 1e-6);
+    }
+
+    #[wasm_bindgen_test]
+    fn get_unit_exponents_handles_rational_exponents() {
+        let reg = UnitRegistry::new();
+        let map = reg.get_unit_exponents("m^(1/2)").unwrap();
+        assert_eq!(map.get(&"m".into()).as_f64(), Some(0.5));
     }
 }

@@ -10,7 +10,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/physure?color=F59E0B&labelColor=18181A)](https://pypi.org/project/physure/)
 [![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure-java?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure)
 [![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](LICENSE)
 
@@ -28,7 +28,7 @@ the one that matches how you work — none of them require the others:
 | **[PHS](physure-cli/README.md)** | A standalone DSL + CLI (`phs`) for writing engineering/lab calculations as physics, not code — validates a formula before it's handed to a dev team, and doubles as documentation of the calculation process. | No |
 | **[physure (Python)](physure-python/)** | The library this README focuses on below: `Quantity`, NumPy/PyTorch/JAX backends, `@physure.jit`. | Yes (it *is* the Python package) |
 | **[physure (Rust)](physure-core/README.md)** | The core crate directly, for Rust projects that want dimensional analysis and uncertainty propagation without any FFI. | No |
-| **[physure-java](physure-java/README.md)** | JNI bindings for JVM projects, published to Maven Central. | No |
+| **[physure (Java)](physure-java/README.md)** | JNI bindings for JVM projects, published to Maven Central. | No |
 
 Full install instructions for all four: **[INSTALL.md](INSTALL.md)**.
 
