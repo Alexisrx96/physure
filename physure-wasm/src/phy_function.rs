@@ -10,11 +10,12 @@ use wasm_bindgen::prelude::*;
 
 fn register_body(interpreter: &mut PhsInterpreter, body: &str) -> PhysureResult<()> {
     let statements = parse_phs(body)?;
-    let stmt = statements
-        .statements
-        .first()
-        .ok_or_else(|| PhysureError::Generic("Empty function body".into()))?;
-    interpreter.run_statement(stmt)?;
+    if statements.statements.is_empty() {
+        return Err(PhysureError::Generic("Empty function body".into()));
+    }
+    for stmt in &statements.statements {
+        interpreter.run_statement(stmt)?;
+    }
     Ok(())
 }
 
@@ -164,4 +165,58 @@ mod tests {
         let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
         assert!(String::from(js_error.message()).contains("must be a Quantity or a string"));
     }
+
+    #[wasm_bindgen_test]
+    fn register_body_executes_all_statements_in_multi_statement_body() {
+        let registry = UnitRegistry::new();
+        let energy_fn = PhyFunction::new(
+            &registry,
+            "energy",
+            "c = 3e8 m/s; energy(m) = m * c^2",
+        )
+        .unwrap();
+        let result = energy_fn
+            .call(vec![JsValue::from_str("2 kg")])
+            .unwrap();
+        assert_eq!(result.value(), 1.8e17);
+        assert_eq!(result.unit(), "J");
+    }
+
+    #[wasm_bindgen_test]
+    fn call_function_returning_dimensionless_scalar_number() {
+        let registry = UnitRegistry::new();
+        let scale_fn = PhyFunction::new(
+            &registry,
+            "scale",
+            "scale(x) = x * 2",
+        )
+        .unwrap();
+        let result = scale_fn
+            .call(vec![JsValue::from_str("5")])
+            .unwrap();
+        assert_eq!(result.value(), 10.0);
+        assert_eq!(result.unit(), "");
+    }
+
+    #[wasm_bindgen_test]
+    fn registry_lock_contention() {
+        use wasm_bindgen::JsCast;
+
+        let registry = UnitRegistry::new();
+        let ke = PhyFunction::new(&registry, "kinetic_energy", "kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+
+        let _borrow = registry.state.borrow_mut();
+
+        let new_err = PhyFunction::new(&registry, "foo", "foo(x) = x").err().unwrap();
+        let js_err = new_err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_err.message()).contains("Registry is currently borrowed"));
+
+        let call_err = ke.call(vec![JsValue::from_str("10 kg"), JsValue::from_str("5 m/s")]).unwrap_err();
+        let js_err2 = call_err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_err2.message()).contains("Registry is currently borrowed"));
+
+        let params = ke.get_params();
+        assert!(params.is_empty());
+    }
 }
+
