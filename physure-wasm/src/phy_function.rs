@@ -175,9 +175,93 @@ impl PhyFunction {
         let new_body = format!("{}({}) = {}", new_name, new_params_joined, solve_result);
         self.define(&new_name, &new_body)
     }
+
+    pub fn add(&self, other: &PhyFunction) -> Result<PhyFunction, JsValue> {
+        self.binary_op(other, "+", "add")
+    }
+
+    pub fn subtract(&self, other: &PhyFunction) -> Result<PhyFunction, JsValue> {
+        self.binary_op(other, "-", "subtract")
+    }
+
+    pub fn multiply(&self, other: &PhyFunction) -> Result<PhyFunction, JsValue> {
+        self.binary_op(other, "*", "multiply")
+    }
+
+    pub fn divide(&self, other: &PhyFunction) -> Result<PhyFunction, JsValue> {
+        self.binary_op(other, "/", "divide")
+    }
+
+    pub fn compose(&self, inner: &PhyFunction) -> Result<PhyFunction, JsValue> {
+        self.require_same_registry(inner)?;
+        let params_f = self.try_get_params()?;
+        let params_g = inner.try_get_params()?;
+        if params_f.is_empty() {
+            return Err(to_js_error(PhysureError::Generic(
+                "Outer function must have at least one parameter.".into(),
+            )));
+        }
+        let mut combined = params_g.clone();
+        for p in &params_f[1..] {
+            if !combined.contains(p) {
+                combined.push(p.clone());
+            }
+        }
+        let combined_joined = combined.join(", ");
+        let call_g = format!("{}({})", inner.name, params_g.join(", "));
+        let mut call_f_args = vec![call_g];
+        call_f_args.extend(params_f[1..].to_vec());
+        let call_f = format!("{}({})", self.name, call_f_args.join(", "));
+        let new_name = format!("compose_{}_{}", self.name, inner.name);
+        let new_body = format!("{}({}) = {}", new_name, combined_joined, call_f);
+        self.define(&new_name, &new_body)
+    }
+}
+
+impl std::fmt::Debug for PhyFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhyFunction")
+            .field("name", &self.name)
+            .finish()
+    }
 }
 
 impl PhyFunction {
+    fn require_same_registry(&self, other: &PhyFunction) -> Result<(), JsValue> {
+        if !Rc::ptr_eq(&self.state, &other.state) {
+            return Err(js_sys::Error::new(
+                "PhyFunction operations require both functions to share the same UnitRegistry",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn binary_op(&self, other: &PhyFunction, op_symbol: &str, op_name: &str) -> Result<PhyFunction, JsValue> {
+        self.require_same_registry(other)?;
+        let params1 = self.try_get_params()?;
+        let params2 = other.try_get_params()?;
+        let mut combined = params1.clone();
+        for p in &params2 {
+            if !combined.contains(p) {
+                combined.push(p.clone());
+            }
+        }
+        let combined_joined = combined.join(", ");
+        let new_name = format!("{}_{}_{}", op_name, self.name, other.name);
+        let new_body = format!(
+            "{}({}) = {}({}) {} {}({})",
+            new_name,
+            combined_joined,
+            self.name,
+            params1.join(", "),
+            op_symbol,
+            other.name,
+            params2.join(", ")
+        );
+        self.define(&new_name, &new_body)
+    }
+
     fn try_get_params(&self) -> Result<Vec<String>, JsValue> {
         let state = self
             .state
@@ -436,6 +520,43 @@ mod tests {
         let err2 = ke.integral(r#"v\"invalid"#).unwrap_err();
         let js_err2 = err2.dyn_into::<js_sys::Error>().expect("should be a JS Error");
         assert!(!String::from(js_err2.message()).contains("syntax error") && !String::from(js_err2.message()).contains("Empty expression"));
+    }
+
+    #[wasm_bindgen_test]
+    fn arithmetic_combines_two_phy_functions() {
+        let registry = UnitRegistry::new();
+        let f = PhyFunction::new(&registry, "f", "f(x) = 10 * x").unwrap();
+        let g = PhyFunction::new(&registry, "g", "g(x) = 2 * x").unwrap();
+
+        let diff = f.subtract(&g).unwrap();
+        let prod = f.multiply(&g).unwrap();
+        let quot = f.divide(&g).unwrap();
+
+        assert_eq!(diff.call(vec![JsValue::from_str("3")]).unwrap().value(), 24.0);
+        assert_eq!(prod.call(vec![JsValue::from_str("3")]).unwrap().value(), 180.0);
+        assert_eq!(quot.call(vec![JsValue::from_str("3")]).unwrap().value(), 5.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn compose_nests_the_inner_function_call() {
+        let registry = UnitRegistry::new();
+        let f = PhyFunction::new(&registry, "f", "f(x) = 2 * x").unwrap();
+        let g = PhyFunction::new(&registry, "g", "g(x) = 3 * x").unwrap();
+        let composed = f.compose(&g).unwrap();
+        let result = composed.call(vec![JsValue::from_str("2")]).unwrap();
+        assert_eq!(result.value(), 12.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn operations_across_different_registries_are_rejected() {
+        let registry_a = UnitRegistry::new();
+        let registry_b = UnitRegistry::new();
+        let f = PhyFunction::new(&registry_a, "f", "f(x) = 2 * x").unwrap();
+        let g = PhyFunction::new(&registry_b, "g", "g(x) = 3 * x").unwrap();
+        let err = f.add(&g).unwrap_err();
+        use wasm_bindgen::JsCast;
+        let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_error.message()).contains("same UnitRegistry"));
     }
 }
 
