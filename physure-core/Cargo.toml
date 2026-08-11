@@ -36,6 +36,14 @@ smallvec.workspace     = true
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"
 
+# `rand`/`rand_distr` and `arrow` (via `ahash`'s `const-random`) pull in
+# getrandom 0.2, which refuses to build for wasm32-unknown-unknown unless its
+# "js" feature is enabled. Not a wasm-bindgen dependency (see the hard rule
+# above) — just a target-gated feature flag on a transitive dependency so
+# this crate stays buildable for wasm32 on its own.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+
 [[bench]]
 name = "core_benchmarks"
 harness = false

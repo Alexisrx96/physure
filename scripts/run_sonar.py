@@ -132,6 +132,21 @@ def find_llvm_cov_env() -> tuple[dict, str | None]:
     return env, ("cargo-llvm-cov" if llvm_cov_found else None)
 
 
+def compile_physure_java():
+    """Compile physure-java so the Java sensor has class files (sonar.java.binaries)."""
+    mvn_bin = shutil.which("mvn")
+    if not mvn_bin:
+        log_warning("mvn not found. Skipping physure-java compile (Java analysis will fail without target/classes).")
+        return
+
+    log_info("Compiling physure-java for SonarQube Java analysis...")
+    try:
+        subprocess.run([mvn_bin, "-q", "compile"], cwd=REPO_ROOT / "physure-java", check=True)
+        log_success("physure-java compiled successfully (target/classes)")
+    except Exception as e:
+        log_warning(f"physure-java compile failed: {e}")
+
+
 def main():
     load_env_file()
 
@@ -184,6 +199,9 @@ def main():
     else:
         log_warning("cargo-llvm-cov not found. Skipping Rust lcov generation (Python coverage will still be submitted).")
 
+    # 2b. Compile physure-java so the Java sensor has class files (sonar.java.binaries)
+    compile_physure_java()
+
     # 3. Submit to SonarQube using pysonar or sonar-scanner
     pysonar_bin = shutil.which("pysonar")
     if not pysonar_bin:
@@ -200,6 +218,7 @@ def main():
         ("physure-cli", "physure-cli", "SONAR_TOKEN_CLI"),
         ("physure-lsp", "physure-lsp", "SONAR_TOKEN_LSP"),
         ("physure-script", "physure-script", "SONAR_TOKEN_SCRIPT"),
+        ("physure-wasm", "physure-wasm", "SONAR_TOKEN_WASM"),
     ]
 
     for dir_name, key, token_var in subprojects:

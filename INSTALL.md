@@ -101,12 +101,13 @@ crate's directory is `physure-core/`, but the published package is always named 
 
 ## Java
 
-Published to Maven Central as `io.github.alexisrx96:physure-java`:
+Published to Maven Central as `io.github.alexisrx96:physure` (note: the module's directory is
+`physure-java/`, but the published artifactId is always `physure`):
 
 ```xml
 <dependency>
     <groupId>io.github.alexisrx96</groupId>
-    <artifactId>physure-java</artifactId>
+    <artifactId>physure</artifactId>
     <version>0.2.3</version>
 </dependency>
 ```

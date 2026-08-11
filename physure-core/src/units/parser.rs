@@ -294,6 +294,33 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     Rational64::new(n, d)
                 }
+                Token::LParen => {
+                    self.advance()?;
+                    let num = match self.current_token {
+                        Token::Number(n, _) => {
+                            self.advance()?;
+                            n
+                        }
+                        ref tok => return Err(PhysureError::ParseError(format!("Expected exponent number inside '(', got {:?}", tok))),
+                    };
+                    let den = if self.current_token == Token::Div {
+                        self.advance()?;
+                        match self.current_token {
+                            Token::Number(d, _) => {
+                                self.advance()?;
+                                d
+                            }
+                            ref tok => return Err(PhysureError::ParseError(format!("Expected denominator inside '(', got {:?}", tok))),
+                        }
+                    } else {
+                        1
+                    };
+                    if self.current_token != Token::RParen {
+                        return Err(PhysureError::ParseError("Expected ')'".into()));
+                    }
+                    self.advance()?;
+                    Rational64::new(num, den)
+                }
                 ref tok => return Err(PhysureError::ParseError(format!("Expected exponent number after '^', got {:?}", tok))),
             };
             base = base.pow(exp_rat);

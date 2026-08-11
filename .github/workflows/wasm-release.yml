@@ -1,0 +1,74 @@
+# Release pipeline: push a tag `wasm-vX.Y.Z` to publish the `physure-wasm`
+# bindings (physure-wasm/) to npm as the `physure` package.
+#
+# physure-wasm is versioned independently from the Rust core, Python wrapper,
+# and Java bindings (see core-release.yml / release.yml / java-release.yml).
+#
+# One-time setup (repo owner):
+#   1. Create an npm account/org and verify it can publish the `physure` name.
+#   2. Generate an npm "Automation" access token (npmjs.com -> Access Tokens).
+#   3. GitHub: create the `npm` environment (Settings -> Environments) and add
+#      the token as the NPM_TOKEN secret in that environment.
+name: WASM Release
+
+on:
+  push:
+    tags: ["wasm-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Tag must match Cargo.toml and package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#wasm-v}"
+          
+          # Check physure-wasm/Cargo.toml (or workspace root Cargo.toml if workspace inherited)
+          version="$(grep -m1 -oP '(?<=^version = ")[^"]+' physure-wasm/Cargo.toml || true)"
+          if [ -z "$version" ]; then
+            if grep -m1 -q 'version.workspace *= *true' physure-wasm/Cargo.toml; then
+              version="$(grep -m1 -oP '(?<=^version *= *")[^"]+' Cargo.toml)"
+            fi
+          fi
+          if [ "$tag" != "$version" ]; then
+            echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
+          # Check physure-wasm/package.json
+          pkg_version="$(grep -m1 -oP '(?<="version": ")[^"]+' physure-wasm/package.json || true)"
+          if [ "$tag" != "$pkg_version" ]; then
+            echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match package.json version $pkg_version" >&2
+            exit 1
+          fi
+
+  publish:
+    needs: check-version
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@39370e3970a6d050c3800040652e1a4d1d2345e4 # v4.1.0
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Build bundler target
+        working-directory: physure-wasm
+        run: wasm-pack build --release --target bundler --out-dir pkg-bundler
+      - name: Build nodejs target
+        working-directory: physure-wasm
+        run: wasm-pack build --release --target nodejs --out-dir pkg-node
+      - name: Publish to npm
+        working-directory: physure-wasm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

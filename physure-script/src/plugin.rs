@@ -15,16 +15,25 @@
 //! restarting the process.
 
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
 
-use physure_core::error::{PhysureError, PhysureResult};
+#[cfg(not(target_arch = "wasm32"))]
+use physure_core::error::PhysureError;
+use physure_core::error::PhysureResult;
+#[cfg(not(target_arch = "wasm32"))]
 use physure_core::quantity::Quantity;
 
 use crate::interpreter::ExternalFn;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::value::PhsValue;
 
 /// Bumped whenever `PluginValue`/`PluginFnEntry`/`PluginRegistry`'s layout changes.
@@ -94,12 +103,16 @@ pub type PluginEntryPoint = unsafe extern "C" fn() -> PluginRegistry;
 /// Owns the conversions' `CString`/`Vec` allocations, keeping them alive for
 /// the duration of a single plugin call (the `PluginValue`s built from them
 /// borrow, they don't own).
+///
+/// Only used by the real (non-wasm32) plugin-loading path below.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct ValueArena {
     strings: Vec<CString>,
     vectors: Vec<Vec<PluginValue>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ValueArena {
     fn push(&mut self, value: &PhsValue) -> PhysureResult<PluginValue> {
         Ok(match value {
@@ -161,6 +174,7 @@ impl ValueArena {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn from_plugin_value(value: &PluginValue) -> PhysureResult<PhsValue> {
     match value.tag {
         PluginValueTag::None => Ok(PhsValue::None),
@@ -191,6 +205,7 @@ fn from_plugin_value(value: &PluginValue) -> PhysureResult<PhsValue> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct LoadedPlugin {
     mtime: SystemTime,
     functions: HashMap<String, ExternalFn>,
@@ -202,11 +217,37 @@ struct LoadedPlugin {
 /// path, so [`PluginState::reload_loaded_into`] can tell which ones changed on
 /// disk. Only stems some `use` statement has actually requested end up here —
 /// there is no eager directory scan.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct PluginState {
     loaded: HashMap<PathBuf, LoadedPlugin>,
 }
 
+/// `wasm32-unknown-unknown` has no dlopen equivalent, so native plugin
+/// loading is simply unavailable there: every lookup reports "no plugin
+/// found" and reload is a no-op. Kept API-identical to the real
+/// [`PluginState`] above so callers (e.g. `interpreter.rs`) need no
+/// target-specific code of their own.
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+pub struct PluginState;
+
+#[cfg(target_arch = "wasm32")]
+impl PluginState {
+    pub fn ensure_stem_loaded(
+        &mut self,
+        _base_dir: &Path,
+        _stem: &str,
+    ) -> PhysureResult<Option<HashMap<String, ExternalFn>>> {
+        Ok(None)
+    }
+
+    pub fn reload_loaded_into(&mut self, _externals: &mut HashMap<String, ExternalFn>) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl PluginState {
     /// Loads `<base_dir>/ext/<stem>.<DLL_EXTENSION>` on demand, returning its
     /// exported `{name: function}` map. Returns `Ok(None)` if no such file
@@ -284,6 +325,7 @@ impl PluginState {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_plugin_file(
     path: &Path,
     mtime: SystemTime,
@@ -368,7 +410,7 @@ fn load_plugin_file(
     Ok((lib, functions))
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use std::process::Command;
