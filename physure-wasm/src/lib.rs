@@ -1,9 +1,11 @@
 mod error;
+mod phy_function;
 mod quantity;
 mod registry;
 
 use wasm_bindgen::prelude::*;
 
+pub use phy_function::PhyFunction;
 pub use quantity::Quantity;
 pub use registry::UnitRegistry;
 
