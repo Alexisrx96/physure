@@ -8,6 +8,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
+fn escape_phs_str(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn register_body(interpreter: &mut PhsInterpreter, body: &str) -> PhysureResult<()> {
     let statements = parse_phs(body)?;
     if statements.statements.is_empty() {
@@ -35,6 +39,12 @@ impl PhyFunction {
                 .try_borrow_mut()
                 .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
             register_body(&mut state.interpreter, body).map_err(to_js_error)?;
+            if state.interpreter.get_fn_params(name).is_none() {
+                return Err(to_js_error(PhysureError::Generic(format!(
+                    "Function '{}' was not defined in the body",
+                    name
+                ))));
+            }
         }
         Ok(PhyFunction {
             state: registry.state.clone(),
@@ -49,10 +59,7 @@ impl PhyFunction {
 
     #[wasm_bindgen(js_name = getParams)]
     pub fn get_params(&self) -> Vec<String> {
-        self.state
-            .try_borrow()
-            .map(|state| state.interpreter.get_fn_params(&self.name).unwrap_or_default())
-            .unwrap_or_default()
+        self.try_get_params().unwrap_or_default()
     }
 
     #[wasm_bindgen(variadic)]
@@ -88,7 +95,7 @@ impl PhyFunction {
     }
 
     pub fn deriv(&self, wrt: &str) -> Result<PhyFunction, JsValue> {
-        let params = self.get_params();
+        let params = self.try_get_params()?;
         if params.is_empty() {
             return Err(to_js_error(PhysureError::Generic(
                 "Cannot differentiate a function with no parameters".into(),
@@ -96,14 +103,18 @@ impl PhyFunction {
         }
         let params_joined = params.join(", ");
         let call_expr = format!("{}({})", self.name, params_joined);
-        let deriv_result = self.evaluate_string(&format!("deriv(\"{}\", \"{}\")", call_expr, wrt))?;
+        let deriv_result = self.evaluate_string(&format!(
+            "deriv(\"{}\", \"{}\")",
+            escape_phs_str(&call_expr),
+            escape_phs_str(wrt)
+        ))?;
         let new_name = format!("d_{}_d_{}", self.name, wrt);
         let new_body = format!("{}({}) = {}", new_name, params_joined, deriv_result);
         self.define(&new_name, &new_body)
     }
 
     pub fn integral(&self, wrt: &str) -> Result<PhyFunction, JsValue> {
-        let params = self.get_params();
+        let params = self.try_get_params()?;
         if params.is_empty() {
             return Err(to_js_error(PhysureError::Generic(
                 "Cannot integrate a function with no parameters".into(),
@@ -111,26 +122,54 @@ impl PhyFunction {
         }
         let params_joined = params.join(", ");
         let call_expr = format!("{}({})", self.name, params_joined);
-        let integral_result = self.evaluate_string(&format!("integral(\"{}\", \"{}\")", call_expr, wrt))?;
+        let integral_result = self.evaluate_string(&format!(
+            "integral(\"{}\", \"{}\")",
+            escape_phs_str(&call_expr),
+            escape_phs_str(wrt)
+        ))?;
         let new_name = format!("i_{}_d_{}", self.name, wrt);
         let new_body = format!("{}({}) = {}", new_name, params_joined, integral_result);
         self.define(&new_name, &new_body)
     }
 
     pub fn solve(&self, wrt: &str) -> Result<PhyFunction, JsValue> {
-        let params = self.get_params();
+        let params = self.try_get_params()?;
         if params.is_empty() {
             return Err(to_js_error(PhysureError::Generic(
                 "Cannot solve a function with no parameters".into(),
             )));
         }
+        if !params.contains(&wrt.to_string()) {
+            return Err(to_js_error(PhysureError::Generic(format!(
+                "Parameter '{}' not found in function parameters",
+                wrt
+            ))));
+        }
+
+        let target_param = if !params.contains(&"target".to_string()) {
+            "target".to_string()
+        } else {
+            let mut i = 1;
+            loop {
+                let candidate = format!("target_{}", i);
+                if !params.contains(&candidate) {
+                    break candidate;
+                }
+                i += 1;
+            }
+        };
+
         let params_joined = params.join(", ");
         let call_expr = format!("{}({})", self.name, params_joined);
-        let solve_result =
-            self.evaluate_string(&format!("solve(\"{} = target\", \"{}\")", call_expr, wrt))?;
+        let solve_result = self.evaluate_string(&format!(
+            "solve(\"{} = {}\", \"{}\")",
+            escape_phs_str(&call_expr),
+            escape_phs_str(&target_param),
+            escape_phs_str(wrt)
+        ))?;
         let new_name = format!("solve_{}_for_{}", self.name, wrt);
         let other_params: Vec<String> = params.into_iter().filter(|p| p != wrt).collect();
-        let mut new_params = vec!["target".to_string()];
+        let mut new_params = vec![target_param];
         new_params.extend(other_params);
         let new_params_joined = new_params.join(", ");
         let new_body = format!("{}({}) = {}", new_name, new_params_joined, solve_result);
@@ -139,6 +178,17 @@ impl PhyFunction {
 }
 
 impl PhyFunction {
+    fn try_get_params(&self) -> Result<Vec<String>, JsValue> {
+        let state = self
+            .state
+            .try_borrow()
+            .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
+        state
+            .interpreter
+            .get_fn_params(&self.name)
+            .ok_or_else(|| to_js_error(PhysureError::Generic(format!("Function '{}' not found", self.name))))
+    }
+
     fn evaluate_string(&self, expr: &str) -> Result<String, JsValue> {
         let statements = parse_phs(expr).map_err(to_js_error)?;
         let stmt = statements
@@ -203,8 +253,6 @@ fn is_quantity_instance(arg: &JsValue) -> bool {
     }
     false
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -339,5 +387,56 @@ mod tests {
             .unwrap();
         assert_eq!(result.value(), 5.0);
     }
+
+    #[wasm_bindgen_test]
+    fn phy_function_new_rejects_mismatched_function_name() {
+        use wasm_bindgen::JsCast;
+        let registry = UnitRegistry::new();
+        let err = PhyFunction::new(&registry, "g", "f(x) = x * 2").unwrap_err();
+        let js_err = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_err.message()).contains("Function 'g' was not defined in the body"));
+    }
+
+    #[wasm_bindgen_test]
+    fn solve_handles_parameter_collision_with_target() {
+        let registry = UnitRegistry::new();
+        let f = PhyFunction::new(&registry, "f", "f(target, x) = target + x").unwrap();
+        let solve_x = f.solve("x").unwrap();
+        assert_eq!(solve_x.get_params(), vec!["target_1".to_string(), "target".to_string()]);
+        let result = solve_x
+            .call(vec![JsValue::from_str("10"), JsValue::from_str("3")])
+            .unwrap();
+        assert_eq!(result.value(), 7.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn solve_rejects_invalid_wrt_parameter() {
+        use wasm_bindgen::JsCast;
+        let registry = UnitRegistry::new();
+        let ke = PhyFunction::new(&registry, "kinetic_energy", "kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+        let err = ke.solve("nonexistent").unwrap_err();
+        let js_err = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_err.message()).contains("Parameter 'nonexistent' not found in function parameters"));
+    }
+
+    #[wasm_bindgen_test]
+    fn test_escape_phs_str() {
+        assert_eq!(escape_phs_str(r#"a\b"c"#), r#"a\\b\"c"#);
+    }
+
+    #[wasm_bindgen_test]
+    fn deriv_and_integral_handle_string_escaping() {
+        use wasm_bindgen::JsCast;
+        let registry = UnitRegistry::new();
+        let ke = PhyFunction::new(&registry, "kinetic_energy", "kinetic_energy(m, v) = 0.5 * m * v^2").unwrap();
+        let err = ke.deriv(r#"v\"invalid"#).unwrap_err();
+        let js_err = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(!String::from(js_err.message()).contains("syntax error") && !String::from(js_err.message()).contains("Empty expression"));
+
+        let err2 = ke.integral(r#"v\"invalid"#).unwrap_err();
+        let js_err2 = err2.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(!String::from(js_err2.message()).contains("syntax error") && !String::from(js_err2.message()).contains("Empty expression"));
+    }
 }
+
 
