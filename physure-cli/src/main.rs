@@ -28,13 +28,13 @@ fn print_help() {
     println!("USAGE:");
     println!("    phs <script.phs> [OPTIONS]");
     println!("    phs --repl");
-    println!("    phs transpile <script.phs> [--target <rust|python|java>] [--output <file>]");
+    println!("    phs transpile <script.phs> [--target <rust|python|java|js|ts>] [--output <file>]");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
     println!("    -r, --repl               Start interactive PHS REPL environment");
-    println!("    -t, --target <lang>      Transpile target: rust, python, java (default: rust)");
+    println!("    -t, --target <lang>      Transpile target: rust, python, java, js, ts (default: rust)");
     println!("    -o, --output <file>      Specify output file path (e.g. out.py, Main.java)");
     println!("    --doc, doc [--save]      Generate full Markdown reference specification");
     println!("    --tui                    Launch terminal UI dashboard mode");
@@ -167,6 +167,8 @@ fn handle_transpile(args: &[String]) -> bool {
             Target::JavaWithClass(class_name.to_string())
         }
         (Some("java"), None) => Target::Java,
+        (Some("js") | Some("javascript"), _) => Target::JavaScript,
+        (Some("ts") | Some("typescript"), _) => Target::TypeScript,
         (Some(_), _) => Target::Rust,
         (None, Some(out_p)) => {
             if out_p.ends_with(".py") {
@@ -177,6 +179,10 @@ fn handle_transpile(args: &[String]) -> bool {
                     .and_then(|s| s.to_str())
                     .unwrap_or("Main");
                 Target::JavaWithClass(class_name.to_string())
+            } else if out_p.ends_with(".ts") {
+                Target::TypeScript
+            } else if out_p.ends_with(".js") {
+                Target::JavaScript
             } else {
                 Target::Rust
             }
@@ -219,6 +225,8 @@ fn handle_transpile(args: &[String]) -> bool {
                 Target::Python => "py",
                 Target::Java | Target::JavaWithClass(_) => "java",
                 Target::Rust => "rs",
+                Target::JavaScript => "js",
+                Target::TypeScript => "ts",
             };
             format!("{}.{}", stem, ext)
         }
@@ -233,6 +241,8 @@ fn handle_transpile(args: &[String]) -> bool {
         Target::Python => "Python",
         Target::Java | Target::JavaWithClass(_) => "Java",
         Target::Rust => "Rust",
+        Target::JavaScript => "JavaScript",
+        Target::TypeScript => "TypeScript",
     };
     println!("✓ Transpiled '{}' -> '{}' ({} target)", script_path, out_file_path, target_name);
     true
@@ -581,7 +591,11 @@ fn generate_language_docs_md() -> String {
     md.push_str("# Transpile to Rust\n");
     md.push_str("phs transpile script.phs --target rust --output main.rs\n\n");
     md.push_str("# Transpile to Java\n");
-    md.push_str("phs transpile script.phs --target java --output Main.java\n");
+    md.push_str("phs transpile script.phs --target java --output Main.java\n\n");
+    md.push_str("# Transpile to TypeScript\n");
+    md.push_str("phs transpile script.phs --target ts --output script.ts\n\n");
+    md.push_str("# Transpile to JavaScript\n");
+    md.push_str("phs transpile script.phs --target js --output script.js\n");
     md.push_str("```\n");
 
     md

@@ -33,7 +33,7 @@ end
 
 subgraph group_script["physure-script — PhysureScript (PHS) language engine<br/>depends on physure-core"]
   node_phs_engine{{"lexer.rs · parser.rs · ast.rs ·<br/>resolver.rs · interpreter.rs<br/>PhsLexer/PhsParser/PhsInterpreter/eval_phs<br/>[interpreter.rs]"}}
-  node_codegen["codegen/<br/>transpile to python.rs, java.rs, rust.rs<br/>[codegen/mod.rs]"]
+  node_codegen["codegen/<br/>transpile to python.rs, java.rs, rust.rs, js.rs<br/>[codegen/mod.rs]"]
   node_symbolic_cas["symbolic/<br/>CAS: diff, integrate, solve,<br/>series, ode, factor, sym_matrix<br/>[symbolic/mod.rs]"]
   node_plugin["plugin.rs · builtins.rs · value.rs<br/>native plugin ABI, PhsValue<br/>[plugin.rs]"]
 end
@@ -181,7 +181,7 @@ class node_workspace toneNeutral
 | Group | Purpose | Key rule |
 |---|---|---|
 | **physure-core** | Single source of truth for all physics: dimensional analysis (`units/`), numeric primitives — dual numbers, interval arithmetic, sparse Jacobians (`math/`), sparse covariance tracking (`covariance/`), and the propagation models — Gaussian, unscented, Monte Carlo (`uncertainty/`). | No FFI deps of any kind — every binding wraps this, never duplicates it. |
-| **physure-script** | The PhysureScript (PHS) DSL: lexer → parser → resolver → tree-walking interpreter, a small CAS (`symbolic/`) for diff/integrate/solve, and transpilers to Python/Java/Rust (`codegen/`). Shares physics types with `physure-core`. | This is the *only* implementation of PHS — nothing reimplements it in Python. |
+| **physure-script** | The PhysureScript (PHS) DSL: lexer → parser → resolver → tree-walking interpreter, a small CAS (`symbolic/`) for diff/integrate/solve, and transpilers to Python/Java/Rust/JavaScript/TypeScript (`codegen/`). Shares physics types with `physure-core`. | This is the *only* implementation of PHS — nothing reimplements it in Python. |
 | **physure-python (Rust)** | PyO3 binding crate only. Compiles to `physure._core`. | Zero physics logic — pure glue over `physure-core` + `physure-script`. |
 | **physure-python (Python)** | The public library: `application/` (composition root: `Q_`, active-`UnitSystem` context, `.conf` bootstrap), `domain/measurement` (`Quantity`, `UnitSystem`, `Uncertainty`), `core/` (backend dispatch, protocols, lazy unit registry), `backends/` (NumPy/Torch/JAX/pure-Python), `_jit/` (compile-time unit checking via native `RationalUnit`), `ext/` (optional chemistry/pandas/numba, lazily imported), `nn/` (unit-aware `torch.nn` wrappers). | Everything has a pure-Python fallback **except** `repl.py` (PHS evaluation), which hard-requires the native extension. |
 | **physure-cli** | Standalone `phs` binary — a notebook-like runner with TUI, HTML/LaTeX/KaTeX rendering, and a local web server for PHS scripts. Talks to `physure-script` directly; no Python involved. | Independent distribution target — ships without the Python package. |

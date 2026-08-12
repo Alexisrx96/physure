@@ -26,6 +26,7 @@ pub trait CodeGenerator {
 pub mod python;
 pub mod rust;
 pub mod java;
+pub mod js;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -33,6 +34,8 @@ pub enum Target {
     Rust,
     Java,
     JavaWithClass(String),
+    JavaScript,
+    TypeScript,
 }
 
 pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenError> {
@@ -53,6 +56,14 @@ pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenErr
         Target::JavaWithClass(name) => {
             let compiled = compile_equations_to_functions(program)?;
             java::JavaTranspiler::new(&name).generate_program(&compiled)
+        }
+        Target::JavaScript => {
+            let compiled = compile_equations_to_functions(program)?;
+            js::JsTranspiler::default().generate_program(&compiled)
+        }
+        Target::TypeScript => {
+            let compiled = compile_equations_to_functions(program)?;
+            js::JsTranspiler { typed: true }.generate_program(&compiled)
         }
     }
 }
@@ -189,6 +200,26 @@ pub(crate) fn range_is_not_transpilable() -> CodegenError {
          it, or transpile its endpoints separately."
             .to_string(),
     )
+}
+
+/// Converts a PHS `snake_case` identifier to `camelCase`, the identifier casing shared
+/// by every target whose ecosystem convention is camelCase (Java, JS, TS).
+pub(crate) fn snake_to_camel(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = false;
+    for (i, c) in s.chars().enumerate() {
+        if c == '_' {
+            capitalize_next = true;
+        } else {
+            if capitalize_next && i > 0 {
+                result.push(c.to_ascii_uppercase());
+            } else {
+                result.push(c);
+            }
+            capitalize_next = false;
+        }
+    }
+    result
 }
 
 pub fn expr_to_phs_string(expr: &Expr) -> String {
@@ -437,12 +468,27 @@ mod const_fold_tests {
         let program =
             crate::parser::parse_phs("duplo = a + b where a = 2.0 m, b = a * 3.0").unwrap();
 
-        for target in [Target::Python, Target::Rust, Target::Java] {
+        for target in [Target::Python, Target::Rust, Target::Java, Target::JavaScript, Target::TypeScript] {
             let name = format!("{target:?}");
-            let code = transpile(&program, target).unwrap();
+            let code = transpile(&program, target.clone()).unwrap();
             assert!(!code.contains("let("), "{name} still emits a let() call:\n{code}");
             // `b` is `a * 3.0`, so the binding for `a` has to reach inside it too.
-            assert_eq!(code.matches("2.0").count(), 2, "{name} lost a binding:\n{code}");
+            // JS/TS don't force a `.0` suffix on integral magnitudes (unlike Java/Rust,
+            // which format via `{:?}`), so `"2.0"` never appears there; a bare `"2"`
+            // needle would also falsely match inside the `v0.2.3` version header, so use
+            // a collision-free, target-specific needle instead.
+            match target {
+                Target::JavaScript | Target::TypeScript => {
+                    assert_eq!(
+                        code.matches("Quantity.of(2, \"m\")").count(),
+                        2,
+                        "{name} lost a binding:\n{code}"
+                    );
+                }
+                _ => {
+                    assert_eq!(code.matches("2.0").count(), 2, "{name} lost a binding:\n{code}");
+                }
+            }
         }
     }
 
@@ -462,6 +508,16 @@ mod const_fold_tests {
         assert!(java_code.contains("static Quantity eq5("));
         assert!(java_code.contains("V.divide(I)"));
         assert!(!java_code.contains("3.937"));
+
+        let js_code = transpile(&program, Target::JavaScript).unwrap();
+        assert!(js_code.contains("function eq5("));
+        assert!(js_code.contains("V.divide(I)"));
+        assert!(!js_code.contains("3.937"));
+
+        let ts_code = transpile(&program, Target::TypeScript).unwrap();
+        assert!(ts_code.contains("function eq5(I: Quantity, V: Quantity): Quantity"));
+        assert!(ts_code.contains("V.divide(I)"));
+        assert!(!ts_code.contains("3.937"));
     }
 
     #[test]

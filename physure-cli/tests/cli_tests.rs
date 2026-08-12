@@ -70,3 +70,28 @@ i = integral(\"v\", \"v\")\n\
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("10"));
 }
+
+#[test]
+fn test_cli_transpile_typescript() {
+    let temp_file = "temp_test_transpile_ts.phs";
+    let temp_output = "temp_test_transpile_ts.ts";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"m = 75.0 kg\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .args(["transpile", temp_file, "--target", "ts", "-o", temp_output])
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("TypeScript"), "Expected output to contain 'TypeScript', got: {}", stdout);
+
+    let generated = fs::read_to_string(temp_output).unwrap();
+    let _ = fs::remove_file(temp_output);
+
+    assert!(generated.contains("import { Quantity } from \"physure\";"), "Expected generated code to import Quantity, got: {}", generated);
+    assert!(generated.contains("const m: Quantity = Quantity.of(75, \"kg\");"), "Expected generated code to declare typed const, got: {}", generated);
+}
