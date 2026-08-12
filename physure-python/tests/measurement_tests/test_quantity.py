@@ -495,3 +495,28 @@ def test_array_iter_unchanged(quantity_system, units):
     elements = list(arr)
     assert len(elements) == 3
     assert elements[0].magnitude == pytest.approx(1.0)
+
+
+def test_approx_eq_and_eq_back_the_phs_assert_codegen_contract():
+    # physure-script's Python codegen target emits `a.approx_eq(b, 1e-9, 1e-12)` for PHS's
+    # `assert(a, b)` and `a.exact_eq(b)` for `exact_assert(a, b)` — see
+    # physure-script/src/codegen/python.rs. Both methods exist on Quantity with
+    # exactly these semantics; this test exists so a change to either one's behavior fails
+    # loudly here instead of silently breaking every transpiled Python program's assertions.
+    from physure import Q_
+    a = Q_(1.0, "km")
+    b = Q_(1000.0, "m")
+    assert a.approx_eq(b, 1e-9, 1e-12)
+
+    c = Q_(1.0, "m")
+    d = Q_(1.0, "s")
+    assert not c.approx_eq(d, 1e-9, 1e-12)
+
+    e = Q_(5.0, "m")
+    f = Q_(5.0, "meter")
+    assert e.exact_eq(f)  # alias units compare equal
+
+    g = Q_(1.0, "km")
+    h = Q_(1000.0, "m")
+    assert not g.exact_eq(h)  # exact_assert requires the literal same unit, no conversion
+

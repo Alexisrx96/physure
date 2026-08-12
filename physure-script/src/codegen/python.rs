@@ -37,7 +37,7 @@ impl CodeGenerator for PythonTranspiler {
                             )
                         } else {
                             format!(
-                                "assert ({a}) == ({b}), f\"exact_assert failed: {{{a}}} != {{{b}}}\"",
+                                "assert ({a}).exact_eq({b}), f\"exact_assert failed: {{{a}}} != {{{b}}}\"",
                                 a = a_code, b = b_code
                             )
                         };
@@ -307,7 +307,7 @@ mod tests {
         let tp = PythonTranspiler;
         let program = crate::parser::parse_phs("exact_assert(5.0 m, 5.0 m)").unwrap();
         let code = tp.generate_program(&program).unwrap();
-        assert!(code.contains("assert ") && code.contains(") == ("), "expected an equality assert:\n{code}");
+        assert!(code.contains("assert ") && code.contains(".exact_eq("), "expected an exact_eq assert:\n{code}");
     }
 
     #[test]
