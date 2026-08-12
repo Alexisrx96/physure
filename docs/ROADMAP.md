@@ -12,8 +12,8 @@ This document serves as the **single source of truth** for tracking project-wide
 
 | Subsystem / Sub-roadmap | Status | Progress | Target Path / Sub-roadmap Document | Key Modules |
 |---|---|---|---|---|
-| **1. Core Physics & Unit Engine** | ✅ Complete | 100% | `physure_core/src/`, `physure/domain/measurement/` | Base units, dimensions, quantities, JIT/AOT |
-| **2. Uncertainty & Covariance Engine** | ✅ Complete | 95% | `physure_core/src/uncertainty/`, `physure/domain/uncertainty/` | GUM covariance, Monte Carlo, affine arithmetic |
+| **1. Core Physics & Unit Engine** | ✅ Complete | 100% | `physure-core/src/`, `physure-python/physure/domain/measurement/` | Base units, dimensions, quantities, JIT/AOT |
+| **2. Uncertainty & Covariance Engine** | ✅ Complete | 95% | `physure-core/src/uncertainty/`, `physure-python/physure/domain/uncertainty/` | GUM covariance, Monte Carlo, affine arithmetic |
 | **3. Chemistry & Reaction Tracking** | 🚧 Python ✅ / Rust+PHS Planned | 50% | [Chemistry Roadmap](chemistry_roadmap.md) | `physure.ext.chemistry` → `physure_core::chemistry` + PHS builtins |
 | **4. Symbolic Math & CAS Engine** | 🚧 Phase 1 Done / Phase 2–4 In Progress | 35% | [Symbolic Math Roadmap](symbolic_math_roadmap.md) | `physure_core::cas`, Gröbner, Risch, ODEs, SAT |
 | **5. Diagramming Engine (`physure.diagrams`)**| 📋 Planned | 10% | [Diagramming Engine Roadmap](diagrams_roadmap.md) | Free-body diagrams, vectors, circuits, TikZ/SVG |
