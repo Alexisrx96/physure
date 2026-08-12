@@ -1,5 +1,5 @@
 use crate::ast::{BinaryOp, Expr, FunctionDefNode, Program, Statement};
-use crate::codegen::{CodeGenerator, CodegenError};
+use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
 
 #[derive(Debug, Clone, Default)]
 pub struct JsTranspiler {
@@ -178,24 +178,6 @@ impl JsTranspiler {
             }
         }
     }
-}
-
-fn snake_to_camel(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = false;
-    for (i, c) in s.chars().enumerate() {
-        if c == '_' {
-            capitalize_next = true;
-        } else {
-            if capitalize_next && i > 0 {
-                result.push(c.to_ascii_uppercase());
-            } else {
-                result.push(c);
-            }
-            capitalize_next = false;
-        }
-    }
-    result
 }
 
 /// Escapes the characters that would otherwise break out of a template literal:

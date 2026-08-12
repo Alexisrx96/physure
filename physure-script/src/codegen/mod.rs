@@ -202,6 +202,26 @@ pub(crate) fn range_is_not_transpilable() -> CodegenError {
     )
 }
 
+/// Converts a PHS `snake_case` identifier to `camelCase`, the identifier casing shared
+/// by every target whose ecosystem convention is camelCase (Java, JS, TS).
+pub(crate) fn snake_to_camel(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = false;
+    for (i, c) in s.chars().enumerate() {
+        if c == '_' {
+            capitalize_next = true;
+        } else {
+            if capitalize_next && i > 0 {
+                result.push(c.to_ascii_uppercase());
+            } else {
+                result.push(c);
+            }
+            capitalize_next = false;
+        }
+    }
+    result
+}
+
 pub fn expr_to_phs_string(expr: &Expr) -> String {
     match expr {
         Expr::Quantity(q) => {

@@ -1,5 +1,5 @@
 use crate::ast::{BinaryOp, Expr, Program, Statement};
-use crate::codegen::{CodeGenerator, CodegenError};
+use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
 
 #[derive(Debug, Clone)]
 pub struct JavaTranspiler {
@@ -84,24 +84,6 @@ impl CodeGenerator for JavaTranspiler {
         out.push_str("}\n");
         Ok(out)
     }
-}
-
-fn snake_to_camel(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = false;
-    for (i, c) in s.chars().enumerate() {
-        if c == '_' {
-            capitalize_next = true;
-        } else {
-            if capitalize_next && i > 0 {
-                result.push(c.to_ascii_uppercase());
-            } else {
-                result.push(c);
-            }
-            capitalize_next = false;
-        }
-    }
-    result
 }
 
 impl JavaTranspiler {
