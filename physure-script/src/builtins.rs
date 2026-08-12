@@ -177,6 +177,22 @@ pub fn eval_core_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterp
                 _ => Ok(Some(val.clone())),
             }
         }
+        "assert" | "exact_assert" => {
+            if args.len() != 2 {
+                return Err(PhysureError::Generic(format!("{name} expects 2 arguments (actual, expected)")));
+            }
+            match (&args[0], &args[1]) {
+                (PhsValue::Quantity(a), PhsValue::Quantity(b)) => {
+                    if name == "assert" {
+                        a.phs_assert(b)?;
+                    } else {
+                        a.phs_exact_assert(b)?;
+                    }
+                    Ok(Some(PhsValue::None))
+                }
+                _ => Err(PhysureError::Generic(format!("{name} expects two quantities"))),
+            }
+        }
         "op_>" | "op_gt" => compare(args, |l, r| l > r),
         "op_<" | "op_lt" => compare(args, |l, r| l < r),
         "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
