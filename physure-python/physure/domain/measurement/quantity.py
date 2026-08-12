@@ -412,7 +412,7 @@ class Quantity(
     def approx_eq(
         self, other: Any, rel_tol: float = 1e-9, abs_tol: float = 1e-12
     ) -> bool:
-        """Checks if self and other have compatible dimensions and magnitudes agree within tolerance."""
+        """Checks if self and other agree within tolerance."""
         if not hasattr(other, "dimension") or not hasattr(other, "to"):
             return False
         if self.dimension != getattr(other, "dimension", None):
@@ -429,15 +429,21 @@ class Quantity(
             return False
 
     def exact_eq(self, other: Any) -> bool:
-        """Passes only when self and other carry the literal same unit (or alias) and bit-exact magnitude."""
-        if not hasattr(other, "dimension") or not hasattr(other, "to") or not hasattr(other, "magnitude"):
+        """Passes when self and other match unit and magnitude."""
+        if (
+            not hasattr(other, "dimension")
+            or not hasattr(other, "to")
+            or not hasattr(other, "magnitude")
+        ):
             return False
         if self.dimension != getattr(other, "dimension", None):
             return False
         if self.magnitude != other.magnitude:
             return False
         try:
-            one_other = self._fast_new(1.0, other.unit, 0.0, self.system, self.dimension)
+            one_other = self._fast_new(
+                1.0, other.unit, 0.0, self.system, self.dimension
+            )
             converted_one = one_other.to(self.unit)
             return float(converted_one.magnitude) == 1.0
         except Exception:

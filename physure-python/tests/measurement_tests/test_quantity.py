@@ -504,6 +504,7 @@ def test_approx_eq_and_eq_back_the_phs_assert_codegen_contract():
     # exactly these semantics; this test exists so a change to either one's behavior fails
     # loudly here instead of silently breaking every transpiled Python program's assertions.
     from physure import Q_
+
     a = Q_(1.0, "km")
     b = Q_(1000.0, "m")
     assert a.approx_eq(b, 1e-9, 1e-12)
@@ -518,5 +519,6 @@ def test_approx_eq_and_eq_back_the_phs_assert_codegen_contract():
 
     g = Q_(1.0, "km")
     h = Q_(1000.0, "m")
-    assert not g.exact_eq(h)  # exact_assert requires the literal same unit, no conversion
-
+    assert not g.exact_eq(
+        h
+    )  # exact_assert requires the literal same unit, no conversion
