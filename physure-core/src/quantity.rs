@@ -400,6 +400,42 @@ impl Quantity {
         diff <= tol
     }
 
+    /// Backing implementation for PHS's `assert(actual, expected)` builtin: passes when the
+    /// two quantities have compatible dimensions and their magnitudes agree once converted
+    /// to a common scale, within a fixed tolerance chosen to catch real bugs while
+    /// tolerating floating-point drift across languages.
+    pub fn phs_assert(&self, other: &Quantity) -> PhysureResult<()> {
+        const REL_TOL: f64 = 1e-9;
+        const ABS_TOL: f64 = 1e-12;
+        if self.approx_eq(other, REL_TOL, ABS_TOL) {
+            return Ok(());
+        }
+        if !self.unit.same_dimensions(&other.unit) {
+            return Err(PhysureError::AssertionFailed {
+                kind: "assert",
+                message: format!("{} and {} have incompatible dimensions", self, other),
+            });
+        }
+        Err(PhysureError::AssertionFailed {
+            kind: "assert",
+            message: format!("{} != {}", self, other),
+        })
+    }
+
+    /// Backing implementation for PHS's `exact_assert(actual, expected)` builtin: passes
+    /// only when both operands carry the literal same unit — aliases like `m`/`meter` still
+    /// match, since `RationalUnit`'s `PartialEq` already ignores the display alias — and the
+    /// magnitudes are bit-exact. No conversion, no tolerance.
+    pub fn phs_exact_assert(&self, other: &Quantity) -> PhysureResult<()> {
+        if self.unit == other.unit && self.value.mean().to_bits() == other.value.mean().to_bits() {
+            return Ok(());
+        }
+        Err(PhysureError::AssertionFailed {
+            kind: "exact_assert",
+            message: format!("{} != {}", self, other),
+        })
+    }
+
     /// This quantity's magnitude expressed in canonical base-SI terms (mean * unit.scale).
     pub fn canonical_magnitude(&self) -> f64 {
         self.value.mean() * self.unit.scale
@@ -654,6 +690,52 @@ mod tests {
         assert_eq!(format_fraction(1e-30, false), None);
         assert_eq!(format_fraction(f64::NAN, false), None);
         assert_eq!(format_fraction(f64::INFINITY, false), None);
+    }
+
+    #[test]
+    fn phs_assert_passes_for_equal_dimension_and_magnitude() {
+        let a = Quantity::new(1.0, "km").unwrap();
+        let b = Quantity::new(1000.0, "m").unwrap();
+        assert!(a.phs_assert(&b).is_ok());
+    }
+
+    #[test]
+    fn phs_assert_fails_on_dimension_mismatch() {
+        let a = Quantity::new(1.0, "m").unwrap();
+        let b = Quantity::new(1.0, "s").unwrap();
+        let err = a.phs_assert(&b).unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+    }
+
+    #[test]
+    fn phs_assert_fails_when_magnitude_differs_beyond_tolerance() {
+        let a = Quantity::new(1.0, "m").unwrap();
+        let b = Quantity::new(1.1, "m").unwrap();
+        assert!(a.phs_assert(&b).is_err());
+    }
+
+    #[test]
+    fn phs_exact_assert_passes_for_alias_units_with_same_magnitude() {
+        // "m" and "meter" share the same id/scale/offset in physure.conf; only the
+        // display alias differs, which `exact_assert` deliberately ignores.
+        let a = Quantity::new(5.0, "m").unwrap();
+        let b = Quantity::new(5.0, "meter").unwrap();
+        assert!(a.phs_exact_assert(&b).is_ok());
+    }
+
+    #[test]
+    fn phs_exact_assert_fails_when_conversion_would_be_required() {
+        let a = Quantity::new(1.0, "km").unwrap();
+        let b = Quantity::new(1000.0, "m").unwrap();
+        let err = a.phs_exact_assert(&b).unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "exact_assert", .. }));
+    }
+
+    #[test]
+    fn phs_exact_assert_fails_on_bit_inexact_magnitude() {
+        let a = Quantity::new(5.0, "m").unwrap();
+        let b = Quantity::new(5.0 + 1e-12, "m").unwrap();
+        assert!(a.phs_exact_assert(&b).is_err());
     }
 
     /// Affine conversion is not a single ratio: the zero point has to be added on the way to

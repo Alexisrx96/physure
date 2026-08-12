@@ -17,6 +17,9 @@ pub enum PhysureError {
     /// decorator name without the `@` (`"requires"` or `"ensures"`); `message` is the
     /// user-supplied explanation string from the decorator's second argument.
     ContractViolation { decorator: String, message: String },
+    /// A PHS `assert`/`exact_assert` builtin call failed. `kind` is `"assert"` or
+    /// `"exact_assert"`; `message` names both operands and why they didn't match.
+    AssertionFailed { kind: &'static str, message: String },
 }
 
 impl fmt::Display for PhysureError {
@@ -49,6 +52,9 @@ impl fmt::Display for PhysureError {
             PhysureError::ContractViolation { decorator, message } => {
                 write!(f, "@{} violated: {}", decorator, message)
             }
+            PhysureError::AssertionFailed { kind, message } => {
+                write!(f, "{} failed: {}", kind, message)
+            }
         }
     }
 }
@@ -80,5 +86,14 @@ mod tests {
             message: "x must be positive".to_string(),
         };
         assert_eq!(err.to_string(), "@requires violated: x must be positive");
+    }
+
+    #[test]
+    fn assertion_failed_displays_kind_and_message() {
+        let err = PhysureError::AssertionFailed {
+            kind: "exact_assert",
+            message: "5 m != 5 s".to_string(),
+        };
+        assert_eq!(err.to_string(), "exact_assert failed: 5 m != 5 s");
     }
 }
