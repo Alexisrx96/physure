@@ -66,11 +66,11 @@ avogadro_constant = 6.022141e+23 mol^-1
 
 5. **Regenerate the units reference** (docs/UNITS.md is generated, never
    hand-edit) — confirm the actual generator script still exists at
-   `scripts/generate_units_readme.py` (path may have moved along with the
+   `physure-python/scripts/generate_units_readme.py` (path may have moved along with the
    crate split) before running it:
 
    ```bash
-   uv run python scripts/generate_units_readme.py
+   uv run python physure-python/scripts/generate_units_readme.py
    ```
 
 6. **Run the tests**: `uv run pytest tests/ -x -q`. Add a conversion test
