@@ -86,6 +86,20 @@ impl PythonTranspiler {
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if {}: return {}", self.generate_expr(cond)?, self.generate_expr(value)?))
             }
+            Statement::While { cond, body } => {
+                let cond_str = self.generate_expr(cond)?;
+                let mut lines = Vec::new();
+                for stmt in body {
+                    let stmt_code = self.generate_statement(stmt)?;
+                    for line in stmt_code.lines() {
+                        lines.push(format!("    {}", line));
+                    }
+                }
+                if lines.is_empty() {
+                    lines.push("    pass".to_string());
+                }
+                Ok(format!("while {}:\n{}", cond_str, lines.join("\n")))
+            }
         }
     }
     
@@ -221,6 +235,11 @@ impl PythonTranspiler {
                 }
                 Ok(format!("{}({})", sanitize_identifier(name), arg_strs.join(", ")))
             }
+            Expr::ForExpr { var, iterable, body } => {
+                let it_str = self.generate_expr(iterable)?;
+                let body_str = self.generate_expr(body)?;
+                Ok(format!("[{} for {} in {}]", body_str, sanitize_identifier(var), it_str))
+            }
         }
     }
     
@@ -315,5 +334,28 @@ mod tests {
         let tp = PythonTranspiler;
         let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
         assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn test_transpile_for_expr_and_while_stmt_python() {
+        let tp = PythonTranspiler;
+        let for_expr = Expr::ForExpr {
+            var: "x".to_string(),
+            iterable: Box::new(Expr::Identifier("items".to_string())),
+            body: Box::new(Expr::Identifier("x".to_string())),
+        };
+        let code_for = tp.generate_expr(&for_expr).unwrap();
+        assert_eq!(code_for, "[x for x in items]");
+
+        let while_stmt = Statement::While {
+            cond: Expr::Identifier("flag".to_string()),
+            body: vec![Statement::Assignment(AssignmentNode {
+                name: "i".to_string(),
+                value: Expr::Identifier("1".to_string()),
+                decorators: Vec::new(),
+            })],
+        };
+        let code_while = tp.generate_statement(&while_stmt).unwrap();
+        assert_eq!(code_while, "while flag:\n    i = 1");
     }
 }

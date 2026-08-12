@@ -98,6 +98,7 @@ fn inline_bindings(expr: &Expr) -> Expr {
             right: Box::new(inline_bindings(right)),
         },
         Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => expr.clone(),
+        Expr::ForExpr { .. } => todo!(),
     }
 }
 
@@ -251,6 +252,7 @@ pub fn expr_to_phs_string(expr: &Expr) -> String {
             let arg_strs: Vec<String> = args.iter().map(expr_to_phs_string).collect();
             format!("{}({})", name, arg_strs.join(", "))
         }
+        Expr::ForExpr { .. } => todo!(),
     }
 }
 
@@ -472,6 +474,7 @@ fn rewrite_equation_calls(
             right: Box::new(rewrite_equation_calls(right, equations, functions, signatures)?),
         }),
         Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => Ok(expr.clone()),
+        Expr::ForExpr { .. } => todo!(),
     }
 }
 

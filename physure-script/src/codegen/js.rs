@@ -44,6 +44,9 @@ impl CodeGenerator for JsTranspiler {
                         main_stmts.push(format!("console.log({});", val));
                     }
                 }
+                Statement::While { .. } => {
+                    main_stmts.push(self.generate_statement(stmt)?);
+                }
                 _ => {}
             }
         }
@@ -98,9 +101,33 @@ impl JsTranspiler {
     fn generate_statement(&self, stmt: &Statement) -> Result<String, CodegenError> {
         match stmt {
             Statement::FunctionDef(f) => self.generate_function_def_stmt(f),
+            Statement::Assignment(node) => {
+                let val = self.generate_expr(&node.value)?;
+                let var_name = snake_to_camel(&node.name);
+                Ok(format!("let {} = {}", var_name, val))
+            }
+            Statement::Expr(expr) => self.generate_expr(expr),
             Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if ({}) {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
+            }
+            Statement::While { cond, body } => {
+                let cond_str = self.generate_expr(cond)?;
+                let mut lines = Vec::new();
+                for s in body {
+                    let stmt_code = self.generate_statement(s)?;
+                    if !stmt_code.is_empty() {
+                        let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
+                            stmt_code
+                        } else {
+                            format!("{};", stmt_code)
+                        };
+                        for line in stmt_with_semi.lines() {
+                            lines.push(format!("  {}", line));
+                        }
+                    }
+                }
+                Ok(format!("while ({}) {{\n{}\n}}", cond_str, lines.join("\n")))
             }
             _ => Ok(String::new()),
         }
@@ -188,6 +215,12 @@ impl JsTranspiler {
                     arg_strs.push(self.generate_expr(a)?);
                 }
                 Ok(format!("{}({})", snake_to_camel(name), arg_strs.join(", ")))
+            }
+            Expr::ForExpr { var, iterable, body } => {
+                let it_str = self.generate_expr(iterable)?;
+                let var_str = snake_to_camel(var);
+                let body_str = self.generate_expr(body)?;
+                Ok(format!("({}).map(({}) => {})", it_str, var_str, body_str))
             }
         }
     }
@@ -293,5 +326,24 @@ mod tests {
         let transpiler = JsTranspiler::default();
         let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
         assert!(transpiler.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn test_transpile_for_expr_and_while_stmt_js() {
+        let tp = JsTranspiler::default();
+        let for_expr = Expr::ForExpr {
+            var: "x".to_string(),
+            iterable: Box::new(Expr::Identifier("items".to_string())),
+            body: Box::new(Expr::Identifier("x".to_string())),
+        };
+        let code_for = tp.generate_expr(&for_expr).unwrap();
+        assert_eq!(code_for, "(items).map((x) => x)");
+
+        let while_stmt = Statement::While {
+            cond: Expr::Identifier("flag".to_string()),
+            body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
+        };
+        let code_while = tp.generate_statement(&while_stmt).unwrap();
+        assert_eq!(code_while, "while (flag) {\n  return x;\n}");
     }
 }

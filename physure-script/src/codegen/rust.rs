@@ -34,6 +34,9 @@ impl CodeGenerator for RustTranspiler {
                         main_statements.push(format!("    println!(\"{{}}\", {});", expr_code));
                     }
                 }
+                Statement::While { .. } => {
+                    main_statements.push(format!("    {}", self.generate_statement(stmt)?));
+                }
                 _ => {}
             }
         }
@@ -73,6 +76,24 @@ impl RustTranspiler {
             Statement::Return(expr) => Ok(format!("return {};", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if {} {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
+            }
+            Statement::While { cond, body } => {
+                let cond_str = self.generate_expr(cond)?;
+                let mut lines = Vec::new();
+                for s in body {
+                    let stmt_code = self.generate_statement(s)?;
+                    if !stmt_code.is_empty() {
+                        let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
+                            stmt_code
+                        } else {
+                            format!("{};", stmt_code)
+                        };
+                        for line in stmt_with_semi.lines() {
+                            lines.push(format!("  {}", line));
+                        }
+                    }
+                }
+                Ok(format!("while {} {{\n{}\n}}", cond_str, lines.join("\n")))
             }
         }
     }
@@ -197,6 +218,11 @@ impl RustTranspiler {
                 }
                 Ok(format!("{}({})", name, arg_codes.join(", ")))
             }
+            Expr::ForExpr { var, iterable, body } => {
+                let it_str = self.generate_expr(iterable)?;
+                let body_str = self.generate_expr(body)?;
+                Ok(format!("({}).into_iter().map(|{}| {}).collect::<Vec<_>>()", it_str, var, body_str))
+            }
         }
     }
 }
@@ -284,5 +310,24 @@ mod tests {
         let transpiler = RustTranspiler;
         let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
         assert!(transpiler.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn test_transpile_for_expr_and_while_stmt_rust() {
+        let tp = RustTranspiler;
+        let for_expr = Expr::ForExpr {
+            var: "x".to_string(),
+            iterable: Box::new(Expr::Identifier("items".to_string())),
+            body: Box::new(Expr::Identifier("x".to_string())),
+        };
+        let code_for = tp.generate_expr(&for_expr).unwrap();
+        assert_eq!(code_for, "(items).into_iter().map(|x| x).collect::<Vec<_>>()");
+
+        let while_stmt = Statement::While {
+            cond: Expr::Identifier("flag".to_string()),
+            body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
+        };
+        let code_while = tp.generate_statement(&while_stmt).unwrap();
+        assert_eq!(code_while, "while flag {\n  return x;\n}");
     }
 }
