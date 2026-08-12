@@ -169,6 +169,10 @@ decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
 // and the next, and between the last decorator and the definition itself.
 decorated_stmt  = { (decorator ~ _nl)+ ~ (function_def | assignment_fn | assignment) }
 
+// `///` is legal only directly above an assignment/function definition/decorated statement
+// (see `documented_stmt` below) — anywhere else (e.g. above a bare expression or a
+// `while`/`return`/`import`/`export` statement) it is a parse error rather than a plain
+// comment, since `COMMENT` above deliberately excludes `///` from the generic comment rule.
 doc_comment     = @{ "///" ~ (!NEWLINE ~ ANY)* }
 // One or more `///` lines immediately above the definition they document. Stacks outside
 // decorators — source order is docs, then decorators, then the def:
