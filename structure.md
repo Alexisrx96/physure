@@ -1,10 +1,11 @@
 # physure — workspace architecture
 
-Verified against the actual tree (not `CLAUDE.md`, which still references a
-stale `physure/` / `physure_core/` layout — the real crates are
-`physure-core`, `physure-script`, `physure-python`, `physure-cli`,
-`physure-lsp`, `physure-java`, `physure-wasm`). Two hard rules enforced by
-the Rust manifests drive everything below:
+Verified against the actual tree — the real crates are `physure-core`,
+`physure-script`, `physure-python`, `physure-cli`, `physure-lsp`,
+`physure-java`, `physure-wasm`. `CLAUDE.md`'s architecture section points
+here rather than duplicating this map — keep this file, not `CLAUDE.md`, as
+the source of truth for crate layout. Two hard rules enforced by the Rust
+manifests drive everything below:
 
 - **`physure-core` has zero FFI dependencies** (`Cargo.toml`: *"MUST NOT
   depend on pyo3, wasm-bindgen, or jni ... single source of truth for all
@@ -188,4 +189,4 @@ class node_workspace toneNeutral
 | **physure-java** | JNI bridge exposing `physure-core` types (`Quantity`, `UnitRegistry`, ...) to the JVM. | Mirrors the PyO3 crate's role: bindings only, no physics logic. |
 | **physure-wasm** | `wasm-bindgen` crate exposing `Quantity`, `UnitRegistry`, and `PhyFunction` (PHS-defined functions) to JS/TS. Compiles to a `cdylib` and publishes to npm as the `physure` package. | Bindings only — delegates physics math to `physure-core` and embeds a `physure-script` `PhsInterpreter` for `PhyFunction` bodies. |
 
-**Note:** `CLAUDE.md`'s architecture section describes an older `physure/` / `physure_core/` layout (with `domain/notation/` and `static/` mypy plugin dirs) that no longer exists on disk — the real paths are `physure-python/physure/*` and `physure-core/src/*` as shown above. Worth updating that doc separately.
+**Note:** if this file and `CLAUDE.md`'s architecture section ever disagree, this file wins — `CLAUDE.md` only summarizes and links here. A `PostToolUse` hook on root `Cargo.toml` edits (see `.claude/settings.json`) warns when a workspace member isn't mentioned here yet; run the `update-structure` skill to reconcile.

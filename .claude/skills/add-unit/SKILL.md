@@ -7,9 +7,12 @@ description: Add a unit, constant, prefix, or dimension to physure's .conf catal
 
 All catalog entries live in `physure-core/src/units/physure.conf`
 (sections `[Dimensions]`, `[Prefixes]`, `[Units]`, `[Constants]`) — this is
-the **only** file to hand-edit. System-specific base-unit choices live in
-`physure-core/src/units/systems/international.conf` and `imperial.conf` if
-present, otherwise check `physure-core/src/units/` for the current layout.
+the **only** file to hand-edit. There is no separate `systems/` directory on
+the Rust side; SI vs. imperial base-unit selection is hardcoded in
+`physure-core/src/units/registry.rs` (`build_default_si` /
+`build_default_imperial`), not read from a `.conf` file. (The pure-Python
+fallback does have `physure-python/physure/infrastructure/config/systems/`
+— see the known-drift warning below; don't confuse the two.)
 
 **Known issue:** `physure-python/physure/infrastructure/config/physure.conf`
 is a second, hand-maintained copy of this catalog that has already
@@ -40,7 +43,7 @@ avogadro_constant = 6.022141e+23 mol^-1
    (PR #17). Check every new symbol/alias:
 
    ```bash
-   grep -rn "SYMBOL" physure-core/src/units/*.conf physure-core/src/units/systems/*.conf 2>/dev/null
+   grep -rn "SYMBOL" physure-core/src/units/*.conf 2>/dev/null
    ```
 
    Also consider prefix + existing-symbol clashes for short symbols.
@@ -66,11 +69,13 @@ avogadro_constant = 6.022141e+23 mol^-1
 
 5. **Regenerate the units reference** (docs/UNITS.md is generated, never
    hand-edit) — confirm the actual generator script still exists at
-   `physure-python/scripts/generate_units_readme.py` (path may have moved along with the
-   crate split) before running it:
+   `physure-python/scripts/generate_units_readme.py` (path may have moved
+   along with the crate split) before running it. The script resolves its
+   input `.conf` path relative to its own CWD, so it must be run from
+   `physure-python/`, not the repo root:
 
    ```bash
-   uv run python physure-python/scripts/generate_units_readme.py
+   cd physure-python && uv run python scripts/generate_units_readme.py && cd ..
    ```
 
 6. **Run the tests**: `uv run pytest tests/ -x -q`. Add a conversion test
