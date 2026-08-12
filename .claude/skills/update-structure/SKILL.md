@@ -14,11 +14,18 @@ way `CLAUDE.md` itself did before the crate rename.
 1. **List the real workspace members**: `grep -A20 "^members" Cargo.toml`.
    Every member must have a corresponding `subgraph` block in
    `structure.md`'s mermaid diagram and a mention in its opening summary.
+   Also check the reverse direction: every `subgraph` block already in
+   `structure.md` must correspond to a member still listed in `Cargo.toml`
+   — if a crate was removed from the workspace, remove or flag its
+   now-orphaned subgraph rather than leaving it behind.
 
 2. **For each crate, check its actual top-level `src/` modules**:
    `ls <crate>/src/`. Compare against what `structure.md` claims for that
    crate — files renamed, removed, or added since the last update need
-   their entries fixed.
+   their entries fixed. While you're in there, re-read the crate's
+   one-line purpose description in `structure.md` against what its code
+   actually does now — a crate's role can drift even when its file list
+   doesn't, leaving a stale purpose blurb behind.
 
 3. **Check cross-crate dependencies**: `grep '^physure-' <crate>/Cargo.toml`
    for each crate, and confirm `structure.md`'s stated "depends on X"
