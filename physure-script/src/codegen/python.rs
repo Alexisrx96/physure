@@ -27,8 +27,26 @@ impl CodeGenerator for PythonTranspiler {
                     out.push_str(&format!("print(f\"{}: {{{}}}\")\n", node.name, sanitize_identifier(&node.name)));
                 }
                 Statement::Expr(expr) => {
-                    let expr_str = self.generate_expr(expr)?;
-                    out.push_str(&format!("print({})\n", expr_str));
+                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
+                        let a_code = self.generate_expr(a)?;
+                        let b_code = self.generate_expr(b)?;
+                        let line = if kind == "assert" {
+                            format!(
+                                "assert ({a}).approx_eq({b}, 1e-9, 1e-12), f\"assert failed: {{{a}}} != {{{b}}}\"",
+                                a = a_code, b = b_code
+                            )
+                        } else {
+                            format!(
+                                "assert ({a}) == ({b}), f\"exact_assert failed: {{{a}}} != {{{b}}}\"",
+                                a = a_code, b = b_code
+                            )
+                        };
+                        out.push_str(&line);
+                        out.push('\n');
+                    } else {
+                        let expr_str = self.generate_expr(expr)?;
+                        out.push_str(&format!("print({})\n", expr_str));
+                    }
                 }
                 _ => {
                     let stmt_str = self.generate_statement(stmt)?;
@@ -182,6 +200,12 @@ impl PythonTranspiler {
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {
+                if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && args.len() == 2 {
+                    return Err(CodegenError::Generic(format!(
+                        "'{}' can only be used as a standalone statement, not nested inside an expression",
+                        name
+                    )));
+                }
                 let mut arg_strs = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
                     let arg_s = self.generate_expr(arg)?;
@@ -266,5 +290,30 @@ mod tests {
         let res = tp.generate_program(&prog).unwrap();
         assert!(res.contains("from physure.physics.constants import g"));
         assert!(res.contains("def foo(a, b):\n    return (a * b)"));
+    }
+
+    #[test]
+    fn transpiles_assert_call_to_a_python_assert_statement() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert "), "expected a Python assert statement:\n{code}");
+        assert!(code.contains(".approx_eq("), "expected approx_eq call:\n{code}");
+        assert!(!code.contains("print(assert"), "must not fall through to the generic call path:\n{code}");
+    }
+
+    #[test]
+    fn transpiles_exact_assert_call_to_equality_assert() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("exact_assert(5.0 m, 5.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert ") && code.contains(") == ("), "expected an equality assert:\n{code}");
+    }
+
+    #[test]
+    fn rejects_assert_used_as_a_nested_expression_py() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
+        assert!(tp.generate_program(&program).is_err());
     }
 }
