@@ -5,7 +5,7 @@ COMMENT    = _{ ("//" | "#") ~ (!"\n" ~ !"\r" ~ ANY)* }
 // `in` is deliberately absent: it is the symbol for inch. `let` stays reserved with no rule
 // behind it so the retired `let ... in ...` form fails to parse instead of quietly meaning
 // "let times inches".
-keyword     = @{ ("let" | "if" | "then" | "else" | "where" | "return") ~ !(ASCII_ALPHANUMERIC | "_") }
+keyword     = @{ ("for" | "while" | "let" | "if" | "then" | "else" | "where" | "return") ~ !(ASCII_ALPHANUMERIC | "_") }
 // `LETTER`, not a hand-kept list of the Greek letters someone happened to need, and not
 // ASCII after the first character. A unit symbol is a `LETTER` everywhere `_unit_char` is
 // read, so an identifier that stopped at ASCII made the same symbol legal in one position
@@ -157,6 +157,8 @@ string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 return_stmt   = { "return" ~ expr }
 guard_if_stmt = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ return_stmt }
+for_expr     = { "for" ~ identifier ~ "in" ~ expr ~ "{" ~ expr ~ "}" }
+while_stmt   = { "while" ~ expr ~ "{" ~ _nl ~ (stmt ~ _nl)* ~ "}" }
 
 decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
 // One or more `@name(...)` lines immediately above the definition they annotate. `_nl`

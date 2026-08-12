@@ -14,6 +14,7 @@ pub enum Statement {
     Expr(Expr),
     Return(Expr),
     GuardReturn { cond: Expr, value: Expr },
+    While { cond: Expr, body: Vec<Statement> },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +93,11 @@ pub enum Expr {
         args: Vec<Expr>,
         #[serde(default)]
         kwargs: Vec<(String, Expr)>,
+    },
+    ForExpr {
+        var: String,
+        iterable: Box<Expr>,
+        body: Box<Expr>,
     },
 }
 
@@ -224,6 +230,20 @@ mod tests {
         };
         let expr = Expr::Quantity(node);
         assert!(matches!(expr, Expr::Quantity(_)));
+    }
+
+    #[test]
+    fn test_ast_for_expr_and_while_stmt() {
+        let for_expr = Expr::ForExpr {
+            var: "x".to_string(),
+            iterable: Box::new(Expr::Identifier("range".to_string())),
+            body: Box::new(Expr::Identifier("x".to_string())),
+        };
+        let while_stmt = Statement::While {
+            cond: Expr::Identifier("flag".to_string()),
+            body: vec![Statement::Expr(for_expr)],
+        };
+        assert!(matches!(while_stmt, Statement::While { .. }));
     }
 }
 
