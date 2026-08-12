@@ -576,6 +576,46 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_assertQuantities<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q1_obj: JObject<'local>,
+    q2_obj: JObject<'local>,
+) {
+    let q1 = match get_rust_quantity(&mut env, &q1_obj) {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let q2 = match get_rust_quantity(&mut env, &q2_obj) {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    if let Err(e) = q1.phs_assert(&q2) {
+        throw_physure_exception(&mut env, &format!("{}", e));
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_assertExactQuantities<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q1_obj: JObject<'local>,
+    q2_obj: JObject<'local>,
+) {
+    let q1 = match get_rust_quantity(&mut env, &q1_obj) {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let q2 = match get_rust_quantity(&mut env, &q2_obj) {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    if let Err(e) = q1.phs_exact_assert(&q2) {
+        throw_physure_exception(&mut env, &format!("{}", e));
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_getFunctionParams<'local>(
     mut env: JNIEnv<'local>,
     _class: JClass,

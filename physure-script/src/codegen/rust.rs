@@ -24,8 +24,15 @@ impl CodeGenerator for RustTranspiler {
                     main_statements.push(format!("    println!(\"{}: {{}}\", {});", node.name, node.name));
                 }
                 Statement::Expr(expr) => {
-                    let expr_code = self.generate_expr(expr)?;
-                    main_statements.push(format!("    println!(\"{{}}\", {});", expr_code));
+                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
+                        let a_code = self.generate_expr(a)?;
+                        let b_code = self.generate_expr(b)?;
+                        let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
+                        main_statements.push(format!("    ({}).{}(&({}))?;", a_code, method, b_code));
+                    } else {
+                        let expr_code = self.generate_expr(expr)?;
+                        main_statements.push(format!("    println!(\"{{}}\", {});", expr_code));
+                    }
                 }
                 _ => {}
             }
@@ -53,7 +60,16 @@ impl RustTranspiler {
             Statement::Export(_) => Ok(String::new()),
             Statement::FunctionDef(node) => self.generate_function_def(node),
             Statement::Assignment(node) => self.generate_assignment(node),
-            Statement::Expr(expr) => self.generate_expr(expr),
+            Statement::Expr(expr) => {
+                if let Some((kind, a, b)) = super::as_assert_call(expr) {
+                    let a_code = self.generate_expr(a)?;
+                    let b_code = self.generate_expr(b)?;
+                    let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
+                    Ok(format!("({}).{}(&({}))?", a_code, method, b_code))
+                } else {
+                    self.generate_expr(expr)
+                }
+            }
             Statement::Return(expr) => Ok(format!("return {};", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if {} {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
@@ -169,6 +185,12 @@ impl RustTranspiler {
                         name
                     )));
                 }
+                if (name == "assert" || name == "exact_assert") && args.len() == 2 {
+                    return Err(CodegenError::Generic(format!(
+                        "'{}' can only be used as a standalone statement, not nested inside an expression",
+                        name
+                    )));
+                }
                 let mut arg_codes = Vec::new();
                 for arg in args {
                     arg_codes.push(self.generate_expr(arg)?);
@@ -238,5 +260,29 @@ mod tests {
         };
         let code = transpiler.generate_program(&ast).unwrap();
         assert!(code.contains("Quantity::with_uncertainty(75.0, 0.5, \"kg\")"));
+    }
+
+    #[test]
+    fn transpiles_assert_call_to_phs_assert_with_question_mark() {
+        let transpiler = RustTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
+        let code = transpiler.generate_program(&program).unwrap();
+        assert!(code.contains(".phs_assert(&"), "expected phs_assert call:\n{code}");
+        assert!(code.contains('?'), "expected the call to propagate its Result:\n{code}");
+    }
+
+    #[test]
+    fn transpiles_exact_assert_call_to_phs_exact_assert() {
+        let transpiler = RustTranspiler;
+        let program = crate::parser::parse_phs("exact_assert(5.0 m, 5.0 m)").unwrap();
+        let code = transpiler.generate_program(&program).unwrap();
+        assert!(code.contains(".phs_exact_assert(&"), "expected phs_exact_assert call:\n{code}");
+    }
+
+    #[test]
+    fn rejects_assert_used_as_a_nested_expression() {
+        let transpiler = RustTranspiler;
+        let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
+        assert!(transpiler.generate_program(&program).is_err());
     }
 }

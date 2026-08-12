@@ -282,6 +282,24 @@ pub fn expr_to_unit_string(expr: &Expr) -> String {
     }
 }
 
+/// Recognizes `assert(actual, expected)` / `exact_assert(actual, expected)` — the only
+/// two-argument, no-kwargs shape v1 supports — used as a standalone statement. Every
+/// codegen target intercepts this before falling through to its generic `FunctionCall`
+/// handling, since none of them can express PHS's `assert`/`exact_assert` as an ordinary
+/// function call (Python's `assert` is a statement keyword, not a name; Rust/Java/JS have
+/// no builtin of that name at all).
+pub(crate) fn as_assert_call(expr: &Expr) -> Option<(&'static str, &Expr, &Expr)> {
+    let Expr::FunctionCall { name, args, kwargs } = expr else { return None };
+    if !kwargs.is_empty() || args.len() != 2 {
+        return None;
+    }
+    match name.as_str() {
+        "assert" => Some(("assert", &args[0], &args[1])),
+        "exact_assert" => Some(("exact_assert", &args[0], &args[1])),
+        _ => None,
+    }
+}
+
 /// Converts a symbolic algebra `Node` (from equation solving) into the same `Expr` tree
 /// used for ordinary transpiled code, so it can be handed to the existing per-language
 /// `generate_expr` without any target-specific translation logic of its own.

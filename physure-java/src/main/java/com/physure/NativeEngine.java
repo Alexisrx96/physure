@@ -119,5 +119,7 @@ public class NativeEngine {
     public static native Quantity divQuantities(Quantity a, Quantity b);
     public static native Quantity powQuantity(Quantity q, double power);
     public static native Quantity convertQuantity(Quantity q, String targetUnit);
+    public static native void assertQuantities(Quantity a, Quantity b);
+    public static native void assertExactQuantities(Quantity a, Quantity b);
     public static native String[] getFunctionParams(long registryHandle, String funcName);
 }

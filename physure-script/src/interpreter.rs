@@ -1148,6 +1148,41 @@ mod tests {
     }
 
     #[test]
+    fn assert_passes_when_dimensions_and_magnitude_agree() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("assert(1.0 km, 1000.0 m)").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn assert_fails_with_assertion_failed_error_on_mismatch() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(1.0 m, 1.0 s)").unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+    }
+
+    #[test]
+    fn exact_assert_passes_for_alias_units() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("exact_assert(5.0 m, 5.0 meter)").unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn exact_assert_fails_when_conversion_would_be_required() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("exact_assert(1.0 km, 1000.0 m)").unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "exact_assert", .. }));
+    }
+
+    #[test]
+    fn assert_rejects_non_quantity_arguments() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(\"a\", \"b\")").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
+
+    #[test]
     fn stable_and_experimental_decorators_do_not_affect_evaluation() {
         let mut interp = PhsInterpreter::default();
         let results = interp.eval_str("@stable\nfn f(x) = x * 2.0\nf(3.0)").unwrap();

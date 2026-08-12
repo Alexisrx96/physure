@@ -34,8 +34,15 @@ impl CodeGenerator for JsTranspiler {
                     main_stmts.push(format!("console.log(`{}: ${{{}}}`);", node.name, var_name));
                 }
                 Statement::Expr(expr) => {
-                    let val = self.generate_expr(expr)?;
-                    main_stmts.push(format!("console.log({});", val));
+                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
+                        let a_code = self.generate_expr(a)?;
+                        let b_code = self.generate_expr(b)?;
+                        let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
+                        main_stmts.push(format!("{}.{}({});", a_code, method, b_code));
+                    } else {
+                        let val = self.generate_expr(expr)?;
+                        main_stmts.push(format!("console.log({});", val));
+                    }
                 }
                 _ => {}
             }
@@ -170,6 +177,12 @@ impl JsTranspiler {
                         name
                     )));
                 }
+                if (name == "assert" || name == "exact_assert") && args.len() == 2 {
+                    return Err(CodegenError::Generic(format!(
+                        "'{}' can only be used as a standalone statement, not nested inside an expression",
+                        name
+                    )));
+                }
                 let mut arg_strs = Vec::new();
                 for a in args {
                     arg_strs.push(self.generate_expr(a)?);
@@ -257,5 +270,28 @@ mod tests {
         });
         let result = transpiler.generate_expr(&q).unwrap();
         assert_eq!(result, "Quantity.withUncertainty(75, 0.5, \"kg\")");
+    }
+
+    #[test]
+    fn transpiles_assert_call_to_phys_assert_call_js() {
+        let transpiler = JsTranspiler::default();
+        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
+        let code = transpiler.generate_program(&program).unwrap();
+        assert!(code.contains(".physAssert("), "expected physAssert call:\n{code}");
+    }
+
+    #[test]
+    fn transpiles_exact_assert_call_to_phys_exact_assert_call_ts() {
+        let transpiler = JsTranspiler { typed: true };
+        let program = crate::parser::parse_phs("exact_assert(5.0 m, 5.0 m)").unwrap();
+        let code = transpiler.generate_program(&program).unwrap();
+        assert!(code.contains(".physExactAssert("), "expected physExactAssert call:\n{code}");
+    }
+
+    #[test]
+    fn rejects_assert_used_as_a_nested_expression_js() {
+        let transpiler = JsTranspiler::default();
+        let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
+        assert!(transpiler.generate_program(&program).is_err());
     }
 }
