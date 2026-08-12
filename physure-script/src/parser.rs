@@ -71,7 +71,13 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement
 
 fn parse_while_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
     let mut inner = pair.into_inner();
-    let cond = parse_expr(inner.next().unwrap())?;
+    let first = inner.next().unwrap();
+    let cond_pair = if first.as_rule() == Rule::_while_kw {
+        inner.next().unwrap()
+    } else {
+        first
+    };
+    let cond = parse_expr(cond_pair)?;
     let mut body = Vec::new();
     for stmt_pair in inner {
         if stmt_pair.as_rule() == Rule::stmt {
@@ -524,7 +530,12 @@ fn parse_if_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
 
 fn parse_for_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
-    let var = inner.next().unwrap().as_str().to_string();
+    let first = inner.next().unwrap();
+    let var = if first.as_rule() == Rule::_for_kw {
+        inner.next().unwrap().as_str().to_string()
+    } else {
+        first.as_str().to_string()
+    };
     let iterable = Box::new(parse_expr(inner.next().unwrap())?);
     let body = Box::new(parse_expr(inner.next().unwrap())?);
     Ok(Expr::ForExpr { var, iterable, body })

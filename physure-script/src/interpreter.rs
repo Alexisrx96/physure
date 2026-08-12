@@ -119,8 +119,8 @@ fn make_range(l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
 
 fn is_truthy(val: &PhsValue) -> bool {
     match val {
-        PhsValue::Quantity(q) => q.value.mean() > 0.0,
-        PhsValue::Number(n) => *n > 0.0,
+        PhsValue::Quantity(q) => q.value.mean().abs() > 1e-15,
+        PhsValue::Number(n) => n.abs() > 1e-15,
         PhsValue::Bool(b) => *b,
         PhsValue::String(s) => s == "true" || s == "True" || s == "1",
         _ => false,
@@ -668,7 +668,14 @@ impl PhsInterpreter {
                     PhsValue::Range(start, end) => {
                         let (start_num, unit) = match start.as_ref() {
                             PhsValue::Number(n) => (*n, None),
-                            PhsValue::Quantity(q) => (q.value.mean(), Some(q.unit.clone())),
+                            PhsValue::Quantity(q) => {
+                                let u = if q.unit.dimensions.is_empty() {
+                                    None
+                                } else {
+                                    Some(q.unit.clone())
+                                };
+                                (q.value.mean(), u)
+                            }
                             _ => return Err(PhysureError::Generic("Range start must be a number or quantity".into())),
                         };
                         let end_num = match end.as_ref() {
@@ -690,11 +697,18 @@ impl PhsInterpreter {
                     }
                     other => return Err(PhysureError::Generic(format!("Cannot iterate over {}", other))),
                 };
+
+                let mut local_env = env.clone();
+                let old_val = local_env.get(var).cloned();
                 let mut results = Vec::with_capacity(items.len());
                 for item in items {
-                    let mut child_env = env.clone();
-                    child_env.insert(var.clone(), item);
-                    results.push(self.eval_expr(body, &child_env)?);
+                    local_env.insert(var.clone(), item);
+                    results.push(self.eval_expr(body, &local_env)?);
+                }
+                if let Some(old) = old_val {
+                    local_env.insert(var.clone(), old);
+                } else {
+                    local_env.remove(var);
                 }
                 Ok(PhsValue::Vector(results))
             }
@@ -1647,9 +1661,16 @@ r3 = circuito_abierto(5 V, 2 A)
         let stmts = crate::parser::parse_phs("i = 0\nwhile i < 5 { i = i + 1 }").unwrap();
         interp.run_statements(&stmts).unwrap();
         let val = interp.get_var("i").unwrap();
-        assert_eq!(val.to_string(), "5");
+        assert_eq!(val.to_string(), "5.0");
 
         let infinite = crate::parser::parse_phs("i = 0\nwhile true { i = i + 1 }").unwrap();
         assert!(interp.run_statements(&infinite).is_err());
+    }
+
+    #[test]
+    fn test_is_truthy_negative_numbers() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i { count = count + 1\n i = i + 1 }").unwrap();
+        assert!(interp.run_statements(&stmts).is_ok());
     }
 }
