@@ -286,6 +286,7 @@ mod tests {
                 right: Box::new(Expr::Identifier("v".to_string())),
             })],
             decorators: Vec::new(),
+            doc: None,
         });
 
         let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
@@ -306,6 +307,7 @@ mod tests {
                 right: Box::new(Expr::Identifier("v".to_string())),
             })],
             decorators: Vec::new(),
+            doc: None,
         });
 
         let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();

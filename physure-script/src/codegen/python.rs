@@ -302,6 +302,7 @@ mod tests {
                 right: Box::new(Expr::Identifier("b".to_string())),
             })],
             decorators: Vec::new(),
+            doc: None,
         };
 
         let prog = Program {

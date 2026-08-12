@@ -215,6 +215,7 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         param_units,
         body_stmts,
         decorators: Vec::new(),
+        doc: None,
     }))
 }
 

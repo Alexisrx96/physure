@@ -54,6 +54,10 @@ pub struct FunctionDefNode {
     pub body_stmts: Vec<Statement>,
     #[serde(default)]
     pub decorators: Vec<DecoratorNode>,
+    /// Consecutive `///` lines immediately above the definition, newline-joined, `///` prefix
+    /// and one leading space stripped per line. `None` if the function has no doc comment.
+    #[serde(default)]
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -201,6 +205,7 @@ mod tests {
                 name: "stable".to_string(),
                 args: vec![],
             }],
+            doc: None,
         };
         assert_eq!(node.decorators.len(), 1);
         assert_eq!(node.decorators[0].name, "stable");

@@ -283,6 +283,7 @@ mod tests {
                     })),
                 })],
                 decorators: Vec::new(),
+                doc: None,
             })],
         };
         let code = transpiler.generate_program(&ast).unwrap();

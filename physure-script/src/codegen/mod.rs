@@ -484,6 +484,7 @@ fn rewrite_equation_calls(
                         param_units: vec![None; kwarg_names.len()],
                         body_stmts: vec![Statement::Expr(node_to_expr(chosen))],
                         decorators: Vec::new(),
+                        doc: None,
                     });
                     signatures.insert(name.clone(), kwarg_names.clone());
                 }

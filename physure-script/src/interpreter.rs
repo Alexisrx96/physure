@@ -626,6 +626,7 @@ impl PhsInterpreter {
                                 param_units,
                                 body_stmts: vec![body],
                                 decorators: Vec::new(),
+                                doc: None,
                             }));
                         }
                     }
@@ -974,6 +975,7 @@ impl PhsInterpreter {
                     param_units,
                     body_stmts: vec![body],
                     decorators: Vec::new(),
+                    doc: None,
                 }))
             }
             (PhsValue::Equation(l1, r1), PhsValue::Equation(l2, r2)) => {
@@ -1372,6 +1374,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     })
                 })],
                 decorators: Vec::new(),
+                doc: None,
             }),
             Statement::Assignment(AssignmentNode {
                 name: "m".to_string(),
