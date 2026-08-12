@@ -35,14 +35,22 @@ secrets in a required-reviewer GitHub environment for Maven/npm).
   version to all match — so before tagging a wasm release, bump
   `physure-wasm/package.json` by hand to match whatever the current
   workspace version is.
+
+## Tag-prefix overlaps worth knowing about
+
+The "Tag prefix" column above shows the prefix each *bump workflow*
+produces — but the release workflows themselves accept more than that:
+
 - `release.yml` actually triggers on `v*`, `py-v*`, **and** `py-core-v*`
   (not just `vX.Y.Z`) — its `check-version` job strips whichever prefix
   matched, trying `py-core-v`, then `py-v`, then `v`, before comparing
-  against `__version__`. `core-release.yml` triggers on `core-v*` **and**
-  `py-core-v*` too. That overlap means pushing a `py-core-v*` tag fires
-  *both* `release.yml` and `core-release.yml` at once — two independent,
-  differently-versioned release pipelines simultaneously. Avoid tagging
-  `py-core-v*` unless you specifically intend to trigger both.
+  against `__version__`. Neither bump workflow ever produces `py-v*` or
+  `py-core-v*`; these only matter if you're tagging by hand.
+- `core-release.yml` triggers on `core-v*` **and** `py-core-v*` too. That
+  overlap means pushing a `py-core-v*` tag fires *both* `release.yml` and
+  `core-release.yml` at once — two independent, differently-versioned
+  release pipelines simultaneously. Avoid tagging `py-core-v*` unless you
+  specifically intend to trigger both.
 
 ## Steps: Python release
 
