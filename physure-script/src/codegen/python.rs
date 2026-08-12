@@ -214,6 +214,11 @@ impl PythonTranspiler {
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {
+                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+                    let l_str = self.generate_expr(l)?;
+                    let r_str = self.generate_expr(r)?;
+                    return Ok(format!("({} {} {})", l_str, op_sym, r_str));
+                }
                 if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && args.len() == 2 {
                     return Err(CodegenError::Generic(format!(
                         "'{}' can only be used as a standalone statement, not nested inside an expression",

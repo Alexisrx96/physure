@@ -1763,6 +1763,9 @@ fn expr_to_string(expr: &crate::ast::Expr) -> String {
             let args_str: Vec<String> = args.iter().map(expr_to_string).collect();
             format!("{}({})", name, args_str.join(", "))
         }
+        crate::ast::Expr::ForExpr { var, iterable, body } => {
+            format!("for {} in {} {{ {} }}", var, expr_to_string(iterable), expr_to_string(body))
+        }
     }
 }
 

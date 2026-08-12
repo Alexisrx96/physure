@@ -52,6 +52,11 @@ const TEST_CASES: &[ParityTestCase] = &[
         script: "duplo = a + b where a = 2.0 m, b = a * 3.0\n",
         expected_substring: "8",
     },
+    ParityTestCase {
+        name: "while_loop_convergence",
+        script: "x = 1.5\ni = 0\nwhile i < 5 {\n  x = (x + 2.0 / x) / 2.0\n  i = i + 1\n}\nx\n",
+        expected_substring: "1.41421",
+    },
 ];
 
 #[test]

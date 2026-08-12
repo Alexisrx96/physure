@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::codegen::{CodeGenerator, CodegenError};
+use std::collections::HashSet;
 
 pub struct RustTranspiler;
 
@@ -13,6 +14,7 @@ impl CodeGenerator for RustTranspiler {
         ));
         let mut top_functions = Vec::new();
         let mut main_statements = Vec::new();
+        let mut main_declared_vars = HashSet::new();
 
         for stmt in &program.statements {
             match stmt {
@@ -20,7 +22,7 @@ impl CodeGenerator for RustTranspiler {
                     top_functions.push(self.generate_function_def(node)?);
                 }
                 Statement::Assignment(node) => {
-                    main_statements.push(format!("    {}", self.generate_assignment(node)?));
+                    main_statements.push(format!("    {}", self.generate_assignment(node, &mut main_declared_vars)?));
                     main_statements.push(format!("    println!(\"{}: {{}}\", {});", node.name, node.name));
                 }
                 Statement::Expr(expr) => {
@@ -35,7 +37,7 @@ impl CodeGenerator for RustTranspiler {
                     }
                 }
                 Statement::While { .. } => {
-                    main_statements.push(format!("    {}", self.generate_statement(stmt)?));
+                    main_statements.push(format!("    {}", self.generate_statement(stmt, &mut main_declared_vars)?));
                 }
                 _ => {}
             }
@@ -57,12 +59,12 @@ impl CodeGenerator for RustTranspiler {
 }
 
 impl RustTranspiler {
-    fn generate_statement(&self, stmt: &Statement) -> Result<String, CodegenError> {
+    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
         match stmt {
             Statement::Import(_) => Ok(String::new()),
             Statement::Export(_) => Ok(String::new()),
             Statement::FunctionDef(node) => self.generate_function_def(node),
-            Statement::Assignment(node) => self.generate_assignment(node),
+            Statement::Assignment(node) => self.generate_assignment(node, declared_vars),
             Statement::Expr(expr) => {
                 if let Some((kind, a, b)) = super::as_assert_call(expr) {
                     let a_code = self.generate_expr(a)?;
@@ -81,7 +83,7 @@ impl RustTranspiler {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
-                    let stmt_code = self.generate_statement(s)?;
+                    let stmt_code = self.generate_statement(s, declared_vars)?;
                     if !stmt_code.is_empty() {
                         let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
                             stmt_code
@@ -103,6 +105,7 @@ impl RustTranspiler {
         for param in &node.params {
             params.push(format!("{}: Quantity", param));
         }
+        let mut declared_vars: HashSet<String> = node.params.iter().cloned().collect();
         let last_idx = node.body_stmts.len().saturating_sub(1);
         let mut body_lines = Vec::new();
         for (i, stmt) in node.body_stmts.iter().enumerate() {
@@ -110,10 +113,10 @@ impl RustTranspiler {
                 if let Statement::Expr(ref e) = stmt {
                     body_lines.push(format!("    {}", self.generate_expr(e)?));
                 } else {
-                    body_lines.push(format!("    {}", self.generate_statement(stmt)?));
+                    body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars)?));
                 }
             } else {
-                body_lines.push(format!("    {}", self.generate_statement(stmt)?));
+                body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars)?));
             }
         }
         Ok(format!(
@@ -124,9 +127,14 @@ impl RustTranspiler {
         ))
     }
 
-    fn generate_assignment(&self, node: &AssignmentNode) -> Result<String, CodegenError> {
+    fn generate_assignment(&self, node: &AssignmentNode, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
         let value = self.generate_expr(&node.value)?;
-        Ok(format!("let {} = {};", node.name, value))
+        if declared_vars.contains(&node.name) {
+            Ok(format!("{} = {};", node.name, value))
+        } else {
+            declared_vars.insert(node.name.clone());
+            Ok(format!("let mut {} = {};", node.name, value))
+        }
     }
 
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
@@ -180,10 +188,15 @@ impl RustTranspiler {
                     // operand is re-associated by Rust's own precedence, so
                     // `12 m / (3 s * 2)` emitted as `12 / 3 * 2` and answered 8
                     // where PHS answers 2.
-                    BinaryOp::Add => Ok(format!("({} + {})", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Sub => Ok(format!("({} - {})", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Mul => Ok(format!("({} * {})", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Div => Ok(format!("({} / {})", left_code, self.generate_expr(right)?)),
+                    //
+                    // Operands are borrowed (`&(...)`) rather than moved: `Quantity` has no
+                    // `Copy`, so a variable used twice in one expression (`x + 2.0 / x`, which
+                    // a convergence loop's body writes routinely) would otherwise fail to
+                    // compile with "use of moved value" on its second use.
+                    BinaryOp::Add => Ok(format!("(&({}) + &({}))", left_code, self.generate_expr(right)?)),
+                    BinaryOp::Sub => Ok(format!("(&({}) - &({}))", left_code, self.generate_expr(right)?)),
+                    BinaryOp::Mul => Ok(format!("(&({}) * &({}))", left_code, self.generate_expr(right)?)),
+                    BinaryOp::Div => Ok(format!("(&({}) / &({}))", left_code, self.generate_expr(right)?)),
                     BinaryOp::Pow => {
                         if let Expr::Quantity(q) = &**right {
                             if q.magnitude.fract() == 0.0 {
@@ -200,6 +213,11 @@ impl RustTranspiler {
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {
+                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+                    let l_str = self.generate_expr(l)?;
+                    let r_str = self.generate_expr(r)?;
+                    return Ok(format!("({}.canonical_magnitude() {} {}.canonical_magnitude())", l_str, op_sym, r_str));
+                }
                 if !kwargs.is_empty() {
                     return Err(CodegenError::Generic(format!(
                         "Named arguments are not supported in Rust codegen (call to '{}')",
@@ -327,7 +345,17 @@ mod tests {
             cond: Expr::Identifier("flag".to_string()),
             body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
         };
-        let code_while = tp.generate_statement(&while_stmt).unwrap();
+        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
         assert_eq!(code_while, "while flag {\n  return x;\n}");
+    }
+
+    #[test]
+    fn test_rust_reassignment_in_while_loop() {
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs("i = 0\nwhile i < 5 {\n  i = i + 1\n}").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("let mut i = "), "expected mutable declaration:\n{code}");
+        assert!(code.contains("i = (&(i) +"), "expected reassignment without redeclaration:\n{code}");
+        assert!(!code.contains("let mut i = (&(i) +"), "reassignment should not redeclare inside the loop:\n{code}");
     }
 }

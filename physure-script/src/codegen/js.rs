@@ -1,10 +1,30 @@
 use crate::ast::{BinaryOp, Expr, FunctionDefNode, Program, Statement};
 use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Default)]
 pub struct JsTranspiler {
     /// false = plain JavaScript, true = TypeScript (adds type annotations).
     pub typed: bool,
+}
+
+/// Names assigned inside a `while` body anywhere in the program: a top-level variable of
+/// one of these names needs `let` rather than `const`, since a later loop iteration
+/// reassigns it (and JS's block scoping means a *nested* `let` there would shadow instead
+/// of mutating).
+fn names_reassigned_in_loops(stmts: &[Statement]) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for stmt in stmts {
+        if let Statement::While { body, .. } = stmt {
+            for s in body {
+                if let Statement::Assignment(node) = s {
+                    names.insert(snake_to_camel(&node.name));
+                }
+            }
+            names.extend(names_reassigned_in_loops(body));
+        }
+    }
+    names
 }
 
 impl CodeGenerator for JsTranspiler {
@@ -15,6 +35,8 @@ impl CodeGenerator for JsTranspiler {
 
         let mut functions = Vec::new();
         let mut main_stmts = Vec::new();
+        let mut main_declared_vars = HashSet::new();
+        let reassigned = names_reassigned_in_loops(&program.statements);
 
         for stmt in &program.statements {
             match stmt {
@@ -25,11 +47,14 @@ impl CodeGenerator for JsTranspiler {
                     let val = self.generate_expr(&node.value)?;
                     let var_name = snake_to_camel(&node.name);
                     let is_str_literal = matches!(&node.value, Expr::Str(_));
+                    main_declared_vars.insert(var_name.clone());
+                    // `const` unless a later `while` loop reassigns this variable.
+                    let keyword = if reassigned.contains(&var_name) { "let" } else { "const" };
                     if self.typed {
                         let ty = if is_str_literal { "string" } else { "Quantity" };
-                        main_stmts.push(format!("const {}: {} = {};", var_name, ty, val));
+                        main_stmts.push(format!("{} {}: {} = {};", keyword, var_name, ty, val));
                     } else {
-                        main_stmts.push(format!("const {} = {};", var_name, val));
+                        main_stmts.push(format!("{} {} = {};", keyword, var_name, val));
                     }
                     main_stmts.push(format!("console.log(`{}: ${{{}}}`);", node.name, var_name));
                 }
@@ -45,7 +70,7 @@ impl CodeGenerator for JsTranspiler {
                     }
                 }
                 Statement::While { .. } => {
-                    main_stmts.push(self.generate_statement(stmt)?);
+                    main_stmts.push(self.generate_statement(stmt, &mut main_declared_vars)?);
                 }
                 _ => {}
             }
@@ -82,29 +107,35 @@ impl JsTranspiler {
         let ret_ty = if self.typed { ": Quantity" } else { "" };
         out.push_str(&format!("function {}({}){} {{\n", snake_to_camel(&f.name), params.join(", "), ret_ty));
 
+        let mut declared_vars: HashSet<String> = f.params.iter().map(|p| snake_to_camel(p)).collect();
         let last_idx = f.body_stmts.len().saturating_sub(1);
         for (i, stmt) in f.body_stmts.iter().enumerate() {
             if i == last_idx {
                 if let Statement::Expr(ref e) = stmt {
                     out.push_str(&format!("    return {};\n", self.generate_expr(e)?));
                 } else {
-                    out.push_str(&format!("    {};\n", self.generate_statement(stmt)?));
+                    out.push_str(&format!("    {};\n", self.generate_statement(stmt, &mut declared_vars)?));
                 }
             } else {
-                out.push_str(&format!("    {};\n", self.generate_statement(stmt)?));
+                out.push_str(&format!("    {};\n", self.generate_statement(stmt, &mut declared_vars)?));
             }
         }
         out.push_str("}\n");
         Ok(out)
     }
 
-    fn generate_statement(&self, stmt: &Statement) -> Result<String, CodegenError> {
+    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
         match stmt {
             Statement::FunctionDef(f) => self.generate_function_def_stmt(f),
             Statement::Assignment(node) => {
                 let val = self.generate_expr(&node.value)?;
                 let var_name = snake_to_camel(&node.name);
-                Ok(format!("let {} = {}", var_name, val))
+                if declared_vars.contains(&var_name) {
+                    Ok(format!("{} = {}", var_name, val))
+                } else {
+                    declared_vars.insert(var_name.clone());
+                    Ok(format!("let {} = {}", var_name, val))
+                }
             }
             Statement::Expr(expr) => self.generate_expr(expr),
             Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
@@ -115,7 +146,7 @@ impl JsTranspiler {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
-                    let stmt_code = self.generate_statement(s)?;
+                    let stmt_code = self.generate_statement(s, declared_vars)?;
                     if !stmt_code.is_empty() {
                         let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
                             stmt_code
@@ -198,6 +229,11 @@ impl JsTranspiler {
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {
+                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+                    let l_str = self.generate_expr(l)?;
+                    let r_str = self.generate_expr(r)?;
+                    return Ok(format!("({}.getValue() {} {}.getValue())", l_str, op_sym, r_str));
+                }
                 if !kwargs.is_empty() {
                     return Err(CodegenError::Generic(format!(
                         "Named arguments are not supported in JS/TS codegen (call to '{}')",
@@ -252,7 +288,7 @@ mod tests {
             decorators: Vec::new(),
         });
 
-        let result = transpiler.generate_statement(&func).unwrap();
+        let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
         assert!(result.contains("function kineticEnergy(m, v)"));
         assert!(result.contains("return m.multiply(v);"));
     }
@@ -272,7 +308,7 @@ mod tests {
             decorators: Vec::new(),
         });
 
-        let result = transpiler.generate_statement(&func).unwrap();
+        let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
         assert!(result.contains("function kineticEnergy(m: Quantity, v: Quantity): Quantity"));
         assert!(result.contains("return m.multiply(v);"));
     }
@@ -343,7 +379,17 @@ mod tests {
             cond: Expr::Identifier("flag".to_string()),
             body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
         };
-        let code_while = tp.generate_statement(&while_stmt).unwrap();
+        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
         assert_eq!(code_while, "while (flag) {\n  return x;\n}");
+    }
+
+    #[test]
+    fn test_js_reassignment_in_while_loop() {
+        let tp = JsTranspiler::default();
+        let program = crate::parser::parse_phs("i = 0\nwhile i < 5 {\n  i = i + 1\n}").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("let i = "), "expected mutable declaration:\n{code}");
+        assert!(code.contains("i = i.add("), "expected reassignment without redeclaration:\n{code}");
+        assert!(!code.contains("let i = i.add("), "reassignment should not redeclare inside the loop:\n{code}");
     }
 }
