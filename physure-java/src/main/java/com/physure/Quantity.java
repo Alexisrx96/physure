@@ -184,6 +184,26 @@ public class Quantity {
         return Math.abs(this.value - converted.getValue()) < 1e-6;
     }
 
+    /**
+     * PHS's {@code assert(actual, expected)}: passes when both quantities have compatible
+     * dimensions and their magnitudes agree after unit conversion, within a fixed
+     * tolerance. Throws {@link PhysureException} on failure — delegates to the same
+     * {@code physure-core} comparison every other language target uses, rather than
+     * reimplementing the tolerance logic here.
+     */
+    public void physAssert(Quantity expected) {
+        NativeEngine.assertQuantities(this, expected);
+    }
+
+    /**
+     * PHS's {@code exact_assert(actual, expected)}: passes only when both quantities carry
+     * the literal same unit (aliases like {@code m}/{@code meter} still match) and the
+     * magnitudes are bit-exact. Throws {@link PhysureException} on failure.
+     */
+    public void physExactAssert(Quantity expected) {
+        NativeEngine.assertExactQuantities(this, expected);
+    }
+
     public Quantity to(String targetUnit) {
         return NativeEngine.convertQuantity(this, targetUnit);
     }
