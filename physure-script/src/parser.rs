@@ -62,11 +62,25 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement
         Rule::assignment => parse_assignment(pair),
         Rule::guard_if_stmt => parse_guard_if_stmt(pair),
         Rule::return_stmt => parse_return_stmt(pair),
+        Rule::while_stmt => parse_while_stmt(pair),
         Rule::raw_block => Ok(Statement::Expr(Expr::Identifier(pair.as_str().to_string()))),
         Rule::expr => Ok(Statement::Expr(parse_expr(pair)?)),
         _ => Err(PhysureError::Generic(format!("Unexpected statement rule: {:?}", pair.as_rule()))),
     }
 }
+
+fn parse_while_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut inner = pair.into_inner();
+    let cond = parse_expr(inner.next().unwrap())?;
+    let mut body = Vec::new();
+    for stmt_pair in inner {
+        if stmt_pair.as_rule() == Rule::stmt {
+            body.push(parse_statement(stmt_pair)?);
+        }
+    }
+    Ok(Statement::While { cond, body })
+}
+
 
 fn parse_import(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
     let mut path = String::new();
@@ -284,6 +298,7 @@ fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     };
     let mut result = match first.as_rule() {
         Rule::if_expr => parse_if_expr(first)?,
+        Rule::for_expr => parse_for_expr(first)?,
         Rule::base_expr => parse_base_expr(first)?,
         Rule::conv_expr => parse_conv_expr(first)?,
         _ => parse_comp_expr(first)?,
@@ -459,6 +474,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
         Rule::string_lit => Expr::Str(primary_pair.as_str().trim_matches('"').to_string()),
         Rule::if_expr => parse_if_expr(primary_pair)?,
+        Rule::for_expr => parse_for_expr(primary_pair)?,
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
         Rule::expr => parse_expr(primary_pair)?,
         Rule::base_expr => parse_base_expr(primary_pair)?,
@@ -505,6 +521,15 @@ fn parse_if_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         kwargs: Vec::new(),
     })
 }
+
+fn parse_for_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let var = inner.next().unwrap().as_str().to_string();
+    let iterable = Box::new(parse_expr(inner.next().unwrap())?);
+    let body = Box::new(parse_expr(inner.next().unwrap())?);
+    Ok(Expr::ForExpr { var, iterable, body })
+}
+
 
 /// Desugars `body where a = 1, b = a * 2` into nested `FunctionCall { name: "let", args: [name,
 /// value, body] }`, a form the interpreter special-cases to bind `name` in a local scope before
@@ -1048,6 +1073,12 @@ fn check_statement_shadowing(stmt: &Statement, bound: &mut HashSet<String>, line
             check_expr_shadowing(cond, bound, line, col)?;
             check_expr_shadowing(value, bound, line, col)?;
         }
+        Statement::While { cond, body } => {
+            check_expr_shadowing(cond, bound, line, col)?;
+            for s in body {
+                check_statement_shadowing(s, bound, line, col)?;
+            }
+        }
         Statement::Import(_) | Statement::Export(_) => {}
     }
     Ok(())
@@ -1089,6 +1120,12 @@ fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: 
                 check_expr_shadowing(value, bound, line, col)?;
             }
             Ok(())
+        }
+        Expr::ForExpr { var, iterable, body } => {
+            check_expr_shadowing(iterable, bound, line, col)?;
+            let mut local = bound.clone();
+            local.insert(var.clone());
+            check_expr_shadowing(body, &local, line, col)
         }
     }
 }
@@ -1369,4 +1406,15 @@ mod tests {
             assert!(res.is_ok());
         }
     }
+
+    #[test]
+    fn test_parse_for_expr_and_while_stmt() {
+        let script = "for t in 1 .. 5 {\n t * 2 \n}\nwhile x > 0 {\n x = x - 1 \n}";
+        let stmts = parse_phs(script).unwrap().statements;
+        assert_eq!(stmts.len(), 2);
+        assert!(matches!(&stmts[0], Statement::Expr(Expr::ForExpr { .. })));
+        assert!(matches!(&stmts[1], Statement::While { .. }));
+    }
+
 }
+

@@ -87,6 +87,7 @@ primary_base   = _{
   | (_is_func_start ~ function_call)
   | (_is_vec_start ~ vector_literal)
   | (_is_num_start ~ quantity)
+  | for_expr
   | identifier
   | ("(" ~ expr ~ ")")
 }
@@ -157,7 +158,7 @@ string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 return_stmt   = { "return" ~ expr }
 guard_if_stmt = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ return_stmt }
-for_expr     = { "for" ~ identifier ~ "in" ~ expr ~ "{" ~ expr ~ "}" }
+for_expr     = { "for" ~ identifier ~ "in" ~ expr ~ "{" ~ _nl ~ expr ~ _nl ~ "}" }
 while_stmt   = { "while" ~ expr ~ "{" ~ _nl ~ (stmt ~ _nl)* ~ "}" }
 
 decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
@@ -167,6 +168,7 @@ decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
 decorated_stmt  = { (decorator ~ _nl)+ ~ (function_def | assignment_fn | assignment) }
 
 stmt_term       = _{ ";" | NEWLINE }
-stmt            = { import_stmt | export_stmt | decorated_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | raw_block | expr }
+stmt            = { import_stmt | export_stmt | decorated_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | while_stmt | raw_block | expr }
 _is_stmt_start  = _{ !(NEWLINE | COMMENT | EOI) }
 program         = _{ SOI ~ (stmt_term | COMMENT)* ~ (_is_stmt_start ~ stmt ~ (stmt_term | COMMENT)*)* ~ EOI }
+
