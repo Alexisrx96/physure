@@ -1,5 +1,6 @@
-use crate::ast::{BinaryOp, Expr, Program, Statement};
+use crate::ast::{BinaryOp, Expr, FunctionDefNode, Program, Statement};
 use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct JavaTranspiler {
@@ -34,6 +35,7 @@ impl CodeGenerator for JavaTranspiler {
 
         let mut functions = Vec::new();
         let mut main_stmts = Vec::new();
+        let mut main_declared_vars = HashSet::new();
 
         for stmt in &program.statements {
             match stmt {
@@ -43,15 +45,19 @@ impl CodeGenerator for JavaTranspiler {
                 Statement::Assignment(node) => {
                     let val = self.generate_expr(&node.value)?;
                     let var_name = snake_to_camel(&node.name);
-                    // Java is typed, so a string-valued assignment has to be declared as
-                    // one; it used to be declared `Quantity` and refuse to compile. An
-                    // uninterpolated literal spelling an equation stays a PhyEquation.
                     let literal = match &node.value {
                         Expr::Str(text) => Some(text.as_str()),
                         _ => None,
                     };
                     let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
-                    if literal.is_some() && !is_equation {
+                    let is_reassign = main_declared_vars.contains(&var_name);
+                    if !is_reassign {
+                        main_declared_vars.insert(var_name.clone());
+                    }
+
+                    if is_reassign {
+                        main_stmts.push(format!("        {} = {};", var_name, val));
+                    } else if literal.is_some() && !is_equation {
                         main_stmts.push(format!("        String {} = {};", var_name, val));
                     } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
                         main_stmts.push(format!("        PhyEquation {} = {};", var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }));
@@ -72,6 +78,9 @@ impl CodeGenerator for JavaTranspiler {
                         let val = self.generate_expr(expr)?;
                         main_stmts.push(format!("        System.out.println({});", val));
                     }
+                }
+                Statement::While { .. } => {
+                    main_stmts.push(format!("        {}", self.generate_statement(stmt, &mut main_declared_vars)?));
                 }
                 _ => {}
             }
@@ -94,34 +103,83 @@ impl CodeGenerator for JavaTranspiler {
 }
 
 impl JavaTranspiler {
-    fn generate_function_def_stmt(&self, f: &crate::ast::FunctionDefNode) -> Result<String, CodegenError> {
+    fn generate_function_def_stmt(&self, f: &FunctionDefNode) -> Result<String, CodegenError> {
         let mut out = String::new();
         out.push_str(&format!("    public static Quantity {}(", snake_to_camel(&f.name)));
         let params: Vec<String> = f.params.iter().map(|p| format!("Quantity {}", snake_to_camel(p))).collect();
         out.push_str(&params.join(", "));
         out.push_str(") {\n");
+        let mut fn_declared_vars = HashSet::new();
+        for p in &f.params {
+            fn_declared_vars.insert(snake_to_camel(p));
+        }
         let last_idx = f.body_stmts.len().saturating_sub(1);
         for (i, stmt) in f.body_stmts.iter().enumerate() {
             if i == last_idx {
                 if let Statement::Expr(ref e) = stmt {
                     out.push_str(&format!("        return {};\n", self.generate_expr(e)?));
                 } else {
-                    out.push_str(&format!("        {};\n", self.generate_statement(stmt)?));
+                    out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars)?));
                 }
             } else {
-                out.push_str(&format!("        {};\n", self.generate_statement(stmt)?));
+                out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars)?));
             }
         }
         out.push_str("    }\n");
         Ok(out)
     }
 
-    fn generate_statement(&self, stmt: &Statement) -> Result<String, CodegenError> {
+    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
         match stmt {
             Statement::FunctionDef(f) => self.generate_function_def_stmt(f),
+            Statement::Assignment(node) => {
+                let val = self.generate_expr(&node.value)?;
+                let var_name = snake_to_camel(&node.name);
+                let is_reassign = declared_vars.contains(&var_name);
+                if !is_reassign {
+                    declared_vars.insert(var_name.clone());
+                }
+                if is_reassign {
+                    Ok(format!("{} = {}", var_name, val))
+                } else {
+                    let literal = match &node.value {
+                        Expr::Str(text) => Some(text.as_str()),
+                        _ => None,
+                    };
+                    let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
+                    if literal.is_some() && !is_equation {
+                        Ok(format!("String {} = {}", var_name, val))
+                    } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
+                        Ok(format!("PhyEquation {} = {}", var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }))
+                    } else if val.starts_with("PhyFunction") {
+                        Ok(format!("PhyFunction {} = {}", var_name, val))
+                    } else {
+                        Ok(format!("Quantity {} = {}", var_name, val))
+                    }
+                }
+            }
+            Statement::Expr(expr) => self.generate_expr(expr),
             Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if ({}) {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
+            }
+            Statement::While { cond, body } => {
+                let cond_str = self.generate_expr(cond)?;
+                let mut lines = Vec::new();
+                for s in body {
+                    let stmt_code = self.generate_statement(s, declared_vars)?;
+                    if !stmt_code.is_empty() {
+                        let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
+                            stmt_code
+                        } else {
+                            format!("{};", stmt_code)
+                        };
+                        for line in stmt_with_semi.lines() {
+                            lines.push(format!("  {}", line));
+                        }
+                    }
+                }
+                Ok(format!("while ({}) {{\n{}\n}}", cond_str, lines.join("\n")))
             }
             _ => Ok(String::new()),
         }
@@ -198,6 +256,19 @@ impl JavaTranspiler {
                 }
             }
             Expr::FunctionCall { name, args, kwargs } => {
+                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+                    let l_str = self.generate_expr(l)?;
+                    let r_str = self.generate_expr(r)?;
+                    return Ok(match op_sym {
+                        ">" => format!("{}.greaterThan({})", l_str, r_str),
+                        "<" => format!("{}.lessThan({})", l_str, r_str),
+                        ">=" => format!("!{}.lessThan({})", l_str, r_str),
+                        "<=" => format!("!{}.greaterThan({})", l_str, r_str),
+                        "==" => format!("{}.equals({})", l_str, r_str),
+                        "!=" => format!("!{}.equals({})", l_str, r_str),
+                        _ => unreachable!(),
+                    });
+                }
                 if !kwargs.is_empty() {
                     return Err(CodegenError::Generic(format!(
                         "Named arguments are not supported in Java codegen (call to '{}')",
@@ -215,6 +286,12 @@ impl JavaTranspiler {
                     arg_strs.push(self.generate_expr(a)?);
                 }
                 Ok(format!("{}({})", snake_to_camel(name), arg_strs.join(", ")))
+            }
+            Expr::ForExpr { var, iterable, body } => {
+                let it_str = self.generate_expr(iterable)?;
+                let var_str = snake_to_camel(var);
+                let body_str = self.generate_expr(body)?;
+                Ok(format!("({}).stream().map({} -> {}).collect(java.util.stream.Collectors.toList())", it_str, var_str, body_str))
             }
         }
     }
@@ -240,7 +317,7 @@ mod tests {
             decorators: Vec::new(),
         });
         
-        let result = transpiler.generate_statement(&func).unwrap();
+        let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
         assert!(result.contains("public static Quantity kineticEnergy(Quantity m, Quantity v)"));
         assert!(result.contains("return m.multiply(v);"));
     }
@@ -280,5 +357,34 @@ mod tests {
         let transpiler = JavaTranspiler::default();
         let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
         assert!(transpiler.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn test_transpile_for_expr_and_while_stmt_java() {
+        let tp = JavaTranspiler::default();
+        let for_expr = Expr::ForExpr {
+            var: "x".to_string(),
+            iterable: Box::new(Expr::Identifier("items".to_string())),
+            body: Box::new(Expr::Identifier("x".to_string())),
+        };
+        let code_for = tp.generate_expr(&for_expr).unwrap();
+        assert_eq!(code_for, "(items).stream().map(x -> x).collect(java.util.stream.Collectors.toList())");
+
+        let while_stmt = Statement::While {
+            cond: Expr::Identifier("flag".to_string()),
+            body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
+        };
+        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
+        assert_eq!(code_while, "while (flag) {\n  return x;\n}");
+    }
+
+    #[test]
+    fn test_java_reassignment_in_while_loop() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs("i = 0\nwhile i < 5 {\n  i = i + 1\n}").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("Quantity i = Quantity.of(0"));
+        assert!(code.contains("i = i.add("));
+        assert!(!code.contains("Quantity i = i.add"));
     }
 }

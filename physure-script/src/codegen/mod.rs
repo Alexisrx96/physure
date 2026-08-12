@@ -98,6 +98,11 @@ fn inline_bindings(expr: &Expr) -> Expr {
             right: Box::new(inline_bindings(right)),
         },
         Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => expr.clone(),
+        Expr::ForExpr { var, iterable, body } => Expr::ForExpr {
+            var: var.clone(),
+            iterable: Box::new(inline_bindings(iterable)),
+            body: Box::new(inline_bindings(body)),
+        },
     }
 }
 
@@ -113,6 +118,15 @@ fn substitute(expr: &Expr, name: &str, value: &Expr) -> Expr {
             op: *op,
             left: Box::new(substitute(left, name, value)),
             right: Box::new(substitute(right, name, value)),
+        },
+        Expr::ForExpr { var, iterable, body } => Expr::ForExpr {
+            var: var.clone(),
+            iterable: Box::new(substitute(iterable, name, value)),
+            body: if var == name {
+                body.clone()
+            } else {
+                Box::new(substitute(body, name, value))
+            },
         },
         other => other.clone(),
     }
@@ -135,6 +149,10 @@ fn inline_bindings_stmt(stmt: &Statement) -> Statement {
             body_stmts: def.body_stmts.iter().map(inline_bindings_stmt).collect(),
             ..def.clone()
         }),
+        Statement::While { cond, body } => Statement::While {
+            cond: inline_bindings(cond),
+            body: body.iter().map(inline_bindings_stmt).collect(),
+        },
         other => other.clone(),
     }
 }
@@ -251,6 +269,9 @@ pub fn expr_to_phs_string(expr: &Expr) -> String {
             let arg_strs: Vec<String> = args.iter().map(expr_to_phs_string).collect();
             format!("{}({})", name, arg_strs.join(", "))
         }
+        Expr::ForExpr { var, iterable, body } => {
+            format!("for {} in {} {{ {} }}", var, expr_to_phs_string(iterable), expr_to_phs_string(body))
+        }
     }
 }
 
@@ -298,6 +319,28 @@ pub(crate) fn as_assert_call(expr: &Expr) -> Option<(&'static str, &Expr, &Expr)
         "exact_assert" => Some(("exact_assert", &args[0], &args[1])),
         _ => None,
     }
+}
+
+/// Recognizes the `FunctionCall { name: "op_<", .. }` shape the parser desugars relational
+/// operators into (see `ast.rs`'s note on `op_>` et al.), and returns the operands with the
+/// symbol a target language's own `<`/`>`/`==`/... spells. Every `while`/`if` condition a PHS
+/// script writes is one of these, so every codegen backend needs it to emit a runnable
+/// condition instead of calling a nonexistent `op_<` function.
+pub(crate) fn as_comparison_op(expr: &Expr) -> Option<(&'static str, &Expr, &Expr)> {
+    let Expr::FunctionCall { name, args, kwargs } = expr else { return None };
+    if !kwargs.is_empty() || args.len() != 2 {
+        return None;
+    }
+    let symbol = match name.as_str() {
+        "op_>" | "op_gt" => ">",
+        "op_<" | "op_lt" => "<",
+        "op_>=" | "op_gte" => ">=",
+        "op_<=" | "op_lte" => "<=",
+        "op_==" | "op_eq" => "==",
+        "op_!=" | "op_neq" => "!=",
+        _ => return None,
+    };
+    Some((symbol, &args[0], &args[1]))
 }
 
 /// Converts a symbolic algebra `Node` (from equation solving) into the same `Expr` tree
@@ -472,6 +515,15 @@ fn rewrite_equation_calls(
             right: Box::new(rewrite_equation_calls(right, equations, functions, signatures)?),
         }),
         Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => Ok(expr.clone()),
+        Expr::ForExpr { var, iterable, body } => {
+            let new_iterable = rewrite_equation_calls(iterable, equations, functions, signatures)?;
+            let new_body = rewrite_equation_calls(body, equations, functions, signatures)?;
+            Ok(Expr::ForExpr {
+                var: var.clone(),
+                iterable: Box::new(new_iterable),
+                body: Box::new(new_body),
+            })
+        }
     }
 }
 
@@ -519,7 +571,7 @@ mod const_fold_tests {
 
         let rust_code = transpile(&program, Target::Rust).unwrap();
         assert!(rust_code.contains("pub fn eq5("));
-        assert!(rust_code.contains("V / I"));
+        assert!(rust_code.contains("&(V) / &(I)"));
         assert!(!rust_code.contains("3.937"));
 
         let java_code = transpile(&program, Target::Java).unwrap();
@@ -551,5 +603,58 @@ mod const_fold_tests {
     fn named_argument_call_to_unknown_symbol_still_errors() {
         let program = crate::parser::parse_phs("res = undefined_eq(x = 1)").unwrap();
         assert!(transpile(&program, Target::Rust).is_err());
+    }
+
+    #[test]
+    fn test_transpile_loops_and_for_expressions_across_all_targets() {
+        let program = crate::parser::parse_phs(
+            "items = vector(1, 2, 3, 4)\ni = 0\nwhile i < 5 {\n  i = i + 1\n}\nres = for x in items { x * 2 }\n",
+        )
+        .unwrap();
+
+        for target in [
+            Target::Python,
+            Target::Rust,
+            Target::Java,
+            Target::JavaScript,
+            Target::TypeScript,
+        ] {
+            let code = transpile(&program, target.clone()).unwrap();
+            let name = format!("{target:?}");
+
+            match target {
+                Target::Python => {
+                    assert!(code.contains("while "), "Python missing while: {code}");
+                    assert!(code.contains("[") && code.contains("for x in items]"), "Python missing for expr: {code}");
+                }
+                Target::Rust => {
+                    assert!(code.contains("while "), "Rust missing while: {code}");
+                    assert!(code.contains(".into_iter().map(|x|"), "Rust missing for expr: {code}");
+                }
+                Target::Java | Target::JavaWithClass(_) => {
+                    assert!(code.contains("Quantity i = Quantity.of(0"), "Java missing init: {code}");
+                    assert!(code.contains("while "), "Java missing while: {code}");
+                    assert!(code.contains("i = i.add("), "Java missing re-assignment in while: {code}");
+                    assert!(!code.contains("Quantity i = i.add("), "Java contains duplicate Quantity declaration in while: {code}");
+                    assert!(code.contains(".stream().map(x ->"), "Java missing for expr: {code}");
+                }
+                Target::JavaScript | Target::TypeScript => {
+                    assert!(code.contains("while "), "{name} missing while: {code}");
+                    assert!(code.contains(".map((x) =>"), "{name} missing for expr: {code}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_for_expr_inlining_and_shadowing() {
+        let program = crate::parser::parse_phs(
+            "items = vector(1, 2, 3, 4)\nres = (for x in items { x + y }) where y = 10.0",
+        )
+        .unwrap();
+
+        let code = transpile(&program, Target::Python).unwrap();
+        assert!(!code.contains("let("), "let should be inlined: {code}");
+        assert!(code.contains("10.0"), "y should be substituted with 10.0: {code}");
     }
 }

@@ -119,8 +119,10 @@ fn make_range(l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsValue> {
 
 fn is_truthy(val: &PhsValue) -> bool {
     match val {
-        PhsValue::Quantity(q) => q.value.mean() > 0.0,
-        PhsValue::Number(n) => *n > 0.0,
+        PhsValue::Quantity(q) => q.value.mean().abs() > 1e-15,
+        PhsValue::Number(n) => n.abs() > 1e-15,
+        PhsValue::Bool(b) => *b,
+        PhsValue::String(s) => s == "true" || s == "True" || s == "1",
         _ => false,
     }
 }
@@ -268,6 +270,14 @@ impl PhsInterpreter {
         self.eval_statement(stmt)
     }
 
+    pub fn run_statements(&mut self, program: &Program) -> PhysureResult<PhsValue> {
+        let mut last = PhsValue::None;
+        for stmt in &program.statements {
+            last = self.eval_statement(stmt)?;
+        }
+        Ok(last)
+    }
+
     pub fn get_var(&self, name: &str) -> Option<&PhsValue> {
         self.env.get(name)
     }
@@ -315,6 +325,24 @@ impl PhsInterpreter {
                 } else {
                     Ok(PhsValue::None)
                 }
+            }
+            Statement::While { cond, body } => {
+                const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
+                let mut count = 0;
+                let mut last_val = PhsValue::None;
+                while is_truthy(&self.eval_expr(cond, env)?) {
+                    if count >= DEFAULT_MAX_LOOP_ITERATIONS {
+                        return Err(PhysureError::Generic(format!(
+                            "while loop did not converge after {} iterations",
+                            DEFAULT_MAX_LOOP_ITERATIONS
+                        )));
+                    }
+                    count += 1;
+                    for stmt in body {
+                        last_val = self.eval_statement_with_env(stmt, env)?;
+                    }
+                }
+                Ok(last_val)
             }
         }
     }
@@ -632,6 +660,57 @@ impl PhsInterpreter {
                 }
 
                 Err(PhysureError::Generic(format!("Undefined function '{}'", name)))
+            }
+            Expr::ForExpr { var, iterable, body } => {
+                let iterable_val = self.eval_expr(iterable, env)?;
+                let items: Vec<PhsValue> = match iterable_val {
+                    PhsValue::Vector(v) => v,
+                    PhsValue::Range(start, end) => {
+                        let (start_num, unit) = match start.as_ref() {
+                            PhsValue::Number(n) => (*n, None),
+                            PhsValue::Quantity(q) => {
+                                let u = if q.unit.dimensions.is_empty() {
+                                    None
+                                } else {
+                                    Some(q.unit.clone())
+                                };
+                                (q.value.mean(), u)
+                            }
+                            _ => return Err(PhysureError::Generic("Range start must be a number or quantity".into())),
+                        };
+                        let end_num = match end.as_ref() {
+                            PhsValue::Number(n) => *n,
+                            PhsValue::Quantity(q) => q.value.mean(),
+                            _ => return Err(PhysureError::Generic("Range end must be a number or quantity".into())),
+                        };
+                        let start_i = start_num as i64;
+                        let end_i = end_num as i64;
+                        (start_i..end_i)
+                            .map(|i| {
+                                if let Some(ref u) = unit {
+                                    PhsValue::Quantity(Quantity::new_scalar(i as f64, 0.0, u.clone(), None, None))
+                                } else {
+                                    PhsValue::Number(i as f64)
+                                }
+                            })
+                            .collect()
+                    }
+                    other => return Err(PhysureError::Generic(format!("Cannot iterate over {}", other))),
+                };
+
+                let mut local_env = env.clone();
+                let old_val = local_env.get(var).cloned();
+                let mut results = Vec::with_capacity(items.len());
+                for item in items {
+                    local_env.insert(var.clone(), item);
+                    results.push(self.eval_expr(body, &local_env)?);
+                }
+                if let Some(old) = old_val {
+                    local_env.insert(var.clone(), old);
+                } else {
+                    local_env.remove(var);
+                }
+                Ok(PhsValue::Vector(results))
             }
         }
     }
@@ -1552,5 +1631,46 @@ r3 = circuito_abierto(5 V, 2 A)
             }
             _ => panic!("Expected quantity"),
         }
+    }
+
+    #[test]
+    fn test_interpreter_for_expr() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("res = for i in 1..4 { i * 2 }").unwrap();
+        interp.run_statements(&stmts).unwrap();
+        let val = interp.get_var("res").unwrap();
+        assert!(matches!(val, PhsValue::Vector(_)));
+    }
+
+    #[test]
+    fn test_interpreter_for_expr_large_scale() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("res = for i in 1..100000 { i + 1 }").unwrap();
+        interp.run_statements(&stmts).unwrap();
+        let val = interp.get_var("res").unwrap();
+        if let PhsValue::Vector(v) = val {
+            assert_eq!(v.len(), 99999);
+        } else {
+            panic!("expected vector");
+        }
+    }
+
+    #[test]
+    fn test_interpreter_while_loop_and_max_iter() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("i = 0\nwhile i < 5 { i = i + 1 }").unwrap();
+        interp.run_statements(&stmts).unwrap();
+        let val = interp.get_var("i").unwrap();
+        assert_eq!(val.to_string(), "5.0");
+
+        let infinite = crate::parser::parse_phs("i = 0\nwhile true { i = i + 1 }").unwrap();
+        assert!(interp.run_statements(&infinite).is_err());
+    }
+
+    #[test]
+    fn test_is_truthy_negative_numbers() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i { count = count + 1\n i = i + 1 }").unwrap();
+        assert!(interp.run_statements(&stmts).is_ok());
     }
 }

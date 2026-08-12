@@ -57,6 +57,11 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
                 format!("\\text{{{}}}({})", escape_latex_text(name), args_s.join(", "))
             }
         }
+        physure_script::ast::Expr::ForExpr { var, iterable, body } => {
+            let it = format_expr_latex_summary(iterable, i18n);
+            let b = format_expr_latex_summary(body, i18n);
+            format!("[{} \\mid {} \\in {}]", b, format_symbol_latex(var), it)
+        }
     }
 }
 
