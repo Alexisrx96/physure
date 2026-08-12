@@ -68,6 +68,16 @@ impl Quantity {
     pub fn convert_to(&self, unit: &str) -> Result<Quantity, JsValue> {
         self.inner.to(unit).map(Quantity::from_core).map_err(to_js_error)
     }
+
+    #[wasm_bindgen(js_name = physAssert)]
+    pub fn phs_assert(&self, other: &Quantity) -> Result<(), JsValue> {
+        self.inner.phs_assert(&other.inner).map_err(to_js_error)
+    }
+
+    #[wasm_bindgen(js_name = physExactAssert)]
+    pub fn phs_exact_assert(&self, other: &Quantity) -> Result<(), JsValue> {
+        self.inner.phs_exact_assert(&other.inner).map_err(to_js_error)
+    }
 }
 
 impl Quantity {
@@ -145,5 +155,30 @@ mod tests {
             String::from(js_error.message()).contains("Unit mismatch")
                 || String::from(js_error.message()).contains("Incompatible dimensions")
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn phys_assert_passes_for_equal_dimension_and_magnitude() {
+        let a = Quantity::new(1.0, "km").unwrap();
+        let b = Quantity::new(1000.0, "m").unwrap();
+        assert!(a.phs_assert(&b).is_ok());
+    }
+
+    #[wasm_bindgen_test]
+    fn phys_assert_throws_a_js_error_on_mismatch() {
+        let a = Quantity::new(1.0, "m").unwrap();
+        let b = Quantity::new(1.0, "s").unwrap();
+        let err = a.phs_assert(&b).unwrap_err();
+        let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_error.message()).contains("assert failed"));
+    }
+
+    #[wasm_bindgen_test]
+    fn phys_exact_assert_throws_when_conversion_would_be_required() {
+        let a = Quantity::new(1.0, "km").unwrap();
+        let b = Quantity::new(1000.0, "m").unwrap();
+        let err = a.phs_exact_assert(&b).unwrap_err();
+        let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_error.message()).contains("exact_assert failed"));
     }
 }
