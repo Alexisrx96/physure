@@ -121,7 +121,7 @@ These are not style preferences. Breaking one is a bug even when every test pass
   wins. Before adding any unit or alias, grep the symbol across every `.conf` file — this is
   how `gal` became galileo instead of gallon.
 - **Global state must be resettable.** See the `clean_state` fixture above.
-- **Never commit machine-specific config.** `.env`, a `physure_core/.cargo/config.toml` with
+- **Never commit machine-specific config.** `.env`, a `physure-core/.cargo/config.toml` with
   local rustflags, and `.claude/settings.local.json` are gitignored. They have broken CI
   before.
 
