@@ -1412,6 +1412,54 @@ mod tests {
     }
 
     #[test]
+    fn doc_comment_attaches_to_function_def() {
+        let program = parse_phs("/// Computes kinetic energy.\nfn ke(m, v) = 0.5 * m * v^2").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.doc.as_deref(), Some("Computes kinetic energy."));
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn multiline_doc_comment_joins_with_newline() {
+        let program = parse_phs(
+            "/// Line one.\n/// Line two.\nfn ke(m, v) = 0.5 * m * v^2",
+        ).unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.doc.as_deref(), Some("Line one.\nLine two."));
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn doc_comment_stacks_above_decorators() {
+        let program = parse_phs(
+            "/// Computes kinetic energy.\n@stable\nfn ke(m, v) = 0.5 * m * v^2",
+        ).unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.doc.as_deref(), Some("Computes kinetic energy."));
+                assert_eq!(node.decorators.len(), 1);
+                assert_eq!(node.decorators[0].name, "stable");
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plain_double_slash_comment_still_parses() {
+        let program = parse_phs("// just a comment\nfn ke(m, v) = 0.5 * m * v^2").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => assert_eq!(node.doc, None),
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn test_parse_1_cargas() {
         if let Ok(code) = std::fs::read_to_string("D:/Projects/test_physure/1_cargas.phs") {
             let res = parse_phs(&code);
