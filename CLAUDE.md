@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install deps (including dev)
 uv sync --all-extras
 
-# Build Rust core (required after any change to physure_core/src/)
-cd physure_core && maturin develop && cd ..
+# Build Rust core (required after any change to physure-core/src/)
+cd physure-core && maturin develop && cd ..
 
 # Run all tests
 uv run pytest
@@ -37,58 +37,22 @@ make sonar  # runs pytest coverage, Rust lcov, and pysonar analysis
 
 ## Architecture
 
-### Two packages, one repo
+The repo is a 7-crate Cargo workspace. **`structure.md`** (repo root) is
+the source of truth for the crate layout, module map, and how the crates
+depend on each other — read it before navigating the codebase. Keep it
+current: the `update-structure` skill audits/regenerates it, and a
+`PostToolUse` hook on the workspace `Cargo.toml` warns when a crate is
+missing from it.
 
-- **`physure/`** — pure Python library (the public API)
-- **`physure-core/`** — Rust core engine via PyO3, built with `maturin`. Provides `RationalUnit`, `UnitRegistry`, `CovarianceStore`, `PruningConfig`, and the native PHS engine (`PhsLexer`, `PhsParser`, `PhsInterpreter`, `PhsValue`, `eval_phs`) plus the standalone `phs` CLI binary (`cargo run --bin phs`). Most imports from `physure-core` have Python fallbacks so the library still works without it, at reduced performance — **the PHS language is the exception: only Rust implements it**, so `physure.repl` (`python -m physure`) requires the native engine and fails with an install hint without it.
+Two invariants `structure.md` documents that are worth restating here
+because they drive the code-quality policy below:
 
-### Layer map
-
-```
-application/    ← factories (Q_), context (ContextVar), startup (parse .conf → UnitSystem), IO
-domain/         ← core business logic
-  measurement/  ← Quantity, Dimension, CompoundUnit, UnitSystem, Uncertainty, converters
-  notation/     ← lexer, parsers, AST for unit expressions
-  symbolic/     ← sympy-based symbolic quantity handling
-core/           ← BackendManager dispatcher, protocols, formatting
-backends/       ← per-backend ops (numpy_backend, torch_backend, jax_backend)
-  torch/        ← autograd store, covariance for PyTorch
-_jit/           ← tracing + kernel baking; uses RationalUnit for compile-time dim checks
-infrastructure/ ← .conf files defining SI and Imperial unit systems
-ext/            ← optional pandas/numba integrations (activated lazily in __init__.py)
-nn/             ← unit-aware neural network layers (wraps torch.nn)
-static/         ← custom mypy plugin, generated type stubs
-```
-
-### Key objects and how they relate
-
-**`Quantity[Value, Unc, Unit]`** (`domain/measurement/quantity.py`) is the central user-facing class. It holds a `magnitude` (any numeric type), a `CompoundUnit`, and an optional `Uncertainty`.
-
-**`CompoundUnit`** and **`Dimension`** both use the Flyweight pattern — they cache instances in class-level `_cache` dicts. Call `CompoundUnit._cache.clear()` and `Dimension._cache.clear()` when resetting state (the test conftest does this automatically).
-
-**`UnitSystem`** (`domain/measurement/system.py`) is a self-contained registry of dimensions, units, prefixes, and constants. The active system is stored in a `ContextVar` (`application/context.py`). Resolution order: ContextVar → global cache → lazy-load default SI system from `.conf` files.
-
-**`Q_`** is a `QuantityFactory` instance (not a class), called like `Q_(10, "m/s")`. It reads the active `UnitSystem` from context.
-
-**`Uncertainty`** is abstract (`domain/measurement/uncertainty.py`). Concrete subclasses: `CorrelatedUncertainty` (tracks full covariance via `CovarianceStore`) and `UncorrelatedUncertainty`. The global `CovarianceStore` must be cleared between tests — handled by the `clean_state` autouse fixture in `tests/conftest.py`.
-
-**`BackendManager`** (`core/dispatcher.py`) lazily loads backend modules (NumPy, PyTorch, JAX) and caches them. Select via `PHYSURE_BACKEND` env var or by passing a tensor to `Q_`.
-
-### JIT compilation
-
-`physure.jit` wraps a function with symbolic tracing: during the trace, `Quantity` objects are unwrapped and unit arithmetic is validated via `RationalUnit` (Rust). The compiled function operates on raw tensors; unit checks have zero runtime overhead. For PyTorch, this goes through `__torch_dispatch__`.
-
-### Unit system bootstrap
-
-`application/startup.py` reads `infrastructure/config/physure.conf`, `systems/international.conf`, and `systems/imperial.conf` using `configparser`, then uses `UnitSystemBuilder` to register dimensions, prefixes, units, and constants into a `UnitSystem`. A user-local `physure.conf` in the CWD can override defaults.
-
-### Uncertainty propagation modes
-
-Set globally with `physure.propagation_mode("correlated" | "uncorrelated")` or scoped with the `uncertainty_mode` context manager. Correlated mode uses a sparse covariance matrix (backed by `physure_core.CovarianceStore` when available). For JAX/functional use, `physure.functional.FunctionalState` lets you pass the covariance matrix explicitly instead of relying on global state.
-
-### mypy plugin
-
-`physure.static.mypy_plugin` narrows `Q_("value", "unit_str")` return types to `Quantity[..., ..., Literal["unit_str"]]` at static analysis time. Configured in both `pyproject.toml` and `mypy.ini`.
+- **`physure-core` has zero FFI dependencies** — every language binding
+  (`physure-python`, `physure-wasm`, `physure-java`, `physure-cli`,
+  `physure-lsp`) wraps it, never re-implements physics/unit logic.
+- **The PHS language (`physure-script`) has no fallback** — it's the one
+  piece every other binding transitively depends on with no Python (or
+  other) reimplementation to fall back to.
 
 ## Philosophy & Correctness
 
@@ -101,7 +65,7 @@ These are the project's non-negotiable invariants, learned the hard way. Violati
 - **Unit aliases collide silently.** `UnitSystem` logs a warning and the *later* definition wins (the `gal` gallon/galileo incident, PR #17). Before adding any unit or alias, grep the existing symbol across all `.conf` files — use the `add-unit` skill.
 - **Global state must be resettable.** `CompoundUnit._cache`, `Dimension._cache`, and the global `CovarianceStore` are cleared by the `clean_state` autouse fixture. New global caches must be added to that fixture.
 - **Doctests are tests.** pytest runs `--doctest-modules`; every docstring example in `physure/` executes on every run. Keep examples runnable or don't write them.
-- **Never commit machine-specific config.** `.env`, `physure_core/.cargo/config.toml` with local rustflags, and `.claude/settings.local.json` broke or nearly broke CI before — they are gitignored; keep it that way.
+- **Never commit machine-specific config.** `.env`, `physure-core/.cargo/config.toml` with local rustflags, and `.claude/settings.local.json` broke or nearly broke CI before — they are gitignored; keep it that way.
 
 ### Code quality policy (enforced)
 
