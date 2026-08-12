@@ -99,8 +99,8 @@ _is_pow     = _{ &"^" }
 _is_minus   = _{ &"-" }
 factor      = { (_is_minus ~ op_sub)? ~ primary ~ (_is_pow ~ op_pow ~ primary)? }
 
-_is_delim         = _{ "," | ")" | "]" | "}" | ":" | "=" | "=>" | ".." | "?" | "then" | "else" | "where" | "return" }
-_is_implicit_mul  = _{ _no_nl ~ !op_sub ~ !_is_delim }
+_is_delim         = _{ "," | ")" | "]" | "{" | "}" | ":" | "=" | "=>" | ".." | "?" | "then" | "else" | "where" | "return" }
+_is_implicit_mul  = _{ _no_nl ~ !op_sub ~ !(WHITESPACE* ~ _is_delim) }
 _is_mul_div       = _{ &("*" | "/") }
 term              = { factor ~ ((_is_mul_div ~ (op_mul | op_div) ~ factor) | (_is_implicit_mul ~ factor))* }
 
@@ -158,8 +158,10 @@ string_lit    = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 
 return_stmt   = { "return" ~ expr }
 guard_if_stmt = { "if" ~ _nl ~ expr ~ _nl ~ "then" ~ _nl ~ return_stmt }
-for_expr     = { "for" ~ identifier ~ "in" ~ expr ~ "{" ~ _nl ~ expr ~ _nl ~ "}" }
-while_stmt   = { "while" ~ expr ~ "{" ~ _nl ~ (stmt ~ _nl)* ~ "}" }
+_for_kw      = @{ "for" ~ !(ASCII_ALPHANUMERIC | "_") }
+_while_kw    = @{ "while" ~ !(ASCII_ALPHANUMERIC | "_") }
+for_expr     = { _for_kw ~ _nl ~ identifier ~ _nl ~ "in" ~ _nl ~ expr ~ _nl ~ "{" ~ _nl ~ expr ~ _nl ~ "}" }
+while_stmt   = { _while_kw ~ _nl ~ expr ~ _nl ~ "{" ~ _nl ~ (stmt ~ _nl)* ~ "}" }
 
 decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
 // One or more `@name(...)` lines immediately above the definition they annotate. `_nl`

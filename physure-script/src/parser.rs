@@ -1416,5 +1416,47 @@ mod tests {
         assert!(matches!(&stmts[1], Statement::While { .. }));
     }
 
+    #[test]
+    fn test_parse_loop_newlines_before_brace() {
+        let script = "for\n item\n in\n 1 .. 5\n {\n item * 2\n }\nwhile\n x > 0\n {\n x = x - 1\n }";
+        let stmts = parse_phs(script).unwrap().statements;
+        assert_eq!(stmts.len(), 2);
+        assert!(matches!(&stmts[0], Statement::Expr(Expr::ForExpr { .. })));
+        assert!(matches!(&stmts[1], Statement::While { .. }));
+    }
+
+    #[test]
+    fn test_parse_while_multi_statement() {
+        let script = "while x > 0 {\n a = x * 2\n x = x - 1\n }";
+        let stmts = parse_phs(script).unwrap().statements;
+        assert_eq!(stmts.len(), 1);
+        if let Statement::While { cond: _, body } = &stmts[0] {
+            assert_eq!(body.len(), 2);
+        } else {
+            panic!("expected While statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_loops() {
+        let script = "while x > 0 {\n y = for i in 1 .. 3 {\n i * x\n }\n x = x - 1\n }";
+        let stmts = parse_phs(script).unwrap().statements;
+        assert_eq!(stmts.len(), 1);
+        if let Statement::While { cond: _, body } = &stmts[0] {
+            assert_eq!(body.len(), 2);
+            assert!(matches!(&body[0], Statement::Assignment(a) if matches!(a.value, Expr::ForExpr { .. })));
+        } else {
+            panic!("expected While statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_loop_keyword_prefix_identifiers() {
+        let script = "for_item = 1\nwhile_count = 10\nfor_item + while_count";
+        let stmts = parse_phs(script).unwrap().statements;
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(&stmts[0], Statement::Assignment(a) if a.name == "for_item"));
+        assert!(matches!(&stmts[1], Statement::Assignment(a) if a.name == "while_count"));
+    }
 }
 
