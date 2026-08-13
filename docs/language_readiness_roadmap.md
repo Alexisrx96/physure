@@ -481,17 +481,35 @@ Tracks are independent — check off in any order, on any timeline.
         re-runs only the correctly-scoped dependents.
   - [ ] *(Follow-on, out of scope)* Cross-file incrementality via `FsModuleResolver`.
 
-- [ ] **Track E: Compiled Export Artifacts** *(non-blocking for LAB-READY — a distribution/interop
-      capability, not a language execution capability)*
-  - [ ] `codegen::proto::ProtoGenerator`: Request/Response messages + `rpc Compute` per exported
-        function, derived from `param_units` and the inferred return type.
-  - [ ] FFI shim generator: flat `f64` in/out wrapping `RustTranspiler` output, unit baked in at
-        generation time.
-  - [ ] Scaffold-and-build pipeline: throwaway `cdylib` crate, `cargo build --release`, artifact
-        copied to the output dir.
-  - [ ] `phs export` CLI subcommand (`--fn`, `--target proto|native|all`, `-o`).
-  - [ ] Round-trip test: compiled `.so`/`.dll` output matches interpreter output for the same
-        function and input, within floating-point tolerance.
+- [x] **Track E: Compiled Export Artifacts** *(non-blocking for LAB-READY — a distribution/interop
+      capability, not a language execution capability)* — see
+      [`docs/superpowers/specs/2026-08-12-track-e-compiled-exports-design.md`](superpowers/specs/2026-08-12-track-e-compiled-exports-design.md)
+      and [`docs/superpowers/plans/2026-08-12-track-e-compiled-exports.md`](superpowers/plans/2026-08-12-track-e-compiled-exports.md)
+      for the design and executed plan. Two scope changes from this section's original
+      description, both intentional and tracked below:
+      (1) `.proto` **and** `.md` generation are mandatory on every `phs export` run, not one of
+      several `--target` choices — the CLI flag surface simplified to a single optional
+      `--native`, in favor of a new `///` doc-comment language feature that feeds the `.md`;
+      (2) contract propagation (`@requires`/`@ensures`) into the compiled shim, which Track F's
+      own plan explicitly deferred to this track, is implemented via `generate_export_shim`
+      reusing `RustTranspiler::generate_expr` — never a second, independently-written condition
+      evaluator.
+  - [x] `codegen::proto::ProtoGenerator`: Request/Response messages + `rpc Compute` per exported
+        function, derived from `param_units`; `Response` gains `ok`/`error` fields only when the
+        function carries `@requires`/`@ensures` (return-value unit is not statically known in PHS
+        today, so the `Response.value` field is untyped `double` rather than unit-annotated).
+  - [x] `///` doc-comment grammar/AST/parser (new prerequisite, not in the original sketch):
+        `FunctionDefNode.doc: Option<String>`, rendered by `codegen::md::MdGenerator`.
+  - [x] FFI shim generator (`RustTranspiler::generate_export_shim`): flat `f64` in/out, unit baked
+        in at generation time, `@requires`/`@ensures` enforced via the shared `generate_expr` path,
+        `<name>_last_error()` thread-local getter for the failing contract's message.
+  - [x] Scaffold-and-build pipeline: throwaway `cdylib` crate, `cargo build --release`, artifact
+        copied to the output dir; `physure-core` resolved via a `CARGO_MANIFEST_DIR`-derived
+        absolute path baked into `phs` at its own compile time (not published, not vendored).
+  - [x] `phs export` CLI subcommand (`--fn`, `--native`, `-o`; `.proto`/`.md` unconditional).
+  - [x] Round-trip test: compiled `.so`/`.dll` output matches interpreter output for the same
+        function and input, within floating-point tolerance, including a paired
+        contract-violation case (`#[ignore]`d — real `cargo build --release`, run explicitly).
   - [ ] *(Parked, out of scope)* Curated multi-formula repository, hosted on-demand builds,
         generated docs site.
 
