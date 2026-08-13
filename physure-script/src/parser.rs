@@ -57,6 +57,7 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement
         Rule::stmt => parse_statement(pair.into_inner().next().unwrap()),
         Rule::import_stmt => parse_import(pair),
         Rule::export_stmt => parse_export(pair),
+        Rule::documented_stmt => parse_documented_stmt(pair),
         Rule::decorated_stmt => parse_decorated_stmt(pair),
         Rule::function_def | Rule::assignment_fn => parse_function_def(pair),
         Rule::assignment => parse_assignment(pair),
@@ -215,6 +216,7 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         param_units,
         body_stmts,
         decorators: Vec::new(),
+        doc: None,
     }))
 }
 
@@ -270,6 +272,38 @@ fn parse_decorated_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Stat
         Statement::FunctionDef(node) => node.decorators = decorators,
         Statement::Assignment(node) => node.decorators = decorators,
         _ => unreachable!("decorated_stmt only ever wraps function_def, assignment_fn, or assignment"),
+    }
+    Ok(stmt)
+}
+
+/// Collects consecutive `doc_comment` pairs (stripping the `///` prefix and one leading space
+/// per line, joining with `\n`), parses the wrapped target via the existing parse functions, and
+/// attaches the joined text to `FunctionDefNode.doc`. A doc comment stacked on a bare
+/// `Statement::Assignment` parses without error but the text is dropped — `AssignmentNode` has no
+/// `doc` field (§2.4 of the Track E design spec: doc comments document functions, not constants).
+fn parse_documented_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    let mut doc_lines = Vec::new();
+    let mut target = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::doc_comment => {
+                let text = inner.as_str().trim_start_matches("///");
+                let text = text.strip_prefix(' ').unwrap_or(text);
+                doc_lines.push(text.to_string());
+            }
+            Rule::decorated_stmt => target = Some(parse_decorated_stmt(inner)?),
+            Rule::function_def | Rule::assignment_fn => target = Some(parse_function_def(inner)?),
+            Rule::assignment => target = Some(parse_assignment(inner)?),
+            _ => {}
+        }
+    }
+
+    let mut stmt = target.ok_or_else(|| {
+        PhysureError::Generic("documented statement is missing its function or assignment".to_string())
+    })?;
+    if let Statement::FunctionDef(node) = &mut stmt {
+        node.doc = Some(doc_lines.join("\n"));
     }
     Ok(stmt)
 }
@@ -1406,6 +1440,54 @@ mod tests {
                 assert_eq!(node.decorators.len(), 2);
                 assert!(node.decorators.iter().all(|d| d.name == "requires"));
             }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn doc_comment_attaches_to_function_def() {
+        let program = parse_phs("/// Computes kinetic energy.\nfn ke(m, v) = 0.5 * m * v^2").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.doc.as_deref(), Some("Computes kinetic energy."));
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn multiline_doc_comment_joins_with_newline() {
+        let program = parse_phs(
+            "/// Line one.\n/// Line two.\nfn ke(m, v) = 0.5 * m * v^2",
+        ).unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.doc.as_deref(), Some("Line one.\nLine two."));
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn doc_comment_stacks_above_decorators() {
+        let program = parse_phs(
+            "/// Computes kinetic energy.\n@stable\nfn ke(m, v) = 0.5 * m * v^2",
+        ).unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => {
+                assert_eq!(node.doc.as_deref(), Some("Computes kinetic energy."));
+                assert_eq!(node.decorators.len(), 1);
+                assert_eq!(node.decorators[0].name, "stable");
+            }
+            other => panic!("expected FunctionDef, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn plain_double_slash_comment_still_parses() {
+        let program = parse_phs("// just a comment\nfn ke(m, v) = 0.5 * m * v^2").unwrap();
+        match &program.statements[0] {
+            Statement::FunctionDef(node) => assert_eq!(node.doc, None),
             other => panic!("expected FunctionDef, got {:?}", other),
         }
     }

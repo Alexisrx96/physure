@@ -27,3 +27,7 @@ chrono         = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+
+[dev-dependencies]
+libloading = "0.8"
+

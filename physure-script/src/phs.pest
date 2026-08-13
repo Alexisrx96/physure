@@ -1,6 +1,6 @@
 WHITESPACE = _{ " " | "\t" }
 NEWLINE    = _{ "\r\n" | "\n" | "\r" }
-COMMENT    = _{ ("//" | "#") ~ (!"\n" ~ !"\r" ~ ANY)* }
+COMMENT    = _{ ("//" ~ !"/" ~ (!"\n" ~ !"\r" ~ ANY)*) | ("#" ~ (!"\n" ~ !"\r" ~ ANY)*) }
 
 // `in` is deliberately absent: it is the symbol for inch. `let` stays reserved with no rule
 // behind it so the retired `let ... in ...` form fails to parse instead of quietly meaning
@@ -169,8 +169,20 @@ decorator       = { "@" ~ identifier ~ ("(" ~ (expr ~ ("," ~ expr)*)? ~ ")")? }
 // and the next, and between the last decorator and the definition itself.
 decorated_stmt  = { (decorator ~ _nl)+ ~ (function_def | assignment_fn | assignment) }
 
+// `///` is legal only directly above an assignment/function definition/decorated statement
+// (see `documented_stmt` below) — anywhere else (e.g. above a bare expression or a
+// `while`/`return`/`import`/`export` statement) it is a parse error rather than a plain
+// comment, since `COMMENT` above deliberately excludes `///` from the generic comment rule.
+doc_comment     = @{ "///" ~ (!NEWLINE ~ ANY)* }
+// One or more `///` lines immediately above the definition they document. Stacks outside
+// decorators — source order is docs, then decorators, then the def:
+//   /// Computes kinetic energy.
+//   @stable
+//   fn kinetic_energy(m, v) = 0.5 * m * v^2
+documented_stmt = { (doc_comment ~ _nl)+ ~ (decorated_stmt | function_def | assignment_fn | assignment) }
+
 stmt_term       = _{ ";" | NEWLINE }
-stmt            = { import_stmt | export_stmt | decorated_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | while_stmt | raw_block | expr }
+stmt            = { import_stmt | export_stmt | documented_stmt | decorated_stmt | function_def | assignment_fn | assignment | guard_if_stmt | return_stmt | while_stmt | raw_block | expr }
 _is_stmt_start  = _{ !(NEWLINE | COMMENT | EOI) }
 program         = _{ SOI ~ (stmt_term | COMMENT)* ~ (_is_stmt_start ~ stmt ~ (stmt_term | COMMENT)*)* ~ EOI }
 

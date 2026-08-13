@@ -189,6 +189,7 @@ mod tests {
             param_units: vec![None],
             body_stmts: vec![Statement::Expr(Expr::Identifier("x".to_string()))],
             decorators,
+            doc: None,
         })
     }
 
@@ -218,6 +219,7 @@ mod tests {
                 name: "ensures".to_string(),
                 args: vec![Expr::Identifier("result".to_string()), Expr::Str("must hold".to_string())],
             }],
+            doc: None,
         });
         assert!(validate_decorators(&[stmt]).is_err());
     }

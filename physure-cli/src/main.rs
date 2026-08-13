@@ -5,6 +5,7 @@ use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
 mod config;
+mod export;
 mod html;
 mod katex_assets;
 mod latex;
@@ -29,6 +30,7 @@ fn print_help() {
     println!("    phs <script.phs> [OPTIONS]");
     println!("    phs --repl");
     println!("    phs transpile <script.phs> [--target <rust|python|java|js|ts>] [--output <file>]");
+    println!("    phs export <script.phs> --fn <name> [--native] [-o <dir>]");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!();
     println!("FLAGS & OPTIONS:");
@@ -48,6 +50,7 @@ fn print_help() {
     println!("    phs transpile 1_cargas.phs --target python");
     println!("    phs transpile 1_cargas.phs -t java -o Calculator.java");
     println!("    phs new-plugin myplugin --lang rust");
+    println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
 }
 
 fn run_repl() {
@@ -647,6 +650,11 @@ fn main() {
 
     if args[1] == "new-plugin" {
         scaffold::run_new_plugin(&args);
+        return;
+    }
+
+    if args[1] == "export" {
+        export::run_export(&args);
         return;
     }
 
