@@ -27,6 +27,8 @@ pub mod python;
 pub mod rust;
 pub mod java;
 pub mod js;
+pub mod proto;
+pub mod md;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -318,6 +320,34 @@ pub(crate) fn as_assert_call(expr: &Expr) -> Option<(&'static str, &Expr, &Expr)
         "assert" => Some(("assert", &args[0], &args[1])),
         "exact_assert" => Some(("exact_assert", &args[0], &args[1])),
         _ => None,
+    }
+}
+
+/// `kinetic_energy` -> `KineticEnergy`. Used by `proto::ProtoGenerator` and
+/// `rust::RustTranspiler::generate_export_shim` for message/service/struct names, so it lives
+/// here rather than being duplicated in both.
+pub(crate) fn to_pascal_case(name: &str) -> String {
+    name.split('_')
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            let mut chars = s.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod pascal_case_tests {
+    use super::to_pascal_case;
+
+    #[test]
+    fn converts_snake_case_to_pascal_case() {
+        assert_eq!(to_pascal_case("kinetic_energy"), "KineticEnergy");
+        assert_eq!(to_pascal_case("ke"), "Ke");
+        assert_eq!(to_pascal_case("a_b_c"), "ABC");
     }
 }
 
