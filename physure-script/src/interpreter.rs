@@ -699,6 +699,10 @@ impl PhsInterpreter {
                     other => return Err(PhysureError::Generic(format!("Cannot iterate over {}", other))),
                 };
 
+                // Switch to parallel evaluation if the iteration count meets the threshold.
+                // Note: rayon's parallel collect stops scheduling new work on error but may
+                // leave in-flight work on other threads to complete, so loop body side effects
+                // (e.g. I/O in external functions) may partially execute even if evaluation fails.
                 if items.len() >= physure_core::settings::parallel_threshold() {
                     use rayon::prelude::*;
                     let results: Vec<PhsValue> = items
@@ -1674,19 +1678,21 @@ r3 = circuito_abierto(5 V, 2 A)
     #[test]
     fn for_expr_parallel_and_sequential_paths_agree() {
         let script = "res = for i in 1..20000 { i * 3 + 1 }";
-
-        let original = physure_core::settings::set_parallel_threshold(usize::MAX);
-        let mut interp_seq = PhsInterpreter::default();
         let stmts = crate::parser::parse_phs(script).unwrap();
-        interp_seq.run_statements(&stmts).unwrap();
-        let seq_val = interp_seq.get_var("res").unwrap().clone();
 
-        physure_core::settings::set_parallel_threshold(0);
-        let mut interp_par = PhsInterpreter::default();
-        interp_par.run_statements(&stmts).unwrap();
-        let par_val = interp_par.get_var("res").unwrap().clone();
+        let seq_val = {
+            let _guard = physure_core::settings::scoped(usize::MAX);
+            let mut interp_seq = PhsInterpreter::default();
+            interp_seq.run_statements(&stmts).unwrap();
+            interp_seq.get_var("res").unwrap().clone()
+        };
 
-        physure_core::settings::set_parallel_threshold(original);
+        let par_val = {
+            let _guard = physure_core::settings::scoped(0);
+            let mut interp_par = PhsInterpreter::default();
+            interp_par.run_statements(&stmts).unwrap();
+            interp_par.get_var("res").unwrap().clone()
+        };
 
         assert_eq!(seq_val, par_val);
     }
