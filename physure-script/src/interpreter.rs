@@ -632,7 +632,7 @@ impl PhsInterpreter {
                     }
                 }
 
-                if let Some(val) = crate::builtins::eval_core_builtin(name, &arg_vals, self)? {
+                if let Some(val) = crate::builtins::eval_core_builtin(name, &arg_vals, self, env)? {
                     return Ok(val);
                 }
 
@@ -1695,6 +1695,40 @@ r3 = circuito_abierto(5 V, 2 A)
         };
 
         assert_eq!(seq_val, par_val);
+    }
+
+    #[test]
+    fn parallel_map_applies_function_to_every_element() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs(
+            "fn double(x) = x * 2.0\nres = parallel_map(double, vector(1.0, 2.0, 3.0))",
+        )
+        .unwrap();
+        interp.run_statements(&stmts).unwrap();
+        let val = interp.get_var("res").unwrap();
+        let PhsValue::Vector(v) = val else { panic!("expected vector, got {val:?}") };
+        let means: Vec<f64> = v
+            .iter()
+            .map(|x| match x {
+                PhsValue::Number(n) => *n,
+                PhsValue::Quantity(q) => q.value.mean(),
+                other => panic!("expected numeric element, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(means, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn parallel_map_reports_failing_index() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs(
+            "@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x * 2.0\n\
+             parallel_map(f, vector(1.0, 2.0, -1.0, 4.0))",
+        )
+        .unwrap();
+        let err = interp.run_statements(&stmts).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("index 2"), "expected the failing index in the error, got: {msg}");
     }
 
     #[test]
