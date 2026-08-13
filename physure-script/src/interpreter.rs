@@ -699,19 +699,32 @@ impl PhsInterpreter {
                     other => return Err(PhysureError::Generic(format!("Cannot iterate over {}", other))),
                 };
 
-                let mut local_env = env.clone();
-                let old_val = local_env.get(var).cloned();
-                let mut results = Vec::with_capacity(items.len());
-                for item in items {
-                    local_env.insert(var.clone(), item);
-                    results.push(self.eval_expr(body, &local_env)?);
-                }
-                if let Some(old) = old_val {
-                    local_env.insert(var.clone(), old);
+                if items.len() >= physure_core::settings::parallel_threshold() {
+                    use rayon::prelude::*;
+                    let results: Vec<PhsValue> = items
+                        .into_par_iter()
+                        .map(|item| {
+                            let mut local_env = env.clone();
+                            local_env.insert(var.clone(), item);
+                            self.eval_expr(body, &local_env)
+                        })
+                        .collect::<PhysureResult<Vec<PhsValue>>>()?;
+                    Ok(PhsValue::Vector(results))
                 } else {
-                    local_env.remove(var);
+                    let mut local_env = env.clone();
+                    let old_val = local_env.get(var).cloned();
+                    let mut results = Vec::with_capacity(items.len());
+                    for item in items {
+                        local_env.insert(var.clone(), item);
+                        results.push(self.eval_expr(body, &local_env)?);
+                    }
+                    if let Some(old) = old_val {
+                        local_env.insert(var.clone(), old);
+                    } else {
+                        local_env.remove(var);
+                    }
+                    Ok(PhsValue::Vector(results))
                 }
-                Ok(PhsValue::Vector(results))
             }
         }
     }
@@ -1656,6 +1669,26 @@ r3 = circuito_abierto(5 V, 2 A)
         } else {
             panic!("expected vector");
         }
+    }
+
+    #[test]
+    fn for_expr_parallel_and_sequential_paths_agree() {
+        let script = "res = for i in 1..20000 { i * 3 + 1 }";
+
+        let original = physure_core::settings::set_parallel_threshold(usize::MAX);
+        let mut interp_seq = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs(script).unwrap();
+        interp_seq.run_statements(&stmts).unwrap();
+        let seq_val = interp_seq.get_var("res").unwrap().clone();
+
+        physure_core::settings::set_parallel_threshold(0);
+        let mut interp_par = PhsInterpreter::default();
+        interp_par.run_statements(&stmts).unwrap();
+        let par_val = interp_par.get_var("res").unwrap().clone();
+
+        physure_core::settings::set_parallel_threshold(original);
+
+        assert_eq!(seq_val, par_val);
     }
 
     #[test]
