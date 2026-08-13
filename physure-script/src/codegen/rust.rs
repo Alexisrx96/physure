@@ -243,6 +243,115 @@ impl RustTranspiler {
             }
         }
     }
+
+    /// Wraps the ordinary transpiled function (renamed `<name>_impl`) in a `#[no_mangle] extern
+    /// "C"` shim: flat `f64` params (unit baked in from `param_units` at generation time), flat
+    /// `f64` return for a function with no `@requires`/`@ensures`, or a `#[repr(C)]
+    /// <Name>Result { value: f64, ok: bool }` for one that has them — running each `@requires`
+    /// check before the call and each `@ensures` check after, via the exact same `generate_expr`
+    /// path already used for the function body, so compiled and interpreted pass/fail can never
+    /// diverge by construction. On the first failing check, the message is stashed in a
+    /// thread-local string readable via `<name>_last_error()`, mirroring `errno`/`GetLastError`.
+    pub fn generate_export_shim(&self, node: &FunctionDefNode) -> Result<String, CodegenError> {
+        let impl_name = format!("{}_impl", node.name);
+        let mut impl_node = node.clone();
+        impl_node.name = impl_name.clone();
+        let impl_fn = self.generate_function_def(&impl_node)?;
+
+        let has_contract = node.decorators.iter().any(|d| d.name == "requires" || d.name == "ensures");
+
+        let params_sig: Vec<String> = node.params.iter().map(|p| format!("{}: f64", p)).collect();
+        let mut binds = Vec::new();
+        let mut call_args = Vec::new();
+        for (i, param) in node.params.iter().enumerate() {
+            let unit = node.param_units.get(i).and_then(|u| u.as_deref()).unwrap_or("");
+            binds.push(format!("    let {p} = Quantity::new({p}, {u:?}).unwrap();", p = param, u = unit));
+            call_args.push(param.clone());
+        }
+        let binds = binds.join("\n");
+        let call_expr = format!("{}({})", impl_name, call_args.join(", "));
+
+        let mut shim = String::new();
+        shim.push_str(&impl_fn);
+        shim.push_str("\n\n");
+
+        if !has_contract {
+            shim.push_str(&format!(
+                "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> f64 {{\n{binds}\n    {call}.value.mean()\n}}\n",
+                name = node.name,
+                params = params_sig.join(", "),
+                binds = binds,
+                call = call_expr,
+            ));
+            return Ok(shim);
+        }
+
+        let pascal = super::to_pascal_case(&node.name);
+        let error_static = format!("{}_LAST_ERROR", node.name.to_uppercase());
+
+        shim.push_str(&format!(
+            "#[repr(C)]\npub struct {pascal}Result {{\n    pub value: f64,\n    pub ok: bool,\n}}\n\n",
+            pascal = pascal,
+        ));
+        shim.push_str(&format!(
+            "thread_local! {{\n    static {error_static}: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());\n}}\n\n",
+            error_static = error_static,
+        ));
+
+        let mut body = String::new();
+        body.push_str(&binds);
+        body.push('\n');
+        for dec in &node.decorators {
+            if dec.name == "requires" {
+                let cond = self.generate_expr(&dec.args[0])?;
+                let msg = message_literal(&dec.args[1]);
+                body.push_str(&format!(
+                    "    if !({cond}) {{\n        {error_static}.with(|e| *e.borrow_mut() = {msg}.to_string());\n        return {pascal}Result {{ value: 0.0, ok: false }};\n    }}\n",
+                    cond = cond, error_static = error_static, msg = msg, pascal = pascal,
+                ));
+            }
+        }
+        body.push_str(&format!("    let result = {};\n", call_expr));
+        for dec in &node.decorators {
+            if dec.name == "ensures" {
+                let cond = self.generate_expr(&dec.args[0])?;
+                let msg = message_literal(&dec.args[1]);
+                body.push_str(&format!(
+                    "    if !({cond}) {{\n        {error_static}.with(|e| *e.borrow_mut() = {msg}.to_string());\n        return {pascal}Result {{ value: 0.0, ok: false }};\n    }}\n",
+                    cond = cond, error_static = error_static, msg = msg, pascal = pascal,
+                ));
+            }
+        }
+        body.push_str(&format!("    {pascal}Result {{ value: result.value.mean(), ok: true }}\n", pascal = pascal));
+
+        shim.push_str(&format!(
+            "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> {pascal}Result {{\n{body}}}\n\n",
+            name = node.name,
+            params = params_sig.join(", "),
+            pascal = pascal,
+            body = body,
+        ));
+
+        shim.push_str(&format!(
+            "#[no_mangle]\npub extern \"C\" fn {name}_last_error() -> *const std::os::raw::c_char {{\n    {error_static}.with(|e| std::ffi::CString::new(e.borrow().clone()).unwrap_or_default().into_raw())\n}}\n",
+            name = node.name,
+            error_static = error_static,
+        ));
+
+        Ok(shim)
+    }
+}
+
+/// Renders a decorator's message argument as a Rust string literal. `{:?}` on a `&str` already
+/// produces a correctly escaped, double-quoted Rust literal, so no hand-rolled escaping is
+/// needed. Every existing `@requires`/`@ensures` message is built as `Expr::Str` (see
+/// `decorators.rs`), so the fallback branch is unreached in practice; it exists so a non-literal
+/// message can never panic codegen.
+fn message_literal(expr: &Expr) -> String {
+    match expr {
+        Expr::Str(s) => format!("{:?}", s),
+        _ => "\"contract violated\"".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -358,5 +467,93 @@ mod tests {
         assert!(code.contains("let mut i = "), "expected mutable declaration:\n{code}");
         assert!(code.contains("i = (&(i) +"), "expected reassignment without redeclaration:\n{code}");
         assert!(!code.contains("let mut i = (&(i) +"), "reassignment should not redeclare inside the loop:\n{code}");
+    }
+
+    #[test]
+    fn export_shim_bare_function_returns_flat_f64() {
+        let node = FunctionDefNode {
+            name: "kinetic_energy".to_string(),
+            params: vec!["m".to_string(), "v".to_string()],
+            param_units: vec![Some("kg".to_string()), Some("m/s".to_string())],
+            body_stmts: vec![Statement::Expr(Expr::BinaryOp {
+                op: BinaryOp::Mul,
+                left: Box::new(Expr::Quantity(QuantityNode {
+                    magnitude: 0.5,
+                    uncertainty: None,
+                    uncertainty_lower: None,
+                    is_sigma: false,
+                    unit: None,
+                })),
+                right: Box::new(Expr::Identifier("m".to_string())),
+            })],
+            decorators: vec![],
+            doc: None,
+        };
+        let shim = RustTranspiler.generate_export_shim(&node).unwrap();
+        assert!(shim.contains("pub fn kinetic_energy_impl(m: Quantity, v: Quantity) -> Quantity"));
+        assert!(shim.contains("pub extern \"C\" fn kinetic_energy(m: f64, v: f64) -> f64"));
+        assert!(shim.contains("Quantity::new(m, \"kg\").unwrap()"));
+        assert!(shim.contains("kinetic_energy_impl(m, v).value.mean()"));
+        assert!(!shim.contains("KineticEnergyResult"));
+    }
+
+    #[test]
+    fn export_shim_decorated_function_returns_result_struct() {
+        let node = FunctionDefNode {
+            name: "kinetic_energy".to_string(),
+            params: vec!["m".to_string()],
+            param_units: vec![Some("kg".to_string())],
+            body_stmts: vec![Statement::Expr(Expr::Identifier("m".to_string()))],
+            decorators: vec![
+                DecoratorNode {
+                    name: "requires".to_string(),
+                    args: vec![
+                        Expr::FunctionCall {
+                            name: "op_>".to_string(),
+                            args: vec![
+                                Expr::Identifier("m".to_string()),
+                                Expr::Quantity(QuantityNode {
+                                    magnitude: 0.0,
+                                    uncertainty: None,
+                                    uncertainty_lower: None,
+                                    is_sigma: false,
+                                    unit: Some("kg".to_string()),
+                                }),
+                            ],
+                            kwargs: vec![],
+                        },
+                        Expr::Str("m must be positive".to_string()),
+                    ],
+                },
+                DecoratorNode {
+                    name: "ensures".to_string(),
+                    args: vec![
+                        Expr::FunctionCall {
+                            name: "op_>".to_string(),
+                            args: vec![
+                                Expr::Identifier("result".to_string()),
+                                Expr::Quantity(QuantityNode {
+                                    magnitude: 0.0,
+                                    uncertainty: None,
+                                    uncertainty_lower: None,
+                                    is_sigma: false,
+                                    unit: Some("kg".to_string()),
+                                }),
+                            ],
+                            kwargs: vec![],
+                        },
+                        Expr::Str("result must be positive".to_string()),
+                    ],
+                },
+            ],
+            doc: None,
+        };
+        let shim = RustTranspiler.generate_export_shim(&node).unwrap();
+        assert!(shim.contains("pub struct KineticEnergyResult"));
+        assert!(shim.contains("pub extern \"C\" fn kinetic_energy(m: f64) -> KineticEnergyResult"));
+        assert!(shim.contains("\"m must be positive\""));
+        assert!(shim.contains("\"result must be positive\""));
+        assert!(shim.contains("let result = kinetic_energy_impl(m);"));
+        assert!(shim.contains("pub extern \"C\" fn kinetic_energy_last_error() -> *const std::os::raw::c_char"));
     }
 }
