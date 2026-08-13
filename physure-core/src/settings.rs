@@ -44,11 +44,15 @@ impl Drop for ThresholdGuard {
 }
 
 #[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn set_parallel_threshold_returns_previous_and_updates() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let original = set_parallel_threshold(42);
         assert_eq!(parallel_threshold(), 42);
         let previous = set_parallel_threshold(original);
@@ -57,10 +61,16 @@ mod tests {
 
     #[test]
     fn scoped_override_takes_precedence_and_restores_on_drop() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let baseline = parallel_threshold();
         {
-            let _guard = scoped(999);
-            assert_eq!(parallel_threshold(), 999);
+            let _guard = scoped(99);
+            assert_eq!(parallel_threshold(), 99);
+            {
+                let _inner_guard = scoped(55);
+                assert_eq!(parallel_threshold(), 55);
+            }
+            assert_eq!(parallel_threshold(), 99);
         }
         assert_eq!(parallel_threshold(), baseline);
     }

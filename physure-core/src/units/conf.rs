@@ -355,6 +355,7 @@ mod tests {
 
     #[test]
     fn parses_parallel_threshold_from_settings_section() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::parallel_threshold();
