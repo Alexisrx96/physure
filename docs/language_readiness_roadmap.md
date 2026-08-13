@@ -448,11 +448,19 @@ Tracks are independent — check off in any order, on any timeline.
   - [ ] Python/Java/Rust codegen emitters for both constructs.
   - [ ] Execution-equivalence tests (interpret vs. each transpiled target) for both constructs.
 
-- [ ] **Track B: Concurrency**
-  - [ ] Add `rayon` dependency to `physure-script`.
-  - [ ] Transparent `par_iter` parallelism for array builtins and `for`-expression above size threshold.
-  - [ ] `parallel_map(fn, vector)` builtin with fail-fast error semantics.
-  - [ ] Determinism test (parallel output == sequential output) and mid-batch-failure test.
+- [x] **Track B: Concurrency** — see
+      [`docs/superpowers/specs/2026-08-12-track-b-concurrency-design.md`](superpowers/specs/2026-08-12-track-b-concurrency-design.md)
+      and [`docs/superpowers/plans/2026-08-12-track-b-concurrency.md`](superpowers/plans/2026-08-12-track-b-concurrency.md).
+      One scope change from this section's original description, intentional and tracked
+      below: `gradient`/`trapz` are **not** parallelized — `trapz` is a running accumulation
+      that can't be parallelized without a parallel-reduce rewrite, and `gradient`'s
+      per-element cost is too small for thread-dispatch to pay off. Threshold is configurable
+      via `physure.conf`'s `[Settings] parallel_threshold` (default 10,000), not a bare
+      constant or env var.
+  - [x] Add `rayon` dependency to `physure-script`.
+  - [x] Transparent `par_iter` parallelism for `for`-expression above `parallel_threshold`.
+  - [x] `parallel_map(fn, vector)` builtin with fail-fast error semantics.
+  - [x] Determinism test (parallel output == sequential output) and mid-batch-failure test.
 
 - [ ] **Track C: Breakpoints**
   - [ ] `DebugHook` trait + `Vec<StackFrame>` call-stack tracking wired into the interpreter's
