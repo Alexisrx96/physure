@@ -58,16 +58,18 @@ fn analyze_one(stmt: &Statement) -> StmtDeps {
                 collect_declared(s, &mut declared);
             }
             let mut reads = HashSet::new();
-            // `check_ensures` (physure-script/src/interpreter.rs) binds a synthetic `result`
-            // name into a clone of the local env before evaluating an `@ensures` condition;
-            // treat it as local to every decorator on this function (not just `@ensures`) so
-            // it never counts as an outer read -- `validate_decorators` already forbids a
-            // param literally named `result`, so this can't hide a real dependency.
-            let mut decorator_locals = declared.clone();
-            decorator_locals.insert("result".to_string());
+            // Only `check_ensures` (physure-script/src/interpreter.rs) binds a synthetic
+            // `result` name into a clone of the local env -- `check_requires` and every other
+            // decorator evaluate against the plain params/locals set, so a real global
+            // literally named `result` referenced from e.g. `@requires` must still count as a
+            // read, not be assumed function-local. `validate_decorators` forbidding a param
+            // literally named `result` only rules out the param-shadowing case, not this one.
+            let mut ensures_locals = declared.clone();
+            ensures_locals.insert("result".to_string());
             for d in &node.decorators {
+                let locals_for_decorator = if d.name == "ensures" { &ensures_locals } else { &declared };
                 for arg in &d.args {
-                    collect_expr_reads(arg, &decorator_locals, &mut reads);
+                    collect_expr_reads(arg, locals_for_decorator, &mut reads);
                 }
             }
             for s in &node.body_stmts {
@@ -140,13 +142,13 @@ fn collect_stmt_reads(stmt: &Statement, locals: &HashSet<String>, out: &mut Hash
             }
         }
         Statement::FunctionDef(node) => {
-            // Same `result`-binding exemption as `analyze_one`'s FunctionDef arm -- see its
-            // comment for why (`check_ensures` in interpreter.rs).
-            let mut decorator_locals = locals.clone();
-            decorator_locals.insert("result".to_string());
+            // Same @ensures-only exemption as analyze_one's FunctionDef arm -- see its comment.
+            let mut ensures_locals = locals.clone();
+            ensures_locals.insert("result".to_string());
             for d in &node.decorators {
+                let locals_for_decorator = if d.name == "ensures" { &ensures_locals } else { locals };
                 for arg in &d.args {
-                    collect_expr_reads(arg, &decorator_locals, out);
+                    collect_expr_reads(arg, locals_for_decorator, out);
                 }
             }
             for s in &node.body_stmts {
@@ -638,6 +640,16 @@ mod tests {
         let s = stmts("@ensures(result > 0.0, \"must be positive\")\nfn small(m) = m");
         let deps = analyze_one(&s[0]);
         assert!(!deps.reads.contains("result"), "result is bound locally by @ensures, not an outer read");
+    }
+
+    #[test]
+    fn requires_does_not_get_the_ensures_only_result_exemption() {
+        // check_requires (interpreter.rs) evaluates @requires against plain local_env, with no
+        // synthetic `result` binding -- only check_ensures binds one. A real global literally
+        // named `result` referenced from @requires must still count as a read.
+        let s = stmts("@requires(m > result, \"must exceed result\")\nfn small(m) = m");
+        let deps = analyze_one(&s[0]);
+        assert!(deps.reads.contains("result"), "result is a real global read here, not @ensures's synthetic binding");
     }
 
     #[test]
