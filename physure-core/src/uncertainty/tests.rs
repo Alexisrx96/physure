@@ -374,33 +374,54 @@ fn a_moments_value_reads_back_through_the_enum() {
 
 #[test]
 fn asymmetric_arithmetic_now_propagates_instead_of_refusing() {
-    // Superseded placeholder: this used to assert every one of these refused (see git
-    // history). Now that the moments primitive is implemented, arithmetic on an asymmetric
-    // value succeeds -- two Moments values keep full provenance through the enum's explicit
-    // `(Moments, Moments)` arm, and a Moments value meeting a foreign model still succeeds
-    // through the generic `&dyn` fallback, which treats the foreign side as an independent
-    // symmetric source (the `UncertaintyBackend` trait exposes only `mean()`/`std_dev()`, so a
-    // foreign backend's own skew, if it even has one, simply is not visible from here -- the
-    // same reason two unrelated models already fall back to quadrature; see
-    // `UncertaintyValue::lineage`).
+    // A Moments value as `self` keeps propagating -- through the enum's explicit
+    // `(Moments, Moments)` arm when both sides are Moments, or through `MomentsBackend`'s own
+    // `&dyn` trait methods (reached via the generic `_` fallback) when the other side is some
+    // other model, which treats the foreign side as an independent symmetric source.
+    //
+    // But a Moments value as `other` -- i.e. some *other* model's own symmetric arm running
+    // with a Moments operand -- must still refuse: every one of those arms only ever reads
+    // `mean()`/`std_dev()` off `other` (the `UncertaintyBackend` trait exposes nothing else),
+    // so it would silently drop the Moments side's skew and look like it had worked. A prior
+    // version of this test asserted only `is_ok()` on every ordering, which would still pass
+    // if foreign-as-self silently symmetrised -- exactly the bug this refusal exists to catch.
     let x = UncertaintyValue::Moments(MomentsBackend::measured(12.3, 0.4, 0.5).unwrap());
     let y = UncertaintyValue::Moments(MomentsBackend::measured(1.0, 0.3, 0.6).unwrap());
     let g = UncertaintyValue::Gaussian(GaussianBackend::new(1.0, 0.3));
     let mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.3, 1000));
     let u = UncertaintyValue::Unscented(UnscentedBackend::new_scalar(2.0, 0.3));
 
-    for other in [&g, &mc, &u, &y] {
+    for foreign in [&g, &mc, &u] {
         for (name, result) in [
-            ("add", x.propagate_add(other)),
-            ("sub", x.propagate_sub(other)),
-            ("mul", x.propagate_mul(other)),
-            ("div", x.propagate_div(other)),
-            ("add-rhs", other.propagate_add(&x)),
-            ("sub-rhs", other.propagate_sub(&x)),
-            ("mul-rhs", other.propagate_mul(&x)),
-            ("div-rhs", other.propagate_div(&x)),
+            ("add", x.propagate_add(foreign)),
+            ("sub", x.propagate_sub(foreign)),
+            ("mul", x.propagate_mul(foreign)),
+            ("div", x.propagate_div(foreign)),
         ] {
-            assert!(result.is_ok(), "{name} refused instead of propagating");
+            assert!(result.is_ok(), "moments-left {name} refused instead of propagating");
+        }
+        for (name, result) in [
+            ("add-rhs", foreign.propagate_add(&x)),
+            ("sub-rhs", foreign.propagate_sub(&x)),
+            ("mul-rhs", foreign.propagate_mul(&x)),
+            ("div-rhs", foreign.propagate_div(&x)),
+        ] {
+            assert!(
+                result.is_err(),
+                "{name}: foreign-left with a Moments operand must refuse, not silently symmetrise"
+            );
+        }
+    }
+
+    // Both sides Moments succeeds either way, and keeps both operands' real skew -- unlike the
+    // `&dyn` fallback above, which cannot see a foreign value's third moment at all.
+    for (name, result) in [("add", x.propagate_add(&y)), ("add-rhs", y.propagate_add(&x)), ("mul", x.propagate_mul(&y))]
+    {
+        let r = result.unwrap();
+        if let UncertaintyValue::Moments(m) = r {
+            assert!(m.third() != 0.0, "{name}: combining two skewed sources must not average the skew away");
+        } else {
+            panic!("{name}: expected a Moments result");
         }
     }
 
@@ -409,15 +430,6 @@ fn asymmetric_arithmetic_now_propagates_instead_of_refusing() {
     // The one corner that still refuses: a function name outside the model's derivative
     // table, rather than silently falling through to the identity map.
     assert!(x.propagate_function("gamma_fn_nobody_added").is_err());
-
-    // The `(Moments, Moments)` arm keeps both operands' real skew, unlike the `&dyn` fallback
-    // above, which cannot see a foreign value's third moment at all.
-    let sum = x.propagate_add(&y).unwrap();
-    if let UncertaintyValue::Moments(m) = sum {
-        assert!(m.third() != 0.0, "combining two skewed sources must not average the skew away");
-    } else {
-        panic!("expected a Moments result");
-    }
 }
 
 // -- MomentsBackend restructure: shape/sources, combine, first-order trait arms ----------
@@ -459,6 +471,19 @@ fn combine_refuses_mixed_shapes() {
 }
 
 #[test]
+fn mul_and_div_refuse_mixed_shapes_too() {
+    // `combine` (add/sub) already refused a shape mismatch; `first_order` (mul/div) used to be
+    // an `&self` method that always answered with `self.shape` and so silently ignored the
+    // other operand's shape entirely -- `Dimidiated * Fechner` returned `Ok` with the left
+    // operand's shape instead of refusing the way `Dimidiated + Fechner` already did.
+    use super::trait_def::UncertaintyValue;
+    let d = UncertaintyValue::Moments(MomentsBackend::measured_with(2.0, 0.3, 0.5, ShapeKind::Dimidiated, None).unwrap());
+    let f = UncertaintyValue::Moments(MomentsBackend::measured_with(3.0, 0.3, 0.5, ShapeKind::Fechner, None).unwrap());
+    assert!(d.propagate_mul(&f).is_err());
+    assert!(d.propagate_div(&f).is_err());
+}
+
+#[test]
 fn unrepresentable_skew_is_an_error_not_a_mean() {
     // Hand-build a backend whose skew exceeds the dimidiated ceiling.
     let b = MomentsBackend {
@@ -497,16 +522,18 @@ fn trait_arms_propagate_first_order() {
 #[test]
 fn negative_derivative_flips_the_skew_through_a_function() {
     use super::trait_def::UncertaintyValue;
-    // cos at m=1: J = −sin(1) < 0, so a positive input skew must come out negative.
     let backend = MomentsBackend::measured(1.0, 0.1, 0.3).unwrap();
     let input_third = backend.third();
+    let backend_mean = backend.mean;
     assert!(input_third > 0.0);
+    // cos is evaluated at the mean, not the mode (see `MomentsBackend::applied`): J =
+    // −sin(mean) < 0, so a positive input skew must come out negative.
     let out = UncertaintyValue::Moments(backend).propagate_function("cos").unwrap();
     if let UncertaintyValue::Moments(m) = out {
-        let j = -(1.0_f64).sin();
+        let j = -backend_mean.sin();
         assert!(m.third() < 0.0);
         assert!((m.third() - j.powi(3) * input_third).abs() < 1e-12);
-        assert!((m.mean - (1.0_f64).cos()).abs() < 1e-12);
+        assert!((m.mean - backend_mean.cos()).abs() < 1e-12);
     } else {
         panic!("expected a Moments result")
     }
@@ -518,6 +545,25 @@ fn unknown_function_refuses_instead_of_identity() {
     let backend = MomentsBackend::measured(1.0, 0.1, 0.3).unwrap();
     let v = UncertaintyValue::Moments(backend);
     assert!(v.propagate_function("gamma_fn_nobody_added").is_err());
+}
+
+#[test]
+fn dyn_fallback_div_uses_first_order_not_combines_sum() {
+    // `MomentsBackend`'s own `&dyn` trait methods are reached whenever a Moments value meets a
+    // foreign backend through the enum's generic fallback (`Moments / Gaussian`, say). Nothing
+    // else exercises this specific body numerically -- `trait_arms_propagate_first_order` only
+    // covers the *enum*'s `(Moments, Moments)` mul arm -- so a `combine`/`first_order` swap
+    // here specifically would go uncaught without this.
+    let a = MomentsBackend::measured(8.0, 0.3, 0.5).unwrap();
+    let g = GaussianBackend::new(4.0, 0.2);
+    let result = a.propagate_div(&g).unwrap();
+    // First-order mean: a.mean / g.mean. `combine`'s `Σ(coeff * mean)` would instead give
+    // (1/g.mean)*a.mean + (-a.mean/g.mean^2)*g.mean == 0 for any inputs -- nothing close to the
+    // right answer, so a swap here would be obvious rather than subtly wrong.
+    assert!((result.mean() - a.mean / g.mean).abs() < 1e-12);
+    let want_variance =
+        (1.0 / g.mean).powi(2) * a.variance() + (a.mean / g.mean.powi(2)).powi(2) * (g.std_dev() * g.std_dev());
+    assert!((result.std_dev().powi(2) - want_variance).abs() < 1e-9);
 }
 
 // --- The uncorrelated opt-out ------------------------------------------------------------

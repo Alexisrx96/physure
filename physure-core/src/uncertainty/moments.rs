@@ -350,6 +350,26 @@ fn push_term(out: &mut Vec<(u32, SourceMoments)>, id: u32, s: SourceMoments) {
     }
 }
 
+/// The error for combining, multiplying, or dividing two asymmetric values built with different
+/// shapes: the moments still add or multiply fine regardless of shape (variance and third
+/// moment do not care which shape produced them), but the eventual `(σ⁻, σ⁺)` read-out would be
+/// ambiguous for a mix.
+///
+/// Shared by [`MomentsBackend::combine`] and, from `trait_def.rs`, the enum's
+/// `(Moments, Moments)` mul/div arms — [`MomentsBackend::first_order`] cannot make this check on
+/// its own, since it only ever sees bare [`MomentLineage`]s, never the [`ShapeKind`] of the
+/// backend either one came from (that's exactly why it takes `shape` as an explicit parameter
+/// now rather than reading `self.shape`: an `&self` method always answered with its own shape,
+/// which is what let `Dimidiated * Fechner` succeed silently instead of refusing the way
+/// `Dimidiated + Fechner` already does through `combine`).
+pub(super) fn shape_mismatch() -> PhysureError {
+    PhysureError::Generic(
+        "Cannot combine asymmetric values built with different shapes: the moments add, but the \
+         (sigma-, sigma+) read-out would be ambiguous. Rebuild the operands with one shape."
+            .into(),
+    )
+}
+
 /// A measured asymmetric value, held as the moments a propagation model needs.
 ///
 /// `shape` and `sources` replace what used to be a bare `sigma: Lineage` and a scalar `third`:
@@ -469,12 +489,7 @@ impl MomentsBackend {
     pub fn combine(terms: &[(f64, &MomentsBackend)]) -> PhysureResult<MomentsBackend> {
         let shape = terms.first().map(|(_, b)| b.shape).unwrap_or(ShapeKind::DEFAULT);
         if terms.iter().any(|(_, b)| b.shape != shape) {
-            return Err(PhysureError::Generic(
-                "Cannot combine asymmetric values built with different shapes: the moments \
-                 add, but the (sigma-, sigma+) read-out would be ambiguous. Rebuild the \
-                 operands with one shape."
-                    .into(),
-            ));
+            return Err(shape_mismatch());
         }
         let mut mean = 0.0;
         let mut sources = MomentLineage::exact();
@@ -495,55 +510,74 @@ impl MomentsBackend {
     }
 
     /// The non-affine counterpart to [`Self::combine`]: folds sources through the chain rule
-    /// exactly as `combine` does, but takes the result `mean` explicitly instead of deriving it
-    /// as `Σ aᵢ·meanᵢ`.
+    /// exactly as `combine` does, but takes the result `shape` and `mean` explicitly instead of
+    /// reading `self.shape` and deriving the mean as `Σ aᵢ·meanᵢ`.
     ///
     /// Needed the moment two values are *multiplied* (or divided, or one is raised to a power):
     /// `d(ab)/da = b` and `d(ab)/db = a` are the right sensitivities for the *spread*, but the
     /// mean of a product is `mean_a · mean_b`, not `b·mean_a + a·mean_b`. Using [`Self::combine`]
     /// here would produce a plausible-looking but wrong mean for every non-linear operation.
-    pub(super) fn first_order(&self, mean: f64, terms: &[(f64, &MomentLineage)]) -> MomentsBackend {
+    ///
+    /// An associated function rather than an `&self` method, and `shape` an explicit parameter
+    /// rather than always `self.shape`: this only ever sees bare [`MomentLineage`]s, so it
+    /// cannot check two real operands' shapes agree the way [`Self::combine`] does — that check
+    /// has to happen at the call site, where both operands' [`ShapeKind`]s are still visible
+    /// (the enum's `(Moments, Moments)` mul/div arms in `trait_def.rs`, via [`shape_mismatch`]).
+    /// An `&self` method would have silently always answered with `self.shape`, which is exactly
+    /// what let `Dimidiated * Fechner` succeed instead of refusing like `Dimidiated + Fechner`.
+    pub(super) fn first_order(shape: ShapeKind, mean: f64, terms: &[(f64, &MomentLineage)]) -> MomentsBackend {
         let mut sources = MomentLineage::exact();
         for &(a, l) in terms {
             sources = MomentLineage::combine(&sources, 1.0, l, a);
         }
-        MomentsBackend { mean, shape: self.shape, sources }
+        MomentsBackend { mean, shape, sources }
     }
 
-    /// This value raised to `exponent`: `mean' = mode^exponent`, `jacobian = exponent ·
-    /// mode^(exponent−1)` applied to the sources via [`Self::scale`] (single operand, so there
+    /// This value raised to `exponent`: `mean' = mean^exponent`, `jacobian = exponent ·
+    /// mean^(exponent−1)` applied to the sources via [`Self::scale`] (single operand, so there
     /// is nothing to merge — the source ids survive, which is what lets `x² / x²` cancel).
     ///
-    /// Evaluated at [`Self::mode`], not `self.mean` — unlike the Gaussian backend, where the two
-    /// coincide, a `MomentsBackend`'s mean is a derived quantity (mode plus the shape's shift),
-    /// while the mode is the number the experimenter actually wrote down and the natural point
-    /// to raise to a power. This is also why the failure mode differs from `gaussian.rs`'s pow
-    /// arm: a skew too large for this shape to express has no honest mode either, so this
-    /// propagates that error (see [`Self::shift`]) rather than falling back to the mean.
+    /// Evaluated at `self.mean`, not [`Self::mode`] — the delta method is `E[f(X)] ≈ f(E[X])`,
+    /// and evaluating at the mode instead would move an *identity* operation: `x.powf(1.0)` must
+    /// be an exact no-op, but the mode differs from the mean by the shape's shift, so evaluating
+    /// there would shift the result for no reason. It would also mean the field this struct
+    /// documents as "the mean" would actually hold a mode after every `pow`/function call,
+    /// silently breaking every later operation that reads `.mean` expecting a mean (`cos(x) + y`
+    /// would then be mixing a mode and a mean). Nothing about "the result of applying this to
+    /// the quoted value" is lost by evaluating at the mean instead: the *output's own* `.mode()`
+    /// still comes back at ≈ `f(quoted value)`, to first order.
     ///
-    /// Guards `mode == 0.0 && exponent > 0.0` exactly like `gaussian.rs`'s own pow arm: the
-    /// jacobian's `mode^(exponent−1)` is undefined there for a fractional exponent, and the
-    /// honest answer for "zero to a positive power" is exact zero, not a computed `NaN`.
-    pub(super) fn powered(&self, exponent: f64) -> PhysureResult<Self> {
-        let m = self.mode()?;
+    /// Guards `mean == 0.0 && exponent > 0.0` exactly like `gaussian.rs`'s own pow arm: the
+    /// jacobian's `mean^(exponent−1)` is undefined there for a fractional exponent, and the
+    /// honest answer for "zero to a positive power" is exact zero, not a computed `NaN`. This
+    /// has to compare against the mean and not a `mode()` recovered by bisection — a value built
+    /// exactly at zero variance-of-skew (a symmetric measurement) has `mean == 0.0` exactly, but
+    /// `mode()`'s round trip through `sigmas_from_moments`'s search can land a few ulps off zero,
+    /// which used to let the guard miss and silently annihilate the variance through a tiny but
+    /// nonzero jacobian instead of returning the honest exact zero.
+    pub(super) fn powered(&self, exponent: f64) -> Self {
+        let m = self.mean;
         if m == 0.0 && exponent > 0.0 {
-            return Ok(MomentsBackend { mean: 0.0, shape: self.shape, sources: MomentLineage::exact() });
+            return MomentsBackend { mean: 0.0, shape: self.shape, sources: MomentLineage::exact() };
         }
         let new_mean = m.powf(exponent);
         let jacobian = exponent * m.powf(exponent - 1.0);
         let mut result = self.scale(jacobian);
         result.mean = new_mean;
-        Ok(result)
+        result
     }
 
-    /// This value passed through a supported one-argument function, using the *signed*
-    /// derivative table in [`function_mean_and_jacobian`] — see that function's own doc comment
-    /// for why the sign matters here and not in the Gaussian backend. Evaluated at
-    /// [`Self::mode`] for the same reason as [`Self::powered`]: the mode is the quoted value a
-    /// function like `cos(measured_value)` is naturally applied to, and its fallibility is why
-    /// this returns a `Result` where the Gaussian equivalent does not.
+    /// This value passed through a supported one-argument function, evaluated at `self.mean` for
+    /// the same reason as [`Self::powered`] (an identity-shaped function must not shift the
+    /// value, and the mean field must stay a mean after the call), using the *signed* derivative
+    /// table in [`function_mean_and_jacobian`] — see that function's own doc comment for why the
+    /// sign matters here and not in the Gaussian backend.
+    ///
+    /// Still fallible, unlike [`Self::powered`]: evaluating at the mean removed the
+    /// mode-recovery failure mode, but an unrecognised function name is a real refusal
+    /// independent of that (see [`function_mean_and_jacobian`]).
     pub(super) fn applied(&self, func: &str) -> PhysureResult<Self> {
-        let (new_mean, jacobian) = function_mean_and_jacobian(func, self.mode()?)?;
+        let (new_mean, jacobian) = function_mean_and_jacobian(func, self.mean)?;
         let mut result = self.scale(jacobian);
         result.mean = new_mean;
         Ok(result)
@@ -552,14 +586,22 @@ impl MomentsBackend {
 
 /// The value and *signed* first derivative of a supported one-argument function at `m`.
 ///
-/// `gaussian::function_mean_and_jacobian` wraps every entry in `.abs()`, because a symmetric
-/// spread does not care which way the slope points. A third central moment does: negating a
-/// value flips the sign of its skew, and a negative slope is exactly a (locally) negated value,
-/// so the jacobian here must stay signed — `J³` in [`MomentLineage::third`] is what carries that
-/// sign through. An unsupported function name refuses outright rather than falling through to
-/// the identity map the symmetric table's `_ => (m, 1.0)` arm uses, since silently answering
-/// "no change" for a function this model does not actually know would misreport the result
-/// rather than the model's own limits.
+/// `gaussian::function_mean_and_jacobian` already keeps every entry signed (its `cos` is
+/// `-m.sin()`, not `m.sin().abs()`) — a symmetric spread only ever reads a jacobian back
+/// squared, so the sign never mattered there either way. Two real differences from that table,
+/// both deliberate:
+///
+/// - **`abs`**: `gaussian.rs` documents choosing a jacobian of `1.0` there, rather than
+///   `signum(m)`, because folding a magnitude to its absolute value moves where a *symmetric*
+///   measurement sits, not how well it is known, and a sign flip on every coefficient would be
+///   an arbitrary choice that breaks cancellation for no gain. A third moment does not get that
+///   free pass: negating a value flips the sign of its skew, and `abs` on a negative input is
+///   locally exactly a negation, so this table uses the signed `if m >= 0.0 { 1.0 } else {
+///   -1.0 }` instead — `J³` in [`MomentLineage::third`] is what carries that sign through.
+/// - **An unsupported function name refuses outright** rather than falling through to the
+///   identity map the symmetric table's `_ => (m, 1.0)` arm uses, since silently answering "no
+///   change" for a function this model does not actually know would misreport the result rather
+///   than the model's own limits.
 fn function_mean_and_jacobian(func: &str, m: f64) -> PhysureResult<(f64, f64)> {
     Ok(match func {
         "sin" => (m.sin(), m.cos()),
@@ -619,7 +661,11 @@ impl UncertaintyBackend for MomentsBackend {
     fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         let (m1, m2) = (self.mean, other.mean());
         let other_sources = MomentLineage::measured(other.std_dev() * other.std_dev(), 0.0);
-        Ok(Box::new(self.first_order(m1 * m2, &[(m2, &self.sources), (m1, &other_sources)])))
+        Ok(Box::new(MomentsBackend::first_order(
+            self.shape,
+            m1 * m2,
+            &[(m2, &self.sources), (m1, &other_sources)],
+        )))
     }
 
     /// Guards `other.mean() == 0.0` exactly like `gaussian.rs`'s division arm — the honest
@@ -630,14 +676,15 @@ impl UncertaintyBackend for MomentsBackend {
             return Err(PhysureError::DivisionByZero("Division by zero in uncertainty propagation".into()));
         }
         let other_sources = MomentLineage::measured(other.std_dev() * other.std_dev(), 0.0);
-        Ok(Box::new(self.first_order(
+        Ok(Box::new(MomentsBackend::first_order(
+            self.shape,
             m1 / m2,
             &[(1.0 / m2, &self.sources), (-m1 / m2.powi(2), &other_sources)],
         )))
     }
 
     fn propagate_pow(&self, exponent: f64) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Ok(Box::new(self.powered(exponent)?))
+        Ok(Box::new(self.powered(exponent)))
     }
 
     fn propagate_function(&self, func: &str) -> PhysureResult<Box<dyn UncertaintyBackend>> {
@@ -744,14 +791,41 @@ mod tests {
         // Superseded placeholder: `MomentsBackend` used to refuse every arithmetic path
         // unconditionally (see git history). Now that the moments primitive is implemented,
         // this is a regression guard the other direction -- these must succeed, not refuse.
+        //
+        // A review caught the first version of this test asserting only `is_ok()`, which would
+        // still pass against a stub that silently symmetrised (dropped the third moment) --
+        // exactly the class of bug this module exists to prevent. So this checks the actual
+        // numbers `propagate_add`'s `&dyn` body (the path reached whenever a `MomentsBackend` is
+        // combined via the generic trait method rather than the enum's own arms) produces.
         let x = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
         let y = MomentsBackend::measured(1.0, 0.4, 0.5).unwrap();
-        assert!(x.propagate_add(&y).is_ok());
+        let sum = x.propagate_add(&y).unwrap();
+        assert!((sum.mean() - (x.mean + y.mean)).abs() < 1e-12);
+        // `y` is folded in as a symmetric source here (third forced to 0), but its own real
+        // variance survives -- only its skew is invisible through the `&dyn` interface.
+        assert!((sum.std_dev().powi(2) - (x.variance() + y.variance())).abs() < 1e-9);
+
         assert!(x.propagate_pow(2.0).is_ok());
         assert!(x.propagate_function("sin").is_ok());
         // The one corner that still refuses: a function name outside the derivative table,
         // rather than silently falling through to the identity map.
         assert!(x.propagate_function("gamma_fn_nobody_added").is_err());
+    }
+
+    #[test]
+    fn pow_guards_the_true_zero_mean_not_a_bisection_recovered_mode() {
+        // measured(0.0, 0.2, 0.2) is symmetric (sigma_minus == sigma_plus, so shift == 0.0
+        // exactly), so `.mean` is exactly 0.0 by construction -- unlike `.mode()`, which would
+        // have to recover it through `sigmas_from_moments`'s bisection search and can land a few
+        // ulps off zero. `powered`'s zero guard used to compare against that recovered mode and
+        // so could miss, letting a near-zero-but-nonzero jacobian silently annihilate the
+        // variance to something like 1e-34 instead of the honest exact zero.
+        let x = MomentsBackend::measured(0.0, 0.2, 0.2).unwrap();
+        assert_eq!(x.mean, 0.0);
+        let squared = x.powered(2.0);
+        assert_eq!(squared.mean, 0.0);
+        assert_eq!(squared.variance(), 0.0);
+        assert_eq!(squared.third(), 0.0);
     }
 
     #[test]
