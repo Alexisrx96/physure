@@ -160,22 +160,45 @@ special-case this form: `value_expr`'s reads count normally (evaluated in the ou
 some unrelated earlier top-level write of the same name. Chained `where a = 1, b = a + 1` desugars
 to nested `let`s and falls out of the same rule recursively.
 
-### 4.4 A `While` statement's writes are conditional on what already existed
+### 4.4 A `While` statement's writes — corrected against the real interpreter, not the roadmap's prose
 
-Track A's scoping rule (roadmap §3): a `while` body's assignments persist to the enclosing scope
-only for a name that **already existed there before the loop**; a name first assigned inside the
-loop stays loop-local and never leaks out. So a top-level `Statement::While`'s write-set is not
-simply "every name assigned in its body" (that would over-write the graph with names nothing
-outside the loop can ever actually see) — it's the intersection of that set with whatever the
-top-level scan has already seen written by an *earlier* statement.
+The roadmap's scoping rule (§3) claims a `while` body's assignments persist to the enclosing scope
+only for a name that already existed there, and that a name first assigned inside the loop doesn't
+leak out. **This spec originally modeled the graph on that claim; it's wrong.** Verified directly
+against the interpreter, not assumed from the AST: `eval_statement` ([interpreter.rs:654](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L654))
+clones `self.env` once for the *entire* top-level statement, runs it, and commits the whole
+resulting map back — and `Statement::While`'s own arm ([interpreter.rs:525](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L525))
+runs every body statement against that *same* `&mut env` reference, with no snapshot-and-restore
+around the loop. Nothing filters out newly-introduced names before the commit. Confirmed
+empirically: `i = 0\nwhile i < 1 { i = i + 1\nbrand_new = 99 }` leaves `brand_new` readable
+afterward. This is a real gap between Track A's documented intent and its shipped behavior — worth
+its own follow-up, but not a Track D concern to fix; Track D has to model what actually executes,
+not what a comment says should.
 
-This falls out of the same left-to-right sweep used for step 4's `last_writer` map with no extra
-pass: when the sweep reaches a `While` statement, a body-assigned name counts as one of its writes
-only if `last_writer` already has an entry for that name at that point. A body-assigned name with
-no prior entry is loop-local — excluded from the graph entirely, since nothing outside the loop can
-legitimately depend on it. The `While` statement's *reads* are computed the same way as a
-`FunctionDef`'s (§4.1): the full recursive walk of `cond` and every body statement's expressions,
-including the `FunctionCall.name` fix, minus names first assigned inside the loop itself.
+**Consequence for the graph**: a top-level `Statement::While`'s write-set is simply *every* name
+assigned anywhere in its body (recursively, same walk as `collect_declared`) — unconditionally, no
+`existing_before` filtering, no dependency on scan order. This is simpler than the original
+design, not just more correct: no context needs threading into the per-statement analysis at all.
+The `While` statement's *reads* are computed the same way as a `FunctionDef`'s (§4.1): the full
+recursive walk of `cond` and every body statement's expressions, including the `FunctionCall.name`
+fix, minus every name assigned anywhere in the body (a body statement reading a name the loop
+itself assigned earlier is a loop-local read, not a dependency on some earlier top-level statement
+of the same name).
+
+### 4.5 A template string's `{expr}` spans are reads too
+
+`Expr::Str(text)` is not read-free just because it's a string literal: `interpolate`
+([interpreter.rs:138](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L138)) scans for every
+`{...}` span and evaluates its contents as a full parsed PHS expression against `env` — `"v is
+{v * 2}"` really does read `v`. Skipping this would under-count reads for any statement using
+string interpolation, which is exactly the "too little" failure mode the roadmap warns about.
+
+**Fix**: the read-collector, on a `Str`, finds each brace-delimited span with the same scan
+`interpolate` uses, parses it with the already-public `physure_script::parser::parse_phs`, and — if
+it parses — recurses into the resulting statement's expression for further reads, the same as any
+other nested `Expr`. A span that fails to parse contributes no reads (`interpolate` itself leaves
+unparseable braces untouched at eval time, so nothing would have been read from `env` for it
+either).
 
 ---
 
@@ -196,9 +219,10 @@ Plus two targeted at the subtleties in §4:
    expression) still propagates to the call site when the global changes (§4.1).
 4. A statement that previously wrote a value successfully, edited into a form that now errors,
    removes that value for downstream readers rather than leaving it stale (§4.2).
-5. A name first assigned inside a `while` body (no prior top-level write) does not dirty any
-   statement outside the loop when edited; a `while` body reassignment of a name that *does*
-   already exist at top level does propagate to statements after the loop that read it (§4.4).
+5. A statement after a `while` loop that reads a name the loop's body assigns (whether or not that
+   name existed before the loop — see §4.4) is dirtied when the loop's body is edited (§4.4).
+6. Editing a variable referenced only inside a string's `{expr}` interpolation span dirties the
+   statement containing that string (§4.5).
 
 ---
 
