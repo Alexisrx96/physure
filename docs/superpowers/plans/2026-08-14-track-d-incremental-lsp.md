@@ -65,7 +65,7 @@ git commit -m "feat(script): expose collect_declared for reuse outside the debug
 
 **Confirmed API shapes used below** (already verified against the current source):
 - `physure_script::parser::parse_phs_with_lines(text: &str) -> PhysureResult<Vec<(usize, Statement)>>`
-  ([parser.rs:35](../../../physure-script/src/parser.rs))
+  ([parser.rs:35](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/parser.rs#L35))
 - `physure_script::interpreter::PhsInterpreter` — `#[derive(Clone)]`, `Default`, `pub env: HashMap<String, PhsValue>`,
   `pub fn run_statement(&mut self, stmt: &Statement) -> PhysureResult<PhsValue>`
 
