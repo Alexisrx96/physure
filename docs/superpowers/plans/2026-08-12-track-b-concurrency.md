@@ -215,7 +215,7 @@ rayon = "1"
 
 - [ ] **Step 2: Write the equivalence test**
 
-`PhsValue` already derives `PartialEq` ([value.rs:5](../../../physure-script/src/value.rs#L5)), so the two
+`PhsValue` already derives `PartialEq` ([value.rs:5](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/value.rs#L5)), so the two
 paths' output can be compared directly. In `physure-script/src/interpreter.rs`'s existing
 `mod tests` block (near `test_interpreter_for_expr_large_scale`):
 ```rust
