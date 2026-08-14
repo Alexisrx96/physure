@@ -188,6 +188,7 @@ mod tests {
             params: vec!["x".to_string()],
             param_units: vec![None],
             body_stmts: vec![Statement::Expr(Expr::Identifier("x".to_string()))],
+            body_lines: vec![],
             decorators,
             doc: None,
         })
@@ -215,6 +216,7 @@ mod tests {
             params: vec!["result".to_string()],
             param_units: vec![None],
             body_stmts: vec![Statement::Expr(Expr::Identifier("result".to_string()))],
+            body_lines: vec![],
             decorators: vec![DecoratorNode {
                 name: "ensures".to_string(),
                 args: vec![Expr::Identifier("result".to_string()), Expr::Str("must hold".to_string())],

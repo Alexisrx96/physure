@@ -163,7 +163,7 @@ impl JavaTranspiler {
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if ({}) {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
             }
-            Statement::While { cond, body } => {
+            Statement::While { cond, body, .. } => {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
@@ -314,6 +314,7 @@ mod tests {
                 left: Box::new(Expr::Identifier("m".to_string())),
                 right: Box::new(Expr::Identifier("v".to_string())),
             })],
+            body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
         });
@@ -374,6 +375,7 @@ mod tests {
         let while_stmt = Statement::While {
             cond: Expr::Identifier("flag".to_string()),
             body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
+            body_lines: vec![],
         };
         let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
         assert_eq!(code_while, "while (flag) {\n  return x;\n}");

@@ -86,7 +86,7 @@ impl PythonTranspiler {
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if {}: return {}", self.generate_expr(cond)?, self.generate_expr(value)?))
             }
-            Statement::While { cond, body } => {
+            Statement::While { cond, body, .. } => {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for stmt in body {
@@ -301,6 +301,7 @@ mod tests {
                 left: Box::new(Expr::Identifier("a".to_string())),
                 right: Box::new(Expr::Identifier("b".to_string())),
             })],
+            body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
         };
@@ -310,6 +311,7 @@ mod tests {
                 Statement::Import(import_node),
                 Statement::FunctionDef(fn_node),
             ],
+            lines: vec![],
         };
 
         let res = tp.generate_program(&prog).unwrap();
@@ -360,6 +362,7 @@ mod tests {
                 value: Expr::Identifier("1".to_string()),
                 decorators: Vec::new(),
             })],
+            body_lines: vec![],
         };
         let code_while = tp.generate_statement(&while_stmt).unwrap();
         assert_eq!(code_while, "while flag:\n    i = 1");

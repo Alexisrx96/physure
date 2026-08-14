@@ -55,7 +55,7 @@ mod tests {
     use crate::ast::Expr;
 
     fn program_with(node: FunctionDefNode) -> Program {
-        Program { statements: vec![Statement::FunctionDef(node)] }
+        Program { statements: vec![Statement::FunctionDef(node)], lines: vec![] }
     }
 
     fn base_node() -> FunctionDefNode {
@@ -64,6 +64,7 @@ mod tests {
             params: vec!["m".to_string(), "v".to_string()],
             param_units: vec![None, Some("m/s".to_string())],
             body_stmts: vec![],
+            body_lines: vec![],
             decorators: vec![],
             doc: None,
         }
@@ -96,7 +97,7 @@ mod tests {
 
     #[test]
     fn errors_on_empty_program() {
-        let out = ProtoGenerator.generate_program(&Program { statements: vec![] });
+        let out = ProtoGenerator.generate_program(&Program { statements: vec![], lines: vec![] });
         assert!(out.is_err());
     }
 }
