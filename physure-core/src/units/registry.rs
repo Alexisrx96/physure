@@ -150,27 +150,22 @@ impl UnitRegistry {
         } else if let Some(unit) = self.derived_units.get(name) {
             Some(unit.clone())
         } else {
-            let mut prefix_match = None;
-            for (p_sym, p_factor) in &self.prefixes {
-                if name.starts_with(p_sym) && name.len() > p_sym.len() {
-                    let rest = &name[p_sym.len()..];
-                    let rest_resolved = self.resolve_symbol(rest);
-                    let base_opt = self
-                        .base_units
-                        .get(&rest_resolved)
-                        .or_else(|| self.derived_units.get(&rest_resolved))
-                        .or_else(|| self.base_units.get(rest))
-                        .or_else(|| self.derived_units.get(rest));
-                    if let Some(base_u) = base_opt {
-                        let new_scale = base_u.scale * p_factor;
-                        let mut prefixed = base_u.clone().with_scale(new_scale);
-                        prefixed.display_name = Some(name.to_string());
-                        prefix_match = Some(prefixed);
-                        break;
-                    }
-                }
-            }
-            prefix_match
+            self.split_prefix(name).and_then(|(p_sym, p_factor)| {
+                let rest = &name[p_sym.len()..];
+                let rest_resolved = self.resolve_symbol(rest);
+                let base_opt = self
+                    .base_units
+                    .get(&rest_resolved)
+                    .or_else(|| self.derived_units.get(&rest_resolved))
+                    .or_else(|| self.base_units.get(rest))
+                    .or_else(|| self.derived_units.get(rest));
+                base_opt.map(|base_u| {
+                    let new_scale = base_u.scale * p_factor;
+                    let mut prefixed = base_u.clone().with_scale(new_scale);
+                    prefixed.display_name = Some(name.to_string());
+                    prefixed
+                })
+            })
         };
         if let Some(ref mut unit) = u {
             if unit.display_name.is_none() {
@@ -178,6 +173,29 @@ impl UnitRegistry {
             }
         }
         u
+    }
+
+    /// Splits `name` into a registered prefix symbol and its factor, if `name` is a known
+    /// prefix immediately followed by a base or derived unit symbol (e.g. `"km"` -> `Some(("k",
+    /// 1000.0))`; `"km/h"` or any other compound expression -> `None`, since this only
+    /// recognizes a single prefixed symbol, not an arbitrary unit expression). Factored out of
+    /// `get_unit`'s own prefix-matching so `Inspection`'s reverse lookup (Track C) reuses this
+    /// exact rule instead of re-deriving it.
+    pub fn split_prefix(&self, name: &str) -> Option<(String, f64)> {
+        for (p_sym, p_factor) in &self.prefixes {
+            if name.starts_with(p_sym.as_str()) && name.len() > p_sym.len() {
+                let rest = &name[p_sym.len()..];
+                let rest_resolved = self.resolve_symbol(rest);
+                let known = self.base_units.contains_key(&rest_resolved)
+                    || self.derived_units.contains_key(&rest_resolved)
+                    || self.base_units.contains_key(rest)
+                    || self.derived_units.contains_key(rest);
+                if known {
+                    return Some((p_sym.clone(), *p_factor));
+                }
+            }
+        }
+        None
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -300,4 +318,21 @@ fn edit_distance(a: &str, b: &str) -> usize {
         std::mem::swap(&mut previous, &mut current);
     }
     previous[b_chars.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn split_prefix_recognizes_a_registered_prefix_over_a_known_unit() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        let (symbol, factor) = reg.split_prefix("km").expect("km should split as k + m");
+        assert_eq!(symbol, "k");
+        assert_eq!(factor, 1000.0);
+    }
+
+    #[test]
+    fn split_prefix_returns_none_for_a_plain_unregistered_remainder() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        assert!(reg.split_prefix("qzzz").is_none());
+    }
 }
