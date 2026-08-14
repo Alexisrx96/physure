@@ -36,7 +36,7 @@ impl StackFrame {
     }
 }
 
-fn collect_declared(stmt: &crate::ast::Statement, declared: &mut HashSet<String>) {
+pub fn collect_declared(stmt: &crate::ast::Statement, declared: &mut HashSet<String>) {
     use crate::ast::{ImportSpecifier, Statement};
     match stmt {
         Statement::Assignment(node) => {

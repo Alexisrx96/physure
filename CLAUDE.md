@@ -79,6 +79,26 @@ Nothing merges to main unless all of these hold. CI enforces the first three; th
    - **All other subprojects** (physure-python, physure-wasm, physure-cli, physure-lsp, physure-java) — baseline "Sonar way" gate: new coverage ≥ 80%, new duplication ≤ 3%, zero new violations, security hotspots 100% reviewed. These are thinner binding/delegation layers with lower intrinsic logic risk, and physure-python already has its own stricter 80%-coverage floor enforced separately in CI (see #2 above).
 5. **ty is advisory, not gated** (~900 pre-existing errors). Don't add new errors to files you touch; burn down the backlog opportunistically.
 
+### Docs link policy (before committing anything under `docs/`)
+
+CI runs `cd physure-python && uv run mkdocs build --strict`, which fails the build on any broken
+link or missing nav target — this has broken CI twice already (Track B's `value.rs` link, fixed in
+`db030e8`; Track D's `parser.rs` link and an uncommitted-but-referenced plan file, fixed in
+`487c7ef`). Before committing a change under `docs/`:
+
+1. **Never link to a source file with a relative path.** `mkdocs` resolves relative links against
+   the docs tree, and a `../../../physure-script/src/foo.rs`-style path pointing outside it fails
+   the strict build. Every source-file link in `docs/` uses the full
+   `https://github.com/Alexisrx96/physure/blob/main/<path>#L<line>` form instead — match that
+   convention for any new one.
+2. **If a new `docs/*.md` file links to another `docs/*.md` file, `git add` both in the same
+   commit.** A link to a file that exists locally but was never committed 404s in CI the moment
+   someone else (or a fresh clone) builds the docs — it won't fail locally if the referenced file
+   happens to already be sitting in your working tree.
+3. **Run the build locally before pushing** if you touched more than a one-line edit to an
+   existing, already-linked page: `cd physure-python && uv run mkdocs build --strict`. It takes
+   well under a minute and catches both of the above before CI does.
+
 ### Changelog update policy (before every release)
 
 Before tagging any release, `CHANGELOG.md` **must** be updated from the real git history. Never guess or assume which features belong to which release.
