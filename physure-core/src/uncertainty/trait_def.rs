@@ -68,16 +68,17 @@ impl UncertaintyValue {
 
     /// The provenance of this value's uncertainty.
     ///
-    /// Monte Carlo carries correlation in its sample array rather than in a lineage, and a
-    /// `Custom` backend's provenance is unknowable from here. Both therefore report a fresh
-    /// independent source, which makes a mixed-model operation fall back to quadrature — the
-    /// honest answer when the two sides cannot be related.
+    /// Monte Carlo carries correlation in its sample array rather than in a lineage, a `Custom`
+    /// backend's provenance is unknowable from here, and a `Moments` value's provenance is a
+    /// `MomentLineage` — sensitivity paired with each source's own `(variance, third)`, not a
+    /// bare coefficient — so it cannot be merged into a plain `Lineage` either. All three
+    /// therefore report a fresh independent source, which makes a mixed-model operation fall
+    /// back to quadrature — the honest answer when the two sides cannot be related.
     pub fn lineage(&self) -> Lineage {
         match self {
             Self::Gaussian(g) => g.sigma.clone(),
-            Self::Moments(m) => m.sigma.clone(),
             Self::Unscented(u) => u.sigma.clone(),
-            Self::MonteCarlo(_) | Self::Custom(_) => Lineage::measured(self.std_dev()),
+            Self::Moments(_) | Self::MonteCarlo(_) | Self::Custom(_) => Lineage::measured(self.std_dev()),
         }
     }
 
@@ -153,9 +154,12 @@ impl UncertaintyValue {
 
     pub fn propagate_add(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
-            // Refused rather than approximated: every arm below is symmetric, so any of
-            // them would drop the skew and look like it had worked.
-            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("addition")),
+            // Both sides' real provenance survives here, through `MomentsBackend::combine`
+            // directly — a mixed pairing instead falls through to the generic `_` arm below,
+            // which reaches `MomentsBackend`'s own `&dyn` trait methods (see moments.rs).
+            (Self::Moments(a), Self::Moments(b)) => {
+                Ok(Self::Moments(MomentsBackend::combine(&[(1.0, a), (1.0, b)])?))
+            }
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m = g1.mean + g2.mean;
                 let sigma = Lineage::combine(&g1.sigma, 1.0, &g2.sigma, 1.0);
@@ -182,9 +186,9 @@ impl UncertaintyValue {
 
     pub fn propagate_sub(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
-            // Refused rather than approximated: every arm below is symmetric, so any of
-            // them would drop the skew and look like it had worked.
-            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("subtraction")),
+            (Self::Moments(a), Self::Moments(b)) => {
+                Ok(Self::Moments(MomentsBackend::combine(&[(1.0, a), (-1.0, b)])?))
+            }
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m = g1.mean - g2.mean;
                 let sigma = Lineage::combine(&g1.sigma, 1.0, &g2.sigma, -1.0);
@@ -211,9 +215,11 @@ impl UncertaintyValue {
 
     pub fn propagate_mul(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
-            // Refused rather than approximated: every arm below is symmetric, so any of
-            // them would drop the skew and look like it had worked.
-            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("multiplication")),
+            // First-order mean (`mean_a * mean_b`), not `combine`'s `Σaμ` — see
+            // `MomentsBackend::first_order`.
+            (Self::Moments(a), Self::Moments(b)) => Ok(Self::Moments(
+                a.first_order(a.mean * b.mean, &[(b.mean, &a.sources), (a.mean, &b.sources)]),
+            )),
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 // d(ab)/da = b, d(ab)/db = a. With disjoint lineages this reproduces the
                 // quadrature form it replaces; with a shared source it does not, which is
@@ -242,9 +248,17 @@ impl UncertaintyValue {
 
     pub fn propagate_div(&self, other: &UncertaintyValue) -> PhysureResult<UncertaintyValue> {
         match (self, other) {
-            // Refused rather than approximated: every arm below is symmetric, so any of
-            // them would drop the skew and look like it had worked.
-            (Self::Moments(_), _) | (_, Self::Moments(_)) => Err(super::moments::not_implemented("division")),
+            (Self::Moments(a), Self::Moments(b)) => {
+                if b.mean == 0.0 {
+                    return Err(crate::error::PhysureError::DivisionByZero(
+                        "Uncertainty propagation denominator is zero".into(),
+                    ));
+                }
+                Ok(Self::Moments(a.first_order(
+                    a.mean / b.mean,
+                    &[(1.0 / b.mean, &a.sources), (-a.mean / b.mean.powi(2), &b.sources)],
+                )))
+            }
             (Self::Gaussian(g1), Self::Gaussian(g2)) => {
                 let m1 = g1.mean; let m2 = g2.mean;
                 if m2 == 0.0 {
@@ -294,7 +308,7 @@ impl UncertaintyValue {
                 let sigma = g.sigma.scale(exponent * m.powf(exponent - 1.0));
                 Ok(Self::Gaussian(GaussianBackend::derived(new_mean, sigma)))
             }
-            Self::Moments(_) => Err(super::moments::not_implemented("exponentiation")),
+            Self::Moments(m) => Ok(Self::Moments(m.powered(exponent)?)),
             Self::MonteCarlo(m) => {
                 Ok(Self::MonteCarlo(MonteCarloBackend { samples: m.samples.mapv(|x| x.powf(exponent)) }))
             }
@@ -315,7 +329,7 @@ impl UncertaintyValue {
                 let (new_mean, jacobian) = super::gaussian::function_mean_and_jacobian(func, g.mean);
                 Ok(Self::Gaussian(GaussianBackend::derived(new_mean, g.sigma.scale(jacobian))))
             }
-            Self::Moments(_) => Err(super::moments::not_implemented(func)),
+            Self::Moments(m) => Ok(Self::Moments(m.applied(func)?)),
             Self::MonteCarlo(m) => {
                 let new_samples = match func {
                     "sin" => m.samples.mapv(|x| x.sin()),

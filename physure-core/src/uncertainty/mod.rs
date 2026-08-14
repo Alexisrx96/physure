@@ -11,7 +11,7 @@ pub use trait_def::{UncertaintyBackend, UncertaintyValue};
 pub use gaussian::GaussianBackend;
 pub use lineage::Lineage;
 pub use mode::{ModeGuard, PropagationMode, propagation_mode, set_propagation_mode};
-pub use moments::{AsymmetricMoments, MomentsBackend};
+pub use moments::{AsymmetricMoments, MomentLineage, MomentsBackend, SourceMoments};
 pub use shapes::{AsymmetryShape, DimidiatedGaussian, FechnerGaussian, ShapeKind};
 pub use monte_carlo::MonteCarloBackend;
 pub use unscented::UnscentedBackend;

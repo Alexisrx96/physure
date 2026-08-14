@@ -373,16 +373,23 @@ fn a_moments_value_reads_back_through_the_enum() {
 }
 
 #[test]
-fn arithmetic_on_an_asymmetric_value_refuses_instead_of_symmetrising() {
-    // Until moment propagation lands, every route through the symmetric arms would return a
-    // plausible-looking number with the asymmetry quietly averaged out. Each one must refuse,
-    // whichever side the asymmetric operand is on.
+fn asymmetric_arithmetic_now_propagates_instead_of_refusing() {
+    // Superseded placeholder: this used to assert every one of these refused (see git
+    // history). Now that the moments primitive is implemented, arithmetic on an asymmetric
+    // value succeeds -- two Moments values keep full provenance through the enum's explicit
+    // `(Moments, Moments)` arm, and a Moments value meeting a foreign model still succeeds
+    // through the generic `&dyn` fallback, which treats the foreign side as an independent
+    // symmetric source (the `UncertaintyBackend` trait exposes only `mean()`/`std_dev()`, so a
+    // foreign backend's own skew, if it even has one, simply is not visible from here -- the
+    // same reason two unrelated models already fall back to quadrature; see
+    // `UncertaintyValue::lineage`).
     let x = UncertaintyValue::Moments(MomentsBackend::measured(12.3, 0.4, 0.5).unwrap());
+    let y = UncertaintyValue::Moments(MomentsBackend::measured(1.0, 0.3, 0.6).unwrap());
     let g = UncertaintyValue::Gaussian(GaussianBackend::new(1.0, 0.3));
     let mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.3, 1000));
     let u = UncertaintyValue::Unscented(UnscentedBackend::new_scalar(2.0, 0.3));
 
-    for other in [&g, &mc, &u, &x] {
+    for other in [&g, &mc, &u, &y] {
         for (name, result) in [
             ("add", x.propagate_add(other)),
             ("sub", x.propagate_sub(other)),
@@ -393,13 +400,124 @@ fn arithmetic_on_an_asymmetric_value_refuses_instead_of_symmetrising() {
             ("mul-rhs", other.propagate_mul(&x)),
             ("div-rhs", other.propagate_div(&x)),
         ] {
-            let Err(err) = result else { panic!("{name} answered instead of refusing") };
-            assert!(err.to_string().contains("not yet propagated"), "{name}: {err}");
+            assert!(result.is_ok(), "{name} refused instead of propagating");
         }
     }
 
-    assert!(x.propagate_pow(2.0).is_err());
-    assert!(x.propagate_function("sin").is_err());
+    assert!(x.propagate_pow(2.0).is_ok());
+    assert!(x.propagate_function("sin").is_ok());
+    // The one corner that still refuses: a function name outside the model's derivative
+    // table, rather than silently falling through to the identity map.
+    assert!(x.propagate_function("gamma_fn_nobody_added").is_err());
+
+    // The `(Moments, Moments)` arm keeps both operands' real skew, unlike the `&dyn` fallback
+    // above, which cannot see a foreign value's third moment at all.
+    let sum = x.propagate_add(&y).unwrap();
+    if let UncertaintyValue::Moments(m) = sum {
+        assert!(m.third() != 0.0, "combining two skewed sources must not average the skew away");
+    } else {
+        panic!("expected a Moments result");
+    }
+}
+
+// -- MomentsBackend restructure: shape/sources, combine, first-order trait arms ----------
+
+#[test]
+fn measured_carries_mean_off_the_quoted_value() {
+    let b = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
+    // Equal-area now: shift = k·(σ⁺−σ⁻) = 0.3989…·0.1
+    assert!((b.mean - 12.3 - 0.039_894_228_040_143_27).abs() < 1e-12);
+    assert!((b.mode().unwrap() - 12.3).abs() < 1e-9);
+    let (lo, hi) = b.sigmas().unwrap();
+    assert!((lo - 0.4).abs() < 1e-8 && (hi - 0.5).abs() < 1e-8);
+}
+
+#[test]
+fn combine_is_linear_in_all_three_moments() {
+    let a = MomentsBackend::measured(10.0, 0.3, 0.5).unwrap();
+    let b = MomentsBackend::measured(20.0, 0.3, 0.5).unwrap();
+    let s = MomentsBackend::combine(&[(1.0, &a), (1.0, &b)]).unwrap();
+    assert!((s.mean - (a.mean + b.mean)).abs() < 1e-12);
+    assert!((s.variance() - 2.0 * a.variance()).abs() < 1e-12);
+    assert!((s.third() - 2.0 * a.third()).abs() < 1e-12);
+}
+
+#[test]
+fn combine_cancels_a_reused_source_in_the_third_moment() {
+    let x = MomentsBackend::measured_with(5.0, 0.3, 0.5, ShapeKind::Dimidiated, Some(41)).unwrap();
+    let y = MomentsBackend::combine(&[(2.0, &x), (-1.0, &x)]).unwrap(); // 2x − x == x
+    assert!((y.variance() - x.variance()).abs() < 1e-12);
+    assert!((y.third() - x.third()).abs() < 1e-12);
+    assert!((y.mean - x.mean).abs() < 1e-12);
+}
+
+#[test]
+fn combine_refuses_mixed_shapes() {
+    let d = MomentsBackend::measured_with(0.0, 0.3, 0.5, ShapeKind::Dimidiated, None).unwrap();
+    let f = MomentsBackend::measured_with(0.0, 0.3, 0.5, ShapeKind::Fechner, None).unwrap();
+    assert!(MomentsBackend::combine(&[(1.0, &d), (1.0, &f)]).is_err());
+}
+
+#[test]
+fn unrepresentable_skew_is_an_error_not_a_mean() {
+    // Hand-build a backend whose skew exceeds the dimidiated ceiling.
+    let b = MomentsBackend {
+        mean: 0.0,
+        shape: ShapeKind::Dimidiated,
+        sources: MomentLineage::measured(1.0, 1.7),
+    };
+    assert!(b.shift().is_err());
+    assert!(b.mode().is_err());
+    assert!(b.sigmas().is_err());
+    // The moments themselves stay readable.
+    assert_eq!(b.variance(), 1.0);
+    assert_eq!(b.third(), 1.7);
+}
+
+#[test]
+fn trait_arms_propagate_first_order() {
+    use super::trait_def::UncertaintyValue;
+    let a = UncertaintyValue::Moments(MomentsBackend::measured(3.0, 0.3, 0.5).unwrap());
+    let b = UncertaintyValue::Moments(MomentsBackend::measured(4.0, 0.2, 0.4).unwrap());
+    let p = a.propagate_mul(&b).unwrap();
+    if let UncertaintyValue::Moments(m) = p {
+        let (ba, bb) =
+            (MomentsBackend::measured(3.0, 0.3, 0.5).unwrap(), MomentsBackend::measured(4.0, 0.2, 0.4).unwrap());
+        // J_a = mean_b, J_b = mean_a; mean' = product of means (first order).
+        assert!((m.mean - ba.mean * bb.mean).abs() < 1e-9);
+        let want_var = bb.mean.powi(2) * ba.variance() + ba.mean.powi(2) * bb.variance();
+        assert!((m.variance() - want_var).abs() < 1e-9);
+        let want_third = bb.mean.powi(3) * ba.third() + ba.mean.powi(3) * bb.third();
+        assert!((m.third() - want_third).abs() < 1e-9);
+    } else {
+        panic!("expected a Moments result")
+    }
+}
+
+#[test]
+fn negative_derivative_flips_the_skew_through_a_function() {
+    use super::trait_def::UncertaintyValue;
+    // cos at m=1: J = −sin(1) < 0, so a positive input skew must come out negative.
+    let backend = MomentsBackend::measured(1.0, 0.1, 0.3).unwrap();
+    let input_third = backend.third();
+    assert!(input_third > 0.0);
+    let out = UncertaintyValue::Moments(backend).propagate_function("cos").unwrap();
+    if let UncertaintyValue::Moments(m) = out {
+        let j = -(1.0_f64).sin();
+        assert!(m.third() < 0.0);
+        assert!((m.third() - j.powi(3) * input_third).abs() < 1e-12);
+        assert!((m.mean - (1.0_f64).cos()).abs() < 1e-12);
+    } else {
+        panic!("expected a Moments result")
+    }
+}
+
+#[test]
+fn unknown_function_refuses_instead_of_identity() {
+    use super::trait_def::UncertaintyValue;
+    let backend = MomentsBackend::measured(1.0, 0.1, 0.3).unwrap();
+    let v = UncertaintyValue::Moments(backend);
+    assert!(v.propagate_function("gamma_fn_nobody_added").is_err());
 }
 
 // --- The uncorrelated opt-out ------------------------------------------------------------
