@@ -58,9 +58,16 @@ fn analyze_one(stmt: &Statement) -> StmtDeps {
                 collect_declared(s, &mut declared);
             }
             let mut reads = HashSet::new();
+            // `check_ensures` (physure-script/src/interpreter.rs) binds a synthetic `result`
+            // name into a clone of the local env before evaluating an `@ensures` condition;
+            // treat it as local to every decorator on this function (not just `@ensures`) so
+            // it never counts as an outer read -- `validate_decorators` already forbids a
+            // param literally named `result`, so this can't hide a real dependency.
+            let mut decorator_locals = declared.clone();
+            decorator_locals.insert("result".to_string());
             for d in &node.decorators {
                 for arg in &d.args {
-                    collect_expr_reads(arg, &declared, &mut reads);
+                    collect_expr_reads(arg, &decorator_locals, &mut reads);
                 }
             }
             for s in &node.body_stmts {
@@ -133,9 +140,13 @@ fn collect_stmt_reads(stmt: &Statement, locals: &HashSet<String>, out: &mut Hash
             }
         }
         Statement::FunctionDef(node) => {
+            // Same `result`-binding exemption as `analyze_one`'s FunctionDef arm -- see its
+            // comment for why (`check_ensures` in interpreter.rs).
+            let mut decorator_locals = locals.clone();
+            decorator_locals.insert("result".to_string());
             for d in &node.decorators {
                 for arg in &d.args {
-                    collect_expr_reads(arg, locals, out);
+                    collect_expr_reads(arg, &decorator_locals, out);
                 }
             }
             for s in &node.body_stmts {
@@ -307,6 +318,13 @@ mod tests {
         let s = stmts(r#"msg = "v is {v * 2}""#);
         let deps = analyze_one(&s[0]);
         assert!(deps.reads.contains("v"));
+    }
+
+    #[test]
+    fn ensures_result_binding_does_not_read_as_an_outer_dependency() {
+        let s = stmts("@ensures(result > 0.0, \"must be positive\")\nfn small(m) = m");
+        let deps = analyze_one(&s[0]);
+        assert!(!deps.reads.contains("result"), "result is bound locally by @ensures, not an outer read");
     }
 
     #[test]
