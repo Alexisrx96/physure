@@ -99,7 +99,9 @@ mod tests {
     }
 }
 
-struct CliDebugHook;
+struct CliDebugHook {
+    registry: physure_core::UnitRegistry,
+}
 
 impl DebugHook for CliDebugHook {
     fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
@@ -179,8 +181,7 @@ impl DebugHook for CliDebugHook {
                         .filter(|f| f.declared.contains(&name))
                         .map(|f| ScopeKind::Local { owner_fn: f.fn_name.clone(), frame_depth: ctx.call_stack.len() })
                         .unwrap_or(ScopeKind::Global);
-                    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
-                    let insp = inspect(&name, val, scope, &registry);
+                    let insp = inspect(&name, val, scope, &self.registry);
                     println!("{name}");
                     println!("  kind        : {:?}", insp.kind);
                     println!("  scope       : {:?}", insp.scope);
@@ -221,9 +222,10 @@ pub fn run_debug(args: &[String]) {
         }
     };
 
+    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
     let mut interp = PhsInterpreter::with_debug_hook(
         Arc::new(physure_script::resolver::FsModuleResolver::default()),
-        Arc::new(CliDebugHook),
+        Arc::new(CliDebugHook { registry }),
     );
 
     let mut i = 2;
