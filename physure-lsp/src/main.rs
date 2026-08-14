@@ -1,3 +1,5 @@
+mod incremental;
+
 use std::collections::HashMap;
 use std::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
