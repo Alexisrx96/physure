@@ -81,7 +81,8 @@ pub fn run_export(args: &[String]) {
         process::exit(1);
     }
 
-    let single_fn_program = Program { statements: vec![Statement::FunctionDef(node.clone())] };
+    let single_fn_program =
+        Program { statements: vec![Statement::FunctionDef(node.clone())], lines: vec![] };
 
     let proto = match ProtoGenerator.generate_program(&single_fn_program) {
         Ok(s) => s,

@@ -326,7 +326,7 @@ impl PhsInterpreter {
                     Ok(PhsValue::None)
                 }
             }
-            Statement::While { cond, body } => {
+            Statement::While { cond, body, .. } => {
                 const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
@@ -625,6 +625,7 @@ impl PhsInterpreter {
                                 params,
                                 param_units,
                                 body_stmts: vec![body],
+                                body_lines: vec![],
                                 decorators: Vec::new(),
                                 doc: None,
                             }));
@@ -991,6 +992,7 @@ impl PhsInterpreter {
                     params,
                     param_units,
                     body_stmts: vec![body],
+                    body_lines: vec![],
                     decorators: Vec::new(),
                     doc: None,
                 }))
@@ -1390,6 +1392,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         })),
                     })
                 })],
+                body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
             }),
@@ -1429,7 +1432,7 @@ r3 = circuito_abierto(5 V, 2 A)
             }),
         ];
         
-        let env = interp.eval_program(&Program { statements }).unwrap();
+        let env = interp.eval_program(&Program { statements, lines: vec![] }).unwrap();
         
         let e_val = env.get("E").unwrap();
         if let PhsValue::Quantity(q) = e_val {
@@ -1460,6 +1463,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     decorators: Vec::new(),
                 }),
             ],
+            lines: vec![],
         };
         let env = interp.eval_program(&program).unwrap();
         let m_val = env.get("m").unwrap();
@@ -1532,6 +1536,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     specifier: ImportSpecifier::Wildcard,
                 })
             ],
+            lines: vec![],
         };
         let env = interp.eval_program(&program).unwrap();
         let g_val = env.get("G").unwrap();

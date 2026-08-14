@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub statements: Vec<Statement>,
+    /// `lines[i]` is the 1-based source line of `statements[i]`. Empty for any `Program`
+    /// built somewhere other than the real parser (codegen-internal rewrites, hand-built
+    /// test fixtures) — line lookups elsewhere always index this defensively, never panic
+    /// on a missing/short entry.
+    #[serde(default)]
+    pub lines: Vec<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -14,7 +20,14 @@ pub enum Statement {
     Expr(Expr),
     Return(Expr),
     GuardReturn { cond: Expr, value: Expr },
-    While { cond: Expr, body: Vec<Statement> },
+    While {
+        cond: Expr,
+        body: Vec<Statement>,
+        /// `body_lines[i]` is the source line of `body[i]`. Same defensive-lookup contract
+        /// as `Program.lines`.
+        #[serde(default)]
+        body_lines: Vec<usize>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -52,6 +65,9 @@ pub struct FunctionDefNode {
     #[serde(default)]
     pub param_units: Vec<Option<String>>,
     pub body_stmts: Vec<Statement>,
+    /// Same defensive-lookup contract as `Program.lines`.
+    #[serde(default)]
+    pub body_lines: Vec<usize>,
     #[serde(default)]
     pub decorators: Vec<DecoratorNode>,
     /// Consecutive `///` lines immediately above the definition, newline-joined, `///` prefix
@@ -201,6 +217,7 @@ mod tests {
             params: vec!["x".to_string()],
             param_units: vec![None],
             body_stmts: vec![Statement::Expr(Expr::Identifier("x".to_string()))],
+            body_lines: vec![],
             decorators: vec![DecoratorNode {
                 name: "stable".to_string(),
                 args: vec![],
@@ -247,6 +264,7 @@ mod tests {
         let while_stmt = Statement::While {
             cond: Expr::Identifier("flag".to_string()),
             body: vec![Statement::Expr(for_expr)],
+            body_lines: vec![],
         };
         assert!(matches!(while_stmt, Statement::While { .. }));
     }

@@ -151,16 +151,20 @@ fn inline_bindings_stmt(stmt: &Statement) -> Statement {
             body_stmts: def.body_stmts.iter().map(inline_bindings_stmt).collect(),
             ..def.clone()
         }),
-        Statement::While { cond, body } => Statement::While {
+        Statement::While { cond, body, body_lines } => Statement::While {
             cond: inline_bindings(cond),
             body: body.iter().map(inline_bindings_stmt).collect(),
+            body_lines: body_lines.clone(),
         },
         other => other.clone(),
     }
 }
 
 fn inline_bindings_program(program: &Program) -> Program {
-    Program { statements: program.statements.iter().map(inline_bindings_stmt).collect() }
+    Program {
+        statements: program.statements.iter().map(inline_bindings_stmt).collect(),
+        lines: program.lines.clone(),
+    }
 }
 
 /// One piece of a string literal after `{expr}` interpolation has been read out of it.
@@ -478,7 +482,7 @@ fn compile_equations_to_functions(program: &Program) -> Result<Program, CodegenE
 
     let mut all_statements: Vec<Statement> = functions.into_iter().map(Statement::FunctionDef).collect();
     all_statements.extend(statements);
-    Ok(Program { statements: all_statements })
+    Ok(Program { statements: all_statements, lines: vec![] })
 }
 
 /// Replaces `name(k1 = v1, k2 = v2)` calls to a tracked equation with a plain positional
@@ -513,6 +517,7 @@ fn rewrite_equation_calls(
                         params: kwarg_names.clone(),
                         param_units: vec![None; kwarg_names.len()],
                         body_stmts: vec![Statement::Expr(node_to_expr(chosen))],
+                        body_lines: vec![],
                         decorators: Vec::new(),
                         doc: None,
                     });
