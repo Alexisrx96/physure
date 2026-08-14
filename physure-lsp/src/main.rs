@@ -78,6 +78,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         self.documents.write().unwrap().remove(&uri);
         self.doc_states.write().unwrap().remove(&uri);
+        self.client.publish_diagnostics(uri, vec![], None).await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -754,5 +755,14 @@ async fn main() {
         doc_states: RwLock::new(HashMap::new()),
     });
 
-    Server::new(stdin, stdout, socket).serve(service).await;
+    // Serialized, not the default concurrency_level(4): on_change persists a DocState that
+    // feeds forward into the next edit's incremental diff, so two edits (or an edit racing a
+    // close) for the same document completing out of order could silently corrupt that state
+    // -- resurrecting a closed document's entry, or overwriting a newer edit's result with an
+    // older one's. A single-user local language server has no real need for concurrent
+    // notification handling, so serializing everything is simpler and safer than per-URI locks.
+    Server::new(stdin, stdout, socket)
+        .concurrency_level(1)
+        .serve(service)
+        .await;
 }
