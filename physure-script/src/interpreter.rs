@@ -359,29 +359,71 @@ impl PhsInterpreter {
         Ok(self.env.clone())
     }
 
-    pub fn add_breakpoint(&mut self, bp: crate::debug::Breakpoint) {
+    pub fn add_breakpoint(&self, bp: crate::debug::Breakpoint) {
         self.breakpoints.lock().unwrap_or_else(|e| e.into_inner()).push(bp);
     }
 
     fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         let Some(hook) = &self.debug_hook else { return Ok(()) };
-        let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
-        let breakpoints = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner());
 
-        let hits = breakpoints.iter().any(|bp| match bp {
-            crate::debug::Breakpoint::Line(l) => *l == line,
-            crate::debug::Breakpoint::Conditional(l, cond) => {
-                *l == line && is_truthy(&self.eval_expr(cond, env).unwrap_or(PhsValue::Bool(false)))
-            }
-            crate::debug::Breakpoint::FunctionEntry(name) => {
-                call_stack.last().map(|f| f.fn_name == *name).unwrap_or(false)
-            }
-        });
+        // Snapshot the breakpoint list and the innermost frame's name, then drop both locks
+        // *before* evaluating any `Conditional` breakpoint's condition below: that condition
+        // may call a PHS-defined function, which re-enters `debug_checkpoint` on this same
+        // thread via `eval_expr` -> `call_function_node` -> `call_function_node_at` ->
+        // `eval_statement_with_env_at`. `std::sync::Mutex` is not reentrant, so holding
+        // `call_stack`/`breakpoints` locked (as `MutexGuard`s) across that call would
+        // self-deadlock the thread forever -- NLL only relaxes borrow-checking, it doesn't
+        // change when a `MutexGuard`'s `Drop` actually runs, so the naive "just lock at the
+        // top of the function" version hangs the instant a condition calls back in.
+        // `Breakpoint` and `StackFrame` are both `Clone`, so cloning out of the lock is cheap
+        // and correct.
+        let breakpoints = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let innermost_fn_name = self
+            .call_stack
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last()
+            .map(|f| f.fn_name.clone());
 
+        let mut hits = false;
+        for bp in &breakpoints {
+            hits = match bp {
+                crate::debug::Breakpoint::Line(l) => *l == line,
+                crate::debug::Breakpoint::Conditional(l, cond) => {
+                    // Let a condition-eval error (typo'd variable, type error, ...) propagate
+                    // as a real error instead of silently treating it as "didn't match" --
+                    // every call site of `debug_checkpoint` already propagates its
+                    // `PhysureResult` with `?`, so a user with a broken breakpoint condition
+                    // gets a real error message instead of a breakpoint that quietly never
+                    // fires.
+                    *l == line && is_truthy(&self.eval_expr(cond, env)?)
+                }
+                // Fires on every statement inside the named function's innermost frame, not
+                // only its first statement -- see the doc comment on `Breakpoint::FunctionEntry`
+                // in debug.rs for why.
+                crate::debug::Breakpoint::FunctionEntry(name) => {
+                    innermost_fn_name.as_deref() == Some(name.as_str())
+                }
+            };
+            if hits {
+                break;
+            }
+        }
+
+        // Two different "no match" cases, deliberately handled differently: no breakpoints
+        // registered at all means every checkpoint still reaches the hook, exactly as before
+        // C3 (preserves C1's "hook sees everything" behavior so plain step/next/continue work
+        // without requiring a breakpoint to be set first); breakpoints registered but none of
+        // them matched *this* checkpoint means stay silent.
         if !hits && !breakpoints.is_empty() {
             return Ok(());
         }
 
+        // Re-acquire `call_stack` only now, right before the hook call, to build the
+        // `DebugContext` -- safe to hold during `hook.on_statement` because `DebugHook` only
+        // ever receives `&DebugContext`, never a `PhsInterpreter` reference, so there is no way
+        // for the hook to call back into `self` and re-enter this lock.
+        let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
         let ctx = DebugContext { line, call_stack: &call_stack, env };
         let _ = hook.on_statement(&ctx);
         Ok(())
@@ -1376,6 +1418,12 @@ mod tests {
         );
         interp.add_breakpoint(Breakpoint::FunctionEntry("double".to_string()));
         // Single-expression function body (no indentation block needed): "fn f(x) = expr".
+        // NB: because `double`'s body is a single statement, this test can't by itself
+        // distinguish "fires once per call" from the actual "fires once per statement in the
+        // frame" semantics (see `Breakpoint::FunctionEntry`'s doc comment in debug.rs) -- two
+        // calls to a one-statement function produce the same hit count either way. See
+        // `function_entry_breakpoint_fires_on_every_statement_in_frame_not_just_entry` below
+        // for the test that actually tells the two apart.
         let program = crate::parser::parse_phs(
             "fn double(x) = x * 2\na = double(1)\nb = double(2)\n",
         )
@@ -1383,6 +1431,98 @@ mod tests {
         interp.run_statements_with_lines(&program).unwrap();
 
         assert_eq!(*hits.lock().unwrap(), 2, "expected a pause on each of the two calls");
+    }
+
+    #[test]
+    fn function_entry_breakpoint_fires_on_every_statement_in_frame_not_just_entry() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                if ctx.call_stack.last().map(|f| f.fn_name.as_str()) == Some("double") {
+                    *self.0.lock().unwrap() += 1;
+                }
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::FunctionEntry("double".to_string()));
+        // Two-statement body, ONE call: `FunctionEntry` matches on "innermost frame is this
+        // function", checked at every checkpoint inside that frame -- so a single call to a
+        // two-statement function must hit twice, not once, which is what actually distinguishes
+        // this from a true once-per-call breakpoint.
+        let program = crate::parser::parse_phs(
+            "fn double(x) =\n  y = x * 2\n  return y\na = double(1)\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        assert_eq!(
+            *hits.lock().unwrap(),
+            2,
+            "FunctionEntry should fire on both statements of the single call, not just entry"
+        );
+    }
+
+    #[test]
+    fn conditional_breakpoint_condition_calling_a_phs_function_does_not_deadlock() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::mpsc;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                *self.0.lock().unwrap() += 1;
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        let program = crate::parser::parse_phs(
+            "fn helper(v) = v > 0\nx = 1\nx = 2\ny = x\n",
+        )
+        .unwrap();
+        let cond_line = program.lines[3]; // the "y = x" statement
+        let cond_expr = crate::parser::parse_phs("helper(x)").unwrap().statements.remove(0);
+        let crate::ast::Statement::Expr(cond) = cond_expr else { panic!("expected expr") };
+        // Regression test for the self-deadlock this used to cause: the condition calls a
+        // PHS-defined function, so evaluating it re-enters `debug_checkpoint` on this same
+        // thread (via `eval_expr` -> `call_function_node` -> `call_function_node_at` ->
+        // `eval_statement_with_env_at`) while this very breakpoint check is still in progress.
+        // The old implementation held `call_stack`/`breakpoints` locked (as `MutexGuard`s)
+        // across that `eval_expr` call, so the re-entrant lock attempt hung forever. Run on a
+        // background thread with a bounded `recv_timeout` so a reintroduced deadlock fails this
+        // test outright instead of hanging the whole `cargo test` invocation (and CI) forever.
+        interp.add_breakpoint(Breakpoint::Conditional(cond_line, cond));
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            interp.run_statements_with_lines(&program).unwrap();
+            let _ = tx.send(*hits.lock().unwrap());
+        });
+
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(count) => assert_eq!(count, 1, "should pause exactly once, once x has settled to 2"),
+            Err(_) => panic!(
+                "debug_checkpoint deadlocked evaluating a Conditional breakpoint whose \
+                 condition calls a PHS-defined function"
+            ),
+        }
     }
 
     #[test]
