@@ -1974,17 +1974,89 @@ method, not direct field access):
 Run: `cargo test -p physure-script --lib interpreter::tests::parallel_map_falls_back`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full `physure-script` test suite**
+- [ ] **Step 5: Extend the same fallback to the `for`-expression parallel path**
+
+**Added during C1's code review, not in the original spec/plan draft**: C1's code-quality
+reviewer checked the `call_stack`-safety doc comment against reality and found it only
+addressed `parallel_map` — the `Expr::ForExpr` parallel path (added in Track B, same
+`rayon`-above-`parallel_threshold` mechanism) has the identical corruption risk whenever its
+loop body contains a function call: multiple rayon worker threads would concurrently push/pop
+into the single shared `call_stack` `Vec` from unrelated logical call chains, and
+`hook.on_statement` would be invoked concurrently against a `call_stack` that no longer
+represents any one coherent execution. The `Mutex` prevents a data race, but not this semantic
+corruption. This step closes that gap using the exact same `debug_hook_is_set()` accessor
+Step 3 already added.
+
+In `physure-script/src/interpreter.rs`'s `mod tests` block, alongside
+`parallel_map_falls_back_to_sequential_when_debug_hook_is_set`:
+```rust
+#[test]
+fn for_expr_falls_back_to_sequential_when_debug_hook_is_set() {
+    use crate::debug::{DebugAction, DebugContext, DebugHook};
+    use std::sync::{Arc, Mutex};
+
+    struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+    impl DebugHook for RecordingHook {
+        fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+            self.0.lock().unwrap().push(ctx.line);
+            DebugAction::Continue
+        }
+    }
+
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let hook = Arc::new(RecordingHook(seen.clone()));
+    let mut interp = PhsInterpreter::with_debug_hook(
+        std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+        hook,
+    );
+    // Force the parallel branch (threshold 0) so this test would exercise the rayon path if
+    // the fallback below didn't override it.
+    let _guard = physure_core::settings::scoped(0);
+    let stmts = crate::parser::parse_phs(
+        "fn double(x) = x * 2.0\nres = for i in vector(1.0, 2.0, 3.0) { double(i) }",
+    )
+    .unwrap();
+    interp.run_statements(&stmts).unwrap();
+
+    let PhsValue::Vector(v) = interp.get_var("res").unwrap() else { panic!("expected vector") };
+    assert_eq!(v.len(), 3);
+    // Same reasoning as parallel_map's fallback test: a deterministic, same-thread checkpoint
+    // count is what "fell back to sequential" actually proves, not just correct output.
+    assert!(!seen.lock().unwrap().is_empty(), "hook should have been called for double()'s body");
+}
+```
+
+Run: `cargo test -p physure-script --lib interpreter::tests::for_expr_falls_back`
+Expected: FAIL to compile or FAIL the assertion — the parallel branch has no debug-hook check
+yet, so under `set_parallel_threshold(0)` it takes the `rayon` path regardless of `debug_hook`.
+
+In `physure-script/src/interpreter.rs`, the `Expr::ForExpr` arm's threshold check currently
+reads:
+```rust
+                if items.len() >= physure_core::settings::parallel_threshold() {
+```
+Change it to:
+```rust
+                if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() {
+```
+This is the same "coherent debugging experience" rule Step 3 already applies to `parallel_map`,
+now covering the other rayon entry point Track B added. No other change needed — the existing
+`else` branch is already the correct sequential fallback, unchanged.
+
+Run: `cargo test -p physure-script --lib interpreter::tests::for_expr_falls_back`
+Expected: PASS.
+
+- [ ] **Step 6: Run the full `physure-script` test suite**
 
 Run: `cargo test -p physure-script --lib`
-Expected: PASS (includes Track B's own `parallel_map` tests, unaffected since they never set a
-`debug_hook`).
+Expected: PASS (includes Track B's own `parallel_map` and `for`-expression parallelism tests,
+unaffected since they never set a `debug_hook`).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add physure-script/src/builtins.rs physure-script/src/interpreter.rs
-git commit -m "feat(phs): fall back to sequential parallel_map when a debug hook is set"
+git commit -m "feat(phs): fall back to sequential parallel_map and for-expression evaluation when a debug hook is set"
 ```
 
 ### Task I.2: End-to-end scripted CLI-debugger test
