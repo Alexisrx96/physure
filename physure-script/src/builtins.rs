@@ -179,6 +179,22 @@ pub fn eval_core_builtin(
                 (Some(PhsValue::Function(f)), Some(PhsValue::Vector(v))) => (f, v.clone()),
                 _ => return Err(PhysureError::Generic("parallel_map expects (fn, vector)".into())),
             };
+            // A breakpoint inside a rayon worker closure isn't a coherent debugging
+            // experience -- pausing one of N racing threads while the rest continue -- so a
+            // debug session forces this back to plain sequential `.map()` instead of silently
+            // ignoring any breakpoint set inside `func`.
+            if interpreter.debug_hook_is_set() {
+                let results: PhysureResult<Vec<PhsValue>> = vec
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        interpreter
+                            .call_function_node(func, vec![item], env)
+                            .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
+                    })
+                    .collect();
+                return Ok(Some(PhsValue::Vector(results?)));
+            }
             use rayon::prelude::*;
             let results: Vec<PhsValue> = vec
                 .into_par_iter()
