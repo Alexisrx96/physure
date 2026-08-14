@@ -143,13 +143,24 @@ successfully is edited into something that now fails, simply calling `run_statem
 the `Err` would leave the *old* `x` sitting in `env` for every downstream reader, silently wrong —
 a fresh full re-run (today's behavior) would never have had that stale value to begin with.
 
-**Fix**: before re-running any dirty statement, remove the name(s) it is expected to write
-(`Assignment.name`, `FunctionDef.name`, each bound name in an `Import`'s `Symbols` specifier) from
-`env` first. A failing rewrite this time then correctly leaves that name undefined, matching what a
-fresh interpreter would produce, and downstream readers fall back to the same behavior the
-interpreter already has for an unbound identifier (unit-symbol fallback, then string-literal
-fallback — see [interpreter.rs:685-700](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L685-L700)) rather
-than a silently-preserved old numeric value.
+A per-statement version of this fix ("remove *this* statement's own write-name before re-running
+it") isn't quite enough either: if the edit changes *which* name a statement writes (`x = 1` edited
+to `y = 1` at the same position), the old `x` is never anyone's "own write-name" again and would
+linger forever with nothing left to invalidate it.
+
+**Fix**: before re-running anything, remove every name in `touched_names` (§3 step 3 — every name
+written by *either* side of the changed span, old or new) from `env`, once, up front. This
+subsumes the per-statement version: a statement whose write-name is unchanged still gets its name
+invalidated (it's in both sides' write sets); a renamed write invalidates the *old* name too, since
+old-side writes are already part of `touched_names`. Every dirty statement that still writes a name
+naturally repopulates it when it re-runs, in file order; a name whose write genuinely disappeared
+stays removed, and downstream readers fall back to the same behavior the interpreter already has
+for an unbound identifier (unit-symbol fallback, then string-literal fallback — see
+[interpreter.rs:685-700](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L685-L700)) rather than a
+silently-preserved old value. A dirty statement that's dirty only *transitively* (its own text is
+unchanged, it's re-running because something it reads changed) doesn't need separate invalidation —
+its write-name isn't in `touched_names`, so nothing removed it, and re-running overwrites it with a
+fresh value before anything downstream can observe a stale one.
 
 ### 4.3 `where`/`let`-local names must not read as cross-statement dependencies
 
@@ -218,7 +229,9 @@ Plus two targeted at the subtleties in §4:
 3. A global read only inside a called function's body (never at the call site's own top-level
    expression) still propagates to the call site when the global changes (§4.1).
 4. A statement that previously wrote a value successfully, edited into a form that now errors,
-   removes that value for downstream readers rather than leaving it stale (§4.2).
+   removes that value for downstream readers rather than leaving it stale (§4.2) — including the
+   case where the edit renames which variable it writes, so the *old* name has no statement left
+   to invalidate it except `touched_names`.
 5. A statement after a `while` loop that reads a name the loop's body assigns (whether or not that
    name existed before the loop — see §4.4) is dirtied when the loop's body is edited (§4.4).
 6. Editing a variable referenced only inside a string's `{expr}` interpolation span dirties the
