@@ -47,10 +47,10 @@ def test_the_mean_is_not_the_quoted_value():
     lo, hi = b.sigmas()
     assert math.isclose(lo, 0.5, abs_tol=1e-9)
     assert math.isclose(hi, 0.4, abs_tol=1e-9)
-    # The spread carries provenance, so an asymmetric value still cancels against itself
-    # once something propagates it.
-    assert b.sigma.std_dev > 0.0
-    assert not b.sigma.is_exact
+    # A measured value has real spread and is not exact (an exact value's std_dev and
+    # third moment are both zero).
+    assert b.std_dev > 0.0
+    assert b.third != 0.0
 
 
 @pytest.mark.parametrize(
