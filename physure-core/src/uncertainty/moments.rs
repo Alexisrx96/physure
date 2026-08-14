@@ -5,28 +5,23 @@
 //! they are the parameters of a shape. Averaging them, which is what a symmetric model has to
 //! do, throws away the asymmetry, and the asymmetry is often the interesting part.
 //!
-//! The shape used here is the *dimidiated* Gaussian: two half-Gaussians of widths σ⁻ and σ⁺
-//! joined at the mode. It is the reading most physicists intend by that notation, and its
-//! first three moments have a closed form, so the pair converts to moments and back without a
-//! fit. Moments are what propagation needs, because for a linear combination they simply add:
-//! the mean, the variance and the third central moment of `Σ cₖ xₖ` are `Σ cₖ μₖ`, `Σ cₖ² σₖ²`
-//! and `Σ cₖ³ μ₃ₖ` over independent sources. The `cₖ` are exactly what [`Lineage`] already
-//! records, so correlated sources cancel here for the same reason they cancel for σ.
+//! Turning a pair into a shape is a choice, made by [`AsymmetryShape`](super::shapes::AsymmetryShape). The default is
+//! the *dimidiated* Gaussian — two half-Gaussians of widths σ⁻ and σ⁺ joined so each carries
+//! equal area, with the quoted value at the median — because that is the reading most
+//! physicists intend by the notation. The *Fechner* (equal-height) Gaussian is available as an
+//! opt-in alternative. Both names and both closed forms are in arXiv:2411.15499 §A. Either way
+//! the pair converts to moments and back without a fit, and moments are what propagation needs:
+//! for a linear combination they simply add, so the mean, the variance and the third central
+//! moment of `Σ cₖ xₖ` are `Σ cₖ μₖ`, `Σ cₖ² σₖ²` and `Σ cₖ³ μ₃ₖ` over independent sources. The
+//! `cₖ` are exactly what [`Lineage`] already records, so correlated sources cancel here for the
+//! same reason they cancel for σ.
 //!
 //! See R. Barlow, *Asymmetric Errors*, PHYSTAT 2003, for the conventions.
 
-use std::f64::consts::{FRAC_2_PI, PI};
-
 use super::lineage::Lineage;
+use super::shapes::ShapeKind;
 use super::trait_def::UncertaintyBackend;
 use crate::error::{PhysureError, PhysureResult};
-
-/// The largest σ⁺/σ⁻ the inverse map searches over.
-///
-/// Skewness rises towards a finite asymptote as the ratio grows, so the last stretch before it
-/// costs unbounded ratio for no accuracy. Past this point the one-sided closed form below is
-/// both cheaper and more accurate than continuing the search.
-const RATIO_MAX: f64 = 1.0e12;
 
 /// The first three moments of an asymmetric measurement.
 ///
@@ -65,69 +60,44 @@ impl AsymmetricMoments {
     }
 }
 
-fn k() -> f64 {
-    FRAC_2_PI.sqrt()
-}
-
-/// The moments of the dimidiated Gaussian with half-widths `sigma_minus` and `sigma_plus`.
+/// The moments of the default shape ([`ShapeKind::DEFAULT`]) with half-widths `sigma_minus`
+/// and `sigma_plus`.
 ///
 /// Both widths measure outwards from the mode, so both are non-negative; a negative one is a
-/// sign error at the call site rather than a distribution, and is rejected.
+/// sign error at the call site rather than a distribution, and is rejected. To use a shape
+/// other than the default, call [`AsymmetryShape::moments_from_sigmas`](super::shapes::AsymmetryShape::moments_from_sigmas)
+/// on a [`ShapeKind::strategy`] directly.
 ///
 /// ```
 /// use physure_core::uncertainty::moments::moments_from_sigmas;
-/// // Equal halves are an ordinary Gaussian: no shift, no skew.
+/// // Equal halves are an ordinary Gaussian under any shape: no shift, no skew.
 /// let m = moments_from_sigmas(0.5, 0.5).unwrap();
 /// assert_eq!(m.shift, 0.0);
 /// assert_eq!(m.third, 0.0);
 /// assert!((m.variance - 0.25).abs() < 1e-12);
 /// ```
 pub fn moments_from_sigmas(sigma_minus: f64, sigma_plus: f64) -> PhysureResult<AsymmetricMoments> {
-    if !sigma_minus.is_finite() || !sigma_plus.is_finite() || sigma_minus < 0.0 || sigma_plus < 0.0 {
-        return Err(PhysureError::Generic(format!(
-            "An asymmetric uncertainty needs two finite non-negative half-widths measured outwards \
-             from the value, got ({}, {})",
-            sigma_minus, sigma_plus
-        )));
-    }
-    let d = sigma_plus - sigma_minus;
-    let product = sigma_plus * sigma_minus;
-    Ok(AsymmetricMoments {
-        shift: k() * d,
-        variance: product + (1.0 - FRAC_2_PI) * d * d,
-        third: k() * d * (product + (4.0 / PI - 1.0) * d * d),
-    })
+    ShapeKind::DEFAULT.strategy().moments_from_sigmas(sigma_minus, sigma_plus)
 }
 
-/// The skewness of a dimidiated Gaussian with `sigma_plus / sigma_minus == ratio`.
+/// The largest skewness the default shape ([`ShapeKind::DEFAULT`]) can represent as a pair of
+/// half-widths, reached in the one-sided limit σ⁻ → 0.
 ///
-/// Scale-free, which is what makes the inverse map a one-dimensional search: the shape is
-/// fixed by the ratio alone, and the variance only sets how wide it is afterwards.
-fn skewness_of_ratio(ratio: f64) -> f64 {
-    let d = ratio - 1.0;
-    let variance = ratio + (1.0 - FRAC_2_PI) * d * d;
-    k() * d * (ratio + (4.0 / PI - 1.0) * d * d) / variance.powf(1.5)
-}
-
-/// The largest skewness a dimidiated Gaussian can have, reached in the one-sided limit σ⁻ → 0.
-///
-/// It is a little under 1, so a distribution more skewed than this cannot be written as a pair
-/// of half-widths at all. That is a property of the shape, not a limitation of the search, and
+/// A distribution more skewed than this cannot be written as a pair under the default shape at
+/// all. That is a property of the shape, not a limitation of the search, and
 /// [`sigmas_from_moments`] reports it rather than returning the closest thing it can find.
 pub fn max_skewness() -> f64 {
-    k() * (4.0 / PI - 1.0) / (1.0 - FRAC_2_PI).powf(1.5)
+    ShapeKind::DEFAULT.strategy().max_skewness()
 }
 
-/// The `(σ⁻, σ⁺)` pair whose dimidiated Gaussian has this variance and third moment.
+/// The `(σ⁻, σ⁺)` pair whose default-shape ([`ShapeKind::DEFAULT`]) distribution has this
+/// variance and third moment.
 ///
 /// The inverse of [`moments_from_sigmas`]. Only two of the three moments are needed: the pair
 /// fixes the shape and the width, and `shift` then says where the mode sits relative to the
-/// mean, so recovering it from the pair is exact rather than a third constraint to satisfy.
-///
-/// The ratio σ⁺/σ⁻ is found by bisection on the skewness, which is monotonic in it, and the
-/// variance scales the result. A skewness beyond [`max_skewness`] is not representable and is
-/// rejected — silently returning the most skewed shape available would understate the tail by
-/// an unbounded amount.
+/// mean, so recovering it from the pair is exact rather than a third constraint to satisfy. A
+/// skewness beyond [`max_skewness`] is not representable and is rejected — silently returning
+/// the most skewed shape available would understate the tail by an unbounded amount.
 ///
 /// ```
 /// use physure_core::uncertainty::moments::{moments_from_sigmas, sigmas_from_moments};
@@ -136,60 +106,7 @@ pub fn max_skewness() -> f64 {
 /// assert!((lo - 0.4).abs() < 1e-9 && (hi - 0.5).abs() < 1e-9);
 /// ```
 pub fn sigmas_from_moments(variance: f64, third: f64) -> PhysureResult<(f64, f64)> {
-    if !variance.is_finite() || !third.is_finite() || variance < 0.0 {
-        return Err(PhysureError::Generic(format!(
-            "Cannot recover half-widths from a non-finite or negative variance: ({}, {})",
-            variance, third
-        )));
-    }
-    if variance == 0.0 {
-        // No spread at all leaves nothing for a third moment to describe.
-        return if third == 0.0 {
-            Ok((0.0, 0.0))
-        } else {
-            Err(PhysureError::Generic(format!(
-                "A zero variance cannot carry a third moment of {}",
-                third
-            )))
-        };
-    }
-
-    let skew = third / variance.powf(1.5);
-    let target = skew.abs();
-    if target > max_skewness() {
-        return Err(PhysureError::Generic(format!(
-            "A skewness of {:.4} cannot be written as a pair of half-widths: the dimidiated \
-             Gaussian tops out at {:.4}, reached only when one side is zero",
-            skew,
-            max_skewness()
-        )));
-    }
-
-    let ratio = if target >= skewness_of_ratio(RATIO_MAX) {
-        // The one-sided limit, where the closed form is exact and the search is not.
-        f64::INFINITY
-    } else {
-        let (mut lo, mut hi) = (1.0, RATIO_MAX);
-        for _ in 0..100 {
-            let mid = 0.5 * (lo + hi);
-            if skewness_of_ratio(mid) < target {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        0.5 * (lo + hi)
-    };
-
-    let (narrow, wide) = if ratio.is_finite() {
-        let d = ratio - 1.0;
-        let narrow = (variance / (ratio + (1.0 - FRAC_2_PI) * d * d)).sqrt();
-        (narrow, ratio * narrow)
-    } else {
-        (0.0, (variance / (1.0 - FRAC_2_PI)).sqrt())
-    };
-
-    Ok(if skew < 0.0 { (wide, narrow) } else { (narrow, wide) })
+    ShapeKind::DEFAULT.strategy().sigmas_from_moments(variance, third)
 }
 
 /// A measured asymmetric value, held as the moments a propagation model needs.
@@ -242,10 +159,13 @@ impl AsymmetricMoments {
     /// Fills in the shift implied by the pair this variance and third moment describe.
     ///
     /// The shift is not free once the other two are fixed, so computing it here keeps a value's
-    /// mode consistent with the pair it will be printed as.
+    /// mode consistent with the pair it will be printed as. Recomputing it through
+    /// [`moments_from_sigmas`] — the default shape's own forward map — rather than a
+    /// shape-specific formula keeps this correct for whichever shape [`ShapeKind::DEFAULT`]
+    /// names.
     fn with_shift_from_sigmas(self) -> Self {
-        match self.sigmas() {
-            Ok((lo, hi)) => AsymmetricMoments { shift: k() * (hi - lo), ..self },
+        match self.sigmas().and_then(|(lo, hi)| moments_from_sigmas(lo, hi)) {
+            Ok(m) => AsymmetricMoments { shift: m.shift, ..self },
             // Too skewed for the pair form. The variance and third moment are still exactly
             // what they were; only the mode is unavailable, and reporting the mean as the mode
             // is the symmetric answer, which is the one that does not invent a number.
@@ -360,7 +280,7 @@ mod tests {
     fn a_skew_no_pair_can_reach_is_refused() {
         // Just past the asymptote — a real distribution, but not one of these.
         let err = sigmas_from_moments(1.0, max_skewness() + 0.01).unwrap_err();
-        assert!(err.to_string().contains("cannot be written as a pair"), "{}", err);
+        assert!(err.to_string().contains("exceeds the dimidiated Gaussian's reach"), "{}", err);
     }
 
     #[test]
