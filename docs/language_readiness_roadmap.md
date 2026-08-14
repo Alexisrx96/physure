@@ -1,6 +1,6 @@
 # PHS Language Readiness Roadmap — Loops, Concurrency, Breakpoints, Incremental LSP, Compiled Exports & Decorators
 
-**Status: 📋 Planned / Specification Defined**
+**Status: 🟡 LAB-READY reached (Track A/B/C merged) — Track D in progress, Track F merged**
 
 > 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
 
@@ -123,10 +123,10 @@ decorator_registry -.->|"future sugar, e.g. @export\nas an alias for Statement::
   a precedent for.)
 - **Safety**: `while` gets a configurable max-iteration cap so a non-converging script fails with a
   clear "loop did not converge after N iterations at line L" error instead of hanging.
-- **Codegen**: `for`/`while` emitters added to all three transpile targets, with **execution-equivalence
-  tests** (run the same script through the interpreter and through each transpiled target, assert
-  matching numeric/uncertainty output) rather than the string-matching style of the current
-  `codegen/tests.rs`.
+- **Codegen**: `for`/`while` emitters added to all four transpile targets (Python, JavaScript/
+  TypeScript, Java, Rust), with **execution-equivalence tests** (run the same script through the
+  interpreter and through each transpiled target, assert matching numeric/uncertainty output) rather
+  than the string-matching style of the current `codegen/tests.rs`.
 
 ## 4. Track B — Concurrency
 
@@ -442,11 +442,25 @@ trigger (the existing `export` statement is untouched either way).
 
 Tracks are independent — check off in any order, on any timeline.
 
-- [ ] **Track A: Loops**
-  - [ ] `Expr::ForExpr` grammar, AST, interpreter eval producing a `Vector`.
-  - [ ] `Statement::While` grammar, AST, interpreter eval with iteration cap and scoping rule.
-  - [ ] Python/Java/Rust codegen emitters for both constructs.
-  - [ ] Execution-equivalence tests (interpret vs. each transpiled target) for both constructs.
+- [x] **Track A: Loops** — see
+      [`docs/superpowers/specs/2026-08-12-track-a-loops-design.md`](superpowers/specs/2026-08-12-track-a-loops-design.md)
+      and [`docs/superpowers/plans/2026-08-12-track-a-loops.md`](superpowers/plans/2026-08-12-track-a-loops.md).
+      Codegen emitters landed for all **four** transpile targets, not just the three named in this
+      section's original sketch — Python, JavaScript/TypeScript, Rust, and Java. The execution-parity
+      test suite's convergence-loop case (Newton's method) exposed real cross-backend bugs no prior
+      test caught, all fixed in the same pass: the parser's desugared comparison calls (`op_<`, `op_>`,
+      …) weren't translated to native operators by any backend; Rust and JS/TS redeclared rather than
+      mutated a reassigned `while`-loop variable (both are block-scoped); Rust's arithmetic codegen
+      moved rather than borrowed operands, breaking on `x + 2.0 / x`-style reuse; and `builtins.rs`'s
+      `expr_to_string` plus the CLI's LaTeX renderer were both missing a `ForExpr` match arm.
+  - [x] `Expr::ForExpr` grammar, AST, interpreter eval producing a `Vector` (pre-allocated with
+        `Vec::with_capacity`, not grown one push at a time).
+  - [x] `Statement::While` grammar, AST, interpreter eval with a 10,000-iteration cap and the scoping
+        rule (assignments persist across iterations; a name assigned only inside the loop doesn't leak
+        past it unless already bound in the enclosing scope).
+  - [x] Python/JavaScript-TypeScript/Rust/Java codegen emitters for both constructs.
+  - [x] Execution-equivalence tests (interpret vs. each transpiled target) for both constructs,
+        including a convergence-loop (Newton's method) case.
 
 - [x] **Track B: Concurrency** — see
       [`docs/superpowers/specs/2026-08-12-track-b-concurrency-design.md`](superpowers/specs/2026-08-12-track-b-concurrency-design.md)
@@ -538,25 +552,34 @@ Tracks are independent — check off in any order, on any timeline.
   - [ ] *(Parked, out of scope)* Curated multi-formula repository, hosted on-demand builds,
         generated docs site.
 
-- [ ] **Track F: Decorators** *(non-blocking for LAB-READY — a syntax/DRY foundation other tracks can
-      adopt, not itself a language execution capability)*
-  - [ ] `decorator`/`decorated_stmt` grammar rules (`.pest`), tried before the bare `function_def`/
+- [x] **Track F: Decorators** *(non-blocking for LAB-READY — a syntax/DRY foundation other tracks can
+      adopt, not itself a language execution capability)* — see
+      [`docs/superpowers/plans/2026-08-07-phs-decorators-track-f.md`](superpowers/plans/2026-08-07-phs-decorators-track-f.md).
+      Two deviations from this section's original sketch: validation (unknown-name rejection,
+      `@stable`/`@experimental` mutual exclusion, `@ensures`-vs-`result`-param collision) lives in a
+      new `physure-script/src/decorators.rs` module rather than `resolver.rs`, modeled on the existing
+      `validate_unit_shadowing` pass; and decorators ride directly on the existing `FunctionDefNode`/
+      `AssignmentNode` structs (no new AST node type), so every consumer that already threads those
+      structs — including `PhsValue::Function` — carries decorators for free.
+  - [x] `decorator`/`decorated_stmt` grammar rules (`.pest`), tried before the bare `function_def`/
         `assignment` alternatives.
-  - [ ] `DecoratorNode` + `decorators: Vec<DecoratorNode>` on `FunctionDefNode` and `AssignmentNode`
+  - [x] `DecoratorNode` + `decorators: Vec<DecoratorNode>` on `FunctionDefNode` and `AssignmentNode`
         (`#[serde(default)]`, backward compatible).
-  - [ ] `known_decorators` registry in `resolver.rs`; unregistered decorator name is a hard error.
-  - [ ] Parse round-trip test (single + stacked decorators, both node kinds).
-  - [ ] `PhysureError::ContractViolation { decorator, message }` variant added to
+  - [x] `KNOWN_DECORATORS` registry in `decorators.rs`; unregistered decorator name is a hard error.
+  - [x] Parse round-trip test (single + stacked decorators, both node kinds).
+  - [x] `PhysureError::ContractViolation { decorator, message }` variant added to
         `physure-core/src/error.rs`.
-  - [ ] `@requires(cond, msg)` / `@ensures(cond, msg)`: interpreter evaluation (params bound for
-        `@requires`; `result` bound for `@ensures`) + resolver check for a `result`-name collision.
-  - [ ] `@range(param, min, max)` implemented as sugar over two `@requires`-equivalent checks, with
+  - [x] `@requires(cond, msg)` / `@ensures(cond, msg)`: interpreter evaluation (params bound for
+        `@requires`; `result` bound for `@ensures`) + validation check for a `result`-name collision.
+  - [x] `@range(param, min, max)` implemented as sugar over two `@requires`-equivalent checks, with
         the structured tuple preserved for Track E/Track C consumption.
-  - [ ] `@stable` / `@experimental`: metadata only; resolver rejects both on the same definition.
-  - [ ] `@requires`/`@ensures`/`@range` transpiled into the Track E FFI shim via
+  - [x] `@stable` / `@experimental`: metadata only, confirmed inert at call time; validation rejects
+        both on the same definition.
+  - [x] `@requires`/`@ensures`/`@range` transpiled into the Track E FFI shim via
         `RustTranspiler::generate_expr` (see Track E's "Fallible exports" + `SimulateResult`-style
-        struct return).
-  - [ ] Interpreter pass/fail test per Phase 1 decorator; Track E FFI round-trip test (paired with
+        struct return) — implemented as part of Track E's own plan, per the cross-reference already
+        noted in Track E's section above.
+  - [x] Interpreter pass/fail test per Phase 1 decorator; Track E FFI round-trip test (paired with
         Track E's own checklist item) confirms compiled and interpreted pass/fail agree.
   - [ ] *(Open, deferred)* Whether `@export` becomes sugar for Track E's compile-target marking —
         decided when Track E revisits it, not by Track F.
@@ -565,8 +588,10 @@ Tracks are independent — check off in any order, on any timeline.
         different problem from formula-correctness contracts, not designed here.
 
 **LAB-READY is reached when Track A, Track B, and the non-stretch part of Track C are all merged with
-tests green in `tests.yml` CI.** Tracks D, E, and F improve editor experience, distribution/interop,
-and future extensibility respectively, but none of them gate the milestone.
+tests green in `tests.yml` CI.** ✅ **Reached** — all three merged. Tracks D, E, and F improve editor
+experience, distribution/interop, and future extensibility respectively; E and F are also merged, and
+none of the three gate the milestone. Track D (Incremental LSP Evaluation) is the only remaining
+unimplemented item in this document.
 
 ---
 
