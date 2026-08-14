@@ -167,8 +167,46 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
     }
 }
 
-pub fn eval_core_builtin(name: &str, args: &[PhsValue], _interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+pub fn eval_core_builtin(
+    name: &str,
+    args: &[PhsValue],
+    interpreter: &PhsInterpreter,
+    env: &std::collections::HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
     match name {
+        "parallel_map" => {
+            let (func, vec) = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Function(f)), Some(PhsValue::Vector(v))) => (f, v.clone()),
+                _ => return Err(PhysureError::Generic("parallel_map expects (fn, vector)".into())),
+            };
+            // A breakpoint inside a rayon worker closure isn't a coherent debugging
+            // experience -- pausing one of N racing threads while the rest continue -- so a
+            // debug session forces this back to plain sequential `.map()` instead of silently
+            // ignoring any breakpoint set inside `func`.
+            if interpreter.debug_hook_is_set() {
+                let results: PhysureResult<Vec<PhsValue>> = vec
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        interpreter
+                            .call_function_node(func, vec![item], env)
+                            .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
+                    })
+                    .collect();
+                return Ok(Some(PhsValue::Vector(results?)));
+            }
+            use rayon::prelude::*;
+            let results: Vec<PhsValue> = vec
+                .into_par_iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    interpreter
+                        .call_function_node(func, vec![item], env)
+                        .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
+                })
+                .collect::<PhysureResult<Vec<PhsValue>>>()?;
+            Ok(Some(PhsValue::Vector(results)))
+        }
         "format" => {
             let Some(val) = args.first() else { return Ok(None) };
             match args.get(1) {
@@ -2151,7 +2189,8 @@ mod tests {
 
     fn eval(name: &str, args: Vec<PhsValue>) -> PhsValue {
         let interp = PhsInterpreter::default();
-        eval_core_builtin(name, &args, &interp).unwrap().unwrap()
+        let env = std::collections::HashMap::new();
+        eval_core_builtin(name, &args, &interp, &env).unwrap().unwrap()
     }
 
     fn eval_calc(name: &str, args: Vec<PhsValue>) -> PhsValue {

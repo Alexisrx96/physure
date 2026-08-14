@@ -79,7 +79,7 @@ impl RustTranspiler {
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if {} {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
             }
-            Statement::While { cond, body } => {
+            Statement::While { cond, body, .. } => {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
@@ -391,9 +391,11 @@ mod tests {
                         unit: None,
                     })),
                 })],
+                body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
             })],
+            lines: vec![],
         };
         let code = transpiler.generate_program(&ast).unwrap();
         assert!(code.contains("pub fn kinetic_energy(m: Quantity, v: Quantity) -> Quantity"));
@@ -411,6 +413,7 @@ mod tests {
                 is_sigma: false,
                 unit: Some("kg".to_string()),
             }))],
+            lines: vec![],
         };
         let code = transpiler.generate_program(&ast).unwrap();
         assert!(code.contains("Quantity::with_uncertainty(75.0, 0.5, \"kg\")"));
@@ -454,6 +457,7 @@ mod tests {
         let while_stmt = Statement::While {
             cond: Expr::Identifier("flag".to_string()),
             body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
+            body_lines: vec![],
         };
         let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
         assert_eq!(code_while, "while flag {\n  return x;\n}");
@@ -486,6 +490,7 @@ mod tests {
                 })),
                 right: Box::new(Expr::Identifier("m".to_string())),
             })],
+            body_lines: vec![],
             decorators: vec![],
             doc: None,
         };
@@ -504,6 +509,7 @@ mod tests {
             params: vec!["m".to_string()],
             param_units: vec![Some("kg".to_string())],
             body_stmts: vec![Statement::Expr(Expr::Identifier("m".to_string()))],
+            body_lines: vec![],
             decorators: vec![
                 DecoratorNode {
                     name: "requires".to_string(),

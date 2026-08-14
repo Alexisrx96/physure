@@ -150,27 +150,12 @@ impl UnitRegistry {
         } else if let Some(unit) = self.derived_units.get(name) {
             Some(unit.clone())
         } else {
-            let mut prefix_match = None;
-            for (p_sym, p_factor) in &self.prefixes {
-                if name.starts_with(p_sym) && name.len() > p_sym.len() {
-                    let rest = &name[p_sym.len()..];
-                    let rest_resolved = self.resolve_symbol(rest);
-                    let base_opt = self
-                        .base_units
-                        .get(&rest_resolved)
-                        .or_else(|| self.derived_units.get(&rest_resolved))
-                        .or_else(|| self.base_units.get(rest))
-                        .or_else(|| self.derived_units.get(rest));
-                    if let Some(base_u) = base_opt {
-                        let new_scale = base_u.scale * p_factor;
-                        let mut prefixed = base_u.clone().with_scale(new_scale);
-                        prefixed.display_name = Some(name.to_string());
-                        prefix_match = Some(prefixed);
-                        break;
-                    }
-                }
-            }
-            prefix_match
+            self.split_prefix(name).map(|(_p_sym, p_factor, base_u)| {
+                let new_scale = base_u.scale * p_factor;
+                let mut prefixed = base_u.with_scale(new_scale);
+                prefixed.display_name = Some(name.to_string());
+                prefixed
+            })
         };
         if let Some(ref mut unit) = u {
             if unit.display_name.is_none() {
@@ -178,6 +163,36 @@ impl UnitRegistry {
             }
         }
         u
+    }
+
+    /// Splits `name` into a registered prefix symbol and its factor, if `name` is a known
+    /// prefix immediately followed by a base or derived unit symbol (e.g. `"km"` -> `Some(("k",
+    /// 1000.0, <the "m" RationalUnit>))`; `"km/h"` or any other compound expression -> `None`,
+    /// since this only recognizes a single prefixed symbol, not an arbitrary unit expression).
+    /// Factored out of `get_unit`'s own prefix-matching so `Inspection`'s reverse lookup (Track
+    /// C) reuses this exact rule instead of re-deriving it.
+    ///
+    /// Returns `(prefix symbol, prefix factor, the unprefixed remainder's own RationalUnit)`.
+    /// Carrying the resolved unit forward means `get_unit`'s caller doesn't have to redo the
+    /// same `resolve_symbol` + four-way lookup a second time just to fetch what this method
+    /// already found while checking whether `name` was a known prefix+unit combination.
+    pub fn split_prefix(&self, name: &str) -> Option<(String, f64, RationalUnit)> {
+        for (p_sym, p_factor) in &self.prefixes {
+            if name.starts_with(p_sym.as_str()) && name.len() > p_sym.len() {
+                let rest = &name[p_sym.len()..];
+                let rest_resolved = self.resolve_symbol(rest);
+                let base_opt = self
+                    .base_units
+                    .get(&rest_resolved)
+                    .or_else(|| self.derived_units.get(&rest_resolved))
+                    .or_else(|| self.base_units.get(rest))
+                    .or_else(|| self.derived_units.get(rest));
+                if let Some(unit) = base_opt {
+                    return Some((p_sym.clone(), *p_factor, unit.clone()));
+                }
+            }
+        }
+        None
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -300,4 +315,32 @@ fn edit_distance(a: &str, b: &str) -> usize {
         std::mem::swap(&mut previous, &mut current);
     }
     previous[b_chars.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn split_prefix_recognizes_a_registered_prefix_over_a_known_unit() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        let (symbol, factor, _unit) = reg.split_prefix("km").expect("km should split as k + m");
+        assert_eq!(symbol, "k");
+        assert_eq!(factor, 1000.0);
+    }
+
+    #[test]
+    fn split_prefix_returns_none_for_a_plain_unregistered_remainder() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        assert!(reg.split_prefix("qzzz").is_none());
+    }
+
+    #[test]
+    fn split_prefix_result_carries_the_resolved_unit_so_get_unit_does_not_look_it_up_twice() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        let (symbol, factor, unit) = reg.split_prefix("km").expect("km should split as k + m");
+        assert_eq!(symbol, "k");
+        assert_eq!(factor, 1000.0);
+        // The returned unit is the *unprefixed* remainder ("m"), scale 1.0 -- get_unit is what
+        // applies `factor` on top of it, not split_prefix's job.
+        assert_eq!(unit.scale, 1.0);
+    }
 }

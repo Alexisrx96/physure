@@ -1281,7 +1281,7 @@ impl PyInterpreter {
     }
 
     fn evaluate(&mut self, py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {
-        let results = self.inner.eval_str(source)
+        let results = py.allow_threads(|| self.inner.eval_str(source))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         results.into_iter().map(|val| phs_value_to_py(py, val)).collect()
     }
@@ -1289,7 +1289,7 @@ impl PyInterpreter {
     fn deriv(&self, expression: &str, var: &str) -> PyResult<String> {
         let call_expr = format!("use deriv from calc\nderiv(\"{}\", \"{}\")", expression, var);
         let mut interp = self.inner.clone();
-        let res = interp.eval_str(&call_expr)
+        let res = pyo3::Python::with_gil(|py| py.allow_threads(|| interp.eval_str(&call_expr)))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
     }
@@ -1297,7 +1297,7 @@ impl PyInterpreter {
     fn integral(&self, expression: &str, var: &str) -> PyResult<String> {
         let call_expr = format!("use integral from calc\nintegral(\"{}\", \"{}\")", expression, var);
         let mut interp = self.inner.clone();
-        let res = interp.eval_str(&call_expr)
+        let res = pyo3::Python::with_gil(|py| py.allow_threads(|| interp.eval_str(&call_expr)))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(res.last().map(|v| v.to_string()).unwrap_or_default())
     }
@@ -1305,7 +1305,7 @@ impl PyInterpreter {
     fn solve(&self, equation: &str, var: &str) -> PyResult<String> {
         let call_expr = format!("use solve from calc\nsolve(\"{}\", \"{}\")", equation, var);
         let mut interp = self.inner.clone();
-        let res = interp.eval_str(&call_expr)
+        let res = pyo3::Python::with_gil(|py| py.allow_threads(|| interp.eval_str(&call_expr)))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(match res.last() {
             Some(::physure_script::PhsValue::Equation(_, rhs)) => rhs.to_phs_string(),

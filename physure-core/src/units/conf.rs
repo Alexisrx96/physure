@@ -33,18 +33,27 @@ pub fn parse_physure_conf(
 
         match current_section {
             "Settings" => {
-                if let Some(("propagation_mode", raw)) =
-                    line.split_once('=').map(|(k, v)| (k.trim(), v))
-                {
-                    match raw.parse::<PropagationMode>() {
-                        Ok(mode) => {
-                            set_propagation_mode(mode);
-                        }
-                        // A conf is read before there is anywhere to report to, and the mode
-                        // it names is not worth refusing to start over. Saying so on stderr
-                        // beats falling back to correlated with nothing on screen: that is
-                        // the wrong answer that looks right.
-                        Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
+                if let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
+                    match key {
+                        "propagation_mode" => match raw.parse::<PropagationMode>() {
+                            Ok(mode) => {
+                                set_propagation_mode(mode);
+                            }
+                            // A conf is read before there is anywhere to report to, and the mode
+                            // it names is not worth refusing to start over. Saying so on stderr
+                            // beats falling back to correlated with nothing on screen: that is
+                            // the wrong answer that looks right.
+                            Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
+                        },
+                        "parallel_threshold" => match raw.parse::<usize>() {
+                            Ok(n) => {
+                                crate::settings::set_parallel_threshold(n);
+                            }
+                            Err(_) => eprintln!(
+                                "physure.conf: invalid parallel_threshold '{raw}'; keeping default"
+                            ),
+                        },
+                        _ => {}
                     }
                 }
             }
@@ -336,4 +345,26 @@ fn normalize_dimension_symbols(expr: &str, dim_to_base: &HashMap<String, String>
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::units::registry::UnitRegistry;
+    use std::collections::HashMap;
+
+    #[test]
+    fn parses_parallel_threshold_from_settings_section() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        let original = crate::settings::parallel_threshold();
+        parse_physure_conf(
+            "[Settings]\nparallel_threshold = 500\n",
+            &mut reg,
+            &mut constants,
+        );
+        assert_eq!(crate::settings::parallel_threshold(), 500);
+        crate::settings::set_parallel_threshold(original);
+    }
 }

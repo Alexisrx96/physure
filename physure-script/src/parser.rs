@@ -15,19 +15,21 @@ pub fn parse_phs(code: &str) -> PhysureResult<Program> {
         .map_err(|e| PhysureError::Generic(format!("Parse error: {}", e)))?;
     
     let mut statements = Vec::new();
+    let mut lines = Vec::new();
     let mut statement_pos = Vec::new();
     for pair in pairs {
         if pair.as_rule() == Rule::stmt {
             let (line, col) = pair.line_col();
             let inner = pair.into_inner().next().unwrap();
             statements.push(parse_statement(inner)?);
+            lines.push(line);
             statement_pos.push((line, col));
         }
     }
 
     validate_unit_shadowing(&statements, &statement_pos)?;
     crate::decorators::validate_decorators(&statements)?;
-    Ok(Program { statements })
+    Ok(Program { statements, lines })
 }
 
 pub fn parse_phs_with_lines(code: &str) -> PhysureResult<Vec<(usize, Statement)>> {
@@ -80,12 +82,14 @@ fn parse_while_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statemen
     };
     let cond = parse_expr(cond_pair)?;
     let mut body = Vec::new();
+    let mut body_lines = Vec::new();
     for stmt_pair in inner {
         if stmt_pair.as_rule() == Rule::stmt {
+            body_lines.push(stmt_pair.line_col().0);
             body.push(parse_statement(stmt_pair)?);
         }
     }
-    Ok(Statement::While { cond, body })
+    Ok(Statement::While { cond, body, body_lines })
 }
 
 
@@ -169,10 +173,16 @@ fn parse_export(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
 }
 
 fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
+    // Captured before `pair.into_inner()` consumes `pair` by value below -- this is the whole
+    // `fn ... = ...` construct's own starting line, used for the single-expression-body case
+    // (`fn f(x) = x^2`), which has exactly one body statement and no `stmt`-level pair of its
+    // own to read a line from.
+    let def_line = pair.line_col().0;
     let mut name = String::new();
     let mut params = Vec::new();
     let mut param_units = Vec::new();
     let mut body_stmts = Vec::new();
+    let mut body_lines = Vec::new();
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -194,14 +204,17 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
                 }
             }
             Rule::expr => {
+                body_lines.push(def_line);
                 body_stmts.push(Statement::Expr(parse_expr(inner)?));
             }
             Rule::block_body => {
                 for stmt_pair in inner.into_inner() {
                     if stmt_pair.as_rule() == Rule::stmt {
+                        body_lines.push(stmt_pair.line_col().0);
                         let inner_stmt = stmt_pair.into_inner().next().unwrap();
                         body_stmts.push(parse_statement(inner_stmt)?);
                     } else if stmt_pair.as_rule() != Rule::_nl_indent {
+                        body_lines.push(stmt_pair.line_col().0);
                         body_stmts.push(parse_statement(stmt_pair)?);
                     }
                 }
@@ -215,6 +228,7 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         params,
         param_units,
         body_stmts,
+        body_lines,
         decorators: Vec::new(),
         doc: None,
     }))
@@ -1118,7 +1132,7 @@ fn check_statement_shadowing(stmt: &Statement, bound: &mut HashSet<String>, line
             check_expr_shadowing(cond, bound, line, col)?;
             check_expr_shadowing(value, bound, line, col)?;
         }
-        Statement::While { cond, body } => {
+        Statement::While { cond, body, .. } => {
             check_expr_shadowing(cond, bound, line, col)?;
             for s in body {
                 check_statement_shadowing(s, bound, line, col)?;
@@ -1178,6 +1192,29 @@ fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_phs_records_line_numbers_for_top_level_function_and_while_bodies() {
+        // PHS function bodies are indentation-delimited, not brace-delimited (only `while` uses
+        // braces -- confirmed against phs.pest's `function_def = "fn" ~ ... ~ "=" ~ (block_body |
+        // expr)` and `block_body = (_nl_indent ~ stmt)+`, and against a working example already in
+        // the test suite: physure-script/tests/unit_shadowing.rs's `"fn f(x) =\n    t = 2.0 s\n
+        // 5 m / t\n"`).
+        let script = "x = 1\nfn f(a) =\n  a = a + 1\n  a\nwhile x < 3 {\n  x = x + 1\n}\n";
+        let program = parse_phs(script).unwrap();
+
+        assert_eq!(program.lines.len(), program.statements.len());
+        assert_eq!(program.lines[0], 1); // x = 1
+
+        let Statement::FunctionDef(f) = &program.statements[1] else { panic!("expected fn") };
+        assert_eq!(f.body_lines.len(), f.body_stmts.len());
+        assert_eq!(f.body_lines[0], 3); // a = a + 1
+        assert_eq!(f.body_lines[1], 4); // a
+
+        let Statement::While { body, body_lines, .. } = &program.statements[2] else { panic!("expected while") };
+        assert_eq!(body_lines.len(), body.len());
+        assert_eq!(body_lines[0], 6); // x = x + 1
+    }
 
     /// `ternary_op` is a rule of its own, so `expr` sees it as a single child rather than
     /// as two loose `base_expr`s — reading the branches off `expr` panicked on the second.
@@ -1523,7 +1560,7 @@ mod tests {
         let script = "while x > 0 {\n a = x * 2\n x = x - 1\n }";
         let stmts = parse_phs(script).unwrap().statements;
         assert_eq!(stmts.len(), 1);
-        if let Statement::While { cond: _, body } = &stmts[0] {
+        if let Statement::While { cond: _, body, body_lines: _ } = &stmts[0] {
             assert_eq!(body.len(), 2);
         } else {
             panic!("expected While statement");
@@ -1535,7 +1572,7 @@ mod tests {
         let script = "while x > 0 {\n y = for i in 1 .. 3 {\n i * x\n }\n x = x - 1\n }";
         let stmts = parse_phs(script).unwrap().statements;
         assert_eq!(stmts.len(), 1);
-        if let Statement::While { cond: _, body } = &stmts[0] {
+        if let Statement::While { cond: _, body, body_lines: _ } = &stmts[0] {
             assert_eq!(body.len(), 2);
             assert!(matches!(&body[0], Statement::Assignment(a) if matches!(a.value, Expr::ForExpr { .. })));
         } else {

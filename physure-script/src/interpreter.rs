@@ -10,6 +10,7 @@ use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
 
 use crate::ast::{BinaryOp, Expr, Program, Statement};
+use crate::debug::{DebugAction, DebugContext, DebugHook, StackFrame};
 use crate::resolver::{ModuleResolver, FsModuleResolver};
 use crate::symbolic::Node;
 use crate::PhsValue;
@@ -181,12 +182,61 @@ pub struct PhsInterpreter {
     // uncertainties should propagate; it depends on a `physure.conf` it never mentions,
     // and the transpilers drop that dependency entirely. See
     // docs/superpowers/specs/2026-08-02-phs-execution-context.md.
+    pub(crate) debug_hook: Option<Arc<dyn DebugHook>>,
+    /// `Arc<Mutex<..>>`, not `RefCell`: Track B's `for`-expression and `parallel_map` rayon
+    /// paths require `&PhsInterpreter: Send + Sync` at compile time regardless of whether a
+    /// hook is set at runtime -- `RefCell` would break both of those already-shipped parallel
+    /// paths. Both of those rayon entry points check `debug_hook_is_set()` before choosing the
+    /// parallel branch and fall back to plain sequential execution whenever a hook is attached
+    /// (see `builtins.rs`'s `parallel_map` arm and this file's `Expr::ForExpr` arm), so this
+    /// mutex is never contended by more than one thread in practice -- a debugging session only
+    /// ever exercises sequential execution paths.
+    call_stack: Arc<Mutex<Vec<StackFrame>>>,
+    /// `Mutex<Arc<Vec<..>>>`, not `Mutex<Vec<..>>`: `debug_checkpoint` needs to read this list
+    /// on every single statement checkpoint while debugging, and cloning a `Vec<Breakpoint>`
+    /// means deep-cloning every embedded `Expr` AST in every `Conditional` breakpoint each time.
+    /// Cloning an `Arc` is a refcount bump; the `Vec` itself is only ever cloned once, inside
+    /// `add_breakpoint`, when a new breakpoint is actually added (copy-on-write).
+    breakpoints: Arc<Mutex<Arc<Vec<crate::debug::Breakpoint>>>>,
+    step_mode: Arc<Mutex<Option<StepMode>>>,
 }
 
 impl Default for PhsInterpreter {
     fn default() -> Self {
         Self::new(Arc::new(FsModuleResolver::default()))
     }
+}
+
+/// RAII pop for the `StackFrame` `call_function_node_at` pushes. Constructed right after the
+/// push, held as a local in `call_function_node_at`; its `Drop` runs on every exit from that
+/// point on -- normal return, an early `break`, or `?` propagating an error out of the body
+/// loop -- so the frame can never be left on `call_stack` past the call that pushed it.
+struct CallStackGuard {
+    call_stack: Arc<Mutex<Vec<StackFrame>>>,
+}
+
+impl Drop for CallStackGuard {
+    fn drop(&mut self) {
+        self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).pop();
+    }
+}
+
+/// Tracks what a `Step*`/`Pause` `DebugAction` committed the interpreter to doing next, so a
+/// later `debug_checkpoint` call can decide whether to fire the hook even when no `Breakpoint`
+/// matches -- this is what actually makes `step`/`next`/`finish` do something once at least one
+/// breakpoint is registered (previously the `DebugAction` a hook returned was thrown away
+/// entirely, so those commands were indistinguishable from `Continue`). `None` means "no step
+/// pending" -- either nothing has been returned yet, or the last action was `Continue`.
+#[derive(Clone, Copy)]
+enum StepMode {
+    /// Fire on the very next checkpoint, whatever its call-stack depth.
+    Into,
+    /// Fire once `call_stack` depth is back down to (or shallower than) the depth recorded when
+    /// this was issued -- skips over anything deeper (a nested call).
+    Over(usize),
+    /// Fire once `call_stack` depth is strictly shallower than the depth recorded when this was
+    /// issued -- i.e. only after the current frame has actually returned.
+    Out(usize),
 }
 
 /// Trailing `#` / `//` comments survive into a unit annotation's text; the unit parser
@@ -216,11 +266,34 @@ impl PhsInterpreter {
             plugin_base_dir: None,
             unlocked_builtins: Arc::new(Mutex::new(HashMap::new())),
             dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
+            debug_hook: None,
+            call_stack: Arc::new(Mutex::new(Vec::new())),
+            breakpoints: Arc::new(Mutex::new(Arc::new(Vec::new()))),
+            step_mode: Arc::new(Mutex::new(None)),
         }
     }
 
     pub fn new_default() -> Self {
         Self::default()
+    }
+
+    /// `PhsInterpreter` derives `Clone`, and `call_stack`/`breakpoints`/`step_mode` are
+    /// `Arc<Mutex<..>>` -- every clone shares the *same* underlying call stack, breakpoint list,
+    /// and step state, not an independent copy. `physure-script/src/function.rs`'s
+    /// `PhyFunction::deriv`/`integral`/`solve`/`compose` already clone `self.interpreter` freely.
+    /// No current binding (Python/WASM/Java) attaches a debug hook, so this is dormant today --
+    /// but an embedder that builds a hook-attached interpreter, derives a `PhyFunction` from it,
+    /// and calls the original and the derivative concurrently on separate threads would have
+    /// both share one call stack, corrupting what a hook sees. Don't attach a debug hook to an
+    /// interpreter that will be cloned and used concurrently across threads.
+    pub fn with_debug_hook(resolver: Arc<dyn ModuleResolver>, hook: Arc<dyn DebugHook>) -> Self {
+        let mut interp = Self::new(resolver);
+        interp.debug_hook = Some(hook);
+        interp
+    }
+
+    pub(crate) fn debug_hook_is_set(&self) -> bool {
+        self.debug_hook.is_some()
     }
 
     /// Like `default()`, but resolves `import` paths relative to `base_dir`
@@ -278,12 +351,36 @@ impl PhsInterpreter {
         Ok(last)
     }
 
+    /// Like `run_statements`, but executes against `program.lines` so `debug_checkpoint` sees
+    /// real source lines instead of `0`. This is what `phs debug` uses; `run_statements` stays
+    /// as-is for every other caller (Python/WASM/Java bindings, the plain REPL) that doesn't
+    /// have line-accurate debugging as a goal.
+    pub fn run_statements_with_lines(&mut self, program: &Program) -> PhysureResult<PhsValue> {
+        let mut env = self.env.clone();
+        let mut last = PhsValue::None;
+        for (i, stmt) in program.statements.iter().enumerate() {
+            let line = program.lines.get(i).copied().unwrap_or(0);
+            last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
+        }
+        self.env = env;
+        Ok(last)
+    }
+
     pub fn get_var(&self, name: &str) -> Option<&PhsValue> {
         self.env.get(name)
     }
 
     pub fn env(&self) -> &HashMap<String, PhsValue> {
         &self.env
+    }
+
+    /// Test-only: `call_stack` stays private (not part of the public debugger API C1 defines --
+    /// a debugger observes it indirectly, through `DebugContext::call_stack` in `on_statement`),
+    /// but a leak regression test needs to assert its depth from outside any hook callback,
+    /// after an error has already propagated back out. Compiled out of production builds.
+    #[cfg(test)]
+    fn call_stack_depth(&self) -> usize {
+        self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn get_fn_params(&self, name: &str) -> Option<Vec<String>> {
@@ -301,7 +398,106 @@ impl PhsInterpreter {
         Ok(self.env.clone())
     }
 
+    pub fn add_breakpoint(&self, bp: crate::debug::Breakpoint) {
+        let mut guard = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner());
+        let mut updated = (**guard).clone();
+        updated.push(bp);
+        *guard = Arc::new(updated);
+    }
+
+    fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
+        let Some(hook) = &self.debug_hook else { return Ok(()) };
+
+        // Snapshot the breakpoint list, the innermost frame's name/depth, and the pending step
+        // mode, then drop every lock *before* evaluating any `Conditional` breakpoint's
+        // condition below: that condition may call a PHS-defined function, which re-enters
+        // `debug_checkpoint` on this same thread via `eval_expr` -> `call_function_node` ->
+        // `call_function_node_at` -> `eval_statement_with_env_at`. `std::sync::Mutex` is not
+        // reentrant, so holding any of these locked (as `MutexGuard`s) across that call would
+        // self-deadlock the thread forever -- NLL only relaxes borrow-checking, it doesn't
+        // change when a `MutexGuard`'s `Drop` actually runs, so the naive "just lock at the top
+        // of the function" version hangs the instant a condition calls back in. `Breakpoint`,
+        // `StackFrame`, and `StepMode` are all `Clone`/`Copy`, so cloning out of the locks is
+        // cheap and correct.
+        let breakpoints = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let (innermost_fn_name, current_depth) = {
+            let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
+            (call_stack.last().map(|f| f.fn_name.clone()), call_stack.len())
+        };
+        let pending_step = *self.step_mode.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut hits = false;
+        for bp in &*breakpoints {
+            hits = match bp {
+                crate::debug::Breakpoint::Line(l) => *l == line,
+                crate::debug::Breakpoint::Conditional(l, cond) => {
+                    // Let a condition-eval error (typo'd variable, type error, ...) propagate
+                    // as a real error instead of silently treating it as "didn't match" --
+                    // every call site of `debug_checkpoint` already propagates its
+                    // `PhysureResult` with `?`, so a user with a broken breakpoint condition
+                    // gets a real error message instead of a breakpoint that quietly never
+                    // fires.
+                    *l == line && is_truthy(&self.eval_expr(cond, env)?)
+                }
+                // Fires on every statement inside the named function's innermost frame, not
+                // only its first statement -- see the doc comment on `Breakpoint::FunctionEntry`
+                // in debug.rs for why.
+                crate::debug::Breakpoint::FunctionEntry(name) => {
+                    innermost_fn_name.as_deref() == Some(name.as_str())
+                }
+            };
+            if hits {
+                break;
+            }
+        }
+
+        // A pending `Step*`/`Pause` can also justify firing even when no breakpoint matched
+        // *this* checkpoint -- this is what makes `step`/`next`/`finish` actually do something
+        // once at least one breakpoint exists, instead of being indistinguishable from
+        // `continue`. `Into` (StepInto and Pause both map here) fires unconditionally; `Over`
+        // and `Out` are gated on `call_stack` depth relative to where the step was issued.
+        let step_due = match pending_step {
+            Some(StepMode::Into) => true,
+            Some(StepMode::Over(saved_depth)) => current_depth <= saved_depth,
+            Some(StepMode::Out(saved_depth)) => current_depth < saved_depth,
+            None => false,
+        };
+
+        // Three cases, deliberately handled differently: no breakpoints registered at all means
+        // every checkpoint still reaches the hook, exactly as before C3 (preserves C1's "hook
+        // sees everything" behavior so plain step/next/continue work without requiring a
+        // breakpoint to be set first); breakpoints registered and a step is due means fire even
+        // without a match; breakpoints registered, none matched, and no step is due means stay
+        // silent.
+        if !hits && !step_due && !breakpoints.is_empty() {
+            return Ok(());
+        }
+
+        // Re-acquire `call_stack` only now, right before the hook call, to build the
+        // `DebugContext` -- safe to hold during `hook.on_statement` because `DebugHook` only
+        // ever receives `&DebugContext`, never a `PhsInterpreter` reference, so there is no way
+        // for the hook to call back into `self` and re-enter this lock.
+        let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = DebugContext { line, call_stack: &call_stack, env };
+        let action = hook.on_statement(&ctx);
+        drop(call_stack);
+
+        *self.step_mode.lock().unwrap_or_else(|e| e.into_inner()) = match action {
+            DebugAction::Continue => None,
+            DebugAction::StepInto | DebugAction::Pause => Some(StepMode::Into),
+            DebugAction::StepOver => Some(StepMode::Over(current_depth)),
+            DebugAction::StepOut => Some(StepMode::Out(current_depth)),
+        };
+
+        Ok(())
+    }
+
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        self.eval_statement_with_env_at(stmt, env, 0)
+    }
+
+    fn eval_statement_with_env_at(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>, line: usize) -> PhysureResult<PhsValue> {
+        self.debug_checkpoint(line, env)?;
         match stmt {
             Statement::Assignment(node) => {
                 let val = self.eval_expr(&node.value, env)?;
@@ -326,7 +522,7 @@ impl PhsInterpreter {
                     Ok(PhsValue::None)
                 }
             }
-            Statement::While { cond, body } => {
+            Statement::While { cond, body, body_lines } => {
                 const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
@@ -338,8 +534,9 @@ impl PhsInterpreter {
                         )));
                     }
                     count += 1;
-                    for stmt in body {
-                        last_val = self.eval_statement_with_env(stmt, env)?;
+                    for (i, stmt) in body.iter().enumerate() {
+                        let line = body_lines.get(i).copied().unwrap_or(0);
+                        last_val = self.eval_statement_with_env_at(stmt, env, line)?;
                     }
                 }
                 Ok(last_val)
@@ -625,6 +822,7 @@ impl PhsInterpreter {
                                 params,
                                 param_units,
                                 body_stmts: vec![body],
+                                body_lines: vec![],
                                 decorators: Vec::new(),
                                 doc: None,
                             }));
@@ -632,7 +830,7 @@ impl PhsInterpreter {
                     }
                 }
 
-                if let Some(val) = crate::builtins::eval_core_builtin(name, &arg_vals, self)? {
+                if let Some(val) = crate::builtins::eval_core_builtin(name, &arg_vals, self, env)? {
                     return Ok(val);
                 }
 
@@ -699,19 +897,36 @@ impl PhsInterpreter {
                     other => return Err(PhysureError::Generic(format!("Cannot iterate over {}", other))),
                 };
 
-                let mut local_env = env.clone();
-                let old_val = local_env.get(var).cloned();
-                let mut results = Vec::with_capacity(items.len());
-                for item in items {
-                    local_env.insert(var.clone(), item);
-                    results.push(self.eval_expr(body, &local_env)?);
-                }
-                if let Some(old) = old_val {
-                    local_env.insert(var.clone(), old);
+                // Switch to parallel evaluation if the iteration count meets the threshold.
+                // Note: rayon's parallel collect stops scheduling new work on error but may
+                // leave in-flight work on other threads to complete, so loop body side effects
+                // (e.g. I/O in external functions) may partially execute even if evaluation fails.
+                if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() {
+                    use rayon::prelude::*;
+                    let results: Vec<PhsValue> = items
+                        .into_par_iter()
+                        .map(|item| {
+                            let mut local_env = env.clone();
+                            local_env.insert(var.clone(), item);
+                            self.eval_expr(body, &local_env)
+                        })
+                        .collect::<PhysureResult<Vec<PhsValue>>>()?;
+                    Ok(PhsValue::Vector(results))
                 } else {
-                    local_env.remove(var);
+                    let mut local_env = env.clone();
+                    let old_val = local_env.get(var).cloned();
+                    let mut results = Vec::with_capacity(items.len());
+                    for item in items {
+                        local_env.insert(var.clone(), item);
+                        results.push(self.eval_expr(body, &local_env)?);
+                    }
+                    if let Some(old) = old_val {
+                        local_env.insert(var.clone(), old);
+                    } else {
+                        local_env.remove(var);
+                    }
+                    Ok(PhsValue::Vector(results))
                 }
-                Ok(PhsValue::Vector(results))
             }
         }
     }
@@ -790,11 +1005,27 @@ impl PhsInterpreter {
         Ok(None)
     }
 
+    /// `call_site_line` is always `0` here -- `Expr` carries no line numbers (only `Statement`
+    /// does), and this is the only call path `Expr::FunctionCall` reaches, so there is no real
+    /// line to pass. This is a known, accepted v1 limitation, not a bug: it means
+    /// `StackFrame::call_site_line` (and therefore the CLI debugger's "called from line N" and
+    /// `backtrace` output) always reads `0` for every call, for every debug session, today.
+    /// Expression-level call-site precision is out of scope for LAB-READY.
     pub fn call_function_node(
         &self,
         func: &crate::ast::FunctionDefNode,
         arg_vals: Vec<PhsValue>,
         env: &HashMap<String, PhsValue>,
+    ) -> PhysureResult<PhsValue> {
+        self.call_function_node_at(func, arg_vals, env, 0)
+    }
+
+    fn call_function_node_at(
+        &self,
+        func: &crate::ast::FunctionDefNode,
+        arg_vals: Vec<PhsValue>,
+        env: &HashMap<String, PhsValue>,
+        call_site_line: usize,
     ) -> PhysureResult<PhsValue> {
         if func.params.len() != arg_vals.len() {
             return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", func.name, func.params.len(), arg_vals.len())));
@@ -805,14 +1036,33 @@ impl PhsInterpreter {
             local_env.insert(param_name.clone(), bound_val);
         }
         self.check_requires(func, &local_env)?;
+
+        // `_stack_guard` pops the pushed `StackFrame` on every exit path from this point on --
+        // normal completion, an early `break` from a `Return`/`GuardReturn` arm, or `?` error
+        // propagation from anywhere in the body loop below (undefined function, contract
+        // violation, unit mismatch, ...). Without this, a mid-body error would leave the frame
+        // on `call_stack` forever: `PhsInterpreter` is long-lived (REPL, future DAP sessions),
+        // and every enclosing call in a chain hits the same unguarded early return, so a deep
+        // call stack would leak one frame per active call on every error.
+        let _stack_guard = if self.debug_hook.is_some() {
+            self.call_stack.lock().unwrap_or_else(|e| e.into_inner())
+                .push(StackFrame::new(func, call_site_line));
+            Some(CallStackGuard { call_stack: self.call_stack.clone() })
+        } else {
+            None
+        };
+
         let mut last_val = PhsValue::None;
-        for stmt in &func.body_stmts {
+        for (i, stmt) in func.body_stmts.iter().enumerate() {
+            let line = func.body_lines.get(i).copied().unwrap_or(0);
             match stmt {
                 Statement::Return(expr) => {
+                    self.debug_checkpoint(line, &local_env)?;
                     last_val = self.eval_expr(expr, &local_env)?;
                     break;
                 }
                 Statement::GuardReturn { cond, value } => {
+                    self.debug_checkpoint(line, &local_env)?;
                     let cond_val = self.eval_expr(cond, &local_env)?;
                     if is_truthy(&cond_val) {
                         last_val = self.eval_expr(value, &local_env)?;
@@ -820,10 +1070,11 @@ impl PhsInterpreter {
                     }
                 }
                 _ => {
-                    last_val = self.eval_statement_with_env(stmt, &mut local_env)?;
+                    last_val = self.eval_statement_with_env_at(stmt, &mut local_env, line)?;
                 }
             }
         }
+
         self.check_ensures(func, &local_env, &last_val)?;
         Ok(last_val)
     }
@@ -974,6 +1225,7 @@ impl PhsInterpreter {
                     params,
                     param_units,
                     body_stmts: vec![body],
+                    body_lines: vec![],
                     decorators: Vec::new(),
                     doc: None,
                 }))
@@ -1131,6 +1383,445 @@ mod tests {
     use super::*;
     use crate::ast::*;
     use crate::resolver::{MemoryModuleResolver, ModuleExport};
+
+    #[test]
+    fn debug_hook_fires_once_per_statement_including_function_return() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        // PHS function bodies are indentation-delimited (see the note on the C0.1 test) --
+        // "fn double(x) =" on line 1, its two-statement body on lines 2-3, then the top-level call
+        // on line 4 (no closing brace to account for).
+        let program = crate::parser::parse_phs(
+            "fn double(x) =\n  y = x * 2\n  return y\nres = double(3)\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        let lines = seen.lock().unwrap();
+        // line 4 (top-level call), then the two statements inside double's body (lines 2 and 3).
+        // Line 3 is an explicit `return`, which `call_function_node_at` special-cases with its own
+        // `break` instead of routing through `eval_statement_with_env_at` like every other
+        // statement -- this is the actual regression case for the choke-point gap (a bare
+        // expression used as an implicit return, e.g. just `y` with no `return` keyword, would
+        // already have been checkpointed by the ordinary `_` arm and wouldn't exercise this path).
+        assert!(lines.contains(&4), "top-level call not recorded: {lines:?}");
+        assert!(lines.contains(&2), "first body statement not recorded: {lines:?}");
+        assert!(lines.contains(&3), "function's explicit return statement not recorded: {lines:?}");
+    }
+
+    #[test]
+    fn call_stack_pops_frame_when_body_errors_mid_execution() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::Arc;
+
+        struct NoopHook;
+        impl DebugHook for NoopHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                DebugAction::Continue
+            }
+        }
+
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            Arc::new(NoopHook),
+        );
+        // `boom`'s body calls an undefined function partway through, which errors out of
+        // `eval_statement_with_env_at` via `?` while `call_function_node_at` is mid-loop over
+        // `boom`'s body -- exactly the path that used to leave `boom`'s `StackFrame` on
+        // `call_stack` forever, since the old unguarded `pop()` after the loop was never
+        // reached once the `?` in the `_` arm returned early.
+        let program = crate::parser::parse_phs(
+            "fn boom(x) =\n  y = undefined_fn(x)\n  return y\nboom(3)\n",
+        )
+        .unwrap();
+        let err = interp.run_statements_with_lines(&program);
+        assert!(err.is_err(), "expected the undefined-function call inside boom's body to error");
+        assert_eq!(
+            interp.call_stack_depth(),
+            0,
+            "boom's StackFrame leaked on call_stack after the error propagated out"
+        );
+
+        // Run an unrelated, successful statement afterward: if a frame had leaked, subsequent
+        // calls would push on top of the stale one, so any `DebugContext::call_stack` a hook
+        // observes from here on would show a phantom `boom` frame beneath the real ones.
+        interp.eval_str("fn ok(x) = x + 1\nok(1)").unwrap();
+        assert_eq!(interp.call_stack_depth(), 0, "call_stack not clean after a later, unrelated successful call");
+    }
+
+    #[test]
+    fn function_entry_breakpoint_pauses_on_every_call() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                if ctx.call_stack.last().map(|f| f.fn_name.as_str()) == Some("double") {
+                    *self.0.lock().unwrap() += 1;
+                }
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::FunctionEntry("double".to_string()));
+        // Single-expression function body (no indentation block needed): "fn f(x) = expr".
+        // NB: because `double`'s body is a single statement, this test can't by itself
+        // distinguish "fires once per call" from the actual "fires once per statement in the
+        // frame" semantics (see `Breakpoint::FunctionEntry`'s doc comment in debug.rs) -- two
+        // calls to a one-statement function produce the same hit count either way. See
+        // `function_entry_breakpoint_fires_on_every_statement_in_frame_not_just_entry` below
+        // for the test that actually tells the two apart.
+        let program = crate::parser::parse_phs(
+            "fn double(x) = x * 2\na = double(1)\nb = double(2)\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), 2, "expected a pause on each of the two calls");
+    }
+
+    #[test]
+    fn function_entry_breakpoint_fires_on_every_statement_in_frame_not_just_entry() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                if ctx.call_stack.last().map(|f| f.fn_name.as_str()) == Some("double") {
+                    *self.0.lock().unwrap() += 1;
+                }
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::FunctionEntry("double".to_string()));
+        // Two-statement body, ONE call: `FunctionEntry` matches on "innermost frame is this
+        // function", checked at every checkpoint inside that frame -- so a single call to a
+        // two-statement function must hit twice, not once, which is what actually distinguishes
+        // this from a true once-per-call breakpoint.
+        let program = crate::parser::parse_phs(
+            "fn double(x) =\n  y = x * 2\n  return y\na = double(1)\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        assert_eq!(
+            *hits.lock().unwrap(),
+            2,
+            "FunctionEntry should fire on both statements of the single call, not just entry"
+        );
+    }
+
+    #[test]
+    fn conditional_breakpoint_condition_calling_a_phs_function_does_not_deadlock() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::mpsc;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                *self.0.lock().unwrap() += 1;
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        let program = crate::parser::parse_phs(
+            "fn helper(v) = v > 0\nx = 1\nx = 2\ny = x\n",
+        )
+        .unwrap();
+        let cond_line = program.lines[3]; // the "y = x" statement
+        let cond_expr = crate::parser::parse_phs("helper(x)").unwrap().statements.remove(0);
+        let crate::ast::Statement::Expr(cond) = cond_expr else { panic!("expected expr") };
+        // Regression test for the self-deadlock this used to cause: the condition calls a
+        // PHS-defined function, so evaluating it re-enters `debug_checkpoint` on this same
+        // thread (via `eval_expr` -> `call_function_node` -> `call_function_node_at` ->
+        // `eval_statement_with_env_at`) while this very breakpoint check is still in progress.
+        // The old implementation held `call_stack`/`breakpoints` locked (as `MutexGuard`s)
+        // across that `eval_expr` call, so the re-entrant lock attempt hung forever. Run on a
+        // background thread with a bounded `recv_timeout` so a reintroduced deadlock fails this
+        // test outright instead of hanging the whole `cargo test` invocation (and CI) forever.
+        interp.add_breakpoint(Breakpoint::Conditional(cond_line, cond));
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            interp.run_statements_with_lines(&program).unwrap();
+            let _ = tx.send(*hits.lock().unwrap());
+        });
+
+        match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(count) => assert_eq!(count, 1, "should pause exactly once, once x has settled to 2"),
+            Err(_) => panic!(
+                "debug_checkpoint deadlocked evaluating a Conditional breakpoint whose \
+                 condition calls a PHS-defined function"
+            ),
+        }
+    }
+
+    #[test]
+    fn conditional_breakpoint_pauses_only_when_condition_holds() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                *self.0.lock().unwrap() += 1;
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        // A checkpoint fires *before* its own statement's effect (see debug_checkpoint's call at
+        // the top of eval_statement_with_env_at, ahead of the match on the statement itself) --
+        // so the condition targets the line *after* the assignment it depends on, where `x` has
+        // already settled to its final value from the fully-executed previous statement.
+        let program = crate::parser::parse_phs(
+            "x = 1\nx = 2\nx = 3\ny = x\n",
+        )
+        .unwrap();
+        let cond_line = program.lines[3]; // the "y = x" statement
+        let cond_expr = crate::parser::parse_phs("x > 2").unwrap().statements.remove(0);
+        let crate::ast::Statement::Expr(cond) = cond_expr else { panic!("expected expr") };
+        interp.add_breakpoint(Breakpoint::Conditional(cond_line, cond));
+
+        interp.run_statements_with_lines(&program).unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), 1, "should only pause once x has actually reached 3");
+    }
+
+    #[test]
+    fn step_over_skips_statements_inside_a_deeper_nested_call() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct ScriptedHook {
+            actions: Mutex<Vec<DebugAction>>,
+            seen: Arc<Mutex<Vec<usize>>>,
+        }
+        impl DebugHook for ScriptedHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.seen.lock().unwrap().push(ctx.line);
+                let mut actions = self.actions.lock().unwrap();
+                if actions.is_empty() { DebugAction::Continue } else { actions.remove(0) }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(ScriptedHook {
+            actions: Mutex::new(vec![DebugAction::StepOver, DebugAction::Continue]),
+            seen: seen.clone(),
+        });
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::Line(4));
+        // Lines: 1 "fn helper(x) =", 2 "  y = x * 2", 3 "  return y", 4 "z = helper(1)", 5 "w = 2".
+        let program = crate::parser::parse_phs(
+            "fn helper(x) =\n  y = x * 2\n  return y\nz = helper(1)\nw = 2\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        // Paused at line 4 (the breakpoint, depth 0). StepOver should skip both statements inside
+        // helper's body (lines 2-3, depth 1 -- deeper than where StepOver was issued) and land on
+        // line 5 (depth 0 again, back at or above the issuing depth) -- never on 2 or 3.
+        assert_eq!(*seen.lock().unwrap(), vec![4, 5]);
+    }
+
+    #[test]
+    fn step_into_fires_on_the_very_next_checkpoint_regardless_of_depth() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct ScriptedHook {
+            actions: Mutex<Vec<DebugAction>>,
+            seen: Arc<Mutex<Vec<usize>>>,
+        }
+        impl DebugHook for ScriptedHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.seen.lock().unwrap().push(ctx.line);
+                let mut actions = self.actions.lock().unwrap();
+                if actions.is_empty() { DebugAction::Continue } else { actions.remove(0) }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(ScriptedHook {
+            actions: Mutex::new(vec![DebugAction::StepInto, DebugAction::Continue]),
+            seen: seen.clone(),
+        });
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::Line(4));
+        let program = crate::parser::parse_phs(
+            "fn helper(x) =\n  y = x * 2\n  return y\nz = helper(1)\nw = 2\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        // Unlike StepOver, StepInto must fire on the *very* next checkpoint even though it's
+        // deeper (inside helper's body) -- line 2, not line 5.
+        assert_eq!(*seen.lock().unwrap(), vec![4, 2]);
+    }
+
+    #[test]
+    fn continue_after_a_breakpoint_does_not_refire_until_the_next_breakpoint_match() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::Line(2));
+        let program = crate::parser::parse_phs("x = 1\ny = 2\nz = 3\n").unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        // This is the regression case for the original bug: only line 2 (the breakpoint) should
+        // ever have paused. Before the fix, the discarded DebugAction made no difference either
+        // way here since nothing was implemented to *use* it -- this test's real job is to prove
+        // the *new* step-bookkeeping doesn't accidentally make Continue behave like a step.
+        assert_eq!(*seen.lock().unwrap(), vec![2]);
+    }
+
+    #[test]
+    fn parallel_map_falls_back_to_sequential_when_debug_hook_is_set() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        let stmts = crate::parser::parse_phs(
+            "fn double(x) = x * 2.0\nres = parallel_map(double, vector(1.0, 2.0, 3.0))",
+        )
+        .unwrap();
+        interp.run_statements(&stmts).unwrap();
+
+        // Sequential execution means the hook is called in a well-defined, deterministic order
+        // (three checkpoints, one per element, each dispatched from the same thread) rather than
+        // racing across rayon workers -- this is what "sequential fallback" is actually testing:
+        // not just that the result is right (parallel_map's own Track B tests already prove that),
+        // but that debugging one didn't need `DebugHook: Sync`-across-threads reasoning at all.
+        //
+        // `run_statements` (unlike `run_statements_with_lines`) always checkpoints each
+        // top-level statement at line 0 (see `eval_statement_with_env`'s `eval_statement_with_env_at(stmt, env, 0)`),
+        // so the two top-level statements here (the `fn double` definition and the
+        // `res = ...` assignment) each contribute one line-0 checkpoint that has nothing to do
+        // with parallel_map's fallback. The checkpoints that actually matter -- one per element,
+        // fired from inside `double`'s body via `call_function_node_at` -- land on line 1
+        // (`double` is a one-line `fn double(x) = x * 2.0`, so its `body_lines[0]` is that same
+        // line, never 0). Filter those out explicitly rather than asserting a raw total of 5,
+        // so the "one checkpoint per element" property stays the thing under test.
+        let seen = seen.lock().unwrap();
+        let per_element_checkpoints = seen.iter().filter(|&&l| l != 0).count();
+        assert_eq!(per_element_checkpoints, 3, "expected one checkpoint per double() call, got {seen:?}");
+        // Also assert output correctness survives -- the real regression this guards is a future
+        // change to parallel_map's rayon path forgetting this check, not today's behavior.
+        let PhsValue::Vector(v) = interp.get_var("res").unwrap() else { panic!("expected vector") };
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn for_expr_falls_back_to_sequential_when_debug_hook_is_set() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        // Force the parallel branch (threshold 0) so this test would exercise the rayon path if
+        // the fallback below didn't override it.
+        let _guard = physure_core::settings::scoped(0);
+        let stmts = crate::parser::parse_phs(
+            "fn double(x) = x * 2.0\nres = for i in vector(1.0, 2.0, 3.0) { double(i) }",
+        )
+        .unwrap();
+        interp.run_statements(&stmts).unwrap();
+
+        let PhsValue::Vector(v) = interp.get_var("res").unwrap() else { panic!("expected vector") };
+        assert_eq!(v.len(), 3);
+        // Same reasoning as parallel_map's fallback test: a deterministic, same-thread checkpoint
+        // count is what "fell back to sequential" actually proves, not just correct output.
+        assert!(!seen.lock().unwrap().is_empty(), "hook should have been called for double()'s body");
+    }
 
     #[test]
     fn requires_violation_returns_contract_violation_error() {
@@ -1373,6 +2064,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         })),
                     })
                 })],
+                body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
             }),
@@ -1412,7 +2104,7 @@ r3 = circuito_abierto(5 V, 2 A)
             }),
         ];
         
-        let env = interp.eval_program(&Program { statements }).unwrap();
+        let env = interp.eval_program(&Program { statements, lines: vec![] }).unwrap();
         
         let e_val = env.get("E").unwrap();
         if let PhsValue::Quantity(q) = e_val {
@@ -1443,6 +2135,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     decorators: Vec::new(),
                 }),
             ],
+            lines: vec![],
         };
         let env = interp.eval_program(&program).unwrap();
         let m_val = env.get("m").unwrap();
@@ -1515,6 +2208,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     specifier: ImportSpecifier::Wildcard,
                 })
             ],
+            lines: vec![],
         };
         let env = interp.eval_program(&program).unwrap();
         let g_val = env.get("G").unwrap();
@@ -1656,6 +2350,62 @@ r3 = circuito_abierto(5 V, 2 A)
         } else {
             panic!("expected vector");
         }
+    }
+
+    #[test]
+    fn for_expr_parallel_and_sequential_paths_agree() {
+        let script = "res = for i in 1..20000 { i * 3 + 1 }";
+        let stmts = crate::parser::parse_phs(script).unwrap();
+
+        let seq_val = {
+            let _guard = physure_core::settings::scoped(usize::MAX);
+            let mut interp_seq = PhsInterpreter::default();
+            interp_seq.run_statements(&stmts).unwrap();
+            interp_seq.get_var("res").unwrap().clone()
+        };
+
+        let par_val = {
+            let _guard = physure_core::settings::scoped(0);
+            let mut interp_par = PhsInterpreter::default();
+            interp_par.run_statements(&stmts).unwrap();
+            interp_par.get_var("res").unwrap().clone()
+        };
+
+        assert_eq!(seq_val, par_val);
+    }
+
+    #[test]
+    fn parallel_map_applies_function_to_every_element() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs(
+            "fn double(x) = x * 2.0\nres = parallel_map(double, vector(1.0, 2.0, 3.0))",
+        )
+        .unwrap();
+        interp.run_statements(&stmts).unwrap();
+        let val = interp.get_var("res").unwrap();
+        let PhsValue::Vector(v) = val else { panic!("expected vector, got {val:?}") };
+        let means: Vec<f64> = v
+            .iter()
+            .map(|x| match x {
+                PhsValue::Number(n) => *n,
+                PhsValue::Quantity(q) => q.value.mean(),
+                other => panic!("expected numeric element, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(means, vec![2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn parallel_map_reports_failing_index() {
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs(
+            "@requires(x > 0.0, \"x must be positive\")\nfn f(x) = x * 2.0\n\
+             parallel_map(f, vector(1.0, 2.0, -1.0, 4.0))",
+        )
+        .unwrap();
+        let err = interp.run_statements(&stmts).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("index 2"), "expected the failing index in the error, got: {msg}");
     }
 
     #[test]
