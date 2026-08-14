@@ -79,6 +79,19 @@ pub enum DebugAction {
     Pause,
 }
 
+#[derive(Debug, Clone)]
+pub enum Breakpoint {
+    Line(usize),
+    Conditional(usize, crate::ast::Expr),
+    /// Matches by comparing the checkpoint's innermost `call_stack` frame's `fn_name` against
+    /// this name -- which means it fires on *every* statement executed inside that function's
+    /// frame, not only the first one. There is no separate "just entered" bit tracked anywhere,
+    /// so a multi-statement function pauses once per statement per call, not once per call.
+    /// Callers that want a true once-per-call pause need to track call-count themselves (e.g.
+    /// by comparing `call_stack` depth/identity across hook invocations).
+    FunctionEntry(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
