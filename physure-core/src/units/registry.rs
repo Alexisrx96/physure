@@ -167,11 +167,12 @@ impl UnitRegistry {
 
     /// Splits `name` into a registered prefix symbol and its factor, if `name` is a known
     /// prefix immediately followed by a base or derived unit symbol (e.g. `"km"` -> `Some(("k",
-    /// 1000.0))`; `"km/h"` or any other compound expression -> `None`, since this only
-    /// recognizes a single prefixed symbol, not an arbitrary unit expression). Factored out of
-    /// `get_unit`'s own prefix-matching so `Inspection`'s reverse lookup (Track C) reuses this
-    /// exact rule instead of re-deriving it.
-    /// Returns `(prefix symbol, prefix factor, the unprefixed remainder's own `RationalUnit`)`.
+    /// 1000.0, <the "m" RationalUnit>))`; `"km/h"` or any other compound expression -> `None`,
+    /// since this only recognizes a single prefixed symbol, not an arbitrary unit expression).
+    /// Factored out of `get_unit`'s own prefix-matching so `Inspection`'s reverse lookup (Track
+    /// C) reuses this exact rule instead of re-deriving it.
+    ///
+    /// Returns `(prefix symbol, prefix factor, the unprefixed remainder's own RationalUnit)`.
     /// Carrying the resolved unit forward means `get_unit`'s caller doesn't have to redo the
     /// same `resolve_symbol` + four-way lookup a second time just to fetch what this method
     /// already found while checking whether `name` was a known prefix+unit combination.

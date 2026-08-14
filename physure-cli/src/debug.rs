@@ -251,7 +251,8 @@ pub fn run_debug(args: &[String]) {
             }
             i += 2;
         } else if args[i] == "--break" {
-            if let Some(spec) = args.get(i + 1).and_then(|v| parse_break_flag(v)) {
+            let raw = args.get(i + 1);
+            if let Some(spec) = raw.and_then(|v| parse_break_flag(v)) {
                 match spec {
                     BreakpointSpec::Line(l) => interp.add_breakpoint(Breakpoint::Line(l)),
                     BreakpointSpec::Conditional(l, cond_src) => {
@@ -265,6 +266,11 @@ pub fn run_debug(args: &[String]) {
                         }
                     }
                 }
+            } else {
+                eprintln!(
+                    "warning: could not parse breakpoint '{}' (line numbers must be 1 or greater)",
+                    raw.map(String::as_str).unwrap_or("")
+                );
             }
             i += 2;
         } else {
