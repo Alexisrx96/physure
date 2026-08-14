@@ -12,6 +12,8 @@ use physure_script::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
 use physure_script::inspect::{inspect, ScopeKind};
 use physure_script::{parse_phs, PhsInterpreter};
 
+use crate::rich::RichRenderer;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DebuggerCommand {
     Print(String),
@@ -129,7 +131,7 @@ impl DebugHook for CliDebugHook {
                     };
                     for name in &frame.declared {
                         if let Some(val) = ctx.env.get(name) {
-                            println!("  {name} = {val}");
+                            RichRenderer::render_variable_card(name, val);
                         }
                     }
                 }
@@ -141,7 +143,7 @@ impl DebugHook for CliDebugHook {
                         .unwrap_or_default();
                     for (name, val) in ctx.env {
                         if !local_names.contains(name.as_str()) {
-                            println!("  {name} = {val}");
+                            RichRenderer::render_variable_card(name, val);
                         }
                     }
                 }
