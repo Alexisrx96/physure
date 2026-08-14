@@ -10,7 +10,7 @@ use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
 
 use crate::ast::{BinaryOp, Expr, Program, Statement};
-use crate::debug::{DebugContext, DebugHook, StackFrame};
+use crate::debug::{DebugAction, DebugContext, DebugHook, StackFrame};
 use crate::resolver::{ModuleResolver, FsModuleResolver};
 use crate::symbolic::Node;
 use crate::PhsValue;
@@ -192,6 +192,7 @@ pub struct PhsInterpreter {
     /// closing that gap is planned as a later Integration task, not yet implemented.
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
     breakpoints: Arc<Mutex<Vec<crate::debug::Breakpoint>>>,
+    step_mode: Arc<Mutex<Option<StepMode>>>,
 }
 
 impl Default for PhsInterpreter {
@@ -212,6 +213,24 @@ impl Drop for CallStackGuard {
     fn drop(&mut self) {
         self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).pop();
     }
+}
+
+/// Tracks what a `Step*`/`Pause` `DebugAction` committed the interpreter to doing next, so a
+/// later `debug_checkpoint` call can decide whether to fire the hook even when no `Breakpoint`
+/// matches -- this is what actually makes `step`/`next`/`finish` do something once at least one
+/// breakpoint is registered (previously the `DebugAction` a hook returned was thrown away
+/// entirely, so those commands were indistinguishable from `Continue`). `None` means "no step
+/// pending" -- either nothing has been returned yet, or the last action was `Continue`.
+#[derive(Clone, Copy)]
+enum StepMode {
+    /// Fire on the very next checkpoint, whatever its call-stack depth.
+    Into,
+    /// Fire once `call_stack` depth is back down to (or shallower than) the depth recorded when
+    /// this was issued -- skips over anything deeper (a nested call).
+    Over(usize),
+    /// Fire once `call_stack` depth is strictly shallower than the depth recorded when this was
+    /// issued -- i.e. only after the current frame has actually returned.
+    Out(usize),
 }
 
 /// Trailing `#` / `//` comments survive into a unit annotation's text; the unit parser
@@ -244,6 +263,7 @@ impl PhsInterpreter {
             debug_hook: None,
             call_stack: Arc::new(Mutex::new(Vec::new())),
             breakpoints: Arc::new(Mutex::new(Vec::new())),
+            step_mode: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -370,24 +390,23 @@ impl PhsInterpreter {
     fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         let Some(hook) = &self.debug_hook else { return Ok(()) };
 
-        // Snapshot the breakpoint list and the innermost frame's name, then drop both locks
-        // *before* evaluating any `Conditional` breakpoint's condition below: that condition
-        // may call a PHS-defined function, which re-enters `debug_checkpoint` on this same
-        // thread via `eval_expr` -> `call_function_node` -> `call_function_node_at` ->
-        // `eval_statement_with_env_at`. `std::sync::Mutex` is not reentrant, so holding
-        // `call_stack`/`breakpoints` locked (as `MutexGuard`s) across that call would
+        // Snapshot the breakpoint list, the innermost frame's name/depth, and the pending step
+        // mode, then drop every lock *before* evaluating any `Conditional` breakpoint's
+        // condition below: that condition may call a PHS-defined function, which re-enters
+        // `debug_checkpoint` on this same thread via `eval_expr` -> `call_function_node` ->
+        // `call_function_node_at` -> `eval_statement_with_env_at`. `std::sync::Mutex` is not
+        // reentrant, so holding any of these locked (as `MutexGuard`s) across that call would
         // self-deadlock the thread forever -- NLL only relaxes borrow-checking, it doesn't
-        // change when a `MutexGuard`'s `Drop` actually runs, so the naive "just lock at the
-        // top of the function" version hangs the instant a condition calls back in.
-        // `Breakpoint` and `StackFrame` are both `Clone`, so cloning out of the lock is cheap
-        // and correct.
+        // change when a `MutexGuard`'s `Drop` actually runs, so the naive "just lock at the top
+        // of the function" version hangs the instant a condition calls back in. `Breakpoint`,
+        // `StackFrame`, and `StepMode` are all `Clone`/`Copy`, so cloning out of the locks is
+        // cheap and correct.
         let breakpoints = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let innermost_fn_name = self
-            .call_stack
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .last()
-            .map(|f| f.fn_name.clone());
+        let (innermost_fn_name, current_depth) = {
+            let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
+            (call_stack.last().map(|f| f.fn_name.clone()), call_stack.len())
+        };
+        let pending_step = *self.step_mode.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut hits = false;
         for bp in &breakpoints {
@@ -414,12 +433,25 @@ impl PhsInterpreter {
             }
         }
 
-        // Two different "no match" cases, deliberately handled differently: no breakpoints
-        // registered at all means every checkpoint still reaches the hook, exactly as before
-        // C3 (preserves C1's "hook sees everything" behavior so plain step/next/continue work
-        // without requiring a breakpoint to be set first); breakpoints registered but none of
-        // them matched *this* checkpoint means stay silent.
-        if !hits && !breakpoints.is_empty() {
+        // A pending `Step*`/`Pause` can also justify firing even when no breakpoint matched
+        // *this* checkpoint -- this is what makes `step`/`next`/`finish` actually do something
+        // once at least one breakpoint exists, instead of being indistinguishable from
+        // `continue`. `Into` (StepInto and Pause both map here) fires unconditionally; `Over`
+        // and `Out` are gated on `call_stack` depth relative to where the step was issued.
+        let step_due = match pending_step {
+            Some(StepMode::Into) => true,
+            Some(StepMode::Over(saved_depth)) => current_depth <= saved_depth,
+            Some(StepMode::Out(saved_depth)) => current_depth < saved_depth,
+            None => false,
+        };
+
+        // Three cases, deliberately handled differently: no breakpoints registered at all means
+        // every checkpoint still reaches the hook, exactly as before C3 (preserves C1's "hook
+        // sees everything" behavior so plain step/next/continue work without requiring a
+        // breakpoint to be set first); breakpoints registered and a step is due means fire even
+        // without a match; breakpoints registered, none matched, and no step is due means stay
+        // silent.
+        if !hits && !step_due && !breakpoints.is_empty() {
             return Ok(());
         }
 
@@ -429,7 +461,16 @@ impl PhsInterpreter {
         // for the hook to call back into `self` and re-enter this lock.
         let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
         let ctx = DebugContext { line, call_stack: &call_stack, env };
-        let _ = hook.on_statement(&ctx);
+        let action = hook.on_statement(&ctx);
+        drop(call_stack);
+
+        *self.step_mode.lock().unwrap_or_else(|e| e.into_inner()) = match action {
+            DebugAction::Continue => None,
+            DebugAction::StepInto | DebugAction::Pause => Some(StepMode::Into),
+            DebugAction::StepOver => Some(StepMode::Over(current_depth)),
+            DebugAction::StepOut => Some(StepMode::Out(current_depth)),
+        };
+
         Ok(())
     }
 
@@ -1564,6 +1605,114 @@ mod tests {
         interp.run_statements_with_lines(&program).unwrap();
 
         assert_eq!(*hits.lock().unwrap(), 1, "should only pause once x has actually reached 3");
+    }
+
+    #[test]
+    fn step_over_skips_statements_inside_a_deeper_nested_call() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct ScriptedHook {
+            actions: Mutex<Vec<DebugAction>>,
+            seen: Arc<Mutex<Vec<usize>>>,
+        }
+        impl DebugHook for ScriptedHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.seen.lock().unwrap().push(ctx.line);
+                let mut actions = self.actions.lock().unwrap();
+                if actions.is_empty() { DebugAction::Continue } else { actions.remove(0) }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(ScriptedHook {
+            actions: Mutex::new(vec![DebugAction::StepOver, DebugAction::Continue]),
+            seen: seen.clone(),
+        });
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::Line(4));
+        // Lines: 1 "fn helper(x) =", 2 "  y = x * 2", 3 "  return y", 4 "z = helper(1)", 5 "w = 2".
+        let program = crate::parser::parse_phs(
+            "fn helper(x) =\n  y = x * 2\n  return y\nz = helper(1)\nw = 2\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        // Paused at line 4 (the breakpoint, depth 0). StepOver should skip both statements inside
+        // helper's body (lines 2-3, depth 1 -- deeper than where StepOver was issued) and land on
+        // line 5 (depth 0 again, back at or above the issuing depth) -- never on 2 or 3.
+        assert_eq!(*seen.lock().unwrap(), vec![4, 5]);
+    }
+
+    #[test]
+    fn step_into_fires_on_the_very_next_checkpoint_regardless_of_depth() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct ScriptedHook {
+            actions: Mutex<Vec<DebugAction>>,
+            seen: Arc<Mutex<Vec<usize>>>,
+        }
+        impl DebugHook for ScriptedHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.seen.lock().unwrap().push(ctx.line);
+                let mut actions = self.actions.lock().unwrap();
+                if actions.is_empty() { DebugAction::Continue } else { actions.remove(0) }
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(ScriptedHook {
+            actions: Mutex::new(vec![DebugAction::StepInto, DebugAction::Continue]),
+            seen: seen.clone(),
+        });
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::Line(4));
+        let program = crate::parser::parse_phs(
+            "fn helper(x) =\n  y = x * 2\n  return y\nz = helper(1)\nw = 2\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        // Unlike StepOver, StepInto must fire on the *very* next checkpoint even though it's
+        // deeper (inside helper's body) -- line 2, not line 5.
+        assert_eq!(*seen.lock().unwrap(), vec![4, 2]);
+    }
+
+    #[test]
+    fn continue_after_a_breakpoint_does_not_refire_until_the_next_breakpoint_match() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::Line(2));
+        let program = crate::parser::parse_phs("x = 1\ny = 2\nz = 3\n").unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        // This is the regression case for the original bug: only line 2 (the breakpoint) should
+        // ever have paused. Before the fix, the discarded DebugAction made no difference either
+        // way here since nothing was implemented to *use* it -- this test's real job is to prove
+        // the *new* step-bookkeeping doesn't accidentally make Continue behave like a step.
+        assert_eq!(*seen.lock().unwrap(), vec![2]);
     }
 
     #[test]
