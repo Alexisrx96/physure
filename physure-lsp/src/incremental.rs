@@ -453,11 +453,20 @@ fn execution_error_diagnostic(err_str: &str, line: usize, text: &str) -> Diagnos
     }
 }
 
+/// The result of applying one document change: the updated state to persist for this document
+/// (store it keyed by URI), and the full diagnostics list to publish -- always the complete
+/// set for the document, not a diff, since that's what the LSP protocol requires each time.
 pub struct ChangeOutcome {
     pub state: DocState,
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Applies one document change (the full new text, per `TextDocumentSyncKind::FULL`) against
+/// `prev` -- `None` on first open, `Some` on every edit after. Parses, diffs against `prev`'s
+/// last-known-good statements, invalidates stale `env` entries, re-runs exactly the dirty
+/// statements against the persisted interpreter, and returns the updated state plus diagnostics.
+/// A parse failure leaves `prev`'s state untouched (see the early-return below) and reports a
+/// single parse-error diagnostic, rather than a per-statement diagnostic list.
 pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
     let pairs = match physure_script::parser::parse_phs_with_lines(text) {
         Ok(p) => p,
@@ -473,6 +482,9 @@ pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
     };
     let new_lines: Vec<usize> = pairs.iter().map(|(l, _)| *l).collect();
     let new_statements: Vec<Statement> = pairs.into_iter().map(|(_, s)| s).collect();
+    // Both built from the same `pairs` above, so this must always hold -- `new_lines.get(i)`
+    // below relies on it to never fall back to line 0 for a real statement.
+    debug_assert_eq!(new_lines.len(), new_statements.len());
 
     let mut state = prev.unwrap_or_else(DocState::empty);
     let old_statements = std::mem::take(&mut state.statements);
@@ -491,6 +503,9 @@ pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
             diagnostics_by_stmt.push(None);
         } else {
             let old_i = if i < prefix { i } else { (i as isize - len_diff) as usize };
+            // `old_i` is only ever in-bounds because every apply_change return path keeps
+            // `state.diagnostics.len() == state.statements.len()` -- i.e. `old_diagnostics`
+            // here has exactly `old_statements.len()` entries, one per old statement.
             diagnostics_by_stmt.push(old_diagnostics.get(old_i).cloned().flatten());
         }
     }
