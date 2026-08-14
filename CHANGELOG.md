@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Affine temperature units: `degC`, `degF` and `degR`.** The core's `RationalUnit` was purely multiplicative — a unit was a set of dimensions and a scale factor — so a scale with a zero point could not be expressed at all, and Celsius and Fahrenheit were simply missing from `physure.conf`. `20.0 degC` failed with "Unknown unit 'degC' — did you mean 'deg'?", which made calorimetry (`m * cap * (T2 - T1)`) unwritable in PHS. `RationalUnit` now carries an `offset`, applied as `base = value * scale + offset`, and the conf parser reads the zero point from the `factor, offset, dimension` form the Python config had been using all along. Only Celsius and Fahrenheit are affine; Rankine shares Kelvin's zero point and the `delta_*` units are the interval scales. The offset takes part in unit equality, since `degC` and `K` are otherwise identical and a conversion between them would look like a no-op.
 - **PHS gains loops: `for x in iterable { ... }` and `while cond { ... }`.** Before this, the only way to repeat something over a range was to unroll it by hand. `for` is a vectorized functional expression — it evaluates to the vector of its body's value over each element of `iterable`, pre-allocating with `Vec::with_capacity` rather than growing one push at a time. `while` is the imperative counterpart for convergence loops (Newton's method, fixed-point iteration) that don't know their length in advance; it is capped at 10,000 iterations so a condition that never turns false fails loudly instead of hanging. Both compile to their natural equivalent in all four transpiled targets — Python, JavaScript/TypeScript, Rust and Java — as well as the interpreter.
+- **`physure-lsp` re-evaluates a document incrementally instead of re-running every statement on
+  every keystroke.** Editing one statement now only re-runs it and whatever transitively depends
+  on it, tracked via a per-statement read/write dependency graph built from the AST (no execution
+  needed to build it). A persisted interpreter carries `env` forward across edits instead of being
+  rebuilt from scratch each time. Handles dynamic scoping correctly — a function call depends on
+  every global its body reads, not just names in the call site's own text — and invalidates stale
+  values left behind by a statement that used to succeed and now fails, including when an edit
+  renames which variable a statement writes.
+
 ### Changed
 - `Quantity.java` now uses `List<Quantity>` instead of raw `double[]` for `QuantityVector` interactions; added `mul()`, `div()`, `sub()` shorthand aliases.
 - **BREAKING (PHS)**: local bindings moved from `let name = value in body` to a postfix `where` clause — `body where name = value[, name2 = value2]`. A later binding can use an earlier one. `let` stays a reserved word with no rule behind it, so the old form fails to parse instead of quietly meaning "let times inches".
