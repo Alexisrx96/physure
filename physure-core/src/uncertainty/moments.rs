@@ -30,7 +30,9 @@ use crate::error::{PhysureError, PhysureResult};
 /// measurement's mean is not the number the experimenter wrote down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AsymmetricMoments {
-    /// `mean − mode`: how far the mean sits from the quoted value.
+    /// `mean − mode`: how far the mean sits from the quoted value. Under the default shape
+    /// the join point (the mode) is also the median, so `shift` is equally the mean's distance
+    /// from the median there — see [`shapes::DimidiatedGaussian`](super::shapes::DimidiatedGaussian).
     pub shift: f64,
     /// The variance about the mean.
     pub variance: f64,
@@ -280,7 +282,7 @@ mod tests {
     fn a_skew_no_pair_can_reach_is_refused() {
         // Just past the asymptote — a real distribution, but not one of these.
         let err = sigmas_from_moments(1.0, max_skewness() + 0.01).unwrap_err();
-        assert!(err.to_string().contains("exceeds the dimidiated Gaussian's reach"), "{}", err);
+        assert!(err.to_string().contains("cannot be written as a pair"), "{}", err);
     }
 
     #[test]

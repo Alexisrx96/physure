@@ -124,10 +124,16 @@ impl AsymmetryShape for DimidiatedGaussian {
             };
         }
         let target = third / variance.powf(1.5);
-        if target.abs() > DIMIDIATED_MAX_SKEW {
+        // A one-sided pair (sigma_minus == 0) sits exactly at DIMIDIATED_MAX_SKEW, but `target`
+        // is computed, not the literal constant, so it can land a few ulps above it at some
+        // scales even though it is not genuinely more skewed. A few ulps of slack (~9e-16
+        // relative) accepts that noise without opening the door to real over-skew, which misses
+        // by orders of magnitude in comparison (see skewness_ceilings_differ_and_are_enforced).
+        if target.abs() > DIMIDIATED_MAX_SKEW * (1.0 + 4.0 * f64::EPSILON) {
             return Err(PhysureError::Generic(format!(
-                "Standardised skewness {target} exceeds the dimidiated Gaussian's reach \
-                 of {DIMIDIATED_MAX_SKEW}; this distribution has no (sigma-, sigma+) form"
+                "A skewness of {target:.4} cannot be written as a pair of half-widths: the \
+                 dimidiated Gaussian tops out at {DIMIDIATED_MAX_SKEW:.4}, reached only when \
+                 one side is zero"
             )));
         }
         let (mut lo, mut hi) = (-1.0_f64, 1.0_f64);
@@ -224,7 +230,10 @@ impl AsymmetryShape for FechnerGaussian {
         let skew = third / variance.powf(1.5);
         let target = skew.abs();
         let max_skew = self.max_skewness();
-        if target > max_skew {
+        // Same few-ulp slack as DimidiatedGaussian, and for the same reason: a one-sided pair
+        // sits exactly at max_skew, and the computed value can land a few ulps past the
+        // computed constant at some scales without being genuinely more skewed.
+        if target > max_skew * (1.0 + 4.0 * f64::EPSILON) {
             return Err(PhysureError::Generic(format!(
                 "A skewness of {skew:.4} cannot be written as a pair of half-widths: the \
                  Fechner Gaussian tops out at {max_skew:.4}, reached only when one side is zero"
@@ -361,5 +370,31 @@ mod tests {
         assert_eq!(ShapeKind::from_name("fechner").unwrap(), ShapeKind::Fechner);
         assert!(ShapeKind::from_name("gauss-ish").is_err());
         assert_eq!(ShapeKind::Dimidiated.strategy().name(), "dimidiated");
+        assert_eq!(ShapeKind::Fechner.name(), "fechner");
+    }
+
+    #[test]
+    fn one_sided_pairs_round_trip_across_scales() {
+        // A one-sided pair (sigma_minus == 0) sits exactly at each shape's skewness ceiling, so
+        // it is the case most exposed to the ulp-level float noise the ceiling check now
+        // tolerates. sigma_plus == 1.0 alone (as in both_shapes_round_trip) happens to be a
+        // scale where the noise favours acceptance; this regression sweeps decades on both
+        // sides of it, several of which used to be spuriously rejected.
+        for shape in [&DimidiatedGaussian as &dyn AsymmetryShape, &FechnerGaussian] {
+            for sp in [1e-9, 1e-4, 1.0, 1e2, 1e9] {
+                let m = shape
+                    .moments_from_sigmas(0.0, sp)
+                    .unwrap_or_else(|e| panic!("{} (0,{sp}): {e}", shape.name()));
+                let (lo, hi) = shape
+                    .sigmas_from_moments(m.variance, m.third)
+                    .unwrap_or_else(|e| panic!("{} (0,{sp}): {e}", shape.name()));
+                assert!(lo.abs() < sp * 1e-6, "{} sigma_minus {lo} at scale {sp}", shape.name());
+                assert!(
+                    (hi - sp).abs() < sp * 1e-6,
+                    "{} sigma_plus {hi} at scale {sp}",
+                    shape.name()
+                );
+            }
+        }
     }
 }

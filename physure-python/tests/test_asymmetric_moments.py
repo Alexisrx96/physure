@@ -62,7 +62,9 @@ def test_a_pair_that_is_not_two_half_widths_is_refused(sigmas):
 
 
 def test_a_skew_beyond_the_shape_is_reported_not_rounded_down():
-    assert 0.99 < max_skewness() < 1.0
+    # The default shape is the dimidiated (equal-area) Gaussian, whose ceiling is a little
+    # past 1.64 rather than just under 1 (that was the equal-height Fechner ceiling).
+    assert 1.64 < max_skewness() < 1.65
     # A third moment past the asymptote has no pair behind it. Returning the most skewed
     # pair available would understate the tail by an unbounded amount.
     beyond = AsymmetricMoments.from_sigmas(0.0, 1.0)
