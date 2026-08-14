@@ -465,18 +465,20 @@ Tracks are independent — check off in any order, on any timeline.
 - [x] **Track C: Breakpoints** — see
       [`docs/superpowers/specs/2026-08-13-track-c-breakpoints-design.md`](superpowers/specs/2026-08-13-track-c-breakpoints-design.md)
       and [`docs/superpowers/plans/2026-08-13-track-c-breakpoints.md`](superpowers/plans/2026-08-13-track-c-breakpoints.md).
-      One prerequisite not in this section's original sketch, added during brainstorming:
-      source-line tracking on `Program`/`FunctionDefNode`/`Statement::While` (none existed
-      before this track), added as parallel `Vec<usize>` fields rather than wrapping every
-      `Statement` variant, to keep the change additive. Two `Inspection` fields also deviate
-      from the original sketch: `dimension` exposes `RationalUnit.dimensions` (registered
-      base-unit symbols) directly rather than the unused `DimVector`/`SI_ORDER` scheme this
-      section named; `prefix` is best-effort, resolvable only for a single non-compound unit
-      symbol. One more deviation, found during the integration task's own review of Track B's
-      parallel paths: the sequential-fallback rule applies to *both* rayon entry points Track B
-      added — `parallel_map` and the `for`-expression's parallel branch above
-      `parallel_threshold` — not just `parallel_map` as this section originally scoped it,
-      since both share the same `call_stack`-corruption risk under concurrent debug checkpoints.
+      Three deviations from this section's original sketch, all found during implementation:
+      - A prerequisite not in the original sketch, added during brainstorming: source-line
+        tracking on `Program`/`FunctionDefNode`/`Statement::While` (none existed before this
+        track), added as parallel `Vec<usize>` fields rather than wrapping every `Statement`
+        variant, to keep the change additive.
+      - Two `Inspection` fields deviate from the original sketch: `dimension` exposes
+        `RationalUnit.dimensions` (registered base-unit symbols) directly rather than the
+        unused `DimVector`/`SI_ORDER` scheme this section named; `prefix` is best-effort,
+        resolvable only for a single non-compound unit symbol.
+      - Found during the integration task's own review of Track B's parallel paths: the
+        sequential-fallback rule applies to *both* rayon entry points Track B added —
+        `parallel_map` and the `for`-expression's parallel branch above `parallel_threshold` —
+        not just `parallel_map` as this section originally scoped it, since both share the same
+        `call_stack`-corruption risk under concurrent debug checkpoints.
   - [x] `DebugHook` trait + `Vec<StackFrame>` call-stack tracking wired into the interpreter's
         statement/loop-iteration dispatch.
   - [x] Line, conditional, and function-entry breakpoints.
