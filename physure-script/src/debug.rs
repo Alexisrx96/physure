@@ -76,6 +76,11 @@ pub enum DebugAction {
     StepInto,
     StepOver,
     StepOut,
+    /// Currently unreachable from any shipped `DebugHook` implementation (no CLI command maps
+    /// to it) -- mapped to the same "stop at the next checkpoint" behavior as `StepInto` in
+    /// `interpreter.rs`'s `debug_checkpoint` (both become `StepMode::Into`). Reserved for a
+    /// future async/DAP-style pause request that can interrupt execution from outside the
+    /// current call, which is not something the synchronous CLI hook needs.
     Pause,
 }
 
