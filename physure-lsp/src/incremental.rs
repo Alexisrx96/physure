@@ -326,7 +326,7 @@ pub fn compute_dirty(old: &[Statement], new: &[Statement]) -> DirtyAnalysis {
         let depends_on_dirty = d
             .reads
             .iter()
-            .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
+            .any(|n| last_writer.get(n).is_some_and(|w| dirty.contains(w)));
         // A write-write ordering dependency, not a read-write one: if this statement writes a
         // name whose previous writer (earlier in the file) is dirty, this statement must also
         // rerun -- not because its own output would differ, but because its role is "the write
@@ -338,7 +338,7 @@ pub fn compute_dirty(old: &[Statement], new: &[Statement]) -> DirtyAnalysis {
         let rewrites_dirty_name = d
             .writes
             .iter()
-            .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
+            .any(|n| last_writer.get(n).is_some_and(|w| dirty.contains(w)));
         if in_changed_span || touches || depends_on_dirty || rewrites_dirty_name {
             dirty.insert(i);
         }
