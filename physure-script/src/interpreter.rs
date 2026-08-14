@@ -191,6 +191,7 @@ pub struct PhsInterpreter {
     /// `debug_hook` and would corrupt this stack if used concurrently with an active hook --
     /// closing that gap is planned as a later Integration task, not yet implemented.
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
+    breakpoints: Arc<Mutex<Vec<crate::debug::Breakpoint>>>,
 }
 
 impl Default for PhsInterpreter {
@@ -242,6 +243,7 @@ impl PhsInterpreter {
             dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
             debug_hook: None,
             call_stack: Arc::new(Mutex::new(Vec::new())),
+            breakpoints: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -357,13 +359,30 @@ impl PhsInterpreter {
         Ok(self.env.clone())
     }
 
+    pub fn add_breakpoint(&mut self, bp: crate::debug::Breakpoint) {
+        self.breakpoints.lock().unwrap_or_else(|e| e.into_inner()).push(bp);
+    }
+
     fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         let Some(hook) = &self.debug_hook else { return Ok(()) };
         let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
+        let breakpoints = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner());
+
+        let hits = breakpoints.iter().any(|bp| match bp {
+            crate::debug::Breakpoint::Line(l) => *l == line,
+            crate::debug::Breakpoint::Conditional(l, cond) => {
+                *l == line && is_truthy(&self.eval_expr(cond, env).unwrap_or(PhsValue::Bool(false)))
+            }
+            crate::debug::Breakpoint::FunctionEntry(name) => {
+                call_stack.last().map(|f| f.fn_name == *name).unwrap_or(false)
+            }
+        });
+
+        if !hits && !breakpoints.is_empty() {
+            return Ok(());
+        }
+
         let ctx = DebugContext { line, call_stack: &call_stack, env };
-        // v1: every action resumes execution. StepOver/StepOut/Pause bookkeeping (comparing
-        // call_stack depth across calls) is Task C3's job once breakpoints exist to pause on;
-        // C1 only has to prove the checkpoint fires at the right places with the right context.
         let _ = hook.on_statement(&ctx);
         Ok(())
     }
@@ -1332,6 +1351,75 @@ mod tests {
         // observes from here on would show a phantom `boom` frame beneath the real ones.
         interp.eval_str("fn ok(x) = x + 1\nok(1)").unwrap();
         assert_eq!(interp.call_stack_depth(), 0, "call_stack not clean after a later, unrelated successful call");
+    }
+
+    #[test]
+    fn function_entry_breakpoint_pauses_on_every_call() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                if ctx.call_stack.last().map(|f| f.fn_name.as_str()) == Some("double") {
+                    *self.0.lock().unwrap() += 1;
+                }
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        interp.add_breakpoint(Breakpoint::FunctionEntry("double".to_string()));
+        // Single-expression function body (no indentation block needed): "fn f(x) = expr".
+        let program = crate::parser::parse_phs(
+            "fn double(x) = x * 2\na = double(1)\nb = double(2)\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), 2, "expected a pause on each of the two calls");
+    }
+
+    #[test]
+    fn conditional_breakpoint_pauses_only_when_condition_holds() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct CountingHook(Arc<Mutex<usize>>);
+        impl DebugHook for CountingHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                *self.0.lock().unwrap() += 1;
+                DebugAction::Continue
+            }
+        }
+
+        let hits = Arc::new(Mutex::new(0));
+        let hook = Arc::new(CountingHook(hits.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        // A checkpoint fires *before* its own statement's effect (see debug_checkpoint's call at
+        // the top of eval_statement_with_env_at, ahead of the match on the statement itself) --
+        // so the condition targets the line *after* the assignment it depends on, where `x` has
+        // already settled to its final value from the fully-executed previous statement.
+        let program = crate::parser::parse_phs(
+            "x = 1\nx = 2\nx = 3\ny = x\n",
+        )
+        .unwrap();
+        let cond_line = program.lines[3]; // the "y = x" statement
+        let cond_expr = crate::parser::parse_phs("x > 2").unwrap().statements.remove(0);
+        let crate::ast::Statement::Expr(cond) = cond_expr else { panic!("expected expr") };
+        interp.add_breakpoint(Breakpoint::Conditional(cond_line, cond));
+
+        interp.run_statements_with_lines(&program).unwrap();
+
+        assert_eq!(*hits.lock().unwrap(), 1, "should only pause once x has actually reached 3");
     }
 
     #[test]

@@ -79,6 +79,13 @@ pub enum DebugAction {
     Pause,
 }
 
+#[derive(Debug, Clone)]
+pub enum Breakpoint {
+    Line(usize),
+    Conditional(usize, crate::ast::Expr),
+    FunctionEntry(String),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
