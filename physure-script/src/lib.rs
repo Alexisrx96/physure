@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod decorators;
+pub mod inspect;
 pub mod lexer;
 pub mod parser;
 pub mod resolver;
