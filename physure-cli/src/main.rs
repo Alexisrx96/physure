@@ -659,6 +659,11 @@ fn main() {
         return;
     }
 
+    if args[1] == "debug" {
+        debug::run_debug(&args);
+        return;
+    }
+
     if handle_transpile(&args) {
         return;
     }
