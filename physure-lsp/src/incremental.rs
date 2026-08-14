@@ -236,12 +236,38 @@ fn collect_template_reads(text: &str, locals: &HashSet<String>, out: &mut HashSe
     }
 }
 
+/// Returns a clone of `stmt` with every FunctionDefNode/While `body_lines` field cleared, so
+/// statement equality is insensitive to line-number shifts caused by edits elsewhere in the
+/// document -- a byte-identical function or while statement shouldn't register as "changed"
+/// just because something above it in the file moved it to a different line. `Statement`
+/// itself carries no line info (that lives out-of-band in `Program.lines`/`DocState.lines`),
+/// but `FunctionDefNode.body_lines` and `Statement::While`'s `body_lines` do, and recurse into
+/// nested bodies too (a nested FunctionDef/While inside a function body has its own).
+fn normalize_lines(stmt: &Statement) -> Statement {
+    match stmt {
+        Statement::FunctionDef(node) => {
+            let mut node = node.clone();
+            node.body_lines = Vec::new();
+            node.body_stmts = node.body_stmts.iter().map(normalize_lines).collect();
+            Statement::FunctionDef(node)
+        }
+        Statement::While { cond, body, .. } => Statement::While {
+            cond: cond.clone(),
+            body: body.iter().map(normalize_lines).collect(),
+            body_lines: Vec::new(),
+        },
+        other => other.clone(),
+    }
+}
+
 /// Longest common prefix length, then longest common suffix length (not overlapping the
 /// prefix), by structural equality. Everything between the two matched regions -- on the old
 /// side and the new side independently, since insertions/deletions change list length -- is
 /// the changed span (spec §3 step 2). O(n), safe in the over-inclusive direction for any edit
 /// this doesn't perfectly isolate (e.g. a whole statement moving from top to bottom).
 fn diff_bounds(old: &[Statement], new: &[Statement]) -> (usize, usize) {
+    let old: Vec<Statement> = old.iter().map(normalize_lines).collect();
+    let new: Vec<Statement> = new.iter().map(normalize_lines).collect();
     let max_prefix = old.len().min(new.len());
     let mut prefix = 0;
     while prefix < max_prefix && old[prefix] == new[prefix] {
@@ -381,5 +407,15 @@ mod tests {
         let old: Vec<Statement> = Vec::new();
         let new = stmts("a = 1\nb = 2");
         assert_eq!(diff_bounds(&old, &new), (0, 0));
+    }
+
+    #[test]
+    fn diff_bounds_ignores_line_number_shifts_in_function_bodies() {
+        let old = stmts("fn f(x) = x + 1\nresult = f(2)");
+        let new = stmts("extra = 0\nfn f(x) = x + 1\nresult = f(2)");
+        // The function and the call site are byte-identical content, just shifted down by
+        // one line by the inserted statement above them -- diff_bounds must still recognize
+        // them as an unchanged suffix instead of treating the line-number shift as a change.
+        assert_eq!(diff_bounds(&old, &new), (0, 2));
     }
 }
