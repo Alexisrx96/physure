@@ -284,10 +284,11 @@ fn diff_bounds(old: &[Statement], new: &[Statement]) -> (usize, usize) {
 use std::collections::HashMap;
 
 /// Result of diffing an old statement list against a new one: which new-list indices need
-/// re-running, the common-prefix length (statements before it can never be dirty by
-/// construction -- everything they read resolves within the unchanged prefix), and every
-/// name touched by the changed span on either side (needed to invalidate stale `env` entries
-/// before re-running -- see `apply_change`).
+/// re-running, the common-prefix length (content-wise, nothing in it changed -- but a
+/// statement here can still end up dirty, e.g. a FunctionDef whose body reads a name that
+/// changed later in the file, since its reads resolve at call time, not definition time), and
+/// every name touched by the changed span on either side (needed to invalidate stale `env`
+/// entries before re-running -- see `apply_change`).
 pub struct DirtyAnalysis {
     pub dirty: HashSet<usize>,
     pub prefix: usize,
@@ -312,19 +313,22 @@ pub fn compute_dirty(old: &[Statement], new: &[Statement]) -> DirtyAnalysis {
     let mut last_writer: HashMap<String, usize> = HashMap::new();
 
     for (i, d) in deps.iter().enumerate() {
-        // Statements before `prefix` are unchanged content whose reads resolve entirely
-        // within the equally-unchanged prefix -- never dirty, regardless of a same-named
-        // write appearing later in the changed span.
-        if i >= prefix {
-            let in_changed_span = i < new_mid_end;
-            let touches = d.reads.iter().any(|n| touched_names.contains(n));
-            let depends_on_dirty = d
-                .reads
-                .iter()
-                .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
-            if in_changed_span || touches || depends_on_dirty {
-                dirty.insert(i);
-            }
+        // A prefix statement's own *content* can never be part of the changed span -- but
+        // unlike an ordinary assignment, a FunctionDef's body is evaluated lazily at call
+        // time, not at the point the FunctionDef statement itself runs, so it can legitimately
+        // read a name defined *later* in the file (as long as that name exists by the time the
+        // function is actually called). A prefix FunctionDef can therefore genuinely depend on
+        // something in the changed span, so only `in_changed_span` itself is restricted to
+        // i >= prefix -- `touches` and `depends_on_dirty` must still be checked for every
+        // statement, prefix included.
+        let in_changed_span = i >= prefix && i < new_mid_end;
+        let touches = d.reads.iter().any(|n| touched_names.contains(n));
+        let depends_on_dirty = d
+            .reads
+            .iter()
+            .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
+        if in_changed_span || touches || depends_on_dirty {
+            dirty.insert(i);
         }
         for name in &d.writes {
             last_writer.insert(name.clone(), i);
@@ -539,5 +543,17 @@ mod tests {
         let new = stmts("v = 2\nmsg = \"v is {v * 2}\"");
         let result = compute_dirty(&old, &new);
         assert_eq!(result.dirty, HashSet::from([0, 1]));
+    }
+
+    #[test]
+    fn a_prefix_function_def_still_dirties_when_it_reads_a_later_changed_global() {
+        // The function is textually unchanged (lands in the common prefix), but its body
+        // reads `g`, which is defined *after* it and gets edited. Because a function's free
+        // variables resolve at call time (not definition time), this must still propagate to
+        // the call site -- a naive "prefix is always safe" check would miss this.
+        let old = stmts("fn compute(m) = m * g\ng = 9.8\nresult = compute(2.0)");
+        let new = stmts("fn compute(m) = m * g\ng = 10.0\nresult = compute(2.0)");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([0, 1, 2]));
     }
 }
