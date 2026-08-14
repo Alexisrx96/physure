@@ -988,6 +988,12 @@ impl PhsInterpreter {
         Ok(None)
     }
 
+    /// `call_site_line` is always `0` here -- `Expr` carries no line numbers (only `Statement`
+    /// does), and this is the only call path `Expr::FunctionCall` reaches, so there is no real
+    /// line to pass. This is a known, accepted v1 limitation, not a bug: it means
+    /// `StackFrame::call_site_line` (and therefore the CLI debugger's "called from line N" and
+    /// `backtrace` output) always reads `0` for every call, for every debug session, today.
+    /// Expression-level call-site precision is out of scope for LAB-READY.
     pub fn call_function_node(
         &self,
         func: &crate::ast::FunctionDefNode,
