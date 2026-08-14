@@ -197,7 +197,7 @@ pub struct PhsInterpreter {
     /// means deep-cloning every embedded `Expr` AST in every `Conditional` breakpoint each time.
     /// Cloning an `Arc` is a refcount bump; the `Vec` itself is only ever cloned once, inside
     /// `add_breakpoint`, when a new breakpoint is actually added (copy-on-write).
-    breakpoints: Arc<Mutex<std::sync::Arc<Vec<crate::debug::Breakpoint>>>>,
+    breakpoints: Arc<Mutex<Arc<Vec<crate::debug::Breakpoint>>>>,
     step_mode: Arc<Mutex<Option<StepMode>>>,
 }
 
@@ -268,7 +268,7 @@ impl PhsInterpreter {
             dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
             debug_hook: None,
             call_stack: Arc::new(Mutex::new(Vec::new())),
-            breakpoints: Arc::new(Mutex::new(std::sync::Arc::new(Vec::new()))),
+            breakpoints: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             step_mode: Arc::new(Mutex::new(None)),
         }
     }
@@ -402,7 +402,7 @@ impl PhsInterpreter {
         let mut guard = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner());
         let mut updated = (**guard).clone();
         updated.push(bp);
-        *guard = std::sync::Arc::new(updated);
+        *guard = Arc::new(updated);
     }
 
     fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
