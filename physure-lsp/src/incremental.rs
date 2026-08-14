@@ -327,7 +327,19 @@ pub fn compute_dirty(old: &[Statement], new: &[Statement]) -> DirtyAnalysis {
             .reads
             .iter()
             .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
-        if in_changed_span || touches || depends_on_dirty {
+        // A write-write ordering dependency, not a read-write one: if this statement writes a
+        // name whose previous writer (earlier in the file) is dirty, this statement must also
+        // rerun -- not because its own output would differ, but because its role is "the write
+        // that determines env[name] going forward from here." Skipping it would let the earlier
+        // dirty write's value leak through past the point in the file where it should have been
+        // overwritten again. (E.g. `x = 1\n...\nx = 2`: editing the first `x` must also rerun
+        // the second `x = 2`, even though `x = 2` reads nothing and its own output never
+        // changes, purely so the final env value for `x` ends up right.)
+        let rewrites_dirty_name = d
+            .writes
+            .iter()
+            .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
+        if in_changed_span || touches || depends_on_dirty || rewrites_dirty_name {
             dirty.insert(i);
         }
         for name in &d.writes {
@@ -659,13 +671,15 @@ mod tests {
     #[test]
     fn editing_the_first_of_two_writes_reruns_only_correctly_scoped_dependents() {
         // Roadmap-mandated rebinding-correctness test: x written twice, y and z read
-        // in between/after. Editing the *first* x must not touch the second write (x = 2,
-        // a fresh write reading nothing) but must touch both the direct and transitive
-        // readers of the first write.
+        // in between/after. Editing the *first* x must touch its direct and transitive
+        // readers (y, z) -- and, per the write-write ordering rule, must ALSO touch the
+        // *second* write (x = 2), even though its own content and output are unaffected:
+        // without rerunning it, the first write's edited value would leak through past
+        // the point in the file where the second write should have overwritten it again.
         let old = stmts("x = 1\ny = x\nx = 2\nz = y");
         let new = stmts("x = 5\ny = x\nx = 2\nz = y");
         let result = compute_dirty(&old, &new);
-        assert_eq!(result.dirty, HashSet::from([0, 1, 3]));
+        assert_eq!(result.dirty, HashSet::from([0, 1, 2, 3]));
     }
 
     #[test]
@@ -807,5 +821,21 @@ mod tests {
         let (state, _) = run(Some(state), "y = 1");
         assert!(state.interp.env.get("x").is_none(), "old name must be invalidated");
         assert_eq!(state.interp.env.get("y").unwrap().to_string(), "1.0");
+    }
+
+    #[test]
+    fn editing_the_first_of_two_writes_to_a_name_still_lets_the_second_write_win() {
+        // The write-write ordering case: editing the FIRST of two writes to `x` must not let
+        // its new value leak past the SECOND, unrelated write to the same name -- a full
+        // re-evaluation of the new script would still end with x = 2 (the last write wins),
+        // not x = 5 (the first, edited write's value).
+        let (state, _) = run(None, "x = 1\ny = x\nx = 2\nz = y");
+        assert_eq!(state.interp.env.get("x").unwrap().to_string(), "2.0");
+
+        let (state, diagnostics) = run(Some(state), "x = 5\ny = x\nx = 2\nz = y");
+        assert!(diagnostics.is_empty());
+        assert_eq!(state.interp.env.get("x").unwrap().to_string(), "2.0", "the second write must still win");
+        assert_eq!(state.interp.env.get("y").unwrap().to_string(), "5.0");
+        assert_eq!(state.interp.env.get("z").unwrap().to_string(), "5.0");
     }
 }
