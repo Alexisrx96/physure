@@ -52,7 +52,6 @@ pub fn parse_command(line: &str) -> DebuggerCommand {
 pub enum BreakpointSpec {
     Line(usize),
     Conditional(usize, String),
-    FunctionEntry(String),
 }
 
 /// Parses one `--break` flag value: `"42"` -> a line breakpoint, `"42:v > 100 m/s"` -> a
@@ -249,7 +248,6 @@ pub fn run_debug(args: &[String]) {
                             _ => eprintln!("warning: could not parse breakpoint condition '{cond_src}'"),
                         }
                     }
-                    BreakpointSpec::FunctionEntry(_) => unreachable!("parse_break_flag never returns FunctionEntry"),
                 }
             }
             i += 2;
