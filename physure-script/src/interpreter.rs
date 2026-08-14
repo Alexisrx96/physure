@@ -186,10 +186,11 @@ pub struct PhsInterpreter {
     /// `Arc<Mutex<..>>`, not `RefCell`: Track B's `for`-expression and `parallel_map` rayon
     /// paths require `&PhsInterpreter: Send + Sync` at compile time regardless of whether a
     /// hook is set at runtime -- `RefCell` would break both of those already-shipped parallel
-    /// paths. The mutex is safe today because a debugging session only exercises sequential
-    /// execution paths in practice; `parallel_map`'s rayon path does not yet check
-    /// `debug_hook` and would corrupt this stack if used concurrently with an active hook --
-    /// closing that gap is planned as a later Integration task, not yet implemented.
+    /// paths. Both of those rayon entry points check `debug_hook_is_set()` before choosing the
+    /// parallel branch and fall back to plain sequential execution whenever a hook is attached
+    /// (see `builtins.rs`'s `parallel_map` arm and this file's `Expr::ForExpr` arm), so this
+    /// mutex is never contended by more than one thread in practice -- a debugging session only
+    /// ever exercises sequential execution paths.
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
     breakpoints: Arc<Mutex<Vec<crate::debug::Breakpoint>>>,
     step_mode: Arc<Mutex<Option<StepMode>>>,
