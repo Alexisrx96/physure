@@ -272,6 +272,15 @@ impl PhsInterpreter {
         Self::default()
     }
 
+    /// `PhsInterpreter` derives `Clone`, and `call_stack`/`breakpoints`/`step_mode` are
+    /// `Arc<Mutex<..>>` -- every clone shares the *same* underlying call stack, breakpoint list,
+    /// and step state, not an independent copy. `physure-script/src/function.rs`'s
+    /// `PhyFunction::deriv`/`integral`/`solve`/`compose` already clone `self.interpreter` freely.
+    /// No current binding (Python/WASM/Java) attaches a debug hook, so this is dormant today --
+    /// but an embedder that builds a hook-attached interpreter, derives a `PhyFunction` from it,
+    /// and calls the original and the derivative concurrently on separate threads would have
+    /// both share one call stack, corrupting what a hook sees. Don't attach a debug hook to an
+    /// interpreter that will be cloned and used concurrently across threads.
     pub fn with_debug_hook(resolver: Arc<dyn ModuleResolver>, hook: Arc<dyn DebugHook>) -> Self {
         let mut interp = Self::new(resolver);
         interp.debug_hook = Some(hook);
