@@ -347,6 +347,20 @@ pub fn compute_dirty(old: &[Statement], new: &[Statement]) -> DirtyAnalysis {
         }
     }
 
+    // A name's write can be deleted rather than edited: the earlier write disappears, and the
+    // surviving (later) write of the same name can be structurally unchanged from before --
+    // matched into diff_bounds's common prefix/suffix, so nothing in the loop above ever marks
+    // it dirty. But `apply_change` still invalidates every touched_names entry from `env`
+    // unconditionally, so if nothing reruns to restore it, the name is silently left unset.
+    // Force the actual last writer of every touched name to rerun -- if there's no last writer
+    // at all (the name was genuinely deleted everywhere), there's nothing to force, and it
+    // correctly stays gone.
+    for name in &touched_names {
+        if let Some(&idx) = last_writer.get(name) {
+            dirty.insert(idx);
+        }
+    }
+
     DirtyAnalysis { dirty, prefix, touched_names }
 }
 
@@ -852,5 +866,19 @@ mod tests {
         assert_eq!(state.interp.env.get("x").unwrap().to_string(), "2.0", "the second write must still win");
         assert_eq!(state.interp.env.get("y").unwrap().to_string(), "5.0");
         assert_eq!(state.interp.env.get("z").unwrap().to_string(), "5.0");
+    }
+
+    #[test]
+    fn deleting_the_earlier_of_two_writes_still_lets_the_survivor_repopulate_the_name() {
+        // The earlier write is removed entirely, not edited -- the surviving write is
+        // structurally unchanged and would otherwise be matched into diff_bounds's common
+        // prefix/suffix, so nothing marks it dirty even though `env`'s value for the name gets
+        // wiped by touched_names invalidation. It must still rerun to restore the value.
+        let (state, _) = run(None, "x = 1\nx = 2");
+        assert_eq!(state.interp.env.get("x").unwrap().to_string(), "2.0");
+
+        let (state, diagnostics) = run(Some(state), "x = 2");
+        assert!(diagnostics.is_empty());
+        assert_eq!(state.interp.env.get("x").unwrap().to_string(), "2.0");
     }
 }
