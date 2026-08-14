@@ -759,8 +759,15 @@ async fn main() {
     // feeds forward into the next edit's incremental diff, so two edits (or an edit racing a
     // close) for the same document completing out of order could silently corrupt that state
     // -- resurrecting a closed document's entry, or overwriting a newer edit's result with an
-    // older one's. A single-user local language server has no real need for concurrent
-    // notification handling, so serializing everything is simpler and safer than per-URI locks.
+    // older one's. tower-lsp dispatches every request AND notification (hover, completion,
+    // did_change, did_close, ...) through the same buffer_unordered(concurrency_level) stream,
+    // so concurrency_level(1) serializes the whole server, not just edit-related notifications
+    // -- a hover/completion request now queues behind an in-flight on_change instead of running
+    // alongside it, and this also disables `$/cancelRequest` support (tower-lsp's own doc
+    // comment on concurrency_level(1) states this). A per-document lock around just on_change's
+    // critical section would avoid both costs, but is real added complexity for a single-user
+    // local language server with no real need for concurrent notification handling in the first
+    // place -- accepted here as the simpler, safer trade-off, not an oversight.
     Server::new(stdin, stdout, socket)
         .concurrency_level(1)
         .serve(service)
