@@ -441,6 +441,73 @@ fn execution_error_diagnostic(err_str: &str, line: usize, text: &str) -> Diagnos
     }
 }
 
+pub struct ChangeOutcome {
+    pub state: DocState,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
+    let pairs = match physure_script::parser::parse_phs_with_lines(text) {
+        Ok(p) => p,
+        Err(err) => {
+            // A syntactically invalid buffer can't be diffed meaningfully -- leave the last
+            // known-good state untouched so the next successful parse resumes incremental
+            // diffing from it rather than from scratch.
+            return ChangeOutcome {
+                state: prev.unwrap_or_else(DocState::empty),
+                diagnostics: vec![parse_error_diagnostic(&err.to_string(), text)],
+            };
+        }
+    };
+    let new_lines: Vec<usize> = pairs.iter().map(|(l, _)| *l).collect();
+    let new_statements: Vec<Statement> = pairs.into_iter().map(|(_, s)| s).collect();
+
+    let mut state = prev.unwrap_or_else(DocState::empty);
+    let old_statements = std::mem::take(&mut state.statements);
+    let old_diagnostics = std::mem::take(&mut state.diagnostics);
+
+    let DirtyAnalysis { dirty, prefix, touched_names } =
+        compute_dirty(&old_statements, &new_statements);
+    let len_diff = new_statements.len() as isize - old_statements.len() as isize;
+
+    // Non-dirty statements keep their cached diagnostic, remapped from its old index (the
+    // suffix region can be at a different index than before if the changed span's length
+    // differs -- an insertion or deletion). Dirty slots get filled in by the run loop below.
+    let mut diagnostics_by_stmt: Vec<Option<Diagnostic>> = Vec::with_capacity(new_statements.len());
+    for i in 0..new_statements.len() {
+        if dirty.contains(&i) {
+            diagnostics_by_stmt.push(None);
+        } else {
+            let old_i = if i < prefix { i } else { (i as isize - len_diff) as usize };
+            diagnostics_by_stmt.push(old_diagnostics.get(old_i).cloned().flatten());
+        }
+    }
+
+    // §4.2: invalidate every name either side of the changed span used to write, once, up
+    // front -- subsumes per-statement invalidation and correctly handles a renamed write too.
+    for name in &touched_names {
+        state.interp.env.remove(name);
+    }
+
+    for (i, stmt) in new_statements.iter().enumerate() {
+        if !dirty.contains(&i) {
+            continue;
+        }
+        let line = new_lines.get(i).copied().unwrap_or(0);
+        diagnostics_by_stmt[i] = match state.interp.run_statement(stmt) {
+            Ok(_) => None,
+            Err(e) => Some(execution_error_diagnostic(&e.to_string(), line, text)),
+        };
+    }
+
+    let final_diagnostics: Vec<Diagnostic> = diagnostics_by_stmt.iter().flatten().cloned().collect();
+    state.statements = new_statements;
+    state.lines = new_lines;
+    state.diagnostics = diagnostics_by_stmt;
+
+    ChangeOutcome { state, diagnostics: final_diagnostics }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,5 +741,71 @@ mod tests {
         assert!(!cleaned.contains("-->"));
         assert!(cleaned.contains("Ambiguous 's' in the quantity literal `9.81 m / s ^ 2`"));
         assert!(cleaned.contains("Write `(9.81 m) / s ^ 2`"));
+    }
+
+    fn run(prev: Option<DocState>, text: &str) -> (DocState, Vec<Diagnostic>) {
+        let outcome = apply_change(prev, text);
+        (outcome.state, outcome.diagnostics)
+    }
+
+    #[test]
+    fn first_open_with_valid_text_runs_every_statement_and_reports_no_errors() {
+        let (state, diagnostics) = run(None, "a = 1\nb = a + 1");
+        assert!(diagnostics.is_empty());
+        assert_eq!(state.interp.env.get("b").unwrap().to_string(), "2.0");
+    }
+
+    #[test]
+    fn first_open_with_a_parse_error_reports_one_diagnostic_and_keeps_empty_state() {
+        let (state, diagnostics) = run(None, "a = ");
+        assert_eq!(diagnostics.len(), 1);
+        assert!(state.statements.is_empty());
+    }
+
+    #[test]
+    fn a_later_parse_error_leaves_the_previous_good_state_untouched() {
+        let (state, _) = run(None, "a = 1");
+        assert_eq!(state.interp.env.get("a").unwrap().to_string(), "1.0");
+
+        let (state, diagnostics) = run(Some(state), "a = ");
+        assert_eq!(diagnostics.len(), 1);
+        // Untouched: still has the old value and the old (valid) statement list.
+        assert_eq!(state.interp.env.get("a").unwrap().to_string(), "1.0");
+        assert_eq!(state.statements.len(), 1);
+    }
+
+    #[test]
+    fn editing_one_statement_only_recomputes_its_own_value() {
+        let (state, _) = run(None, "a = 1\nb = 2\nc = 3");
+        let (state, diagnostics) = run(Some(state), "a = 1\nb = 99\nc = 3");
+        assert!(diagnostics.is_empty());
+        assert_eq!(state.interp.env.get("b").unwrap().to_string(), "99.0");
+        assert_eq!(state.interp.env.get("a").unwrap().to_string(), "1.0");
+        assert_eq!(state.interp.env.get("c").unwrap().to_string(), "3.0");
+    }
+
+    #[test]
+    fn a_rewrite_that_starts_failing_removes_its_stale_value_for_downstream_readers() {
+        // §4.2: x was written successfully, then edited into a form that now errors. A
+        // downstream reader of x must not see the old value.
+        let (state, diagnostics) = run(None, "x = 1\ny = x");
+        assert!(diagnostics.is_empty());
+        assert_eq!(state.interp.env.get("y").unwrap().to_string(), "1.0");
+
+        let (state, diagnostics) = run(Some(state), "x = undefined_fn()\ny = x");
+        assert!(!diagnostics.is_empty(), "x's statement must report its new error");
+        assert!(state.interp.env.get("x").is_none(), "stale x must not survive the failed rewrite");
+    }
+
+    #[test]
+    fn renaming_which_variable_a_statement_writes_invalidates_the_old_name() {
+        // §4.2's renamed-write case: x = 1 edited to y = 1 at the same position. The old x
+        // has no statement left to invalidate it except touched_names.
+        let (state, _) = run(None, "x = 1");
+        assert!(state.interp.env.get("x").is_some());
+
+        let (state, _) = run(Some(state), "y = 1");
+        assert!(state.interp.env.get("x").is_none(), "old name must be invalidated");
+        assert_eq!(state.interp.env.get("y").unwrap().to_string(), "1.0");
     }
 }
