@@ -462,20 +462,37 @@ Tracks are independent — check off in any order, on any timeline.
   - [x] `parallel_map(fn, vector)` builtin with fail-fast error semantics.
   - [x] Determinism test (parallel output == sequential output) and mid-batch-failure test.
 
-- [ ] **Track C: Breakpoints**
-  - [ ] `DebugHook` trait + `Vec<StackFrame>` call-stack tracking wired into the interpreter's
+- [x] **Track C: Breakpoints** — see
+      [`docs/superpowers/specs/2026-08-13-track-c-breakpoints-design.md`](superpowers/specs/2026-08-13-track-c-breakpoints-design.md)
+      and [`docs/superpowers/plans/2026-08-13-track-c-breakpoints.md`](superpowers/plans/2026-08-13-track-c-breakpoints.md).
+      Three deviations from this section's original sketch, all found during implementation:
+      - A prerequisite not in the original sketch, added during brainstorming: source-line
+        tracking on `Program`/`FunctionDefNode`/`Statement::While` (none existed before this
+        track), added as parallel `Vec<usize>` fields rather than wrapping every `Statement`
+        variant, to keep the change additive.
+      - Two `Inspection` fields deviate from the original sketch: `dimension` exposes
+        `RationalUnit.dimensions` (registered base-unit symbols) directly rather than the
+        unused `DimVector`/`SI_ORDER` scheme this section named; `prefix` is best-effort,
+        resolvable only for a single non-compound unit symbol.
+      - Found during the integration task's own review of Track B's parallel paths: the
+        sequential-fallback rule applies to *both* rayon entry points Track B added —
+        `parallel_map` and the `for`-expression's parallel branch above `parallel_threshold` —
+        not just `parallel_map` as this section originally scoped it, since both share the same
+        `call_stack`-corruption risk under concurrent debug checkpoints.
+  - [x] `DebugHook` trait + `Vec<StackFrame>` call-stack tracking wired into the interpreter's
         statement/loop-iteration dispatch.
-  - [ ] Line, conditional, and function-entry breakpoints.
-  - [ ] `Inspection` struct: measure, `ValueKind`, `ScopeKind` (Global vs. Local + owning frame),
-        unit, prefix (reverse-looked-up via `UnitRegistry`), dimension (`DimVector`/`SI_ORDER`),
-        uncertainty, and per-kind `ValueDetail` (function params/units, equation lhs/rhs, recursive
-        Vector/Matrix elements).
-  - [ ] `StackFrame::declared` computed statically from each `FunctionDefNode` (params ∪ names
+  - [x] Line, conditional, and function-entry breakpoints.
+  - [x] `Inspection` struct: measure, `ValueKind`, `ScopeKind` (Global vs. Local + owning frame),
+        unit, prefix (reverse-looked-up via `UnitRegistry::split_prefix`), dimension
+        (`RationalUnit.dimensions`), uncertainty, and per-kind `ValueDetail` (function
+        params/units, equation lhs/rhs, recursive Vector/Matrix elements).
+  - [x] `StackFrame::declared` computed statically from each `FunctionDefNode` (params ∪ names
         assigned in `body_stmts`) when a call frame is pushed.
-  - [ ] `phs debug script.phs` CLI debugger: `print`, `inspect`, `locals`, `globals`, `backtrace`,
-        `break`/`break fn`, step/next/finish/continue.
-  - [ ] `parallel_map` sequential-fallback rule enforced whenever a breakpoint is set inside it.
-  - [ ] Scripted CLI-debugger test (set breakpoint, run, assert paused at right line, assert
+  - [x] `phs debug script.phs` CLI debugger: `print`, `inspect`, `locals`, `globals`,
+        `backtrace`, `break`/`break fn`, step/next/finish/continue.
+  - [x] `parallel_map` and `for`-expression sequential-fallback rule enforced whenever a debug
+        hook is attached, not only when a breakpoint is set inside the parallel region.
+  - [x] Scripted CLI-debugger test (set breakpoint, run, assert paused at right line, assert
         `inspect` output decomposes measure/unit/prefix/dimension/uncertainty correctly).
   - [ ] *(Stretch, non-blocking)* DAP adapter over the same `DebugHook`/`Inspection` types.
 

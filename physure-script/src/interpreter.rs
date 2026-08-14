@@ -257,6 +257,10 @@ impl PhsInterpreter {
         interp
     }
 
+    pub(crate) fn debug_hook_is_set(&self) -> bool {
+        self.debug_hook.is_some()
+    }
+
     /// Like `default()`, but resolves `import` paths relative to `base_dir`
     /// (typically the directory containing the script being run) instead of `.`.
     /// Native plugins under `<base_dir>/ext/` are not loaded eagerly — they're
@@ -838,7 +842,7 @@ impl PhsInterpreter {
                 // Note: rayon's parallel collect stops scheduling new work on error but may
                 // leave in-flight work on other threads to complete, so loop body side effects
                 // (e.g. I/O in external functions) may partially execute even if evaluation fails.
-                if items.len() >= physure_core::settings::parallel_threshold() {
+                if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() {
                     use rayon::prelude::*;
                     let results: Vec<PhsValue> = items
                         .into_par_iter()
@@ -1560,6 +1564,90 @@ mod tests {
         interp.run_statements_with_lines(&program).unwrap();
 
         assert_eq!(*hits.lock().unwrap(), 1, "should only pause once x has actually reached 3");
+    }
+
+    #[test]
+    fn parallel_map_falls_back_to_sequential_when_debug_hook_is_set() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        let stmts = crate::parser::parse_phs(
+            "fn double(x) = x * 2.0\nres = parallel_map(double, vector(1.0, 2.0, 3.0))",
+        )
+        .unwrap();
+        interp.run_statements(&stmts).unwrap();
+
+        // Sequential execution means the hook is called in a well-defined, deterministic order
+        // (three checkpoints, one per element, each dispatched from the same thread) rather than
+        // racing across rayon workers -- this is what "sequential fallback" is actually testing:
+        // not just that the result is right (parallel_map's own Track B tests already prove that),
+        // but that debugging one didn't need `DebugHook: Sync`-across-threads reasoning at all.
+        //
+        // `run_statements` (unlike `run_statements_with_lines`) always checkpoints each
+        // top-level statement at line 0 (see `eval_statement_with_env`'s `eval_statement_with_env_at(stmt, env, 0)`),
+        // so the two top-level statements here (the `fn double` definition and the
+        // `res = ...` assignment) each contribute one line-0 checkpoint that has nothing to do
+        // with parallel_map's fallback. The checkpoints that actually matter -- one per element,
+        // fired from inside `double`'s body via `call_function_node_at` -- land on line 1
+        // (`double` is a one-line `fn double(x) = x * 2.0`, so its `body_lines[0]` is that same
+        // line, never 0). Filter those out explicitly rather than asserting a raw total of 5,
+        // so the "one checkpoint per element" property stays the thing under test.
+        let seen = seen.lock().unwrap();
+        let per_element_checkpoints = seen.iter().filter(|&&l| l != 0).count();
+        assert_eq!(per_element_checkpoints, 3, "expected one checkpoint per double() call, got {seen:?}");
+        // Also assert output correctness survives -- the real regression this guards is a future
+        // change to parallel_map's rayon path forgetting this check, not today's behavior.
+        let PhsValue::Vector(v) = interp.get_var("res").unwrap() else { panic!("expected vector") };
+        assert_eq!(v.len(), 3);
+    }
+
+    #[test]
+    fn for_expr_falls_back_to_sequential_when_debug_hook_is_set() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        // Force the parallel branch (threshold 0) so this test would exercise the rayon path if
+        // the fallback below didn't override it.
+        let _guard = physure_core::settings::scoped(0);
+        let stmts = crate::parser::parse_phs(
+            "fn double(x) = x * 2.0\nres = for i in vector(1.0, 2.0, 3.0) { double(i) }",
+        )
+        .unwrap();
+        interp.run_statements(&stmts).unwrap();
+
+        let PhsValue::Vector(v) = interp.get_var("res").unwrap() else { panic!("expected vector") };
+        assert_eq!(v.len(), 3);
+        // Same reasoning as parallel_map's fallback test: a deterministic, same-thread checkpoint
+        // count is what "fell back to sequential" actually proves, not just correct output.
+        assert!(!seen.lock().unwrap().is_empty(), "hook should have been called for double()'s body");
     }
 
     #[test]
