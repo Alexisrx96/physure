@@ -10,7 +10,7 @@ use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
 
 use crate::ast::{BinaryOp, Expr, Program, Statement};
-use crate::debug::{DebugAction, DebugContext, DebugHook, StackFrame};
+use crate::debug::{DebugContext, DebugHook, StackFrame};
 use crate::resolver::{ModuleResolver, FsModuleResolver};
 use crate::symbolic::Node;
 use crate::PhsValue;
@@ -186,15 +186,30 @@ pub struct PhsInterpreter {
     /// `Arc<Mutex<..>>`, not `RefCell`: Track B's `for`-expression and `parallel_map` rayon
     /// paths require `&PhsInterpreter: Send + Sync` at compile time regardless of whether a
     /// hook is set at runtime -- `RefCell` would break both of those already-shipped parallel
-    /// paths. The mutex is never actually contended once debugging is active because
-    /// `parallel_map` falls back to sequential execution whenever `debug_hook.is_some()`
-    /// (Integration task).
+    /// paths. The mutex is safe today because a debugging session only exercises sequential
+    /// execution paths in practice; `parallel_map`'s rayon path does not yet check
+    /// `debug_hook` and would corrupt this stack if used concurrently with an active hook --
+    /// closing that gap is planned as a later Integration task, not yet implemented.
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
 }
 
 impl Default for PhsInterpreter {
     fn default() -> Self {
         Self::new(Arc::new(FsModuleResolver::default()))
+    }
+}
+
+/// RAII pop for the `StackFrame` `call_function_node_at` pushes. Constructed right after the
+/// push, held as a local in `call_function_node_at`; its `Drop` runs on every exit from that
+/// point on -- normal return, an early `break`, or `?` propagating an error out of the body
+/// loop -- so the frame can never be left on `call_stack` past the call that pushed it.
+struct CallStackGuard {
+    call_stack: Arc<Mutex<Vec<StackFrame>>>,
+}
+
+impl Drop for CallStackGuard {
+    fn drop(&mut self) {
+        self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).pop();
     }
 }
 
@@ -316,6 +331,15 @@ impl PhsInterpreter {
 
     pub fn env(&self) -> &HashMap<String, PhsValue> {
         &self.env
+    }
+
+    /// Test-only: `call_stack` stays private (not part of the public debugger API C1 defines --
+    /// a debugger observes it indirectly, through `DebugContext::call_stack` in `on_statement`),
+    /// but a leak regression test needs to assert its depth from outside any hook callback,
+    /// after an error has already propagated back out. Compiled out of production builds.
+    #[cfg(test)]
+    fn call_stack_depth(&self) -> usize {
+        self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn get_fn_params(&self, name: &str) -> Option<Vec<String>> {
@@ -883,10 +907,20 @@ impl PhsInterpreter {
         }
         self.check_requires(func, &local_env)?;
 
-        if self.debug_hook.is_some() {
+        // `_stack_guard` pops the pushed `StackFrame` on every exit path from this point on --
+        // normal completion, an early `break` from a `Return`/`GuardReturn` arm, or `?` error
+        // propagation from anywhere in the body loop below (undefined function, contract
+        // violation, unit mismatch, ...). Without this, a mid-body error would leave the frame
+        // on `call_stack` forever: `PhsInterpreter` is long-lived (REPL, future DAP sessions),
+        // and every enclosing call in a chain hits the same unguarded early return, so a deep
+        // call stack would leak one frame per active call on every error.
+        let _stack_guard = if self.debug_hook.is_some() {
             self.call_stack.lock().unwrap_or_else(|e| e.into_inner())
                 .push(StackFrame::new(func, call_site_line));
-        }
+            Some(CallStackGuard { call_stack: self.call_stack.clone() })
+        } else {
+            None
+        };
 
         let mut last_val = PhsValue::None;
         for (i, stmt) in func.body_stmts.iter().enumerate() {
@@ -909,10 +943,6 @@ impl PhsInterpreter {
                     last_val = self.eval_statement_with_env_at(stmt, &mut local_env, line)?;
                 }
             }
-        }
-
-        if self.debug_hook.is_some() {
-            self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).pop();
         }
 
         self.check_ensures(func, &local_env, &last_val)?;
@@ -1262,6 +1292,46 @@ mod tests {
         assert!(lines.contains(&4), "top-level call not recorded: {lines:?}");
         assert!(lines.contains(&2), "first body statement not recorded: {lines:?}");
         assert!(lines.contains(&3), "function's explicit return statement not recorded: {lines:?}");
+    }
+
+    #[test]
+    fn call_stack_pops_frame_when_body_errors_mid_execution() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::Arc;
+
+        struct NoopHook;
+        impl DebugHook for NoopHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                DebugAction::Continue
+            }
+        }
+
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            Arc::new(NoopHook),
+        );
+        // `boom`'s body calls an undefined function partway through, which errors out of
+        // `eval_statement_with_env_at` via `?` while `call_function_node_at` is mid-loop over
+        // `boom`'s body -- exactly the path that used to leave `boom`'s `StackFrame` on
+        // `call_stack` forever, since the old unguarded `pop()` after the loop was never
+        // reached once the `?` in the `_` arm returned early.
+        let program = crate::parser::parse_phs(
+            "fn boom(x) =\n  y = undefined_fn(x)\n  return y\nboom(3)\n",
+        )
+        .unwrap();
+        let err = interp.run_statements_with_lines(&program);
+        assert!(err.is_err(), "expected the undefined-function call inside boom's body to error");
+        assert_eq!(
+            interp.call_stack_depth(),
+            0,
+            "boom's StackFrame leaked on call_stack after the error propagated out"
+        );
+
+        // Run an unrelated, successful statement afterward: if a frame had leaked, subsequent
+        // calls would push on top of the stale one, so any `DebugContext::call_stack` a hook
+        // observes from here on would show a phantom `boom` frame beneath the real ones.
+        interp.eval_str("fn ok(x) = x + 1\nok(1)").unwrap();
+        assert_eq!(interp.call_stack_depth(), 0, "call_stack not clean after a later, unrelated successful call");
     }
 
     #[test]
