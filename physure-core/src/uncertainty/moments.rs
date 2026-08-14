@@ -18,7 +18,8 @@
 //!
 //! See R. Barlow, *Asymmetric Errors*, PHYSTAT 2003, for the conventions.
 
-use super::lineage::Lineage;
+use super::lineage::{Lineage, fresh_id};
+use super::mode::{PropagationMode, propagation_mode};
 use super::shapes::ShapeKind;
 use super::trait_def::UncertaintyBackend;
 use crate::error::{PhysureError, PhysureResult};
@@ -109,6 +110,202 @@ pub fn max_skewness() -> f64 {
 /// ```
 pub fn sigmas_from_moments(variance: f64, third: f64) -> PhysureResult<(f64, f64)> {
     ShapeKind::DEFAULT.strategy().sigmas_from_moments(variance, third)
+}
+
+/// One noise source as seen from a derived value: how sensitive the value is to it, and the
+/// source's own intrinsic central moments.
+///
+/// The split is what makes the third moment cancel the way [`Lineage`]'s standard deviation
+/// already does. Sensitivities are signed and linear, so they can be merged per source the
+/// same way `Lineage` merges coefficients; the variance and third moment cannot be merged that
+/// way; they only make sense multiplied by the *square* and *cube* of the merged sensitivity.
+/// Folding `a^3 * mu_3` per operand instead of per source is what silently breaks `2x - x`:
+/// each occurrence of `x` folds its own `a^3`, giving `2^3*mu_3 + (-1)^3*mu_3 = 7*mu_3` for a
+/// value that is exactly `x` and should report `x`'s own `mu_3`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceMoments {
+    /// This source's contribution to the value's linear sensitivity — what `Lineage`'s
+    /// coefficient is, but kept separate from the moments below so the two can be merged with
+    /// different arithmetic.
+    pub sensitivity: f64,
+    /// The source's own variance, before the sensitivity is applied.
+    pub variance: f64,
+    /// The source's own third central moment, before the sensitivity is applied.
+    pub third: f64,
+}
+
+/// Provenance for an asymmetric measurement, the way [`Lineage`] is provenance for a symmetric
+/// one — except each term carries its source's intrinsic `(variance, third)` alongside the
+/// signed sensitivity, rather than a single pre-multiplied number.
+///
+/// Terms are kept sorted by id, like `Lineage`, so merging is a linear walk; a term whose
+/// sensitivity has cancelled to zero is dropped rather than kept at zero, so a fully cancelled
+/// lineage — `x - x` — comes out with no terms rather than one dead one.
+///
+/// Ids are minted from [`fresh_id`], the same counter `Lineage` uses. An id therefore names
+/// either a `Lineage` source or a `MomentLineage` source, never both, which is what lets a
+/// symmetric value promoted into the moments world ([`MomentLineage::from_lineage`]) keep its
+/// id and still cancel against itself later: there is no way for that id to collide with one a
+/// `MomentLineage` minted directly, and no ambiguity about which arithmetic a shared id implies.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MomentLineage {
+    terms: Vec<(u32, SourceMoments)>,
+}
+
+impl MomentLineage {
+    /// A value with no uncertainty at all.
+    pub fn exact() -> Self {
+        Self { terms: Vec::new() }
+    }
+
+    /// A newly measured asymmetric quantity, carrying its own variance and third moment.
+    /// Mints a fresh source id: measuring twice gives two independent measurements, exactly as
+    /// [`Lineage::measured`] does.
+    ///
+    /// A source with no variance and no third moment is exact, so it gets no id — minting one
+    /// would let two unrelated exact constants "cancel" against each other later.
+    pub fn measured(variance: f64, third: f64) -> Self {
+        Self::measured_with_id(fresh_id(), variance, third)
+    }
+
+    /// A measured quantity tied to a caller-supplied source id rather than a fresh one, the
+    /// moments analogue of [`Lineage::measured_with_id`].
+    pub fn measured_with_id(id: u32, variance: f64, third: f64) -> Self {
+        if variance == 0.0 && third == 0.0 {
+            return Self::exact();
+        }
+        Self { terms: vec![(id, SourceMoments { sensitivity: 1.0, variance, third })] }
+    }
+
+    /// Lifts a symmetric, lineage-tracked value into the moments world. `(id, c)` becomes
+    /// `(id, {sensitivity: c, variance: 1, third: 0})`: only `sensitivity^2 * variance` and
+    /// `sensitivity^3 * third` are ever read back out, so this reproduces the lineage's own
+    /// variance exactly (`c^2 * 1 == c^2`) and stays skew-free (`third` is 0) — while keeping
+    /// the ids, so a later reuse of the same source still cancels against this one.
+    pub fn from_lineage(l: &Lineage) -> Self {
+        Self {
+            terms: l
+                .terms()
+                .iter()
+                .map(|&(id, c)| (id, SourceMoments { sensitivity: c, variance: 1.0, third: 0.0 }))
+                .collect(),
+        }
+    }
+
+    /// Rebuilds a moments lineage from raw terms, sorting by id and dropping any term whose
+    /// sensitivity is zero — the invariants the rest of this type relies on.
+    pub fn from_terms(mut terms: Vec<(u32, SourceMoments)>) -> Self {
+        terms.sort_by_key(|t| t.0);
+        terms.retain(|t| t.1.sensitivity != 0.0);
+        Self { terms }
+    }
+
+    /// The terms, sorted by id.
+    pub fn terms(&self) -> &[(u32, SourceMoments)] {
+        &self.terms
+    }
+
+    /// `Σ sensitivity² * variance` over the sources — the variance this lineage represents.
+    pub fn variance(&self) -> f64 {
+        self.terms.iter().map(|(_, s)| s.sensitivity * s.sensitivity * s.variance).sum()
+    }
+
+    /// `Σ sensitivity³ * third` over the sources — the third central moment this lineage
+    /// represents. This is the sum a bare scalar accumulator cannot reproduce, because it needs
+    /// the merged, signed sensitivity of each source, not a per-operand contribution.
+    pub fn third(&self) -> f64 {
+        self.terms.iter().map(|(_, s)| s.sensitivity.powi(3) * s.third).sum()
+    }
+
+    /// The standard deviation this lineage represents.
+    pub fn std_dev(&self) -> f64 {
+        self.variance().sqrt()
+    }
+
+    /// Applies a single partial derivative, as for a one-argument function. The jacobian
+    /// multiplies every source's sensitivity directly, so it lands cubed in [`Self::third`] and
+    /// squared in [`Self::variance`] the next time either is read — which is why negating a
+    /// value flips the sign of its skew but not of its variance.
+    pub fn scale(&self, jacobian: f64) -> Self {
+        if jacobian == 0.0 {
+            return Self::exact();
+        }
+        Self {
+            terms: self
+                .terms
+                .iter()
+                .map(|&(id, s)| (id, SourceMoments { sensitivity: s.sensitivity * jacobian, ..s }))
+                .collect(),
+        }
+    }
+
+    /// Merges two moments lineages under the chain rule, the moments analogue of
+    /// [`Lineage::combine`].
+    ///
+    /// In `uncorrelated` mode every value is a fresh, independent measurement, mirroring
+    /// [`Lineage::combine`]'s own `combine_independent` arm: the variances and third moments are
+    /// folded through the jacobian powers first (`Σ j² V` and `Σ j³ μ₃`), and the result is one
+    /// freshly minted source carrying them — no id from either operand survives, so nothing
+    /// downstream can later cancel against them.
+    ///
+    /// In `correlated` mode, sensitivities are merged per source *first* — `ja * a(id) + jb *
+    /// b(id)`, exactly as `Lineage::combine` merges coefficients — and only then are the merged
+    /// sensitivities squared and cubed against the source's own `(variance, third)`. A shared id
+    /// names the same measurement on both sides, so its intrinsic moments must already agree;
+    /// that invariant is asserted in debug builds rather than silently trusted, since a
+    /// violation would mean two different sources had been given the same id upstream.
+    pub fn combine(a: &Self, ja: f64, b: &Self, jb: f64) -> Self {
+        if propagation_mode() == PropagationMode::Uncorrelated {
+            let variance = ja * ja * a.variance() + jb * jb * b.variance();
+            let third = ja.powi(3) * a.third() + jb.powi(3) * b.third();
+            return Self::measured(variance, third);
+        }
+
+        let (at, bt) = (a.terms(), b.terms());
+        let mut out: Vec<(u32, SourceMoments)> = Vec::with_capacity(at.len() + bt.len());
+        let (mut i, mut j) = (0, 0);
+
+        fn push(out: &mut Vec<(u32, SourceMoments)>, id: u32, s: SourceMoments) {
+            if s.sensitivity != 0.0 {
+                out.push((id, s));
+            }
+        }
+
+        while i < at.len() && j < bt.len() {
+            match at[i].0.cmp(&bt[j].0) {
+                std::cmp::Ordering::Less => {
+                    push(&mut out, at[i].0, SourceMoments { sensitivity: at[i].1.sensitivity * ja, ..at[i].1 });
+                    i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    push(&mut out, bt[j].0, SourceMoments { sensitivity: bt[j].1.sensitivity * jb, ..bt[j].1 });
+                    j += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    debug_assert_eq!(at[i].1.variance, bt[j].1.variance);
+                    debug_assert_eq!(at[i].1.third, bt[j].1.third);
+                    push(
+                        &mut out,
+                        at[i].0,
+                        SourceMoments {
+                            sensitivity: at[i].1.sensitivity * ja + bt[j].1.sensitivity * jb,
+                            ..at[i].1
+                        },
+                    );
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        for &(id, s) in &at[i..] {
+            push(&mut out, id, SourceMoments { sensitivity: s.sensitivity * ja, ..s });
+        }
+        for &(id, s) in &bt[j..] {
+            push(&mut out, id, SourceMoments { sensitivity: s.sensitivity * jb, ..s });
+        }
+
+        Self { terms: out }
+    }
 }
 
 /// A measured asymmetric value, held as the moments a propagation model needs.
@@ -325,5 +522,90 @@ mod tests {
         assert!((x.mode().unwrap() - 12.3).abs() < 1e-9);
         let (lo, hi) = x.sigmas().unwrap();
         assert!((lo - 0.4).abs() < 1e-9 && (hi - 0.5).abs() < 1e-9);
+    }
+
+    // -- MomentLineage -----------------------------------------------------------------
+
+    #[test]
+    fn same_source_reused_cancels_in_both_moments() {
+        // 2x - x == x: net sensitivity 1, so variance AND third both return to the source's own.
+        let x = MomentLineage::measured_with_id(7, 4.0, 2.5);
+        let two_x_minus_x = MomentLineage::combine(&x, 2.0, &x, -1.0);
+        assert!((two_x_minus_x.variance() - 4.0).abs() < 1e-12);
+        assert!((two_x_minus_x.third() - 2.5).abs() < 1e-12); // a scalar accumulator says 7*2.5
+    }
+
+    #[test]
+    fn x_minus_x_is_exact_and_prunes_the_source() {
+        let x = MomentLineage::measured_with_id(9, 4.0, 2.5);
+        let zero = MomentLineage::combine(&x, 1.0, &x, -1.0);
+        assert_eq!(zero.terms().len(), 0);
+        assert_eq!(zero.variance(), 0.0);
+        assert_eq!(zero.third(), 0.0);
+    }
+
+    #[test]
+    fn independent_sources_add_with_jacobian_powers() {
+        let a = MomentLineage::measured(1.0, 0.5); // fresh ids: independent
+        let b = MomentLineage::measured(2.0, -0.25);
+        let m = MomentLineage::combine(&a, 2.0, &b, -3.0);
+        assert!((m.variance() - (4.0 * 1.0 + 9.0 * 2.0)).abs() < 1e-12); // Σ a²V
+        assert!((m.third() - (8.0 * 0.5 + -27.0 * -0.25)).abs() < 1e-12); // Σ a³μ₃, signs kept
+    }
+
+    #[test]
+    fn scale_keeps_the_sign_in_the_third_power() {
+        let a = MomentLineage::measured(1.0, 0.5);
+        let neg = a.scale(-1.0);
+        assert!((neg.variance() - 1.0).abs() < 1e-12);
+        assert!((neg.third() + 0.5).abs() < 1e-12); // J³ flips it
+    }
+
+    #[test]
+    fn from_lineage_preserves_ids_and_variance() {
+        let l = Lineage::measured_with_id(3, 0.5); // one source, amplitude 0.5
+        let m = MomentLineage::from_lineage(&l);
+        assert_eq!(m.terms().len(), 1);
+        assert_eq!(m.terms()[0].0, 3);
+        assert!((m.variance() - 0.25).abs() < 1e-12); // matches l.std_dev()²
+        assert_eq!(m.third(), 0.0);
+    }
+
+    #[test]
+    fn uncorrelated_mode_collapses_like_lineage_does() {
+        // Mirror Lineage::combine_independent: no id bookkeeping survives.
+        let _guard = crate::uncertainty::mode::scoped(PropagationMode::Uncorrelated);
+        let x = MomentLineage::measured_with_id(7, 4.0, 2.5);
+        let m = MomentLineage::combine(&x, 2.0, &x, -1.0);
+        // Treated as independent: variance 4·4 + 1·4 = 20, third 8·2.5 − 1·2.5 = 17.5.
+        assert!((m.variance() - 20.0).abs() < 1e-12);
+        assert!((m.third() - 17.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cancellation_and_addition_hold_across_orders_of_magnitude() {
+        // Task 1 shipped a bug from comparing a computed float to a hardcoded literal with a
+        // strict `>`, wrong at most scales but invisible at 1.0. Guard against the same class of
+        // mistake here by exercising both the cancelling and additive paths well away from 1.0.
+        for scale in [1e-6, 1e-3, 1.0, 1e3, 1e6, 1e9] {
+            let x = MomentLineage::measured_with_id(42, 4.0 * scale, 2.5 * scale);
+            let two_x_minus_x = MomentLineage::combine(&x, 2.0, &x, -1.0);
+            assert!(
+                (two_x_minus_x.variance() - 4.0 * scale).abs() < 1e-9 * scale.max(1.0),
+                "variance mismatch at scale {scale}"
+            );
+            assert!(
+                (two_x_minus_x.third() - 2.5 * scale).abs() < 1e-9 * scale.max(1.0),
+                "third mismatch at scale {scale}"
+            );
+
+            let a = MomentLineage::measured(1.0 * scale, 0.5 * scale);
+            let b = MomentLineage::measured(2.0 * scale, -0.25 * scale);
+            let m = MomentLineage::combine(&a, 2.0, &b, -3.0);
+            assert!(
+                (m.variance() - (4.0 * scale + 18.0 * scale)).abs() < 1e-9 * scale.max(1.0),
+                "independent variance mismatch at scale {scale}"
+            );
+        }
     }
 }
