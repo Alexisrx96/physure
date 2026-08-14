@@ -18,7 +18,7 @@
 //!
 //! See R. Barlow, *Asymmetric Errors*, PHYSTAT 2003, for the conventions.
 
-use super::lineage::{Lineage, fresh_id};
+use super::lineage::{Lineage, fresh_id, reserve_id};
 use super::mode::{PropagationMode, propagation_mode};
 use super::shapes::ShapeKind;
 use super::trait_def::UncertaintyBackend;
@@ -171,6 +171,7 @@ impl MomentLineage {
     /// A measured quantity tied to a caller-supplied source id rather than a fresh one, the
     /// moments analogue of [`Lineage::measured_with_id`].
     pub fn measured_with_id(id: u32, variance: f64, third: f64) -> Self {
+        reserve_id(id);
         if variance == 0.0 && third == 0.0 {
             return Self::exact();
         }
@@ -192,12 +193,31 @@ impl MomentLineage {
         }
     }
 
-    /// Rebuilds a moments lineage from raw terms, sorting by id and dropping any term whose
-    /// sensitivity is zero — the invariants the rest of this type relies on.
+    /// Rebuilds a moments lineage from raw terms, restoring the invariants the rest of this
+    /// type relies on: sorted by id, one term per id, no dead or non-finite sensitivities.
+    /// Mirrors [`Lineage::from_terms`] exactly, including reserving the largest id seen so a
+    /// term that came from outside this counter — a round trip through another language, say
+    /// — can never be handed out again by [`fresh_id`].
     pub fn from_terms(mut terms: Vec<(u32, SourceMoments)>) -> Self {
+        if let Some(&(max_id, _)) = terms.iter().max_by_key(|&&(id, _)| id) {
+            reserve_id(max_id);
+        }
         terms.sort_by_key(|t| t.0);
-        terms.retain(|t| t.1.sensitivity != 0.0);
-        Self { terms }
+        let mut out: Vec<(u32, SourceMoments)> = Vec::with_capacity(terms.len());
+        for (id, s) in terms {
+            match out.last_mut() {
+                // A shared id is the same measurement seen twice, so its intrinsic moments
+                // must already agree — only the sensitivities add.
+                Some((last_id, last_s)) if *last_id == id => {
+                    debug_assert_eq!(last_s.variance, s.variance);
+                    debug_assert_eq!(last_s.third, s.third);
+                    last_s.sensitivity += s.sensitivity;
+                }
+                _ => out.push((id, s)),
+            }
+        }
+        out.retain(|t| t.1.sensitivity != 0.0 && t.1.sensitivity.is_finite());
+        Self { terms: out }
     }
 
     /// The terms, sorted by id.
@@ -206,37 +226,55 @@ impl MomentLineage {
     }
 
     /// `Σ sensitivity² * variance` over the sources — the variance this lineage represents.
+    ///
+    /// The empty case is spelled out rather than left to the fold, for the same reason
+    /// [`Lineage::std_dev`] spells it out: `impl Sum for f64` folds from `-0.0`, so a fully
+    /// cancelled lineage would otherwise report a variance of `-0.0` instead of `0.0`.
     pub fn variance(&self) -> f64 {
+        if self.terms.is_empty() {
+            return 0.0;
+        }
         self.terms.iter().map(|(_, s)| s.sensitivity * s.sensitivity * s.variance).sum()
     }
 
     /// `Σ sensitivity³ * third` over the sources — the third central moment this lineage
     /// represents. This is the sum a bare scalar accumulator cannot reproduce, because it needs
     /// the merged, signed sensitivity of each source, not a per-operand contribution.
+    ///
+    /// The empty case is spelled out for the same `-0.0`-from-`Sum` reason as [`Self::variance`].
     pub fn third(&self) -> f64 {
+        if self.terms.is_empty() {
+            return 0.0;
+        }
         self.terms.iter().map(|(_, s)| s.sensitivity.powi(3) * s.third).sum()
     }
 
-    /// The standard deviation this lineage represents.
+    /// The standard deviation this lineage represents. Clamped at zero like
+    /// [`AsymmetricMoments::std_dev`]: nothing in this module can produce a negative variance
+    /// today, but the two spellings of "standard deviation from a variance" in this file should
+    /// agree regardless.
     pub fn std_dev(&self) -> f64 {
-        self.variance().sqrt()
+        self.variance().max(0.0).sqrt()
     }
 
     /// Applies a single partial derivative, as for a one-argument function. The jacobian
     /// multiplies every source's sensitivity directly, so it lands cubed in [`Self::third`] and
     /// squared in [`Self::variance`] the next time either is read — which is why negating a
     /// value flips the sign of its skew but not of its variance.
+    ///
+    /// Routed through [`push_term`] so the no-dead-and-no-non-finite-sensitivity invariant holds
+    /// however the lineage was built, not just for the ones that came out of [`Self::combine`] —
+    /// mirrors [`Lineage::scale`]. A non-finite jacobian collapses to [`Self::exact`] rather than
+    /// producing `NaN` sensitivities that would poison every later read.
     pub fn scale(&self, jacobian: f64) -> Self {
-        if jacobian == 0.0 {
+        if jacobian == 0.0 || !jacobian.is_finite() {
             return Self::exact();
         }
-        Self {
-            terms: self
-                .terms
-                .iter()
-                .map(|&(id, s)| (id, SourceMoments { sensitivity: s.sensitivity * jacobian, ..s }))
-                .collect(),
+        let mut out = Vec::with_capacity(self.terms.len());
+        for &(id, s) in &self.terms {
+            push_term(&mut out, id, SourceMoments { sensitivity: s.sensitivity * jacobian, ..s });
         }
+        Self { terms: out }
     }
 
     /// Merges two moments lineages under the chain rule, the moments analogue of
@@ -265,26 +303,20 @@ impl MomentLineage {
         let mut out: Vec<(u32, SourceMoments)> = Vec::with_capacity(at.len() + bt.len());
         let (mut i, mut j) = (0, 0);
 
-        fn push(out: &mut Vec<(u32, SourceMoments)>, id: u32, s: SourceMoments) {
-            if s.sensitivity != 0.0 {
-                out.push((id, s));
-            }
-        }
-
         while i < at.len() && j < bt.len() {
             match at[i].0.cmp(&bt[j].0) {
                 std::cmp::Ordering::Less => {
-                    push(&mut out, at[i].0, SourceMoments { sensitivity: at[i].1.sensitivity * ja, ..at[i].1 });
+                    push_term(&mut out, at[i].0, SourceMoments { sensitivity: at[i].1.sensitivity * ja, ..at[i].1 });
                     i += 1;
                 }
                 std::cmp::Ordering::Greater => {
-                    push(&mut out, bt[j].0, SourceMoments { sensitivity: bt[j].1.sensitivity * jb, ..bt[j].1 });
+                    push_term(&mut out, bt[j].0, SourceMoments { sensitivity: bt[j].1.sensitivity * jb, ..bt[j].1 });
                     j += 1;
                 }
                 std::cmp::Ordering::Equal => {
                     debug_assert_eq!(at[i].1.variance, bt[j].1.variance);
                     debug_assert_eq!(at[i].1.third, bt[j].1.third);
-                    push(
+                    push_term(
                         &mut out,
                         at[i].0,
                         SourceMoments {
@@ -298,13 +330,23 @@ impl MomentLineage {
             }
         }
         for &(id, s) in &at[i..] {
-            push(&mut out, id, SourceMoments { sensitivity: s.sensitivity * ja, ..s });
+            push_term(&mut out, id, SourceMoments { sensitivity: s.sensitivity * ja, ..s });
         }
         for &(id, s) in &bt[j..] {
-            push(&mut out, id, SourceMoments { sensitivity: s.sensitivity * jb, ..s });
+            push_term(&mut out, id, SourceMoments { sensitivity: s.sensitivity * jb, ..s });
         }
 
         Self { terms: out }
+    }
+}
+
+/// Pushes a term unless its sensitivity is dead — zero, or non-finite from an operation like
+/// scaling by infinity. Mirrors `lineage`'s own `push_term` so both types keep the same
+/// "no dead coefficients" invariant, however they were built rather than only for terms that
+/// came out of [`MomentLineage::combine`].
+fn push_term(out: &mut Vec<(u32, SourceMoments)>, id: u32, s: SourceMoments) {
+    if s.sensitivity != 0.0 && s.sensitivity.is_finite() {
+        out.push((id, s));
     }
 }
 
@@ -542,6 +584,12 @@ mod tests {
         assert_eq!(zero.terms().len(), 0);
         assert_eq!(zero.variance(), 0.0);
         assert_eq!(zero.third(), 0.0);
+        // `impl Sum for f64` folds from `-0.0`, and `(-0.0).sqrt()` is `-0.0`, so the empty case
+        // must be handled explicitly or a cancelled result prints as `-0.000000` — the same trap
+        // `Lineage::std_dev` documents and regression-tests.
+        assert!(!zero.variance().is_sign_negative(), "variance must never carry a negative sign");
+        assert!(!zero.third().is_sign_negative(), "a third moment must never carry a negative sign");
+        assert!(!zero.std_dev().is_sign_negative(), "a standard deviation must never carry a negative sign");
     }
 
     #[test]
@@ -586,26 +634,43 @@ mod tests {
     fn cancellation_and_addition_hold_across_orders_of_magnitude() {
         // Task 1 shipped a bug from comparing a computed float to a hardcoded literal with a
         // strict `>`, wrong at most scales but invisible at 1.0. Guard against the same class of
-        // mistake here by exercising both the cancelling and additive paths well away from 1.0.
+        // mistake here with a *relative* tolerance — an absolute one hides drift away from
+        // unity, understating the true relative error by six orders of magnitude at 1e-6.
+        fn assert_close(actual: f64, expected: f64, what: &str, scale: f64) {
+            assert!(
+                (actual - expected).abs() < 1e-9 * expected.abs(),
+                "{what} mismatch at scale {scale}: {actual} != {expected}"
+            );
+        }
+
         for scale in [1e-6, 1e-3, 1.0, 1e3, 1e6, 1e9] {
             let x = MomentLineage::measured_with_id(42, 4.0 * scale, 2.5 * scale);
             let two_x_minus_x = MomentLineage::combine(&x, 2.0, &x, -1.0);
-            assert!(
-                (two_x_minus_x.variance() - 4.0 * scale).abs() < 1e-9 * scale.max(1.0),
-                "variance mismatch at scale {scale}"
-            );
-            assert!(
-                (two_x_minus_x.third() - 2.5 * scale).abs() < 1e-9 * scale.max(1.0),
-                "third mismatch at scale {scale}"
-            );
+            assert_close(two_x_minus_x.variance(), 4.0 * scale, "variance", scale);
+            assert_close(two_x_minus_x.third(), 2.5 * scale, "third", scale);
 
             let a = MomentLineage::measured(1.0 * scale, 0.5 * scale);
             let b = MomentLineage::measured(2.0 * scale, -0.25 * scale);
             let m = MomentLineage::combine(&a, 2.0, &b, -3.0);
-            assert!(
-                (m.variance() - (4.0 * scale + 18.0 * scale)).abs() < 1e-9 * scale.max(1.0),
-                "independent variance mismatch at scale {scale}"
+            assert_close(m.variance(), 4.0 * scale + 18.0 * scale, "independent variance", scale);
+            assert_close(
+                m.third(),
+                8.0 * (0.5 * scale) + -27.0 * (-0.25 * scale),
+                "independent third",
+                scale,
             );
         }
+    }
+
+    #[test]
+    fn an_imported_moment_id_is_never_minted_again() {
+        // Mirrors `lineage::tests::an_imported_id_is_never_minted_again`: an id that entered
+        // this process from outside `fresh_id` — deserialized, or named by a caller — must
+        // never be handed out again, or two unrelated measurements would start cancelling.
+        let imported = 970_000_u32;
+        let _ = MomentLineage::from_terms(vec![(imported, SourceMoments { sensitivity: 1.0, variance: 0.5, third: 0.1 })]);
+        assert!(fresh_id() > imported);
+        let _ = MomentLineage::measured_with_id(imported + 5_000, 0.5, 0.1);
+        assert!(fresh_id() > imported + 5_000);
     }
 }
