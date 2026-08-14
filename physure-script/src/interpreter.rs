@@ -192,7 +192,12 @@ pub struct PhsInterpreter {
     /// mutex is never contended by more than one thread in practice -- a debugging session only
     /// ever exercises sequential execution paths.
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
-    breakpoints: Arc<Mutex<Vec<crate::debug::Breakpoint>>>,
+    /// `Mutex<Arc<Vec<..>>>`, not `Mutex<Vec<..>>`: `debug_checkpoint` needs to read this list
+    /// on every single statement checkpoint while debugging, and cloning a `Vec<Breakpoint>`
+    /// means deep-cloning every embedded `Expr` AST in every `Conditional` breakpoint each time.
+    /// Cloning an `Arc` is a refcount bump; the `Vec` itself is only ever cloned once, inside
+    /// `add_breakpoint`, when a new breakpoint is actually added (copy-on-write).
+    breakpoints: Arc<Mutex<std::sync::Arc<Vec<crate::debug::Breakpoint>>>>,
     step_mode: Arc<Mutex<Option<StepMode>>>,
 }
 
@@ -263,7 +268,7 @@ impl PhsInterpreter {
             dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
             debug_hook: None,
             call_stack: Arc::new(Mutex::new(Vec::new())),
-            breakpoints: Arc::new(Mutex::new(Vec::new())),
+            breakpoints: Arc::new(Mutex::new(std::sync::Arc::new(Vec::new()))),
             step_mode: Arc::new(Mutex::new(None)),
         }
     }
@@ -394,7 +399,10 @@ impl PhsInterpreter {
     }
 
     pub fn add_breakpoint(&self, bp: crate::debug::Breakpoint) {
-        self.breakpoints.lock().unwrap_or_else(|e| e.into_inner()).push(bp);
+        let mut guard = self.breakpoints.lock().unwrap_or_else(|e| e.into_inner());
+        let mut updated = (**guard).clone();
+        updated.push(bp);
+        *guard = std::sync::Arc::new(updated);
     }
 
     fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
@@ -419,7 +427,7 @@ impl PhsInterpreter {
         let pending_step = *self.step_mode.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut hits = false;
-        for bp in &breakpoints {
+        for bp in &*breakpoints {
             hits = match bp {
                 crate::debug::Breakpoint::Line(l) => *l == line,
                 crate::debug::Breakpoint::Conditional(l, cond) => {
