@@ -281,6 +281,59 @@ fn diff_bounds(old: &[Statement], new: &[Statement]) -> (usize, usize) {
     (prefix, suffix)
 }
 
+use std::collections::HashMap;
+
+/// Result of diffing an old statement list against a new one: which new-list indices need
+/// re-running, the common-prefix length (statements before it can never be dirty by
+/// construction -- everything they read resolves within the unchanged prefix), and every
+/// name touched by the changed span on either side (needed to invalidate stale `env` entries
+/// before re-running -- see `apply_change`).
+pub struct DirtyAnalysis {
+    pub dirty: HashSet<usize>,
+    pub prefix: usize,
+    pub touched_names: HashSet<String>,
+}
+
+pub fn compute_dirty(old: &[Statement], new: &[Statement]) -> DirtyAnalysis {
+    let (prefix, suffix) = diff_bounds(old, new);
+    let old_mid = &old[prefix..old.len() - suffix];
+    let new_mid_end = new.len() - suffix;
+    let new_mid = &new[prefix..new_mid_end];
+
+    // Union of both sides: a write that's purely deleted (old side only) still needs every
+    // downstream reader re-resolved, which an index-only check over the new list would miss.
+    let mut touched_names: HashSet<String> = HashSet::new();
+    for stmt in old_mid.iter().chain(new_mid.iter()) {
+        touched_names.extend(analyze_one(stmt).writes);
+    }
+
+    let deps = analyze(new);
+    let mut dirty = HashSet::new();
+    let mut last_writer: HashMap<String, usize> = HashMap::new();
+
+    for (i, d) in deps.iter().enumerate() {
+        // Statements before `prefix` are unchanged content whose reads resolve entirely
+        // within the equally-unchanged prefix -- never dirty, regardless of a same-named
+        // write appearing later in the changed span.
+        if i >= prefix {
+            let in_changed_span = i < new_mid_end;
+            let touches = d.reads.iter().any(|n| touched_names.contains(n));
+            let depends_on_dirty = d
+                .reads
+                .iter()
+                .any(|n| last_writer.get(n).map_or(false, |w| dirty.contains(w)));
+            if in_changed_span || touches || depends_on_dirty {
+                dirty.insert(i);
+            }
+        }
+        for name in &d.writes {
+            last_writer.insert(name.clone(), i);
+        }
+    }
+
+    DirtyAnalysis { dirty, prefix, touched_names }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +470,74 @@ mod tests {
         // one line by the inserted statement above them -- diff_bounds must still recognize
         // them as an unchanged suffix instead of treating the line-number shift as a change.
         assert_eq!(diff_bounds(&old, &new), (0, 2));
+    }
+
+    #[test]
+    fn editing_an_unread_statement_dirties_only_itself() {
+        // Roadmap-mandated execution-count test: a statement whose result nothing downstream
+        // reads, edited, re-executes alone.
+        let old = stmts("a = 1\nb = 2\nc = 3");
+        let new = stmts("a = 1\nb = 99\nc = 3");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([1]));
+    }
+
+    #[test]
+    fn editing_the_first_of_two_writes_reruns_only_correctly_scoped_dependents() {
+        // Roadmap-mandated rebinding-correctness test: x written twice, y and z read
+        // in between/after. Editing the *first* x must not touch the second write (x = 2,
+        // a fresh write reading nothing) but must touch both the direct and transitive
+        // readers of the first write.
+        let old = stmts("x = 1\ny = x\nx = 2\nz = y");
+        let new = stmts("x = 5\ny = x\nx = 2\nz = y");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([0, 1, 3]));
+    }
+
+    #[test]
+    fn editing_a_global_only_a_called_functions_body_reads_propagates_to_the_call_site() {
+        // §4.1: g never appears in the call site's own text -- only inside compute's body.
+        let old = stmts("g = 9.8\nfn compute(m) = m * g\nresult = compute(2.0)");
+        let new = stmts("g = 10.0\nfn compute(m) = m * g\nresult = compute(2.0)");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([0, 1, 2]));
+    }
+
+    #[test]
+    fn unrelated_statements_stay_clean() {
+        let old = stmts("a = 1\nb = 2\nc = 3");
+        let new = stmts("a = 1\nb = 2\nc = 3");
+        let result = compute_dirty(&old, &new);
+        assert!(result.dirty.is_empty());
+    }
+
+    #[test]
+    fn a_deleted_write_dirties_its_former_readers() {
+        // touched_names must come from *both* sides of the changed span: the write to x
+        // disappears entirely (statement removed), so whatever used to read it needs
+        // re-resolving even though nothing at its new position writes x anymore.
+        let old = stmts("x = 1\ny = x");
+        let new = stmts("y = x");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([0]));
+    }
+
+    #[test]
+    fn statement_after_a_while_loop_reruns_when_the_loops_body_write_changes() {
+        // §4.4: c reads i, which the while loop (re)assigns -- edit the loop body, c must
+        // re-run too, regardless of whether i existed before the loop.
+        let old = stmts("i = 0\nwhile i < 5 { i = i + 1 }\nc = i");
+        let new = stmts("i = 0\nwhile i < 5 { i = i + 2 }\nc = i");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([1, 2]));
+    }
+
+    #[test]
+    fn editing_a_variable_used_only_in_a_template_string_dirties_that_statement() {
+        // §4.5
+        let old = stmts("v = 1\nmsg = \"v is {v * 2}\"");
+        let new = stmts("v = 2\nmsg = \"v is {v * 2}\"");
+        let result = compute_dirty(&old, &new);
+        assert_eq!(result.dirty, HashSet::from([0, 1]));
     }
 }
