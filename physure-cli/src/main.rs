@@ -5,6 +5,7 @@ use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
 mod config;
+mod debug;
 mod export;
 mod html;
 mod katex_assets;
