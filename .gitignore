@@ -110,3 +110,6 @@ test-results.xml
 *.gltf
 *.glb
 interactive_3d.html
+
+# Isolated git worktrees for parallel subagent implementation work
+.worktrees/
