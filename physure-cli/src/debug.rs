@@ -12,6 +12,8 @@ use physure_script::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
 use physure_script::inspect::{inspect, ScopeKind};
 use physure_script::{parse_phs, PhsInterpreter};
 
+use crate::rich::RichRenderer;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DebuggerCommand {
     Print(String),
@@ -50,7 +52,6 @@ pub fn parse_command(line: &str) -> DebuggerCommand {
 pub enum BreakpointSpec {
     Line(usize),
     Conditional(usize, String),
-    FunctionEntry(String),
 }
 
 /// Parses one `--break` flag value: `"42"` -> a line breakpoint, `"42:v > 100 m/s"` -> a
@@ -59,9 +60,11 @@ pub enum BreakpointSpec {
 /// text, so it's testable without a script or an interpreter in hand).
 pub fn parse_break_flag(value: &str) -> Option<BreakpointSpec> {
     if let Some((line_str, cond)) = value.split_once(':') {
-        line_str.trim().parse::<usize>().ok().map(|l| BreakpointSpec::Conditional(l, cond.trim().to_string()))
+        line_str.trim().parse::<usize>().ok()
+            .filter(|&l| l > 0)
+            .map(|l| BreakpointSpec::Conditional(l, cond.trim().to_string()))
     } else {
-        value.trim().parse::<usize>().ok().map(BreakpointSpec::Line)
+        value.trim().parse::<usize>().ok().filter(|&l| l > 0).map(BreakpointSpec::Line)
     }
 }
 
@@ -95,9 +98,25 @@ mod tests {
             Some(BreakpointSpec::Conditional(42, "v > 100 m/s".to_string()))
         );
     }
+
+    #[test]
+    fn rejects_a_zero_line_breakpoint() {
+        // Line 0 is never a real source line (parser.rs's line_col() is 1-based), and it's the
+        // sentinel synthesized/composed functions get for "unknown line" (see
+        // physure-script/src/interpreter.rs's function-composition sites) -- accepting it as a
+        // literal breakpoint would spuriously pause on every call to such a function.
+        assert_eq!(parse_break_flag("0"), None);
+    }
+
+    #[test]
+    fn rejects_a_zero_line_conditional_breakpoint() {
+        assert_eq!(parse_break_flag("0:x > 1"), None);
+    }
 }
 
-struct CliDebugHook;
+struct CliDebugHook {
+    registry: physure_core::UnitRegistry,
+}
 
 impl DebugHook for CliDebugHook {
     fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
@@ -129,7 +148,7 @@ impl DebugHook for CliDebugHook {
                     };
                     for name in &frame.declared {
                         if let Some(val) = ctx.env.get(name) {
-                            println!("  {name} = {val}");
+                            RichRenderer::render_variable_card(name, val);
                         }
                     }
                 }
@@ -141,7 +160,7 @@ impl DebugHook for CliDebugHook {
                         .unwrap_or_default();
                     for (name, val) in ctx.env {
                         if !local_names.contains(name.as_str()) {
-                            println!("  {name} = {val}");
+                            RichRenderer::render_variable_card(name, val);
                         }
                     }
                 }
@@ -177,8 +196,7 @@ impl DebugHook for CliDebugHook {
                         .filter(|f| f.declared.contains(&name))
                         .map(|f| ScopeKind::Local { owner_fn: f.fn_name.clone(), frame_depth: ctx.call_stack.len() })
                         .unwrap_or(ScopeKind::Global);
-                    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
-                    let insp = inspect(&name, val, scope, &registry);
+                    let insp = inspect(&name, val, scope, &self.registry);
                     println!("{name}");
                     println!("  kind        : {:?}", insp.kind);
                     println!("  scope       : {:?}", insp.scope);
@@ -219,9 +237,10 @@ pub fn run_debug(args: &[String]) {
         }
     };
 
+    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
     let mut interp = PhsInterpreter::with_debug_hook(
         Arc::new(physure_script::resolver::FsModuleResolver::default()),
-        Arc::new(CliDebugHook),
+        Arc::new(CliDebugHook { registry }),
     );
 
     let mut i = 2;
@@ -232,7 +251,8 @@ pub fn run_debug(args: &[String]) {
             }
             i += 2;
         } else if args[i] == "--break" {
-            if let Some(spec) = args.get(i + 1).and_then(|v| parse_break_flag(v)) {
+            let raw = args.get(i + 1);
+            if let Some(spec) = raw.and_then(|v| parse_break_flag(v)) {
                 match spec {
                     BreakpointSpec::Line(l) => interp.add_breakpoint(Breakpoint::Line(l)),
                     BreakpointSpec::Conditional(l, cond_src) => {
@@ -245,8 +265,12 @@ pub fn run_debug(args: &[String]) {
                             _ => eprintln!("warning: could not parse breakpoint condition '{cond_src}'"),
                         }
                     }
-                    BreakpointSpec::FunctionEntry(_) => unreachable!("parse_break_flag never returns FunctionEntry"),
                 }
+            } else {
+                eprintln!(
+                    "warning: could not parse breakpoint '{}' (line numbers must be 1 or greater)",
+                    raw.map(String::as_str).unwrap_or("")
+                );
             }
             i += 2;
         } else {

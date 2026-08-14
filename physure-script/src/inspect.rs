@@ -69,7 +69,7 @@ pub fn inspect(name: &str, value: &PhsValue, scope: ScopeKind, registry: &UnitRe
         PhsValue::String(_) => Inspection { kind: ValueKind::String, ..base },
         PhsValue::Quantity(q) => {
             let unit_display = Some(q.unit.__repr__());
-            let prefix = q.unit.display_name.as_ref().and_then(|dn| registry.split_prefix(dn));
+            let prefix = q.unit.display_name.as_ref().and_then(|dn| registry.split_prefix(dn)).map(|(sym, factor, _unit)| (sym, factor));
             let dimension = q.unit.dimensions.iter().map(|(sym, (n, d))| (sym.clone(), *n, *d)).collect();
             let std_dev = q.value.std_dev();
             let uncertainty = if std_dev > 0.0 {
