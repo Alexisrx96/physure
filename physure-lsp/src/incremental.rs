@@ -236,6 +236,25 @@ fn collect_template_reads(text: &str, locals: &HashSet<String>, out: &mut HashSe
     }
 }
 
+/// Longest common prefix length, then longest common suffix length (not overlapping the
+/// prefix), by structural equality. Everything between the two matched regions -- on the old
+/// side and the new side independently, since insertions/deletions change list length -- is
+/// the changed span (spec §3 step 2). O(n), safe in the over-inclusive direction for any edit
+/// this doesn't perfectly isolate (e.g. a whole statement moving from top to bottom).
+fn diff_bounds(old: &[Statement], new: &[Statement]) -> (usize, usize) {
+    let max_prefix = old.len().min(new.len());
+    let mut prefix = 0;
+    while prefix < max_prefix && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+    let max_suffix = old.len().min(new.len()) - prefix;
+    let mut suffix = 0;
+    while suffix < max_suffix && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix] {
+        suffix += 1;
+    }
+    (prefix, suffix)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +353,33 @@ mod tests {
         let mut writes = deps.writes.clone();
         writes.sort();
         assert_eq!(writes, vec!["deriv".to_string(), "slv".to_string()]);
+    }
+
+    #[test]
+    fn diff_bounds_finds_a_single_inserted_statement() {
+        let old = stmts("a = 1\nb = 2\nc = 3");
+        let new = stmts("a = 1\nx = 9\nb = 2\nc = 3");
+        assert_eq!(diff_bounds(&old, &new), (1, 2));
+    }
+
+    #[test]
+    fn diff_bounds_finds_a_single_edited_statement() {
+        let old = stmts("a = 1\nb = 2\nc = 3");
+        let new = stmts("a = 1\nb = 5\nc = 3");
+        assert_eq!(diff_bounds(&old, &new), (1, 1));
+    }
+
+    #[test]
+    fn diff_bounds_of_identical_lists_covers_everything() {
+        let old = stmts("a = 1\nb = 2");
+        let new = stmts("a = 1\nb = 2");
+        assert_eq!(diff_bounds(&old, &new), (2, 0));
+    }
+
+    #[test]
+    fn diff_bounds_handles_empty_old_list() {
+        let old: Vec<Statement> = Vec::new();
+        let new = stmts("a = 1\nb = 2");
+        assert_eq!(diff_bounds(&old, &new), (0, 0));
     }
 }
