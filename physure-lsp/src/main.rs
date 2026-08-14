@@ -9,6 +9,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 struct Backend {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
+    doc_states: RwLock<HashMap<Url, incremental::DocState>>,
 }
 
 #[tower_lsp::async_trait]
@@ -71,6 +72,12 @@ impl LanguageServer for Backend {
         if let Some(text) = text_opt {
             self.on_change(params.text_document.uri, text).await;
         }
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        self.documents.write().unwrap().remove(&uri);
+        self.doc_states.write().unwrap().remove(&uri);
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -350,13 +357,24 @@ impl LanguageServer for Backend {
 
 impl Backend {
     async fn on_change(&self, uri: Url, text: String) {
+        // Take ownership of any previous state before the panic guard: on a panic the
+        // closure's argument is dropped along with the unwind, which correctly leaves no
+        // entry behind (next edit falls back to a full bootstrap run, the same graceful
+        // degradation as today).
+        let prev = self.doc_states.write().unwrap().remove(&uri);
+
         // Analysing a half-typed buffer must never take the process down. A panic here used to
         // exit(101); the client restarts a few times, then gives up and the user loses
         // diagnostics for the rest of the session. Degrade to one diagnostic instead.
-        let diagnostics = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            analyze(&text)
-        })) {
-            Ok(diagnostics) => diagnostics,
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            incremental::apply_change(prev, &text)
+        }));
+
+        let diagnostics = match outcome {
+            Ok(outcome) => {
+                self.doc_states.write().unwrap().insert(uri.clone(), outcome.state);
+                outcome.diagnostics
+            }
             Err(_) => vec![Diagnostic {
                 range: Range {
                     start: Position { line: 0, character: 0 },
@@ -378,68 +396,6 @@ impl Backend {
 
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
-}
-
-fn analyze(text: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-
-    match physure_script::parser::parse_phs_with_lines(text) {
-            Ok(statements) => {
-                let mut interp = physure_script::interpreter::PhsInterpreter::default();
-                for (line_idx, stmt) in statements {
-                    if let Err(e) = interp.run_statement(&stmt) {
-                        let err_str = e.to_string();
-                        let clean_msg = incremental::clean_error_message(&err_str);
-                        let line = line_idx as u32;
-                        let line_text = text.lines().nth(line as usize).unwrap_or("");
-                        let end_col = (line_text.len() as u32).max(1);
-
-                        diagnostics.push(Diagnostic {
-                            range: Range {
-                                start: Position { line, character: 0 },
-                                end: Position { line, character: end_col },
-                            },
-                            severity: Some(DiagnosticSeverity::ERROR),
-                            code: None,
-                            code_description: None,
-                            source: Some("physure-lsp".to_string()),
-                            message: format!("Execution Error: {}", clean_msg),
-                            related_information: None,
-                            tags: None,
-                            data: None,
-                        });
-                    }
-                }
-            }
-            Err(err) => {
-                let err_str = err.to_string();
-                let (line, col) = incremental::extract_line_col_from_err(&err_str);
-                let line_text = text.lines().nth(line as usize).unwrap_or("");
-                let end_col = if line_text.is_empty() {
-                    10
-                } else {
-                    (line_text.len() as u32).max(col + 1)
-                };
-                let clean_msg = incremental::clean_error_message(&err_str);
-
-                diagnostics.push(Diagnostic {
-                    range: Range {
-                        start: Position { line, character: col },
-                        end: Position { line, character: end_col },
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: None,
-                    code_description: None,
-                    source: Some("physure-lsp".to_string()),
-                    message: clean_msg,
-                    related_information: None,
-                    tags: None,
-                    data: None,
-                });
-            }
-        }
-
-    diagnostics
 }
 
 enum UseContext {
@@ -795,6 +751,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         documents: RwLock::new(HashMap::new()),
+        doc_states: RwLock::new(HashMap::new()),
     });
 
     Server::new(stdin, stdout, socket).serve(service).await;
