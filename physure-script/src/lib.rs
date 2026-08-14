@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod debug;
 pub mod decorators;
 pub mod inspect;
 pub mod lexer;
@@ -14,6 +15,7 @@ pub mod plugin;
 
 pub use codegen::{transpile, Target};
 pub use ast::{Expr, Program, Statement};
+pub use debug::{DebugAction, DebugContext, DebugHook, StackFrame};
 pub use lexer::{PhsLexer, PhsToken, TokenKind};
 pub use parser::{parse_phs, parse_phs_with_lines};
 pub use interpreter::{eval_phs, ExternalFn, PhsInterpreter};

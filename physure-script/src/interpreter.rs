@@ -10,6 +10,7 @@ use physure_core::units::parser::Parser as UnitParser;
 use physure_core::units::RationalUnit;
 
 use crate::ast::{BinaryOp, Expr, Program, Statement};
+use crate::debug::{DebugContext, DebugHook, StackFrame};
 use crate::resolver::{ModuleResolver, FsModuleResolver};
 use crate::symbolic::Node;
 use crate::PhsValue;
@@ -181,11 +182,34 @@ pub struct PhsInterpreter {
     // uncertainties should propagate; it depends on a `physure.conf` it never mentions,
     // and the transpilers drop that dependency entirely. See
     // docs/superpowers/specs/2026-08-02-phs-execution-context.md.
+    pub(crate) debug_hook: Option<Arc<dyn DebugHook>>,
+    /// `Arc<Mutex<..>>`, not `RefCell`: Track B's `for`-expression and `parallel_map` rayon
+    /// paths require `&PhsInterpreter: Send + Sync` at compile time regardless of whether a
+    /// hook is set at runtime -- `RefCell` would break both of those already-shipped parallel
+    /// paths. The mutex is safe today because a debugging session only exercises sequential
+    /// execution paths in practice; `parallel_map`'s rayon path does not yet check
+    /// `debug_hook` and would corrupt this stack if used concurrently with an active hook --
+    /// closing that gap is planned as a later Integration task, not yet implemented.
+    call_stack: Arc<Mutex<Vec<StackFrame>>>,
 }
 
 impl Default for PhsInterpreter {
     fn default() -> Self {
         Self::new(Arc::new(FsModuleResolver::default()))
+    }
+}
+
+/// RAII pop for the `StackFrame` `call_function_node_at` pushes. Constructed right after the
+/// push, held as a local in `call_function_node_at`; its `Drop` runs on every exit from that
+/// point on -- normal return, an early `break`, or `?` propagating an error out of the body
+/// loop -- so the frame can never be left on `call_stack` past the call that pushed it.
+struct CallStackGuard {
+    call_stack: Arc<Mutex<Vec<StackFrame>>>,
+}
+
+impl Drop for CallStackGuard {
+    fn drop(&mut self) {
+        self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).pop();
     }
 }
 
@@ -216,11 +240,19 @@ impl PhsInterpreter {
             plugin_base_dir: None,
             unlocked_builtins: Arc::new(Mutex::new(HashMap::new())),
             dynamic_externals: Arc::new(Mutex::new(HashMap::new())),
+            debug_hook: None,
+            call_stack: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
     pub fn new_default() -> Self {
         Self::default()
+    }
+
+    pub fn with_debug_hook(resolver: Arc<dyn ModuleResolver>, hook: Arc<dyn DebugHook>) -> Self {
+        let mut interp = Self::new(resolver);
+        interp.debug_hook = Some(hook);
+        interp
     }
 
     /// Like `default()`, but resolves `import` paths relative to `base_dir`
@@ -278,12 +310,36 @@ impl PhsInterpreter {
         Ok(last)
     }
 
+    /// Like `run_statements`, but executes against `program.lines` so `debug_checkpoint` sees
+    /// real source lines instead of `0`. This is what `phs debug` uses; `run_statements` stays
+    /// as-is for every other caller (Python/WASM/Java bindings, the plain REPL) that doesn't
+    /// have line-accurate debugging as a goal.
+    pub fn run_statements_with_lines(&mut self, program: &Program) -> PhysureResult<PhsValue> {
+        let mut env = self.env.clone();
+        let mut last = PhsValue::None;
+        for (i, stmt) in program.statements.iter().enumerate() {
+            let line = program.lines.get(i).copied().unwrap_or(0);
+            last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
+        }
+        self.env = env;
+        Ok(last)
+    }
+
     pub fn get_var(&self, name: &str) -> Option<&PhsValue> {
         self.env.get(name)
     }
 
     pub fn env(&self) -> &HashMap<String, PhsValue> {
         &self.env
+    }
+
+    /// Test-only: `call_stack` stays private (not part of the public debugger API C1 defines --
+    /// a debugger observes it indirectly, through `DebugContext::call_stack` in `on_statement`),
+    /// but a leak regression test needs to assert its depth from outside any hook callback,
+    /// after an error has already propagated back out. Compiled out of production builds.
+    #[cfg(test)]
+    fn call_stack_depth(&self) -> usize {
+        self.call_stack.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     pub fn get_fn_params(&self, name: &str) -> Option<Vec<String>> {
@@ -301,7 +357,23 @@ impl PhsInterpreter {
         Ok(self.env.clone())
     }
 
+    fn debug_checkpoint(&self, line: usize, env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
+        let Some(hook) = &self.debug_hook else { return Ok(()) };
+        let call_stack = self.call_stack.lock().unwrap_or_else(|e| e.into_inner());
+        let ctx = DebugContext { line, call_stack: &call_stack, env };
+        // v1: every action resumes execution. StepOver/StepOut/Pause bookkeeping (comparing
+        // call_stack depth across calls) is Task C3's job once breakpoints exist to pause on;
+        // C1 only has to prove the checkpoint fires at the right places with the right context.
+        let _ = hook.on_statement(&ctx);
+        Ok(())
+    }
+
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        self.eval_statement_with_env_at(stmt, env, 0)
+    }
+
+    fn eval_statement_with_env_at(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>, line: usize) -> PhysureResult<PhsValue> {
+        self.debug_checkpoint(line, env)?;
         match stmt {
             Statement::Assignment(node) => {
                 let val = self.eval_expr(&node.value, env)?;
@@ -326,7 +398,7 @@ impl PhsInterpreter {
                     Ok(PhsValue::None)
                 }
             }
-            Statement::While { cond, body, .. } => {
+            Statement::While { cond, body, body_lines } => {
                 const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
@@ -338,8 +410,9 @@ impl PhsInterpreter {
                         )));
                     }
                     count += 1;
-                    for stmt in body {
-                        last_val = self.eval_statement_with_env(stmt, env)?;
+                    for (i, stmt) in body.iter().enumerate() {
+                        let line = body_lines.get(i).copied().unwrap_or(0);
+                        last_val = self.eval_statement_with_env_at(stmt, env, line)?;
                     }
                 }
                 Ok(last_val)
@@ -814,6 +887,16 @@ impl PhsInterpreter {
         arg_vals: Vec<PhsValue>,
         env: &HashMap<String, PhsValue>,
     ) -> PhysureResult<PhsValue> {
+        self.call_function_node_at(func, arg_vals, env, 0)
+    }
+
+    fn call_function_node_at(
+        &self,
+        func: &crate::ast::FunctionDefNode,
+        arg_vals: Vec<PhsValue>,
+        env: &HashMap<String, PhsValue>,
+        call_site_line: usize,
+    ) -> PhysureResult<PhsValue> {
         if func.params.len() != arg_vals.len() {
             return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", func.name, func.params.len(), arg_vals.len())));
         }
@@ -823,14 +906,33 @@ impl PhsInterpreter {
             local_env.insert(param_name.clone(), bound_val);
         }
         self.check_requires(func, &local_env)?;
+
+        // `_stack_guard` pops the pushed `StackFrame` on every exit path from this point on --
+        // normal completion, an early `break` from a `Return`/`GuardReturn` arm, or `?` error
+        // propagation from anywhere in the body loop below (undefined function, contract
+        // violation, unit mismatch, ...). Without this, a mid-body error would leave the frame
+        // on `call_stack` forever: `PhsInterpreter` is long-lived (REPL, future DAP sessions),
+        // and every enclosing call in a chain hits the same unguarded early return, so a deep
+        // call stack would leak one frame per active call on every error.
+        let _stack_guard = if self.debug_hook.is_some() {
+            self.call_stack.lock().unwrap_or_else(|e| e.into_inner())
+                .push(StackFrame::new(func, call_site_line));
+            Some(CallStackGuard { call_stack: self.call_stack.clone() })
+        } else {
+            None
+        };
+
         let mut last_val = PhsValue::None;
-        for stmt in &func.body_stmts {
+        for (i, stmt) in func.body_stmts.iter().enumerate() {
+            let line = func.body_lines.get(i).copied().unwrap_or(0);
             match stmt {
                 Statement::Return(expr) => {
+                    self.debug_checkpoint(line, &local_env)?;
                     last_val = self.eval_expr(expr, &local_env)?;
                     break;
                 }
                 Statement::GuardReturn { cond, value } => {
+                    self.debug_checkpoint(line, &local_env)?;
                     let cond_val = self.eval_expr(cond, &local_env)?;
                     if is_truthy(&cond_val) {
                         last_val = self.eval_expr(value, &local_env)?;
@@ -838,10 +940,11 @@ impl PhsInterpreter {
                     }
                 }
                 _ => {
-                    last_val = self.eval_statement_with_env(stmt, &mut local_env)?;
+                    last_val = self.eval_statement_with_env_at(stmt, &mut local_env, line)?;
                 }
             }
         }
+
         self.check_ensures(func, &local_env, &last_val)?;
         Ok(last_val)
     }
@@ -1150,6 +1253,86 @@ mod tests {
     use super::*;
     use crate::ast::*;
     use crate::resolver::{MemoryModuleResolver, ModuleExport};
+
+    #[test]
+    fn debug_hook_fires_once_per_statement_including_function_return() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingHook(Arc<Mutex<Vec<usize>>>);
+        impl DebugHook for RecordingHook {
+            fn on_statement(&self, ctx: &DebugContext) -> DebugAction {
+                self.0.lock().unwrap().push(ctx.line);
+                DebugAction::Continue
+            }
+        }
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let hook = Arc::new(RecordingHook(seen.clone()));
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            hook,
+        );
+        // PHS function bodies are indentation-delimited (see the note on the C0.1 test) --
+        // "fn double(x) =" on line 1, its two-statement body on lines 2-3, then the top-level call
+        // on line 4 (no closing brace to account for).
+        let program = crate::parser::parse_phs(
+            "fn double(x) =\n  y = x * 2\n  return y\nres = double(3)\n",
+        )
+        .unwrap();
+        interp.run_statements_with_lines(&program).unwrap();
+
+        let lines = seen.lock().unwrap();
+        // line 4 (top-level call), then the two statements inside double's body (lines 2 and 3).
+        // Line 3 is an explicit `return`, which `call_function_node_at` special-cases with its own
+        // `break` instead of routing through `eval_statement_with_env_at` like every other
+        // statement -- this is the actual regression case for the choke-point gap (a bare
+        // expression used as an implicit return, e.g. just `y` with no `return` keyword, would
+        // already have been checkpointed by the ordinary `_` arm and wouldn't exercise this path).
+        assert!(lines.contains(&4), "top-level call not recorded: {lines:?}");
+        assert!(lines.contains(&2), "first body statement not recorded: {lines:?}");
+        assert!(lines.contains(&3), "function's explicit return statement not recorded: {lines:?}");
+    }
+
+    #[test]
+    fn call_stack_pops_frame_when_body_errors_mid_execution() {
+        use crate::debug::{DebugAction, DebugContext, DebugHook};
+        use std::sync::Arc;
+
+        struct NoopHook;
+        impl DebugHook for NoopHook {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                DebugAction::Continue
+            }
+        }
+
+        let mut interp = PhsInterpreter::with_debug_hook(
+            std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+            Arc::new(NoopHook),
+        );
+        // `boom`'s body calls an undefined function partway through, which errors out of
+        // `eval_statement_with_env_at` via `?` while `call_function_node_at` is mid-loop over
+        // `boom`'s body -- exactly the path that used to leave `boom`'s `StackFrame` on
+        // `call_stack` forever, since the old unguarded `pop()` after the loop was never
+        // reached once the `?` in the `_` arm returned early.
+        let program = crate::parser::parse_phs(
+            "fn boom(x) =\n  y = undefined_fn(x)\n  return y\nboom(3)\n",
+        )
+        .unwrap();
+        let err = interp.run_statements_with_lines(&program);
+        assert!(err.is_err(), "expected the undefined-function call inside boom's body to error");
+        assert_eq!(
+            interp.call_stack_depth(),
+            0,
+            "boom's StackFrame leaked on call_stack after the error propagated out"
+        );
+
+        // Run an unrelated, successful statement afterward: if a frame had leaked, subsequent
+        // calls would push on top of the stale one, so any `DebugContext::call_stack` a hook
+        // observes from here on would show a phantom `boom` frame beneath the real ones.
+        interp.eval_str("fn ok(x) = x + 1\nok(1)").unwrap();
+        assert_eq!(interp.call_stack_depth(), 0, "call_stack not clean after a later, unrelated successful call");
+    }
 
     #[test]
     fn requires_violation_returns_contract_violation_error() {
