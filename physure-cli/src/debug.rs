@@ -60,9 +60,11 @@ pub enum BreakpointSpec {
 /// text, so it's testable without a script or an interpreter in hand).
 pub fn parse_break_flag(value: &str) -> Option<BreakpointSpec> {
     if let Some((line_str, cond)) = value.split_once(':') {
-        line_str.trim().parse::<usize>().ok().map(|l| BreakpointSpec::Conditional(l, cond.trim().to_string()))
+        line_str.trim().parse::<usize>().ok()
+            .filter(|&l| l > 0)
+            .map(|l| BreakpointSpec::Conditional(l, cond.trim().to_string()))
     } else {
-        value.trim().parse::<usize>().ok().map(BreakpointSpec::Line)
+        value.trim().parse::<usize>().ok().filter(|&l| l > 0).map(BreakpointSpec::Line)
     }
 }
 
@@ -95,6 +97,20 @@ mod tests {
             parse_break_flag("42:v > 100 m/s"),
             Some(BreakpointSpec::Conditional(42, "v > 100 m/s".to_string()))
         );
+    }
+
+    #[test]
+    fn rejects_a_zero_line_breakpoint() {
+        // Line 0 is never a real source line (parser.rs's line_col() is 1-based), and it's the
+        // sentinel synthesized/composed functions get for "unknown line" (see
+        // physure-script/src/interpreter.rs's function-composition sites) -- accepting it as a
+        // literal breakpoint would spuriously pause on every call to such a function.
+        assert_eq!(parse_break_flag("0"), None);
+    }
+
+    #[test]
+    fn rejects_a_zero_line_conditional_breakpoint() {
+        assert_eq!(parse_break_flag("0:x > 1"), None);
     }
 }
 
