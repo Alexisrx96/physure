@@ -348,65 +348,6 @@ impl LanguageServer for Backend {
     }
 }
 
-fn extract_line_col_from_err(err_str: &str) -> (u32, u32) {
-    if let Some(pos) = err_str.find("--> ") {
-        let after = &err_str[pos + 4..];
-        if let Some(colon) = after.find(':') {
-            let line_part = after[..colon].trim();
-            let rest = &after[colon + 1..];
-            let end_pos = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
-            let col_part = rest[..end_pos].trim();
-
-            if let (Ok(l), Ok(c)) = (line_part.parse::<u32>(), col_part.parse::<u32>()) {
-                return (l.saturating_sub(1), c.saturating_sub(1));
-            }
-        }
-    }
-    (0, 0)
-}
-
-fn clean_error_message(err_str: &str) -> String {
-    let mut s = err_str.trim();
-
-    // Remove leading "--> line:col\n" header if present
-    if let Some(pos) = s.find("--> ") {
-        if let Some(nl) = s[pos..].find('\n') {
-            s = s[pos + nl + 1..].trim();
-        }
-    }
-
-    // Strip Generic("...") wrapper if present
-    if s.starts_with("Generic(\"") {
-        s = &s[9..];
-        if s.ends_with("\")") {
-            s = &s[..s.len() - 2];
-        } else if s.ends_with('"') {
-            s = &s[..s.len() - 1];
-        }
-    }
-
-    // Strip "Parse error: " prefix if present
-    if let Some(stripped) = s.strip_prefix("Parse error: ") {
-        s = stripped;
-    }
-
-    // Strip secondary Generic("...") if nested
-    if s.starts_with("Generic(\"") {
-        s = &s[9..];
-        if s.ends_with("\")") {
-            s = &s[..s.len() - 2];
-        } else if s.ends_with('"') {
-            s = &s[..s.len() - 1];
-        }
-    }
-
-    s.replace("\\\"", "\"")
-     .replace("\\n", "\n")
-     .replace("␊", "")
-     .trim()
-     .to_string()
-}
-
 impl Backend {
     async fn on_change(&self, uri: Url, text: String) {
         // Analysing a half-typed buffer must never take the process down. A panic here used to
@@ -448,7 +389,7 @@ fn analyze(text: &str) -> Vec<Diagnostic> {
                 for (line_idx, stmt) in statements {
                     if let Err(e) = interp.run_statement(&stmt) {
                         let err_str = e.to_string();
-                        let clean_msg = clean_error_message(&err_str);
+                        let clean_msg = incremental::clean_error_message(&err_str);
                         let line = line_idx as u32;
                         let line_text = text.lines().nth(line as usize).unwrap_or("");
                         let end_col = (line_text.len() as u32).max(1);
@@ -472,14 +413,14 @@ fn analyze(text: &str) -> Vec<Diagnostic> {
             }
             Err(err) => {
                 let err_str = err.to_string();
-                let (line, col) = extract_line_col_from_err(&err_str);
+                let (line, col) = incremental::extract_line_col_from_err(&err_str);
                 let line_text = text.lines().nth(line as usize).unwrap_or("");
                 let end_col = if line_text.is_empty() {
                     10
                 } else {
                     (line_text.len() as u32).max(col + 1)
                 };
-                let clean_msg = clean_error_message(&err_str);
+                let clean_msg = incremental::clean_error_message(&err_str);
 
                 diagnostics.push(Diagnostic {
                     range: Range {
@@ -843,22 +784,6 @@ f(v: m / s) =
         assert!(doc_str.contains("* **m**: Masa del cuerpo [kg]"));
         assert!(doc_str.contains("* **v**: Velocidad del cuerpo [m/s]"));
         assert!(!doc_str.contains("Funciones Definidas"));
-    }
-
-    #[test]
-    fn test_unit_shadowing_lsp_diagnostic_location_and_cleaning() {
-        let script = "s = 3.0 s\ng = 9.81 m / s ^ 2\n";
-        let err = physure_script::parser::parse_phs_with_lines(script).unwrap_err();
-        let err_str = err.to_string();
-        let (line, col) = extract_line_col_from_err(&err_str);
-        assert_eq!(line, 1, "Should point to line 2 (0-indexed 1)");
-        assert_eq!(col, 0, "Should point to col 1 (0-indexed 0)");
-
-        let cleaned = clean_error_message(&err_str);
-        assert!(!cleaned.contains("Generic("));
-        assert!(!cleaned.contains("-->"));
-        assert!(cleaned.contains("Ambiguous 's' in the quantity literal `9.81 m / s ^ 2`"));
-        assert!(cleaned.contains("Write `(9.81 m) / s ^ 2`"));
     }
 }
 
