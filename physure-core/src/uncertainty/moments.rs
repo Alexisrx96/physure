@@ -696,10 +696,19 @@ impl UncertaintyBackend for MomentsBackend {
     }
 }
 
-/// An error for an operation this model genuinely cannot do — today, only an unrecognised
-/// one-argument function name (see [`function_mean_and_jacobian`]). Arithmetic itself
-/// (add/sub/mul/div/pow) is implemented for every asymmetric value; this is not a blanket
-/// "propagation unimplemented" refusal the way it used to be.
+/// An error for an operation this model genuinely cannot do. Two distinct uses:
+///
+/// - an unrecognised one-argument function name (see [`function_mean_and_jacobian`]);
+/// - from `trait_def.rs`, a mixed pair with a *foreign* backend on the left of a `Moments`
+///   operand (`Gaussian + Moments`, `MonteCarlo * Moments`, ...) — every such arm reads only
+///   `mean()`/`std_dev()` off its `other` operand, so it would silently drop the Moments side's
+///   third moment rather than refuse.
+///
+/// This is not a blanket "propagation unimplemented" refusal the way it used to be: arithmetic on
+/// a `Moments` value is implemented and succeeds whenever it is `self` — both a
+/// `(Moments, Moments)` pair and a `Moments`-on-the-left/foreign-on-the-right pair take a real
+/// path (the enum's own arm, or `MomentsBackend`'s `&dyn` trait methods, respectively). Only
+/// foreign-on-the-left, Moments-on-the-right refuses.
 pub(super) fn not_implemented(op: &str) -> PhysureError {
     PhysureError::Generic(format!("{op} is not implemented for the moments model"))
 }
@@ -826,6 +835,26 @@ mod tests {
         assert_eq!(squared.mean, 0.0);
         assert_eq!(squared.variance(), 0.0);
         assert_eq!(squared.third(), 0.0);
+    }
+
+    #[test]
+    fn identity_shaped_ops_are_exact_no_ops_on_a_skewed_value() {
+        // The whole reason `powered`/`applied` evaluate at `self.mean` rather than `self.mode()`
+        // (see their doc comments): `x.powf(1.0)` and `abs()` of a strictly positive value are
+        // affine identities, jacobian `1.0`, so `scale(1.0)` must reproduce every field
+        // bit-for-bit -- `assert_eq!`, not an epsilon. Mode-evaluation broke exactly this: both
+        // shifted the value by `-shift`, which for this (0.1, 0.3) pair is no small effect.
+        let x = MomentsBackend::measured(1.0, 0.1, 0.3).unwrap();
+
+        let identity_pow = x.powered(1.0);
+        assert_eq!(identity_pow.mean, x.mean);
+        assert_eq!(identity_pow.variance(), x.variance());
+        assert_eq!(identity_pow.third(), x.third());
+
+        let identity_abs = x.applied("abs").unwrap();
+        assert_eq!(identity_abs.mean, x.mean);
+        assert_eq!(identity_abs.variance(), x.variance());
+        assert_eq!(identity_abs.third(), x.third());
     }
 
     #[test]
