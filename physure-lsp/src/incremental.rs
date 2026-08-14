@@ -85,6 +85,20 @@ fn analyze_one(stmt: &Statement) -> StmtDeps {
                     .collect(),
                 // Wildcard/ModuleAlias: statically unknowable which names get bound -- under-
                 // report rather than guess, same rule collect_declared already uses.
+                //
+                // Known ceiling: because a wildcard import's writes are invisible here,
+                // touched_names/dirty-tracking can't detect that editing `use * from mod` to
+                // point at a *different* module should invalidate a name the old module
+                // exported but the new one doesn't -- env keeps the stale binding, and nothing
+                // reruns to notice, since no statement in the document textually reads
+                // "compute" the way a normal read/write edge would need. Fixing this properly
+                // would mean actually resolving the wildcard's target module during this
+                // AST-only analysis pass (filesystem I/O, not a name-based dependency edge) --
+                // a real architectural expansion, not an aligned fix, so it's accepted as a
+                // known, narrow gap rather than chased here. Upgrade path: `apply_change` could
+                // additionally treat any statement containing a wildcard `Import` in the
+                // changed span as fully invalidating and re-resolving the module it names, if
+                // this is ever observed to matter in practice.
                 ImportSpecifier::Wildcard | ImportSpecifier::ModuleAlias(_) => Vec::new(),
             };
             StmtDeps { writes, reads: HashSet::new() }
