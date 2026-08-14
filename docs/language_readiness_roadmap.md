@@ -1,6 +1,6 @@
 # PHS Language Readiness Roadmap — Loops, Concurrency, Breakpoints, Incremental LSP, Compiled Exports & Decorators
 
-**Status: 🟡 LAB-READY reached (Track A/B/C merged) — Track D in progress, Track F merged**
+**Status: ✅ LAB-READY reached — Tracks A/B/C/D/E/F all merged** (Track C's DAP adapter stretch item and Track D's cross-file incrementality follow-on remain open, both explicitly non-blocking)
 
 > 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
 
@@ -510,13 +510,35 @@ Tracks are independent — check off in any order, on any timeline.
         `inspect` output decomposes measure/unit/prefix/dimension/uncertainty correctly).
   - [ ] *(Stretch, non-blocking)* DAP adapter over the same `DebugHook`/`Inspection` types.
 
-- [ ] **Track D: Incremental LSP Evaluation** *(non-blocking for LAB-READY — editor responsiveness,
-      not a language capability; tracked here so it isn't lost)*
-  - [ ] Per-statement dependency graph (reads/writes from the AST), position-aware for rebinding.
-  - [ ] `on_change` diffs the statement list and re-runs only changed statements + transitive
-        dependents, against a persisted `Environment`.
-  - [ ] Execution-count test: editing an unread statement re-executes only itself.
-  - [ ] Rebinding-correctness test: editing an earlier write among two writes to the same name
+- [x] **Track D: Incremental LSP Evaluation** *(non-blocking for LAB-READY — editor responsiveness,
+      not a language capability)* — see
+      [`docs/superpowers/specs/2026-08-14-track-d-incremental-lsp-design.md`](superpowers/specs/2026-08-14-track-d-incremental-lsp-design.md)
+      and [`docs/superpowers/plans/2026-08-14-track-d-incremental-lsp.md`](superpowers/plans/2026-08-14-track-d-incremental-lsp.md)
+      for the design and executed plan. Several correctness subtleties were found and fixed
+      during implementation and review, none present in the original sketch: a function call's
+      callee name (`Expr::FunctionCall.name`) had to be treated as a read even though it's a bare
+      `String`, not a nested `Identifier`, since resolution goes through `env.get(name)`; a
+      `while` loop's body-assigned names were verified empirically to leak to the outer scope
+      *unconditionally* (the original scoping-rule assumption in this section was wrong); a
+      common-prefix statement (most notably a `FunctionDef`, whose free variables resolve lazily
+      at call time, not definition time) can still be dirty and must not be exempted from
+      dependency checks; a write-write ordering dependency exists that's distinct from the usual
+      read-write kind — editing or deleting an earlier write to a name must also re-run a later,
+      otherwise-unaffected write to the same name, or its value silently leaks through / never
+      gets restored; and a decorator-conditional interpreter binding (`@ensures`'s synthetic
+      `result`) must not be applied to decorators that don't actually bind it (`@requires`). A
+      known, narrow, explicitly-documented gap remains for wildcard imports (`use * from mod`)
+      whose target module changes — see the comment on `ImportSpecifier::Wildcard` in
+      `incremental.rs` for the reasoning and upgrade path.
+  - [x] Per-statement dependency graph (reads/writes from the AST via a pure walk, no execution
+        needed to build it), position-aware for rebinding via a `last_writer` map built in one
+        forward sweep.
+  - [x] `on_change` diffs the statement list (common-prefix/suffix, line-number-insensitive) and
+        re-runs only changed statements + transitive dependents, against a persisted
+        `PhsInterpreter`.
+  - [x] Execution-count test: editing an unread statement re-executes only itself (verified via
+        exact dirty-index-set assertions, a stronger check than an execution counter).
+  - [x] Rebinding-correctness test: editing an earlier write among two writes to the same name
         re-runs only the correctly-scoped dependents.
   - [ ] *(Follow-on, out of scope)* Cross-file incrementality via `FsModuleResolver`.
 
@@ -589,9 +611,9 @@ Tracks are independent — check off in any order, on any timeline.
 
 **LAB-READY is reached when Track A, Track B, and the non-stretch part of Track C are all merged with
 tests green in `tests.yml` CI.** ✅ **Reached** — all three merged. Tracks D, E, and F improve editor
-experience, distribution/interop, and future extensibility respectively; E and F are also merged, and
-none of the three gate the milestone. Track D (Incremental LSP Evaluation) is the only remaining
-unimplemented item in this document.
+experience, distribution/interop, and future extensibility respectively; all three are also merged,
+and none of them gate the milestone. The only items left open in this document are explicitly
+non-blocking stretch/follow-on work: Track C's DAP adapter and Track D's cross-file incrementality.
 
 ---
 
