@@ -32,6 +32,7 @@ fn print_help() {
     println!("    phs --repl");
     println!("    phs transpile <script.phs> [--target <rust|python|java|js|ts>] [--output <file>]");
     println!("    phs export <script.phs> --fn <name> [--native] [-o <dir>]");
+    println!("    phs debug <script.phs> [--break-fn name] [--break N[:cond]]");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!();
     println!("FLAGS & OPTIONS:");
@@ -52,6 +53,7 @@ fn print_help() {
     println!("    phs transpile 1_cargas.phs -t java -o Calculator.java");
     println!("    phs new-plugin myplugin --lang rust");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
+    println!("    phs debug orbit_sim.phs --break 12");
 }
 
 fn run_repl() {

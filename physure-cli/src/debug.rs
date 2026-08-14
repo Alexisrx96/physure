@@ -4,6 +4,14 @@
 //! (plain `read_line` loop, no new CLI dependency) and `export.rs`'s subcommand-module
 //! convention (`run_debug(args)`, dispatched from `main.rs` via `if args[1] == "debug"`).
 
+use std::io::{self, Write};
+use std::process;
+use std::sync::Arc;
+
+use physure_script::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+use physure_script::inspect::{inspect, ScopeKind};
+use physure_script::{parse_phs, PhsInterpreter};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DebuggerCommand {
     Print(String),
@@ -89,15 +97,6 @@ mod tests {
     }
 }
 
-use std::collections::HashMap;
-use std::io::{self, Write};
-use std::process;
-use std::sync::{Arc, Mutex};
-
-use physure_script::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
-use physure_script::inspect::{inspect, ScopeKind};
-use physure_script::{parse_phs, PhsInterpreter};
-
 struct CliDebugHook;
 
 impl DebugHook for CliDebugHook {
@@ -118,12 +117,12 @@ impl DebugHook for CliDebugHook {
             if io::stdin().read_line(&mut line).is_err() || line.is_empty() {
                 return DebugAction::Continue;
             }
-            match super::debug::parse_command(&line) {
-                super::debug::DebuggerCommand::Continue => return DebugAction::Continue,
-                super::debug::DebuggerCommand::Step => return DebugAction::StepInto,
-                super::debug::DebuggerCommand::Next => return DebugAction::StepOver,
-                super::debug::DebuggerCommand::Finish => return DebugAction::StepOut,
-                super::debug::DebuggerCommand::Locals => {
+            match parse_command(&line) {
+                DebuggerCommand::Continue => return DebugAction::Continue,
+                DebuggerCommand::Step => return DebugAction::StepInto,
+                DebuggerCommand::Next => return DebugAction::StepOver,
+                DebuggerCommand::Finish => return DebugAction::StepOut,
+                DebuggerCommand::Locals => {
                     let Some(frame) = ctx.call_stack.last() else {
                         println!("(no locals at global scope)");
                         continue;
@@ -134,7 +133,7 @@ impl DebugHook for CliDebugHook {
                         }
                     }
                 }
-                super::debug::DebuggerCommand::Globals => {
+                DebuggerCommand::Globals => {
                     let local_names: std::collections::HashSet<&str> = ctx
                         .call_stack
                         .last()
@@ -146,12 +145,12 @@ impl DebugHook for CliDebugHook {
                         }
                     }
                 }
-                super::debug::DebuggerCommand::Backtrace => {
+                DebuggerCommand::Backtrace => {
                     for (depth, frame) in ctx.call_stack.iter().rev().enumerate() {
                         println!("  #{depth} {} (called from line {})", frame.fn_name, frame.call_site_line);
                     }
                 }
-                super::debug::DebuggerCommand::Print(expr_src) => {
+                DebuggerCommand::Print(expr_src) => {
                     match parse_phs(&expr_src) {
                         Ok(prog) if !prog.statements.is_empty() => {
                             let interp = PhsInterpreter::default();
@@ -167,7 +166,7 @@ impl DebugHook for CliDebugHook {
                         _ => println!("error: could not parse '{expr_src}'"),
                     }
                 }
-                super::debug::DebuggerCommand::Inspect(name) => {
+                DebuggerCommand::Inspect(name) => {
                     let Some(val) = ctx.env.get(&name) else {
                         println!("error: no variable named '{name}'");
                         continue;
@@ -189,7 +188,7 @@ impl DebugHook for CliDebugHook {
                     println!("  dimension   : {:?}", insp.dimension);
                     println!("  uncertainty : {:?}", insp.uncertainty);
                 }
-                super::debug::DebuggerCommand::Unknown(cmd) => {
+                DebuggerCommand::Unknown(cmd) => {
                     println!("unknown command '{cmd}' -- try print/inspect/locals/globals/backtrace/step/next/finish/continue");
                 }
             }
