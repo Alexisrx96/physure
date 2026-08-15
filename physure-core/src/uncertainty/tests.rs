@@ -694,5 +694,35 @@ fn test_asymmetric_measurement_handling() {
     
     let u = UncertaintyValue::Moments(m);
     let u_mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(1.0, 0.1, 1000));
-    assert!(u.propagate_add(&u_mc).is_err());
+
+    // This assertion used to be `u.propagate_add(&u_mc).is_err()`, from when no arithmetic on a
+    // moments value was implemented at all. It is now direction-dependent, and the direction is
+    // the point: a mixed pair is only refused when the *foreign* backend is on the left.
+    //
+    // Moments on the left keeps its own third moment — the foreign operand joins as an
+    // independent, unskewed source, which is exactly what a Gaussian or a Monte-Carlo value is
+    // from the moments model's point of view.
+    // The result arrives as `Custom` rather than `Moments`: the generic `_` arm wraps whatever
+    // `MomentsBackend`'s own `&dyn` method returns. `get_model_name()` is how you tell it is
+    // still a moments value — the third moment itself is not on the trait, so it is carried but
+    // not reachable through the enum.
+    let sum = u
+        .propagate_add(&u_mc)
+        .expect("moments on the left keeps its skew and folds the foreign operand in");
+    assert_eq!(sum.get_model_name(), "moments");
+    assert!(
+        sum.std_dev() > u_mc.std_dev(),
+        "both variances must contribute to the sum"
+    );
+
+    // Checked on the backend directly, where the third moment is reachable.
+    let backend_sum = MomentsBackend::measured(10.0, 1.0, 2.0)
+        .unwrap()
+        .propagate_add(&MonteCarloBackend::from_stats(1.0, 0.1, 1000))
+        .unwrap();
+    assert_eq!(backend_sum.get_model_name(), "moments");
+
+    // The other direction refuses: MonteCarlo's arm reads only `mean()`/`std_dev()` off its
+    // operand, so letting it run would silently drop the third moment.
+    assert!(u_mc.propagate_add(&u).is_err());
 }
