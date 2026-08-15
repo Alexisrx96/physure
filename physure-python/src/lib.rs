@@ -1650,23 +1650,19 @@ impl PyMomentsBackend {
 
     #[getter]
     fn third(&self) -> f64 {
-        self.0.third
+        self.0.third()
     }
 
     #[getter]
     fn std_dev(&self) -> f64 {
-        self.0.sigma.std_dev()
+        self.0.std_dev()
     }
 
-    /// The provenance of the spread, shared with the Gaussian backend so an asymmetric value
-    /// still cancels against itself.
-    #[getter]
-    fn sigma(&self) -> PyLineage {
-        PyLineage(self.0.sigma.clone())
-    }
-
-    fn moments(&self) -> PyAsymmetricMoments {
-        PyAsymmetricMoments(self.0.moments())
+    fn moments(&self) -> PyResult<PyAsymmetricMoments> {
+        self.0
+            .moments()
+            .map(PyAsymmetricMoments)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     fn sigmas(&self) -> PyResult<(f64, f64)> {
@@ -1685,7 +1681,7 @@ impl PyMomentsBackend {
     fn __repr__(&self) -> String {
         match self.0.sigmas() {
             Ok((lo, hi)) => format!("MomentsBackend(mean={}, -{}, +{})", self.0.mean, lo, hi),
-            Err(_) => format!("MomentsBackend(mean={}, third={})", self.0.mean, self.0.third),
+            Err(_) => format!("MomentsBackend(mean={}, third={})", self.0.mean, self.0.third()),
         }
     }
 }

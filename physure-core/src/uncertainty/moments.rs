@@ -5,28 +5,24 @@
 //! they are the parameters of a shape. Averaging them, which is what a symmetric model has to
 //! do, throws away the asymmetry, and the asymmetry is often the interesting part.
 //!
-//! The shape used here is the *dimidiated* Gaussian: two half-Gaussians of widths σ⁻ and σ⁺
-//! joined at the mode. It is the reading most physicists intend by that notation, and its
-//! first three moments have a closed form, so the pair converts to moments and back without a
-//! fit. Moments are what propagation needs, because for a linear combination they simply add:
-//! the mean, the variance and the third central moment of `Σ cₖ xₖ` are `Σ cₖ μₖ`, `Σ cₖ² σₖ²`
-//! and `Σ cₖ³ μ₃ₖ` over independent sources. The `cₖ` are exactly what [`Lineage`] already
-//! records, so correlated sources cancel here for the same reason they cancel for σ.
+//! Turning a pair into a shape is a choice, made by [`AsymmetryShape`](super::shapes::AsymmetryShape). The default is
+//! the *dimidiated* Gaussian — two half-Gaussians of widths σ⁻ and σ⁺ joined so each carries
+//! equal area, with the quoted value at the median — because that is the reading most
+//! physicists intend by the notation. The *Fechner* (equal-height) Gaussian is available as an
+//! opt-in alternative. Both names and both closed forms are in arXiv:2411.15499 §A. Either way
+//! the pair converts to moments and back without a fit, and moments are what propagation needs:
+//! for a linear combination they simply add, so the mean, the variance and the third central
+//! moment of `Σ cₖ xₖ` are `Σ cₖ μₖ`, `Σ cₖ² σₖ²` and `Σ cₖ³ μ₃ₖ` over independent sources. The
+//! `cₖ` are exactly what [`Lineage`] already records, so correlated sources cancel here for the
+//! same reason they cancel for σ.
 //!
 //! See R. Barlow, *Asymmetric Errors*, PHYSTAT 2003, for the conventions.
 
-use std::f64::consts::{FRAC_2_PI, PI};
-
-use super::lineage::Lineage;
+use super::lineage::{Lineage, fresh_id, reserve_id};
+use super::mode::{PropagationMode, propagation_mode};
+use super::shapes::ShapeKind;
 use super::trait_def::UncertaintyBackend;
 use crate::error::{PhysureError, PhysureResult};
-
-/// The largest σ⁺/σ⁻ the inverse map searches over.
-///
-/// Skewness rises towards a finite asymptote as the ratio grows, so the last stretch before it
-/// costs unbounded ratio for no accuracy. Past this point the one-sided closed form below is
-/// both cheaper and more accurate than continuing the search.
-const RATIO_MAX: f64 = 1.0e12;
 
 /// The first three moments of an asymmetric measurement.
 ///
@@ -35,7 +31,9 @@ const RATIO_MAX: f64 = 1.0e12;
 /// measurement's mean is not the number the experimenter wrote down.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AsymmetricMoments {
-    /// `mean − mode`: how far the mean sits from the quoted value.
+    /// `mean − mode`: how far the mean sits from the quoted value. Under the default shape
+    /// the join point (the mode) is also the median, so `shift` is equally the mean's distance
+    /// from the median there — see [`shapes::DimidiatedGaussian`](super::shapes::DimidiatedGaussian).
     pub shift: f64,
     /// The variance about the mean.
     pub variance: f64,
@@ -65,69 +63,44 @@ impl AsymmetricMoments {
     }
 }
 
-fn k() -> f64 {
-    FRAC_2_PI.sqrt()
-}
-
-/// The moments of the dimidiated Gaussian with half-widths `sigma_minus` and `sigma_plus`.
+/// The moments of the default shape ([`ShapeKind::DEFAULT`]) with half-widths `sigma_minus`
+/// and `sigma_plus`.
 ///
 /// Both widths measure outwards from the mode, so both are non-negative; a negative one is a
-/// sign error at the call site rather than a distribution, and is rejected.
+/// sign error at the call site rather than a distribution, and is rejected. To use a shape
+/// other than the default, call [`AsymmetryShape::moments_from_sigmas`](super::shapes::AsymmetryShape::moments_from_sigmas)
+/// on a [`ShapeKind::strategy`] directly.
 ///
 /// ```
 /// use physure_core::uncertainty::moments::moments_from_sigmas;
-/// // Equal halves are an ordinary Gaussian: no shift, no skew.
+/// // Equal halves are an ordinary Gaussian under any shape: no shift, no skew.
 /// let m = moments_from_sigmas(0.5, 0.5).unwrap();
 /// assert_eq!(m.shift, 0.0);
 /// assert_eq!(m.third, 0.0);
 /// assert!((m.variance - 0.25).abs() < 1e-12);
 /// ```
 pub fn moments_from_sigmas(sigma_minus: f64, sigma_plus: f64) -> PhysureResult<AsymmetricMoments> {
-    if !sigma_minus.is_finite() || !sigma_plus.is_finite() || sigma_minus < 0.0 || sigma_plus < 0.0 {
-        return Err(PhysureError::Generic(format!(
-            "An asymmetric uncertainty needs two finite non-negative half-widths measured outwards \
-             from the value, got ({}, {})",
-            sigma_minus, sigma_plus
-        )));
-    }
-    let d = sigma_plus - sigma_minus;
-    let product = sigma_plus * sigma_minus;
-    Ok(AsymmetricMoments {
-        shift: k() * d,
-        variance: product + (1.0 - FRAC_2_PI) * d * d,
-        third: k() * d * (product + (4.0 / PI - 1.0) * d * d),
-    })
+    ShapeKind::DEFAULT.strategy().moments_from_sigmas(sigma_minus, sigma_plus)
 }
 
-/// The skewness of a dimidiated Gaussian with `sigma_plus / sigma_minus == ratio`.
+/// The largest skewness the default shape ([`ShapeKind::DEFAULT`]) can represent as a pair of
+/// half-widths, reached in the one-sided limit σ⁻ → 0.
 ///
-/// Scale-free, which is what makes the inverse map a one-dimensional search: the shape is
-/// fixed by the ratio alone, and the variance only sets how wide it is afterwards.
-fn skewness_of_ratio(ratio: f64) -> f64 {
-    let d = ratio - 1.0;
-    let variance = ratio + (1.0 - FRAC_2_PI) * d * d;
-    k() * d * (ratio + (4.0 / PI - 1.0) * d * d) / variance.powf(1.5)
-}
-
-/// The largest skewness a dimidiated Gaussian can have, reached in the one-sided limit σ⁻ → 0.
-///
-/// It is a little under 1, so a distribution more skewed than this cannot be written as a pair
-/// of half-widths at all. That is a property of the shape, not a limitation of the search, and
+/// A distribution more skewed than this cannot be written as a pair under the default shape at
+/// all. That is a property of the shape, not a limitation of the search, and
 /// [`sigmas_from_moments`] reports it rather than returning the closest thing it can find.
 pub fn max_skewness() -> f64 {
-    k() * (4.0 / PI - 1.0) / (1.0 - FRAC_2_PI).powf(1.5)
+    ShapeKind::DEFAULT.strategy().max_skewness()
 }
 
-/// The `(σ⁻, σ⁺)` pair whose dimidiated Gaussian has this variance and third moment.
+/// The `(σ⁻, σ⁺)` pair whose default-shape ([`ShapeKind::DEFAULT`]) distribution has this
+/// variance and third moment.
 ///
 /// The inverse of [`moments_from_sigmas`]. Only two of the three moments are needed: the pair
 /// fixes the shape and the width, and `shift` then says where the mode sits relative to the
-/// mean, so recovering it from the pair is exact rather than a third constraint to satisfy.
-///
-/// The ratio σ⁺/σ⁻ is found by bisection on the skewness, which is monotonic in it, and the
-/// variance scales the result. A skewness beyond [`max_skewness`] is not representable and is
-/// rejected — silently returning the most skewed shape available would understate the tail by
-/// an unbounded amount.
+/// mean, so recovering it from the pair is exact rather than a third constraint to satisfy. A
+/// skewness beyond [`max_skewness`] is not representable and is rejected — silently returning
+/// the most skewed shape available would understate the tail by an unbounded amount.
 ///
 /// ```
 /// use physure_core::uncertainty::moments::{moments_from_sigmas, sigmas_from_moments};
@@ -136,159 +109,586 @@ pub fn max_skewness() -> f64 {
 /// assert!((lo - 0.4).abs() < 1e-9 && (hi - 0.5).abs() < 1e-9);
 /// ```
 pub fn sigmas_from_moments(variance: f64, third: f64) -> PhysureResult<(f64, f64)> {
-    if !variance.is_finite() || !third.is_finite() || variance < 0.0 {
-        return Err(PhysureError::Generic(format!(
-            "Cannot recover half-widths from a non-finite or negative variance: ({}, {})",
-            variance, third
-        )));
-    }
-    if variance == 0.0 {
-        // No spread at all leaves nothing for a third moment to describe.
-        return if third == 0.0 {
-            Ok((0.0, 0.0))
-        } else {
-            Err(PhysureError::Generic(format!(
-                "A zero variance cannot carry a third moment of {}",
-                third
-            )))
-        };
+    ShapeKind::DEFAULT.strategy().sigmas_from_moments(variance, third)
+}
+
+/// One noise source as seen from a derived value: how sensitive the value is to it, and the
+/// source's own intrinsic central moments.
+///
+/// The split is what makes the third moment cancel the way [`Lineage`]'s standard deviation
+/// already does. Sensitivities are signed and linear, so they can be merged per source the
+/// same way `Lineage` merges coefficients; the variance and third moment cannot be merged that
+/// way; they only make sense multiplied by the *square* and *cube* of the merged sensitivity.
+/// Folding `a^3 * mu_3` per operand instead of per source is what silently breaks `2x - x`:
+/// each occurrence of `x` folds its own `a^3`, giving `2^3*mu_3 + (-1)^3*mu_3 = 7*mu_3` for a
+/// value that is exactly `x` and should report `x`'s own `mu_3`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceMoments {
+    /// This source's contribution to the value's linear sensitivity — what `Lineage`'s
+    /// coefficient is, but kept separate from the moments below so the two can be merged with
+    /// different arithmetic.
+    pub sensitivity: f64,
+    /// The source's own variance, before the sensitivity is applied.
+    pub variance: f64,
+    /// The source's own third central moment, before the sensitivity is applied.
+    pub third: f64,
+}
+
+/// Provenance for an asymmetric measurement, the way [`Lineage`] is provenance for a symmetric
+/// one — except each term carries its source's intrinsic `(variance, third)` alongside the
+/// signed sensitivity, rather than a single pre-multiplied number.
+///
+/// Terms are kept sorted by id, like `Lineage`, so merging is a linear walk; a term whose
+/// sensitivity has cancelled to zero is dropped rather than kept at zero, so a fully cancelled
+/// lineage — `x - x` — comes out with no terms rather than one dead one.
+///
+/// Ids are minted from [`fresh_id`], the same counter `Lineage` uses. An id therefore names
+/// either a `Lineage` source or a `MomentLineage` source, never both, which is what lets a
+/// symmetric value promoted into the moments world ([`MomentLineage::from_lineage`]) keep its
+/// id and still cancel against itself later: there is no way for that id to collide with one a
+/// `MomentLineage` minted directly, and no ambiguity about which arithmetic a shared id implies.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct MomentLineage {
+    terms: Vec<(u32, SourceMoments)>,
+}
+
+impl MomentLineage {
+    /// A value with no uncertainty at all.
+    pub fn exact() -> Self {
+        Self { terms: Vec::new() }
     }
 
-    let skew = third / variance.powf(1.5);
-    let target = skew.abs();
-    if target > max_skewness() {
-        return Err(PhysureError::Generic(format!(
-            "A skewness of {:.4} cannot be written as a pair of half-widths: the dimidiated \
-             Gaussian tops out at {:.4}, reached only when one side is zero",
-            skew,
-            max_skewness()
-        )));
+    /// A newly measured asymmetric quantity, carrying its own variance and third moment.
+    /// Mints a fresh source id: measuring twice gives two independent measurements, exactly as
+    /// [`Lineage::measured`] does.
+    ///
+    /// A source with no variance and no third moment is exact, so it gets no id — minting one
+    /// would let two unrelated exact constants "cancel" against each other later.
+    pub fn measured(variance: f64, third: f64) -> Self {
+        Self::measured_with_id(fresh_id(), variance, third)
     }
 
-    let ratio = if target >= skewness_of_ratio(RATIO_MAX) {
-        // The one-sided limit, where the closed form is exact and the search is not.
-        f64::INFINITY
-    } else {
-        let (mut lo, mut hi) = (1.0, RATIO_MAX);
-        for _ in 0..100 {
-            let mid = 0.5 * (lo + hi);
-            if skewness_of_ratio(mid) < target {
-                lo = mid;
-            } else {
-                hi = mid;
+    /// A measured quantity tied to a caller-supplied source id rather than a fresh one, the
+    /// moments analogue of [`Lineage::measured_with_id`].
+    pub fn measured_with_id(id: u32, variance: f64, third: f64) -> Self {
+        reserve_id(id);
+        if variance == 0.0 && third == 0.0 {
+            return Self::exact();
+        }
+        Self { terms: vec![(id, SourceMoments { sensitivity: 1.0, variance, third })] }
+    }
+
+    /// Lifts a symmetric, lineage-tracked value into the moments world. `(id, c)` becomes
+    /// `(id, {sensitivity: c, variance: 1, third: 0})`: only `sensitivity^2 * variance` and
+    /// `sensitivity^3 * third` are ever read back out, so this reproduces the lineage's own
+    /// variance exactly (`c^2 * 1 == c^2`) and stays skew-free (`third` is 0) — while keeping
+    /// the ids, so a later reuse of the same source still cancels against this one.
+    pub fn from_lineage(l: &Lineage) -> Self {
+        Self {
+            terms: l
+                .terms()
+                .iter()
+                .map(|&(id, c)| (id, SourceMoments { sensitivity: c, variance: 1.0, third: 0.0 }))
+                .collect(),
+        }
+    }
+
+    /// Rebuilds a moments lineage from raw terms, restoring the invariants the rest of this
+    /// type relies on: sorted by id, one term per id, no dead or non-finite sensitivities.
+    /// Mirrors [`Lineage::from_terms`] exactly, including reserving the largest id seen so a
+    /// term that came from outside this counter — a round trip through another language, say
+    /// — can never be handed out again by [`fresh_id`].
+    pub fn from_terms(mut terms: Vec<(u32, SourceMoments)>) -> Self {
+        if let Some(&(max_id, _)) = terms.iter().max_by_key(|&&(id, _)| id) {
+            reserve_id(max_id);
+        }
+        terms.sort_by_key(|t| t.0);
+        let mut out: Vec<(u32, SourceMoments)> = Vec::with_capacity(terms.len());
+        for (id, s) in terms {
+            match out.last_mut() {
+                // A shared id is the same measurement seen twice, so its intrinsic moments
+                // must already agree — only the sensitivities add.
+                Some((last_id, last_s)) if *last_id == id => {
+                    debug_assert_eq!(last_s.variance, s.variance);
+                    debug_assert_eq!(last_s.third, s.third);
+                    last_s.sensitivity += s.sensitivity;
+                }
+                _ => out.push((id, s)),
             }
         }
-        0.5 * (lo + hi)
-    };
+        out.retain(|t| t.1.sensitivity != 0.0 && t.1.sensitivity.is_finite());
+        Self { terms: out }
+    }
 
-    let (narrow, wide) = if ratio.is_finite() {
-        let d = ratio - 1.0;
-        let narrow = (variance / (ratio + (1.0 - FRAC_2_PI) * d * d)).sqrt();
-        (narrow, ratio * narrow)
-    } else {
-        (0.0, (variance / (1.0 - FRAC_2_PI)).sqrt())
-    };
+    /// The terms, sorted by id.
+    pub fn terms(&self) -> &[(u32, SourceMoments)] {
+        &self.terms
+    }
 
-    Ok(if skew < 0.0 { (wide, narrow) } else { (narrow, wide) })
+    /// `Σ sensitivity² * variance` over the sources — the variance this lineage represents.
+    ///
+    /// The empty case is spelled out rather than left to the fold, for the same reason
+    /// [`Lineage::std_dev`] spells it out: `impl Sum for f64` folds from `-0.0`, so a fully
+    /// cancelled lineage would otherwise report a variance of `-0.0` instead of `0.0`.
+    pub fn variance(&self) -> f64 {
+        if self.terms.is_empty() {
+            return 0.0;
+        }
+        self.terms.iter().map(|(_, s)| s.sensitivity * s.sensitivity * s.variance).sum()
+    }
+
+    /// `Σ sensitivity³ * third` over the sources — the third central moment this lineage
+    /// represents. This is the sum a bare scalar accumulator cannot reproduce, because it needs
+    /// the merged, signed sensitivity of each source, not a per-operand contribution.
+    ///
+    /// The empty case is spelled out for the same `-0.0`-from-`Sum` reason as [`Self::variance`].
+    pub fn third(&self) -> f64 {
+        if self.terms.is_empty() {
+            return 0.0;
+        }
+        self.terms.iter().map(|(_, s)| s.sensitivity.powi(3) * s.third).sum()
+    }
+
+    /// The standard deviation this lineage represents. Clamped at zero like
+    /// [`AsymmetricMoments::std_dev`]: nothing in this module can produce a negative variance
+    /// today, but the two spellings of "standard deviation from a variance" in this file should
+    /// agree regardless.
+    pub fn std_dev(&self) -> f64 {
+        self.variance().max(0.0).sqrt()
+    }
+
+    /// Applies a single partial derivative, as for a one-argument function. The jacobian
+    /// multiplies every source's sensitivity directly, so it lands cubed in [`Self::third`] and
+    /// squared in [`Self::variance`] the next time either is read — which is why negating a
+    /// value flips the sign of its skew but not of its variance.
+    ///
+    /// Routed through [`push_term`] so the no-dead-and-no-non-finite-sensitivity invariant holds
+    /// however the lineage was built, not just for the ones that came out of [`Self::combine`] —
+    /// mirrors [`Lineage::scale`]. A non-finite jacobian collapses to [`Self::exact`] rather than
+    /// producing `NaN` sensitivities that would poison every later read.
+    pub fn scale(&self, jacobian: f64) -> Self {
+        if jacobian == 0.0 || !jacobian.is_finite() {
+            return Self::exact();
+        }
+        let mut out = Vec::with_capacity(self.terms.len());
+        for &(id, s) in &self.terms {
+            push_term(&mut out, id, SourceMoments { sensitivity: s.sensitivity * jacobian, ..s });
+        }
+        Self { terms: out }
+    }
+
+    /// Merges two moments lineages under the chain rule, the moments analogue of
+    /// [`Lineage::combine`].
+    ///
+    /// In `uncorrelated` mode every value is a fresh, independent measurement, mirroring
+    /// [`Lineage::combine`]'s own `combine_independent` arm: the variances and third moments are
+    /// folded through the jacobian powers first (`Σ j² V` and `Σ j³ μ₃`), and the result is one
+    /// freshly minted source carrying them — no id from either operand survives, so nothing
+    /// downstream can later cancel against them.
+    ///
+    /// In `correlated` mode, sensitivities are merged per source *first* — `ja * a(id) + jb *
+    /// b(id)`, exactly as `Lineage::combine` merges coefficients — and only then are the merged
+    /// sensitivities squared and cubed against the source's own `(variance, third)`. A shared id
+    /// names the same measurement on both sides, so its intrinsic moments must already agree;
+    /// that invariant is asserted in debug builds rather than silently trusted, since a
+    /// violation would mean two different sources had been given the same id upstream.
+    pub fn combine(a: &Self, ja: f64, b: &Self, jb: f64) -> Self {
+        if propagation_mode() == PropagationMode::Uncorrelated {
+            let variance = ja * ja * a.variance() + jb * jb * b.variance();
+            let third = ja.powi(3) * a.third() + jb.powi(3) * b.third();
+            return Self::measured(variance, third);
+        }
+
+        let (at, bt) = (a.terms(), b.terms());
+        let mut out: Vec<(u32, SourceMoments)> = Vec::with_capacity(at.len() + bt.len());
+        let (mut i, mut j) = (0, 0);
+
+        while i < at.len() && j < bt.len() {
+            match at[i].0.cmp(&bt[j].0) {
+                std::cmp::Ordering::Less => {
+                    push_term(&mut out, at[i].0, SourceMoments { sensitivity: at[i].1.sensitivity * ja, ..at[i].1 });
+                    i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    push_term(&mut out, bt[j].0, SourceMoments { sensitivity: bt[j].1.sensitivity * jb, ..bt[j].1 });
+                    j += 1;
+                }
+                std::cmp::Ordering::Equal => {
+                    debug_assert_eq!(at[i].1.variance, bt[j].1.variance);
+                    debug_assert_eq!(at[i].1.third, bt[j].1.third);
+                    push_term(
+                        &mut out,
+                        at[i].0,
+                        SourceMoments {
+                            sensitivity: at[i].1.sensitivity * ja + bt[j].1.sensitivity * jb,
+                            ..at[i].1
+                        },
+                    );
+                    i += 1;
+                    j += 1;
+                }
+            }
+        }
+        for &(id, s) in &at[i..] {
+            push_term(&mut out, id, SourceMoments { sensitivity: s.sensitivity * ja, ..s });
+        }
+        for &(id, s) in &bt[j..] {
+            push_term(&mut out, id, SourceMoments { sensitivity: s.sensitivity * jb, ..s });
+        }
+
+        Self { terms: out }
+    }
+}
+
+/// Pushes a term unless its sensitivity is dead — zero, or non-finite from an operation like
+/// scaling by infinity. Mirrors `lineage`'s own `push_term` so both types keep the same
+/// "no dead coefficients" invariant, however they were built rather than only for terms that
+/// came out of [`MomentLineage::combine`].
+fn push_term(out: &mut Vec<(u32, SourceMoments)>, id: u32, s: SourceMoments) {
+    if s.sensitivity != 0.0 && s.sensitivity.is_finite() {
+        out.push((id, s));
+    }
+}
+
+/// The error for combining, multiplying, or dividing two asymmetric values built with different
+/// shapes: the moments still add or multiply fine regardless of shape (variance and third
+/// moment do not care which shape produced them), but the eventual `(σ⁻, σ⁺)` read-out would be
+/// ambiguous for a mix.
+///
+/// Shared by [`MomentsBackend::combine`] and, from `trait_def.rs`, the enum's
+/// `(Moments, Moments)` mul/div arms — [`MomentsBackend::first_order`] cannot make this check on
+/// its own, since it only ever sees bare [`MomentLineage`]s, never the [`ShapeKind`] of the
+/// backend either one came from (that's exactly why it takes `shape` as an explicit parameter
+/// now rather than reading `self.shape`: an `&self` method always answered with its own shape,
+/// which is what let `Dimidiated * Fechner` succeed silently instead of refusing the way
+/// `Dimidiated + Fechner` already does through `combine`).
+pub(super) fn shape_mismatch() -> PhysureError {
+    PhysureError::Generic(
+        "Cannot combine asymmetric values built with different shapes: the moments add, but the \
+         (sigma-, sigma+) read-out would be ambiguous. Rebuild the operands with one shape."
+            .into(),
+    )
 }
 
 /// A measured asymmetric value, held as the moments a propagation model needs.
 ///
-/// A container, not a model. It carries the mean, the spread with its provenance, and the
-/// third moment, and stops there. How a third moment combines when two values meet — what a
-/// shared source does to the skew, what a jacobian does to it — is the propagation design, and
-/// it is deliberately left open here rather than settled by the first thing that compiles.
+/// `shape` and `sources` replace what used to be a bare `sigma: Lineage` and a scalar `third`:
+/// a `MomentLineage` carries the *intrinsic* `(variance, third)` of every contributing source
+/// separately from the sensitivity that combined them, which is what lets the third moment
+/// cancel correctly through repeated use of the same source (`2x - x == x`) the way `Lineage`
+/// already lets the standard deviation cancel. `shape` records which pair-to-moments map this
+/// particular value was built with, so reading it back out as `(σ⁻, σ⁺)` — after arithmetic has
+/// mixed several sources together — knows which inverse map to use.
 #[derive(Clone, Debug)]
 pub struct MomentsBackend {
     /// The mean, not the quoted value. See [`MomentsBackend::mode`].
     pub mean: f64,
-    /// The standard deviation and its provenance, exactly as the Gaussian backend holds it.
-    pub sigma: Lineage,
-    /// The third central moment about the mean.
-    pub third: f64,
+    /// Which [`AsymmetryShape`](super::shapes::AsymmetryShape) this value's `(σ⁻, σ⁺)` read-out
+    /// is interpreted under.
+    pub shape: ShapeKind,
+    /// The provenance of the spread: every contributing source's own `(variance, third)`
+    /// alongside its signed sensitivity. See [`MomentLineage`].
+    pub sources: MomentLineage,
 }
 
 impl MomentsBackend {
-    /// A newly measured asymmetric quantity, quoted as `value +sigma_plus -sigma_minus`.
+    /// A newly measured asymmetric quantity, quoted as `value +sigma_plus -sigma_minus`, under
+    /// the default shape ([`ShapeKind::DEFAULT`]).
     ///
     /// `value` is the mode — the number the experimenter wrote — so the mean lands a little to
     /// the long-tailed side of it. Each call mints a fresh source id, as measuring twice gives
     /// two independent measurements.
     pub fn measured(value: f64, sigma_minus: f64, sigma_plus: f64) -> PhysureResult<Self> {
-        let m = moments_from_sigmas(sigma_minus, sigma_plus)?;
-        Ok(MomentsBackend { mean: value + m.shift, sigma: Lineage::measured(m.std_dev()), third: m.third })
+        Self::measured_with(value, sigma_minus, sigma_plus, ShapeKind::DEFAULT, None)
     }
 
-    /// The moments of this value.
-    pub fn moments(&self) -> AsymmetricMoments {
-        let std_dev = self.sigma.std_dev();
-        AsymmetricMoments { shift: 0.0, variance: std_dev * std_dev, third: self.third }
-            .with_shift_from_sigmas()
+    /// As [`Self::measured`], but with an explicit shape and, optionally, a caller-supplied
+    /// source id rather than a freshly minted one — the moments analogue of
+    /// [`Lineage::measured_with_id`].
+    pub fn measured_with(
+        value: f64,
+        sigma_minus: f64,
+        sigma_plus: f64,
+        shape: ShapeKind,
+        id: Option<u32>,
+    ) -> PhysureResult<Self> {
+        let m = shape.strategy().moments_from_sigmas(sigma_minus, sigma_plus)?;
+        let sources = match id {
+            Some(id) => MomentLineage::measured_with_id(id, m.variance, m.third),
+            None => MomentLineage::measured(m.variance, m.third),
+        };
+        Ok(MomentsBackend { mean: value + m.shift, shape, sources })
     }
 
-    /// The `(σ⁻, σ⁺)` pair to report this value as.
-    pub fn sigmas(&self) -> PhysureResult<(f64, f64)> {
-        let std_dev = self.sigma.std_dev();
-        sigmas_from_moments(std_dev * std_dev, self.third)
+    /// Lifts a symmetric, lineage-tracked value into the moments world, keeping its source ids
+    /// so a later reuse of the same source still cancels. See [`MomentLineage::from_lineage`].
+    pub fn from_lineage(mean: f64, lineage: &Lineage) -> Self {
+        MomentsBackend { mean, shape: ShapeKind::DEFAULT, sources: MomentLineage::from_lineage(lineage) }
     }
 
-    /// The mode: the value to quote the half-widths around.
-    pub fn mode(&self) -> PhysureResult<f64> {
-        Ok(self.mean - self.moments().shift)
+    /// The variance this value represents — `Σ sensitivity² · variance` over its sources.
+    pub fn variance(&self) -> f64 {
+        self.sources.variance()
     }
-}
 
-impl AsymmetricMoments {
-    /// Fills in the shift implied by the pair this variance and third moment describe.
+    /// The third central moment this value represents — `Σ sensitivity³ · third` over its
+    /// sources.
+    pub fn third(&self) -> f64 {
+        self.sources.third()
+    }
+
+    /// The dimensionless skewness `μ₃ / σ³`, or zero for a value with no spread. Mirrors
+    /// [`AsymmetricMoments::skewness`].
+    pub fn skewness(&self) -> f64 {
+        let v = self.variance();
+        if v <= 0.0 { 0.0 } else { self.third() / v.powf(1.5) }
+    }
+
+    /// `mean − mode`, under [`Self::shape`](Self)'s pair-to-moments map.
     ///
-    /// The shift is not free once the other two are fixed, so computing it here keeps a value's
-    /// mode consistent with the pair it will be printed as.
-    fn with_shift_from_sigmas(self) -> Self {
-        match self.sigmas() {
-            Ok((lo, hi)) => AsymmetricMoments { shift: k() * (hi - lo), ..self },
-            // Too skewed for the pair form. The variance and third moment are still exactly
-            // what they were; only the mode is unavailable, and reporting the mean as the mode
-            // is the symmetric answer, which is the one that does not invent a number.
-            Err(_) => self,
+    /// Explicit rather than silent: once arithmetic has mixed several sources together, the
+    /// resulting `(variance, third)` may be more skewed than any `(σ⁻, σ⁺)` pair under this
+    /// shape can express (see [`shapes::AsymmetryShape::sigmas_from_moments`](super::shapes::AsymmetryShape::sigmas_from_moments)),
+    /// and in that case there is no honest mode to report — `Err`, not the mean, which would
+    /// silently claim the value has become symmetric.
+    pub fn shift(&self) -> PhysureResult<f64> {
+        let (lo, hi) = self.shape.strategy().sigmas_from_moments(self.variance(), self.third())?;
+        Ok(self.shape.strategy().moments_from_sigmas(lo, hi)?.shift)
+    }
+
+    /// The `(σ⁻, σ⁺)` pair to report this value as, under [`Self::shape`](Self). See
+    /// [`Self::shift`] for why this can fail.
+    pub fn sigmas(&self) -> PhysureResult<(f64, f64)> {
+        self.shape.strategy().sigmas_from_moments(self.variance(), self.third())
+    }
+
+    /// The mode: the value to quote the half-widths around. See [`Self::shift`] for why this
+    /// can fail.
+    pub fn mode(&self) -> PhysureResult<f64> {
+        Ok(self.mean - self.shift()?)
+    }
+
+    /// The moments of this value, as an [`AsymmetricMoments`]. See [`Self::shift`] for why this
+    /// can fail even though [`Self::variance`] and [`Self::third`] never do.
+    pub fn moments(&self) -> PhysureResult<AsymmetricMoments> {
+        Ok(AsymmetricMoments { shift: self.shift()?, variance: self.variance(), third: self.third() })
+    }
+
+    /// The primitive every propagation path is built from: `mean = Σ aᵢ·meanᵢ` over the terms,
+    /// their sources folded by [`MomentLineage::combine`].
+    ///
+    /// Correct **only for an affine combination** — a sum or a difference, where each operand's
+    /// mean really does contribute linearly to the result. A product's first-order mean is
+    /// `mean_a · mean_b`, not `Σ aᵢ·meanᵢ`, which is exactly why `propagate_mul`/`propagate_div`
+    /// use [`Self::first_order`] instead of this.
+    ///
+    /// All terms must share one shape — the moments themselves add regardless (variance and
+    /// third moment do not care which shape produced them), but the `(σ⁻, σ⁺)` read-out would
+    /// be ambiguous for a mix, so that case is refused rather than silently picking one side's
+    /// shape.
+    pub fn combine(terms: &[(f64, &MomentsBackend)]) -> PhysureResult<MomentsBackend> {
+        let shape = terms.first().map(|(_, b)| b.shape).unwrap_or(ShapeKind::DEFAULT);
+        if terms.iter().any(|(_, b)| b.shape != shape) {
+            return Err(shape_mismatch());
         }
+        let mut mean = 0.0;
+        let mut sources = MomentLineage::exact();
+        for &(a, b) in terms {
+            mean += a * b.mean;
+            sources = MomentLineage::combine(&sources, 1.0, &b.sources, a);
+        }
+        Ok(MomentsBackend { mean, shape, sources })
+    }
+
+    /// Applies a single partial derivative, as for a one-argument function: `mean · jacobian`,
+    /// with `sources` scaled the same way [`MomentLineage::scale`] scales a lineage. Affine —
+    /// correct when the whole value is being multiplied by a constant, which is *not* the same
+    /// as [`Self::powered`]/[`Self::applied`] below, where the mean itself transforms
+    /// non-linearly and only the spread scales like this.
+    pub fn scale(&self, jacobian: f64) -> Self {
+        MomentsBackend { mean: self.mean * jacobian, shape: self.shape, sources: self.sources.scale(jacobian) }
+    }
+
+    /// The non-affine counterpart to [`Self::combine`]: folds sources through the chain rule
+    /// exactly as `combine` does, but takes the result `shape` and `mean` explicitly instead of
+    /// reading `self.shape` and deriving the mean as `Σ aᵢ·meanᵢ`.
+    ///
+    /// Needed the moment two values are *multiplied* (or divided, or one is raised to a power):
+    /// `d(ab)/da = b` and `d(ab)/db = a` are the right sensitivities for the *spread*, but the
+    /// mean of a product is `mean_a · mean_b`, not `b·mean_a + a·mean_b`. Using [`Self::combine`]
+    /// here would produce a plausible-looking but wrong mean for every non-linear operation.
+    ///
+    /// An associated function rather than an `&self` method, and `shape` an explicit parameter
+    /// rather than always `self.shape`: this only ever sees bare [`MomentLineage`]s, so it
+    /// cannot check two real operands' shapes agree the way [`Self::combine`] does — that check
+    /// has to happen at the call site, where both operands' [`ShapeKind`]s are still visible
+    /// (the enum's `(Moments, Moments)` mul/div arms in `trait_def.rs`, via [`shape_mismatch`]).
+    /// An `&self` method would have silently always answered with `self.shape`, which is exactly
+    /// what let `Dimidiated * Fechner` succeed instead of refusing like `Dimidiated + Fechner`.
+    pub(super) fn first_order(shape: ShapeKind, mean: f64, terms: &[(f64, &MomentLineage)]) -> MomentsBackend {
+        let mut sources = MomentLineage::exact();
+        for &(a, l) in terms {
+            sources = MomentLineage::combine(&sources, 1.0, l, a);
+        }
+        MomentsBackend { mean, shape, sources }
+    }
+
+    /// This value raised to `exponent`: `mean' = mean^exponent`, `jacobian = exponent ·
+    /// mean^(exponent−1)` applied to the sources via [`Self::scale`] (single operand, so there
+    /// is nothing to merge — the source ids survive, which is what lets `x² / x²` cancel).
+    ///
+    /// Evaluated at `self.mean`, not [`Self::mode`] — the delta method is `E[f(X)] ≈ f(E[X])`,
+    /// and evaluating at the mode instead would move an *identity* operation: `x.powf(1.0)` must
+    /// be an exact no-op, but the mode differs from the mean by the shape's shift, so evaluating
+    /// there would shift the result for no reason. It would also mean the field this struct
+    /// documents as "the mean" would actually hold a mode after every `pow`/function call,
+    /// silently breaking every later operation that reads `.mean` expecting a mean (`cos(x) + y`
+    /// would then be mixing a mode and a mean). Nothing about "the result of applying this to
+    /// the quoted value" is lost by evaluating at the mean instead: the *output's own* `.mode()`
+    /// still comes back at ≈ `f(quoted value)`, to first order.
+    ///
+    /// Guards `mean == 0.0 && exponent > 0.0` exactly like `gaussian.rs`'s own pow arm: the
+    /// jacobian's `mean^(exponent−1)` is undefined there for a fractional exponent, and the
+    /// honest answer for "zero to a positive power" is exact zero, not a computed `NaN`. This
+    /// has to compare against the mean and not a `mode()` recovered by bisection — a value built
+    /// exactly at zero variance-of-skew (a symmetric measurement) has `mean == 0.0` exactly, but
+    /// `mode()`'s round trip through `sigmas_from_moments`'s search can land a few ulps off zero,
+    /// which used to let the guard miss and silently annihilate the variance through a tiny but
+    /// nonzero jacobian instead of returning the honest exact zero.
+    pub(super) fn powered(&self, exponent: f64) -> Self {
+        let m = self.mean;
+        if m == 0.0 && exponent > 0.0 {
+            return MomentsBackend { mean: 0.0, shape: self.shape, sources: MomentLineage::exact() };
+        }
+        let new_mean = m.powf(exponent);
+        let jacobian = exponent * m.powf(exponent - 1.0);
+        let mut result = self.scale(jacobian);
+        result.mean = new_mean;
+        result
+    }
+
+    /// This value passed through a supported one-argument function, evaluated at `self.mean` for
+    /// the same reason as [`Self::powered`] (an identity-shaped function must not shift the
+    /// value, and the mean field must stay a mean after the call), using the *signed* derivative
+    /// table in [`function_mean_and_jacobian`] — see that function's own doc comment for why the
+    /// sign matters here and not in the Gaussian backend.
+    ///
+    /// Still fallible, unlike [`Self::powered`]: evaluating at the mean removed the
+    /// mode-recovery failure mode, but an unrecognised function name is a real refusal
+    /// independent of that (see [`function_mean_and_jacobian`]).
+    pub(super) fn applied(&self, func: &str) -> PhysureResult<Self> {
+        let (new_mean, jacobian) = function_mean_and_jacobian(func, self.mean)?;
+        let mut result = self.scale(jacobian);
+        result.mean = new_mean;
+        Ok(result)
     }
 }
 
-// TODO: moment propagation is not implemented — see the asymmetric-uncertainty work. Until it
-// is, every arithmetic path refuses. Falling back to the Gaussian rules would look like it
-// worked and quietly report a symmetric answer for a measurement whose whole point is that it
-// is not symmetric, which is the failure this model exists to prevent.
+/// The value and *signed* first derivative of a supported one-argument function at `m`.
+///
+/// `gaussian::function_mean_and_jacobian` already keeps every entry signed (its `cos` is
+/// `-m.sin()`, not `m.sin().abs()`) — a symmetric spread only ever reads a jacobian back
+/// squared, so the sign never mattered there either way. Two real differences from that table,
+/// both deliberate:
+///
+/// - **`abs`**: `gaussian.rs` documents choosing a jacobian of `1.0` there, rather than
+///   `signum(m)`, because folding a magnitude to its absolute value moves where a *symmetric*
+///   measurement sits, not how well it is known, and a sign flip on every coefficient would be
+///   an arbitrary choice that breaks cancellation for no gain. A third moment does not get that
+///   free pass: negating a value flips the sign of its skew, and `abs` on a negative input is
+///   locally exactly a negation, so this table uses the signed `if m >= 0.0 { 1.0 } else {
+///   -1.0 }` instead — `J³` in [`MomentLineage::third`] is what carries that sign through.
+/// - **An unsupported function name refuses outright** rather than falling through to the
+///   identity map the symmetric table's `_ => (m, 1.0)` arm uses, since silently answering "no
+///   change" for a function this model does not actually know would misreport the result rather
+///   than the model's own limits.
+fn function_mean_and_jacobian(func: &str, m: f64) -> PhysureResult<(f64, f64)> {
+    Ok(match func {
+        "sin" => (m.sin(), m.cos()),
+        "cos" => (m.cos(), -m.sin()),
+        "exp" => (m.exp(), m.exp()),
+        "log" => (m.ln(), 1.0 / m),
+        "tan" => {
+            let t = m.tan();
+            (t, 1.0 + t * t)
+        }
+        "tanh" => {
+            let t = m.tanh();
+            (t, 1.0 - t * t)
+        }
+        "abs" => (m.abs(), if m >= 0.0 { 1.0 } else { -1.0 }),
+        _ => return Err(not_implemented(func)),
+    })
+}
+
 impl UncertaintyBackend for MomentsBackend {
     fn mean(&self) -> f64 {
         self.mean
     }
 
     fn std_dev(&self) -> f64 {
-        self.sigma.std_dev()
+        self.sources.std_dev()
     }
 
-    fn propagate_add(&self, _other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Err(not_implemented("addition"))
+    /// Treats `other` as an independent symmetric source — `MomentLineage::measured(other.std_dev()², 0.0)`
+    /// — because the `UncertaintyBackend` trait exposes only `mean()`/`std_dev()`, so a foreign
+    /// backend's own skew (if it even has a notion of one) simply is not visible from here.
+    /// This matches how the Gaussian arms only ever read `mean()`/`std_dev()` off a foreign
+    /// backend, and it is reached only when the two operands are not *both* statically known to
+    /// be `MomentsBackend`: `UncertaintyValue::propagate_add`'s `(Moments, Moments)` arm goes
+    /// through [`Self::combine`] directly instead, so two real asymmetric values never flatten
+    /// each other this way.
+    fn propagate_add(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
+        let other_m = MomentsBackend {
+            mean: other.mean(),
+            shape: self.shape,
+            sources: MomentLineage::measured(other.std_dev() * other.std_dev(), 0.0),
+        };
+        Ok(Box::new(MomentsBackend::combine(&[(1.0, self), (1.0, &other_m)])?))
     }
 
-    fn propagate_sub(&self, _other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Err(not_implemented("subtraction"))
+    fn propagate_sub(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
+        let other_m = MomentsBackend {
+            mean: other.mean(),
+            shape: self.shape,
+            sources: MomentLineage::measured(other.std_dev() * other.std_dev(), 0.0),
+        };
+        Ok(Box::new(MomentsBackend::combine(&[(1.0, self), (-1.0, &other_m)])?))
     }
 
-    fn propagate_mul(&self, _other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Err(not_implemented("multiplication"))
+    /// `mean' = mean_self · mean_other` (first order, not `combine`'s `Σaμ`); the sensitivities
+    /// are `d(ab)/da = b` and `d(ab)/db = a`. See [`Self::first_order`].
+    fn propagate_mul(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
+        let (m1, m2) = (self.mean, other.mean());
+        let other_sources = MomentLineage::measured(other.std_dev() * other.std_dev(), 0.0);
+        Ok(Box::new(MomentsBackend::first_order(
+            self.shape,
+            m1 * m2,
+            &[(m2, &self.sources), (m1, &other_sources)],
+        )))
     }
 
-    fn propagate_div(&self, _other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Err(not_implemented("division"))
+    /// Guards `other.mean() == 0.0` exactly like `gaussian.rs`'s division arm — the honest
+    /// answer for a zero denominator is an error, not an infinite or `NaN` result.
+    fn propagate_div(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
+        let (m1, m2) = (self.mean, other.mean());
+        if m2 == 0.0 {
+            return Err(PhysureError::DivisionByZero("Division by zero in uncertainty propagation".into()));
+        }
+        let other_sources = MomentLineage::measured(other.std_dev() * other.std_dev(), 0.0);
+        Ok(Box::new(MomentsBackend::first_order(
+            self.shape,
+            m1 / m2,
+            &[(1.0 / m2, &self.sources), (-m1 / m2.powi(2), &other_sources)],
+        )))
     }
 
-    fn propagate_pow(&self, _exponent: f64) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Err(not_implemented("exponentiation"))
+    fn propagate_pow(&self, exponent: f64) -> PhysureResult<Box<dyn UncertaintyBackend>> {
+        Ok(Box::new(self.powered(exponent)))
     }
 
     fn propagate_function(&self, func: &str) -> PhysureResult<Box<dyn UncertaintyBackend>> {
-        Err(not_implemented(func))
+        Ok(Box::new(self.applied(func)?))
     }
 
     fn get_model_name(&self) -> &str {
@@ -296,12 +696,21 @@ impl UncertaintyBackend for MomentsBackend {
     }
 }
 
+/// An error for an operation this model genuinely cannot do. Two distinct uses:
+///
+/// - an unrecognised one-argument function name (see [`function_mean_and_jacobian`]);
+/// - from `trait_def.rs`, a mixed pair with a *foreign* backend on the left of a `Moments`
+///   operand (`Gaussian + Moments`, `MonteCarlo * Moments`, ...) — every such arm reads only
+///   `mean()`/`std_dev()` off its `other` operand, so it would silently drop the Moments side's
+///   third moment rather than refuse.
+///
+/// This is not a blanket "propagation unimplemented" refusal the way it used to be: arithmetic on
+/// a `Moments` value is implemented and succeeds whenever it is `self` — both a
+/// `(Moments, Moments)` pair and a `Moments`-on-the-left/foreign-on-the-right pair take a real
+/// path (the enum's own arm, or `MomentsBackend`'s `&dyn` trait methods, respectively). Only
+/// foreign-on-the-left, Moments-on-the-right refuses.
 pub(super) fn not_implemented(op: &str) -> PhysureError {
-    PhysureError::Generic(format!(
-        "Asymmetric uncertainties can be measured and reported but not yet propagated: {} is \
-         not implemented for the moments model",
-        op
-    ))
+    PhysureError::Generic(format!("{op} is not implemented for the moments model"))
 }
 
 #[cfg(test)]
@@ -382,18 +791,70 @@ mod tests {
         // The lineage half is already settled, so an asymmetric measurement is a source in the
         // same sense a symmetric one is: one id, cancelling against itself.
         let x = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
-        assert_eq!(x.sigma.terms().len(), 1);
-        assert_eq!(Lineage::combine(&x.sigma, 1.0, &x.sigma, -1.0).std_dev(), 0.0);
+        assert_eq!(x.sources.terms().len(), 1);
+        assert_eq!(MomentLineage::combine(&x.sources, 1.0, &x.sources, -1.0).variance(), 0.0);
     }
 
     #[test]
-    fn propagation_refuses_rather_than_answering_symmetrically() {
+    fn propagation_now_succeeds_instead_of_refusing() {
+        // Superseded placeholder: `MomentsBackend` used to refuse every arithmetic path
+        // unconditionally (see git history). Now that the moments primitive is implemented,
+        // this is a regression guard the other direction -- these must succeed, not refuse.
+        //
+        // A review caught the first version of this test asserting only `is_ok()`, which would
+        // still pass against a stub that silently symmetrised (dropped the third moment) --
+        // exactly the class of bug this module exists to prevent. So this checks the actual
+        // numbers `propagate_add`'s `&dyn` body (the path reached whenever a `MomentsBackend` is
+        // combined via the generic trait method rather than the enum's own arms) produces.
         let x = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
         let y = MomentsBackend::measured(1.0, 0.4, 0.5).unwrap();
-        let Err(err) = x.propagate_add(&y) else { panic!("answered instead of refusing") };
-        assert!(err.to_string().contains("not yet propagated"), "{err}");
-        assert!(x.propagate_pow(2.0).is_err());
-        assert!(x.propagate_function("sin").is_err());
+        let sum = x.propagate_add(&y).unwrap();
+        assert!((sum.mean() - (x.mean + y.mean)).abs() < 1e-12);
+        // `y` is folded in as a symmetric source here (third forced to 0), but its own real
+        // variance survives -- only its skew is invisible through the `&dyn` interface.
+        assert!((sum.std_dev().powi(2) - (x.variance() + y.variance())).abs() < 1e-9);
+
+        assert!(x.propagate_pow(2.0).is_ok());
+        assert!(x.propagate_function("sin").is_ok());
+        // The one corner that still refuses: a function name outside the derivative table,
+        // rather than silently falling through to the identity map.
+        assert!(x.propagate_function("gamma_fn_nobody_added").is_err());
+    }
+
+    #[test]
+    fn pow_guards_the_true_zero_mean_not_a_bisection_recovered_mode() {
+        // measured(0.0, 0.2, 0.2) is symmetric (sigma_minus == sigma_plus, so shift == 0.0
+        // exactly), so `.mean` is exactly 0.0 by construction -- unlike `.mode()`, which would
+        // have to recover it through `sigmas_from_moments`'s bisection search and can land a few
+        // ulps off zero. `powered`'s zero guard used to compare against that recovered mode and
+        // so could miss, letting a near-zero-but-nonzero jacobian silently annihilate the
+        // variance to something like 1e-34 instead of the honest exact zero.
+        let x = MomentsBackend::measured(0.0, 0.2, 0.2).unwrap();
+        assert_eq!(x.mean, 0.0);
+        let squared = x.powered(2.0);
+        assert_eq!(squared.mean, 0.0);
+        assert_eq!(squared.variance(), 0.0);
+        assert_eq!(squared.third(), 0.0);
+    }
+
+    #[test]
+    fn identity_shaped_ops_are_exact_no_ops_on_a_skewed_value() {
+        // The whole reason `powered`/`applied` evaluate at `self.mean` rather than `self.mode()`
+        // (see their doc comments): `x.powf(1.0)` and `abs()` of a strictly positive value are
+        // affine identities, jacobian `1.0`, so `scale(1.0)` must reproduce every field
+        // bit-for-bit -- `assert_eq!`, not an epsilon. Mode-evaluation broke exactly this: both
+        // shifted the value by `-shift`, which for this (0.1, 0.3) pair is no small effect.
+        let x = MomentsBackend::measured(1.0, 0.1, 0.3).unwrap();
+
+        let identity_pow = x.powered(1.0);
+        assert_eq!(identity_pow.mean, x.mean);
+        assert_eq!(identity_pow.variance(), x.variance());
+        assert_eq!(identity_pow.third(), x.third());
+
+        let identity_abs = x.applied("abs").unwrap();
+        assert_eq!(identity_abs.mean, x.mean);
+        assert_eq!(identity_abs.variance(), x.variance());
+        assert_eq!(identity_abs.third(), x.third());
     }
 
     #[test]
@@ -403,5 +864,113 @@ mod tests {
         assert!((x.mode().unwrap() - 12.3).abs() < 1e-9);
         let (lo, hi) = x.sigmas().unwrap();
         assert!((lo - 0.4).abs() < 1e-9 && (hi - 0.5).abs() < 1e-9);
+    }
+
+    // -- MomentLineage -----------------------------------------------------------------
+
+    #[test]
+    fn same_source_reused_cancels_in_both_moments() {
+        // 2x - x == x: net sensitivity 1, so variance AND third both return to the source's own.
+        let x = MomentLineage::measured_with_id(7, 4.0, 2.5);
+        let two_x_minus_x = MomentLineage::combine(&x, 2.0, &x, -1.0);
+        assert!((two_x_minus_x.variance() - 4.0).abs() < 1e-12);
+        assert!((two_x_minus_x.third() - 2.5).abs() < 1e-12); // a scalar accumulator says 7*2.5
+    }
+
+    #[test]
+    fn x_minus_x_is_exact_and_prunes_the_source() {
+        let x = MomentLineage::measured_with_id(9, 4.0, 2.5);
+        let zero = MomentLineage::combine(&x, 1.0, &x, -1.0);
+        assert_eq!(zero.terms().len(), 0);
+        assert_eq!(zero.variance(), 0.0);
+        assert_eq!(zero.third(), 0.0);
+        // `impl Sum for f64` folds from `-0.0`, and `(-0.0).sqrt()` is `-0.0`, so the empty case
+        // must be handled explicitly or a cancelled result prints as `-0.000000` — the same trap
+        // `Lineage::std_dev` documents and regression-tests.
+        assert!(!zero.variance().is_sign_negative(), "variance must never carry a negative sign");
+        assert!(!zero.third().is_sign_negative(), "a third moment must never carry a negative sign");
+        assert!(!zero.std_dev().is_sign_negative(), "a standard deviation must never carry a negative sign");
+    }
+
+    #[test]
+    fn independent_sources_add_with_jacobian_powers() {
+        let a = MomentLineage::measured(1.0, 0.5); // fresh ids: independent
+        let b = MomentLineage::measured(2.0, -0.25);
+        let m = MomentLineage::combine(&a, 2.0, &b, -3.0);
+        assert!((m.variance() - (4.0 * 1.0 + 9.0 * 2.0)).abs() < 1e-12); // Σ a²V
+        assert!((m.third() - (8.0 * 0.5 + -27.0 * -0.25)).abs() < 1e-12); // Σ a³μ₃, signs kept
+    }
+
+    #[test]
+    fn scale_keeps_the_sign_in_the_third_power() {
+        let a = MomentLineage::measured(1.0, 0.5);
+        let neg = a.scale(-1.0);
+        assert!((neg.variance() - 1.0).abs() < 1e-12);
+        assert!((neg.third() + 0.5).abs() < 1e-12); // J³ flips it
+    }
+
+    #[test]
+    fn from_lineage_preserves_ids_and_variance() {
+        let l = Lineage::measured_with_id(3, 0.5); // one source, amplitude 0.5
+        let m = MomentLineage::from_lineage(&l);
+        assert_eq!(m.terms().len(), 1);
+        assert_eq!(m.terms()[0].0, 3);
+        assert!((m.variance() - 0.25).abs() < 1e-12); // matches l.std_dev()²
+        assert_eq!(m.third(), 0.0);
+    }
+
+    #[test]
+    fn uncorrelated_mode_collapses_like_lineage_does() {
+        // Mirror Lineage::combine_independent: no id bookkeeping survives.
+        let _guard = crate::uncertainty::mode::scoped(PropagationMode::Uncorrelated);
+        let x = MomentLineage::measured_with_id(7, 4.0, 2.5);
+        let m = MomentLineage::combine(&x, 2.0, &x, -1.0);
+        // Treated as independent: variance 4·4 + 1·4 = 20, third 8·2.5 − 1·2.5 = 17.5.
+        assert!((m.variance() - 20.0).abs() < 1e-12);
+        assert!((m.third() - 17.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cancellation_and_addition_hold_across_orders_of_magnitude() {
+        // Task 1 shipped a bug from comparing a computed float to a hardcoded literal with a
+        // strict `>`, wrong at most scales but invisible at 1.0. Guard against the same class of
+        // mistake here with a *relative* tolerance — an absolute one hides drift away from
+        // unity, understating the true relative error by six orders of magnitude at 1e-6.
+        fn assert_close(actual: f64, expected: f64, what: &str, scale: f64) {
+            assert!(
+                (actual - expected).abs() < 1e-9 * expected.abs(),
+                "{what} mismatch at scale {scale}: {actual} != {expected}"
+            );
+        }
+
+        for scale in [1e-6, 1e-3, 1.0, 1e3, 1e6, 1e9] {
+            let x = MomentLineage::measured_with_id(42, 4.0 * scale, 2.5 * scale);
+            let two_x_minus_x = MomentLineage::combine(&x, 2.0, &x, -1.0);
+            assert_close(two_x_minus_x.variance(), 4.0 * scale, "variance", scale);
+            assert_close(two_x_minus_x.third(), 2.5 * scale, "third", scale);
+
+            let a = MomentLineage::measured(1.0 * scale, 0.5 * scale);
+            let b = MomentLineage::measured(2.0 * scale, -0.25 * scale);
+            let m = MomentLineage::combine(&a, 2.0, &b, -3.0);
+            assert_close(m.variance(), 4.0 * scale + 18.0 * scale, "independent variance", scale);
+            assert_close(
+                m.third(),
+                8.0 * (0.5 * scale) + -27.0 * (-0.25 * scale),
+                "independent third",
+                scale,
+            );
+        }
+    }
+
+    #[test]
+    fn an_imported_moment_id_is_never_minted_again() {
+        // Mirrors `lineage::tests::an_imported_id_is_never_minted_again`: an id that entered
+        // this process from outside `fresh_id` — deserialized, or named by a caller — must
+        // never be handed out again, or two unrelated measurements would start cancelling.
+        let imported = 970_000_u32;
+        let _ = MomentLineage::from_terms(vec![(imported, SourceMoments { sensitivity: 1.0, variance: 0.5, third: 0.1 })]);
+        assert!(fresh_id() > imported);
+        let _ = MomentLineage::measured_with_id(imported + 5_000, 0.5, 0.1);
+        assert!(fresh_id() > imported + 5_000);
     }
 }
