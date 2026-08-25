@@ -119,8 +119,11 @@ fn prefixed_literals_equal_their_expanded_form() {
 /// — a dimensionally impossible result — because both operands had been truncated.
 #[test]
 fn arithmetic_over_prefixed_literals() {
-    let kinetic_energy = eval_quantity("m = 2 kg\nv = 3 m/s\n0.5 * m * v^2");
-    assert_close(kinetic_energy.canonical_magnitude(), 9.0, "0.5 * m * v^2");
+    // Named `mass`, not `m`: the parser flags a quantity literal's unit word against every
+    // bound name in scope, including the first, and `v = 3 m/s` would otherwise collide with
+    // a variable named `m` (see physure-script/tests/unit_shadowing.rs).
+    let kinetic_energy = eval_quantity("mass = 2 kg\nv = 3 m/s\n0.5 * mass * v^2");
+    assert_close(kinetic_energy.canonical_magnitude(), 9.0, "0.5 * mass * v^2");
     assert_eq!(kinetic_energy.unit.__repr__(), "J");
 
     let converted = eval_quantity("100.0 kPa => bar");

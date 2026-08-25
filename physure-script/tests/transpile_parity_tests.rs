@@ -33,13 +33,16 @@ const TEST_CASES: &[ParityTestCase] = &[
         expected_substring: "50.265",
     },
     ParityTestCase {
+        // Named `mass`, not `m`: the parser flags a quantity literal's unit word against
+        // every bound name in scope, including the first, and `v = 3.0 m/s` would otherwise
+        // collide with a variable named `m` (see physure-script/tests/unit_shadowing.rs).
         name: "string_interpolation",
-        script: "m = 2.0 kg\nv = 3.0 m/s\nlabel = \"masa {m} a {v}\"\n",
+        script: "mass = 2.0 kg\nv = 3.0 m/s\nlabel = \"masa {mass} a {v}\"\n",
         expected_substring: "masa 2.0 kg a 3.0 m/s",
     },
     ParityTestCase {
         name: "uncertainty",
-        script: "m = 10.0 +/- 0.2 kg\na = 2.5 +/- 0.1 m/s^2\nf = m * a\n",
+        script: "mass = 10.0 +/- 0.2 kg\na = 2.5 +/- 0.1 m/s^2\nf = mass * a\n",
         expected_substring: "25",
     },
     ParityTestCase {

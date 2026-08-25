@@ -177,11 +177,14 @@ fn test_taylor_series_exact_poly_and_expansions() {
 fn test_physical_units_dimensional_invariance() {
     let mut interp = PhsInterpreter::default();
 
-    // 1. Kinetic energy E_k = 0.5 * m * v^2 -> Joules
+    // 1. Kinetic energy E_k = 0.5 * m * v^2 -> Joules. Named `mass`, not `m`: the parser now
+    // flags a quantity literal's unit word against every bound name in scope, including the
+    // first (see physure-script/tests/unit_shadowing.rs), and `v = 10.0 m/s` would otherwise
+    // collide with a variable named `m`.
     let script_ek = r#"
-        m = 70.0 kg
+        mass = 70.0 kg
         v = 10.0 m/s
-        Ek = 0.5 * m * v^2 => J
+        Ek = 0.5 * mass * v^2 => J
     "#;
     let res_ek = interp.eval_str(script_ek).unwrap();
     if let Some(PhsValue::Quantity(q)) = res_ek.last() {

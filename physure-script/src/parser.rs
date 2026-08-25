@@ -472,16 +472,33 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(left)
 }
 
+/// `Some(name)` when `expr` is nothing but a bare name — used by `parse_term` to track
+/// whether the most recently produced factor is a bare identifier, regardless of which
+/// operator produced it.
+fn as_bare_identifier(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Identifier(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 fn parse_term(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap(); // factor
     let mut left = parse_factor(first)?;
-    
+    // The name of the *rightmost* factor combined into `left` so far, when it happens to be a
+    // bare identifier — carried across every arm below (explicit or implicit), because what
+    // matters is whether the *next* join is implicit, not how the previous one was spelled.
+    // Only used to catch two bare identifiers landing next to each other via implicit
+    // multiplication (`x y`, or `y z` in `x * y z`); see the `Rule::factor` arm below.
+    let mut prev_bare_identifier = as_bare_identifier(&left);
+
     while let Some(next_pair) = inner.next() {
         match next_pair.as_rule() {
             Rule::op_mul => {
                 let right_pair = inner.next().unwrap();
                 let right = parse_factor(right_pair)?;
+                prev_bare_identifier = as_bare_identifier(&right);
                 left = Expr::BinaryOp {
                     op: BinaryOp::Mul,
                     left: Box::new(left),
@@ -491,6 +508,7 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             Rule::op_div => {
                 let right_pair = inner.next().unwrap();
                 let right = parse_factor(right_pair)?;
+                prev_bare_identifier = as_bare_identifier(&right);
                 left = Expr::BinaryOp {
                     op: BinaryOp::Div,
                     left: Box::new(left),
@@ -498,8 +516,24 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
                 };
             }
             Rule::factor => {
-                // implicit multiplication
+                // Implicit multiplication — except between two bare identifiers with nothing
+                // else in play (`x y`). That reads exactly like a forgotten operator, and it
+                // is never how the language's own examples write a product of two symbols: a
+                // coefficient/quantity always sits on one side (`1/2 m`, `(2 m) v^2`). Nothing
+                // in the repo's docs or tests ever spells two bare names side by side on
+                // purpose, so `x y` used to silently return `x * y` with a plausible-looking
+                // unit and no error at all.
+                let (line, col) = next_pair.line_col();
                 let right = parse_factor(next_pair)?;
+                let right_bare_identifier = as_bare_identifier(&right);
+                if let (Some(l_name), Some(r_name)) = (&prev_bare_identifier, &right_bare_identifier) {
+                    return Err(PhysureError::Generic(format!(
+                        "--> {line}:{col}\nMissing operator between '{l_name}' and '{r_name}': PhysureScript does \
+not read two bare names side by side as a product. Write `{l_name} * {r_name}` if you meant to \
+multiply them, or add whatever operator belongs between them."
+                    )));
+                }
+                prev_bare_identifier = right_bare_identifier;
                 left = Expr::BinaryOp {
                     op: BinaryOp::Mul,
                     left: Box::new(left),
@@ -1002,7 +1036,9 @@ fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
 struct UnitToken {
     text: String,
     /// The `*` or `/` that introduced this word, and its byte offset. `None` for the first
-    /// word, which juxtaposition — never multiplication — attached to the number.
+    /// word, which juxtaposition — never multiplication — attached to the number. It is
+    /// still checked against `bound` like every later word (see `check_expr_shadowing`); the
+    /// distinction only changes the rewrite `unit_shadowing_error` suggests.
     op: Option<(char, usize)>,
 }
 
@@ -1063,23 +1099,35 @@ fn unit_chain_tokens(unit: &str) -> Vec<UnitToken> {
 
 /// The error raised when a unit-chain word is also a name the script bound.
 ///
-/// The two suggested rewrites are the escape hatches that already exist in the grammar, and
-/// they are spelled out against the user's own literal rather than described abstractly:
-/// parenthesising the number ends the unit chain so the word reaches the expression parser as
-/// an ordinary variable reference, and quoting it keeps it a unit because a string operand is
-/// resolved against the unit registry.
+/// The two suggested rewrites are the escape hatches that already exist in the grammar, spelled
+/// out against the user's own literal rather than described abstractly. The head word (`op ==
+/// None`) needs a different rewrite from a later chain word: parenthesising the *magnitude*
+/// doesn't help there, because a parenthesised magnitude is just another `quantity` head and
+/// still greedily reattaches the following word as its unit — `(3) m` parses exactly like
+/// `3 m`. An explicit `*` is what actually changes the parse for the head word, on both sides:
+/// a bare identifier to its right reads as the variable, and a quoted string reads as a unit
+/// (the interpreter parses a string operand as a full unit *expression*, not a single symbol,
+/// so this also covers a compound head like `m/s`).
 fn unit_shadowing_error(magnitude: f64, unit: &str, token: &UnitToken, line: usize, col: usize) -> PhysureError {
     let literal = format!("{} {}", magnitude, unit);
 
-    // `op` is always present: only a word introduced by an explicit `*` or `/` gets here.
-    let (op_char, op_at) = token.op.as_ref().map(|(c, i)| (*c, *i)).unwrap_or(('*', 0));
-    let head = unit[..op_at].trim();
-    // The tail starts just past the operator rather than at the word itself, so a group's
-    // opening "(" — which sits between the two — stays attached: `kg * (g * m)` must be
-    // suggested back as `(g * m)`, not as the unbalanced `g * m)`.
-    let tail = unit[op_at + op_char.len_utf8()..].trim();
-    let as_variable = format!("({} {}) {} {}", magnitude, head, op_char, tail);
-    let as_unit = format!("{} {} {} \"{}\"", magnitude, head, op_char, tail);
+    let (as_variable, as_unit) = match &token.op {
+        Some((op_char, op_at)) => {
+            let head = unit[..*op_at].trim();
+            // The tail starts just past the operator rather than at the word itself, so a
+            // group's opening "(" — which sits between the two — stays attached: `kg * (g *
+            // m)` must be suggested back as `(g * m)`, not as the unbalanced `g * m)`.
+            let tail = unit[op_at + op_char.len_utf8()..].trim();
+            (
+                format!("({} {}) {} {}", magnitude, head, op_char, tail),
+                format!("{} {} {} \"{}\"", magnitude, head, op_char, tail),
+            )
+        }
+        None => (
+            format!("{} * {}", magnitude, unit),
+            format!("{} * \"{}\"", magnitude, unit),
+        ),
+    };
 
     PhysureError::Generic(format!(
         "--> {line}:{col}\nAmbiguous '{token}' in the quantity literal `{literal}`: '{token}' is a registered unit \
@@ -1148,9 +1196,16 @@ fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: 
         Expr::Quantity(node) => {
             let Some(unit) = &node.unit else { return Ok(()) };
             for token in unit_chain_tokens(unit) {
-                // The first word is attached by juxtaposition, which is never multiplication in
-                // PhysureScript, so `3 m` stays a quantity even in a script that binds `m`.
-                if token.op.is_some() && bound.contains(&token.text) {
+                // The first word used to be exempt — juxtaposition is never multiplication, so
+                // `3 m` was read as a quantity even in a script that bound `m`. But that same
+                // exemption let `fn kinetic_energy(m, v) = 1/2 m v^2` silently read its own `m`
+                // parameter as the *metre* attached to the `2` split out of `1/2`, dropping the
+                // mass argument entirely (see unit_shadowing.rs's
+                // `the_kinetic_energy_shorthand_that_motivated_this_check_is_rejected`). The
+                // first word is checked exactly like every later one now, at the cost of also
+                // flagging an ordinary standalone literal whose unit happens to collide with a
+                // name in scope — still cheaper than a confident wrong answer.
+                if bound.contains(&token.text) {
                     return Err(unit_shadowing_error(node.magnitude, unit, &token, line, col));
                 }
             }
@@ -1274,16 +1329,52 @@ mod tests {
         }
     }
 
+    /// `1/2 m v^2` used to parse clean, but never evaluated to kinetic energy: `2` (split out
+    /// of `1/2`) swallows `m` as the unit metre before the interpreter ever sees it as the
+    /// mass parameter, so the body silently computed `1 / (2 m) * v^2` instead of `0.5 * m *
+    /// v^2` — see `unit_shadowing.rs`'s
+    /// `the_kinetic_energy_shorthand_that_motivated_this_check_is_rejected`. It is now a
+    /// resolve-time ambiguity error naming `m`, not a value.
     #[test]
-    fn test_natural_function_definitions() {
+    fn test_natural_function_definition_shorthand_is_rejected_as_ambiguous() {
         let code = "fn kinetic_energy(m, v) = 1/2 m v^2";
-        let prog = parse_phs(code).unwrap();
-        if let Statement::FunctionDef(f) = &prog.statements[0] {
-            assert_eq!(f.name, "kinetic_energy");
-            assert_eq!(f.params, vec!["m", "v"]);
-            assert_eq!(f.param_units, vec![None, None]);
-            // 1/2 m v^2
-        } else { panic!("expected func def"); }
+        let err = parse_phs(code).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains('m'), "expected the ambiguity to name 'm': {msg}");
+    }
+
+    /// Two bare identifiers with only whitespace between them (`x y`) used to be read as
+    /// `x * y` by `term`'s `_is_implicit_mul` — the same juxtaposition rule `1/2 m v^2` relies
+    /// on to skip the `*` between a coefficient and a symbol. But nothing in the repo's docs,
+    /// README examples, or test suite ever spells two *bare names* side by side on purpose,
+    /// and it reads exactly like a forgotten operator: `total = masa velocidad` used to
+    /// silently return `masa * velocidad` with a plausible-looking unit and no error at all.
+    #[test]
+    fn test_bare_identifier_juxtaposition_is_rejected() {
+        let err = parse_phs("x y").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains('x') && msg.contains('y'), "expected both names in the error: {msg}");
+    }
+
+    /// The check has to look at the two factors actually being joined, not just the first
+    /// pair in the term — an explicit `*` earlier in the chain must not exempt a later bare
+    /// juxtaposition from the same rule.
+    #[test]
+    fn test_bare_identifier_juxtaposition_is_rejected_later_in_a_chain() {
+        let err = parse_phs("x * y z").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains('y') && msg.contains('z'), "expected 'y' and 'z' in the error: {msg}");
+    }
+
+    /// Only bare-identifier-next-to-bare-identifier is banned — a quantity next to an
+    /// identifier is untouched, since that is the coefficient/unit-chain pattern the language
+    /// actually documents and relies on. `"m"` here is not bound by anything else in the
+    /// script, so the quantity `2 m` itself is unambiguous; `x` is the separate factor
+    /// `term`'s implicit multiplication still joins it to.
+    #[test]
+    fn test_quantity_next_to_bare_identifier_juxtaposition_still_parses() {
+        let prog = parse_phs("2 m x").unwrap();
+        assert!(matches!(&prog.statements[0], Statement::Expr(_)));
     }
 
     #[test]
