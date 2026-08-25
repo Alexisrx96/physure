@@ -39,7 +39,10 @@ pub fn fresh_id() -> u32 {
 /// wrapper language that kept its own source ids. Those ids were never minted by this
 /// counter, so without reserving them a later `fresh_id` could hand out one again and
 /// two unrelated measurements would start cancelling against each other.
-fn reserve_id(id: u32) {
+///
+/// `pub(super)` rather than private: `MomentLineage` mints ids from this same counter
+/// (see `moments.rs`) and needs the identical protection for its own imported/named ids.
+pub(super) fn reserve_id(id: u32) {
     NEXT_ID.fetch_max(id.saturating_add(1), Ordering::Relaxed);
 }
 
