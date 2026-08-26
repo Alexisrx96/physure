@@ -1,6 +1,7 @@
 use std::process::Command;
 use std::fs;
 use std::io::Write;
+use std::path::Path;
 
 fn get_phs_bin() -> String {
     env!("CARGO_BIN_EXE_phs").to_string()
@@ -136,4 +137,86 @@ fn test_cli_transpile_typescript() {
 
     assert!(generated.contains("import { Quantity } from \"physure\";"), "Expected generated code to import Quantity, got: {}", generated);
     assert!(generated.contains("const m: Quantity = Quantity.of(75, \"kg\");"), "Expected generated code to declare typed const, got: {}", generated);
+}
+
+#[test]
+fn test_output_flag_alone_does_not_trigger_transpile_mode() {
+    // `-o`/`--output` used to gate transpile mode all on its own, with neither the
+    // `transpile` subcommand nor `--target` present -- so any other feature reusing `-o`
+    // for its own purpose (the HTML report, below) silently transpiled to Rust instead.
+    let temp_file = "temp_test_output_flag_no_transpile.phs";
+    let bogus_output = "temp_test_output_flag_no_transpile_out.txt";
+    let _ = fs::remove_file(bogus_output);
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"m = 75.0 kg\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .args([temp_file, "-o", bogus_output])
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+    let existed = Path::new(bogus_output).exists();
+    let _ = fs::remove_file(bogus_output);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Transpiled"), "Expected plain execution, not a transpile, got: {}", stdout);
+    assert!(!existed, "-o alone should not have written a transpiled file at {bogus_output:?}");
+    assert!(stdout.contains("75"), "Expected the script to actually run, got: {}", stdout);
+}
+
+#[test]
+fn test_html_report_saves_next_to_the_script_by_default() {
+    // PHS_NO_OPEN keeps this from popping an actual browser window during the test run.
+    let temp_file = "temp_test_html_default_name.phs";
+    let expected_output = "temp_test_html_default_name.html";
+    let _ = fs::remove_file(expected_output);
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"m = 75.0 kg\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .arg("--html")
+        .env("PHS_NO_OPEN", "1")
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        Path::new(expected_output).exists(),
+        "Expected the report at {expected_output:?} (next to the script, not a random temp file) -- stdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let _ = fs::remove_file(expected_output);
+}
+
+#[test]
+fn test_html_report_respects_output_flag() {
+    let temp_file = "temp_test_html_custom_name.phs";
+    let custom_output = "temp_test_html_custom_report.html";
+    let _ = fs::remove_file(custom_output);
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"m = 75.0 kg\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .args([temp_file, "--html", "-o", custom_output])
+        .env("PHS_NO_OPEN", "1")
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.contains("Transpiled"), "Expected an HTML report, not a transpile, got: {}", stdout);
+    assert!(
+        Path::new(custom_output).exists(),
+        "Expected the report at the -o path {custom_output:?} -- stdout: {}",
+        stdout,
+    );
+    let content = fs::read_to_string(custom_output).unwrap();
+    let _ = fs::remove_file(custom_output);
+    assert!(content.contains("<html") || content.contains("<!DOCTYPE"), "Expected real HTML content, got: {}", &content[..content.len().min(200)]);
 }

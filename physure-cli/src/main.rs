@@ -134,9 +134,14 @@ pub(crate) fn get_flag_value(args: &[String], flag: &str) -> Option<String> {
 fn handle_transpile(args: &[String]) -> bool {
     let is_transpile_cmd = args.get(1).map(|s| s == "transpile").unwrap_or(false);
     let has_target_flag = args.iter().any(|a| a == "--target" || a == "-t");
-    let has_output_flag = args.iter().any(|a| a == "--output" || a == "-o");
 
-    if !is_transpile_cmd && !has_target_flag && !has_output_flag {
+    // `-o`/`--output` alone used to be enough to enter transpile mode -- but it's not a
+    // transpile-specific flag (the `--html` report reuses it too, for its own output path),
+    // so gating on it here meant `phs script.phs --html -o report.html` silently transpiled
+    // to Rust and wrote that at "report.html" instead of ever generating a report. Only the
+    // documented entry points (`transpile` as the subcommand, or an explicit `--target`)
+    // commit to transpiling; `-o`'s value is still read below once one of those has.
+    if !is_transpile_cmd && !has_target_flag {
         return false;
     }
 
@@ -771,7 +776,17 @@ fn main() {
             eprintln!("Web Visualizer Error: {}", e);
         }
     } else if is_view {
-        if let Err(e) = html::open_standalone_html(raw_input, &code, &steps, &vars_map) {
+        // Default: next to the script, same base name -- `calc.phs --html` used to always
+        // land in the OS temp dir under a timestamp nobody could predict or find again once
+        // the browser tab closed, which defeats the report's own point as a keepable
+        // artifact. `-o`/`--output` overrides it; safe to reuse now that `-o` alone no
+        // longer also means "transpile" (see `handle_transpile`).
+        let html_output_path = match get_flag_value(&args, "--output").or_else(|| get_flag_value(&args, "-o")) {
+            Some(custom) => std::path::PathBuf::from(custom),
+            None if std::path::Path::new(raw_input).exists() => std::path::Path::new(raw_input).with_extension("html"),
+            None => std::path::PathBuf::from("physure_report.html"),
+        };
+        if let Err(e) = html::open_standalone_html(raw_input, &html_output_path, &code, &steps, &vars_map) {
             eprintln!("HTML Report Error: {}", e);
         }
     } else {

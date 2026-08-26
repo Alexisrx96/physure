@@ -168,13 +168,9 @@ fn format_val_latex(val: &PhsValue, i18n: &I18nLabels) -> String {
     }
 }
 
-pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = PhysureConfig::load();
     let i18n = cfg.i18n();
-
-    let mut temp_dir = env::temp_dir();
-    let file_name = format!("physure_{}.html", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs());
-    temp_dir.push(file_name);
 
     let meta = extract_metadata(code);
     let paper_title = meta.title.clone().unwrap_or_else(|| title.to_string());
@@ -521,8 +517,11 @@ pub fn open_standalone_html(title: &str, code: &str, steps: &[ExecutionStep], _v
         escape_html(code)
     );
 
-    fs::write(&temp_dir, html_content)?;
-    println!("\x1b[1;32m📄 Manuscrito científico HTML generado (100% offline):\x1b[0m {}", temp_dir.display());
-    open::that(&temp_dir)?;
+    fs::write(output_path, html_content)?;
+    println!("\x1b[1;32m📄 Manuscrito científico HTML generado (100% offline):\x1b[0m {}", output_path.display());
+    // Set for CLI integration tests, which must not pop an actual browser window.
+    if env::var_os("PHS_NO_OPEN").is_none() {
+        open::that(output_path)?;
+    }
     Ok(())
 }
