@@ -126,6 +126,11 @@ fn replace_binary(installed: &Path, new_content: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The default (non-`--nightly`) upgrade flow: checks GitHub for the latest `core-v*` release,
+/// and if it's newer than the running `phs`, downloads and extracts the platform-appropriate
+/// asset, then replaces the running `phs` binary and (if present alongside it or in
+/// `~/.cargo/bin`) `physure-lsp`. Prints progress and exits 1 on any failure that prevents `phs`
+/// itself from being updated; a `physure-lsp` replace failure alone is reported but non-fatal.
 fn run_stable_upgrade() {
     println!("Checking for the latest release...");
     let releases = match github_get("https://api.github.com/repos/Alexisrx96/physure/releases") {
@@ -242,8 +247,10 @@ fn run_stable_upgrade() {
             });
         match lsp_target {
             Some(target) => match replace_binary(&target, &lsp_extracted) {
-                Ok(()) => println!("physure-lsp: -> {latest}"),
-                Err(e) => eprintln!("Failed to replace physure-lsp: {e}"),
+                Ok(()) => println!("physure-lsp: updated to {latest}"),
+                Err(e) => eprintln!(
+                    "phs updated, but failed to replace physure-lsp: {e} (try again after closing any editor using it)"
+                ),
             },
             None => println!("physure-lsp not found alongside phs or in ~/.cargo/bin; skipped."),
         }
