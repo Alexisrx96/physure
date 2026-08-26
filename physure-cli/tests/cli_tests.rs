@@ -37,6 +37,27 @@ fn test_phs_missing_file() {
 }
 
 #[test]
+fn test_runtime_error_reports_line_number_and_source_text() {
+    // The failing statement is line 3 -- distinct from line 1, so a fix that only reports
+    // "the first line" or a hardcoded 1 would not pass this.
+    let temp_file = "temp_test_runtime_error_line.phs";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"a = 1.0 m\nb = 2.0 kg\nc = a + b\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("line 3"), "Expected the error to name line 3, got: {}", stderr);
+    assert!(stderr.contains("a + b"), "Expected the error to show the failing line's own source text, got: {}", stderr);
+}
+
+#[test]
 fn test_cli_run_subcommand() {
     let output = Command::new(get_phs_bin())
         .arg("2 + 2")

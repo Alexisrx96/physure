@@ -709,10 +709,10 @@ fn main() {
         RichRenderer::render_header(raw_input);
     }
 
-    for stmt in program.statements {
-        let (label, expr_code, latex_expr, is_disp) = format_statement_latex(&stmt, &i18n);
+    for (stmt_idx, stmt) in program.statements.iter().enumerate() {
+        let (label, expr_code, latex_expr, is_disp) = format_statement_latex(stmt, &i18n);
 
-        match interp.run_statement(&stmt) {
+        match interp.run_statement(stmt) {
             Ok(val) => {
                 if val != PhsValue::None {
                     if !is_tui && !is_web && !is_view {
@@ -735,7 +735,11 @@ fn main() {
                 }
             }
             Err(e) => {
-                RichRenderer::render_runtime_error(raw_input, &e, &expr_code);
+                let line_no = program.lines.get(stmt_idx).copied();
+                let line_text = line_no
+                    .and_then(|n| code.lines().nth(n.saturating_sub(1)))
+                    .unwrap_or("");
+                RichRenderer::render_runtime_error(raw_input, &e, &expr_code, line_no, line_text);
                 process::exit(1);
             }
         }

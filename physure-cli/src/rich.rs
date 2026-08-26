@@ -69,11 +69,23 @@ impl RichRenderer {
         eprintln!("\x1b[1;31m└─────────────────────────────────────────────────────────────────────┘\x1b[0m\n");
     }
 
-    pub fn render_runtime_error(file: &str, err: &dyn std::fmt::Display, stmt_code: &str) {
+    /// `line`/`line_text` are the statement's own source position and text, from
+    /// `Program::lines` and the script's source -- both already computed by the parser, not
+    /// derived here. When present they replace the generic `stmt_code` label (an AST-node
+    /// name like `"expr"` or `"c = ..."` from `format_statement_latex`, useful for LaTeX
+    /// rendering but not for telling two same-shaped statements apart in a plain error box)
+    /// with what a reader actually needs to find the failing line themselves.
+    pub fn render_runtime_error(file: &str, err: &dyn std::fmt::Display, stmt_code: &str, line: Option<usize>, line_text: &str) {
         eprintln!("\n\x1b[1;31m┌── ❌ Physure Execution & Dimensional Analysis Error ─────────────────┐\x1b[0m");
         eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mFile:\x1b[0m \x1b[36m{}\x1b[0m", file);
-        if !stmt_code.is_empty() {
-            eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mStatement:\x1b[0m \x1b[33m{}\x1b[0m", stmt_code.trim());
+        match (line, !line_text.trim().is_empty()) {
+            (Some(n), true) => {
+                eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mStatement (line {}):\x1b[0m \x1b[33m{}\x1b[0m", n, line_text.trim());
+            }
+            _ if !stmt_code.is_empty() => {
+                eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;37mStatement:\x1b[0m \x1b[33m{}\x1b[0m", stmt_code.trim());
+            }
+            _ => {}
         }
         eprintln!("\x1b[1;31m│\x1b[0m \x1b[1;31mError Details: {}\x1b[0m", err);
         eprintln!("\x1b[1;31m└─────────────────────────────────────────────────────────────────────┘\x1b[0m\n");
