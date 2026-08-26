@@ -8,6 +8,14 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+pub fn run_upgrade(nightly: bool) {
+    if nightly {
+        run_nightly_upgrade();
+    } else {
+        run_stable_upgrade();
+    }
+}
+
 /// Makes `target` writable even if it's currently executing (this process's own exe, or one
 /// another process has open), by renaming it out of the way -- unconditionally, on every
 /// platform. On Windows this is load-bearing: Windows allows *renaming* an in-use executable

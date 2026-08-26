@@ -35,6 +35,7 @@ fn print_help() {
     println!("    phs export <script.phs> --fn <name> [--native] [-o <dir>]");
     println!("    phs debug <script.phs> [--break-fn name] [--break N[:cond]]");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
+    println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
@@ -56,6 +57,8 @@ fn print_help() {
     println!("    phs new-plugin myplugin --lang rust");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
+    println!("    phs upgrade");
+    println!("    phs upgrade --nightly");
 }
 
 fn print_version() {
@@ -682,6 +685,12 @@ fn main() {
 
     if args[1] == "debug" {
         debug::run_debug(&args);
+        return;
+    }
+
+    if args[1] == "upgrade" {
+        let nightly = args.iter().any(|a| a == "--nightly");
+        upgrade::run_upgrade(nightly);
         return;
     }
 
