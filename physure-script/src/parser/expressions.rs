@@ -1,7 +1,7 @@
 use physure_core::error::{PhysureError, PhysureResult};
 use crate::ast::*;
 use super::Rule;
-use super::parse_quantity;
+use super::quantities::parse_quantity;
 
 pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
