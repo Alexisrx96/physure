@@ -4,11 +4,6 @@
 //! that actually changed one of the crates that compile into these binaries has landed since
 //! the running build.
 
-/// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
-/// depend directly on `physure-script`, which implements the language itself (parser,
-/// interpreter, grammar), so it belongs in this set alongside the more obvious
-/// `physure-core`, `physure-cli`, and `physure-lsp` -- leaving it out would miss most of
-/// what a typical commit to this repo changes.
 use std::fs;
 use std::io;
 use std::path::Path;
