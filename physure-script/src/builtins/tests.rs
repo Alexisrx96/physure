@@ -27,8 +27,31 @@ fn test_sqrt() {
 }
 
 #[test]
+fn sqrt_of_a_negative_bare_number_is_a_domain_error_not_nan() {
+    let interp = PhsInterpreter::default();
+    let env = std::collections::HashMap::new();
+    let err = eval_core_builtin("sqrt", &[PhsValue::Number(-9.0)], &interp, &env).unwrap_err();
+    assert!(
+        matches!(err, physure_core::error::PhysureError::DomainError(_)),
+        "expected DomainError, got {err:?}"
+    );
+}
+
+#[test]
 fn test_log() {
     assert_eq!(eval("log", vec![PhsValue::Number(100.0)]), PhsValue::Number(2.0));
+}
+
+#[test]
+fn log_and_ln_of_a_non_positive_bare_number_are_domain_errors_not_nan_or_inf() {
+    let interp = PhsInterpreter::default();
+    let env = std::collections::HashMap::new();
+    let log_zero = eval_core_builtin("log", &[PhsValue::Number(0.0)], &interp, &env).unwrap_err();
+    assert!(matches!(log_zero, physure_core::error::PhysureError::DomainError(_)));
+    let log_negative = eval_core_builtin("log", &[PhsValue::Number(-5.0)], &interp, &env).unwrap_err();
+    assert!(matches!(log_negative, physure_core::error::PhysureError::DomainError(_)));
+    let ln_negative = eval_core_builtin("ln", &[PhsValue::Number(-5.0)], &interp, &env).unwrap_err();
+    assert!(matches!(ln_negative, physure_core::error::PhysureError::DomainError(_)));
 }
 
 #[test]

@@ -172,7 +172,14 @@ impl PhsInterpreter {
                         }
                         l / r
                     }
-                    BinaryOp::Pow => l.powf(r),
+                    BinaryOp::Pow => {
+                        if l < 0.0 && r.fract() != 0.0 {
+                            return Err(PhysureError::DomainError(format!(
+                                "{l}^{r} cannot be computed for a negative base with a non-integer exponent"
+                            )));
+                        }
+                        l.powf(r)
+                    }
                     BinaryOp::Convert | BinaryOp::Range => unreachable!(),
                 };
                 Ok(PhsValue::Number(res))

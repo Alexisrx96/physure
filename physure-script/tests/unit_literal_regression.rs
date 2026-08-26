@@ -268,6 +268,33 @@ fn comparisons_produce_a_real_bool_not_a_dimensionless_1_0() {
     );
 }
 
+/// `(-4)^0.5` used to answer `NaN.0` -- `powf` computes a negative base via
+/// `exp(exponent * ln(base))`, which only exists for a positive base, and quietly handing
+/// that NaN back is the confident-wrong-answer this library exists to prevent. An integer
+/// exponent has a real, exact result and must keep working.
+#[test]
+fn pow_of_a_negative_base_with_a_fractional_exponent_is_a_domain_error_not_nan() {
+    let err = |src: &str| eval_phs(src).unwrap_err();
+
+    assert!(matches!(err("(-4)^0.5"), physure_core::error::PhysureError::DomainError(_)));
+    // A bare numeric literal evaluates as a dimensionless Quantity, not a raw Number.
+    assert!((eval_quantity("(-2)^3").value.mean() - (-8.0)).abs() < 1e-9);
+}
+
+/// `sqrt`/`log`/`ln` of an out-of-domain argument (negative for `sqrt`/`log`/`ln`, also
+/// zero for `log`/`ln`) used to answer `NaN.0` or `-inf` instead of erroring -- for both a
+/// bare number and a quantity.
+#[test]
+fn sqrt_and_log_of_out_of_domain_values_are_domain_errors_not_nan_or_inf() {
+    let err = |src: &str| eval_phs(src).unwrap_err();
+
+    assert!(matches!(err("sqrt(-4 m^2)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("sqrt(-9)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("log(-5)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("log(0)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("ln(-5)"), physure_core::error::PhysureError::DomainError(_)));
+}
+
 /// A declared uncertainty has to reach the output; printing only the mean discards the
 /// half of a measurement that says how far to trust the other half.
 #[test]

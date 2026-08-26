@@ -233,6 +233,9 @@ pub fn eval_core_builtin(
                 return Err(PhysureError::Generic("sqrt expects 1 argument".into()));
             }
             match &args[0] {
+                PhsValue::Number(n) if *n < 0.0 => Err(PhysureError::DomainError(format!(
+                    "sqrt of a negative value ({n}) is undefined for real numbers"
+                ))),
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.sqrt()))),
                 PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.sqrt()?))),
                 _ => Err(PhysureError::Generic("sqrt expects a number or quantity".into())),
@@ -273,6 +276,9 @@ pub fn eval_core_builtin(
                 return Err(PhysureError::Generic("ln expects 1 argument".into()));
             }
             match &args[0] {
+                PhsValue::Number(n) if *n <= 0.0 => Err(PhysureError::DomainError(format!(
+                    "ln of a non-positive value ({n}) is undefined for real numbers"
+                ))),
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.ln()))),
                 PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.ln()?))),
                 _ => Err(PhysureError::Generic("ln expects a number or quantity".into())),
@@ -293,6 +299,9 @@ pub fn eval_core_builtin(
                 return Err(PhysureError::Generic("log expects 1 argument".into()));
             }
             match &args[0] {
+                PhsValue::Number(n) if *n <= 0.0 => Err(PhysureError::DomainError(format!(
+                    "log of a non-positive value ({n}) is undefined for real numbers"
+                ))),
                 PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.log10()))),
                 PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.log10()?))),
                 _ => Err(PhysureError::Generic("log expects a number or quantity".into())),

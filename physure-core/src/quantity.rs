@@ -264,6 +264,17 @@ impl Quantity {
         if self.unit.is_affine() {
             return self.to_delta()?.pow(exponent);
         }
+        let m = self.value.mean();
+        // `powf` computes a negative base via `exp(exponent * ln(base))`, which is only
+        // defined for a positive base -- so a negative base with a fractional exponent
+        // (`(-4)^0.5`) comes back NaN even where a real answer exists (e.g. the real cube
+        // root of -8), and quietly handing that NaN back is the confident-wrong-answer this
+        // library exists to prevent. An integer exponent stays exact (`(-2)^3 = -8`).
+        if m < 0.0 && exponent.fract() != 0.0 {
+            return Err(PhysureError::DomainError(format!(
+                "{m}^{exponent} cannot be computed for a negative base with a non-integer exponent"
+            )));
+        }
         let exp_r = Rational64::from_f64(exponent).unwrap_or(Rational64::new(0, 1));
         let new_value = self.value.propagate_pow(exponent)?;
         let new_unit = self.unit.pow(exp_r);
@@ -271,6 +282,12 @@ impl Quantity {
     }
 
     pub fn sqrt(&self) -> PhysureResult<Quantity> {
+        let m = self.value.mean();
+        if m < 0.0 {
+            return Err(PhysureError::DomainError(format!(
+                "sqrt of a negative value ({m}) is undefined for real numbers"
+            )));
+        }
         self.pow(0.5)
     }
 
@@ -385,6 +402,16 @@ impl Quantity {
         // A dimensionless unit can still carry a scale (`%`, `ppm`), and the series is in
         // the pure ratio: ln(50 %) has to be ln(0.5), not ln(50).
         let magnitude = Self::scale_value(&self.value, self.unit.scale)?;
+        // `exp` is defined everywhere; `ln`/`log10` (both routed here as `core_func == "log"`)
+        // are not defined at or below zero -- `ln(0)` silently answering `-inf` and `ln(-5)`
+        // answering `NaN` are exactly the confident-wrong-answer this library exists to
+        // prevent, so both are reported as errors instead.
+        if core_func == "log" && magnitude.mean() <= 0.0 {
+            return Err(PhysureError::DomainError(format!(
+                "{name} of a non-positive value ({}) is undefined for real numbers",
+                magnitude.mean()
+            )));
+        }
         let new_value = magnitude.propagate_function(core_func)?;
         Ok(Quantity { value: new_value, unit: RationalUnit::dimensionless() })
     }
@@ -690,6 +717,41 @@ mod tests {
         assert_eq!(format_fraction(1e-30, false), None);
         assert_eq!(format_fraction(f64::NAN, false), None);
         assert_eq!(format_fraction(f64::INFINITY, false), None);
+    }
+
+    #[test]
+    fn sqrt_of_a_negative_quantity_is_a_domain_error_not_nan() {
+        let q = Quantity::new(-4.0, "m^2").unwrap();
+        let err = q.sqrt().unwrap_err();
+        assert!(matches!(err, PhysureError::DomainError(_)), "expected DomainError, got {err:?}");
+    }
+
+    #[test]
+    fn pow_of_a_negative_base_with_a_fractional_exponent_is_a_domain_error_not_nan() {
+        let q = Quantity::new(-4.0, "").unwrap();
+        let err = q.pow(0.5).unwrap_err();
+        assert!(matches!(err, PhysureError::DomainError(_)), "expected DomainError, got {err:?}");
+    }
+
+    #[test]
+    fn pow_of_a_negative_base_with_an_integer_exponent_still_works() {
+        let q = Quantity::new(-2.0, "m").unwrap();
+        let cubed = q.pow(3.0).unwrap();
+        assert!((cubed.value.mean() - (-8.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ln_of_a_non_positive_value_is_a_domain_error_not_nan_or_inf() {
+        let zero = Quantity::new(0.0, "").unwrap();
+        assert!(matches!(zero.ln().unwrap_err(), PhysureError::DomainError(_)));
+        let negative = Quantity::new(-5.0, "").unwrap();
+        assert!(matches!(negative.ln().unwrap_err(), PhysureError::DomainError(_)));
+    }
+
+    #[test]
+    fn log10_of_a_non_positive_value_is_a_domain_error() {
+        let negative = Quantity::new(-5.0, "").unwrap();
+        assert!(matches!(negative.log10().unwrap_err(), PhysureError::DomainError(_)));
     }
 
     #[test]

@@ -1046,3 +1046,21 @@ r3 = circuito_abierto(5 V, 2 A)
         let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i { count = count + 1\n i = i + 1 }").unwrap();
         assert!(interp.run_statements(&stmts).is_ok());
     }
+
+    /// `Number ^ Number` with a negative base and a fractional exponent used to answer
+    /// `NaN` via a bare `l.powf(r)`, right next to a `Div` arm that already refuses to
+    /// divide by zero -- the two arms should be equally honest about their own domains.
+    #[test]
+    fn pow_of_a_negative_number_base_with_a_fractional_exponent_is_a_domain_error_not_nan() {
+        let interp = PhsInterpreter::default();
+        let err = interp
+            .eval_binary_op_vals(BinaryOp::Pow, PhsValue::Number(-4.0), PhsValue::Number(0.5))
+            .unwrap_err();
+        assert!(matches!(err, PhysureError::DomainError(_)), "expected DomainError, got {err:?}");
+
+        // An integer exponent on a negative base is still a real, exact result.
+        let cubed = interp
+            .eval_binary_op_vals(BinaryOp::Pow, PhsValue::Number(-2.0), PhsValue::Number(3.0))
+            .unwrap();
+        assert_eq!(cubed, PhsValue::Number(-8.0));
+    }
