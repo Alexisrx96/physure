@@ -207,9 +207,16 @@ fn unregistered_symbols_are_errors_not_new_dimensions() {
 /// Comparisons used to read the raw magnitude, so `1 km == 1000 m` was false while
 /// `1 km + 1000 m` converted correctly — the same two quantities disagreeing with
 /// themselves depending on the operator.
+///
+/// `truth` reads a `PhsValue::Bool`, not `eval_quantity`'s dimensionless-`Quantity` 1.0/0.0
+/// stand-in the comparison builtins used to return (see `comparisons_produce_a_real_bool_not_a_dimensionless_1_0`
+/// for why that stand-in was replaced).
 #[test]
 fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
-    let truth = |src: &str| eval_quantity(src).value.mean() > 0.5;
+    let truth = |src: &str| match eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed to evaluate: {e:?}")).into_iter().last() {
+        Some(PhsValue::Bool(b)) => b,
+        other => panic!("{src:?} produced {other:?}, expected a Bool"),
+    };
 
     assert!(truth("1.0 km == 1000.0 m"));
     assert!(truth("100.0 kPa == 1.0 bar"));
@@ -225,6 +232,40 @@ fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
     // Comparing across dimensions has no answer, and answering `false` would let it
     // pass silently through a conditional.
     assert!(eval_phs("5.0 m > 2.0 s").is_err(), "m vs s should not compare");
+}
+
+/// Every comparison builtin funnels through `builtins/core.rs`'s `boolean()`, which used to
+/// build a dimensionless `Quantity` (magnitude 1.0/0.0) instead of `PhsValue::Bool` -- a type
+/// that already existed, with `Display` ("True"/"False"), `is_truthy`, the debugger's
+/// `Inspection`, the plugin ABI, and every export path already built around it. The four
+/// codegen targets already emit the target language's own comparison operator (`>` in
+/// Python/Rust/Java/JS, which is natively a bool in each), so the interpreter's dimensionless
+/// 1.0/0.0 was the one place out of step with what a transpiled version of the same script
+/// actually produces.
+#[test]
+fn comparisons_produce_a_real_bool_not_a_dimensionless_1_0() {
+    let last = |src: &str| eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed to evaluate: {e:?}")).into_iter().last();
+
+    assert_eq!(last("5.0 m > 3.0 m"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("5.0 m < 3.0 m"), Some(PhsValue::Bool(false)));
+    assert_eq!(last("1.0 km == 1000.0 m"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("1.0 km != 1000.0 m"), Some(PhsValue::Bool(false)));
+
+    // The sigma-tolerance comparison (`a == b +/- N sigma`) goes through the exact same
+    // `boolean()` call as the plain relational operators -- one fix covers both.
+    assert_eq!(last("9.81 m/s^2 == 9.80 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("9.81 m/s^2 == 9.00 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(false)));
+
+    // Display must read like an answer, not a magnitude.
+    assert_eq!(eval_phs("5.0 m > 3.0 m").unwrap().last().unwrap().to_string(), "True");
+    assert_eq!(eval_phs("5.0 m < 3.0 m").unwrap().last().unwrap().to_string(), "False");
+
+    // `if`/ternary conditions must still work -- `is_truthy` already had a `PhsValue::Bool`
+    // arm before this change, so this is a regression guard, not new plumbing.
+    assert_eq!(
+        eval_phs("if 5.0 m > 3.0 m then \"bigger\" else \"smaller\"").unwrap().into_iter().last(),
+        Some(PhsValue::String("bigger".to_string())),
+    );
 }
 
 /// A declared uncertainty has to reach the output; printing only the mean discards the
@@ -787,8 +828,10 @@ fn a_format_spec_applies_to_the_whole_expression() {
     assert_eq!(formatted("1 m + 50 cm: base"), "1.5 m");
     // Parenthesising was the workaround; it still parses and still means the same thing.
     assert_eq!(formatted("(25 m/s => km/h):.2f"), "90.00 km/h");
-    // A comparison keeps its own operands — the spec lands on the result of the test.
-    assert_eq!(formatted("2 m > 1 m:.1f"), "1.0");
+    // A comparison keeps its own operands -- the spec lands on the result of the test, not
+    // the right operand alone. The result is a real Bool now, so a numeric spec has nothing
+    // to apply to and falls back to the plain "True"/"False" rendering.
+    assert_eq!(formatted("2 m > 1 m:.1f"), "True");
 }
 
 /// `frac` and `ifrac` write a magnitude as a common and as a mixed fraction. "When one

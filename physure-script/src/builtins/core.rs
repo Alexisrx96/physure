@@ -2,14 +2,14 @@ use physure_core::error::{PhysureError, PhysureResult};
 use crate::value::PhsValue;
 use crate::interpreter::PhsInterpreter;
 
+/// `PhsValue::Bool` already carries `Display` ("True"/"False"), an `is_truthy` arm, a
+/// debugger `Inspection` kind, plugin-ABI support and export serialization -- everything a
+/// comparison result needs was already built around it. The dimensionless-`Quantity`
+/// stand-in this used to build (magnitude 1.0/0.0) was also the one place out of step with
+/// every codegen target, which already emits the target language's own comparison operator
+/// (`>` in Python/Rust/Java/JS, natively a bool in each).
 fn boolean(res: bool) -> PhsValue {
-    PhsValue::Quantity(physure_core::Quantity::new_scalar(
-        if res { 1.0 } else { 0.0 },
-        0.0,
-        physure_core::units::RationalUnit::dimensionless(),
-        None,
-        None,
-    ))
+    PhsValue::Bool(res)
 }
 
 /// Two quantities reduced to a pair of numbers that can be compared directly.
@@ -205,11 +205,11 @@ pub fn eval_core_builtin(
         "op_!=" | "op_neq" => compare(args, |l, r| (l - r).abs() >= 1e-9),
         "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
         "ternary" | "if_then_else" => {
-            let cond_true = match args.first() {
-                Some(PhsValue::Quantity(q)) => q.value.mean() > 0.0,
-                Some(PhsValue::Number(n)) => *n > 0.0,
-                _ => false,
-            };
+            // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
+            // for anything else) instead of the shared `is_truthy` -- fine while every
+            // comparison built a dimensionless Quantity, wrong the moment one builds a real
+            // `PhsValue::Bool` instead.
+            let cond_true = args.first().is_some_and(crate::interpreter::helpers::is_truthy);
             if cond_true {
                 Ok(args.get(1).cloned())
             } else {
