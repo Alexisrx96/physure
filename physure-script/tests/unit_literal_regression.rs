@@ -295,6 +295,57 @@ fn sqrt_and_log_of_out_of_domain_values_are_domain_errors_not_nan_or_inf() {
     assert!(matches!(err("ln(-5)"), physure_core::error::PhysureError::DomainError(_)));
 }
 
+/// `@implicit_units` lets a function declared with unit-annotated parameters
+/// (`fn calc(a: m/s2, v: m/s, x: m) = ...`) accept a plain, unitless number for a
+/// parameter and have it take on that parameter's declared unit -- `calc(1, 2, 3)` reads
+/// as `calc(1 m/s2, 2 m/s, 3 m)`. Without the decorator this keeps erroring exactly as
+/// before: opt-in, not a language-wide default, so "forgot the unit entirely" still fails
+/// loudly for every function that didn't ask for this.
+#[test]
+fn implicit_units_decorator_assigns_declared_units_to_bare_numbers() {
+    let src = "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1, 2, 3)";
+    let result = eval_quantity(src);
+    assert!((result.value.mean() - 6.0).abs() < 1e-9, "expected 6.0, got {}", result.value.mean());
+    assert_eq!(result.unit.__repr__(), "m^3 * s^-3");
+}
+
+#[test]
+fn without_implicit_units_bare_numbers_still_error_on_a_unit_annotated_param() {
+    let src = "fn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1, 2, 3)";
+    assert!(eval_phs(src).is_err(), "expected the un-decorated function to keep rejecting bare numbers");
+}
+
+#[test]
+fn implicit_units_still_respects_explicit_units_and_still_rejects_real_mismatches() {
+    // An explicitly-unitted argument is unaffected -- same conversion behavior as always.
+    let explicit = eval_quantity(
+        "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1 m/s2, 2 m/s, 3 m)",
+    );
+    assert!((explicit.value.mean() - 6.0).abs() < 1e-9);
+
+    // A genuinely incompatible dimension (kg where m/s2 is declared) is still a real error --
+    // the decorator only fills in a *missing* unit, it never overrides a wrong one.
+    let mismatched = "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1 kg, 2 m/s, 3 m)";
+    assert!(eval_phs(mismatched).is_err(), "expected a real dimension mismatch to still error under @implicit_units");
+}
+
+#[test]
+fn implicit_units_does_not_reinterpret_a_percent_or_ratio_argument() {
+    // 50% already carries its own unit symbol (a 0.01 scale) -- @implicit_units only fills
+    // in units for a bare, unscaled number, not for a value the caller already tagged.
+    let src = "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(50 %, 2 m/s, 3 m)";
+    assert!(eval_phs(src).is_err(), "expected a percent argument to still be rejected as dimensionally incompatible");
+}
+
+#[test]
+fn implicit_units_preserves_uncertainty_when_assigning_a_unit() {
+    let src = "@implicit_units\nfn calc(a: m/s2) = a\ncalc(1 +/- 0.1)";
+    let result = eval_quantity(src);
+    assert!((result.value.mean() - 1.0).abs() < 1e-9);
+    assert!((result.value.std_dev() - 0.1).abs() < 1e-9);
+    assert_eq!(result.unit.__repr__(), "m/s2");
+}
+
 /// A declared uncertainty has to reach the output; printing only the mean discards the
 /// half of a measurement that says how far to trust the other half.
 #[test]

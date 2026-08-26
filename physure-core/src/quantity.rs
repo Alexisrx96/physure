@@ -281,6 +281,17 @@ impl Quantity {
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
+    /// Relabels this quantity with a different unit, keeping the magnitude and the full
+    /// uncertainty backend (lineage, Monte Carlo draws, ...) exactly as they are.
+    ///
+    /// This is not a conversion -- `5` relabeled to `m` is `5 m`, not `5` rescaled by some
+    /// factor into `m`. It exists for the one place that legitimately needs to *assign* a
+    /// unit to a bare number rather than convert an already-dimensioned one: a PHS function
+    /// parameter declared `(x: m)` under `@implicit_units`, called with a plain `5`.
+    pub fn with_unit(&self, unit: RationalUnit) -> Quantity {
+        Quantity { value: self.value.clone(), unit }
+    }
+
     pub fn sqrt(&self) -> PhysureResult<Quantity> {
         let m = self.value.mean();
         if m < 0.0 {
@@ -752,6 +763,15 @@ mod tests {
     fn log10_of_a_non_positive_value_is_a_domain_error() {
         let negative = Quantity::new(-5.0, "").unwrap();
         assert!(matches!(negative.log10().unwrap_err(), PhysureError::DomainError(_)));
+    }
+
+    #[test]
+    fn with_unit_relabels_without_rescaling_or_losing_uncertainty() {
+        let q = Quantity::new_scalar(2.5, 0.1, RationalUnit::dimensionless(), None, None);
+        let relabeled = q.with_unit(RationalUnit::base("m"));
+        assert_eq!(relabeled.value.mean(), 2.5);
+        assert_eq!(relabeled.value.std_dev(), 0.1);
+        assert_eq!(relabeled.unit, RationalUnit::base("m"));
     }
 
     #[test]

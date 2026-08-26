@@ -441,9 +441,10 @@ impl PhsInterpreter {
         if func.params.len() != arg_vals.len() {
             return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", func.name, func.params.len(), arg_vals.len())));
         }
+        let implicit_units = func.decorators.iter().any(|d| d.name == "implicit_units");
         let mut local_env = env.clone();
         for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {
-            let bound_val = self.bind_param_value(&func.name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val)?;
+            let bound_val = self.bind_param_value(&func.name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val, implicit_units)?;
             local_env.insert(param_name.clone(), bound_val);
         }
         self.check_requires(func, &local_env)?;
@@ -545,12 +546,21 @@ impl PhsInterpreter {
     /// - If the argument isn't a `Quantity`, it is bound as-is (nothing to convert).
     /// - If the argument's unit is dimensionally incompatible with the declared unit,
     ///   this returns a clear error rather than silently producing a wrong result.
+    /// - If `implicit_units` is set (the function carries `@implicit_units`) and the
+    ///   argument is a *plain* dimensionless quantity -- exactly `RationalUnit::dimensionless()`,
+    ///   which a bare number like the `1` in `calc(1, 2, 3)` always evaluates to, as opposed
+    ///   to a `%`/ppm-style ratio the caller already tagged with its own unit symbol -- the
+    ///   declared unit is assigned to it rather than attempted as a conversion (which would
+    ///   otherwise fail: dimensionless and `m/s2` are not the same dimension). A real
+    ///   dimension mismatch (`5 kg` for an `m/s2` parameter) still errors exactly as before;
+    ///   this only fills in a *missing* unit, it never overrides a wrong one.
     fn bind_param_value(
         &self,
         fn_name: &str,
         param_name: &str,
         declared_unit: Option<&String>,
         arg_val: PhsValue,
+        implicit_units: bool,
     ) -> PhysureResult<PhsValue> {
         let Some(unit_str) = declared_unit else {
             return Ok(arg_val);
@@ -563,6 +573,9 @@ impl PhsInterpreter {
             return Ok(PhsValue::Quantity(q));
         }
         let target_unit = UnitParser::parse_expression(clean_unit_str)?;
+        if implicit_units && q.unit == RationalUnit::dimensionless() && target_unit != RationalUnit::dimensionless() {
+            return Ok(PhsValue::Quantity(q.with_unit(target_unit)));
+        }
         let converted = q.convert_to(&target_unit).map_err(|e| {
             PhysureError::Generic(format!(
                 "Argument for parameter '{}' of function '{}' has a unit incompatible with declared unit '{}': {:?}",
