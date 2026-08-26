@@ -38,6 +38,19 @@ fn test_phs_missing_file() {
 }
 
 #[test]
+fn test_version_flag_prints_the_crate_version() {
+    let output = Command::new(get_phs_bin())
+        .arg("--version")
+        .output()
+        .expect("Failed to execute phs binary");
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(env!("CARGO_PKG_VERSION")), "Expected the crate version in output, got: {}", stdout);
+    assert!(stdout.starts_with("phs "), "Expected output to start with 'phs ', got: {}", stdout);
+}
+
+#[test]
 fn test_runtime_error_reports_line_number_and_source_text() {
     // The failing statement is line 3 -- distinct from line 1, so a fix that only reports
     // "the first line" or a hardcoded 1 would not pass this.

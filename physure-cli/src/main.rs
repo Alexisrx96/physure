@@ -37,6 +37,7 @@ fn print_help() {
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
+    println!("    -V, --version            Print version and build commit");
     println!("    -r, --repl               Start interactive PHS REPL environment");
     println!("    -t, --target <lang>      Transpile target: rust, python, java, js, ts (default: rust)");
     println!("    -o, --output <file>      Specify output file path (e.g. out.py, Main.java)");
@@ -54,6 +55,13 @@ fn print_help() {
     println!("    phs new-plugin myplugin --lang rust");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
+}
+
+fn print_version() {
+    match option_env!("PHS_BUILD_SHA") {
+        Some(sha) => println!("phs {} ({})", env!("CARGO_PKG_VERSION"), sha),
+        None => println!("phs {}", env!("CARGO_PKG_VERSION")),
+    }
 }
 
 fn run_repl() {
@@ -630,6 +638,11 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     if args.iter().any(|a| a == "--daemon" || a == "-d" || a == "daemon") {
         run_daemon();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        print_version();
         return;
     }
 
