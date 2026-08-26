@@ -77,27 +77,33 @@ fn base64_encode(input: &str) -> String {
     out
 }
 
-fn format_val_latex(val: &PhsValue, i18n: &I18nLabels) -> String {
+/// `format_float`/`gum_round` both hand back plain-decimal or `1.23e4`-style strings; this
+/// turns the latter into `1.23 \times 10^{4}` for LaTeX.
+fn sci_notation_to_latex(mut s: String) -> String {
+    if s.contains('e') || s.contains('E') {
+        let parts: Vec<&str> = s.split(['e', 'E']).collect();
+        if parts.len() == 2 {
+            s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
+        }
+    }
+    s
+}
+
+fn format_val_latex(val: &PhsValue, i18n: &I18nLabels, precision_override: Option<u32>) -> String {
     match val {
         PhsValue::Quantity(q) => {
-            let mut val_s = physure_core::quantity::format_float(q.value.mean());
-            if val_s.contains('e') || val_s.contains('E') {
-                let parts: Vec<&str> = val_s.split(['e', 'E']).collect();
-                if parts.len() == 2 {
-                    val_s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
-                }
-            }
             let std_dev = q.value.std_dev();
-            if std_dev > 0.0 {
-                let mut unc_s = physure_core::quantity::format_float(std_dev);
-                if unc_s.contains('e') || unc_s.contains('E') {
-                    let parts: Vec<&str> = unc_s.split(['e', 'E']).collect();
-                    if parts.len() == 2 {
-                        unc_s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
-                    }
+            let val_s = if std_dev > 0.0 {
+                // GUM rounding correlates the two, so both come from one call rather than
+                // each being formatted to its own independent precision.
+                let (mean_s, unc_s) = physure_core::quantity::gum_round(q.value.mean(), std_dev, precision_override);
+                format!("({} \\pm {})", sci_notation_to_latex(mean_s), sci_notation_to_latex(unc_s))
+            } else {
+                match precision_override {
+                    Some(n) => sci_notation_to_latex(format!("{:.*}", n as usize, q.value.mean())),
+                    None => sci_notation_to_latex(physure_core::quantity::format_float(q.value.mean())),
                 }
-                val_s = format!("({} \\pm {})", val_s, unc_s);
-            }
+            };
             let u_s = unit_to_latex(&q.unit.__repr__());
             if u_s.is_empty() {
                 format!("= {}", val_s)
@@ -118,7 +124,7 @@ fn format_val_latex(val: &PhsValue, i18n: &I18nLabels) -> String {
         PhsValue::Bool(b) => format!("= \\text{{{}}}", if *b { "True" } else { "False" }),
         PhsValue::Vector(v) => {
             let items: Vec<String> = v.iter().map(|item| {
-                let s = format_val_latex(item, i18n);
+                let s = format_val_latex(item, i18n, None);
                 s.trim_start_matches("= ").to_string()
             }).collect();
             if items.len() > 4 {
@@ -247,7 +253,7 @@ pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &s
                 let math_body = if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, &i18n) {
                     cmp
                 } else {
-                    let mut eval_latex = format_val_latex(&step.value, &i18n);
+                    let mut eval_latex = format_val_latex(&step.value, &i18n, step.precision_override);
                     if !step.latex_expr.is_empty() && eval_latex.starts_with("= ") {
                         let trimmed_expr = step.latex_expr.trim_end();
                         if trimmed_expr.ends_with('=') || trimmed_expr.ends_with("\\Rightarrow") {
@@ -524,4 +530,30 @@ pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &s
         open::that(output_path)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use physure_core::quantity::Quantity;
+    use physure_core::units::RationalUnit;
+
+    #[test]
+    fn format_val_latex_applies_gum_rounding_to_an_uncertain_quantity() {
+        let i18n = PhysureConfig::load().i18n();
+        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
+        let latex = format_val_latex(&PhsValue::Quantity(q), &i18n, None);
+        assert!(latex.contains("630"), "expected the GUM-rounded mean, got: {latex}");
+        assert!(latex.contains("40"), "expected the GUM-rounded uncertainty, got: {latex}");
+        assert!(!latex.contains("40.0195264839553"), "expected no un-rounded uncertainty, got: {latex}");
+    }
+
+    #[test]
+    fn format_val_latex_respects_a_precision_override() {
+        let i18n = PhysureConfig::load().i18n();
+        let q = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::dimensionless(), None, None);
+        let latex = format_val_latex(&PhsValue::Quantity(q), &i18n, Some(2));
+        assert!(latex.contains("3.14"), "expected 2 decimal places, got: {latex}");
+        assert!(!latex.contains("3.14159265"), "expected the override to actually apply, got: {latex}");
+    }
 }

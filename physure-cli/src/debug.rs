@@ -148,7 +148,7 @@ impl DebugHook for CliDebugHook {
                     };
                     for name in &frame.declared {
                         if let Some(val) = ctx.env.get(name) {
-                            RichRenderer::render_variable_card(name, val);
+                            RichRenderer::render_variable_card(name, val, None);
                         }
                     }
                 }
@@ -160,7 +160,7 @@ impl DebugHook for CliDebugHook {
                         .unwrap_or_default();
                     for (name, val) in ctx.env {
                         if !local_names.contains(name.as_str()) {
-                            RichRenderer::render_variable_card(name, val);
+                            RichRenderer::render_variable_card(name, val, None);
                         }
                     }
                 }

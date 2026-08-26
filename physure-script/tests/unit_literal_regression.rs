@@ -703,13 +703,15 @@ fn floor_and_ceil_keep_the_unit_and_the_uncertainty() {
     assert_close(floored.value.mean(), 9.0, "floor moves the mean down");
     assert_eq!(floored.unit.__repr__(), "m / s ^ 2", "floor dropped the unit");
     assert_close(floored.value.std_dev(), 0.05, "floor kept the uncertainty");
-    assert_eq!(floored.to_string(), "9.0 ± 0.05 m / s ^ 2");
+    // GUM rounding matches the magnitude's decimal places to the uncertainty's -- both at 2
+    // decimals here (0.05 keeps 1 sig fig), not the mean's own independent "shortest" form.
+    assert_eq!(floored.to_string(), "9.00 ± 0.05 m / s ^ 2");
 
     let ceiled = eval_quantity("ceil(9.81 +/- 0.05 m / s ^ 2)");
     assert_close(ceiled.value.mean(), 10.0, "ceil moves the mean up");
     assert_eq!(ceiled.unit.__repr__(), "m / s ^ 2", "ceil dropped the unit");
     assert_close(ceiled.value.std_dev(), 0.05, "ceil kept the uncertainty");
-    assert_eq!(ceiled.to_string(), "10.0 ± 0.05 m / s ^ 2");
+    assert_eq!(ceiled.to_string(), "10.00 ± 0.05 m / s ^ 2");
 
     // A dimensionless measurement is the worst case for the old code: every sample of
     // `0.5 +/- 0.01` floors to zero, so anything that rounds the distribution rather than

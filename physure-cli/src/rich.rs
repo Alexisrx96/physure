@@ -10,10 +10,10 @@ impl RichRenderer {
         println!("\x1b[1;36m└──────────────────────────────────────────────────────────────┘\x1b[0m");
     }
 
-    pub fn render_variable_card(name: &str, val: &PhsValue) {
+    pub fn render_variable_card(name: &str, val: &PhsValue, precision_override: Option<u32>) {
         match val {
             PhsValue::Quantity(q) => {
-                println!("\x1b[1;36m{:<24}\x1b[0m = \x1b[1;33m{}\x1b[0m", name, q.to_string());
+                println!("\x1b[1;36m{:<24}\x1b[0m = \x1b[1;33m{}\x1b[0m", name, q.to_string_with_precision(precision_override));
             }
             PhsValue::Number(n) => {
                 println!("\x1b[1;36m{:<24}\x1b[0m = \x1b[1;33m{}\x1b[0m", name, n);

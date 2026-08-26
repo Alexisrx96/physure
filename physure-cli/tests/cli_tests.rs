@@ -107,6 +107,45 @@ fn test_bare_string_expressions_print_as_plain_text_not_a_label_equals_value_car
 }
 
 #[test]
+fn test_precision_decorator_overrides_sig_figs_on_an_uncertain_value() {
+    let temp_file = "temp_test_precision_uncertain.phs";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"@precision(3)\nx = 40.0195264839553 +/- 40.0195264839553\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 3 sig figs of 40.0195264839553 is 40.0; the mean (equal to the uncertainty here) rounds
+    // to the same decimal place.
+    assert!(stdout.contains("40.0"), "Expected 3-sig-fig rounding, got: {}", stdout);
+}
+
+#[test]
+fn test_precision_decorator_sets_decimal_places_on_an_exact_value() {
+    let temp_file = "temp_test_precision_exact.phs";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"@precision(2)\nx = 3.14159265\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("3.14"), "Expected 2 decimal places on an exact value, got: {}", stdout);
+    assert!(!stdout.contains("3.14159265"), "Expected the full-precision value not to leak through, got: {}", stdout);
+}
+
+#[test]
 fn test_cli_run_subcommand() {
     let output = Command::new(get_phs_bin())
         .arg("2 + 2")

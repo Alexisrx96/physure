@@ -733,6 +733,23 @@ fn main() {
         } else {
             label.clone()
         };
+        // `@precision(N)` decorates a variable assignment; `decorators.rs` already guarantees
+        // (at parse time) that when present it's exactly 1 positive whole-number argument, so
+        // this only needs to read it back out, not re-validate it.
+        let precision_override = match stmt {
+            physure_script::ast::Statement::Assignment(node) => node
+                .decorators
+                .iter()
+                .find(|d| d.name == "precision")
+                .and_then(|d| d.args.first())
+                .and_then(|arg| match arg {
+                    physure_script::ast::Expr::Quantity(q) if q.magnitude > 0.0 && q.magnitude.fract() == 0.0 => {
+                        Some(q.magnitude as u32)
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        };
 
         match interp.run_statement(stmt) {
             Ok(val) => {
@@ -753,7 +770,7 @@ fn main() {
                                 println!("{}", txt);
                             }
                         } else {
-                            RichRenderer::render_variable_card(&display_label, &val);
+                            RichRenderer::render_variable_card(&display_label, &val, precision_override);
                         }
                     }
 
@@ -763,6 +780,7 @@ fn main() {
                         latex_expr,
                         value: val,
                         is_display_text: is_disp,
+                        precision_override,
                     });
                 }
             }

@@ -102,8 +102,76 @@ pub fn format_float(n: f64) -> String {
     }
 }
 
+/// The base-10 exponent of `x`'s leading (most significant) digit -- `1` for `40.02`, `-1`
+/// for `0.981`, `0` for `1.0`.
+fn magnitude_exponent(x: f64) -> i32 {
+    x.abs().log10().floor() as i32
+}
+
+/// Rounds `x` to `decimal_places` digits after the decimal point. Negative rounds to a power
+/// of ten instead (`-1` rounds to the nearest ten).
+fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
+    let factor = 10f64.powi(decimal_places);
+    (x * factor).round() / factor
+}
+
+/// Rounds `x` to `sig_figs` significant figures.
+fn round_to_sig_figs(x: f64, sig_figs: u32) -> f64 {
+    if x == 0.0 {
+        return 0.0;
+    }
+    round_to_decimal_place(x, (sig_figs as i32 - 1) - magnitude_exponent(x))
+}
+
+/// The single leading digit of `x`, once `x` is already a "clean" value at a known order of
+/// magnitude (as produced by `round_to_sig_figs`) -- `4` for `40.0`, `1` for `1.0`.
+fn leading_digit(x: f64) -> i64 {
+    (x.abs() / 10f64.powi(magnitude_exponent(x))).round() as i64
+}
+
+/// GUM-style correlated rounding: the uncertainty gets 1 significant figure, or 2 if that
+/// leading digit would be `1` (whether the original value's leading digit already was `1`, or
+/// rounding to 1 figure carried a digit over into one -- `0.981` rounds to `1.0` at 1 figure,
+/// so this re-checks and uses 2 instead: `0.98`). The mean is then rounded to the same decimal
+/// place the (rounded) uncertainty landed on, so it's never shown with more precision than the
+/// uncertainty justifies. `sig_figs_override`, when given, replaces the automatic 1-or-2 rule
+/// with a fixed count.
+///
+/// An exact value (`std_dev <= 0.0`) and an extreme magnitude (matching `format_float`'s own
+/// scientific-notation threshold) both pass through to `format_float` untouched -- this is a
+/// normal-range display convenience, not a replacement for existing non-finite/extreme-value
+/// handling.
+pub fn gum_round(mean: f64, std_dev: f64, sig_figs_override: Option<u32>) -> (String, String) {
+    let extreme = |n: f64| { let a = n.abs(); a != 0.0 && (a < 1e-4 || a >= 1e16) };
+    if std_dev <= 0.0 || !std_dev.is_finite() || !mean.is_finite() || extreme(std_dev) || extreme(mean) {
+        return (format_float(mean), format_float(std_dev));
+    }
+    let sig_figs = match sig_figs_override {
+        Some(n) => n.max(1),
+        None => {
+            let one_fig = round_to_sig_figs(std_dev, 1);
+            if leading_digit(one_fig) == 1 { 2 } else { 1 }
+        }
+    };
+    let rounded_std = round_to_sig_figs(std_dev, sig_figs);
+    let decimal_places = (sig_figs as i32 - 1) - magnitude_exponent(rounded_std);
+    let rounded_mean = round_to_decimal_place(mean, decimal_places);
+    let show_decimals = decimal_places.max(0) as usize;
+    (format!("{:.*}", show_decimals, rounded_mean), format!("{:.*}", show_decimals, rounded_std))
+}
+
 impl std::fmt::Display for Quantity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string_with_precision(None))
+    }
+}
+
+impl Quantity {
+    /// The default `Display` string, or one with `@precision(N)`'s override applied: `N`
+    /// significant figures for the uncertainty when this quantity has one (magnitude rounds
+    /// to match, same as the default), or `N` plain decimal places on the magnitude when it's
+    /// exact (there's no uncertainty to round against).
+    pub fn to_string_with_precision(&self, precision_override: Option<u32>) -> String {
         // Multiplying/dividing quantities can produce an anonymous (unnamed) compound
         // unit whose scale isn't 1.0 (e.g. Ohm * milliamp). There's no literal symbol
         // for such a unit, so fold the scale into the value and display in canonical
@@ -119,14 +187,18 @@ impl std::fmt::Display for Quantity {
         // "10.0 m" for `10.0 +/- 0.5 m` throws away the half of the measurement that
         // says how much to trust the other half.
         let val_str = if std_dev > 0.0 {
-            format!("{} ± {}", format_float(val), format_float(std_dev))
+            let (val_s, std_s) = gum_round(val, std_dev, precision_override);
+            format!("{} ± {}", val_s, std_s)
         } else {
-            format_float(val)
+            match precision_override {
+                Some(n) => format!("{:.*}", n as usize, val),
+                None => format_float(val),
+            }
         };
         if unit_str.is_empty() || unit_str == "Dimensionless" {
-            write!(f, "{}", val_str)
+            val_str
         } else {
-            write!(f, "{} {}", val_str, unit_str)
+            format!("{} {}", val_str, unit_str)
         }
     }
 }
@@ -763,6 +835,66 @@ mod tests {
     fn log10_of_a_non_positive_value_is_a_domain_error() {
         let negative = Quantity::new(-5.0, "").unwrap();
         assert!(matches!(negative.log10().unwrap_err(), PhysureError::DomainError(_)));
+    }
+
+    #[test]
+    fn gum_round_matches_the_worked_examples() {
+        assert_eq!(gum_round(625.0, 40.0195264839553, None), ("630".to_string(), "40".to_string()));
+        assert_eq!(gum_round(2.0, 0.1, None), ("2.00".to_string(), "0.10".to_string()));
+        assert_eq!(gum_round(9.81, 0.05, None), ("9.81".to_string(), "0.05".to_string()));
+        // 0.981 rounds to 1 sig fig as 1.0 -- a leading digit of 1 even though the
+        // pre-rounding value's leading digit was 9, so the carry-over check bumps this to
+        // 2 sig figs (0.98), not 1 (which would have shown as the misleadingly coarse "1").
+        assert_eq!(gum_round(19.62, 0.981, None), ("19.62".to_string(), "0.98".to_string()));
+    }
+
+    #[test]
+    fn gum_round_leaves_an_exact_value_untouched() {
+        assert_eq!(gum_round(5.0, 0.0, None), (format_float(5.0), format_float(0.0)));
+    }
+
+    #[test]
+    fn gum_round_sig_figs_override_replaces_the_automatic_rule() {
+        // Forcing 1 sig fig on 0.981 skips the automatic carry-over bump to 2 -- it still
+        // carries to 1 (0.981 rounded to 1 figure), and the mean rounds to match that.
+        assert_eq!(gum_round(19.62, 0.981, Some(1)), ("20".to_string(), "1".to_string()));
+        // Forcing 3 sig figs on the tutorial's kinetic-energy example.
+        assert_eq!(gum_round(625.0, 40.0195264839553, Some(3)), ("625.0".to_string(), "40.0".to_string()));
+    }
+
+    #[test]
+    fn gum_round_falls_back_to_format_float_outside_the_normal_range() {
+        // Matches format_float's own scientific-notation threshold -- GUM correlation is a
+        // normal-range display convenience, not a replacement for existing extreme-magnitude
+        // handling.
+        let (mean_s, std_s) = gum_round(1.0, 1e-10, None);
+        assert_eq!(mean_s, format_float(1.0));
+        assert_eq!(std_s, format_float(1e-10));
+    }
+
+    #[test]
+    fn to_string_with_precision_overrides_sig_figs_when_uncertain() {
+        let q = Quantity::new_scalar(19.62, 0.981, RationalUnit::base("N"), None, None);
+        assert_eq!(q.to_string_with_precision(None), q.to_string());
+        assert_eq!(q.to_string_with_precision(Some(1)), "20 ± 1 N");
+    }
+
+    #[test]
+    fn to_string_with_precision_sets_decimal_places_when_exact() {
+        let q = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::dimensionless(), None, None);
+        assert_eq!(q.to_string_with_precision(Some(2)), "3.14");
+    }
+
+    #[test]
+    fn to_string_with_precision_keeps_the_unit_from_an_exact_quantity() {
+        let q = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::base("m"), None, None);
+        assert_eq!(q.to_string_with_precision(Some(2)), "3.14 m");
+    }
+
+    #[test]
+    fn display_applies_gum_rounding_to_an_uncertain_quantity() {
+        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
+        assert_eq!(q.to_string(), "630 ± 40 J");
     }
 
     #[test]
