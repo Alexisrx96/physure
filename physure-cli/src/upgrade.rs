@@ -29,21 +29,37 @@ fn make_way_for(target: &Path) -> io::Result<()> {
 
 const USER_AGENT: &str = "phs-upgrade";
 
+/// A `ureq` agent with a 30s timeout covering the whole request -- DNS, connect, and reading
+/// the response body -- so a connection that connects fine but then stalls mid-response can't
+/// hang `phs upgrade` forever with no feedback.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(30)).build()
+}
+
+/// GETs `url`, the one request path every helper in this module funnels through. On a non-2xx
+/// response this captures GitHub's actual response body (a rate-limit explanation, a JSON
+/// `message` field, etc.) in the error, not just the status code -- `ureq::Error`'s own
+/// `Display` collapses a `Status` error down to `"status code 403"`, which is exactly the least
+/// useful moment to lose that detail.
+fn get(url: &str) -> Result<ureq::Response, String> {
+    agent().get(url).set("User-Agent", USER_AGENT).call().map_err(|e| match e {
+        ureq::Error::Status(code, resp) => {
+            let body = resp.into_string().unwrap_or_default();
+            format!("GET {url} failed: {code} {body}")
+        }
+        ureq::Error::Transport(t) => format!("GET {url} failed: {t}"),
+    })
+}
+
 /// GETs `url` expecting a JSON body -- every GitHub API call this module makes.
 fn github_get(url: &str) -> Result<serde_json::Value, String> {
-    let resp = ureq::get(url)
-        .set("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|e| format!("GET {url} failed: {e}"))?;
+    let resp = get(url)?;
     resp.into_json().map_err(|e| format!("GET {url}: invalid JSON response: {e}"))
 }
 
 /// Downloads `url`'s raw body to `dest`, for a release asset (a `.zip`/`.tar.gz`, not JSON).
 fn download_file(url: &str, dest: &Path) -> Result<(), String> {
-    let resp = ureq::get(url)
-        .set("User-Agent", USER_AGENT)
-        .call()
-        .map_err(|e| format!("GET {url} failed: {e}"))?;
+    let resp = get(url)?;
     let mut file = fs::File::create(dest).map_err(|e| format!("creating {}: {e}", dest.display()))?;
     io::copy(&mut resp.into_reader(), &mut file)
         .map_err(|e| format!("writing {}: {e}", dest.display()))?;
