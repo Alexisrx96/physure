@@ -790,7 +790,12 @@ class Quantity(
 
     def __repr__(self) -> str:
         """Returns string representation."""
-        unit_str = self.unit.to_string(self.system)
+        # Matches `__str__`/`_display_unit_str`: a dimensionless quantity has no unit to
+        # show, whether it's an anonymous ratio (`3 m / 2 m`) or built with no unit at
+        # all. Reading `self.unit.to_string(...)` directly here (bypassing that check)
+        # is what let `Quantity(1.5, 1)` through -- a "1" that reads like a second
+        # positional argument, not "no unit".
+        unit_str = self._display_unit_str(use_alias=True)
         if self._has_uncertainty:
             # A scalar model reprs as a plain float. Dumping the model itself
             # would put its internals in the repr, and for a lineage-tracking
@@ -806,11 +811,15 @@ class Quantity(
                 if unc is None or is_scalar_model
                 else repr(unc)
             )
-            return (
-                f"Quantity({self.magnitude!r}, {unit_str}, "
-                f"uncertainty={unc_repr})"
-            )
-        return f"Quantity({self.magnitude!r}, {unit_str})"
+            if unit_str:
+                return (
+                    f"Quantity({self.magnitude!r}, {unit_str}, "
+                    f"uncertainty={unc_repr})"
+                )
+            return f"Quantity({self.magnitude!r}, uncertainty={unc_repr})"
+        if unit_str:
+            return f"Quantity({self.magnitude!r}, {unit_str})"
+        return f"Quantity({self.magnitude!r})"
 
     def _display_unit_str(self, use_alias: bool = True) -> str:
         """Returns the unit's display string, or "" if dimensionless."""

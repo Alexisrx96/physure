@@ -147,6 +147,16 @@ def test_dunder_methods(quantity_system):
     assert "uncertainty=" in repr(q_arr_unc)
 
 
+def test_repr_hides_the_unit_for_a_dimensionless_result(quantity_system):
+    """`__str__` already hides a dimensionless unit via `_display_unit_str`, but
+    `__repr__` read `self.unit.to_string(...)` directly and skipped that check --
+    `3 m / 2 m` printed as `Quantity(1.5, 1)`, reading like a second positional
+    argument rather than "no unit". `__repr__` must agree with `__str__`."""
+    ratio = quantity_system.Q_(3, "m") / quantity_system.Q_(2, "m")
+    assert str(ratio) == "1.5"
+    assert repr(ratio) == "Quantity(1.5)"
+
+
 def test_comparison_edge_cases(quantity_system):
     """Test __le__, __ge__ and comparisons with non-quantities."""
     q1 = quantity_system.Q_(5, "m")
