@@ -259,6 +259,115 @@ fn run_stable_upgrade() {
     let _ = fs::remove_dir_all(&tmp_dir);
 }
 
+fn which_cargo_found() -> bool {
+    let lookup = if cfg!(windows) { "where" } else { "which" };
+    std::process::Command::new(lookup)
+        .arg("cargo")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn cargo_install_from_main(krate: &str, bin: &str) -> bool {
+    let mut cmd = std::process::Command::new("cargo");
+    cmd.args(["install", "--git", "https://github.com/Alexisrx96/physure", "--branch", "main", krate]);
+    if bin != krate {
+        cmd.args(["--bin", bin]);
+    }
+    cmd.args(["--locked", "--force"]);
+    match cmd.status() {
+        Ok(s) if s.success() => true,
+        Ok(s) => {
+            eprintln!("cargo install {krate} exited with {s}");
+            false
+        }
+        Err(e) => {
+            eprintln!("Failed to run cargo install for {krate}: {e}");
+            false
+        }
+    }
+}
+
+fn run_nightly_upgrade() {
+    if !which_cargo_found() {
+        eprintln!("cargo not found on PATH. Install Rust from https://rustup.rs then re-run `phs upgrade --nightly`.");
+        std::process::exit(1);
+    }
+
+    let running_sha = option_env!("PHS_BUILD_SHA");
+    let mut should_rebuild = true;
+    let mut status_note: Option<String> = None;
+
+    if let Some(running_sha) = running_sha {
+        if let Ok(commit) = github_get("https://api.github.com/repos/Alexisrx96/physure/commits/main") {
+            if let Some(latest_sha) = commit["sha"].as_str() {
+                let latest_short = &latest_sha[..latest_sha.len().min(7)];
+                if latest_short == running_sha {
+                    should_rebuild = false;
+                    status_note = Some(format!("phs is already on the latest commit ({running_sha})."));
+                } else {
+                    let compare_url = format!(
+                        "https://api.github.com/repos/Alexisrx96/physure/compare/{running_sha}...{latest_sha}"
+                    );
+                    // A failed diagnostic check here is never a reason to refuse an upgrade
+                    // the user explicitly asked for -- should_rebuild simply stays true.
+                    if let Ok(compare) = github_get(&compare_url) {
+                        let files: Vec<String> = compare["files"]
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter().filter_map(|f| f["filename"].as_str().map(str::to_string)).collect()
+                            })
+                            .unwrap_or_default();
+                        if !is_relevant_change(&files) {
+                            should_rebuild = false;
+                            status_note = Some(format!(
+                                "main moved ({running_sha} -> {latest_short}) but nothing under physure-core/physure-script/physure-cli/physure-lsp changed -- phs is already effectively up to date."
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !should_rebuild {
+        println!("{}", status_note.unwrap_or_else(|| "phs is already up to date.".to_string()));
+        return;
+    }
+
+    let phs_installed = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Could not determine the running phs's own path: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = make_way_for(&phs_installed) {
+        eprintln!("Failed to prepare {} for rebuild: {e}", phs_installed.display());
+        std::process::exit(1);
+    }
+    println!("Building phs from main...");
+    if !cargo_install_from_main("physure-cli", "phs") {
+        std::process::exit(1);
+    }
+
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    if let Some(dir) = phs_installed.parent() {
+        let lsp_path = dir.join(format!("physure-lsp{exe}"));
+        if lsp_path.exists() {
+            match make_way_for(&lsp_path) {
+                Ok(()) => {
+                    println!("Building physure-lsp from main...");
+                    cargo_install_from_main("physure-lsp", "physure-lsp");
+                }
+                Err(e) => eprintln!("Failed to prepare {} for rebuild: {e}", lsp_path.display()),
+            }
+        }
+    }
+
+    println!("Done. Run `phs --version` to confirm the new commit.");
+}
+
 /// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
 /// depend directly on `physure-script`, which implements the language itself (parser,
 /// interpreter, grammar), so it belongs in this set alongside the more obvious
