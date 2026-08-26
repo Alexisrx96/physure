@@ -27,6 +27,29 @@ fn make_way_for(target: &Path) -> io::Result<()> {
     Ok(())
 }
 
+const USER_AGENT: &str = "phs-upgrade";
+
+/// GETs `url` expecting a JSON body -- every GitHub API call this module makes.
+fn github_get(url: &str) -> Result<serde_json::Value, String> {
+    let resp = ureq::get(url)
+        .set("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| format!("GET {url} failed: {e}"))?;
+    resp.into_json().map_err(|e| format!("GET {url}: invalid JSON response: {e}"))
+}
+
+/// Downloads `url`'s raw body to `dest`, for a release asset (a `.zip`/`.tar.gz`, not JSON).
+fn download_file(url: &str, dest: &Path) -> Result<(), String> {
+    let resp = ureq::get(url)
+        .set("User-Agent", USER_AGENT)
+        .call()
+        .map_err(|e| format!("GET {url} failed: {e}"))?;
+    let mut file = fs::File::create(dest).map_err(|e| format!("creating {}: {e}", dest.display()))?;
+    io::copy(&mut resp.into_reader(), &mut file)
+        .map_err(|e| format!("writing {}: {e}", dest.display()))?;
+    Ok(())
+}
+
 /// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
 /// depend directly on `physure-script`, which implements the language itself (parser,
 /// interpreter, grammar), so it belongs in this set alongside the more obvious
