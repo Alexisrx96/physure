@@ -1,8 +1,14 @@
-/// The four crate directories that actually compile into `phs`/`physure-lsp`.
-/// `physure-script` implements the language itself (parser, interpreter, grammar) and both
-/// binaries depend on it directly -- leaving it out would miss most of what a typical commit
-/// here changes, confirmed against this session's own history, where nearly every fix touched
-/// `physure-script`, not `physure-core`.
+//! `phs upgrade` -- self-updates the `phs`/`physure-lsp` binaries. Two modes: the default
+//! downloads the latest published `core-v*` GitHub release binary for the current platform;
+//! `--nightly` rebuilds from `main`'s current tip via `cargo install`, but only when a commit
+//! that actually changed one of the crates that compile into these binaries has landed since
+//! the running build.
+
+/// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
+/// depend directly on `physure-script`, which implements the language itself (parser,
+/// interpreter, grammar), so it belongs in this set alongside the more obvious
+/// `physure-core`, `physure-cli`, and `physure-lsp` -- leaving it out would miss most of
+/// what a typical commit to this repo changes.
 const RELEVANT_PATH_PREFIXES: &[&str] =
     &["physure-core/", "physure-script/", "physure-cli/", "physure-lsp/"];
 
@@ -13,6 +19,9 @@ fn parse_core_tag_version(tag: &str) -> Option<semver::Version> {
     tag.strip_prefix("core-v").and_then(|v| semver::Version::parse(v).ok())
 }
 
+/// The prebuilt-binary asset name `core-release.yml` publishes for a given `(os, arch)` pair,
+/// as reported by `std::env::consts::OS`/`ARCH` -- `None` for any platform that pipeline
+/// doesn't build for.
 fn asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
     match (os, arch) {
         ("windows", "x86_64") => Some("phs-windows-x86_64.zip"),
@@ -24,8 +33,7 @@ fn asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-/// The prebuilt-binary asset name `core-release.yml` publishes for the platform this binary
-/// is actually running on, or `None` for a platform that pipeline doesn't build for.
+/// `asset_name_for` for the platform this binary is actually running on.
 fn platform_asset_name() -> Option<&'static str> {
     asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
 }
