@@ -26,55 +26,55 @@ mistake pass silently.
 ## 1. A quantity is a number with a unit
 
 ```phs
-presion = 100.0 kPa
+pressure = 100.0 kPa
 ```
 
 Write the magnitude and the unit exactly like you would on paper — no `Quantity(...)`
 constructor, no import. Running it prints:
 
 ```
-presion                 = 100.0 kPa
+pressure                = 100.0 kPa
 ```
 
 ## 2. Conversion with `=>`
 
 ```phs
-presion_bar = presion => bar
+pressure_bar = pressure => bar
 ```
 
 `=>` converts a quantity to a different unit *of the same dimension* on the spot — no manual
 conversion factor to look up or get wrong:
 
 ```
-presion_bar             = 1.0 bar
+pressure_bar             = 1.0 bar
 ```
 
-Converting to a dimensionally incompatible unit (say, `presion => kg`) is a hard error, not a
+Converting to a dimensionally incompatible unit (say, `pressure => kg`) is a hard error, not a
 silently wrong number — see [Break it on purpose](#break-it-on-purpose) below.
 
 ## 3. Uncertainty with `+/-`
 
 ```phs
-velocidad = 25.0 +/- 0.5 m / s
-masa = 2.0 +/- 0.1 kg
-energia_cinetica = 0.5 * masa * velocidad^2
+velocity = 25.0 +/- 0.5 m / s
+mass = 2.0 +/- 0.1 kg
+kinetic_energy = 0.5 * mass * velocity^2
 ```
 
 A measurement's uncertainty isn't a comment or a separate column — it's part of the value, and
-it propagates automatically through every operation that uses it. Squaring `velocidad` and
-multiplying by `masa` widens the error bar exactly the way the underlying statistics say it
+it propagates automatically through every operation that uses it. Squaring `velocity` and
+multiplying by `mass` widens the error bar exactly the way the underlying statistics say it
 should, with no separate calculation to keep in sync:
 
 ```
-velocidad               = 25.0 ± 0.5 m / s
-masa                    = 2.0 ± 0.1 kg
-energia_cinetica        = 625.0 ± 40.0195264839553 J
+velocity                = 25.0 ± 0.5 m / s
+mass                    = 2.0 ± 0.1 kg
+kinetic_energy          = 625.0 ± 40.0195264839553 J
 ```
 
 ## 4. `where` for showing intermediate steps
 
 ```phs
-fuerza = masa * aceleracion where aceleracion = 9.81 m / s^2
+force = mass * acceleration where acceleration = 9.81 m / s^2
 ```
 
 `where` binds a name for use in the expression to its left without a separate assignment line
@@ -82,18 +82,18 @@ above it — useful for a constant that only this one calculation needs, kept vi
 to where it's used instead of buried earlier in the script:
 
 ```
-fuerza                   = 19.62 ± 0.981 N
+force                   = 19.62 ± 0.981 N
 ```
 
 Every value computed so far can be interpolated straight into a string, for a one-line summary
 of the whole calculation:
 
 ```phs
-"La presion es {presion_bar}, la energia cinetica es {energia_cinetica}, y la fuerza es {fuerza}"
+"The pressure is {pressure_bar}, the kinetic energy is {kinetic_energy}, and the force is {force}"
 ```
 
 ```
-La presion es 1.0 bar, la energia cinetica es 625.0 ± 40.0195264839553 J, y la fuerza es 19.62 ± 0.981 N
+The pressure is 1.0 bar, the kinetic energy is 625.0 ± 40.0195264839553 J, and the force is 19.62 ± 0.981 N
 ```
 
 ## 5. The closing deliverable: `phs script.phs --html`
@@ -131,17 +131,17 @@ to fix before trusting anything downstream of it.
 **A missing operator:**
 
 ```phs
-masa = 2.0 kg
-velocidad = 3.0 m/s
-total = masa velocidad
+mass = 2.0 kg
+velocity = 3.0 m/s
+total = mass velocity
 ```
 
 ```
-Error Details: Missing operator between 'masa' and 'velocidad': PhysureScript does not read two
-bare names side by side as a product. Write `masa * velocidad` if you meant to multiply them,
+Error Details: Missing operator between 'mass' and 'velocity': PhysureScript does not read two
+bare names side by side as a product. Write `mass * velocity` if you meant to multiply them,
 or add whatever operator belongs between them.
 ```
 
-`masa velocidad` with the `*` left out by accident isn't read as a product — PHS has caught
+`mass velocity` with the `*` left out by accident isn't read as a product — PHS has caught
 exactly the typo that, in a language willing to guess, would have silently multiplied two
 values with no warning at all.
