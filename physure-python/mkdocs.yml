@@ -52,6 +52,7 @@ plugins:
 nav:
   - Home: index.md
   - Tutorials:
+      - PHS Primer: tutorials/phs_primer.md
       - Best Practices: tutorials/01_best_practices.ipynb
       - JAX Integration: tutorials/jax_tutorial.ipynb
   - Guides:
