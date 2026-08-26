@@ -16,7 +16,12 @@ use std::path::Path;
 fn make_way_for(target: &Path) -> io::Result<()> {
     if cfg!(windows) && target.exists() {
         let stale = target.with_extension("old");
-        let _ = fs::remove_file(&stale); // best-effort: a leftover from a previous upgrade
+        // Belt-and-suspenders, not load-bearing: `fs::rename` below already replaces an
+        // existing `stale` destination on its own (Windows `MoveFileExW` is called with
+        // `MOVEFILE_REPLACE_EXISTING`). This just clears the way first, best-effort, in
+        // case a leftover `.old` from a previous upgrade can't be replaced in place for
+        // some reason -- if it truly can't be removed, the rename below will surface that.
+        let _ = fs::remove_file(&stale);
         fs::rename(target, &stale)?;
     }
     Ok(())
@@ -118,15 +123,47 @@ mod tests {
     #[test]
     #[cfg(windows)]
     fn make_way_for_renames_an_existing_file_out_of_the_target_path() {
+        use std::io::Read;
+        use std::os::windows::fs::OpenOptionsExt;
+
+        // The exact sharing the Windows loader grants a running exe's image: read + delete,
+        // but *not* write. A plain `File::open` handle grants write-sharing by default and
+        // would let a direct overwrite succeed, so it wouldn't catch a regression here --
+        // only these flags actually reproduce the "Acceso denegado" failure `cargo install`
+        // hit rebuilding a running phs.exe.
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_DELETE: u32 = 0x4;
+
         let dir = std::env::temp_dir().join(format!("phs-upgrade-test-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let target = dir.join("phs.exe");
         fs::write(&target, b"old content").unwrap();
 
+        // Hold `target` open the way a running phs.exe would hold itself open, across the
+        // whole first `make_way_for` call below.
+        let mut locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
+            .open(&target)
+            .unwrap();
+
+        // Prove this is really the locked-executable scenario and not an idle-file rename:
+        // a direct overwrite attempt fails with ERROR_SHARING_VIOLATION while `locked` is
+        // open.
+        let overwrite_err = fs::OpenOptions::new().write(true).open(&target).unwrap_err();
+        assert_eq!(overwrite_err.raw_os_error(), Some(32), "expected ERROR_SHARING_VIOLATION");
+
         make_way_for(&target).unwrap();
 
         assert!(!target.exists(), "the original path should be free for a new file");
         assert_eq!(fs::read(target.with_extension("old")).unwrap(), b"old content");
+
+        // The handle opened before the rename is still valid -- this is the property that
+        // lets a process keep running normally after being renamed out from under itself.
+        let mut still_readable = String::new();
+        locked.read_to_string(&mut still_readable).unwrap();
+        assert_eq!(still_readable, "old content");
+        drop(locked);
 
         // A second call (a second upgrade in a row) must not fail just because a stale
         // .old from the first one is still sitting there.
