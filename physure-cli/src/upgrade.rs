@@ -1,0 +1,91 @@
+/// The four crate directories that actually compile into `phs`/`physure-lsp`.
+/// `physure-script` implements the language itself (parser, interpreter, grammar) and both
+/// binaries depend on it directly -- leaving it out would miss most of what a typical commit
+/// here changes, confirmed against this session's own history, where nearly every fix touched
+/// `physure-script`, not `physure-core`.
+const RELEVANT_PATH_PREFIXES: &[&str] =
+    &["physure-core/", "physure-script/", "physure-cli/", "physure-lsp/"];
+
+/// Parses the version out of a `core-vX.Y.Z` release tag. `None` for any other tag shape --
+/// this repo also publishes plain `vX.Y.Z` (Python package) and `py-vX.Y.Z` releases, which
+/// `phs upgrade` must ignore.
+fn parse_core_tag_version(tag: &str) -> Option<semver::Version> {
+    tag.strip_prefix("core-v").and_then(|v| semver::Version::parse(v).ok())
+}
+
+fn asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
+    match (os, arch) {
+        ("windows", "x86_64") => Some("phs-windows-x86_64.zip"),
+        ("linux", "x86_64") => Some("phs-linux-x86_64.tar.gz"),
+        ("linux", "aarch64") => Some("phs-linux-aarch64.tar.gz"),
+        ("macos", "x86_64") => Some("phs-macos-x86_64.tar.gz"),
+        ("macos", "aarch64") => Some("phs-macos-aarch64.tar.gz"),
+        _ => None,
+    }
+}
+
+/// The prebuilt-binary asset name `core-release.yml` publishes for the platform this binary
+/// is actually running on, or `None` for a platform that pipeline doesn't build for.
+fn platform_asset_name() -> Option<&'static str> {
+    asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// True if any changed file falls under one of the crates that actually compile into
+/// `phs`/`physure-lsp` -- see `RELEVANT_PATH_PREFIXES`'s doc comment.
+fn is_relevant_change(files: &[String]) -> bool {
+    files.iter().any(|f| RELEVANT_PATH_PREFIXES.iter().any(|p| f.starts_with(p)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_core_tag_version_reads_a_core_tag() {
+        assert_eq!(parse_core_tag_version("core-v0.2.4"), Some(semver::Version::new(0, 2, 4)));
+    }
+
+    #[test]
+    fn parse_core_tag_version_rejects_other_tag_shapes() {
+        assert_eq!(parse_core_tag_version("v0.2.4"), None);
+        assert_eq!(parse_core_tag_version("py-v0.2.4"), None);
+        assert_eq!(parse_core_tag_version("py-core-v0.2.4"), None);
+        assert_eq!(parse_core_tag_version("core-vnotaversion"), None);
+    }
+
+    #[test]
+    fn asset_name_for_covers_every_core_release_yml_target() {
+        assert_eq!(asset_name_for("windows", "x86_64"), Some("phs-windows-x86_64.zip"));
+        assert_eq!(asset_name_for("linux", "x86_64"), Some("phs-linux-x86_64.tar.gz"));
+        assert_eq!(asset_name_for("linux", "aarch64"), Some("phs-linux-aarch64.tar.gz"));
+        assert_eq!(asset_name_for("macos", "x86_64"), Some("phs-macos-x86_64.tar.gz"));
+        assert_eq!(asset_name_for("macos", "aarch64"), Some("phs-macos-aarch64.tar.gz"));
+    }
+
+    #[test]
+    fn asset_name_for_is_none_for_an_unsupported_target() {
+        assert_eq!(asset_name_for("freebsd", "x86_64"), None);
+    }
+
+    #[test]
+    fn platform_asset_name_finds_a_match_on_the_platform_running_this_test() {
+        // This repo's CI and dev machines are always one of the five core-release.yml
+        // targets, so this should never be None in practice.
+        assert!(platform_asset_name().is_some());
+    }
+
+    #[test]
+    fn is_relevant_change_true_for_any_of_the_four_crate_directories() {
+        assert!(is_relevant_change(&["physure-core/src/quantity.rs".to_string()]));
+        assert!(is_relevant_change(&["physure-script/src/interpreter/mod.rs".to_string()]));
+        assert!(is_relevant_change(&["physure-cli/src/main.rs".to_string()]));
+        assert!(is_relevant_change(&["physure-lsp/src/incremental.rs".to_string()]));
+    }
+
+    #[test]
+    fn is_relevant_change_false_for_unrelated_paths() {
+        assert!(!is_relevant_change(&["physure-python/physure/__init__.py".to_string()]));
+        assert!(!is_relevant_change(&["docs/tutorials/phs_primer.md".to_string()]));
+        assert!(!is_relevant_change(&[]));
+    }
+}

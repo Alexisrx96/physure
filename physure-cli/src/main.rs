@@ -15,6 +15,7 @@ mod rich;
 mod scaffold;
 mod step;
 mod tui;
+mod upgrade;
 mod web;
 
 use config::PhysureConfig;
