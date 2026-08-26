@@ -9,12 +9,18 @@ use std::io;
 use std::path::Path;
 
 /// Makes `target` writable even if it's currently executing (this process's own exe, or one
-/// another process has open) -- Windows allows *renaming* an in-use executable even though it
-/// refuses to delete or overwrite it directly; the renamed file keeps running until whichever
-/// process has it open exits. Unix needs nothing: removing/overwriting a running executable's
-/// file is always fine there, so this is a no-op except on Windows.
+/// another process has open), by renaming it out of the way -- unconditionally, on every
+/// platform. On Windows this is load-bearing: Windows allows *renaming* an in-use executable
+/// even though it refuses to delete or overwrite it directly, so the renamed file keeps
+/// running until whichever process has it open exits. On Unix it's cheap insurance rather
+/// than a workaround for a lock: `replace_binary`'s subsequent `fs::copy` opens the
+/// *destination* file and truncates it in place (`O_WRONLY|O_CREAT|O_TRUNC` on the same
+/// inode) rather than unlinking and recreating it, and truncating a file that's still mapped
+/// into a running process's address space is exactly what Unix's `ETXTBSY` ("Text file
+/// busy") protection blocks. Renaming first ensures `fs::copy` always writes into a fresh
+/// inode instead of ever risking a truncate-in-place on a possibly-running binary.
 fn make_way_for(target: &Path) -> io::Result<()> {
-    if cfg!(windows) && target.exists() {
+    if target.exists() {
         let stale = target.with_extension("old");
         // Belt-and-suspenders, not load-bearing: `fs::rename` below already replaces an
         // existing `stale` destination on its own (Windows `MoveFileExW` is called with
@@ -85,16 +91,37 @@ fn extract_archive(archive: &Path, dest_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Replaces `installed` with the content at `new_content`, freeing the path first via
-/// `make_way_for` in case `installed` is a currently-running executable. Best-effort cleans
-/// up the `.old` file `make_way_for` may have left behind.
+/// Replaces `installed` with the content at `new_content`. Never leaves `installed` missing:
+/// the existing file is moved aside first (`make_way_for`, needed on Windows because it
+/// refuses to overwrite a currently-executing file in place, and harmless insurance on Unix
+/// since `fs::copy` truncates the destination inode rather than unlinking it -- which Unix
+/// blocks for a running executable with ETXTBSY), the new content is copied to a fresh
+/// same-directory temp path first, and only *that* gets renamed into `installed`'s place. If
+/// anything fails before the final rename, the original is renamed back from `.old` so a
+/// failed upgrade leaves the previous working binary in place, not a missing one.
 fn replace_binary(installed: &Path, new_content: &Path) -> Result<(), String> {
+    let had_original = installed.exists();
     make_way_for(installed).map_err(|e| format!("preparing to replace {}: {e}", installed.display()))?;
     if let Some(parent) = installed.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
     }
-    fs::copy(new_content, installed)
-        .map_err(|e| format!("copying {} -> {}: {e}", new_content.display(), installed.display()))?;
+
+    let staged = installed.with_extension("new");
+    let result = fs::copy(new_content, &staged)
+        .map_err(|e| format!("copying {} -> {}: {e}", new_content.display(), staged.display()))
+        .and_then(|_| {
+            fs::rename(&staged, installed)
+                .map_err(|e| format!("moving {} -> {}: {e}", staged.display(), installed.display()))
+        });
+
+    if let Err(e) = &result {
+        let _ = fs::remove_file(&staged);
+        if had_original {
+            let _ = fs::rename(installed.with_extension("old"), installed);
+        }
+        return Err(format!("{e} (restored the previous binary)"));
+    }
+
     let _ = fs::remove_file(installed.with_extension("old"));
     Ok(())
 }
@@ -248,19 +275,24 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
-    fn make_way_for_is_a_no_op_outside_windows() {
-        let dir = std::env::temp_dir().join(format!("phs-upgrade-test-{}", std::process::id()));
+    fn make_way_for_renames_on_every_platform() {
+        let dir = std::env::temp_dir()
+            .join(format!("phs-upgrade-test-portable-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let target = dir.join("phs");
-        fs::write(&target, b"content").unwrap();
+        fs::write(&target, b"old content").unwrap();
 
         make_way_for(&target).unwrap();
 
-        // Nothing renamed -- overwriting a running executable's file is always fine on Unix,
-        // so make_way_for has nothing to do there.
-        assert!(target.exists());
-        assert!(!target.with_extension("old").exists());
+        assert!(!target.exists(), "the original path should be free for a new file");
+        assert_eq!(fs::read(target.with_extension("old")).unwrap(), b"old content");
+
+        // A second call (a second upgrade in a row) must not fail just because a stale
+        // .old from the first one is still sitting there.
+        fs::write(&target, b"new content").unwrap();
+        make_way_for(&target).unwrap();
+        assert!(!target.exists());
+        assert_eq!(fs::read(target.with_extension("old")).unwrap(), b"new content");
 
         let _ = fs::remove_dir_all(&dir);
     }
