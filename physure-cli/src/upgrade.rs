@@ -126,6 +126,132 @@ fn replace_binary(installed: &Path, new_content: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn run_stable_upgrade() {
+    println!("Checking for the latest release...");
+    let releases = match github_get("https://api.github.com/repos/Alexisrx96/physure/releases") {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to check for updates: {e}");
+            std::process::exit(1);
+        }
+    };
+    let Some(releases_arr) = releases.as_array() else {
+        eprintln!("Unexpected response from GitHub releases API.");
+        std::process::exit(1);
+    };
+    let Some(release) = releases_arr
+        .iter()
+        .find(|r| r["tag_name"].as_str().map(|t| t.starts_with("core-v")).unwrap_or(false))
+    else {
+        eprintln!("No core-v* release found on GitHub.");
+        std::process::exit(1);
+    };
+    let tag = release["tag_name"].as_str().unwrap_or("");
+    let Some(latest) = parse_core_tag_version(tag) else {
+        eprintln!("Could not parse a version from release tag '{tag}'.");
+        std::process::exit(1);
+    };
+    let running = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("CARGO_PKG_VERSION is always valid semver");
+
+    match latest.cmp(&running) {
+        std::cmp::Ordering::Equal => {
+            println!("phs is already up to date ({running}).");
+            return;
+        }
+        std::cmp::Ordering::Less => {
+            println!(
+                "Running {running} is newer than the latest published release ({latest}) -- probably a --nightly build. Nothing to do."
+            );
+            return;
+        }
+        std::cmp::Ordering::Greater => {}
+    }
+
+    let Some(asset_name) = platform_asset_name() else {
+        eprintln!(
+            "No prebuilt binary for {}/{}. Try `phs upgrade --nightly` (requires cargo) or install manually.",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        );
+        std::process::exit(1);
+    };
+    let Some(asset) = release["assets"]
+        .as_array()
+        .and_then(|assets| assets.iter().find(|a| a["name"].as_str() == Some(asset_name)))
+    else {
+        eprintln!("Release {tag} has no asset named '{asset_name}'.");
+        std::process::exit(1);
+    };
+    let Some(download_url) = asset["browser_download_url"].as_str() else {
+        eprintln!("Release asset '{asset_name}' has no download URL.");
+        std::process::exit(1);
+    };
+
+    let tmp_dir = std::env::temp_dir().join(format!("phs-upgrade-{}", std::process::id()));
+    if let Err(e) = fs::create_dir_all(&tmp_dir) {
+        eprintln!("Failed to create temp directory {}: {e}", tmp_dir.display());
+        std::process::exit(1);
+    }
+    let archive_path = tmp_dir.join(asset_name);
+
+    println!("Downloading {asset_name}...");
+    if let Err(e) = download_file(download_url, &archive_path) {
+        eprintln!("Download failed: {e}");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        std::process::exit(1);
+    }
+
+    let extract_dir = tmp_dir.join("extracted");
+    if let Err(e) = extract_archive(&archive_path, &extract_dir) {
+        eprintln!("Extraction failed: {e}");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        std::process::exit(1);
+    }
+
+    let exe = if cfg!(windows) { ".exe" } else { "" };
+    let phs_installed = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Could not determine the running phs's own path: {e}");
+            let _ = fs::remove_dir_all(&tmp_dir);
+            std::process::exit(1);
+        }
+    };
+    let phs_extracted = extract_dir.join(format!("phs{exe}"));
+    match replace_binary(&phs_installed, &phs_extracted) {
+        Ok(()) => println!("phs: {running} -> {latest}"),
+        Err(e) => {
+            eprintln!("Failed to replace phs: {e}");
+            let _ = fs::remove_dir_all(&tmp_dir);
+            std::process::exit(1);
+        }
+    }
+
+    let lsp_name = format!("physure-lsp{exe}");
+    let lsp_extracted = extract_dir.join(&lsp_name);
+    if lsp_extracted.exists() {
+        let lsp_target = phs_installed
+            .parent()
+            .map(|dir| dir.join(&lsp_name))
+            .filter(|p| p.exists())
+            .or_else(|| {
+                dirs::home_dir()
+                    .map(|h| h.join(".cargo").join("bin").join(&lsp_name))
+                    .filter(|p| p.exists())
+            });
+        match lsp_target {
+            Some(target) => match replace_binary(&target, &lsp_extracted) {
+                Ok(()) => println!("physure-lsp: -> {latest}"),
+                Err(e) => eprintln!("Failed to replace physure-lsp: {e}"),
+            },
+            None => println!("physure-lsp not found alongside phs or in ~/.cargo/bin; skipped."),
+        }
+    }
+
+    let _ = fs::remove_dir_all(&tmp_dir);
+}
+
 /// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
 /// depend directly on `physure-script`, which implements the language itself (parser,
 /// interpreter, grammar), so it belongs in this set alongside the more obvious
