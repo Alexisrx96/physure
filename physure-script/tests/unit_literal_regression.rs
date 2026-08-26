@@ -354,18 +354,22 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
 /// Symbols that cannot be written after `=>` today, each with the reason. The sweep below
 /// asserts these still fail, so fixing one forces removing it from this list.
 ///
-/// Both are the same gap: the right-hand side of `=>` is parsed as an ordinary expression,
-/// so the target has to be an `identifier`, and an identifier is made of `LETTER`s. `°` and
-/// `%` are units the grammar accepts in `_unit_char` but that no identifier may contain —
-/// and it cannot, or `x%` would be a name. Closing this means deciding that the operand of
-/// `=>` is a *unit expression* rather than any expression, which would also stop a variable
-/// holding a unit name from being used as a target.
+/// `°`, `%`, `°C`, `°F` and `°R` used to be the whole list here: the right-hand side of `=>`
+/// was parsed as an ordinary expression, so the target had to be an `identifier`, and an
+/// identifier is made of `LETTER`s. `=>`'s target is now `unit_expr` instead (see `phs.pest`'s
+/// `conv_expr`), which already accepted these symbols for a quantity literal's own unit
+/// suffix — see `degree_percent_and_affine_temperature_symbols_are_usable_conversion_targets`.
+///
+/// `"1"` is a new entry, not a leftover: it never had a real gap before, it had a coincidence.
+/// `x => 1` used to reach `comp_expr`'s `quantity` rule (a bare `1` is a valid number
+/// literal), producing a unitless `Quantity` whose magnitude `expr_to_unit_string` stringified
+/// back to `"1"` — which happens to also be the unity symbol's spelling. `unit_expr`'s
+/// `unit_term` requires a `_unit_char` (a `LETTER`) first, so a bare digit can never start one
+/// — the same reason `"1"` is already in `KNOWN_GAPS` above for the *literal* position: unity
+/// isn't really spelled by any syntax, this was never more than that one digit reading as
+/// itself twice by luck.
 const KNOWN_CONVERSION_GAPS: &[(&str, &str)] = &[
-    ("°", "not a LETTER, so no identifier can spell it; use `deg`"),
-    ("%", "not a LETTER, so no identifier can spell it; use `percent`"),
-    ("°C", "leading ° is not a LETTER, so no identifier can spell it; use `degC`"),
-    ("°F", "leading ° is not a LETTER, so no identifier can spell it; use `degF`"),
-    ("°R", "leading ° is not a LETTER, so no identifier can spell it; use `degR`"),
+    ("1", "unit_term requires a LETTER first; a bare digit can never start one"),
 ];
 
 /// Every symbol in the registry, swept through the literal parser. The prefix bug was a
@@ -740,6 +744,35 @@ fn a_prefixed_non_ascii_symbol_is_a_valid_conversion_target() {
     // A non-ASCII symbol is also a usable name, not only a unit.
     let bound = eval_quantity("Δx = 3 m\nΔx + 1 m");
     assert_close(bound.canonical_magnitude(), 4.0, "Δx + 1 m");
+}
+
+/// `°`, `%`, `°C`, `°F` and `°R` are not `LETTER`s, so no `identifier` can spell them — and
+/// `=>`'s right-hand side used to be parsed as one, the same rule a bare variable reference
+/// goes through. `deg`/`percent`/`degC`/`degF`/`degR` always worked as a target; only the
+/// symbol spelling didn't.
+#[test]
+fn degree_percent_and_affine_temperature_symbols_are_usable_conversion_targets() {
+    // A self-conversion is a no-op on the *displayed* value -- `canonical_magnitude()` is
+    // the base-SI value (radians for `deg`/`°`), not this.
+    let deg = eval_quantity("1.0 deg => °");
+    assert!((deg.value.mean() - 1.0).abs() < 1e-9, "1.0 deg => ° should read 1.0, got {}", deg.value.mean());
+    assert_eq!(deg.unit.__repr__(), "°");
+
+    let pct = eval_quantity("50.0 percent => %");
+    assert!((pct.value.mean() - 50.0).abs() < 1e-9, "50.0 percent => % should read 50.0, got {}", pct.value.mean());
+    assert_eq!(pct.unit.__repr__(), "%");
+
+    // Affine units carry a zero-point offset, not just a scale factor -- converting through
+    // the ° spelling has to apply it the same way `degC`/`degF`/`degR` already do.
+    let boiling = eval_quantity("212.0 degF => °C");
+    assert!((boiling.value.mean() - 100.0).abs() < 1e-9, "212 degF => °C should be 100.0, got {}", boiling.value.mean());
+    assert_eq!(boiling.unit.__repr__(), "°C");
+
+    let freezing = eval_quantity("0.0 °C => degF");
+    assert!((freezing.value.mean() - 32.0).abs() < 1e-9, "0 °C => degF should be 32.0, got {}", freezing.value.mean());
+
+    let absolute = eval_quantity("0.0 degR => °C");
+    assert!((absolute.value.mean() - (-273.15)).abs() < 1e-9, "0 degR => °C should be -273.15, got {}", absolute.value.mean());
 }
 
 /// A format spec closes the expression it is written on. Bound one level too low, inside

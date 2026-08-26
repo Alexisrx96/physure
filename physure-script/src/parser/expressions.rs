@@ -92,7 +92,19 @@ fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             _ => return Err(PhysureError::Generic(format!("Unexpected op in conv_expr: {:?}", op_pair.as_rule()))),
         };
         let right_pair = inner.next().unwrap();
-        let right = parse_comp_expr(right_pair)?;
+        // `=>`'s target is a `unit_expr`, not a `comp_expr` (see phs.pest's `conv_expr`) --
+        // every consumer of this side (the interpreter's `BinaryOp::Convert` arm, every
+        // codegen target) reads it back through `expr_to_unit_string`, which flattens an
+        // `Expr` to unit-chain text and only special-cases `Identifier`/`Quantity`/`BinaryOp`.
+        // Reusing the matched text as one `Identifier` is exactly what that flattening would
+        // produce for a real unit chain anyway, and it sidesteps rebuilding `unit_expr`'s
+        // internal `*`/`/` structure into an equivalent `Expr` tree for no benefit -- nothing
+        // ever inspects this side's shape, only its flattened text.
+        let right = if op == BinaryOp::Convert {
+            Expr::Identifier(right_pair.as_str().trim().to_string())
+        } else {
+            parse_comp_expr(right_pair)?
+        };
         left = Expr::BinaryOp {
             op,
             left: Box::new(left),
