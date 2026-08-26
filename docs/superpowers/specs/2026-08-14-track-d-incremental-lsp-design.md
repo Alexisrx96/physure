@@ -105,7 +105,7 @@ worse than not doing this track at all.
 
 `Expr::FunctionCall { name: String, args, kwargs }` stores the callee's name as a bare `String`
 field, not a nested `Expr::Identifier`. Resolution goes through `env.get(name)`
-([interpreter.rs:849](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L849)), exactly the same
+([interpreter/expressions.rs:215](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs#L215)), exactly the same
 lookup an `Identifier` read uses. A read-collector that only walks `Expr::Identifier` nodes would
 silently miss every function call as a dependency edge.
 
@@ -156,7 +156,7 @@ old-side writes are already part of `touched_names`. Every dirty statement that 
 naturally repopulates it when it re-runs, in file order; a name whose write genuinely disappeared
 stays removed, and downstream readers fall back to the same behavior the interpreter already has
 for an unbound identifier (unit-symbol fallback, then string-literal fallback — see
-[interpreter.rs:685-700](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L685-L700)) rather than a
+[interpreter/expressions.rs:96-111](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs#L96-L111)) rather than a
 silently-preserved old value. A dirty statement that's dirty only *transitively* (its own text is
 unchanged, it's re-running because something it reads changed) doesn't need separate invalidation —
 its write-name isn't in `touched_names`, so nothing removed it, and re-running overwrites it with a
@@ -165,7 +165,7 @@ fresh value before anything downstream can observe a stale one.
 ### 4.3 `where`/`let`-local names must not read as cross-statement dependencies
 
 `where` clauses desugar to an internal `let(name, value_expr, body_expr)` pseudo-call
-([interpreter.rs:718](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L718)). The read-collector must
+([interpreter/expressions.rs:129](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs#L129)). The read-collector must
 special-case this form: `value_expr`'s reads count normally (evaluated in the outer scope), but
 `name` is locally bound for the walk of `body_expr` only, and must not be treated as depending on
 some unrelated earlier top-level write of the same name. Chained `where a = 1, b = a + 1` desugars
@@ -176,9 +176,9 @@ to nested `let`s and falls out of the same rule recursively.
 The roadmap's scoping rule (§3) claims a `while` body's assignments persist to the enclosing scope
 only for a name that already existed there, and that a name first assigned inside the loop doesn't
 leak out. **This spec originally modeled the graph on that claim; it's wrong.** Verified directly
-against the interpreter, not assumed from the AST: `eval_statement` ([interpreter.rs:654](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L654))
+against the interpreter, not assumed from the AST: `eval_statement` ([interpreter/statements.rs:350](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/statements.rs#L350))
 clones `self.env` once for the *entire* top-level statement, runs it, and commits the whole
-resulting map back — and `Statement::While`'s own arm ([interpreter.rs:525](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L525))
+resulting map back — and `Statement::While`'s own arm ([interpreter/statements.rs:221](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/statements.rs#L221))
 runs every body statement against that *same* `&mut env` reference, with no snapshot-and-restore
 around the loop. Nothing filters out newly-introduced names before the commit. Confirmed
 empirically: `i = 0\nwhile i < 1 { i = i + 1\nbrand_new = 99 }` leaves `brand_new` readable
@@ -199,7 +199,7 @@ of the same name).
 ### 4.5 A template string's `{expr}` spans are reads too
 
 `Expr::Str(text)` is not read-free just because it's a string literal: `interpolate`
-([interpreter.rs:138](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L138)) scans for every
+([interpreter/expressions.rs:31](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs#L31)) scans for every
 `{...}` span and evaluates its contents as a full parsed PHS expression against `env` — `"v is
 {v * 2}"` really does read `v`. Skipping this would under-count reads for any statement using
 string interpolation, which is exactly the "too little" failure mode the roadmap warns about.

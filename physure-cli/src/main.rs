@@ -134,9 +134,14 @@ pub(crate) fn get_flag_value(args: &[String], flag: &str) -> Option<String> {
 fn handle_transpile(args: &[String]) -> bool {
     let is_transpile_cmd = args.get(1).map(|s| s == "transpile").unwrap_or(false);
     let has_target_flag = args.iter().any(|a| a == "--target" || a == "-t");
-    let has_output_flag = args.iter().any(|a| a == "--output" || a == "-o");
 
-    if !is_transpile_cmd && !has_target_flag && !has_output_flag {
+    // `-o`/`--output` alone used to be enough to enter transpile mode -- but it's not a
+    // transpile-specific flag (the `--html` report reuses it too, for its own output path),
+    // so gating on it here meant `phs script.phs --html -o report.html` silently transpiled
+    // to Rust and wrote that at "report.html" instead of ever generating a report. Only the
+    // documented entry points (`transpile` as the subcommand, or an explicit `--target`)
+    // commit to transpiling; `-o`'s value is still read below once one of those has.
+    if !is_transpile_cmd && !has_target_flag {
         return false;
     }
 
@@ -709,19 +714,63 @@ fn main() {
         RichRenderer::render_header(raw_input);
     }
 
-    for stmt in program.statements {
-        let (label, expr_code, latex_expr, is_disp) = format_statement_latex(&stmt, &i18n);
+    for (stmt_idx, stmt) in program.statements.iter().enumerate() {
+        let (label, expr_code, latex_expr, is_disp) = format_statement_latex(stmt, &i18n);
+        // `format_statement_latex` gives every bare (unassigned) expression statement the
+        // same generic "expr" label -- fine for the LaTeX/TUI paths, which also carry
+        // `expr_code`/a table column alongside it, but the plain `label = value` card below
+        // has no other column, so two such statements printed identically with no way to
+        // tell which value came from which line. Swap in the statement's own source line
+        // (already available from the parser's `Program::lines`) for that one case.
+        let display_label = if matches!(stmt, physure_script::ast::Statement::Expr(_)) {
+            program
+                .lines
+                .get(stmt_idx)
+                .and_then(|n| code.lines().nth(n.saturating_sub(1)))
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .unwrap_or_else(|| label.clone())
+        } else {
+            label.clone()
+        };
+        // `@precision(N)` decorates a variable assignment; `decorators.rs` already guarantees
+        // (at parse time) that when present it's exactly 1 positive whole-number argument, so
+        // this only needs to read it back out, not re-validate it.
+        let precision_override = match stmt {
+            physure_script::ast::Statement::Assignment(node) => node
+                .decorators
+                .iter()
+                .find(|d| d.name == "precision")
+                .and_then(|d| d.args.first())
+                .and_then(|arg| match arg {
+                    physure_script::ast::Expr::Quantity(q) if q.magnitude > 0.0 && q.magnitude.fract() == 0.0 => {
+                        Some(q.magnitude as u32)
+                    }
+                    _ => None,
+                }),
+            _ => None,
+        };
 
-        match interp.run_statement(&stmt) {
+        match interp.run_statement(stmt) {
             Ok(val) => {
                 if val != PhsValue::None {
+                    // A bare (unassigned) expression that evaluates to a String is a print,
+                    // not a named quantity -- showing it as `"<template source>" = <computed
+                    // text>` repeats the message twice with a confusing "=" between them. This
+                    // folds into the same `is_disp` signal the backtick-note convention
+                    // already used (both mean "render as plain text, not a label=value card"),
+                    // so both the terminal print below and the HTML report's existing
+                    // `is_display_text` handling pick it up with no separate fix needed there.
+                    let is_disp = is_disp
+                        || (matches!(stmt, physure_script::ast::Statement::Expr(_))
+                            && matches!(val, PhsValue::String(_)));
                     if !is_tui && !is_web && !is_view {
                         if is_disp {
                             if let PhsValue::String(ref txt) = val {
-                                println!("\x1b[90m{}\x1b[0m", txt);
+                                println!("{}", txt);
                             }
                         } else {
-                            RichRenderer::render_variable_card(&label, &val);
+                            RichRenderer::render_variable_card(&display_label, &val, precision_override);
                         }
                     }
 
@@ -731,11 +780,16 @@ fn main() {
                         latex_expr,
                         value: val,
                         is_display_text: is_disp,
+                        precision_override,
                     });
                 }
             }
             Err(e) => {
-                RichRenderer::render_runtime_error(raw_input, &e, &expr_code);
+                let line_no = program.lines.get(stmt_idx).copied();
+                let line_text = line_no
+                    .and_then(|n| code.lines().nth(n.saturating_sub(1)))
+                    .unwrap_or("");
+                RichRenderer::render_runtime_error(raw_input, &e, &expr_code, line_no, line_text);
                 process::exit(1);
             }
         }
@@ -750,7 +804,17 @@ fn main() {
             eprintln!("Web Visualizer Error: {}", e);
         }
     } else if is_view {
-        if let Err(e) = html::open_standalone_html(raw_input, &code, &steps, &vars_map) {
+        // Default: next to the script, same base name -- `calc.phs --html` used to always
+        // land in the OS temp dir under a timestamp nobody could predict or find again once
+        // the browser tab closed, which defeats the report's own point as a keepable
+        // artifact. `-o`/`--output` overrides it; safe to reuse now that `-o` alone no
+        // longer also means "transpile" (see `handle_transpile`).
+        let html_output_path = match get_flag_value(&args, "--output").or_else(|| get_flag_value(&args, "-o")) {
+            Some(custom) => std::path::PathBuf::from(custom),
+            None if std::path::Path::new(raw_input).exists() => std::path::Path::new(raw_input).with_extension("html"),
+            None => std::path::PathBuf::from("physure_report.html"),
+        };
+        if let Err(e) = html::open_standalone_html(raw_input, &html_output_path, &code, &steps, &vars_map) {
             eprintln!("HTML Report Error: {}", e);
         }
     } else {

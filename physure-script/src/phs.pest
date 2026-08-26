@@ -108,8 +108,15 @@ _is_compare = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
 _is_format  = _{ &(":" ~ format_spec) }
 comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* }
 
-_is_add_sub_conv = _{ &("+" | "-" | "=>") }
-conv_expr   = { comp_expr ~ (_is_add_sub_conv ~ (op_add | op_sub | op_convert) ~ comp_expr)* }
+// `=>`'s right side is a unit, not an expression -- `unit_expr` already accepts `°`/`%`/`$`
+// (`_unit_char`, used for a quantity literal's own unit suffix and for parameter unit
+// annotations) where `identifier`'s `LETTER`-only alphabet cannot. The interpreter and every
+// codegen target only ever read this side through `expr_to_unit_string`, which turns any
+// `Expr` back into unit-chain text, so nothing downstream cares that this side is no longer
+// built out of `comp_expr`/`identifier` nodes.
+_is_add_sub = _{ &("+" | "-") }
+_is_convert = _{ &"=>" }
+conv_expr   = { comp_expr ~ ((_is_add_sub ~ (op_add | op_sub) ~ comp_expr) | (_is_convert ~ op_convert ~ unit_expr))* }
 
 // `..` binds looser than everything else, so each endpoint is a whole expression of its
 // own: `0 m .. 100 m => km` converts the endpoint that was written next to `=>` and leaves

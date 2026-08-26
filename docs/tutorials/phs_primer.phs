@@ -1,0 +1,20 @@
+# @title: PHS primer — quantities, conversion, uncertainty, and a report
+# @author: physure
+# @abstract: The day-one PHS lesson: a quantity with a unit, converting it, carrying
+#   uncertainty through a calculation, and showing the intermediate steps with `where`.
+
+# 1. A quantity is a number with a unit, written the way you'd write it on paper.
+pressure = 100.0 kPa
+
+# 2. Convert on the spot with `=>`.
+pressure_bar = pressure => bar
+
+# 3. A measurement carries its uncertainty through the whole calculation.
+velocity = 25.0 +/- 0.5 m / s
+mass = 2.0 +/- 0.1 kg
+kinetic_energy = 0.5 * mass * velocity^2
+
+# 4. `where` shows an intermediate step without a separate assignment above it.
+force = mass * acceleration where acceleration = 9.81 m / s^2
+
+"The pressure is {pressure_bar}, the kinetic energy is {kinetic_energy}, and the force is {force}"

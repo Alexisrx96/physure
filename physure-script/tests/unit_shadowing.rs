@@ -69,14 +69,72 @@ fn a_name_bound_later_does_not_shadow_an_earlier_use() {
     expect_ok("x = 5 m / t\nt = 3.0 s\n");
 }
 
-/// Juxtaposition is never multiplication in PhysureScript: `3 m` is a quantity literal by
-/// grammar, with no operator to be ambiguous about. A script that binds `m` must therefore
-/// keep parsing every later `3 m`.
+/// Reversed by design: the first unit word used to be exempt from this check because
+/// juxtaposition "is never multiplication" — but that exemption is exactly what let
+/// `fn kinetic_energy(m, v) = 1/2 m v^2` silently read its own `m` parameter as the *metre*
+/// attached to the `2` from `1/2`, dropping the mass argument and returning `m * s^-2` instead
+/// of joules (`4.5 m/s^2` in place of `9.0 J` for `m = 2.0 kg, v = 3.0 m/s`). Nothing printed
+/// said a guess had been made. The first word is now checked exactly like every later one in
+/// the chain, at the cost of also flagging the ordinary standalone literal — a wrong answer
+/// with confident units is worse than an exception either way.
 #[test]
-fn the_first_token_after_the_number_is_never_ambiguous() {
-    expect_ok("m = 5.0 kg\nd = 3 m\n");
-    expect_ok("s = 2.0\nd = 10 s\n");
-    expect_ok("t = 1.0\nmass = 4 t\n");
+fn the_first_token_after_the_number_is_ambiguous_too() {
+    expect_ambiguity("m = 5.0 kg\nd = 3 m\n", "m");
+    expect_ambiguity("s = 2.0\nd = 10 s\n", "s");
+    expect_ambiguity("t = 1.0\nmass = 4 t\n", "t");
+}
+
+/// The motivating defect itself: `2` (split out of `1/2`) swallows the `m` parameter as the
+/// unit metre, so the mass argument never reaches the multiplication at all.
+#[test]
+fn the_kinetic_energy_shorthand_that_motivated_this_check_is_rejected() {
+    expect_ambiguity("fn kinetic_energy(m, v) = 1/2 m v^2\n", "m");
+}
+
+/// The head token can't reuse the chain-word case's "parenthesise the number" trick — `(3)`
+/// is just another `quantity` head, so `(3) m` still greedily reattaches `m` as the unit; the
+/// escape hatch has to be a rewrite that actually changes what gets parsed. An explicit `*`
+/// does: as a bare identifier on the left, or as a quoted unit string on the right — the
+/// interpreter parses a string operand as a *full* unit expression (see
+/// `interpreter.rs`'s `(PhsValue::Number, PhsValue::String)` arm), so this works for a
+/// compound chain like `m/s`, not just a single symbol.
+#[test]
+fn the_head_token_message_offers_working_rewrites() {
+    // `expect_ambiguity` formats the error with `{:?}`, so the literal `"` inside the
+    // suggested unit rewrite comes back escaped (`\"`) in this string, same as it would in
+    // any other `Debug`-formatted `String`.
+    let text = expect_ambiguity("m = 5.0 kg\nd = 3 m\n", "m");
+    assert!(text.contains("3 * m"), "no variable rewrite offered: {text}");
+    assert!(text.contains("3 * \\\"m\\\""), "no unit rewrite offered: {text}");
+    expect_ok("m = 5.0 kg\nd = 3 * m\n");
+    expect_ok("m = 5.0 kg\nd = 3 * \"m\"\n");
+}
+
+/// The fix must be actionable end to end, not just non-garbled: taking the ambiguity error's
+/// own suggested rewrite for the motivating kinetic-energy case must parse *and* evaluate to
+/// the right physics — `9.0 J`, not the `4.5 m/s^2` the silent bug used to return.
+#[test]
+fn the_kinetic_energy_rewrite_evaluates_correctly() {
+    use physure_script::interpreter::PhsInterpreter;
+    use physure_script::value::PhsValue;
+    let src = "fn kinetic_energy(m, v) = 0.5 * m * v^2\nkinetic_energy(2.0 kg, 3.0 m/s) => J\n";
+    let mut interp = PhsInterpreter::default();
+    let results = interp.eval_str(src).expect("the explicit rewrite must parse and evaluate");
+    if let Some(PhsValue::Quantity(q)) = results.last() {
+        assert!((q.value.mean() - 9.0).abs() < 1e-9, "expected 9.0, got {}", q.value.mean());
+        assert_eq!(q.unit.display_name.as_deref(), Some("J"));
+    } else {
+        panic!("expected a Quantity result, got {results:?}");
+    }
+}
+
+/// The other classic collision this same rule now catches: `g` for grams next to a `g` bound
+/// as gravitational acceleration, the exact pairing the shadowing check already existed to
+/// name for the `* g` / `/ g` positions.
+#[test]
+fn grams_next_to_a_gravity_variable_are_now_rejected_too() {
+    expect_ambiguity("g = 9.81 m / s ^ 2\nmasa = 5.0 g\n", "g");
+    expect_ok("g = 9.81 m / s ^ 2\nmasa = 5.0 \"g\"\n");
 }
 
 /// Parameters shadow inside their own function body and nowhere else — a `t` parameter must
@@ -117,14 +175,17 @@ fn transpiling_an_ambiguous_script_fails_for_every_target() {
 }
 
 /// The scripts the rule must never touch: the guide's headline examples, uncertainty
-/// literals, and constants whose units legitimately chain several symbols.
+/// literals, and constants whose units legitimately chain several symbols. None of these
+/// bind a name that collides with a unit word used later — `E = 0.5 * m * v^2 where m =
+/// 2.0 kg, v = 3.0 m / s` moved out of this list once the first-token check landed, because
+/// `v`'s own `3.0 m / s` collides with the `m` the `where` clause just bound.
 #[test]
 fn unambiguous_scripts_are_untouched() {
     expect_ok("500 N / 2 m^2 => kPa\n");
     expect_ok("10.0 kg\n");
     expect_ok("9.81 +/- 0.05 m / s ^ 2\n");
     expect_ok("k = 8.99e9 N * m ^ 2 / C ^ 2\n");
-    expect_ok("E = 0.5 * m * v ^ 2 where m = 2.0 kg, v = 3.0 m / s\n");
+    expect_ok("E = 0.5 * mass * v ^ 2 where mass = 2.0 kg, v = 3.0 m / s\n");
 }
 
 /// The rewrites are cut out of the user's own chain, so a parenthesised group must come back

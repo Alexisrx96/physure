@@ -174,7 +174,7 @@ decorator_registry -.->|"future sugar, e.g. @export\nas an alias for Statement::
 
   **Why `declared` has to be tracked explicitly**: `call_function_node` builds each call's env by
   cloning whatever was visible at the call site and overlaying params
-  ([interpreter.rs:721](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L721)) — there is no parent-scope
+  ([interpreter/expressions.rs:444](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs#L444)) — there is no parent-scope
   pointer to walk. So `ctx.env` inside a one-line helper contains the helper's params *and* every
   global, indistinguishably, in the same flat map. `StackFrame::declared` is what lets the debugger
   tell them apart without re-walking values: a name is local to a frame if it's a parameter or is
@@ -234,7 +234,7 @@ decorator_registry -.->|"future sugar, e.g. @export\nas an alias for Statement::
   under it), `break <line>[:cond]` / `break fn <name>`, and `step`/`next`/`finish`/`continue`
   mapping to the four `DebugAction`s. Splitting `locals`/`globals` instead of one flat dump matters
   precisely because `ctx.env` is a full clone-and-overlay of everything visible at the call site
-  ([interpreter.rs:721](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter.rs#L721)) — without the split, `locals`
+  ([interpreter/expressions.rs:444](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs#L444)) — without the split, `locals`
   inside a one-line helper would print every global too. First consumer of `DebugHook` — proves the
   hook and `Inspection` design before DAP commits to them.
 
@@ -415,7 +415,7 @@ without touching the algorithm body or writing it into engineering's control flo
 - **Propagation is mandatory, not optional**: `@requires`/`@ensures`/`@range` are transpiled into the
   Track E FFI shim exactly once, via the same `RustTranspiler::generate_expr` already used for the
   function body (comparisons already lower to plain `FunctionCall`s like `op_<`
-  ([parser.rs:339](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/parser.rs#L339)), so no new expression machinery is needed) —
+  ([parser/statements.rs:284](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/parser/statements.rs#L284)), so no new expression machinery is needed) —
   see Track E's "Fallible exports" note. A contract that only the interpreter enforces and the
   compiled artifact silently ignores would defeat the reason these decorators exist.
 

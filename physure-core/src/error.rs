@@ -6,6 +6,7 @@ pub enum PhysureError {
     UnknownUnit { symbol: String, suggestion: Option<String> },
     IncompatibleDimensions { op: &'static str, dim1: String, dim2: String },
     DivisionByZero(String),
+    DomainError(String),
     NonConstantExponent(String),
     NonLinearArgument { function: &'static str },
     UnsupportedIntegration(String),
@@ -38,6 +39,7 @@ impl fmt::Display for PhysureError {
                 write!(f, "Incompatible dimensions in {}: '{}' vs '{}'", op, dim1, dim2)
             }
             PhysureError::DivisionByZero(msg) => write!(f, "Division by zero: {}", msg),
+            PhysureError::DomainError(msg) => write!(f, "Domain error: {}", msg),
             PhysureError::NonConstantExponent(msg) => write!(f, "Non-constant exponent: {}", msg),
             PhysureError::NonLinearArgument { function } => {
                 write!(f, "Non-linear argument in integration for {}", function)
@@ -86,6 +88,12 @@ mod tests {
             message: "x must be positive".to_string(),
         };
         assert_eq!(err.to_string(), "@requires violated: x must be positive");
+    }
+
+    #[test]
+    fn domain_error_displays_with_a_domain_error_prefix() {
+        let err = PhysureError::DomainError("sqrt of a negative value (-4) is undefined for real numbers".to_string());
+        assert_eq!(err.to_string(), "Domain error: sqrt of a negative value (-4) is undefined for real numbers");
     }
 
     #[test]

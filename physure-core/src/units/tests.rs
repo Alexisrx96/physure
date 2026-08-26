@@ -326,3 +326,23 @@ fn test_unit_conversions() {
     let energy_kwh = energy.convert_to(&kwh).unwrap();
     assert!((energy_kwh.value.mean() - 1.0).abs() < 1e-9);
 }
+
+/// `unity = 1.0, 1, [1]` used to get registered twice: `parse_physure_conf`'s base-unit
+/// auto-detection pass (factor 1.0, single-ident dimension code) has no guard for dimension
+/// code "1", so it called `add_base_unit("unity")` and poisoned `base_units["unity"]` with a
+/// real, spurious `("unity", (1,1))` dimension -- even though the *second* pass correctly
+/// registers the intended, truly dimensionless `unity` into `derived_units`. `get_unit`
+/// checks `base_units` before `derived_units`, so the wrong one always won: `unity` couldn't
+/// convert to or add with `%`, `ppm`, or a bare number, despite all four being dimensionless.
+#[test]
+fn unity_is_dimensionless_like_percent_ppm_and_a_bare_number() {
+    let pct = crate::units::parser::Parser::parse_expression("%").unwrap();
+    let ppm = crate::units::parser::Parser::parse_expression("ppm").unwrap();
+    let unity = crate::units::parser::Parser::parse_expression("unity").unwrap();
+    let bare = crate::units::RationalUnit::dimensionless();
+
+    assert!(unity.dimensions.is_empty(), "unity should carry no dimension of its own, got {:?}", unity.dimensions);
+    assert!(pct.same_dimensions(&unity), "% and unity should be the same (empty) dimension");
+    assert!(ppm.same_dimensions(&unity), "ppm and unity should be the same (empty) dimension");
+    assert!(bare.same_dimensions(&unity), "a bare number and unity should be the same (empty) dimension");
+}

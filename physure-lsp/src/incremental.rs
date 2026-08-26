@@ -812,6 +812,39 @@ mod tests {
         assert!(cleaned.contains("Write `(9.81 m) / s ^ 2`"));
     }
 
+    #[test]
+    fn test_bare_identifier_juxtaposition_lsp_diagnostic_location_and_cleaning() {
+        let script = "x y\n";
+        let err = physure_script::parser::parse_phs_with_lines(script).unwrap_err();
+        let err_str = err.to_string();
+        let (line, col) = extract_line_col_from_err(&err_str);
+        assert_eq!(line, 0, "Should point to line 1 (0-indexed 0)");
+        assert_eq!(col, 2, "Should point to col 3 (0-indexed 2), right at 'y'");
+
+        let cleaned = clean_error_message(&err_str);
+        assert!(!cleaned.contains("Generic("));
+        assert!(!cleaned.contains("-->"));
+        assert!(cleaned.contains("Missing operator between 'x' and 'y'"));
+        assert!(cleaned.contains("Write `x * y`"));
+    }
+
+    #[test]
+    fn test_head_token_shadowing_lsp_diagnostic_location_and_cleaning() {
+        let script = "fn kinetic_energy(m, v) = 1/2 m v^2\n";
+        let err = physure_script::parser::parse_phs_with_lines(script).unwrap_err();
+        let err_str = err.to_string();
+        let (line, col) = extract_line_col_from_err(&err_str);
+        assert_eq!(line, 0, "Should point to line 1 (0-indexed 0)");
+        assert_eq!(col, 0, "Should point to col 1 (0-indexed 0)");
+
+        let cleaned = clean_error_message(&err_str);
+        assert!(!cleaned.contains("Generic("));
+        assert!(!cleaned.contains("-->"));
+        assert!(cleaned.contains("Ambiguous 'm' in the quantity literal `2 m`"));
+        assert!(cleaned.contains("Write `2 * m`"));
+        assert!(cleaned.contains(r#"2 * "m""#));
+    }
+
     fn run(prev: Option<DocState>, text: &str) -> (DocState, Vec<Diagnostic>) {
         let outcome = apply_change(prev, text);
         (outcome.state, outcome.diagnostics)

@@ -48,21 +48,24 @@ area = 3.14159265 * r^2
 """,
         {"area": "50.265"},
     ),
-    # 5. String interpolation: `{expr}` is the only way a value enters a literal
+    # 5. String interpolation: `{expr}` is the only way a value enters a literal.
+    # Named `mass`, not `m`: the parser flags a quantity literal's unit word against every
+    # bound name in scope, including the first, and `v = 3.0 m/s` would otherwise collide
+    # with a variable named `m` (see physure-script/tests/unit_shadowing.rs).
     (
         "string_interpolation",
-        """m = 2.0 kg
+        """mass = 2.0 kg
 v = 3.0 m/s
-label = "masa {m} a {v}"
+label = "masa {mass} a {v}"
 """,
         {"label": "masa 2.0 kg a 3.0 m/s"},
     ),
     # 6. Uncertainty Propagation
     (
         "uncertainty",
-        """m = 10.0 +/- 0.2 kg
+        """mass = 10.0 +/- 0.2 kg
 a = 2.5 +/- 0.1 m/s^2
-f = m * a
+f = mass * a
 """,
         {"f": "25"},
     ),

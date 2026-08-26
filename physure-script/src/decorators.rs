@@ -1,10 +1,10 @@
-use crate::ast::{DecoratorNode, Expr, FunctionDefNode, Statement};
+use crate::ast::{DecoratorNode, Expr, FunctionDefNode, QuantityNode, Statement};
 use physure_core::error::{PhysureError, PhysureResult};
 
 /// Every decorator name Track F's interpreter/validator understands. `@range` is
 /// deliberately absent: it is desugared into `requires` by `lower_range` before this
 /// registry is ever consulted, so nothing downstream needs to know it existed.
-const KNOWN_DECORATORS: &[&str] = &["requires", "ensures", "stable", "experimental"];
+const KNOWN_DECORATORS: &[&str] = &["requires", "ensures", "stable", "experimental", "implicit_units", "precision"];
 
 /// Expands `@range(var, min, max)` into two `@requires` decorators — `var >= min` and
 /// `var <= max` — reusing `@requires`'s own runtime enforcement (Task 6) instead of
@@ -117,6 +117,36 @@ fn check_decorator_list(decorators: &[DecoratorNode], func: Option<&FunctionDefN
                 }
                 has_experimental = true;
             }
+            "implicit_units" => {
+                if func.is_none() {
+                    return Err(PhysureError::Generic(
+                        "@implicit_units is only valid on a function definition, not a variable assignment".to_string(),
+                    ));
+                }
+                if !dec.args.is_empty() {
+                    return Err(PhysureError::Generic("@implicit_units takes no arguments".to_string()));
+                }
+            }
+            "precision" => {
+                if func.is_some() {
+                    return Err(PhysureError::Generic(
+                        "@precision is only valid on a variable assignment, not a function definition".to_string(),
+                    ));
+                }
+                if dec.args.len() != 1 {
+                    return Err(PhysureError::Generic(format!(
+                        "@precision expects exactly 1 argument (a positive integer), got {}",
+                        dec.args.len()
+                    )));
+                }
+                let is_valid_count = matches!(
+                    &dec.args[0],
+                    Expr::Quantity(QuantityNode { magnitude, .. }) if *magnitude > 0.0 && magnitude.fract() == 0.0
+                );
+                if !is_valid_count {
+                    return Err(PhysureError::Generic("@precision's argument must be a positive whole number".to_string()));
+                }
+            }
             _ => unreachable!("checked against KNOWN_DECORATORS above"),
         }
     }
@@ -143,7 +173,7 @@ fn check_decorator_list(decorators: &[DecoratorNode], func: Option<&FunctionDefN
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::QuantityNode;
+    use crate::ast::{AssignmentNode, QuantityNode};
 
     fn quantity(magnitude: f64) -> Expr {
         Expr::Quantity(QuantityNode {
@@ -207,6 +237,71 @@ mod tests {
             DecoratorNode { name: "experimental".to_string(), args: vec![] },
         ]);
         assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_accepts_bare_implicit_units() {
+        let stmt = function_with_decorators(vec![DecoratorNode { name: "implicit_units".to_string(), args: vec![] }]);
+        assert!(validate_decorators(&[stmt]).is_ok());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_implicit_units_with_arguments() {
+        let stmt = function_with_decorators(vec![DecoratorNode { name: "implicit_units".to_string(), args: vec![quantity(1.0)] }]);
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_implicit_units_on_a_plain_assignment() {
+        let stmt = Statement::Assignment(AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode { name: "implicit_units".to_string(), args: vec![] }],
+        });
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_accepts_precision_with_a_positive_integer_on_an_assignment() {
+        let stmt = Statement::Assignment(AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode { name: "precision".to_string(), args: vec![quantity(2.0)] }],
+        });
+        assert!(validate_decorators(&[stmt]).is_ok());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_precision_on_a_function_definition() {
+        let stmt = function_with_decorators(vec![DecoratorNode { name: "precision".to_string(), args: vec![quantity(2.0)] }]);
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_precision_with_wrong_arity() {
+        let stmt = Statement::Assignment(AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode { name: "precision".to_string(), args: vec![] }],
+        });
+        assert!(validate_decorators(&[stmt]).is_err());
+    }
+
+    #[test]
+    fn validate_decorators_rejects_precision_with_a_non_positive_or_fractional_argument() {
+        let non_integer = Statement::Assignment(AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode { name: "precision".to_string(), args: vec![quantity(1.5)] }],
+        });
+        assert!(validate_decorators(&[non_integer]).is_err());
+
+        let zero = Statement::Assignment(AssignmentNode {
+            name: "x".to_string(),
+            value: quantity(1.0),
+            decorators: vec![DecoratorNode { name: "precision".to_string(), args: vec![quantity(0.0)] }],
+        });
+        assert!(validate_decorators(&[zero]).is_err());
     }
 
     #[test]

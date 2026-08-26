@@ -119,8 +119,11 @@ fn prefixed_literals_equal_their_expanded_form() {
 /// — a dimensionally impossible result — because both operands had been truncated.
 #[test]
 fn arithmetic_over_prefixed_literals() {
-    let kinetic_energy = eval_quantity("m = 2 kg\nv = 3 m/s\n0.5 * m * v^2");
-    assert_close(kinetic_energy.canonical_magnitude(), 9.0, "0.5 * m * v^2");
+    // Named `mass`, not `m`: the parser flags a quantity literal's unit word against every
+    // bound name in scope, including the first, and `v = 3 m/s` would otherwise collide with
+    // a variable named `m` (see physure-script/tests/unit_shadowing.rs).
+    let kinetic_energy = eval_quantity("mass = 2 kg\nv = 3 m/s\n0.5 * mass * v^2");
+    assert_close(kinetic_energy.canonical_magnitude(), 9.0, "0.5 * mass * v^2");
     assert_eq!(kinetic_energy.unit.__repr__(), "J");
 
     let converted = eval_quantity("100.0 kPa => bar");
@@ -204,9 +207,16 @@ fn unregistered_symbols_are_errors_not_new_dimensions() {
 /// Comparisons used to read the raw magnitude, so `1 km == 1000 m` was false while
 /// `1 km + 1000 m` converted correctly — the same two quantities disagreeing with
 /// themselves depending on the operator.
+///
+/// `truth` reads a `PhsValue::Bool`, not `eval_quantity`'s dimensionless-`Quantity` 1.0/0.0
+/// stand-in the comparison builtins used to return (see `comparisons_produce_a_real_bool_not_a_dimensionless_1_0`
+/// for why that stand-in was replaced).
 #[test]
 fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
-    let truth = |src: &str| eval_quantity(src).value.mean() > 0.5;
+    let truth = |src: &str| match eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed to evaluate: {e:?}")).into_iter().last() {
+        Some(PhsValue::Bool(b)) => b,
+        other => panic!("{src:?} produced {other:?}, expected a Bool"),
+    };
 
     assert!(truth("1.0 km == 1000.0 m"));
     assert!(truth("100.0 kPa == 1.0 bar"));
@@ -222,6 +232,118 @@ fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
     // Comparing across dimensions has no answer, and answering `false` would let it
     // pass silently through a conditional.
     assert!(eval_phs("5.0 m > 2.0 s").is_err(), "m vs s should not compare");
+}
+
+/// Every comparison builtin funnels through `builtins/core.rs`'s `boolean()`, which used to
+/// build a dimensionless `Quantity` (magnitude 1.0/0.0) instead of `PhsValue::Bool` -- a type
+/// that already existed, with `Display` ("True"/"False"), `is_truthy`, the debugger's
+/// `Inspection`, the plugin ABI, and every export path already built around it. The four
+/// codegen targets already emit the target language's own comparison operator (`>` in
+/// Python/Rust/Java/JS, which is natively a bool in each), so the interpreter's dimensionless
+/// 1.0/0.0 was the one place out of step with what a transpiled version of the same script
+/// actually produces.
+#[test]
+fn comparisons_produce_a_real_bool_not_a_dimensionless_1_0() {
+    let last = |src: &str| eval_phs(src).unwrap_or_else(|e| panic!("{src:?} failed to evaluate: {e:?}")).into_iter().last();
+
+    assert_eq!(last("5.0 m > 3.0 m"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("5.0 m < 3.0 m"), Some(PhsValue::Bool(false)));
+    assert_eq!(last("1.0 km == 1000.0 m"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("1.0 km != 1000.0 m"), Some(PhsValue::Bool(false)));
+
+    // The sigma-tolerance comparison (`a == b +/- N sigma`) goes through the exact same
+    // `boolean()` call as the plain relational operators -- one fix covers both.
+    assert_eq!(last("9.81 m/s^2 == 9.80 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("9.81 m/s^2 == 9.00 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(false)));
+
+    // Display must read like an answer, not a magnitude.
+    assert_eq!(eval_phs("5.0 m > 3.0 m").unwrap().last().unwrap().to_string(), "True");
+    assert_eq!(eval_phs("5.0 m < 3.0 m").unwrap().last().unwrap().to_string(), "False");
+
+    // `if`/ternary conditions must still work -- `is_truthy` already had a `PhsValue::Bool`
+    // arm before this change, so this is a regression guard, not new plumbing.
+    assert_eq!(
+        eval_phs("if 5.0 m > 3.0 m then \"bigger\" else \"smaller\"").unwrap().into_iter().last(),
+        Some(PhsValue::String("bigger".to_string())),
+    );
+}
+
+/// `(-4)^0.5` used to answer `NaN.0` -- `powf` computes a negative base via
+/// `exp(exponent * ln(base))`, which only exists for a positive base, and quietly handing
+/// that NaN back is the confident-wrong-answer this library exists to prevent. An integer
+/// exponent has a real, exact result and must keep working.
+#[test]
+fn pow_of_a_negative_base_with_a_fractional_exponent_is_a_domain_error_not_nan() {
+    let err = |src: &str| eval_phs(src).unwrap_err();
+
+    assert!(matches!(err("(-4)^0.5"), physure_core::error::PhysureError::DomainError(_)));
+    // A bare numeric literal evaluates as a dimensionless Quantity, not a raw Number.
+    assert!((eval_quantity("(-2)^3").value.mean() - (-8.0)).abs() < 1e-9);
+}
+
+/// `sqrt`/`log`/`ln` of an out-of-domain argument (negative for `sqrt`/`log`/`ln`, also
+/// zero for `log`/`ln`) used to answer `NaN.0` or `-inf` instead of erroring -- for both a
+/// bare number and a quantity.
+#[test]
+fn sqrt_and_log_of_out_of_domain_values_are_domain_errors_not_nan_or_inf() {
+    let err = |src: &str| eval_phs(src).unwrap_err();
+
+    assert!(matches!(err("sqrt(-4 m^2)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("sqrt(-9)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("log(-5)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("log(0)"), physure_core::error::PhysureError::DomainError(_)));
+    assert!(matches!(err("ln(-5)"), physure_core::error::PhysureError::DomainError(_)));
+}
+
+/// `@implicit_units` lets a function declared with unit-annotated parameters
+/// (`fn calc(a: m/s2, v: m/s, x: m) = ...`) accept a plain, unitless number for a
+/// parameter and have it take on that parameter's declared unit -- `calc(1, 2, 3)` reads
+/// as `calc(1 m/s2, 2 m/s, 3 m)`. Without the decorator this keeps erroring exactly as
+/// before: opt-in, not a language-wide default, so "forgot the unit entirely" still fails
+/// loudly for every function that didn't ask for this.
+#[test]
+fn implicit_units_decorator_assigns_declared_units_to_bare_numbers() {
+    let src = "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1, 2, 3)";
+    let result = eval_quantity(src);
+    assert!((result.value.mean() - 6.0).abs() < 1e-9, "expected 6.0, got {}", result.value.mean());
+    assert_eq!(result.unit.__repr__(), "m^3 * s^-3");
+}
+
+#[test]
+fn without_implicit_units_bare_numbers_still_error_on_a_unit_annotated_param() {
+    let src = "fn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1, 2, 3)";
+    assert!(eval_phs(src).is_err(), "expected the un-decorated function to keep rejecting bare numbers");
+}
+
+#[test]
+fn implicit_units_still_respects_explicit_units_and_still_rejects_real_mismatches() {
+    // An explicitly-unitted argument is unaffected -- same conversion behavior as always.
+    let explicit = eval_quantity(
+        "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1 m/s2, 2 m/s, 3 m)",
+    );
+    assert!((explicit.value.mean() - 6.0).abs() < 1e-9);
+
+    // A genuinely incompatible dimension (kg where m/s2 is declared) is still a real error --
+    // the decorator only fills in a *missing* unit, it never overrides a wrong one.
+    let mismatched = "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(1 kg, 2 m/s, 3 m)";
+    assert!(eval_phs(mismatched).is_err(), "expected a real dimension mismatch to still error under @implicit_units");
+}
+
+#[test]
+fn implicit_units_does_not_reinterpret_a_percent_or_ratio_argument() {
+    // 50% already carries its own unit symbol (a 0.01 scale) -- @implicit_units only fills
+    // in units for a bare, unscaled number, not for a value the caller already tagged.
+    let src = "@implicit_units\nfn calc(a: m/s2, v: m/s, x: m) = a * v * x\ncalc(50 %, 2 m/s, 3 m)";
+    assert!(eval_phs(src).is_err(), "expected a percent argument to still be rejected as dimensionally incompatible");
+}
+
+#[test]
+fn implicit_units_preserves_uncertainty_when_assigning_a_unit() {
+    let src = "@implicit_units\nfn calc(a: m/s2) = a\ncalc(1 +/- 0.1)";
+    let result = eval_quantity(src);
+    assert!((result.value.mean() - 1.0).abs() < 1e-9);
+    assert!((result.value.std_dev() - 0.1).abs() < 1e-9);
+    assert_eq!(result.unit.__repr__(), "m/s2");
 }
 
 /// A declared uncertainty has to reach the output; printing only the mean discards the
@@ -351,18 +473,22 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
 /// Symbols that cannot be written after `=>` today, each with the reason. The sweep below
 /// asserts these still fail, so fixing one forces removing it from this list.
 ///
-/// Both are the same gap: the right-hand side of `=>` is parsed as an ordinary expression,
-/// so the target has to be an `identifier`, and an identifier is made of `LETTER`s. `°` and
-/// `%` are units the grammar accepts in `_unit_char` but that no identifier may contain —
-/// and it cannot, or `x%` would be a name. Closing this means deciding that the operand of
-/// `=>` is a *unit expression* rather than any expression, which would also stop a variable
-/// holding a unit name from being used as a target.
+/// `°`, `%`, `°C`, `°F` and `°R` used to be the whole list here: the right-hand side of `=>`
+/// was parsed as an ordinary expression, so the target had to be an `identifier`, and an
+/// identifier is made of `LETTER`s. `=>`'s target is now `unit_expr` instead (see `phs.pest`'s
+/// `conv_expr`), which already accepted these symbols for a quantity literal's own unit
+/// suffix — see `degree_percent_and_affine_temperature_symbols_are_usable_conversion_targets`.
+///
+/// `"1"` is a new entry, not a leftover: it never had a real gap before, it had a coincidence.
+/// `x => 1` used to reach `comp_expr`'s `quantity` rule (a bare `1` is a valid number
+/// literal), producing a unitless `Quantity` whose magnitude `expr_to_unit_string` stringified
+/// back to `"1"` — which happens to also be the unity symbol's spelling. `unit_expr`'s
+/// `unit_term` requires a `_unit_char` (a `LETTER`) first, so a bare digit can never start one
+/// — the same reason `"1"` is already in `KNOWN_GAPS` above for the *literal* position: unity
+/// isn't really spelled by any syntax, this was never more than that one digit reading as
+/// itself twice by luck.
 const KNOWN_CONVERSION_GAPS: &[(&str, &str)] = &[
-    ("°", "not a LETTER, so no identifier can spell it; use `deg`"),
-    ("%", "not a LETTER, so no identifier can spell it; use `percent`"),
-    ("°C", "leading ° is not a LETTER, so no identifier can spell it; use `degC`"),
-    ("°F", "leading ° is not a LETTER, so no identifier can spell it; use `degF`"),
-    ("°R", "leading ° is not a LETTER, so no identifier can spell it; use `degR`"),
+    ("1", "unit_term requires a LETTER first; a bare digit can never start one"),
 ];
 
 /// Every symbol in the registry, swept through the literal parser. The prefix bug was a
@@ -577,13 +703,15 @@ fn floor_and_ceil_keep_the_unit_and_the_uncertainty() {
     assert_close(floored.value.mean(), 9.0, "floor moves the mean down");
     assert_eq!(floored.unit.__repr__(), "m / s ^ 2", "floor dropped the unit");
     assert_close(floored.value.std_dev(), 0.05, "floor kept the uncertainty");
-    assert_eq!(floored.to_string(), "9.0 ± 0.05 m / s ^ 2");
+    // GUM rounding matches the magnitude's decimal places to the uncertainty's -- both at 2
+    // decimals here (0.05 keeps 1 sig fig), not the mean's own independent "shortest" form.
+    assert_eq!(floored.to_string(), "9.00 ± 0.05 m / s ^ 2");
 
     let ceiled = eval_quantity("ceil(9.81 +/- 0.05 m / s ^ 2)");
     assert_close(ceiled.value.mean(), 10.0, "ceil moves the mean up");
     assert_eq!(ceiled.unit.__repr__(), "m / s ^ 2", "ceil dropped the unit");
     assert_close(ceiled.value.std_dev(), 0.05, "ceil kept the uncertainty");
-    assert_eq!(ceiled.to_string(), "10.0 ± 0.05 m / s ^ 2");
+    assert_eq!(ceiled.to_string(), "10.00 ± 0.05 m / s ^ 2");
 
     // A dimensionless measurement is the worst case for the old code: every sample of
     // `0.5 +/- 0.01` floors to zero, so anything that rounds the distribution rather than
@@ -739,6 +867,35 @@ fn a_prefixed_non_ascii_symbol_is_a_valid_conversion_target() {
     assert_close(bound.canonical_magnitude(), 4.0, "Δx + 1 m");
 }
 
+/// `°`, `%`, `°C`, `°F` and `°R` are not `LETTER`s, so no `identifier` can spell them — and
+/// `=>`'s right-hand side used to be parsed as one, the same rule a bare variable reference
+/// goes through. `deg`/`percent`/`degC`/`degF`/`degR` always worked as a target; only the
+/// symbol spelling didn't.
+#[test]
+fn degree_percent_and_affine_temperature_symbols_are_usable_conversion_targets() {
+    // A self-conversion is a no-op on the *displayed* value -- `canonical_magnitude()` is
+    // the base-SI value (radians for `deg`/`°`), not this.
+    let deg = eval_quantity("1.0 deg => °");
+    assert!((deg.value.mean() - 1.0).abs() < 1e-9, "1.0 deg => ° should read 1.0, got {}", deg.value.mean());
+    assert_eq!(deg.unit.__repr__(), "°");
+
+    let pct = eval_quantity("50.0 percent => %");
+    assert!((pct.value.mean() - 50.0).abs() < 1e-9, "50.0 percent => % should read 50.0, got {}", pct.value.mean());
+    assert_eq!(pct.unit.__repr__(), "%");
+
+    // Affine units carry a zero-point offset, not just a scale factor -- converting through
+    // the ° spelling has to apply it the same way `degC`/`degF`/`degR` already do.
+    let boiling = eval_quantity("212.0 degF => °C");
+    assert!((boiling.value.mean() - 100.0).abs() < 1e-9, "212 degF => °C should be 100.0, got {}", boiling.value.mean());
+    assert_eq!(boiling.unit.__repr__(), "°C");
+
+    let freezing = eval_quantity("0.0 °C => degF");
+    assert!((freezing.value.mean() - 32.0).abs() < 1e-9, "0 °C => degF should be 32.0, got {}", freezing.value.mean());
+
+    let absolute = eval_quantity("0.0 degR => °C");
+    assert!((absolute.value.mean() - (-273.15)).abs() < 1e-9, "0 degR => °C should be -273.15, got {}", absolute.value.mean());
+}
+
 /// A format spec closes the expression it is written on. Bound one level too low, inside
 /// `comp_expr`, it took the *right operand* instead: `0.1 + 0.2: base` was a parse error,
 /// and `25 m/s => km/h: base` printed `25.0 m/s` — the spec formatted the conversion target
@@ -751,8 +908,10 @@ fn a_format_spec_applies_to_the_whole_expression() {
     assert_eq!(formatted("1 m + 50 cm: base"), "1.5 m");
     // Parenthesising was the workaround; it still parses and still means the same thing.
     assert_eq!(formatted("(25 m/s => km/h):.2f"), "90.00 km/h");
-    // A comparison keeps its own operands — the spec lands on the result of the test.
-    assert_eq!(formatted("2 m > 1 m:.1f"), "1.0");
+    // A comparison keeps its own operands -- the spec lands on the result of the test, not
+    // the right operand alone. The result is a real Bool now, so a numeric spec has nothing
+    // to apply to and falls back to the plain "True"/"False" rendering.
+    assert_eq!(formatted("2 m > 1 m:.1f"), "True");
 }
 
 /// `frac` and `ifrac` write a magnitude as a common and as a mixed fraction. "When one

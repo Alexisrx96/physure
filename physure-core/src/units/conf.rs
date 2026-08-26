@@ -77,7 +77,17 @@ pub fn parse_physure_conf(
                         let factor: f64 = parts[0].parse().unwrap_or(0.0);
                         let dim_symbol = parts[1];
                         let symbol = aliases_str.first().cloned().unwrap_or_default();
-                        if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() {
+                        // Dimension "1" is the dimensionless marker `unity = 1.0, 1, [1]`
+                        // declares itself against -- `parse_unit_line` below already treats it
+                        // as "no dimension" (so `%`/`ppm` don't inherit a spurious `unity`
+                        // dimension). Without this guard here too, this pass ran first and
+                        // called `add_base_unit` on it anyway, registering a real, poisoned
+                        // `("unity", (1,1))` dimension in `base_units` that `get_unit` finds
+                        // before it ever reaches `parse_unit_line`'s correct, empty-dimension
+                        // registration in `derived_units` -- so `unity` could not convert to
+                        // or add with `%`, `ppm`, or a bare number, despite all four being
+                        // dimensionless.
+                        if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() && dim_symbol != "1" {
                             if is_single_ident(dim_symbol) {
                                 // The first base declaration for a dimension symbol wins.
                                 // `physure.conf` declares both `radian` and `steradian`
