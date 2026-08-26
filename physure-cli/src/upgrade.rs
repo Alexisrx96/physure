@@ -66,6 +66,39 @@ fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Extracts `archive` (`.zip` or `.tar.gz`) into `dest_dir` by shelling out to the system
+/// `tar` -- bsdtar, which every target platform ships by default (Windows 10 1803+, macOS,
+/// Linux), reads both archive types through the same `-xf`, so this needs no archive-handling
+/// crate.
+fn extract_archive(archive: &Path, dest_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(dest_dir).map_err(|e| format!("creating {}: {e}", dest_dir.display()))?;
+    let status = std::process::Command::new("tar")
+        .arg("-xf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest_dir)
+        .status()
+        .map_err(|e| format!("running tar: {e} (is `tar` on PATH?)"))?;
+    if !status.success() {
+        return Err(format!("tar exited with {status}"));
+    }
+    Ok(())
+}
+
+/// Replaces `installed` with the content at `new_content`, freeing the path first via
+/// `make_way_for` in case `installed` is a currently-running executable. Best-effort cleans
+/// up the `.old` file `make_way_for` may have left behind.
+fn replace_binary(installed: &Path, new_content: &Path) -> Result<(), String> {
+    make_way_for(installed).map_err(|e| format!("preparing to replace {}: {e}", installed.display()))?;
+    if let Some(parent) = installed.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    fs::copy(new_content, installed)
+        .map_err(|e| format!("copying {} -> {}: {e}", new_content.display(), installed.display()))?;
+    let _ = fs::remove_file(installed.with_extension("old"));
+    Ok(())
+}
+
 /// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
 /// depend directly on `physure-script`, which implements the language itself (parser,
 /// interpreter, grammar), so it belongs in this set alongside the more obvious
