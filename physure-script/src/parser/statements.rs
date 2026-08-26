@@ -1,7 +1,7 @@
 use physure_core::error::{PhysureError, PhysureResult};
 use crate::ast::*;
 use super::Rule;
-use super::parse_expr;
+use super::expressions::parse_expr;
 
 pub(crate) fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
     match pair.as_rule() {
