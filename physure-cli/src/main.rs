@@ -737,10 +737,20 @@ fn main() {
         match interp.run_statement(stmt) {
             Ok(val) => {
                 if val != PhsValue::None {
+                    // A bare (unassigned) expression that evaluates to a String is a print,
+                    // not a named quantity -- showing it as `"<template source>" = <computed
+                    // text>` repeats the message twice with a confusing "=" between them. This
+                    // folds into the same `is_disp` signal the backtick-note convention
+                    // already used (both mean "render as plain text, not a label=value card"),
+                    // so both the terminal print below and the HTML report's existing
+                    // `is_display_text` handling pick it up with no separate fix needed there.
+                    let is_disp = is_disp
+                        || (matches!(stmt, physure_script::ast::Statement::Expr(_))
+                            && matches!(val, PhsValue::String(_)));
                     if !is_tui && !is_web && !is_view {
                         if is_disp {
                             if let PhsValue::String(ref txt) = val {
-                                println!("\x1b[90m{}\x1b[0m", txt);
+                                println!("{}", txt);
                             }
                         } else {
                             RichRenderer::render_variable_card(&display_label, &val);

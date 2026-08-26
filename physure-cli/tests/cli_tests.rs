@@ -80,6 +80,33 @@ fn test_bare_expression_statements_are_labeled_by_their_own_source_not_a_generic
 }
 
 #[test]
+fn test_bare_string_expressions_print_as_plain_text_not_a_label_equals_value_card() {
+    // A bare (unassigned) string-template statement is a print, not a named quantity -- it
+    // used to show up as `"<raw template source>" = <computed text>`, repeating the message
+    // twice (once as an un-interpolated template, once as the real interpolated result) with
+    // a confusing "=" between them.
+    let temp_file = "temp_test_bare_string_print.phs";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"a = 5.0 m\n\"The value is {a}\"\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("The value is 5.0 m"), "Expected the computed text, got: {}", stdout);
+    assert!(!stdout.contains("{a}"), "Expected no raw, un-interpolated template source in the output, got: {}", stdout);
+    assert!(!stdout.contains("\" = "), "Expected no label/equals-sign card for a bare string print, got: {}", stdout);
+
+    // An *assigned* string is a real named value and must keep its label and "=".
+    assert!(stdout.contains("a") && stdout.contains("5.0 m"), "Expected the assignment 'a = 5.0 m' to still render normally, got: {}", stdout);
+}
+
+#[test]
 fn test_cli_run_subcommand() {
     let output = Command::new(get_phs_bin())
         .arg("2 + 2")
