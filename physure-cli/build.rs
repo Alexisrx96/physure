@@ -7,7 +7,7 @@ use std::process::Command;
 /// isn't available or this isn't a git checkout at all -- the crates.io sdist case.
 fn main() {
     let sha = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "--short=7", "HEAD"])
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -18,8 +18,11 @@ fn main() {
     if let Some(sha) = sha {
         println!("cargo:rustc-env=PHS_BUILD_SHA={sha}");
     }
-    // Best-effort: re-run when HEAD moves to a different commit. Doesn't cover every way
-    // HEAD can change (e.g. `git commit --amend` keeps the same ref), which is fine -- a
-    // stale SHA in a dev build is a display nicety, not correctness-critical.
+    // Re-run on anything that can change what HEAD resolves to. `.git/HEAD` itself only
+    // changes on a branch switch or a detached-HEAD commit -- an ordinary `git commit` on
+    // the checked-out branch instead updates `.git/refs/heads/<branch>`, which the reflog
+    // (`.git/logs/HEAD`) captures on every commit/checkout/merge/amend. Watch both: HEAD
+    // for the branch-switch case, logs/HEAD so same-branch commits aren't cached stale.
     println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/logs/HEAD");
 }
