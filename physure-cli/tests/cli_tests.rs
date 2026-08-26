@@ -58,6 +58,27 @@ fn test_runtime_error_reports_line_number_and_source_text() {
 }
 
 #[test]
+fn test_bare_expression_statements_are_labeled_by_their_own_source_not_a_generic_name() {
+    // Two bare (unassigned) expression statements -- both used to print under the same
+    // generic "expr" label, with no way to tell which value came from which line.
+    let temp_file = "temp_test_bare_expr_labels.phs";
+    let mut file = fs::File::create(temp_file).unwrap();
+    file.write_all(b"a = 50.0 %\nb = 25.0 %\na / b\na * b\n").unwrap();
+
+    let output = Command::new(get_phs_bin())
+        .arg(temp_file)
+        .output()
+        .expect("Failed to execute phs binary");
+
+    fs::remove_file(temp_file).unwrap();
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("a / b"), "Expected the division statement to be labeled by its own source, got: {}", stdout);
+    assert!(stdout.contains("a * b"), "Expected the multiplication statement to be labeled by its own source, got: {}", stdout);
+}
+
+#[test]
 fn test_cli_run_subcommand() {
     let output = Command::new(get_phs_bin())
         .arg("2 + 2")

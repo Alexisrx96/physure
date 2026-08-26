@@ -711,6 +711,23 @@ fn main() {
 
     for (stmt_idx, stmt) in program.statements.iter().enumerate() {
         let (label, expr_code, latex_expr, is_disp) = format_statement_latex(stmt, &i18n);
+        // `format_statement_latex` gives every bare (unassigned) expression statement the
+        // same generic "expr" label -- fine for the LaTeX/TUI paths, which also carry
+        // `expr_code`/a table column alongside it, but the plain `label = value` card below
+        // has no other column, so two such statements printed identically with no way to
+        // tell which value came from which line. Swap in the statement's own source line
+        // (already available from the parser's `Program::lines`) for that one case.
+        let display_label = if matches!(stmt, physure_script::ast::Statement::Expr(_)) {
+            program
+                .lines
+                .get(stmt_idx)
+                .and_then(|n| code.lines().nth(n.saturating_sub(1)))
+                .map(|line| line.trim().to_string())
+                .filter(|line| !line.is_empty())
+                .unwrap_or_else(|| label.clone())
+        } else {
+            label.clone()
+        };
 
         match interp.run_statement(stmt) {
             Ok(val) => {
@@ -721,7 +738,7 @@ fn main() {
                                 println!("\x1b[90m{}\x1b[0m", txt);
                             }
                         } else {
-                            RichRenderer::render_variable_card(&label, &val);
+                            RichRenderer::render_variable_card(&display_label, &val);
                         }
                     }
 
