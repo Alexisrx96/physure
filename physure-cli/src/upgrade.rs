@@ -9,6 +9,29 @@
 /// interpreter, grammar), so it belongs in this set alongside the more obvious
 /// `physure-core`, `physure-cli`, and `physure-lsp` -- leaving it out would miss most of
 /// what a typical commit to this repo changes.
+use std::fs;
+use std::io;
+use std::path::Path;
+
+/// Makes `target` writable even if it's currently executing (this process's own exe, or one
+/// another process has open) -- Windows allows *renaming* an in-use executable even though it
+/// refuses to delete or overwrite it directly; the renamed file keeps running until whichever
+/// process has it open exits. Unix needs nothing: removing/overwriting a running executable's
+/// file is always fine there, so this is a no-op except on Windows.
+fn make_way_for(target: &Path) -> io::Result<()> {
+    if cfg!(windows) && target.exists() {
+        let stale = target.with_extension("old");
+        let _ = fs::remove_file(&stale); // best-effort: a leftover from a previous upgrade
+        fs::rename(target, &stale)?;
+    }
+    Ok(())
+}
+
+/// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
+/// depend directly on `physure-script`, which implements the language itself (parser,
+/// interpreter, grammar), so it belongs in this set alongside the more obvious
+/// `physure-core`, `physure-cli`, and `physure-lsp` -- leaving it out would miss most of
+/// what a typical commit to this repo changes.
 const RELEVANT_PATH_PREFIXES: &[&str] =
     &["physure-core/", "physure-script/", "physure-cli/", "physure-lsp/"];
 
@@ -95,5 +118,46 @@ mod tests {
         assert!(!is_relevant_change(&["physure-python/physure/__init__.py".to_string()]));
         assert!(!is_relevant_change(&["docs/tutorials/phs_primer.md".to_string()]));
         assert!(!is_relevant_change(&[]));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn make_way_for_renames_an_existing_file_out_of_the_target_path() {
+        let dir = std::env::temp_dir().join(format!("phs-upgrade-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("phs.exe");
+        fs::write(&target, b"old content").unwrap();
+
+        make_way_for(&target).unwrap();
+
+        assert!(!target.exists(), "the original path should be free for a new file");
+        assert_eq!(fs::read(target.with_extension("old")).unwrap(), b"old content");
+
+        // A second call (a second upgrade in a row) must not fail just because a stale
+        // .old from the first one is still sitting there.
+        fs::write(&target, b"new content").unwrap();
+        make_way_for(&target).unwrap();
+        assert!(!target.exists());
+        assert_eq!(fs::read(target.with_extension("old")).unwrap(), b"new content");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    fn make_way_for_is_a_no_op_outside_windows() {
+        let dir = std::env::temp_dir().join(format!("phs-upgrade-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("phs");
+        fs::write(&target, b"content").unwrap();
+
+        make_way_for(&target).unwrap();
+
+        // Nothing renamed -- overwriting a running executable's file is always fine on Unix,
+        // so make_way_for has nothing to do there.
+        assert!(target.exists());
+        assert!(!target.with_extension("old").exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
