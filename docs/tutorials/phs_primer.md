@@ -67,9 +67,16 @@ should, with no separate calculation to keep in sync:
 
 ```
 velocity                = 25.0 ± 0.5 m / s
-mass                    = 2.0 ± 0.1 kg
-kinetic_energy          = 625.0 ± 40.0195264839553 J
+mass                    = 2.00 ± 0.10 kg
+kinetic_energy          = 630 ± 40 J
 ```
+
+The displayed digits are also correlated to the uncertainty itself — showing an uncertainty to
+fifteen decimal places would be its own false-precision claim, so PHS rounds it to 1-2
+significant figures and rounds the value to match (`mass`'s `0.1` keeps 2 figures here, since
+a leading `1` would otherwise round to a coarse `±0.2`). The full, unrounded value is never
+lost — it stays available for every further calculation, and an explicit format spec like
+`kinetic_energy:.6f` still shows exactly the precision you ask for.
 
 ## 4. `where` for showing intermediate steps
 
@@ -82,7 +89,7 @@ above it — useful for a constant that only this one calculation needs, kept vi
 to where it's used instead of buried earlier in the script:
 
 ```
-force                   = 19.62 ± 0.981 N
+force                   = 19.62 ± 0.98 N
 ```
 
 Every value computed so far can be interpolated straight into a string, for a one-line summary
@@ -93,7 +100,7 @@ of the whole calculation:
 ```
 
 ```
-The pressure is 1.0 bar, the kinetic energy is 625.0 ± 40.0195264839553 J, and the force is 19.62 ± 0.981 N
+The pressure is 1.0 bar, the kinetic energy is 630 ± 40 J, and the force is 19.62 ± 0.98 N
 ```
 
 ## 5. The closing deliverable: `phs script.phs --html`
