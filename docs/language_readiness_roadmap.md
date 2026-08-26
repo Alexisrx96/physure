@@ -415,7 +415,7 @@ without touching the algorithm body or writing it into engineering's control flo
 - **Propagation is mandatory, not optional**: `@requires`/`@ensures`/`@range` are transpiled into the
   Track E FFI shim exactly once, via the same `RustTranspiler::generate_expr` already used for the
   function body (comparisons already lower to plain `FunctionCall`s like `op_<`
-  ([parser.rs:339](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/parser.rs#L339)), so no new expression machinery is needed) —
+  ([parser/statements.rs:284](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/parser/statements.rs#L284)), so no new expression machinery is needed) —
   see Track E's "Fallible exports" note. A contract that only the interpreter enforces and the
   compiled artifact silently ignores would defeat the reason these decorators exist.
 
