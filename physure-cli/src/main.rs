@@ -15,6 +15,7 @@ mod rich;
 mod scaffold;
 mod step;
 mod tui;
+mod upgrade;
 mod web;
 
 use config::PhysureConfig;
@@ -34,9 +35,11 @@ fn print_help() {
     println!("    phs export <script.phs> --fn <name> [--native] [-o <dir>]");
     println!("    phs debug <script.phs> [--break-fn name] [--break N[:cond]]");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
+    println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
+    println!("    -V, --version            Print version and build commit");
     println!("    -r, --repl               Start interactive PHS REPL environment");
     println!("    -t, --target <lang>      Transpile target: rust, python, java, js, ts (default: rust)");
     println!("    -o, --output <file>      Specify output file path (e.g. out.py, Main.java)");
@@ -54,6 +57,15 @@ fn print_help() {
     println!("    phs new-plugin myplugin --lang rust");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
+    println!("    phs upgrade");
+    println!("    phs upgrade --nightly");
+}
+
+fn print_version() {
+    match option_env!("PHS_BUILD_SHA") {
+        Some(sha) => println!("phs {} ({})", env!("CARGO_PKG_VERSION"), sha),
+        None => println!("phs {}", env!("CARGO_PKG_VERSION")),
+    }
 }
 
 fn run_repl() {
@@ -633,6 +645,11 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        print_version();
+        return;
+    }
+
     if args.len() < 2 || args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
         print_help();
         return;
@@ -668,6 +685,12 @@ fn main() {
 
     if args[1] == "debug" {
         debug::run_debug(&args);
+        return;
+    }
+
+    if args[1] == "upgrade" {
+        let nightly = args.iter().any(|a| a == "--nightly");
+        upgrade::run_upgrade(nightly);
         return;
     }
 
