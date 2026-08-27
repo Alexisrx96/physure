@@ -575,6 +575,63 @@ use physure_core::units::parser::Parser as UnitParser;
     }
 
     #[test]
+    fn bool_assert_passes_and_returns_none() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("assert(True)").unwrap();
+        assert_eq!(results[0], PhsValue::None);
+    }
+
+    #[test]
+    fn bool_assert_fails_with_assertion_failed() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(False)").unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+    }
+
+    #[test]
+    fn bool_assert_with_message_includes_it_in_the_failure() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(False, \"scenario id\")").unwrap_err();
+        let PhysureError::AssertionFailed { message, .. } = err else {
+            panic!("expected AssertionFailed, got {err:?}")
+        };
+        assert_eq!(message, "scenario id");
+    }
+
+    #[test]
+    fn invalid_assert_signature_lists_the_accepted_ones() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(1.0, 2.0, 3.0)").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("assert(Bool)") && msg.contains("assert(Quantity, Quantity)"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn exact_assert_has_no_bool_overload() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("exact_assert(True)").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("exact_assert(Quantity, Quantity)"), "{msg}");
+    }
+
+    #[test]
+    fn assert_of_a_comparison_expression_works_for_compatible_converted_units() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("assert(1.0 km == 1000.0 m)").unwrap();
+        assert_eq!(results[0], PhsValue::None);
+    }
+
+    #[test]
+    fn a_false_sigma_bound_comparison_reaches_bool_assert_and_fails() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(5.0 == 1.0 +/- 0.1 sigma)").unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+    }
+
+    #[test]
     fn stable_and_experimental_decorators_do_not_affect_evaluation() {
         let mut interp = PhsInterpreter::default();
         let results = interp.eval_str("@stable\nfn f(x) = x * 2.0\nf(3.0)").unwrap();

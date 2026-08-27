@@ -202,22 +202,40 @@ pub fn eval_core_builtin(
                 _ => Ok(Some(val.clone())),
             }
         }
-        "assert" | "exact_assert" => {
-            if args.len() != 2 {
-                return Err(PhysureError::Generic(format!("{name} expects 2 arguments (actual, expected)")));
-            }
-            match (&args[0], &args[1]) {
-                (PhsValue::Quantity(a), PhsValue::Quantity(b)) => {
-                    if name == "assert" {
-                        a.phs_assert(b)?;
-                    } else {
-                        a.phs_exact_assert(b)?;
-                    }
+        "assert" => match args {
+            [PhsValue::Bool(cond)] => {
+                if *cond {
                     Ok(Some(PhsValue::None))
+                } else {
+                    Err(PhysureError::AssertionFailed { kind: "assert", message: "condition was False".to_string() })
                 }
-                _ => Err(PhysureError::Generic(format!("{name} expects two quantities"))),
             }
-        }
+            [PhsValue::Bool(cond), PhsValue::String(msg)] => {
+                if *cond {
+                    Ok(Some(PhsValue::None))
+                } else {
+                    Err(PhysureError::AssertionFailed { kind: "assert", message: msg.clone() })
+                }
+            }
+            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+                a.phs_assert(b)?;
+                Ok(Some(PhsValue::None))
+            }
+            _ => Err(PhysureError::Generic(format!(
+                "assert received ({}); expected assert(Bool), assert(Bool, String), or assert(Quantity, Quantity)",
+                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+            ))),
+        },
+        "exact_assert" => match args {
+            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+                a.phs_exact_assert(b)?;
+                Ok(Some(PhsValue::None))
+            }
+            _ => Err(PhysureError::Generic(format!(
+                "exact_assert received ({}); expected exact_assert(Quantity, Quantity)",
+                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+            ))),
+        },
         "op_>" | "op_gt" => compare(args, |l, r| l > r),
         "op_<" | "op_lt" => compare(args, |l, r| l < r),
         "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
