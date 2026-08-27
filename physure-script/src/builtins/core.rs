@@ -12,6 +12,27 @@ fn boolean(res: bool) -> PhsValue {
     PhsValue::Bool(res)
 }
 
+/// The `==`/`!=` Bool branch. `Some(Ok(...))` when at least one side is `Bool` (a matching
+/// pair compares directly; a mismatched pair is a type error naming both types); `None` when
+/// neither side is `Bool`, so the caller falls through to the existing Quantity/sigma-bound
+/// handling unchanged.
+fn bool_equality(args: &[PhsValue], symbol: &str, want_equal: bool) -> Option<PhysureResult<Option<PhsValue>>> {
+    let l_is_bool = matches!(args.first(), Some(PhsValue::Bool(_)));
+    let r_is_bool = matches!(args.get(1), Some(PhsValue::Bool(_)));
+    if !l_is_bool && !r_is_bool {
+        return None;
+    }
+    if let (Some(PhsValue::Bool(l)), Some(PhsValue::Bool(r))) = (args.first(), args.get(1)) {
+        return Some(Ok(Some(boolean((l == r) == want_equal))));
+    }
+    Some(Err(PhysureError::Generic(format!(
+        "cannot compare {} and {} with {}",
+        args.first().map(PhsValue::type_name).unwrap_or("None"),
+        args.get(1).map(PhsValue::type_name).unwrap_or("None"),
+        symbol,
+    ))))
+}
+
 /// Two quantities reduced to a pair of numbers that can be compared directly.
 ///
 /// Comparing the raw magnitudes makes `1 km == 1000 m` false and `1 km > 999 m` false
@@ -190,6 +211,9 @@ pub fn eval_core_builtin(
         "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
         "op_<=" | "op_lte" => compare(args, |l, r| l <= r),
         "op_==" | "op_eq" => {
+            if let Some(res) = bool_equality(args, "==", true) {
+                return res;
+            }
             // `x == 5.0 +/- 0.2` asks whether x lies within k sigma of the target, so it
             // is a tolerance test rather than an ordinary comparison.
             if let (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma)))
@@ -202,7 +226,12 @@ pub fn eval_core_builtin(
             }
             compare(args, |l, r| (l - r).abs() < 1e-9)
         }
-        "op_!=" | "op_neq" => compare(args, |l, r| (l - r).abs() >= 1e-9),
+        "op_!=" | "op_neq" => {
+            if let Some(res) = bool_equality(args, "!=", false) {
+                return res;
+            }
+            compare(args, |l, r| (l - r).abs() >= 1e-9)
+        }
         "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
         "ternary" | "if_then_else" => {
             // Was its own, narrower truthiness check (Quantity/Number only, silently `false`

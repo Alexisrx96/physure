@@ -1122,3 +1122,21 @@ r3 = circuito_abierto(5 V, 2 A)
         let err = interp.eval_str("5 m and (1 / 0 > 0)").unwrap_err();
         assert!(matches!(err, PhysureError::Generic(_)));
     }
+
+    #[test]
+    fn bool_equality_and_inequality() {
+        let mut interp = PhsInterpreter::default();
+        assert_eq!(interp.eval_str("True == True").unwrap()[0].to_string(), "True");
+        assert_eq!(interp.eval_str("True == False").unwrap()[0].to_string(), "False");
+        assert_eq!(interp.eval_str("True != False").unwrap()[0].to_string(), "True");
+        assert_eq!(interp.eval_str("False != False").unwrap()[0].to_string(), "False");
+    }
+
+    #[test]
+    fn mixed_bool_and_non_bool_equality_is_a_type_error() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("True == 1").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+        let err = interp.eval_str("1.0 m != False").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
