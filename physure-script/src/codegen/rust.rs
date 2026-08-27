@@ -631,30 +631,44 @@ mod tests {
 
     #[test]
     fn known_bools_does_not_leak_across_functions() {
-        // A variable named `ok` classified Bool in one function must not leak Bool-ness into
-        // a different function that also has a local named `ok` used non-boolean-ly: each
-        // `generate_function_def` call starts its own fresh `known_bools`.
+        // `g`'s parameter is deliberately also named `ok`, colliding with the name `f` locally
+        // classifies as Bool (`ok = x > 0.0`). `g` reads its own `ok` through a 2-arg `assert`
+        // BEFORE any reassignment, so if `known_bools` ever leaked from f's
+        // `generate_function_def` call into g's (e.g. a shared `thread_local!` HashSet instead
+        // of each call getting its own fresh one), `assert(ok, 5.0 m)` in g would misroute from
+        // the Quantities shape (`.phs_assert(...)` -- correct, since g's `ok` is an ordinary
+        // Quantity parameter and PHS parameters are never pre-classified Bool, per this
+        // design's "no inferring boolean parameter types" scope) to the BoolWithMessage shape
+        // (`assert!(ok, "{}", ...)`), which treats a `Quantity` as a `bool` condition -- a real
+        // type mismatch.
+        //
+        // Verified as a genuine, compiler-detectable divergence, not just a string check:
+        // injecting a `thread_local!`-based leak into `generate_function_def` and re-running
+        // this test flips both the emitted shape below AND whether the resulting Rust actually
+        // compiles -- the leaked/BoolWithMessage shape fails `cargo check` with E0600 (`assert!`
+        // expands to `if !(cond) { .. }`, and `Quantity` implements no `Not`, so it can't stand
+        // in for the `bool` `ok` should have been).
+        //
+        // This test checks the shape directly rather than calling `assert_generated_rust_compiles`
+        // here, because a 2-arg Quantities-shape assert placed as a non-tail statement inside
+        // *any* plain `fn` body -- independent of any leak, and independent of this task --
+        // already fails to compile for an unrelated, pre-existing reason: `phs_assert` returns
+        // `PhysureResult<()>` and its call site emits `?`, but `generate_function_def` always
+        // declares `-> Quantity`, never `-> Result<..>`, so even the CORRECT (non-leaked)
+        // routing here has nothing for `?` to propagate into and fails a real `cargo check`
+        // with E0277 regardless of leak status (confirmed empirically while building this
+        // test). That's a separate, out-of-scope bug this fix does not touch, so a real-compile
+        // assertion on this particular script would fail unconditionally and could never
+        // discriminate leaked from non-leaked -- the string-level shape check below is the
+        // actually-discriminating signal.
         let tp = RustTranspiler;
         let program = crate::parser::parse_phs(
-            "fn f(x) =\n  ok = x > 0.0\n  ok\nfn g(y) =\n  ok = y * 2.0\n  ok",
+            "fn f(x) =\n  ok = x > 0.0\n  x * 2.0\nfn g(ok) =\n  assert(ok, 5.0 m)\n  ok",
         )
         .unwrap();
         let code = tp.generate_program(&program).unwrap();
-        // Rust infers locals' types, so this target has no distinct emission shape for a
-        // bool-typed vs. Quantity-typed local to assert on directly; what matters is that both
-        // functions transpile successfully with their own, unconfused bodies: f's `ok` comes
-        // from a comparison (`>`), g's from a multiplication (`*`).
-        assert!(code.contains("pub fn f(x: Quantity) -> Quantity"), "{code}");
-        assert!(code.contains("pub fn g(y: Quantity) -> Quantity"), "{code}");
-        let f_start = code.find("pub fn f(").unwrap();
-        let g_start = code.find("pub fn g(").unwrap();
-        let (f_body, g_body) = if f_start < g_start {
-            (&code[f_start..g_start], &code[g_start..])
-        } else {
-            (&code[f_start..], &code[g_start..f_start])
-        };
-        assert!(f_body.contains(">"), "f's `ok` should come from a comparison:\n{code}");
-        assert!(g_body.contains("*"), "g's `ok` should come from a multiplication:\n{code}");
+        assert!(code.contains(".phs_assert("), "g's assert should use the Quantities shape:\n{code}");
+        assert!(!code.contains("assert!(ok"), "g's `ok` must not be treated as bool-classified:\n{code}");
     }
 
     #[test]
