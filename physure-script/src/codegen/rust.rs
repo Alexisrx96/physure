@@ -15,6 +15,7 @@ impl CodeGenerator for RustTranspiler {
         let mut top_functions = Vec::new();
         let mut main_statements = Vec::new();
         let mut main_declared_vars = HashSet::new();
+        let mut known_bools: HashSet<String> = HashSet::new();
 
         for stmt in &program.statements {
             match stmt {
@@ -22,22 +23,34 @@ impl CodeGenerator for RustTranspiler {
                     top_functions.push(self.generate_function_def(node)?);
                 }
                 Statement::Assignment(node) => {
-                    main_statements.push(format!("    {}", self.generate_assignment(node, &mut main_declared_vars)?));
+                    main_statements.push(format!("    {}", self.generate_assignment(node, &mut main_declared_vars, &mut known_bools)?));
                     main_statements.push(format!("    println!(\"{}: {{}}\", {});", node.name, node.name));
                 }
                 Statement::Expr(expr) => {
-                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
-                        let a_code = self.generate_expr(a)?;
-                        let b_code = self.generate_expr(b)?;
-                        let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
-                        main_statements.push(format!("    ({}).{}(&({}))?;", a_code, method, b_code));
-                    } else {
-                        let expr_code = self.generate_expr(expr)?;
-                        main_statements.push(format!("    println!(\"{{}}\", {});", expr_code));
+                    match super::as_assert_call(expr, &known_bools) {
+                        Some(super::AssertShape::Bool { condition }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            main_statements.push(format!("    assert!({}, \"assertion failed\");", cond_code));
+                        }
+                        Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            let msg_code = self.generate_expr(message)?;
+                            main_statements.push(format!("    assert!({}, \"{{}}\", {});", cond_code, msg_code));
+                        }
+                        Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                            let a_code = self.generate_expr(actual)?;
+                            let b_code = self.generate_expr(expected)?;
+                            let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
+                            main_statements.push(format!("    ({}).{}(&({}))?;", a_code, method, b_code));
+                        }
+                        None => {
+                            let expr_code = self.generate_expr(expr)?;
+                            main_statements.push(format!("    println!(\"{{}}\", {});", expr_code));
+                        }
                     }
                 }
                 Statement::While { .. } => {
-                    main_statements.push(format!("    {}", self.generate_statement(stmt, &mut main_declared_vars)?));
+                    main_statements.push(format!("    {}", self.generate_statement(stmt, &mut main_declared_vars, &mut known_bools)?));
                 }
                 _ => {}
             }
@@ -59,20 +72,27 @@ impl CodeGenerator for RustTranspiler {
 }
 
 impl RustTranspiler {
-    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
+    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>, known_bools: &mut HashSet<String>) -> Result<String, CodegenError> {
         match stmt {
             Statement::Import(_) => Ok(String::new()),
             Statement::Export(_) => Ok(String::new()),
             Statement::FunctionDef(node) => self.generate_function_def(node),
-            Statement::Assignment(node) => self.generate_assignment(node, declared_vars),
+            Statement::Assignment(node) => self.generate_assignment(node, declared_vars, known_bools),
             Statement::Expr(expr) => {
-                if let Some((kind, a, b)) = super::as_assert_call(expr) {
-                    let a_code = self.generate_expr(a)?;
-                    let b_code = self.generate_expr(b)?;
-                    let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
-                    Ok(format!("({}).{}(&({}))?", a_code, method, b_code))
-                } else {
-                    self.generate_expr(expr)
+                match super::as_assert_call(expr, known_bools) {
+                    Some(super::AssertShape::Bool { condition }) => {
+                        Ok(format!("assert!({}, \"assertion failed\")", self.generate_expr(condition)?))
+                    }
+                    Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                        Ok(format!("assert!({}, \"{{}}\", {})", self.generate_expr(condition)?, self.generate_expr(message)?))
+                    }
+                    Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                        let a_code = self.generate_expr(actual)?;
+                        let b_code = self.generate_expr(expected)?;
+                        let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
+                        Ok(format!("({}).{}(&({}))?", a_code, method, b_code))
+                    }
+                    None => self.generate_expr(expr),
                 }
             }
             Statement::Return(expr) => Ok(format!("return {};", self.generate_expr(expr)?)),
@@ -83,7 +103,7 @@ impl RustTranspiler {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
-                    let stmt_code = self.generate_statement(s, declared_vars)?;
+                    let stmt_code = self.generate_statement(s, declared_vars, known_bools)?;
                     if !stmt_code.is_empty() {
                         let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
                             stmt_code
@@ -106,6 +126,7 @@ impl RustTranspiler {
             params.push(format!("{}: Quantity", param));
         }
         let mut declared_vars: HashSet<String> = node.params.iter().cloned().collect();
+        let mut known_bools: HashSet<String> = HashSet::new();
         let last_idx = node.body_stmts.len().saturating_sub(1);
         let mut body_lines = Vec::new();
         for (i, stmt) in node.body_stmts.iter().enumerate() {
@@ -113,10 +134,10 @@ impl RustTranspiler {
                 if let Statement::Expr(ref e) = stmt {
                     body_lines.push(format!("    {}", self.generate_expr(e)?));
                 } else {
-                    body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars)?));
+                    body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars, &mut known_bools)?));
                 }
             } else {
-                body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars)?));
+                body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars, &mut known_bools)?));
             }
         }
         Ok(format!(
@@ -127,7 +148,12 @@ impl RustTranspiler {
         ))
     }
 
-    fn generate_assignment(&self, node: &AssignmentNode, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
+    fn generate_assignment(&self, node: &AssignmentNode, declared_vars: &mut HashSet<String>, known_bools: &mut HashSet<String>) -> Result<String, CodegenError> {
+        if super::is_definitely_bool(&node.value, known_bools) {
+            known_bools.insert(node.name.clone());
+        } else {
+            known_bools.remove(&node.name);
+        }
         let value = self.generate_expr(&node.value)?;
         if declared_vars.contains(&node.name) {
             Ok(format!("{} = {};", node.name, value))
@@ -219,13 +245,20 @@ impl RustTranspiler {
                     let r_str = self.generate_expr(r)?;
                     return Ok(format!("({}.canonical_magnitude() {} {}.canonical_magnitude())", l_str, op_sym, r_str));
                 }
+                if let Some(logical) = super::as_logical_op(expr) {
+                    return Ok(match logical {
+                        super::LogicalOp::Not(x) => format!("(!{})", self.generate_expr(x)?),
+                        super::LogicalOp::And(l, r) => format!("({} && {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                        super::LogicalOp::Or(l, r) => format!("({} || {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                    });
+                }
                 if !kwargs.is_empty() {
                     return Err(CodegenError::Generic(format!(
                         "Named arguments are not supported in Rust codegen (call to '{}')",
                         name
                     )));
                 }
-                if (name == "assert" || name == "exact_assert") && args.len() == 2 {
+                if (name == "assert" || name == "exact_assert") && matches!(args.len(), 1 | 2) {
                     return Err(CodegenError::Generic(format!(
                         "'{}' can only be used as a standalone statement, not nested inside an expression",
                         name
@@ -452,6 +485,88 @@ mod tests {
     }
 
     #[test]
+    fn transpiles_logical_operators_rust() {
+        let tp = RustTranspiler;
+        let not_expr = Expr::FunctionCall { name: "op_not".to_string(), args: vec![Expr::Bool(true)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&not_expr).unwrap(), "(!true)");
+        let and_expr = Expr::FunctionCall { name: "op_and".to_string(), args: vec![Expr::Bool(true), Expr::Bool(false)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&and_expr).unwrap(), "(true && false)");
+        let or_expr = Expr::FunctionCall { name: "op_or".to_string(), args: vec![Expr::Bool(false), Expr::Bool(true)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&or_expr).unwrap(), "(false || true)");
+    }
+
+    #[test]
+    fn transpiles_one_argument_bool_assert_rust() {
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 m > 0.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert!("), "{code}");
+        assert!(!code.contains("phs_assert"), "a Bool assert must not call the Quantity method:\n{code}");
+    }
+
+    #[test]
+    fn transpiles_bool_assert_with_message_rust() {
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 m > 2.0 m, \"too small\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert!(") && code.contains("\"too small\""), "{code}");
+    }
+
+    #[test]
+    fn rejects_one_argument_assert_nested_in_an_expression_rust() {
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs("x = assert(1.0 m > 0.0 m)").unwrap();
+        assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn an_assert_with_an_unclassified_condition_errors_instead_of_calling_a_nonexistent_function() {
+        // `is_ready(x)` isn't a literal, comparison, logical op, or tracked-bool identifier,
+        // so `is_definitely_bool` correctly can't promise it's Bool -- this must produce a
+        // clear CodegenError, not silently emit a call to a Rust function named `assert`
+        // that doesn't exist (Rust's real assertion is the `assert!` macro).
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs("fn is_ready(x) = x > 0\nassert(is_ready(v))").unwrap();
+        assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn transpiles_and_compiles_a_bool_assert_with_a_named_condition_rust() {
+        // Proves the generated Rust actually compiles and the generated assert!() macro
+        // call is syntactically valid, not just that the output string contains the right
+        // substrings -- a real Python codegen bug earlier in this same plan (a quote-nesting
+        // SyntaxError) was only caught by actually compiling/running generated output, never
+        // by string-matching alone.
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert!("), "{code}");
+
+        let temp_dir = std::env::temp_dir().join("phs_rust_bool_assert_compile_check");
+        let src_dir = temp_dir.join("src");
+        let _ = std::fs::create_dir_all(&src_dir);
+        let core_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("physure-core");
+        let cargo_toml = format!(
+            "[package]\nname = \"bool_assert_compile_check\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nphysure_core = {{ package = \"physure\", path = \"{}\" }}\n",
+            core_path.to_str().unwrap().replace('\\', "/")
+        );
+        let _ = std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml);
+        let _ = std::fs::write(src_dir.join("main.rs"), &code);
+
+        let output = std::process::Command::new("cargo")
+            .args(["build", "--quiet"])
+            .env("RUSTFLAGS", "-A unused_parens")
+            .current_dir(&temp_dir)
+            .output();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        match output {
+            Ok(o) => assert!(o.status.success(), "generated Rust failed to compile:\n{code}\nstderr: {}", String::from_utf8_lossy(&o.stderr)),
+            Err(_) => eprintln!("skipping compile check: cargo unavailable in this environment"),
+        }
+    }
+
+    #[test]
     fn test_transpile_for_expr_and_while_stmt_rust() {
         let tp = RustTranspiler;
         let for_expr = Expr::ForExpr {
@@ -467,7 +582,7 @@ mod tests {
             body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
             body_lines: vec![],
         };
-        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
+        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new(), &mut HashSet::new()).unwrap();
         assert_eq!(code_while, "while flag {\n  return x;\n}");
     }
 
