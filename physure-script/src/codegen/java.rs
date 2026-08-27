@@ -207,6 +207,7 @@ impl JavaTranspiler {
                 }
                 Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
             }
+            Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
             Expr::Quantity(q) => {
                 if let Some(reason) = q.asymmetric_refusal() {
@@ -336,6 +337,13 @@ mod tests {
         });
         let result = transpiler.generate_expr(&q).unwrap();
         assert_eq!(result, "Quantity.withUncertainty(75.0, 0.5, \"kg\")");
+    }
+
+    #[test]
+    fn transpiles_bool_literals_java() {
+        let tp = JavaTranspiler::default();
+        assert_eq!(tp.generate_expr(&Expr::Bool(true)).unwrap(), "true");
+        assert_eq!(tp.generate_expr(&Expr::Bool(false)).unwrap(), "false");
     }
 
     #[test]

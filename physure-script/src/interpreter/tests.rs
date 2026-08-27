@@ -1064,3 +1064,11 @@ r3 = circuito_abierto(5 V, 2 A)
             .unwrap();
         assert_eq!(cubed, PhsValue::Number(-8.0));
     }
+
+    #[test]
+    fn bool_literal_evaluates_directly_to_a_bool_value() {
+        let interp = PhsInterpreter::default();
+        let env = std::collections::HashMap::new();
+        let result = interp.eval_expr(&Expr::Bool(true), &env).unwrap();
+        assert_eq!(result, PhsValue::Bool(true));
+    }

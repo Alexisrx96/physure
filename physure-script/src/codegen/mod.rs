@@ -99,7 +99,7 @@ fn inline_bindings(expr: &Expr) -> Expr {
             left: Box::new(inline_bindings(left)),
             right: Box::new(inline_bindings(right)),
         },
-        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => expr.clone(),
+        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => expr.clone(),
         Expr::ForExpr { var, iterable, body } => Expr::ForExpr {
             var: var.clone(),
             iterable: Box::new(inline_bindings(iterable)),
@@ -256,6 +256,7 @@ pub fn expr_to_phs_string(expr: &Expr) -> String {
             }
         }
         Expr::Str(s) => s.clone(),
+        Expr::Bool(b) => if *b { "True" } else { "False" }.to_string(),
         Expr::Identifier(name) => name.clone(),
         Expr::BinaryOp { op, left, right } => {
             let l = expr_to_phs_string(left);
@@ -550,7 +551,7 @@ fn rewrite_equation_calls(
             left: Box::new(rewrite_equation_calls(left, equations, functions, signatures)?),
             right: Box::new(rewrite_equation_calls(right, equations, functions, signatures)?),
         }),
-        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => Ok(expr.clone()),
+        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => Ok(expr.clone()),
         Expr::ForExpr { var, iterable, body } => {
             let new_iterable = rewrite_equation_calls(iterable, equations, functions, signatures)?;
             let new_body = rewrite_equation_calls(body, equations, functions, signatures)?;
@@ -566,6 +567,12 @@ fn rewrite_equation_calls(
 #[cfg(test)]
 mod const_fold_tests {
     use super::*;
+
+    #[test]
+    fn bool_literal_round_trips_through_expr_to_phs_string() {
+        assert_eq!(expr_to_phs_string(&Expr::Bool(true)), "True");
+        assert_eq!(expr_to_phs_string(&Expr::Bool(false)), "False");
+    }
 
     /// A `where` clause desugars to `let(name, value, body)`, which every target used to
     /// emit verbatim as a call to a function that does not exist anywhere.

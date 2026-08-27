@@ -57,6 +57,7 @@ fn expr_to_string(expr: &crate::ast::Expr) -> String {
             }
         }
         crate::ast::Expr::Str(s) | crate::ast::Expr::Identifier(s) => s.clone(),
+        crate::ast::Expr::Bool(b) => if *b { "True" } else { "False" }.to_string(),
         crate::ast::Expr::BinaryOp { op, left, right } => {
             let op_str = match op {
                 crate::ast::BinaryOp::Add => "+",

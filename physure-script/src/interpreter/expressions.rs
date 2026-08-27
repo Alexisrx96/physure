@@ -89,6 +89,7 @@ impl PhsInterpreter {
                     Ok(PhsValue::Quantity(q))
                 }
             }
+            Expr::Bool(value) => Ok(PhsValue::Bool(*value)),
             // A string literal is the text the user wrote, never a variable lookup: with
             // `v = 3 m/s` in scope, `deriv("0.5*m*v^2", "v")` used to receive the quantity
             // instead of the name. `{v}` folds a value in explicitly.

@@ -180,6 +180,7 @@ impl RustTranspiler {
                     format!("format!({:?}, {})", fmt, args.join(", "))
                 })
             }
+            Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Expr::Identifier(name) => Ok(name.clone()),
             Expr::BinaryOp { op, left, right } => {
                 let left_code = self.generate_expr(left)?;
@@ -417,6 +418,13 @@ mod tests {
         };
         let code = transpiler.generate_program(&ast).unwrap();
         assert!(code.contains("Quantity::with_uncertainty(75.0, 0.5, \"kg\")"));
+    }
+
+    #[test]
+    fn transpiles_bool_literals_rust() {
+        let tp = RustTranspiler;
+        assert_eq!(tp.generate_expr(&Expr::Bool(true)).unwrap(), "true");
+        assert_eq!(tp.generate_expr(&Expr::Bool(false)).unwrap(), "false");
     }
 
     #[test]

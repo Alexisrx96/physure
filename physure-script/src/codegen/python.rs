@@ -178,6 +178,7 @@ impl PythonTranspiler {
                 }
                 Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
             }
+            Expr::Bool(b) => Ok(if *b { "True" } else { "False" }.to_string()),
             Expr::Identifier(name) => {
                 if name.starts_with('`') || name.contains('\n') {
                     let clean = name.trim_matches('`').trim();
@@ -317,6 +318,13 @@ mod tests {
         let res = tp.generate_program(&prog).unwrap();
         assert!(res.contains("from physure.physics.constants import g"));
         assert!(res.contains("def foo(a, b):\n    return (a * b)"));
+    }
+
+    #[test]
+    fn transpiles_bool_literals_python() {
+        let tp = PythonTranspiler;
+        assert_eq!(tp.generate_expr(&Expr::Bool(true)).unwrap(), "True");
+        assert_eq!(tp.generate_expr(&Expr::Bool(false)).unwrap(), "False");
     }
 
     #[test]
