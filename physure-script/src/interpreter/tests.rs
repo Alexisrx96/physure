@@ -1072,3 +1072,53 @@ r3 = circuito_abierto(5 V, 2 A)
         let result = interp.eval_expr(&Expr::Bool(true), &env).unwrap();
         assert_eq!(result, PhsValue::Bool(true));
     }
+
+    #[test]
+    fn not_and_or_truth_table() {
+        let mut interp = PhsInterpreter::default();
+        let cases = [
+            ("not True", "False"),
+            ("not False", "True"),
+            ("True and False", "False"),
+            ("True and True", "True"),
+            ("False and True", "False"),
+            ("True or False", "True"),
+            ("False or False", "False"),
+            ("False or True", "True"),
+        ];
+        for (src, expected) in cases {
+            let results = interp.eval_str(src).unwrap();
+            assert_eq!(results[0].to_string(), expected, "for `{src}`");
+        }
+    }
+
+    #[test]
+    fn and_short_circuits_and_never_evaluates_a_dividing_by_zero_right_side() {
+        let mut interp = PhsInterpreter::default();
+        // Eager evaluation would raise "Division by zero" instead of returning False.
+        let results = interp.eval_str("False and (1 / 0 > 0)").unwrap();
+        assert_eq!(results[0].to_string(), "False");
+    }
+
+    #[test]
+    fn or_short_circuits_and_never_evaluates_a_dividing_by_zero_right_side() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("True or (1 / 0 > 0)").unwrap();
+        assert_eq!(results[0].to_string(), "True");
+    }
+
+    #[test]
+    fn not_rejects_a_non_bool_operand() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("not 5").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
+
+    #[test]
+    fn and_rejects_a_non_bool_left_operand_without_evaluating_the_right_side() {
+        let mut interp = PhsInterpreter::default();
+        // If the (invalid) left operand's type error didn't short-circuit, this would raise
+        // "Division by zero" from the right side instead of a type error about `5 m`.
+        let err = interp.eval_str("5 m and (1 / 0 > 0)").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
