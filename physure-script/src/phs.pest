@@ -5,7 +5,7 @@ COMMENT    = _{ ("//" ~ !"/" ~ (!"\n" ~ !"\r" ~ ANY)*) | ("#" ~ (!"\n" ~ !"\r" ~
 // `in` is deliberately absent: it is the symbol for inch. `let` stays reserved with no rule
 // behind it so the retired `let ... in ...` form fails to parse instead of quietly meaning
 // "let times inches".
-keyword     = @{ ("for" | "while" | "let" | "if" | "then" | "else" | "where" | "return") ~ !(ASCII_ALPHANUMERIC | "_") }
+keyword     = @{ ("for" | "while" | "let" | "if" | "then" | "else" | "where" | "return" | "not" | "and" | "or" | "True" | "False") ~ !(ASCII_ALPHANUMERIC | "_") }
 // `LETTER`, not a hand-kept list of the Greek letters someone happened to need, and not
 // ASCII after the first character. A unit symbol is a `LETTER` everywhere `_unit_char` is
 // read, so an identifier that stopped at ASCII made the same symbol legal in one position
@@ -80,12 +80,15 @@ where_expr  = { "where" ~ _nl ~ where_bind ~ (_nl ~ "," ~ _nl ~ where_bind)* }
 _is_str_start  = _{ &"\"" }
 _is_func_start = _{ &(identifier ~ "(") }
 _is_vec_start  = _{ &"[" }
+_is_bool_start = _{ &(("True" | "False") ~ !(ASCII_ALPHANUMERIC | "_")) }
 _is_num_start  = _{ &(ASCII_DIGIT | "+" | "-" | "infinity" | "inf" | "oo" | "∞" | "(") }
+bool_lit       = @{ "True" | "False" }
 
 primary_base   = _{
     (_is_str_start ~ string_lit)
   | (_is_func_start ~ function_call)
   | (_is_vec_start ~ vector_literal)
+  | (_is_bool_start ~ bool_lit)
   | (_is_num_start ~ quantity)
   | for_expr
   | identifier
@@ -134,9 +137,22 @@ conv_expr   = { comp_expr ~ ((_is_add_sub ~ (op_add | op_sub) ~ comp_expr) | (_i
 _is_range   = _{ &".." }
 base_expr   = { conv_expr ~ (_is_range ~ op_range ~ conv_expr)? ~ (_is_format ~ op_format)? }
 
+not_kw   = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") }
+and_kw   = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }
+or_kw    = @{ "or" ~ !(ASCII_ALPHANUMERIC | "_") }
+
+// `not` binds tighter than `and`, which binds tighter than `or`; both `and`/`or` are
+// left-associative repetitions. Every tier wraps `base_expr` unchanged -- range, format
+// spec, arithmetic, conversion, and comparison keep exactly their current precedence, per
+// the design's "insert the logical layer after the existing non-logical/comparison layer,
+// without changing arithmetic/conversion/range/formatting/ternary/where precedence."
+not_expr = { not_kw* ~ base_expr }
+and_expr = { not_expr ~ (_nl ~ and_kw ~ _nl ~ not_expr)* }
+or_expr  = { and_expr ~ (_nl ~ or_kw ~ _nl ~ and_expr)* }
+
 _is_ternary = _{ &"?" }
 ternary_op  = { "?" ~ _nl ~ base_expr ~ _nl ~ ":" ~ _nl ~ base_expr }
-expr        = { ((_is_if ~ if_expr) | (base_expr ~ (_is_ternary ~ ternary_op)?)) ~ (_is_where ~ where_expr)? }
+expr        = { ((_is_if ~ if_expr) | (or_expr ~ (_is_ternary ~ ternary_op)?)) ~ (_is_where ~ where_expr)? }
 
 // `name: value` is accepted alongside `name = value`; the plain `expr` branch stays last
 // so a format spec (`x:.2f`) still wins, since `.2f` is not a valid expression.
