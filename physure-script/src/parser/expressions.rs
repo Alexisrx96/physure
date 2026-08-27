@@ -161,8 +161,9 @@ fn parse_not_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
             base_pair = Some(p);
         }
     }
-    let base_pair = base_pair.ok_or_else(|| PhysureError::Generic("`not` is missing its operand".into()))?;
-    let mut result = parse_base_expr(base_pair)?;
+    // The grammar (`not_expr = { _not_kw* ~ base_expr }`) guarantees exactly one
+    // non-`_not_kw` child: `base_expr`.
+    let mut result = parse_base_expr(base_pair.unwrap())?;
     for _ in 0..not_count {
         result = Expr::FunctionCall { name: "op_not".to_string(), args: vec![result], kwargs: Vec::new() };
     }
@@ -173,12 +174,10 @@ fn parse_and_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
     let mut left = parse_not_expr(first)?;
-    while let Some(kw_pair) = inner.next() {
-        debug_assert_eq!(kw_pair.as_rule(), Rule::_and_kw);
-        let right_pair = inner
-            .next()
-            .ok_or_else(|| PhysureError::Generic("`and` is missing its right operand".into()))?;
-        let right = parse_not_expr(right_pair)?;
+    while inner.next().is_some() {
+        // The consumed pair is `_and_kw`; `and_expr = { not_expr ~ (_nl ~ _and_kw ~ _nl ~
+        // not_expr)* }` guarantees a `not_expr` immediately follows it.
+        let right = parse_not_expr(inner.next().unwrap())?;
         left = Expr::FunctionCall { name: "op_and".to_string(), args: vec![left, right], kwargs: Vec::new() };
     }
     Ok(left)
@@ -188,12 +187,10 @@ fn parse_or_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
     let mut left = parse_and_expr(first)?;
-    while let Some(kw_pair) = inner.next() {
-        debug_assert_eq!(kw_pair.as_rule(), Rule::_or_kw);
-        let right_pair = inner
-            .next()
-            .ok_or_else(|| PhysureError::Generic("`or` is missing its right operand".into()))?;
-        let right = parse_and_expr(right_pair)?;
+    while inner.next().is_some() {
+        // The consumed pair is `_or_kw`; `or_expr = { and_expr ~ (_nl ~ _or_kw ~ _nl ~
+        // and_expr)* }` guarantees an `and_expr` immediately follows it.
+        let right = parse_and_expr(inner.next().unwrap())?;
         left = Expr::FunctionCall { name: "op_or".to_string(), args: vec![left, right], kwargs: Vec::new() };
     }
     Ok(left)

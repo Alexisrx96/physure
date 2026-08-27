@@ -483,3 +483,21 @@ use super::*;
         assert!(parse_phs("True and").is_err());
         assert!(parse_phs("and True").is_err());
     }
+
+    #[test]
+    fn not_re_enters_the_or_expr_chain_through_a_parenthesized_group() {
+        let prog = parse_phs("not (a and b)").unwrap();
+        let Statement::Expr(Expr::FunctionCall { name: outer, args: outer_args, .. }) = &prog.statements[0] else { panic!() };
+        assert_eq!(outer, "op_not");
+        let Expr::FunctionCall { name: inner, args: inner_args, .. } = &outer_args[0] else { panic!("expected op_and inside the parens") };
+        assert_eq!(inner, "op_and");
+        assert!(matches!(&inner_args[0], Expr::Identifier(a) if a == "a"));
+        assert!(matches!(&inner_args[1], Expr::Identifier(b) if b == "b"));
+    }
+
+    #[test]
+    fn bool_and_logical_expressions_parse_as_call_arguments() {
+        // A later task wires `assert(condition)` through exactly this call-arg position.
+        assert!(parse_phs("f(True)").is_ok());
+        assert!(parse_phs("f(a and b)").is_ok());
+    }
