@@ -355,6 +355,77 @@ fn test_java_bool_assert_transpiler_compiles_and_runs() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+/// Real-syntax-check regression test for task 11 (JS/TS codegen for `not`/`and`/`or` and the
+/// Bool `assert` overloads). JS/TS is not statically compiled the way Python/Rust/Java are in
+/// the parity tests above, but `node --check` parses a file without executing it or needing
+/// the `physure` package importable, which is enough to catch the "generates invalid syntax"
+/// class of bug the other three targets' real-compile tests found in their own tasks (a
+/// Python 3.11 syntax bug, a Rust missing-semicolon compile bug, a Java double-semicolon
+/// cosmetic bug). TypeScript's `: Quantity`/`: boolean` annotations are not valid plain-JS
+/// syntax, so `node --check` cannot validate the `typed: true` output; a real check there
+/// would need `tsc`, which (unlike `node`) is not available in this environment -- so this
+/// test covers the untyped `Target::JavaScript` output only, gracefully skipping entirely if
+/// `node` itself is not on PATH (mirroring how the Python/Java/Rust parity tests above skip
+/// when their own toolchain is missing).
+#[test]
+fn test_js_transpiler_syntax_validity() {
+    let node_available = Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !node_available {
+        eprintln!("Skipping JS syntax-validity test: 'node' not found on PATH");
+        return;
+    }
+
+    let temp_dir = std::env::temp_dir().join("phs_js_syntax_check");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let check_syntax = |name: &str, code: &str| {
+        let file = temp_dir.join(format!("{}.js", name));
+        fs::write(&file, code).unwrap();
+        let result = Command::new("node")
+            .args(["--check", file.to_str().unwrap()])
+            .output()
+            .expect("Failed to run `node --check`");
+        assert!(
+            result.status.success(),
+            "Generated JS for '{}' is not valid syntax.\nStderr: {}\nCode:\n{}",
+            name, String::from_utf8_lossy(&result.stderr), code
+        );
+    };
+
+    // The general parity fixtures above (arithmetic, functions, uncertainty, equations,
+    // while loops, etc.) -- none touch booleans, but they exercise the rest of the codegen
+    // paths this task's changes sit alongside, so a regression there would show up here too.
+    for tc in TEST_CASES {
+        let program = parse_phs(tc.script).unwrap();
+        let js_code = transpile(&program, Target::JavaScript).unwrap();
+        check_syntax(tc.name, &js_code);
+    }
+
+    // Dedicated to this task: `not`/`and`/`or`, both `assert` arities in Bool form, and the
+    // pre-existing Quantities-shape `assert`/`exact_assert`, all in one script. Every
+    // condition is written to actually hold, since `transpile()` runs the whole program
+    // through the real interpreter first (to resolve any `solve()`-defined equations) and a
+    // genuinely-failing `assert` would fail during that eager pass, before codegen ever runs.
+    let bool_and_logical_script = "a = 1.0 m > 0.0 m\nb = 2.0 m > 3.0 m\nc = a and not b\nd = a or b\nassert(c, \"c should hold\")\nassert(d)\nexact_assert(5.0 m, 5.0 m)\n";
+    let program = parse_phs(bool_and_logical_script).unwrap();
+    let js_code = transpile(&program, Target::JavaScript).unwrap();
+    assert!(js_code.contains("&&") && js_code.contains("||") && js_code.contains("!"), "expected logical operators in:\n{js_code}");
+    // The message argument goes through the same `Expr::Str` codegen as every other string in
+    // js.rs, which always renders as a template literal (backtick), not a double-quoted
+    // string -- so `"c should hold"` shows up as `` `c should hold` `` in the generated code.
+    // The single-arg form's "assertion failed" message is a hard-coded Rust string literal in
+    // `generate_program` itself (not routed through `generate_expr`), so it stays double-quoted.
+    assert!(js_code.contains("throw new Error(`c should hold`)"), "{js_code}");
+    assert!(js_code.contains("throw new Error(\"assertion failed\")"), "{js_code}");
+    assert!(js_code.contains(".physExactAssert("), "{js_code}");
+    check_syntax("bool_and_logical", &js_code);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
 #[test]
 fn test_rust_transpiler_parity() {
     let core_path = repo_root().join("physure-core");
