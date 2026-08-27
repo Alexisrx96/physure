@@ -1148,3 +1148,10 @@ r3 = circuito_abierto(5 V, 2 A)
         let msg = err.to_string();
         assert!(msg.contains("Bool") && msg.contains("None"), "{msg}");
     }
+
+    #[test]
+    fn a_missing_comparison_operand_is_distinguished_from_a_present_none_value() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("op_eq(True)").unwrap_err();
+        assert!(err.to_string().contains("missing argument"), "{err}");
+    }
