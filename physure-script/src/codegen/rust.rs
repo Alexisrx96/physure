@@ -105,11 +105,7 @@ impl RustTranspiler {
                 for s in body {
                     let stmt_code = self.generate_statement(s, declared_vars, known_bools)?;
                     if !stmt_code.is_empty() {
-                        let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
-                            stmt_code
-                        } else {
-                            format!("{};", stmt_code)
-                        };
+                        let stmt_with_semi = terminate_statement(stmt_code);
                         for line in stmt_with_semi.lines() {
                             lines.push(format!("  {}", line));
                         }
@@ -132,12 +128,17 @@ impl RustTranspiler {
         for (i, stmt) in node.body_stmts.iter().enumerate() {
             if i == last_idx {
                 if let Statement::Expr(ref e) = stmt {
+                    // The tail expression must NOT end in `;` -- that's what makes it the
+                    // function's return value in Rust -- so this branch bypasses
+                    // `generate_statement` (and `terminate_statement`) entirely.
                     body_lines.push(format!("    {}", self.generate_expr(e)?));
                 } else {
-                    body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars, &mut known_bools)?));
+                    let stmt_code = self.generate_statement(stmt, &mut declared_vars, &mut known_bools)?;
+                    body_lines.push(format!("    {}", terminate_statement(stmt_code)));
                 }
             } else {
-                body_lines.push(format!("    {}", self.generate_statement(stmt, &mut declared_vars, &mut known_bools)?));
+                let stmt_code = self.generate_statement(stmt, &mut declared_vars, &mut known_bools)?;
+                body_lines.push(format!("    {}", terminate_statement(stmt_code)));
             }
         }
         Ok(format!(
@@ -376,6 +377,24 @@ impl RustTranspiler {
     }
 }
 
+/// Appends a trailing `;` to a non-tail statement's generated code unless it already ends in
+/// `;` or `}` (a block-shaped statement -- `while`, an `if { return ...; }` guard -- is already
+/// self-terminating, so adding another would just be noise). Every non-tail statement spliced
+/// into a Rust block needs one: `generate_statement`'s `Statement::Assignment`/`Return` arms
+/// already return a string ending in `;`, but the `Statement::Expr` arm's `assert!(...)` (the
+/// Bool and BoolWithMessage assert forms) and the pre-existing `(...).phs_assert(&(...))?`
+/// (the Quantities form) both come back WITHOUT one, matching how those same strings are used
+/// verbatim as a function's tail expression elsewhere (which must NOT have a trailing `;`).
+/// Without this, a non-final `assert(...)` inside a plain `fn` body -- an ordinary mid-function
+/// validation check -- produced Rust that failed to compile with "expected `;`".
+fn terminate_statement(stmt_code: String) -> String {
+    if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
+        stmt_code
+    } else {
+        format!("{};", stmt_code)
+    }
+}
+
 /// Renders a decorator's message argument as a Rust string literal. `{:?}` on a `&str` already
 /// produces a correctly escaped, double-quoted Rust literal, so no hand-rolled escaping is
 /// needed. Every existing `@requires`/`@ensures` message is built as `Expr::Str` (see
@@ -391,6 +410,56 @@ fn message_literal(expr: &Expr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Compiles `code` as a standalone crate against `physure-core`, proving the generated
+    /// Rust is actually valid -- not just a string match (a real Python codegen bug earlier in
+    /// this same plan, a quote-nesting `SyntaxError`, was only caught by actually
+    /// compiling/running generated output, never by string-matching alone).
+    ///
+    /// Points `CARGO_TARGET_DIR` at the workspace's own already-built `target/`, mirroring
+    /// `physure-script/tests/transpile_parity_tests.rs`'s `test_rust_transpiler_parity`, so
+    /// `cargo` does not recompile `physure_core` from scratch on every call -- that was the
+    /// dominant cost of the original version of this helper (~27s for one call). Uses `cargo
+    /// check` rather than `cargo build` since only compile-validity is being tested here, never
+    /// a runnable binary. The temp crate's directory and package name are both derived from a
+    /// hash of `code` so tests running concurrently (`cargo test` parallelizes by default)
+    /// never share one, even though they all point at the same `CARGO_TARGET_DIR`.
+    fn assert_generated_rust_compiles(code: &str) {
+        use std::hash::{Hash, Hasher};
+
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let target_dir = repo_root.join("target");
+        let core_path = repo_root.join("physure-core");
+
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        code.hash(&mut hasher);
+        let crate_name = format!("phs_compile_check_{:x}", hasher.finish());
+
+        let temp_dir = std::env::temp_dir().join(&crate_name);
+        let src_dir = temp_dir.join("src");
+        let _ = std::fs::create_dir_all(&src_dir);
+
+        let cargo_toml = format!(
+            "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nphysure_core = {{ package = \"physure\", path = \"{}\" }}\n",
+            core_path.to_str().unwrap().replace('\\', "/"),
+            crate_name = crate_name,
+        );
+        let _ = std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml);
+        let _ = std::fs::write(src_dir.join("main.rs"), code);
+
+        let output = std::process::Command::new("cargo")
+            .args(["check", "--quiet"])
+            .env("RUSTFLAGS", "-A unused_parens")
+            .env("CARGO_TARGET_DIR", &target_dir)
+            .current_dir(&temp_dir)
+            .output();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        match output {
+            Ok(o) => assert!(o.status.success(), "generated Rust failed to compile:\n{code}\nstderr: {}", String::from_utf8_lossy(&o.stderr)),
+            Err(_) => eprintln!("skipping compile check: cargo unavailable in this environment"),
+        }
+    }
 
     #[test]
     fn test_transpile_function_def() {
@@ -541,29 +610,66 @@ mod tests {
         let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")").unwrap();
         let code = tp.generate_program(&program).unwrap();
         assert!(code.contains("assert!("), "{code}");
+        assert_generated_rust_compiles(&code);
+    }
 
-        let temp_dir = std::env::temp_dir().join("phs_rust_bool_assert_compile_check");
-        let src_dir = temp_dir.join("src");
-        let _ = std::fs::create_dir_all(&src_dir);
-        let core_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("physure-core");
-        let cargo_toml = format!(
-            "[package]\nname = \"bool_assert_compile_check\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nphysure_core = {{ package = \"physure\", path = \"{}\" }}\n",
-            core_path.to_str().unwrap().replace('\\', "/")
-        );
-        let _ = std::fs::write(temp_dir.join("Cargo.toml"), cargo_toml);
-        let _ = std::fs::write(src_dir.join("main.rs"), &code);
+    #[test]
+    fn a_mid_function_bool_assert_compiles_correctly() {
+        // Regression test: a NON-last `assert(Bool)`/`assert(Bool, msg)` statement inside a
+        // plain `fn` body -- an ordinary mid-function validation check, and the design's whole
+        // premise for making `assert(condition)` the primary assertion form -- used to generate
+        // Rust missing the statement's trailing `;`, failing to compile with "expected `;`".
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs(
+            "fn compute(x) =\n  ok = x > 0.0\n  assert(ok, \"x must be positive\")\n  x * 2.0\nresult = compute(5.0)\n",
+        )
+        .unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert!("), "{code}");
+        assert_generated_rust_compiles(&code);
+    }
 
-        let output = std::process::Command::new("cargo")
-            .args(["build", "--quiet"])
-            .env("RUSTFLAGS", "-A unused_parens")
-            .current_dir(&temp_dir)
-            .output();
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    #[test]
+    fn known_bools_does_not_leak_across_functions() {
+        // A variable named `ok` classified Bool in one function must not leak Bool-ness into
+        // a different function that also has a local named `ok` used non-boolean-ly: each
+        // `generate_function_def` call starts its own fresh `known_bools`.
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs(
+            "fn f(x) =\n  ok = x > 0.0\n  ok\nfn g(y) =\n  ok = y * 2.0\n  ok",
+        )
+        .unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        // Rust infers locals' types, so this target has no distinct emission shape for a
+        // bool-typed vs. Quantity-typed local to assert on directly; what matters is that both
+        // functions transpile successfully with their own, unconfused bodies: f's `ok` comes
+        // from a comparison (`>`), g's from a multiplication (`*`).
+        assert!(code.contains("pub fn f(x: Quantity) -> Quantity"), "{code}");
+        assert!(code.contains("pub fn g(y: Quantity) -> Quantity"), "{code}");
+        let f_start = code.find("pub fn f(").unwrap();
+        let g_start = code.find("pub fn g(").unwrap();
+        let (f_body, g_body) = if f_start < g_start {
+            (&code[f_start..g_start], &code[g_start..])
+        } else {
+            (&code[f_start..], &code[g_start..f_start])
+        };
+        assert!(f_body.contains(">"), "f's `ok` should come from a comparison:\n{code}");
+        assert!(g_body.contains("*"), "g's `ok` should come from a multiplication:\n{code}");
+    }
 
-        match output {
-            Ok(o) => assert!(o.status.success(), "generated Rust failed to compile:\n{code}\nstderr: {}", String::from_utf8_lossy(&o.stderr)),
-            Err(_) => eprintln!("skipping compile check: cargo unavailable in this environment"),
-        }
+    #[test]
+    fn transpiles_a_bool_assert_inside_a_while_loop() {
+        // The pre-existing capability this task had to preserve (unlike the other 3 targets,
+        // Rust already supported `assert(...)` inside a `while` loop), now exercised with the
+        // NEW Bool form rather than just the old Quantities form.
+        let tp = RustTranspiler;
+        let program = crate::parser::parse_phs(
+            "i = 0.0\nwhile i < 5.0 {\n  assert(i >= 0.0, \"i went negative\")\n  i = i + 1.0\n}",
+        )
+        .unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("assert!("), "{code}");
+        assert_generated_rust_compiles(&code);
     }
 
     #[test]
