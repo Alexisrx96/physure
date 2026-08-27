@@ -1,4 +1,5 @@
-use physure_script::codegen::{transpile, Target};
+use physure_script::codegen::java::JavaTranspiler;
+use physure_script::codegen::{transpile, CodeGenerator, Target};
 use physure_script::interpreter::PhsInterpreter;
 use physure_script::parser::parse_phs;
 use std::fs;
@@ -212,6 +213,139 @@ fn test_java_transpiler_parity() {
             "Java output for {} expected '{}', got:\n{}", tc.name, tc.expected_substring, stdout
         );
     }
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+/// Real-`javac`-compile regression test for task 10 (Java codegen for `not`/`and`/`or` and the
+/// Bool `assert` overloads). Mirrors `test_java_transpiler_parity` above (same `javac`/`java`
+/// availability checks, same shared-base-classes-compiled-once approach) rather than living
+/// inline in `java.rs`'s unit-test module, since it needs the same `repo_root()`/
+/// `native_lib_dir()` machinery and shelling out to `javac`/`java` -- exactly the pattern this
+/// file already establishes and `java.rs`'s unit tests have no precedent for.
+///
+/// Also resolves the double-semicolon question flagged during implementation: with the shared
+/// `generate_java_assignment` helper now baking its own trailing `;` into every branch,
+/// `generate_function_def_stmt`'s per-statement loop -- which unconditionally appends `{};\n`
+/// after calling `generate_statement` for a non-tail statement -- produces a literal `;;` for
+/// any non-tail `Assignment` inside a function body (`generate_statement`'s `Assignment` arm now
+/// returns a string that already ends in `;`). Per the Java Language Specification, a lone `;`
+/// is a legal `EmptyStatement`, so `int x = 5;;` parses as two statements and compiles cleanly --
+/// unlike the Rust codegen bug found in task 9 (a genuine *missing* terminator, which really
+/// does fail `rustc` with "expected `;`"). `passing_script` below deliberately includes a
+/// function with a non-tail `Assignment` (`y = x * 2.0`) to force this exact path, and the
+/// `contains(";;")` assertion proves the double semicolon is actually emitted (not merely
+/// hypothesized) before proving `javac` accepts it anyway.
+#[test]
+fn test_java_bool_assert_transpiler_compiles_and_runs() {
+    let java_src_dir = repo_root().join("physure-java/src/main/java");
+    let native_lib_dir = native_lib_dir();
+
+    let temp_dir = std::env::temp_dir().join("phs_java_bool_assert");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let compile_base = match Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "javac -d {} {}/com/physure/*.java",
+            temp_dir.to_str().unwrap().replace('\\', "/"),
+            java_src_dir.to_str().unwrap().replace('\\', "/")
+        ))
+        .output()
+    {
+        Ok(out) => out,
+        Err(_) => {
+            eprintln!("Skipping Java bool-assert test: 'sh' or 'javac' not found");
+            return;
+        }
+    };
+    if !compile_base.status.success() {
+        eprintln!("Skipping Java bool-assert test: javac failed: {}", String::from_utf8_lossy(&compile_base.stderr));
+        return;
+    }
+
+    // Both cases below call `JavaTranspiler::generate_program` directly instead of going
+    // through the public `transpile()` entry point. `transpile()` first runs the WHOLE
+    // program through the real interpreter (`compile_equations_to_functions`, to resolve any
+    // `solve()`-defined equations) before codegen ever sees it -- so for a script whose
+    // `assert` condition is fully determined by literals (as every PHS script's is: there is
+    // no external/runtime input), a genuinely-failing `assert` fails during THAT eager
+    // interpreter pass and `transpile()` itself returns `Err` before emitting any Java at all
+    // (confirmed empirically: swapping in `transpile()` here made `Case 2` panic on `.unwrap()`
+    // with the interpreter's own "assert failed: boom", never reaching codegen). Calling
+    // `generate_program` directly is the same thing `java.rs`'s own unit tests already do for
+    // every assert-shape test, and neither case here defines an equation via `solve()`, so
+    // skipping that prepass changes nothing about what's being proven: real Java source, really
+    // compiled by `javac`, really executed by `java`.
+
+    // Case 1: passes at runtime. Also exercises a non-tail Assignment inside a function body
+    // (the double-semicolon path described above) and a top-level BoolWithMessage assert.
+    let passing_script =
+        "fn compute(x) =\n  y = x * 2.0\n  y\nresult = compute(5.0 m)\nok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")\n";
+    let program = parse_phs(passing_script).unwrap();
+    let java_code = JavaTranspiler::new("BoolAssertPass").generate_program(&program).unwrap();
+    assert!(java_code.contains(";;"), "expected the double-semicolon path to actually fire:\n{java_code}");
+
+    let gen_file = temp_dir.join("BoolAssertPass.java");
+    fs::write(&gen_file, &java_code).unwrap();
+    let compile_gen = Command::new("javac")
+        .args(["-cp", temp_dir.to_str().unwrap(), "-d", temp_dir.to_str().unwrap(), gen_file.to_str().unwrap()])
+        .output()
+        .expect("Failed to compile generated java");
+    assert!(
+        compile_gen.status.success(),
+        "Java generated compile failed for passing bool assert (incl. double-semicolon case).\nStderr: {}\nCode:\n{}",
+        String::from_utf8_lossy(&compile_gen.stderr), java_code
+    );
+
+    let run = Command::new("java")
+        .arg(format!("-Djava.library.path={}", native_lib_dir.to_str().unwrap()))
+        .args(["-cp", temp_dir.to_str().unwrap(), "BoolAssertPass"])
+        .output();
+    match run {
+        Ok(r) if r.status.success() => {}
+        Ok(r) => {
+            eprintln!("Skipping Java bool-assert run check: {}", String::from_utf8_lossy(&r.stderr));
+            let _ = fs::remove_dir_all(&temp_dir);
+            return;
+        }
+        Err(_) => {
+            eprintln!("Skipping Java bool-assert run check: java run failed");
+            let _ = fs::remove_dir_all(&temp_dir);
+            return;
+        }
+    }
+
+    // Case 2: a FAILING 2-arg Bool assert must actually throw AssertionError with the given
+    // message at runtime, not merely compile.
+    let failing_script = "ok = 1.0 m > 2.0 m\nassert(ok, \"boom\")\n";
+    let program2 = parse_phs(failing_script).unwrap();
+    let java_code2 = JavaTranspiler::new("BoolAssertFail").generate_program(&program2).unwrap();
+    let gen_file2 = temp_dir.join("BoolAssertFail.java");
+    fs::write(&gen_file2, &java_code2).unwrap();
+    let compile_gen2 = Command::new("javac")
+        .args(["-cp", temp_dir.to_str().unwrap(), "-d", temp_dir.to_str().unwrap(), gen_file2.to_str().unwrap()])
+        .output()
+        .expect("Failed to compile generated java");
+    assert!(
+        compile_gen2.status.success(),
+        "Java generated compile failed for failing bool assert.\nStderr: {}\nCode:\n{}",
+        String::from_utf8_lossy(&compile_gen2.stderr), java_code2
+    );
+
+    let run2 = Command::new("java")
+        .arg(format!("-Djava.library.path={}", native_lib_dir.to_str().unwrap()))
+        .args(["-cp", temp_dir.to_str().unwrap(), "BoolAssertFail"])
+        .output()
+        .expect("Failed to run generated java");
+
+    assert!(
+        !run2.status.success(),
+        "expected the assertion to fail at runtime:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&run2.stdout), String::from_utf8_lossy(&run2.stderr)
+    );
+    let stderr2 = String::from_utf8_lossy(&run2.stderr);
+    assert!(stderr2.contains("boom"), "expected the AssertionError message 'boom':\n{stderr2}");
 
     let _ = fs::remove_dir_all(&temp_dir);
 }

@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, FunctionDefNode, Program, Statement};
+use crate::ast::{AssignmentNode, BinaryOp, Expr, FunctionDefNode, Program, Statement};
 use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
 use std::collections::HashSet;
 
@@ -36,6 +36,7 @@ impl CodeGenerator for JavaTranspiler {
         let mut functions = Vec::new();
         let mut main_stmts = Vec::new();
         let mut main_declared_vars = HashSet::new();
+        let mut known_bool_vars: HashSet<String> = HashSet::new();
 
         for stmt in &program.statements {
             match stmt {
@@ -43,44 +44,35 @@ impl CodeGenerator for JavaTranspiler {
                     functions.push(self.generate_function_def_stmt(f)?);
                 }
                 Statement::Assignment(node) => {
-                    let val = self.generate_expr(&node.value)?;
+                    main_stmts.push(self.generate_java_assignment(node, "        ", &mut main_declared_vars, &mut known_bool_vars)?);
                     let var_name = snake_to_camel(&node.name);
-                    let literal = match &node.value {
-                        Expr::Str(text) => Some(text.as_str()),
-                        _ => None,
-                    };
-                    let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
-                    let is_reassign = main_declared_vars.contains(&var_name);
-                    if !is_reassign {
-                        main_declared_vars.insert(var_name.clone());
-                    }
-
-                    if is_reassign {
-                        main_stmts.push(format!("        {} = {};", var_name, val));
-                    } else if literal.is_some() && !is_equation {
-                        main_stmts.push(format!("        String {} = {};", var_name, val));
-                    } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
-                        main_stmts.push(format!("        PhyEquation {} = {};", var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }));
-                    } else if val.starts_with("PhyFunction") {
-                        main_stmts.push(format!("        PhyFunction {} = {};", var_name, val));
-                    } else {
-                        main_stmts.push(format!("        Quantity {} = {};", var_name, val));
-                    }
                     main_stmts.push(format!("        System.out.println(\"{}: \" + {});", node.name, var_name));
                 }
                 Statement::Expr(expr) => {
-                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
-                        let a_code = self.generate_expr(a)?;
-                        let b_code = self.generate_expr(b)?;
-                        let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
-                        main_stmts.push(format!("        {}.{}({});", a_code, method, b_code));
-                    } else {
-                        let val = self.generate_expr(expr)?;
-                        main_stmts.push(format!("        System.out.println({});", val));
+                    match super::as_assert_call(expr, &known_bool_vars) {
+                        Some(super::AssertShape::Bool { condition }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            main_stmts.push(format!("        if (!({})) throw new AssertionError(\"assertion failed\");", cond_code));
+                        }
+                        Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            let msg_code = self.generate_expr(message)?;
+                            main_stmts.push(format!("        if (!({})) throw new AssertionError({});", cond_code, msg_code));
+                        }
+                        Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                            let a_code = self.generate_expr(actual)?;
+                            let b_code = self.generate_expr(expected)?;
+                            let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
+                            main_stmts.push(format!("        {}.{}({});", a_code, method, b_code));
+                        }
+                        None => {
+                            let val = self.generate_expr(expr)?;
+                            main_stmts.push(format!("        System.out.println({});", val));
+                        }
                     }
                 }
                 Statement::While { .. } => {
-                    main_stmts.push(format!("        {}", self.generate_statement(stmt, &mut main_declared_vars)?));
+                    main_stmts.push(format!("        {}", self.generate_statement(stmt, &mut main_declared_vars, &mut known_bool_vars)?));
                 }
                 _ => {}
             }
@@ -103,6 +95,58 @@ impl CodeGenerator for JavaTranspiler {
 }
 
 impl JavaTranspiler {
+    /// Emits one Java local-variable declaration or reassignment, tracking `known_bool_vars` so a
+    /// later use of this name (another assignment, or an `assert` call) knows whether it holds a
+    /// `boolean`. `indent` is the caller's own per-line prefix.
+    fn generate_java_assignment(
+        &self,
+        node: &AssignmentNode,
+        indent: &str,
+        declared_vars: &mut HashSet<String>,
+        known_bool_vars: &mut HashSet<String>,
+    ) -> Result<String, CodegenError> {
+        let val = self.generate_expr(&node.value)?;
+        let var_name = snake_to_camel(&node.name);
+        let is_reassign = declared_vars.contains(&var_name);
+        let is_bool_now = super::is_definitely_bool(&node.value, known_bool_vars);
+
+        if is_reassign && known_bool_vars.contains(&var_name) && !is_bool_now {
+            return Err(CodegenError::Generic(format!(
+                "'{}' was previously assigned a Bool expression and cannot be reassigned to a non-Bool value in Java codegen",
+                node.name
+            )));
+        }
+        if !is_reassign {
+            declared_vars.insert(var_name.clone());
+        }
+        if is_bool_now {
+            known_bool_vars.insert(var_name.clone());
+        } else {
+            known_bool_vars.remove(&var_name);
+        }
+
+        if is_reassign {
+            return Ok(format!("{}{} = {};", indent, var_name, val));
+        }
+        if is_bool_now {
+            return Ok(format!("{}boolean {} = {};", indent, var_name, val));
+        }
+        let literal = match &node.value {
+            Expr::Str(text) => Some(text.as_str()),
+            _ => None,
+        };
+        let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
+        if literal.is_some() && !is_equation {
+            Ok(format!("{}String {} = {};", indent, var_name, val))
+        } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
+            Ok(format!("{}PhyEquation {} = {};", indent, var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }))
+        } else if val.starts_with("PhyFunction") {
+            Ok(format!("{}PhyFunction {} = {};", indent, var_name, val))
+        } else {
+            Ok(format!("{}Quantity {} = {};", indent, var_name, val))
+        }
+    }
+
     fn generate_function_def_stmt(&self, f: &FunctionDefNode) -> Result<String, CodegenError> {
         let mut out = String::new();
         out.push_str(&format!("    public static Quantity {}(", snake_to_camel(&f.name)));
@@ -110,6 +154,7 @@ impl JavaTranspiler {
         out.push_str(&params.join(", "));
         out.push_str(") {\n");
         let mut fn_declared_vars = HashSet::new();
+        let mut fn_known_bools: HashSet<String> = HashSet::new();
         for p in &f.params {
             fn_declared_vars.insert(snake_to_camel(p));
         }
@@ -119,46 +164,37 @@ impl JavaTranspiler {
                 if let Statement::Expr(ref e) = stmt {
                     out.push_str(&format!("        return {};\n", self.generate_expr(e)?));
                 } else {
-                    out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars)?));
+                    out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars, &mut fn_known_bools)?));
                 }
             } else {
-                out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars)?));
+                out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars, &mut fn_known_bools)?));
             }
         }
         out.push_str("    }\n");
         Ok(out)
     }
 
-    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
+    fn generate_statement(&self, stmt: &Statement, declared_vars: &mut HashSet<String>, known_bool_vars: &mut HashSet<String>) -> Result<String, CodegenError> {
         match stmt {
             Statement::FunctionDef(f) => self.generate_function_def_stmt(f),
-            Statement::Assignment(node) => {
-                let val = self.generate_expr(&node.value)?;
-                let var_name = snake_to_camel(&node.name);
-                let is_reassign = declared_vars.contains(&var_name);
-                if !is_reassign {
-                    declared_vars.insert(var_name.clone());
-                }
-                if is_reassign {
-                    Ok(format!("{} = {}", var_name, val))
-                } else {
-                    let literal = match &node.value {
-                        Expr::Str(text) => Some(text.as_str()),
-                        _ => None,
-                    };
-                    let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
-                    if literal.is_some() && !is_equation {
-                        Ok(format!("String {} = {}", var_name, val))
-                    } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
-                        Ok(format!("PhyEquation {} = {}", var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }))
-                    } else if val.starts_with("PhyFunction") {
-                        Ok(format!("PhyFunction {} = {}", var_name, val))
-                    } else {
-                        Ok(format!("Quantity {} = {}", var_name, val))
+            Statement::Assignment(node) => self.generate_java_assignment(node, "", declared_vars, known_bool_vars),
+            Statement::Expr(expr) => {
+                match super::as_assert_call(expr, known_bool_vars) {
+                    Some(super::AssertShape::Bool { condition }) => {
+                        Ok(format!("if (!({})) throw new AssertionError(\"assertion failed\")", self.generate_expr(condition)?))
                     }
+                    Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                        Ok(format!("if (!({})) throw new AssertionError({})", self.generate_expr(condition)?, self.generate_expr(message)?))
+                    }
+                    Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                        let a_code = self.generate_expr(actual)?;
+                        let b_code = self.generate_expr(expected)?;
+                        let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
+                        Ok(format!("{}.{}({})", a_code, method, b_code))
+                    }
+                    None => self.generate_expr(expr),
                 }
             }
-            Statement::Expr(expr) => self.generate_expr(expr),
             Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if ({}) {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
@@ -167,7 +203,7 @@ impl JavaTranspiler {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
-                    let stmt_code = self.generate_statement(s, declared_vars)?;
+                    let stmt_code = self.generate_statement(s, declared_vars, known_bool_vars)?;
                     if !stmt_code.is_empty() {
                         let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
                             stmt_code
@@ -270,13 +306,20 @@ impl JavaTranspiler {
                         _ => unreachable!(),
                     });
                 }
+                if let Some(logical) = super::as_logical_op(expr) {
+                    return Ok(match logical {
+                        super::LogicalOp::Not(x) => format!("(!{})", self.generate_expr(x)?),
+                        super::LogicalOp::And(l, r) => format!("({} && {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                        super::LogicalOp::Or(l, r) => format!("({} || {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                    });
+                }
                 if !kwargs.is_empty() {
                     return Err(CodegenError::Generic(format!(
                         "Named arguments are not supported in Java codegen (call to '{}')",
                         name
                     )));
                 }
-                if (name == "assert" || name == "exact_assert") && args.len() == 2 {
+                if (name == "assert" || name == "exact_assert") && matches!(args.len(), 1 | 2) {
                     return Err(CodegenError::Generic(format!(
                         "'{}' can only be used as a standalone statement, not nested inside an expression",
                         name
@@ -320,7 +363,7 @@ mod tests {
             doc: None,
         });
         
-        let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
+        let result = transpiler.generate_statement(&func, &mut HashSet::new(), &mut HashSet::new()).unwrap();
         assert!(result.contains("public static Quantity kineticEnergy(Quantity m, Quantity v)"));
         assert!(result.contains("return m.multiply(v);"));
     }
@@ -385,7 +428,7 @@ mod tests {
             body: vec![Statement::Return(Expr::Identifier("x".to_string()))],
             body_lines: vec![],
         };
-        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new()).unwrap();
+        let code_while = tp.generate_statement(&while_stmt, &mut HashSet::new(), &mut HashSet::new()).unwrap();
         assert_eq!(code_while, "while (flag) {\n  return x;\n}");
     }
 
@@ -397,5 +440,35 @@ mod tests {
         assert!(code.contains("Quantity i = Quantity.of(0"));
         assert!(code.contains("i = i.add("));
         assert!(!code.contains("Quantity i = i.add"));
+    }
+
+    #[test]
+    fn transpiles_logical_operators_java() {
+        let tp = JavaTranspiler::default();
+        let and_expr = Expr::FunctionCall { name: "op_and".to_string(), args: vec![Expr::Bool(true), Expr::Bool(false)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&and_expr).unwrap(), "(true && false)");
+    }
+
+    #[test]
+    fn named_bool_assignment_gets_an_explicit_boolean_type_java() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("boolean ok = "), "expected an explicit boolean declaration:\n{code}");
+        assert!(code.contains("throw new AssertionError(\"should hold\")"), "{code}");
+    }
+
+    #[test]
+    fn reassigning_a_known_bool_variable_to_a_quantity_is_a_codegen_error_java() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nok = 5.0 m\n").unwrap();
+        assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn rejects_one_argument_assert_nested_in_an_expression_java() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs("x = assert(1.0 m > 0.0 m)").unwrap();
+        assert!(tp.generate_program(&program).is_err());
     }
 }
