@@ -1,4 +1,5 @@
 use physure_script::codegen::java::JavaTranspiler;
+use physure_script::codegen::python::PythonTranspiler;
 use physure_script::codegen::{transpile, CodeGenerator, Target};
 use physure_script::interpreter::PhsInterpreter;
 use physure_script::parser::parse_phs;
@@ -241,26 +242,38 @@ fn test_java_bool_assert_transpiler_compiles_and_runs() {
     let java_src_dir = repo_root().join("physure-java/src/main/java");
     let native_lib_dir = native_lib_dir();
 
-    let temp_dir = std::env::temp_dir().join("phs_java_bool_assert");
+    let temp_dir = std::env::temp_dir().join("phs_java_bool_assert_transpile");
     let _ = fs::create_dir_all(&temp_dir);
 
-    let compile_base = match Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "javac -d {} {}/com/physure/*.java",
-            temp_dir.to_str().unwrap().replace('\\', "/"),
-            java_src_dir.to_str().unwrap().replace('\\', "/")
-        ))
-        .output()
-    {
+    let java_files: Vec<_> = fs::read_dir(java_src_dir.join("com/physure"))
+        .ok()
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|ext| ext == "java"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if java_files.is_empty() {
+        eprintln!("Skipping Java bool-assert test: no java source files found in com/physure");
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    }
+    let mut javac_args = vec!["-d".to_string(), temp_dir.to_str().unwrap().to_string()];
+    for f in &java_files {
+        javac_args.push(f.to_str().unwrap().to_string());
+    }
+    let compile_base = match Command::new("javac").args(&javac_args).output() {
         Ok(out) => out,
         Err(_) => {
-            eprintln!("Skipping Java bool-assert test: 'sh' or 'javac' not found");
+            eprintln!("Skipping Java bool-assert test: javac not found");
+            let _ = fs::remove_dir_all(&temp_dir);
             return;
         }
     };
     if !compile_base.status.success() {
         eprintln!("Skipping Java bool-assert test: javac failed: {}", String::from_utf8_lossy(&compile_base.stderr));
+        let _ = fs::remove_dir_all(&temp_dir);
         return;
     }
 
@@ -480,3 +493,115 @@ fn test_rust_transpiler_parity() {
 
     let _ = fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_python_bool_assert_survives_dash_o() {
+    let py_dir = repo_root().join("physure-python");
+    let importable = Command::new("uv")
+        .args(["run", "python", "-c", "import physure"])
+        .current_dir(&py_dir)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !importable {
+        eprintln!("skipping: `uv run python -c 'import physure'` does not work here");
+        return;
+    }
+
+    // A False boolean assertion with a message. Python's `assert` statement is stripped by
+    // `-O`; the generated code must not depend on it (see the "Assertion emission" table in
+    // the design spec). Calling `PythonTranspiler.generate_program` directly avoids running
+    // the failing assertion through the interpreter pre-pass.
+    let program = parse_phs("assert(False, \"boom\")").unwrap();
+    let py_code = PythonTranspiler.generate_program(&program).unwrap();
+    assert!(!py_code.contains("\nassert "), "must not emit a removable `assert` statement:\n{py_code}");
+
+    for flag in [None, Some("-O")] {
+        let temp_file = std::env::temp_dir().join(format!("bool_assert_{}.py", flag.unwrap_or("plain")));
+        fs::write(&temp_file, &py_code).unwrap();
+        let mut args = vec!["run", "python"];
+        if let Some(f) = flag {
+            args.push(f);
+        }
+        let file_str = temp_file.to_str().unwrap().to_string();
+        args.push(&file_str);
+        let output = Command::new("uv").args(&args).current_dir(&py_dir).output().expect("failed to run python");
+        let _ = fs::remove_file(&temp_file);
+        assert!(
+            !output.status.success(),
+            "expected assert(False, ...) to fail under {:?}, but it exited 0", flag
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("boom"),
+            "expected the assertion message under {:?}, got: {}", flag, String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn test_java_bool_assert_fails_without_dash_ea() {
+    let java_src_dir = repo_root().join("physure-java/src/main/java");
+    let temp_dir = std::env::temp_dir().join("phs_java_bool_assert_no_ea");
+    let _ = fs::create_dir_all(&temp_dir);
+
+    // The generated program always imports com.physure.* (even unused), so those classes
+    // must be on the classpath to compile -- but a Bool-only assert never *calls* into them,
+    // so no native library is loaded at runtime and `native_lib_dir()`/`-Djava.library.path`
+    // aren't needed here.
+    let java_files: Vec<_> = fs::read_dir(java_src_dir.join("com/physure"))
+        .ok()
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|ext| ext == "java"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if java_files.is_empty() {
+        eprintln!("skipping: no java source files found in com/physure");
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    }
+    let mut javac_args = vec!["-d".to_string(), temp_dir.to_str().unwrap().to_string()];
+    for f in &java_files {
+        javac_args.push(f.to_str().unwrap().to_string());
+    }
+    let compile_base = match Command::new("javac").args(&javac_args).output() {
+        Ok(o) => o,
+        Err(_) => {
+            eprintln!("skipping: javac not found");
+            let _ = fs::remove_dir_all(&temp_dir);
+            return;
+        }
+    };
+    if !compile_base.status.success() {
+        eprintln!("skipping: base com.physure classes failed to compile: {}", String::from_utf8_lossy(&compile_base.stderr));
+        let _ = fs::remove_dir_all(&temp_dir);
+        return;
+    }
+
+    let program = parse_phs("assert(False, \"boom\")").unwrap();
+    let java_code = JavaTranspiler::new("BoolAssert").generate_program(&program).unwrap();
+    let gen_file = temp_dir.join("BoolAssert.java");
+    fs::write(&gen_file, &java_code).unwrap();
+
+    let compile_gen = Command::new("javac")
+        .args(["-cp", temp_dir.to_str().unwrap(), "-d", temp_dir.to_str().unwrap(), gen_file.to_str().unwrap()])
+        .output()
+        .expect("failed to compile generated java");
+    assert!(compile_gen.status.success(), "javac failed: {}", String::from_utf8_lossy(&compile_gen.stderr));
+
+    // Deliberately no `-ea`: JVM assertions are off by default, so if the generated code
+    // relied on the language `assert` keyword this would silently pass instead of throwing.
+    let run = Command::new("java")
+        .args(["-cp", temp_dir.to_str().unwrap(), "BoolAssert"])
+        .output()
+        .expect("failed to run java");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!run.status.success(), "expected assert(False, ...) to fail even without -ea");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("boom"),
+        "expected the assertion message, got: {}", String::from_utf8_lossy(&run.stderr)
+    );
+}
+
