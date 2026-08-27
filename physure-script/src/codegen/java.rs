@@ -154,7 +154,7 @@ impl JavaTranspiler {
         out.push_str(&params.join(", "));
         out.push_str(") {\n");
         let mut fn_declared_vars = HashSet::new();
-        let mut fn_known_bools: HashSet<String> = HashSet::new();
+        let mut fn_known_bool_vars: HashSet<String> = HashSet::new();
         for p in &f.params {
             fn_declared_vars.insert(snake_to_camel(p));
         }
@@ -164,10 +164,12 @@ impl JavaTranspiler {
                 if let Statement::Expr(ref e) = stmt {
                     out.push_str(&format!("        return {};\n", self.generate_expr(e)?));
                 } else {
-                    out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars, &mut fn_known_bools)?));
+                    let stmt_code = self.generate_statement(stmt, &mut fn_declared_vars, &mut fn_known_bool_vars)?;
+                    out.push_str(&format!("        {}\n", terminate_statement(stmt_code)));
                 }
             } else {
-                out.push_str(&format!("        {};\n", self.generate_statement(stmt, &mut fn_declared_vars, &mut fn_known_bools)?));
+                let stmt_code = self.generate_statement(stmt, &mut fn_declared_vars, &mut fn_known_bool_vars)?;
+                out.push_str(&format!("        {}\n", terminate_statement(stmt_code)));
             }
         }
         out.push_str("    }\n");
@@ -205,11 +207,7 @@ impl JavaTranspiler {
                 for s in body {
                     let stmt_code = self.generate_statement(s, declared_vars, known_bool_vars)?;
                     if !stmt_code.is_empty() {
-                        let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
-                            stmt_code
-                        } else {
-                            format!("{};", stmt_code)
-                        };
+                        let stmt_with_semi = terminate_statement(stmt_code);
                         for line in stmt_with_semi.lines() {
                             lines.push(format!("  {}", line));
                         }
@@ -338,6 +336,23 @@ impl JavaTranspiler {
                 Ok(format!("({}).stream().map({} -> {}).collect(java.util.stream.Collectors.toList())", it_str, var_str, body_str))
             }
         }
+    }
+}
+
+/// Appends a trailing `;` to a non-tail statement's generated code unless it already ends in
+/// `;` or `}` (a block-shaped statement -- `while`, an `if { return ...; }` guard, a nested
+/// function definition -- is already self-terminating, so adding another would just be noise).
+/// `generate_java_assignment` now bakes its own trailing `;` into every branch (needed so
+/// `generate_program`'s call site, which doesn't wrap its result at all, still gets one), so
+/// unconditionally appending `;` at a call site -- as `generate_function_def_stmt`'s
+/// per-statement loop used to -- double-terminates any non-tail `Assignment` inside a function
+/// body. Mirrors `rust.rs`'s identically-named helper, added for the same bug class one task
+/// earlier in this plan (commit `3a9a46f`).
+fn terminate_statement(stmt_code: String) -> String {
+    if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
+        stmt_code
+    } else {
+        format!("{};", stmt_code)
     }
 }
 
@@ -470,5 +485,40 @@ mod tests {
         let tp = JavaTranspiler::default();
         let program = crate::parser::parse_phs("x = assert(1.0 m > 0.0 m)").unwrap();
         assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn transpiles_a_bool_assert_inside_a_function_body_java() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs(
+            "fn f(x) =\n  ok = x > 0.0 m\n  assert(ok, \"x must be positive\")\n  x * 2.0",
+        )
+        .unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("throw new AssertionError(\"x must be positive\")"), "{code}");
+        assert!(!code.contains(";;"), "a non-tail assert/assignment inside a function body must not double-terminate:\n{code}");
+    }
+
+    #[test]
+    fn transpiles_a_bool_assert_inside_a_while_loop_java() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs(
+            "i = 0.0\nwhile i < 5.0 {\n  assert(i >= 0.0, \"i went negative\")\n  i = i + 1.0\n}",
+        )
+        .unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("throw new AssertionError(\"i went negative\")"), "{code}");
+    }
+
+    #[test]
+    fn known_bool_vars_does_not_leak_across_functions_java() {
+        let tp = JavaTranspiler::default();
+        let program = crate::parser::parse_phs("fn f(x) =\n  ok = x > 0.0 m\n  ok\nfn g(ok) =\n  ok").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        // f's `ok` is boolean-typed (a comparison); g's `ok` is a Quantity parameter, never
+        // classified boolean by a parameter alone -- both must transpile without one
+        // function's classification bleeding into the other's return-type handling.
+        assert!(code.contains("boolean ok"), "f's ok should be boolean-typed:\n{code}");
+        assert!(code.contains("public static Quantity g(Quantity ok)"), "g's ok should stay an ordinary Quantity parameter:\n{code}");
     }
 }

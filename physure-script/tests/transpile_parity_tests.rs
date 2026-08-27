@@ -224,18 +224,18 @@ fn test_java_transpiler_parity() {
 /// `native_lib_dir()` machinery and shelling out to `javac`/`java` -- exactly the pattern this
 /// file already establishes and `java.rs`'s unit tests have no precedent for.
 ///
-/// Also resolves the double-semicolon question flagged during implementation: with the shared
-/// `generate_java_assignment` helper now baking its own trailing `;` into every branch,
-/// `generate_function_def_stmt`'s per-statement loop -- which unconditionally appends `{};\n`
-/// after calling `generate_statement` for a non-tail statement -- produces a literal `;;` for
-/// any non-tail `Assignment` inside a function body (`generate_statement`'s `Assignment` arm now
-/// returns a string that already ends in `;`). Per the Java Language Specification, a lone `;`
-/// is a legal `EmptyStatement`, so `int x = 5;;` parses as two statements and compiles cleanly --
-/// unlike the Rust codegen bug found in task 9 (a genuine *missing* terminator, which really
-/// does fail `rustc` with "expected `;`"). `passing_script` below deliberately includes a
-/// function with a non-tail `Assignment` (`y = x * 2.0`) to force this exact path, and the
-/// `contains(";;")` assertion proves the double semicolon is actually emitted (not merely
-/// hypothesized) before proving `javac` accepts it anyway.
+/// Also regression-tests the double-semicolon bug found in code review after the initial
+/// implementation: with the shared `generate_java_assignment` helper baking its own trailing
+/// `;` into every branch, `generate_function_def_stmt`'s per-statement loop used to
+/// unconditionally append another `;` after calling `generate_statement` for a non-tail
+/// statement, producing a literal `;;` for any non-tail `Assignment` inside a function body.
+/// While a lone `;` is a legal Java `EmptyStatement` (so this never actually failed to
+/// compile -- unlike the Rust codegen bug from task 9, a genuine *missing* terminator, which
+/// really did fail `rustc`), it was still fixed via a `terminate_statement` helper mirroring
+/// `rust.rs`'s. `passing_script` below deliberately includes a function with a non-tail
+/// `Assignment` (`y = x * 2.0`) AND a non-tail `assert(...)` followed by further statements
+/// (`z = y + 1.0 m`, then the tail `z`), so the `!contains(";;")` assertion proves the fix
+/// holds for both statement shapes, not just the one originally found broken-looking.
 #[test]
 fn test_java_bool_assert_transpiler_compiles_and_runs() {
     let java_src_dir = repo_root().join("physure-java/src/main/java");
@@ -278,13 +278,18 @@ fn test_java_bool_assert_transpiler_compiles_and_runs() {
     // skipping that prepass changes nothing about what's being proven: real Java source, really
     // compiled by `javac`, really executed by `java`.
 
-    // Case 1: passes at runtime. Also exercises a non-tail Assignment inside a function body
-    // (the double-semicolon path described above) and a top-level BoolWithMessage assert.
+    // Case 1: passes at runtime. Exercises a non-tail Assignment AND a non-tail
+    // `assert(...)` followed by more statements, both inside the same function body (the
+    // double-semicolon path described above), plus a top-level BoolWithMessage assert.
     let passing_script =
-        "fn compute(x) =\n  y = x * 2.0\n  y\nresult = compute(5.0 m)\nok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")\n";
+        "fn compute(x) =\n  y = x * 2.0\n  assert(y > 0.0 m, \"y must be positive\")\n  z = y + 1.0 m\n  z\nresult = compute(5.0 m)\nok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")\n";
     let program = parse_phs(passing_script).unwrap();
     let java_code = JavaTranspiler::new("BoolAssertPass").generate_program(&program).unwrap();
-    assert!(java_code.contains(";;"), "expected the double-semicolon path to actually fire:\n{java_code}");
+    assert!(
+        !java_code.contains(";;"),
+        "a non-tail statement inside a function body must not double-terminate:\n{java_code}"
+    );
+    assert!(java_code.contains("throw new AssertionError(\"y must be positive\")"), "{java_code}");
 
     let gen_file = temp_dir.join("BoolAssertPass.java");
     fs::write(&gen_file, &java_code).unwrap();
