@@ -632,6 +632,22 @@ use physure_core::units::parser::Parser as UnitParser;
     }
 
     #[test]
+    fn assert_with_no_arguments_lists_the_accepted_signatures() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert()").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("assert(Bool)"), "{msg}");
+    }
+
+    #[test]
+    fn assert_rejects_a_bool_condition_with_a_non_string_message() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(True, 5.0 m)").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("assert(Bool)") && msg.contains("assert(Quantity, Quantity)"), "{msg}");
+    }
+
+    #[test]
     fn stable_and_experimental_decorators_do_not_affect_evaluation() {
         let mut interp = PhsInterpreter::default();
         let results = interp.eval_str("@stable\nfn f(x) = x * 2.0\nf(3.0)").unwrap();

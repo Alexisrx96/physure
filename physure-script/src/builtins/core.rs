@@ -226,6 +226,9 @@ pub fn eval_core_builtin(
                 args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
             ))),
         },
+        // No Bool overload here, unlike `assert` above -- boolean equality is expressed as
+        // `assert(left == right)`, not `exact_assert(left == right)`. This omission is
+        // deliberate, not an oversight; do not add a symmetrical Bool arm.
         "exact_assert" => match args {
             [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
                 a.phs_exact_assert(b)?;
