@@ -12,6 +12,7 @@ pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
     let mut result = match first.as_rule() {
         Rule::if_expr => parse_if_expr(first)?,
         Rule::for_expr => parse_for_expr(first)?,
+        Rule::or_expr => parse_or_expr(first)?,
         Rule::base_expr => parse_base_expr(first)?,
         Rule::conv_expr => parse_conv_expr(first)?,
         _ => parse_comp_expr(first)?,
@@ -143,6 +144,61 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(left)
 }
 
+fn parse_bool_lit(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    Ok(Expr::Bool(pair.as_str() == "True"))
+}
+
+/// `_not_kw* ~ base_expr` -- zero or more `not` prefixes wrapping one `base_expr`. Wrapping
+/// in a plain loop (rather than tracking parity) keeps `not not x` and `not x` both correct
+/// without special-casing an even count.
+fn parse_not_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut not_count = 0usize;
+    let mut base_pair = None;
+    for p in pair.into_inner() {
+        if p.as_rule() == Rule::_not_kw {
+            not_count += 1;
+        } else {
+            base_pair = Some(p);
+        }
+    }
+    let base_pair = base_pair.ok_or_else(|| PhysureError::Generic("`not` is missing its operand".into()))?;
+    let mut result = parse_base_expr(base_pair)?;
+    for _ in 0..not_count {
+        result = Expr::FunctionCall { name: "op_not".to_string(), args: vec![result], kwargs: Vec::new() };
+    }
+    Ok(result)
+}
+
+fn parse_and_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap();
+    let mut left = parse_not_expr(first)?;
+    while let Some(kw_pair) = inner.next() {
+        debug_assert_eq!(kw_pair.as_rule(), Rule::_and_kw);
+        let right_pair = inner
+            .next()
+            .ok_or_else(|| PhysureError::Generic("`and` is missing its right operand".into()))?;
+        let right = parse_not_expr(right_pair)?;
+        left = Expr::FunctionCall { name: "op_and".to_string(), args: vec![left, right], kwargs: Vec::new() };
+    }
+    Ok(left)
+}
+
+fn parse_or_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap();
+    let mut left = parse_and_expr(first)?;
+    while let Some(kw_pair) = inner.next() {
+        debug_assert_eq!(kw_pair.as_rule(), Rule::_or_kw);
+        let right_pair = inner
+            .next()
+            .ok_or_else(|| PhysureError::Generic("`or` is missing its right operand".into()))?;
+        let right = parse_and_expr(right_pair)?;
+        left = Expr::FunctionCall { name: "op_or".to_string(), args: vec![left, right], kwargs: Vec::new() };
+    }
+    Ok(left)
+}
+
 /// `Some(name)` when `expr` is nothing but a bare name — used by `parse_term` to track
 /// whether the most recently produced factor is a bare identifier, regardless of which
 /// operator produced it.
@@ -232,6 +288,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::function_call => parse_function_call(primary_pair)?,
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
         Rule::string_lit => Expr::Str(primary_pair.as_str().trim_matches('"').to_string()),
+        Rule::bool_lit => parse_bool_lit(primary_pair)?,
         Rule::if_expr => parse_if_expr(primary_pair)?,
         Rule::for_expr => parse_for_expr(primary_pair)?,
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
