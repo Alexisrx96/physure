@@ -188,6 +188,7 @@ fn collect_stmt_reads(stmt: &Statement, locals: &HashSet<String>, out: &mut Hash
 fn collect_expr_reads(expr: &Expr, locals: &HashSet<String>, out: &mut HashSet<String>) {
     match expr {
         Expr::Quantity(_) => {}
+        Expr::Bool(_) => {}
         Expr::Identifier(name) => {
             if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
                 collect_template_reads(name, locals, out);
