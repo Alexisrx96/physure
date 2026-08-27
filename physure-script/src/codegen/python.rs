@@ -50,12 +50,12 @@ impl CodeGenerator for PythonTranspiler {
                             let b_code = self.generate_expr(expected)?;
                             let line = if kind == "assert" {
                                 format!(
-                                    "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(f'assert failed: {{{a}}} != {{{b}}}')",
+                                    "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(\"assert failed: {{}} != {{}}\".format({a}, {b}))",
                                     a = a_code, b = b_code
                                 )
                             } else {
                                 format!(
-                                    "if not ({a}).exact_eq({b}): raise AssertionError(f'exact_assert failed: {{{a}}} != {{{b}}}')",
+                                    "if not ({a}).exact_eq({b}): raise AssertionError(\"exact_assert failed: {{}} != {{}}\".format({a}, {b}))",
                                     a = a_code, b = b_code
                                 )
                             };
@@ -376,17 +376,10 @@ mod tests {
         assert!(!code.contains("\nassert "), "must not emit a removable `assert` statement:\n{code}");
     }
 
-    #[test]
-    fn transpiled_quantity_assert_is_valid_python_syntax() {
-        // A regression test for a real bug: the assert-failure message f-string used to
-        // nest double-quoted unit strings (`Q_(1.0, "km")`) inside a double-quoted outer
-        // f-string, which is a SyntaxError before Python 3.12 (this project supports
-        // 3.11+). Compiling (not running) the generated code is enough to catch this
-        // class of bug without needing the `physure` package importable.
-        let tp = PythonTranspiler;
-        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
-        let code = tp.generate_program(&program).unwrap();
-
+    /// Feeds `code` to a real Python interpreter's `compile(..., 'exec')` (never runs it,
+    /// so no `physure` package needs to be importable). Panics if the code fails to
+    /// compile; returns early (skipping the assertion) if no interpreter is found on PATH.
+    fn assert_generated_python_compiles(code: &str) {
         let python = if cfg!(windows) { "python" } else { "python3" };
         let output = match std::process::Command::new(python)
             .args(["-c", "import sys; compile(sys.stdin.read(), '<generated>', 'exec')"])
@@ -411,6 +404,33 @@ mod tests {
             code,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn transpiled_quantity_assert_is_valid_python_syntax() {
+        // A regression test for a real bug: the assert-failure message used to be an
+        // f-string that nested double-quoted unit strings (`Q_(1.0, "km")`) inside a
+        // double-quoted outer f-string, which is a SyntaxError before Python 3.12 (this
+        // project supports 3.11+). Compiling (not running) the generated code is enough
+        // to catch this class of bug without needing the `physure` package importable.
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert_generated_python_compiles(&code);
+    }
+
+    #[test]
+    fn transpiled_quantity_assert_handles_operands_with_both_quote_characters() {
+        // A string-literal operand containing an apostrophe is valid PHS and reaches the
+        // same AssertShape::Quantities codegen path as a normal Quantity assert -- proving
+        // the message construction is immune to quote-collision regardless of which quote
+        // character(s) appear inside the operand's own generated code, not just the common
+        // double-quoted-unit case. (An f-string with EITHER quote character as the outer
+        // delimiter is vulnerable to the other; `.format()` sidesteps the whole class.)
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(\"it's here\", \"abc\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert_generated_python_compiles(&code);
     }
 
     #[test]
