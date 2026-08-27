@@ -50,12 +50,12 @@ impl CodeGenerator for PythonTranspiler {
                             let b_code = self.generate_expr(expected)?;
                             let line = if kind == "assert" {
                                 format!(
-                                    "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(f\"assert failed: {{{a}}} != {{{b}}}\")",
+                                    "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(f'assert failed: {{{a}}} != {{{b}}}')",
                                     a = a_code, b = b_code
                                 )
                             } else {
                                 format!(
-                                    "if not ({a}).exact_eq({b}): raise AssertionError(f\"exact_assert failed: {{{a}}} != {{{b}}}\")",
+                                    "if not ({a}).exact_eq({b}): raise AssertionError(f'exact_assert failed: {{{a}}} != {{{b}}}')",
                                     a = a_code, b = b_code
                                 )
                             };
@@ -374,6 +374,43 @@ mod tests {
         let code = tp.generate_program(&program).unwrap();
         assert!(code.contains("if not") && code.contains(".exact_eq("), "expected an exact_eq conditional raise:\n{code}");
         assert!(!code.contains("\nassert "), "must not emit a removable `assert` statement:\n{code}");
+    }
+
+    #[test]
+    fn transpiled_quantity_assert_is_valid_python_syntax() {
+        // A regression test for a real bug: the assert-failure message f-string used to
+        // nest double-quoted unit strings (`Q_(1.0, "km")`) inside a double-quoted outer
+        // f-string, which is a SyntaxError before Python 3.12 (this project supports
+        // 3.11+). Compiling (not running) the generated code is enough to catch this
+        // class of bug without needing the `physure` package importable.
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let output = match std::process::Command::new(python)
+            .args(["-c", "import sys; compile(sys.stdin.read(), '<generated>', 'exec')"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.take().unwrap().write_all(code.as_bytes())?;
+                child.wait_with_output()
+            }) {
+            Ok(o) => o,
+            Err(_) => {
+                eprintln!("skipping: no python interpreter available");
+                return;
+            }
+        };
+        assert!(
+            output.status.success(),
+            "generated Python failed to compile:\n{}\nstderr: {}",
+            code,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
