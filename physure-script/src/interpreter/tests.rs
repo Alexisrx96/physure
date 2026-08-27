@@ -1140,3 +1140,11 @@ r3 = circuito_abierto(5 V, 2 A)
         let err = interp.eval_str("1.0 m != False").unwrap_err();
         assert!(matches!(err, PhysureError::Generic(_)));
     }
+
+    #[test]
+    fn bool_compared_to_a_none_value_is_a_type_error_naming_both() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("True == assert(1.0 m, 1.0 m)").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Bool") && msg.contains("None"), "{msg}");
+    }

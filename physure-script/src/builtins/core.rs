@@ -12,6 +12,18 @@ fn boolean(res: bool) -> PhsValue {
     PhsValue::Bool(res)
 }
 
+/// Names an operand for an error message. A present argument (including one whose value is
+/// the real `PhsValue::None`) renders as its `type_name()`; a genuinely absent argument slot
+/// (reachable only via a direct call like `op_eq(True)` with the wrong arity, since normal
+/// `==` syntax always supplies exactly 2 args) renders distinctly so the two cases can't be
+/// confused in the message.
+fn describe_arg(v: Option<&PhsValue>) -> &'static str {
+    match v {
+        Some(val) => val.type_name(),
+        None => "a missing argument",
+    }
+}
+
 /// The `==`/`!=` Bool branch. `Some(Ok(...))` when at least one side is `Bool` (a matching
 /// pair compares directly; a mismatched pair is a type error naming both types); `None` when
 /// neither side is `Bool`, so the caller falls through to the existing Quantity/sigma-bound
@@ -27,8 +39,8 @@ fn bool_equality(args: &[PhsValue], symbol: &str, want_equal: bool) -> Option<Ph
     }
     Some(Err(PhysureError::Generic(format!(
         "cannot compare {} and {} with {}",
-        args.first().map(PhsValue::type_name).unwrap_or("None"),
-        args.get(1).map(PhsValue::type_name).unwrap_or("None"),
+        describe_arg(args.first()),
+        describe_arg(args.get(1)),
         symbol,
     ))))
 }
