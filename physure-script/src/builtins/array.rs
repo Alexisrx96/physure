@@ -40,6 +40,17 @@ pub(crate) fn eval_array_builtin(name: &str, args: &[PhsValue], interpreter: &Ph
                     _ => None,
                 },
             };
+            // `count` is a caller-supplied argument driving `.collect()` below directly --
+            // the identical unbounded-materialization shape as the for-expression's Range
+            // branch and `parallel_map` (see `physure_core::settings::max_loop_iterations`'s
+            // doc comment). Checked before the `.collect()` so an oversized `count` never
+            // allocates.
+            let ceiling = physure_core::settings::max_loop_iterations();
+            if count > ceiling {
+                return Err(PhysureError::Generic(format!(
+                    "linspace received count={count}, exceeding the max_loop_iterations ceiling of {ceiling}; raise `max_loop_iterations` in physure.conf's [Settings] section if this is a legitimate workload"
+                )));
+            }
             let step = if count > 1 { (stop - start) / (count - 1) as f64 } else { 0.0 };
             let vec: Vec<PhsValue> = (0..count)
                 .map(|i| {
