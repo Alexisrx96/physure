@@ -14,6 +14,7 @@ mod package;
 mod protocol;
 mod rich;
 mod scaffold;
+mod server;
 mod step;
 mod tui;
 mod upgrade;
@@ -36,6 +37,7 @@ fn print_help() {
     println!("    phs export <script.phs> --fn <name> [--native] [-o <dir>]");
     println!("    phs debug <script.phs> [--break-fn name] [--break N[:cond]]");
     println!("    phs pack [dir|manifest]  [-o <bundle.phspkg>] Package repository into .phspkg bundle");
+    println!("    phs serve [dir|file]     [--port 8080] [--host 127.0.0.1] [--token <secret>] Run Model REST Server");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
     println!();
@@ -692,6 +694,11 @@ fn main() {
 
     if args[1] == "pack" {
         package::run_pack(&args);
+        return;
+    }
+
+    if args[1] == "serve" {
+        server::run_serve(&args);
         return;
     }
 

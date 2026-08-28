@@ -334,3 +334,33 @@ calc = "calc.phs"
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_serve_subcommand_via_cli() {
+    let temp_dir = std::env::temp_dir().join(format!("phs_cli_serve_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(temp_dir.join("math.phs"), "fn double(x: m) = x * 2\n").unwrap();
+
+    let port = 19876u16;
+    let mut child = Command::new(get_phs_bin())
+        .args(["serve", temp_dir.to_str().unwrap(), "--port", &port.to_string()])
+        .spawn()
+        .expect("Failed to spawn phs serve");
+
+    // Wait a brief moment for server to bind
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let url = format!("http://127.0.0.1:{}/health", port);
+    let health_resp = ureq::get(&url).call();
+
+    // Kill the server process
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(health_resp.is_ok(), "Failed to query health endpoint on spawned server");
+    let health_json: serde_json::Value = health_resp.unwrap().into_json().unwrap();
+    assert_eq!(health_json["status"], "ok");
+    assert_eq!(health_json["modules_loaded"], 1);
+}
+
+
