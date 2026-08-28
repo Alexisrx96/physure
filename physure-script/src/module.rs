@@ -199,6 +199,180 @@ impl PhsModule {
         self.interpreter
             .call_function_node(func, args.to_vec(), &self.interpreter.env)
     }
+
+    /// Composes `outer_fn` (a function of `self`) with `inner_fn` (a function of `inner`),
+    /// producing a single callable that first evaluates `inner_fn` and feeds its result into
+    /// `outer_fn`'s `bind_param` parameter.
+    ///
+    /// This is cross-module composition — `self` and `inner` may be (and in the motivating
+    /// use case, are) two different `.phs` files loaded independently, e.g. a hydraulics
+    /// module's `fuerza_empuje(P, A)` composed with a geometry module's `area_tubo(d)` bound
+    /// to `fuerza_empuje`'s `A` parameter. The design spec's `compose(&self, outer_fn,
+    /// inner_fn, bind_param) -> PhysureResult<PhsFunction>` (same-module, single `&self`,
+    /// undefined `PhsFunction` return type) does not cover this — it was superseded before
+    /// this method existed by the plan's own test, which requires composing across two
+    /// independently-loaded modules. See `docs/superpowers/plans/2026-08-27-phs-foreign-bridge.md`
+    /// Task 3 for the full history; the narrower same-module form isn't implemented since
+    /// nothing in this crate currently needs it.
+    ///
+    /// The returned [`ComposedFunction`] borrows both modules (`'a`) rather than owning cloned
+    /// copies of them: `PhsModule` deliberately doesn't derive `Clone` (see the struct doc
+    /// comment above), and there's no other cheap way to keep two live, independently-invokable
+    /// modules around after this call returns. A plain borrow is sufficient because `invoke`
+    /// only needs `&self`, so nothing about calling the composed function later requires
+    /// mutable or owned access to either module — the caller just needs to keep both `self`
+    /// and `inner` alive for as long as it holds onto the `ComposedFunction`, which a pipeline
+    /// or any other in-process caller naturally does. If a future caller needs a composed
+    /// function to outlive the modules it was built from (e.g. handing it across an FFI
+    /// boundary that can't express a borrow), that's a job for `Arc<PhsModule>` at that call
+    /// site — not a reason to make every composition here pay for shared ownership it doesn't
+    /// need.
+    ///
+    /// `ComposedFunction::call`'s expected argument order is: `outer_fn`'s parameters, in their
+    /// declared order, *skipping* `bind_param` (which is supplied by `inner_fn`'s result
+    /// instead of the caller), followed by `inner_fn`'s parameters in their declared order.
+    /// E.g. for `fuerza_empuje(P, A)` composed with `area_tubo(d)` bound to `"A"`, the composed
+    /// function takes `[P, d]` — `A` is never supplied directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `outer_fn` is not a function `self` exports, if `inner_fn` is not a
+    /// function `inner` exports, or if `bind_param` does not name a parameter of `outer_fn`.
+    /// These are all checked eagerly, here, rather than deferred to the first `call()` — a
+    /// caller that successfully builds a `ComposedFunction` can trust it's actually callable.
+    pub fn compose_with<'a>(
+        &'a self,
+        inner: &'a PhsModule,
+        outer_fn: &str,
+        inner_fn: &str,
+        bind_param: &str,
+    ) -> PhysureResult<ComposedFunction<'a>> {
+        let outer_sig = self.functions.get(outer_fn).ok_or_else(|| {
+            PhysureError::Generic(format!(
+                "'{}' is not a function this module ('{}') exports",
+                outer_fn, self.name
+            ))
+        })?;
+        let inner_sig = inner.functions.get(inner_fn).ok_or_else(|| {
+            PhysureError::Generic(format!(
+                "'{}' is not a function the inner module ('{}') exports",
+                inner_fn, inner.name
+            ))
+        })?;
+        let bind_index = outer_sig
+            .params
+            .iter()
+            .position(|p| p.name == bind_param)
+            .ok_or_else(|| {
+                PhysureError::Generic(format!(
+                    "outer function '{}' has no parameter named '{}' to bind '{}''s result to",
+                    outer_fn, bind_param, inner_fn
+                ))
+            })?;
+
+        Ok(ComposedFunction {
+            outer: self,
+            inner,
+            outer_fn: outer_fn.to_string(),
+            inner_fn: inner_fn.to_string(),
+            outer_arity: outer_sig.params.len(),
+            inner_arity: inner_sig.params.len(),
+            bind_index,
+        })
+    }
+}
+
+/// A callable produced by [`PhsModule::compose_with`]: calling it evaluates the inner
+/// function first, then splices its result into the outer function's `bind_param` position
+/// and evaluates the outer function.
+///
+/// Borrows both modules for `'a` rather than owning them — see the doc comment on
+/// `compose_with` for why a borrow (and not `Arc`) is the right call here.
+///
+/// `Debug` is derived manually (rather than via `#[derive(Debug)]`) because `PhsModule` itself
+/// has no `Debug` impl (its private `interpreter` field holds live `Arc<Mutex<..>>` state that
+/// isn't meaningfully printable) -- printing a `ComposedFunction` shows the composition's
+/// shape (which functions, which modules by name, arities, bind position) without trying to
+/// print either module's full contents.
+pub struct ComposedFunction<'a> {
+    outer: &'a PhsModule,
+    inner: &'a PhsModule,
+    outer_fn: String,
+    inner_fn: String,
+    /// `outer_fn`'s total parameter count, captured at `compose_with` time (immutable
+    /// thereafter — a `PhsModule`'s `functions` map never changes after construction).
+    outer_arity: usize,
+    inner_arity: usize,
+    /// Index of `bind_param` within `outer_fn`'s parameter list.
+    bind_index: usize,
+}
+
+impl std::fmt::Debug for ComposedFunction<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComposedFunction")
+            .field("outer_module", &self.outer.name)
+            .field("outer_fn", &self.outer_fn)
+            .field("inner_module", &self.inner.name)
+            .field("inner_fn", &self.inner_fn)
+            .field("outer_arity", &self.outer_arity)
+            .field("inner_arity", &self.inner_arity)
+            .field("bind_index", &self.bind_index)
+            .finish()
+    }
+}
+
+impl<'a> ComposedFunction<'a> {
+    /// Calls the composed function. `args` must supply exactly `outer_fn`'s parameters minus
+    /// `bind_param`, followed by all of `inner_fn`'s parameters — see the ordering documented
+    /// on [`PhsModule::compose_with`].
+    ///
+    /// Both the inner and outer calls go through [`PhsModule::invoke`], so both stages get
+    /// full registry-aware unit coercion and `@requires`/`@ensures` enforcement exactly as if
+    /// each were called directly — composition adds no second, easier-to-drift code path for
+    /// dimensional correctness.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `args.len()` doesn't match the expected arity (outer arity - 1 +
+    /// inner arity), or if either the inner or outer `invoke()` call fails (dimension
+    /// mismatch, contract violation, etc.).
+    pub fn call(&self, args: &[PhsValue]) -> PhysureResult<PhsValue> {
+        // `bind_index < outer_arity` is guaranteed by `compose_with` (it comes from
+        // `position()` over `outer_fn`'s own params), so this subtraction never underflows.
+        let outer_partial_arity = self.outer_arity - 1;
+        let expected_total = outer_partial_arity + self.inner_arity;
+        if args.len() != expected_total {
+            return Err(PhysureError::Generic(format!(
+                "composed function ('{}' \u{2218} '{}') expects {} argument(s) \
+                 ({} for the outer call, {} for the inner call), got {}",
+                self.outer_fn,
+                self.inner_fn,
+                expected_total,
+                outer_partial_arity,
+                self.inner_arity,
+                args.len()
+            )));
+        }
+
+        let (outer_partial, inner_args) = args.split_at(outer_partial_arity);
+        let inner_result = self.inner.invoke(&self.inner_fn, inner_args)?;
+
+        let mut full_outer_args = Vec::with_capacity(self.outer_arity);
+        let mut partial_iter = outer_partial.iter().cloned();
+        for i in 0..self.outer_arity {
+            if i == self.bind_index {
+                full_outer_args.push(inner_result.clone());
+            } else {
+                full_outer_args.push(
+                    partial_iter
+                        .next()
+                        .expect("arity checked above: outer_arity - 1 partial args available"),
+                );
+            }
+        }
+
+        self.outer.invoke(&self.outer_fn, &full_outer_args)
+    }
 }
 
 #[cfg(test)]
@@ -462,5 +636,92 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
             matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "ensures"),
             "expected an ensures ContractViolation, got {err:?}"
         );
+    }
+
+    // -- compose_with -------------------------------------------------------------------
+    //
+    // The main "does composition actually chain unit coercion end-to-end across two real
+    // modules" test lives in `pipeline.rs`, matching where the original plan asked for it
+    // (`compose_with` and `PhsPipeline` share that test file's intent). These tests instead
+    // cover `compose_with`'s own error paths, which are specific to `PhsModule` and belong
+    // next to `invoke`'s equivalent error-path tests above.
+
+    #[test]
+    fn test_compose_with_errors_when_outer_fn_missing() {
+        let outer = PhsModule::from_source("outer", "fn f(a: m) = a").unwrap();
+        let inner = PhsModule::from_source("inner", "fn g(b: m) = b").unwrap();
+
+        let err = outer
+            .compose_with(&inner, "nonexistent", "g", "a")
+            .unwrap_err();
+        assert!(err.to_string().contains("is not a function this module"));
+    }
+
+    #[test]
+    fn test_compose_with_errors_when_inner_fn_missing() {
+        let outer = PhsModule::from_source("outer", "fn f(a: m) = a").unwrap();
+        let inner = PhsModule::from_source("inner", "fn g(b: m) = b").unwrap();
+
+        let err = outer
+            .compose_with(&inner, "f", "nonexistent", "a")
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("is not a function the inner module"));
+    }
+
+    #[test]
+    fn test_compose_with_errors_when_bind_param_not_a_param_of_outer_fn() {
+        let outer = PhsModule::from_source("outer", "fn f(a: m) = a").unwrap();
+        let inner = PhsModule::from_source("inner", "fn g(b: m) = b").unwrap();
+
+        let err = outer
+            .compose_with(&inner, "f", "g", "not_a_param")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no parameter named 'not_a_param'"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_composed_function_splices_bind_param_result_into_the_middle_of_outer_args() {
+        // The plan's own composition test only exercises binding the *last* outer parameter
+        // (`fuerza_empuje(P, A)` bound on `A`), which never has to prove the splice actually
+        // reinserts the inner result at the right position -- pushing it last would look
+        // identical. Use a 3-param outer function bound on its *middle* parameter so a bug
+        // that always appended the inner result (instead of inserting it at `bind_index`)
+        // would be caught: if that bug existed here, `b` would receive `c`'s value (3 m)
+        // instead of `g`'s result (10 m), and the sum would come out as 1+3+3=7 m, not 14 m.
+        let outer = PhsModule::from_source("outer", "fn f(a: m, b: m, c: m) = a + b + c").unwrap();
+        let inner = PhsModule::from_source("inner", "fn g(x: m) = x * 2.0").unwrap();
+        let composed = outer.compose_with(&inner, "f", "g", "b").unwrap();
+
+        let m = |v: f64| PhsValue::Quantity(physure_core::Quantity::new(v, "m").unwrap());
+        // Composed argument order: outer's params minus "b" (i.e. [a, c]), then inner's
+        // params (i.e. [x]) -- so [a=1, c=3, x=5].
+        let res = composed.call(&[m(1.0), m(3.0), m(5.0)]).unwrap();
+
+        let PhsValue::Quantity(q) = res else {
+            panic!("Expected Quantity result");
+        };
+        // b = g(5) = 10, so f(1, 10, 3) = 14.
+        assert_eq!(q.value.mean(), 14.0);
+    }
+
+    #[test]
+    fn test_composed_function_call_errors_on_arity_mismatch() {
+        // f(a, c) composed on "c" expects [a, d] (2 args: 1 outer partial + 1 inner) -- passing
+        // 3 must fail with a clear arity error rather than panicking on the split_at/zip.
+        let outer = PhsModule::from_source("outer", "fn f(a: m, c: m) = a + c").unwrap();
+        let inner = PhsModule::from_source("inner", "fn g(d: m) = d").unwrap();
+        let composed = outer.compose_with(&inner, "f", "g", "c").unwrap();
+
+        let one_m = PhsValue::Quantity(physure_core::Quantity::new(1.0, "m").unwrap());
+        let err = composed
+            .call(&[one_m.clone(), one_m.clone(), one_m])
+            .unwrap_err();
+        assert!(err.to_string().contains("expects 2 argument"));
     }
 }

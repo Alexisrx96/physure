@@ -280,7 +280,18 @@ Expected: PASS.
 - Modify: `physure-script/src/lib.rs`
 - Test: `physure-script/src/pipeline.rs` (inline unit tests)
 
-- [ ] **Step 1: Write tests for function composition and multi-step pipeline chaining**
+- [x] **Step 1: Write tests for function composition and multi-step pipeline chaining**
+
+> **Deviation from the snippet below:** `parse_expression_atomic("N")` never resolves against the
+> unit registry (same unsoundness Task 2 already found and documented for `invoke`), so it parses
+> to the fake opaque dimension `{"N": 1}` rather than `kg*m*s^-2` — a real computed force would
+> never `same_dimensions`-match it, and `convert_to` would fail. The shipped test uses
+> `parse_expression` (the registry-resolving variant `Quantity::new` itself uses) instead; the
+> physics/numbers were already right. `geom`/`hydr` are plain (non-`mut`) bindings in the shipped
+> test — `compose_with` and `ComposedFunction::call` only ever need `&self`, so no `mut` is
+> required anywhere in this task, mirroring Task 2's `invoke` deviation. See
+> `physure-script/src/pipeline.rs`'s `test_symbolic_composition_between_modules` for the corrected
+> version.
 
 ```rust
 // In physure-script/src/pipeline.rs tests
@@ -310,7 +321,26 @@ fn test_symbolic_composition_between_modules() {
 }
 ```
 
-- [ ] **Step 2: Implement `compose_with` and `PhsPipeline` DAG execution**
+- [x] **Step 2: Implement `compose_with` and `PhsPipeline` DAG execution**
+
+> **Deviation from the snippet below:** this plan gave no implementation for `compose_with`
+> itself, and the design spec's `compose(&self, outer_fn, inner_fn, bind_param) -> PhysureResult<PhsFunction>`
+> is same-module (single `&self`, no second module, an undefined `PhsFunction` return type) —
+> superseded by this task's own test, which needs *cross-module* composition. The shipped
+> `PhsModule::compose_with<'a>(&'a self, inner: &'a PhsModule, outer_fn, inner_fn, bind_param) ->
+> PhysureResult<ComposedFunction<'a>>` (in `module.rs`, alongside `invoke`) borrows both modules
+> for `'a` rather than cloning them (`PhsModule` deliberately isn't `Clone`) — a plain borrow is
+> enough since both `invoke` calls it makes only need `&self`. `ComposedFunction::call`'s argument
+> order is outer's params minus `bind_param`, in order, followed by inner's params, in order.
+> Validity (both functions exist, `bind_param` names a real outer parameter) is checked eagerly in
+> `compose_with`, not deferred to `call()`.
+>
+> `PhsPipeline::execute` takes `&self`, not `&mut self` as sketched below — it originally needed
+> `&mut self` only because it called `self.modules.get_mut(..)` for the now-obsolete reason
+> `invoke` used to need `&mut self`; since Task 2 loosened `invoke` to `&self`, `execute` uses
+> `self.modules.get(..)` and needs no exclusive borrow either. See `physure-script/src/module.rs`
+> (`compose_with`/`ComposedFunction`) and `physure-script/src/pipeline.rs` (`PhsPipeline`) for the
+> shipped code and full rationale in the doc comments.
 
 ```rust
 // In physure-script/src/pipeline.rs
@@ -384,7 +414,7 @@ impl PhsPipeline {
 }
 ```
 
-- [ ] **Step 3: Run pipeline tests and verify pass**
+- [x] **Step 3: Run pipeline tests and verify pass**
 
 Run: `cargo test -p physure-script pipeline`
 Expected: PASS.
