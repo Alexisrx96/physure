@@ -39,7 +39,7 @@
 - Modify: `physure-script/src/lib.rs`
 - Test: `physure-script/src/module.rs` (inline unit tests)
 
-- [ ] **Step 1: Write the failing unit tests for signature extraction**
+- [x] **Step 1: Write the failing unit tests for signature extraction**
 
 ```rust
 // In physure-script/src/module.rs (bottom test module)
@@ -74,12 +74,12 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p physure-script test_extract_function_signatures_from_phs`
 Expected: FAIL (module does not exist yet).
 
-- [ ] **Step 3: Implement `ParamInfo`, `FunctionSignature`, and `PhsModule`**
+- [x] **Step 3: Implement `ParamInfo`, `FunctionSignature`, and `PhsModule`**
 
 ```rust
 // In physure-script/src/module.rs
@@ -157,7 +157,7 @@ impl PhsModule {
 }
 ```
 
-- [ ] **Step 4: Re-export in `physure-script/src/lib.rs` and verify test passes**
+- [x] **Step 4: Re-export in `physure-script/src/lib.rs` and verify test passes**
 
 Run: `cargo test -p physure-script test_extract_function_signatures_from_phs`
 Expected: PASS.
