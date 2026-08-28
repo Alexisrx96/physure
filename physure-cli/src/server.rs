@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use physure_core::error::{PhysureError, PhysureResult};
@@ -21,6 +22,9 @@ pub struct ModelServerConfig {
     pub port: u16,
     pub auth_token: Option<String>,
 }
+
+/// Maximum request body size accepted by the server (10 MB).
+pub const MAX_REQUEST_BODY_BYTES: u64 = 10 * 1024 * 1024;
 
 impl Default for ModelServerConfig {
     fn default() -> Self {
@@ -303,7 +307,7 @@ impl ModelServer {
             }
             (Method::Post, "/api/v1/pipeline" | "/pipeline") => {
                 let mut body = String::new();
-                if let Err(e) = request.as_reader().read_to_string(&mut body) {
+                if let Err(e) = std::io::Read::take(request.as_reader(), MAX_REQUEST_BODY_BYTES).read_to_string(&mut body) {
                     let err_json = serde_json::json!({ "status": "error", "error": format!("Failed to read body: {}", e) });
                     let _ = request.respond(Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)));
                     return Ok(());
@@ -436,7 +440,7 @@ impl ModelServer {
                 };
 
                 let mut body = String::new();
-                if let Err(e) = request.as_reader().read_to_string(&mut body) {
+                if let Err(e) = std::io::Read::take(request.as_reader(), MAX_REQUEST_BODY_BYTES).read_to_string(&mut body) {
                     let err_json = serde_json::json!({ "status": "error", "error": format!("Failed to read request body: {}", e) });
                     let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
                     let _ = request.respond(response);
@@ -525,12 +529,16 @@ impl ModelServer {
         Ok(())
     }
 
-    /// Starts the blocking HTTP server loop on `server`.
+    /// Starts the multithreaded HTTP server loop on `server`.
     pub fn run(self, server: Server) -> PhysureResult<()> {
+        let server_arc = std::sync::Arc::new(self);
         for request in server.incoming_requests() {
-            if let Err(e) = self.handle_request(request) {
-                eprintln!("Error handling request: {}", e);
-            }
+            let s = std::sync::Arc::clone(&server_arc);
+            std::thread::spawn(move || {
+                if let Err(e) = s.handle_request(request) {
+                    eprintln!("Error handling request: {}", e);
+                }
+            });
         }
         Ok(())
     }

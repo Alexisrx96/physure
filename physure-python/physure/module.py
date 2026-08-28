@@ -14,6 +14,7 @@ section intact.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -101,15 +102,22 @@ def _coerce_scalar(arg: Any) -> Any:
     """Coerces a unit-string argument into a real Quantity.
 
     Turns a ``"5 bar"``-style string into a real ``Quantity``; a bare numeric string into a
-    ``float``; leaves everything else (``Quantity``, ``float``, ``bool``, list, ...) alone.
+    ``float``; leaves everything else (``Quantity``, ``float``, ``bool``, text ``str``,
+    list, ...) alone.
     """
     if isinstance(arg, str):
         if " " in arg:
             mag_str, unit_str = arg.split(" ", 1)
-            from physure import Q_
+            try:
+                from physure import Q_
 
-            return Q_(float(mag_str), unit_str)
-        return float(arg)
+                return Q_(float(mag_str), unit_str)
+            except Exception:
+                return arg
+        try:
+            return float(arg)
+        except ValueError:
+            return arg
     return arg
 
 
@@ -117,24 +125,53 @@ class PhsFunctionWrapper:
     """Callable proxy for a single function exported by a `.phs` module."""
 
     def __init__(
-        self, module_core: PhsModuleCore, name: str, params: list[str]
+        self,
+        module_core: PhsModuleCore,
+        name: str,
+        params: list[str],
+        docstring: str | None = None,
     ) -> None:
         self._core = module_core
         self._name = name
         self._params = params
+        self.__name__ = name
+        self.__doc__ = docstring or f"PHS function {name}({', '.join(params)})"
+        self.__signature__ = inspect.Signature(
+            [
+                inspect.Parameter(p, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+                for p in params
+            ]
+        )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invokes the wrapped `.phs` function with positional or keyword arguments."""
-        if kwargs:
-            ordered_args = []
-            for p in self._params:
-                if p not in kwargs:
-                    raise ValueError(
-                        f"Missing required parameter '{p}' for {self._name}()"
-                    )
+        if len(args) > len(self._params):
+            raise TypeError(
+                f"{self._name}() takes {len(self._params)} positional arguments "
+                f"but {len(args)} were given"
+            )
+
+        # Check for unexpected or duplicated keyword arguments
+        for k in kwargs:
+            if k not in self._params:
+                raise TypeError(
+                    f"{self._name}() got an unexpected keyword argument {k!r}"
+                )
+            idx = self._params.index(k)
+            if idx < len(args):
+                raise TypeError(
+                    f"{self._name}() got multiple values for argument {k!r}"
+                )
+
+        ordered_args: list[Any] = list(args)
+        for i in range(len(args), len(self._params)):
+            p = self._params[i]
+            if p in kwargs:
                 ordered_args.append(kwargs[p])
-        else:
-            ordered_args = list(args)
+            else:
+                raise ValueError(
+                    f"Missing required parameter '{p}' for {self._name}()"
+                )
 
         coerced = [_to_core_quantity(_coerce_scalar(a)) for a in ordered_args]
         result = self._core.invoke(self._name, coerced)

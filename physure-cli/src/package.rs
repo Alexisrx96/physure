@@ -148,10 +148,10 @@ impl Manifest {
 
         // Validate entry file if specified
         if let Some(ref entry_path_str) = self.package.entry {
-            let full_entry = base.join(entry_path_str);
+            let full_entry = ensure_path_within_base(base, entry_path_str)?;
             if !full_entry.is_file() {
                 return Err(PhysureError::Generic(format!(
-                    "Package entry file '{}' does not exist in '{}'",
+                    "Package entry file '{}' is not a file in '{}'",
                     entry_path_str,
                     base.display()
                 )));
@@ -181,11 +181,11 @@ impl Manifest {
 
         for export_name in export_keys {
             let rel_path = &self.exports[export_name];
-            let full_path = base.join(rel_path);
+            let full_path = ensure_path_within_base(base, rel_path)?;
 
             if !full_path.is_file() {
                 return Err(PhysureError::Generic(format!(
-                    "Export '{}' points to missing file '{}' (resolved to '{}')",
+                    "Export '{}' points to non-file '{}' (resolved to '{}')",
                     export_name,
                     rel_path,
                     full_path.display()
@@ -359,6 +359,40 @@ impl PhsPackageBundle {
             ))
         })
     }
+}
+
+/// Verifies that `rel_path` resolves to an existing file strictly located inside `base`.
+fn ensure_path_within_base(base: &Path, rel_path: &str) -> PhysureResult<std::path::PathBuf> {
+    let full_path = base.join(rel_path);
+    if !full_path.exists() {
+        return Err(PhysureError::Generic(format!(
+            "Path '{}' does not exist in '{}'",
+            rel_path,
+            base.display()
+        )));
+    }
+    let canonical_base = base.canonicalize().map_err(|e| {
+        PhysureError::Generic(format!(
+            "Cannot resolve base directory '{}': {}",
+            base.display(),
+            e
+        ))
+    })?;
+    let canonical_target = full_path.canonicalize().map_err(|e| {
+        PhysureError::Generic(format!(
+            "Cannot resolve target path '{}': {}",
+            full_path.display(),
+            e
+        ))
+    })?;
+    if !canonical_target.starts_with(&canonical_base) {
+        return Err(PhysureError::Generic(format!(
+            "Path traversal forbidden: '{}' escapes base directory '{}'",
+            rel_path,
+            base.display()
+        )));
+    }
+    Ok(full_path)
 }
 
 /// CLI runner for `phs pack [dir_or_manifest] [-o <output.phspkg>]`.
@@ -653,4 +687,33 @@ version = "not-a-valid-semver"
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid semver"));
     }
+
+    #[test]
+    fn test_manifest_path_traversal_is_rejected() {
+        let temp_dir = std::env::temp_dir().join(format!("phs_pack_traversal_{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        let sub_dir = temp_dir.join("subpkg");
+        fs::create_dir_all(&sub_dir).unwrap();
+
+        // Create an external file outside sub_dir
+        fs::write(temp_dir.join("secret.phs"), "fn secret() = 42\n").unwrap();
+
+        let manifest_content = r#"
+[package]
+name = "traversal-pkg"
+version = "1.0.0"
+
+[exports]
+hack = "../secret.phs"
+"#;
+        fs::write(sub_dir.join("phs.toml"), manifest_content).unwrap();
+
+        let manifest = Manifest::from_file(sub_dir.join("phs.toml")).unwrap();
+        let result = manifest.validate(&sub_dir);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("Path traversal forbidden"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+

@@ -164,3 +164,64 @@ def test_named_unit_parameter_rejects_matching_foreign_quantity(tmp_path):
 
     result = mod.identity(m=5.0 * g)
     assert result.magnitude == pytest.approx(5.0)
+
+
+def test_mixed_positional_and_keyword_arguments(tmp_path):
+    phs_file = tmp_path / "math_ops.phs"
+    phs_file.write_text("fn calc(a, b, c) = a * 100 + b * 10 + c\n")
+
+    mod = physure.load_phs(phs_file)
+
+    # 1. All positional
+    assert mod.calc(1, 2, 3) == 123.0
+    # 2. Mixed: 1 positional, 2 keyword
+    assert mod.calc(1, b=2, c=3) == 123.0
+    # 3. Mixed: 2 positional, 1 keyword
+    assert mod.calc(1, 2, c=3) == 123.0
+    # 4. All keyword out of order
+    assert mod.calc(c=3, a=1, b=2) == 123.0
+
+
+def test_argument_binding_error_cases(tmp_path):
+    phs_file = tmp_path / "math_ops.phs"
+    phs_file.write_text("fn add(x, y) = x + y\n")
+
+    mod = physure.load_phs(phs_file)
+
+    # Too many positional arguments
+    with pytest.raises(TypeError, match="positional arguments"):
+        mod.add(1, 2, 3)
+
+    # Unexpected keyword argument
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        mod.add(1, unexpected=2)
+
+    # Multiple values for argument
+    with pytest.raises(TypeError, match="multiple values"):
+        mod.add(1, x=2)
+
+    # Missing required parameter
+    with pytest.raises(ValueError, match="Missing required parameter 'y'"):
+        mod.add(1)
+
+
+def test_plain_string_arguments_do_not_crash(tmp_path):
+    phs_file = tmp_path / "strings.phs"
+    phs_file.write_text("fn greet(name) = name\n")
+
+    mod = physure.load_phs(phs_file)
+    assert mod.greet("World") == "World"
+
+
+def test_function_wrapper_introspection_and_signature(tmp_path):
+    import inspect
+
+    phs_file = tmp_path / "geom.phs"
+    phs_file.write_text("fn rectangle_area(width, height) = width * height\n")
+
+    mod = physure.load_phs(phs_file)
+    fn = mod.rectangle_area
+
+    assert fn.__name__ == "rectangle_area"
+    sig = inspect.signature(fn)
+    assert list(sig.parameters.keys()) == ["width", "height"]
