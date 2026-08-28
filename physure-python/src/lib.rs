@@ -1331,6 +1331,66 @@ impl PyInterpreter {
     }
 }
 
+// ── PyPhsModule ─────────────────────────────────────────────────────────────
+// Thin wrapper around `physure_script::PhsModule` (see
+// `docs/superpowers/plans/2026-08-27-phs-foreign-bridge.md` Task 4): exposes a parsed `.phs`
+// source's function signatures and lets a Python caller invoke them with host-supplied
+// argument values, going through the same registry-aware unit coercion and `@requires`/
+// `@ensures` enforcement as a native PHS-to-PHS call. All conversion logic is reused from
+// `py_to_phs_value`/`phs_value_to_py` above -- no dimensional/coercion logic is reimplemented
+// here, matching this crate's "thin translation layer only" rule.
+#[pyclass(name = "PhsModuleCore", module = "physure._core")]
+pub struct PyPhsModule {
+    inner: ::physure_script::PhsModule,
+}
+
+#[pymethods]
+impl PyPhsModule {
+    #[staticmethod]
+    fn from_file(path: &str) -> PyResult<Self> {
+        let inner = ::physure_script::PhsModule::from_file(path)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyPhsModule { inner })
+    }
+
+    #[staticmethod]
+    fn from_source(name: &str, source: &str) -> PyResult<Self> {
+        let inner = ::physure_script::PhsModule::from_source(name, source)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        Ok(PyPhsModule { inner })
+    }
+
+    fn list_functions(&self) -> Vec<String> {
+        self.inner.functions.keys().cloned().collect()
+    }
+
+    fn get_params(&self, fn_name: &str) -> PyResult<Vec<String>> {
+        self.inner
+            .functions
+            .get(fn_name)
+            .map(|f| f.params.iter().map(|p| p.name.clone()).collect())
+            .ok_or_else(|| {
+                pyo3::exceptions::PyKeyError::new_err(format!("Function '{}' not found", fn_name))
+            })
+    }
+
+    // `PhsModule::invoke` only needs `&self` -- it evaluates against an already-built
+    // interpreter environment and never mutates it (see the struct-level doc comment on
+    // `PhsModule` in physure-script/src/module.rs). Matching that with `&self` here rather
+    // than `&mut self` is both more accurate and more permissive for callers.
+    fn invoke(&self, py: Python<'_>, fn_name: &str, args: Vec<Bound<'_, PyAny>>) -> PyResult<PyObject> {
+        let mut rust_args = Vec::with_capacity(args.len());
+        for a in args {
+            rust_args.push(py_to_phs_value(&a)?);
+        }
+        let res = self
+            .inner
+            .invoke(fn_name, &rust_args)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        phs_value_to_py(py, res)
+    }
+}
+
 #[pyfunction]
 fn evaluate_phs_native(py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {
     let results = ::physure_script::eval_phs(source)
@@ -1705,6 +1765,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQuantityVector>()?;
     m.add_class::<PyQuantityMatrix>()?;
     m.add_class::<PyInterpreter>()?;
+    m.add_class::<PyPhsModule>()?;
     m.add_class::<PyPruningConfig>()?;
     m.add_class::<PyCovarianceStore>()?;
     m.add_class::<PyDimVector>()?;
