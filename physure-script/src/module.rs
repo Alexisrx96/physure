@@ -357,19 +357,13 @@ impl<'a> ComposedFunction<'a> {
         let (outer_partial, inner_args) = args.split_at(outer_partial_arity);
         let inner_result = self.inner.invoke(&self.inner_fn, inner_args)?;
 
-        let mut full_outer_args = Vec::with_capacity(self.outer_arity);
-        let mut partial_iter = outer_partial.iter().cloned();
-        for i in 0..self.outer_arity {
-            if i == self.bind_index {
-                full_outer_args.push(inner_result.clone());
-            } else {
-                full_outer_args.push(
-                    partial_iter
-                        .next()
-                        .expect("arity checked above: outer_arity - 1 partial args available"),
-                );
-            }
-        }
+        // `outer_partial` already holds every outer argument *except* `bind_param`, in the
+        // declared order they appear once `bind_param`'s slot is skipped -- so re-inserting
+        // the inner result at `bind_index` recovers the full, correctly-ordered argument
+        // list. `Vec::insert` handles `bind_index` being any valid position, including the
+        // last one, with no manual index bookkeeping.
+        let mut full_outer_args = outer_partial.to_vec();
+        full_outer_args.insert(self.bind_index, inner_result);
 
         self.outer.invoke(&self.outer_fn, &full_outer_args)
     }
@@ -690,24 +684,33 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
         // The plan's own composition test only exercises binding the *last* outer parameter
         // (`fuerza_empuje(P, A)` bound on `A`), which never has to prove the splice actually
         // reinserts the inner result at the right position -- pushing it last would look
-        // identical. Use a 3-param outer function bound on its *middle* parameter so a bug
-        // that always appended the inner result (instead of inserting it at `bind_index`)
-        // would be caught: if that bug existed here, `b` would receive `c`'s value (3 m)
-        // instead of `g`'s result (10 m), and the sum would come out as 1+3+3=7 m, not 14 m.
-        let outer = PhsModule::from_source("outer", "fn f(a: m, b: m, c: m) = a + b + c").unwrap();
-        let inner = PhsModule::from_source("inner", "fn g(x: m) = x * 2.0").unwrap();
+        // identical. Use a 3-param outer function bound on its *middle* parameter, with each
+        // param declared in a genuinely *different* unit (m / s / kg), so a bug that always
+        // appended the inner result instead of inserting it at `bind_index` can't hide behind
+        // a coincidentally-correct number the way a same-unit sum would: it would misalign
+        // every later positional argument against a differently-dimensioned parameter, and
+        // `invoke`'s own `bind_param_value` would reject it with a real dimension-mismatch
+        // error rather than silently returning a wrong-but-plausible answer.
+        let outer = PhsModule::from_source("outer", "fn f(a: m, b: s, c: kg) = b * 2.0").unwrap();
+        let inner = PhsModule::from_source("inner", "fn g(x: s) = x * 3.0").unwrap();
         let composed = outer.compose_with(&inner, "f", "g", "b").unwrap();
 
-        let m = |v: f64| PhsValue::Quantity(physure_core::Quantity::new(v, "m").unwrap());
+        let a = PhsValue::Quantity(physure_core::Quantity::new(2.0, "m").unwrap());
+        let c = PhsValue::Quantity(physure_core::Quantity::new(4.0, "kg").unwrap());
+        let x = PhsValue::Quantity(physure_core::Quantity::new(5.0, "s").unwrap());
         // Composed argument order: outer's params minus "b" (i.e. [a, c]), then inner's
-        // params (i.e. [x]) -- so [a=1, c=3, x=5].
-        let res = composed.call(&[m(1.0), m(3.0), m(5.0)]).unwrap();
+        // params (i.e. [x]) -- so [a=2m, c=4kg, x=5s]. A correct splice binds b = g(5s) =
+        // 15s, giving f(2m, 15s, 4kg) = 30s. An append-instead-of-insert bug would instead
+        // bind b <- c's value (4 kg) -- dimensionally incompatible with b's declared unit
+        // `s` -- and this call would fail with a dimension mismatch instead of quietly
+        // returning a wrong number.
+        let res = composed.call(&[a, c, x]).unwrap();
 
         let PhsValue::Quantity(q) = res else {
             panic!("Expected Quantity result");
         };
-        // b = g(5) = 10, so f(1, 10, 3) = 14.
-        assert_eq!(q.value.mean(), 14.0);
+        assert_eq!(q.unit.__repr__(), "s");
+        assert_eq!(q.value.mean(), 30.0);
     }
 
     #[test]

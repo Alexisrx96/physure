@@ -1,6 +1,7 @@
 //! Multi-step formula pipelines built on top of [`PhsModule::invoke`]: a [`PhsPipeline`] wires
 //! together calls into one or more modules where a later step's argument can reference an
-//! earlier step's result by name, running the whole thing as a linear DAG.
+//! earlier step's result by name. Steps run in the fixed order they were added -- see
+//! [`PhsPipeline`]'s own doc comment for exactly what "DAG" does and doesn't mean here.
 //!
 //! This is a thin orchestration layer over `PhsModule::invoke` and `PhsModule::compose_with`
 //! (see `module.rs`) -- it adds no second unit-coercion path of its own. Every step's
@@ -26,6 +27,11 @@ pub struct PipelineStep {
 }
 
 /// Where a single [`PipelineStep`] argument's value comes from.
+// `PhsValue` is ~496 bytes (it carries e.g. `Vector`/`Matrix` variants inline), so this enum
+// trips `clippy::large_enum_variant`. Deliberately not boxed: `PipelineArg` lives in a
+// config-time `HashMap` built once per pipeline, not a hot loop, so the extra stack space
+// isn't a real cost, and boxing would add an indirection every call site has to match on.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum PipelineArg {
     /// A value supplied directly, independent of any other step.
@@ -57,10 +63,16 @@ impl PhsPipeline {
         Self::default()
     }
 
+    /// Registers `module` under its own `module.name`. Adding a second module with a name
+    /// already in use silently replaces the first one (plain `HashMap::insert` semantics) --
+    /// there's no separate "already registered" error today.
     pub fn add_module(&mut self, module: PhsModule) {
         self.modules.insert(module.name.clone(), module);
     }
 
+    /// Appends `step` to the run order. Note that `execute()`'s `scope.insert` has the same
+    /// silent-overwrite behavior for a repeated `output_alias`: a later step's result simply
+    /// replaces an earlier step's under the same alias, rather than erroring.
     pub fn add_step(&mut self, step: PipelineStep) {
         self.steps.push(step);
     }
@@ -91,15 +103,15 @@ impl PhsPipeline {
         for step in &self.steps {
             let module = self.modules.get(&step.module_name).ok_or_else(|| {
                 PhysureError::Generic(format!(
-                    "Module '{}' not found in pipeline",
-                    step.module_name
+                    "Module '{}' not found in pipeline (step '{}')",
+                    step.module_name, step.output_alias
                 ))
             })?;
 
             let sig = module.functions.get(&step.function_name).ok_or_else(|| {
                 PhysureError::Generic(format!(
-                    "Function '{}' not found in module '{}'",
-                    step.function_name, step.module_name
+                    "Function '{}' not found in module '{}' (step '{}')",
+                    step.function_name, step.module_name, step.output_alias
                 ))
             })?;
 
