@@ -1,14 +1,15 @@
-//! Introspection over a parsed `.phs` source: exposes the functions a script defines,
-//! their declared parameter units, and their doc comments, without requiring a caller to
-//! walk the AST directly.
+//! Introspection over, and dynamic invocation of, a parsed `.phs` source: exposes the
+//! functions a script defines, their declared parameter units, and their doc comments,
+//! without requiring a caller to walk the AST directly, plus a way to call them with
+//! host-supplied argument values.
 //!
 //! This is the foundation for the foreign-execution bridge (see
 //! `docs/superpowers/plans/2026-08-27-phs-foreign-bridge.md`): a host language loads a
-//! `PhsModule` to discover what it can call and with what units, before invoking anything.
-//! Dynamic invocation and formula composition are later stages built on top of this and are
-//! deliberately not implemented here.
+//! `PhsModule` to discover what it can call and with what units, then invokes it via
+//! [`PhsModule::invoke`]. Formula composition/pipelines is a later stage built on top of this
+//! and is deliberately not implemented here.
 
-use crate::{PhsInterpreter, Statement};
+use crate::{PhsInterpreter, PhsValue, Statement};
 use physure_core::error::{PhysureError, PhysureResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -37,11 +38,39 @@ pub struct FunctionSignature {
 /// (functions registered, module-level assignments bound) — ready for a caller to invoke
 /// functions against.
 ///
-/// `interpreter` is deliberately private: Task 2's `invoke()` will consult `functions` for
-/// unit-coercion metadata before calling into the interpreter, and a caller mutating
-/// `interpreter`'s environment directly (adding/removing bindings) could desync it from the
-/// cached signature map with no way to detect it. Exposing a narrow accessor is a decision
-/// for whichever task first needs read access from outside this module.
+/// `interpreter` is deliberately private: a caller mutating `interpreter`'s environment
+/// directly (adding/removing bindings) could desync it from the cached signature map with no
+/// way to detect it. Exposing a narrow accessor is a decision for whichever task first needs
+/// read access from outside this module.
+///
+/// [`PhsModule::invoke`] (Task 2) is the first consumer, and it deliberately does *not* use
+/// `functions` for dimensional coercion. The original plan called for re-parsing each
+/// parameter's declared-unit string with `physure_core::units::Parser::parse_expression_atomic`
+/// and comparing `RationalUnit::same_dimensions` by hand, then formatting the coerced
+/// arguments back into a PHS call expression string and re-parsing it through
+/// `PhsInterpreter::eval_str`. Both halves of that turned out to be unsound:
+///
+/// - `parse_expression_atomic` treats every unit token as its own atomic dimension with no
+///   registry lookup (that is its documented purpose), so it never expands a named derived
+///   unit or a prefix -- `"N"` parses to the single dimension `{"N": 1}`, not
+///   `{"kg": 1, "m": 1, "s": -2}`, and `"km"` parses to `{"km": 1}`, not `{"m": 1}` scaled by
+///   1000. Meanwhile every real `Quantity` (via `Quantity::new`, which calls
+///   `Parser::parse_expression`) carries the registry-resolved, base-SI-decomposed form.
+///   Comparing the two with `same_dimensions` would reject perfectly valid calls for any
+///   function whose declared unit is a named/prefixed unit -- i.e. most physics.
+/// - `PhsValue`'s `Display` is not round-trippable through the PHS parser for every shape:
+///   `Vector`s over 4 elements print as `"[a, b, c, ... (N items)]"`, `Function`/`Plot` print
+///   human-readable summaries, not expressions, and none of that is valid PHS syntax to
+///   re-parse.
+///
+/// Instead, `invoke()` looks the target function up as a `PhsValue::Function` in
+/// `interpreter.env` and calls `PhsInterpreter::call_function_node` directly -- the same
+/// internal path a native PHS-to-PHS call site uses. That function's own parameter-binding
+/// step (`bind_param_value`) already does correct, registry-aware dimensional coercion via
+/// `UnitParser::parse_expression` (not the atomic variant) and `Quantity::convert_to`, and
+/// already enforces `@requires`/`@ensures`. Reusing it means foreign callers get identical
+/// semantics to PHS-to-PHS calls, with no second, easier-to-drift implementation of unit
+/// coercion living in this file.
 pub struct PhsModule {
     pub name: String,
     /// The path this module was loaded from, or `None` for a module built from an
@@ -52,9 +81,8 @@ pub struct PhsModule {
     /// `PhsInterpreter::eval_statement`'s own `HashMap::insert` on `Statement::FunctionDef`,
     /// which the same source drives when populating `interpreter`'s environment below.
     pub functions: HashMap<String, FunctionSignature>,
-    // Not read anywhere yet -- Task 2's `invoke()` is the first consumer. Kept private (see
-    // the struct doc above) rather than `pub` to keep it in sync with `functions`.
-    #[allow(dead_code)]
+    // Holds the live, callable AST (`PhsValue::Function` bindings in `env`) that
+    // `invoke()` calls into. Kept private -- see the struct doc above.
     interpreter: PhsInterpreter,
 }
 
@@ -119,6 +147,32 @@ impl PhsModule {
         let mut m = Self::from_source(name, &content)?;
         m.path = Some(p.to_path_buf());
         Ok(m)
+    }
+
+    /// Calls the top-level function named `fn_name` with `args`, coercing any `Quantity`
+    /// argument to its parameter's declared unit (raising on a dimensionally incompatible
+    /// one) exactly as a native PHS-to-PHS call would.
+    ///
+    /// This delegates to [`PhsInterpreter::call_function_node`] against the module's own
+    /// `PhsValue::Function` binding rather than re-implementing unit coercion in this file --
+    /// see the struct-level doc comment above for why. A consequence of that is `@requires`/
+    /// `@ensures` contracts on the target function are enforced here too, not skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `fn_name` is not a function this module defines, if `args.len()`
+    /// doesn't match the function's parameter count, if a `Quantity` argument's unit is
+    /// dimensionally incompatible with its parameter's declared unit, or if evaluating the
+    /// function body itself fails (e.g. a `@requires`/`@ensures` contract violation).
+    pub fn invoke(&mut self, fn_name: &str, args: &[PhsValue]) -> PhysureResult<PhsValue> {
+        let Some(PhsValue::Function(func)) = self.interpreter.env.get(fn_name) else {
+            return Err(PhysureError::Generic(format!(
+                "Function '{}' not found in module '{}'",
+                fn_name, self.name
+            )));
+        };
+        self.interpreter
+            .call_function_node(func, args.to_vec(), &self.interpreter.env)
     }
 }
 
@@ -206,5 +260,104 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     fn from_source_propagates_parse_errors() {
         let result = PhsModule::from_source("broken", "fn (((( invalid");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invoke_with_quantity_coercion() {
+        let code = "fn E_k(m: kg, v: m/s) = 0.5 * m * v^2";
+        let mut module = PhsModule::from_source("ke", code).unwrap();
+
+        // Pass as Quantity values (10 kg and 5 m/s)
+        let m_val = PhsValue::Quantity(physure_core::Quantity::new(10.0, "kg").unwrap());
+        let v_val = PhsValue::Quantity(physure_core::Quantity::new(5.0, "m/s").unwrap());
+
+        let res = module.invoke("E_k", &[m_val, v_val]).unwrap();
+        if let PhsValue::Quantity(q) = res {
+            assert_eq!(q.value.mean(), 125.0);
+            assert_eq!(q.unit.__repr__(), "J");
+        } else {
+            panic!("Expected Quantity result");
+        }
+    }
+
+    #[test]
+    fn test_invoke_rejects_incompatible_dimensions() {
+        let code = "fn E_k(m: kg, v: m/s) = 0.5 * m * v^2";
+        let mut module = PhsModule::from_source("ke", code).unwrap();
+
+        // Passing seconds instead of velocity
+        let m_val = PhsValue::Quantity(physure_core::Quantity::new(10.0, "kg").unwrap());
+        let invalid_v = PhsValue::Quantity(physure_core::Quantity::new(5.0, "s").unwrap());
+
+        let err = module.invoke("E_k", &[m_val, invalid_v]).unwrap_err();
+        assert!(
+            err.to_string().contains("Dimension mismatch")
+                || err.to_string().contains("incompatible")
+        );
+    }
+
+    #[test]
+    fn test_invoke_coerces_a_differently_scaled_but_compatible_unit() {
+        // Real dimensional coercion, not just a same-unit no-op: 5000 g into a `kg` parameter
+        // must convert (and produce the same physical answer as passing 5 kg directly), per
+        // `bind_param_value`'s documented "5 cm passed to a (r: m) parameter" contract.
+        let code = "fn double_mass(m: kg) = 2.0 * m";
+        let mut module = PhsModule::from_source("massy", code).unwrap();
+
+        let grams = PhsValue::Quantity(physure_core::Quantity::new(5000.0, "g").unwrap());
+        let res = module.invoke("double_mass", &[grams]).unwrap();
+        let PhsValue::Quantity(q) = res else {
+            panic!("Expected Quantity result")
+        };
+        assert_eq!(q.unit.__repr__(), "kg");
+        assert_eq!(q.value.mean(), 10.0);
+    }
+
+    #[test]
+    fn test_invoke_passes_unitless_number_through_when_param_has_no_declared_unit() {
+        let code = "scale(x, y) = x * y";
+        let mut module = PhsModule::from_source("shorthand", code).unwrap();
+
+        let res = module
+            .invoke("scale", &[PhsValue::Number(3.0), PhsValue::Number(4.0)])
+            .unwrap();
+        match res {
+            PhsValue::Number(n) => assert_eq!(n, 12.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 12.0),
+            other => panic!("Expected a numeric result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_invoke_zero_arg_function() {
+        let code = "fn answer() = 42.0";
+        let mut module = PhsModule::from_source("consts", code).unwrap();
+        let res = module.invoke("answer", &[]).unwrap();
+        match res {
+            PhsValue::Number(n) => assert_eq!(n, 42.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 42.0),
+            other => panic!("Expected a numeric result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_invoke_errors_on_argument_count_mismatch() {
+        let code = "fn add(a: m, b: m) = a + b";
+        let mut module = PhsModule::from_source("mathy", code).unwrap();
+        let only_arg = PhsValue::Quantity(physure_core::Quantity::new(1.0, "m").unwrap());
+        let err = module.invoke("add", &[only_arg]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains('2') && msg.contains('1'),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_invoke_errors_when_function_not_found() {
+        let code = "fn add(a: m, b: m) = a + b";
+        let mut module = PhsModule::from_source("mathy", code).unwrap();
+        let err = module.invoke("subtract", &[]).unwrap_err();
+        assert!(err.to_string().contains("not found"));
     }
 }
