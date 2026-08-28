@@ -432,3 +432,72 @@ use super::*;
         assert!(matches!(&stmts[0], Statement::Assignment(a) if a.name == "for_item"));
         assert!(matches!(&stmts[1], Statement::Assignment(a) if a.name == "while_count"));
     }
+
+    #[test]
+    fn parses_bool_literals() {
+        let prog = parse_phs("True\nFalse").unwrap();
+        assert!(matches!(&prog.statements[0], Statement::Expr(Expr::Bool(true))));
+        assert!(matches!(&prog.statements[1], Statement::Expr(Expr::Bool(false))));
+    }
+
+    #[test]
+    fn true_and_false_are_reserved_against_identifiers() {
+        assert!(parse_phs("True = 5").is_err());
+        assert!(parse_phs("False = 5").is_err());
+    }
+
+    #[test]
+    fn not_and_or_parse_with_the_documented_precedence_and_associativity() {
+        // `not pressure > limit and enabled or override`
+        //   == `((not (pressure > limit)) and enabled) or override`
+        let prog = parse_phs("not a > b and c or d").unwrap();
+        let Statement::Expr(expr) = &prog.statements[0] else { panic!("expected expr") };
+        let Expr::FunctionCall { name: outer_name, args: outer_args, .. } = expr else { panic!("expected or_ call") };
+        assert_eq!(outer_name, "op_or");
+        let Expr::FunctionCall { name: and_name, args: and_args, .. } = &outer_args[0] else { panic!("expected and_ call") };
+        assert_eq!(and_name, "op_and");
+        let Expr::FunctionCall { name: not_name, .. } = &and_args[0] else { panic!("expected not_ call") };
+        assert_eq!(not_name, "op_not");
+        assert!(matches!(&outer_args[1], Expr::Identifier(d) if d == "d"));
+        assert!(matches!(&and_args[1], Expr::Identifier(c) if c == "c"));
+    }
+
+    #[test]
+    fn repeated_not_nests_correctly() {
+        let prog = parse_phs("not not True").unwrap();
+        let Statement::Expr(Expr::FunctionCall { name: outer, args: outer_args, .. }) = &prog.statements[0] else { panic!() };
+        assert_eq!(outer, "op_not");
+        let Expr::FunctionCall { name: inner, args: inner_args, .. } = &outer_args[0] else { panic!() };
+        assert_eq!(inner, "op_not");
+        assert!(matches!(&inner_args[0], Expr::Bool(true)));
+    }
+
+    #[test]
+    fn and_or_accept_line_breaks_around_them() {
+        let prog = parse_phs("True\n  and\n  False\n  or\n  True").unwrap();
+        assert!(matches!(&prog.statements[0], Statement::Expr(Expr::FunctionCall { name, .. }) if name == "op_or"));
+    }
+
+    #[test]
+    fn a_dangling_and_or_or_is_a_parse_error() {
+        assert!(parse_phs("True and").is_err());
+        assert!(parse_phs("and True").is_err());
+    }
+
+    #[test]
+    fn not_re_enters_the_or_expr_chain_through_a_parenthesized_group() {
+        let prog = parse_phs("not (a and b)").unwrap();
+        let Statement::Expr(Expr::FunctionCall { name: outer, args: outer_args, .. }) = &prog.statements[0] else { panic!() };
+        assert_eq!(outer, "op_not");
+        let Expr::FunctionCall { name: inner, args: inner_args, .. } = &outer_args[0] else { panic!("expected op_and inside the parens") };
+        assert_eq!(inner, "op_and");
+        assert!(matches!(&inner_args[0], Expr::Identifier(a) if a == "a"));
+        assert!(matches!(&inner_args[1], Expr::Identifier(b) if b == "b"));
+    }
+
+    #[test]
+    fn bool_and_logical_expressions_parse_as_call_arguments() {
+        // A later task wires `assert(condition)` through exactly this call-arg position.
+        assert!(parse_phs("f(True)").is_ok());
+        assert!(parse_phs("f(a and b)").is_ok());
+    }

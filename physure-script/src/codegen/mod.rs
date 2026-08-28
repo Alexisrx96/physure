@@ -99,7 +99,7 @@ fn inline_bindings(expr: &Expr) -> Expr {
             left: Box::new(inline_bindings(left)),
             right: Box::new(inline_bindings(right)),
         },
-        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => expr.clone(),
+        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => expr.clone(),
         Expr::ForExpr { var, iterable, body } => Expr::ForExpr {
             var: var.clone(),
             iterable: Box::new(inline_bindings(iterable)),
@@ -256,6 +256,7 @@ pub fn expr_to_phs_string(expr: &Expr) -> String {
             }
         }
         Expr::Str(s) => s.clone(),
+        Expr::Bool(b) => if *b { "True" } else { "False" }.to_string(),
         Expr::Identifier(name) => name.clone(),
         Expr::BinaryOp { op, left, right } => {
             let l = expr_to_phs_string(left);
@@ -309,20 +310,74 @@ pub fn expr_to_unit_string(expr: &Expr) -> String {
     }
 }
 
-/// Recognizes `assert(actual, expected)` / `exact_assert(actual, expected)` — the only
-/// two-argument, no-kwargs shape v1 supports — used as a standalone statement. Every
-/// codegen target intercepts this before falling through to its generic `FunctionCall`
-/// handling, since none of them can express PHS's `assert`/`exact_assert` as an ordinary
-/// function call (Python's `assert` is a statement keyword, not a name; Rust/Java/JS have
-/// no builtin of that name at all).
-pub(crate) fn as_assert_call(expr: &Expr) -> Option<(&'static str, &Expr, &Expr)> {
+/// The `not`/`and`/`or` shape the parser desugars logical expressions into (see `ast.rs`'s
+/// note on `op_>` et al.). Every target maps this straight onto its own native `!`/`&&`/`||`
+/// -- all four of Python, Rust, Java, and JavaScript/TypeScript are natively short-circuit,
+/// so no target needs its own short-circuit emulation.
+pub(crate) enum LogicalOp<'a> {
+    Not(&'a Expr),
+    And(&'a Expr, &'a Expr),
+    Or(&'a Expr, &'a Expr),
+}
+
+pub(crate) fn as_logical_op(expr: &Expr) -> Option<LogicalOp<'_>> {
     let Expr::FunctionCall { name, args, kwargs } = expr else { return None };
-    if !kwargs.is_empty() || args.len() != 2 {
+    if !kwargs.is_empty() {
         return None;
     }
-    match name.as_str() {
-        "assert" => Some(("assert", &args[0], &args[1])),
-        "exact_assert" => Some(("exact_assert", &args[0], &args[1])),
+    match (name.as_str(), args.len()) {
+        ("op_not", 1) => Some(LogicalOp::Not(&args[0])),
+        ("op_and", 2) => Some(LogicalOp::And(&args[0], &args[1])),
+        ("op_or", 2) => Some(LogicalOp::Or(&args[0], &args[1])),
+        _ => None,
+    }
+}
+
+/// Recognizes an expression whose PHS type is definitely `Bool` without needing to run the
+/// interpreter: a literal, a comparison (`as_comparison_op`), a logical operator
+/// (`as_logical_op`), or an identifier previously classified as boolean by `known_bools`.
+///
+/// This is what lets codegen -- which never sees a runtime `PhsValue` -- decide between the
+/// `assert(Bool)`/`assert(Bool, String)` and `assert(Quantity, Quantity)` overloads (the
+/// interpreter makes the same decision dynamically, from the actual argument values), and
+/// lets Java and typed TypeScript give a local an explicit `boolean` type instead of the
+/// default `Quantity`. Deliberately narrow: an opaque function call or an unclassified
+/// identifier is never treated as boolean, matching this design's "no general overload
+/// resolution" and "no inferring boolean return types for arbitrary functions" scope.
+pub(crate) fn is_definitely_bool(expr: &Expr, known_bools: &HashSet<String>) -> bool {
+    match expr {
+        Expr::Bool(_) => true,
+        Expr::Identifier(name) => known_bools.contains(name),
+        Expr::FunctionCall { .. } => as_comparison_op(expr).is_some() || as_logical_op(expr).is_some(),
+        _ => false,
+    }
+}
+
+/// The overload an `assert`/`exact_assert` call site resolves to, decided statically from its
+/// arity and (for a 2-argument `assert` call) whether the first argument `is_definitely_bool`.
+/// Mirrors `builtins::core::eval_core_builtin`'s runtime dispatch, but codegen has no runtime
+/// value to inspect -- only the AST plus whatever `known_bools` the caller has tracked from
+/// earlier assignments in the same generated scope. Every codegen target intercepts this
+/// before falling through to its generic `FunctionCall` handling, since none of them can
+/// express PHS's `assert`/`exact_assert` as an ordinary function call.
+pub(crate) enum AssertShape<'a> {
+    Bool { condition: &'a Expr },
+    BoolWithMessage { condition: &'a Expr, message: &'a Expr },
+    Quantities { kind: &'static str, actual: &'a Expr, expected: &'a Expr },
+}
+
+pub(crate) fn as_assert_call<'a>(expr: &'a Expr, known_bools: &HashSet<String>) -> Option<AssertShape<'a>> {
+    let Expr::FunctionCall { name, args, kwargs } = expr else { return None };
+    if !kwargs.is_empty() {
+        return None;
+    }
+    match (name.as_str(), args.as_slice()) {
+        ("assert", [cond]) if is_definitely_bool(cond, known_bools) => Some(AssertShape::Bool { condition: cond }),
+        ("assert", [cond, msg]) if is_definitely_bool(cond, known_bools) => {
+            Some(AssertShape::BoolWithMessage { condition: cond, message: msg })
+        }
+        ("assert", [a, b]) => Some(AssertShape::Quantities { kind: "assert", actual: a, expected: b }),
+        ("exact_assert", [a, b]) => Some(AssertShape::Quantities { kind: "exact_assert", actual: a, expected: b }),
         _ => None,
     }
 }
@@ -550,7 +605,7 @@ fn rewrite_equation_calls(
             left: Box::new(rewrite_equation_calls(left, equations, functions, signatures)?),
             right: Box::new(rewrite_equation_calls(right, equations, functions, signatures)?),
         }),
-        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) => Ok(expr.clone()),
+        Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => Ok(expr.clone()),
         Expr::ForExpr { var, iterable, body } => {
             let new_iterable = rewrite_equation_calls(iterable, equations, functions, signatures)?;
             let new_body = rewrite_equation_calls(body, equations, functions, signatures)?;
@@ -566,6 +621,12 @@ fn rewrite_equation_calls(
 #[cfg(test)]
 mod const_fold_tests {
     use super::*;
+
+    #[test]
+    fn bool_literal_round_trips_through_expr_to_phs_string() {
+        assert_eq!(expr_to_phs_string(&Expr::Bool(true)), "True");
+        assert_eq!(expr_to_phs_string(&Expr::Bool(false)), "False");
+    }
 
     /// A `where` clause desugars to `let(name, value, body)`, which every target used to
     /// emit verbatim as a call to a function that does not exist anywhere.
@@ -692,5 +753,57 @@ mod const_fold_tests {
         let code = transpile(&program, Target::Python).unwrap();
         assert!(!code.contains("let("), "let should be inlined: {code}");
         assert!(code.contains("10.0"), "y should be substituted with 10.0: {code}");
+    }
+}
+
+#[cfg(test)]
+mod classifier_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn comparisons_and_logicals_are_definitely_bool() {
+        let known = HashSet::new();
+        let cmp = Expr::FunctionCall { name: "op_>".into(), args: vec![Expr::Bool(true), Expr::Bool(true)], kwargs: vec![] };
+        assert!(is_definitely_bool(&cmp, &known));
+        let not_expr = Expr::FunctionCall { name: "op_not".into(), args: vec![Expr::Bool(true)], kwargs: vec![] };
+        assert!(is_definitely_bool(&not_expr, &known));
+        assert!(is_definitely_bool(&Expr::Bool(false), &known));
+        assert!(!is_definitely_bool(&Expr::Identifier("x".into()), &known));
+    }
+
+    #[test]
+    fn a_known_bool_identifier_is_definitely_bool() {
+        let mut known = HashSet::new();
+        known.insert("flag".to_string());
+        assert!(is_definitely_bool(&Expr::Identifier("flag".to_string()), &known));
+    }
+
+    #[test]
+    fn assert_call_shape_depends_on_arity_and_the_bool_classifier() {
+        let known = HashSet::new();
+        let one_arg = Expr::FunctionCall { name: "assert".into(), args: vec![Expr::Bool(true)], kwargs: vec![] };
+        assert!(matches!(as_assert_call(&one_arg, &known), Some(AssertShape::Bool { .. })));
+
+        let bool_msg = Expr::FunctionCall {
+            name: "assert".into(),
+            args: vec![Expr::Bool(false), Expr::Str("boom".into())],
+            kwargs: vec![],
+        };
+        assert!(matches!(as_assert_call(&bool_msg, &known), Some(AssertShape::BoolWithMessage { .. })));
+
+        let quantities = Expr::FunctionCall {
+            name: "assert".into(),
+            args: vec![Expr::Identifier("a".into()), Expr::Identifier("b".into())],
+            kwargs: vec![],
+        };
+        assert!(matches!(as_assert_call(&quantities, &known), Some(AssertShape::Quantities { kind: "assert", .. })));
+
+        let exact = Expr::FunctionCall {
+            name: "exact_assert".into(),
+            args: vec![Expr::Identifier("a".into()), Expr::Identifier("b".into())],
+            kwargs: vec![],
+        };
+        assert!(matches!(as_assert_call(&exact, &known), Some(AssertShape::Quantities { kind: "exact_assert", .. })));
     }
 }

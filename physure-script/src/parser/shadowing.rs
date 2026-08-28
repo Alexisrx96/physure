@@ -181,7 +181,7 @@ fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: 
             }
             Ok(())
         }
-        Expr::Identifier(_) | Expr::Str(_) => Ok(()),
+        Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => Ok(()),
         Expr::BinaryOp { left, right, .. } => {
             check_expr_shadowing(left, bound, line, col)?;
             check_expr_shadowing(right, bound, line, col)

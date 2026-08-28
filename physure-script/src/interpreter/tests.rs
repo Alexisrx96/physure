@@ -575,6 +575,79 @@ use physure_core::units::parser::Parser as UnitParser;
     }
 
     #[test]
+    fn bool_assert_passes_and_returns_none() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("assert(True)").unwrap();
+        assert_eq!(results[0], PhsValue::None);
+    }
+
+    #[test]
+    fn bool_assert_fails_with_assertion_failed() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(False)").unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+    }
+
+    #[test]
+    fn bool_assert_with_message_includes_it_in_the_failure() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(False, \"scenario id\")").unwrap_err();
+        let PhysureError::AssertionFailed { message, .. } = err else {
+            panic!("expected AssertionFailed, got {err:?}")
+        };
+        assert_eq!(message, "scenario id");
+    }
+
+    #[test]
+    fn invalid_assert_signature_lists_the_accepted_ones() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(1.0, 2.0, 3.0)").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("assert(Bool)") && msg.contains("assert(Quantity, Quantity)"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn exact_assert_has_no_bool_overload() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("exact_assert(True)").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("exact_assert(Quantity, Quantity)"), "{msg}");
+    }
+
+    #[test]
+    fn assert_of_a_comparison_expression_works_for_compatible_converted_units() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("assert(1.0 km == 1000.0 m)").unwrap();
+        assert_eq!(results[0], PhsValue::None);
+    }
+
+    #[test]
+    fn a_false_sigma_bound_comparison_reaches_bool_assert_and_fails() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(5.0 == 1.0 +/- 0.1 sigma)").unwrap_err();
+        assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+    }
+
+    #[test]
+    fn assert_with_no_arguments_lists_the_accepted_signatures() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert()").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("assert(Bool)"), "{msg}");
+    }
+
+    #[test]
+    fn assert_rejects_a_bool_condition_with_a_non_string_message() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("assert(True, 5.0 m)").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("assert(Bool)") && msg.contains("assert(Quantity, Quantity)"), "{msg}");
+    }
+
+    #[test]
     fn stable_and_experimental_decorators_do_not_affect_evaluation() {
         let mut interp = PhsInterpreter::default();
         let results = interp.eval_str("@stable\nfn f(x) = x * 2.0\nf(3.0)").unwrap();
@@ -1063,4 +1136,95 @@ r3 = circuito_abierto(5 V, 2 A)
             .eval_binary_op_vals(BinaryOp::Pow, PhsValue::Number(-2.0), PhsValue::Number(3.0))
             .unwrap();
         assert_eq!(cubed, PhsValue::Number(-8.0));
+    }
+
+    #[test]
+    fn bool_literal_evaluates_directly_to_a_bool_value() {
+        let interp = PhsInterpreter::default();
+        let env = std::collections::HashMap::new();
+        let result = interp.eval_expr(&Expr::Bool(true), &env).unwrap();
+        assert_eq!(result, PhsValue::Bool(true));
+    }
+
+    #[test]
+    fn not_and_or_truth_table() {
+        let mut interp = PhsInterpreter::default();
+        let cases = [
+            ("not True", "False"),
+            ("not False", "True"),
+            ("True and False", "False"),
+            ("True and True", "True"),
+            ("False and True", "False"),
+            ("True or False", "True"),
+            ("False or False", "False"),
+            ("False or True", "True"),
+        ];
+        for (src, expected) in cases {
+            let results = interp.eval_str(src).unwrap();
+            assert_eq!(results[0].to_string(), expected, "for `{src}`");
+        }
+    }
+
+    #[test]
+    fn and_short_circuits_and_never_evaluates_a_dividing_by_zero_right_side() {
+        let mut interp = PhsInterpreter::default();
+        // Eager evaluation would raise "Division by zero" instead of returning False.
+        let results = interp.eval_str("False and (1 / 0 > 0)").unwrap();
+        assert_eq!(results[0].to_string(), "False");
+    }
+
+    #[test]
+    fn or_short_circuits_and_never_evaluates_a_dividing_by_zero_right_side() {
+        let mut interp = PhsInterpreter::default();
+        let results = interp.eval_str("True or (1 / 0 > 0)").unwrap();
+        assert_eq!(results[0].to_string(), "True");
+    }
+
+    #[test]
+    fn not_rejects_a_non_bool_operand() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("not 5").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
+
+    #[test]
+    fn and_rejects_a_non_bool_left_operand_without_evaluating_the_right_side() {
+        let mut interp = PhsInterpreter::default();
+        // If the (invalid) left operand's type error didn't short-circuit, this would raise
+        // "Division by zero" from the right side instead of a type error about `5 m`.
+        let err = interp.eval_str("5 m and (1 / 0 > 0)").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
+
+    #[test]
+    fn bool_equality_and_inequality() {
+        let mut interp = PhsInterpreter::default();
+        assert_eq!(interp.eval_str("True == True").unwrap()[0].to_string(), "True");
+        assert_eq!(interp.eval_str("True == False").unwrap()[0].to_string(), "False");
+        assert_eq!(interp.eval_str("True != False").unwrap()[0].to_string(), "True");
+        assert_eq!(interp.eval_str("False != False").unwrap()[0].to_string(), "False");
+    }
+
+    #[test]
+    fn mixed_bool_and_non_bool_equality_is_a_type_error() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("True == 1").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+        let err = interp.eval_str("1.0 m != False").unwrap_err();
+        assert!(matches!(err, PhysureError::Generic(_)));
+    }
+
+    #[test]
+    fn bool_compared_to_a_none_value_is_a_type_error_naming_both() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("True == assert(1.0 m, 1.0 m)").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Bool") && msg.contains("None"), "{msg}");
+    }
+
+    #[test]
+    fn a_missing_comparison_operand_is_distinguished_from_a_present_none_value() {
+        let mut interp = PhsInterpreter::default();
+        let err = interp.eval_str("op_eq(True)").unwrap_err();
+        assert!(err.to_string().contains("missing argument"), "{err}");
     }

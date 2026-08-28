@@ -103,6 +103,8 @@ pub enum Expr {
     /// happens to name a variable stays the text the user wrote; `{name}` interpolation is
     /// the explicit way to fold a value into it.
     Str(String),
+    /// `True` or `False`. Reserved keywords in PHS source — see `phs.pest`'s `keyword` rule.
+    Bool(bool),
     BinaryOp {
         op: BinaryOp,
         left: Box<Expr>,
@@ -252,6 +254,12 @@ mod tests {
         };
         let expr = Expr::Quantity(node);
         assert!(matches!(expr, Expr::Quantity(_)));
+    }
+
+    #[test]
+    fn test_construct_bool() {
+        let expr = Expr::Bool(true);
+        assert!(matches!(expr, Expr::Bool(true)));
     }
 
     #[test]

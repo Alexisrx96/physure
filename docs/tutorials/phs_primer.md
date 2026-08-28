@@ -114,6 +114,52 @@ it (`phs_primer.html`) — every quantity, every intermediate step, every unit a
 laid out as a single offline document. Think of it as a photographed whiteboard: not just the
 final answer, but the whole derivation, in a form you can attach to an email or a ticket
 without anyone having to re-run anything to trust it. The report *is* the audit trail.
+ 
+## 6. Booleans, `not`/`and`/`or`, and assertions
+
+Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `≈`) return a real boolean, `True` or `False`.
+There is no implicit truthiness: a quantity, a number, or a string is never treated as a
+condition on its own.
+
+```phs
+pressure > 0 Pa
+count != 0
+not (sensor_disconnected)
+denominator != 0 and numerator / denominator > limit
+```
+
+`and` and `or` short-circuit: `False and rhs` and `True or rhs` never evaluate `rhs` at all,
+so a guard like the denominator check above is safe even when `rhs` would otherwise raise.
+`not` binds tighter than `and`, which binds tighter than `or` — parenthesize a mixed condition
+so a later reader doesn't have to work it out:
+
+```phs
+(not (pressure > limit) and enabled) or override
+```
+
+`assert` takes either a boolean condition (with an optional message) or two quantities to
+compare directly:
+
+```phs
+assert(power > 0 kW)
+assert(pressure >= minimum_pressure, "V-PUMP-004: pressure is below the operating range")
+assert(actual, expected)          # existing form: dimensional + magnitude tolerance check
+exact_assert(actual, expected)    # existing form: exact unit and magnitude match
+```
+
+`assert(actual, expected)` and `exact_assert(actual, expected)` still expect two `Quantity`
+values — `assert(actual == expected)` is the boolean form, and gives a less specific failure
+message (it doesn't know *how much* the two differ, only that they weren't equal), so prefer
+naming the comparison you actually mean.
+
+Prefer several small assertions with descriptive messages over one large compound condition —
+a boolean built from named domain predicates (`is_within_tolerance and is_powered`) reads
+better and fails with a clearer message than one long inline expression.
+
+A sigma-bound condition like `assert(result == reference +/- 2 sigma)` parses and runs in the
+interpreter, but its behavior is not yet identical across every transpile target (see
+`docs/uncertainty-gum-compliance.md`) — use `assert(actual, expected)` instead when the check
+needs to produce the same result in every generated language.
 
 ## Break it on purpose
 

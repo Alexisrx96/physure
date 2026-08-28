@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::ast::{
     Program, Statement, ImportNode, ImportSpecifier, ExportNode,
     FunctionDefNode, AssignmentNode, Expr, BinaryOp, QuantityNode
@@ -17,35 +19,53 @@ impl CodeGenerator for PythonTranspiler {
             "except ImportError:\n",
             "    def vector(*args): return list(args)\n\n"
         ));
-        
+        let mut known_bools: HashSet<String> = HashSet::new();
+
         for stmt in &program.statements {
             match stmt {
                 Statement::Assignment(node) => {
+                    if super::is_definitely_bool(&node.value, &known_bools) {
+                        known_bools.insert(node.name.clone());
+                    } else {
+                        known_bools.remove(&node.name);
+                    }
                     let stmt_str = self.generate_assignment(node)?;
                     out.push_str(&stmt_str);
                     out.push('\n');
                     out.push_str(&format!("print(f\"{}: {{{}}}\")\n", node.name, sanitize_identifier(&node.name)));
                 }
                 Statement::Expr(expr) => {
-                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
-                        let a_code = self.generate_expr(a)?;
-                        let b_code = self.generate_expr(b)?;
-                        let line = if kind == "assert" {
-                            format!(
-                                "assert ({a}).approx_eq({b}, 1e-9, 1e-12), f\"assert failed: {{{a}}} != {{{b}}}\"",
-                                a = a_code, b = b_code
-                            )
-                        } else {
-                            format!(
-                                "assert ({a}).exact_eq({b}), f\"exact_assert failed: {{{a}}} != {{{b}}}\"",
-                                a = a_code, b = b_code
-                            )
-                        };
-                        out.push_str(&line);
-                        out.push('\n');
-                    } else {
-                        let expr_str = self.generate_expr(expr)?;
-                        out.push_str(&format!("print({})\n", expr_str));
+                    match super::as_assert_call(expr, &known_bools) {
+                        Some(super::AssertShape::Bool { condition }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            out.push_str(&format!("if not ({}): raise AssertionError(\"assertion failed\")\n", cond_code));
+                        }
+                        Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            let msg_code = self.generate_expr(message)?;
+                            out.push_str(&format!("if not ({}): raise AssertionError({})\n", cond_code, msg_code));
+                        }
+                        Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                            let a_code = self.generate_expr(actual)?;
+                            let b_code = self.generate_expr(expected)?;
+                            let line = if kind == "assert" {
+                                format!(
+                                    "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(\"assert failed: {{}} != {{}}\".format({a}, {b}))",
+                                    a = a_code, b = b_code
+                                )
+                            } else {
+                                format!(
+                                    "if not ({a}).exact_eq({b}): raise AssertionError(\"exact_assert failed: {{}} != {{}}\".format({a}, {b}))",
+                                    a = a_code, b = b_code
+                                )
+                            };
+                            out.push_str(&line);
+                            out.push('\n');
+                        }
+                        None => {
+                            let expr_str = self.generate_expr(expr)?;
+                            out.push_str(&format!("print({})\n", expr_str));
+                        }
                     }
                 }
                 _ => {
@@ -57,7 +77,7 @@ impl CodeGenerator for PythonTranspiler {
                 }
             }
         }
-        
+
         Ok(out)
     }
 }
@@ -178,6 +198,7 @@ impl PythonTranspiler {
                 }
                 Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
             }
+            Expr::Bool(b) => Ok(if *b { "True" } else { "False" }.to_string()),
             Expr::Identifier(name) => {
                 if name.starts_with('`') || name.contains('\n') {
                     let clean = name.trim_matches('`').trim();
@@ -219,7 +240,14 @@ impl PythonTranspiler {
                     let r_str = self.generate_expr(r)?;
                     return Ok(format!("({} {} {})", l_str, op_sym, r_str));
                 }
-                if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && args.len() == 2 {
+                if let Some(logical) = super::as_logical_op(expr) {
+                    return Ok(match logical {
+                        super::LogicalOp::Not(x) => format!("(not {})", self.generate_expr(x)?),
+                        super::LogicalOp::And(l, r) => format!("({} and {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                        super::LogicalOp::Or(l, r) => format!("({} or {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                    });
+                }
+                if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && matches!(args.len(), 1 | 2) {
                     return Err(CodegenError::Generic(format!(
                         "'{}' can only be used as a standalone statement, not nested inside an expression",
                         name
@@ -320,13 +348,23 @@ mod tests {
     }
 
     #[test]
-    fn transpiles_assert_call_to_a_python_assert_statement() {
+    fn transpiles_bool_literals_python() {
+        let tp = PythonTranspiler;
+        assert_eq!(tp.generate_expr(&Expr::Bool(true)).unwrap(), "True");
+        assert_eq!(tp.generate_expr(&Expr::Bool(false)).unwrap(), "False");
+    }
+
+    #[test]
+    fn transpiles_assert_call_to_a_python_conditional_raise() {
+        // Python's `assert` statement is removed by `python -O`; the design requires an
+        // explicit `if not ...: raise AssertionError(...)` instead so `-O` can't disable it.
         let tp = PythonTranspiler;
         let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
         let code = tp.generate_program(&program).unwrap();
-        assert!(code.contains("assert "), "expected a Python assert statement:\n{code}");
+        assert!(code.contains("if not"), "expected a conditional raise:\n{code}");
+        assert!(code.contains("raise AssertionError"), "expected AssertionError:\n{code}");
+        assert!(!code.contains("\nassert "), "must not emit a removable `assert` statement:\n{code}");
         assert!(code.contains(".approx_eq("), "expected approx_eq call:\n{code}");
-        assert!(!code.contains("print(assert"), "must not fall through to the generic call path:\n{code}");
     }
 
     #[test]
@@ -334,7 +372,65 @@ mod tests {
         let tp = PythonTranspiler;
         let program = crate::parser::parse_phs("exact_assert(5.0 m, 5.0 m)").unwrap();
         let code = tp.generate_program(&program).unwrap();
-        assert!(code.contains("assert ") && code.contains(".exact_eq("), "expected an exact_eq assert:\n{code}");
+        assert!(code.contains("if not") && code.contains(".exact_eq("), "expected an exact_eq conditional raise:\n{code}");
+        assert!(!code.contains("\nassert "), "must not emit a removable `assert` statement:\n{code}");
+    }
+
+    /// Feeds `code` to a real Python interpreter's `compile(..., 'exec')` (never runs it,
+    /// so no `physure` package needs to be importable). Panics if the code fails to
+    /// compile; returns early (skipping the assertion) if no interpreter is found on PATH.
+    fn assert_generated_python_compiles(code: &str) {
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let output = match std::process::Command::new(python)
+            .args(["-c", "import sys; compile(sys.stdin.read(), '<generated>', 'exec')"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.take().unwrap().write_all(code.as_bytes())?;
+                child.wait_with_output()
+            }) {
+            Ok(o) => o,
+            Err(_) => {
+                eprintln!("skipping: no python interpreter available");
+                return;
+            }
+        };
+        assert!(
+            output.status.success(),
+            "generated Python failed to compile:\n{}\nstderr: {}",
+            code,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn transpiled_quantity_assert_is_valid_python_syntax() {
+        // A regression test for a real bug: the assert-failure message used to be an
+        // f-string that nested double-quoted unit strings (`Q_(1.0, "km")`) inside a
+        // double-quoted outer f-string, which is a SyntaxError before Python 3.12 (this
+        // project supports 3.11+). Compiling (not running) the generated code is enough
+        // to catch this class of bug without needing the `physure` package importable.
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert_generated_python_compiles(&code);
+    }
+
+    #[test]
+    fn transpiled_quantity_assert_handles_operands_with_both_quote_characters() {
+        // A string-literal operand containing an apostrophe is valid PHS and reaches the
+        // same AssertShape::Quantities codegen path as a normal Quantity assert -- proving
+        // the message construction is immune to quote-collision regardless of which quote
+        // character(s) appear inside the operand's own generated code, not just the common
+        // double-quoted-unit case. (An f-string with EITHER quote character as the outer
+        // delimiter is vulnerable to the other; `.format()` sidesteps the whole class.)
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(\"it's here\", \"abc\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert_generated_python_compiles(&code);
     }
 
     #[test]
@@ -342,6 +438,63 @@ mod tests {
         let tp = PythonTranspiler;
         let program = crate::parser::parse_phs("x = assert(1.0 m, 1.0 m)").unwrap();
         assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn transpiles_logical_operators_python() {
+        let tp = PythonTranspiler;
+        let not_expr = Expr::FunctionCall { name: "op_not".to_string(), args: vec![Expr::Bool(true)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&not_expr).unwrap(), "(not True)");
+        let and_expr = Expr::FunctionCall { name: "op_and".to_string(), args: vec![Expr::Bool(true), Expr::Bool(false)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&and_expr).unwrap(), "(True and False)");
+        let or_expr = Expr::FunctionCall { name: "op_or".to_string(), args: vec![Expr::Bool(false), Expr::Bool(true)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&or_expr).unwrap(), "(False or True)");
+    }
+
+    #[test]
+    fn transpiles_one_argument_bool_assert_python() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 m > 0.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("if not") && code.contains("raise AssertionError(\"assertion failed\")"), "{code}");
+    }
+
+    #[test]
+    fn transpiles_bool_assert_with_message_python() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("assert(1.0 m > 2.0 m, \"too small\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("raise AssertionError(\"too small\")"), "{code}");
+    }
+
+    #[test]
+    fn rejects_one_argument_assert_nested_in_an_expression_py() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("x = assert(1.0 m > 0.0 m)").unwrap();
+        assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn named_bool_assignment_feeds_a_later_assert_python() {
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(
+            code.contains("raise AssertionError(\"should hold\")"),
+            "expected the Bool+message shape, not a Quantity assert:\n{code}"
+        );
+    }
+
+    #[test]
+    fn an_assert_with_an_unclassified_condition_errors_instead_of_emitting_broken_python() {
+        // `is_ready(x)` isn't a literal, comparison, logical op, or tracked-bool identifier,
+        // so `is_definitely_bool` correctly can't promise it's Bool -- this must produce a
+        // clear CodegenError, not silently fall through to `print(assert(is_ready(x)))`
+        // (a Python SyntaxError, since `assert` is a keyword there, not a callable).
+        let tp = PythonTranspiler;
+        let program = crate::parser::parse_phs("fn is_ready(x) = x > 0\nassert(is_ready(v))").unwrap();
+        let result = tp.generate_program(&program);
+        assert!(result.is_err(), "expected a CodegenError, got: {result:?}");
     }
 
     #[test]

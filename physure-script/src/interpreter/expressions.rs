@@ -89,6 +89,7 @@ impl PhsInterpreter {
                     Ok(PhsValue::Quantity(q))
                 }
             }
+            Expr::Bool(value) => Ok(PhsValue::Bool(*value)),
             // A string literal is the text the user wrote, never a variable lookup: with
             // `v = 3 m/s` in scope, `deriv("0.5*m*v^2", "v")` used to receive the quantity
             // instead of the name. `{v}` folds a value in explicitly.
@@ -199,6 +200,39 @@ impl PhsInterpreter {
                         return Err(PhysureError::Generic(format!("Failed to evaluate equation '{}'", name)));
                     };
                     return self.eval_expr(expr, &local_env);
+                }
+
+                // Short-circuit logical operators: language semantics, not an optimization,
+                // so they must run before the eager argument evaluation below rather than as
+                // ordinary builtins. Strict Bool checking here (never `is_truthy`) is what
+                // keeps `5 m and enabled` a type error instead of a silent truthiness test.
+                if kwargs.is_empty() && args.len() == 1 && name == "op_not" {
+                    let operand = self.eval_expr(&args[0], env)?;
+                    let PhsValue::Bool(b) = operand else {
+                        return Err(PhysureError::Generic(format!(
+                            "`not` expects a Bool operand, got {}", operand.type_name()
+                        )));
+                    };
+                    return Ok(PhsValue::Bool(!b));
+                }
+                if kwargs.is_empty() && args.len() == 2 && (name == "op_and" || name == "op_or") {
+                    let word = if name == "op_and" { "and" } else { "or" };
+                    let left = self.eval_expr(&args[0], env)?;
+                    let PhsValue::Bool(left_b) = left else {
+                        return Err(PhysureError::Generic(format!(
+                            "`{}` expects Bool operands, left side was {}", word, left.type_name()
+                        )));
+                    };
+                    if (name == "op_and" && !left_b) || (name == "op_or" && left_b) {
+                        return Ok(PhsValue::Bool(left_b));
+                    }
+                    let right = self.eval_expr(&args[1], env)?;
+                    let PhsValue::Bool(right_b) = right else {
+                        return Err(PhysureError::Generic(format!(
+                            "`{}` expects Bool operands, right side was {}", word, right.type_name()
+                        )));
+                    };
+                    return Ok(PhsValue::Bool(right_b));
                 }
 
                 let mut arg_vals = Vec::new();

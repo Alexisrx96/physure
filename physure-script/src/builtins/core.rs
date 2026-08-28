@@ -12,6 +12,39 @@ fn boolean(res: bool) -> PhsValue {
     PhsValue::Bool(res)
 }
 
+/// Names an operand for an error message. A present argument (including one whose value is
+/// the real `PhsValue::None`) renders as its `type_name()`; a genuinely absent argument slot
+/// (reachable only via a direct call like `op_eq(True)` with the wrong arity, since normal
+/// `==` syntax always supplies exactly 2 args) renders distinctly so the two cases can't be
+/// confused in the message.
+fn describe_arg(v: Option<&PhsValue>) -> &'static str {
+    match v {
+        Some(val) => val.type_name(),
+        None => "a missing argument",
+    }
+}
+
+/// The `==`/`!=` Bool branch. `Some(Ok(...))` when at least one side is `Bool` (a matching
+/// pair compares directly; a mismatched pair is a type error naming both types); `None` when
+/// neither side is `Bool`, so the caller falls through to the existing Quantity/sigma-bound
+/// handling unchanged.
+fn bool_equality(args: &[PhsValue], symbol: &str, want_equal: bool) -> Option<PhysureResult<Option<PhsValue>>> {
+    let l_is_bool = matches!(args.first(), Some(PhsValue::Bool(_)));
+    let r_is_bool = matches!(args.get(1), Some(PhsValue::Bool(_)));
+    if !l_is_bool && !r_is_bool {
+        return None;
+    }
+    if let (Some(PhsValue::Bool(l)), Some(PhsValue::Bool(r))) = (args.first(), args.get(1)) {
+        return Some(Ok(Some(boolean((l == r) == want_equal))));
+    }
+    Some(Err(PhysureError::Generic(format!(
+        "cannot compare {} and {} with {}",
+        describe_arg(args.first()),
+        describe_arg(args.get(1)),
+        symbol,
+    ))))
+}
+
 /// Two quantities reduced to a pair of numbers that can be compared directly.
 ///
 /// Comparing the raw magnitudes makes `1 km == 1000 m` false and `1 km > 999 m` false
@@ -169,27 +202,51 @@ pub fn eval_core_builtin(
                 _ => Ok(Some(val.clone())),
             }
         }
-        "assert" | "exact_assert" => {
-            if args.len() != 2 {
-                return Err(PhysureError::Generic(format!("{name} expects 2 arguments (actual, expected)")));
-            }
-            match (&args[0], &args[1]) {
-                (PhsValue::Quantity(a), PhsValue::Quantity(b)) => {
-                    if name == "assert" {
-                        a.phs_assert(b)?;
-                    } else {
-                        a.phs_exact_assert(b)?;
-                    }
+        "assert" => match args {
+            [PhsValue::Bool(cond)] => {
+                if *cond {
                     Ok(Some(PhsValue::None))
+                } else {
+                    Err(PhysureError::AssertionFailed { kind: "assert", message: "condition was False".to_string() })
                 }
-                _ => Err(PhysureError::Generic(format!("{name} expects two quantities"))),
             }
-        }
+            [PhsValue::Bool(cond), PhsValue::String(msg)] => {
+                if *cond {
+                    Ok(Some(PhsValue::None))
+                } else {
+                    Err(PhysureError::AssertionFailed { kind: "assert", message: msg.clone() })
+                }
+            }
+            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+                a.phs_assert(b)?;
+                Ok(Some(PhsValue::None))
+            }
+            _ => Err(PhysureError::Generic(format!(
+                "assert received ({}); expected assert(Bool), assert(Bool, String), or assert(Quantity, Quantity)",
+                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+            ))),
+        },
+        // No Bool overload here, unlike `assert` above -- boolean equality is expressed as
+        // `assert(left == right)`, not `exact_assert(left == right)`. This omission is
+        // deliberate, not an oversight; do not add a symmetrical Bool arm.
+        "exact_assert" => match args {
+            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+                a.phs_exact_assert(b)?;
+                Ok(Some(PhsValue::None))
+            }
+            _ => Err(PhysureError::Generic(format!(
+                "exact_assert received ({}); expected exact_assert(Quantity, Quantity)",
+                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+            ))),
+        },
         "op_>" | "op_gt" => compare(args, |l, r| l > r),
         "op_<" | "op_lt" => compare(args, |l, r| l < r),
         "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
         "op_<=" | "op_lte" => compare(args, |l, r| l <= r),
         "op_==" | "op_eq" => {
+            if let Some(res) = bool_equality(args, "==", true) {
+                return res;
+            }
             // `x == 5.0 +/- 0.2` asks whether x lies within k sigma of the target, so it
             // is a tolerance test rather than an ordinary comparison.
             if let (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma)))
@@ -202,7 +259,12 @@ pub fn eval_core_builtin(
             }
             compare(args, |l, r| (l - r).abs() < 1e-9)
         }
-        "op_!=" | "op_neq" => compare(args, |l, r| (l - r).abs() >= 1e-9),
+        "op_!=" | "op_neq" => {
+            if let Some(res) = bool_equality(args, "!=", false) {
+                return res;
+            }
+            compare(args, |l, r| (l - r).abs() >= 1e-9)
+        }
         "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
         "ternary" | "if_then_else" => {
             // Was its own, narrower truthiness check (Quantity/Number only, silently `false`

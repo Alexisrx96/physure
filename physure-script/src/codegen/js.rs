@@ -36,6 +36,7 @@ impl CodeGenerator for JsTranspiler {
         let mut functions = Vec::new();
         let mut main_stmts = Vec::new();
         let mut main_declared_vars = HashSet::new();
+        let mut known_bools: HashSet<String> = HashSet::new();
         let reassigned = names_reassigned_in_loops(&program.statements);
 
         for stmt in &program.statements {
@@ -47,11 +48,17 @@ impl CodeGenerator for JsTranspiler {
                     let val = self.generate_expr(&node.value)?;
                     let var_name = snake_to_camel(&node.name);
                     let is_str_literal = matches!(&node.value, Expr::Str(_));
+                    let is_bool_now = super::is_definitely_bool(&node.value, &known_bools);
+                    if is_bool_now {
+                        known_bools.insert(node.name.clone());
+                    } else {
+                        known_bools.remove(&node.name);
+                    }
                     main_declared_vars.insert(var_name.clone());
                     // `const` unless a later `while` loop reassigns this variable.
                     let keyword = if reassigned.contains(&var_name) { "let" } else { "const" };
                     if self.typed {
-                        let ty = if is_str_literal { "string" } else { "Quantity" };
+                        let ty = if is_bool_now { "boolean" } else if is_str_literal { "string" } else { "Quantity" };
                         main_stmts.push(format!("{} {}: {} = {};", keyword, var_name, ty, val));
                     } else {
                         main_stmts.push(format!("{} {} = {};", keyword, var_name, val));
@@ -59,14 +66,26 @@ impl CodeGenerator for JsTranspiler {
                     main_stmts.push(format!("console.log(`{}: ${{{}}}`);", node.name, var_name));
                 }
                 Statement::Expr(expr) => {
-                    if let Some((kind, a, b)) = super::as_assert_call(expr) {
-                        let a_code = self.generate_expr(a)?;
-                        let b_code = self.generate_expr(b)?;
-                        let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
-                        main_stmts.push(format!("{}.{}({});", a_code, method, b_code));
-                    } else {
-                        let val = self.generate_expr(expr)?;
-                        main_stmts.push(format!("console.log({});", val));
+                    match super::as_assert_call(expr, &known_bools) {
+                        Some(super::AssertShape::Bool { condition }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            main_stmts.push(format!("if (!({})) throw new Error(\"assertion failed\");", cond_code));
+                        }
+                        Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                            let cond_code = self.generate_expr(condition)?;
+                            let msg_code = self.generate_expr(message)?;
+                            main_stmts.push(format!("if (!({})) throw new Error({});", cond_code, msg_code));
+                        }
+                        Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                            let a_code = self.generate_expr(actual)?;
+                            let b_code = self.generate_expr(expected)?;
+                            let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
+                            main_stmts.push(format!("{}.{}({});", a_code, method, b_code));
+                        }
+                        None => {
+                            let val = self.generate_expr(expr)?;
+                            main_stmts.push(format!("console.log({});", val));
+                        }
                     }
                 }
                 Statement::While { .. } => {
@@ -182,6 +201,7 @@ impl JsTranspiler {
                 out.push('`');
                 Ok(out)
             }
+            Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
             Expr::Quantity(q) => {
                 if let Some(reason) = q.asymmetric_refusal() {
@@ -234,13 +254,20 @@ impl JsTranspiler {
                     let r_str = self.generate_expr(r)?;
                     return Ok(format!("({}.getValue() {} {}.getValue())", l_str, op_sym, r_str));
                 }
+                if let Some(logical) = super::as_logical_op(expr) {
+                    return Ok(match logical {
+                        super::LogicalOp::Not(x) => format!("(!{})", self.generate_expr(x)?),
+                        super::LogicalOp::And(l, r) => format!("({} && {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                        super::LogicalOp::Or(l, r) => format!("({} || {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                    });
+                }
                 if !kwargs.is_empty() {
                     return Err(CodegenError::Generic(format!(
                         "Named arguments are not supported in JS/TS codegen (call to '{}')",
                         name
                     )));
                 }
-                if (name == "assert" || name == "exact_assert") && args.len() == 2 {
+                if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && matches!(args.len(), 1 | 2) {
                     return Err(CodegenError::Generic(format!(
                         "'{}' can only be used as a standalone statement, not nested inside an expression",
                         name
@@ -346,6 +373,13 @@ mod tests {
     }
 
     #[test]
+    fn transpiles_bool_literals_js() {
+        let tp = JsTranspiler::default();
+        assert_eq!(tp.generate_expr(&Expr::Bool(true)).unwrap(), "true");
+        assert_eq!(tp.generate_expr(&Expr::Bool(false)).unwrap(), "false");
+    }
+
+    #[test]
     fn transpiles_assert_call_to_phys_assert_call_js() {
         let transpiler = JsTranspiler::default();
         let program = crate::parser::parse_phs("assert(1.0 km, 1000.0 m)").unwrap();
@@ -396,5 +430,72 @@ mod tests {
         assert!(code.contains("let i = "), "expected mutable declaration:\n{code}");
         assert!(code.contains("i = i.add("), "expected reassignment without redeclaration:\n{code}");
         assert!(!code.contains("let i = i.add("), "reassignment should not redeclare inside the loop:\n{code}");
+    }
+
+    #[test]
+    fn transpiles_logical_operators_js() {
+        let tp = JsTranspiler::default();
+        let or_expr = Expr::FunctionCall { name: "op_or".to_string(), args: vec![Expr::Bool(false), Expr::Bool(true)], kwargs: vec![] };
+        assert_eq!(tp.generate_expr(&or_expr).unwrap(), "(false || true)");
+    }
+
+    #[test]
+    fn named_bool_assignment_gets_an_explicit_boolean_type_ts() {
+        let tp = JsTranspiler { typed: true };
+        let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains(": boolean ="), "expected an explicit boolean annotation:\n{code}");
+        // The message argument goes through the same `Expr::Str` codegen as every other
+        // string in this file, which always renders as a template literal (backtick), not a
+        // double-quoted string -- see `untyped_js_never_emits_a_boolean_type_annotation` below.
+        assert!(code.contains("throw new Error(`should hold`)"), "{code}");
+    }
+
+    #[test]
+    fn rejects_one_argument_assert_nested_in_an_expression_js() {
+        let tp = JsTranspiler::default();
+        let program = crate::parser::parse_phs("x = assert(1.0 m > 0.0 m)").unwrap();
+        assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn transpiles_one_argument_bool_assert_js() {
+        let tp = JsTranspiler::default();
+        let program = crate::parser::parse_phs("assert(1.0 m > 0.0 m)").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(code.contains("if (!(") && code.contains("throw new Error(\"assertion failed\")"), "{code}");
+    }
+
+    #[test]
+    fn transpiles_bool_assert_with_message_js() {
+        let tp = JsTranspiler::default();
+        let program = crate::parser::parse_phs("assert(1.0 m > 2.0 m, \"too small\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        // `Expr::Str` always renders as a template literal (backtick) in this file, even
+        // with no interpolation -- e.g. the `console.log` calls emitted for every plain
+        // assignment already do the same. `throw new Error(\`too small\`)` is valid,
+        // semantically identical JS.
+        assert!(code.contains("throw new Error(`too small`)"), "{code}");
+    }
+
+    #[test]
+    fn an_assert_with_an_unclassified_condition_errors_instead_of_emitting_a_broken_call_js() {
+        let tp = JsTranspiler::default();
+        let program = crate::parser::parse_phs("fn is_ready(x) = x > 0\nassert(is_ready(v))").unwrap();
+        assert!(tp.generate_program(&program).is_err());
+    }
+
+    #[test]
+    fn untyped_js_never_emits_a_boolean_type_annotation() {
+        // Plain JavaScript has no type annotations at all -- the `known_bools` classifier
+        // must still track state correctly (for assert-shape dispatch) without ever leaking
+        // a `: boolean` (or any other) annotation into untyped output.
+        let tp = JsTranspiler::default();
+        let program = crate::parser::parse_phs("ok = 1.0 m > 0.0 m\nassert(ok, \"should hold\")").unwrap();
+        let code = tp.generate_program(&program).unwrap();
+        assert!(!code.contains(": boolean"), "untyped JS must not emit type annotations:\n{code}");
+        // Backtick, not double-quoted: `generate_expr`'s `Expr::Str` arm always emits a
+        // template literal for a string, with or without interpolation.
+        assert!(code.contains("throw new Error(`should hold`)"), "{code}");
     }
 }

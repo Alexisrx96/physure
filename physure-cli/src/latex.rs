@@ -28,6 +28,10 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
             }
             s
         }
+        physure_script::ast::Expr::Bool(b) => {
+            let verdict = if *b { i18n.true_word } else { i18n.false_word };
+            format!("\\text{{{}}}", verdict)
+        }
         physure_script::ast::Expr::Str(s) | physure_script::ast::Expr::Identifier(s) => {
             let clean = s.trim_matches('"');
             format!("\\text{{{}}}", escape_latex_text(clean))

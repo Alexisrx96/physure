@@ -61,3 +61,26 @@ impl fmt::Display for PhsValue {
         }
     }
 }
+
+impl PhsValue {
+    /// A short, human-readable name for this value's PHS type. Used by the strict-Bool
+    /// logical operators and the `assert`/`exact_assert` dispatcher, neither of which may
+    /// fall back to `is_truthy` -- their errors need to say what type they actually got.
+    pub(crate) fn type_name(&self) -> &'static str {
+        match self {
+            PhsValue::None => "None",
+            PhsValue::Number(_) => "Number",
+            PhsValue::Quantity(_) => "Quantity",
+            PhsValue::Bool(_) => "Bool",
+            PhsValue::String(_) => "String",
+            PhsValue::Vector(_) => "Vector",
+            PhsValue::Matrix(_) => "Matrix",
+            PhsValue::Function(_) => "Function",
+            PhsValue::Sigma(_) => "Sigma",
+            PhsValue::SigmaBound(_, _) => "SigmaBound",
+            PhsValue::Plot(_) => "Plot",
+            PhsValue::Equation(_, _) => "Equation",
+            PhsValue::Range(_, _) => "Range",
+        }
+    }
+}

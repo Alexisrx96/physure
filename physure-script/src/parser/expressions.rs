@@ -12,6 +12,7 @@ pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
     let mut result = match first.as_rule() {
         Rule::if_expr => parse_if_expr(first)?,
         Rule::for_expr => parse_for_expr(first)?,
+        Rule::or_expr => parse_or_expr(first)?,
         Rule::base_expr => parse_base_expr(first)?,
         Rule::conv_expr => parse_conv_expr(first)?,
         _ => parse_comp_expr(first)?,
@@ -143,6 +144,58 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     Ok(left)
 }
 
+fn parse_bool_lit(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    Ok(Expr::Bool(pair.as_str() == "True"))
+}
+
+/// `_not_kw* ~ base_expr` -- zero or more `not` prefixes wrapping one `base_expr`. Wrapping
+/// in a plain loop (rather than tracking parity) keeps `not not x` and `not x` both correct
+/// without special-casing an even count.
+fn parse_not_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut not_count = 0usize;
+    let mut base_pair = None;
+    for p in pair.into_inner() {
+        if p.as_rule() == Rule::_not_kw {
+            not_count += 1;
+        } else {
+            base_pair = Some(p);
+        }
+    }
+    // The grammar (`not_expr = { _not_kw* ~ base_expr }`) guarantees exactly one
+    // non-`_not_kw` child: `base_expr`.
+    let mut result = parse_base_expr(base_pair.unwrap())?;
+    for _ in 0..not_count {
+        result = Expr::FunctionCall { name: "op_not".to_string(), args: vec![result], kwargs: Vec::new() };
+    }
+    Ok(result)
+}
+
+fn parse_and_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap();
+    let mut left = parse_not_expr(first)?;
+    while inner.next().is_some() {
+        // The consumed pair is `_and_kw`; `and_expr = { not_expr ~ (_nl ~ _and_kw ~ _nl ~
+        // not_expr)* }` guarantees a `not_expr` immediately follows it.
+        let right = parse_not_expr(inner.next().unwrap())?;
+        left = Expr::FunctionCall { name: "op_and".to_string(), args: vec![left, right], kwargs: Vec::new() };
+    }
+    Ok(left)
+}
+
+fn parse_or_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap();
+    let mut left = parse_and_expr(first)?;
+    while inner.next().is_some() {
+        // The consumed pair is `_or_kw`; `or_expr = { and_expr ~ (_nl ~ _or_kw ~ _nl ~
+        // and_expr)* }` guarantees an `and_expr` immediately follows it.
+        let right = parse_and_expr(inner.next().unwrap())?;
+        left = Expr::FunctionCall { name: "op_or".to_string(), args: vec![left, right], kwargs: Vec::new() };
+    }
+    Ok(left)
+}
+
 /// `Some(name)` when `expr` is nothing but a bare name — used by `parse_term` to track
 /// whether the most recently produced factor is a bare identifier, regardless of which
 /// operator produced it.
@@ -232,6 +285,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         Rule::function_call => parse_function_call(primary_pair)?,
         Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
         Rule::string_lit => Expr::Str(primary_pair.as_str().trim_matches('"').to_string()),
+        Rule::bool_lit => parse_bool_lit(primary_pair)?,
         Rule::if_expr => parse_if_expr(primary_pair)?,
         Rule::for_expr => parse_for_expr(primary_pair)?,
         Rule::vector_literal => parse_vector_literal(primary_pair)?,
