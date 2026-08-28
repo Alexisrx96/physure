@@ -736,9 +736,17 @@ Expected: PASS. (9 passed, 1 xfailed — see Step 1's deviation notes for the `x
 - Create: `physure-cli/src/server.rs`
 - Modify: `physure-cli/src/main.rs`
 
-- [ ] **Step 1: Implement HTTP REST handler using embedded TCP/HTTP server**
-- [ ] **Step 2: Add `/api/v1/catalog`, `/api/v1/:module/:function`, and `/api/v1/pipeline` routes**
-- [ ] **Step 3: Wire `phs serve <dir> --port <port>` into `physure-cli/src/main.rs`**
+- [x] **Step 1: Implement HTTP REST handler using embedded TCP/HTTP server**
+- [x] **Step 2: Add `/api/v1/catalog`, `/api/v1/:module/:function`, and `/api/v1/pipeline` routes**
+- [x] **Step 3: Wire `phs serve <dir> --port <port>` into `physure-cli/src/main.rs`**
+
+> **Implementation notes:** Created `physure-cli/src/server.rs` embedding `tiny_http`.
+> Implemented `ModelServer` with catalog discovery (`GET /api/v1/catalog` and `/health`),
+> dynamic function execution with parameter coercion and dimensional validation (`POST /api/v1/:module/:function`),
+> and multi-step pipeline DAG execution (`POST /api/v1/pipeline`). Added security/authentication support via
+> `--token <secret>` (accepting `Bearer <token>` and `X-API-Key: <token>`), defaulting to `127.0.0.1` safe bind.
+> Integrated `phs serve [dir|file] [--port 8080] [--host 127.0.0.1] [--token <secret>]` in `physure-cli/src/main.rs`.
+> Verified with unit tests and CLI integration tests in `physure-cli/tests/cli_tests.rs`.
 
 ---
 
