@@ -299,3 +299,38 @@ fn test_html_report_respects_output_flag() {
     let _ = fs::remove_file(custom_output);
     assert!(content.contains("<html") || content.contains("<!DOCTYPE"), "Expected real HTML content, got: {}", &content[..content.len().min(200)]);
 }
+
+#[test]
+fn test_pack_subcommand_creates_bundle() {
+    let temp_dir = std::env::temp_dir().join(format!("phs_cli_pack_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let manifest = r#"
+[package]
+name = "cli-test-pkg"
+version = "1.0.0"
+
+[exports]
+calc = "calc.phs"
+"#;
+    fs::write(temp_dir.join("phs.toml"), manifest).unwrap();
+    fs::write(temp_dir.join("calc.phs"), "fn add(a, b) = a + b\n").unwrap();
+
+    let out_bundle = temp_dir.join("bundle.phspkg");
+    let output = Command::new(get_phs_bin())
+        .args(["pack", temp_dir.to_str().unwrap(), "-o", out_bundle.to_str().unwrap()])
+        .output()
+        .expect("Failed to execute phs binary");
+
+    assert!(output.status.success(), "Command failed with stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Successfully packed"), "Expected pack success message, got: {}", stdout);
+    assert!(out_bundle.is_file(), "Expected output bundle file to exist");
+
+    let bundle_content = fs::read_to_string(&out_bundle).unwrap();
+    assert!(bundle_content.contains("cli-test-pkg"));
+    assert!(bundle_content.contains("calc"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
