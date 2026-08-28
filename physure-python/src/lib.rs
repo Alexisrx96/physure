@@ -1332,13 +1332,13 @@ impl PyInterpreter {
 }
 
 // ── PyPhsModule ─────────────────────────────────────────────────────────────
-// Thin wrapper around `physure_script::PhsModule` (see
-// `docs/superpowers/plans/2026-08-27-phs-foreign-bridge.md` Task 4): exposes a parsed `.phs`
-// source's function signatures and lets a Python caller invoke them with host-supplied
-// argument values, going through the same registry-aware unit coercion and `@requires`/
-// `@ensures` enforcement as a native PHS-to-PHS call. All conversion logic is reused from
-// `py_to_phs_value`/`phs_value_to_py` above -- no dimensional/coercion logic is reimplemented
-// here, matching this crate's "thin translation layer only" rule.
+/// Thin wrapper around `physure_script::PhsModule` (see
+/// `docs/superpowers/plans/2026-08-27-phs-foreign-bridge.md` Task 4): exposes a parsed `.phs`
+/// source's function signatures and lets a Python caller invoke them with host-supplied
+/// argument values, going through the same registry-aware unit coercion and `@requires`/
+/// `@ensures` enforcement as a native PHS-to-PHS call. All conversion logic is reused from
+/// `py_to_phs_value`/`phs_value_to_py` above -- no dimensional/coercion logic is reimplemented
+/// here, matching this crate's "thin translation layer only" rule.
 #[pyclass(name = "PhsModuleCore", module = "physure._core")]
 pub struct PyPhsModule {
     inner: ::physure_script::PhsModule,
@@ -1348,6 +1348,19 @@ pub struct PyPhsModule {
 impl PyPhsModule {
     #[staticmethod]
     fn from_file(path: &str) -> PyResult<Self> {
+        // `PhsModule::from_file`'s own I/O error wraps `std::io::Error`'s `Display`, which is
+        // OS-locale-dependent (e.g. Spanish Windows renders "file not found" text a caller
+        // can't reliably match on) and surfaces as a generic `PyValueError` rather than the
+        // `FileNotFoundError` a Python caller would naturally guard for. Check existence here,
+        // at the PyO3 boundary, and raise a clean, locale-independent error directly -- leaving
+        // `physure-script`'s own error type untouched, since this is purely a binding-layer
+        // presentation fix, not a correctness issue in `PhsModule` itself.
+        if !std::path::Path::new(path).is_file() {
+            return Err(pyo3::exceptions::PyFileNotFoundError::new_err(format!(
+                "No such file: '{}'",
+                path
+            )));
+        }
         let inner = ::physure_script::PhsModule::from_file(path)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         Ok(PyPhsModule { inner })
@@ -1383,9 +1396,12 @@ impl PyPhsModule {
         for a in args {
             rust_args.push(py_to_phs_value(&a)?);
         }
-        let res = self
-            .inner
-            .invoke(fn_name, &rust_args)
+        // `call_function_node` can trigger rayon parallelism internally (e.g. large
+        // for-expressions), so release the GIL for the duration of the call exactly as
+        // `PyInterpreter::evaluate` already does for `eval_str` above -- otherwise every other
+        // Python thread stalls until this call returns.
+        let res = py
+            .allow_threads(|| self.inner.invoke(fn_name, &rust_args))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         phs_value_to_py(py, res)
     }

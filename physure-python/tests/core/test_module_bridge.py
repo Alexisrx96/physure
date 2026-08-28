@@ -99,7 +99,26 @@ def test_from_file_loads_a_phs_file_and_can_invoke_its_functions(tmp_path):
     assert module.invoke("area", [3.0, 4.0]) == 12.0
 
 
-def test_from_file_raises_value_error_when_file_does_not_exist(tmp_path):
+def test_from_file_raises_file_not_found_error_when_file_does_not_exist(
+    tmp_path,
+):
+    # A missing file must surface as the `FileNotFoundError` a Python caller would naturally
+    # guard for, not a generic `ValueError` wrapping a raw (OS-locale-dependent) io::Error
+    # message -- see the PyO3-boundary check in `PyPhsModule::from_file`.
     missing = tmp_path / "does_not_exist.phs"
-    with pytest.raises(ValueError, match="Failed to read"):
+    with pytest.raises(FileNotFoundError):
         PhsModuleCore.from_file(str(missing))
+
+
+def test_invoke_raises_type_error_for_an_unconvertible_argument():
+    # A plain object with no `__iter__` (and not a bool/float/str/Quantity/None) can't be
+    # turned into any `PhsValue` by `py_to_phs_value` -- confirm that comes back as a `TypeError`
+    # instead of silently doing something surprising. (A `dict` argument is a separate,
+    # pre-existing case: it silently becomes a `Vector` of its keys via `py_to_phs_value`'s
+    # `try_iter()` fallback, inherited behavior from before this task and out of scope here.)
+    class NotConvertible:
+        pass
+
+    module = PhsModuleCore.from_source("mathy", "fn add(a, b) = a + b")
+    with pytest.raises(TypeError):
+        module.invoke("add", [NotConvertible(), 1.0])
