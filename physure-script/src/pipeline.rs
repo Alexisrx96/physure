@@ -98,6 +98,14 @@ impl PhsPipeline {
     /// call itself fails (dimension mismatch, wrong argument count, `@requires`/`@ensures`
     /// violation, etc.).
     pub fn execute(&self) -> PhysureResult<HashMap<String, PhsValue>> {
+        let ceiling = physure_core::settings::max_pipeline_steps();
+        if self.steps.len() > ceiling {
+            return Err(PhysureError::Generic(format!(
+                "pipeline has {} steps, exceeding the max_pipeline_steps ceiling of {ceiling}; raise `max_pipeline_steps` in physure.conf's [Settings] section if this is a legitimate workload",
+                self.steps.len()
+            )));
+        }
+
         let mut scope: HashMap<String, PhsValue> = HashMap::new();
 
         for step in &self.steps {
@@ -379,6 +387,51 @@ mod tests {
                 && (msg.contains("Dimension mismatch") || msg.contains("incompatible")),
             "unexpected message: {msg}"
         );
+    }
+
+    #[test]
+    fn test_pipeline_exceeding_max_pipeline_steps_errors_before_executing_first_step() {
+        let _guard = physure_core::settings::scoped_max_pipeline_steps(2);
+        let mut pipeline = PhsPipeline::new();
+        // No modules are registered at all. If the ceiling check didn't run first, step 1
+        // would fail with "Module ... not found" instead -- so getting the ceiling error
+        // proves execute() rejects the oversized pipeline before running any step.
+        for i in 0..3 {
+            pipeline.add_step(PipelineStep {
+                module_name: "does_not_exist".to_string(),
+                function_name: "f".to_string(),
+                inputs: HashMap::new(),
+                output_alias: format!("out_{i}"),
+            });
+        }
+
+        let err = pipeline.execute().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("3") && msg.contains("2") && msg.contains("max_pipeline_steps"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_at_max_pipeline_steps_still_executes() {
+        let _guard = physure_core::settings::scoped_max_pipeline_steps(1);
+        let mut pipeline = PhsPipeline::new();
+        pipeline.add_module(geom_module());
+        pipeline.add_step(PipelineStep {
+            module_name: "geom".to_string(),
+            function_name: "area_tubo".to_string(),
+            inputs: HashMap::from([(
+                "d".to_string(),
+                PipelineArg::Literal(PhsValue::Quantity(
+                    physure_core::Quantity::new(50.0, "mm").unwrap(),
+                )),
+            )]),
+            output_alias: "area".to_string(),
+        });
+
+        let scope = pipeline.execute().unwrap();
+        assert_eq!(scope.len(), 1);
     }
 
     #[test]

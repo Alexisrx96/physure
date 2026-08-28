@@ -1068,6 +1068,50 @@ r3 = circuito_abierto(5 V, 2 A)
     }
 
     #[test]
+    fn for_expr_range_exceeding_max_loop_iterations_errors_cleanly() {
+        let _guard = physure_core::settings::scoped_max_loop_iterations(1000);
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("res = for i in 0..1001 { i }").unwrap();
+        let err = interp.run_statements(&stmts).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("1001") && msg.contains("1000"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn for_expr_range_at_max_loop_iterations_still_succeeds() {
+        let _guard = physure_core::settings::scoped_max_loop_iterations(1000);
+        let mut interp = PhsInterpreter::default();
+        let stmts = crate::parser::parse_phs("res = for i in 0..1000 { i }").unwrap();
+        interp.run_statements(&stmts).unwrap();
+        let PhsValue::Vector(v) = interp.get_var("res").unwrap() else { panic!("expected vector") };
+        assert_eq!(v.len(), 1000);
+    }
+
+    #[test]
+    fn parallel_map_exceeding_max_loop_iterations_errors_cleanly() {
+        // parallel_map's input vector is already fully materialized by `vector(...)` -- built
+        // here with no for-expression involved -- so this proves parallel_map enforces the
+        // ceiling itself rather than relying on the for-expression's own check.
+        let _guard = physure_core::settings::scoped_max_loop_iterations(10);
+        let mut interp = PhsInterpreter::default();
+        let elements: Vec<String> = (0..11).map(|i| i.to_string()).collect();
+        let script = format!(
+            "fn double(x) = x * 2.0\nres = parallel_map(double, vector({}))",
+            elements.join(", ")
+        );
+        let stmts = crate::parser::parse_phs(&script).unwrap();
+        let err = interp.run_statements(&stmts).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("11") && msg.contains("10"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
     fn parallel_map_applies_function_to_every_element() {
         let mut interp = PhsInterpreter::default();
         let stmts = crate::parser::parse_phs(
