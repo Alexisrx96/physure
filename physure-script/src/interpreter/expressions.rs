@@ -612,7 +612,7 @@ impl PhsInterpreter {
         }
         let converted = q.convert_to(&target_unit).map_err(|e| {
             PhysureError::Generic(format!(
-                "Argument for parameter '{}' of function '{}' has a unit incompatible with declared unit '{}': {:?}",
+                "Argument for parameter '{}' of function '{}' has a unit incompatible with declared unit '{}': {}",
                 param_name, fn_name, clean_unit_str, e
             ))
         })?;

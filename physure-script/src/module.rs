@@ -71,6 +71,17 @@ pub struct FunctionSignature {
 /// already enforces `@requires`/`@ensures`. Reusing it means foreign callers get identical
 /// semantics to PHS-to-PHS calls, with no second, easier-to-drift implementation of unit
 /// coercion living in this file.
+///
+/// One consequence of executing against live `env` bindings rather than `functions` is worth
+/// calling out: a source that reassigns a function's name to a non-function value after
+/// defining it (`"fn add(a, b) = a + b\nadd = 5.0"`), or that aliases a function under a new
+/// name (`"fn add(a, b) = a + b\nalias = add"`), can make `env` and `functions` disagree about
+/// what is callable -- `env` would happily call through an alias `functions` never heard of,
+/// and would no longer be able to call a name `functions` still lists. `invoke()` resolves
+/// that disagreement by treating `functions` (Task 1's introspection map, and the one a
+/// foreign caller inspects before deciding what to invoke) as the sole authority on which
+/// *names* are callable: it rejects any `fn_name` not in `functions` before ever consulting
+/// `env`, rather than trying to keep the two structures in sync by some other mechanism.
 pub struct PhsModule {
     pub name: String,
     /// The path this module was loaded from, or `None` for a module built from an
@@ -158,16 +169,30 @@ impl PhsModule {
     /// see the struct-level doc comment above for why. A consequence of that is `@requires`/
     /// `@ensures` contracts on the target function are enforced here too, not skipped.
     ///
+    /// `fn_name` is checked against `self.functions` -- Task 1's introspection map -- before
+    /// anything else, so a name invisible to introspection (an alias, or any other binding
+    /// that isn't a top-level `fn` definition) is never callable through here even if it
+    /// happens to resolve to a `PhsValue::Function` in `env`. See the struct-level doc comment
+    /// above for why that gate exists.
+    ///
     /// # Errors
     ///
-    /// Returns an error if `fn_name` is not a function this module defines, if `args.len()`
-    /// doesn't match the function's parameter count, if a `Quantity` argument's unit is
-    /// dimensionally incompatible with its parameter's declared unit, or if evaluating the
-    /// function body itself fails (e.g. a `@requires`/`@ensures` contract violation).
-    pub fn invoke(&mut self, fn_name: &str, args: &[PhsValue]) -> PhysureResult<PhsValue> {
+    /// Returns an error if `fn_name` is not a key in `self.functions` (i.e. not a function
+    /// this module's introspection lists as callable), if `args.len()` doesn't match the
+    /// function's parameter count, if a `Quantity` argument's unit is dimensionally
+    /// incompatible with its parameter's declared unit, or if evaluating the function body
+    /// itself fails (e.g. a `@requires`/`@ensures` contract violation).
+    pub fn invoke(&self, fn_name: &str, args: &[PhsValue]) -> PhysureResult<PhsValue> {
+        if !self.functions.contains_key(fn_name) {
+            return Err(PhysureError::Generic(format!(
+                "'{}' is not a function this module ('{}') exports",
+                fn_name, self.name
+            )));
+        }
         let Some(PhsValue::Function(func)) = self.interpreter.env.get(fn_name) else {
             return Err(PhysureError::Generic(format!(
-                "Function '{}' not found in module '{}'",
+                "'{}' is listed as a function in module '{}' but its binding was reassigned \
+                 to a non-function value after definition",
                 fn_name, self.name
             )));
         };
@@ -265,7 +290,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_invoke_with_quantity_coercion() {
         let code = "fn E_k(m: kg, v: m/s) = 0.5 * m * v^2";
-        let mut module = PhsModule::from_source("ke", code).unwrap();
+        let module = PhsModule::from_source("ke", code).unwrap();
 
         // Pass as Quantity values (10 kg and 5 m/s)
         let m_val = PhsValue::Quantity(physure_core::Quantity::new(10.0, "kg").unwrap());
@@ -283,16 +308,21 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_invoke_rejects_incompatible_dimensions() {
         let code = "fn E_k(m: kg, v: m/s) = 0.5 * m * v^2";
-        let mut module = PhsModule::from_source("ke", code).unwrap();
+        let module = PhsModule::from_source("ke", code).unwrap();
 
         // Passing seconds instead of velocity
         let m_val = PhsValue::Quantity(physure_core::Quantity::new(10.0, "kg").unwrap());
         let invalid_v = PhsValue::Quantity(physure_core::Quantity::new(5.0, "s").unwrap());
 
         let err = module.invoke("E_k", &[m_val, invalid_v]).unwrap_err();
+        let msg = err.to_string();
+        // `bind_param_value`'s wrapper text always contains "incompatible", so asserting on
+        // that alone can't tell a well-formed message from a malformed one -- pin down the
+        // parameter name too, so this only passes if the error actually names what went wrong.
         assert!(
-            err.to_string().contains("Dimension mismatch")
-                || err.to_string().contains("incompatible")
+            msg.contains("parameter 'v'")
+                && (msg.contains("Dimension mismatch") || msg.contains("incompatible")),
+            "unexpected message: {msg}"
         );
     }
 
@@ -302,7 +332,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
         // must convert (and produce the same physical answer as passing 5 kg directly), per
         // `bind_param_value`'s documented "5 cm passed to a (r: m) parameter" contract.
         let code = "fn double_mass(m: kg) = 2.0 * m";
-        let mut module = PhsModule::from_source("massy", code).unwrap();
+        let module = PhsModule::from_source("massy", code).unwrap();
 
         let grams = PhsValue::Quantity(physure_core::Quantity::new(5000.0, "g").unwrap());
         let res = module.invoke("double_mass", &[grams]).unwrap();
@@ -316,7 +346,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_invoke_passes_unitless_number_through_when_param_has_no_declared_unit() {
         let code = "scale(x, y) = x * y";
-        let mut module = PhsModule::from_source("shorthand", code).unwrap();
+        let module = PhsModule::from_source("shorthand", code).unwrap();
 
         let res = module
             .invoke("scale", &[PhsValue::Number(3.0), PhsValue::Number(4.0)])
@@ -331,7 +361,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_invoke_zero_arg_function() {
         let code = "fn answer() = 42.0";
-        let mut module = PhsModule::from_source("consts", code).unwrap();
+        let module = PhsModule::from_source("consts", code).unwrap();
         let res = module.invoke("answer", &[]).unwrap();
         match res {
             PhsValue::Number(n) => assert_eq!(n, 42.0),
@@ -343,7 +373,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_invoke_errors_on_argument_count_mismatch() {
         let code = "fn add(a: m, b: m) = a + b";
-        let mut module = PhsModule::from_source("mathy", code).unwrap();
+        let module = PhsModule::from_source("mathy", code).unwrap();
         let only_arg = PhsValue::Quantity(physure_core::Quantity::new(1.0, "m").unwrap());
         let err = module.invoke("add", &[only_arg]).unwrap_err();
         let msg = err.to_string();
@@ -356,8 +386,81 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_invoke_errors_when_function_not_found() {
         let code = "fn add(a: m, b: m) = a + b";
-        let mut module = PhsModule::from_source("mathy", code).unwrap();
+        let module = PhsModule::from_source("mathy", code).unwrap();
         let err = module.invoke("subtract", &[]).unwrap_err();
-        assert!(err.to_string().contains("not found"));
+        assert!(err.to_string().contains("is not a function this module"));
+    }
+
+    #[test]
+    fn test_invoke_rejects_an_alias_invisible_to_introspection() {
+        // `alias` resolves to a real, callable `PhsValue::Function` in the interpreter's
+        // `env` (PHS lets you bind any value, including a function, to a new name), but
+        // Task 1's `functions` map -- built only from `Statement::FunctionDef` nodes -- never
+        // heard of it. `invoke()` must side with `functions`: a foreign caller who inspected
+        // `module.functions` first (the documented way to discover what's callable) never
+        // saw "alias" listed, so calling it anyway would let it invoke something invisible to
+        // introspection, silently defeating the "discover before invoking" contract.
+        let code = "fn add(a: m, b: m) = a + b\nalias = add";
+        let module = PhsModule::from_source("mathy", code).unwrap();
+        assert!(!module.functions.contains_key("alias"));
+
+        let err = module.invoke("alias", &[]).unwrap_err();
+        assert!(err.to_string().contains("is not a function this module"));
+    }
+
+    #[test]
+    fn test_invoke_reports_a_clear_error_when_a_function_name_is_reassigned() {
+        // The mirror-image gap: `functions` still lists `add` as a 2-param function (it was
+        // captured once, at definition time, and never re-scanned), but the source rebinds
+        // the name to a plain quantity afterwards, so `env` no longer has a function there.
+        // This must not panic or silently coerce the quantity into a call -- it should fail
+        // with a message that points at the real cause instead of a bare "not found".
+        let code = "fn add(a: m, b: m) = a + b\nadd = 5.0 m";
+        let module = PhsModule::from_source("mathy", code).unwrap();
+        assert!(module.functions.contains_key("add"));
+
+        let err = module.invoke("add", &[]).unwrap_err();
+        assert!(err.to_string().contains("reassigned"));
+    }
+
+    #[test]
+    fn test_invoke_enforces_requires_contract() {
+        // The struct-level doc comment claims @requires/@ensures are enforced "for free" for
+        // foreign callers because invoke() reuses call_function_node -- this is the test that
+        // actually demonstrates it through the invoke() entry point, rather than only through
+        // eval_str (already covered in interpreter::tests).
+        let code = "@requires(m > 0.0, \"mass must be positive\")\nfn double_mass(m) = m * 2.0";
+        let module = PhsModule::from_source("guarded", code).unwrap();
+
+        let err = module
+            .invoke("double_mass", &[PhsValue::Number(-1.0)])
+            .unwrap_err();
+        assert!(
+            matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "requires"),
+            "expected a requires ContractViolation, got {err:?}"
+        );
+
+        let ok = module
+            .invoke("double_mass", &[PhsValue::Number(2.0)])
+            .unwrap();
+        match ok {
+            PhsValue::Number(n) => assert_eq!(n, 4.0),
+            PhsValue::Quantity(q) => assert_eq!(q.value.mean(), 4.0),
+            other => panic!("Expected a numeric result, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_invoke_enforces_ensures_contract() {
+        let code = "@ensures(result > 100.0, \"result must exceed 100\")\nfn small(m) = m";
+        let module = PhsModule::from_source("guarded", code).unwrap();
+
+        let err = module
+            .invoke("small", &[PhsValue::Number(1.0)])
+            .unwrap_err();
+        assert!(
+            matches!(err, PhysureError::ContractViolation { ref decorator, .. } if decorator == "ensures"),
+            "expected an ensures ContractViolation, got {err:?}"
+        );
     }
 }
