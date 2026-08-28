@@ -225,3 +225,23 @@ def test_function_wrapper_introspection_and_signature(tmp_path):
     assert fn.__name__ == "rectangle_area"
     sig = inspect.signature(fn)
     assert list(sig.parameters.keys()) == ["width", "height"]
+
+
+def test_module_wrapper_subscript_and_membership(tmp_path):
+    phs_file = tmp_path / "calc.phs"
+    phs_file.write_text("fn square(x) = x^2\n")
+
+    mod = physure.load_phs(phs_file)
+
+    # 1. Membership test
+    assert "square" in mod
+    assert "cube" not in mod
+
+    # 2. Subscript access
+    fn = mod["square"]
+    assert fn(4.0) == 16.0
+
+    # 3. Key error on missing function
+    with pytest.raises(KeyError, match="Module has no function 'cube'"):
+        _ = mod["cube"]
+

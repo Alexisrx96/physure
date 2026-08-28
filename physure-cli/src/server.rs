@@ -406,10 +406,10 @@ impl ModelServer {
                     return Ok(());
                 }
 
-                let module_name = segments[0];
-                let fn_name = segments[1];
+                let module_name = percent_decode(segments[0]);
+                let fn_name = percent_decode(segments[1]);
 
-                let module = match self.modules.get(module_name) {
+                let module = match self.modules.get(&module_name) {
                     Some(m) => m,
                     None => {
                         let mut available: Vec<&String> = self.modules.keys().collect();
@@ -424,7 +424,7 @@ impl ModelServer {
                     }
                 };
 
-                let sig = match module.functions.get(fn_name) {
+                let sig = match module.functions.get(&fn_name) {
                     Some(s) => s,
                     None => {
                         let mut available: Vec<&String> = module.functions.keys().collect();
@@ -493,7 +493,7 @@ impl ModelServer {
                     }
                 };
 
-                match module.invoke(fn_name, &call_args) {
+                match module.invoke(&fn_name, &call_args) {
                     Ok(result) => {
                         let resp = serde_json::json!({
                             "status": "success",
@@ -619,6 +619,25 @@ pub fn phs_value_to_json(val: &PhsValue) -> serde_json::Value {
             "repr": format!("{}", other)
         }),
     }
+}
+
+/// Decodes percent-encoded UTF-8 strings (e.g. `%20` -> ` `, `%C3%AD` -> `í`).
+fn percent_decode(s: &str) -> String {
+    let mut result = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(val) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..=i + 2]).unwrap_or(""), 16) {
+                result.push(val);
+                i += 3;
+                continue;
+            }
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).to_string()
 }
 
 /// CLI runner for `phs serve [dir_or_file_or_manifest] [--port <port>] [--host <host>] [--token <auth_token>]`.
@@ -905,4 +924,24 @@ mod tests {
             .call();
         assert!(resp_api_key.is_ok());
     }
+
+    #[test]
+    fn test_server_percent_encoded_url_routes() {
+        let (_server, base_url) = create_test_server(None);
+
+        // POST /api/v1/geom/area_tubo with percent-encoded characters e.g. %61%72%65%61_tubo ("area_tubo")
+        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/%61%72%65%61_tubo", base_url))
+            .send_json(serde_json::json!({
+                "d": "0.05 m"
+            }))
+            .unwrap()
+            .into_json()
+            .unwrap();
+
+        assert_eq!(resp["status"], "success");
+        let result = &resp["result"];
+        assert_eq!(result["type"], "quantity");
+        assert_eq!(result["unit"], "m^2");
+    }
 }
+

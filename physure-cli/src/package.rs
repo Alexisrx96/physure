@@ -351,13 +351,21 @@ impl PhsPackageBundle {
         let content = fs::read_to_string(p).map_err(|e| {
             PhysureError::Generic(format!("Cannot read bundle file '{}': {}", p.display(), e))
         })?;
-        serde_json::from_str(&content).map_err(|e| {
+        let bundle: Self = serde_json::from_str(&content).map_err(|e| {
             PhysureError::Generic(format!(
                 "Invalid .phspkg bundle file '{}': {}",
                 p.display(),
                 e
             ))
-        })
+        })?;
+        if bundle.format_version != 1 {
+            return Err(PhysureError::Generic(format!(
+                "Unsupported .phspkg format version {} in '{}' (expected version 1)",
+                bundle.format_version,
+                p.display()
+            )));
+        }
+        Ok(bundle)
     }
 }
 
@@ -715,5 +723,32 @@ hack = "../secret.phs"
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_bundle_unsupported_format_version_fails() {
+        let temp_dir = std::env::temp_dir().join(format!("phs_pack_fmt_{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let bundle_file = temp_dir.join("bad_version.phspkg");
+        let bad_json = r#"{
+            "format_version": 999,
+            "manifest": {
+                "package": { "name": "bad", "version": "1.0.0" },
+                "exports": {}
+            },
+            "created_at": "2026-08-28T00:00:00Z",
+            "modules": {},
+            "entry_source": null
+        }"#;
+        fs::write(&bundle_file, bad_json).unwrap();
+
+        let result = PhsPackageBundle::from_file(&bundle_file);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Unsupported .phspkg format version 999"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }
+
 

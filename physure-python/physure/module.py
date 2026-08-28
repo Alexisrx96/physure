@@ -193,6 +193,14 @@ class PhsModuleWrapper:
             return self._fn_cache[item]
         raise AttributeError(f"Module has no function {item!r}")
 
+    def __getitem__(self, item: str) -> PhsFunctionWrapper:
+        if item in self._fn_cache:
+            return self._fn_cache[item]
+        raise KeyError(f"Module has no function {item!r}")
+
+    def __contains__(self, item: str) -> bool:
+        return item in self._fn_cache
+
     def __dir__(self) -> list[str]:
         return [*super().__dir__(), *self._fn_cache.keys()]
 

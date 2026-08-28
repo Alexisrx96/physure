@@ -115,6 +115,15 @@ impl PhsPipeline {
                 ))
             })?;
 
+            for input_key in step.inputs.keys() {
+                if !sig.params.iter().any(|p| &p.name == input_key) {
+                    return Err(PhysureError::Generic(format!(
+                        "Unexpected input '{}' for {}.{}() in step '{}'",
+                        input_key, step.module_name, step.function_name, step.output_alias
+                    )));
+                }
+            }
+
             let mut call_args = Vec::with_capacity(sig.params.len());
             for param in &sig.params {
                 let arg_spec = step.inputs.get(&param.name).ok_or_else(|| {
@@ -371,4 +380,35 @@ mod tests {
             "unexpected message: {msg}"
         );
     }
+
+    #[test]
+    fn test_pipeline_unexpected_input_produces_clear_error() {
+        let mut pipeline = PhsPipeline::new();
+        pipeline.add_module(geom_module());
+        pipeline.add_step(PipelineStep {
+            module_name: "geom".to_string(),
+            function_name: "area_tubo".to_string(),
+            inputs: HashMap::from([
+                (
+                    "d".to_string(),
+                    PipelineArg::Literal(PhsValue::Quantity(
+                        physure_core::Quantity::new(0.05, "m").unwrap(),
+                    )),
+                ),
+                (
+                    "unexpected_param".to_string(),
+                    PipelineArg::Literal(PhsValue::Number(123.0)),
+                ),
+            ]),
+            output_alias: "area".to_string(),
+        });
+
+        let err = pipeline.execute().unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unexpected input 'unexpected_param'"),
+            "unexpected message: {msg}"
+        );
+    }
 }
+
