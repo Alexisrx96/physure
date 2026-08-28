@@ -36,14 +36,26 @@ pub struct FunctionSignature {
 /// [`PhsInterpreter`] whose environment already has every top-level statement evaluated
 /// (functions registered, module-level assignments bound) — ready for a caller to invoke
 /// functions against.
-#[derive(Clone)]
+///
+/// `interpreter` is deliberately private: Task 2's `invoke()` will consult `functions` for
+/// unit-coercion metadata before calling into the interpreter, and a caller mutating
+/// `interpreter`'s environment directly (adding/removing bindings) could desync it from the
+/// cached signature map with no way to detect it. Exposing a narrow accessor is a decision
+/// for whichever task first needs read access from outside this module.
 pub struct PhsModule {
     pub name: String,
     /// The path this module was loaded from, or `None` for a module built from an
     /// in-memory source string via [`PhsModule::from_source`].
     pub path: Option<PathBuf>,
+    /// Every top-level function's signature, keyed by name. If the source defines the same
+    /// function name twice, the later definition wins — matching
+    /// `PhsInterpreter::eval_statement`'s own `HashMap::insert` on `Statement::FunctionDef`,
+    /// which the same source drives when populating `interpreter`'s environment below.
     pub functions: HashMap<String, FunctionSignature>,
-    pub interpreter: PhsInterpreter,
+    // Not read anywhere yet -- Task 2's `invoke()` is the first consumer. Kept private (see
+    // the struct doc above) rather than `pub` to keep it in sync with `functions`.
+    #[allow(dead_code)]
+    interpreter: PhsInterpreter,
 }
 
 impl PhsModule {
@@ -132,6 +144,13 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
 
         let ek_sig = &module.functions["E_k"];
         assert_eq!(ek_sig.name, "E_k");
+        assert_eq!(
+            ek_sig.docstring.as_deref(),
+            Some(
+                "Computes kinetic energy in Joules\n@param m Mass of the body in kg\n\
+                 @param v Velocity in m/s\n@returns Energy in Joules"
+            )
+        );
         assert_eq!(ek_sig.params.len(), 2);
         assert_eq!(ek_sig.params[0].name, "m");
         assert_eq!(ek_sig.params[0].expected_unit.as_deref(), Some("kg"));
