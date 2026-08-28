@@ -21,7 +21,7 @@ pub use debug::{DebugAction, DebugContext, DebugHook, StackFrame};
 pub use lexer::{PhsLexer, PhsToken, TokenKind};
 pub use parser::{parse_phs, parse_phs_with_lines};
 pub use interpreter::{eval_phs, ExternalFn, PhsInterpreter};
-pub use module::{ComposedFunction, FunctionSignature, ParamInfo, PhsModule};
+pub use module::{extract_function_signatures, ComposedFunction, FunctionSignature, ParamInfo, PhsModule};
 pub use pipeline::{PhsPipeline, PipelineArg, PipelineStep};
 pub use value::{PhsValue, PlotData};
 pub use plugin::{

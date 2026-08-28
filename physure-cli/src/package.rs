@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use physure_core::error::{PhysureError, PhysureResult};
-use physure_script::{parse_phs, PhsModule};
+use physure_script::{extract_function_signatures, parse_phs, FunctionSignature, PhsModule};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
@@ -128,7 +128,26 @@ impl Manifest {
     /// - Checks version adheres to semantic versioning (semver).
     /// - Verifies that the entry file (if defined) exists and parses without errors.
     /// - Verifies that all exported `.phs` files exist, parse cleanly, and extract valid signatures.
-    pub fn validate(&self, base_dir: impl AsRef<Path>) -> PhysureResult<PackageValidationReport> {
+    ///
+    /// `allow_execution` controls how each exported module's function signatures are obtained:
+    ///
+    /// - `false` (the default `phs pack`/`phs serve` use): signatures come from
+    ///   [`physure_script::extract_function_signatures`], which only parses -- it never
+    ///   evaluates a single statement in the exported source. This is the safe choice for
+    ///   "check this package before deciding whether to trust it," which is what `validate()`
+    ///   exists for: an exported `.phs` file can contain arbitrary top-level (not inside any
+    ///   function) statements, and evaluating them would run whatever side-effecting builtins
+    ///   they call (file writes, network calls, plot exports, ...) as a byproduct of what is
+    ///   supposed to be a read-only syntax check.
+    /// - `true`: signatures come from a full [`PhsModule::from_source`], which evaluates every
+    ///   top-level statement -- restoring the pre-fix behavior for a caller who has already
+    ///   decided to trust this package and wants early feedback on a runtime error, not just a
+    ///   syntax error.
+    pub fn validate(
+        &self,
+        base_dir: impl AsRef<Path>,
+        allow_execution: bool,
+    ) -> PhysureResult<PackageValidationReport> {
         let base = base_dir.as_ref();
 
         let trimmed_name = self.package.name.trim();
@@ -200,27 +219,33 @@ impl Manifest {
                 ))
             })?;
 
-            // Ensure source parses
-            parse_phs(&source).map_err(|e| {
-                PhysureError::Generic(format!(
-                    "Parse error in exported module '{}' ('{}'): {:?}",
-                    export_name,
-                    full_path.display(),
-                    e
-                ))
-            })?;
+            // Extract function signatures. By default this is a syntax-only parse that never
+            // evaluates a single statement in `source` -- see the `allow_execution` doc comment
+            // on `validate()` for why that matters. `--allow-execution` opts back into the old
+            // full-evaluation behavior via `PhsModule::from_source`.
+            let functions = if allow_execution {
+                PhsModule::from_source(export_name, &source)
+                    .map_err(|e| {
+                        PhysureError::Generic(format!(
+                            "Error loading module '{}' from '{}': {}",
+                            export_name,
+                            full_path.display(),
+                            e
+                        ))
+                    })?
+                    .functions
+            } else {
+                extract_function_signatures(&source).map_err(|e| {
+                    PhysureError::Generic(format!(
+                        "Parse error in exported module '{}' ('{}'): {:?}",
+                        export_name,
+                        full_path.display(),
+                        e
+                    ))
+                })?
+            };
 
-            // Instantiate PhsModule to extract function signatures
-            let module = PhsModule::from_source(export_name, &source).map_err(|e| {
-                PhysureError::Generic(format!(
-                    "Error loading module '{}' from '{}': {}",
-                    export_name,
-                    full_path.display(),
-                    e
-                ))
-            })?;
-
-            let mut fn_names: Vec<String> = module.functions.keys().cloned().collect();
+            let mut fn_names: Vec<String> = functions.keys().cloned().collect();
             fn_names.sort();
             let sig_count = fn_names.len();
             total_fns += sig_count;
@@ -243,13 +268,22 @@ impl Manifest {
     }
 
     /// Validates the package and creates a self-contained `.phspkg` bundle file.
+    ///
+    /// `allow_execution` is forwarded to [`Self::validate`] (see its doc comment) and also
+    /// governs how this method itself re-derives each module's function signatures for the
+    /// bundle below -- `pack()` reads and re-inspects each exported module's source
+    /// independently of `validate()`'s own pass (to get full signatures with params/docstrings
+    /// for the bundle, not just the name/count `PackageValidationReport` carries), so it must
+    /// honor the same default of "never evaluate untrusted top-level code" on its own, not only
+    /// via the `validate()` call it makes first.
     pub fn pack(
         &self,
         base_dir: impl AsRef<Path>,
         output_path: Option<impl AsRef<Path>>,
+        allow_execution: bool,
     ) -> PhysureResult<(PathBuf, PackageValidationReport)> {
         let base = base_dir.as_ref();
-        let report = self.validate(base)?;
+        let report = self.validate(base, allow_execution)?;
 
         let mut bundled_modules = HashMap::new();
         for mod_info in &report.modules {
@@ -258,9 +292,13 @@ impl Manifest {
                 PhysureError::Generic(format!("Error reading '{}': {}", full_path.display(), e))
             })?;
 
-            let module = PhsModule::from_source(&mod_info.export_name, &source)?;
+            let functions: HashMap<String, FunctionSignature> = if allow_execution {
+                PhsModule::from_source(&mod_info.export_name, &source)?.functions
+            } else {
+                extract_function_signatures(&source)?
+            };
             let mut fn_map = HashMap::new();
-            for (fn_name, sig) in &module.functions {
+            for (fn_name, sig) in &functions {
                 let params = sig
                     .params
                     .iter()
@@ -403,10 +441,11 @@ fn ensure_path_within_base(base: &Path, rel_path: &str) -> PhysureResult<std::pa
     Ok(full_path)
 }
 
-/// CLI runner for `phs pack [dir_or_manifest] [-o <output.phspkg>]`.
+/// CLI runner for `phs pack [dir_or_manifest] [-o <output.phspkg>] [--allow-execution]`.
 pub fn run_pack(args: &[String]) {
     let mut target_dir_or_file = None;
     let mut output_override = None;
+    let mut allow_execution = false;
 
     let mut skip_next = false;
     for (i, arg) in args.iter().enumerate().skip(1) {
@@ -422,6 +461,10 @@ pub fn run_pack(args: &[String]) {
                 output_override = Some(args[i + 1].clone());
                 skip_next = true;
             }
+            continue;
+        }
+        if arg == "--allow-execution" {
+            allow_execution = true;
             continue;
         }
         if target_dir_or_file.is_none() {
@@ -463,9 +506,15 @@ pub fn run_pack(args: &[String]) {
         "🔍 Validating package '{}' v{}...",
         manifest.package.name, manifest.package.version
     );
+    if allow_execution {
+        println!(
+            "⚠️  --allow-execution passed: exported modules' top-level statements WILL be \
+             evaluated (file writes, network calls, etc. may run as a side effect)."
+        );
+    }
 
     let output_path_opt = output_override.map(PathBuf::from);
-    match manifest.pack(&base_dir, output_path_opt) {
+    match manifest.pack(&base_dir, output_path_opt, allow_execution) {
         Ok((bundle_path, report)) => {
             println!("✓ Validated {} exported module(s):", report.modules.len());
             for m in &report.modules {
@@ -603,7 +652,7 @@ fn rectangle_area(w: m, h: m) = w * h
         ).unwrap();
 
         let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
-        let report = manifest.validate(&temp_dir).unwrap();
+        let report = manifest.validate(&temp_dir, false).unwrap();
 
         assert_eq!(report.package_name, "demo-pack");
         assert_eq!(report.version, "0.1.0");
@@ -612,7 +661,7 @@ fn rectangle_area(w: m, h: m) = w * h
 
         // Pack the package
         let bundle_file = temp_dir.join("dist/demo-pack-0.1.0.phspkg");
-        let (packed_path, pack_report) = manifest.pack(&temp_dir, Some(&bundle_file)).unwrap();
+        let (packed_path, pack_report) = manifest.pack(&temp_dir, Some(&bundle_file), false).unwrap();
         assert_eq!(packed_path, bundle_file);
         assert_eq!(pack_report.total_functions, 3);
         assert!(bundle_file.is_file());
@@ -650,7 +699,7 @@ missing = "does_not_exist.phs"
         fs::write(temp_dir.join("phs.toml"), manifest_content).unwrap();
 
         let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
-        let result = manifest.validate(&temp_dir);
+        let result = manifest.validate(&temp_dir, false);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("missing file") || err_msg.contains("does_not_exist.phs"));
@@ -675,7 +724,7 @@ broken = "broken.phs"
         fs::write(temp_dir.join("broken.phs"), "fn broken( == +++ invalid syntax").unwrap();
 
         let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
-        let result = manifest.validate(&temp_dir);
+        let result = manifest.validate(&temp_dir, false);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Parse error"));
@@ -691,7 +740,7 @@ name = "bad-version"
 version = "not-a-valid-semver"
 "#;
         let manifest = Manifest::from_str(toml).unwrap();
-        let result = manifest.validate(".");
+        let result = manifest.validate(".", false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid semver"));
     }
@@ -716,7 +765,7 @@ hack = "../secret.phs"
         fs::write(sub_dir.join("phs.toml"), manifest_content).unwrap();
 
         let manifest = Manifest::from_file(sub_dir.join("phs.toml")).unwrap();
-        let result = manifest.validate(&sub_dir);
+        let result = manifest.validate(&sub_dir, false);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("Path traversal forbidden"));
@@ -746,6 +795,143 @@ hack = "../secret.phs"
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unsupported .phspkg format version 999"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    // -- CVE-style exploit: a top-level `export3d(...)` call must not execute during --------
+    // -- validate()/pack() unless the caller explicitly opts in via `allow_execution`. -------
+    //
+    // `export3d` (a real PHS builtin, `physure-script/src/builtins/plot.rs`) writes a file to
+    // disk as a side effect. Before this fix, `validate()`/`pack()` called
+    // `PhsModule::from_source` unconditionally, which evaluates every top-level statement in an
+    // exported module -- so a manifest with a perfectly legitimate, non-path-traversing export
+    // pointing at a `.phs` file containing a top-level `export3d(...)` call (not inside any
+    // function) would silently write a real file as a byproduct of "just checking" the package.
+    // That defeated the entire "check before you trust it" premise `phs pack` documents.
+
+    /// Builds a temp package dir containing one export whose source is a bare top-level
+    /// `export3d(...)` call writing to `side_effect_target`. Returns `(package_dir,
+    /// side_effect_target)`; caller is responsible for `fs::remove_dir_all(&package_dir)`.
+    fn write_export3d_exploit_package(test_name: &str) -> (PathBuf, PathBuf) {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "phs_pack_exploit_{}_{}",
+            test_name,
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let side_effect_target = temp_dir.join("pwned.stl");
+        // PHS string literals do no escape processing at all (`string_lit` in `phs.pest` is
+        // `"\"" ~ (!"\"" ~ ANY)* ~ "\""`, and the parser just trims the quotes) -- so the raw
+        // Windows path, backslashes included, is safe to embed verbatim.
+        let target_str = side_effect_target.to_str().unwrap().to_string();
+
+        let manifest_content = r#"
+[package]
+name = "exploit-pack"
+version = "1.0.0"
+
+[exports]
+evil = "evil.phs"
+"#;
+        fs::write(temp_dir.join("phs.toml"), manifest_content).unwrap();
+
+        // A perfectly legitimate, non-traversing export path (`evil.phs`, right next to
+        // `phs.toml`) -- the exploit is entirely in what the file's top-level code *does* when
+        // evaluated, not in where it points. `export3d` is a domain builtin that must be
+        // `use`d before it's callable by its bare name (see `resolve_use` in
+        // `physure-script/src/interpreter/statements.rs`) -- the `use export3d from plot`
+        // line is itself an ordinary top-level statement `PhsModule::from_source` evaluates
+        // just like the call that follows it.
+        let evil_source = format!(
+            "fn harmless(x: m) = x\n\nuse export3d from plot\nexport3d(\"sin(x)*cos(y)\", file: \"{target}\", format: \"stl\")\n",
+            target = target_str
+        );
+        fs::write(temp_dir.join("evil.phs"), evil_source).unwrap();
+
+        (temp_dir, side_effect_target)
+    }
+
+    #[test]
+    fn test_validate_default_does_not_execute_top_level_export3d_side_effect() {
+        let (temp_dir, side_effect_target) = write_export3d_exploit_package("validate_default");
+
+        let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
+        let report = manifest
+            .validate(&temp_dir, false)
+            .expect("syntax-only validate() must still succeed on a well-formed export");
+
+        assert!(
+            !side_effect_target.exists(),
+            "validate() executed a top-level export3d() call as a side effect of 'checking' the package"
+        );
+        // The legitimate function signature is still extracted -- this isn't a regression to
+        // "validate() sees nothing," just "validate() doesn't run anything."
+        assert_eq!(report.modules.len(), 1);
+        assert_eq!(report.modules[0].function_names, vec!["harmless".to_string()]);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_pack_default_does_not_execute_top_level_export3d_side_effect() {
+        let (temp_dir, side_effect_target) = write_export3d_exploit_package("pack_default");
+
+        let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
+        let bundle_file = temp_dir.join("out.phspkg");
+        let (_packed_path, pack_report) = manifest
+            .pack(&temp_dir, Some(&bundle_file), false)
+            .expect("syntax-only pack() must still succeed on a well-formed export");
+
+        assert!(
+            !side_effect_target.exists(),
+            "pack() executed a top-level export3d() call as a side effect of packaging"
+        );
+        assert_eq!(pack_report.total_functions, 1);
+
+        // The bundle itself still records the real signature -- syntax-only extraction doesn't
+        // degrade what the .phspkg carries for a well-formed module.
+        let bundle = PhsPackageBundle::from_file(&bundle_file).unwrap();
+        assert!(bundle.modules["evil"].functions.contains_key("harmless"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_pack_allow_execution_restores_full_evaluation_behavior() {
+        // The escape hatch: explicitly opting in must restore the pre-fix behavior exactly,
+        // for the legitimate "I already trust this package" caller.
+        let (temp_dir, side_effect_target) = write_export3d_exploit_package("pack_allow_exec");
+
+        let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
+        let bundle_file = temp_dir.join("out.phspkg");
+        let (_packed_path, pack_report) = manifest
+            .pack(&temp_dir, Some(&bundle_file), true)
+            .expect("allow_execution=true pack() should succeed exactly as it did before the fix");
+
+        assert!(
+            side_effect_target.exists(),
+            "--allow-execution must restore full evaluation of top-level statements"
+        );
+        assert_eq!(pack_report.total_functions, 1);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_validate_allow_execution_restores_full_evaluation_behavior() {
+        let (temp_dir, side_effect_target) = write_export3d_exploit_package("validate_allow_exec");
+
+        let manifest = Manifest::from_file(temp_dir.join("phs.toml")).unwrap();
+        manifest
+            .validate(&temp_dir, true)
+            .expect("allow_execution=true validate() should succeed exactly as it did before the fix");
+
+        assert!(
+            side_effect_target.exists(),
+            "--allow-execution must restore full evaluation of top-level statements in validate() too"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

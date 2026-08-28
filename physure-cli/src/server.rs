@@ -121,7 +121,12 @@ impl ModelServer {
                 // Load from manifest exports
                 let manifest = crate::package::Manifest::from_file(p)?;
                 let base_dir = p.parent().unwrap_or_else(|| Path::new("."));
-                let report = manifest.validate(base_dir)?;
+                // Syntax-only: this call only needs `report.modules`' paths/names to build the
+                // `sources` map below. The actual execution of each module's top-level code
+                // happens deliberately, right after, in `Self::new`'s own `PhsModule::from_source`
+                // call per module -- that's the operator-trusted "instantiate for serving" step,
+                // not a "check an unknown package" step, so it's unaffected by this `false`.
+                let report = manifest.validate(base_dir, false)?;
                 for mod_info in report.modules {
                     let full_path = base_dir.join(&mod_info.relative_path);
                     let source = fs::read_to_string(&full_path).map_err(|e| {

@@ -97,10 +97,77 @@ pub struct PhsModule {
     interpreter: PhsInterpreter,
 }
 
+/// Extracts every top-level function's signature from an already-parsed [`crate::ast::Program`],
+/// building exactly the `FunctionSignature`/`ParamInfo` shape [`PhsModule::from_source`] stores
+/// in `functions` -- without touching an interpreter or evaluating anything. Shared by
+/// `from_source` (which evaluates the same statements afterward, via its own separate loop) and
+/// [`extract_function_signatures`] (which never evaluates anything), so the `param_units`
+/// index-alignment logic below has exactly one implementation instead of two that could drift.
+fn function_signatures_from_program(program: &crate::ast::Program) -> HashMap<String, FunctionSignature> {
+    let mut functions = HashMap::new();
+    for stmt in &program.statements {
+        if let Statement::FunctionDef(f) = stmt {
+            let params = f
+                .params
+                .iter()
+                .enumerate()
+                .map(|(i, p)| ParamInfo {
+                    name: p.clone(),
+                    // `param_units[i]` may be missing entirely (a shorthand definition like
+                    // `P(x, y) = ...` carries no `param_units` at all) or present-but-`None`
+                    // (an explicit param with no `: unit` annotation) -- `.get(i).cloned()`
+                    // handles the former by falling back to `None` via `.flatten()`, and the
+                    // latter falls out of `Option<Option<String>>::flatten` naturally. Neither
+                    // case panics on a short/missing entry.
+                    expected_unit: f.param_units.get(i).cloned().flatten(),
+                })
+                .collect();
+
+            functions.insert(
+                f.name.clone(),
+                FunctionSignature {
+                    name: f.name.clone(),
+                    docstring: f.doc.clone(),
+                    params,
+                },
+            );
+        }
+    }
+    functions
+}
+
+/// Parses `source` and extracts every top-level function's signature, WITHOUT evaluating any
+/// statement -- unlike [`PhsModule::from_source`], this never runs a side-effecting builtin
+/// (a file write, a network call, a plot export, anything else a top-level statement might do)
+/// as a byproduct of inspecting a script's shape.
+///
+/// This is the function to reach for when you have `.phs` source you have not yet decided to
+/// trust -- e.g. checking a downloaded package before running any of it. It parses with the
+/// exact same parser `from_source` uses, so a source that fails to parse here would fail to
+/// parse there too; the only difference is that nothing in this function ever touches an
+/// interpreter.
+///
+/// # Errors
+///
+/// Returns an error if `source` fails to parse.
+pub fn extract_function_signatures(source: &str) -> PhysureResult<HashMap<String, FunctionSignature>> {
+    let program = crate::parser::parse_phs(source)?;
+    Ok(function_signatures_from_program(&program))
+}
+
 impl PhsModule {
     /// Parses `source` as PHS, extracts every top-level function's signature, and evaluates
     /// every top-level statement into a fresh interpreter so the module is immediately ready
     /// to have its functions invoked.
+    ///
+    /// This is the "trust it, run it" path -- it evaluates every top-level statement, which
+    /// means any side-effecting builtin a script calls at module scope (not inside a function
+    /// body) runs for real (file writes, plot exports, etc.). That is correct and intended for
+    /// this function's real callers (`physure.load_phs()`'s Python bridge, `phs serve`
+    /// instantiating a module it has been told to actually serve) -- they've already decided
+    /// to trust and run this source. It is NOT safe to call on source you're merely trying to
+    /// *check* before deciding whether to trust it; use [`extract_function_signatures`] for
+    /// that instead, which parses the exact same way but never evaluates anything.
     ///
     /// # Errors
     ///
@@ -108,30 +175,10 @@ impl PhsModule {
     /// fails (e.g. a module-level assignment referencing an unknown unit).
     pub fn from_source(name: &str, source: &str) -> PhysureResult<Self> {
         let program = crate::parser::parse_phs(source)?;
+        let functions = function_signatures_from_program(&program);
+
         let mut interpreter = PhsInterpreter::default();
-        let mut functions = HashMap::new();
-
         for stmt in &program.statements {
-            if let Statement::FunctionDef(f) = stmt {
-                let params = f
-                    .params
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| ParamInfo {
-                        name: p.clone(),
-                        expected_unit: f.param_units.get(i).cloned().flatten(),
-                    })
-                    .collect();
-
-                functions.insert(
-                    f.name.clone(),
-                    FunctionSignature {
-                        name: f.name.clone(),
-                        docstring: f.doc.clone(),
-                        params,
-                    },
-                );
-            }
             interpreter.eval_statement(stmt)?;
         }
 
@@ -403,6 +450,45 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
         assert_eq!(ek_sig.params[0].expected_unit.as_deref(), Some("kg"));
         assert_eq!(ek_sig.params[1].name, "v");
         assert_eq!(ek_sig.params[1].expected_unit.as_deref(), Some("m/s"));
+    }
+
+    #[test]
+    fn test_extract_function_signatures_matches_from_source_without_evaluating() {
+        // `extract_function_signatures` must produce exactly the same `functions` map
+        // `from_source` builds for the same source -- proving the shared extraction helper
+        // wasn't accidentally forked into two slightly different implementations.
+        let code = r#"
+/// Computes kinetic energy in Joules
+/// @param m Mass of the body in kg
+/// @param v Velocity in m/s
+fn E_k(m: kg, v: m/s) = 0.5 * m * v^2
+
+# Mathematical shorthand
+P(x, y) = 100.0 kPa * sin(x / 1.0 m)
+"#;
+        let module = PhsModule::from_source("physics", code).expect("from_source failed");
+        let extracted =
+            extract_function_signatures(code).expect("extract_function_signatures failed");
+        assert_eq!(extracted, module.functions);
+    }
+
+    #[test]
+    fn test_extract_function_signatures_never_evaluates_top_level_statements() {
+        // A top-level statement that fails at *evaluation* time (referencing a function that
+        // doesn't exist), not at parse time. `from_source` evaluates every top-level statement,
+        // so it must fail on this source. `extract_function_signatures` must still succeed --
+        // if it evaluated anything, it would fail identically to `from_source`, so a passing
+        // result here is direct proof it never does.
+        let code = "fn add(a: m, b: m) = a + b\ntotally_undefined_function_call()";
+        assert!(
+            PhsModule::from_source("mathy", code).is_err(),
+            "expected from_source to fail evaluating the undefined call -- test premise broken"
+        );
+
+        let sigs = extract_function_signatures(code)
+            .expect("extract_function_signatures must not evaluate the undefined call");
+        assert!(sigs.contains_key("add"));
+        assert_eq!(sigs.len(), 1);
     }
 
     #[test]

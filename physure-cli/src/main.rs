@@ -36,7 +36,7 @@ fn print_help() {
     println!("    phs transpile <script.phs> [--target <rust|python|java|js|ts>] [--output <file>]");
     println!("    phs export <script.phs> --fn <name> [--native] [-o <dir>]");
     println!("    phs debug <script.phs> [--break-fn name] [--break N[:cond]]");
-    println!("    phs pack [dir|manifest]  [-o <bundle.phspkg>] Package repository into .phspkg bundle");
+    println!("    phs pack [dir|manifest]  [-o <bundle.phspkg>] [--allow-execution] Package repository into .phspkg bundle");
     println!("    phs serve [dir|file]     [--port 8080] [--host 127.0.0.1] [--token <secret>] Run Model REST Server");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
