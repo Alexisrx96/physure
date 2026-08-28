@@ -705,27 +705,15 @@ Expected: PASS. (9 passed, 1 xfailed — see Step 1's deviation notes for the `x
 - Modify: `physure-cli/src/main.rs`
 - Test: `physure-cli/src/package.rs` (inline unit tests)
 
-- [ ] **Step 1: Write manifest parsing and verification tests**
+- [x] **Step 1: Write manifest parsing and verification tests**
 
-```rust
-#[test]
-fn test_parse_phs_manifest() {
-    let toml = r#"
-[package]
-name = "fluid-models"
-version = "1.0.0"
-entry = "main.phs"
+- [x] **Step 2: Implement manifest data structures and `phs pack` logic**
 
-[exports]
-fluidos = "models/fluidos.phs"
-"#;
-    let manifest = Manifest::from_str(toml).unwrap();
-    assert_eq!(manifest.package.name, "fluid-models");
-    assert_eq!(manifest.exports.get("fluidos").unwrap(), "models/fluidos.phs");
-}
-```
-
-- [ ] **Step 2: Implement manifest data structures and `phs pack` logic**
+> **Implementation notes:** Added `toml = "0.8"` to `physure-cli/Cargo.toml`. Created `physure-cli/src/package.rs`
+> with `Manifest`, `PackageMetadata`, `DependenciesConfig`, `PackageValidationReport`, and `PhsPackageBundle`
+> (`.phspkg` self-contained format). Validates package semver, entry files, all exported `.phs` modules, and extracts
+> function signatures. Added CLI subcommand `phs pack [dir|manifest] [-o <output.phspkg>]` in `physure-cli/src/main.rs`.
+> Verified unit tests and CLI integration tests in `physure-cli/tests/cli_tests.rs`.
 
 ---
 
