@@ -105,6 +105,7 @@ if TYPE_CHECKING:
     from physure.domain.measurement.vectorized_uncertainty import (
         PhysureContext,
     )
+    from physure.module import load_dir, load_phs
     from physure.plotting import (
         export_3d,
         plot,
@@ -176,6 +177,7 @@ _HELPER_ATTRS = {
     "pi",
     "e",
 }
+_MODULE_ATTRS = {"load_phs", "load_dir"}
 
 
 def _load_io(name: str) -> Any:
@@ -311,6 +313,12 @@ def _load_symbolic(name: str) -> Any:
     return getattr(symbolic, name)
 
 
+def _load_module(name: str) -> Any:
+    import physure.module as module
+
+    return getattr(module, name)
+
+
 _ATTR_LOADERS: dict[str, Callable[[str], Any]] = {}
 for _attr in _IO_ATTRS:
     _ATTR_LOADERS[_attr] = _load_io
@@ -339,6 +347,8 @@ _ATTR_LOADERS["PhyEquation"] = _load_symbolic
 _ATTR_LOADERS["phy_function"] = _load_symbolic
 for _attr in _HELPER_ATTRS:
     _ATTR_LOADERS[_attr] = _load_helpers
+for _attr in _MODULE_ATTRS:
+    _ATTR_LOADERS[_attr] = _load_module
 del _attr
 
 
@@ -413,6 +423,8 @@ __all__ = [
     "get_unit",
     "jit",
     "linspace",
+    "load_dir",
+    "load_phs",
     "load_state",
     "log",
     "log10",
