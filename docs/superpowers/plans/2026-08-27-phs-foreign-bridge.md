@@ -513,7 +513,59 @@ Expected: Build succeeds and module loads.
 - Modify: `physure-python/physure/__init__.py`
 - Test: `physure-python/tests/test_foreign_bridge.py`
 
-- [ ] **Step 1: Write Python unit tests for direct loading and kwargs invocation**
+- [x] **Step 1: Write Python unit tests for direct loading and kwargs invocation**
+
+> **Deviations from the snippet below (both confirmed bugs in the plan text, not style
+> choices):**
+> 1. `fuerza_empuje`'s first parameter is declared `P`, not `presion` — the snippet's kwarg
+>    name doesn't match the function signature and would raise `ValueError: Missing required
+>    parameter 'P'`. Fixed to `P="5 bar"`.
+> 2. `res.unit`/the PHS-result type is the bare `physure._core.Quantity` (what
+>    `phs_value_to_py` returns), which has no `.convert_to()` — and no conversion method at
+>    all. `PhsFunctionWrapper.__call__` promotes results into the richer domain
+>    `physure.domain.measurement.quantity.Quantity` instead (via
+>    `CompoundUnit.from_rational_unit`, the library's own existing Rust-`RationalUnit`-to-
+>    domain-unit bridge), so callers get the same type `Q_()` returns, with a real `.to()`.
+>    Fixed `convert_to("N")` → `to("N")`; fixed `str(res.unit) == "J"` → `str(res) == "125.0
+>    J"` (the domain unit's own `str()` shows the expanded base-unit form; the alias lookup
+>    that renders "J" lives on `Quantity.__str__`, not `CompoundUnit.__str__`).
+>
+> A third, deeper issue surfaced investigating deviation 2: a domain `Quantity` (what
+> `10 * kg` actually returns) is a separate, composition-based class that is NOT a
+> `physure._core.Quantity` instance and defines `__float__` — passed straight into
+> `PhsModuleCore.invoke()`, `py_to_phs_value` silently extracts it as a bare `f64`, dropping
+> the unit (and any dimension check) instead of raising. Confirmed by hand: invoking a
+> `kg`-declared parameter with a `Quantity` built in meters returned a bogus dimensionless
+> result rather than failing. `PhsFunctionWrapper.__call__` now bridges every domain
+> `Quantity` argument into a real `physure._core.Quantity` first (`_to_core_quantity` in
+> `physure/module.py`, reusing the same magnitude/unit/std_dev construction
+> `Quantity._maybe_wrap_in_rust_core` already uses) so the dimension check stays intact.
+>
+> Test 2 (chaining) also had to move off the plan's literal `bar`/`mm` units onto plain base-
+> SI compositions (`kg`, `m`, `s`) after finding a fourth, separate bug — this one in
+> `physure-script`, not this task's binding layer: `PhsModule::bind_param_value`
+> (`physure-script/src/interpreter/expressions.rs`) parses a function's *declared* unit with
+> the registry-*expanding* parser, while every foreign-facing constructor
+> (`parse_unit_expression`, `UnitRegistry.get_unit`, this task's own bridge) uses the
+> *atomic* one, and `RationalUnit::same_dimensions` (`physure-core/src/units/rational.rs`)
+> compares raw symbol keys rather than reduced dimensions — so a foreign `Quantity` built in
+> a named/derived/prefixed unit ("N", "Pa", "bar", "mm", "km", "g", ...) is rejected as
+> dimensionally incompatible with a declared parameter of that very same unit. Confirmed with
+> a minimal repro using only `physure._core` (no domain layer at all): `RationalUnit`s with
+> identical `id`s still fail `PhsModule::invoke`'s coercion. A base-SI-only pre-conversion
+> workaround was tried and rejected — it dodges the parser mismatch but produces a silently
+> wrong final answer once the result is promoted back to a domain `Quantity` (`CompoundUnit
+> .from_rational_unit` doesn't reconstruct the Rust-side unit's `scale`), which is worse than
+> the honest `ValueError` this task ships instead. Out of scope for Task 5 (`physure-script`
+> is off-limits here beyond the FFI-boundary fix above); pinned as an `xfail(strict=True)`
+> regression test (`test_named_unit_parameter_rejects_matching_foreign_quantity`) so a future
+> `physure-script` fix is noticed rather than silently masked.
+>
+> Additional tests beyond the plan's two happy-path snippets: missing function
+> (`AttributeError` via `__getattr__`), missing required kwarg (`ValueError`), wrong-dimension
+> argument (`ValueError`, proving `_to_core_quantity` actually prevents the silent-unit-drop
+> above end-to-end), missing file (`FileNotFoundError`), `load_dir`, and `__dir__`. See
+> `physure-python/tests/test_foreign_bridge.py` for the shipped tests.
 
 ```python
 # In physure-python/tests/test_foreign_bridge.py
@@ -545,7 +597,21 @@ def test_load_phs_with_chaining(tmp_path):
     assert fuerza.convert_to("N").magnitude == pytest.approx(981.74, rel=1e-3)
 ```
 
-- [ ] **Step 2: Implement `PhsModuleWrapper` and `load_phs`**
+- [x] **Step 2: Implement `PhsModuleWrapper` and `load_phs`**
+
+> **Deviations:** Also added `load_dir(path)` (one-line convenience: `load_phs` over every
+> `.phs` file directly in a directory, keyed by filename stem) since the plan's own title
+> names it, even though no sample code was given — no `PhsProject`-style cross-module
+> composition was added, that stays out of scope. `PhsFunctionWrapper.__call__` routes every
+> argument through `_coerce_scalar` (the plan's string-splitting logic, unchanged) and then
+> `_to_core_quantity` (new — see Step 1's deviation notes), and its result through
+> `_to_domain_value` (new) before returning. `load_phs`/`load_dir` are exported from
+> `physure/__init__.py` lazily, via the same `_ATTR_LOADERS`/`__getattr__` pattern every other
+> deferred export already uses, so accessing them doesn't pull in `physure.module`,
+> `physure.domain`, torch, or scipy at `import physure` time (measured: `import physure`
+> ~11ms, first `Q_()` eval ~170ms, well inside the ~0.5s budget; `physure.module` only enters
+> `sys.modules` on first `load_phs`/`load_dir` access). See `physure-python/physure/module.py`
+> for the shipped code.
 
 ```python
 # In physure-python/physure/module.py
@@ -616,10 +682,11 @@ def load_phs(path: str | Path) -> PhsModuleWrapper:
     return PhsModuleWrapper(core)
 ```
 
-- [ ] **Step 3: Run pytest and verify green**
+- [x] **Step 3: Run pytest and verify green**
 
 Run: `uv run pytest physure-python/tests/test_foreign_bridge.py -v`
-Expected: PASS.
+Expected: PASS. (9 passed, 1 xfailed — see Step 1's deviation notes for the `xfail`. Full
+`physure-python` suite also verified green: 896 passed, 1 xfailed.)
 
 ---
 
