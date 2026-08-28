@@ -162,23 +162,25 @@ pub fn eval_core_builtin(
 ) -> PhysureResult<Option<PhsValue>> {
     match name {
         "parallel_map" => {
-            let (func, vec) = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Function(f)), Some(PhsValue::Vector(v))) => (f, v.clone()),
+            let (func, v) = match (args.first(), args.get(1)) {
+                (Some(PhsValue::Function(f)), Some(PhsValue::Vector(v))) => (f, v),
                 _ => return Err(PhysureError::Generic("parallel_map expects (fn, vector)".into())),
             };
             // The input vector is already fully materialized by the time it reaches here --
             // built by a for-expression, `vector(...)`, or anything else -- so it carries the
             // same unbounded-allocation risk the for-expression's own range check guards
             // against (see `physure_core::settings::max_loop_iterations`'s doc comment).
-            // `.into_par_iter().collect()` below allocates a second `Vec<PhsValue>` the same
-            // size, so an oversized input doubles the exposure rather than merely repeating it.
+            // Checked against the borrowed vector, before the `.clone()` below (which would
+            // otherwise double an oversized input's memory) and before
+            // `.into_par_iter().collect()` allocates a second `Vec<PhsValue>` the same size.
             let ceiling = physure_core::settings::max_loop_iterations();
-            if vec.len() > ceiling {
+            if v.len() > ceiling {
                 return Err(PhysureError::Generic(format!(
                     "parallel_map received a vector with {} elements, exceeding the max_loop_iterations ceiling of {ceiling}; raise `max_loop_iterations` in physure.conf's [Settings] section if this is a legitimate workload",
-                    vec.len()
+                    v.len()
                 )));
             }
+            let vec = v.clone();
             // A breakpoint inside a rayon worker closure isn't a coherent debugging
             // experience -- pausing one of N racing threads while the rest continue -- so a
             // debug session forces this back to plain sequential `.map()` instead of silently
