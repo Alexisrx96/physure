@@ -170,7 +170,7 @@ Expected: PASS.
 - Modify: `physure-script/src/module.rs`
 - Test: `physure-script/src/module.rs` (inline unit tests)
 
-- [ ] **Step 1: Write tests for dynamic invocation and dimensional validation**
+- [x] **Step 1: Write tests for dynamic invocation and dimensional validation**
 
 ```rust
 // In physure-script/src/module.rs tests
@@ -206,12 +206,21 @@ fn test_invoke_rejects_incompatible_dimensions() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify failure**
+- [x] **Step 2: Run test to verify failure**
 
 Run: `cargo test -p physure-script test_invoke_with_quantity_coercion`
 Expected: FAIL (`invoke` not implemented).
 
-- [ ] **Step 3: Implement `PhsModule::invoke`**
+- [x] **Step 3: Implement `PhsModule::invoke`**
+
+> **Deviation from the snippet below:** both `parse_expression_atomic` (never resolves against the
+> unit registry, so a real `10 N` quantity would never dimension-match an atomically-parsed `"N"`)
+> and the `Display`-stringify-and-`eval_str`-reparse mechanism (not round-trippable for `Vector`s
+> over 4 elements, `Function`, `Plot`) turned out to be unsound. The shipped `invoke()` instead
+> reuses the interpreter's own internal `call_function_node`/`bind_param_value` path — the same
+> one native PHS-to-PHS calls use, which already does registry-aware coercion and enforces
+> `@requires`/`@ensures`. See the doc comment on `PhsModule` in `physure-script/src/module.rs` for
+> the full rationale. `invoke()` takes `&self`, not `&mut self` (loosened for Task 3's benefit).
 
 ```rust
 // In physure-script/src/module.rs
@@ -256,7 +265,7 @@ impl PhsModule {
 }
 ```
 
-- [ ] **Step 4: Run tests and verify pass**
+- [x] **Step 4: Run tests and verify pass**
 
 Run: `cargo test -p physure-script test_invoke_`
 Expected: PASS.
