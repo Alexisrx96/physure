@@ -427,7 +427,16 @@ Expected: PASS.
 - Modify: `physure-python/src/lib.rs`
 - Test: `physure-python/tests/core/test_module_bridge.py`
 
-- [ ] **Step 1: Expose `PyPhsModule` and `PyPhsProject` in `physure-python/src/lib.rs`**
+- [x] **Step 1: Expose `PyPhsModule` and `PyPhsProject` in `physure-python/src/lib.rs`**
+
+> **Deviations from the snippet below:** `PyPhsProject` was skipped — no `PhsProject` type was
+> ever built in Tasks 1-3 (it's a phantom from an earlier design draft), so there's nothing to
+> wrap. `invoke()` uses `&self` (matches `PhsModule::invoke`'s real signature after Task 2's
+> loosening) and wraps the call in `py.allow_threads(...)`, matching `PyInterpreter::evaluate`'s
+> existing convention, so a long-running invocation doesn't block other Python threads. `from_file`
+> checks `Path::is_file()` first and raises `PyFileNotFoundError` (not a generic `PyValueError`
+> with an OS-locale-dependent message) when the file doesn't exist. See `physure-python/src/lib.rs`
+> (`PyPhsModule`) for the shipped code.
 
 ```rust
 // In physure-python/src/lib.rs
@@ -474,15 +483,25 @@ impl PyPhsModule {
 }
 ```
 
-- [ ] **Step 2: Register `PhsModuleCore` in `_core` module register function**
+- [x] **Step 2: Register `PhsModuleCore` in `_core` module register function**
 
 ```rust
 m.add_class::<PyPhsModule>()?;
 ```
 
-- [ ] **Step 3: Compile extension**
+- [x] **Step 3: Compile extension**
 
-Run: `cd physure-core && maturin develop && cd ..`
+> **The documented command below is wrong and does not work** — `physure-core` has no
+> `pyproject.toml` and is a pure `rlib` with an explicit "MUST NOT depend on pyo3" rule; there is
+> nothing there for maturin to build. The actual maturin project is `physure-python/` (its own
+> `pyproject.toml` has `module-name = "physure._core"`). The real command is
+> `cd physure-python && maturin develop`. (This same wrong command is also in root `CLAUDE.md`'s
+> Commands section — worth fixing there too next time that file is touched.) Also watch out:
+> running this from a shell whose `$VIRTUAL_ENV` still points at a *different* checkout's `.venv`
+> silently installs into the wrong one — verify with
+> `python -c "import physure; print(physure._core.__file__)"` after building.
+
+Run: ~~`cd physure-core && maturin develop && cd ..`~~ → `cd physure-python && maturin develop`
 Expected: Build succeeds and module loads.
 
 ---
