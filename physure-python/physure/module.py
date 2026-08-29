@@ -48,9 +48,13 @@ def _to_core_quantity(value: Any) -> Any:
     declared with a *named/derived/prefixed* unit ("N", "Pa", "bar", "mm", "km", "g", ...)
     will reject a dimensionally-identical foreign `Quantity` in that same unit, because
     `bind_param_value` (`physure-script/src/interpreter/expressions.rs`) parses the declared
-    unit with the registry-*expanding* parser while every foreign constructor
-    (`parse_unit_expression`, `UnitRegistry.get_unit`, this module) uses the *atomic* one, and
-    `RationalUnit::same_dimensions` compares raw symbol keys rather than reduced dimensions.
+    unit with the registry-*expanding* parser while the specific foreign-facing paths this
+    bridge touches -- `parse_unit_expression`, and reconstructing a unit from a domain
+    `CompoundUnit`'s raw `.exponents` (what `_to_core_quantity` itself does, below) -- stay
+    *atomic*/unexpanded. (`physure.units.UnitRegistry.get_unit`, used internally by domain
+    `Quantity` objects like `10 * N`, was independently verified to expand correctly and is
+    NOT implicated.) `RationalUnit::same_dimensions` compares raw symbol keys rather than
+    reduced dimensions.
     Converting to base SI units before bridging would dodge that mismatch, but was tried and
     rejected: the resulting core `Quantity` can carry a scale `CompoundUnit.from_rational_unit`
     (used by `_to_domain_value` below) does not reconstruct, which silently produced a wrong
@@ -189,8 +193,14 @@ class PhsModuleWrapper:
             self._fn_cache[fn] = PhsFunctionWrapper(self._core, fn, params)
 
     def __getattr__(self, item: str) -> PhsFunctionWrapper:
-        if item in self._fn_cache:
-            return self._fn_cache[item]
+        # `__getattr__` only runs when normal lookup already failed, so a bare
+        # `self._fn_cache` read here would -- on an instance built via `cls.__new__(cls)`
+        # with `__init__` never run (e.g. `copy.copy`'s default reconstruction path before
+        # `__dict__` is restored) -- itself miss and recurse into `__getattr__` forever.
+        # `self.__dict__.get(...)` is a plain dict lookup that never triggers `__getattr__`.
+        fn_cache = self.__dict__.get("_fn_cache")
+        if fn_cache is not None and item in fn_cache:
+            return fn_cache[item]
         raise AttributeError(f"Module has no function {item!r}")
 
     def __getitem__(self, item: str) -> PhsFunctionWrapper:
@@ -228,6 +238,10 @@ def load_dir(path: str | Path) -> dict[str, PhsModuleWrapper]:
     A thin convenience over calling `load_phs` once per file -- there is no
     cross-module composition/import graph here (no ``PhsProject``); that is out of scope
     for this task (see Tasks 6/7 of the foreign-bridge plan).
+
+    Note: the ``"*.phs"`` glob is case-insensitive on Windows/macOS filesystems but
+    case-sensitive on typical Linux ones, so a file like ``UPPER.PHS`` may or may not be
+    picked up depending on the platform this runs on.
     """
     directory = Path(path)
     return {p.stem: load_phs(p) for p in sorted(directory.glob("*.phs"))}

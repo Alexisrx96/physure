@@ -545,9 +545,12 @@ Expected: Build succeeds and module loads.
 > SI compositions (`kg`, `m`, `s`) after finding a fourth, separate bug — this one in
 > `physure-script`, not this task's binding layer: `PhsModule::bind_param_value`
 > (`physure-script/src/interpreter/expressions.rs`) parses a function's *declared* unit with
-> the registry-*expanding* parser, while every foreign-facing constructor
-> (`parse_unit_expression`, `UnitRegistry.get_unit`, this task's own bridge) uses the
-> *atomic* one, and `RationalUnit::same_dimensions` (`physure-core/src/units/rational.rs`)
+> the registry-*expanding* parser, while `parse_unit_expression` and this task's own bridge
+> (`_to_core_quantity`, which reconstructs atomically from a domain `CompoundUnit`'s raw
+> `.exponents`) stay *atomic*/unexpanded. `physure.units.UnitRegistry.get_unit` -- used
+> internally by domain `Quantity` objects like `10 * N` -- was independently verified to
+> expand correctly and is **not** implicated. `RationalUnit::same_dimensions`
+> (`physure-core/src/units/rational.rs`)
 > compares raw symbol keys rather than reduced dimensions — so a foreign `Quantity` built in
 > a named/derived/prefixed unit ("N", "Pa", "bar", "mm", "km", "g", ...) is rejected as
 > dimensionally incompatible with a declared parameter of that very same unit. Confirmed with

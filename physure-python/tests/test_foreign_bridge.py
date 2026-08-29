@@ -10,6 +10,8 @@ of `load_phs(...).some_fn(...)` can hit.
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 
 import physure
@@ -37,8 +39,9 @@ def test_load_phs_with_chaining(tmp_path):
     # `_to_core_quantity`'s docstring in `physure/module.py`): a foreign `Quantity` built in
     # a named/derived/prefixed unit is rejected as dimensionally incompatible with a
     # declared parameter of that very same unit, because `bind_param_value` parses the
-    # declared unit with a different (registry-expanding) parser than every foreign
-    # constructor uses (atomic). That bug is in `physure-script`, out of scope here, and
+    # declared unit with a different (registry-expanding) parser than `parse_unit_expression`
+    # and this module's own bridge use (atomic) -- `UnitRegistry.get_unit` expands correctly
+    # and is not implicated. That bug is in `physure-script`, out of scope here, and
     # cleanly reported separately -- this test instead proves the actual Task 5 deliverable
     # (kwargs dispatch, cross-module chaining, real dimensional coercion, `.to()` conversion
     # on the result) on the unit family that works correctly today.
@@ -143,13 +146,15 @@ def test_module_wrapper_dir_lists_functions(tmp_path):
         "Pre-existing physure-script bug, out of scope for Task 5 (see "
         "physure/module.py's _to_core_quantity docstring): PhsModule::bind_param_value "
         "(physure-script/src/interpreter/expressions.rs) parses a declared parameter unit "
-        "with the registry-expanding parser, while every foreign constructor "
-        "(parse_unit_expression, UnitRegistry.get_unit, this module's own bridge) uses the "
-        "atomic one. RationalUnit::same_dimensions compares raw symbol keys rather than "
-        "reduced dimensions, so a dimensionally-identical foreign Quantity in a "
-        "named/derived/prefixed unit is rejected. Pinned here (rather than silently working "
-        "around it) so a physure-script fix flips this to an unexpected pass and gets "
-        "noticed."
+        "with the registry-expanding parser, while parse_unit_expression and this module's "
+        "own bridge (_to_core_quantity, reconstructing atomically from a CompoundUnit's raw "
+        ".exponents) stay atomic/unexpanded. UnitRegistry.get_unit -- used internally by "
+        "domain Quantity objects like 10 * N -- was independently verified to expand "
+        "correctly and is NOT implicated. RationalUnit::same_dimensions compares raw symbol "
+        "keys rather than reduced dimensions, so a dimensionally-identical foreign Quantity "
+        "in a named/derived/prefixed unit is rejected. Pinned here (rather than silently "
+        "working around it) so a physure-script fix flips this to an unexpected pass and "
+        "gets noticed."
     ),
     strict=True,
 )
@@ -245,3 +250,41 @@ def test_module_wrapper_subscript_and_membership(tmp_path):
     with pytest.raises(KeyError, match="Module has no function 'cube'"):
         _ = mod["cube"]
 
+
+def test_getattr_on_uninitialized_instance_raises_attribute_error_not_recursion():
+    """`__getattr__` must not infinitely recurse when `_fn_cache` was never set.
+
+    `__getattr__` only runs when normal attribute lookup already failed, so a bare
+    `self._fn_cache` read inside it would -- on an instance produced via
+    `cls.__new__(cls)` with `__init__` never run -- itself miss and re-enter
+    `__getattr__` forever (confirmed: this used to raise `RecursionError`). This is
+    exactly the state `copy.copy`'s default reconstruction path puts an object in before
+    restoring `__dict__`.
+    """
+    from physure.module import PhsModuleWrapper
+
+    uninitialized = PhsModuleWrapper.__new__(PhsModuleWrapper)
+
+    with pytest.raises(AttributeError):
+        _ = uninitialized.some_attr
+
+
+def test_copy_copy_does_not_recurse(tmp_path):
+    """`copy.copy(mod)` must not raise `RecursionError` (the original Bug 1 repro).
+
+    `copy.copy`'s default path builds a fresh, un-`__init__`-ed instance via
+    `cls.__new__(cls)` before copying `__dict__` onto it -- triggering the same
+    uninitialized-instance path as the test above. Whether the resulting shallow copy is
+    fully usable (it wraps a PyO3 handle that may not support copying) is out of scope
+    here; only the absence of infinite recursion is being asserted.
+    """
+    phs_file = tmp_path / "geom.phs"
+    phs_file.write_text("fn area(w, h) = w * h\n")
+    mod = physure.load_phs(phs_file)
+
+    try:
+        copy.copy(mod)
+    except RecursionError:
+        raise
+    except Exception:
+        pass
