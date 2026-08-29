@@ -232,6 +232,34 @@ fn test_linspace() {
 }
 
 #[test]
+fn linspace_exceeding_max_loop_iterations_errors_cleanly() {
+    // linspace's count argument (args[2]) drives `(0..count).map(...).collect()` directly --
+    // the identical unbounded-materialization shape as the for-expression's Range branch and
+    // parallel_map, just reached through a different builtin. This proves it is gated by the
+    // same ceiling instead of allocating.
+    let _guard = physure_core::settings::scoped_max_loop_iterations(1000);
+    let interp = PhsInterpreter::default();
+    let args = vec![PhsValue::Number(0.0), PhsValue::Number(1.0), PhsValue::Number(1001.0)];
+    let err = eval_array_builtin("linspace", &args, &interp).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("1001") && msg.contains("1000"),
+        "unexpected message: {msg}"
+    );
+}
+
+#[test]
+fn linspace_at_max_loop_iterations_still_succeeds() {
+    let _guard = physure_core::settings::scoped_max_loop_iterations(1000);
+    let res = eval_array(
+        "linspace",
+        vec![PhsValue::Number(0.0), PhsValue::Number(1.0), PhsValue::Number(1000.0)],
+    );
+    let PhsValue::Vector(v) = res else { panic!("expected vector") };
+    assert_eq!(v.len(), 1000);
+}
+
+#[test]
 fn test_gradient() {
     let y = PhsValue::Vector(vec![PhsValue::Number(1.0), PhsValue::Number(4.0), PhsValue::Number(9.0)]);
     let x = PhsValue::Vector(vec![PhsValue::Number(1.0), PhsValue::Number(2.0), PhsValue::Number(3.0)]);

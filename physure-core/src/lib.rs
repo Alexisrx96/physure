@@ -17,7 +17,10 @@ pub use linalg::{QuantityVector, QuantityMatrix};
 pub use covariance::{CovarianceStore, PruningConfig};
 pub use uncertainty::{UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, PropagationMode, UnscentedBackend, propagation_mode, set_propagation_mode};
 pub use plotting::Mesh3DData;
-pub use settings::{parallel_threshold, set_parallel_threshold};
+pub use settings::{
+    parallel_threshold, set_parallel_threshold, max_loop_iterations, set_max_loop_iterations,
+    max_pipeline_steps, set_max_pipeline_steps,
+};
 
 /// Convert batch values in-place using factor.
 pub fn batch_to_si(data: &mut [f64], factor: f64) {

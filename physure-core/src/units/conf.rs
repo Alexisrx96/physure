@@ -53,6 +53,22 @@ pub fn parse_physure_conf(
                                 "physure.conf: invalid parallel_threshold '{raw}'; keeping default"
                             ),
                         },
+                        "max_loop_iterations" => match raw.parse::<usize>() {
+                            Ok(n) => {
+                                crate::settings::set_max_loop_iterations(n);
+                            }
+                            Err(_) => eprintln!(
+                                "physure.conf: invalid max_loop_iterations '{raw}'; keeping default"
+                            ),
+                        },
+                        "max_pipeline_steps" => match raw.parse::<usize>() {
+                            Ok(n) => {
+                                crate::settings::set_max_pipeline_steps(n);
+                            }
+                            Err(_) => eprintln!(
+                                "physure.conf: invalid max_pipeline_steps '{raw}'; keeping default"
+                            ),
+                        },
                         _ => {}
                     }
                 }
@@ -376,5 +392,35 @@ mod tests {
         );
         assert_eq!(crate::settings::parallel_threshold(), 500);
         crate::settings::set_parallel_threshold(original);
+    }
+
+    #[test]
+    fn parses_max_loop_iterations_from_settings_section() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        let original = crate::settings::max_loop_iterations();
+        parse_physure_conf(
+            "[Settings]\nmax_loop_iterations = 250\n",
+            &mut reg,
+            &mut constants,
+        );
+        assert_eq!(crate::settings::max_loop_iterations(), 250);
+        crate::settings::set_max_loop_iterations(original);
+    }
+
+    #[test]
+    fn parses_max_pipeline_steps_from_settings_section() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        let original = crate::settings::max_pipeline_steps();
+        parse_physure_conf(
+            "[Settings]\nmax_pipeline_steps = 42\n",
+            &mut reg,
+            &mut constants,
+        );
+        assert_eq!(crate::settings::max_pipeline_steps(), 42);
+        crate::settings::set_max_pipeline_steps(original);
     }
 }

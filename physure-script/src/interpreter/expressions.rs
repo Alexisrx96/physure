@@ -329,6 +329,13 @@ impl PhsInterpreter {
                         };
                         let start_i = start_num as i64;
                         let end_i = end_num as i64;
+                        let count = end_i.saturating_sub(start_i).max(0) as usize;
+                        let ceiling = physure_core::settings::max_loop_iterations();
+                        if count > ceiling {
+                            return Err(PhysureError::Generic(format!(
+                                "for-loop range `{start_i}..{end_i}` would materialize {count} elements, exceeding the max_loop_iterations ceiling of {ceiling}; raise `max_loop_iterations` in physure.conf's [Settings] section if this is a legitimate workload"
+                            )));
+                        }
                         (start_i..end_i)
                             .map(|i| {
                                 if let Some(ref u) = unit {
@@ -612,7 +619,7 @@ impl PhsInterpreter {
         }
         let converted = q.convert_to(&target_unit).map_err(|e| {
             PhysureError::Generic(format!(
-                "Argument for parameter '{}' of function '{}' has a unit incompatible with declared unit '{}': {:?}",
+                "Argument for parameter '{}' of function '{}' has a unit incompatible with declared unit '{}': {}",
                 param_name, fn_name, clean_unit_str, e
             ))
         })?;
