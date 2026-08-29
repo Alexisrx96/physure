@@ -81,6 +81,16 @@ Expected: FAIL (module does not exist yet).
 
 - [x] **Step 3: Implement `ParamInfo`, `FunctionSignature`, and `PhsModule`**
 
+> **Deviations from the snippet below (added post-hoc; Tasks 2-4 called these out inline at
+> the time, this one wasn't):** the shipped `PhsModule` does NOT derive `Clone`, and
+> `interpreter` is a private field, not `pub`. Code review found `pub interpreter` let a
+> caller mutate the interpreter's environment directly while `functions` (the cached
+> signature map) went stale with no way to detect it, and `#[derive(Clone)]` would have
+> silently shared `PhsInterpreter`'s `Arc<Mutex<..>>` call-stack/breakpoint state across
+> clones (a hazard `PhsInterpreter`'s own doc comment already warns about). Both were fixed
+> in the same review pass that landed Task 1 (see `physure-script/src/module.rs`'s struct
+> doc comment for the full rationale).
+
 ```rust
 // In physure-script/src/module.rs
 use std::collections::HashMap;
@@ -471,17 +481,20 @@ impl PyPhsModule {
             .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(format!("Function '{}' not found", fn_name)))
     }
 
-    fn invoke(&mut self, py: Python<'_>, fn_name: &str, args: Vec<Bound<'_, PyAny>>) -> PyResult<PyObject> {
+    fn invoke(&self, py: Python<'_>, fn_name: &str, args: Vec<Bound<'_, PyAny>>) -> PyResult<PyObject> {
         let mut rust_args = Vec::with_capacity(args.len());
         for a in args {
             rust_args.push(py_to_phs_value(&a)?);
         }
-        let res = self.inner.invoke(fn_name, &rust_args)
+        let res = py.allow_threads(|| self.inner.invoke(fn_name, &rust_args))
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
         phs_value_to_py(py, res)
     }
 }
 ```
+<!-- Note (post-hoc correction): this snippet previously showed `&mut self` with no
+     `allow_threads` call, contradicting the deviation note above it -- that was the
+     pre-review-fix version. The snippet now matches the actual shipped code. -->
 
 - [x] **Step 2: Register `PhsModuleCore` in `_core` module register function**
 
