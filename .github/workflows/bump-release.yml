@@ -39,13 +39,14 @@ jobs:
           esac
           new="$major.$minor.$patch"
           sed -i "s/__version__ = \"$current\"/__version__ = \"$new\"/" physure-python/physure/__init__.py
+          sed -i "s/^version     = \"$current\"/version     = \"$new\"/" physure-python/pyproject.toml
           echo "new=$new" >> "$GITHUB_OUTPUT"
 
       - name: Commit, tag, and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add physure-python/physure/__init__.py
+          git add physure-python/physure/__init__.py physure-python/pyproject.toml
           git commit -m "chore: release v${{ steps.bump.outputs.new }}"
           git tag "v${{ steps.bump.outputs.new }}"
           git push origin HEAD:${{ github.ref_name }}
