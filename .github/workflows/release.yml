@@ -33,6 +33,11 @@ jobs:
             echo "Tag $GITHUB_REF_NAME (parsed $tag) does not match __version__ $version" >&2
             exit 1
           fi
+          pyproject_version="$(grep -Po '(?<=^version     = ")[^"]*' physure-python/pyproject.toml)"
+          if [ "$version" != "$pyproject_version" ]; then
+            echo "__version__ $version does not match pyproject.toml version $pyproject_version — maturin builds from pyproject.toml, so a mismatch here silently ships the wrong wheel version" >&2
+            exit 1
+          fi
 
   # One abi3 wheel per platform (Python >= 3.11). maturin-action builds
   # inside manylinux images on Linux so PyPI accepts the wheels — a bare
