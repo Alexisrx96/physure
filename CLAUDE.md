@@ -5,11 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install deps (including dev)
-uv sync --all-extras
+# Every Python command below runs from physure-python/ — the virtualenv and
+# pyproject.toml live there, not at the repository root.
+cd physure-python
 
-# Build Rust core (required after any change to physure-core/src/)
-cd physure-core && maturin develop && cd ..
+# Install deps (including dev)
+uv sync --all-extras --dev
+
+# Build the Rust extension (required after any change under physure-core/src/,
+# physure-script/src/ or physure-python/src/)
+uv run maturin develop --release
 
 # Run all tests
 uv run pytest
@@ -27,11 +32,11 @@ uv run ty check
 # Enable runtime beartype contracts (slow, for debugging)
 PHYSURE_DEBUG=1 uv run pytest
 
-# SonarQube scan (requires .env with SONAR_TOKEN, see .env.example)
+# SonarQube scan (requires the repo-root .env with SONAR_TOKEN, see .env.example)
 make sonar  # runs pytest coverage, Rust lcov, and pysonar analysis
 ```
 
-`.env` holds `SONAR_TOKEN` and is gitignored. Copy `.env.example` to `.env` to configure.
+`.env` holds `SONAR_TOKEN` and is gitignored. Copy `.env.example` to `.env` (both at the repository root) to configure.
 
 `pytest` runs `--doctest-modules` by default, so doctests in source files are always executed.
 
