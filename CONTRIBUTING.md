@@ -11,8 +11,8 @@ design discussion costs one thread; a rejected PR costs an afternoon.
 
 ## Layout
 
-One repository, six crates and one Python package. The names do not all match their
-directories, which trips people up:
+One repository, seven workspace crates (`physure-python/` is both the PyO3 crate and the
+Python package). The names do not all match their directories, which trips people up:
 
 | Directory | What it is | Published as |
 | --- | --- | --- |
@@ -22,6 +22,7 @@ directories, which trips people up:
 | `physure-python/` | The Python package and the PyO3 bindings | `physure` on PyPI |
 | `physure-java/` | The Java classes and the JNI bridge | Maven |
 | `physure-lsp/` | The language server for PHS | crate `physure-lsp` |
+| `physure-wasm/` | The `wasm-bindgen` bindings for JS/TS | npm package **`physure`** |
 
 The Rust library target inside `physure-core/` is called `physure_core`, so Rust code says
 `use physure_core::...` while `Cargo.toml` says `physure`. That split is deliberate; please
@@ -62,6 +63,13 @@ uv run maturin develop --release         # rebuild after ANY change under physur
 `maturin develop` is not optional after touching Rust: the Python package imports a compiled
 `physure._core`, and a stale one will have you chasing a bug you already fixed. The same goes
 for `target/release/phs` — rebuild it before trusting what the CLI prints.
+
+Preview the documentation site with `cd physure-python && uv run mkdocs serve`. CI builds it
+with `uv run mkdocs build --strict` from the same directory.
+
+Working in a git worktree? Run `maturin develop` from that worktree's own `physure-python/`
+and check `echo $VIRTUAL_ENV` first: a venv inherited from another checkout would receive
+your build silently.
 
 ---
 
