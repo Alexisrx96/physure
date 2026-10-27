@@ -1,6 +1,7 @@
 import configparser
 import pathlib
 import pprint
+import subprocess
 import sys
 
 # Ensure we can import physure from the project root
@@ -142,7 +143,11 @@ def generate_init_module(output_dir):
         "try:",
         "    from ._index import UNIT_INDEX",
         "except ImportError:",
-        "    UNIT_INDEX = {}",
+        "    # ponytail: UNIT_INDEX toggles between the generated index and an"
+        " empty",
+        "    # fallback across the try/except branches by design; not a real",
+        "    # constant-redefinition bug.",
+        "    UNIT_INDEX = {}  # pyright: ignore[reportConstantRedefinition]",
         "",
         "def __getattr__(name: str) -> CompoundUnit:",
         "    if name in UNIT_INDEX:",
@@ -163,6 +168,21 @@ def generate_init_module(output_dir):
         f.write("\n".join(content))
 
 
+def format_output(output_dir):
+    """Formats the generated files with ruff.
+
+    CI runs ``ruff check`` and ``ruff format --check`` on these files, so the
+    generator must emit output that already passes both. Run from
+    physure-python/ so ruff picks up the project's configuration.
+    """
+    out = str(output_dir)
+    subprocess.run([sys.executable, "-m", "ruff", "format", out], check=True)
+    subprocess.run(
+        [sys.executable, "-m", "ruff", "check", "--fix", "--quiet", out],
+        check=True,
+    )
+
+
 def compile_units(config_path, output_dir):
     """Compiles units from config file to Python modules."""
     out_path = pathlib.Path(output_dir)
@@ -175,6 +195,7 @@ def compile_units(config_path, output_dir):
     generate_core_module(unique_units, out_path)
     generate_index_module(index_map, out_path)
     generate_init_module(out_path)
+    format_output(out_path)
 
     print("Compilation complete.")
 
