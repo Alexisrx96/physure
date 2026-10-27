@@ -75,9 +75,8 @@ target/
 !.claude/agents/
 .claude/worktrees/
 
-# Physure Generated Types
-physure/_generated_types.py
-physure/core/registry.pyi
+# mkdocs-jupyter execution cache
+physure-python/.cache/
 
 # SonarQube local config (contains secrets)
 .env
