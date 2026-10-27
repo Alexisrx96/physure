@@ -12,7 +12,7 @@ def load_config(config_path):
     """Parses the INI configuration file."""
     path = pathlib.Path(config_path)
     print(f"Reading configuration from: {path}")
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
     try:
         parser.read(str(path), encoding="utf-8")
@@ -180,7 +180,6 @@ def compile_units(config_path, output_dir):
 
 
 if __name__ == "__main__":
-    # Point to the physure.conf file
-    # We assume CWD is project root d:\physure
-    conf_file = "physure/infrastructure/config/physure.conf"
+    # physure-core owns the catalog. Run this script from physure-python/.
+    conf_file = "../physure-core/src/units/physure.conf"
     compile_units(conf_file, "physure/units")

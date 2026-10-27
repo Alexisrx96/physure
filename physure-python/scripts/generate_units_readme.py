@@ -3,9 +3,10 @@ from pathlib import Path
 
 
 def generate_units_markdown():
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
-    parser.read("physure/infrastructure/config/physure.conf", encoding="utf-8")
+    # physure-core owns the catalog. Run this script from physure-python/.
+    parser.read("../physure-core/src/units/physure.conf", encoding="utf-8")
 
     md = []
     md.append("# Supported Units, Prefixes, and Constants in Physure\n")

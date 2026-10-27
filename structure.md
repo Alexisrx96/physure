@@ -51,7 +51,7 @@ subgraph group_python["physure-python/physure/ — Python public API package<br/
   node_core_infra["core/<br/>BackendManager dispatcher, BackendOps<br/>protocol, lazy UnitRegistry, formatting<br/>[core/dispatcher.py]"]
   node_backends["backends/<br/>numpy/torch/jax/python/core backends<br/>[backends/core_backend.py]"]
   node_jit["_jit/tracer.py<br/>TracerQuantity DAG, validates dims<br/>via RationalUnit, zero runtime overhead<br/>[_jit/tracer.py]"]
-  node_infra_conf["infrastructure/config/<br/>physure.conf, international.conf,<br/>imperial.conf<br/>[infrastructure/config/physure.conf]"]
+  node_infra_conf["infrastructure/config/systems/<br/>international.conf, imperial.conf<br/>(base catalog: physure-core's physure.conf,<br/>embedded in _core)<br/>[infrastructure/config/systems/international.conf]"]
   node_ext["ext/<br/>chemistry, pandas/numba support,<br/>phs_loader, currency (lazy-imported)<br/>[ext/phs_loader.py]"]
   node_nn["nn/<br/>unit-aware layers/loss wrapping torch.nn<br/>[nn/layers.py]"]
   node_units_pkg["units/<br/>friendly constant/unit shortcuts<br/>[units/core.py]"]
@@ -147,7 +147,7 @@ click node_symbolic_py "https://github.com/Alexisrx96/physure/blob/main/physure-
 click node_core_infra "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/core/dispatcher.py"
 click node_backends "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/backends/core_backend.py"
 click node_jit "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/_jit/tracer.py"
-click node_infra_conf "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/infrastructure/config/physure.conf"
+click node_infra_conf "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/infrastructure/config/systems/international.conf"
 click node_ext "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/ext/phs_loader.py"
 click node_nn "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/nn/layers.py"
 click node_units_pkg "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/units/core.py"

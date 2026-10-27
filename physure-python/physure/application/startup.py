@@ -16,6 +16,7 @@ from importlib import resources
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from physure._core import default_conf
 from physure.application.context import normalize_propagation_mode, use_system
 from physure.domain.measurement.converters import (
     LinearConverter,
@@ -308,17 +309,10 @@ class UnitSystemBuilder:
 def _load_base_config(
     parser: configparser.ConfigParser, verbose: bool
 ) -> None:
-    """Loads the base physure.conf packaged with the library."""
-    try:
-        base_config_path = resources.files(
-            "physure.infrastructure.config"
-        ).joinpath(_CONF_FILE)
-        with resources.as_file(base_config_path) as base_config:
-            parser.read(str(base_config), encoding="utf-8")
-            if verbose:
-                print(f"  -> Loaded base config: {base_config}")
-    except Exception as e:
-        print(f"[WARNING] Could not load base configuration: {e}")
+    """Loads the base physure.conf embedded in the native extension."""
+    parser.read_string(default_conf())
+    if verbose:
+        print("  -> Loaded base config: physure._core.default_conf()")
 
 
 def _load_extra_config_file(
@@ -350,7 +344,9 @@ def _get_config_parser(
     extra_config_files: list[str] | None = None, verbose: bool = False
 ) -> configparser.ConfigParser:
     """Creates a ConfigParser with base configs and optional extra files."""
-    parser = configparser.ConfigParser()
+    # interpolation=None: the catalog contains a literal "%"
+    # (percent = 0.01, 1, [%, percent, ...]).
+    parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
 
     # 1. Always load the base physure.conf
