@@ -349,33 +349,43 @@ git commit -m "build(make): run Python targets from physure-python/" -m "make te
 
 ---
 
-### Task 5: Reconcile `ROADMAP.md` and `docs/ROADMAP.md` (needs a maintainer decision)
+### Task 5: Merge the two roadmap timelines (maintainer decision recorded)
 
 **Files:**
-- Modify: `docs/ROADMAP.md` (timeline block only, depending on the decision)
-- Modify: `ROADMAP.md` (becomes a pointer)
+- Modify: `ROADMAP.md` (timeline block only)
+- Modify: `docs/ROADMAP.md` (timeline block only)
 
-The two files are not mechanical copies: link base differs (`docs/x.md` on GitHub vs `x.md` for mkdocs), only the docs copy has the "Active execution plan" line, and their `timeline` blocks differ. Do not guess which timeline is current.
+Maintainer decision (2026-10-27): combine both timelines and do not remove anything from the root file. So the four `timeline` lines become the union of both files' items and are written to **both** files. Neither file is replaced by a pointer; each keeps its own link base (`docs/x.md` on GitHub, `x.md` for mkdocs) and every other difference. The only wording change is that the docs copy's "Chemistry Extension (Species & Reactions)" becomes the root copy's "Chemistry Python Extension (Species & Reactions)" (same item, the more specific name).
 
-- [ ] **Step 1: Show the differences**
+- [ ] **Step 1: Show the difference being merged**
 
 ```bash
-diff ROADMAP.md docs/ROADMAP.md | grep -n "Q3 2026\|Q4 2026\|Q1 2027\|Q2 2027\|Active execution plan" 
+diff ROADMAP.md docs/ROADMAP.md | grep -n "Q3 2026\|Q4 2026\|Q1 2027\|Q2 2027"
 ```
 
-Expected: eight timeline lines (four per file) and the `Active execution plan` line only on the docs side.
+Expected: eight timeline lines (four from each file).
 
-- [ ] **Step 2: Ask the maintainer which timeline is current**
+- [ ] **Step 2: Write the merged timeline into `ROADMAP.md`**
 
-Ask, with these options, and wait for the answer:
+In `ROADMAP.md`, replace these four lines:
 
-1. Use the **root** `ROADMAP.md` timeline (chemistry Python extension, PHS chemistry builtins).
-2. Use the **docs** `docs/ROADMAP.md` timeline (partial fractions, Bareiss matrices, DAE Pantelides).
-3. Skip this task; leave both files as they are.
+```
+    Q3 2026 (Completed) : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression
+    Q4 2026 (In Progress) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Rust Core Chemistry Module (physure_core::chemistry) : Risch Integration Engine : Buckingham Pi Nullspace Solver
+    Q1 2027 (Planned) : PHS DSL Chemistry Builtins : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Parametric Free-Body Diagrams (physure.diagrams) : GUM Welch-Satterthwaite & Real Gas EOS
+    Q2 2027 (Planned) : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
+```
 
-For option 3, delete this task's remaining steps from the checklist and move on to Task 6.
+with:
 
-- [ ] **Step 3: Apply option 1 only — copy the root timeline into the docs copy**
+```
+    Q3 2026 (Completed) : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression
+    Q4 2026 (In Progress) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Rust Core Chemistry Module (physure_core::chemistry) : Risch Integration Engine : Buckingham Pi Nullspace Solver
+    Q1 2027 (Planned) : PHS DSL Chemistry Builtins : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : GUM Welch-Satterthwaite & Real Gas EOS
+    Q2 2027 (Planned) : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
+```
+
+- [ ] **Step 3: Write the same merged timeline into `docs/ROADMAP.md`**
 
 In `docs/ROADMAP.md`, replace these four lines:
 
@@ -386,44 +396,25 @@ In `docs/ROADMAP.md`, replace these four lines:
     Q2 2027 (Planned) : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
 ```
 
-with:
+with the same four merged lines as in Step 2.
 
-```
-    Q3 2026 (Completed) : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression
-    Q4 2026 (In Progress) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Rust Core Chemistry Module (physure_core::chemistry) : Risch Integration Engine : Buckingham Pi Nullspace Solver
-    Q1 2027 (Planned) : PHS DSL Chemistry Builtins : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Parametric Free-Body Diagrams (physure.diagrams) : GUM Welch-Satterthwaite & Real Gas EOS
-    Q2 2027 (Planned) : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
-```
-
-For option 2, make no edit here.
-
-- [ ] **Step 4: Replace the root file with a pointer (options 1 and 2)**
-
-Overwrite `ROADMAP.md` with exactly:
-
-```markdown
-# Roadmap
-
-The roadmap lives in [`docs/ROADMAP.md`](docs/ROADMAP.md), the same file the documentation
-site publishes as "Master Roadmap", so GitHub and the site never disagree.
-```
-
-The root file is outside mkdocs' `docs_dir`, so this relative link does not affect the strict build.
-
-- [ ] **Step 5: Check nothing else depended on the root file's content**
+- [ ] **Step 4: Verify the timelines are identical and nothing was lost**
 
 ```bash
-grep -rn "ROADMAP.md" README.md CONTRIBUTING.md INSTALL.md CLAUDE.md physure-python/README.md; echo "exit=$?"
+diff <(grep -E "^ +Q[1-4] 20" ROADMAP.md) <(grep -E "^ +Q[1-4] 20" docs/ROADMAP.md); echo "timeline-diff-exit=$?"
+for item in "Chemistry Python Extension" "Rust Core Chemistry Module" "PHS DSL Chemistry Builtins" "Advanced Reaction Networks" "Cross-Language Chemistry Bindings" "Partial Fraction Decomposition" "Bareiss Symbolic Matrices" "DAE Pantelides Index Reduction" "Anisotropic 3D Tensors"; do printf "%-34s root=%s docs=%s
+" "$item" "$(grep -c "$item" ROADMAP.md)" "$(grep -c "$item" docs/ROADMAP.md)"; done
+git diff --stat ROADMAP.md docs/ROADMAP.md
 ```
 
-Expected: no matches, `exit=1`. If a file does match, make sure it only needs the filename to exist, not the old content.
+Expected: `timeline-diff-exit=0`; every item prints `root=1 docs=1`; the stat shows only the four timeline lines changed in each file (4 insertions and 4 deletions each).
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add ROADMAP.md docs/ROADMAP.md
 git diff --cached --name-only
-git commit -m "docs(roadmap): one canonical roadmap, root file points to docs/ROADMAP.md" -m "The two copies had drifted (timeline block, execution-plan line). The docs copy is the one the site publishes." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git commit -m "docs(roadmap): merge the two timelines into one, keep both files" -m "ROADMAP.md and docs/ROADMAP.md had drifted: each timeline had items the other lacked. Both now carry the union. Each file keeps its own link base and everything else." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -499,7 +490,7 @@ Expected: ends with `Documentation built in ... seconds` and no `WARNING` or `ER
 git diff --name-only origin/main...HEAD
 ```
 
-Expected exactly (the two `ROADMAP` files only if Task 5 was not skipped): `CLAUDE.md`, `CONTRIBUTING.md`, `Makefile`, `ROADMAP.md`, `docs/ROADMAP.md`, `structure.md`, the spec, and the three plans. `Cargo.lock` must **not** appear.
+Expected exactly: `CLAUDE.md`, `CONTRIBUTING.md`, `Makefile`, `ROADMAP.md`, `docs/ROADMAP.md`, `structure.md`, the spec, and the three plans. `Cargo.lock` must **not** appear.
 
 ---
 
@@ -526,7 +517,7 @@ gh pr create --base main --title "docs: make CLAUDE.md, CONTRIBUTING, structure.
 - `CONTRIBUTING.md`: seven crates (adds `physure-wasm`), docs preview, worktree venv warning.
 - `structure.md`: real parser layout, mandatory native extension, Python-side duplication named.
 - `Makefile`: targets run from `physure-python/` (they could not work from the root).
-- One canonical roadmap (if the maintainer chose to reconcile it).
+- The two roadmap timelines are merged (both files keep their content).
 - Adds the repo-hygiene spec and the three implementation plans.
 
 ## Why

@@ -77,9 +77,10 @@ observe a change (PR-3). The 12 untracked WIP documents in the main checkout are
    `cargo test --workspace` stays at the root; `sonar` unchanged.
 5. **Roadmaps:** `ROADMAP.md` and `docs/ROADMAP.md` differ in link base (`docs/x.md` for
    GitHub, `x.md` for mkdocs), in one "Active execution plan" line, and in the timeline
-   block. The maintainer picks which timeline is current; `docs/ROADMAP.md` (the file the
-   site publishes) becomes canonical and the root file a three-line pointer. Moving the five
-   per-area roadmaps is dropped: ~15 relative links plus the nav would change for no gain.
+   block, where each file has items the other lacks. Maintainer decision: combine both
+   and remove nothing from the root file. The timeline becomes the union of both and is
+   written to both files; neither file becomes a pointer. Moving the five per-area
+   roadmaps is dropped: ~15 relative links plus the nav would change for no gain.
 
 Docs link policy applies: no relative links to source files, both ends of any
 doc-to-doc link committed together.
