@@ -126,6 +126,8 @@ class UnitRegistry:
     attocandela: Unit
     attocandelas: Unit
     attocd: Unit
+    attocelsius: Unit
+    attocentigrade: Unit
     attocoulomb: Unit
     attocoulombs: Unit
     attod: Unit
@@ -135,14 +137,24 @@ class UnitRegistry:
     attodebye: Unit
     attodecibel: Unit
     attodeg: Unit
+    attodegC: Unit
+    attodegC_delta: Unit
+    attodegF: Unit
+    attodegF_delta: Unit
+    attodegR: Unit
     attodegree: Unit
     attodegrees: Unit
+    attodelta_celsius: Unit
+    attodelta_degC: Unit
+    attodelta_degF: Unit
+    attodelta_fahrenheit: Unit
     attodyn: Unit
     attodyne: Unit
     attoeV: Unit
     attoelectron_mass: Unit
     attoelectron_volt: Unit
     attoerg: Unit
+    attofahrenheit: Unit
     attofarad: Unit
     attofarads: Unit
     attofeet: Unit
@@ -172,6 +184,8 @@ class UnitRegistry:
     attohp: Unit
     attojoule: Unit
     attojoules: Unit
+    attojulio: Unit
+    attojulios: Unit
     attokat: Unit
     attokatal: Unit
     attokayser: Unit
@@ -220,28 +234,37 @@ class UnitRegistry:
     attooersted: Unit
     attoohm: Unit
     attoohm_meter: Unit
+    attoohmio: Unit
+    attoohmios: Unit
     attoohms: Unit
     attoounce: Unit
     attoounces: Unit
     attooz: Unit
     attoparsec: Unit
     attopascal: Unit
+    attopascalio: Unit
+    attopascalios: Unit
     attopascals: Unit
     attopc: Unit
+    attopct: Unit
+    attopercent: Unit
     attoplanck_charge: Unit
     attoplanck_length: Unit
     attoplanck_mass: Unit
     attoplanck_temperature: Unit
     attoplanck_time: Unit
     attopoise: Unit
+    attoporcentaje: Unit
     attopound: Unit
     attopound_force: Unit
     attopounds: Unit
+    attoppm: Unit
     attopsi: Unit
     attoqp: Unit
     attorad: Unit
     attoradian: Unit
     attoradians: Unit
+    attorankine: Unit
     attos: Unit
     attosec: Unit
     attosecond: Unit
@@ -265,7 +288,11 @@ class UnitRegistry:
     attotorr: Unit
     attotp: Unit
     attounity: Unit
+    attovatio: Unit
+    attovatios: Unit
     attovolt: Unit
+    attovoltio: Unit
+    attovoltios: Unit
     attovolts: Unit
     attowatt: Unit
     attowatt_hour: Unit
@@ -293,6 +320,7 @@ class UnitRegistry:
     candela: Unit
     candelas: Unit
     cd: Unit
+    celsius: Unit
     centiA: Unit
     centiBTU: Unit
     centiBa: Unit
@@ -358,6 +386,8 @@ class UnitRegistry:
     centicandela: Unit
     centicandelas: Unit
     centicd: Unit
+    centicelsius: Unit
+    centicentigrade: Unit
     centicoulomb: Unit
     centicoulombs: Unit
     centid: Unit
@@ -367,14 +397,24 @@ class UnitRegistry:
     centidebye: Unit
     centidecibel: Unit
     centideg: Unit
+    centidegC: Unit
+    centidegC_delta: Unit
+    centidegF: Unit
+    centidegF_delta: Unit
+    centidegR: Unit
     centidegree: Unit
     centidegrees: Unit
+    centidelta_celsius: Unit
+    centidelta_degC: Unit
+    centidelta_degF: Unit
+    centidelta_fahrenheit: Unit
     centidyn: Unit
     centidyne: Unit
     centieV: Unit
     centielectron_mass: Unit
     centielectron_volt: Unit
     centierg: Unit
+    centifahrenheit: Unit
     centifarad: Unit
     centifarads: Unit
     centifeet: Unit
@@ -391,6 +431,7 @@ class UnitRegistry:
     centigallons: Unit
     centigauss: Unit
     centigilbert: Unit
+    centigrade: Unit
     centigram: Unit
     centigrams: Unit
     centiha: Unit
@@ -404,6 +445,8 @@ class UnitRegistry:
     centihp: Unit
     centijoule: Unit
     centijoules: Unit
+    centijulio: Unit
+    centijulios: Unit
     centikat: Unit
     centikatal: Unit
     centikayser: Unit
@@ -452,28 +495,37 @@ class UnitRegistry:
     centioersted: Unit
     centiohm: Unit
     centiohm_meter: Unit
+    centiohmio: Unit
+    centiohmios: Unit
     centiohms: Unit
     centiounce: Unit
     centiounces: Unit
     centioz: Unit
     centiparsec: Unit
     centipascal: Unit
+    centipascalio: Unit
+    centipascalios: Unit
     centipascals: Unit
     centipc: Unit
+    centipct: Unit
+    centipercent: Unit
     centiplanck_charge: Unit
     centiplanck_length: Unit
     centiplanck_mass: Unit
     centiplanck_temperature: Unit
     centiplanck_time: Unit
     centipoise: Unit
+    centiporcentaje: Unit
     centipound: Unit
     centipound_force: Unit
     centipounds: Unit
+    centippm: Unit
     centipsi: Unit
     centiqp: Unit
     centirad: Unit
     centiradian: Unit
     centiradians: Unit
+    centirankine: Unit
     centis: Unit
     centisec: Unit
     centisecond: Unit
@@ -497,7 +549,11 @@ class UnitRegistry:
     centitorr: Unit
     centitp: Unit
     centiunity: Unit
+    centivatio: Unit
+    centivatios: Unit
     centivolt: Unit
+    centivoltio: Unit
+    centivoltios: Unit
     centivolts: Unit
     centiwatt: Unit
     centiwatt_hour: Unit
@@ -584,6 +640,8 @@ class UnitRegistry:
     decacandela: Unit
     decacandelas: Unit
     decacd: Unit
+    decacelsius: Unit
+    decacentigrade: Unit
     decacoulomb: Unit
     decacoulombs: Unit
     decad: Unit
@@ -593,14 +651,24 @@ class UnitRegistry:
     decadebye: Unit
     decadecibel: Unit
     decadeg: Unit
+    decadegC: Unit
+    decadegC_delta: Unit
+    decadegF: Unit
+    decadegF_delta: Unit
+    decadegR: Unit
     decadegree: Unit
     decadegrees: Unit
+    decadelta_celsius: Unit
+    decadelta_degC: Unit
+    decadelta_degF: Unit
+    decadelta_fahrenheit: Unit
     decadyn: Unit
     decadyne: Unit
     decaeV: Unit
     decaelectron_mass: Unit
     decaelectron_volt: Unit
     decaerg: Unit
+    decafahrenheit: Unit
     decafarad: Unit
     decafarads: Unit
     decafeet: Unit
@@ -630,6 +698,8 @@ class UnitRegistry:
     decahp: Unit
     decajoule: Unit
     decajoules: Unit
+    decajulio: Unit
+    decajulios: Unit
     decakat: Unit
     decakatal: Unit
     decakayser: Unit
@@ -678,28 +748,37 @@ class UnitRegistry:
     decaoersted: Unit
     decaohm: Unit
     decaohm_meter: Unit
+    decaohmio: Unit
+    decaohmios: Unit
     decaohms: Unit
     decaounce: Unit
     decaounces: Unit
     decaoz: Unit
     decaparsec: Unit
     decapascal: Unit
+    decapascalio: Unit
+    decapascalios: Unit
     decapascals: Unit
     decapc: Unit
+    decapct: Unit
+    decapercent: Unit
     decaplanck_charge: Unit
     decaplanck_length: Unit
     decaplanck_mass: Unit
     decaplanck_temperature: Unit
     decaplanck_time: Unit
     decapoise: Unit
+    decaporcentaje: Unit
     decapound: Unit
     decapound_force: Unit
     decapounds: Unit
+    decappm: Unit
     decapsi: Unit
     decaqp: Unit
     decarad: Unit
     decaradian: Unit
     decaradians: Unit
+    decarankine: Unit
     decas: Unit
     decasec: Unit
     decasecond: Unit
@@ -723,7 +802,11 @@ class UnitRegistry:
     decatorr: Unit
     decatp: Unit
     decaunity: Unit
+    decavatio: Unit
+    decavatios: Unit
     decavolt: Unit
+    decavoltio: Unit
+    decavoltios: Unit
     decavolts: Unit
     decawatt: Unit
     decawatt_hour: Unit
@@ -804,6 +887,8 @@ class UnitRegistry:
     decicandela: Unit
     decicandelas: Unit
     decicd: Unit
+    decicelsius: Unit
+    decicentigrade: Unit
     decicoulomb: Unit
     decicoulombs: Unit
     decid: Unit
@@ -813,14 +898,24 @@ class UnitRegistry:
     decidebye: Unit
     decidecibel: Unit
     decideg: Unit
+    decidegC: Unit
+    decidegC_delta: Unit
+    decidegF: Unit
+    decidegF_delta: Unit
+    decidegR: Unit
     decidegree: Unit
     decidegrees: Unit
+    decidelta_celsius: Unit
+    decidelta_degC: Unit
+    decidelta_degF: Unit
+    decidelta_fahrenheit: Unit
     decidyn: Unit
     decidyne: Unit
     decieV: Unit
     decielectron_mass: Unit
     decielectron_volt: Unit
     decierg: Unit
+    decifahrenheit: Unit
     decifarad: Unit
     decifarads: Unit
     decifeet: Unit
@@ -850,6 +945,8 @@ class UnitRegistry:
     decihp: Unit
     decijoule: Unit
     decijoules: Unit
+    decijulio: Unit
+    decijulios: Unit
     decikat: Unit
     decikatal: Unit
     decikayser: Unit
@@ -898,28 +995,37 @@ class UnitRegistry:
     decioersted: Unit
     deciohm: Unit
     deciohm_meter: Unit
+    deciohmio: Unit
+    deciohmios: Unit
     deciohms: Unit
     deciounce: Unit
     deciounces: Unit
     decioz: Unit
     deciparsec: Unit
     decipascal: Unit
+    decipascalio: Unit
+    decipascalios: Unit
     decipascals: Unit
     decipc: Unit
+    decipct: Unit
+    decipercent: Unit
     deciplanck_charge: Unit
     deciplanck_length: Unit
     deciplanck_mass: Unit
     deciplanck_temperature: Unit
     deciplanck_time: Unit
     decipoise: Unit
+    deciporcentaje: Unit
     decipound: Unit
     decipound_force: Unit
     decipounds: Unit
+    decippm: Unit
     decipsi: Unit
     deciqp: Unit
     decirad: Unit
     deciradian: Unit
     deciradians: Unit
+    decirankine: Unit
     decis: Unit
     decisec: Unit
     decisecond: Unit
@@ -943,7 +1049,11 @@ class UnitRegistry:
     decitorr: Unit
     decitp: Unit
     deciunity: Unit
+    decivatio: Unit
+    decivatios: Unit
     decivolt: Unit
+    decivoltio: Unit
+    decivoltios: Unit
     decivolts: Unit
     deciwatt: Unit
     deciwatt_hour: Unit
@@ -959,8 +1069,17 @@ class UnitRegistry:
     deciΩ: Unit
     deciΩm: Unit
     deg: Unit
+    degC: Unit
+    degC_delta: Unit
+    degF: Unit
+    degF_delta: Unit
+    degR: Unit
     degree: Unit
     degrees: Unit
+    delta_celsius: Unit
+    delta_degC: Unit
+    delta_degF: Unit
+    delta_fahrenheit: Unit
     dyn: Unit
     dyne: Unit
     eV: Unit
@@ -1032,6 +1151,8 @@ class UnitRegistry:
     exacandela: Unit
     exacandelas: Unit
     exacd: Unit
+    exacelsius: Unit
+    exacentigrade: Unit
     exacoulomb: Unit
     exacoulombs: Unit
     exad: Unit
@@ -1041,14 +1162,24 @@ class UnitRegistry:
     exadebye: Unit
     exadecibel: Unit
     exadeg: Unit
+    exadegC: Unit
+    exadegC_delta: Unit
+    exadegF: Unit
+    exadegF_delta: Unit
+    exadegR: Unit
     exadegree: Unit
     exadegrees: Unit
+    exadelta_celsius: Unit
+    exadelta_degC: Unit
+    exadelta_degF: Unit
+    exadelta_fahrenheit: Unit
     exadyn: Unit
     exadyne: Unit
     exaeV: Unit
     exaelectron_mass: Unit
     exaelectron_volt: Unit
     exaerg: Unit
+    exafahrenheit: Unit
     exafarad: Unit
     exafarads: Unit
     exafeet: Unit
@@ -1078,6 +1209,8 @@ class UnitRegistry:
     exahp: Unit
     exajoule: Unit
     exajoules: Unit
+    exajulio: Unit
+    exajulios: Unit
     exakat: Unit
     exakatal: Unit
     exakayser: Unit
@@ -1126,28 +1259,37 @@ class UnitRegistry:
     exaoersted: Unit
     exaohm: Unit
     exaohm_meter: Unit
+    exaohmio: Unit
+    exaohmios: Unit
     exaohms: Unit
     exaounce: Unit
     exaounces: Unit
     exaoz: Unit
     exaparsec: Unit
     exapascal: Unit
+    exapascalio: Unit
+    exapascalios: Unit
     exapascals: Unit
     exapc: Unit
+    exapct: Unit
+    exapercent: Unit
     exaplanck_charge: Unit
     exaplanck_length: Unit
     exaplanck_mass: Unit
     exaplanck_temperature: Unit
     exaplanck_time: Unit
     exapoise: Unit
+    exaporcentaje: Unit
     exapound: Unit
     exapound_force: Unit
     exapounds: Unit
+    exappm: Unit
     exapsi: Unit
     exaqp: Unit
     exarad: Unit
     exaradian: Unit
     exaradians: Unit
+    exarankine: Unit
     exas: Unit
     exasec: Unit
     exasecond: Unit
@@ -1171,7 +1313,11 @@ class UnitRegistry:
     exatorr: Unit
     exatp: Unit
     exaunity: Unit
+    exavatio: Unit
+    exavatios: Unit
     exavolt: Unit
+    exavoltio: Unit
+    exavoltios: Unit
     exavolts: Unit
     exawatt: Unit
     exawatt_hour: Unit
@@ -1186,6 +1332,7 @@ class UnitRegistry:
     exaÅ: Unit
     exaΩ: Unit
     exaΩm: Unit
+    fahrenheit: Unit
     farad: Unit
     farads: Unit
     feet: Unit
@@ -1254,6 +1401,8 @@ class UnitRegistry:
     femtocandela: Unit
     femtocandelas: Unit
     femtocd: Unit
+    femtocelsius: Unit
+    femtocentigrade: Unit
     femtocoulomb: Unit
     femtocoulombs: Unit
     femtod: Unit
@@ -1263,14 +1412,24 @@ class UnitRegistry:
     femtodebye: Unit
     femtodecibel: Unit
     femtodeg: Unit
+    femtodegC: Unit
+    femtodegC_delta: Unit
+    femtodegF: Unit
+    femtodegF_delta: Unit
+    femtodegR: Unit
     femtodegree: Unit
     femtodegrees: Unit
+    femtodelta_celsius: Unit
+    femtodelta_degC: Unit
+    femtodelta_degF: Unit
+    femtodelta_fahrenheit: Unit
     femtodyn: Unit
     femtodyne: Unit
     femtoeV: Unit
     femtoelectron_mass: Unit
     femtoelectron_volt: Unit
     femtoerg: Unit
+    femtofahrenheit: Unit
     femtofarad: Unit
     femtofarads: Unit
     femtofeet: Unit
@@ -1300,6 +1459,8 @@ class UnitRegistry:
     femtohp: Unit
     femtojoule: Unit
     femtojoules: Unit
+    femtojulio: Unit
+    femtojulios: Unit
     femtokat: Unit
     femtokatal: Unit
     femtokayser: Unit
@@ -1348,28 +1509,37 @@ class UnitRegistry:
     femtooersted: Unit
     femtoohm: Unit
     femtoohm_meter: Unit
+    femtoohmio: Unit
+    femtoohmios: Unit
     femtoohms: Unit
     femtoounce: Unit
     femtoounces: Unit
     femtooz: Unit
     femtoparsec: Unit
     femtopascal: Unit
+    femtopascalio: Unit
+    femtopascalios: Unit
     femtopascals: Unit
     femtopc: Unit
+    femtopct: Unit
+    femtopercent: Unit
     femtoplanck_charge: Unit
     femtoplanck_length: Unit
     femtoplanck_mass: Unit
     femtoplanck_temperature: Unit
     femtoplanck_time: Unit
     femtopoise: Unit
+    femtoporcentaje: Unit
     femtopound: Unit
     femtopound_force: Unit
     femtopounds: Unit
+    femtoppm: Unit
     femtopsi: Unit
     femtoqp: Unit
     femtorad: Unit
     femtoradian: Unit
     femtoradians: Unit
+    femtorankine: Unit
     femtos: Unit
     femtosec: Unit
     femtosecond: Unit
@@ -1393,7 +1563,11 @@ class UnitRegistry:
     femtotorr: Unit
     femtotp: Unit
     femtounity: Unit
+    femtovatio: Unit
+    femtovatios: Unit
     femtovolt: Unit
+    femtovoltio: Unit
+    femtovoltios: Unit
     femtovolts: Unit
     femtowatt: Unit
     femtowatt_hour: Unit
@@ -1485,6 +1659,8 @@ class UnitRegistry:
     gigacandela: Unit
     gigacandelas: Unit
     gigacd: Unit
+    gigacelsius: Unit
+    gigacentigrade: Unit
     gigacoulomb: Unit
     gigacoulombs: Unit
     gigad: Unit
@@ -1494,14 +1670,24 @@ class UnitRegistry:
     gigadebye: Unit
     gigadecibel: Unit
     gigadeg: Unit
+    gigadegC: Unit
+    gigadegC_delta: Unit
+    gigadegF: Unit
+    gigadegF_delta: Unit
+    gigadegR: Unit
     gigadegree: Unit
     gigadegrees: Unit
+    gigadelta_celsius: Unit
+    gigadelta_degC: Unit
+    gigadelta_degF: Unit
+    gigadelta_fahrenheit: Unit
     gigadyn: Unit
     gigadyne: Unit
     gigaeV: Unit
     gigaelectron_mass: Unit
     gigaelectron_volt: Unit
     gigaerg: Unit
+    gigafahrenheit: Unit
     gigafarad: Unit
     gigafarads: Unit
     gigafeet: Unit
@@ -1531,6 +1717,8 @@ class UnitRegistry:
     gigahp: Unit
     gigajoule: Unit
     gigajoules: Unit
+    gigajulio: Unit
+    gigajulios: Unit
     gigakat: Unit
     gigakatal: Unit
     gigakayser: Unit
@@ -1579,28 +1767,37 @@ class UnitRegistry:
     gigaoersted: Unit
     gigaohm: Unit
     gigaohm_meter: Unit
+    gigaohmio: Unit
+    gigaohmios: Unit
     gigaohms: Unit
     gigaounce: Unit
     gigaounces: Unit
     gigaoz: Unit
     gigaparsec: Unit
     gigapascal: Unit
+    gigapascalio: Unit
+    gigapascalios: Unit
     gigapascals: Unit
     gigapc: Unit
+    gigapct: Unit
+    gigapercent: Unit
     gigaplanck_charge: Unit
     gigaplanck_length: Unit
     gigaplanck_mass: Unit
     gigaplanck_temperature: Unit
     gigaplanck_time: Unit
     gigapoise: Unit
+    gigaporcentaje: Unit
     gigapound: Unit
     gigapound_force: Unit
     gigapounds: Unit
+    gigappm: Unit
     gigapsi: Unit
     gigaqp: Unit
     gigarad: Unit
     gigaradian: Unit
     gigaradians: Unit
+    gigarankine: Unit
     gigas: Unit
     gigasec: Unit
     gigasecond: Unit
@@ -1624,7 +1821,11 @@ class UnitRegistry:
     gigatorr: Unit
     gigatp: Unit
     gigaunity: Unit
+    gigavatio: Unit
+    gigavatios: Unit
     gigavolt: Unit
+    gigavoltio: Unit
+    gigavoltios: Unit
     gigavolts: Unit
     gigawatt: Unit
     gigawatt_hour: Unit
@@ -1712,6 +1913,8 @@ class UnitRegistry:
     hectocandela: Unit
     hectocandelas: Unit
     hectocd: Unit
+    hectocelsius: Unit
+    hectocentigrade: Unit
     hectocoulomb: Unit
     hectocoulombs: Unit
     hectod: Unit
@@ -1721,14 +1924,24 @@ class UnitRegistry:
     hectodebye: Unit
     hectodecibel: Unit
     hectodeg: Unit
+    hectodegC: Unit
+    hectodegC_delta: Unit
+    hectodegF: Unit
+    hectodegF_delta: Unit
+    hectodegR: Unit
     hectodegree: Unit
     hectodegrees: Unit
+    hectodelta_celsius: Unit
+    hectodelta_degC: Unit
+    hectodelta_degF: Unit
+    hectodelta_fahrenheit: Unit
     hectodyn: Unit
     hectodyne: Unit
     hectoeV: Unit
     hectoelectron_mass: Unit
     hectoelectron_volt: Unit
     hectoerg: Unit
+    hectofahrenheit: Unit
     hectofarad: Unit
     hectofarads: Unit
     hectofeet: Unit
@@ -1758,6 +1971,8 @@ class UnitRegistry:
     hectohp: Unit
     hectojoule: Unit
     hectojoules: Unit
+    hectojulio: Unit
+    hectojulios: Unit
     hectokat: Unit
     hectokatal: Unit
     hectokayser: Unit
@@ -1806,28 +2021,37 @@ class UnitRegistry:
     hectooersted: Unit
     hectoohm: Unit
     hectoohm_meter: Unit
+    hectoohmio: Unit
+    hectoohmios: Unit
     hectoohms: Unit
     hectoounce: Unit
     hectoounces: Unit
     hectooz: Unit
     hectoparsec: Unit
     hectopascal: Unit
+    hectopascalio: Unit
+    hectopascalios: Unit
     hectopascals: Unit
     hectopc: Unit
+    hectopct: Unit
+    hectopercent: Unit
     hectoplanck_charge: Unit
     hectoplanck_length: Unit
     hectoplanck_mass: Unit
     hectoplanck_temperature: Unit
     hectoplanck_time: Unit
     hectopoise: Unit
+    hectoporcentaje: Unit
     hectopound: Unit
     hectopound_force: Unit
     hectopounds: Unit
+    hectoppm: Unit
     hectopsi: Unit
     hectoqp: Unit
     hectorad: Unit
     hectoradian: Unit
     hectoradians: Unit
+    hectorankine: Unit
     hectos: Unit
     hectosec: Unit
     hectosecond: Unit
@@ -1851,7 +2075,11 @@ class UnitRegistry:
     hectotorr: Unit
     hectotp: Unit
     hectounity: Unit
+    hectovatio: Unit
+    hectovatios: Unit
     hectovolt: Unit
+    hectovoltio: Unit
+    hectovoltios: Unit
     hectovolts: Unit
     hectowatt: Unit
     hectowatt_hour: Unit
@@ -1877,6 +2105,8 @@ class UnitRegistry:
     inch: Unit
     joule: Unit
     joules: Unit
+    julio: Unit
+    julios: Unit
     kat: Unit
     katal: Unit
     kayser: Unit
@@ -1949,6 +2179,8 @@ class UnitRegistry:
     kilocandela: Unit
     kilocandelas: Unit
     kilocd: Unit
+    kilocelsius: Unit
+    kilocentigrade: Unit
     kilocoulomb: Unit
     kilocoulombs: Unit
     kilod: Unit
@@ -1958,14 +2190,24 @@ class UnitRegistry:
     kilodebye: Unit
     kilodecibel: Unit
     kilodeg: Unit
+    kilodegC: Unit
+    kilodegC_delta: Unit
+    kilodegF: Unit
+    kilodegF_delta: Unit
+    kilodegR: Unit
     kilodegree: Unit
     kilodegrees: Unit
+    kilodelta_celsius: Unit
+    kilodelta_degC: Unit
+    kilodelta_degF: Unit
+    kilodelta_fahrenheit: Unit
     kilodyn: Unit
     kilodyne: Unit
     kiloeV: Unit
     kiloelectron_mass: Unit
     kiloelectron_volt: Unit
     kiloerg: Unit
+    kilofahrenheit: Unit
     kilofarad: Unit
     kilofarads: Unit
     kilofeet: Unit
@@ -1996,6 +2238,8 @@ class UnitRegistry:
     kilohp: Unit
     kilojoule: Unit
     kilojoules: Unit
+    kilojulio: Unit
+    kilojulios: Unit
     kilokat: Unit
     kilokatal: Unit
     kilokayser: Unit
@@ -2044,14 +2288,20 @@ class UnitRegistry:
     kilooersted: Unit
     kiloohm: Unit
     kiloohm_meter: Unit
+    kiloohmio: Unit
+    kiloohmios: Unit
     kiloohms: Unit
     kiloounce: Unit
     kiloounces: Unit
     kilooz: Unit
     kiloparsec: Unit
     kilopascal: Unit
+    kilopascalio: Unit
+    kilopascalios: Unit
     kilopascals: Unit
     kilopc: Unit
+    kilopct: Unit
+    kilopercent: Unit
     kiloplanck_charge: Unit
     kiloplanck_length: Unit
     kiloplanck_mass: Unit
@@ -2059,14 +2309,17 @@ class UnitRegistry:
     kiloplanck_time: Unit
     kilopoise: Unit
     kilopond: Unit
+    kiloporcentaje: Unit
     kilopound: Unit
     kilopound_force: Unit
     kilopounds: Unit
+    kiloppm: Unit
     kilopsi: Unit
     kiloqp: Unit
     kilorad: Unit
     kiloradian: Unit
     kiloradians: Unit
+    kilorankine: Unit
     kilos: Unit
     kilosec: Unit
     kilosecond: Unit
@@ -2090,7 +2343,11 @@ class UnitRegistry:
     kilotorr: Unit
     kilotp: Unit
     kilounity: Unit
+    kilovatio: Unit
+    kilovatios: Unit
     kilovolt: Unit
+    kilovoltio: Unit
+    kilovoltios: Unit
     kilovolts: Unit
     kilowatt: Unit
     kilowatt_hour: Unit
@@ -2188,6 +2445,8 @@ class UnitRegistry:
     megacandela: Unit
     megacandelas: Unit
     megacd: Unit
+    megacelsius: Unit
+    megacentigrade: Unit
     megacoulomb: Unit
     megacoulombs: Unit
     megad: Unit
@@ -2197,14 +2456,24 @@ class UnitRegistry:
     megadebye: Unit
     megadecibel: Unit
     megadeg: Unit
+    megadegC: Unit
+    megadegC_delta: Unit
+    megadegF: Unit
+    megadegF_delta: Unit
+    megadegR: Unit
     megadegree: Unit
     megadegrees: Unit
+    megadelta_celsius: Unit
+    megadelta_degC: Unit
+    megadelta_degF: Unit
+    megadelta_fahrenheit: Unit
     megadyn: Unit
     megadyne: Unit
     megaeV: Unit
     megaelectron_mass: Unit
     megaelectron_volt: Unit
     megaerg: Unit
+    megafahrenheit: Unit
     megafarad: Unit
     megafarads: Unit
     megafeet: Unit
@@ -2234,6 +2503,8 @@ class UnitRegistry:
     megahp: Unit
     megajoule: Unit
     megajoules: Unit
+    megajulio: Unit
+    megajulios: Unit
     megakat: Unit
     megakatal: Unit
     megakayser: Unit
@@ -2282,28 +2553,37 @@ class UnitRegistry:
     megaoersted: Unit
     megaohm: Unit
     megaohm_meter: Unit
+    megaohmio: Unit
+    megaohmios: Unit
     megaohms: Unit
     megaounce: Unit
     megaounces: Unit
     megaoz: Unit
     megaparsec: Unit
     megapascal: Unit
+    megapascalio: Unit
+    megapascalios: Unit
     megapascals: Unit
     megapc: Unit
+    megapct: Unit
+    megapercent: Unit
     megaplanck_charge: Unit
     megaplanck_length: Unit
     megaplanck_mass: Unit
     megaplanck_temperature: Unit
     megaplanck_time: Unit
     megapoise: Unit
+    megaporcentaje: Unit
     megapound: Unit
     megapound_force: Unit
     megapounds: Unit
+    megappm: Unit
     megapsi: Unit
     megaqp: Unit
     megarad: Unit
     megaradian: Unit
     megaradians: Unit
+    megarankine: Unit
     megas: Unit
     megasec: Unit
     megasecond: Unit
@@ -2327,7 +2607,11 @@ class UnitRegistry:
     megatorr: Unit
     megatp: Unit
     megaunity: Unit
+    megavatio: Unit
+    megavatios: Unit
     megavolt: Unit
+    megavoltio: Unit
+    megavoltios: Unit
     megavolts: Unit
     megawatt: Unit
     megawatt_hour: Unit
@@ -2413,6 +2697,8 @@ class UnitRegistry:
     microcandela: Unit
     microcandelas: Unit
     microcd: Unit
+    microcelsius: Unit
+    microcentigrade: Unit
     microcoulomb: Unit
     microcoulombs: Unit
     microd: Unit
@@ -2422,14 +2708,24 @@ class UnitRegistry:
     microdebye: Unit
     microdecibel: Unit
     microdeg: Unit
+    microdegC: Unit
+    microdegC_delta: Unit
+    microdegF: Unit
+    microdegF_delta: Unit
+    microdegR: Unit
     microdegree: Unit
     microdegrees: Unit
+    microdelta_celsius: Unit
+    microdelta_degC: Unit
+    microdelta_degF: Unit
+    microdelta_fahrenheit: Unit
     microdyn: Unit
     microdyne: Unit
     microeV: Unit
     microelectron_mass: Unit
     microelectron_volt: Unit
     microerg: Unit
+    microfahrenheit: Unit
     microfarad: Unit
     microfarads: Unit
     microfeet: Unit
@@ -2459,6 +2755,8 @@ class UnitRegistry:
     microhp: Unit
     microjoule: Unit
     microjoules: Unit
+    microjulio: Unit
+    microjulios: Unit
     microkat: Unit
     microkatal: Unit
     microkayser: Unit
@@ -2507,28 +2805,37 @@ class UnitRegistry:
     microoersted: Unit
     microohm: Unit
     microohm_meter: Unit
+    microohmio: Unit
+    microohmios: Unit
     microohms: Unit
     microounce: Unit
     microounces: Unit
     microoz: Unit
     microparsec: Unit
     micropascal: Unit
+    micropascalio: Unit
+    micropascalios: Unit
     micropascals: Unit
     micropc: Unit
+    micropct: Unit
+    micropercent: Unit
     microplanck_charge: Unit
     microplanck_length: Unit
     microplanck_mass: Unit
     microplanck_temperature: Unit
     microplanck_time: Unit
     micropoise: Unit
+    microporcentaje: Unit
     micropound: Unit
     micropound_force: Unit
     micropounds: Unit
+    microppm: Unit
     micropsi: Unit
     microqp: Unit
     microrad: Unit
     microradian: Unit
     microradians: Unit
+    microrankine: Unit
     micros: Unit
     microsec: Unit
     microsecond: Unit
@@ -2552,7 +2859,11 @@ class UnitRegistry:
     microtorr: Unit
     microtp: Unit
     microunity: Unit
+    microvatio: Unit
+    microvatios: Unit
     microvolt: Unit
+    microvoltio: Unit
+    microvoltios: Unit
     microvolts: Unit
     microwatt: Unit
     microwatt_hour: Unit
@@ -2634,6 +2945,8 @@ class UnitRegistry:
     millicandela: Unit
     millicandelas: Unit
     millicd: Unit
+    millicelsius: Unit
+    millicentigrade: Unit
     millicoulomb: Unit
     millicoulombs: Unit
     millid: Unit
@@ -2643,14 +2956,24 @@ class UnitRegistry:
     millidebye: Unit
     millidecibel: Unit
     millideg: Unit
+    millidegC: Unit
+    millidegC_delta: Unit
+    millidegF: Unit
+    millidegF_delta: Unit
+    millidegR: Unit
     millidegree: Unit
     millidegrees: Unit
+    millidelta_celsius: Unit
+    millidelta_degC: Unit
+    millidelta_degF: Unit
+    millidelta_fahrenheit: Unit
     millidyn: Unit
     millidyne: Unit
     millieV: Unit
     millielectron_mass: Unit
     millielectron_volt: Unit
     millierg: Unit
+    millifahrenheit: Unit
     millifarad: Unit
     millifarads: Unit
     millifeet: Unit
@@ -2680,6 +3003,8 @@ class UnitRegistry:
     millihp: Unit
     millijoule: Unit
     millijoules: Unit
+    millijulio: Unit
+    millijulios: Unit
     millikat: Unit
     millikatal: Unit
     millikayser: Unit
@@ -2728,28 +3053,37 @@ class UnitRegistry:
     millioersted: Unit
     milliohm: Unit
     milliohm_meter: Unit
+    milliohmio: Unit
+    milliohmios: Unit
     milliohms: Unit
     milliounce: Unit
     milliounces: Unit
     millioz: Unit
     milliparsec: Unit
     millipascal: Unit
+    millipascalio: Unit
+    millipascalios: Unit
     millipascals: Unit
     millipc: Unit
+    millipct: Unit
+    millipercent: Unit
     milliplanck_charge: Unit
     milliplanck_length: Unit
     milliplanck_mass: Unit
     milliplanck_temperature: Unit
     milliplanck_time: Unit
     millipoise: Unit
+    milliporcentaje: Unit
     millipound: Unit
     millipound_force: Unit
     millipounds: Unit
+    millippm: Unit
     millipsi: Unit
     milliqp: Unit
     millirad: Unit
     milliradian: Unit
     milliradians: Unit
+    millirankine: Unit
     millis: Unit
     millisec: Unit
     millisecond: Unit
@@ -2773,7 +3107,11 @@ class UnitRegistry:
     millitorr: Unit
     millitp: Unit
     milliunity: Unit
+    millivatio: Unit
+    millivatios: Unit
     millivolt: Unit
+    millivoltio: Unit
+    millivoltios: Unit
     millivolts: Unit
     milliwatt: Unit
     milliwatt_hour: Unit
@@ -2862,6 +3200,8 @@ class UnitRegistry:
     nanocandela: Unit
     nanocandelas: Unit
     nanocd: Unit
+    nanocelsius: Unit
+    nanocentigrade: Unit
     nanocoulomb: Unit
     nanocoulombs: Unit
     nanod: Unit
@@ -2871,14 +3211,24 @@ class UnitRegistry:
     nanodebye: Unit
     nanodecibel: Unit
     nanodeg: Unit
+    nanodegC: Unit
+    nanodegC_delta: Unit
+    nanodegF: Unit
+    nanodegF_delta: Unit
+    nanodegR: Unit
     nanodegree: Unit
     nanodegrees: Unit
+    nanodelta_celsius: Unit
+    nanodelta_degC: Unit
+    nanodelta_degF: Unit
+    nanodelta_fahrenheit: Unit
     nanodyn: Unit
     nanodyne: Unit
     nanoeV: Unit
     nanoelectron_mass: Unit
     nanoelectron_volt: Unit
     nanoerg: Unit
+    nanofahrenheit: Unit
     nanofarad: Unit
     nanofarads: Unit
     nanofeet: Unit
@@ -2908,6 +3258,8 @@ class UnitRegistry:
     nanohp: Unit
     nanojoule: Unit
     nanojoules: Unit
+    nanojulio: Unit
+    nanojulios: Unit
     nanokat: Unit
     nanokatal: Unit
     nanokayser: Unit
@@ -2956,28 +3308,37 @@ class UnitRegistry:
     nanooersted: Unit
     nanoohm: Unit
     nanoohm_meter: Unit
+    nanoohmio: Unit
+    nanoohmios: Unit
     nanoohms: Unit
     nanoounce: Unit
     nanoounces: Unit
     nanooz: Unit
     nanoparsec: Unit
     nanopascal: Unit
+    nanopascalio: Unit
+    nanopascalios: Unit
     nanopascals: Unit
     nanopc: Unit
+    nanopct: Unit
+    nanopercent: Unit
     nanoplanck_charge: Unit
     nanoplanck_length: Unit
     nanoplanck_mass: Unit
     nanoplanck_temperature: Unit
     nanoplanck_time: Unit
     nanopoise: Unit
+    nanoporcentaje: Unit
     nanopound: Unit
     nanopound_force: Unit
     nanopounds: Unit
+    nanoppm: Unit
     nanopsi: Unit
     nanoqp: Unit
     nanorad: Unit
     nanoradian: Unit
     nanoradians: Unit
+    nanorankine: Unit
     nanos: Unit
     nanosec: Unit
     nanosecond: Unit
@@ -3001,7 +3362,11 @@ class UnitRegistry:
     nanotorr: Unit
     nanotp: Unit
     nanounity: Unit
+    nanovatio: Unit
+    nanovatios: Unit
     nanovolt: Unit
+    nanovoltio: Unit
+    nanovoltios: Unit
     nanovolts: Unit
     nanowatt: Unit
     nanowatt_hour: Unit
@@ -3023,6 +3388,8 @@ class UnitRegistry:
     oersted: Unit
     ohm: Unit
     ohm_meter: Unit
+    ohmio: Unit
+    ohmios: Unit
     ohms: Unit
     ounce: Unit
     ounces: Unit
@@ -3030,8 +3397,12 @@ class UnitRegistry:
     pH: Unit
     parsec: Unit
     pascal: Unit
+    pascalio: Unit
+    pascalios: Unit
     pascals: Unit
     pc: Unit
+    pct: Unit
+    percent: Unit
     petaA: Unit
     petaBTU: Unit
     petaBa: Unit
@@ -3097,6 +3468,8 @@ class UnitRegistry:
     petacandela: Unit
     petacandelas: Unit
     petacd: Unit
+    petacelsius: Unit
+    petacentigrade: Unit
     petacoulomb: Unit
     petacoulombs: Unit
     petad: Unit
@@ -3106,14 +3479,24 @@ class UnitRegistry:
     petadebye: Unit
     petadecibel: Unit
     petadeg: Unit
+    petadegC: Unit
+    petadegC_delta: Unit
+    petadegF: Unit
+    petadegF_delta: Unit
+    petadegR: Unit
     petadegree: Unit
     petadegrees: Unit
+    petadelta_celsius: Unit
+    petadelta_degC: Unit
+    petadelta_degF: Unit
+    petadelta_fahrenheit: Unit
     petadyn: Unit
     petadyne: Unit
     petaeV: Unit
     petaelectron_mass: Unit
     petaelectron_volt: Unit
     petaerg: Unit
+    petafahrenheit: Unit
     petafarad: Unit
     petafarads: Unit
     petafeet: Unit
@@ -3143,6 +3526,8 @@ class UnitRegistry:
     petahp: Unit
     petajoule: Unit
     petajoules: Unit
+    petajulio: Unit
+    petajulios: Unit
     petakat: Unit
     petakatal: Unit
     petakayser: Unit
@@ -3191,28 +3576,37 @@ class UnitRegistry:
     petaoersted: Unit
     petaohm: Unit
     petaohm_meter: Unit
+    petaohmio: Unit
+    petaohmios: Unit
     petaohms: Unit
     petaounce: Unit
     petaounces: Unit
     petaoz: Unit
     petaparsec: Unit
     petapascal: Unit
+    petapascalio: Unit
+    petapascalios: Unit
     petapascals: Unit
     petapc: Unit
+    petapct: Unit
+    petapercent: Unit
     petaplanck_charge: Unit
     petaplanck_length: Unit
     petaplanck_mass: Unit
     petaplanck_temperature: Unit
     petaplanck_time: Unit
     petapoise: Unit
+    petaporcentaje: Unit
     petapound: Unit
     petapound_force: Unit
     petapounds: Unit
+    petappm: Unit
     petapsi: Unit
     petaqp: Unit
     petarad: Unit
     petaradian: Unit
     petaradians: Unit
+    petarankine: Unit
     petas: Unit
     petasec: Unit
     petasecond: Unit
@@ -3236,7 +3630,11 @@ class UnitRegistry:
     petatorr: Unit
     petatp: Unit
     petaunity: Unit
+    petavatio: Unit
+    petavatios: Unit
     petavolt: Unit
+    petavoltio: Unit
+    petavoltios: Unit
     petavolts: Unit
     petawatt: Unit
     petawatt_hour: Unit
@@ -3316,6 +3714,8 @@ class UnitRegistry:
     picocandela: Unit
     picocandelas: Unit
     picocd: Unit
+    picocelsius: Unit
+    picocentigrade: Unit
     picocoulomb: Unit
     picocoulombs: Unit
     picod: Unit
@@ -3325,14 +3725,24 @@ class UnitRegistry:
     picodebye: Unit
     picodecibel: Unit
     picodeg: Unit
+    picodegC: Unit
+    picodegC_delta: Unit
+    picodegF: Unit
+    picodegF_delta: Unit
+    picodegR: Unit
     picodegree: Unit
     picodegrees: Unit
+    picodelta_celsius: Unit
+    picodelta_degC: Unit
+    picodelta_degF: Unit
+    picodelta_fahrenheit: Unit
     picodyn: Unit
     picodyne: Unit
     picoeV: Unit
     picoelectron_mass: Unit
     picoelectron_volt: Unit
     picoerg: Unit
+    picofahrenheit: Unit
     picofarad: Unit
     picofarads: Unit
     picofeet: Unit
@@ -3362,6 +3772,8 @@ class UnitRegistry:
     picohp: Unit
     picojoule: Unit
     picojoules: Unit
+    picojulio: Unit
+    picojulios: Unit
     picokat: Unit
     picokatal: Unit
     picokayser: Unit
@@ -3410,28 +3822,37 @@ class UnitRegistry:
     picooersted: Unit
     picoohm: Unit
     picoohm_meter: Unit
+    picoohmio: Unit
+    picoohmios: Unit
     picoohms: Unit
     picoounce: Unit
     picoounces: Unit
     picooz: Unit
     picoparsec: Unit
     picopascal: Unit
+    picopascalio: Unit
+    picopascalios: Unit
     picopascals: Unit
     picopc: Unit
+    picopct: Unit
+    picopercent: Unit
     picoplanck_charge: Unit
     picoplanck_length: Unit
     picoplanck_mass: Unit
     picoplanck_temperature: Unit
     picoplanck_time: Unit
     picopoise: Unit
+    picoporcentaje: Unit
     picopound: Unit
     picopound_force: Unit
     picopounds: Unit
+    picoppm: Unit
     picopsi: Unit
     picoqp: Unit
     picorad: Unit
     picoradian: Unit
     picoradians: Unit
+    picorankine: Unit
     picos: Unit
     picosec: Unit
     picosecond: Unit
@@ -3455,7 +3876,11 @@ class UnitRegistry:
     picotorr: Unit
     picotp: Unit
     picounity: Unit
+    picovatio: Unit
+    picovatios: Unit
     picovolt: Unit
+    picovoltio: Unit
+    picovoltios: Unit
     picovolts: Unit
     picowatt: Unit
     picowatt_hour: Unit
@@ -3476,9 +3901,11 @@ class UnitRegistry:
     planck_temperature: Unit
     planck_time: Unit
     poise: Unit
+    porcentaje: Unit
     pound: Unit
     pound_force: Unit
     pounds: Unit
+    ppm: Unit
     psi: Unit
     qp: Unit
     quectoA: Unit
@@ -3546,6 +3973,8 @@ class UnitRegistry:
     quectocandela: Unit
     quectocandelas: Unit
     quectocd: Unit
+    quectocelsius: Unit
+    quectocentigrade: Unit
     quectocoulomb: Unit
     quectocoulombs: Unit
     quectod: Unit
@@ -3555,14 +3984,24 @@ class UnitRegistry:
     quectodebye: Unit
     quectodecibel: Unit
     quectodeg: Unit
+    quectodegC: Unit
+    quectodegC_delta: Unit
+    quectodegF: Unit
+    quectodegF_delta: Unit
+    quectodegR: Unit
     quectodegree: Unit
     quectodegrees: Unit
+    quectodelta_celsius: Unit
+    quectodelta_degC: Unit
+    quectodelta_degF: Unit
+    quectodelta_fahrenheit: Unit
     quectodyn: Unit
     quectodyne: Unit
     quectoeV: Unit
     quectoelectron_mass: Unit
     quectoelectron_volt: Unit
     quectoerg: Unit
+    quectofahrenheit: Unit
     quectofarad: Unit
     quectofarads: Unit
     quectofeet: Unit
@@ -3592,6 +4031,8 @@ class UnitRegistry:
     quectohp: Unit
     quectojoule: Unit
     quectojoules: Unit
+    quectojulio: Unit
+    quectojulios: Unit
     quectokat: Unit
     quectokatal: Unit
     quectokayser: Unit
@@ -3640,28 +4081,37 @@ class UnitRegistry:
     quectooersted: Unit
     quectoohm: Unit
     quectoohm_meter: Unit
+    quectoohmio: Unit
+    quectoohmios: Unit
     quectoohms: Unit
     quectoounce: Unit
     quectoounces: Unit
     quectooz: Unit
     quectoparsec: Unit
     quectopascal: Unit
+    quectopascalio: Unit
+    quectopascalios: Unit
     quectopascals: Unit
     quectopc: Unit
+    quectopct: Unit
+    quectopercent: Unit
     quectoplanck_charge: Unit
     quectoplanck_length: Unit
     quectoplanck_mass: Unit
     quectoplanck_temperature: Unit
     quectoplanck_time: Unit
     quectopoise: Unit
+    quectoporcentaje: Unit
     quectopound: Unit
     quectopound_force: Unit
     quectopounds: Unit
+    quectoppm: Unit
     quectopsi: Unit
     quectoqp: Unit
     quectorad: Unit
     quectoradian: Unit
     quectoradians: Unit
+    quectorankine: Unit
     quectos: Unit
     quectosec: Unit
     quectosecond: Unit
@@ -3685,7 +4135,11 @@ class UnitRegistry:
     quectotorr: Unit
     quectotp: Unit
     quectounity: Unit
+    quectovatio: Unit
+    quectovatios: Unit
     quectovolt: Unit
+    quectovoltio: Unit
+    quectovoltios: Unit
     quectovolts: Unit
     quectowatt: Unit
     quectowatt_hour: Unit
@@ -3765,6 +4219,8 @@ class UnitRegistry:
     quettacandela: Unit
     quettacandelas: Unit
     quettacd: Unit
+    quettacelsius: Unit
+    quettacentigrade: Unit
     quettacoulomb: Unit
     quettacoulombs: Unit
     quettad: Unit
@@ -3774,14 +4230,24 @@ class UnitRegistry:
     quettadebye: Unit
     quettadecibel: Unit
     quettadeg: Unit
+    quettadegC: Unit
+    quettadegC_delta: Unit
+    quettadegF: Unit
+    quettadegF_delta: Unit
+    quettadegR: Unit
     quettadegree: Unit
     quettadegrees: Unit
+    quettadelta_celsius: Unit
+    quettadelta_degC: Unit
+    quettadelta_degF: Unit
+    quettadelta_fahrenheit: Unit
     quettadyn: Unit
     quettadyne: Unit
     quettaeV: Unit
     quettaelectron_mass: Unit
     quettaelectron_volt: Unit
     quettaerg: Unit
+    quettafahrenheit: Unit
     quettafarad: Unit
     quettafarads: Unit
     quettafeet: Unit
@@ -3811,6 +4277,8 @@ class UnitRegistry:
     quettahp: Unit
     quettajoule: Unit
     quettajoules: Unit
+    quettajulio: Unit
+    quettajulios: Unit
     quettakat: Unit
     quettakatal: Unit
     quettakayser: Unit
@@ -3859,28 +4327,37 @@ class UnitRegistry:
     quettaoersted: Unit
     quettaohm: Unit
     quettaohm_meter: Unit
+    quettaohmio: Unit
+    quettaohmios: Unit
     quettaohms: Unit
     quettaounce: Unit
     quettaounces: Unit
     quettaoz: Unit
     quettaparsec: Unit
     quettapascal: Unit
+    quettapascalio: Unit
+    quettapascalios: Unit
     quettapascals: Unit
     quettapc: Unit
+    quettapct: Unit
+    quettapercent: Unit
     quettaplanck_charge: Unit
     quettaplanck_length: Unit
     quettaplanck_mass: Unit
     quettaplanck_temperature: Unit
     quettaplanck_time: Unit
     quettapoise: Unit
+    quettaporcentaje: Unit
     quettapound: Unit
     quettapound_force: Unit
     quettapounds: Unit
+    quettappm: Unit
     quettapsi: Unit
     quettaqp: Unit
     quettarad: Unit
     quettaradian: Unit
     quettaradians: Unit
+    quettarankine: Unit
     quettas: Unit
     quettasec: Unit
     quettasecond: Unit
@@ -3904,7 +4381,11 @@ class UnitRegistry:
     quettatorr: Unit
     quettatp: Unit
     quettaunity: Unit
+    quettavatio: Unit
+    quettavatios: Unit
     quettavolt: Unit
+    quettavoltio: Unit
+    quettavoltios: Unit
     quettavolts: Unit
     quettawatt: Unit
     quettawatt_hour: Unit
@@ -3922,6 +4403,7 @@ class UnitRegistry:
     rad: Unit
     radian: Unit
     radians: Unit
+    rankine: Unit
     ronnaA: Unit
     ronnaBTU: Unit
     ronnaBa: Unit
@@ -3987,6 +4469,8 @@ class UnitRegistry:
     ronnacandela: Unit
     ronnacandelas: Unit
     ronnacd: Unit
+    ronnacelsius: Unit
+    ronnacentigrade: Unit
     ronnacoulomb: Unit
     ronnacoulombs: Unit
     ronnad: Unit
@@ -3996,14 +4480,24 @@ class UnitRegistry:
     ronnadebye: Unit
     ronnadecibel: Unit
     ronnadeg: Unit
+    ronnadegC: Unit
+    ronnadegC_delta: Unit
+    ronnadegF: Unit
+    ronnadegF_delta: Unit
+    ronnadegR: Unit
     ronnadegree: Unit
     ronnadegrees: Unit
+    ronnadelta_celsius: Unit
+    ronnadelta_degC: Unit
+    ronnadelta_degF: Unit
+    ronnadelta_fahrenheit: Unit
     ronnadyn: Unit
     ronnadyne: Unit
     ronnaeV: Unit
     ronnaelectron_mass: Unit
     ronnaelectron_volt: Unit
     ronnaerg: Unit
+    ronnafahrenheit: Unit
     ronnafarad: Unit
     ronnafarads: Unit
     ronnafeet: Unit
@@ -4033,6 +4527,8 @@ class UnitRegistry:
     ronnahp: Unit
     ronnajoule: Unit
     ronnajoules: Unit
+    ronnajulio: Unit
+    ronnajulios: Unit
     ronnakat: Unit
     ronnakatal: Unit
     ronnakayser: Unit
@@ -4081,28 +4577,37 @@ class UnitRegistry:
     ronnaoersted: Unit
     ronnaohm: Unit
     ronnaohm_meter: Unit
+    ronnaohmio: Unit
+    ronnaohmios: Unit
     ronnaohms: Unit
     ronnaounce: Unit
     ronnaounces: Unit
     ronnaoz: Unit
     ronnaparsec: Unit
     ronnapascal: Unit
+    ronnapascalio: Unit
+    ronnapascalios: Unit
     ronnapascals: Unit
     ronnapc: Unit
+    ronnapct: Unit
+    ronnapercent: Unit
     ronnaplanck_charge: Unit
     ronnaplanck_length: Unit
     ronnaplanck_mass: Unit
     ronnaplanck_temperature: Unit
     ronnaplanck_time: Unit
     ronnapoise: Unit
+    ronnaporcentaje: Unit
     ronnapound: Unit
     ronnapound_force: Unit
     ronnapounds: Unit
+    ronnappm: Unit
     ronnapsi: Unit
     ronnaqp: Unit
     ronnarad: Unit
     ronnaradian: Unit
     ronnaradians: Unit
+    ronnarankine: Unit
     ronnas: Unit
     ronnasec: Unit
     ronnasecond: Unit
@@ -4126,7 +4631,11 @@ class UnitRegistry:
     ronnatorr: Unit
     ronnatp: Unit
     ronnaunity: Unit
+    ronnavatio: Unit
+    ronnavatios: Unit
     ronnavolt: Unit
+    ronnavoltio: Unit
+    ronnavoltios: Unit
     ronnavolts: Unit
     ronnawatt: Unit
     ronnawatt_hour: Unit
@@ -4206,6 +4715,8 @@ class UnitRegistry:
     rontocandela: Unit
     rontocandelas: Unit
     rontocd: Unit
+    rontocelsius: Unit
+    rontocentigrade: Unit
     rontocoulomb: Unit
     rontocoulombs: Unit
     rontod: Unit
@@ -4215,14 +4726,24 @@ class UnitRegistry:
     rontodebye: Unit
     rontodecibel: Unit
     rontodeg: Unit
+    rontodegC: Unit
+    rontodegC_delta: Unit
+    rontodegF: Unit
+    rontodegF_delta: Unit
+    rontodegR: Unit
     rontodegree: Unit
     rontodegrees: Unit
+    rontodelta_celsius: Unit
+    rontodelta_degC: Unit
+    rontodelta_degF: Unit
+    rontodelta_fahrenheit: Unit
     rontodyn: Unit
     rontodyne: Unit
     rontoeV: Unit
     rontoelectron_mass: Unit
     rontoelectron_volt: Unit
     rontoerg: Unit
+    rontofahrenheit: Unit
     rontofarad: Unit
     rontofarads: Unit
     rontofeet: Unit
@@ -4252,6 +4773,8 @@ class UnitRegistry:
     rontohp: Unit
     rontojoule: Unit
     rontojoules: Unit
+    rontojulio: Unit
+    rontojulios: Unit
     rontokat: Unit
     rontokatal: Unit
     rontokayser: Unit
@@ -4300,28 +4823,37 @@ class UnitRegistry:
     rontooersted: Unit
     rontoohm: Unit
     rontoohm_meter: Unit
+    rontoohmio: Unit
+    rontoohmios: Unit
     rontoohms: Unit
     rontoounce: Unit
     rontoounces: Unit
     rontooz: Unit
     rontoparsec: Unit
     rontopascal: Unit
+    rontopascalio: Unit
+    rontopascalios: Unit
     rontopascals: Unit
     rontopc: Unit
+    rontopct: Unit
+    rontopercent: Unit
     rontoplanck_charge: Unit
     rontoplanck_length: Unit
     rontoplanck_mass: Unit
     rontoplanck_temperature: Unit
     rontoplanck_time: Unit
     rontopoise: Unit
+    rontoporcentaje: Unit
     rontopound: Unit
     rontopound_force: Unit
     rontopounds: Unit
+    rontoppm: Unit
     rontopsi: Unit
     rontoqp: Unit
     rontorad: Unit
     rontoradian: Unit
     rontoradians: Unit
+    rontorankine: Unit
     rontos: Unit
     rontosec: Unit
     rontosecond: Unit
@@ -4345,7 +4877,11 @@ class UnitRegistry:
     rontotorr: Unit
     rontotp: Unit
     rontounity: Unit
+    rontovatio: Unit
+    rontovatios: Unit
     rontovolt: Unit
+    rontovoltio: Unit
+    rontovoltios: Unit
     rontovolts: Unit
     rontowatt: Unit
     rontowatt_hour: Unit
@@ -4442,6 +4978,8 @@ class UnitRegistry:
     teracandela: Unit
     teracandelas: Unit
     teracd: Unit
+    teracelsius: Unit
+    teracentigrade: Unit
     teracoulomb: Unit
     teracoulombs: Unit
     terad: Unit
@@ -4451,14 +4989,24 @@ class UnitRegistry:
     teradebye: Unit
     teradecibel: Unit
     teradeg: Unit
+    teradegC: Unit
+    teradegC_delta: Unit
+    teradegF: Unit
+    teradegF_delta: Unit
+    teradegR: Unit
     teradegree: Unit
     teradegrees: Unit
+    teradelta_celsius: Unit
+    teradelta_degC: Unit
+    teradelta_degF: Unit
+    teradelta_fahrenheit: Unit
     teradyn: Unit
     teradyne: Unit
     teraeV: Unit
     teraelectron_mass: Unit
     teraelectron_volt: Unit
     teraerg: Unit
+    terafahrenheit: Unit
     terafarad: Unit
     terafarads: Unit
     terafeet: Unit
@@ -4488,6 +5036,8 @@ class UnitRegistry:
     terahp: Unit
     terajoule: Unit
     terajoules: Unit
+    terajulio: Unit
+    terajulios: Unit
     terakat: Unit
     terakatal: Unit
     terakayser: Unit
@@ -4536,28 +5086,37 @@ class UnitRegistry:
     teraoersted: Unit
     teraohm: Unit
     teraohm_meter: Unit
+    teraohmio: Unit
+    teraohmios: Unit
     teraohms: Unit
     teraounce: Unit
     teraounces: Unit
     teraoz: Unit
     teraparsec: Unit
     terapascal: Unit
+    terapascalio: Unit
+    terapascalios: Unit
     terapascals: Unit
     terapc: Unit
+    terapct: Unit
+    terapercent: Unit
     teraplanck_charge: Unit
     teraplanck_length: Unit
     teraplanck_mass: Unit
     teraplanck_temperature: Unit
     teraplanck_time: Unit
     terapoise: Unit
+    teraporcentaje: Unit
     terapound: Unit
     terapound_force: Unit
     terapounds: Unit
+    terappm: Unit
     terapsi: Unit
     teraqp: Unit
     terarad: Unit
     teraradian: Unit
     teraradians: Unit
+    terarankine: Unit
     teras: Unit
     terasec: Unit
     terasecond: Unit
@@ -4581,7 +5140,11 @@ class UnitRegistry:
     teratorr: Unit
     teratp: Unit
     teraunity: Unit
+    teravatio: Unit
+    teravatios: Unit
     teravolt: Unit
+    teravoltio: Unit
+    teravoltios: Unit
     teravolts: Unit
     terawatt: Unit
     terawatt_hour: Unit
@@ -4602,7 +5165,11 @@ class UnitRegistry:
     torr: Unit
     tp: Unit
     unity: Unit
+    vatio: Unit
+    vatios: Unit
     volt: Unit
+    voltio: Unit
+    voltios: Unit
     volts: Unit
     watt: Unit
     watt_hour: Unit
@@ -4678,6 +5245,8 @@ class UnitRegistry:
     yoctocandela: Unit
     yoctocandelas: Unit
     yoctocd: Unit
+    yoctocelsius: Unit
+    yoctocentigrade: Unit
     yoctocoulomb: Unit
     yoctocoulombs: Unit
     yoctod: Unit
@@ -4687,14 +5256,24 @@ class UnitRegistry:
     yoctodebye: Unit
     yoctodecibel: Unit
     yoctodeg: Unit
+    yoctodegC: Unit
+    yoctodegC_delta: Unit
+    yoctodegF: Unit
+    yoctodegF_delta: Unit
+    yoctodegR: Unit
     yoctodegree: Unit
     yoctodegrees: Unit
+    yoctodelta_celsius: Unit
+    yoctodelta_degC: Unit
+    yoctodelta_degF: Unit
+    yoctodelta_fahrenheit: Unit
     yoctodyn: Unit
     yoctodyne: Unit
     yoctoeV: Unit
     yoctoelectron_mass: Unit
     yoctoelectron_volt: Unit
     yoctoerg: Unit
+    yoctofahrenheit: Unit
     yoctofarad: Unit
     yoctofarads: Unit
     yoctofeet: Unit
@@ -4724,6 +5303,8 @@ class UnitRegistry:
     yoctohp: Unit
     yoctojoule: Unit
     yoctojoules: Unit
+    yoctojulio: Unit
+    yoctojulios: Unit
     yoctokat: Unit
     yoctokatal: Unit
     yoctokayser: Unit
@@ -4772,28 +5353,37 @@ class UnitRegistry:
     yoctooersted: Unit
     yoctoohm: Unit
     yoctoohm_meter: Unit
+    yoctoohmio: Unit
+    yoctoohmios: Unit
     yoctoohms: Unit
     yoctoounce: Unit
     yoctoounces: Unit
     yoctooz: Unit
     yoctoparsec: Unit
     yoctopascal: Unit
+    yoctopascalio: Unit
+    yoctopascalios: Unit
     yoctopascals: Unit
     yoctopc: Unit
+    yoctopct: Unit
+    yoctopercent: Unit
     yoctoplanck_charge: Unit
     yoctoplanck_length: Unit
     yoctoplanck_mass: Unit
     yoctoplanck_temperature: Unit
     yoctoplanck_time: Unit
     yoctopoise: Unit
+    yoctoporcentaje: Unit
     yoctopound: Unit
     yoctopound_force: Unit
     yoctopounds: Unit
+    yoctoppm: Unit
     yoctopsi: Unit
     yoctoqp: Unit
     yoctorad: Unit
     yoctoradian: Unit
     yoctoradians: Unit
+    yoctorankine: Unit
     yoctos: Unit
     yoctosec: Unit
     yoctosecond: Unit
@@ -4817,7 +5407,11 @@ class UnitRegistry:
     yoctotorr: Unit
     yoctotp: Unit
     yoctounity: Unit
+    yoctovatio: Unit
+    yoctovatios: Unit
     yoctovolt: Unit
+    yoctovoltio: Unit
+    yoctovoltios: Unit
     yoctovolts: Unit
     yoctowatt: Unit
     yoctowatt_hour: Unit
@@ -4897,6 +5491,8 @@ class UnitRegistry:
     yottacandela: Unit
     yottacandelas: Unit
     yottacd: Unit
+    yottacelsius: Unit
+    yottacentigrade: Unit
     yottacoulomb: Unit
     yottacoulombs: Unit
     yottad: Unit
@@ -4906,14 +5502,24 @@ class UnitRegistry:
     yottadebye: Unit
     yottadecibel: Unit
     yottadeg: Unit
+    yottadegC: Unit
+    yottadegC_delta: Unit
+    yottadegF: Unit
+    yottadegF_delta: Unit
+    yottadegR: Unit
     yottadegree: Unit
     yottadegrees: Unit
+    yottadelta_celsius: Unit
+    yottadelta_degC: Unit
+    yottadelta_degF: Unit
+    yottadelta_fahrenheit: Unit
     yottadyn: Unit
     yottadyne: Unit
     yottaeV: Unit
     yottaelectron_mass: Unit
     yottaelectron_volt: Unit
     yottaerg: Unit
+    yottafahrenheit: Unit
     yottafarad: Unit
     yottafarads: Unit
     yottafeet: Unit
@@ -4943,6 +5549,8 @@ class UnitRegistry:
     yottahp: Unit
     yottajoule: Unit
     yottajoules: Unit
+    yottajulio: Unit
+    yottajulios: Unit
     yottakat: Unit
     yottakatal: Unit
     yottakayser: Unit
@@ -4991,28 +5599,37 @@ class UnitRegistry:
     yottaoersted: Unit
     yottaohm: Unit
     yottaohm_meter: Unit
+    yottaohmio: Unit
+    yottaohmios: Unit
     yottaohms: Unit
     yottaounce: Unit
     yottaounces: Unit
     yottaoz: Unit
     yottaparsec: Unit
     yottapascal: Unit
+    yottapascalio: Unit
+    yottapascalios: Unit
     yottapascals: Unit
     yottapc: Unit
+    yottapct: Unit
+    yottapercent: Unit
     yottaplanck_charge: Unit
     yottaplanck_length: Unit
     yottaplanck_mass: Unit
     yottaplanck_temperature: Unit
     yottaplanck_time: Unit
     yottapoise: Unit
+    yottaporcentaje: Unit
     yottapound: Unit
     yottapound_force: Unit
     yottapounds: Unit
+    yottappm: Unit
     yottapsi: Unit
     yottaqp: Unit
     yottarad: Unit
     yottaradian: Unit
     yottaradians: Unit
+    yottarankine: Unit
     yottas: Unit
     yottasec: Unit
     yottasecond: Unit
@@ -5036,7 +5653,11 @@ class UnitRegistry:
     yottatorr: Unit
     yottatp: Unit
     yottaunity: Unit
+    yottavatio: Unit
+    yottavatios: Unit
     yottavolt: Unit
+    yottavoltio: Unit
+    yottavoltios: Unit
     yottavolts: Unit
     yottawatt: Unit
     yottawatt_hour: Unit
@@ -5117,6 +5738,8 @@ class UnitRegistry:
     zeptocandela: Unit
     zeptocandelas: Unit
     zeptocd: Unit
+    zeptocelsius: Unit
+    zeptocentigrade: Unit
     zeptocoulomb: Unit
     zeptocoulombs: Unit
     zeptod: Unit
@@ -5126,14 +5749,24 @@ class UnitRegistry:
     zeptodebye: Unit
     zeptodecibel: Unit
     zeptodeg: Unit
+    zeptodegC: Unit
+    zeptodegC_delta: Unit
+    zeptodegF: Unit
+    zeptodegF_delta: Unit
+    zeptodegR: Unit
     zeptodegree: Unit
     zeptodegrees: Unit
+    zeptodelta_celsius: Unit
+    zeptodelta_degC: Unit
+    zeptodelta_degF: Unit
+    zeptodelta_fahrenheit: Unit
     zeptodyn: Unit
     zeptodyne: Unit
     zeptoeV: Unit
     zeptoelectron_mass: Unit
     zeptoelectron_volt: Unit
     zeptoerg: Unit
+    zeptofahrenheit: Unit
     zeptofarad: Unit
     zeptofarads: Unit
     zeptofeet: Unit
@@ -5163,6 +5796,8 @@ class UnitRegistry:
     zeptohp: Unit
     zeptojoule: Unit
     zeptojoules: Unit
+    zeptojulio: Unit
+    zeptojulios: Unit
     zeptokat: Unit
     zeptokatal: Unit
     zeptokayser: Unit
@@ -5211,28 +5846,37 @@ class UnitRegistry:
     zeptooersted: Unit
     zeptoohm: Unit
     zeptoohm_meter: Unit
+    zeptoohmio: Unit
+    zeptoohmios: Unit
     zeptoohms: Unit
     zeptoounce: Unit
     zeptoounces: Unit
     zeptooz: Unit
     zeptoparsec: Unit
     zeptopascal: Unit
+    zeptopascalio: Unit
+    zeptopascalios: Unit
     zeptopascals: Unit
     zeptopc: Unit
+    zeptopct: Unit
+    zeptopercent: Unit
     zeptoplanck_charge: Unit
     zeptoplanck_length: Unit
     zeptoplanck_mass: Unit
     zeptoplanck_temperature: Unit
     zeptoplanck_time: Unit
     zeptopoise: Unit
+    zeptoporcentaje: Unit
     zeptopound: Unit
     zeptopound_force: Unit
     zeptopounds: Unit
+    zeptoppm: Unit
     zeptopsi: Unit
     zeptoqp: Unit
     zeptorad: Unit
     zeptoradian: Unit
     zeptoradians: Unit
+    zeptorankine: Unit
     zeptos: Unit
     zeptosec: Unit
     zeptosecond: Unit
@@ -5256,7 +5900,11 @@ class UnitRegistry:
     zeptotorr: Unit
     zeptotp: Unit
     zeptounity: Unit
+    zeptovatio: Unit
+    zeptovatios: Unit
     zeptovolt: Unit
+    zeptovoltio: Unit
+    zeptovoltios: Unit
     zeptovolts: Unit
     zeptowatt: Unit
     zeptowatt_hour: Unit
@@ -5336,6 +5984,8 @@ class UnitRegistry:
     zettacandela: Unit
     zettacandelas: Unit
     zettacd: Unit
+    zettacelsius: Unit
+    zettacentigrade: Unit
     zettacoulomb: Unit
     zettacoulombs: Unit
     zettad: Unit
@@ -5345,14 +5995,24 @@ class UnitRegistry:
     zettadebye: Unit
     zettadecibel: Unit
     zettadeg: Unit
+    zettadegC: Unit
+    zettadegC_delta: Unit
+    zettadegF: Unit
+    zettadegF_delta: Unit
+    zettadegR: Unit
     zettadegree: Unit
     zettadegrees: Unit
+    zettadelta_celsius: Unit
+    zettadelta_degC: Unit
+    zettadelta_degF: Unit
+    zettadelta_fahrenheit: Unit
     zettadyn: Unit
     zettadyne: Unit
     zettaeV: Unit
     zettaelectron_mass: Unit
     zettaelectron_volt: Unit
     zettaerg: Unit
+    zettafahrenheit: Unit
     zettafarad: Unit
     zettafarads: Unit
     zettafeet: Unit
@@ -5382,6 +6042,8 @@ class UnitRegistry:
     zettahp: Unit
     zettajoule: Unit
     zettajoules: Unit
+    zettajulio: Unit
+    zettajulios: Unit
     zettakat: Unit
     zettakatal: Unit
     zettakayser: Unit
@@ -5430,28 +6092,37 @@ class UnitRegistry:
     zettaoersted: Unit
     zettaohm: Unit
     zettaohm_meter: Unit
+    zettaohmio: Unit
+    zettaohmios: Unit
     zettaohms: Unit
     zettaounce: Unit
     zettaounces: Unit
     zettaoz: Unit
     zettaparsec: Unit
     zettapascal: Unit
+    zettapascalio: Unit
+    zettapascalios: Unit
     zettapascals: Unit
     zettapc: Unit
+    zettapct: Unit
+    zettapercent: Unit
     zettaplanck_charge: Unit
     zettaplanck_length: Unit
     zettaplanck_mass: Unit
     zettaplanck_temperature: Unit
     zettaplanck_time: Unit
     zettapoise: Unit
+    zettaporcentaje: Unit
     zettapound: Unit
     zettapound_force: Unit
     zettapounds: Unit
+    zettappm: Unit
     zettapsi: Unit
     zettaqp: Unit
     zettarad: Unit
     zettaradian: Unit
     zettaradians: Unit
+    zettarankine: Unit
     zettas: Unit
     zettasec: Unit
     zettasecond: Unit
@@ -5475,7 +6146,11 @@ class UnitRegistry:
     zettatorr: Unit
     zettatp: Unit
     zettaunity: Unit
+    zettavatio: Unit
+    zettavatios: Unit
     zettavolt: Unit
+    zettavoltio: Unit
+    zettavoltios: Unit
     zettavolts: Unit
     zettawatt: Unit
     zettawatt_hour: Unit
