@@ -42,7 +42,7 @@ subgraph group_pyo3["physure-python Rust crate — PyO3 thin wrapper<br/>(cdylib
   node_pyo3["src/lib.rs<br/>ONLY bindings, zero physics logic<br/>[lib.rs]"]
 end
 
-subgraph group_python["physure-python/physure/ — pure Python public API package"]
+subgraph group_python["physure-python/physure/ — Python public API package<br/>(requires the native physure._core extension)"]
   node_python_entry["__init__.py · __main__.py · cli.py<br/>public surface, sync-types/repl subcommands<br/>[__init__.py]"]
   node_repl["repl.py<br/>PHS REPL (python -m physure) —<br/>evaluates PHS through the native engine<br/>[repl.py]"]
   node_app["application/<br/>Q_ factory, ContextVar, .conf bootstrap,<br/>fit/solver services<br/>[application/factories.py]"]
@@ -57,16 +57,16 @@ subgraph group_python["physure-python/physure/ — pure Python public API packag
   node_units_pkg["units/<br/>friendly constant/unit shortcuts<br/>[units/core.py]"]
 end
 
-subgraph group_cli["physure-cli — standalone `phs` binary<br/>depends directly on physure-script (no Python)"]
+subgraph group_cli["physure-cli — standalone `phs` binary<br/>depends directly on physure-script and physure-core (no Python)"]
   node_phs_cli{{"main.rs · step.rs · protocol.rs · config.rs<br/>phs script.phs / phs --repl<br/>[main.rs]"}}
   node_cli_render["tui.rs · web.rs · html.rs · latex.rs ·<br/>katex_assets.rs · rich.rs · scaffold.rs<br/>notebook-style rendering + project scaffolding<br/>[tui.rs]"]
 end
 
-subgraph group_lsp["physure-lsp — PHS language server<br/>(tower-lsp), depends on physure-script"]
+subgraph group_lsp["physure-lsp — PHS language server<br/>(tower-lsp), depends on physure-script and physure-core"]
   node_lsp["main.rs<br/>completion, diagnostics, doc sync<br/>[main.rs]"]
 end
 
-subgraph group_java["physure-java — JNI bridge<br/>depends on physure-core"]
+subgraph group_java["physure-java — JNI bridge<br/>depends on physure-core and physure-script"]
   node_jni_rust["src/lib.rs<br/>JNI glue<br/>[lib.rs]"]
   node_java_api["java/com/physure/*.java<br/>NativeEngine, Quantity, PhyEquation,<br/>QuantityMatrix/Vector, UnitRegistry<br/>[NativeEngine.java]"]
 end
@@ -115,9 +115,12 @@ node_symbolic_py -.->|"optional sympy dependency"| node_measurement
 node_units_pkg -->|"registers into"| node_core_infra
 
 node_phs_cli -->|"depends on"| node_phs_engine
+node_phs_cli -->|"uses registry, quantities and GUM rounding from"| node_core
 node_cli_render -->|"renders output for"| node_phs_cli
 node_lsp -->|"depends on"| node_phs_engine
+node_lsp -->|"builds the unit registry via"| node_core
 node_jni_rust -->|"delegates to"| node_core
+node_jni_rust -->|"embeds PHS interpreter from"| node_phs_engine
 node_java_api -->|"calls via JNI"| node_jni_rust
 
 node_wasm -->|"delegates physics math to"| node_core
@@ -184,9 +187,9 @@ class node_workspace toneNeutral
 | **physure-script** | The PhysureScript (PHS) DSL: pest grammar (`phs.pest`) → `parser/` → resolver → tree-walking interpreter, a small CAS (`symbolic/`, tokenised by `lexer.rs`, which the language parser does not use) for diff/integrate/solve, and transpilers to Python/Java/Rust/JavaScript/TypeScript (`codegen/`). Shares physics types with `physure-core`. | This is the *only* implementation of PHS — nothing reimplements it in Python. |
 | **physure-python (Rust)** | PyO3 binding crate only. Compiles to `physure._core`. | Zero physics logic — pure glue over `physure-core` + `physure-script`. |
 | **physure-python (Python)** | The public library: `application/` (composition root: `Q_`, active-`UnitSystem` context, `.conf` bootstrap), `domain/measurement` (`Quantity`, `UnitSystem`, `Uncertainty`), `core/` (backend dispatch, protocols, lazy unit registry), `backends/` (NumPy/Torch/JAX/pure-Python), `_jit/` (compile-time unit checking via native `RationalUnit`), `ext/` (optional chemistry/pandas/numba, lazily imported), `nn/` (unit-aware `torch.nn` wrappers). | The native extension is mandatory (`physure/__init__.py` raises `ImportError` without it). Python still keeps its own unit/dimension algebra (`domain/measurement`: `Dimension`, `CompoundUnit`, `UnitSystem`, a `configparser`-based `.conf` loader) and registers every unit into the Rust `UnitRegistry` as well — a known duplication with its own follow-up design (item A1 of the repo-hygiene spec). The folder names `application/`, `domain/` and `core/` are historical: they import each other in both directions. |
-| **physure-cli** | Standalone `phs` binary — a notebook-like runner with TUI, HTML/LaTeX/KaTeX rendering, and a local web server for PHS scripts. Talks to `physure-script` directly; no Python involved. | Independent distribution target — ships without the Python package. |
+| **physure-cli** | Standalone `phs` binary — a notebook-like runner with TUI, HTML/LaTeX/KaTeX rendering, and a local web server for PHS scripts. Talks to `physure-script` (and `physure-core` for the unit registry and GUM rounding) directly; no Python involved. | Independent distribution target — ships without the Python package. |
 | **physure-lsp** | `tower-lsp` server giving editors completion/diagnostics for `.phs` files. | Thin — delegates all language understanding to `physure-script`. |
-| **physure-java** | JNI bridge exposing `physure-core` types (`Quantity`, `UnitRegistry`, ...) to the JVM. | Mirrors the PyO3 crate's role: bindings only, no physics logic. |
+| **physure-java** | JNI bridge exposing `physure-core` types (`Quantity`, `UnitRegistry`, ...) to the JVM, and evaluates PHS through `physure-script`. | Mirrors the PyO3 crate's role: bindings only, no physics logic. |
 | **physure-wasm** | `wasm-bindgen` crate exposing `Quantity`, `UnitRegistry`, and `PhyFunction` (PHS-defined functions) to JS/TS. Compiles to a `cdylib` and publishes to npm as the `physure` package. | Bindings only — delegates physics math to `physure-core` and embeds a `physure-script` `PhsInterpreter` for `PhyFunction` bodies. |
 
 **Note:** if this file and `CLAUDE.md`'s architecture section ever disagree, this file wins — `CLAUDE.md` only summarizes and links here. A `PostToolUse` hook on root `Cargo.toml` edits (see `.claude/settings.json`) warns when a workspace member isn't mentioned here yet; run the `update-structure` skill to reconcile.
