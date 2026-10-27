@@ -34,6 +34,7 @@ Expected: `## chore/repo-noise...origin/main`. Run every later command from this
 
 ```bash
 cd physure-python
+unset VIRTUAL_ENV   # on the maintainer machine it points at the main checkout's venv
 uv sync --extra docs --dev
 uv run mkdocs build --strict; echo "baseline-exit=$?"
 cd ..

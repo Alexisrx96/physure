@@ -298,7 +298,7 @@ Recipe lines start with a TAB character, not spaces.
 uv run pytest --collect-only -q; echo "exit=$?"
 ```
 
-Expected: fails, non-zero exit, `uv` cannot find a `pyproject.toml` at the root. This is what `make test` runs today.
+Expected: fails with a non-zero exit. `uv` runs "outside of a project" (there is no `pyproject.toml` at the root) and pytest then cannot import `physure._core`. This is what `make test` runs today.
 
 - [ ] **Step 2: Rewrite the Makefile**
 
@@ -406,7 +406,7 @@ for item in "Chemistry Python Extension" "Rust Core Chemistry Module" "PHS DSL C
 git diff --stat ROADMAP.md docs/ROADMAP.md
 ```
 
-Expected: `timeline-diff-exit=0`; every item prints `root=1 docs=1`; the stat shows only the four timeline lines changed in each file (4 insertions and 4 deletions each).
+Expected: `timeline-diff-exit=0`; every item prints `root=1 docs=1` except `DAE Pantelides Index Reduction`, which prints `root=2 docs=2` (each file also has a checklist line with that name); the stat shows only the four timeline lines changed in each file (4 insertions and 4 deletions each).
 
 - [ ] **Step 5: Commit**
 
@@ -454,8 +454,9 @@ git commit -m "docs(plans): repo hygiene implementation plans for PR-1, PR-2 and
 
 ```bash
 cd physure-python
+echo "VIRTUAL_ENV=${VIRTUAL_ENV:-<unset>}"   # on the maintainer machine this points at the main checkout's venv
+unset VIRTUAL_ENV
 uv sync --all-extras --dev
-echo "VIRTUAL_ENV=${VIRTUAL_ENV:-<unset>}"
 uv run maturin develop --release
 uv run python -c "import physure._core as c; print(c.__file__)"
 ```

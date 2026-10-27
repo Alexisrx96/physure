@@ -41,8 +41,9 @@ Expected: `locked-exit=0`. If it is `101`, PR-2 (Task 4) has not landed: stop an
 
 ```bash
 cd physure-python
+echo "VIRTUAL_ENV=${VIRTUAL_ENV:-<unset>}"   # on the maintainer machine this points at the main checkout's venv
+unset VIRTUAL_ENV
 uv sync --all-extras --dev
-echo "VIRTUAL_ENV=${VIRTUAL_ENV:-<unset>}"
 uv run maturin develop --release
 uv run python -c "import physure._core as c; print(c.__file__)"
 ```
