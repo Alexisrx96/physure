@@ -1768,6 +1768,13 @@ fn max_skewness() -> f64 {
     moments::max_skewness()
 }
 
+/// The default unit catalog (`physure.conf`) embedded in `physure-core`: the single source
+/// the Python `UnitSystem` is built from.
+#[pyfunction]
+fn default_conf() -> &'static str {
+    ::physure_core::units::conf::DEFAULT_PHYSURE_CONF
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1775,6 +1782,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAsymmetricMoments>()?;
     m.add_class::<PyMomentsBackend>()?;
     m.add_function(wrap_pyfunction!(max_skewness, m)?)?;
+    m.add_function(wrap_pyfunction!(default_conf, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add_class::<PyQuantity>()?;
