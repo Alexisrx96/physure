@@ -113,9 +113,9 @@ def _coerce_scalar(arg: Any) -> Any:
         if " " in arg:
             mag_str, unit_str = arg.split(" ", 1)
             try:
-                from physure import Q_
+                from physure.application.factories import QuantityFactory
 
-                return Q_(float(mag_str), unit_str)
+                return QuantityFactory()(float(mag_str), unit_str)
             except Exception:
                 return arg
         try:

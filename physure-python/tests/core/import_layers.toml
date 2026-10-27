@@ -176,33 +176,8 @@ kind = "lazy"
 cause = "a1"
 
 [[exception]]
-importer = "physure.ext.chemistry.equivalency"
-imported = "physure"
-kind = "lazy"
-count = 2
-cause = "a2a"
-
-[[exception]]
-importer = "physure.ext.chemistry.species"
-imported = "physure"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
-importer = "physure.ext.chemistry.thermo_kinetics"
-imported = "physure"
-kind = "lazy"
-count = 2
-cause = "a2a"
-
-[[exception]]
 importer = "physure.infrastructure.config.systems"
 imported = "physure.application.startup"
 kind = "lazy"
 cause = "a1"
 
-[[exception]]
-importer = "physure.module"
-imported = "physure"
-kind = "lazy"
-cause = "a2a"

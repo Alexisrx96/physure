@@ -100,7 +100,9 @@ def gibbs_free_energy(
 
 def standard_enthalpy(formula: str) -> Quantity:
     """Standard enthalpy of formation at 298.15 K, in kJ/mol."""
-    from physure import Q_
+    from physure.application.factories import QuantityFactory
+
+    Q_ = QuantityFactory()
 
     if formula not in STANDARD_ENTHALPY_FORMATION:
         raise KeyError(f"No tabulated standard enthalpy for {formula!r}")
@@ -109,7 +111,9 @@ def standard_enthalpy(formula: str) -> Quantity:
 
 def standard_entropy(formula: str) -> Quantity:
     """Standard molar entropy at 298.15 K, in J/(mol*K)."""
-    from physure import Q_
+    from physure.application.factories import QuantityFactory
+
+    Q_ = QuantityFactory()
 
     if formula not in STANDARD_ENTROPY:
         raise KeyError(f"No tabulated standard entropy for {formula!r}")
