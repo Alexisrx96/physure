@@ -71,7 +71,7 @@ avogadro_constant = 6.022141e+23 mol^-1
    cd physure-python
    uv run python scripts/compile_units.py        # physure/units/*.py
    uv run python scripts/generate_units_readme.py # docs/UNITS.md
-   uv run python -m physure sync-types            # _generated_types.py, registry.pyi
+   uv run python -m physure.cli sync-types            # _generated_types.py, registry.pyi
    cd ..
    ```
 

@@ -403,7 +403,7 @@ with:
    cd physure-python
    uv run python scripts/compile_units.py        # physure/units/*.py
    uv run python scripts/generate_units_readme.py # docs/UNITS.md
-   uv run python -m physure sync-types            # _generated_types.py, registry.pyi
+   uv run python -m physure.cli sync-types            # _generated_types.py, registry.pyi
    cd ..
 ```
 
@@ -480,7 +480,7 @@ Expected `--name-status`: `D` for the Python `physure.conf`, `M` for `startup.py
 cd physure-python
 uv run python scripts/compile_units.py
 uv run python scripts/generate_units_readme.py
-uv run python -m physure sync-types
+uv run python -m physure.cli sync-types
 cd ..
 git status --short | grep -v "Cargo.lock"
 ```
@@ -500,7 +500,7 @@ Expected: a non-empty list of added index entries: the units the core catalog de
 ```bash
 git add physure-python/physure/units physure-python/physure/_generated_types.py physure-python/physure/core/registry.pyi docs/UNITS.md
 git diff --cached --name-only | head -12
-git commit -m "chore(units): regenerate unit modules, types and UNITS.md from the single catalog" -m "Generated output only; review by rerunning scripts/compile_units.py, scripts/generate_units_readme.py and python -m physure sync-types from physure-python/." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git commit -m "chore(units): regenerate unit modules, types and UNITS.md from the single catalog" -m "Generated output only; review by rerunning scripts/compile_units.py, scripts/generate_units_readme.py and python -m physure.cli sync-types from physure-python/." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
