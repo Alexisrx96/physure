@@ -645,7 +645,7 @@ cd /d/Projects/physure/.claude/worktrees/single-conf/physure-python
 unset VIRTUAL_ENV
 cp tests/core/import_layers.toml /tmp/import_layers.toml.bak
 cp physure/core/protocols.py /tmp/protocols.py.bak
-run() { uv run --no-sync pytest tests/core/test_import_layers.py -q -p no:cacheprovider 2>&1 | grep -E "^E  |passed|failed" | grep -vE "^E\s*$" | head -8 | cut -c1-175; }
+run() { uv run --no-sync pytest tests/core/test_import_layers.py -q -p no:cacheprovider 2>&1 | grep -E "^E  |passed|failed" | grep -vE "^E\s*$" | head -12 | cut -c1-175; }
 
 echo "=== baseline ==="; run
 echo "=== MUTATION 1: a new import that goes up (kernel -> services), under 'if False' so nothing executes ==="
