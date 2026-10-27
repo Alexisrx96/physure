@@ -23,7 +23,7 @@ except ImportError:
     HAVE_SYMENGINE = False  # pyright: ignore[reportConstantRedefinition]
 
 
-from physure import default_system
+from physure.application.context import get_current_system
 from physure.domain.exceptions import IncompatibleUnitsError
 from physure.domain.measurement.units import CompoundUnit
 from physure.domain.symbolic.expression import SymbolicExpression
@@ -36,9 +36,11 @@ class SymbolicQuantity(SymbolicExpression):
         self,
         name: str,
         unit: str | CompoundUnit,
-        system: UnitSystem = default_system,
+        system: UnitSystem | None = None,
     ):
         """Initializes a SymbolicQuantity."""
+        if system is None:
+            system = get_current_system()
         symbol = (
             se.Symbol(name)
             if HAVE_SYMENGINE

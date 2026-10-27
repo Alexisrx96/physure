@@ -23,7 +23,7 @@ except ImportError:
     HAVE_SYMENGINE = False  # pyright: ignore[reportConstantRedefinition]
 
 
-from physure import default_system
+from physure.application.context import get_current_system
 from physure.application.functions.functions import Function
 from physure.domain.exceptions import IncompatibleUnitsError
 
@@ -44,7 +44,7 @@ class SymbolicExpression:
         self,
         sympy_expr: sp.Expr,
         unit: CompoundUnit,
-        system: UnitSystem = default_system,
+        system: UnitSystem | None = None,
         variables: set[SymbolicQuantity] | None = None,
     ):
         """Initializes a symbolic expression."""
@@ -53,7 +53,7 @@ class SymbolicExpression:
         else:
             self._expr = sympy_expr
         self.unit = unit
-        self.system = system
+        self.system = system if system is not None else get_current_system()
         # Track the atomic variables that make up this expression
         self.variables = variables or set()
         self._sympy_expr_cached: sp.Expr | None = None
