@@ -17,7 +17,7 @@ The change was implemented and verified on a prototype branch before this plan w
 | Imports of the facade from modules below it | 10 | 1 (`ext/io.py`, documented) |
 | Imports recorded as layering exceptions | 26, in 23 records | 17, in 16 records (8 `a1`, 8 `a2a`, 1 `release`, counted in imports) |
 | Behaviour test `test_active_system_default.py` | 3 failed, 1 passed | 4 passed |
-| Full suite | 914 passed, 6 xfailed | **918 passed, 6 xfailed** |
+| Full suite | 919 passed, 6 xfailed (925 collected on `main`) | **923 passed, 6 xfailed** (929 collected: exactly the 4 new tests more) |
 | First use (`python -m physure "500 N / 2 m^2 => kPa"`) | n/a | 0.11 s, prints `0.25 kPa` |
 | Exception records after each commit | 23 | 20 after the first, 16 after the second, 16 after the third |
 
@@ -333,7 +333,7 @@ Expected: `All checks passed!` and every file formatted.
 uv run --no-sync pytest -q -p no:cacheprovider 2>&1 | tail -1
 ```
 
-Expected: `918 passed, 6 xfailed`. If any other test fails, run it alone and report; do not change application code.
+Expected: `923 passed, 6 xfailed`, which is the 4 new tests on top of the 919 passed of `main`'s tip. If any other test fails, run it alone and report; do not change application code.
 
 - [ ] **Step 3: First use stays fast, and no facade import is left but the documented one**
 
