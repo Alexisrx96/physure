@@ -192,4 +192,19 @@ class node_workspace toneNeutral
 | **physure-java** | JNI bridge exposing `physure-core` types (`Quantity`, `UnitRegistry`, ...) to the JVM, and evaluates PHS through `physure-script`. | Mirrors the PyO3 crate's role: bindings only, no physics logic. |
 | **physure-wasm** | `wasm-bindgen` crate exposing `Quantity`, `UnitRegistry`, and `PhyFunction` (PHS-defined functions) to JS/TS. Compiles to a `cdylib` and publishes to npm as the `physure` package. | Bindings only — delegates physics math to `physure-core` and embeds a `physure-script` `PhsInterpreter` for `PhyFunction` bodies. |
 
+## Python import layers
+
+Inside `physure-python/physure/`, imports follow a layer contract that a test enforces: `physure-python/tests/core/test_import_layers.py` reads the layer map in `physure-python/tests/core/import_layers.toml`. Layers are assigned per module, not per package: `application/context.py`, for example, is `kernel` (state every layer needs) although it lives in `application/`.
+
+| # | Layer | What lives here |
+|---|---|---|
+| 1 | `kernel` | backend interfaces, the dispatcher, the registry, exceptions, the active-system context |
+| 2 | `backends` | NumPy/Torch/JAX adapters and the tracer |
+| 3 | `model` | `Quantity`, units, dimensions, uncertainty |
+| 4 | `services` | factories, fit and solve services, I/O, symbolic helpers |
+| 5 | `extensions` | `ext/`, `nn/`, `plotting`, pandas |
+| 6 | `facade` | the public API (`physure/__init__.py`), the CLI and the REPL |
+
+A module may import from its own layer or a lower one. A deferred import (inside a function) may also reach `extensions`, which is how `Quantity.plot()` uses matplotlib only when it is called. Imports under `if TYPE_CHECKING:` are not checked. Nothing inside the package imports the facade: import the module that defines the name. A few imports break the rule today and are recorded as exceptions in the TOML file (`a1`: removed when A1 deletes the module; `a2a`: removed by the import clean-up). The test fails if a record no longer matches the code, so the list only shrinks. The design is in `docs/superpowers/specs/2026-10-27-a2-layering-contract-design.md`.
+
 **Note:** if this file and `CLAUDE.md`'s architecture section ever disagree, this file wins — `CLAUDE.md` only summarizes and links here. A `PostToolUse` hook on root `Cargo.toml` edits (see `.claude/settings.json`) warns when a workspace member isn't mentioned here yet; run the `update-structure` skill to reconcile.

@@ -40,6 +40,8 @@ infrastructure/ the .conf files defining SI and Imperial
 ext/, nn/       optional integrations, unit-aware torch layers
 ```
 
+Which package may import which is a rule, and a test enforces it: `tests/core/test_import_layers.py` reads the layer map in `tests/core/import_layers.toml` and fails on an import that goes up the layers (see "Python import layers" in `structure.md`). When it fails it prints the importing module, the imported module, the layer of each and the line. Import from a lower layer instead of the package facade (`from physure import X` inside the package is always wrong), put a new module in a layer in the TOML file, and record an exception only if the import is temporary and someone owns removing it.
+
 ---
 
 ## Build
