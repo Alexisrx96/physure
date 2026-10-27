@@ -67,9 +67,9 @@ for `target/release/phs` — rebuild it before trusting what the CLI prints.
 Preview the documentation site with `cd physure-python && uv run mkdocs serve`. CI builds it
 with `uv run mkdocs build --strict` from the same directory.
 
-Working in a git worktree? Run `maturin develop` from that worktree's own `physure-python/`
-and check `echo $VIRTUAL_ENV` first: a venv inherited from another checkout would receive
-your build silently.
+Working in a git worktree? Run `uv run maturin develop --release` from that worktree's own
+`physure-python/`. If you ever run `maturin` without `uv run`, check `echo $VIRTUAL_ENV`
+first: a venv inherited from another checkout would receive your build silently.
 
 ---
 

@@ -17,7 +17,7 @@ and no document contradicts what the code does.
 
 - **A1 — Python-side unit/dimension algebra duplicating Rust.** `physure-python/physure/domain/measurement`
   keeps its own `Dimension` / `CompoundUnit` / `UnitSystem` (dict-of-exponents, ~7.2k lines)
-  and mirrors every registration into the Rust `UnitRegistry`. Making Python a thin layer
+  and mirrors registrations into the Rust `UnitRegistry` on a best-effort basis: errors for derived units, aliases and prefixed units are swallowed by `contextlib.suppress(Exception)`, which sits badly with the "never silently drop" invariant and belongs in the A1 design. Making Python a thin layer
   over `physure-core` is a multi-week refactor and gets its own design.
 - **A2 — layer names that do not hold.** `application/`, `domain/`, `core/` import each
   other in both directions (14 `domain → application` imports, `core → domain` imports,
@@ -29,7 +29,8 @@ and no document contradicts what the code does.
 - **The ~11k lines of generated unit modules** (`units/core.py`, `units/_index.py`):
   removing them depends on A1.
 - **Release workflow dedupe** (3 near-identical `bump-*.yml`) and making the bump flow
-  refresh `Cargo.lock`: cannot be tested locally.
+  refresh `Cargo.lock` (and `physure-python/pyproject.toml`, which still says `0.2.3` while
+  `Cargo.toml` and `physure.__version__` say `0.2.4`): cannot be tested locally.
 - **Scope reduction** (4 transpilers, `phs` self-upgrade / packaging / web server):
   a maintainer decision, not hygiene.
 
@@ -41,7 +42,7 @@ and no document contradicts what the code does.
 | `CLAUDE.md` says `uv sync` at the root and `cd physure-core && maturin develop`; `CONTRIBUTING.md` says everything runs from `physure-python/` | read both |
 | `CONTRIBUTING.md` says "six crates"; the workspace has 7 (`physure-wasm` missing) | `Cargo.toml` |
 | `structure.md` says "Everything has a pure-Python fallback except `repl.py`"; `physure/__init__.py` raises `ImportError` without `physure._core`, so no such fallback exists | `__init__.py` |
-| `structure.md` lists `parser.rs`; it is now `parser/`, built on `phs.pest`. `PhsLexer` is only used by the CAS parser (`symbolic/parser.rs`) | `ls`, grep |
+| `structure.md` lists `parser.rs`; it is now `parser/`, built on `phs.pest`. `PhsLexer` is not used by the language parser; inside `physure-script` only the CAS parser (`symbolic/parser.rs`) uses it, and the PyO3 crate exposes it as `_core.tokenize_phs_expression` | `ls`, grep |
 | Two `mkdocs.yml`; CI builds only `physure-python/mkdocs.yml` (`docs_dir: ../docs`). The root copy diverged (different description, nav, `docs_dir`) | `diff`, `tests.yml` |
 | `physure-core/src/units/physure.conf` (683 lines) and `physure-python/.../config/physure.conf` (656 lines) differ in 45 lines (both are LF in the index; the CRLF seen in a Windows working tree is `autocrlf`). `Q_(1, "percent")`, `"ppm"` and the Spanish alias `julio` raise `UnknownUnitError` in Python, and the Python copy lacks `parallel_threshold`, `max_loop_iterations`, `max_pipeline_steps`. Root cause of the missing `percent`: its `[%, percent, ...]` alias list makes `configparser`'s default interpolation raise `InterpolationSyntaxError`; with `interpolation=None` the core file parses (98 units). (`celsius`/`fahrenheit` do resolve in Python although its copy does not define them; their provenance is a baseline question for PR-3.) | `diff`, `configparser` experiment, `Q_(...)` probe |
 | `ROADMAP.md` (110 lines) and `docs/ROADMAP.md` (112 lines) differ | `diff -q` |

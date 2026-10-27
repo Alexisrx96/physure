@@ -143,9 +143,9 @@ for `target/release/phs` — rebuild it before trusting what the CLI prints.
 Preview the documentation site with `cd physure-python && uv run mkdocs serve`. CI builds it
 with `uv run mkdocs build --strict` from the same directory.
 
-Working in a git worktree? Run `maturin develop` from that worktree's own `physure-python/`
-and check `echo $VIRTUAL_ENV` first: a venv inherited from another checkout would receive
-your build silently.
+Working in a git worktree? Run `uv run maturin develop --release` from that worktree's own
+`physure-python/`. If you ever run `maturin` without `uv run`, check `echo $VIRTUAL_ENV`
+first: a venv inherited from another checkout would receive your build silently.
 ```
 
 - [ ] **Step 5: Verify**
@@ -179,7 +179,7 @@ grep -rn "PhsLexer" physure-script/src --include=*.rs | grep -v "^physure-script
 grep -n "raise ImportError\|^    raise" physure-python/physure/__init__.py | head -2
 ```
 
-Expected: both `ls` targets report `No such file`; `PhsLexer` is used only from `physure-script/src/lib.rs` (re-export) and `physure-script/src/symbolic/parser.rs`; `__init__.py` raises `ImportError` when the extension is missing.
+Expected: both `ls` targets report `No such file`; inside `physure-script`, `PhsLexer` is used only from `src/lib.rs` (re-export) and `src/symbolic/parser.rs` (the PyO3 crate also exposes it as `_core.tokenize_phs_expression`); `__init__.py` raises `ImportError` when the extension is missing.
 
 - [ ] **Step 2: Fix the PHS engine node (line 35)**
 
@@ -260,7 +260,7 @@ Everything has a pure-Python fallback **except** `repl.py` (PHS evaluation), whi
 with:
 
 ```
-The native extension is mandatory (`physure/__init__.py` raises `ImportError` without it). Python still keeps its own unit/dimension algebra (`domain/measurement`: `Dimension`, `CompoundUnit`, `UnitSystem`, a `configparser`-based `.conf` loader) and registers every unit into the Rust `UnitRegistry` as well — a known duplication with its own follow-up design (item A1 of the repo-hygiene spec). The folder names `application/`, `domain/` and `core/` are historical: they import each other in both directions.
+The native extension is mandatory (`physure/__init__.py` raises `ImportError` without it). Python still keeps its own unit/dimension algebra (`domain/measurement`: `Dimension`, `CompoundUnit`, `UnitSystem`; the `configparser`-based `.conf` loader is `UnitSystemBuilder` in `application/startup.py`) and also mirrors each unit into the Rust `UnitRegistry` on a best-effort basis (registration errors there are suppressed) — a known duplication with its own follow-up design (item A1 of the repo-hygiene spec). The folder names `application/`, `domain/` and `core/` are historical: they import each other in both directions.
 ```
 
 - [ ] **Step 7: Verify**
