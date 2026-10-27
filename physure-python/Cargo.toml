@@ -16,7 +16,10 @@ authors.workspace    = true
 publish     = false   # PyO3 binding crate — ships to PyPI via maturin, never to crates.io
 
 [lib]
-name       = "physure_core"  # The compiled .so will be named physure._core
+# Same lib name as the `physure` crate's rlib (physure-core/); both build today.
+# The Python module name comes from `#[pymodule(name = "_core")]` in src/lib.rs
+# and `[tool.maturin] module-name` in pyproject.toml, not from this field.
+name       = "physure_core"
 crate-type = ["cdylib"]      # Shared library for Python import
 
 [dependencies]
@@ -24,18 +27,6 @@ physure-core.workspace = true
 physure-script.workspace = true
 pyo3.workspace         = true
 numpy.workspace        = true
-# Re-export workspace deps that physure-core needs, so they link correctly
+# Used directly by src/lib.rs (Rational64, FromPrimitive).
 num-rational.workspace = true
 num-traits.workspace   = true
-ndarray.workspace      = true
-rand.workspace         = true
-rand_distr.workspace   = true
-nalgebra.workspace     = true
-dyn-clone.workspace    = true
-arrow.workspace        = true
-chrono.workspace       = true
-sprs.workspace         = true
-
-[package.metadata.maturin]
-python-source = "python"
-module-name   = "physure._core"

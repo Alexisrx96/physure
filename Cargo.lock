@@ -2005,20 +2005,12 @@ dependencies = [
 name = "physure-python"
 version = "0.2.4"
 dependencies = [
- "arrow",
- "chrono",
- "dyn-clone",
- "nalgebra",
- "ndarray 0.15.6",
  "num-rational",
  "num-traits",
  "numpy",
  "physure",
  "physure-script",
  "pyo3",
- "rand",
- "rand_distr",
- "sprs",
 ]
 
 [[package]]
