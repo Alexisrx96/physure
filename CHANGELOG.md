@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Python and the core now share one unit catalog.** Python used to carry its own hand-maintained copy of `physure.conf` that had drifted from `physure-core`'s: it did not know `percent` / `%`, `ppm` or Spanish aliases such as `julio`, and it never saw `parallel_threshold`, `max_loop_iterations` or `max_pipeline_steps` in `[Settings]`. The copy could not simply be refreshed, because `configparser`'s default interpolation raises on the literal `%` in `percent`'s alias list. Python's `UnitSystem` is now built from the catalog embedded in the native extension (`physure._core.default_conf()`), read with interpolation off, so a unit added to `physure-core/src/units/physure.conf` is available to both. A `physure.conf` in the working directory still overrides the defaults, and is now also read without `%` interpolation, so a `%%` in it is no longer collapsed to `%`.
 
+### Fixed
+- **`SymbolicQuantity`, `SymbolicExpression` and `Function` use the unit system that is active when they are created.** Their default was bound once, when physure was first imported, so a `physure.use_system(...)` block was silently ignored and the object came out in the original system.
+
 ## [0.2.4] - 2026-08-28
 
 **Tags:** `v0.2.4`, `core-v0.2.4`, `java-v0.2.4`

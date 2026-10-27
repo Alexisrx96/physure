@@ -85,12 +85,6 @@ modules = [
 # --- recorded exceptions ---------------------------------------------------
 
 [[exception]]
-importer = "physure.application.functions.functions"
-imported = "physure"
-kind = "top"
-cause = "a2a"
-
-[[exception]]
 importer = "physure.backends.torch_backend"
 imported = "physure.domain.measurement.quantity"
 kind = "top"
@@ -110,19 +104,7 @@ cause = "a1"
 
 [[exception]]
 importer = "physure.domain.symbolic.expression"
-imported = "physure"
-kind = "top"
-cause = "a2a"
-
-[[exception]]
-importer = "physure.domain.symbolic.expression"
 imported = "physure.application.functions.functions"
-kind = "top"
-cause = "a2a"
-
-[[exception]]
-importer = "physure.domain.symbolic.quantity"
-imported = "physure"
 kind = "top"
 cause = "a2a"
 
