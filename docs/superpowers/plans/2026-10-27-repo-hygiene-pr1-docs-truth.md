@@ -402,8 +402,7 @@ with the same four merged lines as in Step 2.
 
 ```bash
 diff <(grep -E "^ +Q[1-4] 20" ROADMAP.md) <(grep -E "^ +Q[1-4] 20" docs/ROADMAP.md); echo "timeline-diff-exit=$?"
-for item in "Chemistry Python Extension" "Rust Core Chemistry Module" "PHS DSL Chemistry Builtins" "Advanced Reaction Networks" "Cross-Language Chemistry Bindings" "Partial Fraction Decomposition" "Bareiss Symbolic Matrices" "DAE Pantelides Index Reduction" "Anisotropic 3D Tensors"; do printf "%-34s root=%s docs=%s
-" "$item" "$(grep -c "$item" ROADMAP.md)" "$(grep -c "$item" docs/ROADMAP.md)"; done
+for item in "Chemistry Python Extension" "Rust Core Chemistry Module" "PHS DSL Chemistry Builtins" "Advanced Reaction Networks" "Cross-Language Chemistry Bindings" "Partial Fraction Decomposition" "Bareiss Symbolic Matrices" "DAE Pantelides Index Reduction" "Anisotropic 3D Tensors"; do printf "%-34s root=%s docs=%s\n" "$item" "$(grep -c "$item" ROADMAP.md)" "$(grep -c "$item" docs/ROADMAP.md)"; done
 git diff --stat ROADMAP.md docs/ROADMAP.md
 ```
 
@@ -435,7 +434,7 @@ If `git log --oneline origin/main..HEAD` already shows a `docs(plans): ...` comm
 grep -nE "\]\((\.\./|\./)?[A-Za-z_./-]+\.(rs|py|toml|md|yml|conf)\)" docs/superpowers/plans/2026-10-27-repo-hygiene-pr*.md docs/superpowers/specs/2026-10-27-repo-hygiene-onboarding-design.md; echo "exit=$?"
 ```
 
-Expected: exactly one match, in this plan file: the pointer text shown in Task 5 Step 4, which sits inside a code fence (rendered as literal text, so it is not a link for mkdocs). Any other match is a real relative link: remove it or turn it into a GitHub blob URL.
+Expected: no matches, `exit=1`. Any match is a real relative link: remove it or turn it into a GitHub blob URL.
 
 - [ ] **Step 2: Commit**
 
