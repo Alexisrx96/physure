@@ -174,21 +174,22 @@ git commit -m "chore: mark generated files so PR diffs collapse them" -m "Co-Aut
 
 ---
 
-### Task 4: Sync `Cargo.lock` with the workspace version
+### Task 4: Sync the lock files with the workspace version
 
 **Files:**
 - Modify: `Cargo.lock`
+- Modify: `physure-python/uv.lock`
 
-`Cargo.toml` is at the released version but the committed lock still has the previous one for all workspace crates, so the first `cargo` or `rust-analyzer` run dirties a fresh clone.
+`Cargo.toml` and `physure-python/pyproject.toml` are at the released version but the committed locks still have the previous one, so the first `cargo`, `rust-analyzer` or `uv sync` run dirties a fresh clone. Two separate commits.
 
-- [ ] **Step 1: Show the mismatch**
+- [ ] **Step 1: Show the Cargo.lock mismatch**
 
 ```bash
 grep -n "^version" Cargo.toml
 cargo metadata --locked --format-version 1 > /dev/null; echo "locked-exit=$?"
 ```
 
-Expected: the workspace version (for example `0.2.4`), and `locked-exit=101` with a message that the lock file needs to be updated. If `locked-exit=0`, the lock is already in sync (someone fixed it): skip this task.
+Expected: the workspace version (for example `0.2.4`), and `locked-exit=101` with a message that the lock file needs to be updated. If `locked-exit=0`, the lock is already in sync (someone fixed it): skip to Step 5.
 
 - [ ] **Step 2: Refresh only the workspace members**
 
@@ -215,6 +216,57 @@ git add Cargo.lock
 git diff --cached --name-only
 git commit -m "build: sync Cargo.lock with the workspace version" -m "The release flow bumps Cargo.toml but leaves Cargo.lock behind, so any cargo or rust-analyzer run on a fresh clone dirtied the tree. Making the bump workflows refresh the lock is tracked separately." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
+
+- [ ] **Step 5: Show the uv.lock mismatch**
+
+`uv sync` in this worktree may already have rewritten `physure-python/uv.lock` (version line plus a reordering of `resolution-markers`). Restore the committed file first, then check:
+
+```bash
+git checkout -- physure-python/uv.lock
+cd physure-python
+unset VIRTUAL_ENV
+uv lock --check; echo "uv-lock-check-exit=$?"
+grep -n -B1 -A2 '^name = "physure"$' uv.lock | head -8
+cd ..
+```
+
+Expected: a non-zero `uv-lock-check-exit` (the lock needs an update) and the editable package entry showing `version = "0.2.3"` with `source = { editable = "." }`. If the check passes, skip to Step 8.
+
+- [ ] **Step 6: Change only the editable package's version line**
+
+```bash
+python - <<'EOF'
+import pathlib
+p = pathlib.Path("physure-python/uv.lock")
+raw = p.read_bytes().decode("utf-8")
+eol = "\r\n" if "\r\n" in raw else "\n"
+old = 'name = "physure"' + eol + 'version = "0.2.3"' + eol + 'source = { editable = "." }'
+new = old.replace("0.2.3", "0.2.4")
+assert raw.count(old) == 1, raw.count(old)
+p.write_bytes(raw.replace(old, new).encode("utf-8"))
+EOF
+git diff --stat physure-python/uv.lock | tail -1
+cd physure-python && uv lock --check; echo "uv-lock-check-exit=$?"; cd ..
+```
+
+Expected: `1 file changed, 1 insertion(+), 1 deletion(-)` and `uv-lock-check-exit=0`. The version string `0.2.4` must equal `version` in `physure-python/pyproject.toml`; if the workspace version has moved on, use that one. If the check still fails after this one-line change, run `cd physure-python && uv lock` instead, keep its output, and say in the commit message that the `resolution-markers` reordering comes from the uv version.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add physure-python/uv.lock
+git diff --cached --name-only
+git commit -m "build: sync physure-python/uv.lock with the package version" -m "uv.lock pinned the editable physure package at the previous release, so uv sync rewrote it on every fresh clone. Only that version line changes; the reordering of resolution-markers that newer uv versions emit is left out." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+- [ ] **Step 8: Check both locks are clean on a fresh sync**
+
+```bash
+cd physure-python && uv sync --extra docs --dev && cd ..
+git status --short
+```
+
+Expected: no modified `Cargo.lock` or `physure-python/uv.lock` (a `rust-analyzer` session may still rewrite `Cargo.lock` for reasons unrelated to this PR; if so, note it). A residual `uv.lock` diff consisting only of `resolution-markers` reordering is the uv-version noise described above and is not committed.
 
 ---
 
@@ -330,7 +382,7 @@ git commit -m "docs: keep all superpowers plans and specs under docs/superpowers
 git diff --name-status origin/main...HEAD
 ```
 
-Expected: `D` for `unc3.java`, `unc3.py`, `unc3.rs`, `uv.lock`, `mkdocs.yml` and the two `physure-python/.cache/...json` files; `A .gitattributes`; `M .gitignore`, `M Cargo.lock`, `M docs/language_readiness_roadmap.md`, `M physure-python/mkdocs.yml`; 13 `R` lines for the moved plans and specs. Nothing else.
+Expected: `D` for `unc3.java`, `unc3.py`, `unc3.rs`, `uv.lock`, `mkdocs.yml` and the two `physure-python/.cache/...json` files; `A .gitattributes`; `M .gitignore`, `M Cargo.lock`, `M physure-python/uv.lock`, `M docs/language_readiness_roadmap.md`, `M physure-python/mkdocs.yml`; 13 `R` lines for the moved plans and specs. Nothing else.
 
 - [ ] **Step 2: Re-run the strict docs build and the lock check**
 
@@ -353,7 +405,7 @@ gh pr create --base main --title "chore: remove dead root files, sync Cargo.lock
 ## What
 - Remove `unc3.*`, the orphaned root `uv.lock`, the diverged root `mkdocs.yml` and a tracked mkdocs-jupyter cache.
 - `.gitignore`: drop two dead entries, ignore the cache. `.gitattributes`: mark generated files.
-- Sync `Cargo.lock` with the workspace version (a fresh clone no longer dirties on the first cargo run).
+- Sync `Cargo.lock` and `physure-python/uv.lock` with the released version (a fresh clone no longer dirties on the first cargo run or `uv sync`).
 - `exclude_docs` for `docs/superpowers/`; the 11 links from the language readiness roadmap become GitHub blob URLs.
 - Gather the 13 files of `physure-python/docs/superpowers/` into `docs/superpowers/`.
 

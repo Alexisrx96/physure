@@ -29,8 +29,8 @@ and no document contradicts what the code does.
 - **The ~11k lines of generated unit modules** (`units/core.py`, `units/_index.py`):
   removing them depends on A1.
 - **Release workflow dedupe** (3 near-identical `bump-*.yml`) and making the bump flow
-  refresh `Cargo.lock` (and `physure-python/pyproject.toml`, which still says `0.2.3` while
-  `Cargo.toml` and `physure.__version__` say `0.2.4`): cannot be tested locally.
+  refresh `Cargo.lock` and `physure-python/uv.lock` (the `pyproject.toml` version drift itself
+  was fixed upstream in #67): cannot be tested locally.
 - **Scope reduction** (4 transpilers, `phs` self-upgrade / packaging / web server):
   a maintainer decision, not hygiene.
 
@@ -50,7 +50,7 @@ and no document contradicts what the code does.
 | `physure-python/.cache/mkdocs-jupyter` (2 files) is tracked | `git ls-tree` |
 | `.gitignore` lists `physure/_generated_types.py` and `physure/core/registry.pyi`, but the real files live under `physure-python/physure/`, are tracked, and `git check-ignore` reports them as **not ignored** | `git check-ignore` |
 | `physure-python/Cargo.toml` says `python-source = "python"`; `pyproject.toml` says `"."`; there is no `python/` directory | read both |
-| `Cargo.toml` says `0.2.4`, but the committed `Cargo.lock` still says `0.2.3` for all 7 workspace crates; the first `cargo` or `rust-analyzer` run rewrites it and leaves a fresh clone with a dirty tree | `git diff` after rust-analyzer touched a clean worktree |
+| `Cargo.toml` says `0.2.4`, but the committed `Cargo.lock` still says `0.2.3` for all 7 workspace crates, and `physure-python/uv.lock` still pins the editable `physure` package at `0.2.3`; the first `cargo`, `rust-analyzer` or `uv sync` run rewrites them and leaves a fresh clone with a dirty tree | `git diff` after rust-analyzer and `uv sync` touched clean worktrees |
 | 28 AI-generated plans/specs sit in `docs/superpowers/` (inside the published `docs_dir`, no `exclude_docs`); another 13 sit in `physure-python/docs/superpowers/` (outside any `docs_dir`) | `git ls-files`, `mkdocs.yml` |
 
 Nothing outside CI references the root `uv.lock`, `unc3.*`, `.cache/`, or the root
@@ -103,9 +103,11 @@ doc-to-doc link committed together.
    are, so the brainstorming/writing-plans workflow keeps working. `docs/language_readiness_roadmap.md`
    links to 11 files under `superpowers/` with relative paths; excluding them would break
    `mkdocs build --strict`, so those links become GitHub blob URLs, the repo's convention.
-8. Commit the `Cargo.lock` sync (7 `version = "0.2.3"` → `"0.2.4"` lines), so a fresh clone
-   builds with a clean tree. The root cause, the `bump-*.yml` flow not refreshing the lock,
-   is part of the deferred release-workflow item.
+8. Commit the lock syncs, so a fresh clone builds with a clean tree: `Cargo.lock` (7 workspace
+   `version = "0.2.3"` → `"0.2.4"` lines) and `physure-python/uv.lock` (the editable `physure`
+   package's `version` line only; the `resolution-markers` reordering `uv sync` also produces
+   depends on the uv version and is not committed). The root cause, the bump flow not
+   refreshing the locks, is part of the deferred release-workflow item.
 9. Move the 13 files in `physure-python/docs/superpowers/` into `docs/superpowers/` with
    `git mv`, **only if no file name collides**; on a collision, stop and ask.
 
