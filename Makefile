@@ -10,13 +10,14 @@ help:
 sonar:
 	python3 scripts/run_sonar.py
 
+# The Python project (pyproject.toml, .venv) lives in physure-python/.
 test:
-	uv run pytest
+	cd physure-python && uv run pytest
 	cargo test --workspace
 
 lint:
-	uv run ruff check .
-	uv run ruff format --check .
+	cd physure-python && uv run ruff check .
+	cd physure-python && uv run ruff format --check .
 
 format:
-	uv run ruff format .
+	cd physure-python && uv run ruff format .
