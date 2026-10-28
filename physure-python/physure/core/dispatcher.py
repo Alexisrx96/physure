@@ -6,6 +6,8 @@ import os
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from physure.core.protocols import BackendOps
 
 
@@ -44,6 +46,27 @@ class BackendManager:
 
     _backends: ClassVar[dict[str, BackendOps]] = {}
     _python_backend: ClassVar[BackendOps | None] = None
+    # Import-time registrations made by the layers above the backends
+    # (the model registers its pytrees). `clear_backends` keeps them.
+    _load_hooks: ClassVar[dict[str, list[Callable[[], None]]]] = {}
+    _announced: ClassVar[set[str]] = set()
+
+    @classmethod
+    def on_load(cls, name: str, hook: Callable[[], None]) -> None:
+        """Calls `hook` when backend `name` announces itself, or now if it has."""
+        hooks = cls._load_hooks.setdefault(name, [])
+        if hook in hooks:
+            return
+        hooks.append(hook)
+        if name in cls._announced:
+            hook()
+
+    @classmethod
+    def announce(cls, name: str) -> None:
+        """Called by a backend module once its library is in play."""
+        cls._announced.add(name)
+        for hook in list(cls._load_hooks.get(name, ())):
+            hook()
 
     @classmethod
     def get_backend(cls, data_obj: Any) -> BackendOps:

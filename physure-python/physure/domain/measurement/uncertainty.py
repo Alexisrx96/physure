@@ -1116,3 +1116,58 @@ class CovarianceModel(Uncertainty[UncType]):
         return CovarianceModel(  # pyright: ignore[reportReturnType]
             std_dev_internal=new_std, lineage=new_lineage
         )
+
+
+# --- JAX Integration ---
+_jax_pytrees_registered = False
+
+
+def _register_jax_pytrees() -> None:
+    """Register the uncertainty models as JAX pytree nodes.
+
+    Idempotent; no-op without JAX.
+    """
+    global _jax_pytrees_registered
+    if _jax_pytrees_registered:
+        return
+    try:
+        import jax
+    except ImportError:
+        return
+
+    def cov_flatten(m):
+        keys = tuple(sorted(m.lineage.keys()))
+        values = tuple(m.lineage[k] for k in keys)
+        return (m.std_dev_internal, values), (m.vector_slice, keys)
+
+    def cov_unflatten(aux, children):
+        vector_slice, keys = aux
+        std_dev, values = children
+        lineage = dict(zip(keys, values, strict=False))
+        return CovarianceModel(
+            std_dev_internal=std_dev,
+            lineage=lineage,
+            vector_slice=vector_slice,
+        )
+
+    jax.tree_util.register_pytree_node(
+        CovarianceModel,
+        cov_flatten,
+        cov_unflatten,
+    )
+
+    def var_flatten(m):
+        return (m.variance,), ()
+
+    def var_unflatten(_aux, children):
+        return VarianceModel(variance=children[0])
+
+    jax.tree_util.register_pytree_node(
+        VarianceModel,
+        var_flatten,
+        var_unflatten,
+    )
+    _jax_pytrees_registered = True
+
+
+BackendManager.on_load("jax", _register_jax_pytrees)

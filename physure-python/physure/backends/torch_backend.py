@@ -13,7 +13,10 @@ else:
     except ImportError:
         torch = None
 
-from physure.core.dispatcher import enforce_tensor_contract
+from physure.core.dispatcher import (
+    BackendManager,
+    enforce_tensor_contract,
+)
 from physure.core.protocols import BackendOps, Boolean, Numeric
 
 try:
@@ -696,8 +699,6 @@ class TorchBackend(BackendOps):
 
 
 if torch is not None:
-    # Quantity defers its torch pytree registration until torch is in play;
-    # loading this backend is the signal that it is.
-    from physure.domain.measurement.quantity import _register_torch_pytree
-
-    _register_torch_pytree()
+    # The model defers registering its torch pytrees until torch is in
+    # play; loading this backend is the signal that it is.
+    BackendManager.announce("torch")

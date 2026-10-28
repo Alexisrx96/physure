@@ -1735,3 +1735,29 @@ def _register_torch_pytree() -> None:
 # imported; torch users who arrive later get it via the torch backend load.
 if "torch" in sys.modules:
     _register_torch_pytree()
+
+
+# --- JAX Integration ---
+_jax_pytree_registered = False
+
+
+def _register_jax_pytree() -> None:
+    """Register Quantity as a JAX pytree node. Idempotent; no-op without JAX."""
+    global _jax_pytree_registered
+    if _jax_pytree_registered:
+        return
+    try:
+        import jax
+    except ImportError:
+        return
+    jax.tree_util.register_pytree_node(
+        Quantity,
+        Quantity.tree_flatten,
+        Quantity.tree_unflatten,
+    )
+    _jax_pytree_registered = True
+
+
+# The backends announce themselves when they load; the model asks to be told.
+BackendManager.on_load("torch", _register_torch_pytree)
+BackendManager.on_load("jax", _register_jax_pytree)

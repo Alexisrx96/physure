@@ -88,12 +88,6 @@ modules = [
 # --- recorded exceptions ---------------------------------------------------
 
 [[exception]]
-importer = "physure.backends.torch_backend"
-imported = "physure.domain.measurement.quantity"
-kind = "top"
-cause = "a2a"
-
-[[exception]]
 importer = "physure.domain.measurement.system"
 imported = "physure.application.factories"
 kind = "top"
@@ -139,18 +133,6 @@ cause = "a1"
 [[exception]]
 importer = "physure.application.tracing.context"
 imported = "physure.domain.symbolic.tracer"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
-importer = "physure.backends.jax_backend"
-imported = "physure.domain.measurement.quantity"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
-importer = "physure.backends.jax_backend"
-imported = "physure.domain.measurement.uncertainty"
 kind = "lazy"
 cause = "a2a"
 
