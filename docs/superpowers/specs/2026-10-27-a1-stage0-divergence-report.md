@@ -43,3 +43,7 @@ A sixth finding is not a difference between the two sides but a defect of the ge
 ## How to use this
 
 Each class has a strict `xfail` test (or a recorded set, for the last-bit differences). When Stage 1 or 2 closes a gap, the matching test turns into an unexpected pass, which fails the suite until its `xfail` marker is removed. `KNOWN_LAST_BIT` and `KNOWN_COMPOUND_LAST_BIT` become empty when the core has exact scales.
+
+## Update — A1 stage 1a
+
+The `last-bit-difference` class is closed. The core keeps each scale as the exact rational the catalog writes and converts with one rounding, so `KNOWN_LAST_BIT` and `KNOWN_COMPOUND_LAST_BIT` are gone and the tests assert that Python and Rust agree to the last bit over the whole catalog and over the compound cases. The other four classes remain, for stages 1b and 2.

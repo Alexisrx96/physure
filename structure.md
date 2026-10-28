@@ -23,7 +23,7 @@ end
 
 subgraph group_core["physure-core — pure Rust physics engine<br/>(crate physure_core, rlib, NO pyo3/wasm/jni deps)"]
   node_core{{"lib.rs · quantity.rs · equation.rs<br/>Quantity/Equation core types<br/>[lib.rs]"}}
-  node_units["units/<br/>RationalUnit, UnitRegistry, .conf parsing<br/>[units/mod.rs]"]
+  node_units["units/<br/>RationalUnit with exact rational scales, UnitRegistry, .conf parsing<br/>[units/mod.rs]"]
   node_math["math/<br/>dual numbers, Hessian propagation,<br/>interval arithmetic, sparse kernels<br/>[math/mod.rs]"]
   node_covariance[("covariance/<br/>CovarianceStore, PruningConfig<br/>[covariance/store.rs]")]
   node_uncertainty["uncertainty/<br/>gaussian, unscented, monte-carlo,<br/>moments, lineage, mode<br/>[uncertainty/mod.rs]"]
