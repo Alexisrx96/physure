@@ -686,11 +686,14 @@ class Quantity(
             if isinstance(value, Quantity):
                 return value
             if isinstance(value, str):
-                from physure.application.factories import QuantityFactory
+                from physure.application.context import get_active_system
+                from physure.domain.measurement.quantity_text import (
+                    parse_quantity_text,
+                )
 
-                # We use the factory because it handles strings with units
-                q = QuantityFactory()(value)
-                return q
+                system = get_active_system()
+                number, unit = parse_quantity_text(value, system)
+                return Quantity.from_input(number, unit, system)
             raise ValueError(
                 f"No se puede validar Quantity desde {type(value)}"
             )

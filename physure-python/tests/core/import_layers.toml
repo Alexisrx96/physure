@@ -132,12 +132,6 @@ cause = "a1"
 
 [[exception]]
 importer = "physure.domain.measurement.quantity"
-imported = "physure.application.factories"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
-importer = "physure.domain.measurement.quantity"
 imported = "physure.application.startup"
 kind = "lazy"
 cause = "a1"
