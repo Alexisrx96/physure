@@ -65,7 +65,6 @@ except ImportError as _err:
     ) from _err
 
 if TYPE_CHECKING:
-    from physure._jit import jit
     from physure.application.context import (
         get_current_system,
         get_propagation_mode,
@@ -83,6 +82,7 @@ if TYPE_CHECKING:
     )
     from physure.application.factories import QuantityFactory
     from physure.application.io import load_state, save_state
+    from physure.application.jit import jit
     from physure.application.startup import (
         create_default_system,
         create_system,
@@ -232,7 +232,7 @@ def _load_default_system(name: str) -> Any:
 
 
 def _load_jit(name: str) -> Any:
-    from physure._jit import jit
+    from physure.application.jit import jit
 
     return jit
 

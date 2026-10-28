@@ -9,3 +9,10 @@ def test_propagate_affine_lives_with_the_backends():
 
     assert old_name is propagate_affine
     assert propagate_affine.__module__ == "physure.backends.affine"
+
+
+def test_jit_lives_in_the_application_layer():
+    import physure
+    from physure.application.jit import jit
+
+    assert physure.jit is jit

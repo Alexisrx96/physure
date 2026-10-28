@@ -112,18 +112,6 @@ kind = "top"
 cause = "release"
 
 [[exception]]
-importer = "physure._jit.tracer"
-imported = "physure.domain.measurement.quantity"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
-importer = "physure._jit.tracer"
-imported = "physure.domain.measurement.units"
-kind = "lazy"
-cause = "a1"
-
-[[exception]]
 importer = "physure.application.context"
 imported = "physure.application.startup"
 kind = "lazy"
