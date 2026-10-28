@@ -137,12 +137,6 @@ kind = "lazy"
 cause = "a2a"
 
 [[exception]]
-importer = "physure.backends.torch.autograd_store"
-imported = "physure.domain.measurement.vectorized_uncertainty"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
 importer = "physure.domain.measurement.dimensions"
 imported = "physure.application.parsing"
 kind = "lazy"

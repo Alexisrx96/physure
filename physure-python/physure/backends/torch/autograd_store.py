@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from physure.backends.affine import propagate_affine
+
 if TYPE_CHECKING:
     from physure.backends.torch_backend import TorchBackend
 
@@ -86,10 +88,6 @@ class AutogradCovarianceStore:
             if size is None:
                 raise ValueError(f"Input ID {i_id} not allocated.")
             in_slices.append(slice(i_id, i_id + size))
-
-        from physure.domain.measurement.vectorized_uncertainty import (
-            propagate_affine,
-        )
 
         self._matrix = propagate_affine(
             self._matrix, out_slice, in_slices, jacobians, self.backend
