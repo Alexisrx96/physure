@@ -1,5 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use physure::{Quantity, RationalUnit, CovarianceStore, PruningConfig, symbolic::Expr};
+use physure_core::{Quantity, RationalUnit, CovarianceStore, PruningConfig};
+use physure_core::units::Parser;
 use ndarray::ArrayD;
 
 fn bench_units(c: &mut Criterion) {
@@ -13,6 +14,21 @@ fn bench_units(c: &mut Criterion) {
     c.bench_function("unit_div", |b| {
         b.iter(|| m.div(&s))
     });
+}
+
+/// Units whose scale is not 1, which is where an exact scale costs something: the scale-1 units
+/// of `bench_units` take the fast path whatever the representation.
+fn bench_prefixed_units(c: &mut Criterion) {
+    let km = Parser::parse_expression("km").unwrap();
+    let ms = Parser::parse_expression("ms").unwrap();
+    let mile = Parser::parse_expression("mile").unwrap();
+    let q = Quantity::with_uncertainty(5.0, 0.0, "km").unwrap();
+
+    c.bench_function("unit_mul_prefixed", |b| b.iter(|| km.mul(&ms)));
+    c.bench_function("unit_div_prefixed", |b| b.iter(|| km.div(&ms)));
+    c.bench_function("quantity_convert_prefixed", |b| b.iter(|| q.convert_to(&mile).unwrap()));
+    c.bench_function("parse_compound_unit", |b| b.iter(|| Parser::parse_expression("kg*m/s^2").unwrap()));
+    c.bench_function("parse_prefixed_compound_unit", |b| b.iter(|| Parser::parse_expression("km/h").unwrap()));
 }
 
 fn bench_quantity_arithmetic(c: &mut Criterion) {
@@ -45,17 +61,5 @@ fn bench_covariance_propagation(c: &mut Criterion) {
     });
 }
 
-fn bench_symbolic_eval(c: &mut Criterion) {
-    let expr = Expr::number(2.5)
-        .mul(&Expr::symbol("x".into()))
-        .add(&Expr::number(1.0))
-        .unwrap();
-    let compiled = expr.compile().unwrap();
-
-    c.bench_function("compiled_symbolic_eval", |b| {
-        b.iter(|| compiled.eval(&[42.0]).unwrap())
-    });
-}
-
-criterion_group!(benches, bench_units, bench_quantity_arithmetic, bench_covariance_propagation, bench_symbolic_eval);
+criterion_group!(benches, bench_units, bench_prefixed_units, bench_quantity_arithmetic, bench_covariance_propagation);
 criterion_main!(benches);
