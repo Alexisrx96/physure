@@ -785,20 +785,16 @@ Expected: the `git status` prints nothing (regenerating changes no file); `0.25 
 - [ ] **Step 4: The audit, re-run on the fixed catalog**
 
 ```bash
-mkdir -p docs/superpowers/specs/catalog-audit
-git show docs/catalog-numeric-audit:docs/superpowers/specs/catalog-audit/audit_units_and_constants.py > docs/superpowers/specs/catalog-audit/audit_units_and_constants.py
-git show docs/catalog-numeric-audit:docs/superpowers/specs/catalog-audit/audit_identities.py > docs/superpowers/specs/catalog-audit/audit_identities.py
 cd physure-python
 unset VIRTUAL_ENV
 uv run --no-sync python -X utf8 ../docs/superpowers/specs/catalog-audit/audit_units_and_constants.py 2>&1 | sed -n 4,8p
 uv run --no-sync python -X utf8 ../docs/superpowers/specs/catalog-audit/audit_units_and_constants.py 2>&1 | grep -E "^[0-9]+ constants"
 uv run --no-sync python -X utf8 ../docs/superpowers/specs/catalog-audit/audit_identities.py 2>&1 | grep -E "identities off|eps0|sigma|alpha"
 cd ..
-rm -r docs/superpowers/specs/catalog-audit
 git status --short | grep -v Cargo.lock
 ```
 
-Expected: `checked 69 of 105 entries; exact within f64: 69; off: 0`, then `411 constants. Full precision: 411. Cut to 7 significant digits: 0. Other differences: 0. Not in scipy: 0`, then `0 of 27 identities off by more than 4e-16`, and `eps0 * mu0 * c^2 - 1` of about 1e-12; the last `git status` prints nothing (the two audit scripts are removed again; they live on the branch `docs/catalog-numeric-audit`, not in this one).
+Expected: `checked 69 of 105 entries; exact within f64: 69; off: 0`, then `411 constants. Full precision: 411. Cut to 7 significant digits: 0. Other differences: 0. Not in scipy: 0`, then `0 of 27 identities off by more than 4e-16`, and `eps0 * mu0 * c^2 - 1` of about 1e-12; the last `git status` prints nothing (the two audit scripts are tracked in `docs/superpowers/specs/catalog-audit/` since the audit was merged, and running them changes nothing).
 
 - [ ] **Step 5: Confirm the branch**
 
