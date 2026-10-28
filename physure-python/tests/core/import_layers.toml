@@ -63,6 +63,7 @@ modules = [
     "physure.functional",
     "physure.module",
     "physure.symbolic",
+    "physure.domain.symbolic.*",
 ]
 
 [[layer]]
@@ -98,12 +99,6 @@ importer = "physure.domain.measurement.system"
 imported = "physure.application.parsing"
 kind = "top"
 cause = "a1"
-
-[[exception]]
-importer = "physure.domain.symbolic.expression"
-imported = "physure.application.functions.functions"
-kind = "top"
-cause = "a2a"
 
 [[exception]]
 importer = "physure.ext.io"
