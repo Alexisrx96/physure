@@ -362,3 +362,57 @@ fn unity_is_dimensionless_like_percent_ppm_and_a_bare_number() {
     assert!(ppm.same_dimensions(&unity), "ppm and unity should be the same (empty) dimension");
     assert!(bare.same_dimensions(&unity), "a bare number and unity should be the same (empty) dimension");
 }
+
+/// The doubles 1e-6 and 0.01 divide to 9.999999999999999e-05; the rationals the catalog states
+/// divide to exactly 1e-4. A conversion is rounded once, from the exact scales.
+#[test]
+fn a_conversion_is_rounded_once_from_the_exact_scales() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let ratio = |from: &str, to: &str| {
+        let from = Parser::parse_expression_with_registry(from, &reg).unwrap();
+        let to = Parser::parse_expression_with_registry(to, &reg).unwrap();
+        from.ratio_to(&to)
+    };
+    assert_eq!(ratio("ppm", "percent"), 1e-4);
+    assert_eq!(ratio("g/cm^3", "kg/m^3"), 1000.0);
+    assert_eq!(ratio("ft", "inch"), 12.0);
+    assert_eq!(ratio("mile", "ft"), 5280.0);
+    assert_eq!(ratio("lb", "oz"), 16.0);
+    assert_eq!(ratio("gal", "inch^3"), 231.0);
+    assert_eq!(ratio("acre", "ft^2"), 43560.0);
+}
+
+/// `scale` is the exact scale rounded once, for every unit of the catalog and for the units
+/// that prefixes and products build from them.
+#[test]
+fn the_scale_is_the_exact_scale_rounded_once() {
+    let (reg, _) = conf::build_registry_from_conf();
+    for (name, unit) in reg.base_units.iter().chain(reg.derived_units.iter()) {
+        let exact = unit.exact.as_ref().unwrap_or_else(|| panic!("{name} has no exact scale"));
+        assert_eq!(unit.scale.to_bits(), exact.to_f64().to_bits(), "{name}");
+    }
+    let tiny = reg.get_unit("qarcsec").unwrap();
+    assert_eq!(tiny.scale, 4.84813681109536e-36);
+    assert!(tiny.exact.is_some());
+    let product = reg.get_unit("km").unwrap().mul(&reg.get_unit("ms").unwrap());
+    assert_eq!(product.scale, 1.0);
+    assert!(product.exact.as_ref().is_some_and(ExactScale::is_one));
+}
+
+/// A fractional power cannot be held exactly (Python falls back to a float there too), except
+/// that 1 to any power is 1. A scale set from a bare `f64` is not exact either.
+#[test]
+fn what_cannot_be_exact_falls_back_to_the_double() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let root = reg.get_unit("km").unwrap().pow(Rational64::new(1, 2));
+    assert!(root.exact.is_none());
+    assert_eq!(root.scale, 1000f64.powf(0.5));
+    let root_of_one = reg.get_unit("m").unwrap().pow(Rational64::new(1, 2));
+    assert!(root_of_one.exact.as_ref().is_some_and(ExactScale::is_one));
+    let loose = length().with_scale(0.5);
+    assert!(loose.exact.is_none());
+    assert_eq!(loose.ratio_to(&length()), 0.5);
+    let sure = length().with_exact_scale(ExactScale::parse("1/3").unwrap());
+    assert_eq!(sure.scale, 1.0 / 3.0);
+    assert_eq!(sure.ratio_to(&length()), 1.0 / 3.0);
+}

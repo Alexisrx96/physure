@@ -79,7 +79,7 @@ pub fn parse_physure_conf(
                     if parts.len() >= 2 {
                         let symbol = parts[0];
                         if let Ok(factor) = parts[1].parse::<f64>() {
-                            registry.add_prefix(symbol.to_string(), factor);
+                            registry.add_prefix_exact(symbol.to_string(), factor, crate::units::exact::ExactScale::parse(parts[1]));
                         }
                     }
                 }
@@ -260,6 +260,9 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         Ok(f) => f,
         Err(_) => return,
     };
+    // The same factor as the exact rational the catalog writes: conversions use it so that a
+    // ratio is rounded once. A literal that is not a plain decimal stays a double.
+    let exact = crate::units::exact::ExactScale::parse(parts[0]);
 
     // Absolute affine units carry a zero point between the factor and the dimension:
     // `celsius = 1.0, 273.15, O`. Only a 3+ field line can be one, so `unity = 1.0, 1` and
@@ -281,16 +284,19 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
     // dimension "unity", so `2 m * 3 %` printed "m * unity" instead of plain metres.
     if dim_str == "1" || dim_str.is_empty() {
-        let mut u = RationalUnit::new_from_dimensions([]).with_scale(factor);
+        let mut u = match &exact {
+            Some(e) => RationalUnit::new_from_dimensions([]).with_exact_scale(e.clone()),
+            None => RationalUnit::new_from_dimensions([]).with_scale(factor),
+        };
         u.display_name = Some(symbol.clone());
         registry.add_derived_unit(symbol.clone(), u);
     } else if !base_symbol.is_empty() {
         if offset != 0.0 {
-            registry.add_affine_unit(symbol.clone(), &base_symbol, factor, offset);
+            registry.add_affine_unit_exact(symbol.clone(), &base_symbol, factor, exact, offset);
         } else if factor == 1.0 && symbol == base_symbol {
             registry.add_base_unit(symbol.clone());
         } else {
-            registry.add_scaled_unit(symbol.clone(), &base_symbol, factor);
+            registry.add_scaled_unit_exact(symbol.clone(), &base_symbol, factor, exact);
         }
     } else {
         let recipe_index = dim_index + 1;
@@ -315,10 +321,19 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         });
 
         if let Some(parsed_unit) = parsed_unit_opt {
-            let new_scale = parsed_unit.scale * factor;
+            let rescaled = match (&parsed_unit.exact, &exact) {
+                (Some(p), Some(e)) => {
+                    let combined = p.mul(e);
+                    parsed_unit.with_exact_scale(combined)
+                }
+                _ => {
+                    let product = parsed_unit.scale * factor;
+                    parsed_unit.with_scale(product)
+                }
+            };
             // Carry the zero point through here too: dropping it would silently turn an
             // affine definition into a purely multiplicative one.
-            let mut u = parsed_unit.with_scale(new_scale).with_offset(offset);
+            let mut u = rescaled.with_offset(offset);
             u.display_name = Some(symbol.clone());
             registry.add_derived_unit(symbol.clone(), u);
         }

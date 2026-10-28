@@ -1075,3 +1075,23 @@ fn equation_strings_may_carry_units() {
         "a missing non-unit argument was accepted",
     );
 }
+
+/// A conversion is rounded once from the exact scales of the catalog, so a relation that holds
+/// by definition comes out as written: `1 ppm => percent` was `9.999999999999999e-05` and
+/// `1 ft => inch` was `12.000000000000002`.
+#[test]
+fn conversions_are_rounded_once_from_exact_scales() {
+    let cases = [
+        ("1 ppm => percent", 1e-4),
+        ("1 g/cm^3 => kg/m^3", 1000.0),
+        ("1 ft => inch", 12.0),
+        ("1 mile => ft", 5280.0),
+        ("1 lb => oz", 16.0),
+        ("1 gal => inch^3", 231.0),
+        ("1 acre => ft^2", 43560.0),
+        ("1 ft + 1 inch => inch", 13.0),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(eval_quantity(src).value.mean(), expected, "{src}");
+    }
+}

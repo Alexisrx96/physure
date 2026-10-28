@@ -177,8 +177,7 @@ impl Quantity {
         // for such a unit, so fold the scale into the value and display in canonical
         // (scale-1) terms instead of printing the raw, unscaled magnitude.
         let (val, std_dev, unit_str) = if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
-            let mut canonical_unit = self.unit.clone();
-            canonical_unit.scale = 1.0;
+            let canonical_unit = self.unit.clone().with_unit_scale();
             (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
         } else {
             (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
@@ -261,6 +260,16 @@ impl Quantity {
         value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend::exact(factor)))
     }
 
+    /// Divides an uncertainty value by an exact constant, the inverse of `scale_value`. It is
+    /// not the same as multiplying by the reciprocal: `x / 0.5555555555555556` and
+    /// `x * (1.0 / 0.5555555555555556)` differ in the last bit, and the Python side divides.
+    fn unscale_value(value: &UncertaintyValue, divisor: f64) -> PhysureResult<UncertaintyValue> {
+        if divisor == 1.0 {
+            return Ok(value.clone());
+        }
+        value.propagate_div(&UncertaintyValue::Gaussian(GaussianBackend::exact(divisor)))
+    }
+
     /// Shifts an uncertainty value by an exact additive constant. A zero point carries no
     /// uncertainty of its own, so `exact` is used for the same reason as in `scale_value`:
     /// minting a source id here would leave a term that never cancels.
@@ -285,7 +294,7 @@ impl Quantity {
             });
         }
         let other_value = if self.unit.scale != other.unit.scale {
-            Self::scale_value(&other.value, other.unit.scale / self.unit.scale)?
+            Self::scale_value(&other.value, other.unit.ratio_to(&self.unit))?
         } else {
             other.value.clone()
         };
@@ -306,7 +315,7 @@ impl Quantity {
             });
         }
         let other_value = if self.unit.scale != other.unit.scale {
-            Self::scale_value(&other.value, other.unit.scale / self.unit.scale)?
+            Self::scale_value(&other.value, other.unit.ratio_to(&self.unit))?
         } else {
             other.value.clone()
         };
@@ -556,8 +565,7 @@ impl Quantity {
     /// value is the same one `Display` prints — only the terms change. This is what `x: base`
     /// spells in PHS.
     pub fn base_display(&self) -> String {
-        let mut base_unit = self.unit.clone();
-        base_unit.scale = 1.0;
+        let mut base_unit = self.unit.clone().with_unit_scale();
         base_unit.display_name = None;
         let std_dev = self.value.std_dev() * self.unit.scale;
         let val_str = if std_dev > 0.0 {
@@ -590,10 +598,10 @@ impl Quantity {
                 self.unit.offset,
             )?;
             let new_value =
-                Self::scale_value(&Self::shift_value(&base, -target.offset)?, 1.0 / target.scale)?;
+                Self::unscale_value(&Self::shift_value(&base, -target.offset)?, target.scale)?;
             return Ok(Quantity { value: new_value, unit: target.clone() });
         }
-        let ratio = self.unit.scale / target.scale;
+        let ratio = self.unit.ratio_to(target);
         let new_value = Self::scale_value(&self.value, ratio)?;
         Ok(Quantity { value: new_value, unit: target.clone() })
     }
@@ -605,7 +613,7 @@ impl Quantity {
         if !self.unit.is_affine() {
             return Ok(self.clone());
         }
-        let mut base = self.unit.to_delta().with_scale(1.0);
+        let mut base = self.unit.to_delta().with_unit_scale();
         // Drop the affine name so the result renders as "K" and not as the scale it came from.
         base.display_name = None;
         self.convert_to(&base)

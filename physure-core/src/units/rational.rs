@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use num_rational::Rational64;
 use std::hash::{Hash, Hasher};
 use smallvec::SmallVec;
+use crate::units::exact::ExactScale;
 
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
 
@@ -13,6 +14,11 @@ pub struct RationalUnit {
     /// Multiplicative factor converting one of this unit to the canonical base-SI magnitude
     /// for the same `dimensions` (e.g. "m" => 1.0, "km" => 1000.0, "cm" => 0.01).
     pub scale: f64,
+    /// The same factor as an exact rational, when it is known. Invariant: if this is `Some(e)`,
+    /// `scale` is `e` rounded once to the nearest double. A conversion divides the exact
+    /// scales and rounds the quotient once; only a unit whose scale came from a bare `f64`
+    /// (or from a fractional power) has `None` and falls back to dividing the doubles.
+    pub exact: Option<ExactScale>,
     /// Additive term applied *after* `scale` when converting to the canonical base-SI
     /// magnitude, i.e. `base = value * scale + offset`. Non-zero only for absolute affine
     /// units — in practice the temperature scales ("degC" => 273.15, "degF" => 255.372…).
@@ -66,13 +72,39 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, offset: 0.0, id, display_name: None }
+        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, id, display_name: None }
     }
 
-    /// Returns a copy of this unit with a different scale factor (same dimensions/id).
+    /// Returns a copy of this unit with a different scale factor (same dimensions/id). The
+    /// factor is a bare `f64`, so the exact scale is no longer known.
     pub fn with_scale(mut self, scale: f64) -> Self {
         self.scale = scale;
+        self.exact = None;
         self
+    }
+
+    /// The same dimensions measured in the coherent base units: scale 1, exactly.
+    pub fn with_unit_scale(mut self) -> Self {
+        self.scale = 1.0;
+        self.exact = Some(ExactScale::one());
+        self
+    }
+
+    /// Returns a copy of this unit with an exact scale factor; `scale` is its single rounding.
+    pub fn with_exact_scale(mut self, exact: ExactScale) -> Self {
+        self.scale = exact.to_f64();
+        self.exact = Some(exact);
+        self
+    }
+
+    /// The factor that turns a magnitude in this unit into one in `target`, which must have the
+    /// same dimensions. Both exact scales are divided and the quotient rounded once; if either
+    /// is unknown the doubles are divided instead.
+    pub fn ratio_to(&self, target: &Self) -> f64 {
+        match (&self.exact, &target.exact) {
+            (Some(from), Some(to)) => from.div(to).to_f64(),
+            _ => self.scale / target.scale,
+        }
     }
 
     /// Returns a copy of this unit with an additive offset, making it an absolute affine
@@ -105,6 +137,7 @@ impl RationalUnit {
         RationalUnit {
             dimensions: DimVec::new(),
             scale: 1.0,
+            exact: Some(ExactScale::one()),
             offset: 0.0,
             id: 0,
             display_name: None,
@@ -172,9 +205,14 @@ impl RationalUnit {
         } else {
             None
         };
+        let exact = match (&self.exact, &other.exact) {
+            (Some(a), Some(b)) => Some(a.mul(b)),
+            _ => None,
+        };
+        let scale = exact.as_ref().map_or(self.scale * other.scale, ExactScale::to_f64);
         // No offset on a product: `degC * m` has no zero point to speak of. Callers that hold
         // an affine operand must `to_delta` it (and shift its magnitude) before multiplying.
-        RationalUnit { dimensions: new_dims, scale: self.scale * other.scale, offset: 0.0, id, display_name }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, id, display_name }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -219,7 +257,12 @@ impl RationalUnit {
         } else {
             None
         };
-        RationalUnit { dimensions: new_dims, scale: self.scale / other.scale, offset: 0.0, id, display_name }
+        let exact = match (&self.exact, &other.exact) {
+            (Some(a), Some(b)) => Some(a.div(b)),
+            _ => None,
+        };
+        let scale = exact.as_ref().map_or(self.scale / other.scale, ExactScale::to_f64);
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, id, display_name }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -233,7 +276,15 @@ impl RationalUnit {
         }
         let id = Self::calculate_id(&new_dims);
         let exp_f = *exp_r.numer() as f64 / *exp_r.denom() as f64;
-        RationalUnit { dimensions: new_dims, scale: self.scale.powf(exp_f), offset: 0.0, id, display_name: None }
+        // A whole power of an exact scale stays exact. A fractional one does not (Python falls
+        // back to a float there too), except that 1 to any power is 1.
+        let exact = match &self.exact {
+            Some(e) if e.is_one() => Some(ExactScale::one()),
+            Some(e) if *exp_r.denom() == 1 => e.powi(*exp_r.numer()),
+            _ => None,
+        };
+        let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, id, display_name: None }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

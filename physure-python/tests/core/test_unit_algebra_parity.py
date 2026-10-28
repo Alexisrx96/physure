@@ -46,60 +46,6 @@ VALUES = (1.0, 25.0)
 # ratios and logarithmic units), and a reference of one kind hides the rest.
 REFERENCES_PER_GROUP = 2
 
-# Symbols whose conversion differs from Rust in the last bit. Python converts
-# with exact Fraction scales and one rounding; Rust stores scales as f64.
-# Stage 1 gives the core exact scales, and this tuple becomes empty.
-KNOWN_LAST_BIT = (
-    "Gb",
-    "a0",
-    "acre",
-    "acre_international",
-    "acre_us_survey",
-    "acres",
-    "atomic_time",
-    "bohr",
-    "bohr_radius",
-    "btu_iso",
-    "celsius",
-    "centigrade",
-    "degC",
-    "degF",
-    "dyn",
-    "dyne",
-    "electron_mass",
-    "fahrenheit",
-    "fl_oz_imp",
-    "fl_oz_uk",
-    "fluid_ounce_imperial",
-    "gal_imp",
-    "gal_uk",
-    "gallon_imperial",
-    "gilbert",
-    "ha",
-    "hectare",
-    "hectares",
-    "horsepower_metric",
-    "hp_metric",
-    "inch",
-    "lb",
-    "lbf",
-    "lbs",
-    "light_year",
-    "ly",
-    "me",
-    "mp",
-    "ounce",
-    "ounces",
-    "oz",
-    "planck_mass",
-    "pound",
-    "pound_force",
-    "pounds",
-    "ppm",
-    "psi",
-    "tau0",
-)
-
 # Compound conversions (value, from, to) every implementation must agree on.
 COMPOUND_CASES = (
     (1.0, "km/h", "m/s"),
@@ -120,7 +66,6 @@ COMPOUND_CASES = (
     (1.0, "mol/L", "mol/m^3"),
     (1.0, "ft*lbf", "J"),
 )
-KNOWN_COMPOUND_LAST_BIT = (("g/cm^3", "kg/m^3"),)
 
 # Units whose semantics are frozen so Stage 1 has a target to match.
 SEMANTIC_EXPRESSIONS = (
@@ -304,17 +249,9 @@ def test_every_difference_is_classified(comparison):
     assert not unclassified, _show(unclassified)
 
 
-def test_last_bit_differences_are_the_known_ones(comparison):
-    found = tuple(
-        sorted({d.symbol for d in _of_kind(comparison, "last-bit-difference")})
-    )
-    assert found == KNOWN_LAST_BIT, (
-        "Python and Rust disagree in the last bit for a different set of units "
-        "than the one recorded.\n"
-        f"  recorded: {KNOWN_LAST_BIT}\n  found:    {found}\n"
-        "If the set shrank, update KNOWN_LAST_BIT; if it grew, a new unit or a "
-        "change introduced an exactness divergence that needs a look."
-    )
+def test_python_and_rust_agree_to_the_last_bit(comparison):
+    found = _of_kind(comparison, "last-bit-difference")
+    assert not found, _show(found)
 
 
 @pytest.mark.xfail(
@@ -405,12 +342,7 @@ def test_compound_conversions_agree_exactly():
         assert rs_exc is None, (source, target, rs_exc)
         if py != rs:
             differing[(source, target)] = (py, rs)
-    assert tuple(sorted(differing)) == tuple(
-        sorted(KNOWN_COMPOUND_LAST_BIT)
-    ), (
-        f"compound conversions that differ: {differing}\n"
-        f"recorded: {KNOWN_COMPOUND_LAST_BIT}"
-    )
+    assert not differing, f"compound conversions that differ: {differing}"
 
 
 def _plain(number):

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::units::exact::ExactScale;
 use crate::units::rational::RationalUnit;
 
 /// A registry to hold unit definitions, ensuring state isolation.
@@ -23,6 +24,8 @@ pub struct UnitRegistry {
     pub derived_units: HashMap<String, RationalUnit>,
     pub aliases: HashMap<String, String>,
     pub prefixes: HashMap<String, f64>,
+    /// The exact value of each prefix factor, for the prefixes whose factor is known exactly.
+    pub prefix_exact: HashMap<String, ExactScale>,
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
@@ -35,6 +38,7 @@ impl UnitRegistry {
             derived_units: HashMap::new(),
             aliases: HashMap::new(),
             prefixes: HashMap::new(),
+            prefix_exact: HashMap::new(),
             unit_meta: HashMap::new(),
             categories: HashMap::new(),
             constants_meta: HashMap::new(),
@@ -51,6 +55,16 @@ impl UnitRegistry {
     }
 
     pub fn add_prefix(&mut self, symbol: String, factor: f64) {
+        self.add_prefix_exact(symbol, factor, ExactScale::from_f64(factor));
+    }
+
+    /// Registers a prefix with its factor as the double and, when known, as the exact value
+    /// that the catalog states.
+    pub fn add_prefix_exact(&mut self, symbol: String, factor: f64, exact: Option<ExactScale>) {
+        match exact {
+            Some(e) => self.prefix_exact.insert(symbol.clone(), e),
+            None => self.prefix_exact.remove(&symbol),
+        };
         self.prefixes.insert(symbol, factor);
     }
 
@@ -67,20 +81,43 @@ impl UnitRegistry {
     /// Registers a unit that shares dimensions with `base` (which must already be registered)
     /// but has its own scale factor relative to it, e.g. `add_scaled_unit("km", "m", 1000.0)`.
     pub fn add_scaled_unit(&mut self, name: String, base: &str, scale: f64) {
+        self.add_scaled_unit_exact(name, base, scale, ExactScale::from_f64(scale));
+    }
+
+    /// Like `add_scaled_unit`, with the factor also given as the exact value the catalog states.
+    pub fn add_scaled_unit_exact(&mut self, name: String, base: &str, scale: f64, exact: Option<ExactScale>) {
         let base_unit = self.get_unit(base).expect("base unit must be registered first");
-        let new_scale = base_unit.scale * scale;
-        let mut u = base_unit.with_scale(new_scale);
+        let mut u = Self::scaled(base_unit, scale, exact);
         u.display_name = Some(name.clone());
         self.derived_units.insert(name, u);
+    }
+
+    /// `base` rescaled by `factor`: exact when both the base and the factor are, otherwise the
+    /// product of the doubles.
+    fn scaled(base: RationalUnit, factor: f64, exact: Option<ExactScale>) -> RationalUnit {
+        match (&base.exact, exact) {
+            (Some(b), Some(e)) => {
+                let combined = b.mul(&e);
+                base.with_exact_scale(combined)
+            }
+            _ => {
+                let product = base.scale * factor;
+                base.with_scale(product)
+            }
+        }
     }
 
     /// Registers an absolute affine unit against an already-registered `base`, e.g.
     /// `add_affine_unit("degC", "K", 1.0, 273.15)`: one degC is `scale` base units wide and
     /// its zero sits `offset` base units above the base unit's zero.
     pub fn add_affine_unit(&mut self, name: String, base: &str, scale: f64, offset: f64) {
+        self.add_affine_unit_exact(name, base, scale, ExactScale::from_f64(scale), offset);
+    }
+
+    /// Like `add_affine_unit`, with the scale also given as the exact value the catalog states.
+    pub fn add_affine_unit_exact(&mut self, name: String, base: &str, scale: f64, exact: Option<ExactScale>, offset: f64) {
         let base_unit = self.get_unit(base).expect("base unit must be registered first");
-        let new_scale = base_unit.scale * scale;
-        let mut u = base_unit.with_scale(new_scale).with_offset(offset);
+        let mut u = Self::scaled(base_unit, scale, exact).with_offset(offset);
         u.display_name = Some(name.clone());
         self.derived_units.insert(name, u);
     }
@@ -150,9 +187,8 @@ impl UnitRegistry {
         } else if let Some(unit) = self.derived_units.get(name) {
             Some(unit.clone())
         } else {
-            self.split_prefix(name).map(|(_p_sym, p_factor, base_u)| {
-                let new_scale = base_u.scale * p_factor;
-                let mut prefixed = base_u.with_scale(new_scale);
+            self.split_prefix(name).map(|(p_sym, p_factor, base_u)| {
+                let mut prefixed = Self::scaled(base_u, p_factor, self.prefix_exact.get(&p_sym).cloned());
                 prefixed.display_name = Some(name.to_string());
                 prefixed
             })
