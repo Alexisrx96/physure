@@ -195,7 +195,7 @@ def _violations(edges, contract) -> dict:
     return found
 
 
-def _toml_block(key, count, cause="a2a") -> str:
+def _toml_block(key, count, cause="<who removes it>") -> str:
     importer, imported, kind = key
     lines = [
         "[[exception]]",

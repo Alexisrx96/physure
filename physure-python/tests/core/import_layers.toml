@@ -18,7 +18,6 @@
 # a violation that is not recorded, and also on a record that no longer matches
 # the code, so this list can only shrink. `cause` says who will remove it:
 #   a1  - the module involved is deleted by the A1 work (Rust owns the unit algebra)
-#   a2a - fixed by the A2 pull requests that clean up the imports
 #   release - kept on purpose: `__version__` must stay in physure/__init__.py
 #         because the release workflows grep and sed it there. Move it to a
 #         leaf module together with those workflows.
