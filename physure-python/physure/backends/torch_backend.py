@@ -541,7 +541,6 @@ class TorchBackend(BackendOps):
 
     def sparse_matmul(self, a: Any, b: Any) -> Any:
         """Matmul where at least one operand may be sparse."""
-        print(f"DEBUG: sparse_matmul a={type(a)}, b={type(b)}")
         # Torch matmul does not support sparse @ sparse
         a_sparse = getattr(a, "is_sparse", False)
         b_sparse = getattr(b, "is_sparse", False)

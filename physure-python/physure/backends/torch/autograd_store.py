@@ -87,9 +87,6 @@ class AutogradCovarianceStore:
                 raise ValueError(f"Input ID {i_id} not allocated.")
             in_slices.append(slice(i_id, i_id + size))
 
-        print(
-            f"DEBUG: AutogradCovarianceStore.propagate called for out_id={out_id}"
-        )
         from physure.domain.measurement.vectorized_uncertainty import (
             propagate_affine,
         )

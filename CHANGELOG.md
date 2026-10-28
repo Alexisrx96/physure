@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **`SymbolicQuantity`, `SymbolicExpression` and `Function` use the unit system that is active when they are created.** Their default was bound once, when physure was first imported, so a `physure.use_system(...)` block was silently ignored and the object came out in the original system.
+- **The torch backend no longer prints `DEBUG:` lines.** `TorchBackend.sparse_matmul` and `AutogradCovarianceStore.propagate` wrote a line to standard output on every call.
 
 ## [0.2.4] - 2026-08-28
 
