@@ -74,7 +74,7 @@ fn prefixed_literals_carry_their_scale() {
         ("1 h", 3600.0, "h"),
         // Symbols carrying a digit. `a0` parsed as `1 a * 0` — the Bohr radius evaluated
         // to zero — until `unit_term` accepted digits after the first character.
-        ("1 a0", 5.29177210903e-11, "a0"),
+        ("1 a0", 5.29177210544e-11, "a0"),
         ("1 tau0", 2.4188843265e-17, "tau0"),
         // Non-ASCII symbols. The registry lookup was `is_ascii_alphabetic`-only, so these
         // resolved to "" and fell through to the expression parser, which rejects them.

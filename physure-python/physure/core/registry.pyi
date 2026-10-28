@@ -3130,7 +3130,6 @@ class UnitRegistry:
     minute: Unit
     minutes: Unit
     mmHg: Unit
-    mock_unit: Unit
     mol: Unit
     mole: Unit
     moles: Unit

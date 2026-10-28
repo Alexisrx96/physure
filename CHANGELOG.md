@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **`SymbolicQuantity`, `SymbolicExpression` and `Function` use the unit system that is active when they are created.** Their default was bound once, when physure was first imported, so a `physure.use_system(...)` block was silently ignored and the object came out in the original system.
 - **The torch backend no longer prints `DEBUG:` lines.** `TorchBackend.sparse_matmul` and `AutogradCovarianceStore.propagate` wrote a line to standard output on every call.
+- **The constants table keeps every digit.** `[Constants]` was written with `f"{value:e}"`, which keeps 7 significant digits, so 189 of its 411 values (`eps0`, `mu0`, `sigma`, `m_p`, `m_n`, `u`, `a0`, `mu_B`, `Ryd`, ...) were wrong in the seventh digit and `eps0 * mu0 * c^2` was off by 3e-8. The table is now regenerated with `repr` from CODATA 2022 (scipy 1.15 or later), and the atomic and Planck units of `[Units]`, which were CODATA 2018, follow: `electron_mass` is `9.1093837139e-31` kg and `bohr` `5.29177210544e-11` m.
 
 ## [0.2.4] - 2026-08-28
 

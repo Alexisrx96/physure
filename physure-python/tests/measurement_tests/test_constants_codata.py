@@ -1,9 +1,9 @@
 """CODATA / SI-2019 physical-constant checks.
 
 Every value below is a published, independently verifiable reference figure
-(CODATA 2018 recommended values -- the vintage the [Units] "ATOMIC UNITS"
-section of physure.conf already matches exactly, e.g. bohr = 5.29177210903e-11 m,
-electron_mass = 9.1093837015e-31 kg). The 2019 SI redefinition fixes h, e,
+(CODATA 2022 recommended values, the edition of the whole catalog: the
+[Units] "ATOMIC UNITS" section and [Constants] agree to the last digit,
+e.g. bohr = 5.29177210544e-11 m). The 2019 SI redefinition fixes h, e,
 k_B, N_A, and c *exactly* -- those have zero measurement uncertainty, so they
 are checked bit-for-bit, not "close enough".
 
@@ -45,24 +45,22 @@ def test_exact_by_definition_constants_match_si_2019(
     assert c.magnitude == exact_value
 
 
-# name -> (CODATA-2018 published value, relative tolerance)
+# name -> (CODATA-2022 published value, relative tolerance). The table keeps
+# every digit that scipy.constants has, so the tolerance only absorbs
+# float rounding.
 MEASURED_CONSTANTS = [
-    ("vacuum_electric_permittivity", 8.8541878128e-12, 1e-6),
-    ("vacuum_mag_permeability", 1.25663706212e-6, 1e-6),
-    ("fine_structure_constant", 7.2973525693e-3, 1e-6),
-    ("bohr_radius", 5.29177210903e-11, 1e-6),
-    ("rydberg_constant", 10973731.568160, 1e-6),
-    ("bohr_magneton", 9.2740100783e-24, 1e-6),
-    ("electron_mass", 9.1093837015e-31, 1e-6),
-    ("proton_mass", 1.67262192369e-27, 1e-6),
-    ("neutron_mass", 1.67492749804e-27, 1e-6),
-    ("atomic_mass_constant", 1.66053906660e-27, 1e-6),
-    (
-        "newtonian_constant_of_gravitation",
-        6.67430e-11,
-        1e-4,
-    ),  # G: only ~5 sig figs known
-    ("stefan_boltzmann_constant", 5.670374419e-8, 1e-6),
+    ("vacuum_electric_permittivity", 8.8541878188e-12, 1e-12),
+    ("vacuum_mag_permeability", 1.25663706127e-6, 1e-12),
+    ("fine_structure_constant", 7.2973525643e-3, 1e-12),
+    ("bohr_radius", 5.29177210544e-11, 1e-12),
+    ("rydberg_constant", 10973731.568157, 1e-12),
+    ("bohr_magneton", 9.2740100657e-24, 1e-12),
+    ("electron_mass", 9.1093837139e-31, 1e-12),
+    ("proton_mass", 1.67262192595e-27, 1e-12),
+    ("neutron_mass", 1.67492750056e-27, 1e-12),
+    ("atomic_mass_constant", 1.66053906892e-27, 1e-12),
+    ("newtonian_constant_of_gravitation", 6.6743e-11, 1e-12),
+    ("stefan_boltzmann_constant", 5.6703744191844314e-8, 1e-12),
 ]
 
 # Derived-exact constants: computed purely from other SI-2019-exact constants,
@@ -145,7 +143,9 @@ def test_faraday_constant_equals_avogadro_times_elementary_charge(system):
     f = system.get_constant("faraday_constant")
     n_a = system.get_constant("avogadro_constant")
     e = system.get_constant("elementary_charge")
-    assert math.isclose(f.magnitude, n_a.magnitude * e.magnitude, rel_tol=1e-6)
+    assert math.isclose(
+        f.magnitude, n_a.magnitude * e.magnitude, rel_tol=1e-12
+    )
 
 
 def test_stefan_boltzmann_constant_derived_from_h_c_kb(system):
@@ -156,7 +156,7 @@ def test_stefan_boltzmann_constant_derived_from_h_c_kb(system):
     derived = (2 * math.pi**5 * k_b.magnitude**4) / (
         15 * h.magnitude**3 * c.magnitude**2
     )
-    assert math.isclose(sigma.magnitude, derived, rel_tol=1e-6)
+    assert math.isclose(sigma.magnitude, derived, rel_tol=1e-12)
 
 
 def test_bohr_magneton_derived_from_e_hbar_me(system):
@@ -165,7 +165,7 @@ def test_bohr_magneton_derived_from_e_hbar_me(system):
     hbar = system.get_constant("reduced_planck_constant")
     m_e = system.get_constant("electron_mass")
     derived = e.magnitude * hbar.magnitude / (2 * m_e.magnitude)
-    assert math.isclose(mu_b.magnitude, derived, rel_tol=1e-6)
+    assert math.isclose(mu_b.magnitude, derived, rel_tol=1e-10)
 
 
 def test_speed_of_light_derived_from_vacuum_permittivity_and_permeability(
@@ -175,7 +175,7 @@ def test_speed_of_light_derived_from_vacuum_permittivity_and_permeability(
     eps_0 = system.get_constant("vacuum_electric_permittivity")
     mu_0 = system.get_constant("vacuum_mag_permeability")
     derived = 1.0 / math.sqrt(mu_0.magnitude * eps_0.magnitude)
-    assert math.isclose(c.magnitude, derived, rel_tol=1e-6)
+    assert math.isclose(c.magnitude, derived, rel_tol=1e-10)
 
 
 def test_rydberg_constant_derived_from_alpha_me_c_h(system):
@@ -187,4 +187,4 @@ def test_rydberg_constant_derived_from_alpha_me_c_h(system):
     derived = (
         alpha.magnitude**2 * m_e.magnitude * c.magnitude / (2 * h.magnitude)
     )
-    assert math.isclose(r_inf.magnitude, derived, rel_tol=1e-6)
+    assert math.isclose(r_inf.magnitude, derived, rel_tol=1e-10)

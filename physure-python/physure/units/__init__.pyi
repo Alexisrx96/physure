@@ -3126,7 +3126,6 @@ min: CompoundUnit
 minute: CompoundUnit
 minutes: CompoundUnit
 mmHg: CompoundUnit
-mock_unit: CompoundUnit
 mol: CompoundUnit
 mole: CompoundUnit
 moles: CompoundUnit
