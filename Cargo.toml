@@ -31,6 +31,7 @@ physure-core   = { path = "physure-core", package = "physure" }
 physure-script = { path = "physure-script" }
 tower-lsp     = "0.20"
 tokio         = { version = "1", features = ["full"] }
+num-bigint    = "0.4"
 num-rational  = "0.4"
 num-traits    = "0.2"
 ndarray       = "0.15"
