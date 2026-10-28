@@ -47,6 +47,8 @@ class UnitRegistry:
     a0: Unit
     abampere: Unit
     acre: Unit
+    acre_international: Unit
+    acre_us_survey: Unit
     acres: Unit
     ampere: Unit
     amperio: Unit
@@ -99,6 +101,8 @@ class UnitRegistry:
     attoa0: Unit
     attoabampere: Unit
     attoacre: Unit
+    attoacre_international: Unit
+    attoacre_us_survey: Unit
     attoacres: Unit
     attoampere: Unit
     attoamperio: Unit
@@ -120,8 +124,15 @@ class UnitRegistry:
     attobohr: Unit
     attobohr_radius: Unit
     attobtu: Unit
+    attobtu_iso: Unit
+    attobtu_it: Unit
+    attobtu_th: Unit
     attocal: Unit
+    attocal_it: Unit
+    attocal_th: Unit
     attocalorie: Unit
+    attocalorie_it: Unit
+    attocalorie_th: Unit
     attocalories: Unit
     attocandela: Unit
     attocandelas: Unit
@@ -159,14 +170,22 @@ class UnitRegistry:
     attofarads: Unit
     attofeet: Unit
     attofl_oz: Unit
+    attofl_oz_imp: Unit
+    attofl_oz_uk: Unit
+    attofl_oz_us: Unit
     attofluid_ounce: Unit
+    attofluid_ounce_imperial: Unit
     attofoot: Unit
     attofranklin: Unit
     attoft: Unit
     attog: Unit
     attogal: Unit
+    attogal_imp: Unit
+    attogal_uk: Unit
+    attogal_us: Unit
     attogalileo: Unit
     attogallon: Unit
+    attogallon_imperial: Unit
     attogallon_us: Unit
     attogallons: Unit
     attogauss: Unit
@@ -181,7 +200,13 @@ class UnitRegistry:
     attohenry: Unit
     attohertz: Unit
     attohorsepower: Unit
+    attohorsepower_electric: Unit
+    attohorsepower_mechanical: Unit
+    attohorsepower_metric: Unit
     attohp: Unit
+    attohp_electric: Unit
+    attohp_mechanical: Unit
+    attohp_metric: Unit
     attojoule: Unit
     attojoules: Unit
     attojulio: Unit
@@ -302,8 +327,12 @@ class UnitRegistry:
     attoyard: Unit
     attoyd: Unit
     attoyear: Unit
+    attoyear_gregorian: Unit
+    attoyear_julian: Unit
     attoyears: Unit
     attoyr: Unit
+    attoyr_gregorian: Unit
+    attoyr_julian: Unit
     attoÅ: Unit
     attoΩ: Unit
     attoΩm: Unit
@@ -314,8 +343,15 @@ class UnitRegistry:
     bohr: Unit
     bohr_radius: Unit
     btu: Unit
+    btu_iso: Unit
+    btu_it: Unit
+    btu_th: Unit
     cal: Unit
+    cal_it: Unit
+    cal_th: Unit
     calorie: Unit
+    calorie_it: Unit
+    calorie_th: Unit
     calories: Unit
     candela: Unit
     candelas: Unit
@@ -359,6 +395,8 @@ class UnitRegistry:
     centia0: Unit
     centiabampere: Unit
     centiacre: Unit
+    centiacre_international: Unit
+    centiacre_us_survey: Unit
     centiacres: Unit
     centiampere: Unit
     centiamperio: Unit
@@ -380,8 +418,15 @@ class UnitRegistry:
     centibohr: Unit
     centibohr_radius: Unit
     centibtu: Unit
+    centibtu_iso: Unit
+    centibtu_it: Unit
+    centibtu_th: Unit
     centical: Unit
+    centical_it: Unit
+    centical_th: Unit
     centicalorie: Unit
+    centicalorie_it: Unit
+    centicalorie_th: Unit
     centicalories: Unit
     centicandela: Unit
     centicandelas: Unit
@@ -419,14 +464,22 @@ class UnitRegistry:
     centifarads: Unit
     centifeet: Unit
     centifl_oz: Unit
+    centifl_oz_imp: Unit
+    centifl_oz_uk: Unit
+    centifl_oz_us: Unit
     centifluid_ounce: Unit
+    centifluid_ounce_imperial: Unit
     centifoot: Unit
     centifranklin: Unit
     centift: Unit
     centig: Unit
     centigal: Unit
+    centigal_imp: Unit
+    centigal_uk: Unit
+    centigal_us: Unit
     centigalileo: Unit
     centigallon: Unit
+    centigallon_imperial: Unit
     centigallon_us: Unit
     centigallons: Unit
     centigauss: Unit
@@ -442,7 +495,13 @@ class UnitRegistry:
     centihenry: Unit
     centihertz: Unit
     centihorsepower: Unit
+    centihorsepower_electric: Unit
+    centihorsepower_mechanical: Unit
+    centihorsepower_metric: Unit
     centihp: Unit
+    centihp_electric: Unit
+    centihp_mechanical: Unit
+    centihp_metric: Unit
     centijoule: Unit
     centijoules: Unit
     centijulio: Unit
@@ -563,8 +622,12 @@ class UnitRegistry:
     centiyard: Unit
     centiyd: Unit
     centiyear: Unit
+    centiyear_gregorian: Unit
+    centiyear_julian: Unit
     centiyears: Unit
     centiyr: Unit
+    centiyr_gregorian: Unit
+    centiyr_julian: Unit
     centiÅ: Unit
     centiΩ: Unit
     centiΩm: Unit
@@ -613,6 +676,8 @@ class UnitRegistry:
     decaa0: Unit
     decaabampere: Unit
     decaacre: Unit
+    decaacre_international: Unit
+    decaacre_us_survey: Unit
     decaacres: Unit
     decaampere: Unit
     decaamperio: Unit
@@ -634,8 +699,15 @@ class UnitRegistry:
     decabohr: Unit
     decabohr_radius: Unit
     decabtu: Unit
+    decabtu_iso: Unit
+    decabtu_it: Unit
+    decabtu_th: Unit
     decacal: Unit
+    decacal_it: Unit
+    decacal_th: Unit
     decacalorie: Unit
+    decacalorie_it: Unit
+    decacalorie_th: Unit
     decacalories: Unit
     decacandela: Unit
     decacandelas: Unit
@@ -673,14 +745,22 @@ class UnitRegistry:
     decafarads: Unit
     decafeet: Unit
     decafl_oz: Unit
+    decafl_oz_imp: Unit
+    decafl_oz_uk: Unit
+    decafl_oz_us: Unit
     decafluid_ounce: Unit
+    decafluid_ounce_imperial: Unit
     decafoot: Unit
     decafranklin: Unit
     decaft: Unit
     decag: Unit
     decagal: Unit
+    decagal_imp: Unit
+    decagal_uk: Unit
+    decagal_us: Unit
     decagalileo: Unit
     decagallon: Unit
+    decagallon_imperial: Unit
     decagallon_us: Unit
     decagallons: Unit
     decagauss: Unit
@@ -695,7 +775,13 @@ class UnitRegistry:
     decahenry: Unit
     decahertz: Unit
     decahorsepower: Unit
+    decahorsepower_electric: Unit
+    decahorsepower_mechanical: Unit
+    decahorsepower_metric: Unit
     decahp: Unit
+    decahp_electric: Unit
+    decahp_mechanical: Unit
+    decahp_metric: Unit
     decajoule: Unit
     decajoules: Unit
     decajulio: Unit
@@ -816,8 +902,12 @@ class UnitRegistry:
     decayard: Unit
     decayd: Unit
     decayear: Unit
+    decayear_gregorian: Unit
+    decayear_julian: Unit
     decayears: Unit
     decayr: Unit
+    decayr_gregorian: Unit
+    decayr_julian: Unit
     decaÅ: Unit
     decaΩ: Unit
     decaΩm: Unit
@@ -859,6 +949,8 @@ class UnitRegistry:
     decia0: Unit
     deciabampere: Unit
     deciacre: Unit
+    deciacre_international: Unit
+    deciacre_us_survey: Unit
     deciacres: Unit
     deciampere: Unit
     deciamperio: Unit
@@ -881,8 +973,15 @@ class UnitRegistry:
     decibohr: Unit
     decibohr_radius: Unit
     decibtu: Unit
+    decibtu_iso: Unit
+    decibtu_it: Unit
+    decibtu_th: Unit
     decical: Unit
+    decical_it: Unit
+    decical_th: Unit
     decicalorie: Unit
+    decicalorie_it: Unit
+    decicalorie_th: Unit
     decicalories: Unit
     decicandela: Unit
     decicandelas: Unit
@@ -920,14 +1019,22 @@ class UnitRegistry:
     decifarads: Unit
     decifeet: Unit
     decifl_oz: Unit
+    decifl_oz_imp: Unit
+    decifl_oz_uk: Unit
+    decifl_oz_us: Unit
     decifluid_ounce: Unit
+    decifluid_ounce_imperial: Unit
     decifoot: Unit
     decifranklin: Unit
     decift: Unit
     decig: Unit
     decigal: Unit
+    decigal_imp: Unit
+    decigal_uk: Unit
+    decigal_us: Unit
     decigalileo: Unit
     decigallon: Unit
+    decigallon_imperial: Unit
     decigallon_us: Unit
     decigallons: Unit
     decigauss: Unit
@@ -942,7 +1049,13 @@ class UnitRegistry:
     decihenry: Unit
     decihertz: Unit
     decihorsepower: Unit
+    decihorsepower_electric: Unit
+    decihorsepower_mechanical: Unit
+    decihorsepower_metric: Unit
     decihp: Unit
+    decihp_electric: Unit
+    decihp_mechanical: Unit
+    decihp_metric: Unit
     decijoule: Unit
     decijoules: Unit
     decijulio: Unit
@@ -1063,8 +1176,12 @@ class UnitRegistry:
     deciyard: Unit
     deciyd: Unit
     deciyear: Unit
+    deciyear_gregorian: Unit
+    deciyear_julian: Unit
     deciyears: Unit
     deciyr: Unit
+    deciyr_gregorian: Unit
+    deciyr_julian: Unit
     deciÅ: Unit
     deciΩ: Unit
     deciΩm: Unit
@@ -1124,6 +1241,8 @@ class UnitRegistry:
     exaa0: Unit
     exaabampere: Unit
     exaacre: Unit
+    exaacre_international: Unit
+    exaacre_us_survey: Unit
     exaacres: Unit
     exaampere: Unit
     exaamperio: Unit
@@ -1145,8 +1264,15 @@ class UnitRegistry:
     exabohr: Unit
     exabohr_radius: Unit
     exabtu: Unit
+    exabtu_iso: Unit
+    exabtu_it: Unit
+    exabtu_th: Unit
     exacal: Unit
+    exacal_it: Unit
+    exacal_th: Unit
     exacalorie: Unit
+    exacalorie_it: Unit
+    exacalorie_th: Unit
     exacalories: Unit
     exacandela: Unit
     exacandelas: Unit
@@ -1184,14 +1310,22 @@ class UnitRegistry:
     exafarads: Unit
     exafeet: Unit
     exafl_oz: Unit
+    exafl_oz_imp: Unit
+    exafl_oz_uk: Unit
+    exafl_oz_us: Unit
     exafluid_ounce: Unit
+    exafluid_ounce_imperial: Unit
     exafoot: Unit
     exafranklin: Unit
     exaft: Unit
     exag: Unit
     exagal: Unit
+    exagal_imp: Unit
+    exagal_uk: Unit
+    exagal_us: Unit
     exagalileo: Unit
     exagallon: Unit
+    exagallon_imperial: Unit
     exagallon_us: Unit
     exagallons: Unit
     exagauss: Unit
@@ -1206,7 +1340,13 @@ class UnitRegistry:
     exahenry: Unit
     exahertz: Unit
     exahorsepower: Unit
+    exahorsepower_electric: Unit
+    exahorsepower_mechanical: Unit
+    exahorsepower_metric: Unit
     exahp: Unit
+    exahp_electric: Unit
+    exahp_mechanical: Unit
+    exahp_metric: Unit
     exajoule: Unit
     exajoules: Unit
     exajulio: Unit
@@ -1327,8 +1467,12 @@ class UnitRegistry:
     exayard: Unit
     exayd: Unit
     exayear: Unit
+    exayear_gregorian: Unit
+    exayear_julian: Unit
     exayears: Unit
     exayr: Unit
+    exayr_gregorian: Unit
+    exayr_julian: Unit
     exaÅ: Unit
     exaΩ: Unit
     exaΩm: Unit
@@ -1374,6 +1518,8 @@ class UnitRegistry:
     femtoa0: Unit
     femtoabampere: Unit
     femtoacre: Unit
+    femtoacre_international: Unit
+    femtoacre_us_survey: Unit
     femtoacres: Unit
     femtoampere: Unit
     femtoamperio: Unit
@@ -1395,8 +1541,15 @@ class UnitRegistry:
     femtobohr: Unit
     femtobohr_radius: Unit
     femtobtu: Unit
+    femtobtu_iso: Unit
+    femtobtu_it: Unit
+    femtobtu_th: Unit
     femtocal: Unit
+    femtocal_it: Unit
+    femtocal_th: Unit
     femtocalorie: Unit
+    femtocalorie_it: Unit
+    femtocalorie_th: Unit
     femtocalories: Unit
     femtocandela: Unit
     femtocandelas: Unit
@@ -1434,14 +1587,22 @@ class UnitRegistry:
     femtofarads: Unit
     femtofeet: Unit
     femtofl_oz: Unit
+    femtofl_oz_imp: Unit
+    femtofl_oz_uk: Unit
+    femtofl_oz_us: Unit
     femtofluid_ounce: Unit
+    femtofluid_ounce_imperial: Unit
     femtofoot: Unit
     femtofranklin: Unit
     femtoft: Unit
     femtog: Unit
     femtogal: Unit
+    femtogal_imp: Unit
+    femtogal_uk: Unit
+    femtogal_us: Unit
     femtogalileo: Unit
     femtogallon: Unit
+    femtogallon_imperial: Unit
     femtogallon_us: Unit
     femtogallons: Unit
     femtogauss: Unit
@@ -1456,7 +1617,13 @@ class UnitRegistry:
     femtohenry: Unit
     femtohertz: Unit
     femtohorsepower: Unit
+    femtohorsepower_electric: Unit
+    femtohorsepower_mechanical: Unit
+    femtohorsepower_metric: Unit
     femtohp: Unit
+    femtohp_electric: Unit
+    femtohp_mechanical: Unit
+    femtohp_metric: Unit
     femtojoule: Unit
     femtojoules: Unit
     femtojulio: Unit
@@ -1577,20 +1744,32 @@ class UnitRegistry:
     femtoyard: Unit
     femtoyd: Unit
     femtoyear: Unit
+    femtoyear_gregorian: Unit
+    femtoyear_julian: Unit
     femtoyears: Unit
     femtoyr: Unit
+    femtoyr_gregorian: Unit
+    femtoyr_julian: Unit
     femtoÅ: Unit
     femtoΩ: Unit
     femtoΩm: Unit
     fl_oz: Unit
+    fl_oz_imp: Unit
+    fl_oz_uk: Unit
+    fl_oz_us: Unit
     fluid_ounce: Unit
+    fluid_ounce_imperial: Unit
     foot: Unit
     franklin: Unit
     ft: Unit
     g: Unit
     gal: Unit
+    gal_imp: Unit
+    gal_uk: Unit
+    gal_us: Unit
     galileo: Unit
     gallon: Unit
+    gallon_imperial: Unit
     gallon_us: Unit
     gallons: Unit
     gauss: Unit
@@ -1632,6 +1811,8 @@ class UnitRegistry:
     gigaa0: Unit
     gigaabampere: Unit
     gigaacre: Unit
+    gigaacre_international: Unit
+    gigaacre_us_survey: Unit
     gigaacres: Unit
     gigaampere: Unit
     gigaamperio: Unit
@@ -1653,8 +1834,15 @@ class UnitRegistry:
     gigabohr: Unit
     gigabohr_radius: Unit
     gigabtu: Unit
+    gigabtu_iso: Unit
+    gigabtu_it: Unit
+    gigabtu_th: Unit
     gigacal: Unit
+    gigacal_it: Unit
+    gigacal_th: Unit
     gigacalorie: Unit
+    gigacalorie_it: Unit
+    gigacalorie_th: Unit
     gigacalories: Unit
     gigacandela: Unit
     gigacandelas: Unit
@@ -1692,14 +1880,22 @@ class UnitRegistry:
     gigafarads: Unit
     gigafeet: Unit
     gigafl_oz: Unit
+    gigafl_oz_imp: Unit
+    gigafl_oz_uk: Unit
+    gigafl_oz_us: Unit
     gigafluid_ounce: Unit
+    gigafluid_ounce_imperial: Unit
     gigafoot: Unit
     gigafranklin: Unit
     gigaft: Unit
     gigag: Unit
     gigagal: Unit
+    gigagal_imp: Unit
+    gigagal_uk: Unit
+    gigagal_us: Unit
     gigagalileo: Unit
     gigagallon: Unit
+    gigagallon_imperial: Unit
     gigagallon_us: Unit
     gigagallons: Unit
     gigagauss: Unit
@@ -1714,7 +1910,13 @@ class UnitRegistry:
     gigahenry: Unit
     gigahertz: Unit
     gigahorsepower: Unit
+    gigahorsepower_electric: Unit
+    gigahorsepower_mechanical: Unit
+    gigahorsepower_metric: Unit
     gigahp: Unit
+    gigahp_electric: Unit
+    gigahp_mechanical: Unit
+    gigahp_metric: Unit
     gigajoule: Unit
     gigajoules: Unit
     gigajulio: Unit
@@ -1835,8 +2037,12 @@ class UnitRegistry:
     gigayard: Unit
     gigayd: Unit
     gigayear: Unit
+    gigayear_gregorian: Unit
+    gigayear_julian: Unit
     gigayears: Unit
     gigayr: Unit
+    gigayr_gregorian: Unit
+    gigayr_julian: Unit
     gigaÅ: Unit
     gigaΩ: Unit
     gigaΩm: Unit
@@ -1886,6 +2092,8 @@ class UnitRegistry:
     hectoa0: Unit
     hectoabampere: Unit
     hectoacre: Unit
+    hectoacre_international: Unit
+    hectoacre_us_survey: Unit
     hectoacres: Unit
     hectoampere: Unit
     hectoamperio: Unit
@@ -1907,8 +2115,15 @@ class UnitRegistry:
     hectobohr: Unit
     hectobohr_radius: Unit
     hectobtu: Unit
+    hectobtu_iso: Unit
+    hectobtu_it: Unit
+    hectobtu_th: Unit
     hectocal: Unit
+    hectocal_it: Unit
+    hectocal_th: Unit
     hectocalorie: Unit
+    hectocalorie_it: Unit
+    hectocalorie_th: Unit
     hectocalories: Unit
     hectocandela: Unit
     hectocandelas: Unit
@@ -1946,14 +2161,22 @@ class UnitRegistry:
     hectofarads: Unit
     hectofeet: Unit
     hectofl_oz: Unit
+    hectofl_oz_imp: Unit
+    hectofl_oz_uk: Unit
+    hectofl_oz_us: Unit
     hectofluid_ounce: Unit
+    hectofluid_ounce_imperial: Unit
     hectofoot: Unit
     hectofranklin: Unit
     hectoft: Unit
     hectog: Unit
     hectogal: Unit
+    hectogal_imp: Unit
+    hectogal_uk: Unit
+    hectogal_us: Unit
     hectogalileo: Unit
     hectogallon: Unit
+    hectogallon_imperial: Unit
     hectogallon_us: Unit
     hectogallons: Unit
     hectogauss: Unit
@@ -1968,7 +2191,13 @@ class UnitRegistry:
     hectohenry: Unit
     hectohertz: Unit
     hectohorsepower: Unit
+    hectohorsepower_electric: Unit
+    hectohorsepower_mechanical: Unit
+    hectohorsepower_metric: Unit
     hectohp: Unit
+    hectohp_electric: Unit
+    hectohp_mechanical: Unit
+    hectohp_metric: Unit
     hectojoule: Unit
     hectojoules: Unit
     hectojulio: Unit
@@ -2089,8 +2318,12 @@ class UnitRegistry:
     hectoyard: Unit
     hectoyd: Unit
     hectoyear: Unit
+    hectoyear_gregorian: Unit
+    hectoyear_julian: Unit
     hectoyears: Unit
     hectoyr: Unit
+    hectoyr_gregorian: Unit
+    hectoyr_julian: Unit
     hectoÅ: Unit
     hectoΩ: Unit
     hectoΩm: Unit
@@ -2098,9 +2331,15 @@ class UnitRegistry:
     henry: Unit
     hertz: Unit
     horsepower: Unit
+    horsepower_electric: Unit
+    horsepower_mechanical: Unit
+    horsepower_metric: Unit
     hour: Unit
     hours: Unit
     hp: Unit
+    hp_electric: Unit
+    hp_mechanical: Unit
+    hp_metric: Unit
     hr: Unit
     inch: Unit
     joule: Unit
@@ -2152,6 +2391,8 @@ class UnitRegistry:
     kiloa0: Unit
     kiloabampere: Unit
     kiloacre: Unit
+    kiloacre_international: Unit
+    kiloacre_us_survey: Unit
     kiloacres: Unit
     kiloampere: Unit
     kiloamperio: Unit
@@ -2173,8 +2414,15 @@ class UnitRegistry:
     kilobohr: Unit
     kilobohr_radius: Unit
     kilobtu: Unit
+    kilobtu_iso: Unit
+    kilobtu_it: Unit
+    kilobtu_th: Unit
     kilocal: Unit
+    kilocal_it: Unit
+    kilocal_th: Unit
     kilocalorie: Unit
+    kilocalorie_it: Unit
+    kilocalorie_th: Unit
     kilocalories: Unit
     kilocandela: Unit
     kilocandelas: Unit
@@ -2212,14 +2460,22 @@ class UnitRegistry:
     kilofarads: Unit
     kilofeet: Unit
     kilofl_oz: Unit
+    kilofl_oz_imp: Unit
+    kilofl_oz_uk: Unit
+    kilofl_oz_us: Unit
     kilofluid_ounce: Unit
+    kilofluid_ounce_imperial: Unit
     kilofoot: Unit
     kilofranklin: Unit
     kiloft: Unit
     kilog: Unit
     kilogal: Unit
+    kilogal_imp: Unit
+    kilogal_uk: Unit
+    kilogal_us: Unit
     kilogalileo: Unit
     kilogallon: Unit
+    kilogallon_imperial: Unit
     kilogallon_us: Unit
     kilogallons: Unit
     kilogauss: Unit
@@ -2235,7 +2491,13 @@ class UnitRegistry:
     kilohenry: Unit
     kilohertz: Unit
     kilohorsepower: Unit
+    kilohorsepower_electric: Unit
+    kilohorsepower_mechanical: Unit
+    kilohorsepower_metric: Unit
     kilohp: Unit
+    kilohp_electric: Unit
+    kilohp_mechanical: Unit
+    kilohp_metric: Unit
     kilojoule: Unit
     kilojoules: Unit
     kilojulio: Unit
@@ -2357,8 +2619,12 @@ class UnitRegistry:
     kiloyard: Unit
     kiloyd: Unit
     kiloyear: Unit
+    kiloyear_gregorian: Unit
+    kiloyear_julian: Unit
     kiloyears: Unit
     kiloyr: Unit
+    kiloyr_gregorian: Unit
+    kiloyr_julian: Unit
     kiloÅ: Unit
     kiloΩ: Unit
     kiloΩm: Unit
@@ -2418,6 +2684,8 @@ class UnitRegistry:
     megaa0: Unit
     megaabampere: Unit
     megaacre: Unit
+    megaacre_international: Unit
+    megaacre_us_survey: Unit
     megaacres: Unit
     megaampere: Unit
     megaamperio: Unit
@@ -2439,8 +2707,15 @@ class UnitRegistry:
     megabohr: Unit
     megabohr_radius: Unit
     megabtu: Unit
+    megabtu_iso: Unit
+    megabtu_it: Unit
+    megabtu_th: Unit
     megacal: Unit
+    megacal_it: Unit
+    megacal_th: Unit
     megacalorie: Unit
+    megacalorie_it: Unit
+    megacalorie_th: Unit
     megacalories: Unit
     megacandela: Unit
     megacandelas: Unit
@@ -2478,14 +2753,22 @@ class UnitRegistry:
     megafarads: Unit
     megafeet: Unit
     megafl_oz: Unit
+    megafl_oz_imp: Unit
+    megafl_oz_uk: Unit
+    megafl_oz_us: Unit
     megafluid_ounce: Unit
+    megafluid_ounce_imperial: Unit
     megafoot: Unit
     megafranklin: Unit
     megaft: Unit
     megag: Unit
     megagal: Unit
+    megagal_imp: Unit
+    megagal_uk: Unit
+    megagal_us: Unit
     megagalileo: Unit
     megagallon: Unit
+    megagallon_imperial: Unit
     megagallon_us: Unit
     megagallons: Unit
     megagauss: Unit
@@ -2500,7 +2783,13 @@ class UnitRegistry:
     megahenry: Unit
     megahertz: Unit
     megahorsepower: Unit
+    megahorsepower_electric: Unit
+    megahorsepower_mechanical: Unit
+    megahorsepower_metric: Unit
     megahp: Unit
+    megahp_electric: Unit
+    megahp_mechanical: Unit
+    megahp_metric: Unit
     megajoule: Unit
     megajoules: Unit
     megajulio: Unit
@@ -2621,8 +2910,12 @@ class UnitRegistry:
     megayard: Unit
     megayd: Unit
     megayear: Unit
+    megayear_gregorian: Unit
+    megayear_julian: Unit
     megayears: Unit
     megayr: Unit
+    megayr_gregorian: Unit
+    megayr_julian: Unit
     megaÅ: Unit
     megaΩ: Unit
     megaΩm: Unit
@@ -2670,6 +2963,8 @@ class UnitRegistry:
     microa0: Unit
     microabampere: Unit
     microacre: Unit
+    microacre_international: Unit
+    microacre_us_survey: Unit
     microacres: Unit
     microampere: Unit
     microamperio: Unit
@@ -2691,8 +2986,15 @@ class UnitRegistry:
     microbohr: Unit
     microbohr_radius: Unit
     microbtu: Unit
+    microbtu_iso: Unit
+    microbtu_it: Unit
+    microbtu_th: Unit
     microcal: Unit
+    microcal_it: Unit
+    microcal_th: Unit
     microcalorie: Unit
+    microcalorie_it: Unit
+    microcalorie_th: Unit
     microcalories: Unit
     microcandela: Unit
     microcandelas: Unit
@@ -2730,14 +3032,22 @@ class UnitRegistry:
     microfarads: Unit
     microfeet: Unit
     microfl_oz: Unit
+    microfl_oz_imp: Unit
+    microfl_oz_uk: Unit
+    microfl_oz_us: Unit
     microfluid_ounce: Unit
+    microfluid_ounce_imperial: Unit
     microfoot: Unit
     microfranklin: Unit
     microft: Unit
     microg: Unit
     microgal: Unit
+    microgal_imp: Unit
+    microgal_uk: Unit
+    microgal_us: Unit
     microgalileo: Unit
     microgallon: Unit
+    microgallon_imperial: Unit
     microgallon_us: Unit
     microgallons: Unit
     microgauss: Unit
@@ -2752,7 +3062,13 @@ class UnitRegistry:
     microhenry: Unit
     microhertz: Unit
     microhorsepower: Unit
+    microhorsepower_electric: Unit
+    microhorsepower_mechanical: Unit
+    microhorsepower_metric: Unit
     microhp: Unit
+    microhp_electric: Unit
+    microhp_mechanical: Unit
+    microhp_metric: Unit
     microjoule: Unit
     microjoules: Unit
     microjulio: Unit
@@ -2873,8 +3189,12 @@ class UnitRegistry:
     microyard: Unit
     microyd: Unit
     microyear: Unit
+    microyear_gregorian: Unit
+    microyear_julian: Unit
     microyears: Unit
     microyr: Unit
+    microyr_gregorian: Unit
+    microyr_julian: Unit
     microÅ: Unit
     microΩ: Unit
     microΩm: Unit
@@ -2918,6 +3238,8 @@ class UnitRegistry:
     millia0: Unit
     milliabampere: Unit
     milliacre: Unit
+    milliacre_international: Unit
+    milliacre_us_survey: Unit
     milliacres: Unit
     milliampere: Unit
     milliamperio: Unit
@@ -2939,8 +3261,15 @@ class UnitRegistry:
     millibohr: Unit
     millibohr_radius: Unit
     millibtu: Unit
+    millibtu_iso: Unit
+    millibtu_it: Unit
+    millibtu_th: Unit
     millical: Unit
+    millical_it: Unit
+    millical_th: Unit
     millicalorie: Unit
+    millicalorie_it: Unit
+    millicalorie_th: Unit
     millicalories: Unit
     millicandela: Unit
     millicandelas: Unit
@@ -2978,14 +3307,22 @@ class UnitRegistry:
     millifarads: Unit
     millifeet: Unit
     millifl_oz: Unit
+    millifl_oz_imp: Unit
+    millifl_oz_uk: Unit
+    millifl_oz_us: Unit
     millifluid_ounce: Unit
+    millifluid_ounce_imperial: Unit
     millifoot: Unit
     millifranklin: Unit
     millift: Unit
     millig: Unit
     milligal: Unit
+    milligal_imp: Unit
+    milligal_uk: Unit
+    milligal_us: Unit
     milligalileo: Unit
     milligallon: Unit
+    milligallon_imperial: Unit
     milligallon_us: Unit
     milligallons: Unit
     milligauss: Unit
@@ -3000,7 +3337,13 @@ class UnitRegistry:
     millihenry: Unit
     millihertz: Unit
     millihorsepower: Unit
+    millihorsepower_electric: Unit
+    millihorsepower_mechanical: Unit
+    millihorsepower_metric: Unit
     millihp: Unit
+    millihp_electric: Unit
+    millihp_mechanical: Unit
+    millihp_metric: Unit
     millijoule: Unit
     millijoules: Unit
     millijulio: Unit
@@ -3121,8 +3464,12 @@ class UnitRegistry:
     milliyard: Unit
     milliyd: Unit
     milliyear: Unit
+    milliyear_gregorian: Unit
+    milliyear_julian: Unit
     milliyears: Unit
     milliyr: Unit
+    milliyr_gregorian: Unit
+    milliyr_julian: Unit
     milliÅ: Unit
     milliΩ: Unit
     milliΩm: Unit
@@ -3172,6 +3519,8 @@ class UnitRegistry:
     nanoa0: Unit
     nanoabampere: Unit
     nanoacre: Unit
+    nanoacre_international: Unit
+    nanoacre_us_survey: Unit
     nanoacres: Unit
     nanoampere: Unit
     nanoamperio: Unit
@@ -3193,8 +3542,15 @@ class UnitRegistry:
     nanobohr: Unit
     nanobohr_radius: Unit
     nanobtu: Unit
+    nanobtu_iso: Unit
+    nanobtu_it: Unit
+    nanobtu_th: Unit
     nanocal: Unit
+    nanocal_it: Unit
+    nanocal_th: Unit
     nanocalorie: Unit
+    nanocalorie_it: Unit
+    nanocalorie_th: Unit
     nanocalories: Unit
     nanocandela: Unit
     nanocandelas: Unit
@@ -3232,14 +3588,22 @@ class UnitRegistry:
     nanofarads: Unit
     nanofeet: Unit
     nanofl_oz: Unit
+    nanofl_oz_imp: Unit
+    nanofl_oz_uk: Unit
+    nanofl_oz_us: Unit
     nanofluid_ounce: Unit
+    nanofluid_ounce_imperial: Unit
     nanofoot: Unit
     nanofranklin: Unit
     nanoft: Unit
     nanog: Unit
     nanogal: Unit
+    nanogal_imp: Unit
+    nanogal_uk: Unit
+    nanogal_us: Unit
     nanogalileo: Unit
     nanogallon: Unit
+    nanogallon_imperial: Unit
     nanogallon_us: Unit
     nanogallons: Unit
     nanogauss: Unit
@@ -3254,7 +3618,13 @@ class UnitRegistry:
     nanohenry: Unit
     nanohertz: Unit
     nanohorsepower: Unit
+    nanohorsepower_electric: Unit
+    nanohorsepower_mechanical: Unit
+    nanohorsepower_metric: Unit
     nanohp: Unit
+    nanohp_electric: Unit
+    nanohp_mechanical: Unit
+    nanohp_metric: Unit
     nanojoule: Unit
     nanojoules: Unit
     nanojulio: Unit
@@ -3375,8 +3745,12 @@ class UnitRegistry:
     nanoyard: Unit
     nanoyd: Unit
     nanoyear: Unit
+    nanoyear_gregorian: Unit
+    nanoyear_julian: Unit
     nanoyears: Unit
     nanoyr: Unit
+    nanoyr_gregorian: Unit
+    nanoyr_julian: Unit
     nanoÅ: Unit
     nanoΩ: Unit
     nanoΩm: Unit
@@ -3440,6 +3814,8 @@ class UnitRegistry:
     petaa0: Unit
     petaabampere: Unit
     petaacre: Unit
+    petaacre_international: Unit
+    petaacre_us_survey: Unit
     petaacres: Unit
     petaampere: Unit
     petaamperio: Unit
@@ -3461,8 +3837,15 @@ class UnitRegistry:
     petabohr: Unit
     petabohr_radius: Unit
     petabtu: Unit
+    petabtu_iso: Unit
+    petabtu_it: Unit
+    petabtu_th: Unit
     petacal: Unit
+    petacal_it: Unit
+    petacal_th: Unit
     petacalorie: Unit
+    petacalorie_it: Unit
+    petacalorie_th: Unit
     petacalories: Unit
     petacandela: Unit
     petacandelas: Unit
@@ -3500,14 +3883,22 @@ class UnitRegistry:
     petafarads: Unit
     petafeet: Unit
     petafl_oz: Unit
+    petafl_oz_imp: Unit
+    petafl_oz_uk: Unit
+    petafl_oz_us: Unit
     petafluid_ounce: Unit
+    petafluid_ounce_imperial: Unit
     petafoot: Unit
     petafranklin: Unit
     petaft: Unit
     petag: Unit
     petagal: Unit
+    petagal_imp: Unit
+    petagal_uk: Unit
+    petagal_us: Unit
     petagalileo: Unit
     petagallon: Unit
+    petagallon_imperial: Unit
     petagallon_us: Unit
     petagallons: Unit
     petagauss: Unit
@@ -3522,7 +3913,13 @@ class UnitRegistry:
     petahenry: Unit
     petahertz: Unit
     petahorsepower: Unit
+    petahorsepower_electric: Unit
+    petahorsepower_mechanical: Unit
+    petahorsepower_metric: Unit
     petahp: Unit
+    petahp_electric: Unit
+    petahp_mechanical: Unit
+    petahp_metric: Unit
     petajoule: Unit
     petajoules: Unit
     petajulio: Unit
@@ -3643,8 +4040,12 @@ class UnitRegistry:
     petayard: Unit
     petayd: Unit
     petayear: Unit
+    petayear_gregorian: Unit
+    petayear_julian: Unit
     petayears: Unit
     petayr: Unit
+    petayr_gregorian: Unit
+    petayr_julian: Unit
     petaÅ: Unit
     petaΩ: Unit
     petaΩm: Unit
@@ -3686,6 +4087,8 @@ class UnitRegistry:
     picoa0: Unit
     picoabampere: Unit
     picoacre: Unit
+    picoacre_international: Unit
+    picoacre_us_survey: Unit
     picoacres: Unit
     picoampere: Unit
     picoamperio: Unit
@@ -3707,8 +4110,15 @@ class UnitRegistry:
     picobohr: Unit
     picobohr_radius: Unit
     picobtu: Unit
+    picobtu_iso: Unit
+    picobtu_it: Unit
+    picobtu_th: Unit
     picocal: Unit
+    picocal_it: Unit
+    picocal_th: Unit
     picocalorie: Unit
+    picocalorie_it: Unit
+    picocalorie_th: Unit
     picocalories: Unit
     picocandela: Unit
     picocandelas: Unit
@@ -3746,14 +4156,22 @@ class UnitRegistry:
     picofarads: Unit
     picofeet: Unit
     picofl_oz: Unit
+    picofl_oz_imp: Unit
+    picofl_oz_uk: Unit
+    picofl_oz_us: Unit
     picofluid_ounce: Unit
+    picofluid_ounce_imperial: Unit
     picofoot: Unit
     picofranklin: Unit
     picoft: Unit
     picog: Unit
     picogal: Unit
+    picogal_imp: Unit
+    picogal_uk: Unit
+    picogal_us: Unit
     picogalileo: Unit
     picogallon: Unit
+    picogallon_imperial: Unit
     picogallon_us: Unit
     picogallons: Unit
     picogauss: Unit
@@ -3768,7 +4186,13 @@ class UnitRegistry:
     picohenry: Unit
     picohertz: Unit
     picohorsepower: Unit
+    picohorsepower_electric: Unit
+    picohorsepower_mechanical: Unit
+    picohorsepower_metric: Unit
     picohp: Unit
+    picohp_electric: Unit
+    picohp_mechanical: Unit
+    picohp_metric: Unit
     picojoule: Unit
     picojoules: Unit
     picojulio: Unit
@@ -3889,8 +4313,12 @@ class UnitRegistry:
     picoyard: Unit
     picoyd: Unit
     picoyear: Unit
+    picoyear_gregorian: Unit
+    picoyear_julian: Unit
     picoyears: Unit
     picoyr: Unit
+    picoyr_gregorian: Unit
+    picoyr_julian: Unit
     picoÅ: Unit
     picoΩ: Unit
     picoΩm: Unit
@@ -3945,6 +4373,8 @@ class UnitRegistry:
     quectoa0: Unit
     quectoabampere: Unit
     quectoacre: Unit
+    quectoacre_international: Unit
+    quectoacre_us_survey: Unit
     quectoacres: Unit
     quectoampere: Unit
     quectoamperio: Unit
@@ -3966,8 +4396,15 @@ class UnitRegistry:
     quectobohr: Unit
     quectobohr_radius: Unit
     quectobtu: Unit
+    quectobtu_iso: Unit
+    quectobtu_it: Unit
+    quectobtu_th: Unit
     quectocal: Unit
+    quectocal_it: Unit
+    quectocal_th: Unit
     quectocalorie: Unit
+    quectocalorie_it: Unit
+    quectocalorie_th: Unit
     quectocalories: Unit
     quectocandela: Unit
     quectocandelas: Unit
@@ -4005,14 +4442,22 @@ class UnitRegistry:
     quectofarads: Unit
     quectofeet: Unit
     quectofl_oz: Unit
+    quectofl_oz_imp: Unit
+    quectofl_oz_uk: Unit
+    quectofl_oz_us: Unit
     quectofluid_ounce: Unit
+    quectofluid_ounce_imperial: Unit
     quectofoot: Unit
     quectofranklin: Unit
     quectoft: Unit
     quectog: Unit
     quectogal: Unit
+    quectogal_imp: Unit
+    quectogal_uk: Unit
+    quectogal_us: Unit
     quectogalileo: Unit
     quectogallon: Unit
+    quectogallon_imperial: Unit
     quectogallon_us: Unit
     quectogallons: Unit
     quectogauss: Unit
@@ -4027,7 +4472,13 @@ class UnitRegistry:
     quectohenry: Unit
     quectohertz: Unit
     quectohorsepower: Unit
+    quectohorsepower_electric: Unit
+    quectohorsepower_mechanical: Unit
+    quectohorsepower_metric: Unit
     quectohp: Unit
+    quectohp_electric: Unit
+    quectohp_mechanical: Unit
+    quectohp_metric: Unit
     quectojoule: Unit
     quectojoules: Unit
     quectojulio: Unit
@@ -4148,8 +4599,12 @@ class UnitRegistry:
     quectoyard: Unit
     quectoyd: Unit
     quectoyear: Unit
+    quectoyear_gregorian: Unit
+    quectoyear_julian: Unit
     quectoyears: Unit
     quectoyr: Unit
+    quectoyr_gregorian: Unit
+    quectoyr_julian: Unit
     quectoÅ: Unit
     quectoΩ: Unit
     quectoΩm: Unit
@@ -4191,6 +4646,8 @@ class UnitRegistry:
     quettaa0: Unit
     quettaabampere: Unit
     quettaacre: Unit
+    quettaacre_international: Unit
+    quettaacre_us_survey: Unit
     quettaacres: Unit
     quettaampere: Unit
     quettaamperio: Unit
@@ -4212,8 +4669,15 @@ class UnitRegistry:
     quettabohr: Unit
     quettabohr_radius: Unit
     quettabtu: Unit
+    quettabtu_iso: Unit
+    quettabtu_it: Unit
+    quettabtu_th: Unit
     quettacal: Unit
+    quettacal_it: Unit
+    quettacal_th: Unit
     quettacalorie: Unit
+    quettacalorie_it: Unit
+    quettacalorie_th: Unit
     quettacalories: Unit
     quettacandela: Unit
     quettacandelas: Unit
@@ -4251,14 +4715,22 @@ class UnitRegistry:
     quettafarads: Unit
     quettafeet: Unit
     quettafl_oz: Unit
+    quettafl_oz_imp: Unit
+    quettafl_oz_uk: Unit
+    quettafl_oz_us: Unit
     quettafluid_ounce: Unit
+    quettafluid_ounce_imperial: Unit
     quettafoot: Unit
     quettafranklin: Unit
     quettaft: Unit
     quettag: Unit
     quettagal: Unit
+    quettagal_imp: Unit
+    quettagal_uk: Unit
+    quettagal_us: Unit
     quettagalileo: Unit
     quettagallon: Unit
+    quettagallon_imperial: Unit
     quettagallon_us: Unit
     quettagallons: Unit
     quettagauss: Unit
@@ -4273,7 +4745,13 @@ class UnitRegistry:
     quettahenry: Unit
     quettahertz: Unit
     quettahorsepower: Unit
+    quettahorsepower_electric: Unit
+    quettahorsepower_mechanical: Unit
+    quettahorsepower_metric: Unit
     quettahp: Unit
+    quettahp_electric: Unit
+    quettahp_mechanical: Unit
+    quettahp_metric: Unit
     quettajoule: Unit
     quettajoules: Unit
     quettajulio: Unit
@@ -4394,8 +4872,12 @@ class UnitRegistry:
     quettayard: Unit
     quettayd: Unit
     quettayear: Unit
+    quettayear_gregorian: Unit
+    quettayear_julian: Unit
     quettayears: Unit
     quettayr: Unit
+    quettayr_gregorian: Unit
+    quettayr_julian: Unit
     quettaÅ: Unit
     quettaΩ: Unit
     quettaΩm: Unit
@@ -4441,6 +4923,8 @@ class UnitRegistry:
     ronnaa0: Unit
     ronnaabampere: Unit
     ronnaacre: Unit
+    ronnaacre_international: Unit
+    ronnaacre_us_survey: Unit
     ronnaacres: Unit
     ronnaampere: Unit
     ronnaamperio: Unit
@@ -4462,8 +4946,15 @@ class UnitRegistry:
     ronnabohr: Unit
     ronnabohr_radius: Unit
     ronnabtu: Unit
+    ronnabtu_iso: Unit
+    ronnabtu_it: Unit
+    ronnabtu_th: Unit
     ronnacal: Unit
+    ronnacal_it: Unit
+    ronnacal_th: Unit
     ronnacalorie: Unit
+    ronnacalorie_it: Unit
+    ronnacalorie_th: Unit
     ronnacalories: Unit
     ronnacandela: Unit
     ronnacandelas: Unit
@@ -4501,14 +4992,22 @@ class UnitRegistry:
     ronnafarads: Unit
     ronnafeet: Unit
     ronnafl_oz: Unit
+    ronnafl_oz_imp: Unit
+    ronnafl_oz_uk: Unit
+    ronnafl_oz_us: Unit
     ronnafluid_ounce: Unit
+    ronnafluid_ounce_imperial: Unit
     ronnafoot: Unit
     ronnafranklin: Unit
     ronnaft: Unit
     ronnag: Unit
     ronnagal: Unit
+    ronnagal_imp: Unit
+    ronnagal_uk: Unit
+    ronnagal_us: Unit
     ronnagalileo: Unit
     ronnagallon: Unit
+    ronnagallon_imperial: Unit
     ronnagallon_us: Unit
     ronnagallons: Unit
     ronnagauss: Unit
@@ -4523,7 +5022,13 @@ class UnitRegistry:
     ronnahenry: Unit
     ronnahertz: Unit
     ronnahorsepower: Unit
+    ronnahorsepower_electric: Unit
+    ronnahorsepower_mechanical: Unit
+    ronnahorsepower_metric: Unit
     ronnahp: Unit
+    ronnahp_electric: Unit
+    ronnahp_mechanical: Unit
+    ronnahp_metric: Unit
     ronnajoule: Unit
     ronnajoules: Unit
     ronnajulio: Unit
@@ -4644,8 +5149,12 @@ class UnitRegistry:
     ronnayard: Unit
     ronnayd: Unit
     ronnayear: Unit
+    ronnayear_gregorian: Unit
+    ronnayear_julian: Unit
     ronnayears: Unit
     ronnayr: Unit
+    ronnayr_gregorian: Unit
+    ronnayr_julian: Unit
     ronnaÅ: Unit
     ronnaΩ: Unit
     ronnaΩm: Unit
@@ -4687,6 +5196,8 @@ class UnitRegistry:
     rontoa0: Unit
     rontoabampere: Unit
     rontoacre: Unit
+    rontoacre_international: Unit
+    rontoacre_us_survey: Unit
     rontoacres: Unit
     rontoampere: Unit
     rontoamperio: Unit
@@ -4708,8 +5219,15 @@ class UnitRegistry:
     rontobohr: Unit
     rontobohr_radius: Unit
     rontobtu: Unit
+    rontobtu_iso: Unit
+    rontobtu_it: Unit
+    rontobtu_th: Unit
     rontocal: Unit
+    rontocal_it: Unit
+    rontocal_th: Unit
     rontocalorie: Unit
+    rontocalorie_it: Unit
+    rontocalorie_th: Unit
     rontocalories: Unit
     rontocandela: Unit
     rontocandelas: Unit
@@ -4747,14 +5265,22 @@ class UnitRegistry:
     rontofarads: Unit
     rontofeet: Unit
     rontofl_oz: Unit
+    rontofl_oz_imp: Unit
+    rontofl_oz_uk: Unit
+    rontofl_oz_us: Unit
     rontofluid_ounce: Unit
+    rontofluid_ounce_imperial: Unit
     rontofoot: Unit
     rontofranklin: Unit
     rontoft: Unit
     rontog: Unit
     rontogal: Unit
+    rontogal_imp: Unit
+    rontogal_uk: Unit
+    rontogal_us: Unit
     rontogalileo: Unit
     rontogallon: Unit
+    rontogallon_imperial: Unit
     rontogallon_us: Unit
     rontogallons: Unit
     rontogauss: Unit
@@ -4769,7 +5295,13 @@ class UnitRegistry:
     rontohenry: Unit
     rontohertz: Unit
     rontohorsepower: Unit
+    rontohorsepower_electric: Unit
+    rontohorsepower_mechanical: Unit
+    rontohorsepower_metric: Unit
     rontohp: Unit
+    rontohp_electric: Unit
+    rontohp_mechanical: Unit
+    rontohp_metric: Unit
     rontojoule: Unit
     rontojoules: Unit
     rontojulio: Unit
@@ -4890,8 +5422,12 @@ class UnitRegistry:
     rontoyard: Unit
     rontoyd: Unit
     rontoyear: Unit
+    rontoyear_gregorian: Unit
+    rontoyear_julian: Unit
     rontoyears: Unit
     rontoyr: Unit
+    rontoyr_gregorian: Unit
+    rontoyr_julian: Unit
     rontoÅ: Unit
     rontoΩ: Unit
     rontoΩm: Unit
@@ -4950,6 +5486,8 @@ class UnitRegistry:
     teraa0: Unit
     teraabampere: Unit
     teraacre: Unit
+    teraacre_international: Unit
+    teraacre_us_survey: Unit
     teraacres: Unit
     teraampere: Unit
     teraamperio: Unit
@@ -4971,8 +5509,15 @@ class UnitRegistry:
     terabohr: Unit
     terabohr_radius: Unit
     terabtu: Unit
+    terabtu_iso: Unit
+    terabtu_it: Unit
+    terabtu_th: Unit
     teracal: Unit
+    teracal_it: Unit
+    teracal_th: Unit
     teracalorie: Unit
+    teracalorie_it: Unit
+    teracalorie_th: Unit
     teracalories: Unit
     teracandela: Unit
     teracandelas: Unit
@@ -5010,14 +5555,22 @@ class UnitRegistry:
     terafarads: Unit
     terafeet: Unit
     terafl_oz: Unit
+    terafl_oz_imp: Unit
+    terafl_oz_uk: Unit
+    terafl_oz_us: Unit
     terafluid_ounce: Unit
+    terafluid_ounce_imperial: Unit
     terafoot: Unit
     terafranklin: Unit
     teraft: Unit
     terag: Unit
     teragal: Unit
+    teragal_imp: Unit
+    teragal_uk: Unit
+    teragal_us: Unit
     teragalileo: Unit
     teragallon: Unit
+    teragallon_imperial: Unit
     teragallon_us: Unit
     teragallons: Unit
     teragauss: Unit
@@ -5032,7 +5585,13 @@ class UnitRegistry:
     terahenry: Unit
     terahertz: Unit
     terahorsepower: Unit
+    terahorsepower_electric: Unit
+    terahorsepower_mechanical: Unit
+    terahorsepower_metric: Unit
     terahp: Unit
+    terahp_electric: Unit
+    terahp_mechanical: Unit
+    terahp_metric: Unit
     terajoule: Unit
     terajoules: Unit
     terajulio: Unit
@@ -5153,8 +5712,12 @@ class UnitRegistry:
     terayard: Unit
     terayd: Unit
     terayear: Unit
+    terayear_gregorian: Unit
+    terayear_julian: Unit
     terayears: Unit
     terayr: Unit
+    terayr_gregorian: Unit
+    terayr_julian: Unit
     teraÅ: Unit
     teraΩ: Unit
     teraΩm: Unit
@@ -5178,6 +5741,8 @@ class UnitRegistry:
     yard: Unit
     yd: Unit
     year: Unit
+    year_gregorian: Unit
+    year_julian: Unit
     years: Unit
     yoctoA: Unit
     yoctoBTU: Unit
@@ -5217,6 +5782,8 @@ class UnitRegistry:
     yoctoa0: Unit
     yoctoabampere: Unit
     yoctoacre: Unit
+    yoctoacre_international: Unit
+    yoctoacre_us_survey: Unit
     yoctoacres: Unit
     yoctoampere: Unit
     yoctoamperio: Unit
@@ -5238,8 +5805,15 @@ class UnitRegistry:
     yoctobohr: Unit
     yoctobohr_radius: Unit
     yoctobtu: Unit
+    yoctobtu_iso: Unit
+    yoctobtu_it: Unit
+    yoctobtu_th: Unit
     yoctocal: Unit
+    yoctocal_it: Unit
+    yoctocal_th: Unit
     yoctocalorie: Unit
+    yoctocalorie_it: Unit
+    yoctocalorie_th: Unit
     yoctocalories: Unit
     yoctocandela: Unit
     yoctocandelas: Unit
@@ -5277,14 +5851,22 @@ class UnitRegistry:
     yoctofarads: Unit
     yoctofeet: Unit
     yoctofl_oz: Unit
+    yoctofl_oz_imp: Unit
+    yoctofl_oz_uk: Unit
+    yoctofl_oz_us: Unit
     yoctofluid_ounce: Unit
+    yoctofluid_ounce_imperial: Unit
     yoctofoot: Unit
     yoctofranklin: Unit
     yoctoft: Unit
     yoctog: Unit
     yoctogal: Unit
+    yoctogal_imp: Unit
+    yoctogal_uk: Unit
+    yoctogal_us: Unit
     yoctogalileo: Unit
     yoctogallon: Unit
+    yoctogallon_imperial: Unit
     yoctogallon_us: Unit
     yoctogallons: Unit
     yoctogauss: Unit
@@ -5299,7 +5881,13 @@ class UnitRegistry:
     yoctohenry: Unit
     yoctohertz: Unit
     yoctohorsepower: Unit
+    yoctohorsepower_electric: Unit
+    yoctohorsepower_mechanical: Unit
+    yoctohorsepower_metric: Unit
     yoctohp: Unit
+    yoctohp_electric: Unit
+    yoctohp_mechanical: Unit
+    yoctohp_metric: Unit
     yoctojoule: Unit
     yoctojoules: Unit
     yoctojulio: Unit
@@ -5420,8 +6008,12 @@ class UnitRegistry:
     yoctoyard: Unit
     yoctoyd: Unit
     yoctoyear: Unit
+    yoctoyear_gregorian: Unit
+    yoctoyear_julian: Unit
     yoctoyears: Unit
     yoctoyr: Unit
+    yoctoyr_gregorian: Unit
+    yoctoyr_julian: Unit
     yoctoÅ: Unit
     yoctoΩ: Unit
     yoctoΩm: Unit
@@ -5463,6 +6055,8 @@ class UnitRegistry:
     yottaa0: Unit
     yottaabampere: Unit
     yottaacre: Unit
+    yottaacre_international: Unit
+    yottaacre_us_survey: Unit
     yottaacres: Unit
     yottaampere: Unit
     yottaamperio: Unit
@@ -5484,8 +6078,15 @@ class UnitRegistry:
     yottabohr: Unit
     yottabohr_radius: Unit
     yottabtu: Unit
+    yottabtu_iso: Unit
+    yottabtu_it: Unit
+    yottabtu_th: Unit
     yottacal: Unit
+    yottacal_it: Unit
+    yottacal_th: Unit
     yottacalorie: Unit
+    yottacalorie_it: Unit
+    yottacalorie_th: Unit
     yottacalories: Unit
     yottacandela: Unit
     yottacandelas: Unit
@@ -5523,14 +6124,22 @@ class UnitRegistry:
     yottafarads: Unit
     yottafeet: Unit
     yottafl_oz: Unit
+    yottafl_oz_imp: Unit
+    yottafl_oz_uk: Unit
+    yottafl_oz_us: Unit
     yottafluid_ounce: Unit
+    yottafluid_ounce_imperial: Unit
     yottafoot: Unit
     yottafranklin: Unit
     yottaft: Unit
     yottag: Unit
     yottagal: Unit
+    yottagal_imp: Unit
+    yottagal_uk: Unit
+    yottagal_us: Unit
     yottagalileo: Unit
     yottagallon: Unit
+    yottagallon_imperial: Unit
     yottagallon_us: Unit
     yottagallons: Unit
     yottagauss: Unit
@@ -5545,7 +6154,13 @@ class UnitRegistry:
     yottahenry: Unit
     yottahertz: Unit
     yottahorsepower: Unit
+    yottahorsepower_electric: Unit
+    yottahorsepower_mechanical: Unit
+    yottahorsepower_metric: Unit
     yottahp: Unit
+    yottahp_electric: Unit
+    yottahp_mechanical: Unit
+    yottahp_metric: Unit
     yottajoule: Unit
     yottajoules: Unit
     yottajulio: Unit
@@ -5666,12 +6281,18 @@ class UnitRegistry:
     yottayard: Unit
     yottayd: Unit
     yottayear: Unit
+    yottayear_gregorian: Unit
+    yottayear_julian: Unit
     yottayears: Unit
     yottayr: Unit
+    yottayr_gregorian: Unit
+    yottayr_julian: Unit
     yottaÅ: Unit
     yottaΩ: Unit
     yottaΩm: Unit
     yr: Unit
+    yr_gregorian: Unit
+    yr_julian: Unit
     zeptoA: Unit
     zeptoBTU: Unit
     zeptoBa: Unit
@@ -5710,6 +6331,8 @@ class UnitRegistry:
     zeptoa0: Unit
     zeptoabampere: Unit
     zeptoacre: Unit
+    zeptoacre_international: Unit
+    zeptoacre_us_survey: Unit
     zeptoacres: Unit
     zeptoampere: Unit
     zeptoamperio: Unit
@@ -5731,8 +6354,15 @@ class UnitRegistry:
     zeptobohr: Unit
     zeptobohr_radius: Unit
     zeptobtu: Unit
+    zeptobtu_iso: Unit
+    zeptobtu_it: Unit
+    zeptobtu_th: Unit
     zeptocal: Unit
+    zeptocal_it: Unit
+    zeptocal_th: Unit
     zeptocalorie: Unit
+    zeptocalorie_it: Unit
+    zeptocalorie_th: Unit
     zeptocalories: Unit
     zeptocandela: Unit
     zeptocandelas: Unit
@@ -5770,14 +6400,22 @@ class UnitRegistry:
     zeptofarads: Unit
     zeptofeet: Unit
     zeptofl_oz: Unit
+    zeptofl_oz_imp: Unit
+    zeptofl_oz_uk: Unit
+    zeptofl_oz_us: Unit
     zeptofluid_ounce: Unit
+    zeptofluid_ounce_imperial: Unit
     zeptofoot: Unit
     zeptofranklin: Unit
     zeptoft: Unit
     zeptog: Unit
     zeptogal: Unit
+    zeptogal_imp: Unit
+    zeptogal_uk: Unit
+    zeptogal_us: Unit
     zeptogalileo: Unit
     zeptogallon: Unit
+    zeptogallon_imperial: Unit
     zeptogallon_us: Unit
     zeptogallons: Unit
     zeptogauss: Unit
@@ -5792,7 +6430,13 @@ class UnitRegistry:
     zeptohenry: Unit
     zeptohertz: Unit
     zeptohorsepower: Unit
+    zeptohorsepower_electric: Unit
+    zeptohorsepower_mechanical: Unit
+    zeptohorsepower_metric: Unit
     zeptohp: Unit
+    zeptohp_electric: Unit
+    zeptohp_mechanical: Unit
+    zeptohp_metric: Unit
     zeptojoule: Unit
     zeptojoules: Unit
     zeptojulio: Unit
@@ -5913,8 +6557,12 @@ class UnitRegistry:
     zeptoyard: Unit
     zeptoyd: Unit
     zeptoyear: Unit
+    zeptoyear_gregorian: Unit
+    zeptoyear_julian: Unit
     zeptoyears: Unit
     zeptoyr: Unit
+    zeptoyr_gregorian: Unit
+    zeptoyr_julian: Unit
     zeptoÅ: Unit
     zeptoΩ: Unit
     zeptoΩm: Unit
@@ -5956,6 +6604,8 @@ class UnitRegistry:
     zettaa0: Unit
     zettaabampere: Unit
     zettaacre: Unit
+    zettaacre_international: Unit
+    zettaacre_us_survey: Unit
     zettaacres: Unit
     zettaampere: Unit
     zettaamperio: Unit
@@ -5977,8 +6627,15 @@ class UnitRegistry:
     zettabohr: Unit
     zettabohr_radius: Unit
     zettabtu: Unit
+    zettabtu_iso: Unit
+    zettabtu_it: Unit
+    zettabtu_th: Unit
     zettacal: Unit
+    zettacal_it: Unit
+    zettacal_th: Unit
     zettacalorie: Unit
+    zettacalorie_it: Unit
+    zettacalorie_th: Unit
     zettacalories: Unit
     zettacandela: Unit
     zettacandelas: Unit
@@ -6016,14 +6673,22 @@ class UnitRegistry:
     zettafarads: Unit
     zettafeet: Unit
     zettafl_oz: Unit
+    zettafl_oz_imp: Unit
+    zettafl_oz_uk: Unit
+    zettafl_oz_us: Unit
     zettafluid_ounce: Unit
+    zettafluid_ounce_imperial: Unit
     zettafoot: Unit
     zettafranklin: Unit
     zettaft: Unit
     zettag: Unit
     zettagal: Unit
+    zettagal_imp: Unit
+    zettagal_uk: Unit
+    zettagal_us: Unit
     zettagalileo: Unit
     zettagallon: Unit
+    zettagallon_imperial: Unit
     zettagallon_us: Unit
     zettagallons: Unit
     zettagauss: Unit
@@ -6038,7 +6703,13 @@ class UnitRegistry:
     zettahenry: Unit
     zettahertz: Unit
     zettahorsepower: Unit
+    zettahorsepower_electric: Unit
+    zettahorsepower_mechanical: Unit
+    zettahorsepower_metric: Unit
     zettahp: Unit
+    zettahp_electric: Unit
+    zettahp_mechanical: Unit
+    zettahp_metric: Unit
     zettajoule: Unit
     zettajoules: Unit
     zettajulio: Unit
@@ -6159,8 +6830,12 @@ class UnitRegistry:
     zettayard: Unit
     zettayd: Unit
     zettayear: Unit
+    zettayear_gregorian: Unit
+    zettayear_julian: Unit
     zettayears: Unit
     zettayr: Unit
+    zettayr_gregorian: Unit
+    zettayr_julian: Unit
     zettaÅ: Unit
     zettaΩ: Unit
     zettaΩm: Unit
