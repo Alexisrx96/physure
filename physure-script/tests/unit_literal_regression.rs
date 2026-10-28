@@ -67,9 +67,8 @@ fn prefixed_literals_carry_their_scale() {
         ("1 Hz", 1.0, "Hz"),
         ("1 Pa", 1.0, "Pa"),
         ("1 rad", 1.0, "rad"),
-        // physure.conf:185 declares degree to 10 significant digits (π/180 is
-        // 0.017453292519943295); this asserts the parser preserves the registry's value.
-        ("1 deg", 0.0174532925, "deg"),
+        // The registry's degree is π/180 to the last bit; the parser has to keep it.
+        ("1 deg", std::f64::consts::PI / 180.0, "deg"),
         ("1 min", 60.0, "min"),
         ("1 h", 3600.0, "h"),
         // Symbols carrying a digit. `a0` parsed as `1 a * 0` — the Bohr radius evaluated
@@ -79,7 +78,7 @@ fn prefixed_literals_carry_their_scale() {
         // Non-ASCII symbols. The registry lookup was `is_ascii_alphabetic`-only, so these
         // resolved to "" and fell through to the expression parser, which rejects them.
         ("1 Å", 1e-10, "Å"),
-        ("1 °", 0.0174532925, "°"),
+        ("1 °", std::f64::consts::PI / 180.0, "°"),
         ("1 Ω", 1.0, "Ω"),
     ];
 
@@ -754,7 +753,7 @@ fn trig_takes_an_angle_and_propagates_the_derivative() {
 
     // An angle in its own unit is converted first: `deg` carries the degrees → radians
     // factor as its scale, so sin(90°) is 1, not sin(90 rad) = 0.894.
-    let deg: f64 = 0.0174532925; // the factor physure.conf gives `deg`
+    let deg: f64 = std::f64::consts::PI / 180.0; // the factor physure.conf gives `deg`
     assert_close(eval_quantity("sin(90 deg)").value.mean(), 1.0, "sin(90 deg)");
     let cos_deg = eval_quantity("cos(45 +/- 1 deg)");
     assert_close(cos_deg.value.mean(), (45.0 * deg).cos(), "cos(45 deg)");
@@ -815,7 +814,7 @@ fn transcendentals_accept_a_dimensionless_quantity_and_reject_a_dimensioned_one(
 #[test]
 fn degrees_are_an_angle_in_radians_not_in_steradians() {
     let radians = eval_quantity("90 deg => rad");
-    assert_close(radians.value.mean(), 90.0 * 0.0174532925, "90 deg in radians");
+    assert_close(radians.value.mean(), 90.0 * std::f64::consts::PI / 180.0, "90 deg in radians");
     assert_eq!(radians.unit.__repr__(), "rad");
 
     let sum = eval_quantity("30 deg + 15 deg");

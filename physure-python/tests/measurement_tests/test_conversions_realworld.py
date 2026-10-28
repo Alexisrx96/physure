@@ -63,7 +63,7 @@ def test_ounce_to_kilogram_exact():
 def test_slug_to_kilogram_matches_published_value():
     # 1 slug = 1 lbf / (1 ft/s^2) = 14.5939 kg (NIST SP 811 Appendix B).
     assert math.isclose(
-        Q_(1.0, "slug").to("kg").magnitude, 14.5939, rel_tol=1e-6
+        Q_(1.0, "slug").to("kg").magnitude, 14.593902937206364, rel_tol=1e-12
     )
 
 
@@ -90,7 +90,7 @@ def test_hectare_to_square_meter_exact():
 def test_acre_to_square_meter_matches_published_value():
     # 1 acre = 4046.8564224 m^2 (US survey-independent international acre).
     assert math.isclose(
-        Q_(1.0, "acre").to("m^2").magnitude, 4046.856, rel_tol=1e-6
+        Q_(1.0, "acre").to("m^2").magnitude, 4046.8564224, rel_tol=1e-12
     )
 
 
@@ -106,7 +106,7 @@ def test_acre_is_about_43560_square_feet():
 def test_light_year_matches_published_value():
     # IAU: 1 ly = 9.4607e15 m (Julian year * c).
     assert math.isclose(
-        Q_(1.0, "ly").to("m").magnitude, 9.4607e15, rel_tol=1e-5
+        Q_(1.0, "ly").to("m").magnitude, 9460730472580800.0, rel_tol=1e-12
     )
 
 
@@ -135,9 +135,9 @@ def test_calorie_to_joule_exact():
 
 
 def test_btu_to_joule_matches_published_value():
-    # International Table BTU = 1055.05585262 J; .conf stores 1055.06 (6 sig figs).
+    # International Table BTU = 1055.05585262 J, exactly.
     assert math.isclose(
-        Q_(1.0, "BTU").to("J").magnitude, 1055.06, rel_tol=1e-6
+        Q_(1.0, "BTU").to("J").magnitude, 1055.05585262, rel_tol=1e-15
     )
 
 
@@ -179,7 +179,7 @@ def test_torr_to_pascal_matches_published_value():
 
 def test_mmhg_to_pascal_matches_published_value():
     assert math.isclose(
-        Q_(1.0, "mmHg").to("Pa").magnitude, 133.322, rel_tol=1e-6
+        Q_(1.0, "mmHg").to("Pa").magnitude, 133.322387415, rel_tol=1e-15
     )
 
 

@@ -245,7 +245,23 @@ fn degree_is_a_scaled_radian_not_a_scaled_steradian() {
         deg.same_dimensions(&reg.get_unit("rad").unwrap()),
         "a degree and a radian have to be interconvertible"
     );
-    assert!((deg.scale - 0.0174532925).abs() < 1e-12, "deg carries the degrees → radians factor");
+    assert_eq!(deg.scale, std::f64::consts::PI / 180.0, "deg carries the degrees → radians factor");
+}
+
+/// A relation that holds by definition has to come out exact, not as 60.000043 or 760.0021:
+/// the factors in physure.conf are the exact values of their definitions.
+#[test]
+fn scale_ratios_that_are_exact_by_definition_come_out_exact() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let scale = |symbol: &str| reg.get_unit(symbol).unwrap().scale;
+    let close = |got: f64, expected: f64| (got - expected).abs() <= expected.abs() * 1e-14;
+    assert!(close(scale("deg") / scale("arcmin"), 60.0));
+    assert!(close(scale("arcmin") / scale("arcsec"), 60.0));
+    assert!(close(scale("atm") / scale("Torr"), 760.0));
+    assert!(close(scale("gal") / scale("inch").powi(3), 231.0));
+    assert!(close(scale("acre") / scale("ft").powi(2), 43560.0));
+    assert!(close(scale("hp") / (scale("ft") * scale("lbf")), 550.0));
+    assert!(close(scale("psi") / (scale("lbf") / scale("inch").powi(2)), 1.0));
 }
 
 /// The temperature scales are the registry's only affine units: their conversion needs an

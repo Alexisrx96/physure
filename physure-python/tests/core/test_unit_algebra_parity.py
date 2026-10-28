@@ -50,7 +50,6 @@ REFERENCES_PER_GROUP = 2
 # with exact Fraction scales and one rounding; Rust stores scales as f64.
 # Stage 1 gives the core exact scales, and this tuple becomes empty.
 KNOWN_LAST_BIT = (
-    "C",
     "Gb",
     "a0",
     "acre",
@@ -60,18 +59,12 @@ KNOWN_LAST_BIT = (
     "bohr_radius",
     "celsius",
     "centigrade",
-    "coulomb",
-    "coulombs",
     "degC",
     "degF",
     "dyn",
     "dyne",
     "electron_mass",
     "fahrenheit",
-    "gal",
-    "gallon",
-    "gallon_us",
-    "gallons",
     "gilbert",
     "ha",
     "hectare",
@@ -80,6 +73,8 @@ KNOWN_LAST_BIT = (
     "lb",
     "lbf",
     "lbs",
+    "light_year",
+    "ly",
     "me",
     "mp",
     "ounce",
@@ -91,9 +86,6 @@ KNOWN_LAST_BIT = (
     "pounds",
     "ppm",
     "psi",
-    "rad",
-    "radian",
-    "radians",
     "tau0",
 )
 
