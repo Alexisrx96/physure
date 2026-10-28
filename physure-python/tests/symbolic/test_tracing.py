@@ -1,5 +1,5 @@
 import physure as ps
-from physure.application.tracing.context import trace_formulas
+from physure.domain.symbolic.tracer import trace_formulas
 
 
 def test_symbolic_tracing_basic():

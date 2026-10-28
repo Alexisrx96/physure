@@ -119,12 +119,6 @@ count = 2
 cause = "a1"
 
 [[exception]]
-importer = "physure.application.tracing.context"
-imported = "physure.domain.symbolic.tracer"
-kind = "lazy"
-cause = "a2a"
-
-[[exception]]
 importer = "physure.domain.measurement.dimensions"
 imported = "physure.application.parsing"
 kind = "lazy"

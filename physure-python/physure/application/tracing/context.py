@@ -1,14 +1,11 @@
 import sys
-from collections.abc import Generator
-from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from physure.domain.symbolic.tracer import FormulaTracer
 
-# The tracer is imported only inside functions or using TYPE_CHECKING
-# to avoid circular imports.
+# The tracer is imported only under TYPE_CHECKING: its module imports this one.
 _current_tracer: ContextVar["FormulaTracer | None"] = ContextVar(
     "formula_tracer", default=None
 )
@@ -38,22 +35,6 @@ def set_active_tracer(tracer: "FormulaTracer | None") -> Token:
     return _current_tracer.set(tracer)
 
 
-@contextmanager
-def trace_formulas() -> Generator["FormulaTracer", None, None]:
-    """Context manager to enable symbolic tracing.
-
-    Example:
-        with trace_formulas() as tracer:
-            m = Q_(10, "kg", symbol="m")
-            a = Q_(5, "m/s^2", symbol="a")
-            f = m * a
-            print(tracer.get_equation(f))
-    """
-    from physure.domain.symbolic.tracer import FormulaTracer
-
-    tracer = FormulaTracer()
-    token = set_active_tracer(tracer)
-    try:
-        yield tracer
-    finally:
-        _current_tracer.reset(token)
+def reset_active_tracer(token: Token) -> None:
+    """Restores the tracer that was active before `set_active_tracer`."""
+    _current_tracer.reset(token)
