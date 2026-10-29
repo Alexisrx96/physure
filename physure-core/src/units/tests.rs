@@ -755,3 +755,26 @@ fn the_facts_of_a_unit_expression() {
     assert_eq!(facts("kilometer").simplified, "kilometer");
     assert!(reg.facts("furlongs_per_fortnight").is_err());
 }
+
+/// A unit written as symbols stands for what the registry says each symbol is, with exact scales:
+/// `km/h` is 5/18 m/s, and the factor between two of them is rounded once.
+#[test]
+fn a_unit_written_as_symbols_expands_and_converts_by_the_registry() {
+    use crate::units::parser::Parser;
+    let (reg, _) = conf::build_registry_from_conf();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+
+    let kmh = reg.expand(&atomic("km/h")).unwrap();
+    assert!(kmh.same_dimensions(&reg.expand(&atomic("m/s")).unwrap()));
+    assert_eq!(kmh.scale, 1000.0 / 3600.0);
+
+    assert_eq!(reg.factor_between(&atomic("km/h"), &atomic("m/s")).unwrap(), 1000.0 / 3600.0);
+    assert_eq!(reg.factor_between(&atomic("kWh"), &atomic("J")).unwrap(), 3.6e6);
+    assert_eq!(reg.factor_between(&atomic("kg*m/s^2"), &atomic("N")).unwrap(), 1.0);
+    // the offset of a temperature scale is not part of a factor
+    assert_eq!(reg.factor_between(&atomic("degC"), &atomic("K")).unwrap(), 1.0);
+
+    assert!(reg.factor_between(&atomic("m"), &atomic("s")).is_err());
+    assert!(reg.expand(&atomic("furlongs_per_fortnight")).is_err());
+    assert!(reg.expand(&atomic("dB/km")).is_err());
+}

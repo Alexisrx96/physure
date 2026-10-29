@@ -434,6 +434,36 @@ impl UnitRegistry {
         })
     }
 
+    /// The unit that a unit written as symbols stands for: each symbol replaced by what the
+    /// registry says it is, with its exact scale (`km/h` is 5/18 m/s). `atomic` is a unit parsed
+    /// with `Parser::parse_expression_atomic`. A symbol the registry does not know is an error, and
+    /// so is a level inside a compound (`RationalUnit::refuse_logarithmic_compound`).
+    pub fn expand(&self, atomic: &RationalUnit) -> PhysureResult<RationalUnit> {
+        let mut expanded = RationalUnit::dimensionless();
+        for (symbol, (n, d)) in &atomic.dimensions {
+            let unit = self.get_unit(symbol).ok_or_else(|| PhysureError::UnknownUnit {
+                suggestion: self.closest_symbol(symbol),
+                symbol: symbol.clone(),
+            })?;
+            let power = unit.pow(Rational64::new(*n, *d));
+            let product = expanded.mul(&power);
+            RationalUnit::refuse_logarithmic_compound(&[&expanded, &power], &product)?;
+            expanded = product;
+        }
+        Ok(expanded)
+    }
+
+    /// The factor that turns a magnitude in `from` into one in `to`, two units written as symbols
+    /// of the same dimension: the ratio of their exact scales, rounded once. The zero point of a
+    /// temperature scale is not part of a factor.
+    pub fn factor_between(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<f64> {
+        let (from, to) = (self.expand(from)?, self.expand(to)?);
+        if !from.same_dimensions(&to) {
+            return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
+        }
+        Ok(from.ratio_to(&to))
+    }
+
     /// The base or derived unit that `symbol` names, directly or through an alias.
     fn unit_by_symbol(&self, symbol: &str) -> Option<&RationalUnit> {
         let resolved = self.resolve_symbol(symbol);
