@@ -167,7 +167,7 @@ Expected: FAIL to compile, "cannot find function `build_registry_with` in module
 
 - [ ] **Step 3: Implement**
 
-In `physure-core/src/units/conf.rs`, replace the head of `build_registry_from_conf` (from the `pub fn` line to the `.clone();` that ends the `EMBEDDED` block, both included) so that the cached parse is a function of its own and the new function uses it:
+In `physure-core/src/units/conf.rs`, put the cached parse in a function of its own and add the new function, both just above the doc comment of `build_registry_from_conf` (the one that starts `/// Builds a UnitRegistry and constants map from master`):
 
 ```rust
 /// The embedded catalog, parsed once per process.
@@ -191,12 +191,14 @@ pub fn build_registry_with(extra: &str) -> (UnitRegistry, HashMap<String, String
     (reg, constants)
 }
 
-pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
+```
+
+Then, in the body of `build_registry_from_conf`, replace the `static EMBEDDED` block (from `static EMBEDDED: ...` to the `.clone();` that ends the `let (mut reg, mut constants) = EMBEDDED` statement, both included) with:
+
+```rust
     // 1. Load embedded default master physure.conf
     let (mut reg, mut constants) = embedded_catalog().clone();
 ```
-
-(The doc comment of `build_registry_from_conf` that precedes it stays above it.)
 
 - [ ] **Step 4: Run the tests**
 
@@ -329,7 +331,7 @@ In `impl PyUnitRegistry`, after `from_conf`, add:
 
 - [ ] **Step 2: Add the stubs**
 
-In `physure-python/physure/_core.pyi`, find `class UnitRegistry:` and add after its existing methods:
+In `physure-python/physure/_core.pyi`, add after the line `    def __getattr__(self, name: str) -> Any: ...` that closes `class UnitRegistry:` (the stub has a catch-all `__getattr__`; the explicit methods give the checker their types):
 
 ```python
     @staticmethod

@@ -1,7 +1,7 @@
 # A1, stages 2 and 3 — replacing Python's unit classes — design
 
 **Date:** 2026-10-29
-**Status:** proposed; the decisions of the last section wait for the maintainer
+**Status:** approved by the maintainer on 2026-10-29 (the three decisions of the last section were taken as recommended); step 1 is planned, the others are planned when they come up
 **Base:** local `main` @ `fb08c08` (A1 stage 1 complete: stages 0, 1a, 1b, 1c and 1d merged, not yet on `origin/main`)
 **Follows:** `2026-10-27-a1-rust-owned-unit-algebra-design.md`, whose stage 2 ("`Dimension` and `CompoundUnit`") and stage 3 ("`UnitSystem`") this refines.
 
@@ -69,8 +69,8 @@ Each step is one branch, verified end to end, that I show before it is merged; t
 
 A Rust `Quantity` that holds arrays (the spec keeps it scalar); publishing branches or releases; the symbolic engine; `A2b` (the relocation of modules and the rename of `core`), which waits for this work because it removes the imports that cause part of the cycle.
 
-## Decisions for the maintainer
+## Decisions taken with the maintainer (2026-10-29)
 
-1. **Order.** Registry first (steps 1 and 2, then the seam, then the classes) instead of the spec's classes first and system after. Recommended: the finding above is why.
-2. **Where user-visible behaviour changes land.** Each in its own branch after the classes are swapped (step 6), so the swap is judged on "nothing a user sees changed" and each rule on its own diff. The alternative is to fold them into the swap, which is fewer branches and a harder review.
-3. **What `Dimension` becomes.** A wrapper of the core's rational dimension (fixes the silent loss of fractional powers) instead of the integer `DimVector` the spec named (a rename, and the wrong answer stays).
+1. **Order: registry first** (steps 1 and 2, then the seam, then the classes) instead of the spec's classes first and system after; the finding above is why.
+2. **Where user-visible behaviour changes land: each in its own branch after the classes are swapped** (step 6), so the swap is judged on "nothing a user sees changed" and each rule on its own diff.
+3. **What `Dimension` becomes: a wrapper of the core's rational dimension** (fixes the silent loss of fractional powers), not the integer `DimVector` the spec named (a rename that keeps the wrong answer).
