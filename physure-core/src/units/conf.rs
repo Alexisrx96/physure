@@ -116,8 +116,8 @@ fn parse_conf(
                     let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
                     if parts.len() >= 2 {
                         let symbol = parts[0];
-                        if let Ok(factor) = parts[1].parse::<f64>() {
-                            registry.add_prefix_exact(symbol.to_string(), factor, crate::units::exact::ExactScale::parse(parts[1]));
+                        if let Some((factor, exact)) = parse_number(parts[1]) {
+                            registry.add_prefix_exact(symbol.to_string(), factor, exact);
                             registry.add_prefix_name(name.trim().to_string(), symbol.to_string());
                         } else {
                             problems.push(format!("{line}: the factor of a prefix is a number, not '{}'", parts[1]));

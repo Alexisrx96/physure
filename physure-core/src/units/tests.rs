@@ -889,3 +889,14 @@ fn a_level_can_have_a_dimension() {
     assert_eq!(facts.dimension, expected);
     assert!(!facts.is_linear);
 }
+
+/// A prefix factor is a decimal or a fraction, as the factor of a unit is: `1/3` stays exact.
+#[test]
+fn a_prefix_factor_can_be_a_fraction() {
+    use crate::units::parser::Parser;
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    conf::extend_registry(&mut reg, &mut constants, "[Prefixes]\nthird = th, 1/3\n").unwrap();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert_eq!(reg.factor_between(&atomic("thm"), &atomic("m")).unwrap(), 1.0 / 3.0);
+    assert_eq!(reg.factor_between(&atomic("thirdm"), &atomic("m")).unwrap(), 1.0 / 3.0);
+}
