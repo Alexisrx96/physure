@@ -260,6 +260,15 @@ impl Quantity {
         value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend::exact(factor)))
     }
 
+    /// Divides an uncertainty value by an exact constant, the inverse of `scale_value`. It is
+    /// not the same as multiplying by the reciprocal, and Python divides.
+    fn unscale_value(value: &UncertaintyValue, divisor: f64) -> PhysureResult<UncertaintyValue> {
+        if divisor == 1.0 {
+            return Ok(value.clone());
+        }
+        value.propagate_div(&UncertaintyValue::Gaussian(GaussianBackend::exact(divisor)))
+    }
+
     /// Shifts an uncertainty value by an exact additive constant. A zero point carries no
     /// uncertainty of its own, so `exact` is used for the same reason as in `scale_value`:
     /// minting a source id here would leave a term that never cancels.
@@ -271,6 +280,9 @@ impl Quantity {
     }
 
     pub fn add(&self, other: &Quantity) -> PhysureResult<Quantity> {
+        if self.unit.is_logarithmic() || other.unit.is_logarithmic() {
+            return self.combine_levels(other, false);
+        }
         // An absolute temperature has no additive algebra of its own — `20 degC + 5 degC` is
         // only meaningful once both sides are on an interval scale. Normalising to K first
         // keeps every operation below purely multiplicative, as the rest of this file assumes.
@@ -293,6 +305,9 @@ impl Quantity {
     }
 
     pub fn sub(&self, other: &Quantity) -> PhysureResult<Quantity> {
+        if self.unit.is_logarithmic() || other.unit.is_logarithmic() {
+            return self.combine_levels(other, true);
+        }
         // `T2 - T1` across Celsius/Fahrenheit is the calorimetry case: both sides go to K, so
         // the difference comes out as a true interval instead of subtracting two zero points.
         if self.unit.is_affine() || other.unit.is_affine() {
@@ -319,6 +334,7 @@ impl Quantity {
         }
         let new_value = self.value.propagate_mul(&other.value)?;
         let new_unit = self.unit.mul(&other.unit);
+        RationalUnit::refuse_logarithmic_compound(&[&self.unit, &other.unit], &new_unit)?;
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
@@ -328,6 +344,7 @@ impl Quantity {
         }
         let new_value = self.value.propagate_div(&other.value)?;
         let new_unit = self.unit.div(&other.unit);
+        RationalUnit::refuse_logarithmic_compound(&[&self.unit, &other.unit], &new_unit)?;
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
@@ -349,6 +366,7 @@ impl Quantity {
         let exp_r = Rational64::from_f64(exponent).unwrap_or(Rational64::new(0, 1));
         let new_value = self.value.propagate_pow(exponent)?;
         let new_unit = self.unit.pow(exp_r);
+        RationalUnit::refuse_logarithmic_compound(&[&self.unit], &new_unit)?;
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
@@ -438,6 +456,7 @@ impl Quantity {
 
     /// This quantity's value in radians, or an error if it is not an angle at all.
     fn as_radians(&self, func: &str) -> PhysureResult<UncertaintyValue> {
+        self.refuse_level(func)?;
         if !self.unit.dimensions.is_empty() && !self.unit.same_dimensions(&RationalUnit::base("rad")) {
             return Err(PhysureError::Generic(format!(
                 "{func} expects an angle or a dimensionless value, got '{}'",
@@ -475,6 +494,7 @@ impl Quantity {
     /// none. `ln(5 m)` is a physics error, so it is reported as one instead of being
     /// computed from the bare number 5.
     fn transcendental(&self, name: &str, core_func: &str) -> PhysureResult<Quantity> {
+        self.refuse_level(name)?;
         if !self.unit.dimensions.is_empty() {
             return Err(PhysureError::Generic(format!(
                 "{name} expects a dimensionless value, got '{}'",
@@ -547,7 +567,11 @@ impl Quantity {
 
     /// This quantity's magnitude expressed in canonical base-SI terms (mean * unit.scale).
     pub fn canonical_magnitude(&self) -> f64 {
-        self.value.mean() * self.unit.scale
+        match self.unit.log {
+            // the coherent value of a level is the ratio it stands for
+            Some(log) => log.ratio_of(self.value.mean()),
+            None => self.value.mean() * self.unit.scale,
+        }
     }
 
     /// The measurement quoted in the base units it is built from: `2 kΩ` reads
@@ -555,6 +579,11 @@ impl Quantity {
     /// value is the same one `Display` prints — only the terms change. This is what `x: base`
     /// spells in PHS.
     pub fn base_display(&self) -> String {
+        if self.unit.is_logarithmic() {
+            if let Ok(ratio) = self.convert_to(&RationalUnit::dimensionless()) {
+                return ratio.base_display();
+            }
+        }
         let mut base_unit = self.unit.clone().with_unit_scale();
         base_unit.display_name = None;
         let std_dev = self.value.std_dev() * self.unit.scale;
@@ -580,6 +609,9 @@ impl Quantity {
                 actual: target.__repr__(),
             });
         }
+        if self.unit.is_logarithmic() || target.is_logarithmic() {
+            return self.convert_logarithmic(target);
+        }
         // Affine scales (degC, degF) cannot be converted with a single ratio: the zero points
         // are subtracted, not scaled. The conversion is `old * scale + shift`, with the scale
         // and the shift each rounded once from the exact values (`affine_to`).
@@ -591,6 +623,73 @@ impl Quantity {
         let ratio = self.unit.ratio_to(target);
         let new_value = Self::scale_value(&self.value, ratio)?;
         Ok(Quantity { value: new_value, unit: target.clone() })
+    }
+
+    /// A level is the logarithm of a ratio, so a function or a product that reads its number
+    /// as a plain magnitude does not apply: `ln(20 dB)` is not `ln(100)`.
+    fn refuse_level(&self, operation: &str) -> PhysureResult<()> {
+        if self.unit.is_logarithmic() {
+            return Err(PhysureError::Generic(format!(
+                "{operation} expects a plain ratio, got the level '{}'; convert it first (for example `x => unity`)",
+                self.unit.__repr__()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The plain ratio this quantity stands for. A level goes through the inverse of its
+    /// logarithm and any other unit through its scale: the operations of Python's `to_base`,
+    /// in the same order, so both sides round alike.
+    fn ratio_value(&self) -> PhysureResult<UncertaintyValue> {
+        match self.unit.log {
+            Some(log) => {
+                let exponent = Self::unscale_value(&self.value, log.factor)?;
+                let power = exponent.propagate_function("pow10")?;
+                Self::scale_value(&power, log.reference)
+            }
+            None => Self::scale_value(&self.value, self.unit.scale),
+        }
+    }
+
+    /// Conversion where `self` or `target` is a level: through the ratio both stand for.
+    /// A ratio that is not positive has no level (Python raises `math domain error`).
+    fn convert_logarithmic(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
+        if self.unit.log == target.log && self.unit.scale == target.scale {
+            return Ok(Quantity { value: self.value.clone(), unit: target.clone() });
+        }
+        let ratio = self.ratio_value()?;
+        let value = match target.log {
+            Some(log) => {
+                let relative = Self::unscale_value(&ratio, log.reference)?;
+                if relative.mean() <= 0.0 {
+                    return Err(PhysureError::DomainError(format!(
+                        "a level needs a positive ratio, got {}",
+                        ratio.mean()
+                    )));
+                }
+                Self::scale_value(&relative.propagate_function("log10")?, log.factor)?
+            }
+            None => Self::unscale_value(&ratio, target.scale)?,
+        };
+        Ok(Quantity { value, unit: target.clone() })
+    }
+
+    /// `10 dB + 20 dB`: levels combine as the quantities they stand for, so the sum is taken
+    /// on the ratios and written back as a level (20.41 dB). A level and a plain quantity do
+    /// not combine; Python adds the numbers after converting one, which has no meaning.
+    fn combine_levels(&self, other: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
+        if !(self.unit.is_logarithmic() && other.unit.is_logarithmic()) {
+            return Err(PhysureError::Generic(format!(
+                "cannot {} a level and a plain quantity ('{}' and '{}'); convert one of them first",
+                if subtract { "subtract" } else { "add" },
+                self.unit.__repr__(),
+                other.unit.__repr__()
+            )));
+        }
+        let ratios = RationalUnit::dimensionless();
+        let (a, b) = (self.convert_to(&ratios)?, other.convert_to(&ratios)?);
+        let combined = if subtract { a.sub(&b)? } else { a.add(&b)? };
+        combined.convert_to(&self.unit)
     }
 
     /// This quantity restated in its canonical base unit, so that arithmetic is meaningful:

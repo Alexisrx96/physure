@@ -278,6 +278,17 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         return;
     }
 
+    // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`, and
+    // its dimension is the dimensionless "1", because it is the logarithm of a ratio.
+    if parts[0].eq_ignore_ascii_case("log") {
+        let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
+        if let (Some(factor), Some(reference), Some("1")) = (number(1), number(2), parts.get(3).copied()) {
+            registry.add_log_unit(symbol.clone(), factor, reference);
+            register_aliases(registry, key, &symbol, &aliases);
+        }
+        return;
+    }
+
     // A number of the catalog is a decimal (`0.0254`, `1e-5`) or a fraction (`5/9`); the exact
     // rational is what conversions use, so that a ratio is rounded once.
     let (factor, exact) = match parse_number(parts[0]) {
@@ -365,10 +376,15 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         }
     }
 
-    registry.register_alias(key.to_string(), symbol.clone());
-    for alias in &aliases {
-        if alias != &symbol {
-            registry.register_alias(alias.clone(), symbol.clone());
+    register_aliases(registry, key, &symbol, &aliases);
+}
+
+/// Makes the key of a unit line and each of its aliases another name for `symbol`.
+fn register_aliases(registry: &mut UnitRegistry, key: &str, symbol: &str, aliases: &[String]) {
+    registry.register_alias(key.to_string(), symbol.to_string());
+    for alias in aliases {
+        if alias != symbol {
+            registry.register_alias(alias.clone(), symbol.to_string());
         }
     }
 }

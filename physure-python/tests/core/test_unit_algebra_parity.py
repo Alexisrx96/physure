@@ -82,7 +82,7 @@ CLASSIFIED_KINDS = {
     "rust-rejects-long-prefix-name",
     "rust-does-not-know-unit",
     "rust-rejects-delta-temperature",
-    "dimensionless-kinds-merged-by-python",
+    "angle-and-solid-angle-merged-by-python",
 }
 
 
@@ -155,8 +155,8 @@ def _classify(symbol, dimension, py, py_exc, rs, rs_exc, long_prefixes, names):
             return "rust-does-not-know-unit"
         if dimension == "O" and "Unit mismatch" in str(rs_exc):
             return "rust-rejects-delta-temperature"
-        if dimension in {"A", "Dimensionless"}:
-            return "dimensionless-kinds-merged-by-python"
+        if dimension == "A":
+            return "angle-and-solid-angle-merged-by-python"
         return "rust-error-other"
     if rs_exc is None:
         return "python-error-other"
@@ -259,13 +259,6 @@ def test_rust_accepts_the_long_prefix_names_python_accepts(comparison):
     assert not rejected, _show(rejected)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Gap for A1 Stage 1: the PHS registry does not know the logarithmic "
-        "units ('dB', 'decibel', 'pH') that the catalog and Python define."
-    ),
-)
 def test_rust_knows_every_unit_python_knows(comparison):
     unknown = _of_kind(comparison, "rust-does-not-know-unit")
     assert not unknown, _show(unknown)
@@ -279,15 +272,14 @@ def test_rust_converts_delta_temperatures_like_python(comparison):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Decided: angles, solid angle, plain ratios and logarithmic units are "
-        "different kinds and must not convert into each other. Rust refuses; "
-        "Python files them (rad, deg, arcmin, sr, percent, ppm, dB, pH) under "
-        "one dimension, so it still converts arcmin to sr and percent to dB. "
+        "Decided: an angle and a solid angle are different kinds and must not "
+        "convert into each other. Rust refuses; Python files rad, deg, arcmin "
+        "and sr under one dimension, so it still converts arcmin to sr. "
         "Closed when Python adopts the Rust types (A1 Stage 2)."
     ),
 )
-def test_python_does_not_mix_unrelated_dimensionless_kinds(comparison):
-    merged = _of_kind(comparison, "dimensionless-kinds-merged-by-python")
+def test_python_does_not_mix_angle_and_solid_angle(comparison):
+    merged = _of_kind(comparison, "angle-and-solid-angle-merged-by-python")
     assert not merged, _show(merged)
 
 

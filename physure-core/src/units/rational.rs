@@ -2,9 +2,47 @@ use std::collections::HashMap;
 use num_rational::Rational64;
 use std::hash::{Hash, Hasher};
 use smallvec::SmallVec;
+use crate::error::{PhysureError, PhysureResult};
 use crate::units::exact::ExactScale;
 
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
+
+/// What makes a unit a *level*: `level = factor * log10(ratio / reference)`, so `dB` is
+/// `Log, 10, 1.0` and `pH` is `Log, -1, 1.0`. A level is dimensionless, a scale over plain
+/// ratios: `20 dB` is the ratio 100.
+#[derive(Clone, Copy, Debug)]
+pub struct LogScale {
+    pub factor: f64,
+    pub reference: f64,
+}
+
+impl PartialEq for LogScale {
+    fn eq(&self, other: &Self) -> bool {
+        self.factor.to_bits() == other.factor.to_bits() && self.reference.to_bits() == other.reference.to_bits()
+    }
+}
+
+impl Eq for LogScale {}
+
+impl Hash for LogScale {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.factor.to_bits().hash(state);
+        self.reference.to_bits().hash(state);
+    }
+}
+
+impl LogScale {
+    /// The ratio a level stands for. The same two operations as Python's
+    /// `LogarithmicConverter.to_base`, in the same order, so both sides round alike.
+    pub fn ratio_of(&self, level: f64) -> f64 {
+        self.reference * 10f64.powf(level / self.factor)
+    }
+
+    /// The level of a positive ratio (`LogarithmicConverter.from_base`).
+    pub fn level_of(&self, ratio: f64) -> f64 {
+        self.factor * (ratio / self.reference).log10()
+    }
+}
 
 /// A unit representation using rational exponents to avoid floating-point errors.
 #[derive(Clone, Debug)]
@@ -28,6 +66,9 @@ pub struct RationalUnit {
     /// `Some(e)`, `offset` is `e` rounded once. `None` with a non-zero `offset` is an offset that
     /// arrived as a bare `f64`; a zero `offset` is exactly zero whatever this holds.
     pub exact_offset: Option<ExactScale>,
+    /// Set for a level (`dB`, `pH`), which converts through the logarithm of a ratio instead
+    /// of through a scale. Its `scale` is 1 and it has no dimensions.
+    pub log: Option<LogScale>,
     pub id: u64,
     pub display_name: Option<String>,
 }
@@ -41,6 +82,7 @@ impl PartialEq for RationalUnit {
         self.id == other.id
             && self.scale.to_bits() == other.scale.to_bits()
             && self.offset.to_bits() == other.offset.to_bits()
+            && self.log == other.log
     }
 }
 
@@ -49,6 +91,7 @@ impl Hash for RationalUnit {
         self.id.hash(state);
         self.scale.to_bits().hash(state);
         self.offset.to_bits().hash(state);
+        self.log.hash(state);
     }
 }
 
@@ -76,7 +119,7 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, id, display_name: None }
+        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None }
     }
 
     /// Returns a copy of this unit with a different scale factor (same dimensions/id). The
@@ -149,6 +192,35 @@ impl RationalUnit {
         }
     }
 
+    /// Returns a copy of this unit as a level: dimensionless, scale 1, and the given logarithm.
+    pub fn with_log(mut self, log: LogScale) -> Self {
+        self.log = Some(log);
+        self
+    }
+
+    /// True for a level (`dB`, `pH`).
+    pub fn is_logarithmic(&self) -> bool {
+        self.log.is_some()
+    }
+
+    /// A bare number: no dimensions, scale 1, not a level. Multiplying by it changes nothing.
+    fn is_plain_number(&self) -> bool {
+        self.log.is_none() && self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9
+    }
+
+    /// A level stands alone: `dB/km` or `dB^2` would keep the number and lose the logarithm
+    /// it is the level of. `result` is what `operands` combined into; if a level went in and
+    /// no level came out, say so instead of returning a plain ratio.
+    pub fn refuse_logarithmic_compound(operands: &[&Self], result: &Self) -> PhysureResult<()> {
+        match operands.iter().find(|unit| unit.is_logarithmic()) {
+            Some(level) if !result.is_logarithmic() => Err(PhysureError::Generic(format!(
+                "the logarithmic unit '{}' cannot be part of a product, quotient or power of units; convert it to a ratio first",
+                level.__repr__()
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     /// True for absolute affine units — the temperature scales. Their arithmetic is not
     /// closed (5 degC * 2 is not 10 degC), so operations normalise them via `to_delta` first.
     pub fn is_affine(&self) -> bool {
@@ -176,6 +248,7 @@ impl RationalUnit {
             exact: Some(ExactScale::one()),
             offset: 0.0,
             exact_offset: None,
+            log: None,
             id: 0,
             display_name: None,
         }
@@ -249,7 +322,16 @@ impl RationalUnit {
         let scale = exact.as_ref().map_or(self.scale * other.scale, ExactScale::to_f64);
         // No offset on a product: `degC * m` has no zero point to speak of. Callers that hold
         // an affine operand must `to_delta` it (and shift its magnitude) before multiplying.
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, id, display_name }
+        // A level times a plain number is still that level (`10 dB * 2`); with anything else it
+        // is no level at all, which `refuse_logarithmic_compound` reports to whoever can fail.
+        let log = if other.is_plain_number() {
+            self.log
+        } else if self.is_plain_number() {
+            other.log
+        } else {
+            None
+        };
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -299,7 +381,8 @@ impl RationalUnit {
             _ => None,
         };
         let scale = exact.as_ref().map_or(self.scale / other.scale, ExactScale::to_f64);
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, id, display_name }
+        let log = if other.is_plain_number() { self.log } else { None };
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -321,7 +404,8 @@ impl RationalUnit {
             _ => None,
         };
         let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, id, display_name: None }
+        let log = if exp_r == Rational64::from_integer(1) { self.log } else { None };
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name: None }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

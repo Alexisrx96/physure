@@ -163,6 +163,24 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn product(left: &RationalUnit, right: &RationalUnit) -> PhysureResult<RationalUnit> {
+        let result = left.mul(right);
+        RationalUnit::refuse_logarithmic_compound(&[left, right], &result)?;
+        Ok(result)
+    }
+
+    fn quotient(left: &RationalUnit, right: &RationalUnit) -> PhysureResult<RationalUnit> {
+        let result = left.div(right);
+        RationalUnit::refuse_logarithmic_compound(&[left, right], &result)?;
+        Ok(result)
+    }
+
+    fn power(base: &RationalUnit, exponent: Rational64) -> PhysureResult<RationalUnit> {
+        let result = base.pow(exponent);
+        RationalUnit::refuse_logarithmic_compound(&[base], &result)?;
+        Ok(result)
+    }
+
     pub fn parse_expression(input: &str) -> PhysureResult<RationalUnit> {
         let (registry, _) = crate::units::conf::build_registry_from_conf();
         Self::parse_expression_impl(input, Some(&registry))
@@ -223,15 +241,15 @@ impl<'a> Parser<'a> {
             if self.current_token == Token::Mul {
                 self.advance()?;
                 let right = self.parse_factor()?;
-                left = left.mul(&right);
+                left = Self::product(&left, &right)?;
             } else if self.current_token == Token::Div {
                 self.advance()?;
                 let right = self.parse_factor()?;
-                left = left.div(&right);
+                left = Self::quotient(&left, &right)?;
             } else {
                 // Implicit multiplication (space or adjacent units e.g., "kg m")
                 let right = self.parse_factor()?;
-                left = left.mul(&right);
+                left = Self::product(&left, &right)?;
             }
         }
         Ok(left)
@@ -265,7 +283,7 @@ impl<'a> Parser<'a> {
                     }
                 };
                 if let Some((n, d)) = exp_opt {
-                    u.pow(Rational64::new(n, d))
+                    Self::power(&u, Rational64::new(n, d))?
                 } else {
                     u
                 }
@@ -323,10 +341,10 @@ impl<'a> Parser<'a> {
                 }
                 ref tok => return Err(PhysureError::ParseError(format!("Expected exponent number after '^', got {:?}", tok))),
             };
-            base = base.pow(exp_rat);
+            base = Self::power(&base, exp_rat)?;
         } else if let Token::Number(n, d) = self.current_token {
             self.advance()?;
-            base = base.pow(Rational64::new(n, d));
+            base = Self::power(&base, Rational64::new(n, d))?;
         }
 
         Ok(base)

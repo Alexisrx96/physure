@@ -1140,6 +1140,7 @@ class Quantity(
         # scales are rational, vs. two roundings via to_base/from_base.
         from physure.domain.measurement.converters import (
             LinearConverter,
+            LogarithmicConverter,
             OffsetConverter,
             affine_coefficients,
         )
@@ -1148,6 +1149,22 @@ class Quantity(
             target_converter, LinearConverter
         ):
             return None
+
+        if (
+            isinstance(source_converter, LogarithmicConverter)
+            and source_converter == target_converter
+        ):
+            # The same level under another name (decibel, dB): nothing to convert,
+            # and a round trip through the ratio only adds noise (1.0000000000000002).
+            return cast(
+                "Quantity[ValueType, UncType, UnitType]",
+                Quantity.from_input(
+                    self.magnitude,
+                    target_unit,
+                    self.system,
+                    uncertainty=self.uncertainty,
+                ),
+            )
 
         if isinstance(
             source_converter, (LinearConverter, OffsetConverter)

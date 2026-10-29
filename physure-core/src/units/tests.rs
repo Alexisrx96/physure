@@ -513,3 +513,118 @@ fn log10_and_pow10_are_functions_of_every_uncertainty_backend() {
     assert_eq!(ratio.mean(), 100.0);
     assert!((ratio.std_dev() - 100.0 * std::f64::consts::LN_10 * 0.01).abs() < 1e-12);
 }
+
+/// A level is a unit of its own kind: the catalog's `Log` lines are in the registry, `pH` is the
+/// level and no longer a picohenry, and a prefix has nothing to scale on a level.
+#[test]
+fn the_logarithmic_units_of_the_catalog_are_levels() {
+    use crate::units::parser::Parser;
+    let (reg, _) = conf::build_registry_from_conf();
+    for name in ["dB", "decibel", "pH"] {
+        let unit = reg.get_unit(name).unwrap_or_else(|| panic!("{name} should be known"));
+        assert!(unit.is_logarithmic(), "{name}");
+        assert!(unit.dimensions.is_empty(), "{name}");
+        assert_eq!(unit.scale, 1.0, "{name}");
+    }
+    assert_eq!(reg.get_unit("dB").unwrap(), reg.get_unit("decibel").unwrap());
+    assert_ne!(reg.get_unit("dB").unwrap(), reg.get_unit("pH").unwrap());
+    assert_ne!(reg.get_unit("dB").unwrap(), reg.get_unit("unity").unwrap());
+    // pH is the level; the picohenry is still there under its spelled-out name
+    assert!(!reg.get_unit("picohenry").unwrap().is_logarithmic());
+    assert_eq!(reg.get_unit("picohenry").unwrap().scale, 1e-12);
+    // no prefixes on a level, and no level inside a compound unit
+    assert!(reg.get_unit("mdB").is_none());
+    assert!(reg.get_unit("kilodecibel").is_none());
+    assert!(Parser::parse_expression("dB").unwrap().is_logarithmic());
+    for compound in ["dB/km", "dB*m", "dB^2", "1/dB", "dB/dB"] {
+        assert!(Parser::parse_expression(compound).is_err(), "{compound}");
+    }
+    assert!(Parser::parse_expression("dB/1").unwrap().is_logarithmic());
+}
+
+/// Levels convert through the ratio they stand for, with the operations of Python's
+/// `LogarithmicConverter`, so both sides agree to the last bit.
+#[test]
+fn levels_convert_to_ratios_and_to_each_other() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let convert = |value: f64, from: &str, to: &str| -> f64 {
+        Quantity::new(value, from).unwrap().convert_to(&reg.get_unit(to).unwrap()).unwrap().value.mean()
+    };
+    assert_eq!(convert(20.0, "dB", "unity"), 100.0);
+    assert_eq!(convert(20.0, "dB", "percent"), 100.0 / 0.01);
+    assert_eq!(convert(7.0, "pH", "unity"), 10f64.powf(7.0 / -1.0));
+    assert_eq!(convert(50.0, "percent", "dB"), 10.0 * (50.0f64 * 0.01).log10());
+    assert!((convert(50.0, "percent", "dB") + 3.010299956639812).abs() < 1e-12);
+    assert_eq!(convert(1.0, "unity", "dB"), 0.0);
+    assert_eq!(convert(3.0, "dB", "decibel"), 3.0);
+    assert!((convert(3.0, "dB", "pH") + 0.3).abs() < 1e-12);
+    assert!((convert(10.0, "ppm", "dB") + 50.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_level_does_not_convert_into_a_dimension_or_an_angle_and_a_ratio_must_be_positive() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let db = reg.get_unit("dB").unwrap();
+    for from in ["m", "rad", "sr", "deg"] {
+        assert!(Quantity::new(1.0, from).unwrap().convert_to(&db).is_err(), "{from} => dB");
+        assert!(Quantity::new(1.0, "dB").unwrap().convert_to(&reg.get_unit(from).unwrap()).is_err(), "dB => {from}");
+    }
+    assert!(Quantity::new(0.0, "unity").unwrap().convert_to(&db).is_err());
+    assert!(Quantity::new(-1.0, "unity").unwrap().convert_to(&db).is_err());
+}
+
+#[test]
+fn the_uncertainty_of_a_level_follows_the_logarithm() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let unity = reg.get_unit("unity").unwrap();
+    let ratio = Quantity::with_uncertainty(10.0, 0.5, "dB").unwrap().convert_to(&unity).unwrap();
+    assert_eq!(ratio.value.mean(), 10.0);
+    // d(10^(x/10))/dx = 10^(x/10) ln(10) / 10; Python gives 1.151292546497023
+    assert!((ratio.value.std_dev() - 1.151292546497023).abs() < 1e-12);
+    let level = Quantity::with_uncertainty(2.0, 0.1, "unity").unwrap().convert_to(&reg.get_unit("dB").unwrap()).unwrap();
+    assert!((level.value.std_dev() - 0.21714724095162588).abs() < 1e-12);
+}
+
+/// Levels add as the quantities they stand for; a level and a plain quantity do not add; a
+/// level times a plain number is that level; nothing else is defined for a level.
+#[test]
+fn levels_combine_as_ratios_and_refuse_what_has_no_meaning() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    let sum = q(10.0, "dB").add(&q(20.0, "dB")).unwrap();
+    assert!(sum.unit.is_logarithmic());
+    assert_eq!(sum.value.mean(), 10.0 * (10f64.powf(1.0) + 10f64.powf(2.0)).log10());
+    assert!((sum.value.mean() - 20.41392685158225).abs() < 1e-12);
+    let difference = q(20.0, "dB").sub(&q(10.0, "dB")).unwrap();
+    assert!((difference.value.mean() - 19.54242509439325).abs() < 1e-12);
+    assert!(q(10.0, "dB").sub(&q(20.0, "dB")).is_err());
+    assert!(q(10.0, "dB").add(&q(1.0, "unity")).is_err());
+    assert!(q(1.0, "unity").add(&q(10.0, "dB")).is_err());
+    assert!(q(3.0, "dB").add(&q(3.0, "pH")).is_ok());
+
+    let doubled = q(10.0, "dB").mul(&q(2.0, "unity")).unwrap();
+    assert!(doubled.unit.is_logarithmic());
+    assert_eq!(doubled.value.mean(), 20.0);
+    assert_eq!(q(2.0, "unity").mul(&q(10.0, "dB")).unwrap().value.mean(), 20.0);
+    assert!(q(10.0, "dB").div(&q(2.0, "unity")).unwrap().unit.is_logarithmic());
+    for refused in [
+        q(10.0, "dB").mul(&q(2.0, "m")),
+        q(10.0, "dB").div(&q(2.0, "m")),
+        q(2.0, "m").div(&q(10.0, "dB")),
+        q(10.0, "dB").mul(&q(2.0, "dB")),
+        q(10.0, "dB").pow(2.0),
+        q(10.0, "dB").sqrt(),
+        q(10.0, "dB").ln(),
+        q(10.0, "dB").exp(),
+        q(10.0, "dB").sin(),
+    ] {
+        assert!(refused.is_err());
+    }
+    assert!(q(10.0, "dB").abs().unwrap().unit.is_logarithmic());
+    // the coherent value of a level is the ratio, so levels compare by what they stand for
+    assert!(q(20.0, "dB").approx_eq(&q(100.0, "unity"), 1e-12, 0.0));
+    assert!(!q(20.0, "dB").approx_eq(&q(20.0, "unity"), 1e-12, 0.0));
+}

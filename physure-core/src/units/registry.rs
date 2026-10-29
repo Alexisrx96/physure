@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::units::exact::ExactScale;
-use crate::units::rational::RationalUnit;
+use crate::units::rational::{LogScale, RationalUnit};
 
 /// A registry to hold unit definitions, ensuring state isolation.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -75,6 +75,13 @@ impl UnitRegistry {
     /// Registers the spelled-out name of a prefix that is already registered by its symbol.
     pub fn add_prefix_name(&mut self, name: String, symbol: String) {
         self.prefix_names.insert(name, symbol);
+    }
+
+    /// Registers a level: `add_log_unit("dB", 10.0, 1.0)` is `10 * log10(ratio / 1)`.
+    pub fn add_log_unit(&mut self, name: String, factor: f64, reference: f64) {
+        let mut u = RationalUnit::dimensionless().with_log(LogScale { factor, reference });
+        u.display_name = Some(name.clone());
+        self.derived_units.insert(name, u);
     }
 
     pub fn add_base_unit(&mut self, name: String) {
@@ -250,7 +257,8 @@ impl UnitRegistry {
             if best.is_some_and(|(length, ..)| length >= spelled.len()) {
                 continue;
             }
-            if let Some(unit) = self.unit_by_symbol(&name[spelled.len()..]) {
+            // A prefix scales a unit; it has nothing to scale on a level (`mdB`, `kpH`).
+            if let Some(unit) = self.unit_by_symbol(&name[spelled.len()..]).filter(|unit| !unit.is_logarithmic()) {
                 best = Some((spelled.len(), symbol, factor, unit));
             }
         }

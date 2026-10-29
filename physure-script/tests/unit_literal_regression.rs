@@ -1112,3 +1112,28 @@ fn the_fixed_points_of_the_temperature_scales_are_exact_in_phs() {
         assert_eq!(eval_quantity(src).value.mean(), expected, "{src}");
     }
 }
+
+/// The logarithmic units of the catalog work in PHS: they convert through the ratio they
+/// stand for, add as the quantities they stand for, and are refused where they have no meaning.
+#[test]
+fn levels_work_in_phs() {
+    let mean = |src: &str| eval_quantity(src).value.mean();
+    assert_eq!(mean("20 dB => unity"), 100.0);
+    assert_eq!(mean("20 dB => percent"), 10000.0);
+    assert!((mean("50 percent => dB") + 3.010299956639812).abs() < 1e-12);
+    assert_eq!(mean("7 pH => unity"), 10f64.powf(-7.0));
+    assert_eq!(mean("3 dB => decibel"), 3.0);
+    assert!((mean("10 dB + 20 dB") - 20.41392685158225).abs() < 1e-12);
+    assert_eq!(mean("10 dB * 2"), 20.0);
+    for refused in [
+        "10 dB + 1 unity",
+        "10 dB * 2 m",
+        "10 dB ^ 2",
+        "1 rad => dB",
+        "0 unity => dB",
+        "ln(10 dB)",
+        "1 mdB",
+    ] {
+        assert!(eval_phs(refused).is_err(), "{refused} should be refused");
+    }
+}
