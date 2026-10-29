@@ -5,7 +5,7 @@
 //! reproduce them.
 
 use physure_core::units::conf::build_registry_from_conf;
-use physure_core::units::definition::UnitKind;
+use physure_core::units::UnitKind;
 use serde_json::Value;
 
 /// Python's catalog restates celsius and fahrenheit (`international.conf`) with another symbol,

@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use num_rational::Rational64;
 use crate::error::{PhysureError, PhysureResult};
-use crate::units::definition::UnitKind;
 use crate::units::exact::ExactScale;
-use crate::units::rational::{LogScale, RationalUnit};
+use crate::units::rational::{LogScale, RationalUnit, UnitKind};
 
 /// A registry to hold unit definitions, ensuring state isolation.
 #[derive(Clone, Debug, PartialEq, Default)]

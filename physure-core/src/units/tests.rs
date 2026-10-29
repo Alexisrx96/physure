@@ -713,7 +713,7 @@ fn a_unit_written_as_symbols_prints_like_a_compound_unit() {
 /// What the core says about a unit expression: dimension, kind, linearity, alias, simplified form.
 #[test]
 fn the_facts_of_a_unit_expression() {
-    use crate::units::definition::UnitKind;
+    use crate::units::UnitKind;
     let (reg, _) = conf::build_registry_from_conf();
     let facts = |text: &str| reg.facts(text).unwrap_or_else(|e| panic!("{text}: {e}"));
     let dimension = |pairs: &[(&str, i64)]| pairs.iter().map(|(s, e)| (s.to_string(), (*e, 1))).collect::<Vec<_>>();

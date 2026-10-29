@@ -56,6 +56,14 @@ impl LogScale {
     }
 }
 
+/// What a unit measures: an absolute temperature scale (degC, degF) is a point on an interval
+/// scale, anything else is a quantity or an interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnitKind {
+    Delta,
+    Point,
+}
+
 /// A unit representation using rational exponents to avoid floating-point errors.
 #[derive(Clone, Debug)]
 pub struct RationalUnit {
