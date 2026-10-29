@@ -368,6 +368,13 @@ impl PyUnitRegistry {
         Ok(PyUnitRegistry(reg))
     }
 
+    /// Adds the units, prefixes and levels of conf text to this registry, all or nothing: a line the
+    /// core cannot read raises ValueError listing each, and the registry is left as it was.
+    fn extend_conf(&mut self, text: &str) -> PyResult<()> {
+        let mut constants = HashMap::new();
+        ::physure_core::units::conf::extend_registry(&mut self.0, &mut constants, text).map_err(conf_problems)
+    }
+
     /// A unit written as symbols (`km/h`), not resolved: its dimensions are the symbols written.
     fn parse_atomic(&self, py: Python<'_>, expression: &str) -> PyResult<PyObject> {
         let unit = ::physure_core::units::parser::Parser::parse_expression_atomic(expression).map_err(value_error)?;
