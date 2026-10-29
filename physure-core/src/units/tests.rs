@@ -992,3 +992,14 @@ fn the_registry_lists_its_names() {
     assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "sorted, without repeats");
     assert!(!names.contains(&"kilometer".to_string()), "a prefixed name is read, not held");
 }
+
+/// A prefix scales a unit, and the unit `1` (`unity`) is the number one: `E1` is not a unit.
+#[test]
+fn unity_takes_no_prefix() {
+    let (reg, _) = conf::build_registry_from_conf();
+    assert!(reg.get_unit("unity").is_some());
+    assert!(reg.get_unit("1").is_some());
+    for name in ["kunity", "kilounity", "E1", "k1"] {
+        assert!(reg.get_unit(name).is_none(), "{name}");
+    }
+}
