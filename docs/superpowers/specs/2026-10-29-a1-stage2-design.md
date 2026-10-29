@@ -100,3 +100,10 @@ Planning step 2 against the code found four things the design did not know, and 
 
 **Decisions taken for step 2 (proposed, to confirm):** split into 2a and 2b; the registry ignores `[Settings]` (a system keeps its settings, and the process-wide ones are applied only where a conf file is read as a file); a level of a quantity is modelled in the core; an unsupported converter is an error at registration (2b).
 
+## Outcome of step 2a (the core takes a system's definitions strictly)
+
+- `extend_registry` is the strict reading of what a system is made of and `parse_physure_conf` stays the lenient one (the catalog and the `physure.conf` of the working directory). The embedded catalog has no line the parser refuses, and a test says so, which is what lets the strict reading be used for the system file as well.
+- The registry keeps the base unit of each dimension symbol (`dimension_base`) and a text parsed later starts from it; `$` is a dimension symbol, so `enable_currency` is expressible as text.
+- A level can have the dimensions of a quantity (`dBW`, `dBm`), converts to the plain unit of those dimensions through the logarithm, and has no conversion factor between units.
+- Any text parsed, strict or lenient, also registers the eight SI base units (`m`, `s`, `kg`, `A`, `K`, `mol`, `cd`, `rad`) and the default dimension symbols of them (`L`, `M`, `T`, `I`, `O`, `N`, `J`, `A`), whether or not the text mentions them. A registry of a bare system therefore knows `kg`; step 2b must not use the registry's membership to answer `in` for a system, which stays the system's own until step 7.
+- Step 2b (Python) is planned from here.
