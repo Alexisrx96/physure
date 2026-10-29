@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import math
 from collections import defaultdict
@@ -15,6 +14,10 @@ from physure.domain.measurement.conversions import UnitDefinition
 from physure.domain.measurement.converters import (
     LinearConverter,
     UnitConverter,
+)
+from physure.domain.measurement.definitions_text import (
+    prefix_definition_text,
+    unit_definition_text,
 )
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.ports.unit_repository import IUnitRepository
@@ -57,20 +60,42 @@ class UnitSystem(IUnitRepository):
         Dimension._cache.clear()
         self.Q_ = QuantityFactory(self)
 
-        # Initialize Rust Core Registry
+        # The registry of the core is built from the definitions of this
+        # system, as conf text (see extend_core).
         self._core_registry = _RustUnitRegistry()
+        self._core_texts: list[str] = []
+
+    @property
+    def core_registry(self) -> _RustUnitRegistry:
+        """The registry of the core, built from what this system registers.
+
+        It also knows the eight SI base units whatever the system registered,
+        so it is not what answers ``in``.
+        """
+        return self._core_registry
+
+    def extend_core(self, conf_text: str) -> None:
+        """Adds conf text to the core registry of this system, all or nothing.
+
+        Raises:
+            ValueError: The core cannot read a line; every such line is named
+                and the registry is left as it was.
+        """
+        self._core_registry.extend_conf(conf_text)
+        self._core_texts.append(conf_text)
 
     def __getstate__(self) -> dict[str, Any]:
-        """Custom pickling state to exclude unpickleable Rust registry."""
+        """Pickles the texts of the registry: the registry itself cannot be."""
         state = self.__dict__.copy()
         state["_core_registry"] = None
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        """Custom unpickling state to restore (empty) Rust registry."""
+        """Rebuilds the registry of the core from its texts."""
         self.__dict__.update(state)
-        # Re-initialize Rust Core Registry
         self._core_registry = _RustUnitRegistry()
+        for text in self.__dict__.get("_core_texts", ()):
+            self._core_registry.extend_conf(text)
 
     def get_definition(self, unit_symbol: str) -> UnitDefinition | None:
         """Retrieves the definition for a given unit symbol."""
@@ -119,7 +144,22 @@ class UnitSystem(IUnitRepository):
         name: str | None = None,
         exact: Fraction | None = None,
     ) -> None:
-        """Registers a prefix with its symbol, factor, and optional name."""
+        """Registers a prefix with its symbol, factor, and optional name.
+
+        Raises:
+            ValueError: The core cannot take the prefix; nothing is registered.
+        """
+        self.extend_core(prefix_definition_text(symbol, factor, name, exact))
+        self._register_prefix(symbol, factor, name, exact)
+
+    def _register_prefix(
+        self,
+        symbol: str,
+        factor: float,
+        name: str | None = None,
+        exact: Fraction | None = None,
+    ) -> None:
+        """Registers a prefix in Python only (see extend_core)."""
         if symbol in self.PREFIX_REGISTRY:
             log.warning("Prefix '%s' is being redefined.", symbol)
         self.PREFIX_REGISTRY[symbol] = {
@@ -145,7 +185,49 @@ class UnitSystem(IUnitRepository):
         allow_prefixes: bool = True,
         kind: str = "delta",
     ) -> None:
-        """Registers a unit and its aliases with the system."""
+        """Registers a unit and its aliases with the system.
+
+        The unit is written as conf text and given to the core registry
+        first, so a unit the core cannot take leaves the system as it was.
+
+        Raises:
+            TypeError: The converter is not one a conf line can express.
+            ValueError: The core cannot take the unit.
+        """
+        self.extend_core(
+            unit_definition_text(
+                symbol,
+                dimension,
+                converter,
+                aliases,
+                recipe=recipe,
+                allow_prefixes=allow_prefixes,
+                kind=kind,
+            )
+        )
+        self._register_unit(
+            symbol,
+            dimension,
+            converter,
+            name,
+            *aliases,
+            recipe=recipe,
+            allow_prefixes=allow_prefixes,
+            kind=kind,
+        )
+
+    def _register_unit(
+        self,
+        symbol: str,
+        dimension: Dimension,
+        converter: UnitConverter,
+        name: str | None,
+        *aliases: str,
+        recipe: CompoundUnit | None = None,
+        allow_prefixes: bool = True,
+        kind: str = "delta",
+    ) -> None:
+        """Registers a unit in Python only (see extend_core)."""
         unit_def = UnitDefinition(
             symbol,
             dimension,
@@ -168,7 +250,6 @@ class UnitSystem(IUnitRepository):
             self.UNIT_REGISTRY[dimension][unit_name] = unit_def
 
         self._register_unit_recipe_or_base(symbol, recipe, *aliases)
-        self._register_rust_aliases(symbol, *aliases)
 
         # Prefixed variants (km, kilometer, ...) are no longer eagerly
         # cross-produced here -- see get_unit()'s lazy decomposition.
@@ -179,7 +260,7 @@ class UnitSystem(IUnitRepository):
         recipe: CompoundUnit | None,
         *aliases: str,
     ) -> None:
-        """Registers the recipe (derived) or base-unit alias and Rust entry."""
+        """Registers the recipe (derived) or base-unit alias."""
         if recipe is None and self.UNIT_DIMENSIONS[symbol] == Dimension({}):
             # A unit explicitly declared with the dimensionless Dimension
             # and a linear, scale-1.0 converter (e.g. "unity" / "1") is
@@ -205,25 +286,8 @@ class UnitSystem(IUnitRepository):
             for alias_name in (symbol, *aliases):
                 self._UNIT_RECIPES[alias_name] = recipe
             self.register_alias(recipe.exponents, symbol, *aliases)
-
-            if self._core_registry:
-                # CompoundUnit IS a RationalUnit when Rust is active;
-                # pass it directly without any manual conversion.
-                with contextlib.suppress(Exception):
-                    self._core_registry.add_derived_unit(symbol, recipe)
         else:
             self.register_alias({symbol: 1}, symbol, *aliases)
-
-            if self._core_registry:
-                self._core_registry.add_base_unit(symbol)
-
-    def _register_rust_aliases(self, symbol: str, *aliases: str) -> None:
-        """Registers all aliases in the Rust core registry."""
-        if not self._core_registry:
-            return
-        for alias in aliases:
-            with contextlib.suppress(Exception):
-                self._core_registry.register_alias(alias, symbol)
 
     def _try_lazy_prefix(self, unit_expression: str) -> CompoundUnit | None:
         """On-demand prefix decomposition.
@@ -346,10 +410,6 @@ class UnitSystem(IUnitRepository):
                 prefixed_symbol,
                 exact=prefixed_exact,
             )
-            if self._core_registry:
-                self._register_prefixed_rust(
-                    base_def.symbol, prefixed_symbol, prefixed_name or ""
-                )
 
         if (
             prefixed_name
@@ -392,20 +452,6 @@ class UnitSystem(IUnitRepository):
         if symbol != base_prefixed_symbol:
             self.register_alias({symbol: 1}, symbol, base_prefixed_symbol)
 
-    def _register_prefixed_rust(
-        self, unit_name: str, prefixed_symbol: str, prefixed_name: str
-    ) -> None:
-        """Registers the prefixed unit in the Rust registry."""
-        try:
-            base_ru = self._core_registry.get_unit(unit_name)
-            self._core_registry.add_derived_unit(prefixed_symbol, base_ru)
-            if prefixed_name and prefixed_name != prefixed_symbol:
-                self._core_registry.register_alias(
-                    prefixed_name, prefixed_symbol
-                )
-        except Exception:
-            pass
-
     def get_unit(self, unit_expression: str) -> CompoundUnit:
         """Retrieves a CompoundUnit from the system based on its notation."""
         if unit_expression == "dimensionless":
@@ -421,21 +467,6 @@ class UnitSystem(IUnitRepository):
         if unit_expression in self.ALIAS_TO_EXPONENTS:
             key = self.ALIAS_TO_EXPONENTS[unit_expression]
             return CompoundUnit(dict(key))
-
-        # Rust Registry Check (New Path)
-        if (
-            self._core_registry
-            and hasattr(self._core_registry, "contains")
-            and self._core_registry.contains(unit_expression)
-        ):
-            try:
-                ru = self._core_registry.get_unit(unit_expression)
-                return CompoundUnit(ru.dimensions)
-            except Exception as e:
-                log.warning(
-                    f"Failed to retrieve unit '{unit_expression}' from Rust: {e}"
-                )
-                # Fallback to parsing
 
         # Lazy prefix decomposition (km, kilometer, ...): materializes the
         # exact prefixed unit on first use instead of the eager prefix x
@@ -493,15 +524,7 @@ class UnitSystem(IUnitRepository):
 
     def __contains__(self, item: str) -> bool:
         """Checks if a unit symbol or alias exists in the system."""
-        return (
-            item in self.UNIT_DIMENSIONS
-            or item in self.ALIAS_TO_EXPONENTS
-            or (
-                self._core_registry is not None
-                and hasattr(self._core_registry, "contains")
-                and self._core_registry.contains(item)
-            )
-        )
+        return item in self.UNIT_DIMENSIONS or item in self.ALIAS_TO_EXPONENTS
 
     def __getattr__(self, name: str) -> CompoundUnit:
         """Allows accessing units as attributes."""

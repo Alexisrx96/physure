@@ -49,6 +49,12 @@ def _exact_scale(text: str) -> Fraction | None:
         return None
 
 
+def _conf_section(section: str, entries: dict[str, str]) -> str:
+    """Writes entries of the merged conf as the text the core reads."""
+    lines = "".join(f"{key} = {value}\n" for key, value in entries.items())
+    return f"[{section}]\n{lines}"
+
+
 class UnitSystemBuilder:
     """A builder class for constructing a UnitSystem instance."""
 
@@ -81,11 +87,12 @@ class UnitSystemBuilder:
             return self
         if self._verbose:
             print("\n--- Phase 2: Initializing Prefixes ---")
+        self._system.extend_core(_conf_section("Prefixes", prefixes_data))
         for name, value_str in prefixes_data.items():
             symbol, factor_str = [p.strip() for p in value_str.split(",")]
-            self._system.register_prefix(
+            self._system._register_prefix(
                 symbol=symbol,
-                factor=float(factor_str),
+                factor=_number(factor_str),
                 name=name,
                 exact=_exact_scale(factor_str),
             )
@@ -191,7 +198,7 @@ class UnitSystemBuilder:
         symbol = aliases[0] if aliases else key
         all_aliases = {key, *aliases}
 
-        self._system.register_unit(
+        self._system._register_unit(
             symbol,
             dimension,
             converter,
@@ -270,6 +277,7 @@ class UnitSystemBuilder:
             print("\n--- Phase 4: Initializing Units ---")
 
         self._system.unit_definitions.update(units_data)
+        self._system.extend_core(_conf_section("Units", units_data))
 
         # Pass 1: Register all units
         for key, value_str in units_data.items():
