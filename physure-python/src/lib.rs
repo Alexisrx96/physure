@@ -420,6 +420,16 @@ impl PyUnitRegistry {
         self.0.names()
     }
 
+    /// Whether `name` is a unit: a name of the registry, or a prefix and a unit written together.
+    fn knows(&self, name: &str) -> bool {
+        self.0.knows(name)
+    }
+
+    /// Every name `knows` answers yes to, sorted: the names of the registry and their prefixed forms.
+    fn resolvable_names(&self) -> Vec<String> {
+        self.0.resolvable_names()
+    }
+
     /// The unit that measures a dimension (`{"L": 1, "T": -1}` is `m*s^-1`), in the base units of
     /// this registry. The powers are integers or `(numerator, denominator)` pairs.
     fn unit_of_dimension(&self, py: Python<'_>, dimension: &Bound<'_, PyDict>) -> PyResult<PyObject> {

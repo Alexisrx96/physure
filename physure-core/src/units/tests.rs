@@ -981,6 +981,26 @@ fn the_power_can_be_written_with_two_stars_and_a_decimal() {
     assert!(Parser::parse_expression_atomic("m**2.").is_err());
 }
 
+/// A prefixed name is a unit when the prefix scales it, and `resolvable_names` lists them all.
+#[test]
+fn the_registry_knows_prefixed_names_and_lists_them() {
+    let (reg, _) = conf::build_registry_from_conf();
+    for name in ["m", "km", "kilometer", "kPa", "min", "dB"] {
+        assert!(reg.knows(name), "{name}");
+    }
+    for name in ["attodB", "kpH", "xyzzy", "km/s", ""] {
+        assert!(!reg.knows(name), "{name}");
+    }
+    let names = reg.resolvable_names();
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "sorted, without repeats");
+    for name in ["m", "km", "kilometer", "kPa", "dB"] {
+        assert!(names.contains(&name.to_string()), "{name}");
+    }
+    assert!(!names.contains(&"attodB".to_string()));
+    assert!(names.iter().all(|name| reg.knows(name)), "every listed name is known");
+    assert!(names.len() > reg.names().len());
+}
+
 /// The registry lists the names it holds for a unit: units and aliases, not prefixed forms.
 #[test]
 fn the_registry_lists_its_names() {

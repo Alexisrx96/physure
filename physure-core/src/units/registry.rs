@@ -591,6 +591,26 @@ impl UnitRegistry {
         names
     }
 
+    /// Whether `name` is a unit: one of `names()`, or a prefix and a unit written together
+    /// (`km`, `kilometer`). A level takes no prefix (`attodB` is not a unit) and neither does a
+    /// unit the catalog marks `noprefix`.
+    pub fn knows(&self, name: &str) -> bool {
+        self.get_unit(name).is_some()
+    }
+
+    /// Every name that `knows` answers yes to, sorted: `names()` and each prefixed form of them.
+    pub fn resolvable_names(&self) -> Vec<String> {
+        let units = self.names();
+        let prefixes: Vec<&String> = self.prefixes.keys().chain(self.prefix_names.keys()).collect();
+        let mut names = units.clone();
+        for prefix in prefixes {
+            names.extend(units.iter().map(|unit| format!("{prefix}{unit}")).filter(|name| self.knows(name)));
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         let resolved = self.resolve_symbol(name);
         self.base_units.contains_key(&resolved) || self.derived_units.contains_key(&resolved)
