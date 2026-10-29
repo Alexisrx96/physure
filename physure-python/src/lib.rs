@@ -1775,6 +1775,29 @@ fn default_conf() -> &'static str {
     ::physure_core::units::conf::DEFAULT_PHYSURE_CONF
 }
 
+/// What the core says about a unit expression of the default catalog: its dimension (by
+/// dimension symbol), kind, linearity, alias and simplified form.
+#[pyfunction]
+fn unit_facts<'py>(py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
+    let (registry, _) = ::physure_core::units::conf::build_registry_from_conf();
+    let facts = registry.facts(expression).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let dimension = PyDict::new(py);
+    for (symbol, (n, d)) in &facts.dimension {
+        if *d == 1 {
+            dimension.set_item(symbol, *n)?;
+        } else {
+            dimension.set_item(symbol, *n as f64 / *d as f64)?;
+        }
+    }
+    let out = PyDict::new(py);
+    out.set_item("dimension", dimension)?;
+    out.set_item("kind", if facts.kind == UnitKind::Point { "absolute" } else { "delta" })?;
+    out.set_item("is_linear", facts.is_linear)?;
+    out.set_item("alias", facts.alias)?;
+    out.set_item("simplified", facts.simplified)?;
+    Ok(out)
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1804,6 +1827,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
     m.add_function(wrap_pyfunction!(convert_units_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(dim_vector_from_dict, m)?)?;
+    m.add_function(wrap_pyfunction!(unit_facts, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_phs_expression, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;

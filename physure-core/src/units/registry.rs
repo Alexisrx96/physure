@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use num_rational::Rational64;
+use crate::error::{PhysureError, PhysureResult};
+use crate::units::definition::UnitKind;
 use crate::units::exact::ExactScale;
 use crate::units::rational::{LogScale, RationalUnit};
 
@@ -17,6 +20,24 @@ pub struct ConstantMetadata {
     pub latex_symbol: Option<String>,
 }
 
+/// A unit's base symbols with their exponents, sorted: the key of a recipe unit.
+pub type DimKey = Vec<(String, (i64, i64))>;
+
+/// What the registry says about a unit expression.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnitFacts {
+    /// The physical dimension, by dimension symbol: `kg·m/s²` is `L: 1, M: 1, T: -2`.
+    pub dimension: Vec<(String, (i64, i64))>,
+    /// `Point` for an absolute temperature scale (degC, degF), `Delta` for everything else.
+    pub kind: UnitKind,
+    /// False for an offset or a logarithmic unit.
+    pub is_linear: bool,
+    /// The shortest name the registry knows for the unit: `J/s` is `W`, `kilometer` is `km`.
+    pub alias: String,
+    /// The unit with every recipe unit (`N`, `J`, `Hz`...) replaced by its base symbols.
+    pub simplified: String,
+}
+
 /// A registry to hold unit definitions and rich metadata, ensuring state isolation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnitRegistry {
@@ -29,6 +50,15 @@ pub struct UnitRegistry {
     /// The spelled-out name of each prefix (`kilo`) and the symbol it stands for (`k`), so
     /// that `kilometer` reads as `km`.
     pub prefix_names: HashMap<String, String>,
+    /// Every name of a unit, in the order the catalog lists them, under its symbol.
+    pub symbol_aliases: HashMap<String, Vec<String>>,
+    /// The dimension symbol of each base unit (`m` is `L`, `kg` is `M`).
+    pub base_dimension: HashMap<String, String>,
+    /// The units the catalog defines by a recipe at scale 1 (`N = kg*m/s^2`): the ones that
+    /// `simplify` replaces by their base symbols. A unit at another scale stays what it is.
+    pub recipes: HashSet<String>,
+    /// The names of the recipe units, under the base symbols they expand to.
+    pub recipe_aliases: HashMap<DimKey, Vec<String>>,
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
@@ -43,6 +73,10 @@ impl UnitRegistry {
             prefixes: HashMap::new(),
             prefix_exact: HashMap::new(),
             prefix_names: HashMap::new(),
+            symbol_aliases: HashMap::new(),
+            base_dimension: HashMap::new(),
+            recipes: HashSet::new(),
+            recipe_aliases: HashMap::new(),
             unit_meta: HashMap::new(),
             categories: HashMap::new(),
             constants_meta: HashMap::new(),
@@ -82,6 +116,27 @@ impl UnitRegistry {
         let mut u = RationalUnit::dimensionless().with_log(LogScale { factor, reference });
         u.display_name = Some(name.clone());
         self.derived_units.insert(name, u);
+    }
+
+    /// Records the names of a unit, in the order the catalog lists them.
+    pub fn note_aliases(&mut self, symbol: &str, names: &[String]) {
+        let known = self.symbol_aliases.entry(symbol.to_string()).or_default();
+        for name in names {
+            if !known.contains(name) {
+                known.push(name.clone());
+            }
+        }
+    }
+
+    /// Records that `symbol` is a recipe unit, and what it expands to.
+    pub fn note_recipe(&mut self, symbol: &str, expansion: &[(String, (i64, i64))], names: &[String]) {
+        self.recipes.insert(symbol.to_string());
+        let known = self.recipe_aliases.entry(expansion.to_vec()).or_default();
+        for name in names {
+            if !known.contains(name) {
+                known.push(name.clone());
+            }
+        }
     }
 
     pub fn add_base_unit(&mut self, name: String) {
@@ -245,11 +300,16 @@ impl UnitRegistry {
     /// same `resolve_symbol` + four-way lookup a second time just to fetch what this method
     /// already found while checking whether `name` was a known prefix+unit combination.
     pub fn split_prefix(&self, name: &str) -> Option<(String, f64, RationalUnit)> {
+        self.split_prefix_of(name).map(|(symbol, factor, _, unit)| (symbol, factor, unit))
+    }
+
+    /// `split_prefix` that also says which spelling of the unit followed the prefix.
+    fn split_prefix_of(&self, name: &str) -> Option<(String, f64, String, RationalUnit)> {
         let symbols = self.prefixes.iter().map(|(symbol, factor)| (symbol.as_str(), symbol.as_str(), *factor));
         let names = self.prefix_names.iter().filter_map(|(long, symbol)| {
             self.prefixes.get(symbol).map(|factor| (long.as_str(), symbol.as_str(), *factor))
         });
-        let mut best: Option<(usize, &str, f64, &RationalUnit)> = None;
+        let mut best: Option<(usize, &str, f64, &str, &RationalUnit)> = None;
         for (spelled, symbol, factor) in symbols.chain(names) {
             if name.len() <= spelled.len() || !name.starts_with(spelled) {
                 continue;
@@ -259,10 +319,120 @@ impl UnitRegistry {
             }
             // A prefix scales a unit; it has nothing to scale on a level (`mdB`, `kpH`).
             if let Some(unit) = self.unit_by_symbol(&name[spelled.len()..]).filter(|unit| !unit.is_logarithmic()) {
-                best = Some((spelled.len(), symbol, factor, unit));
+                best = Some((spelled.len(), symbol, factor, &name[spelled.len()..], unit));
             }
         }
-        best.map(|(_, symbol, factor, unit)| (symbol.to_string(), factor, unit.clone()))
+        best.map(|(_, symbol, factor, rest, unit)| (symbol.to_string(), factor, rest.to_string(), unit.clone()))
+    }
+
+    /// The unit with every recipe unit replaced by its base symbols (what Python's `get_unit`
+    /// hands back for `J/s`: `kg·m²/s³`). `atomic` is a unit parsed with
+    /// `Parser::parse_expression_atomic`, whose dimensions are the symbols the user wrote.
+    pub fn simplify(&self, atomic: &RationalUnit) -> RationalUnit {
+        let zero = Rational64::from_integer(0);
+        let mut sums: HashMap<String, Rational64> = HashMap::new();
+        for (symbol, (n, d)) in &atomic.dimensions {
+            let exponent = Rational64::new(*n, *d);
+            let resolved = self.resolve_symbol(symbol);
+            if self.derived_units.get(&resolved).is_some_and(|unit| unit.is_plain_number()) {
+                // the unit one (`unity`) is nothing to write
+                continue;
+            }
+            let recipe = if self.recipes.contains(&resolved) { self.get_unit(&resolved) } else { None };
+            match recipe {
+                Some(recipe) => {
+                    for (base, (bn, bd)) in &recipe.dimensions {
+                        *sums.entry(base.clone()).or_insert(zero) += Rational64::new(*bn, *bd) * exponent;
+                    }
+                }
+                None => *sums.entry(symbol.clone()).or_insert(zero) += exponent,
+            }
+        }
+        RationalUnit::new_from_dimensions(
+            sums.into_iter().filter(|(_, e)| *e != zero).map(|(symbol, e)| (symbol, (*e.numer(), *e.denom()))),
+        )
+    }
+
+    /// The physical dimension of a unit written as symbols, by dimension symbol.
+    pub fn dimension_of(&self, atomic: &RationalUnit) -> PhysureResult<Vec<(String, (i64, i64))>> {
+        let zero = Rational64::from_integer(0);
+        let mut sums: HashMap<String, Rational64> = HashMap::new();
+        for (symbol, (n, d)) in &atomic.dimensions {
+            let unit = self.get_unit(symbol).ok_or_else(|| PhysureError::UnknownUnit {
+                suggestion: self.closest_symbol(symbol),
+                symbol: symbol.clone(),
+            })?;
+            for (base, (bn, bd)) in &unit.dimensions {
+                let dimension = self.base_dimension.get(base).unwrap_or(base).clone();
+                *sums.entry(dimension).or_insert(zero) += Rational64::new(*bn, *bd) * Rational64::new(*n, *d);
+            }
+        }
+        let mut dimension: Vec<_> =
+            sums.into_iter().filter(|(_, e)| *e != zero).map(|(symbol, e)| (symbol, (*e.numer(), *e.denom()))).collect();
+        dimension.sort();
+        Ok(dimension)
+    }
+
+    /// `Point` for a single absolute temperature scale, `Delta` for anything else.
+    pub fn kind_of(&self, atomic: &RationalUnit) -> UnitKind {
+        match atomic.dimensions.as_slice() {
+            [(symbol, (1, 1))] if self.get_unit(symbol).is_some_and(|unit| unit.is_affine()) => UnitKind::Point,
+            _ => UnitKind::Delta,
+        }
+    }
+
+    /// False when any symbol of the unit is an offset or a logarithmic unit.
+    pub fn is_linear_of(&self, atomic: &RationalUnit) -> bool {
+        atomic
+            .dimensions
+            .iter()
+            .all(|(symbol, _)| self.get_unit(symbol).map_or(true, |unit| !unit.is_affine() && !unit.is_logarithmic()))
+    }
+
+    /// The name a unit is shown by (`to_string(use_alias=True)` in Python): a registered symbol by its
+    /// shortest name, any other name as written, a prefixed one by the prefix symbol and the symbol of
+    /// what it prefixes (`kilometer` is `km`), a recipe unit written out in base symbols by the shortest name of the
+    /// recipe (`kg·m²/s³` is `W`), and anything else written out.
+    pub fn alias_of(&self, atomic: &RationalUnit) -> String {
+        let unit = self.simplify(atomic);
+        let found = match unit.dimensions.as_slice() {
+            [(symbol, (1, 1))] => self.alias_of_symbol(symbol),
+            dimensions => self.recipe_aliases.get(dimensions).and_then(|names| shortest(names)).cloned(),
+        };
+        found.unwrap_or_else(|| unit.symbolic_repr())
+    }
+
+    /// How a unit symbol is shown: the shortest name when it is the unit's symbol (the first name the
+    /// catalog lists), as written when it is any other name, and a prefixed one by the prefix symbol
+    /// and the symbol of what it prefixes.
+    fn alias_of_symbol(&self, name: &str) -> Option<String> {
+        let canonical = self.resolve_symbol(name);
+        if self.base_units.contains_key(&canonical) || self.derived_units.contains_key(&canonical) {
+            // The unit written by its symbol is shown by the shortest of its names (`deg` is `°`); one
+            // written by any other name as it was written: `gallon` stays `gallon`.
+            let names = self.symbol_aliases.get(&canonical)?;
+            return if names.first().is_some_and(|symbol| symbol == name) {
+                shortest(names).cloned()
+            } else {
+                Some(name.to_string())
+            };
+        }
+        let (prefix, _, rest, _) = self.split_prefix_of(name)?;
+        let base = self.symbol_aliases.get(&self.resolve_symbol(&rest))?.first()?;
+        Some(format!("{prefix}{base}"))
+    }
+
+    /// Dimension, kind, linearity, alias and simplified form of a unit expression.
+    pub fn facts(&self, expression: &str) -> PhysureResult<UnitFacts> {
+        let atomic = crate::units::parser::Parser::parse_expression_atomic(expression)?;
+        let unit = self.simplify(&atomic);
+        Ok(UnitFacts {
+            dimension: self.dimension_of(&unit)?,
+            kind: self.kind_of(&unit),
+            is_linear: self.is_linear_of(&unit),
+            alias: self.alias_of(&unit),
+            simplified: unit.symbolic_repr(),
+        })
     }
 
     /// The base or derived unit that `symbol` names, directly or through an alias.
@@ -381,6 +551,11 @@ impl Default for UnitRegistry {
 
 /// Levenshtein distance over `char`s — unit symbols are full of non-ASCII (Å, Ω, °, µ),
 /// so a byte-wise distance would score them wrong.
+/// The shortest of the names, the first listed among equals.
+fn shortest(names: &[String]) -> Option<&String> {
+    names.iter().min_by_key(|name| name.chars().count())
+}
+
 fn edit_distance(a: &str, b: &str) -> usize {
     let b_chars: Vec<char> = b.chars().collect();
     let mut previous: Vec<usize> = (0..=b_chars.len()).collect();

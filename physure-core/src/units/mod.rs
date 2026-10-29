@@ -13,7 +13,7 @@ pub use dimension::{dim_index, to_superscript, DimVector, SI_ORDER};
 pub use exact::ExactScale;
 pub use parser::Parser;
 pub use rational::{DimVec, RationalUnit};
-pub use registry::UnitRegistry;
+pub use registry::{UnitFacts, UnitRegistry};
 
 #[cfg(test)]
 mod tests;

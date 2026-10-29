@@ -125,6 +125,7 @@ pub fn parse_physure_conf(
                             if is_single_ident(dim_symbol) && (first || own_kind) {
                                 dim_to_base.entry(dim_symbol.to_string()).or_insert_with(|| symbol.clone());
                                 registry.add_base_unit(symbol.clone());
+                                registry.base_dimension.insert(symbol.clone(), dim_symbol.to_string());
                             }
                         }
                     }
@@ -179,6 +180,10 @@ pub fn parse_physure_conf(
     dim_to_base.entry("N".into()).or_insert_with(|| "mol".into());
     dim_to_base.entry("J".into()).or_insert_with(|| "cd".into());
     dim_to_base.entry("A".into()).or_insert_with(|| "rad".into());
+
+    for (dimension, base) in &dim_to_base {
+        registry.base_dimension.entry(base.clone()).or_insert_with(|| dimension.clone());
+    }
 
     // Pass 2: Parse and register all units using the dynamic dimension map
     for line in unit_lines {
@@ -255,6 +260,12 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         vec![]
     };
 
+    // The names in the order the catalog lists them: the first one is the unit's symbol in Python.
+    let mut names = aliases.clone();
+    if !names.iter().any(|name| name == key) {
+        names.push(key.to_string());
+    }
+
     if !aliases.contains(&key.to_string()) {
         aliases.insert(0, key.to_string());
     }
@@ -284,7 +295,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
         if let (Some(factor), Some(reference), Some("1")) = (number(1), number(2), parts.get(3).copied()) {
             registry.add_log_unit(symbol.clone(), factor, reference);
-            register_aliases(registry, key, &symbol, &aliases);
+            register_aliases(registry, key, &symbol, &aliases, &names);
         }
         return;
     }
@@ -372,15 +383,20 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
                 u = u.with_exact_offset(e);
             }
             u.display_name = Some(symbol.clone());
+            // A recipe at scale 1 is a name for its base symbols (`N` is `kg*m/s^2`).
+            if !recipe_str.is_empty() && factor == 1.0 && offset == 0.0 {
+                registry.note_recipe(&symbol, &u.dimensions, &names);
+            }
             registry.add_derived_unit(symbol.clone(), u);
         }
     }
 
-    register_aliases(registry, key, &symbol, &aliases);
+    register_aliases(registry, key, &symbol, &aliases, &names);
 }
 
 /// Makes the key of a unit line and each of its aliases another name for `symbol`.
-fn register_aliases(registry: &mut UnitRegistry, key: &str, symbol: &str, aliases: &[String]) {
+fn register_aliases(registry: &mut UnitRegistry, key: &str, symbol: &str, aliases: &[String], names: &[String]) {
+    registry.note_aliases(symbol, names);
     registry.register_alias(key.to_string(), symbol.to_string());
     for alias in aliases {
         if alias != symbol {

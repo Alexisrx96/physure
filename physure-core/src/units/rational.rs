@@ -7,6 +7,18 @@ use crate::units::exact::ExactScale;
 
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
 
+/// An exponent as superscript digits: `2` is `²`, `0.5` is `⁰⋅⁵`.
+fn superscript(exponent: f64) -> String {
+    const DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+    format!("{exponent}")
+        .chars()
+        .map(|c| match c {
+            '.' => '⋅',
+            digit => DIGITS[digit as usize - '0' as usize],
+        })
+        .collect()
+}
+
 /// What makes a unit a *level*: `level = factor * log10(ratio / reference)`, so `dB` is
 /// `Log, 10, 1.0` and `pH` is `Log, -1, 1.0`. A level is dimensionless, a scale over plain
 /// ratios: `20 dB` is the ratio 100.
@@ -474,6 +486,28 @@ impl RationalUnit {
             Some("n")
         } else {
             None
+        }
+    }
+
+    /// The unit as a product of its symbols, the way a `CompoundUnit` prints: the symbols in
+    /// alphabetical order, positive exponents above the bar and negative ones below it, `kg·m/s²`,
+    /// `kg/(m·s²)`, `1/s`. It reads the dimensions as symbols, so it is meant for a unit parsed
+    /// with `Parser::parse_expression_atomic`.
+    pub fn symbolic_repr(&self) -> String {
+        let (mut numerator, mut denominator) = (Vec::new(), Vec::new());
+        for (symbol, (n, d)) in &self.dimensions {
+            let exponent = *n as f64 / *d as f64;
+            let shown = exponent.abs();
+            let term = if shown == 1.0 { symbol.clone() } else { format!("{symbol}{}", superscript(shown)) };
+            if exponent > 0.0 { numerator.push(term) } else { denominator.push(term) }
+        }
+        let (n, d) = (numerator.join("·"), denominator.join("·"));
+        let d = if d.contains('·') { format!("({d})") } else { d };
+        match (n.is_empty(), d.is_empty()) {
+            (false, false) => format!("{n}/{d}"),
+            (true, false) => format!("1/{d}"),
+            (false, true) => n,
+            (true, true) => "1".to_string(),
         }
     }
 

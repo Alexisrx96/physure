@@ -695,3 +695,62 @@ fn a_temperature_compares_by_its_absolute_value() {
     assert!(!q(20.0, "degC").approx_eq(&q(20.0, "K"), 1e-12, 0.0));
     assert_eq!(q(0.0, "degC").base_display(), "273.15 K");
 }
+
+/// A unit written as symbols prints the way a `CompoundUnit` does.
+#[test]
+fn a_unit_written_as_symbols_prints_like_a_compound_unit() {
+    use crate::units::parser::Parser;
+    let show = |text: &str| Parser::parse_expression_atomic(text).unwrap().symbolic_repr();
+    assert_eq!(show("kg*m/s^2"), "kg·m/s²");
+    assert_eq!(show("m/s^2"), "m/s²");
+    assert_eq!(show("s^-1"), "1/s");
+    assert_eq!(show("kg/(m*s^2)"), "kg/(m·s²)");
+    assert_eq!(show("m^(1/2)"), "m⁰⋅⁵");
+    assert_eq!(show("m"), "m");
+    assert_eq!(show("1"), "1");
+}
+
+/// What the core says about a unit expression: dimension, kind, linearity, alias, simplified form.
+#[test]
+fn the_facts_of_a_unit_expression() {
+    use crate::units::definition::UnitKind;
+    let (reg, _) = conf::build_registry_from_conf();
+    let facts = |text: &str| reg.facts(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+    let dimension = |pairs: &[(&str, i64)]| pairs.iter().map(|(s, e)| (s.to_string(), (*e, 1))).collect::<Vec<_>>();
+
+    // a compound of recipe units is written out in base symbols and named by its recipe
+    let watt = facts("J/s");
+    assert_eq!(watt.dimension, dimension(&[("L", 2), ("M", 1), ("T", -3)]));
+    assert_eq!((watt.alias.as_str(), watt.simplified.as_str()), ("W", "kg·m²/s³"));
+    assert_eq!((watt.kind, watt.is_linear), (UnitKind::Delta, true));
+    assert_eq!(facts("N*m").alias, "J");
+    assert_eq!(facts("kg*m/s^2").alias, "N");
+    assert_eq!(facts("Hz").simplified, "1/s");
+    assert_eq!(facts("Hz").alias, "Hz");
+    assert_eq!(facts("Pa").simplified, "kg/(m·s²)");
+    // a unit at another scale stays what it is
+    for (kept, shown) in [("km/h", "km/h"), ("L/min", "L/min"), ("BTU/h", "BTU/h"), ("g/cm^3", "g/cm³"), ("ft*lbf", "ft·lbf")] {
+        assert_eq!(facts(kept).simplified, shown, "{kept}");
+    }
+    assert_eq!(facts("km/h").dimension, dimension(&[("L", 1), ("T", -1)]));
+    assert_eq!(facts("g/cm^3").alias, "g/cm³");
+    assert_eq!(facts("ft*lbf").alias, "ft·lbf");
+    // temperature scales and levels
+    let celsius = facts("degC");
+    assert_eq!((celsius.kind, celsius.is_linear), (UnitKind::Point, false));
+    assert_eq!(celsius.dimension, dimension(&[("O", 1)]));
+    assert_eq!((facts("delta_celsius").kind, facts("delta_celsius").is_linear), (UnitKind::Delta, true));
+    let decibel = facts("dB");
+    assert!(decibel.dimension.is_empty());
+    assert_eq!((decibel.kind, decibel.is_linear), (UnitKind::Delta, false));
+    // the unit one is nothing to write; a prefixed unit that happens to be 1 is a unit
+    assert_eq!(facts("unity").simplified, "1");
+    assert_eq!(facts("hectopercent").simplified, "hectopercent");
+    // a unit written by its symbol is shown by its shortest name, by another name as written
+    assert_eq!(facts("deg").alias, "°");
+    assert_eq!(facts("gallon").alias, "gallon");
+    assert_eq!(facts("kilometer").alias, "km");
+    assert_eq!(facts("attoampere").alias, "aA");
+    assert_eq!(facts("kilometer").simplified, "kilometer");
+    assert!(reg.facts("furlongs_per_fortnight").is_err());
+}
