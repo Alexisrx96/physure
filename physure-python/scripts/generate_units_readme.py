@@ -51,7 +51,10 @@ def generate_units_markdown():
         else:
             try:
                 Fraction(parts[1])
-                # e.g. celsius = 1.0, 273.15, O, [°C]
+                # e.g. celsius = 1.0, 273.15, O, [°C]; but `unity = 1.0, 1,
+                # [1]` has the dimension `1`, not an offset of 1.
+                if parts[2].startswith("[") or parts[2] in _FLAGS:
+                    raise ValueError(parts[1])
                 dim = parts[2]
                 scale = f"Scale {parts[0]} (Offset {parts[1]})"
                 aliases = parts[3:]
