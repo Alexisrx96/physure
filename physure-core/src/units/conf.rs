@@ -312,6 +312,8 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
     let symbol = aliases[0].clone();
 
+    let no_prefix = val_part.split(',').any(|field| field.trim() == "noprefix");
+
     let mut parts: Vec<&str> = val_part
         .split(',')
         .map(|s| s.trim())
@@ -345,7 +347,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
                 .map_err(|_| format!("cannot read the dimension '{dimension}' of the level {symbol}"))?
         };
         registry.add_level(symbol.clone(), quantity, factor, reference);
-        register_aliases(registry, key, &symbol, &aliases, &names);
+        register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
         return Ok(());
     }
 
@@ -442,12 +444,26 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         }
     }
 
-    register_aliases(registry, key, &symbol, &aliases, &names);
+    register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
     Ok(())
 }
 
 /// Makes the key of a unit line and each of its aliases another name for `symbol`.
-fn register_aliases(registry: &mut UnitRegistry, key: &str, symbol: &str, aliases: &[String], names: &[String]) {
+fn register_aliases(
+    registry: &mut UnitRegistry,
+    key: &str,
+    symbol: &str,
+    aliases: &[String],
+    names: &[String],
+    no_prefix: bool,
+) {
+    for name in names.iter().map(String::as_str).chain([key, symbol]) {
+        if no_prefix {
+            registry.no_prefix.insert(name.to_string());
+        } else {
+            registry.no_prefix.remove(name);
+        }
+    }
     registry.note_aliases(symbol, names);
     registry.register_alias(key.to_string(), symbol.to_string());
     for alias in aliases {

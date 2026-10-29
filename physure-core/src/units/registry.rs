@@ -62,6 +62,9 @@ pub struct UnitRegistry {
     pub recipes: HashSet<String>,
     /// The names of the recipe units, under the base symbols they expand to.
     pub recipe_aliases: HashMap<DimKey, Vec<String>>,
+    /// The names of the units that take no prefix (`noprefix` in the catalog): `mUSD`, `kh` and
+    /// `kmi` are not units, however many of the names of the unit they scale.
+    pub no_prefix: HashSet<String>,
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
@@ -80,6 +83,7 @@ impl UnitRegistry {
             base_dimension: HashMap::new(),
             dimension_base: HashMap::new(),
             recipes: HashSet::new(),
+            no_prefix: HashSet::new(),
             recipe_aliases: HashMap::new(),
             unit_meta: HashMap::new(),
             categories: HashMap::new(),
@@ -327,8 +331,13 @@ impl UnitRegistry {
             if best.is_some_and(|(length, ..)| length >= spelled.len()) {
                 continue;
             }
-            // A prefix scales a unit; it has nothing to scale on a level (`mdB`, `kpH`).
-            if let Some(unit) = self.unit_by_symbol(&name[spelled.len()..]).filter(|unit| !unit.is_logarithmic()) {
+            // A prefix scales a unit; it has nothing to scale on a level (`mdB`, `kpH`), and a unit
+            // that the catalog marks `noprefix` takes none.
+            let rest = &name[spelled.len()..];
+            if self.no_prefix.contains(rest) {
+                continue;
+            }
+            if let Some(unit) = self.unit_by_symbol(rest).filter(|unit| !unit.is_logarithmic()) {
                 best = Some((spelled.len(), symbol, factor, &name[spelled.len()..], unit));
             }
         }

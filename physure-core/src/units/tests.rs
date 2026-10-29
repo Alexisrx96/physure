@@ -900,3 +900,23 @@ fn a_prefix_factor_can_be_a_fraction() {
     assert_eq!(reg.factor_between(&atomic("thm"), &atomic("m")).unwrap(), 1.0 / 3.0);
     assert_eq!(reg.factor_between(&atomic("thirdm"), &atomic("m")).unwrap(), 1.0 / 3.0);
 }
+
+/// A unit that the catalog marks `noprefix` takes no prefix, under any of its names, and a later
+/// definition without the flag takes it back.
+#[test]
+fn a_noprefix_unit_takes_no_prefix() {
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    for name in ["kh", "kin", "kinch", "kmi", "kmile"] {
+        assert!(reg.facts(name).is_err(), "{name} must not be a unit");
+    }
+    assert!(reg.facts("km").is_ok());
+    assert!(reg.facts("kilometer").is_ok());
+
+    conf::extend_registry(&mut reg, &mut constants, "[Units]\nUSD = 1.0, $, noprefix, [USD, dollar]\n").unwrap();
+    assert!(reg.facts("USD").is_ok());
+    assert!(reg.facts("mUSD").is_err());
+    assert!(reg.facts("millidollar").is_err());
+
+    conf::extend_registry(&mut reg, &mut constants, "[Units]\nUSD = 1.0, $, [USD, dollar]\n").unwrap();
+    assert!(reg.facts("mUSD").is_ok());
+}
