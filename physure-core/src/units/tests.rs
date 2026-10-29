@@ -980,3 +980,15 @@ fn the_power_can_be_written_with_two_stars_and_a_decimal() {
     // a decimal point that no digit follows is not part of a number
     assert!(Parser::parse_expression_atomic("m**2.").is_err());
 }
+
+/// The registry lists the names it holds for a unit: units and aliases, not prefixed forms.
+#[test]
+fn the_registry_lists_its_names() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let names = reg.names();
+    for name in ["m", "meter", "N", "degC", "dB"] {
+        assert!(names.contains(&name.to_string()), "{name}");
+    }
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "sorted, without repeats");
+    assert!(!names.contains(&"kilometer".to_string()), "a prefixed name is read, not held");
+}

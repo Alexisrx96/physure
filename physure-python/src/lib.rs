@@ -415,6 +415,11 @@ impl PyUnitRegistry {
         get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
     }
 
+    /// Every name the registry holds for a unit, sorted (a prefixed name is read, not held).
+    fn names(&self) -> Vec<String> {
+        self.0.names()
+    }
+
     /// The unit that measures a dimension (`{"L": 1, "T": -1}` is `m*s^-1`), in the base units of
     /// this registry. The powers are integers or `(numerator, denominator)` pairs.
     fn unit_of_dimension(&self, py: Python<'_>, dimension: &Bound<'_, PyDict>) -> PyResult<PyObject> {

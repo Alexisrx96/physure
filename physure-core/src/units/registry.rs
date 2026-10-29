@@ -576,6 +576,21 @@ impl UnitRegistry {
             .or_else(|| self.derived_units.get(symbol))
     }
 
+    /// Every name the registry holds for a unit, sorted: base units, derived units and aliases.
+    /// A prefixed name (`km`) is not held, it is read from `k` and `m`.
+    pub fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .base_units
+            .keys()
+            .chain(self.derived_units.keys())
+            .chain(self.aliases.keys())
+            .cloned()
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         let resolved = self.resolve_symbol(name);
         self.base_units.contains_key(&resolved) || self.derived_units.contains_key(&resolved)
