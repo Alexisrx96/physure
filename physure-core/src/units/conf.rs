@@ -21,6 +21,38 @@ pub fn parse_physure_conf(
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,
 ) {
+    // A line the parser cannot read is skipped, as it always was: this is the lenient reading of
+    // the catalog and of the `physure.conf` of the working directory.
+    parse_conf(conf_str, registry, constants, true, &mut Vec::new());
+}
+
+/// Adds the units, prefixes, constants and categories of `conf_str` to `registry`, all or nothing:
+/// a line the parser cannot read is a problem, and if there is one the registry and the constants
+/// are left as they were and every problem is returned. `[Settings]` is not read: the settings of a
+/// conf are process-wide and a registry does not own them. This is the reading to use for the
+/// definitions a unit system is made of.
+pub fn extend_registry(
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    conf_str: &str,
+) -> Result<(), Vec<String>> {
+    let backup = (registry.clone(), constants.clone());
+    let mut problems = Vec::new();
+    parse_conf(conf_str, registry, constants, false, &mut problems);
+    if problems.is_empty() {
+        return Ok(());
+    }
+    (*registry, *constants) = backup;
+    Err(problems)
+}
+
+fn parse_conf(
+    conf_str: &str,
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    apply_settings: bool,
+    problems: &mut Vec<String>,
+) {
     let mut current_section = "";
     let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
@@ -38,7 +70,7 @@ pub fn parse_physure_conf(
         }
 
         match current_section {
-            "Settings" => {
+            "Settings" if apply_settings => {
                 if let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
                     match key {
                         "propagation_mode" => match raw.parse::<PropagationMode>() {
@@ -87,7 +119,11 @@ pub fn parse_physure_conf(
                         if let Ok(factor) = parts[1].parse::<f64>() {
                             registry.add_prefix_exact(symbol.to_string(), factor, crate::units::exact::ExactScale::parse(parts[1]));
                             registry.add_prefix_name(name.trim().to_string(), symbol.to_string());
+                        } else {
+                            problems.push(format!("{line}: the factor of a prefix is a number, not '{}'", parts[1]));
                         }
+                    } else {
+                        problems.push(format!("{line}: a prefix is `name = symbol, factor`"));
                     }
                 }
             }
@@ -189,7 +225,9 @@ pub fn parse_physure_conf(
 
     // Pass 2: Parse and register all units using the dynamic dimension map
     for line in unit_lines {
-        parse_unit_line(line, registry, &dim_to_base);
+        if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
+            problems.push(format!("{line}: {reason}"));
+        }
     }
 }
 
@@ -238,7 +276,7 @@ fn is_single_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) {
+fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) -> Result<(), String> {
     let (left, aliases_str) = match line.split_once('[') {
         Some((l, r)) => {
             let r = r.trim_end_matches(']').trim();
@@ -249,7 +287,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
     let (key, val_part) = match left.split_once('=') {
         Some((k, v)) => (k.trim(), v.trim()),
-        None => return,
+        None => return Err("a unit line is `name = factor, dimension, [names]`".to_string()),
     };
 
     let mut aliases: Vec<String> = if !aliases_str.is_empty() {
@@ -288,7 +326,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     }
 
     if parts.is_empty() {
-        return;
+        return Err("the line has no value".to_string());
     }
 
     // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`, and
@@ -298,15 +336,16 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         if let (Some(factor), Some(reference), Some("1")) = (number(1), number(2), parts.get(3).copied()) {
             registry.add_log_unit(symbol.clone(), factor, reference);
             register_aliases(registry, key, &symbol, &aliases, &names);
+            return Ok(());
         }
-        return;
+        return Err("a level is `Log, factor, reference, dimension`".to_string());
     }
 
     // A number of the catalog is a decimal (`0.0254`, `1e-5`) or a fraction (`5/9`); the exact
     // rational is what conversions use, so that a ratio is rounded once.
     let (factor, exact) = match parse_number(parts[0]) {
         Some(parsed) => parsed,
-        None => return,
+        None => return Err(format!("'{}' is not a number", parts[0])),
     };
 
     // Absolute affine units carry a zero point between the factor and the dimension:
@@ -390,10 +429,13 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
                 registry.note_recipe(&symbol, &u.dimensions, &names);
             }
             registry.add_derived_unit(symbol.clone(), u);
+        } else {
+            return Err(format!("cannot read the dimension '{dim_str}' of {symbol}, or its recipe"));
         }
     }
 
     register_aliases(registry, key, &symbol, &aliases, &names);
+    Ok(())
 }
 
 /// Makes the key of a unit line and each of its aliases another name for `symbol`.
@@ -418,14 +460,14 @@ fn embedded_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
     })
 }
 
-/// The embedded catalog plus `extra`, the text of a system file or of a user conf, parsed after it
-/// so that a later definition wins. The `physure.conf` of the working directory is not read: the
-/// caller decides what a system is made of. A `[Settings]` section in `extra` writes the
-/// process-wide settings, as it does in any conf.
-pub fn build_registry_with(extra: &str) -> (UnitRegistry, HashMap<String, String>) {
+/// The embedded catalog plus `extra`, the text of a system file or of a user conf, read strictly
+/// (`extend_registry`) after it, so that a later definition wins. The `physure.conf` of the working
+/// directory is not read: the caller decides what a system is made of. A line the parser cannot
+/// read is an error that lists every such line, and `[Settings]` is not applied.
+pub fn build_registry_with(extra: &str) -> Result<(UnitRegistry, HashMap<String, String>), Vec<String>> {
     let (mut reg, mut constants) = embedded_catalog().clone();
-    parse_physure_conf(extra, &mut reg, &mut constants);
-    (reg, constants)
+    extend_registry(&mut reg, &mut constants, extra)?;
+    Ok((reg, constants))
 }
 
 /// Builds a UnitRegistry and constants map from master `physure.conf` + CWD user override `physure.conf`.

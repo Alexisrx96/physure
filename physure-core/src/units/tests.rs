@@ -785,7 +785,7 @@ fn a_unit_written_as_symbols_expands_and_converts_by_the_registry() {
 fn a_registry_can_be_built_from_the_catalog_plus_extra_text() {
     use crate::units::parser::Parser;
     let extra = "[Units]\nfurlong = 201.168, L, [fur, furlong]\n";
-    let (reg, _) = conf::build_registry_with(extra);
+    let (reg, _) = conf::build_registry_with(extra).unwrap();
     let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
     assert_eq!(reg.factor_between(&atomic("fur"), &atomic("m")).unwrap(), 201.168);
     assert_eq!(reg.facts("furlong").unwrap().dimension, vec![("L".to_string(), (1, 1))]);
@@ -796,7 +796,7 @@ fn a_registry_can_be_built_from_the_catalog_plus_extra_text() {
     assert!(default.facts("furlong").is_err());
 
     // a later definition wins
-    let (redefined, _) = conf::build_registry_with("[Units]\nfoot = 0.3, L, [ft, foot]\n");
+    let (redefined, _) = conf::build_registry_with("[Units]\nfoot = 0.3, L, [ft, foot]\n").unwrap();
     assert_eq!(redefined.factor_between(&atomic("ft"), &atomic("m")).unwrap(), 0.3);
 }
 
@@ -815,4 +815,44 @@ fn a_later_text_starts_from_the_base_units_of_the_first() {
     assert_eq!(reg.factor_between(&atomic("smoot"), &atomic("m")).unwrap(), 1.0);
     assert_eq!(reg.dimension_base.get("L").map(String::as_str), Some("m"));
     assert_eq!(reg.dimension_base.get("$").map(String::as_str), Some("USD"));
+}
+
+/// What a system is made of is read all or nothing: a line the parser cannot read is a problem,
+/// nothing of a refused text is kept, and the embedded catalog has no line the parser refuses.
+#[test]
+fn extending_a_registry_is_all_or_nothing_and_the_catalog_has_no_unreadable_line() {
+    use std::collections::HashMap;
+    let (mut catalog, mut catalog_constants) = (UnitRegistry::new(), HashMap::new());
+    let outcome = conf::extend_registry(&mut catalog, &mut catalog_constants, conf::DEFAULT_PHYSURE_CONF);
+    assert!(outcome.is_ok(), "{:?}", outcome.err());
+
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    let before = reg.clone();
+    let text = "[Units]\nfurlong = 201.168, L, [fur, furlong]\nleague = lots, L, [lg]\nbad line\n[Prefixes]\nzorro = zz, many\n";
+    let problems = conf::extend_registry(&mut reg, &mut constants, text).unwrap_err();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("league") && p.contains("is not a number")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("bad line")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("zorro")), "{problems:?}");
+    assert!(reg == before, "nothing of a refused text is kept, not even its good line");
+
+    let accepted = conf::extend_registry(&mut reg, &mut constants, "[Units]\nfurlong = 201.168, L, [fur, furlong]\n");
+    assert!(accepted.is_ok());
+    assert!(reg.facts("fur").is_ok());
+
+    // a unit whose dimension cannot be read is a problem too, and its names are not registered
+    let unreadable = conf::extend_registry(&mut reg, &mut constants, "[Units]\nsmurf = 2.0, Q, [smf]\n");
+    assert!(unreadable.is_err());
+    assert!(reg.facts("smf").is_err());
+}
+
+/// The settings of a conf are process-wide, and a registry does not own them: extending one does
+/// not apply a `[Settings]` section.
+#[test]
+fn extending_a_registry_does_not_apply_its_settings() {
+    let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    let before = crate::settings::max_loop_iterations();
+    conf::extend_registry(&mut reg, &mut constants, "[Settings]\nmax_loop_iterations = 7\n").unwrap();
+    assert_eq!(crate::settings::max_loop_iterations(), before);
 }

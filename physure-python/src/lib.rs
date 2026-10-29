@@ -287,6 +287,11 @@ fn value_error(e: PhysureError) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(e.to_string())
 }
 
+/// The lines of a conf that the core could not read, one per line of the message.
+fn conf_problems(problems: Vec<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(problems.join("\n"))
+}
+
 /// A dimension as a Python dict: the dimension symbol and its exponent, an int when it is one.
 fn dimension_dict<'py>(py: Python<'py>, dimension: &[(String, (i64, i64))]) -> PyResult<Bound<'py, PyDict>> {
     let out = PyDict::new(py);
@@ -358,9 +363,9 @@ impl PyUnitRegistry {
 
     /// The catalog plus extra conf text (the text of a system file, or units of the user's).
     #[staticmethod]
-    fn from_conf_text(extra: &str) -> Self {
-        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra);
-        PyUnitRegistry(reg)
+    fn from_conf_text(extra: &str) -> PyResult<Self> {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra).map_err(conf_problems)?;
+        Ok(PyUnitRegistry(reg))
     }
 
     /// A unit written as symbols (`km/h`), not resolved: its dimensions are the symbols written.
