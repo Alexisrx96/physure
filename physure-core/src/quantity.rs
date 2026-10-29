@@ -578,8 +578,9 @@ impl Quantity {
     /// spells in PHS.
     pub fn base_display(&self) -> String {
         if self.unit.is_logarithmic() {
-            if let Ok(ratio) = self.convert_to(&RationalUnit::dimensionless()) {
-                return ratio.base_display();
+            let plain = RationalUnit::new_from_dimensions(self.unit.dimensions.iter().cloned());
+            if let Ok(value) = self.convert_to(&plain) {
+                return value.base_display();
             }
         }
         let mut base_unit = self.unit.clone().with_unit_scale();
@@ -761,8 +762,15 @@ impl Quantity {
                 other.unit.__repr__()
             )));
         }
-        let ratios = RationalUnit::dimensionless();
-        let (a, b) = (self.convert_to(&ratios)?, other.convert_to(&ratios)?);
+        if !self.unit.same_dimensions(&other.unit) {
+            return Err(PhysureError::UnitMismatch {
+                expected: self.unit.__repr__(),
+                actual: other.unit.__repr__(),
+            });
+        }
+        // the plain quantity both stand for: a ratio for a level of a ratio, a power for a level of one
+        let plain = RationalUnit::new_from_dimensions(self.unit.dimensions.iter().cloned());
+        let (a, b) = (self.convert_to(&plain)?, other.convert_to(&plain)?);
         let combined = if subtract { a.sub(&b)? } else { a.add(&b)? };
         combined.convert_to(&self.unit)
     }

@@ -329,16 +329,24 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         return Err("the line has no value".to_string());
     }
 
-    // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`, and
-    // its dimension is the dimensionless "1", because it is the logarithm of a ratio.
+    // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`. Its dimension
+    // is "1" when it is the logarithm of a ratio, or the dimensions of a quantity (`dBW`).
     if parts[0].eq_ignore_ascii_case("log") {
         let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
-        if let (Some(factor), Some(reference), Some("1")) = (number(1), number(2), parts.get(3).copied()) {
-            registry.add_log_unit(symbol.clone(), factor, reference);
-            register_aliases(registry, key, &symbol, &aliases, &names);
-            return Ok(());
-        }
-        return Err("a level is `Log, factor, reference, dimension`".to_string());
+        let (Some(factor), Some(reference), Some(dimension)) = (number(1), number(2), parts.get(3).copied()) else {
+            return Err("a level is `Log, factor, reference, dimension`".to_string());
+        };
+        // `1` is a level of a plain ratio; any other dimension is a level of a quantity (`dBW`)
+        let quantity = if dimension == "1" {
+            RationalUnit::dimensionless()
+        } else {
+            let normalized = normalize_dimension_symbols(dimension, dim_to_base);
+            crate::units::parser::Parser::parse_expression_with_registry(&normalized, registry)
+                .map_err(|_| format!("cannot read the dimension '{dimension}' of the level {symbol}"))?
+        };
+        registry.add_level(symbol.clone(), quantity, factor, reference);
+        register_aliases(registry, key, &symbol, &aliases, &names);
+        return Ok(());
     }
 
     // A number of the catalog is a decimal (`0.0254`, `1e-5`) or a fraction (`5/9`); the exact

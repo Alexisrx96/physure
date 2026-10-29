@@ -115,9 +115,15 @@ impl UnitRegistry {
         self.prefix_names.insert(name, symbol);
     }
 
-    /// Registers a level: `add_log_unit("dB", 10.0, 1.0)` is `10 * log10(ratio / 1)`.
+    /// Registers a level of a plain ratio: `add_log_unit("dB", 10.0, 1.0)` is `10 * log10(ratio / 1)`.
     pub fn add_log_unit(&mut self, name: String, factor: f64, reference: f64) {
-        let mut u = RationalUnit::dimensionless().with_log(LogScale { factor, reference });
+        self.add_level(name, RationalUnit::dimensionless(), factor, reference);
+    }
+
+    /// Registers a level of a quantity: `dBW` is `10 * log10(P / 1 W)`, a level with the dimensions
+    /// of `quantity` (its scale and zero point are ignored) whose reference is in base units.
+    pub fn add_level(&mut self, name: String, quantity: RationalUnit, factor: f64, reference: f64) {
+        let mut u = quantity.with_unit_scale().with_offset(0.0).with_log(LogScale { factor, reference });
         u.display_name = Some(name.clone());
         self.derived_units.insert(name, u);
     }
@@ -463,6 +469,13 @@ impl UnitRegistry {
     /// temperature scale is not part of a factor.
     pub fn factor_between(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<f64> {
         let (from, to) = (self.expand(from)?, self.expand(to)?);
+        if from.is_logarithmic() || to.is_logarithmic() {
+            return Err(PhysureError::Generic(format!(
+                "a level ('{}' to '{}') has no factor: it converts through the logarithm of a ratio",
+                from.__repr__(),
+                to.__repr__()
+            )));
+        }
         if !from.same_dimensions(&to) {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
         }

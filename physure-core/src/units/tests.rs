@@ -856,3 +856,36 @@ fn extending_a_registry_does_not_apply_its_settings() {
     conf::extend_registry(&mut reg, &mut constants, "[Settings]\nmax_loop_iterations = 7\n").unwrap();
     assert_eq!(crate::settings::max_loop_iterations(), before);
 }
+
+/// A level can be the level of a quantity: `dBW` is 10 * log10(P / 1 W) and has the dimensions of a
+/// power, `dBm` is the same against a milliwatt.
+#[test]
+fn a_level_can_have_a_dimension() {
+    use crate::quantity::Quantity;
+    use crate::units::parser::Parser;
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    let text = "[Units]\ndBW = Log, 10, 1.0, M*L^2*T^-3, [dBW]\ndBm = Log, 10, 0.001, M*L^2*T^-3, [dBm]\n";
+    conf::extend_registry(&mut reg, &mut constants, text).unwrap();
+    let (dbw, dbm, watt) = (reg.get_unit("dBW").unwrap(), reg.get_unit("dBm").unwrap(), reg.get_unit("W").unwrap());
+    assert!(dbw.is_logarithmic() && dbm.is_logarithmic());
+    assert!(dbw.same_dimensions(&watt));
+    let q = |value: f64, unit: &RationalUnit| Quantity::new_scalar(value, 0.0, unit.clone(), None, None);
+    let mean = |quantity: Quantity| quantity.value.mean();
+    assert!((mean(q(30.0, &dbw).convert_to(&watt).unwrap()) - 1000.0).abs() < 1e-9);
+    assert!((mean(q(0.0, &dbm).convert_to(&watt).unwrap()) - 0.001).abs() < 1e-15);
+    assert!(mean(q(30.0, &dbm).convert_to(&dbw).unwrap()).abs() < 1e-9);
+    assert!((mean(q(1000.0, &watt).convert_to(&dbw).unwrap()) - 30.0).abs() < 1e-9);
+    // levels of a power add as the powers: 10 dBW + 10 dBW is 20 W
+    let sum = q(10.0, &dbw).add(&q(10.0, &dbw)).unwrap();
+    assert!(sum.unit.is_logarithmic());
+    assert!((mean(sum) - 10.0 * 20f64.log10()).abs() < 1e-9);
+    // not a plain quantity, not another dimension, and no factor between units
+    assert!(q(10.0, &dbw).add(&q(1.0, &watt)).is_err());
+    assert!(q(1.0, &dbw).convert_to(&reg.get_unit("m").unwrap()).is_err());
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert!(reg.factor_between(&atomic("dBW"), &atomic("W")).is_err());
+    let facts = reg.facts("dBW").unwrap();
+    let expected: Vec<(String, (i64, i64))> = vec![("L".into(), (2, 1)), ("M".into(), (1, 1)), ("T".into(), (-3, 1))];
+    assert_eq!(facts.dimension, expected);
+    assert!(!facts.is_linear);
+}
