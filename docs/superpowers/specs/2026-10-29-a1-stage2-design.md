@@ -74,3 +74,9 @@ A Rust `Quantity` that holds arrays (the spec keeps it scalar); publishing branc
 1. **Order: registry first** (steps 1 and 2, then the seam, then the classes) instead of the spec's classes first and system after; the finding above is why.
 2. **Where user-visible behaviour changes land: each in its own branch after the classes are swapped** (step 6), so the swap is judged on "nothing a user sees changed" and each rule on its own diff.
 3. **What `Dimension` becomes: a wrapper of the core's rational dimension** (fixes the silent loss of fractional powers), not the integer `DimVector` the spec named (a rename that keeps the wrong answer).
+
+## Outcome of step 1 (the registry answers)
+
+- The registry object answers the facts of every unit of the catalog that Python resolves with the same values, and the conversion factor between compound units with exact equality, as the new `tests/core/test_registry_facts.py` shows.
+- `UnitRegistry::expand` and `factor_between` are new in the core; a registry can be built from the catalog plus extra text (`build_registry_with`), which a system file or a user conf will use in step 2. `[Settings]` of an extra conf still writes process-wide settings; whether a registry owns its settings is a question of step 2.
+- `physure-python/benchmarks/bench_unit_ops.py` is the benchmark the gates cite.
