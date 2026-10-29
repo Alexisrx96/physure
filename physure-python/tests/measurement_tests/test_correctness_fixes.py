@@ -1,7 +1,7 @@
 """Regression tests for the correctness batch.
 
 Covers: angle handling in transcendental functions, Jacobian-based
-uncertainty propagation through unit converters (incl. logarithmic),
+uncertainty propagation through unit conversions (incl. levels),
 and the removal of the mul/div inference heuristic.
 """
 
@@ -11,11 +11,6 @@ import pytest
 
 from physure import Q_
 from physure.domain.exceptions import DimensionError
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-    OffsetConverter,
-)
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.uncertainty import VarianceModel
 
@@ -48,52 +43,40 @@ class TestTranscendentalAngleHandling:
         assert q.uncertainty == pytest.approx(math.pi / 180)
 
 
-class TestConverterDerivatives:
-    def test_linear_derivatives_are_exact(self):
-        c = LinearConverter(1000.0)
-        assert c.to_base_derivative(5.0) == 1000.0
-        assert c.from_base_derivative(5.0) == pytest.approx(1e-3)
+class TestLevelConversionSlopes:
+    def test_a_scale_has_a_constant_slope(self):
+        converted = Q_(5.0, "km", uncertainty=0.1).to("m")
+        assert converted.magnitude == 5000.0
+        assert converted.uncertainty == pytest.approx(100.0)
 
-    def test_offset_derivatives_ignore_offset(self):
-        c = OffsetConverter(scale=5.0 / 9.0, offset=255.372)
-        assert c.to_base_derivative(100.0) == pytest.approx(5.0 / 9.0)
-        assert c.from_base_derivative(300.0) == pytest.approx(9.0 / 5.0)
-
-    def test_log_derivatives_match_numeric(self):
-        c = LogarithmicConverter(factor=10.0)
-        v = 30.0  # 30 dB -> 1000x in base
+    def test_a_level_slope_matches_the_numeric_derivative(self):
         h = 1e-6
-        numeric = (c.to_base(v + h) - c.to_base(v - h)) / (2 * h)
-        assert c.to_base_derivative(v) == pytest.approx(numeric, rel=1e-6)
+        level = Q_(30.0, "dB", uncertainty=1.0).to("unity")  # 30 dB: 1000x
+        assert level.magnitude == pytest.approx(1000.0)
+        numeric = (
+            Q_(30.0 + h, "dB").to("unity").magnitude
+            - Q_(30.0 - h, "dB").to("unity").magnitude
+        ) / (2 * h)
+        assert level.uncertainty == pytest.approx(abs(numeric), rel=1e-6)
 
-        base = c.to_base(v)
-        numeric = (c.from_base(base + h) - c.from_base(base - h)) / (2 * h)
-        assert c.from_base_derivative(base) == pytest.approx(numeric, rel=1e-6)
+    def test_a_ratio_to_a_level_slope_matches_the_numeric_derivative(self):
+        step = 1e-3
+        level = Q_(1000.0, "unity", uncertainty=1.0).to("dB")
+        assert level.magnitude == pytest.approx(30.0)
+        numeric = (
+            Q_(1000.0 + step, "unity").to("dB").magnitude
+            - Q_(1000.0 - step, "unity").to("dB").magnitude
+        ) / (2 * step)
+        assert level.uncertainty == pytest.approx(abs(numeric), rel=1e-6)
 
-    def test_log_from_base_scalar_needs_no_numpy(self):
+    def test_a_scalar_level_needs_no_numpy(self):
         # math path for scalars (numpy is an optional extra)
-        c = LogarithmicConverter(factor=10.0)
-        assert c.from_base(1000.0) == pytest.approx(30.0)
+        assert Q_(1000.0, "unity").to("dB").magnitude == pytest.approx(30.0)
 
-    def test_custom_converter_numeric_fallback(self):
-        from physure.domain.measurement.converters import UnitConverter
-
-        class SquareConverter(UnitConverter):
-            @property
-            def is_linear(self):
-                return False
-
-            def to_base(self, value):
-                return value**2
-
-            def from_base(self, value):
-                return value**0.5
-
-        c = SquareConverter()
-        assert c.to_base_derivative(3.0) == pytest.approx(6.0, rel=1e-4)
-        assert c.from_base_derivative(9.0) == pytest.approx(
-            1.0 / 6.0, rel=1e-4
-        )
+    def test_an_array_of_levels_converts_elementwise(self):
+        np = pytest.importorskip("numpy")
+        levels = Q_(np.array([10.0, 100.0, 1000.0]), "unity").to("dB")
+        assert levels.magnitude == pytest.approx([10.0, 20.0, 30.0])
 
 
 class TestLogUnitUncertaintyPropagation:

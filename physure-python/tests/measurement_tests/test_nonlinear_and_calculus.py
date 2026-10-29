@@ -5,7 +5,7 @@ import sympy as sp
 
 from physure import Q_
 
-# --- Temperature (Offset Converter) Tests ---
+# --- Temperature (zero point) Tests ---
 
 
 def test_temperature_conversions():

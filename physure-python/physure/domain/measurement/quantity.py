@@ -62,8 +62,6 @@ from physure.application.context import _UNCERTAINTY_MODE  # noqa: E402
 if TYPE_CHECKING:
     from physure.domain.measurement.system import UnitSystem
 
-# Lazy import for converters to avoid circular dependencies if possible,
-# or assume available since we are in domain.
 # sympy (sp) moved to lazy loading helper if needed.
 
 
