@@ -1137,3 +1137,40 @@ fn levels_work_in_phs() {
         assert!(eval_phs(refused).is_err(), "{refused} should be refused");
     }
 }
+
+/// The sign of a temperature literal keeps its scale: `-40 degC` is minus forty in degrees Celsius
+/// (233.15 K), where it used to be minus 313.15 K, a temperature below absolute zero.
+#[test]
+fn the_sign_of_a_temperature_literal_keeps_its_scale() {
+    let mean = |src: &str| eval_quantity(src).value.mean();
+    assert!((mean("-40 degC => K") - 233.15).abs() < 1e-12);
+    assert!((mean("-40 degC => degF") + 40.0).abs() < 1e-12);
+    assert!((mean("-40 degF => degC") + 40.0).abs() < 1e-12);
+    assert_eq!(mean("-(25 degC)"), -25.0);
+    assert_eq!(mean("x = 25 degC\n-x"), -25.0);
+    assert_eq!(eval_quantity("-40 degC").unit.__repr__(), "degC");
+}
+
+/// The algebra of points and intervals in PHS, and the comparisons that follow from it.
+#[test]
+fn temperatures_add_compare_and_refuse_as_points_and_intervals() {
+    let mean = |src: &str| eval_quantity(src).value.mean();
+    assert!((mean("20 degC + 5 K => degC") - 25.0).abs() < 1e-12);
+    assert!((mean("20 degC - 5 K => degC") - 15.0).abs() < 1e-12);
+    assert!((mean("20 degC - 5 degC => K") - 15.0).abs() < 1e-12);
+    assert!((mean("8.314 J/(mol*K) * 25 degC => J/mol") - 8.314 * 298.15).abs() < 1e-9);
+    for refused in ["20 degC + 5 degC", "5 K - 20 degC", "2 * 20 degC", "20 degC / 2", "1 / 20 degC"] {
+        assert!(eval_phs(refused).is_err(), "{refused} should be refused");
+    }
+    let truth = |src: &str| match eval_phs(src).unwrap().into_iter().last() {
+        Some(PhsValue::Bool(b)) => b,
+        other => panic!("{src:?} produced {other:?}, expected a Bool"),
+    };
+    assert!(truth("20 degC == 293.15 K"));
+    assert!(truth("20 degC == 68 degF"));
+    assert!(truth("20 degC > 280 K"));
+    assert!(truth("20 degC < 70 degF"));
+    assert!(!truth("20 degC > 70 degF"));
+    assert_eq!(eval_quantity("min(20 degC, 280 K)").unit.__repr__(), "K");
+    assert_eq!(eval_quantity("max(20 degC, 280 K)").unit.__repr__(), "degC");
+}

@@ -204,7 +204,7 @@ impl RationalUnit {
     }
 
     /// A bare number: no dimensions, scale 1, not a level. Multiplying by it changes nothing.
-    fn is_plain_number(&self) -> bool {
+    pub fn is_plain_number(&self) -> bool {
         self.log.is_none() && self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9
     }
 

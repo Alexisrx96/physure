@@ -628,3 +628,70 @@ fn levels_combine_as_ratios_and_refuse_what_has_no_meaning() {
     assert!(q(20.0, "dB").approx_eq(&q(100.0, "unity"), 1e-12, 0.0));
     assert!(!q(20.0, "dB").approx_eq(&q(20.0, "unity"), 1e-12, 0.0));
 }
+
+/// An absolute temperature is a point on an interval scale: an interval moves it, two points give
+/// an interval, and the sum of two points (or a point taken from an interval) has no meaning.
+#[test]
+fn temperature_points_and_intervals_follow_the_affine_algebra() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    let is = |result: crate::error::PhysureResult<Quantity>, mean: f64, unit: &str| {
+        let result = result.unwrap();
+        assert!((result.value.mean() - mean).abs() < 1e-9, "{} != {mean} {unit}", result.value.mean());
+        assert_eq!(result.unit.__repr__(), unit);
+    };
+    is(q(20.0, "degC").add(&q(5.0, "K")), 25.0, "degC");
+    is(q(5.0, "K").add(&q(20.0, "degC")), 25.0, "degC");
+    is(q(20.0, "degC").add(&q(9.0, "delta_fahrenheit")), 25.0, "degC");
+    is(q(20.0, "degF").add(&q(5.0, "K")), 29.0, "degF");
+    is(q(20.0, "degC").sub(&q(5.0, "K")), 15.0, "degC");
+    is(q(20.0, "degC").sub(&q(5.0, "degC")), 15.0, "K");
+    is(q(20.0, "degC").sub(&q(5.0, "degF")), 35.0, "K");
+    assert!(q(20.0, "degC").add(&q(5.0, "degC")).is_err());
+    assert!(q(20.0, "degC").add(&q(5.0, "degF")).is_err());
+    assert!(q(5.0, "K").sub(&q(20.0, "degC")).is_err());
+    assert!(q(20.0, "degC").add(&q(1.0, "m")).is_err());
+    assert!(q(20.0, "degC").sub(&q(1.0, "m")).is_err());
+}
+
+/// A sign keeps the scale; any other plain number would pick a scale for the caller; a quantity with
+/// dimensions takes the temperature as the absolute one it is.
+#[test]
+fn a_sign_keeps_the_scale_and_any_other_number_is_refused() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    for negated in [q(-1.0, "unity").mul(&q(25.0, "degC")), q(25.0, "degC").mul(&q(-1.0, "unity")), q(25.0, "degC").div(&q(-1.0, "unity"))] {
+        let negated = negated.unwrap();
+        assert_eq!(negated.value.mean(), -25.0);
+        assert_eq!(negated.unit.__repr__(), "degC");
+    }
+    assert_eq!(q(1.0, "unity").mul(&q(25.0, "degC")).unwrap().value.mean(), 25.0);
+    for refused in [
+        q(2.0, "unity").mul(&q(20.0, "degC")),
+        q(20.0, "degC").mul(&q(2.0, "unity")),
+        q(20.0, "degC").div(&q(2.0, "unity")),
+        q(1.0, "unity").div(&q(20.0, "degC")),
+        q(-1.0, "unity").div(&q(20.0, "degC")),
+        q(20.0, "degC").mul(&q(50.0, "percent")),
+    ] {
+        assert!(refused.is_err());
+    }
+    let energy = q(8.314, "J/(mol*K)").mul(&q(25.0, "degC")).unwrap();
+    assert!((energy.value.mean() - 8.314 * 298.15).abs() < 1e-9);
+    assert!((q(25.0, "degC").pow(2.0).unwrap().value.mean() - 298.15 * 298.15).abs() < 1e-9);
+    let ratio = q(100.0, "degC").div(&q(0.0, "degC").add(&q(50.0, "K")).unwrap()).unwrap();
+    assert!(ratio.unit.dimensions.is_empty());
+}
+
+/// Quantities compare by what they stand for, so the zero point of a temperature scale counts.
+#[test]
+fn a_temperature_compares_by_its_absolute_value() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    assert_eq!(q(20.0, "degC").canonical_magnitude(), 293.15);
+    assert!((q(32.0, "degF").canonical_magnitude() - 273.15).abs() < 1e-12);
+    assert!(q(20.0, "degC").approx_eq(&q(293.15, "K"), 1e-12, 0.0));
+    assert!(q(20.0, "degC").approx_eq(&q(68.0, "degF"), 1e-12, 0.0));
+    assert!(!q(20.0, "degC").approx_eq(&q(20.0, "K"), 1e-12, 0.0));
+    assert_eq!(q(0.0, "degC").base_display(), "273.15 K");
+}
