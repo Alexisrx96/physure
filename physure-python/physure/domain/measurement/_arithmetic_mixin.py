@@ -764,7 +764,14 @@ class ArithmeticMixin:
                 # Must exclude 'noprefix' check if key is there?
                 # CompoundUnit handles noprefix, exponents might have it?
                 # Usually exponents dict keys are purely unit names.
-                return self.system.get_definition(name).converter
+                definition = self.system.get_definition(name)
+                if definition is None:
+                    # a unit only the core registry knows (centicelsius)
+                    raise NotImplementedError(
+                        f"Arithmetic with the unit '{name}' is not supported "
+                        "yet: convert it with .to() first."
+                    )
+                return definition.converter
         return None
 
     @staticmethod

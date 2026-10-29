@@ -63,6 +63,12 @@ def _get_converter_if_simple(unit: CompoundUnit, system: UnitSystem):
             definition = system.get_definition(name)
             if definition:
                 return definition.converter
+            if not unit.is_linear(system):
+                # a unit only the core registry knows (centicelsius)
+                raise NotImplementedError(
+                    f"Arithmetic with the unit '{name}' is not supported "
+                    "yet: convert it with .to() first."
+                )
     return None
 
 
