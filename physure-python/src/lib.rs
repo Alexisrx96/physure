@@ -43,6 +43,10 @@ use physure_script::symbolic::Expr;
 // handed back whichever of them was cached first.
 static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>), PyObject>>> = OnceLock::new();
 
+// The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
+// other backends, which live in Python, so Python registers the factory at import.
+static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
+
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
@@ -216,6 +220,18 @@ impl PyRationalUnit {
             ));
         };
         get_cached_unit(py, self.0.pow(exp_r))
+    }
+
+    /// `5 * unit` is a quantity, built by the factory Python registered; without one the product
+    /// is not defined, and a factory that does not take the operand says so by returning
+    /// `NotImplemented`.
+    fn __rmul__(slf: &Bound<'_, Self>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let factory = QUANTITY_FACTORY.lock().unwrap().as_ref().map(|factory| factory.clone_ref(py));
+        match factory {
+            Some(factory) => factory.call1(py, (other, slf)),
+            None => Ok(py.NotImplemented()),
+        }
     }
 
     fn __eq__(&self, other: &PyRationalUnit) -> bool {
@@ -1651,6 +1667,12 @@ fn max_skewness() -> f64 {
 
 /// The default unit catalog (`physure.conf`) embedded in `physure-core`: the single source
 /// the Python `UnitSystem` is built from.
+/// Registers the function `5 * unit` calls with the number and the unit to build a quantity.
+#[pyfunction]
+fn register_quantity_factory(factory: PyObject) {
+    *QUANTITY_FACTORY.lock().unwrap() = Some(factory);
+}
+
 #[pyfunction]
 fn default_conf() -> &'static str {
     ::physure_core::units::conf::DEFAULT_PHYSURE_CONF
@@ -1707,6 +1729,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
     m.add_function(wrap_pyfunction!(dim_vector_from_dict, m)?)?;
     m.add_function(wrap_pyfunction!(unit_facts, m)?)?;
+    m.add_function(wrap_pyfunction!(register_quantity_factory, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_phs_expression, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;

@@ -9,7 +9,7 @@ from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
-from physure._core import RationalUnit
+from physure._core import RationalUnit, register_quantity_factory
 from physure.core.dispatcher import BackendManager
 from physure.core.registry import UnitRegistry
 from physure.domain.exceptions import (
@@ -551,6 +551,14 @@ _register_core_units()
 # units.discover_plugins() is now called lazily in UnitRegistry
 
 
+def _quantity_from_sugar(value: Any, unit: Any) -> Any:
+    """What `5 * unit` calls for a unit of the core: the same quantity `5 * meter` builds."""
+    return CompoundUnit(unit.dimensions).__rmul__(value)
+
+
+register_quantity_factory(_quantity_from_sugar)
+
+
 # Inject Python-side functionality into the Rust base class
 # This ensures that results of Rust unit arithmetic (which return raw RationalUnit
 # objects) still have access to the high-level Python methods.
@@ -599,7 +607,6 @@ for method_name in [
 # Arithmetic methods to wrap with Flyweight cache
 for op in [
     "__mul__",
-    "__rmul__",
     "__truediv__",
     "__rtruediv__",
     "__pow__",
