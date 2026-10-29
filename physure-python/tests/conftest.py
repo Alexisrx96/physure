@@ -20,7 +20,6 @@ def clean_state():
     """
     from physure.application.context import reset_context
     from physure.core.dispatcher import BackendManager
-    from physure.domain.measurement.units import _register_core_units
     from physure.domain.measurement.vectorized_uncertainty import (
         clear_global_stores,
     )
@@ -41,7 +40,6 @@ def clean_state():
 
         # 5. Reset Unit Registry to core state
         units.clear()
-        _register_core_units()
         units.discover_plugins()
 
     _reset_all()

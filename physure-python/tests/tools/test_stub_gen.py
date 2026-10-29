@@ -32,8 +32,8 @@ def test_generate_types(package_dir):
         encoding="utf-8"
     )
     assert "class UnitRegistry:" in registry_stub
-    assert "meter: Unit" in registry_stub
-    assert "second: Unit" in registry_stub
+    assert "meter: CompoundUnit" in registry_stub
+    assert "second: CompoundUnit" in registry_stub
 
 
 def test_mock_plugin_discovery(package_dir, monkeypatch):
@@ -52,4 +52,4 @@ def test_mock_plugin_discovery(package_dir, monkeypatch):
     registry_stub = (package_dir / "core" / "registry.pyi").read_text(
         encoding="utf-8"
     )
-    assert "mock_unit: Unit" in registry_stub
+    assert "mock_unit: CompoundUnit" in registry_stub

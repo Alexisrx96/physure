@@ -1,5 +1,4 @@
 # Generated files: GitHub collapses their diffs in pull requests.
-physure-python/physure/units/core.py linguist-generated=true
-physure-python/physure/units/_index.py linguist-generated=true
+physure-python/physure/units/__init__.pyi linguist-generated=true
 physure-python/physure/_generated_types.py linguist-generated=true
 physure-python/physure/core/registry.pyi linguist-generated=true

@@ -1,4 +1,5 @@
 import importlib.metadata
+import keyword
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -11,26 +12,25 @@ class UnitRegistry:
 
     This registry allows for units to be discovered via entry points and
     loaded only when accessed, reducing startup latency and improving
-    extensibility.
+    extensibility. The units of a catalog (see register_catalog) are its
+    units too, and they win over a plugin that has the same name.
     """
 
     def __init__(self):
         """Initializes the registry with empty cache and loaders."""
         self._registry: dict[str, Any] = {}
         self._lazy_loaders: dict[str, Any] = {}
-        # name -> scope module suffix, resolved to "physure.units.<scope>"
-        # only when actually accessed. See register_static.
-        self._static_index: dict[str, str] = {}
+        # A catalog and what makes a unit of one of its names. See
+        # register_catalog.
+        self._catalog: Any = None
+        self._make_unit: Callable[[str], Any] | None = None
+        self._catalog_names: list[str] | None = None
         self._discovered = False
 
     def clear(self) -> None:
         """Clears all registered units and loaders. Useful for test isolation."""
         self._registry.clear()
         self._lazy_loaders.clear()
-        # Rebind, don't .clear(): _static_index may be a shared reference to
-        # physure.units.UNIT_INDEX (see register_static), and clearing it in
-        # place would wipe that module's own lazy resolution too.
-        self._static_index = {}
         self._discovered = False
 
     def register(self, name: str, unit: Any) -> None:
@@ -49,22 +49,45 @@ class UnitRegistry:
         if (
             name in self._registry
             or name in self._lazy_loaders
-            or name in self._static_index
+            or self._in_catalog(name)
         ):
             return
         self._lazy_loaders[name] = loader_func
 
-    def register_static(self, index: dict[str, str]) -> None:
-        """Registers a name -> "physure.units.<scope>" index in bulk.
+    def register_catalog(
+        self, catalog: Any, make_unit: Callable[[str], Any]
+    ) -> None:
+        """Makes every name a catalog knows a unit of this registry.
 
-        Unlike register_lazy, this stores no per-entry closures and makes
-        no copy: `index` (typically `physure.units.UNIT_INDEX`) is kept by
-        reference, so this registry and `physure.units.__getattr__` share
-        the same ~5.5k-entry dict instead of each holding their own copy.
-        The `physure.units.<scope>` import + getattr only happens in
-        __getattr__, on the exact name actually requested.
+        `catalog` is a core registry (`physure._core.UnitRegistry`): it says
+        which names are units (`knows`) and lists them (`resolvable_names`),
+        prefixed ones such as `km` included, so nothing is listed here. The
+        unit of a name is `make_unit(name)`, made the first time it is asked
+        for.
         """
-        self._static_index = index
+        self._catalog = catalog
+        self._make_unit = make_unit
+        self._catalog_names = None
+
+    def _in_catalog(self, name: str) -> bool:
+        return (
+            self._catalog is not None
+            and name.isidentifier()
+            and not name.startswith("_")
+            and self._catalog.knows(name)
+        )
+
+    def _catalog_unit_names(self) -> list[str]:
+        """The names of the catalog that can be written as an attribute."""
+        if self._catalog is None:
+            return []
+        if self._catalog_names is None:
+            self._catalog_names = [
+                name
+                for name in self._catalog.resolvable_names()
+                if name.isidentifier() and not keyword.iskeyword(name)
+            ]
+        return self._catalog_names
 
     def discover_plugins(self) -> None:
         """Scans entry points for the group 'physure.units'.
@@ -92,6 +115,11 @@ class UnitRegistry:
         """Retrieves a unit from the registry, loading it if necessary."""
         if name in self._registry:
             return self._registry[name]
+
+        if self._make_unit is not None and self._in_catalog(name):
+            unit = self._make_unit(name)
+            self._registry[name] = unit
+            return unit
 
         # Trigger discovery lazily
         if not self._discovered:
@@ -121,19 +149,6 @@ class UnitRegistry:
                     f"Unit '{name}' failed to load: {e}"
                 ) from e
 
-        if name in self._static_index:
-            scope = self._static_index[name]
-            try:
-                module = importlib.import_module(f"physure.units.{scope}")
-                unit = getattr(module, name)
-                self._registry[name] = unit
-                return unit
-            except Exception as e:
-                log.exception("Failed to load core unit '%s'", name)
-                raise AttributeError(
-                    f"Unit '{name}' failed to load: {e}"
-                ) from e
-
         raise AttributeError(f"Unit '{name}' not found in registry.")
 
     @property
@@ -144,7 +159,7 @@ class UnitRegistry:
         return sorted(
             set(self._registry)
             | set(self._lazy_loaders)
-            | set(self._static_index)
+            | set(self._catalog_unit_names())
         )
 
     def __dir__(self) -> list[str]:
@@ -154,5 +169,5 @@ class UnitRegistry:
         return sorted(
             set(self._registry)
             | set(self._lazy_loaders)
-            | set(self._static_index)
+            | set(self._catalog_unit_names())
         )

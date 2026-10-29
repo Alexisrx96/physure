@@ -47,18 +47,25 @@ def generate(package_dir=None):
         f.write(_HEADER_EDIT_WARNING)
         f.write(_HEADER_SYNC_WARNING)
         f.write("from typing import Any\n\n")
-        f.write("from physure.domain.measurement.units import Unit\n\n")
+        f.write(
+            "from physure.domain.measurement.units import CompoundUnit\n\n"
+        )
         f.write("class UnitRegistry:\n")
         f.write("    _registry: dict[str, Any]\n")
         f.write("    _lazy_loaders: dict[str, Any]\n")
         f.write("    _discovered: bool\n")
         for name in names:
-            f.write(f"    {name}: Unit\n")
+            f.write(f"    {name}: CompoundUnit\n")
         f.write("    def register(self, name: str, unit: Any) -> None:\n")
         f.write(_STUB_ELLIPSIS)
         f.write(
             "    def register_lazy("
             "self, name: str, loader_func: Any) -> None:\n"
+        )
+        f.write(_STUB_ELLIPSIS)
+        f.write(
+            "    def register_catalog("
+            "self, catalog: Any, make_unit: Any) -> None:\n"
         )
         f.write(_STUB_ELLIPSIS)
         f.write("    def discover_plugins(self) -> None:\n")
@@ -76,7 +83,6 @@ def generate(package_dir=None):
         f.write(
             "from physure.domain.measurement.units import CompoundUnit\n\n"
         )
-        f.write("UNIT_INDEX: dict[str, str]\n\n")
         for name in names:
             f.write(f"{name}: CompoundUnit\n")
 

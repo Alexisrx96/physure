@@ -31,9 +31,7 @@ import physure._core as core
 from physure import Q_
 from physure.application.context import get_current_system
 from physure.domain.exceptions import UnknownUnitError
-
-# Stage 2 replaces this import with the registry-backed namespace.
-from physure.units._index import UNIT_INDEX
+from physure.domain.measurement.units import units
 
 GOLDEN_FILE = Path(__file__).parent / "golden" / "unit_semantics.json"
 UPDATE_GOLDEN = os.environ.get("PHYSURE_UPDATE_GOLDEN") == "1"
@@ -169,7 +167,7 @@ def _describe(value, exc):
 
 @pytest.fixture(scope="module")
 def comparison() -> Comparison:
-    names = set(UNIT_INDEX)
+    names = set(dir(units))  # the names of the catalog written as units.<name>
     long_prefixes = _long_prefix_names()
     groups = collections.defaultdict(list)
     unresolvable = []
@@ -274,14 +272,6 @@ def test_python_does_not_mix_angle_and_solid_angle(comparison):
     assert not merged, _show(merged)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Gap for A1 Stage 2: the generated index lists prefix + level "
-        "combinations (for example 'attodB') that no implementation resolves, "
-        "since a level takes no prefix. Closed when the generated index goes."
-    ),
-)
 def test_every_catalog_name_can_be_resolved_by_python(comparison):
     assert not comparison.unresolvable, comparison.unresolvable[:12]
 

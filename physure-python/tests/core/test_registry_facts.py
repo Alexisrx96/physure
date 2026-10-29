@@ -13,9 +13,10 @@ from physure import Q_
 from physure._core import UnitRegistry
 from physure.application.context import get_current_system
 from physure.domain.exceptions import UnknownUnitError
-from physure.units._index import UNIT_INDEX
+from physure.domain.measurement.units import units
 
 GOLDEN_FILE = Path(__file__).parent / "golden" / "unit_semantics.json"
+CATALOG_NAMES = dir(units)  # the names of the catalog written as units.<name>
 FACT_FIELDS = ("dimension", "kind", "is_linear", "alias", "simplified")
 
 
@@ -59,7 +60,7 @@ def test_the_registry_reproduces_the_frozen_unit_semantics(
 
 def test_the_registry_agrees_with_python_on_every_unit_it_resolves(registry):
     checked = 0
-    for name in sorted(UNIT_INDEX):
+    for name in CATALOG_NAMES:
         try:
             python = _python_facts(name)
         except UnknownUnitError:

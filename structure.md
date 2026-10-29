@@ -54,7 +54,7 @@ subgraph group_python["physure-python/physure/ — Python public API package<br/
   node_infra_conf["infrastructure/config/systems/<br/>international.conf, imperial.conf<br/>(base catalog: physure-core's physure.conf,<br/>embedded in _core)<br/>[infrastructure/config/systems/international.conf]"]
   node_ext["ext/<br/>chemistry, pandas/numba support,<br/>phs_loader, currency (lazy-imported)<br/>[ext/phs_loader.py]"]
   node_nn["nn/<br/>unit-aware layers/loss wrapping torch.nn<br/>[nn/layers.py]"]
-  node_units_pkg["units/<br/>friendly constant/unit shortcuts<br/>[units/core.py]"]
+  node_units_pkg["units/<br/>the catalog's units as attributes, looked up in the core's registry<br/>[units/__init__.py]"]
 end
 
 subgraph group_cli["physure-cli — standalone `phs` binary<br/>depends directly on physure-script and physure-core (no Python)"]
@@ -150,7 +150,7 @@ click node_jit "https://github.com/Alexisrx96/physure/blob/main/physure-python/p
 click node_infra_conf "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/infrastructure/config/systems/international.conf"
 click node_ext "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/ext/phs_loader.py"
 click node_nn "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/nn/layers.py"
-click node_units_pkg "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/units/core.py"
+click node_units_pkg "https://github.com/Alexisrx96/physure/blob/main/physure-python/physure/units/__init__.py"
 click node_phs_cli "https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/main.rs"
 click node_cli_render "https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/tui.rs"
 click node_lsp "https://github.com/Alexisrx96/physure/blob/main/physure-lsp/src/main.rs"

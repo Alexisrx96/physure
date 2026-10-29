@@ -21,11 +21,11 @@ from physure.domain.measurement.converters import (
 )
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.system import UnitSystem
-from physure.domain.measurement.units import CompoundUnit
+from physure.domain.measurement.units import CompoundUnit, units
 from physure.ext.currency import enable_currency
-from physure.units._index import UNIT_INDEX
 
 FIELDS = ("dimension", "kind", "is_linear")
+CATALOG_NAMES = dir(units)  # the names of the catalog written as units.<name>
 
 
 def _plain(number):
@@ -95,12 +95,12 @@ def test_the_default_system():
     # every fourth name of the catalog: all of them are compared with the
     # catalog's own registry in test_registry_facts.py
     system = create_default_system()
-    assert _the_registry_agrees(system, sorted(UNIT_INDEX)[::4]) > 500
+    assert _the_registry_agrees(system, CATALOG_NAMES[::4]) > 500
 
 
 def test_the_imperial_system():
     system = create_system("imperial.conf")
-    assert _the_registry_agrees(system, sorted(UNIT_INDEX)[::4]) > 500
+    assert _the_registry_agrees(system, CATALOG_NAMES[::4]) > 500
 
 
 def test_a_system_with_the_conf_of_the_user(tmp_path, monkeypatch):
