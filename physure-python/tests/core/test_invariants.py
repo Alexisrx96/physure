@@ -5,6 +5,7 @@ from hypothesis import HealthCheck, Phase, assume, given, settings
 from hypothesis import strategies as st
 
 from physure import Quantity
+from physure.domain.exceptions import IncompatibleUnitsError
 from tests.strategies import (
     backend_arrays,
     linear_units,
@@ -224,7 +225,8 @@ def test_unit_invariance(qs):
         b_conv = b.to(target_unit)
         rhs = a_conv + b_conv
 
-    except (ValueError, RuntimeError, TypeError) as e:
+    except (ValueError, RuntimeError, TypeError, IncompatibleUnitsError) as e:
+        # an angle and a solid angle share a dimension but are not convertible
         note(f"Operation failed with {e}")
         assume(False)
 

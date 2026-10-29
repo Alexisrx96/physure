@@ -277,8 +277,9 @@ def test_python_does_not_mix_angle_and_solid_angle(comparison):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Gap for A1 Stage 2: the generated index lists prefix-name + symbol "
-        "combinations (for example 'attoA') that Python itself cannot resolve."
+        "Gap for A1 Stage 2: the generated index lists prefix + level "
+        "combinations (for example 'attodB') that no implementation resolves, "
+        "since a level takes no prefix. Closed when the generated index goes."
     ),
 )
 def test_every_catalog_name_can_be_resolved_by_python(comparison):

@@ -3,9 +3,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
-from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
@@ -129,50 +127,6 @@ def _python_error(
     )
 
 
-def _is_identity_unit(base_unit: Any, unit_name: str) -> bool:
-    """Returns True if base_unit is a trivial identity wrapper for unit_name."""
-    if not (
-        hasattr(base_unit, "exponents") or hasattr(base_unit, "dimensions")
-    ):
-        return False
-    deps = (
-        base_unit.exponents
-        if hasattr(base_unit, "exponents")
-        else base_unit.dimensions
-    )
-    return len(deps) == 1 and deps.get(unit_name) == 1
-
-
-def _raise_unknown_unit(unit_name: str, system: Any) -> None:
-    """Raises UnknownUnitError with difflib suggestions."""
-    import difflib
-
-    known = list(system.UNIT_DIMENSIONS.keys())
-    suggestions = difflib.get_close_matches(unit_name, known, n=3, cutoff=0.6)
-    raise UnknownUnitError(unit_name, suggestions or None)
-
-
-def _resolve_unit_dim(unit_name: str, system: Any, Dimension: type) -> Any:
-    """Returns the Dimension for unit_name within the given system."""
-    if unit_name in system.UNIT_DIMENSIONS:
-        return system.UNIT_DIMENSIONS[unit_name]
-
-    base_unit = system.get_unit(unit_name)
-
-    # get_unit() may have just lazily materialized unit_name (e.g. a prefixed
-    # unit like "GeV") as a side effect, in which case it's now a real entry
-    # rather than the unresolved-fallback identity wrapper it looks like.
-    if unit_name in system.UNIT_DIMENSIONS:
-        return system.UNIT_DIMENSIONS[unit_name]
-
-    if _is_identity_unit(base_unit, unit_name):
-        _raise_unknown_unit(unit_name, system)
-
-    if hasattr(base_unit, "dimension"):
-        return base_unit.dimension(system)
-    return Dimension({unit_name: 1})
-
-
 @dataclass(frozen=True)
 class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
     BaseExponentEntity, RationalUnit
@@ -188,16 +142,10 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         if system is None:
             system = get_default_system()
 
-        dims = Dimension({})
-        for unit_name, exp_val in self.exponents.items():
-            exp = (
-                exp_val[0] / exp_val[1]
-                if isinstance(exp_val, tuple)
-                else exp_val
-            )
-            unit_dim = _resolve_unit_dim(unit_name, system, Dimension)
-            dims = dims * (unit_dim**exp)
-        return dims
+        try:
+            return Dimension(system.core_registry.dimension_of(self))
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     _cache: ClassVar[dict[tuple, CompoundUnit]] = {}
 
@@ -266,73 +214,25 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
     # --- System-Dependent Methods ---
     def _compound_factor(self, system: UnitSystem) -> float:
         """Calculate the unit's total conversion factor relative to SI units."""
-        factor = 1.0
-        for unit, exp in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            _unit = system.get_unit(unit)
-            dim = _unit.dimension(system)
-            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
-            if unit_def and hasattr(unit_def.converter, "scale"):
-                conv_scale = unit_def.converter.scale
-                # Handle tuple exponents (num, den) from RationalUnit
-                exponent_val = (
-                    exp[0] / exp[1] if isinstance(exp, (list, tuple)) else exp
-                )
-                factor *= conv_scale**exponent_val
-        return factor
-
-    def _compound_factor_exact(self, system: UnitSystem) -> Fraction | None:
-        """Exact rational compound factor, or None if not representable.
-
-        Returns None when any component's converter lacks an exact scale
-        or has a non-integer exponent; callers fall back to float math.
-        """
-        factor = Fraction(1)
-        for unit, exp in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            _unit = system.get_unit(unit)
-            dim = _unit.dimension(system)
-            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
-            if not (unit_def and hasattr(unit_def.converter, "scale")):
-                continue
-            exact = getattr(unit_def.converter, "exact", None)
-            if isinstance(exp, (list, tuple)):
-                num, den = exp
-                if den != 1:
-                    return None
-                exp = num
-            if exact is None or exp != int(exp):
-                return None
-            factor *= exact ** int(exp)
-        return factor
+        registry = system.core_registry
+        try:
+            return registry.factor_between(self, registry.expand(self))
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     def is_linear(self, system: UnitSystem) -> bool:
-        """Checks if all components of the unit use linear converters."""
-        for unit, _ in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            unit_def = system.get_definition(unit)
-            if unit_def and not unit_def.converter.is_linear:
-                return False
-        return True
+        """Checks if the unit is a plain scale: no zero point, no logarithm."""
+        try:
+            return system.core_registry.is_linear_of(self)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     def kind(self, system: UnitSystem) -> str:
         """Determines if the unit is 'absolute' (Point) or 'delta' (Vector)."""
-        e_list = list(self.exponents.items())
-        if len(e_list) == 1:
-            unit_name, exp = e_list[0]
-            # Handle rational tuple
-            is_unity = (exp == 1) or (
-                isinstance(exp, (list, tuple)) and exp[0] == 1 and exp[1] == 1
-            )
-
-            if is_unity and unit_name != "noprefix":
-                unit_def = system.get_definition(unit_name)
-                if unit_def:
-                    return getattr(unit_def, "kind", "delta")
-        return "delta"
+        try:
+            return system.core_registry.kind_of(self)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     def conversion_factor_to(
         self, target: CompoundUnit, system: UnitSystem | None = None
@@ -354,17 +254,10 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         if system is None:
             system = get_default_system()
 
-        if self.dimension(system) != target.dimension(system):
-            raise IncompatibleUnitsError(self, target)
-        source_exact = self._compound_factor_exact(system)
-        if source_exact is not None:
-            target_exact = target._compound_factor_exact(system)
-            if target_exact is not None:
-                # Single rounding at the boundary instead of one per scale.
-                return float(source_exact / target_exact)
-        source_factor = self._compound_factor(system)
-        target_factor = target._compound_factor(system)
-        return source_factor / target_factor
+        try:
+            return system.core_registry.factor_between(self, target)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, target) from error
 
     @overload
     def __rmul__(self, other: float) -> Quantity[float, float, Any]: ...
@@ -408,7 +301,6 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         self,
         system: UnitSystem | None = None,
         use_alias: bool = False,
-        alias_preference: str | None = None,
     ) -> str:
         """Generate a human-readable string representation of the unit.
 
@@ -416,21 +308,15 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         system (UnitSystem | None, optional): The system to check for aliases.
         use_alias (bool, optional): If True, uses a registered alias if one
         exists. Defaults to False.
-        alias_preference (str | None, optional): A preferred alias to use if
-        multiple exist. Defaults to None.
 
         Returns:
         str: The string representation of the unit.
         """
         if use_alias and system:
-            key = tuple(
-                sorted((k, v) for k, v in self.exponents.items() if v != 0)
-            )
-            aliases = system.ALIASES.get(key, [])
-            if aliases:
-                if alias_preference and alias_preference in aliases:
-                    return alias_preference
-                return aliases[0]
+            try:
+                return system.core_registry.alias_of(self)
+            except _CORE_ERRORS as error:
+                raise _python_error(error, self, self) from error
 
         return super().__str__()
 
@@ -521,19 +407,11 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         Returns:
             A new, simplified CompoundUnit instance.
         """
-        new_exponents: dict[str, float] = defaultdict(float)
-
-        for unit_symbol, exponent in self.exponents.items():
-            if unit_symbol in system._UNIT_RECIPES:
-                recipe_unit = system._UNIT_RECIPES[unit_symbol]
-                simplified_recipe = recipe_unit.simplify(system)
-
-                for base_unit, base_exp in simplified_recipe.exponents.items():
-                    new_exponents[base_unit] += base_exp * exponent
-            else:
-                new_exponents[unit_symbol] += exponent
-
-        return _CompoundUnit(new_exponents)
+        try:
+            simplified = system.core_registry.simplify(self)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
+        return _CompoundUnit(simplified.dimensions)
 
 
 # Capture a stable reference to the class to survive namespace shadowing
