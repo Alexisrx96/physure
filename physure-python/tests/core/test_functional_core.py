@@ -73,7 +73,7 @@ def test_sub_incompatible_raises(system):
 
 def test_add_two_temperatures_is_an_error(system):
     degc = unit(system, "degC")
-    with pytest.raises(ValueError, match="affine"):
+    with pytest.raises(ValueError, match="absolute"):
         add_quantities(20.0, degc, 30.0, degc, system)
 
 
@@ -112,13 +112,12 @@ def test_sub_delta_from_temperature(system):
     assert u == unit(system, "degC")
 
 
-def test_sub_temperature_from_delta(system):
-    # 300 K - 20 degC: subtract in base, express in the offset unit
-    mag, u = sub_quantities(
-        300.0, unit(system, "K"), 20.0, unit(system, "degC"), system
-    )
-    assert math.isclose(mag, 300.0 - 293.15 - 273.15)
-    assert u == unit(system, "degC")
+def test_sub_temperature_from_delta_is_an_error(system):
+    # 300 K - 20 degC has no meaning: a point cannot be taken from an interval
+    with pytest.raises(ValueError, match="absolute"):
+        sub_quantities(
+            300.0, unit(system, "K"), 20.0, unit(system, "degC"), system
+        )
 
 
 # --- Logarithmic arithmetic -----------------------------------------------------

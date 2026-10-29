@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from physure import Q_
+from physure.application.context import get_current_system
+from physure.core.functional import add_quantities, sub_quantities
 from physure.domain.exceptions import IncompatibleUnitsError
 
 # --- levels add as the quantities they stand for -----------------------------
@@ -133,3 +135,33 @@ def test_a_power_of_a_temperature_is_of_the_absolute_one():
     assert (Q_(25.0, "degC") ** 2).to("K**2").magnitude == pytest.approx(
         298.15**2
     )
+
+
+# --- the functional module follows the same rules -----------------------------
+
+
+def test_the_functional_module_moves_a_point_with_the_core_s_plan():
+    system = get_current_system()
+    unit = system.get_unit
+    magnitude, result = add_quantities(
+        1.0, unit("centicelsius"), 1.0, unit("K"), system
+    )
+    assert magnitude == pytest.approx(101.0)
+    assert result == unit("centicelsius")
+    magnitude, result = sub_quantities(
+        25.0, unit("degC"), 20.0, unit("degC"), system
+    )
+    assert magnitude == pytest.approx(5.0)
+    assert result == unit("K")
+
+
+def test_the_functional_module_adds_levels_through_the_ratio():
+    system = get_current_system()
+    magnitude, _ = add_quantities(
+        10.0, system.get_unit("dB"), 10.0, system.get_unit("dB"), system
+    )
+    assert magnitude == pytest.approx(10 * math.log10(20))
+    with pytest.raises(ValueError, match="level and a plain quantity"):
+        add_quantities(
+            10.0, system.get_unit("dB"), 1.0, system.get_unit("1"), system
+        )
