@@ -191,4 +191,14 @@ The steps: **6a** unit strings are read by the core's parser alone (done, below)
 - The lexer of the core treated `**` as a `*` that swallowed the next star, and read integers only. `**` is the power now and a decimal is read as the exact fraction it stands for.
 - `application/parsing.py` calls the core's parser and nothing else; `physure/core/parsing/` (the SymPy unit parser, 250 lines) is deleted. SymPy stays an optional extra for the symbolic features. Reading `m/s**2` no longer imports it, and `test_standard_units_do_not_load_sympy`, which passed only when an earlier test had imported SymPy, passes alone.
 - Nothing else in the suite needed the fallback: 1,222 tests pass without it.
-- Step 6b is planned from here.
+- Step 6b is done (below).
+
+## Outcome of step 6b (a unit system resolves through its registry)
+
+- `UnitSystem.get_unit` reads the expression with the core's parser, checks every unit of it with `core_registry.dimension_of`, simplifies it with the registry and keeps it in a per-system dictionary that `extend_core` clears. The check cannot be the simplification: the registry's `simplify` leaves a symbol it does not know unchanged, so `get_unit("nonsense")` came back as a placeholder unit and `"nonsense" in system` was true until the check was added. `in` is `get_unit` not raising.
+- `create_system` hands the registry the merged `[Prefixes]` and `[Units]` text in two `extend_core` calls; the builder no longer parses a unit line, an alias list or a number. `register_unit`, `register_prefix` and `register_alias` only write conf text.
+- The core gets `UnitRegistry::names()` (289 names for the catalog) so that "which units exist" has an answer without a Python table. Step 6c uses it for the unit modules.
+- Deleted: the parallel dictionaries of `UnitSystem` and `get_definition`, the lazy prefix pass, `ports/`, `measurement/conversions.py`, the legacy `Unit` dataclass and the prefix denylist: 16 files, +161 -839 lines. Tests that listed units from `UNIT_REGISTRY` ask the registry through the helpers of `tests/strategies.py`.
+- Verified: the new core test; 1,228 Python tests pass (2 xfailed as before); ruff clean; the benchmark against the step 6a tree on the same extension (best of two runs) has no row more than 1.1 % slower and `q_speed.to('km/h')` 34 % faster (27 % against the main checkout; the other rows move by 8 % either way between runs, which is the noise of the machine); `torch.compile` graph breaks are equal on all six rows; first use stays well under the 0.5 s budget.
+- `structure.md` still describes the Python layer as mirroring each unit into the registry on a best-effort basis, which has not been true since step 2b; step 7 rewrites that row once 6c and 6d have settled what Python still keeps.
+- Step 6c is next.
