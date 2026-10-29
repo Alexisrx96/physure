@@ -187,13 +187,9 @@ def _ensure_rational(unit_obj: Any) -> RationalUnit:
         for k, v in unit_obj.exponents.items():
             if isinstance(v, tuple):  # Already (num, den)
                 dims[k] = v
-            elif isinstance(v, float) and not v.is_integer():
-                from fractions import Fraction
-
+            else:  # an int, a Fraction (exact) or a float
                 f = Fraction(v).limit_denominator()
                 dims[k] = (f.numerator, f.denominator)
-            else:
-                dims[k] = (int(v), 1)
         ret = RationalUnit(dims)
     else:
         ret = RationalUnit({})
