@@ -416,3 +416,16 @@ fn what_cannot_be_exact_falls_back_to_the_double() {
     assert_eq!(sure.scale, 1.0 / 3.0);
     assert_eq!(sure.ratio_to(&length()), 1.0 / 3.0);
 }
+
+/// The catalog is parsed once and copied: a copy that is changed does not change the next one.
+#[test]
+fn every_call_gets_its_own_copy_of_the_catalog() {
+    let (mut first, mut constants) = conf::build_registry_from_conf();
+    first.add_base_unit("zzz_scratch".to_string());
+    constants.clear();
+    let (second, second_constants) = conf::build_registry_from_conf();
+    assert!(!second.contains("zzz_scratch"));
+    assert!(!second_constants.is_empty());
+    let (third, _) = conf::build_registry_from_conf();
+    assert_eq!(second, third);
+}

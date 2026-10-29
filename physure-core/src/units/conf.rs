@@ -4,6 +4,7 @@ use crate::units::registry::UnitRegistry;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
 
@@ -348,12 +349,21 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 }
 
 /// Builds a UnitRegistry and constants map from master `physure.conf` + CWD user override `physure.conf`.
+///
+/// The embedded catalog is parsed once per process and every call gets a copy: parsing it is most
+/// of the cost of turning a unit string into a unit, and it applied the `[Settings]` of the
+/// catalog again on every call, undoing any setting that had been changed since.
 pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
-    let mut reg = UnitRegistry::new();
-    let mut constants = HashMap::new();
-
+    static EMBEDDED: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
     // 1. Load embedded default master physure.conf
-    parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+    let (mut reg, mut constants) = EMBEDDED
+        .get_or_init(|| {
+            let mut reg = UnitRegistry::new();
+            let mut constants = HashMap::new();
+            parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+            (reg, constants)
+        })
+        .clone();
 
     // 2. Load user override physure.conf in CWD if present
     let local_conf = Path::new("physure.conf");
@@ -394,9 +404,16 @@ mod tests {
     use crate::units::registry::UnitRegistry;
     use std::collections::HashMap;
 
+    /// Builds the cached catalog now: its first build applies the catalog's `[Settings]` to the
+    /// process-wide globals, and a test that sets one and reads it back must not meet that.
+    fn settle_catalog_settings() {
+        let _ = build_registry_from_conf();
+    }
+
     #[test]
     fn parses_parallel_threshold_from_settings_section() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::parallel_threshold();
@@ -412,6 +429,7 @@ mod tests {
     #[test]
     fn parses_max_loop_iterations_from_settings_section() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::max_loop_iterations();
@@ -427,6 +445,7 @@ mod tests {
     #[test]
     fn parses_max_pipeline_steps_from_settings_section() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::max_pipeline_steps();

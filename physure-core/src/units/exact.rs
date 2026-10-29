@@ -82,6 +82,9 @@ impl ExactScale {
     /// not a finite decimal, so the caller keeps the `f64` it already has.
     pub fn parse(text: &str) -> Option<Self> {
         let text = text.trim();
+        if let Some((numer, denom)) = parse_small_decimal(text) {
+            return Some(Self::small(numer, denom));
+        }
         let ratio = match text.split_once('/') {
             Some((numer, denom)) => {
                 let numer: BigInt = numer.trim().parse().ok()?;
@@ -191,6 +194,39 @@ fn gcd(mut a: u128, mut b: u128) -> u128 {
             return a << shift;
         }
     }
+}
+
+/// A plain positive decimal whose reduced fraction fits in two `u128`, read without
+/// allocating; `None` for anything else, which `parse` then reads the slow way (and refuses,
+/// if it is zero, negative or not a decimal).
+fn parse_small_decimal(text: &str) -> Option<(u128, u128)> {
+    let (mantissa, exponent) = match text.find(|c| c == 'e' || c == 'E') {
+        Some(at) => (&text[..at], text[at + 1..].parse::<i32>().ok()?),
+        None => (text, 0),
+    };
+    let mantissa = mantissa.strip_prefix('+').unwrap_or(mantissa);
+    let (int_part, frac_part) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if int_part.is_empty() && frac_part.is_empty() {
+        return None;
+    }
+    let mut numer: u128 = 0;
+    for byte in int_part.bytes().chain(frac_part.bytes()) {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        numer = numer.checked_mul(10)?.checked_add(u128::from(byte - b'0'))?;
+    }
+    if numer == 0 {
+        return None;
+    }
+    let power = exponent.checked_sub(i32::try_from(frac_part.len()).ok()?)?;
+    let (numer, denom) = if power >= 0 {
+        (numer.checked_mul(10u128.checked_pow(power as u32)?)?, 1)
+    } else {
+        (numer, 10u128.checked_pow(power.unsigned_abs())?)
+    };
+    let divisor = gcd(numer, denom);
+    Some((numer / divisor, denom / divisor))
 }
 
 fn parse_decimal(text: &str) -> Option<BigRational> {
@@ -341,6 +377,19 @@ mod tests {
         assert_eq!(third.mul(&nine), exact("3"));
         assert_eq!(nine.div(&third), exact("27"));
         assert_eq!(exact("2/3").mul(&exact("3/2")), ExactScale::one());
+    }
+
+    /// The allocation-free reading and the `BigInt` one are the same number.
+    #[test]
+    fn the_fast_reading_of_a_decimal_agrees_with_the_general_one() {
+        for text in ["1", "0.0254", "1e-5", "6.02214076e+23", "4046.8564224", "0.017453292519943295", "1e38", "1e-38", "123456789012345678901234567890"] {
+            let fast = ExactScale::parse(text).unwrap_or_else(|| panic!("{text:?} should parse"));
+            let general = ExactScale::from_ratio(parse_decimal(text).unwrap());
+            assert_eq!(fast, general, "{text}");
+        }
+        // beyond u128 it falls back, and still parses
+        assert!(parse_small_decimal("1e39").is_none());
+        assert!(ExactScale::parse("1e39").is_some());
     }
 
     #[test]
