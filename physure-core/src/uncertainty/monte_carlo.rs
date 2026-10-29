@@ -80,6 +80,8 @@ impl UncertaintyBackend for MonteCarloBackend {
             "cos" => self.samples.mapv(|x| x.cos()),
             "exp" => self.samples.mapv(|x| x.exp()),
             "log" => self.samples.mapv(|x| x.ln()),
+            "log10" => self.samples.mapv(|x| x.log10()),
+            "pow10" => self.samples.mapv(|x| 10f64.powf(x)),
             "abs" => self.samples.mapv(|x| x.abs()),
             "tan" => self.samples.mapv(|x| x.tan()),
             "tanh" => self.samples.mapv(|x| x.tanh()),

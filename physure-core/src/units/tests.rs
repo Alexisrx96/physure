@@ -495,3 +495,21 @@ fn an_angle_does_not_convert_into_a_solid_angle() {
     assert!(Quantity::new(1.0, "sr").unwrap().convert_to(&radian).is_err());
     assert!(Quantity::new(180.0, "deg").unwrap().convert_to(&radian).is_ok());
 }
+
+/// `log10` and `pow10` are real functions of every backend: the Monte Carlo and unscented ones
+/// used to hand an unknown name back unchanged, which would have read a level as its own ratio.
+#[test]
+fn log10_and_pow10_are_functions_of_every_uncertainty_backend() {
+    use crate::quantity::Quantity;
+    for mode in ["gaussian", "monte_carlo", "unscented"] {
+        let level = Quantity::new_scalar(2.0, 0.01, RationalUnit::dimensionless(), Some(mode), Some(2000));
+        let ratio = level.value.propagate_function("pow10").unwrap();
+        assert!((ratio.mean() - 100.0).abs() < 1.0, "{mode}: {}", ratio.mean());
+        let back = ratio.propagate_function("log10").unwrap();
+        assert!((back.mean() - 2.0).abs() < 0.01, "{mode}: {}", back.mean());
+    }
+    let level = Quantity::new_scalar(2.0, 0.01, RationalUnit::dimensionless(), Some("gaussian"), None);
+    let ratio = level.value.propagate_function("pow10").unwrap();
+    assert_eq!(ratio.mean(), 100.0);
+    assert!((ratio.std_dev() - 100.0 * std::f64::consts::LN_10 * 0.01).abs() < 1e-12);
+}

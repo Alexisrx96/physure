@@ -105,6 +105,11 @@ pub(crate) fn function_mean_and_jacobian(func: &str, m: f64) -> (f64, f64) {
         "cos" => (m.cos(), -m.sin()),
         "exp" => (m.exp(), m.exp()),
         "log" => (m.ln(), 1.0 / m),
+        "log10" => (m.log10(), 1.0 / (m * std::f64::consts::LN_10)),
+        "pow10" => {
+            let p = 10f64.powf(m);
+            (p, p * std::f64::consts::LN_10)
+        }
         "abs" => (m.abs(), 1.0),
         "tan" => (m.tan(), 1.0 + m.tan().powi(2)),
         "tanh" => (m.tanh(), 1.0 - m.tanh().powi(2)),

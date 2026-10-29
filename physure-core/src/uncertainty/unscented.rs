@@ -123,6 +123,8 @@ impl UncertaintyBackend for UnscentedBackend {
             "cos" => self.sigma_points.mapv(|x| x.cos()),
             "exp" => self.sigma_points.mapv(|x| x.exp()),
             "log" => self.sigma_points.mapv(|x| x.ln()),
+            "log10" => self.sigma_points.mapv(|x| x.log10()),
+            "pow10" => self.sigma_points.mapv(|x| 10f64.powf(x)),
             "abs" => self.sigma_points.mapv(|x| x.abs()),
             "tan" => self.sigma_points.mapv(|x| x.tan()),
             "tanh" => self.sigma_points.mapv(|x| x.tanh()),
