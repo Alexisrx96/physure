@@ -21,10 +21,6 @@ from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentsDict,
 )
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    UnitConverter,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -67,23 +63,6 @@ def get_default_system() -> UnitSystem:
     from physure.application.context import get_current_system
 
     return get_current_system()
-
-
-@dataclass(frozen=True)
-class Unit:
-    """Represents a single atomic unit definition."""
-
-    name: str
-    symbol: str
-    dimension: Dimension
-    converter: UnitConverter
-
-    @property
-    def conversion_factor(self) -> float:
-        """Helper to maintain backward compatibility for linear units."""
-        if isinstance(self.converter, LinearConverter):
-            return self.converter.scale
-        raise ValueError(f"La unidad {self.name} no es lineal.")
 
 
 def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:

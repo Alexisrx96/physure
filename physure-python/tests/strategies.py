@@ -14,7 +14,6 @@ from hypothesis.extra import numpy as hnp
 
 from physure import Quantity, get_unit
 from physure.core.dispatcher import get_backend
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.units import get_default_system
 
 # --- Backend Availability Checks ---
@@ -65,71 +64,42 @@ def shapes(
 # --- Unit Generators ---
 
 
-@st.composite
-def available_units(draw) -> str:
-    """Selects a unit name from the default system registry.
+def unit_names(system) -> list[str]:
+    """The names of the units the registry of a system holds."""
+    return system.core_registry.names()
 
-    If the registry is empty (unlikely after startup), falls back to a small set.
-    """
-    system = get_default_system()
-    # Ensure some units are loaded/discovered if using lazy loading
-    # Ideally we'd trigger discovery here if empty, but accessing keys usually triggers.
-    if hasattr(system, "UNIT_REGISTRY"):
-        # We manually peek or just try to get known units
-        # For simplicity, we use a predefined list of common units to ensure stability
-        # and avoid testing "weird" units unless specifically asked.
-        # But we can also mix in system.available_units if accessible.
-        pass
 
-    # Common units for physics tests
-    common = [
-        "m",
-        "s",
-        "kg",
-        "A",
-        "K",
-        "mol",
-        "cd",
-        "m/s",
-        "N",
-        "J",
-        "Pa",
-        "W",
-        "V",
+def linear_unit_names(system) -> list[str]:
+    """The names that are a plain scale: no zero point and no logarithm."""
+    names = []
+    for name in unit_names(system):
+        try:
+            if system.get_unit(name).is_linear(system):
+                names.append(name)
+        except Exception:
+            continue  # a name that does not resolve as an expression
+    return names
+
+
+def linear_units_of(system, dimension) -> list[str]:
+    """The names of the plain-scale units that measure `dimension`."""
+    return [
+        name
+        for name in linear_unit_names(system)
+        if system.get_unit(name).dimension(system) == dimension
     ]
 
-    # Try to add registered ones
-    try:
-        registered = sorted(list(system.UNIT_SYMBOL_REGISTRY.keys()))
-        if registered:
-            # Sample from registered to get coverage
-            return draw(st.sampled_from(registered))
-    except Exception:
-        pass
 
-    return draw(st.sampled_from(common))
+@st.composite
+def available_units(draw) -> str:
+    """Selects a unit name from the registry of the default system."""
+    return draw(st.sampled_from(unit_names(get_default_system())))
 
 
 @st.composite
 def linear_units(draw) -> str:
     """Selects a linear unit from the registry (excludes affine/log)."""
-    system = get_default_system()
-
-    # Get all units that have a LinearConverter
-    linear_candidates = []
-
-    # 1. Check registry
-    if hasattr(system, "UNIT_SYMBOL_REGISTRY"):
-        for name, definition in system.UNIT_SYMBOL_REGISTRY.items():
-            if isinstance(definition.converter, LinearConverter):
-                # Optionally filter out "strange" units if needed
-                linear_candidates.append(name)
-
-    # 2. Fallback to common linear ones if empty
-    if not linear_candidates:
-        linear_candidates = ["m", "s", "kg", "A", "N", "J", "Pa", "W", "V"]
-
-    return draw(st.sampled_from(linear_candidates))
+    return draw(st.sampled_from(linear_unit_names(get_default_system())))
 
 
 # --- Backend-Specific Array Generators ---

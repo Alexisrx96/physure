@@ -28,7 +28,6 @@ from physure.domain.measurement.base_entity import (
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
 DIMENSIONLESS = None
-_PREFIX_DENYLIST: set[str] = set()
 
 # Canonical Basis for SI plus supplementary (Angle, Money):
 # [Length, Mass, Time, Current, Temperature, Amount, Luminous, Angle, Money]
@@ -44,16 +43,6 @@ SI_ORDER: Final[tuple[str, ...]] = (
     "$",
 )
 SI_INDICES: Final[dict[str, int]] = {s: i for i, s in enumerate(SI_ORDER)}
-
-
-def block_prefixes_for_dimension_symbol(symbol: str) -> None:
-    """Adds a dimension symbol to the prefix denylist."""
-    _PREFIX_DENYLIST.add(symbol)
-
-
-def prefixes_allowed_for_dimension_symbol(symbol: str) -> bool:
-    """Checks if a dimension symbol is allowed to have prefixes."""
-    return symbol not in _PREFIX_DENYLIST
 
 
 def register_dimension(dimension: Dimension, name: str):

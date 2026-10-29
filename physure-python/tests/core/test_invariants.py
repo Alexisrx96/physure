@@ -9,6 +9,7 @@ from physure.domain.exceptions import IncompatibleUnitsError
 from tests.strategies import (
     backend_arrays,
     linear_units,
+    linear_units_of,
     quantities,
     same_shape_quantities,
     same_unit_quantities,
@@ -191,19 +192,12 @@ def test_unit_invariance(qs):
     # Find a compatible unit to convert to (must be linear)
     from hypothesis import note
 
-    compatible_units = []
-    # Ensure dimension is look-up-able
-    try:
-        dim_key = a.dimension
-        if hasattr(dim_key, "to_string"):
-            dim_key = dim_key.to_string()  # Normalize if needed
-        candidates = system.UNIT_REGISTRY.get(dim_key, {})
-    except TypeError:
-        candidates = {}
-
-    for name, definition in candidates.items():
-        if name != a.unit.to_string() and definition.converter.is_linear:
-            compatible_units.append(name)
+    current = a.unit.to_string()
+    compatible_units = [
+        name
+        for name in linear_units_of(system, a.dimension)
+        if name != current
+    ]
 
     if not compatible_units:
         # No alternative units found, skip this example gracefully

@@ -10,43 +10,18 @@ constants into a coherent, usable system.
 from __future__ import annotations
 
 import configparser
-import math
-from fractions import Fraction
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 from physure._core import default_conf
 from physure.application.context import normalize_propagation_mode, use_system
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-    OffsetConverter,
-)
 from physure.domain.measurement.dimensions import (
     Dimension,
-    block_prefixes_for_dimension_symbol,
 )
 from physure.domain.measurement.system import UnitSystem
 from physure.domain.measurement.units import CompoundUnit
 
-if TYPE_CHECKING:
-    from physure.domain.measurement.conversions import UnitDefinition
-
 _CONF_FILE = "physure.conf"
-
-
-def _number(text: str) -> float:
-    """A number of the .conf: a decimal (``0.0254``) or a fraction (``5/9``)."""
-    return float(Fraction(text))
-
-
-def _exact_scale(text: str) -> Fraction | None:
-    """Exact rational value of a .conf factor string, or None."""
-    try:
-        return Fraction(text)
-    except (ValueError, ZeroDivisionError):
-        return None
 
 
 def _conf_section(section: str, entries: dict[str, str]) -> str:
@@ -88,14 +63,6 @@ class UnitSystemBuilder:
         if self._verbose:
             print("\n--- Phase 2: Initializing Prefixes ---")
         self._system.extend_core(_conf_section("Prefixes", prefixes_data))
-        for name, value_str in prefixes_data.items():
-            symbol, factor_str = [p.strip() for p in value_str.split(",")]
-            self._system._register_prefix(
-                symbol=symbol,
-                factor=_number(factor_str),
-                name=name,
-                exact=_exact_scale(factor_str),
-            )
         return self
 
     def add_dimensions(
@@ -111,183 +78,16 @@ class UnitSystemBuilder:
         ]
         Dimension.set_base_dimensions(base_symbols)
         for name, value_str in dimensions_data.items():
-            parts = [p.strip() for p in value_str.split(",")]
-            symbol = parts[0]
-            if len(parts) > 1 and parts[1] == "noprefix":
-                block_prefixes_for_dimension_symbol(symbol)
+            symbol = value_str.split(",")[0].strip()
             dim_instance = Dimension.from_string(symbol)
             self._system.register_dimension(dim_instance, name.capitalize())
         return self
-
-    @staticmethod
-    def _split_aliases(value_str: str) -> tuple[str, list[str]]:
-        """Splits a unit value string into its main part and alias list."""
-        if "[" not in value_str:
-            return value_str, []
-        main_part, alias_part = value_str.split("[", 1)
-        aliases = [a.strip() for a in alias_part.strip()[:-1].split(",")]
-        return main_part, aliases
-
-    @staticmethod
-    def _parse_log_unit(
-        parts: list[str],
-    ) -> tuple[Dimension, LogarithmicConverter, str]:
-        """Parses the components of a logarithmic unit definition."""
-        factor = float(parts[1])
-        reference = float(parts[2])
-        dim_str = parts[3]
-        dimension = (
-            Dimension({}) if dim_str == "1" else Dimension.from_string(dim_str)
-        )
-        return dimension, LogarithmicConverter(factor, reference), "delta"
-
-    @staticmethod
-    def _parse_linear_unit(
-        parts: list[str],
-    ) -> tuple[Dimension, LinearConverter | OffsetConverter, str]:
-        """Parses the components of a linear or offset unit definition."""
-        factor = _number(parts[0])
-        offset = 0.0
-        dim_index = 1
-
-        if len(parts) > 2:
-            try:
-                offset = _number(parts[1])
-                dim_index = 2
-            except (ValueError, ZeroDivisionError):
-                pass
-
-        dimension = Dimension.from_string(parts[dim_index])
-
-        if offset != 0:
-            return (
-                dimension,
-                OffsetConverter(
-                    factor,
-                    offset,
-                    exact_scale=_exact_scale(parts[0]),
-                    exact_offset=_exact_scale(parts[1]),
-                ),
-                "absolute",
-            )
-        return (
-            dimension,
-            LinearConverter(factor, exact=_exact_scale(parts[0])),
-            "delta",
-        )
-
-    def _register_unit_pass1(self, key: str, value_str: str) -> None:
-        """Registers a single unit (pass 1: base registration)."""
-        main_part, aliases = self._split_aliases(value_str)
-        parts = [p.strip() for p in main_part.split(",") if p.strip()]
-
-        allow_prefixes = True
-        if "noprefix" in parts:
-            allow_prefixes = False
-            parts.remove("noprefix")
-        # `own_kind` is read by the core (steradian is not a radian); Python files both
-        # under one dimension until A1 stage 2.
-        if "own_kind" in parts:
-            parts.remove("own_kind")
-
-        if parts[0].lower() == "log":
-            dimension, converter, kind = self._parse_log_unit(parts)
-        else:
-            dimension, converter, kind = self._parse_linear_unit(parts)
-
-        symbol = aliases[0] if aliases else key
-        all_aliases = {key, *aliases}
-
-        self._system._register_unit(
-            symbol,
-            dimension,
-            converter,
-            key,
-            *all_aliases,
-            allow_prefixes=allow_prefixes,
-            kind=kind,
-        )
-
-    def _register_unit_pass2(self, key: str, value_str: str) -> None:
-        """Registers the recipe for a derived unit (pass 2)."""
-        main_part, aliases = self._split_aliases(value_str)
-        parts = [
-            p.strip()
-            for p in main_part.split(",")
-            if p.strip() and p.strip() not in ("noprefix", "own_kind")
-        ]
-
-        is_log = parts[0].lower() == "log"
-        if is_log:
-            return
-
-        has_offset = False
-        if len(parts) > 2:
-            try:
-                _number(parts[1])
-                has_offset = True
-            except (ValueError, ZeroDivisionError):
-                pass
-
-        if has_offset:
-            return
-
-        recipe_str = parts[2] if len(parts) > 2 else None
-        if not recipe_str:
-            return
-
-        unit_def = cast("UnitDefinition", self._system.get_definition(key))
-        if not unit_def or unit_def.recipe:
-            return
-
-        # Recipe substitution replaces the unit by its recipe at lookup
-        # time, so it is only valid when the unit IS its recipe (scale
-        # exactly 1.0, e.g. N = kg*m/s^2). For scaled units such as
-        # degree = 0.0174... rad, substituting silently dropped the
-        # scale factor (Q_(90, "deg") used to become 90 rad).
-        scale = getattr(unit_def.converter, "scale", None)
-        if scale is None or not math.isclose(scale, 1.0):
-            return
-
-        all_aliases = [key, *aliases]
-
-        # Obtain the CompoundUnit object from the recipe.
-        recipe_unit = self._system.get_unit(recipe_str)
-
-        # Simplify the recipe to its base unit components.
-        # This is crucial for conversion.
-        simplified_recipe = recipe_unit.simplify(self._system)
-
-        # Assign the simplified recipe to the unit definition object.
-        unit_def.recipe = simplified_recipe
-        # Index the recipe under every alias (not just unit_def.symbol,
-        # the canonical one): get_unit() looks up by whatever alias the
-        # caller used, e.g. "ohm" as well as "Ohm".
-        for alias_name in all_aliases:
-            self._system._UNIT_RECIPES[alias_name] = simplified_recipe
-        # Register the alias for the simplified recipe so that
-        # to_string(use_alias=True) works for base-unit quantities.
-        self._system._register_alias(
-            simplified_recipe.exponents, *reversed(all_aliases)
-        )
 
     def add_units(self, units_data: dict[str, str]) -> UnitSystemBuilder:
         """Adds units from a dictionary of unit definitions."""
         if self._verbose:
             print("\n--- Phase 4: Initializing Units ---")
-
-        self._system.unit_definitions.update(units_data)
         self._system.extend_core(_conf_section("Units", units_data))
-
-        # Pass 1: Register all units
-        for key, value_str in units_data.items():
-            self._register_unit_pass1(key, value_str)
-
-        # Pass 2: Register recipes for derived units after all base
-        # units are available
-        for key, value_str in units_data.items():
-            self._register_unit_pass2(key, value_str)
-
         return self
 
     def add_constants(

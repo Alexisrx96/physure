@@ -57,10 +57,14 @@ def test_what_a_system_registers_is_in_its_core_registry():
     assert factor == 1000.0
 
 
-def test_membership_is_the_systems_own_not_the_registrys():
+def test_membership_is_what_the_registry_resolves():
     system = _bare_system()
-    assert "kg" not in system
+    assert "ft" in system
+    assert "km" in system  # a prefix and a unit it was given
+    assert "m/s" in system  # an expression of units it knows
+    assert "nonsense" not in system
     # any text parsed also registers the eight SI base units
+    assert "kg" in system
     assert system.core_registry.facts("kg")["dimension"] == {"M": 1}
 
 
@@ -72,7 +76,6 @@ def test_a_converter_a_conf_cannot_say_is_refused_and_changes_nothing(
     with pytest.raises(TypeError, match="not a converter"):
         system.register_unit("sq", Dimension({"L": 2}), converter, "square")
     assert "sq" not in system
-    assert system.get_definition("sq") is None
     with pytest.raises(ValueError, match="Unknown unit"):
         system.core_registry.facts("sq")
 
@@ -84,7 +87,6 @@ def test_a_name_a_conf_cannot_hold_is_refused_and_changes_nothing():
     assert "a,b" not in system
     with pytest.raises(ValueError, match="cannot be a name"):
         system.register_prefix("x=", 2.0)
-    assert "x=" not in system.PREFIX_REGISTRY
 
 
 def test_a_system_pickles_and_its_registry_is_rebuilt():
