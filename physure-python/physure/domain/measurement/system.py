@@ -9,10 +9,6 @@ from typing import TYPE_CHECKING, Any
 from physure.application.factories import QuantityFactory
 from physure.application.parsing import parse_unit_string
 from physure.domain.exceptions import UnknownUnitError
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    UnitConverter,
-)
 from physure.domain.measurement.definitions_text import (
     prefix_definition_text,
     unit_definition_text,
@@ -28,6 +24,7 @@ if TYPE_CHECKING:
     from fractions import Fraction
 
     from physure.domain.measurement.base_entity import ExponentsDict
+    from physure.domain.measurement.definitions_text import Number
 
 from physure._core import UnitRegistry as _RustUnitRegistry
 
@@ -125,8 +122,7 @@ class UnitSystem:
             unit_definition_text(
                 aliases[0],
                 recipe.dimension(self),
-                LinearConverter(1.0),
-                aliases[1:],
+                aliases=aliases[1:],
                 recipe=recipe,
             )
         )
@@ -155,14 +151,21 @@ class UnitSystem:
         self,
         symbol: str,
         dimension: Dimension,
-        converter: UnitConverter,
-        name: str | None,
+        scale: Number | None = None,
+        name: str | None = None,
         *aliases: str,
+        offset: Number = 0,
+        level: tuple[Number, Number] | None = None,
         recipe: CompoundUnit | None = None,
         allow_prefixes: bool = True,
-        kind: str = "delta",
     ) -> None:
         """Registers a unit and its aliases with the system.
+
+        The unit is a scale of its dimension (``scale``, 1 when omitted), a
+        scale with a zero point (``offset``, which makes it an absolute scale
+        such as degC) or a level (``level=(factor, reference)``, such as dB).
+        A `str` or a `Fraction` for a number is exact, a `float` is the
+        decimal it prints as.
 
         The unit is written as conf text and given to the core registry, so a
         unit the core cannot take leaves the system as it was. `name` is a
@@ -170,18 +173,19 @@ class UnitSystem:
         the aliases.
 
         Raises:
-            TypeError: The converter is not one a conf line can express.
-            ValueError: The core cannot take the unit.
+            ValueError: The core cannot take the unit, or the arguments
+                contradict each other (a level has no scale).
         """
         self.extend_core(
             unit_definition_text(
                 symbol,
                 dimension,
-                converter,
+                scale,
                 aliases,
+                offset=offset,
+                level=level,
                 recipe=recipe,
                 allow_prefixes=allow_prefixes,
-                kind=kind,
             )
         )
 

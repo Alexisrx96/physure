@@ -8,7 +8,6 @@ from physure.domain.exceptions import (
     IncompatibleUnitsError,
     UnknownUnitError,
 )
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.units import CompoundUnit
 
@@ -26,11 +25,11 @@ def dims():
 def test_register_unit(system, dims):
     """Test registering units: the registry of the system holds them."""
     length = dims["length"]
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
+    system.register_unit("m", length, 1.0, "meter")
 
     assert system.get_unit("m").dimension(system) == length
 
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
+    system.register_unit("cm", length, 0.01, "centimeter")
     registry = system.core_registry
     factor = registry.factor_between(
         registry.parse_atomic("m"), registry.parse_atomic("cm")
@@ -42,8 +41,8 @@ def test_find_dimension_for_unit(system, dims):
     """Test finding the dimension for a registered unit."""
     length = dims["length"]
     time = dims["time"]
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
 
     assert system.get_unit("m").dimension(system) == length
     assert system.get_unit("s").dimension(system) == time
@@ -58,14 +57,14 @@ def test_compound_unit_conversion_factor(system, dims):
     time = dims["time"]
     mass = dims["mass"]
 
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
-    system.register_unit("km", length, LinearConverter(1000.0), "kilometer")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("min", time, LinearConverter(60.0), "minute")
-    system.register_unit("h", time, LinearConverter(3600.0), "hour")
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
-    system.register_unit("g", mass, LinearConverter(0.001), "gram")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("cm", length, 0.01, "centimeter")
+    system.register_unit("km", length, 1000.0, "kilometer")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("min", time, 60.0, "minute")
+    system.register_unit("h", time, 3600.0, "hour")
+    system.register_unit("kg", mass, 1.0, "kilogram")
+    system.register_unit("g", mass, 0.001, "gram")
 
     meter = CompoundUnit({"m": 1})
     centimeter = CompoundUnit({"cm": 1})

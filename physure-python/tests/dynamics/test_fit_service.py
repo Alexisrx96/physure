@@ -27,7 +27,6 @@ else:
 
 import pytest
 
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 
 
@@ -36,8 +35,8 @@ def fit_system(system):
     """Set up test fixtures for fit tests."""
     length = Dimension({"L": 1})
     time = Dimension({"T": 1})
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
     return system
 
 

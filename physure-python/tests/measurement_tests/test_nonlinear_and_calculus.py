@@ -33,7 +33,7 @@ def test_temperature_subtraction_results_in_delta():
     assert diff.magnitude == pytest.approx(10.0, abs=1e-9)
 
     # The system should return this in Base Units of the dimension (Kelvin)
-    # Kelvin corresponds to LinearConverter(1.0)
+    # Kelvin corresponds to 1.0
     assert diff.unit.to_string() == "K"
 
 

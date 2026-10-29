@@ -28,7 +28,6 @@ else:
 
 import pytest
 
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 
 
@@ -38,9 +37,9 @@ def solver_system(system):
     length = Dimension({"L": 1})
     time = Dimension({"T": 1})
     mass = Dimension({"M": 1})
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("g", mass, LinearConverter(0.001), "gram")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("g", mass, 0.001, "gram")
     return system
 
 

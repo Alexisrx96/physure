@@ -6,38 +6,20 @@ from fractions import Fraction
 import pytest
 
 from physure.application.startup import create_system
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    UnitConverter,
-)
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.system import UnitSystem
 
 LENGTH = Dimension({"L": 1})
 
 
-class _Square(UnitConverter):
-    is_linear = False
-
-    def to_base(self, value):
-        return value**2
-
-    def from_base(self, value):
-        return value**0.5
-
-
-class _Scaled(LinearConverter):
-    pass
-
-
 def _bare_system():
     system = UnitSystem("bare")
     system.register_prefix("k", 1000.0, "kilo", Fraction(1000))
-    system.register_unit("m", LENGTH, LinearConverter(1.0), "meter", "meter")
+    system.register_unit("m", LENGTH, 1.0, "meter", "meter")
     system.register_unit(
         "ft",
         LENGTH,
-        LinearConverter(0.3048, exact=Fraction(381, 1250)),
+        Fraction(381, 1250),
         "foot",
     )
     return system
@@ -68,13 +50,23 @@ def test_membership_is_what_the_registry_resolves():
     assert system.core_registry.facts("kg")["dimension"] == {"M": 1}
 
 
-@pytest.mark.parametrize("converter", [_Square(), _Scaled(2.0)])
-def test_a_converter_a_conf_cannot_say_is_refused_and_changes_nothing(
-    converter,
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({"scale": "twice"}, "is not a number"),
+        ({"scale": float("inf")}, "cannot be written"),
+        ({"scale": 2.0, "level": (10.0, 1.0)}, "no scale"),
+        ({"offset": 5.0, "level": (10.0, 1.0)}, "no zero point"),
+    ],
+)
+def test_a_unit_a_conf_cannot_say_is_refused_and_changes_nothing(
+    arguments, message
 ):
     system = _bare_system()
-    with pytest.raises(TypeError, match="not a converter"):
-        system.register_unit("sq", Dimension({"L": 2}), converter, "square")
+    with pytest.raises(ValueError, match=message):
+        system.register_unit(
+            "sq", Dimension({"L": 2}), name="square", **arguments
+        )
     assert "sq" not in system
     with pytest.raises(ValueError, match="Unknown unit"):
         system.core_registry.facts("sq")
@@ -83,7 +75,7 @@ def test_a_converter_a_conf_cannot_say_is_refused_and_changes_nothing(
 def test_a_name_a_conf_cannot_hold_is_refused_and_changes_nothing():
     system = _bare_system()
     with pytest.raises(ValueError, match="cannot be a name"):
-        system.register_unit("a,b", LENGTH, LinearConverter(1.0), None)
+        system.register_unit("a,b", LENGTH, 1.0, None)
     assert "a,b" not in system
     with pytest.raises(ValueError, match="cannot be a name"):
         system.register_prefix("x=", 2.0)
@@ -93,7 +85,7 @@ def test_a_system_pickles_and_its_registry_is_rebuilt():
     system = _bare_system()
     clone = pickle.loads(pickle.dumps(system))
     assert clone.core_registry.facts("km") == system.core_registry.facts("km")
-    clone.register_unit("yd", LENGTH, LinearConverter(0.9144), "yard")
+    clone.register_unit("yd", LENGTH, 0.9144, "yard")
     assert clone.core_registry.facts("yd")["dimension"] == {"L": 1}
     with pytest.raises(ValueError, match="Unknown unit"):
         system.core_registry.facts("yd")

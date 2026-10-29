@@ -1,11 +1,10 @@
 """Writes what a unit system registers as the conf text the core reads.
 
-A `UnitSystem` keeps its definitions twice: in Python objects and in the
-registry of the core. The registry is built from conf text, so a unit that is
-registered by hand is written as the line of the catalog that would define it.
-Only what a catalog line can say is supported: a scale, a scale with a zero
-point, or a level, on a dimension. Anything else is refused, and the caller
-leaves the system as it was.
+A `UnitSystem` keeps its definitions in the registry of the core, which is
+built from conf text, so a unit that is registered by hand is written as the
+line of the catalog that would define it: a scale, a scale with a zero point,
+or a level, on a dimension. What cannot be written as such a line is refused,
+and the caller leaves the system as it was.
 """
 
 from __future__ import annotations
@@ -14,20 +13,16 @@ import math
 from fractions import Fraction
 from typing import TYPE_CHECKING
 
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-    OffsetConverter,
-)
-
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
 
-    from physure.domain.measurement.converters import UnitConverter
     from physure.domain.measurement.dimensions import Dimension
     from physure.domain.measurement.units import CompoundUnit
 
-_SUPPORTED = (LinearConverter, OffsetConverter, LogarithmicConverter)
+# A number of a unit: a `str` ("5/9", "0.3048") or a `Fraction` is exact, a
+# `float` is the decimal it prints as.
+Number = float | int | Fraction | str
+
 _UNWRITABLE = frozenset("=,[]\n\r")
 
 
@@ -43,10 +38,15 @@ def _name(text: str) -> str:
     return text
 
 
-def _number(value: float, exact: Fraction | None) -> str:
-    """Writes a number of the conf: the exact fraction when there is one."""
-    if exact is not None:
-        return str(Fraction(exact))
+def _number(value: Number) -> str:
+    """Writes a number of the conf: a fraction as it is, a float as it prints."""
+    if isinstance(value, str):
+        try:
+            return str(Fraction(value))
+        except (ValueError, ZeroDivisionError):
+            raise ValueError(f"{value!r} is not a number.") from None
+    if isinstance(value, (int, Fraction)):
+        return str(Fraction(value))
     if not math.isfinite(value):
         raise ValueError(f"{value!r} cannot be written in a conf.")
     return repr(float(value))
@@ -73,12 +73,13 @@ def _product(exponents: Mapping[str, float]) -> str:
 def unit_definition_text(
     symbol: str,
     dimension: Dimension,
-    converter: UnitConverter,
+    scale: Number | None = None,
     aliases: Iterable[str] = (),
     *,
+    offset: Number = 0,
+    level: tuple[Number, Number] | None = None,
     recipe: CompoundUnit | None = None,
     allow_prefixes: bool = True,
-    kind: str = "delta",
 ) -> str:
     """Writes the `[Units]` text that defines a unit in the core's registry.
 
@@ -89,58 +90,47 @@ def unit_definition_text(
     Args:
         symbol: The symbol of the unit, the first of its names.
         dimension: Its dimension.
-        converter: A `LinearConverter`, an `OffsetConverter` or a
-            `LogarithmicConverter`, exactly: a subclass is another converter.
+        scale: How many base units it is: 1 when omitted. Not for a level.
         aliases: The other names of the unit.
+        offset: Where its zero is, in base units. A unit with a zero point
+            (degC) is an absolute scale; without one it is a difference.
+        level: ``(factor, reference)`` of a level: ``factor * log10(x /
+            reference)``, 10 for a power ratio (dB).
         recipe: The units it is another name for, when it is one.
         allow_prefixes: Whether prefixes apply to it.
-        kind: ``"delta"``, or ``"absolute"`` for a unit with a zero point.
 
     Returns:
         The text: a `[Units]` section of one line.
 
     Raises:
-        TypeError: The converter is not one a conf line can express.
-        ValueError: A name cannot be written in a conf, a number is not
-            finite, or `kind` or `recipe` contradicts the converter.
+        ValueError: A name cannot be written in a conf, a number is not a
+            finite number, or the arguments contradict each other: a level
+            has no scale, no zero point and no recipe, and neither has a unit
+            with a zero point.
     """
-    if type(converter) not in _SUPPORTED:
-        raise TypeError(
-            f"A {type(converter).__name__} is not a converter that a unit of "
-            "a system can have: use a LinearConverter, an OffsetConverter or "
-            "a LogarithmicConverter."
-        )
     names = list(dict.fromkeys([symbol, *aliases]))
     for name in names:
         _name(name)
-    if isinstance(converter, OffsetConverter) != (kind == "absolute"):
-        raise ValueError(
-            f"A {type(converter).__name__} cannot be a unit of kind {kind!r}."
-        )
     dimension_text = _product(dimension.exponents)
+    has_zero_point = Fraction(_number(offset)) != 0
     recipe_text = None
-    if isinstance(converter, LogarithmicConverter):
+    if level is not None:
+        if scale is not None:
+            raise ValueError("A level has no scale.")
+        if has_zero_point or recipe is not None:
+            raise ValueError("A level has no zero point and no recipe.")
+        factor, reference = level
+        fields = ["Log", _number(factor), _number(reference), dimension_text]
+    elif has_zero_point:
         if recipe is not None:
-            raise ValueError("A level has no recipe.")
+            raise ValueError("A unit with a zero point has no recipe.")
         fields = [
-            "Log",
-            _number(converter.factor, None),
-            _number(converter.reference, None),
-            dimension_text,
-        ]
-    elif isinstance(converter, OffsetConverter):
-        if converter.offset == 0 or recipe is not None:
-            raise ValueError(
-                "An OffsetConverter needs a zero point, and has no recipe."
-            )
-        fields = [
-            _number(converter.scale, converter.exact_scale),
-            _number(converter.offset, converter.exact_offset),
+            _number(1.0 if scale is None else scale),
+            _number(offset),
             dimension_text,
         ]
     else:
-        assert isinstance(converter, LinearConverter)
-        fields = [_number(converter.scale, converter.exact), dimension_text]
+        fields = [_number(1.0 if scale is None else scale), dimension_text]
         # next to a dimensionless "1" a third field reads as a zero point
         if recipe is not None and dimension_text != "1":
             recipe_text = _product(recipe.exponents)
@@ -173,4 +163,7 @@ def prefix_definition_text(
             finite.
     """
     label = _name(name or symbol)
-    return f"[Prefixes]\n{label} = {_name(symbol)}, {_number(factor, exact)}\n"
+    return (
+        f"[Prefixes]\n{label} = {_name(symbol)}, "
+        f"{_number(factor if exact is None else exact)}\n"
+    )

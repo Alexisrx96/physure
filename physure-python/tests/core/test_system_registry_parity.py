@@ -14,11 +14,6 @@ import pytest
 from physure.application.context import use_system
 from physure.application.startup import create_default_system, create_system
 from physure.domain.exceptions import UnknownUnitError
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-    OffsetConverter,
-)
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.system import UnitSystem
 from physure.domain.measurement.units import CompoundUnit, units
@@ -135,35 +130,33 @@ def test_a_bare_system_with_units_registered_by_hand():
     energy = Dimension({"M": 1, "L": 2, "T": -2})
     power = Dimension({"M": 1, "L": 2, "T": -3})
     system.register_prefix("k", 1000.0, "kilo", Fraction(1000))
-    system.register_unit("m", length, LinearConverter(1.0), "meter", "meter")
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
+    system.register_unit("m", length, 1.0, "meter", "meter")
+    system.register_unit("cm", length, 0.01, "centimeter")
     system.register_unit(
         "ft",
         length,
-        LinearConverter(0.3048, exact=Fraction(381, 1250)),
+        Fraction(381, 1250),
         "foot",
     )
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
+    system.register_unit("kg", mass, 1.0, "kilogram")
+    system.register_unit("s", time, 1.0, "second")
     system.register_unit(
         "J",
         energy,
-        LinearConverter(1.0),
+        1.0,
         "joule",
         recipe=CompoundUnit({"kg": 1, "m": 2, "s": -2}),
     )
-    system.register_unit("W", power, LinearConverter(1.0), "watt")
+    system.register_unit("W", power, 1.0, "watt")
     system.register_unit(
         "dBW",
         power,
-        LogarithmicConverter(10.0),
-        "decibel-watt",
+        name="decibel-watt",
+        level=(10.0, 1.0),
         allow_prefixes=False,
     )
-    system.register_unit("K", heat, LinearConverter(1.0), "kelvin")
-    system.register_unit(
-        "degX", heat, OffsetConverter(1.0, 10.0), "x", kind="absolute"
-    )
+    system.register_unit("K", heat, 1.0, "kelvin")
+    system.register_unit("degX", heat, 1.0, "x", offset=10.0)
     names = [
         "m", "meter", "cm", "ft", "kg", "s", "J", "W", "dBW", "K", "degX",
         "km", "kilometer",

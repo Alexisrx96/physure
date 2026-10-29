@@ -20,7 +20,6 @@ import pytest
 from physure.backends.python_backend import PythonBackend
 from physure.core.dispatcher import BackendManager, get_backend
 from physure.core.protocols import BackendOps
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.quantity import Quantity
 from physure.domain.measurement.system import UnitSystem
@@ -137,7 +136,7 @@ class TestQuantityBackendIntegration:
     def system(self):
         s = UnitSystem()
         L = Dimension({"L": 1})
-        s.register_unit("m", L, LinearConverter(1.0), "meter")
+        s.register_unit("m", L, 1.0, "meter")
         return s
 
     @pytest.mark.skipif(np is None, reason="numpy not available")

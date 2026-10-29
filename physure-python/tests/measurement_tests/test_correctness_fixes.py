@@ -99,12 +99,12 @@ class TestConverterDerivatives:
 class TestLogUnitUncertaintyPropagation:
     def test_db_to_linear_propagates_jacobian(self, system):
         power_dim = Dimension({"M": 1, "L": 2, "T": -3})
-        system.register_unit("W", power_dim, LinearConverter(1.0), "watt")
+        system.register_unit("W", power_dim, 1.0, "watt")
         system.register_unit(
             "dBW",
             power_dim,
-            LogarithmicConverter(factor=10.0),
-            "decibel-watt",
+            name="decibel-watt",
+            level=(10.0, 1.0),
             allow_prefixes=False,
         )
 

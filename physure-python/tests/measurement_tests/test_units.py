@@ -4,7 +4,6 @@ import pytest
 
 from physure import get_unit
 from physure.domain.exceptions import UnknownUnitError
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.units import CompoundUnit
 
@@ -16,11 +15,11 @@ def unit_system(system):
     length = Dimension({"L": 1})
     time = Dimension({"T": 1})
     mass = Dimension({"M": 1})
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
-    system.register_unit("km", length, LinearConverter(1000.0), "kilometer")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("kg", mass, 1.0, "kilogram")
+    system.register_unit("cm", length, 0.01, "centimeter")
+    system.register_unit("km", length, 1000.0, "kilometer")
     # An alias is a unit of the exponents: its units are registered first
     system.register_alias({"m": 1, "s": -1}, "velocity", "speed")
     return system
@@ -71,7 +70,7 @@ def test_dimension_unknown_unit_raises_with_suggestion(unit_system):
     """CompoundUnit.dimension() raises UnknownUnitError with a suggestion."""
     # Register 'meter' so get_close_matches can suggest it
     length = Dimension({"L": 1})
-    unit_system.register_unit("meter", length, LinearConverter(1.0), "meter")
+    unit_system.register_unit("meter", length, 1.0, "meter")
 
     bad_unit = CompoundUnit({"meterr": 1})  # typo — no dimension registered
     with pytest.raises(UnknownUnitError, match="meterr"):
@@ -132,13 +131,13 @@ def test_get_unit_recipe_applies_to_every_alias(system):
     length = Dimension({"L": 1})
     time = Dimension({"T": 1})
     mass = Dimension({"M": 1})
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("kg", mass, 1.0, "kilogram")
     system.register_unit(
         "Newton",
         Dimension({"M": 1, "L": 1, "T": -2}),
-        LinearConverter(1.0),
+        1.0,
         "newton",
         "N",
         recipe=CompoundUnit({"kg": 1, "m": 1, "s": -2}),
@@ -162,7 +161,7 @@ def test_get_unit_dimensionless_unit_has_empty_exponents(system):
     (e.g. a dimensionless coefficient multiplied into a force * distance
     chain made the resulting Joules compare unequal to a clean Joule).
     """
-    system.register_unit("one", Dimension({}), LinearConverter(1.0), "unity")
+    system.register_unit("one", Dimension({}), 1.0, "unity")
 
     assert system.get_unit("one") == CompoundUnit({})
     assert system.get_unit("one").exponents == {}
