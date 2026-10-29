@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
 from physure._core import RationalUnit, register_quantity_factory
+from physure._core import UnitMismatchError as _CoreUnitMismatchError
+from physure._core import UnknownUnitError as _CoreUnknownUnitError
 from physure.core.dispatcher import BackendManager
 from physure.core.registry import UnitRegistry
 from physure.domain.exceptions import (
@@ -109,6 +111,22 @@ def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
         cls = _CompoundUnit
 
     return cls(exponents)
+
+
+_CORE_ERRORS = (_CoreUnknownUnitError, _CoreUnitMismatchError)
+
+
+def _python_error(
+    error: ValueError, source: CompoundUnit, target: CompoundUnit
+) -> Exception:
+    """The exception Python raises for an error of the core registry."""
+    if isinstance(error, _CoreUnitMismatchError):
+        return IncompatibleUnitsError(source, target)
+    suggestion = getattr(error, "suggestion", None)
+    return UnknownUnitError(
+        getattr(error, "symbol", str(error)),
+        [suggestion] if suggestion else None,
+    )
 
 
 def _is_identity_unit(base_unit: Any, unit_name: str) -> bool:

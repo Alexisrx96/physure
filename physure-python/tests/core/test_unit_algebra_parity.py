@@ -269,15 +269,6 @@ def test_rust_converts_delta_temperatures_like_python(comparison):
     assert not rejected, _show(rejected)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Decided: an angle and a solid angle are different kinds and must not "
-        "convert into each other. Rust refuses; Python files rad, deg, arcmin "
-        "and sr under one dimension, so it still converts arcmin to sr. "
-        "Closed when Python adopts the Rust types (A1 Stage 2)."
-    ),
-)
 def test_python_does_not_mix_angle_and_solid_angle(comparison):
     merged = _of_kind(comparison, "angle-and-solid-angle-merged-by-python")
     assert not merged, _show(merged)

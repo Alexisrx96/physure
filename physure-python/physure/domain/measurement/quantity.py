@@ -30,16 +30,17 @@ if TYPE_CHECKING:
     from typing import Self
 
     from physure.core.protocols import BackendOps, Numeric
-    from physure.domain.measurement.base_entity import ExponentsDict
-    from physure.domain.measurement.converters import UnitConverter
     from physure.domain.measurement.dimensions import Dimension
 
 from physure.domain.exceptions import IncompatibleUnitsError
+from physure.domain.measurement.conversion_plan import apply_conversion
 from physure.domain.measurement.uncertainty import (
     Uncertainty,
 )
 from physure.domain.measurement.units import (
+    _CORE_ERRORS,
     CompoundUnit,
+    _python_error,
     get_default_system,
 )
 
@@ -1101,119 +1102,27 @@ class Quantity(
             ":" in s and s.split(":")[0].lower() in devices
         )
 
-    def _single_named_converter(
-        self, exponents: ExponentsDict
-    ) -> UnitConverter | None:
-        """The converter for a single named unit's exponents dict.
-
-        A truly empty (dimensionless) exponents dict -- e.g. the target of
-        `Q_(20, "dB").to("1")` -- has no UnitDefinition of its own, but is
-        dimensionally the identity: its "converter" is a scale-1.0 no-op.
-        Returns None when `exponents` is neither a single named unit nor
-        empty (e.g. a genuine multi-symbol compound), so the caller can
-        fall back to the generic dimensional-analysis conversion path.
-        """
-        from physure.domain.measurement.converters import LinearConverter
-
-        if not exponents:
-            return LinearConverter(1.0)
-        if len(exponents) == 1 and next(iter(exponents.values())) == 1:
-            defn = self.system.get_definition(next(iter(exponents)))
-            return defn.converter if defn else None
-        return None
-
-    def _convert_via_converters(
-        self,
-        target_unit: CompoundUnit,
-    ) -> Quantity[ValueType, UncType, UnitType] | None:
-        """Converts using unit-specific converters when both units are simple.
-
-        Returns a converted Quantity, or None if this path does not apply.
-        """
-        source_converter = self._single_named_converter(self.unit.exponents)
-        target_converter = self._single_named_converter(target_unit.exponents)
-        if source_converter is None or target_converter is None:
-            return None
-
-        # Plain linear pairs go through conversion_factor_to instead:
-        # it computes the ratio exactly (one rounding) when the .conf
-        # scales are rational, vs. two roundings via to_base/from_base.
-        from physure.domain.measurement.converters import (
-            LinearConverter,
-            LogarithmicConverter,
-            OffsetConverter,
-            affine_coefficients,
-        )
-
-        if isinstance(source_converter, LinearConverter) and isinstance(
-            target_converter, LinearConverter
-        ):
-            return None
-
-        if (
-            isinstance(source_converter, LogarithmicConverter)
-            and source_converter == target_converter
-        ):
-            # The same level under another name (decibel, dB): nothing to convert,
-            # and a round trip through the ratio only adds noise (1.0000000000000002).
-            return cast(
-                "Quantity[ValueType, UncType, UnitType]",
-                Quantity.from_input(
-                    self.magnitude,
-                    target_unit,
-                    self.system,
-                    uncertainty=self.uncertainty,
-                ),
-            )
-
-        if isinstance(
-            source_converter, (LinearConverter, OffsetConverter)
-        ) and isinstance(target_converter, (LinearConverter, OffsetConverter)):
-            # new = old * scale + shift, each rounded once from the exact values:
-            # 100 degC is exactly 212 degF, and the core computes the same two numbers.
-            scale, shift = affine_coefficients(
-                source_converter, target_converter
-            )
-            affine_magnitude = self._backend.mul(self.magnitude, scale)  # pyright: ignore[reportArgumentType]
-            if shift != 0.0:
-                affine_magnitude = self._backend.add(affine_magnitude, shift)
-            affine_uncertainty = self._backend.mul(
-                self.uncertainty, abs(scale)
-            )
-            return cast(
-                "Quantity[ValueType, UncType, UnitType]",
-                Quantity.from_input(
-                    affine_magnitude,
-                    target_unit,
-                    self.system,
-                    uncertainty=affine_uncertainty,
-                ),
-            )
-
-        base_val = source_converter.to_base(
-            self.magnitude  # pyright: ignore[reportArgumentType]
-        )
-        new_magnitude = target_converter.from_base(base_val)
-
-        # Chain rule: d(new)/d(old) = from_base'(base) * to_base'(old).
-        # Exact for linear/offset units and correct for nonlinear (log)
-        # units, where a plain scale ratio would be wrong.
-        jac = self._backend.mul(
-            source_converter.to_base_derivative(
-                self.magnitude  # pyright: ignore[reportArgumentType]
-            ),
-            target_converter.from_base_derivative(base_val),
-        )
-        new_uncertainty = self._backend.mul(
-            self.uncertainty, self._backend.abs(jac)
+    def _convert_by_plan(
+        self, target_unit: CompoundUnit
+    ) -> Quantity[ValueType, UncType, UnitType]:
+        """Converts by the plan that the core registry gives for the two units."""
+        try:
+            plan = self.system.core_registry.conversion(self.unit, target_unit)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self.unit, target_unit) from error
+        magnitude, uncertainty = apply_conversion(
+            plan,
+            self.magnitude,  # pyright: ignore[reportArgumentType]
+            self.uncertainty,
+            self._backend,
         )
         return cast(
             "Quantity[ValueType, UncType, UnitType]",
             Quantity.from_input(
-                new_magnitude,
+                magnitude,
                 target_unit,
                 self.system,
-                uncertainty=new_uncertainty,
+                uncertainty=uncertainty,
             ),
         )
 
@@ -1346,35 +1255,7 @@ class Quantity(
         if self.dimension != target_unit.dimension(self.system):
             return self._convert_via_equivalencies(target_unit, equivalencies)
 
-        # --- Polymorphic Conversion (Generic) ---
-        # Handle cases where units are simple single-component units
-        # (e.g. Celsius -> Kelvin) using specific converters.
-        converter_result = self._convert_via_converters(target_unit)
-        if converter_result is not None:
-            return converter_result
-
-        conversion_factor = self.unit.conversion_factor_to(
-            target_unit, self.system
-        )
-
-        # Using backend for multiplication
-        new_value = self._backend.mul(
-            self.magnitude,  # pyright: ignore[reportArgumentType]
-            conversion_factor,
-        )
-        new_uncertainty = self._backend.mul(
-            self.uncertainty, conversion_factor
-        )
-
-        return cast(
-            "Quantity[ValueType, UncType, UnitType]",
-            Quantity.from_input(
-                new_value,
-                target_unit,
-                self.system,
-                uncertainty=new_uncertainty,
-            ),
-        )
+        return self._convert_by_plan(target_unit)
 
     def _base_unit_for_dimension(self, dimension: Any) -> Any:
         """Returns the canonical base unit for a dimension (e.g. L*T^-1 -> m*s^-1)."""
