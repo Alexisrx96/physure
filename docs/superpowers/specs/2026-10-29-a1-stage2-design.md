@@ -107,3 +107,26 @@ Planning step 2 against the code found four things the design did not know, and 
 - A level can have the dimensions of a quantity (`dBW`, `dBm`), converts to the plain unit of those dimensions through the logarithm, and has no conversion factor between units.
 - Any text parsed, strict or lenient, also registers the eight SI base units (`m`, `s`, `kg`, `A`, `K`, `mol`, `cd`, `rad`) and the default dimension symbols of them (`L`, `M`, `T`, `I`, `O`, `N`, `J`, `A`), whether or not the text mentions them. A registry of a bare system therefore knows `kg`; step 2b must not use the registry's membership to answer `in` for a system, which stays the system's own until step 7.
 - Step 2b (Python) is planned from here.
+
+## Step 2b, refined (2026-10-29): what a system registers, and how its registry gets it
+
+Planning step 2b against the Python code, with the suite instrumented, found seven things.
+
+| # | Finding | Consequence |
+|---|---|---|
+| 1 | Nothing outside `system.py` reads a system's registry. The two paths inside it (the "Rust Registry Check" of `get_unit` and the third clause of `__contains__`) were never reached in the 1145 tests of the suite. The mirror is write-only. | Replacing it changes nothing the suite can observe, except the new errors. What 2b buys is a registry that is authoritative and checked, for the seam of step 3 to stand on. |
+| 2 | Every `register_unit` and `register_prefix` call of the suite (81 systems, 574 unit names, bare systems with recipes, levels and currencies included) can be written as a conf line the core accepts, and the core then agrees with Python on dimension, kind, linearity and the conversion factor between every pair of linear units. No exception, no difference. | The translator is feasible as it stands, and the differential test is a contract that holds today. |
+| 3 | `register_unit(symbol, dimension, converter, name, *aliases)` does not make `name` a resolvable name: a bare system resolves `m` but not `meter` unless `meter` is listed as an alias. The core registers the key of a conf line as a name. | The translator writes the symbol as the key and the aliases as the names, and leaves `name` out, so the two resolve the same set of names. |
+| 4 | A prefix factor in a conf must be a decimal, although a unit factor may be a fraction (`5/9`). Python registers prefixes with an exact `Fraction`. | A prefix factor can be a fraction in the core too (Task 1), so nothing is rounded on the way. |
+| 5 | A recipe written on a dimensionless unit makes the line `scale, 1, recipe`, which the parser reads as an offset of 1. | The translator never writes a recipe for a dimensionless unit (the core does not use one there). |
+| 6 | The builder already holds the merged `[Prefixes]` and `[Units]` sections it registers from. Building the registry from that text takes 0.5 ms for the whole catalog; translating each registration one by one would be slower and a second path for the same data. | A system built from conf gets its registry from the text; the translator is only for what is registered by hand afterwards. |
+| 7 | Python's conversion caches are global, not per system. A comparison made after the tests, outside the system that registered the units, reported EUR to USD as 1.1 instead of 1.08. | The differential tests compare inside `use_system(system)`, right after building the system. The leak itself belongs to steps 3 to 5, which remove those caches. |
+
+**Shape of 2b.** A `UnitSystem` keeps the conf texts it has given its registry (`extend_core`), so pickling rebuilds the registry from them. `register_unit` and `register_prefix` write the unit as text and give it to the registry first, so a unit the core cannot take leaves the system as it was. The builder gives the registry the whole merged text once and registers in Python only. The mirror (`add_derived_unit`, `add_base_unit`, `register_alias`, the prefixed copies), its three `contextlib.suppress` sites and the two lookup paths are deleted. `register_dimension` and `register_alias(exponents, ...)` stay Python-only: they are names and display, and the registry derives its own alias from the names of a unit.
+
+**Decisions taken for step 2b (proposed, to confirm):**
+
+- A converter that is not exactly a `LinearConverter`, an `OffsetConverter` or a `LogarithmicConverter` (a custom `UnitConverter`, or a subclass of those three) is refused with `TypeError` at registration. This is what the design of step 2 already said ("user `UnitConverter` subclasses unsupported"); it is a breaking change and goes in the changelog. The alternative is to keep them Python-only until step 5, which leaves units that the registry does not know.
+- `create_system` is strict: a line of `[Units]` or `[Prefixes]` (the shipped files, the file named, or the `physure.conf` of the working directory) that the core cannot read raises `ValueError` listing every such line. The two shipped system files have none.
+- A system exposes its registry as the read-only property `UnitSystem.core_registry`. Membership (`in`) stays the system's own: the registry also knows the eight SI base units whatever the system registered.
+- A kind that contradicts the converter (an `OffsetConverter` registered as `"delta"`, a level with a recipe) is a `ValueError`: the core would otherwise say what Python does not.
