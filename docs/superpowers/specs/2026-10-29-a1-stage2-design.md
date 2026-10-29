@@ -130,3 +130,11 @@ Planning step 2b against the Python code, with the suite instrumented, found sev
 - `create_system` is strict: a line of `[Units]` or `[Prefixes]` (the shipped files, the file named, or the `physure.conf` of the working directory) that the core cannot read raises `ValueError` listing every such line. The two shipped system files have none.
 - A system exposes its registry as the read-only property `UnitSystem.core_registry`. Membership (`in`) stays the system's own: the registry also knows the eight SI base units whatever the system registered.
 - A kind that contradicts the converter (an `OffsetConverter` registered as `"delta"`, a level with a recipe) is a `ValueError`: the core would otherwise say what Python does not.
+
+## Outcome of step 2b (a system owns its registry)
+
+- The registry of a system is built from what the system registers: the merged `[Prefixes]` and `[Units]` text for `create_system`, and `unit_definition_text` / `prefix_definition_text` for what is registered by hand, which the system gives to the registry before it changes anything of its own. The texts are kept, so pickling rebuilds the registry.
+- The five systems of the parity tests (default, imperial, user conf, currency, bare with a prefix, a recipe, a level and a zero point) agree with the registry on dimension, kind, linearity and conversion factor. The differential test is the contract that steps 3 to 5 keep.
+- Membership stays the system's own: the registry knows the eight SI base units whatever a system registered.
+- Python's conversion caches are global, not per system. The parity tests compare inside the system that registered the units for that reason; the leak itself ends when steps 3 to 5 remove those caches.
+- Step 3 (the seam `physure.domain.measurement.unit_ops`) is planned from here.
