@@ -1259,26 +1259,7 @@ class Quantity(
 
     def _base_unit_for_dimension(self, dimension: Any) -> Any:
         """Returns the canonical base unit for a dimension (e.g. L*T^-1 -> m*s^-1)."""
-        base_unit_names = {
-            "L": "m",
-            "M": "kg",
-            "T": "s",
-            "I": "A",
-            "O": "K",
-            "N": "mol",
-            "J": "cd",
-            "A": "rad",
-            "$": "USD",
-        }
-        from physure.domain.measurement.dimensions import SI_ORDER
-
-        terms = [
-            f"{base_unit_names[dim_name]}^{exp}"
-            for dim_name, exp in zip(SI_ORDER, dimension._vector, strict=False)
-            if exp != 0
-        ]
-        unit_str = "*".join(terms) if terms else "1"
-        return self.system.get_unit(unit_str)
+        return CompoundUnit.of_dimension(dimension, self.system)
 
     def _convert_via_equivalencies(
         self, target_unit: Any, equivalencies: Any

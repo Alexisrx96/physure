@@ -70,3 +70,10 @@ def test_a_unit_that_takes_no_prefix_takes_none(registry):
         with pytest.raises(UnknownUnitError):
             registry.facts(name)
     assert registry.facts("km")["dimension"] == {"L": 1}
+
+
+def test_the_registry_says_the_unit_of_a_dimension(registry):
+    unit = registry.unit_of_dimension({"L": 2, "M": 1, "T": (-5, 2)})
+    assert unit.dimensions == {"kg": (1, 1), "m": (2, 1), "s": (-5, 2)}
+    with pytest.raises(ValueError, match="no base unit"):
+        registry.unit_of_dimension({"X": 1})

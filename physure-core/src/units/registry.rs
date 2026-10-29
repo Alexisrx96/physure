@@ -529,6 +529,20 @@ impl UnitRegistry {
         Ok(from.ratio_to(&to))
     }
 
+    /// The unit that measures a dimension in the base units of this registry: each dimension symbol
+    /// is replaced by the base unit declared for it (`L` is `m`, `M` is `kg`), to its power. It is
+    /// written as symbols, like a unit parsed with `Parser::parse_expression_atomic`.
+    pub fn unit_of_dimension(&self, dimension: &[(String, (i64, i64))]) -> PhysureResult<RationalUnit> {
+        let mut symbols = Vec::with_capacity(dimension.len());
+        for (symbol, exponent) in dimension {
+            let base = self.dimension_base.get(symbol).ok_or_else(|| {
+                PhysureError::Generic(format!("no base unit is declared for the dimension '{symbol}'"))
+            })?;
+            symbols.push((base.clone(), *exponent));
+        }
+        Ok(RationalUnit::new_from_dimensions(symbols))
+    }
+
     /// How a number in `from` becomes a number in `to`, two units written as symbols of the same
     /// dimension: the plan the core itself follows in `Quantity::convert_to`. A caller that holds
     /// its numbers elsewhere (NumPy, torch) applies the plan with its own operations and gets the

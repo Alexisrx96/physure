@@ -415,6 +415,18 @@ impl PyUnitRegistry {
         get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
     }
 
+    /// The unit that measures a dimension (`{"L": 1, "T": -1}` is `m*s^-1`), in the base units of
+    /// this registry. The powers are integers or `(numerator, denominator)` pairs.
+    fn unit_of_dimension(&self, py: Python<'_>, dimension: &Bound<'_, PyDict>) -> PyResult<PyObject> {
+        let mut exponents = Vec::with_capacity(dimension.len());
+        for (symbol, power) in dimension.iter() {
+            let exponent = parse_exponent(&power)
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a dimension power is a number"))?;
+            exponents.push((symbol.extract::<String>()?, exponent));
+        }
+        get_cached_unit(py, self.0.unit_of_dimension(&exponents).map_err(value_error)?)
+    }
+
     /// The physical dimension of a unit written as symbols, by dimension symbol.
     fn dimension_of<'py>(&self, py: Python<'py>, unit: &PyRationalUnit) -> PyResult<Bound<'py, PyDict>> {
         dimension_dict(py, &self.0.dimension_of(&unit.0).map_err(value_error)?)

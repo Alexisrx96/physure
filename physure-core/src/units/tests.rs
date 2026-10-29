@@ -948,3 +948,20 @@ fn the_registry_plans_a_conversion() {
     assert!(plan("m", "s").is_err());
     assert!(plan("rad", "sr").is_err());
 }
+
+/// A dimension is measured in the base units the registry declares for its symbols.
+#[test]
+fn a_dimension_is_measured_in_the_base_units() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let energy = [("L".to_string(), (2, 1)), ("M".to_string(), (1, 1)), ("T".to_string(), (-2, 1))];
+    let unit = reg.unit_of_dimension(&energy).unwrap();
+    let expected: std::collections::HashMap<String, (i64, i64)> =
+        [("m".to_string(), (2, 1)), ("kg".to_string(), (1, 1)), ("s".to_string(), (-2, 1))].into();
+    assert_eq!(unit.dimensions_map(), expected);
+    // the powers are exact fractions
+    let noise = reg.unit_of_dimension(&[("T".to_string(), (-1, 2))]).unwrap();
+    assert_eq!(noise.dimensions_map().get("s"), Some(&(-1, 2)));
+    // a symbol with no base unit is an error that says which
+    let error = reg.unit_of_dimension(&[("X".to_string(), (1, 1))]).unwrap_err();
+    assert!(error.to_string().contains("'X'"), "{error}");
+}

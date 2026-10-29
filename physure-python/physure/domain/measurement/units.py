@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
@@ -219,6 +220,23 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
             return registry.factor_between(self, registry.expand(self))
         except _CORE_ERRORS as error:
             raise _python_error(error, self, self) from error
+
+    @classmethod
+    def of_dimension(
+        cls, dimension: Dimension, system: UnitSystem
+    ) -> CompoundUnit:
+        """The unit that measures a dimension in the base units of the system.
+
+        Raises:
+            ValueError: A base dimension has no base unit in the system.
+        """
+        powers = {
+            symbol: (Fraction(power).numerator, Fraction(power).denominator)
+            for symbol, power in dimension.exponents.items()
+        }
+        return _CompoundUnit(
+            system.core_registry.unit_of_dimension(powers).dimensions
+        )
 
     def base_unit(self, system: UnitSystem) -> CompoundUnit:
         """This unit in base symbols, with no scale and no zero point (degC is K)."""
