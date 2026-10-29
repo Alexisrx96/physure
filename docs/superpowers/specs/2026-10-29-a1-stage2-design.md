@@ -138,3 +138,21 @@ Planning step 2b against the Python code, with the suite instrumented, found sev
 - Membership stays the system's own: the registry knows the eight SI base units whatever a system registered.
 - Python's conversion caches are global, not per system. The parity tests compare inside the system that registered the units for that reason; the leak itself ends when steps 3 to 5 remove those caches.
 - Step 3 (the seam `physure.domain.measurement.unit_ops`) is planned from here.
+
+## Revised order (2026-10-29): Python keeps no implementation of its own
+
+The maintainer's principle after step 2b: the project began in Python and moved to Rust piece by piece, so what is left in Python is a second implementation that drifts from the core. Python delegates; where the two differ, the core is the reference and Python adopts its behaviour. Two decisions follow from it, taken with the maintainer:
+
+- When `CompoundUnit` starts to delegate to the registry, the core's behaviour wins at once. Each rule (angle and solid angle, `noprefix`, scalar times a point, the product with an absolute temperature, ...) is its own commit, with its test and its changelog line, inside the step. This replaces "one branch per rule after the class swap".
+- The seam module `physure.domain.measurement.unit_ops` is dropped. The methods of `CompoundUnit` delegate in place and their algorithms are deleted, so nothing is added to be deleted later.
+
+The steps that remain, in order: **3** units and their conversion are the core's (done, below); **4** the point, delta and level arithmetic of `Quantity` (`_affine_*`, `_logarithmic_add_sub`, the functional module) asks the core, and the converters leave the unit definitions; **5** `Dimension` and `CompoundUnit` wrap the rational types of the core; **6** `UnitSystem` without dictionaries of its own, the SymPy parser and the generated modules deleted; **7** cleanup and 0.3.0. Steps 3 and 4 of the earlier list are merged, because delegating what a unit is without converting through the core made Python resolve names (`centicelsius`) whose conversion it still did as a plain factor.
+
+## Outcome of step 3 (units and their conversion are the core's)
+
+- Prototyped first, then rebuilt as clean commits (the code is identical). Delegating `CompoundUnit` alone left one real hazard: Python resolved names that only the core knows, while `Quantity.to` still converted with Python's converters and treated `centicelsius` as linear (0.01 K instead of 273.16 K, with no error). The conversion plan therefore comes first in the history, and the delegation after it.
+- The core gained `noprefix` (the registry remembers the names flagged in the catalog), `UnitRegistry::conversion` (the plan `Quantity::convert_to` follows, as data a caller can apply: affine `scale` and `shift`, or the two stages of a level), and an `expand` that returns a single unit with its zero point and level. The extension raises typed errors.
+- Python: `conversion_plan.py` applies the plan with the backend of the quantity (the converters are kept as the formulas of a level stage); `Quantity._convert_via_converters` and `_single_named_converter` are gone; `CompoundUnit` lost about 140 lines; `register_alias` forwards a unit to the core.
+- Measured in the same checkout: every row of `benchmarks/bench_unit_ops.py` is equal or faster (`q.to('km')` 52 to 19 µs, `q_speed.to('km/h')` 88 to 32 µs, `Q_` 16 to 13 µs, `q1 + q2` 22 to 17 µs); the first use is 0.177 s (0.18 before); `torch.compile` has the same number of graph breaks on six operations and one less on `t.to('K')`; the suite runs in 69 s instead of 95 s.
+- Not done, by design: the point and delta arithmetic and the logarithmic addition still read converters from the unit definitions that the system holds, so they do not exist for a unit only the core knows. They refuse with a clear error until step 4. `test_standard_units_do_not_load_sympy` depends on the order of the tests (it passes only if an earlier test imported SymPy) and fails alone on `main` too; it belongs to the deletion of the SymPy parser.
+- Step 4 is planned from here.
