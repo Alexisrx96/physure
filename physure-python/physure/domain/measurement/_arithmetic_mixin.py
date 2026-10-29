@@ -18,7 +18,9 @@ from physure.domain.exceptions import (
 )
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.uncertainty import Uncertainty
-from physure.domain.measurement.units import CompoundUnit
+from physure.domain.measurement.units import (
+    CompoundUnit,
+)
 
 _Quantity = None
 
@@ -755,6 +757,13 @@ class ArithmeticMixin:
         """True for an absolute temperature (degC, degF): a point, not an interval."""
         return self.unit.kind(self.system) == "absolute"
 
+    def _is_level(self) -> bool:
+        """True for a level (dB, pH): the logarithm of a ratio."""
+        return (
+            not self.unit.is_linear(self.system)
+            and self.unit.kind(self.system) == "delta"
+        )
+
     def _shift_point(self, interval: Quantity, subtract: bool) -> Quantity:
         """This point moved by an interval, in the point's own scale."""
         factor = interval.unit.conversion_factor_to(self.unit, self.system)
@@ -775,6 +784,70 @@ class ArithmeticMixin:
         """Two points make an interval, in the base unit of their dimension."""
         base = self.unit.base_unit(self.system)
         return self.to(base) - other.to(base)
+
+    def _refuse_plain_number(self) -> None:
+        """Raises: a plain number does not scale an absolute temperature."""
+        raise ValueError(
+            "Cannot multiply or divide the absolute temperature "
+            f"'{self.unit}' by a plain number: the result depends on the "
+            "scale (2 * 20 degC is 40 degC on one and 586 K on another); "
+            "convert it first (T.to('K')) for an absolute temperature, or "
+            "use an interval."
+        )
+
+    def _point_product(
+        self, other: Quantity | Numeric | CompoundUnit, divide: bool
+    ) -> Quantity | None:
+        """A product or quotient with an absolute temperature, as the core has it.
+
+        A pure sign mirrors the number in its own scale (-25 degC is minus
+        twenty-five). Any other plain number is refused: 2 * 20 degC is 40 degC
+        on one scale and 586 K on another. A quantity with dimensions of its
+        own takes the temperature as the absolute one it is (R * T, T / T).
+        Returns None when neither operand is an absolute temperature.
+        """
+        self_is_absolute = self._is_absolute()
+        if not (
+            self_is_absolute
+            or (isinstance(other, _q()) and other._is_absolute())
+        ):
+            return None
+        if isinstance(other, CompoundUnit):
+            other = type(self).from_input(1.0, other, self.system)
+        point, rest = (self, other) if self_is_absolute else (other, self)
+        rest_is_plain = not isinstance(rest, _q()) or (
+            rest.dimension.is_dimensionless and not rest._is_level()
+        )
+        if rest_is_plain:
+            number = rest.magnitude if isinstance(rest, _q()) else rest
+            no_uncertainty = not isinstance(rest, _q()) or (
+                self._is_zero_uncertainty(rest.uncertainty)
+            )
+            is_sign = (
+                no_uncertainty
+                and isinstance(number, (int, float))
+                and abs(number) == 1
+                and (point is self or not divide)
+            )
+            if not is_sign:
+                point._refuse_plain_number()
+            return type(self).from_input(
+                self._backend.mul(point.magnitude, number),
+                point.unit,
+                self.system,
+                uncertainty=point.uncertainty,
+            )
+        a = (
+            self.to(self.unit.base_unit(self.system))
+            if self._is_absolute()
+            else self
+        )
+        b = (
+            other.to(other.unit.base_unit(other.system))
+            if other._is_absolute()
+            else other
+        )
+        return a / b if divide else a * b
 
     def _apply_transcendental(self, func_name: str) -> Quantity:
         """Applies a dimensionless transcendental function (sin, exp, etc.).
@@ -916,13 +989,6 @@ class ArithmeticMixin:
         # V - P -> Error
         raise ValueError(
             "Cannot subtract an absolute quantity from a difference."
-        )
-
-    def _is_level(self) -> bool:
-        """True for a level (dB, pH): the logarithm of a ratio."""
-        return (
-            not self.unit.is_linear(self.system)
-            and self.unit.kind(self.system) == "delta"
         )
 
     def _logarithmic_add_sub(
@@ -1132,6 +1198,10 @@ class ArithmeticMixin:
         if rust_res is not None:
             return rust_res
 
+        point_res = self._point_product(other, divide=False)
+        if point_res is not None:
+            return point_res
+
         if isinstance(other, CompoundUnit):
             new_unit = self.unit * other
             return type(self).from_input(
@@ -1219,6 +1289,10 @@ class ArithmeticMixin:
         if rust_res is not None:
             return rust_res
 
+        point_res = self._point_product(other, divide=True)
+        if point_res is not None:
+            return point_res
+
         if isinstance(other, CompoundUnit):
             new_unit = self.unit / other
             return type(self).from_input(
@@ -1300,6 +1374,10 @@ class ArithmeticMixin:
         if rust_res is not None:
             return rust_res
 
+        if self._is_absolute():
+            # a power takes the temperature as the absolute one it is
+            return self.to(self.unit.base_unit(self.system)) ** exponent
+
         u_self = self.uncertainty
         if u_self is None or (
             isinstance(u_self, (int, float)) and u_self == 0.0  # NOSONAR
@@ -1341,6 +1419,9 @@ class ArithmeticMixin:
         rust_res = self._check_and_handle_rust_propagation(other, "rtruediv")
         if rust_res is not None:
             return rust_res
+
+        if self._is_absolute():
+            self._refuse_plain_number()
 
         new_magnitude = self._backend.truediv(other, self.magnitude)
         new_unit = 1 / self.unit

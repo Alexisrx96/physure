@@ -259,6 +259,8 @@ def test_unit_invariance(qs):
 @settings(max_examples=50, deadline=None, phases=[Phase.generate])
 def test_dimensional_homogeneity_scaling(q, scale):
     """f(scale * x) == scale * f(x) for linear functions."""
+    # a plain number does not scale an absolute temperature (2 * 20 degC)
+    assume(q.unit.kind(q.system) != "absolute")
     res1 = q * scale
     res2 = Quantity.from_input(q.magnitude * scale, q.unit, q.system)
 

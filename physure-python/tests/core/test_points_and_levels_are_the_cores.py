@@ -99,3 +99,37 @@ def test_an_interval_in_another_scale_is_scaled_with_its_uncertainty():
 def test_points_of_an_array_move_elementwise():
     moved = Q_(np.array([20.0, 30.0]), "degC") + Q_(np.array([5.0, 10.0]), "K")
     assert moved.magnitude.tolist() == [25.0, 40.0]
+
+
+# --- a product takes the temperature as the absolute one it is ----------------
+
+
+def test_a_plain_number_does_not_scale_a_temperature():
+    for operation in (
+        lambda: Q_(20.0, "degC") * 2,
+        lambda: 2 * Q_(20.0, "degC"),
+        lambda: Q_(20.0, "degC") / 2,
+        lambda: 2 / Q_(20.0, "degC"),
+        lambda: Q_(np.array([20.0, 30.0]), "degC") * 2,
+    ):
+        with pytest.raises(ValueError, match="absolute temperature"):
+            operation()
+
+
+def test_a_pure_sign_mirrors_the_number_in_its_own_scale():
+    assert (-Q_(25.0, "degC")).magnitude == -25.0
+    assert (Q_(25.0, "degC") * -1).magnitude == -25.0
+    assert (-1 * Q_(25.0, "degC")).unit == Q_(1.0, "degC").unit
+
+
+def test_a_product_with_a_dimensioned_quantity_uses_the_absolute_temperature():
+    energy = Q_(8.314, "J/(mol*K)") * Q_(25.0, "degC")
+    assert energy.to("J/mol").magnitude == pytest.approx(8.314 * 298.15)
+    ratio = Q_(100.0, "degC") / Q_(0.0, "degC")
+    assert ratio.magnitude == pytest.approx(373.15 / 273.15)
+
+
+def test_a_power_of_a_temperature_is_of_the_absolute_one():
+    assert (Q_(25.0, "degC") ** 2).to("K**2").magnitude == pytest.approx(
+        298.15**2
+    )

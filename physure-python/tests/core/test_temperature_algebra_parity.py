@@ -1,8 +1,8 @@
 """A1, stage 1c: the temperature algebra of Python and of the Rust core.
 
-Points (degC, degF) and intervals (K, delta_celsius...) add as an affine space in both; where they
-differ the core is right and Python is wrong, and those cases are strict ``xfail`` that close when
-Python adopts the Rust types (A1 Stage 2).
+Points (degC, degF) and intervals (K, delta_celsius...) add as an affine space in both, and Python follows
+the core where it once differed: a plain number does not scale an absolute temperature, and a product takes
+the temperature as the absolute one it is.
 """
 
 import pytest
@@ -71,30 +71,11 @@ def test_comparisons_agree(source, python):
     assert _rust(source) is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Decided (2026-10-28): a plain number does not scale an absolute "
-        "temperature, because the result depends on the scale (2 * 20 degC is "
-        "40 degC on one and 586 K on another). The core refuses; Python scales "
-        "the number in place. Closed when Python adopts the Rust types (A1 "
-        "Stage 2)."
-    ),
-)
 def test_python_refuses_to_scale_a_temperature_by_a_number():
     with pytest.raises(Exception, match=r"(?i)absolute temperature"):
         _ = Q_(20.0, "degC") * 2
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "A product takes the temperature as the absolute one it is: the core "
-        "gives R * 25 degC in kg*m^2/(mol*s^2) at 298.15 K; Python multiplies "
-        "the 25 as if degC had no zero point and keeps degC in the unit. "
-        "Closed when Python adopts the Rust types (A1 Stage 2)."
-    ),
-)
 def test_python_multiplies_by_the_absolute_temperature():
     energy = Q_(8.314, "J/(mol*K)") * Q_(25.0, "degC")
     assert energy.to("J/mol").magnitude == pytest.approx(8.314 * 298.15)
