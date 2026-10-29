@@ -207,3 +207,33 @@ entry marked as a breaking change, and bump the minor version (0.3.0).
 - **One catalog for the temperature scales.** `international.conf` no longer restates them. The reason Python showed `degC` as written while the core showed `°C` was only the order of the names: the first one listed is the symbol of a unit, and the core listed `degC` first where Python's file listed `°C`. The core catalog lists `°C` and `°F` first now, so both sides agree on every unit of the catalog and nothing Python shows changed. In Rust the registry keys the two scales by `°C` and `°F` (`degC` and `degF` are aliases as before, and a unit written `degC` still prints `degC`).
 - **`noprefix` is still ignored by the core.** Python refuses a prefix on a unit the catalog marks `noprefix` (`min`, `mi`, `in`, `h`); the core does not. It belongs with the definition per symbol of stage 3.
 - **`dB/km` and other levels inside a compound unit are refused** (stage 1b-2) and stay so: nothing in the repository uses them, and they need a decision about what a level per length is. Listed for the stage 2 changelog.
+
+### Outcome of stage 1d (the `5 * m` sugar and the measurements)
+
+**Decision gate: (a).** `RationalUnit.__rmul__` lives in the core and calls the factory that Python registers at import (`_core.register_quantity_factory`); it returns `NotImplemented` when none is registered, and the factory returns it for an operand it does not take. It is implemented now and tested: `5 * RationalUnit({"m": 1})` is a quantity, and so is `3 * (m / s)`. Why not (b), a Python subclass whose only job is the sugar: the Rust operators hand back the base class, so `5 * (a * b)` fails on a subclass unless every operator result is re-wrapped in Python, which is what `units.py` does today (`wrap_arithmetic` re-wraps each result in a `CompoundUnit`) and what stage 2 deletes. Cost of the sugar, measured: calling the factory from the core adds about 130 ns (169 ns against 37 ns for the same trivial function called from Python), on top of the roughly 15 µs that building a `Quantity` takes either way. The factory registered today still builds a `CompoundUnit` from the dimensions of the unit it is given, which costs about 1.7 µs more; stage 2 removes that hop.
+
+**Cost of unit and quantity operations** (best of 5 repeats, ns per call, Windows, one quiet run each; the two columns were measured on different builds, so read differences under 10 % as noise):
+
+| Operation | before stage 1 (`0ac08a3`) | now (stage 1 done) |
+|---|---|---|
+| `Q_(5.0, "m")` | 16 123 | 15 452 |
+| `Q_(5.0, units.m)` | 14 856 | 14 032 |
+| `5 * units.m` | 15 937 | 14 400 |
+| `units.m * units.s` | 1 124 | 1 050 |
+| `units.m / units.s` | 1 134 | 1 066 |
+| `units.m ** 2` | 845 | 817 |
+| `q1 + q2` | 23 232 | 20 081 |
+| `q1 * q2` | 20 424 | 17 335 |
+| `q1.to("km")` | 51 693 | 48 295 |
+| `Q_(5, "m") / Q_(2, "s")` to `km/h` | 89 199 | 85 129 |
+| an array of 1000 to `km` | 63 662 | 59 883 |
+| Rust `RationalUnit.__mul__`, raw | 212 | 220 |
+| the same, through the Python wrapper of `units.py` | 1 639 | 1 572 |
+
+Stage 1 changed nothing a Python caller can measure. What stage 2 can change is on the last two rows: a unit operation falls from 1.6 µs to 0.2 µs once the wrapper is gone, and a unit operation is under 10 % of any quantity operation, so the effect on quantities is small and in the right direction. The cost of a quantity is in building it (about 15 µs).
+
+**`torch.compile`.** The test (`tests/ext/test_torch_compile.py`) uses `fullgraph=False`, and Dynamo reports these graph breaks (`torch._dynamo.explain`, torch 2.13, CPU): a plain `x.magnitude * 2.0` has none; `(a + b) * 2.0` had 7 before stage 1 and has 6 now, `a * b` had 7 and has 4 (the stray `print("DEBUG")` calls removed in A2 stopped breaking the graph), `a.to("km")` has 2 (a `Tensor.item()` call). What matters for stage 2 is the unit algebra itself: a `CompoundUnit` product next to a tensor operation compiles with `fullgraph=True` (it is Python Dynamo can trace), while the raw Rust `RationalUnit.__mul__` breaks the graph ("Dynamo does not know how to trace ... a third-party C/C++ extension"). `Quantity.__mul__` multiplies units, so replacing `CompoundUnit` by the Rust type would add a break to every product of quantities inside a compiled region. The mitigation was tried and works: wrapping the call in a function decorated with `torch.compiler.assume_constant_result` (or resolving the product outside the traced region) makes the region compile with `fullgraph=True` again. Stage 2 has to route the unit operations that `Quantity` performs through such a helper and must show the counts above not growing: this is its measure for the `torch.compile` risk, and the plan checks it.
+
+**Pre-existing, not changed.** `np.array([1, 2]) * units.m` is an object array of two quantities, not a quantity of an array: numpy answers the product itself. The array goes through `unit.__rmul__(array)` and the `Q_` constructors.
+
+**Stage 1 exit.** The strict xfails left in the parity suite are the two that stage 2 closes by design (angle and solid angle share a dimension in Python; the generated index lists names Python cannot resolve), and the decision for the sugar is recorded here.
