@@ -279,16 +279,12 @@ Replace with:
     if parts.is_empty() {
         return;
     }
-
-    // `pH
 ```
 Replace with:
 ```rust
     if parts.is_empty() {
         return Err("the line has no value".to_string());
     }
-
-    // `pH
 ```
 
 (h) Find:
@@ -314,16 +310,12 @@ Replace with:
         Some(parsed) => parsed,
         None => return,
     };
-
-    // Absolute
 ```
 Replace with:
 ```rust
         Some(parsed) => parsed,
         None => return Err(format!("'{}' is not a number", parts[0])),
     };
-
-    // Absolute
 ```
 
 (j) Find:
@@ -472,8 +464,10 @@ Replace with:
         if !from.same_dimensions(&to) {
 ```
 
-In `conf.rs`, find the whole level block of `parse_unit_line` (as left by Task 2 (h)):
+In `conf.rs`, find the whole level block of `parse_unit_line` (as left by Task 2 (h)), its comment included:
 ```rust
+    // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`, and
+    // its dimension is the dimensionless "1", because it is the logarithm of a ratio.
     if parts[0].eq_ignore_ascii_case("log") {
         let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
         if let (Some(factor), Some(reference), Some("1")) = (number(1), number(2), parts.get(3).copied()) {
@@ -486,6 +480,8 @@ In `conf.rs`, find the whole level block of `parse_unit_line` (as left by Task 2
 ```
 Replace with:
 ```rust
+    // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`. Its dimension
+    // is "1" when it is the logarithm of a ratio, or the dimensions of a quantity (`dBW`).
     if parts[0].eq_ignore_ascii_case("log") {
         let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
         let (Some(factor), Some(reference), Some(dimension)) = (number(1), number(2), parts.get(3).copied()) else {
@@ -616,14 +612,20 @@ def test_from_conf_text_is_strict_too():
     assert registry.facts("euro")["dimension"] == {"$": 1}
 
 
-def test_a_registry_of_its_own_is_empty_until_it_is_given_definitions():
+def test_a_registry_of_its_own_knows_what_it_is_given_and_the_si_base_units():
     registry = UnitRegistry()
-    registry.extend_conf("[Units]\nmetre = 1.0, L, [m, metre]\nfoot = 0.3048, L, [ft]\n")
+    with pytest.raises(ValueError, match="Unknown unit"):
+        registry.facts("ft")
+    registry.extend_conf(
+        "[Units]\nmetre = 1.0, L, [m, metre]\nfoot = 0.3048, L, [ft]\n"
+    )
     assert registry.factor_between(
         registry.parse_atomic("ft"), registry.parse_atomic("m")
     ) == pytest.approx(0.3048)
+    # any text parsed also registers the eight SI base units, whether or not it mentions them
+    assert registry.facts("kg")["dimension"] == {"M": 1}
     with pytest.raises(ValueError, match="Unknown unit"):
-        registry.facts("kg")
+        registry.facts("lb")
 ```
 
 - [ ] **Step 2: Add the extension methods.** In `physure-python/src/lib.rs`:
@@ -715,6 +717,7 @@ Under `### Fixed`, as the last bullet before `## [0.2.4]`:
 - `extend_registry` is the strict reading of what a system is made of and `parse_physure_conf` stays the lenient one (the catalog and the `physure.conf` of the working directory). The embedded catalog has no line the parser refuses, and a test says so, which is what lets the strict reading be used for the system file as well.
 - The registry keeps the base unit of each dimension symbol (`dimension_base`) and a text parsed later starts from it; `$` is a dimension symbol, so `enable_currency` is expressible as text.
 - A level can have the dimensions of a quantity (`dBW`, `dBm`), converts to the plain unit of those dimensions through the logarithm, and has no conversion factor between units.
+- Any text parsed, strict or lenient, also registers the eight SI base units (`m`, `s`, `kg`, `A`, `K`, `mol`, `cd`, `rad`) and the default dimension symbols of them (`L`, `M`, `T`, `I`, `O`, `N`, `J`, `A`), whether or not the text mentions them. A registry of a bare system therefore knows `kg`; step 2b must not use the registry's membership to answer `in` for a system, which stays the system's own until step 7.
 - Step 2b (Python) is planned from here.
 ```
 
