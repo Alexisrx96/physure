@@ -294,10 +294,11 @@ def test_rust_converts_delta_temperatures_like_python(comparison):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Open question for A1 Stage 1: Python files angles (rad, deg, arcmin), "
-        "solid angle (sr), plain ratios (percent, ppm) and logarithmic units "
-        "(dB, pH) under one dimension, so it converts arcmin to sr and percent "
-        "to dB; Rust refuses. Decide which behaviour is right."
+        "Decided: angles, solid angle, plain ratios and logarithmic units are "
+        "different kinds and must not convert into each other. Rust refuses; "
+        "Python files them (rad, deg, arcmin, sr, percent, ppm, dB, pH) under "
+        "one dimension, so it still converts arcmin to sr and percent to dB. "
+        "Closed when Python adopts the Rust types (A1 Stage 2)."
     ),
 )
 def test_python_does_not_mix_unrelated_dimensionless_kinds(comparison):

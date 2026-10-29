@@ -1,7 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use physure_core::{Quantity, RationalUnit, CovarianceStore, PruningConfig};
 use physure_core::units::Parser;
-use ndarray::ArrayD;
 
 fn bench_units(c: &mut Criterion) {
     let m = RationalUnit::new_from_dimensions([("m".to_string(), (1, 1))]);
