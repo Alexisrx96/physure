@@ -353,12 +353,47 @@ pub fn build_registry_with(extra: &str) -> Result<(UnitRegistry, HashMap<String,
 }
 ```
 
-- [ ] **Step 4: See them pass.** `cargo test -p physure` (all green, including the three settings tests and the step 1 test).
+- [ ] **Step 4: Keep the extension building.** `build_registry_with` returns a `Result` now and `physure-python/src/lib.rs` calls it, so the extension (a workspace member) would not compile at this commit: make `from_conf_text` strict too. In `physure-python/src/lib.rs`:
 
-- [ ] **Step 5: Commit.**
+Find (the helper added in step 1):
+```rust
+fn value_error(e: PhysureError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
+}
+```
+Replace with:
+```rust
+fn value_error(e: PhysureError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
+}
+
+/// The lines of a conf that the core could not read, one per line of the message.
+fn conf_problems(problems: Vec<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(problems.join("\n"))
+}
+```
+
+Find:
+```rust
+    fn from_conf_text(extra: &str) -> Self {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra);
+        PyUnitRegistry(reg)
+    }
+```
+Replace with:
+```rust
+    fn from_conf_text(extra: &str) -> PyResult<Self> {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra).map_err(conf_problems)?;
+        Ok(PyUnitRegistry(reg))
+    }
+```
+
+- [ ] **Step 5: See them pass.** `cargo test -p physure` (all green, including the three settings tests and the step 1 test) and, from the repository root, `cargo check -p physure-python` (builds).
+
+- [ ] **Step 6: Commit.**
 
 ```bash
-git add physure-core/src/units/conf.rs physure-core/src/units/tests.rs
+git add physure-core/src/units/conf.rs physure-core/src/units/tests.rs physure-python/src/lib.rs
 git commit -m "feat(core): read what a system is made of all or nothing
 
 parse_physure_conf is the lenient reading, as it was. extend_registry is
@@ -369,7 +404,8 @@ problem is returned. A unit line that fails no longer registers its
 names. [Settings] is not applied by it, since the settings of a conf are
 process-wide and a registry does not own them. The embedded catalog has
 no line the parser refuses, and a test says so. build_registry_with is
-the strict one.
+the strict one, and so is from_conf_text of the extension, which raises
+ValueError listing every such line.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
@@ -628,31 +664,13 @@ def test_a_registry_of_its_own_knows_what_it_is_given_and_the_si_base_units():
         registry.facts("lb")
 ```
 
-- [ ] **Step 2: Add the extension methods.** In `physure-python/src/lib.rs`:
-
-Find (the helper added in step 1):
-```rust
-fn value_error(e: PhysureError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
-}
-```
-Replace with:
-```rust
-fn value_error(e: PhysureError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
-}
-
-/// The lines of a conf that the core could not read, one per line of the message.
-fn conf_problems(problems: Vec<String>) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(problems.join("\n"))
-}
-```
+- [ ] **Step 2: Add the extension method.** In `physure-python/src/lib.rs` (`from_conf_text` is already strict, from Task 2):
 
 Find:
 ```rust
-    fn from_conf_text(extra: &str) -> Self {
-        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra);
-        PyUnitRegistry(reg)
+    fn from_conf_text(extra: &str) -> PyResult<Self> {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra).map_err(conf_problems)?;
+        Ok(PyUnitRegistry(reg))
     }
 ```
 Replace with:
@@ -685,7 +703,8 @@ git commit -m "feat: a registry of the extension takes the definitions of a syst
 
 UnitRegistry.extend_conf adds the units, prefixes and levels of conf text
 all or nothing, raising ValueError with every line the core could not
-read, and from_conf_text is strict the same way.
+read, as from_conf_text has since the core reads strictly. Tests of both,
+of money as a dimension and of dBW through the extension.
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
