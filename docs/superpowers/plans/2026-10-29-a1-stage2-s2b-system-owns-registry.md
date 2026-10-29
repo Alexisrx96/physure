@@ -135,7 +135,11 @@ class _Scaled(LinearConverter):
 
 def test_a_scaled_unit_is_written_with_its_names():
     text = unit_definition_text(
-        "USD", MONEY, LinearConverter(1.0), ["dollar", "USD"], allow_prefixes=False
+        "USD",
+        MONEY,
+        LinearConverter(1.0),
+        ["dollar", "USD"],
+        allow_prefixes=False,
     )
     assert text == "[Units]\nUSD = 1.0, $, noprefix, [USD, dollar]\n"
     assert _the_core_takes(text).facts("dollar")["dimension"] == {"$": 1}
@@ -161,7 +165,9 @@ def test_a_level_of_a_quantity():
     text = unit_definition_text(
         "dBW", POWER, LogarithmicConverter(10.0), allow_prefixes=False
     )
-    assert text == "[Units]\ndBW = Log, 10.0, 1.0, L^2*M*T^-3, noprefix, [dBW]\n"
+    assert (
+        text == "[Units]\ndBW = Log, 10.0, 1.0, L^2*M*T^-3, noprefix, [dBW]\n"
+    )
     facts = _the_core_takes(text).facts("dBW")
     assert facts["dimension"] == {"L": 2, "M": 1, "T": -3}
     assert facts["is_linear"] is False
@@ -215,11 +221,17 @@ def test_a_kind_that_contradicts_the_converter_is_refused():
 def test_a_level_has_no_recipe_and_an_offset_needs_a_zero_point():
     with pytest.raises(ValueError, match="no recipe"):
         unit_definition_text(
-            "dBx", POWER, LogarithmicConverter(10.0), recipe=CompoundUnit({"W": 1})
+            "dBx",
+            POWER,
+            LogarithmicConverter(10.0),
+            recipe=CompoundUnit({"W": 1}),
         )
     with pytest.raises(ValueError, match="zero point"):
         unit_definition_text(
-            "x", Dimension({"O": 1}), OffsetConverter(1.0, 0.0), kind="absolute"
+            "x",
+            Dimension({"O": 1}),
+            OffsetConverter(1.0, 0.0),
+            kind="absolute",
         )
 
 
@@ -492,7 +504,10 @@ def _bare_system():
     system.register_prefix("k", 1000.0, "kilo", Fraction(1000))
     system.register_unit("m", LENGTH, LinearConverter(1.0), "meter", "meter")
     system.register_unit(
-        "ft", LENGTH, LinearConverter(0.3048, exact=Fraction(381, 1250)), "foot"
+        "ft",
+        LENGTH,
+        LinearConverter(0.3048, exact=Fraction(381, 1250)),
+        "foot",
     )
     return system
 
@@ -552,7 +567,9 @@ def test_a_system_pickles_and_its_registry_is_rebuilt():
 
 
 def test_a_unit_of_a_conf_is_in_the_registry(tmp_path, monkeypatch):
-    conf = "[Prefixes]\nzorro = zz, 1/3\n[Units]\nfurlong = 201.168, L, [fur]\n"
+    conf = (
+        "[Prefixes]\nzorro = zz, 1/3\n[Units]\nfurlong = 201.168, L, [fur]\n"
+    )
     (tmp_path / "physure.conf").write_text(conf, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     registry = create_system().core_registry
@@ -851,11 +868,11 @@ Replace with:
                 )
                 # Fallback to parsing
 
-        # Lazy prefix decomposition
+        # Lazy prefix decomposition (km, kilometer, ...): materializes the
 ```
 Replace with:
 ```python
-        # Lazy prefix decomposition
+        # Lazy prefix decomposition (km, kilometer, ...): materializes the
 ```
 
 (l) Find:
@@ -899,6 +916,8 @@ class UnitSystemBuilder:
         for name, value_str in prefixes_data.items():
             symbol, factor_str = [p.strip() for p in value_str.split(",")]
             self._system.register_prefix(
+                symbol=symbol,
+                factor=float(factor_str),
 ```
 Replace with:
 ```python
@@ -906,6 +925,8 @@ Replace with:
         for name, value_str in prefixes_data.items():
             symbol, factor_str = [p.strip() for p in value_str.split(",")]
             self._system._register_prefix(
+                symbol=symbol,
+                factor=_number(factor_str),
 ```
 
 (c) Find:
@@ -956,8 +977,9 @@ and give it to the registry first, so a unit the core cannot take leaves
 the system as it was: a converter that is not exactly a LinearConverter,
 OffsetConverter or LogarithmicConverter is a TypeError, a name, number or
 kind the core cannot take is a ValueError. A conf line the core cannot
-read stops create_system with every such line named. The system keeps the
-texts, so pickling rebuilds the registry.
+read stops create_system with every such line named. A prefix factor of a
+conf can be a fraction for the builder as for the core. The system keeps
+the texts, so pickling rebuilds the registry.
 
 The best-effort mirror is gone: its three contextlib.suppress sites,
 prefixed copies registered as units without their prefix factor, and the
@@ -1039,34 +1061,48 @@ def _the_registry_agrees(system, names):
             facts = registry.facts(name)
             for field in FIELDS:
                 assert facts[field] == python[field], (name, field)
-        # the factor of each linear unit to the first of its dimension
+        # the factor of each linear unit to the first unit of its dimension
         groups = collections.defaultdict(list)
         for name, python in resolved.items():
             if python["is_linear"]:
                 groups[tuple(python["dimension"].items())].append(name)
-        for group in groups.values():
-            reference = group[0]
+        for dimension, group in groups.items():
+            references = [group[0]]
             for name in group[1:]:
-                factor = registry.factor_between(
-                    registry.parse_atomic(name),
-                    registry.parse_atomic(reference),
-                )
-                python = system.Q_(1.0, name).to(reference).magnitude
-                assert python == pytest.approx(factor, rel=1e-12), (
-                    name,
-                    reference,
-                )
+                for reference in references:
+                    try:
+                        factor = registry.factor_between(
+                            registry.parse_atomic(name),
+                            registry.parse_atomic(reference),
+                        )
+                    except ValueError:
+                        # Python files an angle and a solid angle under one
+                        # dimension and converts between them; the core keeps
+                        # them apart. Known, and closed by step 6
+                        # (test_python_does_not_mix_angle_and_solid_angle).
+                        assert dimension == (("A", 1),), (name, reference)
+                        continue
+                    python = system.Q_(1.0, name).to(reference).magnitude
+                    assert python == pytest.approx(factor, rel=1e-12), (
+                        name,
+                        reference,
+                    )
+                    break
+                else:
+                    references.append(name)  # another kind of the dimension
     return len(resolved)
 
 
 def test_the_default_system():
+    # every fourth name of the catalog: all of them are compared with the
+    # catalog's own registry in test_registry_facts.py
     system = create_default_system()
-    assert _the_registry_agrees(system, sorted(UNIT_INDEX)) > 2000
+    assert _the_registry_agrees(system, sorted(UNIT_INDEX)[::4]) > 500
 
 
 def test_the_imperial_system():
     system = create_system("imperial.conf")
-    assert _the_registry_agrees(system, sorted(UNIT_INDEX)) > 2000
+    assert _the_registry_agrees(system, sorted(UNIT_INDEX)[::4]) > 500
 
 
 def test_a_system_with_the_conf_of_the_user(tmp_path, monkeypatch):
@@ -1104,7 +1140,10 @@ def test_a_bare_system_with_units_registered_by_hand():
     system.register_unit("m", length, LinearConverter(1.0), "meter", "meter")
     system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
     system.register_unit(
-        "ft", length, LinearConverter(0.3048, exact=Fraction(381, 1250)), "foot"
+        "ft",
+        length,
+        LinearConverter(0.3048, exact=Fraction(381, 1250)),
+        "foot",
     )
     system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
     system.register_unit("s", time, LinearConverter(1.0), "second")
@@ -1117,7 +1156,11 @@ def test_a_bare_system_with_units_registered_by_hand():
     )
     system.register_unit("W", power, LinearConverter(1.0), "watt")
     system.register_unit(
-        "dBW", power, LogarithmicConverter(10.0), "decibel-watt", allow_prefixes=False
+        "dBW",
+        power,
+        LogarithmicConverter(10.0),
+        "decibel-watt",
+        allow_prefixes=False,
     )
     system.register_unit("K", heat, LinearConverter(1.0), "kelvin")
     system.register_unit(
