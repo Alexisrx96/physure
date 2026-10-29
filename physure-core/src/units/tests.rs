@@ -303,7 +303,8 @@ fn temperature_scales_are_the_only_affine_units() {
         .collect();
     let mut affine: Vec<&str> = affine.into_iter().map(String::as_str).collect();
     affine.sort_unstable();
-    assert_eq!(affine, ["degC", "degF"], "only Celsius and Fahrenheit are affine");
+    // the registry keys the two scales by their symbols, the first name the catalog lists
+    assert_eq!(affine, ["°C", "°F"], "only Celsius and Fahrenheit are affine");
 }
 
 /// `degC` and `K` share dimensions *and* scale, differing only in their zero point, so unit

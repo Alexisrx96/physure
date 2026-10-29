@@ -367,13 +367,6 @@ def test_unit_semantics_match_the_frozen_python_behaviour():
     assert facts == frozen
 
 
-# Python's catalog restates celsius and fahrenheit (international.conf) with
-# another symbol, so it shows ``degC`` as written; in the core catalog ``degC``
-# is the symbol and is shown by its shortest name. Closed when Python has one
-# catalog (A1 stage 1c-C).
-ALIAS_KNOWN_TO_DIFFER = {"degC", "degF"}
-
-
 def _python_facts(expression):
     system = get_current_system()
     unit = Q_(1.0, expression).unit
@@ -395,23 +388,15 @@ def _python_facts(expression):
 def test_the_core_reproduces_the_frozen_unit_semantics(expression):
     frozen = json.loads(GOLDEN_FILE.read_text(encoding="utf-8"))[expression]
     facts = core.unit_facts(expression)
-    for field in ("dimension", "kind", "is_linear", "simplified"):
+    for field in ("dimension", "kind", "is_linear", "alias", "simplified"):
         assert facts[field] == frozen[field], field
-    if expression in ALIAS_KNOWN_TO_DIFFER:
-        assert facts["alias"] != frozen["alias"]
-    else:
-        assert facts["alias"] == frozen["alias"]
 
 
 def test_the_core_agrees_with_python_on_every_unit_of_the_catalog(comparison):
     names = sorted(
         name for members in comparison.groups.values() for name in members
     )
-    differing = set()
     for name in names:
         python, rust = _python_facts(name), core.unit_facts(name)
-        for field in ("dimension", "kind", "is_linear", "simplified"):
+        for field in ("dimension", "kind", "is_linear", "alias", "simplified"):
             assert rust[field] == python[field], (name, field)
-        if rust["alias"] != python["alias"]:
-            differing.add(name)
-    assert differing == ALIAS_KNOWN_TO_DIFFER

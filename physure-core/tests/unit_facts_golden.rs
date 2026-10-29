@@ -8,11 +8,6 @@ use physure_core::units::conf::build_registry_from_conf;
 use physure_core::units::UnitKind;
 use serde_json::Value;
 
-/// Python's catalog restates celsius and fahrenheit (`international.conf`) with another symbol,
-/// `°C`, so Python shows `degC` as written; in the core catalog `degC` is the symbol of the unit and
-/// is shown by its shortest name. Closed when Python has one catalog.
-const ALIAS_KNOWN_TO_DIFFER: [(&str, &str); 2] = [("degC", "°C"), ("degF", "°F")];
-
 #[test]
 fn the_core_says_what_python_said_before_it_could() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../physure-python/tests/core/golden/unit_semantics.json");
@@ -31,9 +26,6 @@ fn the_core_says_what_python_said_before_it_could() {
         assert_eq!(frozen["kind"], kind, "{expression}: kind");
         assert_eq!(frozen["is_linear"], facts.is_linear, "{expression}: is_linear");
         assert_eq!(frozen["simplified"], facts.simplified.as_str(), "{expression}: simplified");
-        match ALIAS_KNOWN_TO_DIFFER.iter().find(|(name, _)| name == expression) {
-            Some((_, core)) => assert_eq!(facts.alias, *core, "{expression}: alias"),
-            None => assert_eq!(frozen["alias"], facts.alias.as_str(), "{expression}: alias"),
-        }
+        assert_eq!(frozen["alias"], facts.alias.as_str(), "{expression}: alias");
     }
 }
