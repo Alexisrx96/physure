@@ -2,6 +2,9 @@ import configparser
 from fractions import Fraction
 from pathlib import Path
 
+# Words that stand among the fields of a unit line without being a value or an alias.
+_FLAGS = ("noprefix", "own_kind")
+
 
 def generate_units_markdown():
     parser = configparser.ConfigParser(interpolation=None)
@@ -58,7 +61,11 @@ def generate_units_markdown():
                 scale = f"Scale {parts[0]}"
                 aliases = parts[2:]
 
-        aliases_str = ", ".join(aliases).replace("[", "").replace("]", "")
+        aliases_str = (
+            ", ".join(a for a in aliases if a not in _FLAGS)
+            .replace("[", "")
+            .replace("]", "")
+        )
 
         if dim not in units_by_dim:
             units_by_dim[dim] = []

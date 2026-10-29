@@ -464,3 +464,34 @@ fn the_shift_falls_back_to_the_doubles_and_is_zero_without_zero_points() {
     let (_, no_shift) = reg.get_unit("km").unwrap().affine_to(&reg.get_unit("mile").unwrap());
     assert_eq!(no_shift, 0.0);
 }
+
+/// A temperature difference is a kelvin wide, whichever scale it is counted in: `delta_celsius`
+/// was declared at scale 1 on the dimension of kelvin and became a base unit of its own, so it
+/// converted to nothing.
+#[test]
+fn a_temperature_difference_converts_to_kelvin_and_to_the_other_differences() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let kelvin = reg.get_unit("K").unwrap();
+    for name in ["delta_celsius", "delta_degC", "degC_delta"] {
+        let converted = Quantity::new(5.0, name).unwrap().convert_to(&kelvin).unwrap();
+        assert_eq!(converted.value.mean(), 5.0, "{name}");
+    }
+    let delta_celsius = reg.get_unit("delta_celsius").unwrap();
+    let converted = Quantity::new(9.0, "delta_degF").unwrap().convert_to(&delta_celsius).unwrap();
+    assert_eq!(converted.value.mean(), 5.0);
+}
+
+/// Radian and steradian share the dimension symbol `A`; the catalog flags the steradian as a
+/// kind of its own, so an angle never converts into a solid angle.
+#[test]
+fn an_angle_does_not_convert_into_a_solid_angle() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let steradian = reg.get_unit("sr").unwrap();
+    let radian = reg.get_unit("rad").unwrap();
+    assert!(Quantity::new(1.0, "deg").unwrap().convert_to(&steradian).is_err());
+    assert!(Quantity::new(1.0, "rad").unwrap().convert_to(&steradian).is_err());
+    assert!(Quantity::new(1.0, "sr").unwrap().convert_to(&radian).is_err());
+    assert!(Quantity::new(180.0, "deg").unwrap().convert_to(&radian).is_ok());
+}

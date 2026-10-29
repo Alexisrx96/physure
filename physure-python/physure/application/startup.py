@@ -178,6 +178,10 @@ class UnitSystemBuilder:
         if "noprefix" in parts:
             allow_prefixes = False
             parts.remove("noprefix")
+        # `own_kind` is read by the core (steradian is not a radian); Python files both
+        # under one dimension until A1 stage 2.
+        if "own_kind" in parts:
+            parts.remove("own_kind")
 
         if parts[0].lower() == "log":
             dimension, converter, kind = self._parse_log_unit(parts)
@@ -203,7 +207,7 @@ class UnitSystemBuilder:
         parts = [
             p.strip()
             for p in main_part.split(",")
-            if p.strip() and p.strip() != "noprefix"
+            if p.strip() and p.strip() not in ("noprefix", "own_kind")
         ]
 
         is_log = parts[0].lower() == "log"

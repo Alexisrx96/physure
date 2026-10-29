@@ -8,6 +8,11 @@ use std::sync::OnceLock;
 
 pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
 
+/// Words that can stand among the fields of a unit line without being one of its values.
+fn is_flag(field: &str) -> bool {
+    matches!(field, "noprefix" | "own_kind")
+}
+
 /// Parses a `physure.conf` configuration string into a UnitRegistry and constants map.
 /// All dimension symbols (L, M, T, I, O, N, J, A, etc.), prefixes, units, aliases,
 /// and physical constants are extracted 100% dynamically from the configuration file.
@@ -105,13 +110,18 @@ pub fn parse_physure_conf(
                         // or add with `%`, `ppm`, or a bare number, despite all four being
                         // dimensionless.
                         if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() && dim_symbol != "1" {
-                            if is_single_ident(dim_symbol) {
-                                // The first base declaration for a dimension symbol wins.
-                                // `physure.conf` declares both `radian` and `steradian`
-                                // against dimension `A`, so overwriting made steradian the
-                                // base of angle: `deg`, `arcmin` and `arcsec` came out with
-                                // steradian dimensions, `90 deg => rad` failed as a unit
-                                // mismatch and `1 deg + 1 sr` was accepted instead.
+                            // Only the first declaration at scale 1 for a dimension symbol
+                            // is that dimension's base unit, and it wins: `physure.conf`
+                            // declares both `radian` and `steradian` against `A`, and
+                            // overwriting made steradian the base of angle (`90 deg => rad`
+                            // failed as a unit mismatch and `1 deg + 1 sr` was accepted).
+                            // A later one is the same quantity under another name
+                            // (`delta_celsius` is a kelvin: as a base unit of its own it
+                            // could not convert to K) unless the catalog says it is a kind
+                            // of its own: `steradian` is flagged `own_kind`.
+                            let first = !dim_to_base.contains_key(dim_symbol);
+                            let own_kind = parts.contains(&"own_kind");
+                            if is_single_ident(dim_symbol) && (first || own_kind) {
                                 dim_to_base.entry(dim_symbol.to_string()).or_insert_with(|| symbol.clone());
                                 registry.add_base_unit(symbol.clone());
                             }
@@ -253,13 +263,13 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     let mut parts: Vec<&str> = val_part
         .split(',')
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && *s != "noprefix")
+        .filter(|s| !s.is_empty() && !is_flag(s))
         .collect();
 
     if parts.len() == 1 && parts[0].contains(' ') {
         parts = parts[0]
             .split_whitespace()
-            .filter(|s| !s.is_empty() && *s != "noprefix")
+            .filter(|s| !s.is_empty() && !is_flag(s))
             .collect();
     }
 
@@ -314,7 +324,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         let recipe_index = dim_index + 1;
         let recipe_str = if parts.len() > recipe_index
             && !parts[recipe_index].is_empty()
-            && parts[recipe_index] != "noprefix"
+            && !is_flag(parts[recipe_index])
         {
             parts[recipe_index]
         } else {
