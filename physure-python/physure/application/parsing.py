@@ -1,5 +1,5 @@
 # physure/application/parsing.py
-"""Unit string parsing — native parser first, SymPy fallback."""
+"""Unit string parsing: the core's parser."""
 
 from __future__ import annotations
 
@@ -14,28 +14,6 @@ T = TypeVar("T", bound=ExponentEntityProtocol)
 
 # Handles implicit multiplication: "m s" -> "m*s"
 _IMPLICIT_MUL = re.compile(r"(?<=[a-zA-Z0-9)])\s+(?=[a-zA-Z0-9(])")
-
-# Singleton SymPy parser, loaded lazily only when native parser fails
-_SYMPY_PARSER = None
-
-
-def _get_sympy_parser():
-    global _SYMPY_PARSER
-    if _SYMPY_PARSER is None:
-        try:
-            from physure.core.parsing.sympy_parser import SymPyUnitParser
-
-            # ponytail: lazy singleton reassigns this "constant" once,
-            # from None to a real parser instance.
-            _SYMPY_PARSER = (  # pyright: ignore[reportConstantRedefinition]
-                SymPyUnitParser()
-            )
-        except ImportError as e:
-            raise ImportError(
-                "sympy is required to parse this unit expression. "
-                "Install it with: pip install physure[symbolic]"
-            ) from e
-    return _SYMPY_PARSER
 
 
 def _native_parse(expression: str, entity_cls: type[T]) -> T:
@@ -56,25 +34,13 @@ def _native_parse(expression: str, entity_cls: type[T]) -> T:
 def parse_unit_string(expression: str, entity_cls: type[T]) -> T:
     """Parse a unit or dimension string into the target entity class.
 
-    Tries the native recursive-descent parser first (no dependencies).
-    Falls back to the SymPy-based parser for complex expressions.
+    The parser is the core's: ``m/s^2``, ``m/s**2``, ``kg m s^-2``, ``s**0.5``,
+    ``J/(mol*K)`` and ``m²`` all read the same way in every binding.
+
+    Raises:
+        ValueError: The expression is not a unit.
     """
-    # Fast path: native parser, zero deps
     try:
         return _native_parse(expression, entity_cls)
-    except Exception:
-        pass
-
-    # Slow path: SymPy parser (requires sympy installed)
-    try:
-        compound_unit = _get_sympy_parser().parse(expression)
-    except ImportError:
-        raise
-    except Exception as e:
-        raise ValueError(f"Parsing failed: {e}") from e
-
-    if issubclass(entity_cls, type(compound_unit)):
-        # ponytail: verified at runtime by the issubclass check above;
-        # pyright can't narrow CompoundUnit to the generic T.
-        return compound_unit  # pyright: ignore[reportReturnType]
-    return entity_cls(compound_unit.exponents)
+    except Exception as error:
+        raise ValueError(f"Parsing failed: {error}") from error
