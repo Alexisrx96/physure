@@ -254,13 +254,6 @@ def test_python_and_rust_agree_to_the_last_bit(comparison):
     assert not found, _show(found)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Gap for A1 Stage 1: Python accepts long prefix names ('kilometer', "
-        "'attoampere'); the Rust registry only accepts symbol prefixes ('km')."
-    ),
-)
 def test_rust_accepts_the_long_prefix_names_python_accepts(comparison):
     rejected = _of_kind(comparison, "rust-rejects-long-prefix-name")
     assert not rejected, _show(rejected)
@@ -278,14 +271,6 @@ def test_rust_knows_every_unit_python_knows(comparison):
     assert not unknown, _show(unknown)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Gap for A1 Stage 1: Python converts 'delta_celsius' to 'K' (a "
-        "temperature difference is a difference in kelvin); Rust rejects it "
-        "as a unit mismatch."
-    ),
-)
 def test_rust_converts_delta_temperatures_like_python(comparison):
     rejected = _of_kind(comparison, "rust-rejects-delta-temperature")
     assert not rejected, _show(rejected)
