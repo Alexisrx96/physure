@@ -32,6 +32,7 @@ use ::physure_core::{
     PhysureResult, PhysureError,
     DimVector, UnitKind,
 };
+use ::physure_core::units::registry::{Conversion, Stage};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
 use ::physure_core::uncertainty::moments::{self, AsymmetricMoments, MomentsBackend};
 use physure_script::symbolic::Expr;
@@ -283,8 +284,31 @@ fn parse_exponent(v: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
     None
 }
 
+pyo3::create_exception!(_core, UnknownUnitError, pyo3::exceptions::PyValueError, "A unit the registry does not know.");
+pyo3::create_exception!(_core, UnitMismatchError, pyo3::exceptions::PyValueError, "Units of different dimensions.");
+
+/// A core error as the Python exception that says what it was: an unknown unit carries its
+/// `symbol` and a `suggestion`, a mismatch the `expected` and `actual` units. Both are `ValueError`s.
 fn value_error(e: PhysureError) -> PyErr {
-    pyo3::exceptions::PyValueError::new_err(e.to_string())
+    let message = e.to_string();
+    let (err, attributes) = match e {
+        PhysureError::UnknownUnit { symbol, suggestion } => (
+            UnknownUnitError::new_err(message),
+            vec![("symbol", Some(symbol)), ("suggestion", suggestion)],
+        ),
+        PhysureError::UnitMismatch { expected, actual } => (
+            UnitMismatchError::new_err(message),
+            vec![("expected", Some(expected)), ("actual", Some(actual))],
+        ),
+        _ => return pyo3::exceptions::PyValueError::new_err(message),
+    };
+    Python::with_gil(|py| {
+        let value = err.value(py);
+        for (name, text) in attributes {
+            let _ = value.setattr(name, text);
+        }
+    });
+    err
 }
 
 /// The lines of a conf that the core could not read, one per line of the message.
@@ -414,6 +438,43 @@ impl PyUnitRegistry {
     /// The factor that turns a magnitude in `source` into one in `target`, rounded once.
     fn factor_between(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<f64> {
         self.0.factor_between(&source.0, &target.0).map_err(value_error)
+    }
+
+    /// How a number in `source` becomes a number in `target`, as the plan the core follows:
+    /// `{"kind": "affine", "scale", "shift"}` (new = old * scale + shift), or `{"kind": "level",
+    /// "from", "to"}` where each side is `{"scale"}` of a plain unit or `{"factor", "reference"}`
+    /// of a level, and the number goes through the plain ratio both stand for.
+    fn conversion<'py>(
+        &self,
+        py: Python<'py>,
+        source: &PyRationalUnit,
+        target: &PyRationalUnit,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let stage = |stage: Stage| -> PyResult<Bound<'py, PyDict>> {
+            let out = PyDict::new(py);
+            match stage {
+                Stage::Scale(scale) => out.set_item("scale", scale)?,
+                Stage::Level(log) => {
+                    out.set_item("factor", log.factor)?;
+                    out.set_item("reference", log.reference)?;
+                }
+            }
+            Ok(out)
+        };
+        let out = PyDict::new(py);
+        match self.0.conversion(&source.0, &target.0).map_err(value_error)? {
+            Conversion::Affine { scale, shift } => {
+                out.set_item("kind", "affine")?;
+                out.set_item("scale", scale)?;
+                out.set_item("shift", shift)?;
+            }
+            Conversion::Level { from, to } => {
+                out.set_item("kind", "level")?;
+                out.set_item("from", stage(from)?)?;
+                out.set_item("to", stage(to)?)?;
+            }
+        }
+        Ok(out)
     }
 
     /// Dimension, kind, linearity, alias and simplified form of a unit expression.
@@ -1793,6 +1854,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(default_conf, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
+    m.add("UnknownUnitError", m.py().get_type::<UnknownUnitError>())?;
+    m.add("UnitMismatchError", m.py().get_type::<UnitMismatchError>())?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyQuantityVector>()?;
     m.add_class::<PyQuantityMatrix>()?;

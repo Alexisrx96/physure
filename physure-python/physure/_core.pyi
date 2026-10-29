@@ -32,6 +32,17 @@ class UnitRegistry:
         self, source: RationalUnit, target: RationalUnit
     ) -> float: ...
     def facts(self, expression: str) -> dict[str, Any]: ...
+    def conversion(
+        self, source: RationalUnit, target: RationalUnit
+    ) -> dict[str, Any]: ...
+
+class UnknownUnitError(ValueError):
+    symbol: str
+    suggestion: str | None
+
+class UnitMismatchError(ValueError):
+    expected: str
+    actual: str
 
 class Quantity:
     _core_magnitude: Any
