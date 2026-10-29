@@ -920,3 +920,31 @@ fn a_noprefix_unit_takes_no_prefix() {
     conf::extend_registry(&mut reg, &mut constants, "[Units]\nUSD = 1.0, $, [USD, dollar]\n").unwrap();
     assert!(reg.facts("mUSD").is_ok());
 }
+
+/// The plan the registry gives for a conversion is what `Quantity::convert_to` does: a factor, the
+/// two coefficients of a temperature conversion, or the two stages of a level.
+#[test]
+fn the_registry_plans_a_conversion() {
+    use crate::units::parser::Parser;
+    use crate::units::registry::{Conversion, Stage};
+    let (reg, _) = conf::build_registry_from_conf();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    let plan = |from: &str, to: &str| reg.conversion(&atomic(from), &atomic(to));
+
+    assert_eq!(plan("km", "m").unwrap(), Conversion::Affine { scale: 1000.0, shift: 0.0 });
+    assert_eq!(plan("degC", "degF").unwrap(), Conversion::Affine { scale: 1.8, shift: 32.0 });
+    assert_eq!(plan("degC", "K").unwrap(), Conversion::Affine { scale: 1.0, shift: 273.15 });
+    // the same level under another name needs nothing
+    assert_eq!(plan("decibel", "dB").unwrap(), Conversion::Affine { scale: 1.0, shift: 0.0 });
+    // a prefixed temperature scale keeps its zero point
+    assert_eq!(plan("centicelsius", "K").unwrap(), Conversion::Affine { scale: 0.01, shift: 273.15 });
+    // a level goes through the ratio it stands for
+    match plan("dB", "percent").unwrap() {
+        Conversion::Level { from: Stage::Level(log), to: Stage::Scale(scale) } => {
+            assert_eq!((log.factor, log.reference, scale), (10.0, 1.0, 0.01));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(plan("m", "s").is_err());
+    assert!(plan("rad", "sr").is_err());
+}

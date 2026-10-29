@@ -22,6 +22,36 @@ pub struct ConstantMetadata {
 /// A unit's base symbols with their exponents, sorted: the key of a recipe unit.
 pub type DimKey = Vec<(String, (i64, i64))>;
 
+/// How a number in one unit becomes a number in another (see `UnitRegistry::conversion`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Conversion {
+    /// `new = old * scale + shift`: a plain factor (the shift is zero), or two temperature
+    /// scales, whose zero points differ.
+    Affine { scale: f64, shift: f64 },
+    /// A level is involved: `from` turns the number into the plain ratio both stand for and `to`
+    /// turns that ratio into the number.
+    Level { from: Stage, to: Stage },
+}
+
+/// One side of a conversion through a ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Stage {
+    /// A plain unit: `ratio = number * scale`.
+    Scale(f64),
+    /// A level: `ratio = reference * 10^(number / factor)`, and back `number = factor *
+    /// log10(ratio / reference)`.
+    Level(LogScale),
+}
+
+impl Stage {
+    fn of(unit: &RationalUnit) -> Self {
+        match unit.log {
+            Some(log) => Stage::Level(log),
+            None => Stage::Scale(unit.scale),
+        }
+    }
+}
+
 /// What the registry says about a unit expression.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnitFacts {
@@ -459,6 +489,14 @@ impl UnitRegistry {
     /// with `Parser::parse_expression_atomic`. A symbol the registry does not know is an error, and
     /// so is a level inside a compound (`RationalUnit::refuse_logarithmic_compound`).
     pub fn expand(&self, atomic: &RationalUnit) -> PhysureResult<RationalUnit> {
+        // A single unit is what the registry says it is, zero point and level included: a product
+        // would keep only its scale.
+        if let [(symbol, (1, 1))] = atomic.dimensions.iter().collect::<Vec<_>>().as_slice() {
+            return self.get_unit(symbol).ok_or_else(|| PhysureError::UnknownUnit {
+                suggestion: self.closest_symbol(symbol),
+                symbol: symbol.to_string(),
+            });
+        }
         let mut expanded = RationalUnit::dimensionless();
         for (symbol, (n, d)) in &atomic.dimensions {
             let unit = self.get_unit(symbol).ok_or_else(|| PhysureError::UnknownUnit {
@@ -489,6 +527,29 @@ impl UnitRegistry {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
         }
         Ok(from.ratio_to(&to))
+    }
+
+    /// How a number in `from` becomes a number in `to`, two units written as symbols of the same
+    /// dimension: the plan the core itself follows in `Quantity::convert_to`. A caller that holds
+    /// its numbers elsewhere (NumPy, torch) applies the plan with its own operations and gets the
+    /// answer of the core, rounded the same way.
+    pub fn conversion(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<Conversion> {
+        let (from, to) = (self.expand(from)?, self.expand(to)?);
+        if !from.same_dimensions(&to) {
+            return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
+        }
+        if from.is_logarithmic() || to.is_logarithmic() {
+            if from.log == to.log && from.scale == to.scale {
+                // the same level under another name (decibel, dB): nothing to convert
+                return Ok(Conversion::Affine { scale: 1.0, shift: 0.0 });
+            }
+            return Ok(Conversion::Level { from: Stage::of(&from), to: Stage::of(&to) });
+        }
+        if from.is_affine() || to.is_affine() {
+            let (scale, shift) = from.affine_to(&to);
+            return Ok(Conversion::Affine { scale, shift });
+        }
+        Ok(Conversion::Affine { scale: from.ratio_to(&to), shift: 0.0 })
     }
 
     /// The base or derived unit that `symbol` names, directly or through an alias.
