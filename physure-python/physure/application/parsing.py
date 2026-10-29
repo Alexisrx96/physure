@@ -47,12 +47,7 @@ def _native_parse(expression: str, entity_cls: type[T]) -> T:
     if hasattr(res, "dimensions"):
         exponents = {}
         for symbol, (num, den) in res.dimensions.items():
-            if den != 1:
-                raise ValueError(
-                    f"Non-integer dimension exponent {num}/{den} for "
-                    f"{symbol!r} in {expression!r} is not supported."
-                )
-            exponents[symbol] = num
+            exponents[symbol] = num if den == 1 else (num, den)
         return entity_cls(exponents)
     return res  # pyright: ignore[reportReturnType]
 
