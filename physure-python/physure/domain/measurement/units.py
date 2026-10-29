@@ -21,6 +21,7 @@ from physure.domain.exceptions import (
 from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentsDict,
+    exact_power,
 )
 
 if TYPE_CHECKING:
@@ -34,23 +35,6 @@ if TYPE_CHECKING:
 
 
 # --- Dependency Injection for System ---
-
-
-def normalize_exponents(exponents: ExponentsDict) -> dict[str, float | int]:
-    """Normalizes a dictionary of exponents, removing zeros and converting tuples."""
-    normalized = {}
-    for k, v in exponents.items():
-        if isinstance(v, (list, tuple)):
-            v = v[0] / v[1]
-
-        if v == 0:
-            continue
-
-        if isinstance(v, float) and v.is_integer():
-            normalized[k] = int(v)
-        else:
-            normalized[k] = v
-    return normalized
 
 
 def get_default_system() -> UnitSystem:
@@ -128,31 +112,50 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         except _CORE_ERRORS as error:
             raise _python_error(error, self, self) from error
 
+    # one instance per set of powers, found by the canonical key or by the
+    # items that were given (so the usual call does no arithmetic at all)
     _cache: ClassVar[dict[tuple, CompoundUnit]] = {}
 
     # ponytail: the Flyweight cache is keyed by exponents only and always
     # stores/returns a plain CompoundUnit, so `Self` would overpromise for
     # subclasses; CompoundUnit is the honest contract here.
     def __new__(cls, exponents: ExponentsDict) -> CompoundUnit:  # noqa: PYI034
-        """Create or retrieve a cached CompoundUnit instance."""
-        normalized_exponents = normalize_exponents(exponents)
+        """Create or retrieve a cached CompoundUnit instance.
+
+        The powers are exact: an int or a Fraction, whatever number they were
+        given as (a float is the closest simple fraction).
+        """
+        items = tuple(exponents.items()) if exponents else ()
+        try:
+            found = cls._cache.get(items)
+        except TypeError:  # an unhashable power: no shortcut
+            items = None
+            found = None
+        if found is not None:
+            return found
+
         # Sort keys to ensure consistent repr and hash
-        sorted_items = sorted(normalized_exponents.items())
-        key = tuple(sorted_items)
-
-        # Check raw cache
+        key = tuple(
+            sorted(
+                (symbol, pair)
+                for symbol, value in exponents.items()
+                if (pair := exact_power(value))[0] != 0
+            )
+        )
         instance = cls._cache.get(key)
-        if instance is not None:
-            return instance
-
-        instance = RationalUnit.__new__(cls, normalized_exponents)
-
-        # Consistent order for exponents dict to ensure uniform __repr__
-        ordered_exponents = dict(sorted_items)
-        object.__setattr__(instance, "exponents", ordered_exponents)
-
-        # Singleton pattern
-        cls._cache[key] = cast("CompoundUnit", instance)
+        if instance is None:
+            instance = RationalUnit.__new__(cls, dict(key))
+            object.__setattr__(
+                instance,
+                "exponents",
+                {
+                    symbol: n if d == 1 else Fraction(n, d)
+                    for symbol, (n, d) in key
+                },
+            )
+            cls._cache[key] = cast("CompoundUnit", instance)
+        if items is not None:
+            cls._cache[items] = cast("CompoundUnit", instance)
         return cast("CompoundUnit", instance)
 
     # ponytail: real initialization happens in __new__'s singleton cache;
@@ -162,11 +165,6 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         self, exponents: ExponentsDict
     ) -> None:
         """Initializes the compound unit with a dictionary of exponents."""
-
-    def __post_init__(self) -> None:
-        """Eliminamos cualquier unidad con exponente 0."""
-        clean_exponents = {k: v for k, v in self.exponents.items() if v != 0}
-        object.__setattr__(self, "exponents", clean_exponents)
 
     def __reduce__(self) -> tuple[Any, ...]:
         """Custom pickling to ensure Flyweight pattern (cache) is used.
@@ -330,26 +328,17 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         return self.to_string(use_alias=format_spec.startswith("alias"))
 
     def __pow__(self, power: float | tuple[int, int]) -> CompoundUnit:
-        """Power support with float-to-rational conversion."""
-        if isinstance(power, (int, float)):
-            # Use Python-side BaseExponentEntity logic for pure exponents
-            # to avoid Rust RationalUnit issues with fractional powers.
-            # Convert float to int if integral
-            if isinstance(power, float) and power.is_integer():
-                power = int(power)
-
-            new_exponents = {k: v * power for k, v in self.exponents.items()}
-            return _CompoundUnit(new_exponents)
-
-        # For rational tuples, we use Rust core if available
-        # ponytail: the Rust RationalUnit core accepts a rational
-        # (numerator, denominator) tuple here even though the Python
-        # stub's __pow__ only declares float (same "Rust core is
-        # optional/dynamic" pattern as elsewhere in this file).
-        res = super().__pow__(power)  # pyright: ignore[reportArgumentType]
-        if hasattr(res, "dimensions"):
-            return _CompoundUnit(res.dimensions)
-        return res
+        """Raises the unit to a power: an integer, or the fraction a float stands for."""
+        if type(power) is int:
+            return _CompoundUnit(
+                {k: v * power for k, v in self.exponents.items()}
+            )
+        if isinstance(power, float) and power.is_integer():
+            return self ** int(power)
+        # a fraction: the algebra of the core, with the exact power
+        return _CompoundUnit(
+            RationalUnit.__pow__(self, exact_power(power)).dimensions  # pyright: ignore[reportArgumentType]
+        )
 
     # ponytail: BaseExponentEntity.__rtruediv__ is a singledispatchmethod;
     # CompoundUnit intentionally replaces it with a plain method for the

@@ -24,6 +24,9 @@ from physure.domain.measurement.base_entity import (
     ExponentEntityProtocol,
     ExponentsDict,
 )
+from physure.domain.measurement.base_entity import (
+    exact_power as _pair,
+)
 
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
@@ -56,26 +59,6 @@ def register_dimension(dimension: Dimension, name: str):
         name: The human-readable name (e.g., "Length").
     """
     _DIMENSION_NAME_REGISTRY[dimension] = name
-
-
-def _pair(value: Any) -> tuple[int, int]:
-    """A power as the exact (numerator, denominator) it stands for.
-
-    A float is the closest simple fraction (0.5 is 1/2, 0.3333333333333333 is
-    1/3), so a dimension that came back from the core as a float is not
-    truncated to an integer. The plain types go first: a Fraction is slow.
-    """
-    kind = type(value)
-    if kind is int:
-        return (value, 1)
-    if kind is tuple:
-        return (value[0], value[1])
-    fraction = (
-        value
-        if isinstance(value, Fraction)
-        else Fraction(float(value)).limit_denominator(1000)
-    )
-    return (fraction.numerator, fraction.denominator)
 
 
 _RANK: Final[dict[str, int]] = {symbol: i for i, symbol in enumerate(SI_ORDER)}

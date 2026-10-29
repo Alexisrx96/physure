@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import singledispatchmethod
 from typing import Any, Protocol
 
@@ -10,6 +11,27 @@ from physure.core.formatting import to_superscript
 
 # Exponents dictionary type alias: maps base unit or dimension symbol to power/exponent
 ExponentsDict = dict[str, Any]
+
+
+def exact_power(value: Any) -> tuple[int, int]:
+    """A power as the exact (numerator, denominator) it stands for.
+
+    A float is the closest simple fraction (0.5 is 1/2, 0.3333333333333333 is
+    1/3, 0.30000000000000004 is 3/10), so a power that went through float
+    arithmetic is not left with the error. The plain types go first: a
+    Fraction is slow.
+    """
+    kind = type(value)
+    if kind is int:
+        return (value, 1)
+    if kind is tuple or kind is list:
+        return (value[0], value[1])
+    fraction = (
+        value
+        if isinstance(value, Fraction)
+        else Fraction(float(value)).limit_denominator(1000)
+    )
+    return (fraction.numerator, fraction.denominator)
 
 
 class ExponentEntityProtocol(Protocol):
@@ -95,9 +117,10 @@ class BaseExponentEntity:
     def __str__(self) -> str:
         numerator, denominator = [], []
         for unit, exp in sorted(self.exponents.items()):
-            formatted = (
-                f"{unit}{to_superscript(abs(exp)) if abs(exp) != 1 else ''}"
-            )
+            power = abs(exp)
+            if type(power) is not int:
+                power = float(power)  # a Fraction shows as its decimal
+            formatted = f"{unit}{to_superscript(power) if power != 1 else ''}"
             (numerator if exp > 0 else denominator).append(formatted)
         n = "·".join(numerator)
         d = "·".join(denominator)
