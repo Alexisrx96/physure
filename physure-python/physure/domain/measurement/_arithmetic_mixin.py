@@ -19,7 +19,6 @@ from physure.domain.exceptions import (
 )
 from physure.domain.measurement.converters import (
     LinearConverter,
-    LogarithmicConverter,
 )
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.uncertainty import Uncertainty
@@ -1003,35 +1002,31 @@ class ArithmeticMixin:
             "Cannot subtract an absolute quantity from a difference."
         )
 
+    def _is_level(self) -> bool:
+        """True for a level (dB, pH): the logarithm of a ratio."""
+        return (
+            not self.unit.is_linear(self.system)
+            and self.unit.kind(self.system) == "delta"
+        )
+
     def _logarithmic_add_sub(
         self, other: Quantity, is_add: bool
     ) -> Quantity | None:
-        """Handles Logarithmic arithmetic (dB + dB)."""
-        conv_self = self._get_converter_if_simple()
-        conv_other = other._get_converter_if_simple()
-
-        is_log_self = isinstance(conv_self, LogarithmicConverter)
-        is_log_other = isinstance(conv_other, LogarithmicConverter)
-
-        if is_log_self and is_log_other:
-            base_self = conv_self.to_base(cast("float", self.magnitude))
-            base_other = conv_other.to_base(cast("float", other.magnitude))
-
-            if is_add:
-                res_base = self._backend.add(base_self, base_other)
-            else:
-                res_base = self._backend.sub(base_self, base_other)
-
-            res_mag = conv_self.from_base(cast("float", res_base))
-
-            if hasattr(res_mag, "ndim") and res_mag.ndim == 0:
-                with contextlib.suppress(ValueError, TypeError):
-                    res_mag = float(res_mag)
-
-            return type(self).from_input(
-                res_mag, self.unit, self.system, uncertainty=0.0
+        """Levels add as the quantities they stand for: 10 dB + 10 dB is 13 dB."""
+        self_is_level, other_is_level = self._is_level(), other._is_level()
+        if not (self_is_level or other_is_level):
+            return None
+        if not (self_is_level and other_is_level):
+            raise ValueError(
+                f"Cannot {'add' if is_add else 'subtract'} a level and a "
+                f"plain quantity ('{self.unit}' and '{other.unit}'): "
+                "convert one of them first."
             )
-        return None
+        if self.dimension != other.dimension:
+            raise IncompatibleUnitsError(self.unit, other.unit)
+        plain = self.unit.base_unit(self.system)
+        a, b = self.to(plain), other.to(plain)
+        return (a + b if is_add else a - b).to(self.unit)
 
     def _resolve_compatible_magnitude(
         self, other: Quantity | Numeric, is_other_q: bool

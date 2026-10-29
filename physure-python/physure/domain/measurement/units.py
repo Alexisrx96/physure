@@ -220,6 +220,13 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         except _CORE_ERRORS as error:
             raise _python_error(error, self, self) from error
 
+    def base_unit(self, system: UnitSystem) -> CompoundUnit:
+        """This unit in base symbols, with no scale and no zero point (degC is K)."""
+        try:
+            return _CompoundUnit(system.core_registry.expand(self).dimensions)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
+
     def is_linear(self, system: UnitSystem) -> bool:
         """Checks if the unit is a plain scale: no zero point, no logarithm."""
         try:
