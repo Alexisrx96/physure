@@ -26,6 +26,9 @@ pub struct UnitRegistry {
     pub prefixes: HashMap<String, f64>,
     /// The exact value of each prefix factor, for the prefixes whose factor is known exactly.
     pub prefix_exact: HashMap<String, ExactScale>,
+    /// The spelled-out name of each prefix (`kilo`) and the symbol it stands for (`k`), so
+    /// that `kilometer` reads as `km`.
+    pub prefix_names: HashMap<String, String>,
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
@@ -39,6 +42,7 @@ impl UnitRegistry {
             aliases: HashMap::new(),
             prefixes: HashMap::new(),
             prefix_exact: HashMap::new(),
+            prefix_names: HashMap::new(),
             unit_meta: HashMap::new(),
             categories: HashMap::new(),
             constants_meta: HashMap::new(),
@@ -66,6 +70,11 @@ impl UnitRegistry {
             None => self.prefix_exact.remove(&symbol),
         };
         self.prefixes.insert(symbol, factor);
+    }
+
+    /// Registers the spelled-out name of a prefix that is already registered by its symbol.
+    pub fn add_prefix_name(&mut self, name: String, symbol: String) {
+        self.prefix_names.insert(name, symbol);
     }
 
     pub fn add_base_unit(&mut self, name: String) {
@@ -220,26 +229,42 @@ impl UnitRegistry {
     /// C) reuses this exact rule instead of re-deriving it.
     ///
     /// Returns `(prefix symbol, prefix factor, the unprefixed remainder's own RationalUnit)`.
+    ///
+    /// A prefix is written by its symbol (`km`) or by its name (`kilometer`; the symbol that
+    /// comes back is still `k`). When several prefixes fit, the longest one that leaves a unit
+    /// wins, so the answer does not depend on the order a `HashMap` iterates in: `dam` is
+    /// deca + `m`, never deci + `am`.
     /// Carrying the resolved unit forward means `get_unit`'s caller doesn't have to redo the
     /// same `resolve_symbol` + four-way lookup a second time just to fetch what this method
     /// already found while checking whether `name` was a known prefix+unit combination.
     pub fn split_prefix(&self, name: &str) -> Option<(String, f64, RationalUnit)> {
-        for (p_sym, p_factor) in &self.prefixes {
-            if name.starts_with(p_sym.as_str()) && name.len() > p_sym.len() {
-                let rest = &name[p_sym.len()..];
-                let rest_resolved = self.resolve_symbol(rest);
-                let base_opt = self
-                    .base_units
-                    .get(&rest_resolved)
-                    .or_else(|| self.derived_units.get(&rest_resolved))
-                    .or_else(|| self.base_units.get(rest))
-                    .or_else(|| self.derived_units.get(rest));
-                if let Some(unit) = base_opt {
-                    return Some((p_sym.clone(), *p_factor, unit.clone()));
-                }
+        let symbols = self.prefixes.iter().map(|(symbol, factor)| (symbol.as_str(), symbol.as_str(), *factor));
+        let names = self.prefix_names.iter().filter_map(|(long, symbol)| {
+            self.prefixes.get(symbol).map(|factor| (long.as_str(), symbol.as_str(), *factor))
+        });
+        let mut best: Option<(usize, &str, f64, &RationalUnit)> = None;
+        for (spelled, symbol, factor) in symbols.chain(names) {
+            if name.len() <= spelled.len() || !name.starts_with(spelled) {
+                continue;
+            }
+            if best.is_some_and(|(length, ..)| length >= spelled.len()) {
+                continue;
+            }
+            if let Some(unit) = self.unit_by_symbol(&name[spelled.len()..]) {
+                best = Some((spelled.len(), symbol, factor, unit));
             }
         }
-        None
+        best.map(|(_, symbol, factor, unit)| (symbol.to_string(), factor, unit.clone()))
+    }
+
+    /// The base or derived unit that `symbol` names, directly or through an alias.
+    fn unit_by_symbol(&self, symbol: &str) -> Option<&RationalUnit> {
+        let resolved = self.resolve_symbol(symbol);
+        self.base_units
+            .get(&resolved)
+            .or_else(|| self.derived_units.get(&resolved))
+            .or_else(|| self.base_units.get(symbol))
+            .or_else(|| self.derived_units.get(symbol))
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -372,6 +397,33 @@ mod tests {
         let (symbol, factor, _unit) = reg.split_prefix("km").expect("km should split as k + m");
         assert_eq!(symbol, "k");
         assert_eq!(factor, 1000.0);
+    }
+
+    #[test]
+    fn a_prefix_can_be_spelled_out() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        let (symbol, factor, unit) = reg.split_prefix("kilometer").expect("kilometer is kilo + meter");
+        assert_eq!((symbol.as_str(), factor), ("k", 1000.0));
+        assert_eq!(unit.scale, 1.0);
+        assert_eq!(reg.get_unit("kilometer").unwrap().scale, 1000.0);
+        assert_eq!(reg.get_unit("attoampere").unwrap().scale, 1e-18);
+        assert_eq!(reg.get_unit("kilometer").unwrap().ratio_to(&reg.get_unit("km").unwrap()), 1.0);
+    }
+
+    #[test]
+    fn the_longest_prefix_that_leaves_a_unit_wins() {
+        use super::UnitRegistry;
+        let mut reg = UnitRegistry::new();
+        reg.add_base_unit("m".to_string());
+        reg.add_base_unit("am".to_string());
+        reg.add_prefix("d".to_string(), 0.1);
+        reg.add_prefix("da".to_string(), 10.0);
+        // deci + "am" and deca + "m" both leave a unit; a HashMap would pick either
+        for _ in 0..20 {
+            let (symbol, factor, unit) = reg.split_prefix("dam").unwrap();
+            assert_eq!((symbol.as_str(), factor), ("da", 10.0));
+            assert_eq!(unit.dimensions, reg.get_unit("m").unwrap().dimensions);
+        }
     }
 
     #[test]

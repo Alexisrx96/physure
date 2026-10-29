@@ -80,12 +80,13 @@ pub fn parse_physure_conf(
                 }
             }
             "Prefixes" => {
-                if let Some((_name, val_part)) = line.split_once('=') {
+                if let Some((name, val_part)) = line.split_once('=') {
                     let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
                     if parts.len() >= 2 {
                         let symbol = parts[0];
                         if let Ok(factor) = parts[1].parse::<f64>() {
                             registry.add_prefix_exact(symbol.to_string(), factor, crate::units::exact::ExactScale::parse(parts[1]));
+                            registry.add_prefix_name(name.trim().to_string(), symbol.to_string());
                         }
                     }
                 }
