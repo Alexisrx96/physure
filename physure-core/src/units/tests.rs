@@ -778,3 +778,24 @@ fn a_unit_written_as_symbols_expands_and_converts_by_the_registry() {
     assert!(reg.expand(&atomic("furlongs_per_fortnight")).is_err());
     assert!(reg.expand(&atomic("dB/km")).is_err());
 }
+
+/// A system is the catalog plus what it adds: a registry built with extra conf text knows the
+/// extra units, a later definition wins, and the default registry is not touched.
+#[test]
+fn a_registry_can_be_built_from_the_catalog_plus_extra_text() {
+    use crate::units::parser::Parser;
+    let extra = "[Units]\nfurlong = 201.168, L, [fur, furlong]\n";
+    let (reg, _) = conf::build_registry_with(extra);
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert_eq!(reg.factor_between(&atomic("fur"), &atomic("m")).unwrap(), 201.168);
+    assert_eq!(reg.facts("furlong").unwrap().dimension, vec![("L".to_string(), (1, 1))]);
+    // the metre is still the metre
+    assert_eq!(reg.factor_between(&atomic("km"), &atomic("m")).unwrap(), 1000.0);
+
+    let (default, _) = conf::build_registry_from_conf();
+    assert!(default.facts("furlong").is_err());
+
+    // a later definition wins
+    let (redefined, _) = conf::build_registry_with("[Units]\nfoot = 0.3, L, [ft, foot]\n");
+    assert_eq!(redefined.factor_between(&atomic("ft"), &atomic("m")).unwrap(), 0.3);
+}

@@ -405,22 +405,35 @@ fn register_aliases(registry: &mut UnitRegistry, key: &str, symbol: &str, aliase
     }
 }
 
+/// The embedded catalog, parsed once per process.
+fn embedded_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
+    static EMBEDDED: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
+    EMBEDDED.get_or_init(|| {
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+        (reg, constants)
+    })
+}
+
+/// The embedded catalog plus `extra`, the text of a system file or of a user conf, parsed after it
+/// so that a later definition wins. The `physure.conf` of the working directory is not read: the
+/// caller decides what a system is made of. A `[Settings]` section in `extra` writes the
+/// process-wide settings, as it does in any conf.
+pub fn build_registry_with(extra: &str) -> (UnitRegistry, HashMap<String, String>) {
+    let (mut reg, mut constants) = embedded_catalog().clone();
+    parse_physure_conf(extra, &mut reg, &mut constants);
+    (reg, constants)
+}
+
 /// Builds a UnitRegistry and constants map from master `physure.conf` + CWD user override `physure.conf`.
 ///
 /// The embedded catalog is parsed once per process and every call gets a copy: parsing it is most
 /// of the cost of turning a unit string into a unit, and it applied the `[Settings]` of the
 /// catalog again on every call, undoing any setting that had been changed since.
 pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
-    static EMBEDDED: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
     // 1. Load embedded default master physure.conf
-    let (mut reg, mut constants) = EMBEDDED
-        .get_or_init(|| {
-            let mut reg = UnitRegistry::new();
-            let mut constants = HashMap::new();
-            parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
-            (reg, constants)
-        })
-        .clone();
+    let (mut reg, mut constants) = embedded_catalog().clone();
 
     // 2. Load user override physure.conf in CWD if present
     let local_conf = Path::new("physure.conf");
