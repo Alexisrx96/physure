@@ -22,7 +22,7 @@ pub fn parse_physure_conf(
     constants: &mut HashMap<String, String>,
 ) {
     let mut current_section = "";
-    let mut dim_to_base: HashMap<String, String> = HashMap::new();
+    let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
 
     // Pass 1: Extract Prefixes, Constants, Dimensions, and Base Units
@@ -185,6 +185,8 @@ pub fn parse_physure_conf(
         registry.base_dimension.entry(base.clone()).or_insert_with(|| dimension.clone());
     }
 
+    registry.dimension_base = dim_to_base.clone();
+
     // Pass 2: Parse and register all units using the dynamic dimension map
     for line in unit_lines {
         parse_unit_line(line, registry, &dim_to_base);
@@ -233,7 +235,7 @@ fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
 }
 
 fn is_single_ident(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
 fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) {

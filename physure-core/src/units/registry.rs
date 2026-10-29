@@ -53,6 +53,10 @@ pub struct UnitRegistry {
     pub symbol_aliases: HashMap<String, Vec<String>>,
     /// The dimension symbol of each base unit (`m` is `L`, `kg` is `M`).
     pub base_dimension: HashMap<String, String>,
+    /// The base unit of each dimension symbol (`L` is `m`, `$` is `USD`): the first one declared,
+    /// kept so that a text parsed later can declare units of a dimension without declaring its base
+    /// unit again, and cannot make a second base unit of it by accident.
+    pub dimension_base: HashMap<String, String>,
     /// The units the catalog defines by a recipe at scale 1 (`N = kg*m/s^2`): the ones that
     /// `simplify` replaces by their base symbols. A unit at another scale stays what it is.
     pub recipes: HashSet<String>,
@@ -74,6 +78,7 @@ impl UnitRegistry {
             prefix_names: HashMap::new(),
             symbol_aliases: HashMap::new(),
             base_dimension: HashMap::new(),
+            dimension_base: HashMap::new(),
             recipes: HashSet::new(),
             recipe_aliases: HashMap::new(),
             unit_meta: HashMap::new(),

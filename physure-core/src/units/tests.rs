@@ -799,3 +799,20 @@ fn a_registry_can_be_built_from_the_catalog_plus_extra_text() {
     let (redefined, _) = conf::build_registry_with("[Units]\nfoot = 0.3, L, [ft, foot]\n");
     assert_eq!(redefined.factor_between(&atomic("ft"), &atomic("m")).unwrap(), 0.3);
 }
+
+/// A text parsed after another starts from the base units of the first: money is a dimension
+/// (`$`) whose base unit is the first unit at scale 1, a second unit of it is scaled from that
+/// one, and a second unit at scale 1 on a dimension that has a base unit is a name for it.
+#[test]
+fn a_later_text_starts_from_the_base_units_of_the_first() {
+    use crate::units::parser::Parser;
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    conf::parse_physure_conf("[Units]\nUSD = 1.0, $, noprefix, [USD, dollar]\n", &mut reg, &mut constants);
+    conf::parse_physure_conf("[Units]\nEUR = 1.08, $, noprefix, [EUR, euro]\nsmoot = 1.0, L, [smoot]\n", &mut reg, &mut constants);
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert_eq!(reg.factor_between(&atomic("EUR"), &atomic("USD")).unwrap(), 1.08);
+    assert_eq!(reg.facts("EUR").unwrap().dimension, vec![("$".to_string(), (1, 1))]);
+    assert_eq!(reg.factor_between(&atomic("smoot"), &atomic("m")).unwrap(), 1.0);
+    assert_eq!(reg.dimension_base.get("L").map(String::as_str), Some("m"));
+    assert_eq!(reg.dimension_base.get("$").map(String::as_str), Some("USD"));
+}
