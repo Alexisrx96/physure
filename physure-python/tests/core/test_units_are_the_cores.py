@@ -71,8 +71,8 @@ def test_an_alias_needs_the_units_of_its_exponents():
     assert "velocity" not in system
 
 
-def test_arithmetic_with_a_temperature_only_the_core_knows_is_refused_not_wrong():
-    with pytest.raises(NotImplementedError, match="centicelsius"):
-        Q_(1.0, "centicelsius") + Q_(1.0, "K")
-    converted = Q_(1.0, "centicelsius").to("K") + Q_(1.0, "K")
-    assert converted.magnitude == pytest.approx(274.16)
+def test_arithmetic_with_a_temperature_only_the_core_knows():
+    # 1 K is a hundred centi-degrees: the interval moves the point
+    total = Q_(1.0, "centicelsius") + Q_(1.0, "K")
+    assert total.magnitude == pytest.approx(101.0)
+    assert total.to("K").magnitude == pytest.approx(274.16)
