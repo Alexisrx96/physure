@@ -12,9 +12,6 @@ from physure.domain.measurement.units import CompoundUnit
 @pytest.fixture
 def unit_system(system):
     """Set up test fixtures for unit tests."""
-    # Aliases are registered on the instance
-    system.register_alias({"m": 1, "s": -1}, "velocity", "speed")
-
     # Register units into our isolated test system
     length = Dimension({"L": 1})
     time = Dimension({"T": 1})
@@ -24,6 +21,8 @@ def unit_system(system):
     system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
     system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
     system.register_unit("km", length, LinearConverter(1000.0), "kilometer")
+    # An alias is a unit of the exponents: its units are registered first
+    system.register_alias({"m": 1, "s": -1}, "velocity", "speed")
     return system
 
 

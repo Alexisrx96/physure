@@ -116,7 +116,33 @@ class UnitSystem(IUnitRepository):
         return self.Q_(defn)
 
     def register_alias(self, exponents: ExponentsDict, *aliases: str) -> None:
-        """Registers aliases for a given set of exponents."""
+        """Registers aliases for a given set of exponents.
+
+        The aliases are written as a unit of scale one whose recipe is the
+        exponents and given to the core registry first (see extend_core): the
+        core shows the first of them where those exponents are written, and
+        the aliases resolve as units.
+
+        Raises:
+            UnknownUnitError: A unit of the exponents is not known.
+            ValueError: The core cannot take an alias as a name.
+        """
+        if not aliases:
+            return
+        recipe = CompoundUnit(exponents)
+        self.extend_core(
+            unit_definition_text(
+                aliases[0],
+                recipe.dimension(self),
+                LinearConverter(1.0),
+                aliases[1:],
+                recipe=recipe,
+            )
+        )
+        self._register_alias(exponents, *aliases)
+
+    def _register_alias(self, exponents: ExponentsDict, *aliases: str) -> None:
+        """Registers aliases in Python only (see extend_core)."""
         # Normalizar exponentes a enteros para el registro de alias
         normalized_exponents = {}
         for k, v in exponents.items():
@@ -285,9 +311,9 @@ class UnitSystem(IUnitRepository):
             # and all aliases refer to the same derived unit.
             for alias_name in (symbol, *aliases):
                 self._UNIT_RECIPES[alias_name] = recipe
-            self.register_alias(recipe.exponents, symbol, *aliases)
+            self._register_alias(recipe.exponents, symbol, *aliases)
         else:
-            self.register_alias({symbol: 1}, symbol, *aliases)
+            self._register_alias({symbol: 1}, symbol, *aliases)
 
     def _try_lazy_prefix(self, unit_expression: str) -> CompoundUnit | None:
         """On-demand prefix decomposition.
@@ -447,10 +473,10 @@ class UnitSystem(IUnitRepository):
         self.UNIT_DIMENSIONS[symbol] = dimension
         self.UNIT_REGISTRY[dimension][symbol] = prefixed_def
         # Register alias for parser
-        self.register_alias({symbol: 1}, symbol)
+        self._register_alias({symbol: 1}, symbol)
         # If this was a name alias (kilometer), ensure it maps to km
         if symbol != base_prefixed_symbol:
-            self.register_alias({symbol: 1}, symbol, base_prefixed_symbol)
+            self._register_alias({symbol: 1}, symbol, base_prefixed_symbol)
 
     def get_unit(self, unit_expression: str) -> CompoundUnit:
         """Retrieves a CompoundUnit from the system based on its notation."""

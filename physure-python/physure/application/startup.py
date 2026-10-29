@@ -267,7 +267,7 @@ class UnitSystemBuilder:
             self._system._UNIT_RECIPES[alias_name] = simplified_recipe
         # Register the alias for the simplified recipe so that
         # to_string(use_alias=True) works for base-unit quantities.
-        self._system.register_alias(
+        self._system._register_alias(
             simplified_recipe.exponents, *reversed(all_aliases)
         )
 

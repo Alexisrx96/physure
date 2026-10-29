@@ -3,7 +3,13 @@
 import pytest
 
 from physure import Q_
-from physure.domain.exceptions import IncompatibleUnitsError
+from physure.application.context import get_current_system
+from physure.application.startup import create_default_system
+from physure.domain.exceptions import (
+    IncompatibleUnitsError,
+    UnknownUnitError,
+)
+from physure.domain.measurement.system import UnitSystem
 
 
 def test_two_temperature_scales_convert_through_their_zero_points():
@@ -26,3 +32,26 @@ def test_an_angle_and_a_solid_angle_are_different_things():
         Q_(1.0, "arcmin").to("sr")
     with pytest.raises(IncompatibleUnitsError):
         Q_(1.0, "rad").to("sr")
+
+
+def test_a_display_alias_is_a_unit_of_scale_one_in_the_core():
+    system = create_default_system()
+    system.register_alias({"m": 1, "s": -2}, "acceleration", "accel")
+    speed = system.Q_(1234.567, "m/s**2")
+    # the shortest of the names, as it has always been
+    assert speed.unit.to_string(system, use_alias=True) == "accel"
+    # the alias also resolves, as a unit
+    assert system.Q_(2.0, "accel").to("m/s**2").magnitude == 2.0
+    assert system.core_registry.facts("acceleration")["dimension"] == {
+        "L": 1,
+        "T": -2,
+    }
+    # and it belongs to this system alone
+    assert not get_current_system().core_registry.contains("acceleration")
+
+
+def test_an_alias_needs_the_units_of_its_exponents():
+    system = UnitSystem("bare")
+    with pytest.raises(UnknownUnitError):
+        system.register_alias({"m": 1, "s": -1}, "velocity")
+    assert "velocity" not in system
