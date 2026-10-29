@@ -965,3 +965,18 @@ fn a_dimension_is_measured_in_the_base_units() {
     let error = reg.unit_of_dimension(&[("X".to_string(), (1, 1))]).unwrap_err();
     assert!(error.to_string().contains("'X'"), "{error}");
 }
+
+/// `**` is the power, as in Python, and an exponent can be a decimal: both are read exactly.
+#[test]
+fn the_power_can_be_written_with_two_stars_and_a_decimal() {
+    use crate::units::parser::Parser;
+    let parse = |text: &str| Parser::parse_expression_atomic(text).unwrap().dimensions_map();
+    assert_eq!(parse("m**2"), parse("m^2"));
+    assert_eq!(parse("kg*m/s**2"), parse("kg*m/s^2"));
+    assert_eq!(parse("s**0.5").get("s"), Some(&(1, 2)));
+    assert_eq!(parse("s**-0.5").get("s"), Some(&(-1, 2)));
+    assert_eq!(parse("m^2.25").get("m"), Some(&(9, 4)));
+    assert_eq!(parse("V/Hz**0.5").get("Hz"), Some(&(-1, 2)));
+    // a decimal point that no digit follows is not part of a number
+    assert!(Parser::parse_expression_atomic("m**2.").is_err());
+}
