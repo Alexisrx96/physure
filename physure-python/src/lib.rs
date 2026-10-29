@@ -283,6 +283,27 @@ fn parse_exponent(v: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
     None
 }
 
+fn value_error(e: PhysureError) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(e.to_string())
+}
+
+/// A dimension as a Python dict: the dimension symbol and its exponent, an int when it is one.
+fn dimension_dict<'py>(py: Python<'py>, dimension: &[(String, (i64, i64))]) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (symbol, (n, d)) in dimension {
+        if *d == 1 {
+            out.set_item(symbol, *n)?;
+        } else {
+            out.set_item(symbol, *n as f64 / *d as f64)?;
+        }
+    }
+    Ok(out)
+}
+
+fn kind_name(kind: UnitKind) -> &'static str {
+    if kind == UnitKind::Point { "absolute" } else { "delta" }
+}
+
 // ── PyUnitRegistry ──────────────────────────────────────────────────────────
 #[pyclass(name = "UnitRegistry", module = "physure._core")]
 pub struct PyUnitRegistry(UnitRegistry);
@@ -333,6 +354,59 @@ impl PyUnitRegistry {
     fn from_conf() -> Self {
         let (reg, _constants) = ::physure_core::units::conf::build_registry_from_conf();
         PyUnitRegistry(reg)
+    }
+
+    /// The catalog plus extra conf text (the text of a system file, or units of the user's).
+    #[staticmethod]
+    fn from_conf_text(extra: &str) -> Self {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra);
+        PyUnitRegistry(reg)
+    }
+
+    /// A unit written as symbols (`km/h`), not resolved: its dimensions are the symbols written.
+    fn parse_atomic(&self, py: Python<'_>, expression: &str) -> PyResult<PyObject> {
+        let unit = ::physure_core::units::parser::Parser::parse_expression_atomic(expression).map_err(value_error)?;
+        get_cached_unit(py, unit)
+    }
+
+    /// The unit with every recipe unit (`N`, `J`, `Hz`...) replaced by its base symbols.
+    fn simplify(&self, py: Python<'_>, unit: &PyRationalUnit) -> PyResult<PyObject> {
+        get_cached_unit(py, self.0.simplify(&unit.0))
+    }
+
+    /// What a unit written as symbols stands for: each symbol replaced by what the registry says it is.
+    fn expand(&self, py: Python<'_>, unit: &PyRationalUnit) -> PyResult<PyObject> {
+        get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
+    }
+
+    /// The physical dimension of a unit written as symbols, by dimension symbol.
+    fn dimension_of<'py>(&self, py: Python<'py>, unit: &PyRationalUnit) -> PyResult<Bound<'py, PyDict>> {
+        dimension_dict(py, &self.0.dimension_of(&unit.0).map_err(value_error)?)
+    }
+
+    /// `"absolute"` for a temperature scale (degC, degF), `"delta"` for anything else.
+    fn kind_of(&self, unit: &PyRationalUnit) -> &'static str {
+        kind_name(self.0.kind_of(&unit.0))
+    }
+
+    /// False when the unit is an offset or a logarithmic unit.
+    fn is_linear_of(&self, unit: &PyRationalUnit) -> bool {
+        self.0.is_linear_of(&unit.0)
+    }
+
+    /// The name the unit is shown by (`kg·m²/s³` is `W`).
+    fn alias_of(&self, unit: &PyRationalUnit) -> String {
+        self.0.alias_of(&unit.0)
+    }
+
+    /// The factor that turns a magnitude in `source` into one in `target`, rounded once.
+    fn factor_between(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<f64> {
+        self.0.factor_between(&source.0, &target.0).map_err(value_error)
+    }
+
+    /// Dimension, kind, linearity, alias and simplified form of a unit expression.
+    fn facts<'py>(&self, py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
+        facts_dict(py, &self.0, expression)
     }
 
     fn get_categories(&self) -> HashMap<String, Vec<String>> {
@@ -1683,18 +1757,14 @@ fn default_conf() -> &'static str {
 #[pyfunction]
 fn unit_facts<'py>(py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
     let (registry, _) = ::physure_core::units::conf::build_registry_from_conf();
-    let facts = registry.facts(expression).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    let dimension = PyDict::new(py);
-    for (symbol, (n, d)) in &facts.dimension {
-        if *d == 1 {
-            dimension.set_item(symbol, *n)?;
-        } else {
-            dimension.set_item(symbol, *n as f64 / *d as f64)?;
-        }
-    }
+    facts_dict(py, &registry, expression)
+}
+
+fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -> PyResult<Bound<'py, PyDict>> {
+    let facts = registry.facts(expression).map_err(value_error)?;
     let out = PyDict::new(py);
-    out.set_item("dimension", dimension)?;
-    out.set_item("kind", if facts.kind == UnitKind::Point { "absolute" } else { "delta" })?;
+    out.set_item("dimension", dimension_dict(py, &facts.dimension)?)?;
+    out.set_item("kind", kind_name(facts.kind))?;
     out.set_item("is_linear", facts.is_linear)?;
     out.set_item("alias", facts.alias)?;
     out.set_item("simplified", facts.simplified)?;
