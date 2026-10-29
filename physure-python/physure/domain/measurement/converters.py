@@ -86,6 +86,15 @@ class OffsetConverter(UnitConverter):
 
     scale: float
     offset: float
+    # Exact rational values of the declared scale and zero point (from the .conf
+    # strings), or None when they are not exactly representable. Only consumed
+    # by affine_coefficients.
+    exact_scale: Fraction | None = field(
+        default=None, compare=False, repr=False
+    )
+    exact_offset: Fraction | None = field(
+        default=None, compare=False, repr=False
+    )
 
     @property
     def is_linear(self) -> bool:
@@ -157,3 +166,41 @@ class LogarithmicConverter(UnitConverter):
     def from_base_derivative(self, value: float) -> float:
         """Exact derivative: factor / (value * ln(10))."""
         return self.factor / (value * _LN10)
+
+
+def _affine_parts(
+    converter: LinearConverter | OffsetConverter,
+) -> tuple[float, Fraction | None, float, Fraction | None]:
+    """(scale, exact scale, zero point, exact zero point) of a converter."""
+    if isinstance(converter, OffsetConverter):
+        return (
+            converter.scale,
+            converter.exact_scale,
+            converter.offset,
+            converter.exact_offset,
+        )
+    return converter.scale, converter.exact, 0.0, Fraction(0)
+
+
+def affine_coefficients(
+    source: LinearConverter | OffsetConverter,
+    target: LinearConverter | OffsetConverter,
+) -> tuple[float, float]:
+    """(scale, shift) such that ``new = old * scale + shift`` between two units.
+
+    Each is the exact value rounded once when the scales and the zero points
+    are known exactly, so 212 degF is exactly 100 degC; otherwise it is computed
+    from the doubles. The Rust core computes the same two numbers.
+    """
+    s_scale, s_exact, s_offset, s_zero = _affine_parts(source)
+    t_scale, t_exact, t_offset, t_zero = _affine_parts(target)
+    scale = (
+        float(s_exact / t_exact)
+        if s_exact is not None and t_exact is not None
+        else s_scale / t_scale
+    )
+    if None not in (s_zero, t_zero, t_exact):
+        shift = float((s_zero - t_zero) / t_exact)
+    else:
+        shift = (s_offset - t_offset) / t_scale
+    return scale, shift

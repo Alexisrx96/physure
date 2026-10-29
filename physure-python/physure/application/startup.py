@@ -36,6 +36,11 @@ if TYPE_CHECKING:
 _CONF_FILE = "physure.conf"
 
 
+def _number(text: str) -> float:
+    """A number of the .conf: a decimal (``0.0254``) or a fraction (``5/9``)."""
+    return float(Fraction(text))
+
+
 def _exact_scale(text: str) -> Fraction | None:
     """Exact rational value of a .conf factor string, or None."""
     try:
@@ -134,21 +139,30 @@ class UnitSystemBuilder:
         parts: list[str],
     ) -> tuple[Dimension, LinearConverter | OffsetConverter, str]:
         """Parses the components of a linear or offset unit definition."""
-        factor = float(parts[0])
+        factor = _number(parts[0])
         offset = 0.0
         dim_index = 1
 
         if len(parts) > 2:
             try:
-                offset = float(parts[1])
+                offset = _number(parts[1])
                 dim_index = 2
-            except ValueError:
+            except (ValueError, ZeroDivisionError):
                 pass
 
         dimension = Dimension.from_string(parts[dim_index])
 
         if offset != 0:
-            return dimension, OffsetConverter(factor, offset), "absolute"
+            return (
+                dimension,
+                OffsetConverter(
+                    factor,
+                    offset,
+                    exact_scale=_exact_scale(parts[0]),
+                    exact_offset=_exact_scale(parts[1]),
+                ),
+                "absolute",
+            )
         return (
             dimension,
             LinearConverter(factor, exact=_exact_scale(parts[0])),
@@ -199,9 +213,9 @@ class UnitSystemBuilder:
         has_offset = False
         if len(parts) > 2:
             try:
-                float(parts[1])
+                _number(parts[1])
                 has_offset = True
-            except ValueError:
+            except (ValueError, ZeroDivisionError):
                 pass
 
         if has_offset:

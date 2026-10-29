@@ -1095,3 +1095,20 @@ fn conversions_are_rounded_once_from_exact_scales() {
         assert_eq!(eval_quantity(src).value.mean(), expected, "{src}");
     }
 }
+
+/// The fixed points of the temperature scales convert exactly: `100 degC => degF` was
+/// `211.99999999999997`, because the catalog wrote the Fahrenheit zero point as a rounded decimal.
+#[test]
+fn the_fixed_points_of_the_temperature_scales_are_exact_in_phs() {
+    let cases = [
+        ("100 degC => degF", 212.0),
+        ("212 degF => degC", 100.0),
+        ("0 degC => degF", 32.0),
+        ("32 degF => degC", 0.0),
+        ("491.67 degR => degF", 32.0),
+        ("25 degC => K", 298.15),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(eval_quantity(src).value.mean(), expected, "{src}");
+    }
+}

@@ -1,4 +1,5 @@
 import configparser
+from fractions import Fraction
 from pathlib import Path
 
 
@@ -46,7 +47,7 @@ def generate_units_markdown():
             aliases = parts[4:]
         else:
             try:
-                float(parts[1])
+                Fraction(parts[1])
                 # e.g. celsius = 1.0, 273.15, O, [°C]
                 dim = parts[2]
                 scale = f"Scale {parts[0]} (Offset {parts[1]})"

@@ -24,6 +24,10 @@ pub struct RationalUnit {
     /// units — in practice the temperature scales ("degC" => 273.15, "degF" => 255.372…).
     /// A zero offset means the unit is purely multiplicative, which is every other unit.
     pub offset: f64,
+    /// The zero point as an exact rational, when it is known and not zero. Invariant: if this is
+    /// `Some(e)`, `offset` is `e` rounded once. `None` with a non-zero `offset` is an offset that
+    /// arrived as a bare `f64`; a zero `offset` is exactly zero whatever this holds.
+    pub exact_offset: Option<ExactScale>,
     pub id: u64,
     pub display_name: Option<String>,
 }
@@ -72,7 +76,7 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, id, display_name: None }
+        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, id, display_name: None }
     }
 
     /// Returns a copy of this unit with a different scale factor (same dimensions/id). The
@@ -111,7 +115,38 @@ impl RationalUnit {
     /// unit (`base = value * scale + offset`), e.g. `K.with_offset(273.15)` is degC.
     pub fn with_offset(mut self, offset: f64) -> Self {
         self.offset = offset;
+        self.exact_offset = None;
         self
+    }
+
+    /// Returns a copy of this unit with an exact additive zero point; `offset` is its single rounding.
+    pub fn with_exact_offset(mut self, exact: ExactScale) -> Self {
+        self.offset = exact.to_f64();
+        self.exact_offset = Some(exact);
+        self
+    }
+
+    /// The coefficients of the conversion to `target`, which must have the same dimensions:
+    /// `new = old * scale + shift`. Each is the exact value rounded once when the scales and the
+    /// zero points are known exactly, so 212 degF is exactly 100 degC; otherwise it is computed
+    /// from the doubles. A conversion without zero points has a zero shift.
+    pub fn affine_to(&self, target: &Self) -> (f64, f64) {
+        let scale = self.ratio_to(target);
+        let shift = match (self.exact_zero_point(), target.exact_zero_point(), &target.exact) {
+            (Some(from), Some(to), Some(divisor)) => ExactScale::shifted_quotient(from, to, divisor),
+            _ => (self.offset - target.offset) / target.scale,
+        };
+        (scale, shift)
+    }
+
+    /// The zero point as an exact value: `Some(None)` when it is zero, `Some(Some(e))` when it is
+    /// known, `None` when it is not.
+    fn exact_zero_point(&self) -> Option<Option<&ExactScale>> {
+        if self.offset == 0.0 {
+            Some(None)
+        } else {
+            self.exact_offset.as_ref().map(Some)
+        }
     }
 
     /// True for absolute affine units — the temperature scales. Their arithmetic is not
@@ -126,6 +161,7 @@ impl RationalUnit {
     pub fn to_delta(&self) -> Self {
         let mut u = self.clone();
         u.offset = 0.0;
+        u.exact_offset = None;
         u
     }
 
@@ -139,6 +175,7 @@ impl RationalUnit {
             scale: 1.0,
             exact: Some(ExactScale::one()),
             offset: 0.0,
+            exact_offset: None,
             id: 0,
             display_name: None,
         }
@@ -212,7 +249,7 @@ impl RationalUnit {
         let scale = exact.as_ref().map_or(self.scale * other.scale, ExactScale::to_f64);
         // No offset on a product: `degC * m` has no zero point to speak of. Callers that hold
         // an affine operand must `to_delta` it (and shift its magnitude) before multiplying.
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, id, display_name }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, id, display_name }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -262,7 +299,7 @@ impl RationalUnit {
             _ => None,
         };
         let scale = exact.as_ref().map_or(self.scale / other.scale, ExactScale::to_f64);
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, id, display_name }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, id, display_name }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -284,7 +321,7 @@ impl RationalUnit {
             _ => None,
         };
         let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, id, display_name: None }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, id, display_name: None }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

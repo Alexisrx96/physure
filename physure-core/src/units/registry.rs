@@ -111,13 +111,24 @@ impl UnitRegistry {
     /// `add_affine_unit("degC", "K", 1.0, 273.15)`: one degC is `scale` base units wide and
     /// its zero sits `offset` base units above the base unit's zero.
     pub fn add_affine_unit(&mut self, name: String, base: &str, scale: f64, offset: f64) {
-        self.add_affine_unit_exact(name, base, scale, ExactScale::from_f64(scale), offset);
+        self.add_affine_unit_exact(name, base, scale, ExactScale::from_f64(scale), offset, ExactScale::from_f64(offset));
     }
 
     /// Like `add_affine_unit`, with the scale also given as the exact value the catalog states.
-    pub fn add_affine_unit_exact(&mut self, name: String, base: &str, scale: f64, exact: Option<ExactScale>, offset: f64) {
+    pub fn add_affine_unit_exact(
+        &mut self,
+        name: String,
+        base: &str,
+        scale: f64,
+        exact: Option<ExactScale>,
+        offset: f64,
+        exact_offset: Option<ExactScale>,
+    ) {
         let base_unit = self.get_unit(base).expect("base unit must be registered first");
         let mut u = Self::scaled(base_unit, scale, exact).with_offset(offset);
+        if let Some(e) = exact_offset {
+            u = u.with_exact_offset(e);
+        }
         u.display_name = Some(name.clone());
         self.derived_units.insert(name, u);
     }

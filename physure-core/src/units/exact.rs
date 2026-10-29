@@ -158,6 +158,14 @@ impl ExactScale {
         Self::from_ratio(num_traits::pow(base, exponent.unsigned_abs() as usize))
     }
 
+    /// `(plus - minus) / divisor` rounded once; a missing operand is zero. The shift of an
+    /// affine conversion, whose operands (the zero points) may be zero or differ in sign.
+    pub fn shifted_quotient(plus: Option<&Self>, minus: Option<&Self>, divisor: &Self) -> f64 {
+        let plus = plus.map_or_else(BigRational::zero, Self::to_big);
+        let minus = minus.map_or_else(BigRational::zero, Self::to_big);
+        ((plus - minus) / divisor.to_big()).to_f64().unwrap_or(f64::NAN)
+    }
+
     /// The nearest `f64`, rounded once (ties to even).
     pub fn to_f64(&self) -> f64 {
         match &self.0 {
@@ -390,6 +398,19 @@ mod tests {
         // beyond u128 it falls back, and still parses
         assert!(parse_small_decimal("1e39").is_none());
         assert!(ExactScale::parse("1e39").is_some());
+    }
+
+    #[test]
+    fn a_shift_is_rounded_once_from_the_exact_zero_points() {
+        let kelvin_of_degc = exact("273.15");
+        let kelvin_of_degf = exact("45967/180");
+        let degf = exact("5/9");
+        // degC -> degF: (273.15 - 45967/180) / (5/9) = 32 exactly
+        assert_eq!(ExactScale::shifted_quotient(Some(&kelvin_of_degc), Some(&kelvin_of_degf), &degf), 32.0);
+        // degF -> degC: (45967/180 - 273.15) / 1 = -160/9
+        assert_eq!(ExactScale::shifted_quotient(Some(&kelvin_of_degf), Some(&kelvin_of_degc), &ExactScale::one()), -160.0 / 9.0);
+        assert_eq!(ExactScale::shifted_quotient(None, None, &degf), 0.0);
+        assert_eq!(ExactScale::shifted_quotient(Some(&kelvin_of_degc), None, &ExactScale::one()), 273.15);
     }
 
     #[test]

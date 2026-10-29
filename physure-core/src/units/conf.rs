@@ -175,6 +175,16 @@ pub fn parse_physure_conf(
     }
 }
 
+/// A positive number of the catalog as the double and, when it is a decimal or a fraction, the
+/// exact rational. `None` when it is neither (a dimension symbol, `noprefix`, ...).
+fn parse_number(text: &str) -> Option<(f64, Option<crate::units::exact::ExactScale>)> {
+    let exact = crate::units::exact::ExactScale::parse(text);
+    match text.parse::<f64>() {
+        Ok(value) => Some((value, exact)),
+        Err(_) => exact.map(|e| (e.to_f64(), Some(e))),
+    }
+}
+
 fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
     let (left, aliases_str) = match line.split_once('[') {
         Some((l, r)) => {
@@ -257,22 +267,23 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         return;
     }
 
-    let factor: f64 = match parts[0].parse() {
-        Ok(f) => f,
-        Err(_) => return,
+    // A number of the catalog is a decimal (`0.0254`, `1e-5`) or a fraction (`5/9`); the exact
+    // rational is what conversions use, so that a ratio is rounded once.
+    let (factor, exact) = match parse_number(parts[0]) {
+        Some(parsed) => parsed,
+        None => return,
     };
-    // The same factor as the exact rational the catalog writes: conversions use it so that a
-    // ratio is rounded once. A literal that is not a plain decimal stays a double.
-    let exact = crate::units::exact::ExactScale::parse(parts[0]);
 
     // Absolute affine units carry a zero point between the factor and the dimension:
     // `celsius = 1.0, 273.15, O`. Only a 3+ field line can be one, so `unity = 1.0, 1` and
     // friends — where field 2 is the dimension "1" — keep reading field 2 as the dimension.
     let mut offset = 0.0;
+    let mut exact_offset = None;
     let mut dim_index = 1;
     if parts.len() > 2 {
-        if let Ok(parsed) = parts[1].parse::<f64>() {
+        if let Some((parsed, exact)) = parse_number(parts[1]) {
             offset = parsed;
+            exact_offset = exact;
             dim_index = 2;
         }
     }
@@ -293,7 +304,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         registry.add_derived_unit(symbol.clone(), u);
     } else if !base_symbol.is_empty() {
         if offset != 0.0 {
-            registry.add_affine_unit_exact(symbol.clone(), &base_symbol, factor, exact, offset);
+            registry.add_affine_unit_exact(symbol.clone(), &base_symbol, factor, exact, offset, exact_offset);
         } else if factor == 1.0 && symbol == base_symbol {
             registry.add_base_unit(symbol.clone());
         } else {
@@ -335,6 +346,9 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
             // Carry the zero point through here too: dropping it would silently turn an
             // affine definition into a purely multiplicative one.
             let mut u = rescaled.with_offset(offset);
+            if let Some(e) = exact_offset {
+                u = u.with_exact_offset(e);
+            }
             u.display_name = Some(symbol.clone());
             registry.add_derived_unit(symbol.clone(), u);
         }

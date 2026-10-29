@@ -260,16 +260,6 @@ impl Quantity {
         value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend::exact(factor)))
     }
 
-    /// Divides an uncertainty value by an exact constant, the inverse of `scale_value`. It is
-    /// not the same as multiplying by the reciprocal: `x / 0.5555555555555556` and
-    /// `x * (1.0 / 0.5555555555555556)` differ in the last bit, and the Python side divides.
-    fn unscale_value(value: &UncertaintyValue, divisor: f64) -> PhysureResult<UncertaintyValue> {
-        if divisor == 1.0 {
-            return Ok(value.clone());
-        }
-        value.propagate_div(&UncertaintyValue::Gaussian(GaussianBackend::exact(divisor)))
-    }
-
     /// Shifts an uncertainty value by an exact additive constant. A zero point carries no
     /// uncertainty of its own, so `exact` is used for the same reason as in `scale_value`:
     /// minting a source id here would leave a term that never cancels.
@@ -590,15 +580,12 @@ impl Quantity {
                 actual: target.__repr__(),
             });
         }
-        // Affine scales (degC, degF) cannot be converted with a single ratio: go through the
-        // canonical base magnitude so the zero points are subtracted, not scaled.
+        // Affine scales (degC, degF) cannot be converted with a single ratio: the zero points
+        // are subtracted, not scaled. The conversion is `old * scale + shift`, with the scale
+        // and the shift each rounded once from the exact values (`affine_to`).
         if self.unit.is_affine() || target.is_affine() {
-            let base = Self::shift_value(
-                &Self::scale_value(&self.value, self.unit.scale)?,
-                self.unit.offset,
-            )?;
-            let new_value =
-                Self::unscale_value(&Self::shift_value(&base, -target.offset)?, target.scale)?;
+            let (scale, shift) = self.unit.affine_to(target);
+            let new_value = Self::shift_value(&Self::scale_value(&self.value, scale)?, shift)?;
             return Ok(Quantity { value: new_value, unit: target.clone() });
         }
         let ratio = self.unit.ratio_to(target);

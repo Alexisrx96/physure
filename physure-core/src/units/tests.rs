@@ -429,3 +429,38 @@ fn every_call_gets_its_own_copy_of_the_catalog() {
     let (third, _) = conf::build_registry_from_conf();
     assert_eq!(second, third);
 }
+
+/// The temperature scales are written in the catalog as the fractions they are, so the fixed
+/// points of the scales convert exactly in both directions.
+#[test]
+fn the_fixed_points_of_the_temperature_scales_convert_exactly() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let convert = |value: f64, from: &str, to: &str| {
+        let (scale, shift) = reg.get_unit(from).unwrap().affine_to(&reg.get_unit(to).unwrap());
+        value * scale + shift
+    };
+    assert_eq!(convert(100.0, "degC", "degF"), 212.0);
+    assert_eq!(convert(212.0, "degF", "degC"), 100.0);
+    assert_eq!(convert(0.0, "degC", "degF"), 32.0);
+    assert_eq!(convert(32.0, "degF", "degC"), 0.0);
+    assert_eq!(convert(-40.0, "degC", "degF"), -40.0);
+    assert_eq!(convert(-40.0, "degF", "degC"), -40.0);
+    assert_eq!(convert(0.0, "degC", "K"), 273.15);
+    assert_eq!(convert(273.15, "K", "degC"), 0.0);
+    assert_eq!(convert(-459.67, "degF", "K"), 0.0);
+    assert_eq!(convert(491.67, "degR", "degF"), 32.0);
+}
+
+/// A scale that arrived as a double has no exact zero point, and the shift falls back to the
+/// doubles; a conversion between two units without zero points has no shift at all.
+#[test]
+fn the_shift_falls_back_to_the_doubles_and_is_zero_without_zero_points() {
+    let celsius = length().with_scale(1.0).with_offset(273.15);
+    let fahrenheit = length().with_scale(5.0 / 9.0).with_offset(255.37222222222223);
+    let (scale, shift) = celsius.affine_to(&fahrenheit);
+    assert_eq!(scale, 1.0 / (5.0 / 9.0));
+    assert_eq!(shift, (273.15 - 255.37222222222223) / (5.0 / 9.0));
+    let (reg, _) = conf::build_registry_from_conf();
+    let (_, no_shift) = reg.get_unit("km").unwrap().affine_to(&reg.get_unit("mile").unwrap());
+    assert_eq!(no_shift, 0.0);
+}

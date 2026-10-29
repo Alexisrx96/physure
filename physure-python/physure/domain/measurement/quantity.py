@@ -1138,12 +1138,40 @@ class Quantity(
         # Plain linear pairs go through conversion_factor_to instead:
         # it computes the ratio exactly (one rounding) when the .conf
         # scales are rational, vs. two roundings via to_base/from_base.
-        from physure.domain.measurement.converters import LinearConverter
+        from physure.domain.measurement.converters import (
+            LinearConverter,
+            OffsetConverter,
+            affine_coefficients,
+        )
 
         if isinstance(source_converter, LinearConverter) and isinstance(
             target_converter, LinearConverter
         ):
             return None
+
+        if isinstance(
+            source_converter, (LinearConverter, OffsetConverter)
+        ) and isinstance(target_converter, (LinearConverter, OffsetConverter)):
+            # new = old * scale + shift, each rounded once from the exact values:
+            # 100 degC is exactly 212 degF, and the core computes the same two numbers.
+            scale, shift = affine_coefficients(
+                source_converter, target_converter
+            )
+            affine_magnitude = self._backend.mul(self.magnitude, scale)  # pyright: ignore[reportArgumentType]
+            if shift != 0.0:
+                affine_magnitude = self._backend.add(affine_magnitude, shift)
+            affine_uncertainty = self._backend.mul(
+                self.uncertainty, abs(scale)
+            )
+            return cast(
+                "Quantity[ValueType, UncType, UnitType]",
+                Quantity.from_input(
+                    affine_magnitude,
+                    target_unit,
+                    self.system,
+                    uncertainty=affine_uncertainty,
+                ),
+            )
 
         base_val = source_converter.to_base(
             self.magnitude  # pyright: ignore[reportArgumentType]
