@@ -1,3 +1,4 @@
+mod i18n;
 mod incremental;
 
 use std::collections::HashMap;
@@ -10,11 +11,17 @@ struct Backend {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
     doc_states: RwLock<HashMap<Url, incremental::DocState>>,
+    /// The language the client asked for in `initialize` (`InitializeParams.locale`); English
+    /// until it says otherwise.
+    locale: RwLock<String>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        if let Some(locale) = params.locale {
+            *self.locale.write().unwrap() = locale;
+        }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -334,7 +341,8 @@ impl LanguageServer for Backend {
             let line = text.lines().nth(pos.line as usize).unwrap_or("");
             let word = extract_word_at_pos(line, pos.character as usize);
 
-            if let Some(doc) = lookup_hover_doc(&word) {
+            let locale = self.locale.read().unwrap().clone();
+            if let Some(doc) = lookup_hover_doc(&word, &locale) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -561,7 +569,19 @@ fn extract_word_at_pos(line: &str, utf16_char_idx: usize) -> String {
     line[start..end].to_string()
 }
 
-fn lookup_hover_doc(word: &str) -> Option<String> {
+/// The hover of a unit: the same lines for every language, with the name of the quantity it
+/// measures taken from the table of `locale`.
+fn unit_hover(unit: &str, locale: &str, si_base: Option<&str>, dimension: &str) -> Option<String> {
+    let quantity = i18n::quantity_name(unit, locale)?;
+    let mut doc = format!("**Physical Unit**: `{unit}`\n\n* **Quantity**: {quantity}\n");
+    if let Some(base) = si_base {
+        doc.push_str(&format!("* **SI Base**: `{base}`\n"));
+    }
+    doc.push_str(&format!("* **Dimension**: `{dimension}`"));
+    Some(doc)
+}
+
+fn lookup_hover_doc(word: &str, locale: &str) -> Option<String> {
     match word {
         "solve" => Some("**Built-in Function**: `solve(equation, target)`\n\nSolves an equation symbolically for target variable.\n\n**Domain**: `calc` (requires `use solve from calc`).".to_string()),
         "deriv" | "diff" => Some("**Built-in Function**: `deriv(expression, variable)`\n\nDifferentiates a mathematical expression symbolically.\n\n**Domain**: `calc` (requires `use deriv from calc`).".to_string()),
@@ -599,13 +619,13 @@ fn lookup_hover_doc(word: &str) -> Option<String> {
         "core" => Some("**Builtin domain**: `core`\n\nAlways available without `use`: format, comparisons, ternary, vector, sqrt, sin, cos, exp, ln, abs, log, tan, floor, ceil, min, max, round.".to_string()),
         "calc" => Some("**Builtin domain**: `calc`\n\n`use ... from calc` unlocks: deriv, diff, integral, integrate, solve, substitute, limit, grad, div, curl, laplacian, simplify, expand.".to_string()),
         "array" => Some("**Builtin domain**: `array`\n\n`use ... from array` unlocks: linspace, gradient, trapz, dot, cross, norm, unit_vector, transpose, matmul, det.".to_string()),
-        "m" => Some("**Physical Unit**: `m`\n\n* **Quantity**: Length (Longitud)\n* **Dimension**: `[L]`".to_string()),
-        "kg" => Some("**Physical Unit**: `kg`\n\n* **Quantity**: Mass (Masa)\n* **Dimension**: `[M]`".to_string()),
-        "s" => Some("**Physical Unit**: `s`\n\n* **Quantity**: Time (Tiempo)\n* **Dimension**: `[T]`".to_string()),
-        "N" => Some("**Physical Unit**: `N`\n\n* **Quantity**: Force (Fuerza)\n* **SI Base**: `kg·m·s⁻²`\n* **Dimension**: `[M·L·T⁻²]`".to_string()),
-        "Pa" => Some("**Physical Unit**: `Pa`\n\n* **Quantity**: Pressure / Stress\n* **SI Base**: `kg·m⁻¹·s⁻²`\n* **Dimension**: `[M·L⁻¹·T⁻²]`".to_string()),
-        "J" => Some("**Physical Unit**: `J`\n\n* **Quantity**: Energy / Work\n* **SI Base**: `kg·m²·s⁻²`\n* **Dimension**: `[M·L²·T⁻²]`".to_string()),
-        "W" => Some("**Physical Unit**: `W`\n\n* **Quantity**: Power (Potencia)\n* **SI Base**: `kg·m²·s⁻³`\n* **Dimension**: `[M·L²·T⁻³]`".to_string()),
+        "m" => unit_hover("m", locale, None, "[L]"),
+        "kg" => unit_hover("kg", locale, None, "[M]"),
+        "s" => unit_hover("s", locale, None, "[T]"),
+        "N" => unit_hover("N", locale, Some("kg·m·s⁻²"), "[M·L·T⁻²]"),
+        "Pa" => unit_hover("Pa", locale, Some("kg·m⁻¹·s⁻²"), "[M·L⁻¹·T⁻²]"),
+        "J" => unit_hover("J", locale, Some("kg·m²·s⁻²"), "[M·L²·T⁻²]"),
+        "W" => unit_hover("W", locale, Some("kg·m²·s⁻³"), "[M·L²·T⁻³]"),
         _ => None,
     }
 }
@@ -701,6 +721,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_unit_hover_is_english_by_default() {
+        let doc = lookup_hover_doc("m", "").unwrap();
+        assert!(doc.contains("* **Quantity**: Length\n"), "{doc}");
+        assert!(doc.contains("`[L]`"));
+        assert!(!doc.contains("Longitud"));
+        let force = lookup_hover_doc("N", "en").unwrap();
+        assert!(force.contains("* **Quantity**: Force\n* **SI Base**: `kg·m·s⁻²`\n* **Dimension**: `[M·L·T⁻²]`"), "{force}");
+    }
+
+    #[test]
+    fn a_unit_hover_follows_the_locale_of_the_client() {
+        let doc = lookup_hover_doc("m", "es-MX").unwrap();
+        assert!(doc.contains("* **Quantity**: Longitud\n"), "{doc}");
+        assert!(!doc.contains("Length"));
+        // the rest of the hover does not change with the language
+        assert!(lookup_hover_doc("W", "es").unwrap().contains("`kg·m²·s⁻³`"));
+        // a keyword has one text for everybody
+        assert_eq!(lookup_hover_doc("else", "es"), lookup_hover_doc("else", "en"));
+    }
+
+    #[test]
     fn use_statement_context_detects_names_vs_from_target() {
         assert!(matches!(use_statement_context("let x"), UseContext::None));
         assert!(matches!(use_statement_context("use "), UseContext::Names));
@@ -722,24 +763,24 @@ mod tests {
     #[test]
     fn test_extract_user_docstring_ignores_hash_comments_and_supports_html() {
         let script = r#"
-# --- 4. Funciones Definidas por el Usuario y Parámetros con Tipo ---
-/// <b>Cálculo de Energía Cinética</b>
-/// <p>Calcula la energía de un objeto de masa <i>m</i> a velocidad <i>v</i>.</p>
+# --- 4. User-defined functions and typed parameters ---
+/// <b>Kinetic energy calculation</b>
+/// <p>Computes the energy of an object of mass <i>m</i> at speed <i>v</i>.</p>
 /// <ul>
-///   <li><b>m</b>: Masa del cuerpo [kg]</li>
-///   <li><b>v</b>: Velocidad del cuerpo [m/s]</li>
+///   <li><b>m</b>: Mass of the body [kg]</li>
+///   <li><b>v</b>: Speed of the body [m/s]</li>
 /// </ul>
 f(v: m / s) =
-    resta = 1 m / s
-    v * 2 - resta
+    offset = 1 m / s
+    v * 2 - offset
 "#;
         let doc = extract_user_docstring(script, "f");
         assert!(doc.is_some());
         let doc_str = doc.unwrap();
-        assert!(doc_str.contains("**Cálculo de Energía Cinética**"));
-        assert!(doc_str.contains("Calcula la energía"));
-        assert!(doc_str.contains("* **m**: Masa del cuerpo [kg]"));
-        assert!(doc_str.contains("* **v**: Velocidad del cuerpo [m/s]"));
+        assert!(doc_str.contains("**Kinetic energy calculation**"));
+        assert!(doc_str.contains("Computes the energy"));
+        assert!(doc_str.contains("* **m**: Mass of the body [kg]"));
+        assert!(doc_str.contains("* **v**: Speed of the body [m/s]"));
         assert!(!doc_str.contains("Funciones Definidas"));
     }
 }
@@ -753,6 +794,7 @@ async fn main() {
         client,
         documents: RwLock::new(HashMap::new()),
         doc_states: RwLock::new(HashMap::new()),
+        locale: RwLock::new("en".to_string()),
     });
 
     // Serialized, not the default concurrency_level(4): on_change persists a DocState that
