@@ -1,13 +1,32 @@
 package com.physure;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.DoubleUnaryOperator;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Representation of a physical Quantity in Java.
+ * <p>
+ * Arithmetic, powers and conversions are the native engine's: the core decides what a unit is, how two
+ * units combine, how an uncertainty propagates and what a temperature point plus an interval is. This
+ * class does not repeat any of that, and an operation the core refuses (incompatible dimensions,
+ * a division by zero) is a {@link PhysureException}, never a number.
  * Compatible with Java 8+.
  */
 public class Quantity {
+    private static final String NUMBER = "(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?";
+    /** value, an optional uncertainty written {@code +/-} or the core's {@code ±}, and the unit if there is one. */
+    private static final Pattern WRITTEN = Pattern.compile(
+        "^([+-]?(?:" + NUMBER + "|NaN|Infinity))"
+            + "(?:\\s*(?:±|\\+/-)\\s*(" + NUMBER + "))?"
+            + "(?:\\s+(.*))?$",
+        Pattern.DOTALL);
+
     private final double value;
     private final double uncertainty;
     private final String unit;
@@ -16,9 +35,18 @@ public class Quantity {
         this(value, 0.0, unit);
     }
 
+    /**
+     * @param uncertainty the standard uncertainty, a spread: its magnitude is kept and it must be finite
+     *     ({@code NaN} and infinity are not a spread, and reading them as "none" would turn an unknown
+     *     error into an exact value)
+     * @throws IllegalArgumentException if the uncertainty is {@code NaN} or infinite
+     */
     public Quantity(double value, double uncertainty, String unit) {
+        if (Double.isNaN(uncertainty) || Double.isInfinite(uncertainty)) {
+            throw new IllegalArgumentException("The uncertainty must be a finite number, got " + uncertainty);
+        }
         this.value = value;
-        this.uncertainty = uncertainty;
+        this.uncertainty = Math.abs(uncertainty);
         this.unit = unit != null ? unit.trim() : "";
     }
 
@@ -34,48 +62,8 @@ public class Quantity {
         return unit;
     }
 
-    /**
-     * The uncertainty of a sum or a difference of two independent measurements.
-     * <p>
-     * They add in quadrature, not linearly: two half-widths of 0.3 give 0.42, not 0.6.
-     * Adding them straight is what a worst-case bound does, and it reported an error
-     * about 40% too large for every quantity Java touched, disagreeing with the same
-     * calculation in Rust and Python.
-     * <p>
-     * {@code Math.hypot} rather than {@code Math.sqrt(a*a + b*b)} so a large uncertainty
-     * cannot overflow on its way to a representable answer.
-     */
-    static double combineUncertainty(double a, double b) {
-        return Math.hypot(a, b);
-    }
-
-    /**
-     * Reports that an operation across two units needs the native engine to convert them.
-     * Adding the raw magnitudes instead — which is what this used to do — silently drops
-     * the conversion factor, and 1 km + 1 m is not 2 of anything.
-     */
-    private PhysureException conversionUnavailable(String op, Quantity other, Exception cause) {
-        return new PhysureException(
-            "Cannot " + op + " " + this.unit + " and " + other.getUnit()
-                + " without the native engine: the conversion between them lives there, and "
-                + "combining the magnitudes as they stand would ignore it.",
-            cause);
-    }
-
     public Quantity add(Quantity other) {
-        if (!this.unit.equals(other.getUnit()) && !this.unit.isEmpty() && !other.getUnit().isEmpty()) {
-            try {
-                return NativeEngine.addQuantities(this, other.to(this.unit));
-            } catch (Exception e) {
-                throw conversionUnavailable("add", other, e);
-            }
-        }
-        try {
-            return NativeEngine.addQuantities(this, other);
-        } catch (Exception e) {
-            return new Quantity(this.value + other.getValue(),
-                combineUncertainty(this.uncertainty, other.getUncertainty()), this.unit);
-        }
+        return NativeEngine.addQuantities(this, Objects.requireNonNull(other, "other"));
     }
 
     public Quantity sub(Quantity other) {
@@ -83,19 +71,7 @@ public class Quantity {
     }
 
     public Quantity subtract(Quantity other) {
-        if (!this.unit.equals(other.getUnit()) && !this.unit.isEmpty() && !other.getUnit().isEmpty()) {
-            try {
-                return NativeEngine.subQuantities(this, other.to(this.unit));
-            } catch (Exception e) {
-                throw conversionUnavailable("subtract", other, e);
-            }
-        }
-        try {
-            return NativeEngine.subQuantities(this, other);
-        } catch (Exception e) {
-            return new Quantity(this.value - other.getValue(),
-                combineUncertainty(this.uncertainty, other.getUncertainty()), this.unit);
-        }
+        return NativeEngine.subQuantities(this, Objects.requireNonNull(other, "other"));
     }
 
     public Quantity mul(Quantity other) {
@@ -103,11 +79,12 @@ public class Quantity {
     }
 
     public Quantity multiply(Quantity other) {
-        return NativeEngine.mulQuantities(this, other);
+        return NativeEngine.mulQuantities(this, Objects.requireNonNull(other, "other"));
     }
 
+    /** Multiplies by a plain number: the core's rules apply (a plain number does not scale a temperature point). */
     public Quantity multiply(double scalar) {
-        return new Quantity(this.value * scalar, this.uncertainty * scalar, this.unit);
+        return multiply(new Quantity(scalar, ""));
     }
 
     public Quantity div(Quantity other) {
@@ -115,11 +92,12 @@ public class Quantity {
     }
 
     public Quantity divide(Quantity other) {
-        return NativeEngine.divQuantities(this, other);
+        return NativeEngine.divQuantities(this, Objects.requireNonNull(other, "other"));
     }
 
+    /** Divides by a plain number: dividing by zero is a {@link PhysureException}. */
     public Quantity divide(double scalar) {
-        return new Quantity(this.value / scalar, this.uncertainty / scalar, this.unit);
+        return divide(new Quantity(scalar, ""));
     }
 
     public QuantityVector multiply(QuantityVector vec) {
@@ -146,41 +124,63 @@ public class Quantity {
         return pow(0.5);
     }
 
+    /**
+     * The sine of this angle. The angle is read in its unit (90 {@code deg} is 1) and a quantity that is not
+     * an angle is a {@link PhysureException}; a plain number is taken as radians. The uncertainty of the
+     * angle propagates: {@code |cos x| * u}.
+     */
     public Quantity sin() {
-        return new Quantity(Math.sin(this.value), "");
+        return trigonometric(Math::sin, Math::cos);
     }
 
+    /** The cosine of this angle; see {@link #sin()}. */
     public Quantity cos() {
-        return new Quantity(Math.cos(this.value), "");
+        return trigonometric(Math::cos, Math::sin);
     }
 
+    /** The tangent of this angle; see {@link #sin()}. */
     public Quantity tan() {
-        return new Quantity(Math.tan(this.value), "");
+        return trigonometric(Math::tan, x -> 1.0 / (Math.cos(x) * Math.cos(x)));
+    }
+
+    private Quantity trigonometric(DoubleUnaryOperator function, DoubleUnaryOperator derivative) {
+        Quantity angle = unit.isEmpty() || unit.equals("unity") ? this : to("rad");
+        double x = angle.value;
+        return new Quantity(function.applyAsDouble(x), Math.abs(derivative.applyAsDouble(x)) * angle.uncertainty, "");
     }
 
     public Quantity abs() {
         return new Quantity(Math.abs(this.value), this.uncertainty, this.unit);
     }
 
+    /**
+     * Rounds the value and the uncertainty to {@code decimals} decimal places (half up); a negative count
+     * rounds to tens, hundreds... {@code NaN} and infinity are returned as they are.
+     */
     public Quantity round(int decimals) {
-        double factor = Math.pow(10, decimals);
-        double roundedVal = Math.round(this.value * factor) / factor;
-        double roundedUnc = Math.round(this.uncertainty * factor) / factor;
-        return new Quantity(roundedVal, roundedUnc, this.unit);
+        return new Quantity(roundTo(this.value, decimals), roundTo(this.uncertainty, decimals), this.unit);
+    }
+
+    private static double roundTo(double x, int decimals) {
+        if (Double.isNaN(x) || Double.isInfinite(x)) {
+            return x;
+        }
+        // exact decimal arithmetic: scaling by 10^decimals and rounding to a long overflows for large values
+        return new BigDecimal(x).setScale(decimals, RoundingMode.HALF_UP).doubleValue();
     }
 
     public boolean greaterThan(Quantity other) {
-        Quantity converted = other.to(this.unit);
+        Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
         return this.value > converted.getValue();
     }
 
     public boolean lessThan(Quantity other) {
-        Quantity converted = other.to(this.unit);
+        Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
         return this.value < converted.getValue();
     }
 
     public boolean approxEquals(Quantity other) {
-        Quantity converted = other.to(this.unit);
+        Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
         return Math.abs(this.value - converted.getValue()) < 1e-6;
     }
 
@@ -192,7 +192,7 @@ public class Quantity {
      * reimplementing the tolerance logic here.
      */
     public void physAssert(Quantity expected) {
-        NativeEngine.assertQuantities(this, expected);
+        NativeEngine.assertQuantities(this, Objects.requireNonNull(expected, "expected"));
     }
 
     /**
@@ -201,11 +201,11 @@ public class Quantity {
      * magnitudes are bit-exact. Throws {@link PhysureException} on failure.
      */
     public void physExactAssert(Quantity expected) {
-        NativeEngine.assertExactQuantities(this, expected);
+        NativeEngine.assertExactQuantities(this, Objects.requireNonNull(expected, "expected"));
     }
 
     public Quantity to(String targetUnit) {
-        return NativeEngine.convertQuantity(this, targetUnit);
+        return NativeEngine.convertQuantity(this, Objects.requireNonNull(targetUnit, "targetUnit"));
     }
 
     public Quantity convertTo(String targetUnit) {
@@ -213,7 +213,7 @@ public class Quantity {
     }
 
     public Quantity convertTo(Quantity target) {
-        return to(target.getUnit());
+        return to(Objects.requireNonNull(target, "target").getUnit());
     }
 
     public static Quantity of(double value) {
@@ -259,8 +259,13 @@ public class Quantity {
     }
 
     /**
-     * Parses a string representation of a physical quantity (e.g. "125.0 J" or "5.0 m/s") into a Quantity.
+     * Parses the text of a physical quantity: {@code "125.0 J"}, {@code "5.0 m/s"}, {@code "1.5 +/- 0.1 m"} or
+     * the core's {@code "1.5 ± 0.10 m"}. A bare unit ({@code "m/s"}) is one of it, and {@code true} and
+     * {@code false} are 1 and 0. Text that starts like a number and is not one ({@code "1,5 m"}) is an error,
+     * and not a quantity of 1 with a strange unit.
      * Compatible with Java 8+.
+     *
+     * @throws IllegalArgumentException if the text is {@code null} or starts with a number it cannot read
      */
     public static Quantity parse(String str) {
         if (str == null) {
@@ -270,24 +275,41 @@ public class Quantity {
         if (str.isEmpty() || str.equals("None")) {
             return new Quantity(0.0, "");
         }
-        int spaceIdx = str.indexOf(' ');
-        if (spaceIdx == -1) {
-            try {
-                double val = Double.parseDouble(str);
-                return new Quantity(val, "");
-            } catch (NumberFormatException e) {
-                if (str.equalsIgnoreCase("true")) return new Quantity(1.0, "");
-                if (str.equalsIgnoreCase("false")) return new Quantity(0.0, "");
-                return new Quantity(1.0, str);
-            }
-        } else {
-            try {
-                double val = Double.parseDouble(str.substring(0, spaceIdx));
-                String unit = str.substring(spaceIdx + 1);
-                return new Quantity(val, unit);
-            } catch (NumberFormatException e) {
-                return new Quantity(1.0, str);
-            }
+        Matcher written = WRITTEN.matcher(str);
+        if (written.matches()) {
+            double spread = written.group(2) == null ? 0.0 : Double.parseDouble(written.group(2));
+            return new Quantity(Double.parseDouble(written.group(1)), spread, written.group(3));
         }
+        if (str.equalsIgnoreCase("true")) return new Quantity(1.0, "");
+        if (str.equalsIgnoreCase("false")) return new Quantity(0.0, "");
+        char first = str.charAt(0);
+        if (Character.isDigit(first) || first == '.' || first == '+' || first == '-') {
+            throw new IllegalArgumentException("Not a quantity: '" + str + "'");
+        }
+        return new Quantity(1.0, str);
+    }
+
+    /**
+     * This quantity as PHS source: the shortest decimal that reads back to the same number, then
+     * {@code +/- uncertainty} if there is one, then the unit ({@code "2.0 +/- 0.1 m"}). It is what a function
+     * or an equation is called with, so neither the precision nor the uncertainty is lost on the way.
+     */
+    String toPhs() {
+        StringBuilder source = new StringBuilder(phsNumber(value));
+        if (uncertainty != 0.0) {
+            source.append(" +/- ").append(phsNumber(uncertainty));
+        }
+        if (!unit.isEmpty()) {
+            source.append(' ').append(unit);
+        }
+        return source.toString();
+    }
+
+    private static String phsNumber(double x) {
+        if (Double.isNaN(x) || Double.isInfinite(x)) {
+            return Double.toString(x);
+        }
+        // no exponent: 1.0E-5 is not a number PHS reads
+        return BigDecimal.valueOf(x).toPlainString();
     }
 }

@@ -104,6 +104,7 @@ public class NativeEngine {
      * @return String representation of evaluation outputs.
      */
     public static native String evaluateExpression(long registryHandle, String expr);
+    public static native Quantity evaluateQuantity(long registryHandle, String expr);
 
     /**
      * Returns categories mapping (e.g. "length" -> ["m", "cm", "km", ...]).

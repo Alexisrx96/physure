@@ -2,7 +2,7 @@ use jni::JNIEnv;
 use jni::objects::{JClass, JString, JObject, JValue};
 use jni::sys::{jdouble, jlong, jobject, jstring};
 use physure_core::{UnitRegistry, Quantity};
-use physure_script::PhsInterpreter;
+use physure_script::{parse_phs, PhsInterpreter};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -35,13 +35,29 @@ fn default_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
 }
 
 /// A new registry over the embedded catalog extended by `custom` conf text, as the raw handle Java keeps.
-fn new_handle(custom: Option<&str>) -> jlong {
+/// The text is read strictly: a line that cannot be read is an error naming it, and not a definition quietly
+/// left out (and the `[Settings]` of a conf, which are process-wide, are not the registry's to change).
+fn new_handle(custom: Option<&str>) -> Result<jlong, String> {
     let (mut registry, mut constants) = default_catalog().clone();
     if let Some(text) = custom {
-        physure_core::units::conf::parse_physure_conf(text, &mut registry, &mut constants);
+        physure_core::units::conf::extend_registry(&mut registry, &mut constants, text)
+            .map_err(|problems| format!("Invalid unit definitions: {}", problems.join("; ")))?;
     }
-    let handle = RegistryHandle { registry, interpreter: PhsInterpreter::default() };
-    Box::into_raw(Box::new(handle)) as jlong
+    let handle = RegistryHandle { registry, interpreter: new_interpreter() };
+    Ok(Box::into_raw(Box::new(handle)) as jlong)
+}
+
+/// An interpreter with the calculus builtins (`solve`, `deriv`, `integral`) unlocked, as the WASM binding's
+/// is: `UnitRegistry.solve`, `deriv` and `integral` call them, and without this every one failed with
+/// "Undefined function".
+fn new_interpreter() -> PhsInterpreter {
+    let mut interpreter = PhsInterpreter::default();
+    if let Ok(program) = parse_phs("use * from calc;") {
+        for statement in &program.statements {
+            let _ = interpreter.run_statement(statement);
+        }
+    }
+    interpreter
 }
 
 fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
@@ -62,6 +78,7 @@ fn get_rust_quantity(
     java_q: &JObject,
 ) -> Result<Quantity, jni::errors::Error> {
     let value: f64 = env.get_field(java_q, "value", "D")?.d()?;
+    let uncertainty: f64 = env.get_field(java_q, "uncertainty", "D")?.d()?;
     let unit_jstr: JString = env.get_field(java_q, "unit", "Ljava/lang/String;")?.l()?.into();
     let unit_str: String = env.get_string(&unit_jstr)?.into();
     
@@ -74,7 +91,16 @@ fn get_rust_quantity(
         }
     };
     
-    Quantity::new(value, &unit_str).map_err(|_| jni::errors::Error::JavaException)
+    // the uncertainty goes in with the value: dropping it here made every operation answer "exactly"
+    let built = if uncertainty == 0.0 {
+        Quantity::new(value, &unit_str)
+    } else {
+        Quantity::with_uncertainty(value, uncertainty, &unit_str)
+    };
+    built.map_err(|e| {
+        let _ = env.throw_new("com/physure/PhysureException", &format!("{}", e));
+        jni::errors::Error::JavaException
+    })
 }
 
 fn make_java_quantity<'local>(
@@ -82,11 +108,13 @@ fn make_java_quantity<'local>(
     q: Quantity,
 ) -> Result<JObject<'local>, jni::errors::Error> {
     let q_class = env.find_class("com/physure/Quantity")?;
-    let unit_jstr = env.new_string(q.unit.__repr__())?;
+    // the magnitude, uncertainty and unit as one consistent triple (`2 m * 3 km` is 6000 m^2, not 6 m^2)
+    let (value, uncertainty, unit) = q.display_parts();
+    let unit_jstr = env.new_string(unit)?;
     env.new_object(
         q_class,
-        "(DLjava/lang/String;)V",
-        &[JValue::Double(q.value.mean()), JValue::Object(&unit_jstr)],
+        "(DDLjava/lang/String;)V",
+        &[JValue::Double(value), JValue::Double(uncertainty), JValue::Object(&unit_jstr)],
     )
 }
 
@@ -95,7 +123,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistry(
     _env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    new_handle(None)
+    new_handle(None).unwrap_or(0)
 }
 
 #[no_mangle]
@@ -113,7 +141,13 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistryFromPath<'local
     };
 
     match std::fs::read_to_string(&path_str) {
-        Ok(content) => new_handle(Some(&content)),
+        Ok(content) => match new_handle(Some(&content)) {
+            Ok(handle) => handle,
+            Err(message) => {
+                throw_physure_exception(&mut env, &format!("{} (in '{}')", message, path_str));
+                0
+            }
+        },
         Err(e) => {
             throw_physure_exception(&mut env, &format!("Failed to read physure.conf at '{}': {}", path_str, e));
             0
@@ -135,7 +169,13 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistryFromContent<'lo
         }
     };
 
-    new_handle(Some(&content_str))
+    match new_handle(Some(&content_str)) {
+        Ok(handle) => handle,
+        Err(message) => {
+            throw_physure_exception(&mut env, &message);
+            0
+        }
+    }
 }
 
 #[no_mangle]
@@ -382,6 +422,86 @@ pub extern "system" fn Java_com_physure_NativeEngine_evaluateExpression<'local>(
     match env.new_string(result_str) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Evaluates PHS and returns the value of its last statement as a `Quantity`, exactly: the text that
+/// `evaluateExpression` returns is rounded for display (an uncertainty of 0.2236 reads "0.2"), and a
+/// quantity rebuilt from it would carry the rounding.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantity<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    interpreter_handle: jlong,
+    expr: JString<'local>,
+) -> jobject {
+    let interpreter = get_interpreter(interpreter_handle);
+    let expr_str: String = match env.get_string(&expr) {
+        Ok(s) => s.into(),
+        Err(e) => {
+            throw_physure_exception(&mut env, &format!("Invalid JNI string: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+
+    let program = match physure_script::parse_phs(&expr_str) {
+        Ok(p) => p,
+        Err(e) => {
+            throw_physure_exception(&mut env, &format!("Syntax error: {}", e));
+            return std::ptr::null_mut();
+        }
+    };
+
+    let mut last = physure_script::PhsValue::None;
+    for stmt in &program.statements {
+        match interpreter.run_statement(stmt) {
+            Ok(physure_script::PhsValue::None) => {
+                // an assignment's value is the variable it set
+                last = match stmt {
+                    physure_script::Statement::Assignment(node) => interpreter.get_var(&node.name).map(|v| v.clone()).unwrap_or(physure_script::PhsValue::None),
+                    _ => physure_script::PhsValue::None,
+                };
+            }
+            Ok(value) => last = value,
+            Err(e) => {
+                throw_physure_exception(&mut env, &format!("{}", e));
+                return std::ptr::null_mut();
+            }
+        }
+    }
+
+    let quantity = match last {
+        physure_script::PhsValue::Quantity(q) => q,
+        physure_script::PhsValue::Number(n) => match Quantity::new(n, "") {
+            Ok(q) => q,
+            Err(e) => {
+                throw_physure_exception(&mut env, &format!("{}", e));
+                return std::ptr::null_mut();
+            }
+        },
+        physure_script::PhsValue::Bool(b) => match Quantity::new(if b { 1.0 } else { 0.0 }, "") {
+            Ok(q) => q,
+            Err(e) => {
+                throw_physure_exception(&mut env, &format!("{}", e));
+                return std::ptr::null_mut();
+            }
+        },
+        physure_script::PhsValue::None => {
+            throw_physure_exception(&mut env, "The expression produced no value");
+            return std::ptr::null_mut();
+        }
+        other => {
+            throw_physure_exception(&mut env, &format!("The expression did not produce a quantity: {}", other));
+            return std::ptr::null_mut();
+        }
+    };
+
+    match make_java_quantity(&mut env, quantity) {
+        Ok(j_q) => j_q.into_raw(),
+        Err(e) => {
+            throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
+            std::ptr::null_mut()
+        }
     }
 }
 
