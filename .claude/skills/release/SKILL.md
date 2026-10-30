@@ -138,7 +138,9 @@ produces — but the release workflows themselves accept more than that:
 3. Watch it tag `java-vX.Y.Z` and push; its last step starts
    `java-release.yml` (see "How a release really runs").
 4. Watch the release run: jobs `check-version` → `native-libs` (5-platform
-   matrix) → `publish` (Maven Central via Sonatype Central Portal, GPG-signed).
+   matrix) + `bindings-tests` (the golden-file tests of the Java and WASM
+   bindings, `bindings.yml`) → `publish` (Maven Central via Sonatype Central
+   Portal, GPG-signed; `-DskipTests`, the tests ran in `bindings-tests`).
 5. **A green `publish` job is a public release.** `physure-java/pom.xml` sets
    `autoPublish` to `true` (decided 2026-10-30), so the deployment is released
    as soon as the portal validates it, and Maven Central cannot be undone.
@@ -172,8 +174,9 @@ produces — but the release workflows themselves accept more than that:
    git push origin main wasm-vX.Y.Z
    ```
 5. Watch the release run: `gh run watch` (jobs `check-version` →
-   `publish`, builds `bundler` + `nodejs` targets via `wasm-pack`,
-   publishes to npm).
+   `bindings-tests` (the golden-file tests of the Java and WASM bindings,
+   `bindings.yml`) → `publish`, builds `bundler` + `nodejs` targets via
+   `wasm-pack`, publishes to npm).
 6. Verify: `npm view physure versions`.
 
 ## If it fails
@@ -195,6 +198,11 @@ produces — but the release workflows themselves accept more than that:
 - `java-release.yml` publish failure → check the `maven-central`
   environment's `CENTRAL_USERNAME`/`CENTRAL_TOKEN`/`GPG_PRIVATE_KEY`/
   `GPG_PASSPHRASE` secrets exist and the GPG key hasn't expired.
+- `bindings-tests` failure in `java-release.yml` or `wasm-release.yml` → a
+  binding no longer returns what `tests/golden/unit_dimension_scale.tsv` says;
+  nothing was published. Fix the binding (or, if the core's answer changed on
+  purpose, bless the file: `PHYSURE_BLESS_GOLDEN=1 cargo test -p physure --test
+  binding_contract_golden`, and review the diff) and bump again.
 - `wasm-release.yml` `check-version` failure → `physure-wasm/package.json`
   wasn't bumped to match the (workspace-inherited) Cargo version — fix
   and re-tag.
