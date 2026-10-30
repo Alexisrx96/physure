@@ -129,6 +129,22 @@ developer *as* the specification: it shows its work.
   v2) or a Python `.py` extension module by the same syntax — bring your own domain functions
   without forking the interpreter. Scaffold one with `phs new-plugin myplugin --lang rust`.
 
+## Check: dimensions, without running
+
+```bash
+phs check orbit_sim.phs            # file:line: error[dimension-mismatch]: ...
+phs check a.phs b.phs --json       # an array of findings, for tools
+```
+
+`phs check` reads a script and says where a sum, a comparison, a conversion or a call mixes
+incompatible dimensions, where a unit is not in the catalog, and where an absolute temperature
+is used as an interval. It is silent unless the interpreter would refuse the operation: a value it
+cannot type (an imported name, a vector) silences what depends on it. A parameter with a unit
+(`fn f(m: kg, v: m/s)`) is checked at every call; one without takes the dimensions of each call and
+its body is checked for them. The exit code is 1 when there is an error (warnings do not fail it),
+2 when a file cannot be read or does not parse. The language server reports the same findings as
+diagnostics while you type.
+
 ## Transpile: verified physics, real starting code
 
 Once a `.phs` script is validated, hand the dev team something they can build on instead of a
@@ -151,6 +167,7 @@ USAGE:
     phs <script.phs> [OPTIONS]
     phs --repl
     phs transpile <script.phs> [--target <rust|python|java>] [--output <file>]
+    phs check <script.phs>... [--json]
     phs register-protocol
     phs new-plugin <name> [--lang <rust|python|both>] [--dir <path>]
 
