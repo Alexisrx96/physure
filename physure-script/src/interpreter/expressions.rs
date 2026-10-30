@@ -70,6 +70,7 @@ fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
 
 impl PhsInterpreter {
     pub fn eval_expr(&self, expr: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        crate::limits::check_stack(self.limits.max_stack_bytes).map_err(PhysureError::Generic)?;
         match expr {
             Expr::Quantity(node) => {
                 if let Some(reason) = node.asymmetric_refusal() {
@@ -482,6 +483,7 @@ impl PhsInterpreter {
         if func.params.len() != arg_vals.len() {
             return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", func.name, func.params.len(), arg_vals.len())));
         }
+        let _depth = crate::limits::CallDepth::enter(self.limits.max_call_depth).map_err(PhysureError::Generic)?;
         let implicit_units = func.decorators.iter().any(|d| d.name == "implicit_units");
         let mut local_env = env.clone();
         for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {

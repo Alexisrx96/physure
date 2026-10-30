@@ -189,6 +189,7 @@ impl PhsInterpreter {
     }
 
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
         self.eval_statement_with_env_at(stmt, env, 0)
     }
 
