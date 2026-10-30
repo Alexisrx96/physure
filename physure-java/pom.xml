@@ -101,7 +101,8 @@
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>
-              <autoPublish>false</autoPublish>
+              <!-- true: a green java-release run is a public release, like PyPI and crates.io (decided 2026-10-30). -->
+              <autoPublish>true</autoPublish>
             </configuration>
           </plugin>
         </plugins>
