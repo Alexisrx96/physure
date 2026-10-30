@@ -1,7 +1,7 @@
 # A validation surface for agents and language models (N5) — design
 
 **Date:** 2026-10-30
-**Status:** approved by the maintainer ("do it", 2026-10-30) after the design below was presented in chat; N5a built on `feat/agent-validation-surface` (not yet merged), N5b and N5c not started.
+**Status:** approved by the maintainer ("do it", 2026-10-30) after the design below was presented in chat; N5a merged into local main; N5b built on `feat/agent-eval-cli`; N5c not started.
 **Base:** local `main` @ `b3e83f4`
 **Follows:** the draft `2026-10-30-draft-llm-validation-surface.md` (next step N5 of `2026-10-30-post-a1-inventory.md`), which builds on `docs/LLM_SLM_SYNTAX_EXPOSURE_SPEC.md`.
 

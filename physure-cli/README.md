@@ -145,6 +145,42 @@ its body is checked for them. The exit code is 1 when there is an error (warning
 2 when a file cannot be read or does not parse. The language server reports the same findings as
 diagnostics while you type.
 
+## Agents: evaluate with units, as JSON
+
+```bash
+echo 'x = 9.81 +/- 0.02 m/s^2
+x * 2 s' | phs eval -                  # one JSON document on stdout
+phs eval orbit_sim.phs --seed 1 --timeout-ms 2000
+phs unit kWh                            # dimension, kind and alias of a unit
+```
+
+`phs eval` is for text you did not write: a model's equation, a pasted script. It runs in a sandbox: `import`
+finds no file, no native plugin is loaded, the mesh export that writes a file is refused, recursion and the
+native stack are bounded, evaluation stops at `--timeout-ms` (default 5000), the output is capped at 1 MiB, and
+Monte Carlo draws are seeded (`--seed`, default 0) so the same input gives the same answer. There is no flag
+that turns the sandbox off; `phs <script.phs>` is the unrestricted way to run a script.
+
+```json
+{ "ok": true,
+  "results": [
+    { "line": 2, "kind": "quantity", "text": "19.62 ± 0.04 m * s^-1",
+      "value": 19.62, "uncertainty": 0.04, "unit": "m * s^-1", "dimension": "L·T⁻¹" } ],
+  "diagnostics": [ { "line": 5, "severity": "error", "code": "dimension-mismatch", "message": "..." } ] }
+```
+
+- `results` has one item per statement that has a value (`name` for an assignment). `kind` is `quantity`,
+  `number`, `bool`, `string`, `vector` (with every element in `items`), `matrix`, `function`, `equation`,
+  `range`, `plot` or `sigma`. A quantity carries `value`, `uncertainty` and `unit` (an expression the unit
+  parser reads back; the empty string for no unit) as one consistent triple, and its `dimension` as the core
+  writes it (`1` for dimensionless).
+- `diagnostics` merges the static checker (`dimension-mismatch`, `unknown-unit`, `unknown-name`, ...), `syntax`,
+  `runtime`, `limit` (depth, stack, time or output) and `forbidden`. A runtime error on a line the checker
+  already reported is not repeated. After a `limit` the run stops; after any other error it goes on.
+- The exit code is 0 when `ok`, 1 when there is an error, 2 for a usage error or an unreadable file. A watchdog
+  ends the process with a `limit` report if the deadline is not honoured.
+- `phs unit <symbol>` prints `{unit, dimension, kind, linear, alias, simplified}`, or `{"error": ...}` and exit 1.
+- `phs check -` reads the program from stdin, like `phs eval -`.
+
 ## Transpile: verified physics, real starting code
 
 Once a `.phs` script is validated, hand the dev team something they can build on instead of a

@@ -39,7 +39,7 @@ Rules (each is a test in `tests/report.rs`):
 - A limit error (`fn f(x) = f(x)` then `f(1)`; `Limits` with a past deadline): finding `limit`, evaluation stops.
 - `export3d` to a file: finding `forbidden`, no file written.
 - Output cap: with `max_output_bytes = Some(50)` and five long results, results stop before the cap is passed, one `limit` finding says so, `ok` false.
-- Same seed, same JSON, with Monte Carlo selected through `uncertainty::mode::scoped` is not reachable from `evaluate` (the mode is a thread-local); the seed test is therefore: two runs with a seed are byte-identical JSON for a Gaussian program (the default) and `evaluate` is seeded (a `with_seed` scope is open while it runs).
+- Same seed, same JSON: two runs of the same program with the same seed serialize to identical strings. (Monte Carlo cannot be selected from inside `evaluate`: the mode is a host setting, covered by the N5a test.)
 
 - [ ] Write the tests, see them fail to compile, implement, run `cargo test -p physure-script --test report`, commit `feat(script): report::evaluate, the structured answer of a sandboxed run`.
 
