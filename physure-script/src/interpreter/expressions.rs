@@ -70,7 +70,7 @@ fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
 
 impl PhsInterpreter {
     pub fn eval_expr(&self, expr: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
-        crate::limits::check_stack(self.limits.max_stack_bytes).map_err(PhysureError::Generic)?;
+        self.check_budget()?;
         match expr {
             Expr::Quantity(node) => {
                 if let Some(reason) = node.asymmetric_refusal() {
@@ -354,7 +354,7 @@ impl PhsInterpreter {
                 // Note: rayon's parallel collect stops scheduling new work on error but may
                 // leave in-flight work on other threads to complete, so loop body side effects
                 // (e.g. I/O in external functions) may partially execute even if evaluation fails.
-                if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() {
+                if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() && !self.limits.sequential {
                     use rayon::prelude::*;
                     let results: Vec<PhsValue> = items
                         .into_par_iter()
@@ -483,6 +483,7 @@ impl PhsInterpreter {
         if func.params.len() != arg_vals.len() {
             return Err(PhysureError::Generic(format!("Function {} expects {} args, got {}", func.name, func.params.len(), arg_vals.len())));
         }
+        self.check_budget()?;
         let _depth = crate::limits::CallDepth::enter(self.limits.max_call_depth).map_err(PhysureError::Generic)?;
         let implicit_units = func.decorators.iter().any(|d| d.name == "implicit_units");
         let mut local_env = env.clone();

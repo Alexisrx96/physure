@@ -185,7 +185,7 @@ pub fn eval_core_builtin(
             // experience -- pausing one of N racing threads while the rest continue -- so a
             // debug session forces this back to plain sequential `.map()` instead of silently
             // ignoring any breakpoint set inside `func`.
-            if interpreter.debug_hook_is_set() {
+            if interpreter.debug_hook_is_set() || interpreter.limits.sequential {
                 let results: PhysureResult<Vec<PhsValue>> = vec
                     .into_iter()
                     .enumerate()

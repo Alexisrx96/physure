@@ -194,6 +194,7 @@ impl PhsInterpreter {
     }
 
     pub(crate) fn eval_statement_with_env_at(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>, line: usize) -> PhysureResult<PhsValue> {
+        self.check_budget()?;
         self.debug_checkpoint(line, env)?;
         match stmt {
             Statement::Assignment(node) => {
@@ -224,6 +225,7 @@ impl PhsInterpreter {
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
                 while is_truthy(&self.eval_expr(cond, env)?) {
+                    self.check_budget()?;
                     if count >= DEFAULT_MAX_LOOP_ITERATIONS {
                         return Err(PhysureError::Generic(format!(
                             "while loop did not converge after {} iterations",

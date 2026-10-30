@@ -95,3 +95,84 @@ f(1)");
     let error = run_sandboxed(sandbox(), move |interp| run(&interp, &source)).unwrap_err();
     assert!(error.contains("stack limit") || error.contains("call depth limit"), "{error}");
 }
+
+#[test]
+fn a_deadline_that_has_passed_refuses_the_first_statement() {
+    let interp = PhsInterpreter::sandboxed(Limits::sandboxed(Duration::ZERO));
+    let error = run(&interp, "1 m + 1 m").unwrap_err();
+    assert!(error.contains("time limit"), "{error}");
+}
+
+#[test]
+fn slow_work_is_stopped_at_the_deadline() {
+    // 10,000 iterations of a 150-deep recursion take seconds; the deadline is 100 ms
+    let source = format!("{}\nx = 0\nwhile true {{ x = down(150) }}", down(0).lines().take(3).collect::<Vec<_>>().join("\n"));
+    let started = std::time::Instant::now();
+    let error = run_sandboxed(Limits::sandboxed(Duration::from_millis(100)), move |interp| run(&interp, &source)).unwrap_err();
+    assert!(error.contains("time limit"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5), "took {:?}", started.elapsed());
+}
+
+#[test]
+fn a_deadline_far_away_changes_nothing() {
+    let interp = PhsInterpreter::sandboxed(Limits::sandboxed(Duration::from_secs(3600)));
+    assert_eq!(run(&interp, "1 m + 2 m").unwrap().len(), 1);
+}
+
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("physure_sandbox_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn the_mesh_export_writes_a_file_normally_and_is_refused_in_the_sandbox() {
+    let dir = temp_dir("export");
+    let path = dir.join("mesh.stl");
+    let source = format!("use export3d from plot\nexport3d(\"sin(x)*cos(y)\", \"{}\", \"stl\")", path.to_str().unwrap().replace(std::path::MAIN_SEPARATOR, "/"));
+
+    let error = run(&PhsInterpreter::sandboxed(sandbox()), &source).unwrap_err();
+    assert!(error.contains("forbidden"), "{error}");
+    assert!(!path.exists(), "the sandbox wrote a file");
+
+    run(&PhsInterpreter::default(), &source).unwrap();
+    assert!(path.exists(), "the unrestricted interpreter no longer writes");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_import_reads_a_file_normally_and_nothing_in_the_sandbox() {
+    // the unrestricted interpreter resolves `import` against the working directory (the crate's, in a test)
+    let module = format!("zz_sandbox_probe_{}", std::process::id());
+    let file = format!("{module}.phs");
+    std::fs::write(&file, "x = 5 m\n").unwrap();
+    let source = format!("use x from {module}\nx + 1 m");
+
+    let normal = run(&PhsInterpreter::default(), &source);
+    let sandboxed = run(&PhsInterpreter::sandboxed(sandbox()), &source);
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(normal.unwrap().len(), 1, "the control did not read the module");
+    assert!(sandboxed.is_err(), "the sandbox read {file}");
+}
+
+#[test]
+fn a_sandboxed_for_expression_stays_on_one_thread() {
+    let threads = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    let mut interp = PhsInterpreter::sandboxed(sandbox());
+    let seen = threads.clone();
+    interp.register_fn("probe", move |args| {
+        seen.lock().unwrap().insert(std::thread::current().id());
+        Ok(args[0].clone())
+    });
+    let values = run_sandboxed_with(interp, "res = for i in 1..20000 { probe(i) }\nres");
+    values.unwrap();
+    let used = threads.lock().unwrap().len();
+    assert_eq!(used, 1, "the loop spread over {used} threads");
+}
+
+
+/// Runs `source` in `interp` on a thread big enough for a sandbox.
+fn run_sandboxed_with(interp: PhsInterpreter, source: &'static str) -> Result<Vec<PhsValue>, String> {
+    on_a_stack(physure_script::limits::SANDBOX_THREAD_STACK_BYTES, move || run(&interp, source))
+}

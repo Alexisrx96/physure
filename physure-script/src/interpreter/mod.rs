@@ -6,7 +6,7 @@ pub(crate) use statements::StepMode;
 pub(crate) mod helpers;
 
 use std::collections::HashMap;
-use physure_core::error::PhysureResult;
+use physure_core::error::{PhysureError, PhysureResult};
 use std::sync::{Arc, Mutex};
 
 /// A host-registered function callable from PHS source by name. Lets embedders
@@ -104,6 +104,17 @@ impl PhsInterpreter {
         let mut interp = Self::new(resolver);
         interp.debug_hook = Some(hook);
         interp
+    }
+
+    /// Stops an evaluation that has run past its deadline or its stack budget (see [`Limits`]). Cheap when
+    /// neither is set: two `Option` tests.
+    pub(crate) fn check_budget(&self) -> PhysureResult<()> {
+        if let Some(deadline) = self.limits.deadline {
+            if std::time::Instant::now() >= deadline {
+                return Err(PhysureError::Generic("time limit reached".to_string()));
+            }
+        }
+        crate::limits::check_stack(self.limits.max_stack_bytes).map_err(PhysureError::Generic)
     }
 
     pub(crate) fn debug_hook_is_set(&self) -> bool {

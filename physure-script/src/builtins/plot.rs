@@ -215,6 +215,9 @@ pub(crate) fn eval_plot_builtin_with_kwargs(
                     svg: html_str,
                 })))
             } else {
+                if !interpreter.limits.allow_files {
+                    return Err(PhysureError::Generic(format!("forbidden: writing '{}' is not allowed here", filename)));
+                }
                 let bytes = mesh_data.export_format(&format_name)?;
                 std::fs::write(&filename, &bytes)
                     .map_err(|e| PhysureError::Generic(format!("Failed to write {}: {}", filename, e)))?;

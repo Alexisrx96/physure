@@ -1272,3 +1272,15 @@ r3 = circuito_abierto(5 V, 2 A)
         let err = interp.eval_str("op_eq(True)").unwrap_err();
         assert!(err.to_string().contains("missing argument"), "{err}");
     }
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+
+    #[test]
+    fn a_sandboxed_interpreter_has_no_base_dir_so_no_native_plugin_can_load() {
+        let interp = PhsInterpreter::sandboxed(crate::Limits::sandboxed(std::time::Duration::from_secs(1)));
+        assert!(interp.plugin_base_dir.is_none());
+        assert!(interp.limits.sequential && !interp.limits.allow_files);
+    }
+}
