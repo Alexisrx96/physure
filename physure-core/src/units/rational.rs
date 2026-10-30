@@ -7,16 +7,58 @@ use crate::units::exact::ExactScale;
 
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
 
-/// An exponent as superscript digits: `2` is `²`, `0.5` is `⁰⋅⁵`.
-fn superscript(exponent: f64) -> String {
+/// A whole number as superscript digits: `2` is `²` and `-1` is `⁻¹`.
+fn superscript(number: i64) -> String {
     const DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
-    format!("{exponent}")
+    number
+        .to_string()
         .chars()
         .map(|c| match c {
-            '.' => '⋅',
+            '-' => '⁻',
             digit => DIGITS[digit as usize - '0' as usize],
         })
         .collect()
+}
+
+/// The power of a symbol as text, the one rule for it wherever a unit or a dimension is printed: a whole
+/// power is superscript digits (`m²`, `s⁻¹`), a fractional power is the exact fraction in parentheses
+/// (`s^(1/2)`, `s^(-1/3)`). Never the decimal of a fraction: a third as `⁰⋅³³³³…` is a number that is not
+/// the exponent, and no unit parser reads it back, while `^(1/3)` is exact and is read.
+pub fn power_text(numerator: i64, denominator: i64) -> String {
+    if denominator == 1 {
+        superscript(numerator)
+    } else {
+        format!("^({numerator}/{denominator})")
+    }
+}
+
+/// Unit symbols with exponents as a product, the way a `CompoundUnit` prints: the symbols in the order
+/// given, positive exponents above the bar and negative ones below it, `kg·m/s²`, `kg/(m·s²)`, `1/s`,
+/// `m^(1/2)`. What it writes is a unit the parser reads back.
+pub fn unit_text(dimensions: &[(String, (i64, i64))]) -> String {
+    let (mut numerator, mut denominator) = (Vec::new(), Vec::new());
+    for (symbol, (n, d)) in dimensions {
+        let term = if (n.abs(), *d) == (1, 1) { symbol.clone() } else { format!("{symbol}{}", power_text(n.abs(), *d)) };
+        if *n > 0 { numerator.push(term) } else { denominator.push(term) }
+    }
+    let (n, d) = (numerator.join("·"), denominator.join("·"));
+    let d = if d.contains('·') { format!("({d})") } else { d };
+    match (n.is_empty(), d.is_empty()) {
+        (false, false) => format!("{n}/{d}"),
+        (true, false) => format!("1/{d}"),
+        (false, true) => n,
+        (true, true) => "1".to_string(),
+    }
+}
+
+/// Dimension symbols with exponents as a formula, the way a `Dimension` prints: no bar, every exponent on its
+/// symbol, `L·M·T⁻²`, `L^(1/2)`, `T^(-1/2)`. It is `unit_text`'s power rule over another layout.
+pub fn formula_text(dimensions: &[(String, (i64, i64))]) -> String {
+    dimensions
+        .iter()
+        .map(|(symbol, (n, d))| if (*n, *d) == (1, 1) { symbol.clone() } else { format!("{symbol}{}", power_text(*n, *d)) })
+        .collect::<Vec<_>>()
+        .join("·")
 }
 
 /// What makes a unit a *level*: `level = factor * log10(ratio / reference)`, so `dB` is
@@ -503,21 +545,7 @@ impl RationalUnit {
     /// `kg/(m·s²)`, `1/s`. It reads the dimensions as symbols, so it is meant for a unit parsed
     /// with `Parser::parse_expression_atomic`.
     pub fn symbolic_repr(&self) -> String {
-        let (mut numerator, mut denominator) = (Vec::new(), Vec::new());
-        for (symbol, (n, d)) in &self.dimensions {
-            let exponent = *n as f64 / *d as f64;
-            let shown = exponent.abs();
-            let term = if shown == 1.0 { symbol.clone() } else { format!("{symbol}{}", superscript(shown)) };
-            if exponent > 0.0 { numerator.push(term) } else { denominator.push(term) }
-        }
-        let (n, d) = (numerator.join("·"), denominator.join("·"));
-        let d = if d.contains('·') { format!("({d})") } else { d };
-        match (n.is_empty(), d.is_empty()) {
-            (false, false) => format!("{n}/{d}"),
-            (true, false) => format!("1/{d}"),
-            (false, true) => n,
-            (true, true) => "1".to_string(),
-        }
+        unit_text(&self.dimensions)
     }
 
     pub fn __repr__(&self) -> String {

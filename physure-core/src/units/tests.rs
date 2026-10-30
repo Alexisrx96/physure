@@ -707,7 +707,7 @@ fn a_unit_written_as_symbols_prints_like_a_compound_unit() {
     assert_eq!(show("m/s^2"), "m/s²");
     assert_eq!(show("s^-1"), "1/s");
     assert_eq!(show("kg/(m*s^2)"), "kg/(m·s²)");
-    assert_eq!(show("m^(1/2)"), "m⁰⋅⁵");
+    assert_eq!(show("m^(1/2)"), "m^(1/2)");
     assert_eq!(show("m"), "m");
     assert_eq!(show("1"), "1");
 }

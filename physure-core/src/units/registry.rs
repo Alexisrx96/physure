@@ -349,6 +349,16 @@ impl UnitRegistry {
 
     /// `split_prefix` that also says which spelling of the unit followed the prefix.
     fn split_prefix_of(&self, name: &str) -> Option<(String, f64, String, RationalUnit)> {
+        // The micro sign is the prefix `u`, written µ (U+00B5, what a keyboard types and what a table of
+        // prefixes prints) or μ (U+03BC, the Greek letter): `µm` and `μm` are `um`.
+        let micro_as_u;
+        let name = match name.strip_prefix(|c| c == '\u{b5}' || c == '\u{3bc}') {
+            Some(rest) => {
+                micro_as_u = format!("u{rest}");
+                micro_as_u.as_str()
+            }
+            None => name,
+        };
         let symbols = self.prefixes.iter().map(|(symbol, factor)| (symbol.as_str(), symbol.as_str(), *factor));
         let names = self.prefix_names.iter().filter_map(|(long, symbol)| {
             self.prefixes.get(symbol).map(|factor| (long.as_str(), symbol.as_str(), *factor))
