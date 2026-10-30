@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Spanish text lives only in i18n tables.** The title and the "generated" message of the HTML manuscript that `phs --html` and `phs --web` write come from `I18nLabels` in `physure-cli/src/config.rs` (English by default; Spanish, French and German selectable) instead of being Spanish in every language. The hover of the language server names the quantity of a unit in the language of the `locale` that the client sends in `initialize`: `Length (Longitud)` is now `Length`, and `Longitud` for `es` (the table is `physure-lsp/src/i18n.rs`). The validation error of `Quantity` reads "Cannot validate Quantity from ..." (it was Spanish); the project that `phs new-plugin` writes, the `phs --help` examples, the specification that `phs doc` prints and the CLI README are in English; Spanish comments, docstrings and test fixtures were translated. The Spanish unit aliases of the catalog (`julio`, `amperio`, `porcentaje`, ...) are data, not text, and are unchanged.
+
 ## [0.3.0] - 2026-10-29
 
 **Tags:** `v0.3.0`, `core-v0.3.0`, `java-v0.3.0`
