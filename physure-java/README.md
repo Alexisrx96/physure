@@ -41,6 +41,12 @@ From Java 24 the JVM prints a warning for that call unless native access is enab
 will block it. Start the application with `--enable-native-access=ALL-UNNAMED` to avoid both; older JVMs
 do not know the option, so pass it only on 24 and later.
 
+## Threads
+
+A `UnitRegistry` can be shared between threads: every call holds the registry's lock (the PHS interpreter
+behind `evaluate` is one mutable native object), and `close()` takes the same lock. Registries do not share
+state, so one per thread never waits. `Quantity`, `QuantityVector` and `QuantityMatrix` are immutable.
+
 ## Usage in Java 8+
 
 To load and use the native engine inside your Java project:
