@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
 
 use crate::debug::{DebugHook, StackFrame};
+use crate::limits::Limits;
 use crate::resolver::{ModuleResolver, FsModuleResolver};
 use crate::PhsValue;
 
@@ -23,6 +24,7 @@ pub struct PhsInterpreter {
     pub env: HashMap<String, PhsValue>,
     pub resolver: Arc<dyn ModuleResolver>,
     pub externals: HashMap<String, ExternalFn>,
+    pub limits: Limits,
     pub(crate) plugin_state: Arc<Mutex<crate::plugin::PluginState>>,
     pub(crate) plugin_base_dir: Option<std::path::PathBuf>,
     /// call-name -> (domain, canonical builtin name), populated by `use x from calc` etc.
@@ -65,6 +67,7 @@ impl PhsInterpreter {
             env: HashMap::new(),
             resolver,
             externals: HashMap::new(),
+            limits: Limits::default(),
             plugin_state: Arc::new(Mutex::new(crate::plugin::PluginState::default())),
             plugin_base_dir: None,
             unlocked_builtins: Arc::new(Mutex::new(HashMap::new())),
@@ -78,6 +81,14 @@ impl PhsInterpreter {
 
     pub fn new_default() -> Self {
         Self::default()
+    }
+
+    /// An interpreter for text from outside: an empty module resolver (no file is read), no base dir (no native
+    /// plugin is ever loaded), and the given limits. Nothing here can be re-enabled by the program it runs.
+    pub fn sandboxed(limits: Limits) -> Self {
+        let mut interp = Self::new(Arc::new(crate::resolver::MemoryModuleResolver::new()));
+        interp.limits = limits;
+        interp
     }
 
     /// `PhsInterpreter` derives `Clone`, and `call_stack`/`breakpoints`/`step_mode` are
