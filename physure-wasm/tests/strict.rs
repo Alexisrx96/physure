@@ -423,22 +423,41 @@ fn a_body_that_is_not_a_definition_is_an_error() {
     assert!(PhyFunction::new(&registry, "empty", "").is_err());
 }
 
-// ---- a registry that redefines a unit cannot evaluate: the interpreter has one catalog per process
+// ---- evaluate reads unit text against the registry's own catalog
 
 #[wasm_bindgen_test]
-fn a_registry_that_redefines_a_unit_refuses_phs_evaluation_instead_of_using_the_old_meaning() {
-    let custom = UnitRegistry::from_content("[Units]\nkm = 7.0, L, [km]\n").unwrap();
+fn evaluate_reads_units_against_the_registrys_own_catalog() {
+    let custom = UnitRegistry::from_content("[Units]\nkm = 7.0, L, [km]\nfurlong = 201.168, L, [fur, furlong]\n").unwrap();
     assert_eq!(custom.get_unit_scale("km").unwrap(), 7.0);
-    assert!(message(custom.evaluate("1 km").unwrap_err()).contains("redefines km"));
-    assert!(custom.evaluate("1 m").is_err());
-    assert!(custom.solve("x = 2 * y", "x").is_err());
-    assert!(PhyFunction::new(&custom, "f", "f(x) = x").is_err());
+    // before, evaluate read the embedded catalog: 1 km was 1000 m here and `fur` was an unknown unit
+    assert_eq!(custom.evaluate("1 km => m").unwrap().trim(), "7.0 m");
+    assert_eq!(custom.evaluate("5 fur => m").unwrap().trim(), "1005.84 m");
 }
 
 #[wasm_bindgen_test]
-fn a_registry_that_only_adds_units_still_evaluates_and_fails_loudly_on_the_new_ones() {
+fn functions_and_calculus_run_under_the_registrys_catalog_too() {
     let custom = UnitRegistry::from_content("[Units]\nfurlong = 201.168, L, [fur, furlong]\n").unwrap();
-    assert_eq!(custom.evaluate("1 m + 2 m").unwrap().trim(), "3.0 m");
-    assert_eq!(custom.get_unit_scale("fur").unwrap(), 201.168);
-    assert!(message(custom.evaluate("5 fur").unwrap_err()).contains("Unknown unit"));
+    let distance = PhyFunction::new(&custom, "distance", "distance(n) = n * 1 fur").unwrap();
+    close(distance.call(args(&["3"])).unwrap().value(), 3.0);
+    assert_eq!(custom.evaluate("distance(3) => m").unwrap().trim(), "603.504 m");
+    assert!(custom.deriv("x * 2", "x").unwrap().contains('2'));
+}
+
+#[wasm_bindgen_test]
+fn two_registries_in_turn_each_answer_with_their_own_meaning() {
+    let custom = UnitRegistry::from_content("[Units]\nkm = 7.0, L, [km]\n").unwrap();
+    let plain = UnitRegistry::new();
+    for _ in 0..3 {
+        assert_eq!(custom.evaluate("1 km => m").unwrap().trim(), "7.0 m");
+        assert_eq!(plain.evaluate("1 km => m").unwrap().trim(), "1000.0 m");
+    }
+}
+
+#[wasm_bindgen_test]
+fn an_error_while_evaluating_leaves_no_catalog_behind() {
+    let custom = UnitRegistry::from_content("[Units]\nkm = 7.0, L, [km]\n").unwrap();
+    assert!(custom.evaluate("1 +").is_err());
+    assert!(custom.evaluate("1 m + 1 s").is_err());
+    // the failed calls did not leave the custom catalog in place for the next registry
+    assert_eq!(UnitRegistry::new().evaluate("1 km => m").unwrap().trim(), "1000.0 m");
 }

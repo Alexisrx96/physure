@@ -1,7 +1,7 @@
 # PHS evaluation on a registry's own unit catalog — design
 
 **Date:** 2026-10-30
-**Status:** proposal, not implemented. Written at the maintainer's request after the strictness pass (`2026-10-30-binding-strictness-design.md`), whose "not fixed" list it closes.
+**Status:** implemented as option B (a scoped catalog) on `feat/scoped-unit-catalog`, after the maintainer's go-ahead. Written after the strictness pass (`2026-10-30-binding-strictness-design.md`), whose "not fixed" list it closes. Where the implementation differs from what is proposed below it is said in "As built".
 **Affects:** `physure-core` (`units/parser.rs`, `units/conf.rs`), `physure-script` (`parser/quantities.rs`), the Java and WASM bindings. Does not change any public signature in the recommended option.
 
 ## The problem
@@ -85,3 +85,11 @@ Measured, not guessed, after the survey above: the core scope (about 40 lines an
 
 - Is a thread-local scope acceptable in `physure-core`, or should the core take the registry as a parameter (`Quantity::new_in(&registry, ...)`) and keep only the script's choice thread-local? The second removes the hidden context from the core's API at the price of about ten more call sites in the script.
 - Should a registry built from a conf also stop reading `physure.conf` from the working directory? It does not today (the Java and WASM catalogs are built from the embedded text and the given conf only), so only the scope's fallback is in question.
+
+## As built
+
+- `physure-core/src/units/scope.rs`: `with_catalog` and `with_current_catalog` over a thread-local stack of pointers, popped by a drop guard; `Parser::parse_expression` reads the innermost scope and copies nothing when there is one. 8 tests (`tests/catalog_scope.rs`): no scope, scope and after, a unit only the scope knows, nesting, a panic, another thread, two threads with two registries.
+- `physure-script/src/parser/quantities.rs`: `with_unit_catalog` is the one place that chooses between the scope and the embedded catalog; `is_known_unit_symbol` and the `split_unit_expr` scan use it. 7 tests (`tests/catalog_scope.rs`): a literal with a unit only the registry defines, a redefined unit, a conversion asked for in it, a function defined and called under it, nothing changed outside a scope, two registries in turn and nested, two threads. With the scope disabled 6 of the 7 and 7 of the 8 core tests fail.
+- Java: `evaluateExpression` and `evaluateQuantity` are thin wrappers that run the old bodies under `with_catalog(registry)`; the calculus calls and `PhyFunction` go through them. WASM: `RegistryState::in_catalog` runs the parse and the run of `evaluate`, `PhyFunction::{new, call, evaluate_string, define}` under the registry's catalog. The interim guard (`redefined`, `refuse_evaluation_on_redefined_units`, `check_evaluable`) is removed; `UnitRegistry::redefinitions_of` stays, with its tests.
+- Measured: 191 Java tests (Java 8 to 25) and 88 WASM tests pass; the workspace suite and the 413 existing `physure-script` tests are the regression test for "no scope reads what it always read".
+- Both open questions were settled the cheap way: the scope is thread-local in the core (explicit parameters are what the execution-context work will bring), and a registry's catalog is exactly the registry given, without `physure.conf` of the working directory.

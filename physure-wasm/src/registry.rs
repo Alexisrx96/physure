@@ -12,28 +12,16 @@ use wasm_bindgen::prelude::*;
 pub(crate) struct RegistryState {
     pub(crate) registry: CoreUnitRegistry,
     pub(crate) interpreter: PhsInterpreter,
-    /// The names of the embedded catalog that this registry's definitions give another meaning (empty unless
-    /// it was built from a conf that redefines one).
-    pub(crate) redefined: Vec<String>,
 }
 
 impl RegistryState {
-    /// PHS evaluation resolves units through the embedded catalog (the interpreter has one catalog per
-    /// process), so on a registry that gives a unit of it another meaning it would answer with the old one
-    /// while `getUnitScale` answers with the new. An error says so; the old meaning, silently, does not.
-    pub(crate) fn check_evaluable(&self) -> Result<(), JsValue> {
-        if self.redefined.is_empty() {
-            return Ok(());
-        }
-        Err(js_sys::Error::new(&format!(
-            concat!(
-                "This registry redefines {} of the embedded catalog, but PHS evaluation (evaluate, solve, deriv, ",
-                "integral and functions) uses the embedded catalog and would ignore the new meaning; getUnitScale, ",
-                "getUnitExponents and getUnitPowers use the registry's own definitions"
-            ),
-            self.redefined.join(", ")
-        ))
-        .into())
+    /// Runs `f` with the interpreter while the registry's own catalog is the one that unit text is read
+    /// against: the parser deciding that a word after a number is a unit, and the quantities built from unit
+    /// text as the program runs. Without it a registry built from a custom conf answered `getUnitScale`
+    /// with its definitions and `evaluate` with the embedded ones.
+    pub(crate) fn in_catalog<R>(&mut self, f: impl FnOnce(&mut PhsInterpreter) -> R) -> R {
+        let RegistryState { registry, interpreter } = self;
+        physure_core::units::with_catalog(registry, || f(interpreter))
     }
 }
 
@@ -83,7 +71,6 @@ impl UnitRegistry {
             state: Rc::new(RefCell::new(RegistryState {
                 registry: load_default(),
                 interpreter: create_interpreter(),
-                redefined: Vec::new(),
             })),
         }
     }
@@ -97,12 +84,10 @@ impl UnitRegistry {
         extend_registry(&mut registry, &mut constants, content).map_err(|problems| {
             js_sys::Error::new(&format!("Invalid unit definitions: {}", problems.join("; ")))
         })?;
-        let redefined = registry.redefinitions_of(&default_catalog().0);
         Ok(UnitRegistry {
             state: Rc::new(RefCell::new(RegistryState {
                 registry,
                 interpreter: create_interpreter(),
-                redefined,
             })),
         })
     }
@@ -142,27 +127,28 @@ impl UnitRegistry {
     }
 
     pub fn evaluate(&self, source: &str) -> Result<String, JsValue> {
-        let program = parse_phs(source).map_err(to_js_error)?;
         let mut state = self.state.try_borrow_mut().map_err(|_| borrow_err())?;
-        state.check_evaluable()?;
-        let mut result = String::new();
-        for (idx, stmt) in program.statements.iter().enumerate() {
-            if idx > 0 {
-                result.push('\n');
-            }
-            let value = state.interpreter.run_statement(stmt).map_err(to_js_error)?;
-            match value {
-                PhsValue::None => match stmt {
-                    Statement::Assignment(node) => match state.interpreter.get_var(&node.name) {
-                        Some(v) => result.push_str(&v.to_string()),
-                        None => result.push_str("None"),
+        state.in_catalog(|interpreter| {
+            let program = parse_phs(source).map_err(to_js_error)?;
+            let mut result = String::new();
+            for (idx, stmt) in program.statements.iter().enumerate() {
+                if idx > 0 {
+                    result.push('\n');
+                }
+                let value = interpreter.run_statement(stmt).map_err(to_js_error)?;
+                match value {
+                    PhsValue::None => match stmt {
+                        Statement::Assignment(node) => match interpreter.get_var(&node.name) {
+                            Some(v) => result.push_str(&v.to_string()),
+                            None => result.push_str("None"),
+                        },
+                        _ => result.push_str("None"),
                     },
-                    _ => result.push_str("None"),
-                },
-                other => result.push_str(&other.to_string()),
+                    other => result.push_str(&other.to_string()),
+                }
             }
-        }
-        Ok(result)
+            Ok(result)
+        })
     }
 
     pub fn deriv(&self, expr: &str, wrt: &str) -> Result<String, JsValue> {

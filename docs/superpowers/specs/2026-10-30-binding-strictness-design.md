@@ -58,8 +58,7 @@ These change behaviour for callers whose code relied on the old answers, which w
 
 ## Not fixed
 
-- **The PHS interpreter has one catalog per process**, so a custom conf never reaches `evaluate` (Java and WASM): the registry of a binding answers `getUnitScale` and `getUnitExponents` from its own catalog and `evaluate` from the default one. A change in `physure-script`.
-- **`evaluate` costs about 0.4 ms per call** in Java; it is the interpreter, not the binding.
+- **`evaluate` costs about 0.4 ms per call** in Java; it is the interpreter, not the binding. (The other item that stood here, a custom conf not reaching `evaluate`, is fixed: `2026-10-30-phs-per-registry-catalog-design.md`.)
 - **Unit text is not idempotent in its spacing**: a unit the core builds reads `m * s^-1`, the same unit typed reads `m*s^-1`. Cosmetic; both are the same unit.
 - **A conf with text before its first section is accepted** (`this is not a conf [[[` is ignored), as are blank and comment lines; an unreadable line inside a section is an error.
 - **CI has not run**: `bindings.yml` with the new tests, and the Maven build on a runner.

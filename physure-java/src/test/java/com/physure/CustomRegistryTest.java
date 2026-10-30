@@ -71,29 +71,67 @@ class CustomRegistryTest {
     }
 
     /**
-     * PHS evaluation resolves units through the embedded catalog (the interpreter has one catalog per process),
-     * so on a registry that gives a unit of it another meaning it would answer with the old one while
-     * getUnitScale answers with the new: the registry would disagree with itself without a word.
+     * PHS evaluation reads unit text against the registry's own catalog: the parser deciding that a word after a
+     * number is a unit, and the quantities built from unit text while the program runs. Before, a registry that
+     * redefined a unit answered getUnitScale with its definition and evaluate with the embedded one.
      */
     @Test
-    void aRegistryThatRedefinesAUnitRefusesPhsEvaluationInsteadOfUsingTheOldMeaning() {
-        try (UnitRegistry registry = UnitRegistry.fromContent("[Units]\nkm = 7.0, L, [km]\n")) {
+    void evaluateReadsUnitsAgainstTheRegistrysOwnCatalog() {
+        try (UnitRegistry registry = UnitRegistry.fromContent("[Units]\nkm = 7.0, L, [km]\nfurlong = 201.168, L, [fur, furlong]\n")) {
             assertEquals(7.0, registry.getUnitScale("km"), 0.0);
-            PhysureException refused = assertThrows(PhysureException.class, () -> registry.evaluate("1 km"));
-            assertTrue(refused.getMessage().contains("redefines km"), refused.getMessage());
-            assertThrows(PhysureException.class, () -> registry.evaluateRaw("1 m"));
-            assertThrows(PhysureException.class, () -> registry.solve("x = 2 * y", "x"));
-            assertThrows(PhysureException.class, () -> new PhyFunction(registry, "f", "f(x) = x"));
+            assertEquals(7.0, registry.evaluate("1 km => m").getValue(), 1e-12);
+            assertEquals(5 * 201.168, registry.evaluate("5 fur => m").getValue(), 1e-9);
+            assertEquals(2 * 201.168, registry.evaluate("2 fur + 0 m => m").getValue(), 1e-9);
         }
     }
 
     @Test
-    void aRegistryThatOnlyAddsUnitsStillEvaluatesAndFailsLoudlyOnTheNewOnes() {
+    void aFunctionAndTheCalculusCallsAreEvaluatedForTheirRegistryToo() {
         try (UnitRegistry registry = UnitRegistry.fromContent(FURLONG)) {
-            assertEquals(3.0, registry.evaluate("1 m + 2 m").getValue());
-            assertEquals(201.168, registry.getUnitScale("fur"), 0.0);
-            PhysureException unknown = assertThrows(PhysureException.class, () -> registry.evaluate("5 fur"));
-            assertTrue(unknown.getMessage().contains("Unknown unit"), unknown.getMessage());
+            PhyFunction distance = new PhyFunction(registry, "distance", "distance(n) = n * 1 fur");
+            assertEquals(3 * 201.168, registry.evaluate("distance(3) => m").getValue(), 1e-9);
+            assertEquals(3.0, distance.call("3").getValue(), 1e-12);
+            assertTrue(registry.deriv("x * 2", "x").contains("2"));
+        }
+    }
+
+    @Test
+    void theDefaultRegistryAndACustomOneEachAnswerWithTheirOwnMeaningInTurn() {
+        try (UnitRegistry custom = UnitRegistry.fromContent("[Units]\nkm = 7.0, L, [km]\n"); UnitRegistry plain = new UnitRegistry()) {
+            for (int i = 0; i < 3; i++) {
+                assertEquals(7.0, custom.evaluate("1 km => m").getValue(), 1e-12);
+                assertEquals(1000.0, plain.evaluate("1 km => m").getValue(), 1e-9);
+            }
+        }
+    }
+
+    @Test
+    void threadsEvaluatingForDifferentRegistriesEachSeeTheirOwn() throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            java.util.List<java.util.concurrent.Future<Boolean>> results = new java.util.ArrayList<>();
+            for (int t = 0; t < 4; t++) {
+                final double km = 3.0 + t;
+                results.add(pool.submit(() -> {
+                    try (UnitRegistry own = UnitRegistry.fromContent("[Units]\nkm = " + km + ", L, [km]\n")) {
+                        for (int i = 0; i < 100; i++) {
+                            if (Math.abs(own.evaluate("1 km => m").getValue() - km) > 1e-9) return false;
+                        }
+                        return true;
+                    }
+                }));
+            }
+            for (java.util.concurrent.Future<Boolean> result : results) assertTrue(result.get(60, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void anUnknownUnitIsStillAnErrorOnARegistryThatDoesNotHaveIt() {
+        try (UnitRegistry registry = UnitRegistry.fromContent(FURLONG)) {
+            PhysureException unknown = assertThrows(PhysureException.class, () -> registry.evaluate("5 parsecs_of_nothing"));
+            assertTrue(unknown.getMessage().length() > 0);
         }
     }
 

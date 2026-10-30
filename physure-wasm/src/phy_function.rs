@@ -38,8 +38,7 @@ impl PhyFunction {
                 .state
                 .try_borrow_mut()
                 .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
-            state.check_evaluable()?;
-            register_body(&mut state.interpreter, body).map_err(to_js_error)?;
+            state.in_catalog(|interpreter| register_body(interpreter, body)).map_err(to_js_error)?;
             if state.interpreter.get_fn_params(name).is_none() {
                 return Err(to_js_error(PhysureError::Generic(format!(
                     "Function '{}' was not defined in the body",
@@ -70,17 +69,19 @@ impl PhyFunction {
             formatted.push(format_call_arg(arg)?);
         }
         let call_expr = format!("{}({})", self.name, formatted.join(", "));
-        let statements = parse_phs(&call_expr).map_err(to_js_error)?;
-        let stmt = statements
-            .statements
-            .first()
-            .ok_or_else(|| to_js_error(PhysureError::Generic("Empty call expression".into())))?;
         let mut state = self
             .state
             .try_borrow_mut()
             .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
-        state.check_evaluable()?;
-        match state.interpreter.run_statement(stmt).map_err(to_js_error)? {
+        let value = state.in_catalog(|interpreter| {
+            let statements = parse_phs(&call_expr).map_err(to_js_error)?;
+            let stmt = statements
+                .statements
+                .first()
+                .ok_or_else(|| to_js_error(PhysureError::Generic("Empty call expression".into())))?;
+            interpreter.run_statement(stmt).map_err(to_js_error)
+        })?;
+        match value {
             PhsValue::Quantity(q) => Ok(Quantity::from_core(q)),
             PhsValue::Number(n) => Ok(Quantity::from_core(CoreQuantity::new_scalar(
                 n,
@@ -276,17 +277,19 @@ impl PhyFunction {
     }
 
     fn evaluate_string(&self, expr: &str) -> Result<String, JsValue> {
-        let statements = parse_phs(expr).map_err(to_js_error)?;
-        let stmt = statements
-            .statements
-            .first()
-            .ok_or_else(|| to_js_error(PhysureError::Generic("Empty expression".into())))?;
         let mut state = self
             .state
             .try_borrow_mut()
             .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
-        state.check_evaluable()?;
-        match state.interpreter.run_statement(stmt).map_err(to_js_error)? {
+        let value = state.in_catalog(|interpreter| {
+            let statements = parse_phs(expr).map_err(to_js_error)?;
+            let stmt = statements
+                .statements
+                .first()
+                .ok_or_else(|| to_js_error(PhysureError::Generic("Empty expression".into())))?;
+            interpreter.run_statement(stmt).map_err(to_js_error)
+        })?;
+        match value {
             PhsValue::String(s) => Ok(s),
             PhsValue::Equation(_, rhs) => Ok(rhs.to_phs_string()),
             PhsValue::Quantity(q) => Ok(q.to_string()),
@@ -304,8 +307,7 @@ impl PhyFunction {
                 .state
                 .try_borrow_mut()
                 .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
-            state.check_evaluable()?;
-            register_body(&mut state.interpreter, body).map_err(to_js_error)?;
+            state.in_catalog(|interpreter| register_body(interpreter, body)).map_err(to_js_error)?;
         }
         Ok(PhyFunction {
             state: self.state.clone(),
