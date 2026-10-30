@@ -58,6 +58,17 @@
 
   <build>
     <plugins>
+      <!-- Java 9+ rejects the obsolete-option notices of the 8 target; they are about the build, not the jar. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:-options</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
       <!-- The tests call the real native library, so build it first: `cargo build -p physure-java`. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -100,6 +111,17 @@
   <!-- GPG signing and the Central Portal publish step only run under -Prelease,
        so a plain `mvn verify` works locally without any signing key configured. -->
   <profiles>
+    <!-- Compile against the Java 8 API when the JDK can (9+): the source and target flags alone let a Java 9+ method
+         compile into a jar that has to run on 8. JDK 8 itself has no release option, so it keeps source and target. -->
+    <profile>
+      <id>release-8-api</id>
+      <activation>
+        <jdk>[9,)</jdk>
+      </activation>
+      <properties>
+        <maven.compiler.release>8</maven.compiler.release>
+      </properties>
+    </profile>
     <!-- Java 24 warns when System.loadLibrary is called without native access, and a later release will
          block it: NativeEngine loads the JNI library, so the tests say so up front. Applications that use
          the jar on Java 24+ enable native access for it (see README). -->
