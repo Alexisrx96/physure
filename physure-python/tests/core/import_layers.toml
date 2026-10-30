@@ -17,7 +17,11 @@
 # `[[exception]]` records an import that breaks the rule today. The test fails on
 # a violation that is not recorded, and also on a record that no longer matches
 # the code, so this list can only shrink. `cause` says who will remove it:
-#   a1  - the module involved is deleted by the A1 work (Rust owns the unit algebra)
+#   default-system - the default system is built by `application.startup`, which a lower
+#         layer reaches through a lazy import. Removed when the lower layer gets a hook
+#         that the application fills in at load time.
+#   quantity-factory - `UnitSystem.Q_` is a `QuantityFactory` of `application.factories`.
+#         Removed when the factory moves down or is injected.
 #   release - kept on purpose: `__version__` must stay in physure/__init__.py
 #         because the release workflows grep and sed it there. Move it to a
 #         leaf module together with those workflows.
@@ -91,7 +95,7 @@ modules = [
 importer = "physure.domain.measurement.system"
 imported = "physure.application.factories"
 kind = "top"
-cause = "a1"
+cause = "quantity-factory"
 
 [[exception]]
 importer = "physure.ext.io"
@@ -104,17 +108,17 @@ importer = "physure.application.context"
 imported = "physure.application.startup"
 kind = "lazy"
 count = 2
-cause = "a1"
+cause = "default-system"
 
 [[exception]]
 importer = "physure.domain.measurement.quantity"
 imported = "physure.application.startup"
 kind = "lazy"
-cause = "a1"
+cause = "default-system"
 
 [[exception]]
 importer = "physure.infrastructure.config.systems"
 imported = "physure.application.startup"
 kind = "lazy"
-cause = "a1"
+cause = "default-system"
 
