@@ -51,6 +51,8 @@ public class Main {
             // 1. Get exponents of unit expressions
             Map<String, Integer> exponents = registry.getUnitExponents("kg*m/s^2");
             System.out.println("Exponents: " + exponents); // {kg=1, m=1, s=-2}
+            // Whole numbers only: a fractional power such as s^0.5 throws PhysureException.
+            // registry.getUnitPowers("s^0.5") answers it exactly: {s=0.5}
 
             // 2. Get scale factor
             double scale = registry.getUnitScale("cm");

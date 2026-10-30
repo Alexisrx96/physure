@@ -155,11 +155,28 @@ pub extern "system" fn Java_com_physure_NativeEngine_destroyRegistry(
 
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_getUnitExponents<'local>(
-    mut env: JNIEnv<'local>,
+    env: JNIEnv<'local>,
     _class: JClass,
     registry_handle: jlong,
     expr: JString<'local>,
 ) -> jobject {
+    unit_exponent_map(env, registry_handle, expr, false)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_getUnitPowers<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass,
+    registry_handle: jlong,
+    expr: JString<'local>,
+) -> jobject {
+    unit_exponent_map(env, registry_handle, expr, true)
+}
+
+/// The base-unit exponents of `expr` as a `HashMap`: `Integer` values when `exact` is false (a fractional
+/// power is an error, because truncating it to its numerator would be a wrong answer), `Double` values
+/// (numerator over denominator, as the WASM binding returns them) when it is true.
+fn unit_exponent_map<'local>(mut env: JNIEnv<'local>, registry_handle: jlong, expr: JString<'local>, exact: bool) -> jobject {
     let reg = get_registry(registry_handle);
     let expr_str: String = match env.get_string(&expr) {
         Ok(s) => s.into(),
@@ -187,18 +204,36 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitExponents<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let integer_class = match env.find_class("java/lang/Integer") {
+    if !exact {
+        if let Some((symbol, (num, den))) = unit.dimensions.iter().find(|(_, (_, den))| *den != 1) {
+            throw_physure_exception(
+                &mut env,
+                &format!(
+                    "Unit '{}' has the fractional exponent {}/{} on '{}': getUnitExponents returns whole numbers, use getUnitPowers",
+                    expr_str, num, den, symbol
+                ),
+            );
+            return std::ptr::null_mut();
+        }
+    }
+
+    let value_class = match env.find_class(if exact { "java/lang/Double" } else { "java/lang/Integer" }) {
         Ok(c) => c,
         Err(_) => return std::ptr::null_mut(),
     };
 
-    for (symbol, (num, _den)) in &unit.dimensions {
+    for (symbol, (num, den)) in &unit.dimensions {
         let key_jstr = match env.new_string(symbol) {
             Ok(s) => s,
             Err(_) => continue,
         };
 
-        let val_obj = match env.new_object(&integer_class, "(I)V", &[JValue::Int(*num as i32)]) {
+        let value = if exact {
+            env.new_object(&value_class, "(D)V", &[JValue::Double(*num as f64 / *den as f64)])
+        } else {
+            env.new_object(&value_class, "(I)V", &[JValue::Int(*num as i32)])
+        };
+        let val_obj = match value {
             Ok(o) => o,
             Err(_) => continue,
         };

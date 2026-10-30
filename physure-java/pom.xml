@@ -41,10 +41,30 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.source>8</maven.compiler.source>
     <maven.compiler.target>8</maven.compiler.target>
+    <!-- Where `cargo build -p physure-java` leaves the native library the tests load. -->
+    <physure.native.dir>${project.basedir}/../target/debug</physure.native.dir>
   </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.3</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
 
   <build>
     <plugins>
+      <!-- The tests call the real native library, so build it first: `cargo build -p physure-java`. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <argLine>-Djava.library.path=${physure.native.dir}</argLine>
+        </configuration>
+      </plugin>
       <!-- Required by Maven Central: sources + javadoc jars alongside the main jar. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

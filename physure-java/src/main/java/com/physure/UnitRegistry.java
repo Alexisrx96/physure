@@ -33,11 +33,23 @@ public class UnitRegistry implements AutoCloseable {
     }
 
     /**
-     * Parse and get the exponent map of a unit expression.
+     * Parse and get the exponent map of a unit expression, as whole numbers.
+     *
+     * @throws PhysureException if the unit has a fractional power ({@code s^0.5}); the whole number
+     *     would be a wrong answer, so use {@link #getUnitPowers(String)} for those.
      */
     public Map<String, Integer> getUnitExponents(String expr) {
         checkClosed();
         return NativeEngine.getUnitExponents(handle, expr);
+    }
+
+    /**
+     * Parse and get the exponent map of a unit expression with its exact powers
+     * ({@code s^0.5} is {@code {s=0.5}}), as the WASM binding returns them.
+     */
+    public Map<String, Double> getUnitPowers(String expr) {
+        checkClosed();
+        return NativeEngine.getUnitPowers(handle, expr);
     }
 
     /**

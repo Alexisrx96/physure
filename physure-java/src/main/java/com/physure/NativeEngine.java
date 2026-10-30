@@ -84,6 +84,7 @@ public class NativeEngine {
      * @return A map of unit symbols to their exponents, or null on error.
      */
     public static native Map<String, Integer> getUnitExponents(long registryHandle, String expr);
+    public static native Map<String, Double> getUnitPowers(long registryHandle, String expr);
 
     /**
      * Returns the base-SI scale factor of a unit expression.
