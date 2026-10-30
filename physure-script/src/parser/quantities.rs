@@ -11,11 +11,18 @@ fn unit_registry() -> &'static UnitRegistry {
     REGISTRY.get_or_init(|| physure_core::units::conf::build_registry_from_conf().0)
 }
 
+/// The catalog that a word after a number is judged a unit by: the one of the innermost
+/// `physure_core::units::with_catalog` scope on this thread (a binding evaluating for a registry built from a
+/// custom conf), and the embedded one when there is none.
+fn with_unit_catalog<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
+    physure_core::units::with_current_catalog(|scoped| f(scoped.unwrap_or_else(|| unit_registry())))
+}
+
 /// True if `name` resolves to a registered unit. Used to tell a unit symbol apart from an
 /// unbound variable when checking that a keyword call to an equation supplies every unknown:
 /// in `"y = x * 2.0 m"` the `m` is metres, not a variable the caller forgot to pass.
 pub(crate) fn is_known_unit_symbol(name: &str) -> bool {
-    unit_registry().get_unit(name).is_some()
+    with_unit_catalog(|registry| registry.get_unit(name).is_some())
 }
 
 /// True if a `unit_term` pair (e.g. "kg", "r ^ 2", "m2", "a0", "Å") names a registered
@@ -179,7 +186,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
                 }
             }
             Rule::unit_expr => {
-                let (u, leftover) = split_unit_expr(inner, unit_registry());
+                let (u, leftover) = with_unit_catalog(|registry| split_unit_expr(inner, registry));
                 unit = u;
                 unit_leftover = leftover;
             }
