@@ -46,6 +46,12 @@ jobs:
             exit 1
           fi
 
+  # The binding tests (bindings.yml: the golden file, run against the real native library or the wasm
+  # build) must pass on this commit before anything is published.
+  bindings-tests:
+    needs: check-version
+    uses: ./.github/workflows/bindings.yml
+
   # Builds the native cdylib for each platform and stages it at the exact
   # jar-resource path NativeEngine.java's classpath fallback loader expects:
   # /natives/{linux|macos|windows}/{os.arch}/{mapLibraryName}. os.arch is the
@@ -81,7 +87,7 @@ jobs:
           path: staged/natives
 
   publish:
-    needs: native-libs
+    needs: [native-libs, bindings-tests]
     runs-on: ubuntu-latest
     environment: maven-central
     steps:
@@ -102,7 +108,8 @@ jobs:
           gpg-passphrase: GPG_PASSPHRASE
       - name: Publish to Maven Central
         working-directory: physure-java
-        run: mvn -B -Prelease clean deploy
+        # the tests ran in bindings-tests, against a native library built for that runner
+        run: mvn -B -Prelease -DskipTests clean deploy
         env:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}

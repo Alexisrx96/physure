@@ -1,0 +1,79 @@
+# The Java and WASM bindings are held to what the core says about a unit
+# (tests/golden/unit_dimension_scale.tsv, the same file physure-core's own test reads).
+#
+# Runs when something a binding is built from changes, and as the first step of
+# java-release.yml and wasm-release.yml (`uses:`), so a release cannot start
+# from a commit whose binding tests did not pass.
+name: Bindings
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'physure-core/**'
+      - 'physure-script/**'
+      - 'physure-java/**'
+      - 'physure-wasm/**'
+      - 'tests/golden/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/bindings.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'physure-core/**'
+      - 'physure-script/**'
+      - 'physure-java/**'
+      - 'physure-wasm/**'
+      - 'tests/golden/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/bindings.yml'
+  workflow_call:
+
+# The group name is its own (not github.workflow): a release workflow that calls this
+# one shares its workflow name and ref, and two groups with one name would deadlock.
+concurrency:
+  group: bindings-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+      # Java 8 is what the published jar targets (java-release.yml builds it with 8).
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+      # The tests load the real native library from target/debug.
+      - name: Build the native library
+        run: cargo build -p physure-java
+      - name: Run the Java tests
+        working-directory: physure-java
+        run: mvn -B test
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Run the WASM tests under Node
+        working-directory: physure-wasm
+        run: wasm-pack test --node
