@@ -140,3 +140,23 @@ fn describe_unit_answers_what_the_core_knows() {
     assert_eq!((celsius.kind, celsius.linear), ("point", false));
     assert_eq!(describe_unit("fooz").unwrap_err(), "unknown unit 'fooz'");
 }
+
+#[test]
+fn convert_gives_the_value_unit_and_dimension() {
+    use physure_script::report::convert;
+    let metres = convert(2.5, "km", "m").unwrap();
+    assert_eq!((metres.kind, metres.dimension.as_deref()), ("quantity", Some("L")));
+    assert!((metres.value.unwrap() - 2500.0).abs() < 1e-9, "{metres:?}");
+    let kelvin = convert(20.0, "degC", "K").unwrap();
+    assert!((kelvin.value.unwrap() - 293.15).abs() < 1e-9, "{kelvin:?}");
+}
+
+#[test]
+fn convert_refuses_what_the_core_refuses_and_a_unit_that_is_too_long() {
+    use physure_script::report::{convert, MAX_UNIT_LEN};
+    assert!(convert(1.0, "m", "s").is_err());
+    assert!(convert(1.0, "fooz", "m").is_err());
+    let long = "m*".repeat(MAX_UNIT_LEN);
+    assert!(convert(1.0, &long, "m").unwrap_err().contains("too long"));
+    assert!(describe_unit(&long).unwrap_err().contains("too long"));
+}

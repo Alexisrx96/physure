@@ -196,8 +196,32 @@ fn render(value: &PhsValue, registry: &UnitRegistry) -> Value {
     }
 }
 
+/// The longest unit expression `describe_unit` and `convert` read: a caller from outside gets no say in how long
+/// the unit parser works.
+pub const MAX_UNIT_LEN: usize = 200;
+
+fn check_unit_len(unit: &str) -> Result<(), String> {
+    if unit.len() > MAX_UNIT_LEN {
+        return Err(format!("unit expression of {} bytes is too long (the limit is {MAX_UNIT_LEN})", unit.len()));
+    }
+    Ok(())
+}
+
+/// `value` `from` expressed in `to`, as the core converts it (offsets of absolute temperatures included).
+pub fn convert(value: f64, from: &str, to: &str) -> Result<Value, String> {
+    check_unit_len(from)?;
+    check_unit_len(to)?;
+    let converted = physure_core::quantity::Quantity::new(value, from).and_then(|quantity| quantity.to(to)).map_err(|error| error.to_string())?;
+    let value = PhsValue::Quantity(converted);
+    Ok(with_current_catalog(|scoped| match scoped {
+        Some(registry) => render(&value, registry),
+        None => render(&value, &physure_core::units::conf::build_registry_from_conf().0),
+    }))
+}
+
 /// What the core knows of a unit: its dimension, whether it is an absolute temperature scale, its shortest name.
 pub fn describe_unit(symbol: &str) -> Result<UnitDescription, String> {
+    check_unit_len(symbol)?;
     with_current_catalog(|scoped| match scoped {
         Some(registry) => describe(registry, symbol),
         None => describe(&physure_core::units::conf::build_registry_from_conf().0, symbol),

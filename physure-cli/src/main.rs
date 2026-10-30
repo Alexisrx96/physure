@@ -12,6 +12,7 @@ mod export;
 mod html;
 mod katex_assets;
 mod latex;
+mod mcp;
 mod package;
 mod protocol;
 mod rich;
@@ -64,6 +65,7 @@ fn print_help() {
     println!("    phs check orbit_sim.phs                (dimensions, without running; --json for tools)");
     println!("    phs eval orbit_sim.phs --seed 1        (sandboxed run, one JSON document; - reads stdin)");
     println!("    phs unit kWh                           (dimension, kind and alias of a unit, as JSON)");
+    println!("    phs mcp                                (Model Context Protocol server on stdio, for agents)");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
     println!("    phs upgrade");
@@ -699,6 +701,11 @@ fn main() {
 
     if args[1] == "unit" {
         eval::run_unit(&args);
+        return;
+    }
+
+    if args[1] == "mcp" {
+        mcp::run_mcp();
         return;
     }
 
