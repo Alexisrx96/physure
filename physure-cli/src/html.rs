@@ -285,7 +285,7 @@ pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &s
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{} &mdash; Manuscrito Científico Physure</title>
+    <title>{} &mdash; {}</title>
     <style>
         {}
 
@@ -508,6 +508,7 @@ pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &s
     "#,
         i18n.html_lang,
         escape_html(&paper_title),
+        i18n.manuscript_title,
         KATEX_CSS,
         KATEX_JS,
         AUTO_RENDER_JS,
@@ -524,7 +525,7 @@ pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &s
     );
 
     fs::write(output_path, html_content)?;
-    println!("\x1b[1;32m📄 Manuscrito científico HTML generado (100% offline):\x1b[0m {}", output_path.display());
+    println!("\x1b[1;32m📄 {}\x1b[0m {}", i18n.html_generated, output_path.display());
     // Set for CLI integration tests, which must not pop an actual browser window.
     if env::var_os("PHS_NO_OPEN").is_none() {
         open::that(output_path)?;

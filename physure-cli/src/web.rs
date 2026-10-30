@@ -228,7 +228,7 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{} &mdash; Manuscrito Científico Physure</title>
+    <title>{} &mdash; {}</title>
     <style>
         {}
 
@@ -429,6 +429,7 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars:
     "#,
         i18n.html_lang,
         escape_html(&paper_title),
+        i18n.manuscript_title,
         KATEX_CSS,
         KATEX_JS,
         AUTO_RENDER_JS,

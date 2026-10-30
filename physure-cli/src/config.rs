@@ -22,6 +22,8 @@ pub struct I18nLabels {
     pub else_word: &'static str,
     pub true_word: &'static str,
     pub false_word: &'static str,
+    pub manuscript_title: &'static str,
+    pub html_generated: &'static str,
 }
 
 impl PhysureConfig {
@@ -80,6 +82,8 @@ impl PhysureConfig {
                 else_word: "si no",
                 true_word: "Verdadero",
                 false_word: "Falso",
+                manuscript_title: "Manuscrito Científico Physure",
+                html_generated: "Manuscrito científico HTML generado (100% offline):",
             },
             "fr" => I18nLabels {
                 abstract_title: "Résumé / Abstract",
@@ -96,6 +100,8 @@ impl PhysureConfig {
                 else_word: "sinon",
                 true_word: "Vrai",
                 false_word: "Faux",
+                manuscript_title: "Manuscrit scientifique Physure",
+                html_generated: "Manuscrit scientifique HTML généré (100 % hors ligne) :",
             },
             "de" => I18nLabels {
                 abstract_title: "Zusammenfassung / Abstract",
@@ -112,6 +118,8 @@ impl PhysureConfig {
                 else_word: "sonst",
                 true_word: "Wahr",
                 false_word: "Falsch",
+                manuscript_title: "Wissenschaftliches Manuskript Physure",
+                html_generated: "Wissenschaftliches HTML-Manuskript erstellt (100 % offline):",
             },
             _ => I18nLabels {
                 abstract_title: "Abstract",
@@ -128,7 +136,44 @@ impl PhysureConfig {
                 else_word: "else",
                 true_word: "True",
                 false_word: "False",
+                manuscript_title: "Physure Scientific Manuscript",
+                html_generated: "Scientific HTML manuscript generated (100% offline):",
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels(lang: &str) -> I18nLabels {
+        PhysureConfig { lang: lang.to_string() }.i18n()
+    }
+
+    #[test]
+    fn english_is_the_default_and_an_unknown_language_falls_back_to_it() {
+        for lang in ["en", "", "pt", "xx"] {
+            let l = labels(lang);
+            assert_eq!(l.html_lang, "en", "{lang}");
+            assert_eq!(l.manuscript_title, "Physure Scientific Manuscript", "{lang}");
+            assert!(l.html_generated.starts_with("Scientific HTML manuscript generated"), "{lang}");
+        }
+    }
+
+    #[test]
+    fn every_language_has_its_own_manuscript_title_and_message() {
+        let en = labels("en");
+        for (lang, title) in [
+            ("es", "Manuscrito Científico Physure"),
+            ("es-mx", "Manuscrito Científico Physure"),
+            ("fr", "Manuscrit scientifique Physure"),
+            ("de", "Wissenschaftliches Manuskript Physure"),
+        ] {
+            let l = labels(lang);
+            assert_eq!(l.manuscript_title, title, "{lang}");
+            assert_ne!(l.html_generated, en.html_generated, "{lang}");
+            assert!(!l.html_generated.is_empty(), "{lang}");
         }
     }
 }
