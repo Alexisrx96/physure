@@ -102,7 +102,8 @@ fn repr_higher_integer_power() {
 #[test]
 fn repr_fractional_power() {
     let sqrt_l = length().pow(Rational64::new(1, 2));
-    assert_eq!(sqrt_l.__repr__(), "L^1/2");
+    // parenthesised: the parser reads `L^1/2` as `L^1` divided by 2
+    assert_eq!(sqrt_l.__repr__(), "L^(1/2)");
 }
 
 fn dims(pairs: &[(&str, i64, i64)]) -> RationalUnit {

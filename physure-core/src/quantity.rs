@@ -167,21 +167,29 @@ impl std::fmt::Display for Quantity {
 }
 
 impl Quantity {
+    /// The magnitude, its standard uncertainty and the unit symbol that a reader of this quantity is
+    /// shown, as one consistent triple. Multiplying or dividing quantities can produce an anonymous
+    /// (unnamed) compound unit whose scale isn't 1.0 (e.g. Ohm * milliamp). There's no literal symbol
+    /// for such a unit, so the scale is folded into the value and the uncertainty and the unit is
+    /// written in canonical (scale-1) terms: `2 m * 3 km` is `6000.0 m^2`, not the raw `6` that the
+    /// stored value holds next to the scale-less symbol `m^2`. Anything that hands a quantity's
+    /// number and unit to other code (the Java and WASM bindings) has to take them from here, or from
+    /// `Display`, and not from `value` and `unit` separately.
+    pub fn display_parts(&self) -> (f64, f64, String) {
+        if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
+            let canonical_unit = self.unit.clone().with_unit_scale();
+            (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
+        } else {
+            (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
+        }
+    }
+
     /// The default `Display` string, or one with `@precision(N)`'s override applied: `N`
     /// significant figures for the uncertainty when this quantity has one (magnitude rounds
     /// to match, same as the default), or `N` plain decimal places on the magnitude when it's
     /// exact (there's no uncertainty to round against).
     pub fn to_string_with_precision(&self, precision_override: Option<u32>) -> String {
-        // Multiplying/dividing quantities can produce an anonymous (unnamed) compound
-        // unit whose scale isn't 1.0 (e.g. Ohm * milliamp). There's no literal symbol
-        // for such a unit, so fold the scale into the value and display in canonical
-        // (scale-1) terms instead of printing the raw, unscaled magnitude.
-        let (val, std_dev, unit_str) = if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
-            let canonical_unit = self.unit.clone().with_unit_scale();
-            (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
-        } else {
-            (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
-        };
+        let (val, std_dev, unit_str) = self.display_parts();
         // An uncertainty the user declared has to survive to the output: printing
         // "10.0 m" for `10.0 +/- 0.5 m` throws away the half of the measurement that
         // says how much to trust the other half.
@@ -789,6 +797,11 @@ impl Quantity {
     }
 
     pub fn with_uncertainty(mean: f64, std_dev: f64, unit_expr: &str) -> PhysureResult<Self> {
+        // `NaN` and infinity used to be read as "no uncertainty" (the quantity came out exact), which is the
+        // opposite of what an unknown or unbounded spread says.
+        if !std_dev.is_finite() {
+            return Err(PhysureError::DomainError(format!("the uncertainty must be a finite number, got {std_dev}")));
+        }
         let clean_unit = unit_expr.trim().replace(" / ", "/").replace(" * ", "*");
         if clean_unit.is_empty() {
             return Ok(Self::new_scalar(mean, std_dev, crate::units::RationalUnit::dimensionless(), None, None));

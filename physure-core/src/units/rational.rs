@@ -469,7 +469,8 @@ impl RationalUnit {
             } else if *den == 1 {
                 parts.push(format!("{}^{}", base, num));
             } else {
-                parts.push(format!("{}^{}/{}", base, num, den));
+                // parenthesised so that the unit parser reads it back: `m^1/2` is `m^1` divided by 2
+                parts.push(format!("{}^({}/{})", base, num, den));
             }
         }
         parts.join(" * ")
