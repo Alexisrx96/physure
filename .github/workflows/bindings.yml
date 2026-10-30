@@ -41,22 +41,43 @@ permissions:
   contents: read
 
 jobs:
-  java:
+  # The native library does not depend on the JDK that loads it (the JNI interface is stable), so it
+  # is built once and every Java version in the matrix tests the same file.
+  native:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
-      # Java 8 is what the published jar targets (java-release.yml builds it with 8).
+      - name: Build the native library
+        run: cargo build -p physure-java
+      - uses: actions/upload-artifact@v4
+        with:
+          name: physure-java-native
+          path: target/debug/libphysure_java.so
+          retention-days: 1
+
+  # Every LTS release of Java, from the 8 the jar targets (maven.compiler.target) to the newest.
+  java:
+    needs: native
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["8", "11", "17", "21", "25"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "8"
+          java-version: ${{ matrix.java }}
       # The tests load the real native library from target/debug.
-      - name: Build the native library
-        run: cargo build -p physure-java
-      - name: Run the Java tests
+      - uses: actions/download-artifact@v4
+        with:
+          name: physure-java-native
+          path: target/debug
+      - name: Run the Java tests on Java ${{ matrix.java }}
         working-directory: physure-java
         run: mvn -B test
 
