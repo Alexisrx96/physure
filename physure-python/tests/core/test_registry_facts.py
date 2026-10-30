@@ -15,7 +15,12 @@ from physure.application.context import get_current_system
 from physure.domain.exceptions import UnknownUnitError
 from physure.domain.measurement.units import units
 
-GOLDEN_FILE = Path(__file__).parent / "golden" / "unit_semantics.json"
+GOLDEN_FILE = (
+    Path(__file__).resolve().parents[3]
+    / "tests"
+    / "golden"
+    / "unit_semantics.json"
+)
 CATALOG_NAMES = dir(units)  # the names of the catalog written as units.<name>
 FACT_FIELDS = ("dimension", "kind", "is_linear", "alias", "simplified")
 

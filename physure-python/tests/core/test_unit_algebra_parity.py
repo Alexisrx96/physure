@@ -33,7 +33,12 @@ from physure.application.context import get_current_system
 from physure.domain.exceptions import UnknownUnitError
 from physure.domain.measurement.units import units
 
-GOLDEN_FILE = Path(__file__).parent / "golden" / "unit_semantics.json"
+GOLDEN_FILE = (
+    Path(__file__).resolve().parents[3]
+    / "tests"
+    / "golden"
+    / "unit_semantics.json"
+)
 UPDATE_GOLDEN = os.environ.get("PHYSURE_UPDATE_GOLDEN") == "1"
 
 # 1.0 shows scale factors; 25.0 also shows the offset of temperature scales.
