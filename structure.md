@@ -45,10 +45,10 @@ end
 subgraph group_python["physure-python/physure/ — Python public API package<br/>(requires the native physure._core extension)"]
   node_python_entry["__init__.py · __main__.py · cli.py<br/>public surface, sync-types/repl subcommands<br/>[__init__.py]"]
   node_repl["repl.py<br/>PHS REPL (python -m physure) —<br/>evaluates PHS through the native engine<br/>[repl.py]"]
-  node_app["application/<br/>Q_ factory, ContextVar, .conf bootstrap,<br/>fit/solver services<br/>[application/factories.py]"]
-  node_measurement["domain/measurement/<br/>Quantity, UnitSystem, Uncertainty,<br/>conversions/converters<br/>[domain/measurement/quantity.py]"]
+  node_app["application/<br/>Q_ factory, ContextVar, .conf merge into a UnitSystem,<br/>fit/solver services<br/>[application/factories.py]"]
+  node_measurement["domain/measurement/<br/>Quantity, UnitSystem (owns a core registry),<br/>CompoundUnit/Dimension over RationalUnit,<br/>conversion plans, Uncertainty<br/>[domain/measurement/quantity.py]"]
   node_symbolic_py["domain/symbolic/<br/>sympy-backed SymbolicQuantity/graph<br/>[domain/symbolic/graph.py]"]
-  node_core_infra["core/<br/>BackendManager dispatcher, BackendOps<br/>protocol, lazy UnitRegistry, formatting<br/>[core/dispatcher.py]"]
+  node_core_infra["core/<br/>BackendManager dispatcher, BackendOps<br/>protocol, units registry (catalog + plugins), formatting<br/>[core/dispatcher.py]"]
   node_backends["backends/<br/>numpy/torch/jax/python/core backends<br/>[backends/core_backend.py]"]
   node_jit["_jit/tracer.py<br/>TracerQuantity DAG, validates dims<br/>via RationalUnit, zero runtime overhead<br/>[_jit/tracer.py]"]
   node_infra_conf["infrastructure/config/systems/<br/>international.conf, imperial.conf<br/>(base catalog: physure-core's physure.conf,<br/>embedded in _core)<br/>[infrastructure/config/systems/international.conf]"]
@@ -105,6 +105,7 @@ node_app -->|"constructs"| node_measurement
 node_measurement -->|"dispatches array/tensor ops"| node_core_infra
 node_core_infra -->|"lazily loads"| node_backends
 node_measurement -.->|"correlated mode backed by native"| node_pyo3
+node_measurement -->|"asks the registry: parse, dimension, conversion plan, kind, alias"| node_pyo3
 node_jit -.->|"validates dimensions via native"| node_pyo3
 node_repl -->|"evaluates PHS via"| node_pyo3
 node_ext -.->|"optional lazy import"| node_measurement
@@ -112,7 +113,8 @@ node_ext -.->|"optional lazy import"| node_backends
 node_ext -->|"executes .phs scripts via native"| node_pyo3
 node_nn -->|"wraps"| node_backends
 node_symbolic_py -.->|"optional sympy dependency"| node_measurement
-node_units_pkg -->|"registers into"| node_core_infra
+node_units_pkg -->|"forwards to"| node_core_infra
+node_core_infra -.->|"which names are units: knows / resolvable_names"| node_pyo3
 
 node_phs_cli -->|"depends on"| node_phs_engine
 node_phs_cli -->|"uses registry, quantities and GUM rounding from"| node_core
@@ -186,7 +188,7 @@ class node_workspace toneNeutral
 | **physure-core** | Single source of truth for all physics: dimensional analysis (`units/`), numeric primitives — dual numbers, interval arithmetic, sparse Jacobians (`math/`), sparse covariance tracking (`covariance/`), and the propagation models — Gaussian, unscented, Monte Carlo (`uncertainty/`). | No FFI deps of any kind — every binding wraps this, never duplicates it. |
 | **physure-script** | The PhysureScript (PHS) DSL: pest grammar (`phs.pest`) → `parser/` → resolver → tree-walking interpreter, a small CAS (`symbolic/`, tokenised by `lexer.rs`, which the language parser does not use) for diff/integrate/solve, and transpilers to Python/Java/Rust/JavaScript/TypeScript (`codegen/`). Shares physics types with `physure-core`. | This is the *only* implementation of PHS — nothing reimplements it in Python. |
 | **physure-python (Rust)** | PyO3 binding crate only. Compiles to `physure._core`. | Zero physics logic — pure glue over `physure-core` + `physure-script`. |
-| **physure-python (Python)** | The public library: `application/` (composition root: `Q_`, active-`UnitSystem` context, `.conf` bootstrap), `domain/measurement` (`Quantity`, `UnitSystem`, `Uncertainty`), `core/` (backend dispatch, protocols, lazy unit registry), `backends/` (NumPy/Torch/JAX/pure-Python), `_jit/` (compile-time unit checking via native `RationalUnit`), `ext/` (optional chemistry/pandas/numba, lazily imported), `nn/` (unit-aware `torch.nn` wrappers). | The native extension is mandatory (`physure/__init__.py` raises `ImportError` without it). Python still keeps its own unit/dimension algebra (`domain/measurement`: `Dimension`, `CompoundUnit`, `UnitSystem`; the `configparser`-based `.conf` loader is `UnitSystemBuilder` in `application/startup.py`) and also mirrors each unit into the Rust `UnitRegistry` on a best-effort basis (registration errors there are suppressed) — a known duplication with its own follow-up design (item A1 of the repo-hygiene spec). The folder names `application/`, `domain/` and `core/` are historical: they import each other in both directions. |
+| **physure-python (Python)** | The public library: `application/` (composition root: `Q_`, active-`UnitSystem` context, `.conf` merge and system construction), `domain/measurement` (`Quantity` over NumPy/Torch/JAX numbers; `UnitSystem`, which owns a core `UnitRegistry` built from the merged conf text; `CompoundUnit` and `Dimension`, flyweights over the extension's `RationalUnit` with exact powers; `Uncertainty`), `core/` (backend dispatch, protocols, the registry behind `physure.units`: the catalog's names plus plugins), `backends/` (NumPy/Torch/JAX/pure-Python), `_jit/` (compile-time unit checking via native `RationalUnit`), `ext/` (optional chemistry/pandas/numba, lazily imported), `nn/` (unit-aware `torch.nn` wrappers). | The native extension is mandatory (`physure/__init__.py` raises `ImportError` without it). Python keeps no unit algebra of its own: parsing, dimensions, conversion plans, kind, linearity, aliases, simplification and which names are units are asked of the core (`UnitSystem.core_registry`, `physure._core.UnitRegistry`), and the algebra of units and dimensions is `RationalUnit`'s. What stays in Python is what needs the numbers of a `Quantity` (applying a conversion plan with the operations of its backend, `conversion_plan.py`), presentation (names of dimensions, how a unit is shown) and writing a unit registered by hand as the conf line the core reads (`definitions_text.py`). The folder names `application/`, `domain/` and `core/` are historical: they import each other in both directions. |
 | **physure-cli** | Standalone `phs` binary — a notebook-like runner with TUI, HTML/LaTeX/KaTeX rendering, and a local web server for PHS scripts. Talks to `physure-script` (and `physure-core` for the unit registry and GUM rounding) directly; no Python involved. | Independent distribution target — ships without the Python package. |
 | **physure-lsp** | `tower-lsp` server giving editors completion/diagnostics for `.phs` files. | Thin — delegates all language understanding to `physure-script`. |
 | **physure-java** | JNI bridge exposing `physure-core` types (`Quantity`, `UnitRegistry`, ...) to the JVM, and evaluates PHS through `physure-script`. | Mirrors the PyO3 crate's role: bindings only, no physics logic. |
