@@ -1,7 +1,7 @@
 # A conformance contract for the Java and WASM bindings (F3) — design
 
 **Date:** 2026-10-30
-**Status:** approved by the maintainer on 2026-10-30 (option A, and a path-filtered `bindings.yml`; the two questions of the last section), implemented on `test/binding-conformance`. The CI workflow has **not run on GitHub yet**.
+**Status:** approved by the maintainer on 2026-10-30 (option A, and a path-filtered `bindings.yml`; the two questions of the last section), implemented on `test/binding-conformance`. The CI workflow has **not run on GitHub yet**. Extended the same day (`test/java-lts-matrix`) at the maintainer's request: the Java suite runs on every LTS, 8 to 25.
 **Base:** local `main` @ `9a7eef6`
 **Follows:** the draft `2026-10-30-draft-binding-conformance-java-wasm.md` (finding F3 of `2026-10-30-post-a1-inventory.md`).
 
@@ -48,26 +48,29 @@ The fix for the bug above was not asked about; it is the conservative one and is
 | `physure-java/pom.xml` | `junit-jupiter` 5.10.3 (test scope), `maven-surefire-plugin` 3.2.5 with `-Djava.library.path=${physure.native.dir}` (default `../target/debug`). Nothing changes for a consumer of the jar. |
 | `physure-wasm/tests/binding_contract.rs` | One `wasm_bindgen_test` over every row, collecting the disagreements into one message; the golden file comes in with `include_str!`. |
 | `tests/golden/unit_semantics.json` | Moved from `physure-python/tests/core/golden/` so that nothing under `physure-core/tests` reaches into the Python tree. The two Python readers and the Rust reader follow. |
-| `.github/workflows/bindings.yml` | `java` (Rust, JDK 8, `cargo build -p physure-java`, `mvn -B test`) and `wasm` (Rust with the wasm32 target, Node 20, `cargo install wasm-pack`, `wasm-pack test --node`). Triggers: push to `main` and pull requests that touch `physure-core`, `physure-script`, `physure-java`, `physure-wasm`, `tests/golden`, `Cargo.toml`, `Cargo.lock` or the workflow; and `workflow_call`. Its concurrency group has its own name, because a called workflow that used `github.workflow` would share the group of its caller and deadlock. |
+| `.github/workflows/bindings.yml` | `native` (Rust, `cargo build -p physure-java`, the library uploaded as an artifact), `java` (needs `native`; a matrix over every LTS, Java 8, 11, 17, 21 and 25, each downloading that library and running `mvn -B test`; `fail-fast` off) and `wasm` (Rust with the wasm32 target, Node 20, `cargo install wasm-pack`, `wasm-pack test --node`). Triggers: push to `main` and pull requests that touch `physure-core`, `physure-script`, `physure-java`, `physure-wasm`, `tests/golden`, `Cargo.toml`, `Cargo.lock` or the workflow; and `workflow_call`. Its concurrency group has its own name, because a called workflow that used `github.workflow` would share the group of its caller and deadlock. |
 | `java-release.yml`, `wasm-release.yml` | A `bindings-tests` job (`uses: ./.github/workflows/bindings.yml`, after `check-version`); `publish` needs it. The Java publish runs `mvn ... -DskipTests` because the tests ran in that job. |
 | `physure-java` fix | `getUnitExponents` keeps `Map<String, Integer>` and throws `PhysureException` for a unit that has a fractional exponent; the new `getUnitPowers` returns `Map<String, Double>` with the exact powers, as WASM does. |
 
 ## What was measured, and what was not
 
-Measured on this machine (Windows, JDK 21, Maven 3.x, `wasm-pack`, Node):
+Measured on this machine (Windows x64, Maven 3.9.16, `wasm-pack`, Node):
 
 - The core test and the moved golden test pass; the two Python modules that read the moved file pass (88 tests).
 - The WASM contract passes under `wasm-pack test --node`, together with the 43 tests that were already there.
 - The Java contract failed on the four rows above before the fix and passes after it (90 tests, 0 failures).
+- The Java suite passes, 90 of 90, on every LTS: Temurin 8 (8u504), 11 (11.0.32.1), 17 (17.0.20.1) and 25 (25.0.5), whose SHA-256 was checked against Adoptium's metadata, and Microsoft OpenJDK 21 (21.0.11), each with a clean build. Java 25 warns that source and target 8 are obsolete and, without the `native-access` profile, that `System.loadLibrary` is a restricted method that a later release will block.
 - A wrong row (`km` scale off by one ulp, `m^1.5` with the exponent 3) fails all three suites with a message that names the row.
 
-**Not measured:** `bindings.yml` itself (a workflow cannot run from a checkout), the Java tests on JDK 8 (they ran on 21; the pom compiles for 8 and JUnit 5.10 supports 8), the time of `cargo install wasm-pack` on a runner, and the reusable-workflow call from the two release workflows. The first pull request that touches a path filter and the next Java or WASM release are the tests of those.
+**Not measured:** `bindings.yml` itself (a workflow cannot run from a checkout, so the matrix has run on Windows with a `.dll`, not on the Linux runners with a `.so`), whether Temurin 25 is available to `actions/setup-java` on the runners, the time of `cargo install wasm-pack` on a runner, and the reusable-workflow call from the two release workflows. The first pull request that touches a path filter and the next Java or WASM release are the tests of those.
 
 ## What the contract does not do
 
 - It does not make the bindings agree with each other where the core changes on purpose: the file is blessed and the three suites move together. That is the point.
 - Python is not in this file. It is checked against the core by its own suites, which read `unit_semantics.json` (dimension by physical symbol, kind, linearity, alias, simplified form) and compare the whole catalog; the bindings return base-unit exponents (`kg`, `m`, `s`), a different shape, so the draft's "one golden file for all four" was not possible and was not forced.
 - It checks unit expressions, not quantities, PHS evaluation or the calculus calls.
+- Java 25 already calls `-source 8 -target 8` obsolete ("will be removed in a future release"). The day a JDK drops 8 the newest entry of the matrix fails to compile the jar; the choice then is to raise `maven.compiler.target` (ending Java 8 support, a breaking change) or to stop testing that JDK. The matrix is what will show it.
+- Java is tested on Linux x64 in CI. The jar also ships natives for macOS, Windows and aarch64 Linux, which no test loads.
 - Do not write "bit for bit across Python, Rust, the JVM and WebAssembly" in documentation: what is measured is the scale and the exponents of 44 expressions in three of the four.
 
 ## Open for review
