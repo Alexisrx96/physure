@@ -4,7 +4,6 @@ import pytest
 
 os.environ["MPLBACKEND"] = "Agg"
 
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.system import UnitSystem
 from physure.domain.measurement.units import CompoundUnit, units
@@ -20,7 +19,6 @@ def clean_state():
     """
     from physure.application.context import reset_context
     from physure.core.dispatcher import BackendManager
-    from physure.domain.measurement.units import _register_core_units
     from physure.domain.measurement.vectorized_uncertainty import (
         clear_global_stores,
     )
@@ -41,7 +39,6 @@ def clean_state():
 
         # 5. Reset Unit Registry to core state
         units.clear()
-        _register_core_units()
         units.discover_plugins()
 
     _reset_all()
@@ -64,19 +61,19 @@ def common_system(system):
     force = mass * length / (time**2)
     energy = force * length
 
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
-    system.register_unit("km", length, LinearConverter(1000.0), "kilometer")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("cm", length, 0.01, "centimeter")
+    system.register_unit("km", length, 1000.0, "kilometer")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("kg", mass, 1.0, "kilogram")
     system.register_unit(
         "N",
         Dimension({"M": 1, "L": 1, "T": -2}),
-        LinearConverter(1.0),
+        1.0,
         "newton",
         recipe=CompoundUnit({"kg": 1, "m": 1, "s": -2}),
     )
-    system.register_unit("J", energy, LinearConverter(1.0), "joule")
+    system.register_unit("J", energy, 1.0, "joule")
     return system
 
 

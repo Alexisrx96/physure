@@ -177,8 +177,7 @@ impl Quantity {
         // for such a unit, so fold the scale into the value and display in canonical
         // (scale-1) terms instead of printing the raw, unscaled magnitude.
         let (val, std_dev, unit_str) = if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
-            let mut canonical_unit = self.unit.clone();
-            canonical_unit.scale = 1.0;
+            let canonical_unit = self.unit.clone().with_unit_scale();
             (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
         } else {
             (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
@@ -261,6 +260,15 @@ impl Quantity {
         value.propagate_mul(&UncertaintyValue::Gaussian(GaussianBackend::exact(factor)))
     }
 
+    /// Divides an uncertainty value by an exact constant, the inverse of `scale_value`. It is
+    /// not the same as multiplying by the reciprocal, and Python divides.
+    fn unscale_value(value: &UncertaintyValue, divisor: f64) -> PhysureResult<UncertaintyValue> {
+        if divisor == 1.0 {
+            return Ok(value.clone());
+        }
+        value.propagate_div(&UncertaintyValue::Gaussian(GaussianBackend::exact(divisor)))
+    }
+
     /// Shifts an uncertainty value by an exact additive constant. A zero point carries no
     /// uncertainty of its own, so `exact` is used for the same reason as in `scale_value`:
     /// minting a source id here would leave a term that never cancels.
@@ -272,11 +280,13 @@ impl Quantity {
     }
 
     pub fn add(&self, other: &Quantity) -> PhysureResult<Quantity> {
-        // An absolute temperature has no additive algebra of its own — `20 degC + 5 degC` is
-        // only meaningful once both sides are on an interval scale. Normalising to K first
-        // keeps every operation below purely multiplicative, as the rest of this file assumes.
+        if self.unit.is_logarithmic() || other.unit.is_logarithmic() {
+            return self.combine_levels(other, false);
+        }
+        // An absolute temperature (degC, degF) is a point on an interval scale, not a
+        // quantity to add to: `combine_with_point` says what can be done with one.
         if self.unit.is_affine() || other.unit.is_affine() {
-            return self.to_delta()?.add(&other.to_delta()?);
+            return self.combine_with_point(other, false);
         }
         if !self.unit.same_dimensions(&other.unit) {
             return Err(PhysureError::UnitMismatch {
@@ -285,7 +295,7 @@ impl Quantity {
             });
         }
         let other_value = if self.unit.scale != other.unit.scale {
-            Self::scale_value(&other.value, other.unit.scale / self.unit.scale)?
+            Self::scale_value(&other.value, other.unit.ratio_to(&self.unit))?
         } else {
             other.value.clone()
         };
@@ -294,10 +304,11 @@ impl Quantity {
     }
 
     pub fn sub(&self, other: &Quantity) -> PhysureResult<Quantity> {
-        // `T2 - T1` across Celsius/Fahrenheit is the calorimetry case: both sides go to K, so
-        // the difference comes out as a true interval instead of subtracting two zero points.
+        if self.unit.is_logarithmic() || other.unit.is_logarithmic() {
+            return self.combine_levels(other, true);
+        }
         if self.unit.is_affine() || other.unit.is_affine() {
-            return self.to_delta()?.sub(&other.to_delta()?);
+            return self.combine_with_point(other, true);
         }
         if !self.unit.same_dimensions(&other.unit) {
             return Err(PhysureError::UnitMismatch {
@@ -306,7 +317,7 @@ impl Quantity {
             });
         }
         let other_value = if self.unit.scale != other.unit.scale {
-            Self::scale_value(&other.value, other.unit.scale / self.unit.scale)?
+            Self::scale_value(&other.value, other.unit.ratio_to(&self.unit))?
         } else {
             other.value.clone()
         };
@@ -316,19 +327,21 @@ impl Quantity {
 
     pub fn mul(&self, other: &Quantity) -> PhysureResult<Quantity> {
         if self.unit.is_affine() || other.unit.is_affine() {
-            return self.to_delta()?.mul(&other.to_delta()?);
+            return self.scale_or_absolute(other, false);
         }
         let new_value = self.value.propagate_mul(&other.value)?;
         let new_unit = self.unit.mul(&other.unit);
+        RationalUnit::refuse_logarithmic_compound(&[&self.unit, &other.unit], &new_unit)?;
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
     pub fn div(&self, other: &Quantity) -> PhysureResult<Quantity> {
         if self.unit.is_affine() || other.unit.is_affine() {
-            return self.to_delta()?.div(&other.to_delta()?);
+            return self.scale_or_absolute(other, true);
         }
         let new_value = self.value.propagate_div(&other.value)?;
         let new_unit = self.unit.div(&other.unit);
+        RationalUnit::refuse_logarithmic_compound(&[&self.unit, &other.unit], &new_unit)?;
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
@@ -350,6 +363,7 @@ impl Quantity {
         let exp_r = Rational64::from_f64(exponent).unwrap_or(Rational64::new(0, 1));
         let new_value = self.value.propagate_pow(exponent)?;
         let new_unit = self.unit.pow(exp_r);
+        RationalUnit::refuse_logarithmic_compound(&[&self.unit], &new_unit)?;
         Ok(Quantity { value: new_value, unit: new_unit })
     }
 
@@ -439,6 +453,7 @@ impl Quantity {
 
     /// This quantity's value in radians, or an error if it is not an angle at all.
     fn as_radians(&self, func: &str) -> PhysureResult<UncertaintyValue> {
+        self.refuse_level(func)?;
         if !self.unit.dimensions.is_empty() && !self.unit.same_dimensions(&RationalUnit::base("rad")) {
             return Err(PhysureError::Generic(format!(
                 "{func} expects an angle or a dimensionless value, got '{}'",
@@ -476,6 +491,7 @@ impl Quantity {
     /// none. `ln(5 m)` is a physics error, so it is reported as one instead of being
     /// computed from the bare number 5.
     fn transcendental(&self, name: &str, core_func: &str) -> PhysureResult<Quantity> {
+        self.refuse_level(name)?;
         if !self.unit.dimensions.is_empty() {
             return Err(PhysureError::Generic(format!(
                 "{name} expects a dimensionless value, got '{}'",
@@ -546,9 +562,14 @@ impl Quantity {
         })
     }
 
-    /// This quantity's magnitude expressed in canonical base-SI terms (mean * unit.scale).
+    /// This quantity's magnitude expressed in canonical base-SI terms (mean * unit.scale +
+    /// unit.offset): `20 degC` is 293.15, so that quantities compare by what they stand for.
     pub fn canonical_magnitude(&self) -> f64 {
-        self.value.mean() * self.unit.scale
+        match self.unit.log {
+            // the coherent value of a level is the ratio it stands for
+            Some(log) => log.ratio_of(self.value.mean()),
+            None => self.value.mean() * self.unit.scale + self.unit.offset,
+        }
     }
 
     /// The measurement quoted in the base units it is built from: `2 kΩ` reads
@@ -556,8 +577,13 @@ impl Quantity {
     /// value is the same one `Display` prints — only the terms change. This is what `x: base`
     /// spells in PHS.
     pub fn base_display(&self) -> String {
-        let mut base_unit = self.unit.clone();
-        base_unit.scale = 1.0;
+        if self.unit.is_logarithmic() {
+            let plain = RationalUnit::new_from_dimensions(self.unit.dimensions.iter().cloned());
+            if let Ok(value) = self.convert_to(&plain) {
+                return value.base_display();
+            }
+        }
+        let mut base_unit = self.unit.clone().with_unit_scale();
         base_unit.display_name = None;
         let std_dev = self.value.std_dev() * self.unit.scale;
         let val_str = if std_dev > 0.0 {
@@ -582,20 +608,171 @@ impl Quantity {
                 actual: target.__repr__(),
             });
         }
-        // Affine scales (degC, degF) cannot be converted with a single ratio: go through the
-        // canonical base magnitude so the zero points are subtracted, not scaled.
+        if self.unit.is_logarithmic() || target.is_logarithmic() {
+            return self.convert_logarithmic(target);
+        }
+        // Affine scales (degC, degF) cannot be converted with a single ratio: the zero points
+        // are subtracted, not scaled. The conversion is `old * scale + shift`, with the scale
+        // and the shift each rounded once from the exact values (`affine_to`).
         if self.unit.is_affine() || target.is_affine() {
-            let base = Self::shift_value(
-                &Self::scale_value(&self.value, self.unit.scale)?,
-                self.unit.offset,
-            )?;
-            let new_value =
-                Self::scale_value(&Self::shift_value(&base, -target.offset)?, 1.0 / target.scale)?;
+            let (scale, shift) = self.unit.affine_to(target);
+            let new_value = Self::shift_value(&Self::scale_value(&self.value, scale)?, shift)?;
             return Ok(Quantity { value: new_value, unit: target.clone() });
         }
-        let ratio = self.unit.scale / target.scale;
+        let ratio = self.unit.ratio_to(target);
         let new_value = Self::scale_value(&self.value, ratio)?;
         Ok(Quantity { value: new_value, unit: target.clone() })
+    }
+
+    /// What can be done with an absolute temperature (degC, degF) and something else. It is a
+    /// point; an interval (K, degR, delta_celsius...) moves it, and two points give an interval:
+    ///
+    /// - point + interval and interval + point are a point in the point's scale;
+    /// - point - interval is a point, and point - point is an interval, in kelvin;
+    /// - point + point (the sum of two temperatures) and interval - point have no meaning.
+    fn combine_with_point(&self, other: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
+        match (self.unit.is_affine(), other.unit.is_affine(), subtract) {
+            (true, true, false) => Err(PhysureError::Generic(format!(
+                "cannot add two absolute temperatures ('{}' and '{}'): add an interval to one of them \
+                 (the midpoint of T1 and T2 is T1 + (T2 - T1) / 2)",
+                self.unit.__repr__(),
+                other.unit.__repr__()
+            ))),
+            (true, true, true) => self.to_delta()?.sub(&other.to_delta()?),
+            (false, true, true) => Err(PhysureError::Generic(format!(
+                "cannot subtract the absolute temperature '{}' from the interval '{}'",
+                other.unit.__repr__(),
+                self.unit.__repr__()
+            ))),
+            (true, false, _) => self.shifted_by(other, subtract),
+            (false, true, _) => other.shifted_by(self, false),
+            (false, false, _) => unreachable!("combine_with_point needs a point"),
+        }
+    }
+
+    /// This point moved by an interval, in this point's own scale.
+    fn shifted_by(&self, interval: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
+        let moved = interval.convert_to(&self.unit.to_delta())?;
+        let value = if subtract {
+            self.value.propagate_sub(&moved.value)?
+        } else {
+            self.value.propagate_add(&moved.value)?
+        };
+        Ok(Quantity { value, unit: self.unit.clone() })
+    }
+
+    /// Product or quotient where `self` or `other` is an absolute temperature.
+    ///
+    /// A pure sign mirrors the number in its own scale (`-25 degC` is minus twenty-five, not
+    /// minus 298 K). Any other plain number is refused: `2 * 20 degC` is 40 degC on one scale
+    /// and 586 K on another, so the answer depends on a choice the caller has not made. A
+    /// quantity with dimensions of its own takes the temperature as the absolute one it is
+    /// (`R * T`, `T^4`), which is what a product with a temperature means.
+    fn scale_or_absolute(&self, other: &Quantity, divide: bool) -> PhysureResult<Quantity> {
+        let sign = |q: &Quantity| {
+            let exact = q.unit.is_plain_number() && q.value.std_dev() == 0.0;
+            exact.then(|| q.value.mean()).filter(|mean| mean.abs() == 1.0)
+        };
+        if self.unit.is_affine() {
+            if let Some(sign) = sign(other) {
+                return self.mirrored(sign);
+            }
+        } else if !divide {
+            if let Some(sign) = sign(self) {
+                return other.mirrored(sign);
+            }
+        }
+        let plain = |q: &Quantity| q.unit.dimensions.is_empty() && !q.unit.is_logarithmic();
+        let point = if self.unit.is_affine() { self } else { other };
+        if (self.unit.is_affine() && plain(other)) || (other.unit.is_affine() && plain(self)) {
+            return Err(PhysureError::Generic(format!(
+                "cannot multiply or divide the absolute temperature '{}' by a plain number: the \
+                 result depends on the scale (2 * 20 degC is 40 degC on one and 586 K on another); \
+                 convert it first (`T => K`) for an absolute temperature, or use an interval",
+                point.unit.__repr__()
+            )));
+        }
+        let (a, b) = (self.to_delta()?, other.to_delta()?);
+        if divide { a.div(&b) } else { a.mul(&b) }
+    }
+
+    /// This quantity times a sign, in its own unit.
+    fn mirrored(&self, sign: f64) -> PhysureResult<Quantity> {
+        Ok(Quantity { value: Self::scale_value(&self.value, sign)?, unit: self.unit.clone() })
+    }
+
+    /// A level is the logarithm of a ratio, so a function or a product that reads its number
+    /// as a plain magnitude does not apply: `ln(20 dB)` is not `ln(100)`.
+    fn refuse_level(&self, operation: &str) -> PhysureResult<()> {
+        if self.unit.is_logarithmic() {
+            return Err(PhysureError::Generic(format!(
+                "{operation} expects a plain ratio, got the level '{}'; convert it first (for example `x => unity`)",
+                self.unit.__repr__()
+            )));
+        }
+        Ok(())
+    }
+
+    /// The plain ratio this quantity stands for. A level goes through the inverse of its
+    /// logarithm and any other unit through its scale: the operations of Python's `to_base`,
+    /// in the same order, so both sides round alike.
+    fn ratio_value(&self) -> PhysureResult<UncertaintyValue> {
+        match self.unit.log {
+            Some(log) => {
+                let exponent = Self::unscale_value(&self.value, log.factor)?;
+                let power = exponent.propagate_function("pow10")?;
+                Self::scale_value(&power, log.reference)
+            }
+            None => Self::scale_value(&self.value, self.unit.scale),
+        }
+    }
+
+    /// Conversion where `self` or `target` is a level: through the ratio both stand for.
+    /// A ratio that is not positive has no level (Python raises `math domain error`).
+    fn convert_logarithmic(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
+        if self.unit.log == target.log && self.unit.scale == target.scale {
+            return Ok(Quantity { value: self.value.clone(), unit: target.clone() });
+        }
+        let ratio = self.ratio_value()?;
+        let value = match target.log {
+            Some(log) => {
+                let relative = Self::unscale_value(&ratio, log.reference)?;
+                if relative.mean() <= 0.0 {
+                    return Err(PhysureError::DomainError(format!(
+                        "a level needs a positive ratio, got {}",
+                        ratio.mean()
+                    )));
+                }
+                Self::scale_value(&relative.propagate_function("log10")?, log.factor)?
+            }
+            None => Self::unscale_value(&ratio, target.scale)?,
+        };
+        Ok(Quantity { value, unit: target.clone() })
+    }
+
+    /// `10 dB + 20 dB`: levels combine as the quantities they stand for, so the sum is taken
+    /// on the ratios and written back as a level (20.41 dB). A level and a plain quantity do
+    /// not combine; Python adds the numbers after converting one, which has no meaning.
+    fn combine_levels(&self, other: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
+        if !(self.unit.is_logarithmic() && other.unit.is_logarithmic()) {
+            return Err(PhysureError::Generic(format!(
+                "cannot {} a level and a plain quantity ('{}' and '{}'); convert one of them first",
+                if subtract { "subtract" } else { "add" },
+                self.unit.__repr__(),
+                other.unit.__repr__()
+            )));
+        }
+        if !self.unit.same_dimensions(&other.unit) {
+            return Err(PhysureError::UnitMismatch {
+                expected: self.unit.__repr__(),
+                actual: other.unit.__repr__(),
+            });
+        }
+        // the plain quantity both stand for: a ratio for a level of a ratio, a power for a level of one
+        let plain = RationalUnit::new_from_dimensions(self.unit.dimensions.iter().cloned());
+        let (a, b) = (self.convert_to(&plain)?, other.convert_to(&plain)?);
+        let combined = if subtract { a.sub(&b)? } else { a.add(&b)? };
+        combined.convert_to(&self.unit)
     }
 
     /// This quantity restated in its canonical base unit, so that arithmetic is meaningful:
@@ -605,7 +782,7 @@ impl Quantity {
         if !self.unit.is_affine() {
             return Ok(self.clone());
         }
-        let mut base = self.unit.to_delta().with_scale(1.0);
+        let mut base = self.unit.to_delta().with_unit_scale();
         // Drop the affine name so the result renders as "K" and not as the scale it came from.
         base.display_name = None;
         self.convert_to(&base)
@@ -975,10 +1152,13 @@ mod tests {
         assert!((delta.value.mean() - 28.888888888888889).abs() < 1e-9, "got {}", delta.value.mean());
         assert!(!delta.unit.is_affine(), "a difference of temperatures is an interval");
 
-        // Multiplying an absolute temperature normalises it first: the product of an affine
-        // unit has no zero point to inherit, so the result must be plain Kelvin-dimensioned.
-        let doubled = warm.mul(&Quantity::new_scalar(2.0, 0.0, RationalUnit::dimensionless(), None, None)).unwrap();
-        assert!((doubled.value.mean() - 586.3).abs() < 1e-9, "got {}", doubled.value.mean());
-        assert!(!doubled.unit.is_affine());
+        // A plain number does not scale an absolute temperature: 2 * 20 degC is 40 degC on one
+        // scale and 586 K on another, so the caller has to say which. A quantity with dimensions
+        // takes the temperature as the absolute one: the product has no zero point to inherit,
+        // so it is plain Kelvin-dimensioned.
+        assert!(warm.mul(&Quantity::new_scalar(2.0, 0.0, RationalUnit::dimensionless(), None, None)).is_err());
+        let product = warm.mul(&Quantity::new_scalar(2.0, 0.0, RationalUnit::base("m"), None, None)).unwrap();
+        assert!((product.value.mean() - 586.3).abs() < 1e-9, "got {}", product.value.mean());
+        assert!(!product.unit.is_affine());
     }
 }

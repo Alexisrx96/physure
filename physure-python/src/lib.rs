@@ -30,8 +30,9 @@ use ::physure_core::{
     RationalUnit, UnitRegistry, Quantity, PruningConfig, CovarianceStore,
     GaussianBackend, MonteCarloBackend, UnscentedBackend, UncertaintyBackend, UncertaintyValue,
     PhysureResult, PhysureError,
-    DimVector, UnitConverter, UnitDefinition, UnitKind,
+    DimVector, UnitKind,
 };
+use ::physure_core::units::registry::{Conversion, Stage};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
 use ::physure_core::uncertainty::moments::{self, AsymmetricMoments, MomentsBackend};
 use physure_script::symbolic::Expr;
@@ -42,6 +43,10 @@ use physure_script::symbolic::Expr;
 // J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
 // handed back whichever of them was cached first.
 static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>), PyObject>>> = OnceLock::new();
+
+// The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
+// other backends, which live in Python, so Python registers the factory at import.
+static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
 
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -218,6 +223,18 @@ impl PyRationalUnit {
         get_cached_unit(py, self.0.pow(exp_r))
     }
 
+    /// `5 * unit` is a quantity, built by the factory Python registered; without one the product
+    /// is not defined, and a factory that does not take the operand says so by returning
+    /// `NotImplemented`.
+    fn __rmul__(slf: &Bound<'_, Self>, other: &Bound<'_, PyAny>) -> PyResult<PyObject> {
+        let py = slf.py();
+        let factory = QUANTITY_FACTORY.lock().unwrap().as_ref().map(|factory| factory.clone_ref(py));
+        match factory {
+            Some(factory) => factory.call1(py, (other, slf)),
+            None => Ok(py.NotImplemented()),
+        }
+    }
+
     fn __eq__(&self, other: &PyRationalUnit) -> bool {
         self.0 == other.0
     }
@@ -265,6 +282,55 @@ fn parse_exponent(v: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
         }
     }
     None
+}
+
+pyo3::create_exception!(_core, UnknownUnitError, pyo3::exceptions::PyValueError, "A unit the registry does not know.");
+pyo3::create_exception!(_core, UnitMismatchError, pyo3::exceptions::PyValueError, "Units of different dimensions.");
+
+/// A core error as the Python exception that says what it was: an unknown unit carries its
+/// `symbol` and a `suggestion`, a mismatch the `expected` and `actual` units. Both are `ValueError`s.
+fn value_error(e: PhysureError) -> PyErr {
+    let message = e.to_string();
+    let (err, attributes) = match e {
+        PhysureError::UnknownUnit { symbol, suggestion } => (
+            UnknownUnitError::new_err(message),
+            vec![("symbol", Some(symbol)), ("suggestion", suggestion)],
+        ),
+        PhysureError::UnitMismatch { expected, actual } => (
+            UnitMismatchError::new_err(message),
+            vec![("expected", Some(expected)), ("actual", Some(actual))],
+        ),
+        _ => return pyo3::exceptions::PyValueError::new_err(message),
+    };
+    Python::with_gil(|py| {
+        let value = err.value(py);
+        for (name, text) in attributes {
+            let _ = value.setattr(name, text);
+        }
+    });
+    err
+}
+
+/// The lines of a conf that the core could not read, one per line of the message.
+fn conf_problems(problems: Vec<String>) -> PyErr {
+    pyo3::exceptions::PyValueError::new_err(problems.join("\n"))
+}
+
+/// A dimension as a Python dict: the dimension symbol and its exponent, an int when it is one.
+fn dimension_dict<'py>(py: Python<'py>, dimension: &[(String, (i64, i64))]) -> PyResult<Bound<'py, PyDict>> {
+    let out = PyDict::new(py);
+    for (symbol, (n, d)) in dimension {
+        if *d == 1 {
+            out.set_item(symbol, *n)?;
+        } else {
+            out.set_item(symbol, *n as f64 / *d as f64)?;
+        }
+    }
+    Ok(out)
+}
+
+fn kind_name(kind: UnitKind) -> &'static str {
+    if kind == UnitKind::Point { "absolute" } else { "delta" }
 }
 
 // ── PyUnitRegistry ──────────────────────────────────────────────────────────
@@ -317,6 +383,130 @@ impl PyUnitRegistry {
     fn from_conf() -> Self {
         let (reg, _constants) = ::physure_core::units::conf::build_registry_from_conf();
         PyUnitRegistry(reg)
+    }
+
+    /// The catalog plus extra conf text (the text of a system file, or units of the user's).
+    #[staticmethod]
+    fn from_conf_text(extra: &str) -> PyResult<Self> {
+        let (reg, _constants) = ::physure_core::units::conf::build_registry_with(extra).map_err(conf_problems)?;
+        Ok(PyUnitRegistry(reg))
+    }
+
+    /// Adds the units, prefixes and levels of conf text to this registry, all or nothing: a line the
+    /// core cannot read raises ValueError listing each, and the registry is left as it was.
+    fn extend_conf(&mut self, text: &str) -> PyResult<()> {
+        let mut constants = HashMap::new();
+        ::physure_core::units::conf::extend_registry(&mut self.0, &mut constants, text).map_err(conf_problems)
+    }
+
+    /// A unit written as symbols (`km/h`), not resolved: its dimensions are the symbols written.
+    fn parse_atomic(&self, py: Python<'_>, expression: &str) -> PyResult<PyObject> {
+        let unit = ::physure_core::units::parser::Parser::parse_expression_atomic(expression).map_err(value_error)?;
+        get_cached_unit(py, unit)
+    }
+
+    /// The unit with every recipe unit (`N`, `J`, `Hz`...) replaced by its base symbols.
+    fn simplify(&self, py: Python<'_>, unit: &PyRationalUnit) -> PyResult<PyObject> {
+        get_cached_unit(py, self.0.simplify(&unit.0))
+    }
+
+    /// What a unit written as symbols stands for: each symbol replaced by what the registry says it is.
+    fn expand(&self, py: Python<'_>, unit: &PyRationalUnit) -> PyResult<PyObject> {
+        get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
+    }
+
+    /// Every name the registry holds for a unit, sorted (a prefixed name is read, not held).
+    fn names(&self) -> Vec<String> {
+        self.0.names()
+    }
+
+    /// Whether `name` is a unit: a name of the registry, or a prefix and a unit written together.
+    fn knows(&self, name: &str) -> bool {
+        self.0.knows(name)
+    }
+
+    /// Every name `knows` answers yes to, sorted: the names of the registry and their prefixed forms.
+    fn resolvable_names(&self) -> Vec<String> {
+        self.0.resolvable_names()
+    }
+
+    /// The unit that measures a dimension (`{"L": 1, "T": -1}` is `m*s^-1`), in the base units of
+    /// this registry. The powers are integers or `(numerator, denominator)` pairs.
+    fn unit_of_dimension(&self, py: Python<'_>, dimension: &Bound<'_, PyDict>) -> PyResult<PyObject> {
+        let mut exponents = Vec::with_capacity(dimension.len());
+        for (symbol, power) in dimension.iter() {
+            let exponent = parse_exponent(&power)
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("a dimension power is a number"))?;
+            exponents.push((symbol.extract::<String>()?, exponent));
+        }
+        get_cached_unit(py, self.0.unit_of_dimension(&exponents).map_err(value_error)?)
+    }
+
+    /// The physical dimension of a unit written as symbols, by dimension symbol.
+    fn dimension_of<'py>(&self, py: Python<'py>, unit: &PyRationalUnit) -> PyResult<Bound<'py, PyDict>> {
+        dimension_dict(py, &self.0.dimension_of(&unit.0).map_err(value_error)?)
+    }
+
+    /// `"absolute"` for a temperature scale (degC, degF), `"delta"` for anything else.
+    fn kind_of(&self, unit: &PyRationalUnit) -> &'static str {
+        kind_name(self.0.kind_of(&unit.0))
+    }
+
+    /// False when the unit is an offset or a logarithmic unit.
+    fn is_linear_of(&self, unit: &PyRationalUnit) -> bool {
+        self.0.is_linear_of(&unit.0)
+    }
+
+    /// The name the unit is shown by (`kg·m²/s³` is `W`).
+    fn alias_of(&self, unit: &PyRationalUnit) -> String {
+        self.0.alias_of(&unit.0)
+    }
+
+    /// The factor that turns a magnitude in `source` into one in `target`, rounded once.
+    fn factor_between(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<f64> {
+        self.0.factor_between(&source.0, &target.0).map_err(value_error)
+    }
+
+    /// How a number in `source` becomes a number in `target`, as the plan the core follows:
+    /// `{"kind": "affine", "scale", "shift"}` (new = old * scale + shift), or `{"kind": "level",
+    /// "from", "to"}` where each side is `{"scale"}` of a plain unit or `{"factor", "reference"}`
+    /// of a level, and the number goes through the plain ratio both stand for.
+    fn conversion<'py>(
+        &self,
+        py: Python<'py>,
+        source: &PyRationalUnit,
+        target: &PyRationalUnit,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let stage = |stage: Stage| -> PyResult<Bound<'py, PyDict>> {
+            let out = PyDict::new(py);
+            match stage {
+                Stage::Scale(scale) => out.set_item("scale", scale)?,
+                Stage::Level(log) => {
+                    out.set_item("factor", log.factor)?;
+                    out.set_item("reference", log.reference)?;
+                }
+            }
+            Ok(out)
+        };
+        let out = PyDict::new(py);
+        match self.0.conversion(&source.0, &target.0).map_err(value_error)? {
+            Conversion::Affine { scale, shift } => {
+                out.set_item("kind", "affine")?;
+                out.set_item("scale", scale)?;
+                out.set_item("shift", shift)?;
+            }
+            Conversion::Level { from, to } => {
+                out.set_item("kind", "level")?;
+                out.set_item("from", stage(from)?)?;
+                out.set_item("to", stage(to)?)?;
+            }
+        }
+        Ok(out)
+    }
+
+    /// Dimension, kind, linearity, alias and simplified form of a unit expression.
+    fn facts<'py>(&self, py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
+        facts_dict(py, &self.0, expression)
     }
 
     fn get_categories(&self) -> HashMap<String, Vec<String>> {
@@ -921,125 +1111,6 @@ impl PyDimVector {
     fn vector(&self) -> Vec<i32> {
         self.0.0.iter().map(|&x| x as i32).collect()
     }
-}
-
-// ── PyUnitDefinition ─────────────────────────────────────────────────────────
-/// Python-visible wrapper around the native UnitDefinition.
-/// Exposed as `physure._core.UnitDefinition`.
-#[pyclass(name = "UnitDefinition", module = "physure._core")]
-#[derive(Clone)]
-struct PyUnitDefinition(UnitDefinition);
-
-#[pymethods]
-impl PyUnitDefinition {
-    #[new]
-    #[pyo3(signature = (symbol, dimension, converter_kind, scale=1.0, offset=0.0, factor=10.0, reference=1.0, name=None, kind="delta", allow_prefixes=true))]
-    fn new(
-        symbol: String,
-        dimension: &PyDimVector,
-        converter_kind: &str,
-        scale: f64,
-        offset: f64,
-        factor: f64,
-        reference: f64,
-        name: Option<String>,
-        kind: &str,
-        allow_prefixes: bool,
-    ) -> PyResult<Self> {
-        let converter = match converter_kind {
-            "linear" => UnitConverter::linear(scale),
-            "offset" => UnitConverter::offset(scale, offset),
-            "logarithmic" => UnitConverter::logarithmic(factor, reference),
-            other => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    format!("Unknown converter_kind: {other}. Expected 'linear', 'offset', or 'logarithmic'"),
-                ));
-            }
-        };
-        let mut def = UnitDefinition::new(symbol, dimension.0, converter)
-            .with_kind(UnitKind::from_str(kind))
-            .with_allow_prefixes(allow_prefixes);
-        if let Some(n) = name {
-            def = def.with_name(n);
-        }
-        Ok(PyUnitDefinition(def))
-    }
-
-    #[getter]
-    fn symbol(&self) -> &str {
-        &self.0.symbol
-    }
-
-    #[getter]
-    fn dimension(&self) -> PyDimVector {
-        PyDimVector(self.0.dimension)
-    }
-
-    #[getter]
-    fn name(&self) -> Option<&str> {
-        self.0.name.as_deref()
-    }
-
-    #[getter]
-    fn allow_prefixes(&self) -> bool {
-        self.0.allow_prefixes
-    }
-
-    #[getter]
-    fn kind(&self) -> &str {
-        match self.0.kind {
-            UnitKind::Point => "point",
-            UnitKind::Delta => "delta",
-        }
-    }
-
-    #[getter]
-    fn is_linear(&self) -> bool {
-        self.0.converter.is_linear()
-    }
-
-    fn scale(&self) -> Option<f64> {
-        self.0.scale()
-    }
-
-    fn offset(&self) -> f64 {
-        self.0.offset()
-    }
-
-    fn to_base(&self, value: f64) -> f64 {
-        self.0.converter.to_base(value)
-    }
-
-    fn from_base(&self, value: f64) -> f64 {
-        self.0.converter.from_base(value)
-    }
-
-    fn convert_to(&self, value: f64, target: &PyUnitDefinition) -> f64 {
-        self.0.converter.convert_value(value, &target.0.converter)
-    }
-
-    fn __repr__(&self) -> String {
-        format!("UnitDefinition('{}', {})", self.0.symbol, self.0.dimension)
-    }
-}
-
-// ── pyfunction: convert_units ─────────────────────────────────────────────
-/// Fast batch unit conversion: converts `data` in-place from `src` to `dst`.
-#[pyfunction]
-fn convert_units_inplace(
-    data: &Bound<'_, pyo3::types::PyAny>,
-    src: &PyUnitDefinition,
-    dst: &PyUnitDefinition,
-) -> PyResult<()> {
-    let buf: PyBuffer<f64> = PyBuffer::get(data)?;
-    let slice = unsafe {
-        std::slice::from_raw_parts_mut(
-            buf.buf_ptr() as *mut f64,
-            buf.len_bytes() / std::mem::size_of::<f64>(),
-        )
-    };
-    src.0.converter.convert_batch(slice, &dst.0.converter);
-    Ok(())
 }
 
 // ── pyfunction: dim_vector_from_dict ──────────────────────────────────────
@@ -1768,6 +1839,38 @@ fn max_skewness() -> f64 {
     moments::max_skewness()
 }
 
+/// The default unit catalog (`physure.conf`) embedded in `physure-core`: the single source
+/// the Python `UnitSystem` is built from.
+/// Registers the function `5 * unit` calls with the number and the unit to build a quantity.
+#[pyfunction]
+fn register_quantity_factory(factory: PyObject) {
+    *QUANTITY_FACTORY.lock().unwrap() = Some(factory);
+}
+
+#[pyfunction]
+fn default_conf() -> &'static str {
+    ::physure_core::units::conf::DEFAULT_PHYSURE_CONF
+}
+
+/// What the core says about a unit expression of the default catalog: its dimension (by
+/// dimension symbol), kind, linearity, alias and simplified form.
+#[pyfunction]
+fn unit_facts<'py>(py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
+    let (registry, _) = ::physure_core::units::conf::build_registry_from_conf();
+    facts_dict(py, &registry, expression)
+}
+
+fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -> PyResult<Bound<'py, PyDict>> {
+    let facts = registry.facts(expression).map_err(value_error)?;
+    let out = PyDict::new(py);
+    out.set_item("dimension", dimension_dict(py, &facts.dimension)?)?;
+    out.set_item("kind", kind_name(facts.kind))?;
+    out.set_item("is_linear", facts.is_linear)?;
+    out.set_item("alias", facts.alias)?;
+    out.set_item("simplified", facts.simplified)?;
+    Ok(out)
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1775,8 +1878,11 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAsymmetricMoments>()?;
     m.add_class::<PyMomentsBackend>()?;
     m.add_function(wrap_pyfunction!(max_skewness, m)?)?;
+    m.add_function(wrap_pyfunction!(default_conf, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
+    m.add("UnknownUnitError", m.py().get_type::<UnknownUnitError>())?;
+    m.add("UnitMismatchError", m.py().get_type::<UnitMismatchError>())?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyQuantityVector>()?;
     m.add_class::<PyQuantityMatrix>()?;
@@ -1785,7 +1891,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPruningConfig>()?;
     m.add_class::<PyCovarianceStore>()?;
     m.add_class::<PyDimVector>()?;
-    m.add_class::<PyUnitDefinition>()?;
     m.add_class::<PyExpr>()?;
     m.add_function(wrap_pyfunction!(batch_to_si_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(step_euler_inplace, m)?)?;
@@ -1794,8 +1899,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(eval_dual_number, m)?)?;
     m.add_function(wrap_pyfunction!(propagate_hessian_uncertainty, m)?)?;
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(convert_units_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(dim_vector_from_dict, m)?)?;
+    m.add_function(wrap_pyfunction!(unit_facts, m)?)?;
+    m.add_function(wrap_pyfunction!(register_quantity_factory, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_phs_expression, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;

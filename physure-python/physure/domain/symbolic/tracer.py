@@ -1,6 +1,12 @@
 import weakref
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
+from physure.application.tracing.context import (
+    reset_active_tracer,
+    set_active_tracer,
+)
 from physure.domain.symbolic.graph import LeafNode, OpNode, SymbolicNode
 
 
@@ -75,3 +81,22 @@ class FormulaTracer:
         import sympy
 
         return sympy.latex(expr)
+
+
+@contextmanager
+def trace_formulas() -> Generator[FormulaTracer, None, None]:
+    """Context manager to enable symbolic tracing.
+
+    Example:
+        with trace_formulas() as tracer:
+            m = Q_(10, "kg", symbol="m")
+            a = Q_(5, "m/s^2", symbol="a")
+            f = m * a
+            print(tracer.get_equation(f))
+    """
+    tracer = FormulaTracer()
+    token = set_active_tracer(tracer)
+    try:
+        yield tracer
+    finally:
+        reset_active_tracer(token)

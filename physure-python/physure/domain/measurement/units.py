@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
-from physure._core import RationalUnit
+from physure._core import RationalUnit, register_quantity_factory
+from physure._core import UnitMismatchError as _CoreUnitMismatchError
+from physure._core import UnitRegistry as _CoreUnitRegistry
+from physure._core import UnknownUnitError as _CoreUnknownUnitError
 from physure.core.dispatcher import BackendManager
 from physure.core.registry import UnitRegistry
 from physure.domain.exceptions import (
@@ -19,10 +22,7 @@ from physure.domain.exceptions import (
 from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentsDict,
-)
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    UnitConverter,
+    exact_power,
 )
 
 if TYPE_CHECKING:
@@ -38,23 +38,6 @@ if TYPE_CHECKING:
 # --- Dependency Injection for System ---
 
 
-def normalize_exponents(exponents: ExponentsDict) -> dict[str, float | int]:
-    """Normalizes a dictionary of exponents, removing zeros and converting tuples."""
-    normalized = {}
-    for k, v in exponents.items():
-        if isinstance(v, (list, tuple)):
-            v = v[0] / v[1]
-
-        if v == 0:
-            continue
-
-        if isinstance(v, float) and v.is_integer():
-            normalized[k] = int(v)
-        else:
-            normalized[k] = v
-    return normalized
-
-
 def get_default_system() -> UnitSystem:
     """Retrieves the currently active UnitSystem from the context.
 
@@ -66,23 +49,6 @@ def get_default_system() -> UnitSystem:
     from physure.application.context import get_current_system
 
     return get_current_system()
-
-
-@dataclass(frozen=True)
-class Unit:
-    """Represents a single atomic unit definition."""
-
-    name: str
-    symbol: str
-    dimension: Dimension
-    converter: UnitConverter
-
-    @property
-    def conversion_factor(self) -> float:
-        """Helper to maintain backward compatibility for linear units."""
-        if isinstance(self.converter, LinearConverter):
-            return self.converter.scale
-        raise ValueError(f"La unidad {self.name} no es lineal.")
 
 
 def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
@@ -111,48 +77,20 @@ def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
     return cls(exponents)
 
 
-def _is_identity_unit(base_unit: Any, unit_name: str) -> bool:
-    """Returns True if base_unit is a trivial identity wrapper for unit_name."""
-    if not (
-        hasattr(base_unit, "exponents") or hasattr(base_unit, "dimensions")
-    ):
-        return False
-    deps = (
-        base_unit.exponents
-        if hasattr(base_unit, "exponents")
-        else base_unit.dimensions
+_CORE_ERRORS = (_CoreUnknownUnitError, _CoreUnitMismatchError)
+
+
+def _python_error(
+    error: ValueError, source: CompoundUnit, target: CompoundUnit
+) -> Exception:
+    """The exception Python raises for an error of the core registry."""
+    if isinstance(error, _CoreUnitMismatchError):
+        return IncompatibleUnitsError(source, target)
+    suggestion = getattr(error, "suggestion", None)
+    return UnknownUnitError(
+        getattr(error, "symbol", str(error)),
+        [suggestion] if suggestion else None,
     )
-    return len(deps) == 1 and deps.get(unit_name) == 1
-
-
-def _raise_unknown_unit(unit_name: str, system: Any) -> None:
-    """Raises UnknownUnitError with difflib suggestions."""
-    import difflib
-
-    known = list(system.UNIT_DIMENSIONS.keys())
-    suggestions = difflib.get_close_matches(unit_name, known, n=3, cutoff=0.6)
-    raise UnknownUnitError(unit_name, suggestions or None)
-
-
-def _resolve_unit_dim(unit_name: str, system: Any, Dimension: type) -> Any:
-    """Returns the Dimension for unit_name within the given system."""
-    if unit_name in system.UNIT_DIMENSIONS:
-        return system.UNIT_DIMENSIONS[unit_name]
-
-    base_unit = system.get_unit(unit_name)
-
-    # get_unit() may have just lazily materialized unit_name (e.g. a prefixed
-    # unit like "GeV") as a side effect, in which case it's now a real entry
-    # rather than the unresolved-fallback identity wrapper it looks like.
-    if unit_name in system.UNIT_DIMENSIONS:
-        return system.UNIT_DIMENSIONS[unit_name]
-
-    if _is_identity_unit(base_unit, unit_name):
-        _raise_unknown_unit(unit_name, system)
-
-    if hasattr(base_unit, "dimension"):
-        return base_unit.dimension(system)
-    return Dimension({unit_name: 1})
 
 
 @dataclass(frozen=True)
@@ -170,42 +108,58 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         if system is None:
             system = get_default_system()
 
-        dims = Dimension({})
-        for unit_name, exp_val in self.exponents.items():
-            exp = (
-                exp_val[0] / exp_val[1]
-                if isinstance(exp_val, tuple)
-                else exp_val
-            )
-            unit_dim = _resolve_unit_dim(unit_name, system, Dimension)
-            dims = dims * (unit_dim**exp)
-        return dims
+        try:
+            return Dimension(system.core_registry.dimension_of(self))
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
+    # one instance per set of powers, found by the canonical key or by the
+    # items that were given (so the usual call does no arithmetic at all)
     _cache: ClassVar[dict[tuple, CompoundUnit]] = {}
 
     # ponytail: the Flyweight cache is keyed by exponents only and always
     # stores/returns a plain CompoundUnit, so `Self` would overpromise for
     # subclasses; CompoundUnit is the honest contract here.
     def __new__(cls, exponents: ExponentsDict) -> CompoundUnit:  # noqa: PYI034
-        """Create or retrieve a cached CompoundUnit instance."""
-        normalized_exponents = normalize_exponents(exponents)
+        """Create or retrieve a cached CompoundUnit instance.
+
+        The powers are exact: an int or a Fraction, whatever number they were
+        given as (a float is the closest simple fraction).
+        """
+        items = tuple(exponents.items()) if exponents else ()
+        try:
+            found = cls._cache.get(items)
+        except TypeError:  # an unhashable power: no shortcut
+            items = None
+            found = None
+        if found is not None:
+            return found
+
         # Sort keys to ensure consistent repr and hash
-        sorted_items = sorted(normalized_exponents.items())
-        key = tuple(sorted_items)
-
-        # Check raw cache
+        key = tuple(
+            sorted(
+                (symbol, pair)
+                for symbol, value in exponents.items()
+                if (pair := exact_power(value))[0] != 0
+            )
+        )
         instance = cls._cache.get(key)
-        if instance is not None:
-            return instance
-
-        instance = RationalUnit.__new__(cls, normalized_exponents)
-
-        # Consistent order for exponents dict to ensure uniform __repr__
-        ordered_exponents = dict(sorted_items)
-        object.__setattr__(instance, "exponents", ordered_exponents)
-
-        # Singleton pattern
-        cls._cache[key] = cast("CompoundUnit", instance)
+        if instance is None:
+            instance = RationalUnit.__new__(cls, dict(key))
+            # read-only: the instance is shared by everything that builds it
+            object.__setattr__(
+                instance,
+                "exponents",
+                MappingProxyType(
+                    {
+                        symbol: n if d == 1 else Fraction(n, d)
+                        for symbol, (n, d) in key
+                    }
+                ),
+            )
+            cls._cache[key] = cast("CompoundUnit", instance)
+        if items is not None:
+            cls._cache[items] = cast("CompoundUnit", instance)
         return cast("CompoundUnit", instance)
 
     # ponytail: real initialization happens in __new__'s singleton cache;
@@ -216,18 +170,13 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
     ) -> None:
         """Initializes the compound unit with a dictionary of exponents."""
 
-    def __post_init__(self) -> None:
-        """Eliminamos cualquier unidad con exponente 0."""
-        clean_exponents = {k: v for k, v in self.exponents.items() if v != 0}
-        object.__setattr__(self, "exponents", clean_exponents)
-
     def __reduce__(self) -> tuple[Any, ...]:
         """Custom pickling to ensure Flyweight pattern (cache) is used.
 
         By returning (reconstruct_compound_unit, (args,)), we bypass direct
         class lookups that can be corrupted by namespace shadowing.
         """
-        return (reconstruct_compound_unit, (self.exponents,))
+        return (reconstruct_compound_unit, (dict(self.exponents),))
 
     def __hash__(self) -> int:
         """Returns a hash value for the compound unit."""
@@ -246,75 +195,43 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         return cls(r_unit.dimensions)
 
     # --- System-Dependent Methods ---
-    def _compound_factor(self, system: UnitSystem) -> float:
-        """Calculate the unit's total conversion factor relative to SI units."""
-        factor = 1.0
-        for unit, exp in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            _unit = system.get_unit(unit)
-            dim = _unit.dimension(system)
-            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
-            if unit_def and hasattr(unit_def.converter, "scale"):
-                conv_scale = unit_def.converter.scale
-                # Handle tuple exponents (num, den) from RationalUnit
-                exponent_val = (
-                    exp[0] / exp[1] if isinstance(exp, (list, tuple)) else exp
-                )
-                factor *= conv_scale**exponent_val
-        return factor
+    @classmethod
+    def of_dimension(
+        cls, dimension: Dimension, system: UnitSystem
+    ) -> CompoundUnit:
+        """The unit that measures a dimension in the base units of the system.
 
-    def _compound_factor_exact(self, system: UnitSystem) -> Fraction | None:
-        """Exact rational compound factor, or None if not representable.
-
-        Returns None when any component's converter lacks an exact scale
-        or has a non-integer exponent; callers fall back to float math.
+        Raises:
+            ValueError: A base dimension has no base unit in the system.
         """
-        factor = Fraction(1)
-        for unit, exp in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            _unit = system.get_unit(unit)
-            dim = _unit.dimension(system)
-            unit_def = system.UNIT_REGISTRY.get(dim, {}).get(unit)
-            if not (unit_def and hasattr(unit_def.converter, "scale")):
-                continue
-            exact = getattr(unit_def.converter, "exact", None)
-            if isinstance(exp, (list, tuple)):
-                num, den = exp
-                if den != 1:
-                    return None
-                exp = num
-            if exact is None or exp != int(exp):
-                return None
-            factor *= exact ** int(exp)
-        return factor
+        powers = {
+            symbol: (Fraction(power).numerator, Fraction(power).denominator)
+            for symbol, power in dimension.exponents.items()
+        }
+        return _CompoundUnit(
+            system.core_registry.unit_of_dimension(powers).dimensions
+        )
+
+    def base_unit(self, system: UnitSystem) -> CompoundUnit:
+        """This unit in base symbols, with no scale and no zero point (degC is K)."""
+        try:
+            return _CompoundUnit(system.core_registry.expand(self).dimensions)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     def is_linear(self, system: UnitSystem) -> bool:
-        """Checks if all components of the unit use linear converters."""
-        for unit, _ in self.exponents.items():
-            if unit == "noprefix":
-                continue
-            unit_def = system.get_definition(unit)
-            if unit_def and not unit_def.converter.is_linear:
-                return False
-        return True
+        """Checks if the unit is a plain scale: no zero point, no logarithm."""
+        try:
+            return system.core_registry.is_linear_of(self)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     def kind(self, system: UnitSystem) -> str:
         """Determines if the unit is 'absolute' (Point) or 'delta' (Vector)."""
-        e_list = list(self.exponents.items())
-        if len(e_list) == 1:
-            unit_name, exp = e_list[0]
-            # Handle rational tuple
-            is_unity = (exp == 1) or (
-                isinstance(exp, (list, tuple)) and exp[0] == 1 and exp[1] == 1
-            )
-
-            if is_unity and unit_name != "noprefix":
-                unit_def = system.get_definition(unit_name)
-                if unit_def:
-                    return getattr(unit_def, "kind", "delta")
-        return "delta"
+        try:
+            return system.core_registry.kind_of(self)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
 
     def conversion_factor_to(
         self, target: CompoundUnit, system: UnitSystem | None = None
@@ -336,17 +253,10 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         if system is None:
             system = get_default_system()
 
-        if self.dimension(system) != target.dimension(system):
-            raise IncompatibleUnitsError(self, target)
-        source_exact = self._compound_factor_exact(system)
-        if source_exact is not None:
-            target_exact = target._compound_factor_exact(system)
-            if target_exact is not None:
-                # Single rounding at the boundary instead of one per scale.
-                return float(source_exact / target_exact)
-        source_factor = self._compound_factor(system)
-        target_factor = target._compound_factor(system)
-        return source_factor / target_factor
+        try:
+            return system.core_registry.factor_between(self, target)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, target) from error
 
     @overload
     def __rmul__(self, other: float) -> Quantity[float, float, Any]: ...
@@ -390,7 +300,6 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         self,
         system: UnitSystem | None = None,
         use_alias: bool = False,
-        alias_preference: str | None = None,
     ) -> str:
         """Generate a human-readable string representation of the unit.
 
@@ -398,21 +307,15 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         system (UnitSystem | None, optional): The system to check for aliases.
         use_alias (bool, optional): If True, uses a registered alias if one
         exists. Defaults to False.
-        alias_preference (str | None, optional): A preferred alias to use if
-        multiple exist. Defaults to None.
 
         Returns:
         str: The string representation of the unit.
         """
         if use_alias and system:
-            key = tuple(
-                sorted((k, v) for k, v in self.exponents.items() if v != 0)
-            )
-            aliases = system.ALIASES.get(key, [])
-            if aliases:
-                if alias_preference and alias_preference in aliases:
-                    return alias_preference
-                return aliases[0]
+            try:
+                return system.core_registry.alias_of(self)
+            except _CORE_ERRORS as error:
+                raise _python_error(error, self, self) from error
 
         return super().__str__()
 
@@ -421,26 +324,17 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         return self.to_string(use_alias=format_spec.startswith("alias"))
 
     def __pow__(self, power: float | tuple[int, int]) -> CompoundUnit:
-        """Power support with float-to-rational conversion."""
-        if isinstance(power, (int, float)):
-            # Use Python-side BaseExponentEntity logic for pure exponents
-            # to avoid Rust RationalUnit issues with fractional powers.
-            # Convert float to int if integral
-            if isinstance(power, float) and power.is_integer():
-                power = int(power)
-
-            new_exponents = {k: v * power for k, v in self.exponents.items()}
-            return _CompoundUnit(new_exponents)
-
-        # For rational tuples, we use Rust core if available
-        # ponytail: the Rust RationalUnit core accepts a rational
-        # (numerator, denominator) tuple here even though the Python
-        # stub's __pow__ only declares float (same "Rust core is
-        # optional/dynamic" pattern as elsewhere in this file).
-        res = super().__pow__(power)  # pyright: ignore[reportArgumentType]
-        if hasattr(res, "dimensions"):
-            return _CompoundUnit(res.dimensions)
-        return res
+        """Raises the unit to a power: an integer, or the fraction a float stands for."""
+        if type(power) is int:
+            return _CompoundUnit(
+                {k: v * power for k, v in self.exponents.items()}
+            )
+        if isinstance(power, float) and power.is_integer():
+            return self ** int(power)
+        # a fraction: the algebra of the core, with the exact power
+        return _CompoundUnit(
+            RationalUnit.__pow__(self, exact_power(power)).dimensions  # pyright: ignore[reportArgumentType]
+        )
 
     # ponytail: BaseExponentEntity.__rtruediv__ is a singledispatchmethod;
     # CompoundUnit intentionally replaces it with a plain method for the
@@ -503,19 +397,11 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         Returns:
             A new, simplified CompoundUnit instance.
         """
-        new_exponents: dict[str, float] = defaultdict(float)
-
-        for unit_symbol, exponent in self.exponents.items():
-            if unit_symbol in system._UNIT_RECIPES:
-                recipe_unit = system._UNIT_RECIPES[unit_symbol]
-                simplified_recipe = recipe_unit.simplify(system)
-
-                for base_unit, base_exp in simplified_recipe.exponents.items():
-                    new_exponents[base_unit] += base_exp * exponent
-            else:
-                new_exponents[unit_symbol] += exponent
-
-        return _CompoundUnit(new_exponents)
+        try:
+            simplified = system.core_registry.simplify(self)
+        except _CORE_ERRORS as error:
+            raise _python_error(error, self, self) from error
+        return _CompoundUnit(simplified.dimensions)
 
 
 # Capture a stable reference to the class to survive namespace shadowing
@@ -523,32 +409,21 @@ _CompoundUnit = CompoundUnit
 
 # --- Registry Initialization ---
 
-# Initialize the global registry instance
+# Initialize the global registry instance: the units of physure.conf are the
+# ones the core's registry of the embedded catalog knows, so none is listed
+# here. Plugins are discovered lazily, by UnitRegistry itself.
 units = UnitRegistry()
+units.register_catalog(
+    _CoreUnitRegistry.from_conf(), lambda name: CompoundUnit({name: 1})
+)
 
 
-def _register_core_units() -> None:
-    """Helper to populate the registry from the generated index."""
-    try:
-        # Import the index generated by scripts/compile_units.py
-        from physure.units._index import UNIT_INDEX
-    except ImportError:
-        # If the index hasn't been generated yet, skip registration.
-        # This allows bootstrapping or running without generated units.
-        return
-
-    # ponytail: register the name -> scope map directly instead of building
-    # a closure per entry (was ~5.5k closures allocated for units nobody
-    # asked for). UnitRegistry.__getattr__ resolves the actual import only
-    # for the exact name requested.
-    units.register_static(UNIT_INDEX)
+def _quantity_from_sugar(value: Any, unit: Any) -> Any:
+    """What `5 * unit` calls for a unit of the core: the same quantity `5 * meter` builds."""
+    return CompoundUnit(unit.dimensions).__rmul__(value)
 
 
-# Register core units immediately (eager but lightweight)
-_register_core_units()
-
-# Discover external units via entry points (lazy loading)
-# units.discover_plugins() is now called lazily in UnitRegistry
+register_quantity_factory(_quantity_from_sugar)
 
 
 # Inject Python-side functionality into the Rust base class
@@ -585,7 +460,6 @@ def wrap_arithmetic(
 for method_name in [
     "dimension",
     "simplify",
-    "_compound_factor",
     "conversion_factor_to",
     "to_latex",
     "_repr_latex_",
@@ -599,7 +473,6 @@ for method_name in [
 # Arithmetic methods to wrap with Flyweight cache
 for op in [
     "__mul__",
-    "__rmul__",
     "__truediv__",
     "__rtruediv__",
     "__pow__",

@@ -7,7 +7,7 @@ backend-agnostic execution via the Array API standard.
 
 from __future__ import annotations
 
-import math
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -19,18 +19,17 @@ else:
         array_api_compat = None
 
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-    OffsetConverter,
+from physure.domain.measurement.conversion_plan import apply_conversion
+from physure.domain.measurement.units import (
+    _CORE_ERRORS,
+    CompoundUnit,
+    _python_error,
 )
-from physure.domain.measurement.units import CompoundUnit
 
 if TYPE_CHECKING:
     from types import ModuleType
 
     from physure.core.protocols import Numeric
-    from physure.domain.measurement.dimensions import Dimension
     from physure.domain.measurement.system import UnitSystem
 
 
@@ -55,31 +54,6 @@ def get_xp(*arrays: Numeric) -> ModuleType:
         return xp
 
 
-def _get_converter_if_simple(unit: CompoundUnit, system: UnitSystem):
-    """Returns the converter if the unit is a single simple unit."""
-    if len(unit.exponents) == 1:
-        name, exp = next(iter(unit.exponents.items()))
-        if exp == 1:
-            definition = system.get_definition(name)
-            if definition:
-                return definition.converter
-    return None
-
-
-def _find_linear_unit_for_dimension(
-    dimension: Dimension, system: UnitSystem
-) -> CompoundUnit | None:
-    """Finds a linear unit (scale=1.0) for the given dimension."""
-    # This searches the registry for a base unit or standard linear unit
-    # to return results of difference operations (e.g. T - T)
-    for name, u_def in system.UNIT_REGISTRY.get(dimension, {}).items():
-        if isinstance(u_def.converter, LinearConverter) and math.isclose(
-            u_def.converter.scale, 1.0
-        ):
-            return system.get_unit(name)
-    return None
-
-
 def add_quantities(
     val1: Numeric,
     unit1: CompoundUnit,
@@ -100,7 +74,7 @@ def add_quantities(
     """
     is_nonlinear = _check_nonlinear(unit1, unit2, system)
     if is_nonlinear:
-        return _add_nonlinear(val1, unit1, val2, unit2, system)
+        return _add_sub_nonlinear(val1, unit1, val2, unit2, system, False)
 
     # Standard Linear Path
     xp = get_xp(val1, val2)
@@ -128,7 +102,7 @@ def sub_quantities(
     """Subtracts two quantities."""
     is_nonlinear = _check_nonlinear(unit1, unit2, system)
     if is_nonlinear:
-        return _sub_nonlinear(val1, unit1, val2, unit2, system)
+        return _add_sub_nonlinear(val1, unit1, val2, unit2, system, True)
 
     xp = get_xp(val1, val2)
 
@@ -148,169 +122,86 @@ def sub_quantities(
 def _check_nonlinear(
     unit1: CompoundUnit, unit2: CompoundUnit, system: UnitSystem
 ) -> bool:
-    conv1 = _get_converter_if_simple(unit1, system)
-    conv2 = _get_converter_if_simple(unit2, system)
-
-    nl1 = conv1 and not conv1.is_linear
-    nl2 = conv2 and not conv2.is_linear
-    return bool(nl1 or nl2)
+    """True when a zero point or a logarithm is involved: not a plain scale."""
+    return not (unit1.is_linear(system) and unit2.is_linear(system))
 
 
-def _add_nonlinear(
+def _convert(
+    xp: ModuleType,
+    value: Numeric,
+    source: CompoundUnit,
+    target: CompoundUnit,
+    system: UnitSystem,
+) -> Numeric:
+    """Converts a value by the plan that the core registry gives."""
+    try:
+        plan = system.core_registry.conversion(source, target)
+    except _CORE_ERRORS as error:
+        raise _python_error(error, source, target) from error
+    ops = SimpleNamespace(mul=xp.multiply, add=xp.add, abs=xp.abs)
+    return apply_conversion(plan, value, 0.0, ops)[0]
+
+
+def _add_sub_nonlinear(
     val1: Numeric,
     unit1: CompoundUnit,
     val2: Numeric,
     unit2: CompoundUnit,
     system: UnitSystem,
+    subtract: bool,
 ) -> tuple[Numeric, CompoundUnit]:
-    xp = get_xp(val1, val2)
-    conv1 = _get_converter_if_simple(unit1, system)
-    conv2 = _get_converter_if_simple(unit2, system)
+    """Adds or subtracts when a point (degC) or a level (dB) is involved.
 
-    # Check dimensions
+    The rules are the core's: a point moved by an interval stays a point in its
+    own scale, two points make an interval, levels add as the quantities they
+    stand for, and what has no meaning is refused.
+    """
+    xp = get_xp(val1, val2)
     if unit1.dimension(system) != unit2.dimension(system):
         raise IncompatibleUnitsError(unit1, unit2)
+    op = xp.subtract if subtract else xp.add
+    point1 = unit1.kind(system) == "absolute"
+    point2 = unit2.kind(system) == "absolute"
 
-    is_off1 = isinstance(conv1, OffsetConverter)
-    is_off2 = isinstance(conv2, OffsetConverter)
-
-    # 1. Offset + Offset -> Error
-    if is_off1 and is_off2:
-        raise ValueError(
-            "Cannot add two affine quantities (e.g. Temperatures)."
-        )
-
-    # 2. Linear + Offset -> T (Offset)
-    if not is_off1 and is_off2:
-        # Delta + T -> T
-        # Convert both to base, add, convert back to unit2
-        # Delta to base: val1 * scale
-        base1 = (
-            xp.multiply(val1, getattr(conv1, "scale", 1.0)) if conv1 else val1
-        )  # Default linear
-        base2 = conv2.to_base(val2)
-        res_base = xp.add(base1, base2)
-        res_mag = conv2.from_base(res_base)
-        return res_mag, unit2
-
-    # 3. Offset + Linear -> T (Offset)
-    if is_off1 and not is_off2:
-        base1 = conv1.to_base(val1)
-        base2 = (
-            xp.multiply(val2, getattr(conv2, "scale", 1.0)) if conv2 else val2
-        )
-        res_base = xp.add(base1, base2)
-        res_mag = conv1.from_base(res_base)
-        return res_mag, unit1
-
-    # 4. Log + Log (Power Sum)
-    is_log1 = isinstance(conv1, LogarithmicConverter)
-    is_log2 = isinstance(conv2, LogarithmicConverter)
-
-    if is_log1 and is_log2:
-        base1 = conv1.to_base(val1)
-        base2 = conv2.to_base(val2)
-        res_base = xp.add(base1, base2)
-        # Convert back to unit1 (arbitrary choice, usually units match for log sum)
-        res_mag = conv1.from_base(res_base)
-        return res_mag, unit1
-
-    # Fallback to linear if we missed a case or mixed types essentially treated as linear
-    # This effectively recurses to linear behavior manually
-    # But for safety, we implement the conversion here if mixed types fell through
-    # (e.g. one Log, one Linear? usually undefined or strict error,
-    # but let's assume a valid linear-ish op)
-    # Ideally should not happen if _check_nonlinear was accurate.
-    # We'll just define it as "Linear fallback"
-    factor = unit2.conversion_factor_to(unit1, system)
-    val2_converted = xp.multiply(val2, factor)
-    return xp.add(val1, val2_converted), unit1
-
-
-def _sub_nonlinear(
-    val1: Numeric,
-    unit1: CompoundUnit,
-    val2: Numeric,
-    unit2: CompoundUnit,
-    system: UnitSystem,
-) -> tuple[Numeric, CompoundUnit]:
-    xp = get_xp(val1, val2)
-    conv1 = _get_converter_if_simple(unit1, system)
-    conv2 = _get_converter_if_simple(unit2, system)
-
-    if unit1.dimension(system) != unit2.dimension(system):
-        raise IncompatibleUnitsError(unit1, unit2)
-
-    is_off1 = isinstance(conv1, OffsetConverter)
-    is_off2 = isinstance(conv2, OffsetConverter)
-
-    # 1. Offset - Offset -> Delta (Linear)
-    if is_off1 and is_off2:
-        base1 = conv1.to_base(val1)
-        base2 = conv2.to_base(val2)
-        res_base = xp.subtract(base1, base2)
-
-        # Result needs to be in a linear unit of the same dimension (e.g. Kelvin)
-        # Try to find one
-        target_unit = _find_linear_unit_for_dimension(
-            unit1.dimension(system), system
-        )
-        if not target_unit:
-            # Dangerous fallback: use unit1 but it is Offset?
-            # Theoretically we have a value in Base Units.
-            # If we wrap it in unit1 (Celcius), 10 K becomes 10 C? No.
-            # We must return it in base unit if we have it, or synthesize.
-            # Assuming system has base units setup correctly for dimensions.
-            # If search fails, we can't represent it linearly easily?
-            # Let's hope logic holds.
-            # Fallback: Just return value and unit1, but user must know it's raw base value?
-            # No, that breaks encapsulation.
-            raise ValueError(
-                f"Could not find linear unit for dimension {unit1.dimension(system)}"
+    if point1 or point2:
+        if point1 and point2:
+            if not subtract:
+                raise ValueError(
+                    "Cannot add two absolute quantities. "
+                    "Did you mean to add a difference?"
+                )
+            base = unit1.base_unit(system)
+            return (
+                xp.subtract(
+                    _convert(xp, val1, unit1, base, system),
+                    _convert(xp, val2, unit2, base, system),
+                ),
+                base,
             )
+        if point1:
+            factor = unit2.conversion_factor_to(unit1, system)
+            return op(val1, xp.multiply(val2, factor)), unit1
+        if subtract:
+            raise ValueError(
+                "Cannot subtract an absolute quantity from a difference."
+            )
+        factor = unit1.conversion_factor_to(unit2, system)
+        return xp.add(xp.multiply(val1, factor), val2), unit2
 
-        return res_base, target_unit
-
-    # 2. Linear - Offset -> Error? or Delta - T?
-    # 5 deg - 20 degC = -15 degC (T) ?
-    # Analogy: 5 steps - Position 20 = Position -15?
-    # Usually: Delta - T is weird. T - Delta is OK.
-    # Ref implementation: Quantity.py case 2 logic handled +/- similarly.
-    # Let's support it if logic holds: res = base_linear - base_offset.
-    # returns Offset Unit.
-    if not is_off1 and is_off2:
-        base1 = (
-            xp.multiply(val1, getattr(conv1, "scale", 1.0)) if conv1 else val1
+    if not (unit1.kind(system) == "delta" and unit2.kind(system) == "delta"):
+        raise ValueError("Unexpected kind of unit.")
+    # both are levels, since _check_nonlinear found a unit that is not a scale
+    if unit1.is_linear(system) or unit2.is_linear(system):
+        raise ValueError(
+            f"Cannot {'subtract' if subtract else 'add'} a level and a plain "
+            f"quantity ('{unit1}' and '{unit2}'): convert one of them first."
         )
-        base2 = conv2.to_base(val2)
-        res_base = xp.subtract(base1, base2)
-        res_mag = conv2.from_base(res_base)
-        return res_mag, unit2  # Result is T (unit2)
-
-    # 3. Offset - Linear -> T (Offset)
-    if is_off1 and not is_off2:
-        base1 = conv1.to_base(val1)
-        base2 = (
-            xp.multiply(val2, getattr(conv2, "scale", 1.0)) if conv2 else val2
-        )
-        res_base = xp.subtract(base1, base2)
-        res_mag = conv1.from_base(res_base)
-        return res_mag, unit1
-
-    # 4. Log
-    is_log1 = isinstance(conv1, LogarithmicConverter)
-    is_log2 = isinstance(conv2, LogarithmicConverter)
-    if is_log1 and is_log2:
-        base1 = conv1.to_base(val1)
-        base2 = conv2.to_base(val2)
-        res_base = xp.subtract(base1, base2)
-        res_mag = conv1.from_base(res_base)
-        return res_mag, unit1
-
-    # Fallback
-    factor = unit2.conversion_factor_to(unit1, system)
-    val2_converted = xp.multiply(val2, factor)
-    return xp.subtract(val1, val2_converted), unit1
+    plain = unit1.base_unit(system)
+    combined = op(
+        _convert(xp, val1, unit1, plain, system),
+        _convert(xp, val2, unit2, plain, system),
+    )
+    return _convert(xp, combined, plain, unit1, system), unit1
 
 
 def mul_quantities(

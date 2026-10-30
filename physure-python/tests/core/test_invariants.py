@@ -5,9 +5,11 @@ from hypothesis import HealthCheck, Phase, assume, given, settings
 from hypothesis import strategies as st
 
 from physure import Quantity
+from physure.domain.exceptions import IncompatibleUnitsError
 from tests.strategies import (
     backend_arrays,
     linear_units,
+    linear_units_of,
     quantities,
     same_shape_quantities,
     same_unit_quantities,
@@ -190,19 +192,12 @@ def test_unit_invariance(qs):
     # Find a compatible unit to convert to (must be linear)
     from hypothesis import note
 
-    compatible_units = []
-    # Ensure dimension is look-up-able
-    try:
-        dim_key = a.dimension
-        if hasattr(dim_key, "to_string"):
-            dim_key = dim_key.to_string()  # Normalize if needed
-        candidates = system.UNIT_REGISTRY.get(dim_key, {})
-    except TypeError:
-        candidates = {}
-
-    for name, definition in candidates.items():
-        if name != a.unit.to_string() and definition.converter.is_linear:
-            compatible_units.append(name)
+    current = a.unit.to_string()
+    compatible_units = [
+        name
+        for name in linear_units_of(system, a.dimension)
+        if name != current
+    ]
 
     if not compatible_units:
         # No alternative units found, skip this example gracefully
@@ -224,7 +219,8 @@ def test_unit_invariance(qs):
         b_conv = b.to(target_unit)
         rhs = a_conv + b_conv
 
-    except (ValueError, RuntimeError, TypeError) as e:
+    except (ValueError, RuntimeError, TypeError, IncompatibleUnitsError) as e:
+        # an angle and a solid angle share a dimension but are not convertible
         note(f"Operation failed with {e}")
         assume(False)
 
@@ -257,6 +253,8 @@ def test_unit_invariance(qs):
 @settings(max_examples=50, deadline=None, phases=[Phase.generate])
 def test_dimensional_homogeneity_scaling(q, scale):
     """f(scale * x) == scale * f(x) for linear functions."""
+    # a plain number does not scale an absolute temperature (2 * 20 degC)
+    assume(q.unit.kind(q.system) != "absolute")
     res1 = q * scale
     res2 = Quantity.from_input(q.magnitude * scale, q.unit, q.system)
 

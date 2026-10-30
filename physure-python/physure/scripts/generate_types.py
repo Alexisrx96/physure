@@ -10,8 +10,14 @@ _HEADER_SYNC_WARNING = "# Run 'physure sync-types' to update.\n\n"
 from physure.domain.measurement.units import units  # noqa: E402
 
 
-def generate():
-    """Generates type definitions and stubs for Physure units."""
+def generate(package_dir=None):
+    """Generates type definitions and stubs for Physure units.
+
+    The files go to the installed package unless ``package_dir`` names another
+    directory (with ``core/`` and ``units/`` below it), which is what a test uses so
+    that it does not rewrite the tracked ones.
+    """
+    root = package_dir or os.path.dirname(os.path.dirname(__file__))
     # Ensure units are discovered
     units.discover_plugins()
 
@@ -26,9 +32,7 @@ def generate():
         names_str = ", ".join(f'"{name}"' for name in names)
         literal_type = f"Literal[{names_str}]"
 
-    generated_types_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "_generated_types.py"
-    )
+    generated_types_path = os.path.join(root, "_generated_types.py")
 
     with open(generated_types_path, "w", encoding="utf-8") as f:
         f.write(_HEADER_EDIT_WARNING)
@@ -37,26 +41,31 @@ def generate():
         f.write(f"UnitName = {literal_type}\n")
 
     # 2. Generate Stub for Registry attributes
-    registry_stub_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "core", "registry.pyi"
-    )
+    registry_stub_path = os.path.join(root, "core", "registry.pyi")
 
     with open(registry_stub_path, "w", encoding="utf-8") as f:
         f.write(_HEADER_EDIT_WARNING)
         f.write(_HEADER_SYNC_WARNING)
         f.write("from typing import Any\n\n")
-        f.write("from physure.domain.measurement.units import Unit\n\n")
+        f.write(
+            "from physure.domain.measurement.units import CompoundUnit\n\n"
+        )
         f.write("class UnitRegistry:\n")
         f.write("    _registry: dict[str, Any]\n")
         f.write("    _lazy_loaders: dict[str, Any]\n")
         f.write("    _discovered: bool\n")
         for name in names:
-            f.write(f"    {name}: Unit\n")
+            f.write(f"    {name}: CompoundUnit\n")
         f.write("    def register(self, name: str, unit: Any) -> None:\n")
         f.write(_STUB_ELLIPSIS)
         f.write(
             "    def register_lazy("
             "self, name: str, loader_func: Any) -> None:\n"
+        )
+        f.write(_STUB_ELLIPSIS)
+        f.write(
+            "    def register_catalog("
+            "self, catalog: Any, make_unit: Any) -> None:\n"
         )
         f.write(_STUB_ELLIPSIS)
         f.write("    def discover_plugins(self) -> None:\n")
@@ -66,9 +75,7 @@ def generate():
         f.write(_STUB_ELLIPSIS)
 
     # 3. Generate Stub for units module (__init__.pyi)
-    units_stub_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "units", "__init__.pyi"
-    )
+    units_stub_path = os.path.join(root, "units", "__init__.pyi")
 
     with open(units_stub_path, "w", encoding="utf-8") as f:
         f.write(_HEADER_EDIT_WARNING)
@@ -76,7 +83,6 @@ def generate():
         f.write(
             "from physure.domain.measurement.units import CompoundUnit\n\n"
         )
-        f.write("UNIT_INDEX: dict[str, str]\n\n")
         for name in names:
             f.write(f"{name}: CompoundUnit\n")
 

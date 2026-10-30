@@ -216,8 +216,9 @@ class Species:
     @property
     def molar_mass(self) -> Quantity:
         """Molar mass as a Quantity in g/mol, with combined atomic uncertainty."""
-        from physure import Q_
+        from physure.application.factories import QuantityFactory
 
+        Q_ = QuantityFactory()
         mass = 0.0
         variance = 0.0
         for element, count in self.composition.items():

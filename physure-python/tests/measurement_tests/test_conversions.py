@@ -4,9 +4,10 @@ pytest.
 
 import pytest
 
-from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.conversions import UnitDefinition
-from physure.domain.measurement.converters import LinearConverter
+from physure.domain.exceptions import (
+    IncompatibleUnitsError,
+    UnknownUnitError,
+)
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.units import CompoundUnit
 
@@ -21,42 +22,33 @@ def dims():
     }
 
 
-def test_unit_definition_initialization_and_caching(dims):
-    """Test initialization and caching behavior of UnitDefinition."""
-    length = dims["length"]
-    unit1 = UnitDefinition("m", length, LinearConverter(1.0), "meter")
-    assert unit1.symbol == "m"
-    assert unit1.dimension == length
-    assert unit1.name == "meter"
-
-    unit2 = UnitDefinition("m", length, LinearConverter(1.0), "meter")
-    assert unit1 is unit2
-
-
 def test_register_unit(system, dims):
-    """Test registering units in the system's registries."""
+    """Test registering units: the registry of the system holds them."""
     length = dims["length"]
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
+    system.register_unit("m", length, 1.0, "meter")
 
-    assert "m" in system.UNIT_REGISTRY[length]
-    assert system.UNIT_DIMENSIONS["m"] == length
+    assert system.get_unit("m").dimension(system) == length
 
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
-    assert "cm" in system.UNIT_REGISTRY[length]
+    system.register_unit("cm", length, 0.01, "centimeter")
+    registry = system.core_registry
+    factor = registry.factor_between(
+        registry.parse_atomic("m"), registry.parse_atomic("cm")
+    )
+    assert factor == 100.0
 
 
 def test_find_dimension_for_unit(system, dims):
     """Test finding the dimension for a registered unit."""
     length = dims["length"]
     time = dims["time"]
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
 
-    assert system.UNIT_DIMENSIONS["m"] == length
-    assert system.UNIT_DIMENSIONS["s"] == time
+    assert system.get_unit("m").dimension(system) == length
+    assert system.get_unit("s").dimension(system) == time
 
-    with pytest.raises(KeyError):
-        _ = system.UNIT_DIMENSIONS["unknown_unit"]
+    with pytest.raises(UnknownUnitError):
+        system.get_unit("unknown_unit")
 
 
 def test_compound_unit_conversion_factor(system, dims):
@@ -65,14 +57,14 @@ def test_compound_unit_conversion_factor(system, dims):
     time = dims["time"]
     mass = dims["mass"]
 
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("cm", length, LinearConverter(0.01), "centimeter")
-    system.register_unit("km", length, LinearConverter(1000.0), "kilometer")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("min", time, LinearConverter(60.0), "minute")
-    system.register_unit("h", time, LinearConverter(3600.0), "hour")
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
-    system.register_unit("g", mass, LinearConverter(0.001), "gram")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("cm", length, 0.01, "centimeter")
+    system.register_unit("km", length, 1000.0, "kilometer")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("min", time, 60.0, "minute")
+    system.register_unit("h", time, 3600.0, "hour")
+    system.register_unit("kg", mass, 1.0, "kilogram")
+    system.register_unit("g", mass, 0.001, "gram")
 
     meter = CompoundUnit({"m": 1})
     centimeter = CompoundUnit({"cm": 1})
@@ -122,14 +114,16 @@ def test_exact_factors_survive_prefixes():
     assert Q_(1.0, "km").to("mm").magnitude == 1_000_000.0
     assert Q_(1.0, "kg").to("g").magnitude == 1000.0
 
-    system = get_current_system()
-    km = system.UNIT_SYMBOL_REGISTRY["km"].converter
-    assert km.exact == Fraction(1000)
+    registry = get_current_system().core_registry
+
+    def factor(unit):
+        return registry.factor_between(
+            registry.parse_atomic(unit), registry.parse_atomic("m")
+        )
+
+    assert factor("km") == 1000.0
     # prefix * imperial scale: milli-foot = 3048/10^7 m exactly
-    # (materialize on demand -- prefixed units are no longer eagerly registered)
-    system.get_unit("mft")
-    mft = system.UNIT_SYMBOL_REGISTRY["mft"].converter
-    assert mft.exact == Fraction(3048, 10_000_000)
+    assert factor("mft") == float(Fraction(3048, 10_000_000))
 
 
 def test_fractional_exponent_falls_back_to_float():

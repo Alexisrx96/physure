@@ -6,7 +6,6 @@ for exact dimensional validation.
 
 from __future__ import annotations
 
-import functools
 from fractions import Fraction
 from typing import TYPE_CHECKING, Any
 
@@ -178,50 +177,6 @@ def _rational_unit_to_exponents(
     return exponents
 
 
-def jit(func: Callable) -> Callable:
-    """JIT compiler for unit-aware functions.
-
-    Traces the function to validate units and bakes a unit-less numerical kernel.
-    """
-
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        from physure.application.context import get_uncertainty_mode
-        from physure.domain.measurement.quantity import Quantity
-
-        unit_sig = _build_unit_sig(args)
-        sig = (func, tuple(unit_sig))
-
-        mode, _ = get_uncertainty_mode()
-        if mode != "python":
-            return func(*args, **kwargs)
-
-        if sig not in _JIT_CACHE:
-            result = _trace_and_bake(func, args, unit_sig, kwargs)
-            if result is None:
-                return func(*args, **kwargs)
-            _JIT_CACHE[sig] = result
-
-        kernel, out_r_unit = _JIT_CACHE[sig]
-        magnitudes = [getattr(a, "magnitude", a) for a in args]
-        raw_res = kernel(*magnitudes)
-
-        mode, _ = get_uncertainty_mode()
-        if mode != "python":
-            return func(*args, **kwargs)
-
-        from physure.domain.measurement.units import (
-            CompoundUnit,
-            get_default_system,
-        )
-
-        exponents = _rational_unit_to_exponents(out_r_unit)
-        out_unit = CompoundUnit(exponents)
-        return Quantity.from_input(raw_res, out_unit, get_default_system())
-
-    return wrapper
-
-
 def _ensure_rational(unit_obj: Any) -> RationalUnit:
     """Helper to convert any unit representation to core RationalUnit."""
     if isinstance(unit_obj, RationalUnit):
@@ -232,13 +187,9 @@ def _ensure_rational(unit_obj: Any) -> RationalUnit:
         for k, v in unit_obj.exponents.items():
             if isinstance(v, tuple):  # Already (num, den)
                 dims[k] = v
-            elif isinstance(v, float) and not v.is_integer():
-                from fractions import Fraction
-
+            else:  # an int, a Fraction (exact) or a float
                 f = Fraction(v).limit_denominator()
                 dims[k] = (f.numerator, f.denominator)
-            else:
-                dims[k] = (int(v), 1)
         ret = RationalUnit(dims)
     else:
         ret = RationalUnit({})

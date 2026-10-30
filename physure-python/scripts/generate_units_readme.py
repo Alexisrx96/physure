@@ -1,11 +1,16 @@
 import configparser
+from fractions import Fraction
 from pathlib import Path
+
+# Words that stand among the fields of a unit line without being a value or an alias.
+_FLAGS = ("noprefix", "own_kind")
 
 
 def generate_units_markdown():
-    parser = configparser.ConfigParser()
+    parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
-    parser.read("physure/infrastructure/config/physure.conf", encoding="utf-8")
+    # physure-core owns the catalog. Run this script from physure-python/.
+    parser.read("../physure-core/src/units/physure.conf", encoding="utf-8")
 
     md = []
     md.append("# Supported Units, Prefixes, and Constants in Physure\n")
@@ -45,8 +50,11 @@ def generate_units_markdown():
             aliases = parts[4:]
         else:
             try:
-                float(parts[1])
-                # e.g. celsius = 1.0, 273.15, O, [°C]
+                Fraction(parts[1])
+                # e.g. celsius = 1.0, 273.15, O, [°C]; but `unity = 1.0, 1,
+                # [1]` has the dimension `1`, not an offset of 1.
+                if parts[2].startswith("[") or parts[2] in _FLAGS:
+                    raise ValueError(parts[1])
                 dim = parts[2]
                 scale = f"Scale {parts[0]} (Offset {parts[1]})"
                 aliases = parts[3:]
@@ -56,7 +64,11 @@ def generate_units_markdown():
                 scale = f"Scale {parts[0]}"
                 aliases = parts[2:]
 
-        aliases_str = ", ".join(aliases).replace("[", "").replace("]", "")
+        aliases_str = (
+            ", ".join(a for a in aliases if a not in _FLAGS)
+            .replace("[", "")
+            .replace("]", "")
+        )
 
         if dim not in units_by_dim:
             units_by_dim[dim] = []

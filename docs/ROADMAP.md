@@ -59,10 +59,10 @@ For detailed architectural designs, mathematical specifications, API proposals, 
 ```mermaid
 timeline
     title Physure Master Development Timeline
-    Q3 2026 (Completed) : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Extension (Species & Reactions) : Native Symbolic AST & Regression
-    Q4 2026 (In Progress) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Risch Integration Engine : Buckingham Pi Nullspace Solver
-    Q1 2027 (Planned) : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : GUM Welch-Satterthwaite & Real Gas EOS
-    Q2 2027 (Planned) : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
+    Q3 2026 (Completed) : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression
+    Q4 2026 (In Progress) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Rust Core Chemistry Module (physure_core::chemistry) : Risch Integration Engine : Buckingham Pi Nullspace Solver
+    Q1 2027 (Planned) : PHS DSL Chemistry Builtins : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : GUM Welch-Satterthwaite & Real Gas EOS
+    Q2 2027 (Planned) : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
 ```
 
 ---

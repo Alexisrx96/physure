@@ -78,43 +78,21 @@ impl<'a> Lexer<'a> {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),
             '*' => {
+                // `**` is the power, as in Python: `m**2` is `m^2`
                 if self.chars.peek() == Some(&'*') {
                     self.chars.next();
+                    return Ok(Token::Pow);
                 }
                 Ok(Token::Mul)
             }
             '/' => Ok(Token::Div),
             '^' => Ok(Token::Pow),
-            '0'..='9' => {
-                let mut num_str = String::new();
-                num_str.push(c);
-                while let Some(&d) = self.chars.peek() {
-                    if d.is_ascii_digit() {
-                        num_str.push(d);
-                        self.chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                let val: i64 = num_str.parse().map_err(|_| PhysureError::ParseError("Invalid integer".into()))?;
-                Ok(Token::Number(val, 1))
-            }
+            '0'..='9' => self.number(c, false),
             '-' => {
                 if let Some(&d) = self.chars.peek() {
                     if d.is_ascii_digit() {
                         self.chars.next();
-                        let mut num_str = String::new();
-                        num_str.push(d);
-                        while let Some(&next_d) = self.chars.peek() {
-                            if next_d.is_ascii_digit() {
-                                num_str.push(next_d);
-                                self.chars.next();
-                            } else {
-                                break;
-                            }
-                        }
-                        let val: i64 = num_str.parse().map_err(|_| PhysureError::ParseError("Invalid integer".into()))?;
-                        return Ok(Token::Number(-val, 1));
+                        return self.number(d, true);
                     }
                 }
                 Err(PhysureError::ParseError("Unexpected character '-'".into()))
@@ -134,6 +112,39 @@ impl<'a> Lexer<'a> {
             }
             other => Err(PhysureError::ParseError(format!("Unexpected character '{}'", other))),
         }
+    }
+}
+
+impl<'a> Lexer<'a> {
+    /// A number that starts with `first`: an integer, or a decimal read as the exact fraction it
+    /// stands for (`0.5` is 1/2, `2.25` is 9/4), so that `s**0.5` is a half power.
+    fn number(&mut self, first: char, negative: bool) -> PhysureResult<Token> {
+        let invalid = || PhysureError::ParseError("Invalid number".into());
+        let mut digits = String::new();
+        digits.push(first);
+        while let Some(&d) = self.chars.peek() {
+            if !d.is_ascii_digit() {
+                break;
+            }
+            digits.push(d);
+            self.chars.next();
+        }
+        let mut denominator: i64 = 1;
+        let mut lookahead = self.chars.clone();
+        if lookahead.next() == Some('.') && lookahead.next().is_some_and(|d| d.is_ascii_digit()) {
+            self.chars.next();
+            while let Some(&d) = self.chars.peek() {
+                if !d.is_ascii_digit() {
+                    break;
+                }
+                digits.push(d);
+                denominator = denominator.checked_mul(10).ok_or_else(invalid)?;
+                self.chars.next();
+            }
+        }
+        let numerator: i64 = digits.parse().map_err(|_| invalid())?;
+        let value = Rational64::new(if negative { -numerator } else { numerator }, denominator);
+        Ok(Token::Number(*value.numer(), *value.denom()))
     }
 }
 
@@ -161,6 +172,24 @@ impl<'a> Parser<'a> {
     fn advance(&mut self) -> PhysureResult<()> {
         self.current_token = self.lexer.next_token()?;
         Ok(())
+    }
+
+    fn product(left: &RationalUnit, right: &RationalUnit) -> PhysureResult<RationalUnit> {
+        let result = left.mul(right);
+        RationalUnit::refuse_logarithmic_compound(&[left, right], &result)?;
+        Ok(result)
+    }
+
+    fn quotient(left: &RationalUnit, right: &RationalUnit) -> PhysureResult<RationalUnit> {
+        let result = left.div(right);
+        RationalUnit::refuse_logarithmic_compound(&[left, right], &result)?;
+        Ok(result)
+    }
+
+    fn power(base: &RationalUnit, exponent: Rational64) -> PhysureResult<RationalUnit> {
+        let result = base.pow(exponent);
+        RationalUnit::refuse_logarithmic_compound(&[base], &result)?;
+        Ok(result)
     }
 
     pub fn parse_expression(input: &str) -> PhysureResult<RationalUnit> {
@@ -223,15 +252,15 @@ impl<'a> Parser<'a> {
             if self.current_token == Token::Mul {
                 self.advance()?;
                 let right = self.parse_factor()?;
-                left = left.mul(&right);
+                left = Self::product(&left, &right)?;
             } else if self.current_token == Token::Div {
                 self.advance()?;
                 let right = self.parse_factor()?;
-                left = left.div(&right);
+                left = Self::quotient(&left, &right)?;
             } else {
                 // Implicit multiplication (space or adjacent units e.g., "kg m")
                 let right = self.parse_factor()?;
-                left = left.mul(&right);
+                left = Self::product(&left, &right)?;
             }
         }
         Ok(left)
@@ -265,7 +294,7 @@ impl<'a> Parser<'a> {
                     }
                 };
                 if let Some((n, d)) = exp_opt {
-                    u.pow(Rational64::new(n, d))
+                    Self::power(&u, Rational64::new(n, d))?
                 } else {
                     u
                 }
@@ -323,10 +352,10 @@ impl<'a> Parser<'a> {
                 }
                 ref tok => return Err(PhysureError::ParseError(format!("Expected exponent number after '^', got {:?}", tok))),
             };
-            base = base.pow(exp_rat);
+            base = Self::power(&base, exp_rat)?;
         } else if let Token::Number(n, d) = self.current_token {
             self.advance()?;
-            base = base.pow(Rational64::new(n, d));
+            base = Self::power(&base, Rational64::new(n, d))?;
         }
 
         Ok(base)

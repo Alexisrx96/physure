@@ -1,8 +1,7 @@
-"""Prefixed units are no longer eagerly cross-produced at system-build time;
-they're materialized on first lookup by UnitSystem._try_lazy_prefix(). These
-tests confirm that lazy path resolves the same dimensions/factors as before,
-that whole-unit names still win over decomposition, and that compound
-expressions still resolve per-symbol.
+"""A prefixed unit is not held by the registry: it is read as a prefix and a
+unit. These tests confirm that it resolves to the right dimensions and factors,
+that whole-unit names win over decomposition, and that compound expressions
+resolve per symbol.
 """
 
 from physure import Q_
@@ -38,9 +37,9 @@ def test_compound_expression_resolves_per_symbol():
     assert v.to("m/s").magnitude == 1_000_000.0
 
 
-def test_lazy_materialization_populates_registries():
+def test_a_prefixed_unit_is_read_from_the_registry():
     system = get_current_system()
     unit = system.get_unit("THz")
     assert unit is not None
-    assert "THz" in system.UNIT_SYMBOL_REGISTRY
-    assert "THz" in system.UNIT_DIMENSIONS
+    assert "THz" in system
+    assert "THz" not in system.core_registry.names()

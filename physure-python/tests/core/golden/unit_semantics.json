@@ -1,0 +1,311 @@
+{
+  "BTU/h": {
+    "alias": "BTU/h",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -3
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "BTU/h"
+  },
+  "Hz": {
+    "alias": "Hz",
+    "dimension": {
+      "T": -1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "1/s"
+  },
+  "J/s": {
+    "alias": "W",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -3
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "kg·m²/s³"
+  },
+  "K": {
+    "alias": "K",
+    "dimension": {
+      "O": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "K"
+  },
+  "L/min": {
+    "alias": "L/min",
+    "dimension": {
+      "L": 3,
+      "T": -1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "L/min"
+  },
+  "N*m": {
+    "alias": "J",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "kg·m²/s²"
+  },
+  "Pa": {
+    "alias": "Pa",
+    "dimension": {
+      "L": -1,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "kg/(m·s²)"
+  },
+  "cal": {
+    "alias": "cal",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "cal"
+  },
+  "dB": {
+    "alias": "dB",
+    "dimension": {},
+    "is_linear": false,
+    "kind": "delta",
+    "simplified": "dB"
+  },
+  "degC": {
+    "alias": "degC",
+    "dimension": {
+      "O": 1
+    },
+    "is_linear": false,
+    "kind": "absolute",
+    "simplified": "degC"
+  },
+  "degF": {
+    "alias": "degF",
+    "dimension": {
+      "O": 1
+    },
+    "is_linear": false,
+    "kind": "absolute",
+    "simplified": "degF"
+  },
+  "delta_celsius": {
+    "alias": "delta_celsius",
+    "dimension": {
+      "O": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "delta_celsius"
+  },
+  "delta_fahrenheit": {
+    "alias": "delta_fahrenheit",
+    "dimension": {
+      "O": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "delta_fahrenheit"
+  },
+  "eV": {
+    "alias": "eV",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "eV"
+  },
+  "ft*lbf": {
+    "alias": "ft·lbf",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "ft·lbf"
+  },
+  "g/cm^3": {
+    "alias": "g/cm³",
+    "dimension": {
+      "L": -3,
+      "M": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "g/cm³"
+  },
+  "gallon": {
+    "alias": "gallon",
+    "dimension": {
+      "L": 3
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "gallon"
+  },
+  "hp": {
+    "alias": "hp",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -3
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "hp"
+  },
+  "kWh": {
+    "alias": "kWh",
+    "dimension": {
+      "L": 2,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "kWh"
+  },
+  "kg": {
+    "alias": "kg",
+    "dimension": {
+      "M": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "kg"
+  },
+  "kg*m/s^2": {
+    "alias": "N",
+    "dimension": {
+      "L": 1,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "kg·m/s²"
+  },
+  "km": {
+    "alias": "km",
+    "dimension": {
+      "L": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "km"
+  },
+  "km/h": {
+    "alias": "km/h",
+    "dimension": {
+      "L": 1,
+      "T": -1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "km/h"
+  },
+  "m": {
+    "alias": "m",
+    "dimension": {
+      "L": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "m"
+  },
+  "m/s^2": {
+    "alias": "m/s²",
+    "dimension": {
+      "L": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "m/s²"
+  },
+  "mmHg": {
+    "alias": "mmHg",
+    "dimension": {
+      "L": -1,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "mmHg"
+  },
+  "mol/L": {
+    "alias": "mol/L",
+    "dimension": {
+      "L": -3,
+      "N": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "mol/L"
+  },
+  "pH": {
+    "alias": "pH",
+    "dimension": {},
+    "is_linear": false,
+    "kind": "delta",
+    "simplified": "pH"
+  },
+  "percent": {
+    "alias": "percent",
+    "dimension": {},
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "percent"
+  },
+  "ppm": {
+    "alias": "ppm",
+    "dimension": {},
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "ppm"
+  },
+  "psi": {
+    "alias": "psi",
+    "dimension": {
+      "L": -1,
+      "M": 1,
+      "T": -2
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "psi"
+  },
+  "s": {
+    "alias": "s",
+    "dimension": {
+      "T": 1
+    },
+    "is_linear": true,
+    "kind": "delta",
+    "simplified": "s"
+  }
+}

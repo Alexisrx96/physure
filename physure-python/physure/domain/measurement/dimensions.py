@@ -10,25 +10,26 @@ library, enabling it to check for dimensional consistency in calculations.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Final, cast
+from fractions import Fraction
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from physure.core.formatting import to_superscript
-from physure.domain.exceptions import DimensionError
 
 if TYPE_CHECKING:
     from typing import Self
 
-from physure._core import DimVector as _RustDimVector
+from physure._core import RationalUnit
 from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentEntityProtocol,
     ExponentsDict,
 )
+from physure.domain.measurement.base_entity import (
+    exact_power as _pair,
+)
 
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
-
-DIMENSIONLESS = None
-_PREFIX_DENYLIST: set[str] = set()
 
 # Canonical Basis for SI plus supplementary (Angle, Money):
 # [Length, Mass, Time, Current, Temperature, Amount, Luminous, Angle, Money]
@@ -43,19 +44,6 @@ SI_ORDER: Final[tuple[str, ...]] = (
     "A",
     "$",
 )
-SI_INDICES: Final[dict[str, int]] = {s: i for i, s in enumerate(SI_ORDER)}
-DIM_COUNT: Final[int] = len(SI_ORDER)
-ZERO_VECTOR: Final[tuple[int, ...]] = (0,) * DIM_COUNT
-
-
-def block_prefixes_for_dimension_symbol(symbol: str) -> None:
-    """Adds a dimension symbol to the prefix denylist."""
-    _PREFIX_DENYLIST.add(symbol)
-
-
-def prefixes_allowed_for_dimension_symbol(symbol: str) -> bool:
-    """Checks if a dimension symbol is allowed to have prefixes."""
-    return symbol not in _PREFIX_DENYLIST
 
 
 def register_dimension(dimension: Dimension, name: str):
@@ -71,225 +59,198 @@ def register_dimension(dimension: Dimension, name: str):
     _DIMENSION_NAME_REGISTRY[dimension] = name
 
 
+_RANK: Final[dict[str, int]] = {symbol: i for i, symbol in enumerate(SI_ORDER)}
+
+
+def _symbol_order(item: tuple[str, Any]) -> tuple[int, str]:
+    """Sorts the SI symbols in their canonical order, then the others by name."""
+    return (_RANK.get(item[0], len(_RANK)), item[0])
+
+
 @dataclass(frozen=True)
 class Dimension(BaseExponentEntity):
-    """Represents a physical dimension using a fixed-length vector.
+    """A physical dimension: base dimensions to rational powers.
+
+    The powers are exact (a velocity is L·T⁻¹, a noise density L²·T^(1/2)...)
+    and the algebra is the core's: the dimension is held as a unit over the
+    dimension symbols, and multiplying, dividing and raising it to a power are
+    the operations of the core on it.
 
     Canonical Order:
-    [Length, Mass, Time, Current, Temperature, Amount, Luminous]
-    Symbols: [L, M, T, I, O, N, J]
+    [Length, Mass, Time, Current, Temperature, Amount, Luminous, Angle, Money]
+    Symbols: [L, M, T, I, O, N, J, A, $]; any other symbol follows by name.
 
     Attributes:
     ----------
-    _vector : Tuple[int, ...]
-        Tuple of integers storing the exponents of the base dimensions.
+    exponents : dict[str, int | Fraction]
+        The non-zero powers by symbol, in canonical order.
     """
 
-    _vector: tuple[int, ...]
+    _key: tuple[tuple[str, tuple[int, int]], ...]
+    _unit: RationalUnit = field(repr=False)
     _analytical_representation: str = field(init=False, repr=False)
-    _display_exponents: dict = field(init=False, repr=False)
 
-    _cache: ClassVar[dict[tuple[int, ...], Dimension]] = {}
+    # one instance per set of powers, found by the canonical key or by the
+    # items that were given (so the usual call does no arithmetic at all)
+    _cache: ClassVar[dict[tuple, Dimension]] = {}
     _base_dimensions: ClassVar[list[str]] = list(SI_ORDER)
 
-    def __new__(
-        cls, exponents: ExponentsDict | tuple[int, ...] | None = None
-    ) -> Self:
+    def __new__(cls, exponents: ExponentsDict | None = None) -> Self:
         """Creates or retrieves a cached Dimension instance."""
-        if isinstance(exponents, tuple):
-            vector = exponents
-        elif exponents is None:
-            vector = ZERO_VECTOR
-        else:
-            vector = cls._normalize_exponents(exponents)
+        items = tuple(exponents.items()) if exponents else ()
+        try:
+            found = cls._cache.get(items)
+        except TypeError:  # an unhashable power: no shortcut
+            items = None
+            found = None
+        if found is not None:
+            return cast("Self", found)
 
-        if vector in cls._cache:
-            return cast("Self", cls._cache[vector])
-
-        # Initialize instance without calling BaseExponentEntity.__new__
-        # to avoid its default dictionary-based logic.
-        instance = super(BaseExponentEntity, cls).__new__(cls)
-
-        analytical_rep, display_exp_dict = cls._calculate_representation(
-            vector
+        key = tuple(
+            sorted(
+                (
+                    (symbol, pair)
+                    for symbol, value in (exponents or {}).items()
+                    if (pair := _pair(value))[0] != 0
+                ),
+                key=_symbol_order,
+            )
         )
-
-        object.__setattr__(instance, "_vector", vector)
-        object.__setattr__(
-            instance, "_analytical_representation", analytical_rep
-        )
-        object.__setattr__(instance, "_display_exponents", display_exp_dict)
-        # Backward compatibility:
-        # set the 'exponents' field from BaseExponentEntity
-        object.__setattr__(instance, "exponents", display_exp_dict)
-
-        cls._cache[vector] = cast("Dimension", instance)
-        return instance
+        instance = cls._cache.get(key)
+        if instance is None:
+            # Initialize instance without calling BaseExponentEntity.__new__
+            # to avoid its default dictionary-based logic.
+            instance = super(BaseExponentEntity, cls).__new__(cls)
+            object.__setattr__(instance, "_key", key)
+            object.__setattr__(instance, "_unit", RationalUnit(dict(key)))
+            object.__setattr__(
+                instance,
+                "_analytical_representation",
+                cls._calculate_representation(key),
+            )
+            # read-only: the instance is shared by everything that builds it
+            object.__setattr__(
+                instance,
+                "exponents",
+                MappingProxyType(
+                    {
+                        symbol: n if d == 1 else Fraction(n, d)
+                        for symbol, (n, d) in key
+                    }
+                ),
+            )
+            cls._cache[key] = cast("Dimension", instance)
+        if items is not None:
+            cls._cache[items] = cast("Dimension", instance)
+        return cast("Self", instance)
 
     @classmethod
     def _calculate_representation(
-        cls, vector: tuple[int, ...]
-    ) -> tuple[str, dict[str, int]]:
-        """Calculates the analytical string and display dict for a vector."""
-        normalized = {SI_ORDER[i]: v for i, v in enumerate(vector) if v != 0}
-
-        if not normalized:
-            analytical_rep = "Dimensionless"
-        else:
-            parts = []
-            for k in SI_ORDER:
-                idx = SI_INDICES[k]
-                exp = vector[idx]
-                if exp == 0:
-                    continue
-                parts.append(k if exp == 1 else f"{k}{to_superscript(exp)}")
-            analytical_rep = "·".join(parts)
-
-        display_exp_dict = {k: int(v) for k, v in normalized.items()}
-        return analytical_rep, display_exp_dict
+        cls, key: tuple[tuple[str, tuple[int, int]], ...]
+    ) -> str:
+        """Calculates the analytical string of a dimension."""
+        if not key:
+            return "Dimensionless"
+        parts = []
+        for symbol, (n, d) in key:
+            if (n, d) == (1, 1):
+                parts.append(symbol)
+            elif d == 1:
+                parts.append(f"{symbol}{to_superscript(n)}")
+            else:
+                parts.append(f"{symbol}^({n}/{d})")
+        return "·".join(parts)
 
     @classmethod
-    def _normalize_exponents(cls, exponents: ExponentsDict) -> tuple[int, ...]:
-        """Converts an exponents dictionary into a canonical vector."""
-        v_list = [0] * DIM_COUNT
-        for k, v in exponents.items():
-            if k in SI_INDICES:
-                v_list[SI_INDICES[k]] = int(v)
-            elif v != 0:
-                raise DimensionError(f"Unknown base dimension symbol: {k}")
-        return tuple(v_list)
+    def _of(cls, unit: RationalUnit) -> Dimension:
+        """The dimension that a unit over dimension symbols stands for."""
+        return cls(unit.dimensions)
 
     # ponytail: real initialization happens in __new__'s Flyweight cache;
     # this __init__ is intentionally a no-op.
     def __init__(  # pyright: ignore[reportMissingSuperCall]
-        self, exponents: ExponentsDict | tuple[int, ...] | None = None
+        self, exponents: ExponentsDict | None = None
     ):
         """Initializes the dimension. Logic is handled in __new__."""
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Pickles the powers; the flyweight finds the instance again."""
+        return (type(self), (dict(self.exponents),))
+
     def __hash__(self) -> int:
-        """Returns a hash value for the dimension based on its vector."""
-        return hash(self._vector)
+        """Returns a hash value for the dimension based on its powers."""
+        return hash(self._key)
 
     def __eq__(self, other: object) -> bool:
-        """Checks equality by comparing vector representations."""
+        """Checks equality by comparing the powers."""
         if isinstance(other, Dimension):
-            return self._vector == other._vector
+            return self._key == other._key
         if isinstance(other, BaseExponentEntity):
             # Fallback for mixed comparisons if necessary
             return self.exponents == other.exponents
         return NotImplemented
 
-    # --- Vector Arithmetic ---
+    # --- Algebra of the core ---
 
     def __mul__(self, other: ExponentEntityProtocol) -> Dimension:
-        """Multiplies two dimensions by adding their exponent vectors."""
-        vector = getattr(other, "_vector", None)
-        if vector is None:
+        """Multiplies two dimensions by adding their powers."""
+        if not isinstance(other, Dimension):
             return NotImplemented  # type: ignore[return-value]
-        if len(vector) == 9:
-            rv_self = _RustDimVector.from_pairs(
-                [
-                    (SI_ORDER[i], int(self._vector[i]))
-                    for i in range(9)
-                    if self._vector[i] != 0
-                ]
-            )
-            rv_other = _RustDimVector.from_pairs(
-                [
-                    (SI_ORDER[i], int(vector[i]))
-                    for i in range(9)
-                    if vector[i] != 0
-                ]
-            )
-            result = rv_self * rv_other
-            return Dimension(tuple(result.vector))
-        new_vector = tuple(
-            a + b for a, b in zip(self._vector, vector, strict=False)
-        )
-        return Dimension(new_vector)
+        return Dimension._of(self._unit * other._unit)
 
     def __truediv__(self, other: ExponentEntityProtocol) -> Dimension:
-        """Divides two dimensions by subtracting their exponent vectors."""
-        vector = getattr(other, "_vector", None)
-        if vector is None:
+        """Divides two dimensions by subtracting their powers."""
+        if not isinstance(other, Dimension):
             return NotImplemented  # type: ignore[return-value]
-        if len(vector) == 9:
-            rv_self = _RustDimVector.from_pairs(
-                [
-                    (SI_ORDER[i], int(self._vector[i]))
-                    for i in range(9)
-                    if self._vector[i] != 0
-                ]
-            )
-            rv_other = _RustDimVector.from_pairs(
-                [
-                    (SI_ORDER[i], int(vector[i]))
-                    for i in range(9)
-                    if vector[i] != 0
-                ]
-            )
-            result = rv_self / rv_other
-            return Dimension(tuple(result.vector))
-        new_vector = tuple(
-            a - b for a, b in zip(self._vector, vector, strict=False)
-        )
-        return Dimension(new_vector)
+        return Dimension._of(self._unit / other._unit)
 
     def __pow__(self, power: float) -> Dimension:
-        """Raises a dimension to a power by scaling its exponent vector."""
+        """Raises a dimension to a power by scaling its powers."""
         # ponytail: defensive runtime guard against misuse by callers that
         # ignore the type hint (e.g. dynamically-typed callers); the
         # `power: float` annotation makes this unreachable statically.
         if not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
-            power, (int, float)
+            power, (int, float, Fraction)
         ):
             return NotImplemented  # pyright: ignore[reportUnreachable]
-        rv = _RustDimVector.from_pairs(
-            [
-                (SI_ORDER[i], int(self._vector[i]))
-                for i in range(9)
-                if self._vector[i] != 0
-            ]
-        )
-        result = rv ** int(power)
-        return Dimension(tuple(result.vector))
+        return Dimension._of(self._unit ** _pair(power))
 
     # --- Properties for SI Base Dimensions ---
 
     @property
     def length(self) -> int:
         """Exponent of the Length dimension."""
-        return self._vector[0]
+        return self.exponents.get("L", 0)
 
     @property
     def mass(self) -> int:
         """Exponent of the Mass dimension."""
-        return self._vector[1]
+        return self.exponents.get("M", 0)
 
     @property
     def time(self) -> int:
         """Exponent of the Time dimension."""
-        return self._vector[2]
+        return self.exponents.get("T", 0)
 
     @property
     def current(self) -> int:
         """Exponent of the Electric Current dimension."""
-        return self._vector[3]
+        return self.exponents.get("I", 0)
 
     @property
     def temperature(self) -> int:
         """Exponent of the Thermodynamic Temperature dimension."""
-        return self._vector[4]
+        return self.exponents.get("O", 0)
 
     @property
     def amount(self) -> int:
         """Exponent of the Amount of Substance dimension."""
-        return self._vector[5]
+        return self.exponents.get("N", 0)
 
     @property
     def luminous(self) -> int:
         """Exponent of the Luminous Intensity dimension."""
-        return self._vector[6]
+        return self.exponents.get("J", 0)
 
     @property
     def analytical_representation(self) -> str:
@@ -311,26 +272,20 @@ class Dimension(BaseExponentEntity):
         if registered_name:
             return (
                 f"<Dimension: {self.analytical_representation} "
-                f"({registered_name}) {self._display_exponents}>"
+                f"({registered_name}) {self.exponents}>"
             )
         return (
-            "<Dimension: "
-            f"{self.analytical_representation} {self._display_exponents}>"
+            f"<Dimension: {self.analytical_representation} {self.exponents}>"
         )
 
     @property
     def is_dimensionless(self) -> bool:
         """Checks if the dimension is dimensionless."""
-        return all(v == 0 for v in self._vector)
+        return not self._key
 
     @classmethod
     def set_base_dimensions(cls, bases: list[str]):
-        """Sets the base dimensions that the system will recognize.
-
-        Note: The vector representation strictly follows the SI order.
-        If a different system is used, this method will update the registry,
-        but the vector internally will still map known SI symbols.
-        """
+        """Sets the base dimensions that the system will recognize."""
         cls._base_dimensions = bases
 
     @classmethod

@@ -31,6 +31,7 @@ physure-core   = { path = "physure-core", package = "physure" }
 physure-script = { path = "physure-script" }
 tower-lsp     = "0.20"
 tokio         = { version = "1", features = ["full"] }
+num-bigint    = "0.4"
 num-rational  = "0.4"
 num-traits    = "0.2"
 ndarray       = "0.15"
@@ -49,10 +50,11 @@ pyo3          = { version = "0.25", features = ["extension-module", "abi3-py311"
 numpy         = "0.25"
 
 # ── Shared release profile ──────────────────────────────────────────────────
-# panic must stay "unwind" (the default): both crates build as PyO3 extension
-# modules (rlib/cdylib, no standalone binaries), and PyO3's panic -> PanicException
-# conversion requires catch_unwind. "abort" would turn any Rust panic into a
-# process-killing SIGABRT instead of a catchable Python exception.
+# panic must stay "unwind" (the default): physure-python builds as a PyO3 extension
+# module, and PyO3's panic -> PanicException conversion requires catch_unwind.
+# "abort" would turn any Rust panic into a process-killing SIGABRT instead of a
+# catchable Python exception. The profile is workspace-wide, so the phs and
+# language-server binaries are built with unwind too.
 [profile.release]
 lto   = true
 codegen-units = 1

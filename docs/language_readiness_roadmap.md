@@ -443,8 +443,8 @@ trigger (the existing `export` statement is untouched either way).
 Tracks are independent — check off in any order, on any timeline.
 
 - [x] **Track A: Loops** — see
-      [`docs/superpowers/specs/2026-08-12-track-a-loops-design.md`](superpowers/specs/2026-08-12-track-a-loops-design.md)
-      and [`docs/superpowers/plans/2026-08-12-track-a-loops.md`](superpowers/plans/2026-08-12-track-a-loops.md).
+      [`docs/superpowers/specs/2026-08-12-track-a-loops-design.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-08-12-track-a-loops-design.md)
+      and [`docs/superpowers/plans/2026-08-12-track-a-loops.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/plans/2026-08-12-track-a-loops.md).
       Codegen emitters landed for all **four** transpile targets, not just the three named in this
       section's original sketch — Python, JavaScript/TypeScript, Rust, and Java. The execution-parity
       test suite's convergence-loop case (Newton's method) exposed real cross-backend bugs no prior
@@ -463,8 +463,8 @@ Tracks are independent — check off in any order, on any timeline.
         including a convergence-loop (Newton's method) case.
 
 - [x] **Track B: Concurrency** — see
-      [`docs/superpowers/specs/2026-08-12-track-b-concurrency-design.md`](superpowers/specs/2026-08-12-track-b-concurrency-design.md)
-      and [`docs/superpowers/plans/2026-08-12-track-b-concurrency.md`](superpowers/plans/2026-08-12-track-b-concurrency.md).
+      [`docs/superpowers/specs/2026-08-12-track-b-concurrency-design.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-08-12-track-b-concurrency-design.md)
+      and [`docs/superpowers/plans/2026-08-12-track-b-concurrency.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/plans/2026-08-12-track-b-concurrency.md).
       One scope change from this section's original description, intentional and tracked
       below: `gradient`/`trapz` are **not** parallelized — `trapz` is a running accumulation
       that can't be parallelized without a parallel-reduce rewrite, and `gradient`'s
@@ -477,8 +477,8 @@ Tracks are independent — check off in any order, on any timeline.
   - [x] Determinism test (parallel output == sequential output) and mid-batch-failure test.
 
 - [x] **Track C: Breakpoints** — see
-      [`docs/superpowers/specs/2026-08-13-track-c-breakpoints-design.md`](superpowers/specs/2026-08-13-track-c-breakpoints-design.md)
-      and [`docs/superpowers/plans/2026-08-13-track-c-breakpoints.md`](superpowers/plans/2026-08-13-track-c-breakpoints.md).
+      [`docs/superpowers/specs/2026-08-13-track-c-breakpoints-design.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-08-13-track-c-breakpoints-design.md)
+      and [`docs/superpowers/plans/2026-08-13-track-c-breakpoints.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/plans/2026-08-13-track-c-breakpoints.md).
       Three deviations from this section's original sketch, all found during implementation:
       - A prerequisite not in the original sketch, added during brainstorming: source-line
         tracking on `Program`/`FunctionDefNode`/`Statement::While` (none existed before this
@@ -512,8 +512,8 @@ Tracks are independent — check off in any order, on any timeline.
 
 - [x] **Track D: Incremental LSP Evaluation** *(non-blocking for LAB-READY — editor responsiveness,
       not a language capability)* — see
-      [`docs/superpowers/specs/2026-08-14-track-d-incremental-lsp-design.md`](superpowers/specs/2026-08-14-track-d-incremental-lsp-design.md)
-      and [`docs/superpowers/plans/2026-08-14-track-d-incremental-lsp.md`](superpowers/plans/2026-08-14-track-d-incremental-lsp.md)
+      [`docs/superpowers/specs/2026-08-14-track-d-incremental-lsp-design.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-08-14-track-d-incremental-lsp-design.md)
+      and [`docs/superpowers/plans/2026-08-14-track-d-incremental-lsp.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/plans/2026-08-14-track-d-incremental-lsp.md)
       for the design and executed plan. Several correctness subtleties were found and fixed
       during implementation and review, none present in the original sketch: a function call's
       callee name (`Expr::FunctionCall.name`) had to be treated as a read even though it's a bare
@@ -544,8 +544,8 @@ Tracks are independent — check off in any order, on any timeline.
 
 - [x] **Track E: Compiled Export Artifacts** *(non-blocking for LAB-READY — a distribution/interop
       capability, not a language execution capability)* — see
-      [`docs/superpowers/specs/2026-08-12-track-e-compiled-exports-design.md`](superpowers/specs/2026-08-12-track-e-compiled-exports-design.md)
-      and [`docs/superpowers/plans/2026-08-12-track-e-compiled-exports.md`](superpowers/plans/2026-08-12-track-e-compiled-exports.md)
+      [`docs/superpowers/specs/2026-08-12-track-e-compiled-exports-design.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-08-12-track-e-compiled-exports-design.md)
+      and [`docs/superpowers/plans/2026-08-12-track-e-compiled-exports.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/plans/2026-08-12-track-e-compiled-exports.md)
       for the design and executed plan. Two scope changes from this section's original
       description, both intentional and tracked below:
       (1) `.proto` **and** `.md` generation are mandatory on every `phs export` run, not one of
@@ -576,7 +576,7 @@ Tracks are independent — check off in any order, on any timeline.
 
 - [x] **Track F: Decorators** *(non-blocking for LAB-READY — a syntax/DRY foundation other tracks can
       adopt, not itself a language execution capability)* — see
-      [`docs/superpowers/plans/2026-08-07-phs-decorators-track-f.md`](superpowers/plans/2026-08-07-phs-decorators-track-f.md).
+      [`docs/superpowers/plans/2026-08-07-phs-decorators-track-f.md`](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/plans/2026-08-07-phs-decorators-track-f.md).
       Two deviations from this section's original sketch: validation (unknown-name rejection,
       `@stable`/`@experimental` mutual exclusion, `@ensures`-vs-`result`-param collision) lives in a
       new `physure-script/src/decorators.rs` module rather than `resolver.rs`, modeled on the existing

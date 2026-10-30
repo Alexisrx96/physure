@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import operator
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,13 +16,11 @@ from physure.domain.exceptions import (
     DimensionError,
     IncompatibleUnitsError,
 )
-from physure.domain.measurement.converters import (
-    LinearConverter,
-    LogarithmicConverter,
-)
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.uncertainty import Uncertainty
-from physure.domain.measurement.units import CompoundUnit
+from physure.domain.measurement.units import (
+    CompoundUnit,
+)
 
 _Quantity = None
 
@@ -756,98 +753,101 @@ class ArithmeticMixin:
             cast("Numeric", new_mag), new_unit, self.system, uncertainty=0.0
         )
 
-    def _get_converter_if_simple(self):
-        """Returns the converter if the unit is a single simple unit."""
-        if len(self.unit.exponents) == 1:
-            name, exp = next(iter(self.unit.exponents.items()))
-            if exp == 1:
-                # Must exclude 'noprefix' check if key is there?
-                # CompoundUnit handles noprefix, exponents might have it?
-                # Usually exponents dict keys are purely unit names.
-                return self.system.get_definition(name).converter
-        return None
+    def _is_absolute(self) -> bool:
+        """True for an absolute temperature (degC, degF): a point, not an interval."""
+        return self.unit.kind(self.system) == "absolute"
 
-    @staticmethod
-    def _scalar_to_python(val: Numeric) -> Numeric:
-        """Coerce a 0-d array or array scalar to a Python float, if possible."""
-        if hasattr(val, "ndim") and val.ndim == 0:
-            with contextlib.suppress(ValueError, TypeError):
-                return float(val)
-        elif hasattr(val, "item"):
-            with contextlib.suppress(ValueError, TypeError):
-                return val.item()
-        return val
-
-    def _affine_to_base(self, q: Quantity) -> Numeric:
-        """Convert *q*'s magnitude to the base unit for its dimension."""
-        conv = q._get_converter_if_simple()
-        if conv:
-            return conv.to_base(cast("float", q.magnitude))
-        factor = q.unit._compound_factor(q.system)
-        return self._backend.mul(q.magnitude, factor)
-
-    def _affine_result_absolute(
-        self, res_base: Numeric, result_unit: CompoundUnit | None
-    ) -> Quantity:
-        """Convert *res_base* back through *result_unit* and return a Quantity."""
-        if not result_unit:
-            raise ValueError("Result unit required for absolute result.")
-        target_conv = None
-        if len(result_unit.exponents) == 1:
-            name, exp = next(iter(result_unit.exponents.items()))
-            if exp == 1:
-                target_conv = self.system.get_definition(name).converter
-        if target_conv is None:
-            raise NotImplementedError("Complex absolute units not supported.")
-        res_mag = self._scalar_to_python(
-            target_conv.from_base(cast("float", res_base))
-        )
-        return type(self).from_input(
-            res_mag, result_unit, self.system, uncertainty=0.0
+    def _is_level(self) -> bool:
+        """True for a level (dB, pH): the logarithm of a ratio."""
+        return (
+            not self.unit.is_linear(self.system)
+            and self.unit.kind(self.system) == "delta"
         )
 
-    def _affine_result_delta(self, res_base: Numeric) -> Quantity:
-        """Express *res_base* in the linear base unit for this dimension."""
-        base_unit_name = None
-        candidates = self.system.UNIT_REGISTRY.get(self.dimension, {})
-        for name, u_def in candidates.items():
-            is_base_unit = (
-                isinstance(u_def.converter, LinearConverter)
-                and abs(u_def.converter.scale - 1.0) < 1e-9
+    def _shift_point(self, interval: Quantity, subtract: bool) -> Quantity:
+        """This point moved by an interval, in the point's own scale."""
+        factor = interval.unit.conversion_factor_to(self.unit, self.system)
+        moved = type(self).from_input(
+            self._backend.mul(interval.magnitude, factor),
+            self.unit,
+            self.system,
+            uncertainty=self._backend.mul(interval.uncertainty, abs(factor)),
+        )
+        return self._add_sub_same_unit(
+            moved,
+            moved.uncertainty,
+            not subtract,
+            "sub" if subtract else "add",
+        )
+
+    def _point_difference(self, other: Quantity) -> Quantity:
+        """Two points make an interval, in the base unit of their dimension."""
+        base = self.unit.base_unit(self.system)
+        return self.to(base) - other.to(base)
+
+    def _refuse_plain_number(self) -> None:
+        """Raises: a plain number does not scale an absolute temperature."""
+        raise ValueError(
+            "Cannot multiply or divide the absolute temperature "
+            f"'{self.unit}' by a plain number: the result depends on the "
+            "scale (2 * 20 degC is 40 degC on one and 586 K on another); "
+            "convert it first (T.to('K')) for an absolute temperature, or "
+            "use an interval."
+        )
+
+    def _point_product(
+        self, other: Quantity | Numeric | CompoundUnit, divide: bool
+    ) -> Quantity | None:
+        """A product or quotient with an absolute temperature, as the core has it.
+
+        A pure sign mirrors the number in its own scale (-25 degC is minus
+        twenty-five). Any other plain number is refused: 2 * 20 degC is 40 degC
+        on one scale and 586 K on another. A quantity with dimensions of its
+        own takes the temperature as the absolute one it is (R * T, T / T).
+        Returns None when neither operand is an absolute temperature.
+        """
+        self_is_absolute = self._is_absolute()
+        if not (
+            self_is_absolute
+            or (isinstance(other, _q()) and other._is_absolute())
+        ):
+            return None
+        if isinstance(other, CompoundUnit):
+            other = type(self).from_input(1.0, other, self.system)
+        point, rest = (self, other) if self_is_absolute else (other, self)
+        rest_is_plain = not isinstance(rest, _q()) or (
+            rest.dimension.is_dimensionless and not rest._is_level()
+        )
+        if rest_is_plain:
+            number = rest.magnitude if isinstance(rest, _q()) else rest
+            no_uncertainty = not isinstance(rest, _q()) or (
+                self._is_zero_uncertainty(rest.uncertainty)
             )
-            if is_base_unit:
-                base_unit_name = name
-                break
-        if not base_unit_name:
-            raise ValueError(
-                f"No base linear unit found for dimension {self.dimension}"
+            is_sign = (
+                no_uncertainty
+                and isinstance(number, (int, float))
+                and abs(number) == 1
+                and (point is self or not divide)
             )
-        target_unit = self.system.get_unit(base_unit_name)
-        res_base = self._scalar_to_python(res_base)
-        return type(self).from_input(
-            res_base, target_unit, self.system, uncertainty=0.0
+            if not is_sign:
+                point._refuse_plain_number()
+            return type(self).from_input(
+                self._backend.mul(point.magnitude, number),
+                point.unit,
+                self.system,
+                uncertainty=point.uncertainty,
+            )
+        a = (
+            self.to(self.unit.base_unit(self.system))
+            if self._is_absolute()
+            else self
         )
-
-    def _affine_add_sub(
-        self,
-        other: Quantity,
-        is_add: bool,
-        result_type: str,
-        result_unit: CompoundUnit | None,
-    ) -> Quantity:
-        """Helper for Affine operations (Absolute/Delta)."""
-        val_self_base = self._affine_to_base(cast("Quantity", self))
-        val_other_base = self._affine_to_base(other)
-
-        # Perform operation in base domain
-        if is_add:
-            res_base = self._backend.add(val_self_base, val_other_base)
-        else:
-            res_base = self._backend.sub(val_self_base, val_other_base)
-
-        if result_type == "absolute":
-            return self._affine_result_absolute(res_base, result_unit)
-        return self._affine_result_delta(res_base)
+        b = (
+            other.to(other.unit.base_unit(other.system))
+            if other._is_absolute()
+            else other
+        )
+        return a / b if divide else a * b
 
     def _apply_transcendental(self, func_name: str) -> Quantity:
         """Applies a dimensionless transcendental function (sin, exp, etc.).
@@ -955,12 +955,9 @@ class ArithmeticMixin:
         return self._backend.mul(self._backend.ones(size), param)
 
     def _affine_check(self, other: Quantity, is_add: bool) -> Quantity | None:
-        """Checks and performs affine arithmetic if applicable."""
-        kind_self = self.unit.kind(self.system)
-        kind_other = other.unit.kind(self.system)
-
-        is_absolute_self = kind_self == "absolute"
-        is_absolute_other = kind_other == "absolute"
+        """Checks and performs point and interval arithmetic if applicable."""
+        is_absolute_self = self._is_absolute()
+        is_absolute_other = other._is_absolute()
 
         if not (is_absolute_self or is_absolute_other):
             return None
@@ -977,19 +974,17 @@ class ArithmeticMixin:
                 )
             if is_absolute_self:
                 # P + V -> P (self)
-                return self._affine_add_sub(other, True, "absolute", self.unit)
+                return self._shift_point(other, subtract=False)
             # V + P -> P (other)
-            return other._affine_add_sub(
-                cast("Quantity", self), True, "absolute", other.unit
-            )
+            return other._shift_point(cast("Quantity", self), subtract=False)
 
         # Subtraction
         if is_absolute_self and is_absolute_other:
             # P - P -> V
-            return self._affine_add_sub(other, False, "delta", None)
+            return self._point_difference(other)
         if is_absolute_self:
             # P - V -> P
-            return self._affine_add_sub(other, False, "absolute", self.unit)
+            return self._shift_point(other, subtract=True)
 
         # V - P -> Error
         raise ValueError(
@@ -999,32 +994,21 @@ class ArithmeticMixin:
     def _logarithmic_add_sub(
         self, other: Quantity, is_add: bool
     ) -> Quantity | None:
-        """Handles Logarithmic arithmetic (dB + dB)."""
-        conv_self = self._get_converter_if_simple()
-        conv_other = other._get_converter_if_simple()
-
-        is_log_self = isinstance(conv_self, LogarithmicConverter)
-        is_log_other = isinstance(conv_other, LogarithmicConverter)
-
-        if is_log_self and is_log_other:
-            base_self = conv_self.to_base(cast("float", self.magnitude))
-            base_other = conv_other.to_base(cast("float", other.magnitude))
-
-            if is_add:
-                res_base = self._backend.add(base_self, base_other)
-            else:
-                res_base = self._backend.sub(base_self, base_other)
-
-            res_mag = conv_self.from_base(cast("float", res_base))
-
-            if hasattr(res_mag, "ndim") and res_mag.ndim == 0:
-                with contextlib.suppress(ValueError, TypeError):
-                    res_mag = float(res_mag)
-
-            return type(self).from_input(
-                res_mag, self.unit, self.system, uncertainty=0.0
+        """Levels add as the quantities they stand for: 10 dB + 10 dB is 13 dB."""
+        self_is_level, other_is_level = self._is_level(), other._is_level()
+        if not (self_is_level or other_is_level):
+            return None
+        if not (self_is_level and other_is_level):
+            raise ValueError(
+                f"Cannot {'add' if is_add else 'subtract'} a level and a "
+                f"plain quantity ('{self.unit}' and '{other.unit}'): "
+                "convert one of them first."
             )
-        return None
+        if self.dimension != other.dimension:
+            raise IncompatibleUnitsError(self.unit, other.unit)
+        plain = self.unit.base_unit(self.system)
+        a, b = self.to(plain), other.to(plain)
+        return (a + b if is_add else a - b).to(self.unit)
 
     def _resolve_compatible_magnitude(
         self, other: Quantity | Numeric, is_other_q: bool
@@ -1214,6 +1198,10 @@ class ArithmeticMixin:
         if rust_res is not None:
             return rust_res
 
+        point_res = self._point_product(other, divide=False)
+        if point_res is not None:
+            return point_res
+
         if isinstance(other, CompoundUnit):
             new_unit = self.unit * other
             return type(self).from_input(
@@ -1301,6 +1289,10 @@ class ArithmeticMixin:
         if rust_res is not None:
             return rust_res
 
+        point_res = self._point_product(other, divide=True)
+        if point_res is not None:
+            return point_res
+
         if isinstance(other, CompoundUnit):
             new_unit = self.unit / other
             return type(self).from_input(
@@ -1382,6 +1374,10 @@ class ArithmeticMixin:
         if rust_res is not None:
             return rust_res
 
+        if self._is_absolute():
+            # a power takes the temperature as the absolute one it is
+            return self.to(self.unit.base_unit(self.system)) ** exponent
+
         u_self = self.uncertainty
         if u_self is None or (
             isinstance(u_self, (int, float)) and u_self == 0.0  # NOSONAR
@@ -1423,6 +1419,9 @@ class ArithmeticMixin:
         rust_res = self._check_and_handle_rust_propagation(other, "rtruediv")
         if rust_res is not None:
             return rust_res
+
+        if self._is_absolute():
+            self._refuse_plain_number()
 
         new_magnitude = self._backend.truediv(other, self.magnitude)
         new_unit = 1 / self.unit

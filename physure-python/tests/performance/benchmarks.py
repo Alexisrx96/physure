@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.quantity import Quantity
 from physure.domain.measurement.system import UnitSystem
@@ -11,7 +10,7 @@ from physure.domain.measurement.system import UnitSystem
 def benchmark_system():
     sys = UnitSystem("Benchmark")
     le = Dimension({"L": 1})
-    sys.register_unit("m", le, LinearConverter(1.0), "meter")
+    sys.register_unit("m", le, 1.0, "meter")
     return sys
 
 

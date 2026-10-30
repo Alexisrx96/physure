@@ -1939,7 +1939,7 @@ dependencies = [
 
 [[package]]
 name = "physure"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "approx 0.5.1",
  "arrow",
@@ -1949,6 +1949,7 @@ dependencies = [
  "getrandom 0.2.17",
  "nalgebra",
  "ndarray 0.15.6",
+ "num-bigint",
  "num-rational",
  "num-traits",
  "rand",
@@ -1961,7 +1962,7 @@ dependencies = [
 
 [[package]]
 name = "physure-cli"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "arboard",
  "chrono",
@@ -1983,7 +1984,7 @@ dependencies = [
 
 [[package]]
 name = "physure-java"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "jni",
  "num-rational",
@@ -1993,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "physure-lsp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "physure",
  "physure-script",
@@ -2003,27 +2004,19 @@ dependencies = [
 
 [[package]]
 name = "physure-python"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
- "arrow",
- "chrono",
- "dyn-clone",
- "nalgebra",
- "ndarray 0.15.6",
  "num-rational",
  "num-traits",
  "numpy",
  "physure",
  "physure-script",
  "pyo3",
- "rand",
- "rand_distr",
- "sprs",
 ]
 
 [[package]]
 name = "physure-script"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "libloading",
  "num-rational",
@@ -2038,7 +2031,7 @@ dependencies = [
 
 [[package]]
 name = "physure-wasm"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

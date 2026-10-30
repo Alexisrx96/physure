@@ -1,0 +1,132 @@
+# The import-layer contract of the physure Python package.
+#
+# Layers run from the lowest to the highest. A module may import from its own
+# layer or from any lower one. Two relaxations:
+#   * an import inside a function (a deferred import) may also reach the layers
+#     in `lazy_may_reach`: optional features with heavy dependencies, such as
+#     Quantity.plot() or Quantity.to_hdf();
+#   * imports under `if TYPE_CHECKING:` are not checked.
+# The facade (the public API) may import from anywhere, but nothing may import it
+# from inside the package: use the module that really defines the name.
+#
+# Modules are named with their full dotted path. A pattern ending in ".*" means
+# the module itself and everything below it; any other pattern is one exact
+# module. The most specific pattern wins, so a package can be split by listing a
+# few of its modules in a lower layer. Every module must match a pattern.
+#
+# `[[exception]]` records an import that breaks the rule today. The test fails on
+# a violation that is not recorded, and also on a record that no longer matches
+# the code, so this list can only shrink. `cause` says who will remove it:
+#   a1  - the module involved is deleted by the A1 work (Rust owns the unit algebra)
+#   release - kept on purpose: `__version__` must stay in physure/__init__.py
+#         because the release workflows grep and sed it there. Move it to a
+#         leaf module together with those workflows.
+# Spec: docs/superpowers/specs/2026-10-27-a2-layering-contract-design.md
+
+lazy_may_reach = ["extensions"]
+
+[[layer]]
+name = "kernel"
+modules = [
+    "physure.core.protocols",
+    "physure.core.dispatcher",
+    "physure.core.registry",
+    "physure.core.formatting",
+    "physure.core.autograd",
+    "physure.domain.exceptions",
+    "physure.application.context",
+    "physure.application.tracing.context",
+    "physure._generated_types",
+    "physure.infrastructure.*",
+]
+
+[[layer]]
+name = "backends"
+modules = [
+    "physure.backends.*",
+    "physure._jit.*",
+]
+
+[[layer]]
+name = "model"
+modules = [
+    "physure.domain.*",
+    "physure.units.*",
+]
+
+[[layer]]
+name = "services"
+modules = [
+    "physure.application.*",
+    "physure.core.*",
+    "physure.functional",
+    "physure.module",
+    "physure.symbolic",
+    "physure.domain.symbolic.*",
+]
+
+[[layer]]
+name = "extensions"
+modules = [
+    "physure.ext.*",
+    "physure.nn.*",
+    "physure.plotting",
+    "physure.pandas_ext",
+]
+
+[[layer]]
+name = "facade"
+modules = [
+    "physure",
+    "physure.cli",
+    "physure.repl",
+    "physure.__main__",
+    "physure.constants",
+    "physure.scripts.*",
+]
+
+# --- recorded exceptions ---------------------------------------------------
+
+[[exception]]
+importer = "physure.domain.measurement.system"
+imported = "physure.application.factories"
+kind = "top"
+cause = "a1"
+
+[[exception]]
+importer = "physure.domain.measurement.system"
+imported = "physure.application.parsing"
+kind = "top"
+cause = "a1"
+
+[[exception]]
+importer = "physure.ext.io"
+imported = "physure"
+kind = "top"
+cause = "release"
+
+[[exception]]
+importer = "physure.application.context"
+imported = "physure.application.startup"
+kind = "lazy"
+count = 2
+cause = "a1"
+
+[[exception]]
+importer = "physure.domain.measurement.dimensions"
+imported = "physure.application.parsing"
+kind = "lazy"
+cause = "a1"
+
+[[exception]]
+importer = "physure.domain.measurement.quantity"
+imported = "physure.application.startup"
+kind = "lazy"
+cause = "a1"
+
+[[exception]]
+importer = "physure.infrastructure.config.systems"
+imported = "physure.application.startup"
+kind = "lazy"
+cause = "a1"
+

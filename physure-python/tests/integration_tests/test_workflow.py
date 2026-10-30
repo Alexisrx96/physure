@@ -5,7 +5,6 @@ import math
 import pytest
 
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.converters import LinearConverter
 from physure.domain.measurement.dimensions import Dimension
 
 
@@ -19,12 +18,12 @@ def workflow_system(system):
     mass = Dimension({"M": 1})
     money = Dimension({"$": 1})
 
-    system.register_unit("m", length, LinearConverter(1.0), "meter")
-    system.register_unit("s", time, LinearConverter(1.0), "second")
-    system.register_unit("kg", mass, LinearConverter(1.0), "kilogram")
-    system.register_unit("$", money, LinearConverter(1.0), "dollar")
-    system.register_unit("h", time, LinearConverter(3600.0), "hour")
-    system.register_unit("EUR", money, LinearConverter(1.1), "euro")
+    system.register_unit("m", length, 1.0, "meter")
+    system.register_unit("s", time, 1.0, "second")
+    system.register_unit("kg", mass, 1.0, "kilogram")
+    system.register_unit("$", money, 1.0, "dollar")
+    system.register_unit("h", time, 3600.0, "hour")
+    system.register_unit("EUR", money, 1.1, "euro")
 
     system.register_alias({"m": 1, "s": -1}, "m/s", "velocity")
     system.register_alias({"$": 1, "h": -1}, "$/h", "hourly_rate")

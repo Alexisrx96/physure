@@ -23,7 +23,7 @@ except ImportError:
     # try/except branches by design; not a real constant-redefinition bug.
     HAVE_SYMENGINE = False  # pyright: ignore[reportConstantRedefinition]
 
-from physure import default_system
+from physure.application.context import get_current_system
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,7 +40,7 @@ class Function:
     parameters: dict[str, CompoundUnit]  # FIX: Store Units, not Dimensions
     output_unit: CompoundUnit  # FIX: Store Output Unit
     symbolic_func: sp.Expr
-    system: UnitSystem = field(default=default_system, repr=False)
+    system: UnitSystem = field(default_factory=get_current_system, repr=False)
     backend: str = field(default="numpy", repr=False)
     arg_names: tuple[str, ...] = field(init=False, repr=False)
     numeric_func: Callable[..., Any] = field(init=False, repr=False)

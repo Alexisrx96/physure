@@ -4,8 +4,14 @@ use crate::units::registry::UnitRegistry;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
+
+/// Words that can stand among the fields of a unit line without being one of its values.
+fn is_flag(field: &str) -> bool {
+    matches!(field, "noprefix" | "own_kind")
+}
 
 /// Parses a `physure.conf` configuration string into a UnitRegistry and constants map.
 /// All dimension symbols (L, M, T, I, O, N, J, A, etc.), prefixes, units, aliases,
@@ -15,8 +21,40 @@ pub fn parse_physure_conf(
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,
 ) {
+    // A line the parser cannot read is skipped, as it always was: this is the lenient reading of
+    // the catalog and of the `physure.conf` of the working directory.
+    parse_conf(conf_str, registry, constants, true, &mut Vec::new());
+}
+
+/// Adds the units, prefixes, constants and categories of `conf_str` to `registry`, all or nothing:
+/// a line the parser cannot read is a problem, and if there is one the registry and the constants
+/// are left as they were and every problem is returned. `[Settings]` is not read: the settings of a
+/// conf are process-wide and a registry does not own them. This is the reading to use for the
+/// definitions a unit system is made of.
+pub fn extend_registry(
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    conf_str: &str,
+) -> Result<(), Vec<String>> {
+    let backup = (registry.clone(), constants.clone());
+    let mut problems = Vec::new();
+    parse_conf(conf_str, registry, constants, false, &mut problems);
+    if problems.is_empty() {
+        return Ok(());
+    }
+    (*registry, *constants) = backup;
+    Err(problems)
+}
+
+fn parse_conf(
+    conf_str: &str,
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    apply_settings: bool,
+    problems: &mut Vec<String>,
+) {
     let mut current_section = "";
-    let mut dim_to_base: HashMap<String, String> = HashMap::new();
+    let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
 
     // Pass 1: Extract Prefixes, Constants, Dimensions, and Base Units
@@ -32,7 +70,7 @@ pub fn parse_physure_conf(
         }
 
         match current_section {
-            "Settings" => {
+            "Settings" if apply_settings => {
                 if let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
                     match key {
                         "propagation_mode" => match raw.parse::<PropagationMode>() {
@@ -74,13 +112,18 @@ pub fn parse_physure_conf(
                 }
             }
             "Prefixes" => {
-                if let Some((_name, val_part)) = line.split_once('=') {
+                if let Some((name, val_part)) = line.split_once('=') {
                     let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
                     if parts.len() >= 2 {
                         let symbol = parts[0];
-                        if let Ok(factor) = parts[1].parse::<f64>() {
-                            registry.add_prefix(symbol.to_string(), factor);
+                        if let Some((factor, exact)) = parse_number(parts[1]) {
+                            registry.add_prefix_exact(symbol.to_string(), factor, exact);
+                            registry.add_prefix_name(name.trim().to_string(), symbol.to_string());
+                        } else {
+                            problems.push(format!("{line}: the factor of a prefix is a number, not '{}'", parts[1]));
                         }
+                    } else {
+                        problems.push(format!("{line}: a prefix is `name = symbol, factor`"));
                     }
                 }
             }
@@ -104,15 +147,21 @@ pub fn parse_physure_conf(
                         // or add with `%`, `ppm`, or a bare number, despite all four being
                         // dimensionless.
                         if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() && dim_symbol != "1" {
-                            if is_single_ident(dim_symbol) {
-                                // The first base declaration for a dimension symbol wins.
-                                // `physure.conf` declares both `radian` and `steradian`
-                                // against dimension `A`, so overwriting made steradian the
-                                // base of angle: `deg`, `arcmin` and `arcsec` came out with
-                                // steradian dimensions, `90 deg => rad` failed as a unit
-                                // mismatch and `1 deg + 1 sr` was accepted instead.
+                            // Only the first declaration at scale 1 for a dimension symbol
+                            // is that dimension's base unit, and it wins: `physure.conf`
+                            // declares both `radian` and `steradian` against `A`, and
+                            // overwriting made steradian the base of angle (`90 deg => rad`
+                            // failed as a unit mismatch and `1 deg + 1 sr` was accepted).
+                            // A later one is the same quantity under another name
+                            // (`delta_celsius` is a kelvin: as a base unit of its own it
+                            // could not convert to K) unless the catalog says it is a kind
+                            // of its own: `steradian` is flagged `own_kind`.
+                            let first = !dim_to_base.contains_key(dim_symbol);
+                            let own_kind = parts.contains(&"own_kind");
+                            if is_single_ident(dim_symbol) && (first || own_kind) {
                                 dim_to_base.entry(dim_symbol.to_string()).or_insert_with(|| symbol.clone());
                                 registry.add_base_unit(symbol.clone());
+                                registry.base_dimension.insert(symbol.clone(), dim_symbol.to_string());
                             }
                         }
                     }
@@ -168,9 +217,27 @@ pub fn parse_physure_conf(
     dim_to_base.entry("J".into()).or_insert_with(|| "cd".into());
     dim_to_base.entry("A".into()).or_insert_with(|| "rad".into());
 
+    for (dimension, base) in &dim_to_base {
+        registry.base_dimension.entry(base.clone()).or_insert_with(|| dimension.clone());
+    }
+
+    registry.dimension_base = dim_to_base.clone();
+
     // Pass 2: Parse and register all units using the dynamic dimension map
     for line in unit_lines {
-        parse_unit_line(line, registry, &dim_to_base);
+        if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
+            problems.push(format!("{line}: {reason}"));
+        }
+    }
+}
+
+/// A positive number of the catalog as the double and, when it is a decimal or a fraction, the
+/// exact rational. `None` when it is neither (a dimension symbol, `noprefix`, ...).
+fn parse_number(text: &str) -> Option<(f64, Option<crate::units::exact::ExactScale>)> {
+    let exact = crate::units::exact::ExactScale::parse(text);
+    match text.parse::<f64>() {
+        Ok(value) => Some((value, exact)),
+        Err(_) => exact.map(|e| (e.to_f64(), Some(e))),
     }
 }
 
@@ -206,10 +273,10 @@ fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
 }
 
 fn is_single_ident(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_')
+    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) {
+fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) -> Result<(), String> {
     let (left, aliases_str) = match line.split_once('[') {
         Some((l, r)) => {
             let r = r.trim_end_matches(']').trim();
@@ -220,7 +287,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
     let (key, val_part) = match left.split_once('=') {
         Some((k, v)) => (k.trim(), v.trim()),
-        None => return,
+        None => return Err("a unit line is `name = factor, dimension, [names]`".to_string()),
     };
 
     let mut aliases: Vec<String> = if !aliases_str.is_empty() {
@@ -233,42 +300,74 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         vec![]
     };
 
+    // The names in the order the catalog lists them: the first one is the unit's symbol in Python.
+    let mut names = aliases.clone();
+    if !names.iter().any(|name| name == key) {
+        names.push(key.to_string());
+    }
+
     if !aliases.contains(&key.to_string()) {
         aliases.insert(0, key.to_string());
     }
 
     let symbol = aliases[0].clone();
 
+    let no_prefix = val_part.split(',').any(|field| field.trim() == "noprefix");
+
     let mut parts: Vec<&str> = val_part
         .split(',')
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && *s != "noprefix")
+        .filter(|s| !s.is_empty() && !is_flag(s))
         .collect();
 
     if parts.len() == 1 && parts[0].contains(' ') {
         parts = parts[0]
             .split_whitespace()
-            .filter(|s| !s.is_empty() && *s != "noprefix")
+            .filter(|s| !s.is_empty() && !is_flag(s))
             .collect();
     }
 
     if parts.is_empty() {
-        return;
+        return Err("the line has no value".to_string());
     }
 
-    let factor: f64 = match parts[0].parse() {
-        Ok(f) => f,
-        Err(_) => return,
+    // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`. Its dimension
+    // is "1" when it is the logarithm of a ratio, or the dimensions of a quantity (`dBW`).
+    if parts[0].eq_ignore_ascii_case("log") {
+        let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
+        let (Some(factor), Some(reference), Some(dimension)) = (number(1), number(2), parts.get(3).copied()) else {
+            return Err("a level is `Log, factor, reference, dimension`".to_string());
+        };
+        // `1` is a level of a plain ratio; any other dimension is a level of a quantity (`dBW`)
+        let quantity = if dimension == "1" {
+            RationalUnit::dimensionless()
+        } else {
+            let normalized = normalize_dimension_symbols(dimension, dim_to_base);
+            crate::units::parser::Parser::parse_expression_with_registry(&normalized, registry)
+                .map_err(|_| format!("cannot read the dimension '{dimension}' of the level {symbol}"))?
+        };
+        registry.add_level(symbol.clone(), quantity, factor, reference);
+        register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
+        return Ok(());
+    }
+
+    // A number of the catalog is a decimal (`0.0254`, `1e-5`) or a fraction (`5/9`); the exact
+    // rational is what conversions use, so that a ratio is rounded once.
+    let (factor, exact) = match parse_number(parts[0]) {
+        Some(parsed) => parsed,
+        None => return Err(format!("'{}' is not a number", parts[0])),
     };
 
     // Absolute affine units carry a zero point between the factor and the dimension:
     // `celsius = 1.0, 273.15, O`. Only a 3+ field line can be one, so `unity = 1.0, 1` and
     // friends — where field 2 is the dimension "1" — keep reading field 2 as the dimension.
     let mut offset = 0.0;
+    let mut exact_offset = None;
     let mut dim_index = 1;
     if parts.len() > 2 {
-        if let Ok(parsed) = parts[1].parse::<f64>() {
+        if let Some((parsed, exact)) = parse_number(parts[1]) {
             offset = parsed;
+            exact_offset = exact;
             dim_index = 2;
         }
     }
@@ -281,22 +380,25 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
     // dimension "unity", so `2 m * 3 %` printed "m * unity" instead of plain metres.
     if dim_str == "1" || dim_str.is_empty() {
-        let mut u = RationalUnit::new_from_dimensions([]).with_scale(factor);
+        let mut u = match &exact {
+            Some(e) => RationalUnit::new_from_dimensions([]).with_exact_scale(e.clone()),
+            None => RationalUnit::new_from_dimensions([]).with_scale(factor),
+        };
         u.display_name = Some(symbol.clone());
         registry.add_derived_unit(symbol.clone(), u);
     } else if !base_symbol.is_empty() {
         if offset != 0.0 {
-            registry.add_affine_unit(symbol.clone(), &base_symbol, factor, offset);
+            registry.add_affine_unit_exact(symbol.clone(), &base_symbol, factor, exact, offset, exact_offset);
         } else if factor == 1.0 && symbol == base_symbol {
             registry.add_base_unit(symbol.clone());
         } else {
-            registry.add_scaled_unit(symbol.clone(), &base_symbol, factor);
+            registry.add_scaled_unit_exact(symbol.clone(), &base_symbol, factor, exact);
         }
     } else {
         let recipe_index = dim_index + 1;
         let recipe_str = if parts.len() > recipe_index
             && !parts[recipe_index].is_empty()
-            && parts[recipe_index] != "noprefix"
+            && !is_flag(parts[recipe_index])
         {
             parts[recipe_index]
         } else {
@@ -315,30 +417,91 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
         });
 
         if let Some(parsed_unit) = parsed_unit_opt {
-            let new_scale = parsed_unit.scale * factor;
+            let rescaled = match (&parsed_unit.exact, &exact) {
+                (Some(p), Some(e)) => {
+                    let combined = p.mul(e);
+                    parsed_unit.with_exact_scale(combined)
+                }
+                _ => {
+                    let product = parsed_unit.scale * factor;
+                    parsed_unit.with_scale(product)
+                }
+            };
             // Carry the zero point through here too: dropping it would silently turn an
             // affine definition into a purely multiplicative one.
-            let mut u = parsed_unit.with_scale(new_scale).with_offset(offset);
+            let mut u = rescaled.with_offset(offset);
+            if let Some(e) = exact_offset {
+                u = u.with_exact_offset(e);
+            }
             u.display_name = Some(symbol.clone());
+            // A recipe at scale 1 is a name for its base symbols (`N` is `kg*m/s^2`).
+            if !recipe_str.is_empty() && factor == 1.0 && offset == 0.0 {
+                registry.note_recipe(&symbol, &u.dimensions, &names);
+            }
             registry.add_derived_unit(symbol.clone(), u);
+        } else {
+            return Err(format!("cannot read the dimension '{dim_str}' of {symbol}, or its recipe"));
         }
     }
 
-    registry.register_alias(key.to_string(), symbol.clone());
-    for alias in &aliases {
-        if alias != &symbol {
-            registry.register_alias(alias.clone(), symbol.clone());
+    register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
+    Ok(())
+}
+
+/// Makes the key of a unit line and each of its aliases another name for `symbol`.
+fn register_aliases(
+    registry: &mut UnitRegistry,
+    key: &str,
+    symbol: &str,
+    aliases: &[String],
+    names: &[String],
+    no_prefix: bool,
+) {
+    for name in names.iter().map(String::as_str).chain([key, symbol]) {
+        if no_prefix {
+            registry.no_prefix.insert(name.to_string());
+        } else {
+            registry.no_prefix.remove(name);
+        }
+    }
+    registry.note_aliases(symbol, names);
+    registry.register_alias(key.to_string(), symbol.to_string());
+    for alias in aliases {
+        if alias != symbol {
+            registry.register_alias(alias.clone(), symbol.to_string());
         }
     }
 }
 
-/// Builds a UnitRegistry and constants map from master `physure.conf` + CWD user override `physure.conf`.
-pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
-    let mut reg = UnitRegistry::new();
-    let mut constants = HashMap::new();
+/// The embedded catalog, parsed once per process.
+fn embedded_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
+    static EMBEDDED: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
+    EMBEDDED.get_or_init(|| {
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+        (reg, constants)
+    })
+}
 
+/// The embedded catalog plus `extra`, the text of a system file or of a user conf, read strictly
+/// (`extend_registry`) after it, so that a later definition wins. The `physure.conf` of the working
+/// directory is not read: the caller decides what a system is made of. A line the parser cannot
+/// read is an error that lists every such line, and `[Settings]` is not applied.
+pub fn build_registry_with(extra: &str) -> Result<(UnitRegistry, HashMap<String, String>), Vec<String>> {
+    let (mut reg, mut constants) = embedded_catalog().clone();
+    extend_registry(&mut reg, &mut constants, extra)?;
+    Ok((reg, constants))
+}
+
+/// Builds a UnitRegistry and constants map from master `physure.conf` + CWD user override `physure.conf`.
+///
+/// The embedded catalog is parsed once per process and every call gets a copy: parsing it is most
+/// of the cost of turning a unit string into a unit, and it applied the `[Settings]` of the
+/// catalog again on every call, undoing any setting that had been changed since.
+pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
     // 1. Load embedded default master physure.conf
-    parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+    let (mut reg, mut constants) = embedded_catalog().clone();
 
     // 2. Load user override physure.conf in CWD if present
     let local_conf = Path::new("physure.conf");
@@ -379,9 +542,16 @@ mod tests {
     use crate::units::registry::UnitRegistry;
     use std::collections::HashMap;
 
+    /// Builds the cached catalog now: its first build applies the catalog's `[Settings]` to the
+    /// process-wide globals, and a test that sets one and reads it back must not meet that.
+    fn settle_catalog_settings() {
+        let _ = build_registry_from_conf();
+    }
+
     #[test]
     fn parses_parallel_threshold_from_settings_section() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::parallel_threshold();
@@ -397,6 +567,7 @@ mod tests {
     #[test]
     fn parses_max_loop_iterations_from_settings_section() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::max_loop_iterations();
@@ -412,6 +583,7 @@ mod tests {
     #[test]
     fn parses_max_pipeline_steps_from_settings_section() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         let original = crate::settings::max_pipeline_steps();

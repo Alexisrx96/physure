@@ -13,7 +13,10 @@ else:
     except ImportError:
         torch = None
 
-from physure.core.dispatcher import enforce_tensor_contract
+from physure.core.dispatcher import (
+    BackendManager,
+    enforce_tensor_contract,
+)
 from physure.core.protocols import BackendOps, Boolean, Numeric
 
 try:
@@ -541,7 +544,6 @@ class TorchBackend(BackendOps):
 
     def sparse_matmul(self, a: Any, b: Any) -> Any:
         """Matmul where at least one operand may be sparse."""
-        print(f"DEBUG: sparse_matmul a={type(a)}, b={type(b)}")
         # Torch matmul does not support sparse @ sparse
         a_sparse = getattr(a, "is_sparse", False)
         b_sparse = getattr(b, "is_sparse", False)
@@ -697,8 +699,6 @@ class TorchBackend(BackendOps):
 
 
 if torch is not None:
-    # Quantity defers its torch pytree registration until torch is in play;
-    # loading this backend is the signal that it is.
-    from physure.domain.measurement.quantity import _register_torch_pytree
-
-    _register_torch_pytree()
+    # The model defers registering its torch pytrees until torch is in
+    # play; loading this backend is the signal that it is.
+    BackendManager.announce("torch")

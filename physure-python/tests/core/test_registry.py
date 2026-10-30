@@ -2,6 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from physure._core import UnitRegistry as CoreUnitRegistry
 from physure.core.registry import UnitRegistry
 
 
@@ -106,3 +107,48 @@ def test_registry_dir_completeness():
     assert "lazy" in d
     # Our __dir__ only returns units
     assert "register" not in d
+
+
+def _registry_of_the_catalog():
+    registry = UnitRegistry()
+    registry.register_catalog(
+        CoreUnitRegistry.from_conf(), lambda name: ("unit", name)
+    )
+    return registry
+
+
+def test_a_catalog_decides_which_names_are_units():
+    registry = _registry_of_the_catalog()
+    assert registry.m == ("unit", "m")
+    assert registry.km == ("unit", "km")
+    assert registry.kilometer == ("unit", "kilometer")
+    # a level takes no prefix, nor does the number one, and a name that is not
+    # a unit or cannot be an attribute is none of them
+    for name in ("attodB", "kunity", "E1", "xyzzy", "_hidden"):
+        with pytest.raises(AttributeError):
+            getattr(registry, name)
+    names = dir(registry)
+    assert {"m", "km", "kPa", "kilometer", "dB"} <= set(names)
+    assert not {"attodB", "E1"} & set(names)
+    assert all(name.isidentifier() for name in names)
+
+
+def test_a_unit_of_the_catalog_wins_over_a_plugin_of_the_same_name():
+    registry = _registry_of_the_catalog()
+    registry.register_lazy("km", lambda: "plugin")
+    registry.register_lazy("plugin_unit", lambda: "plugin")
+    assert registry.km == ("unit", "km")
+    assert registry.plugin_unit == "plugin"
+    assert "plugin_unit" in dir(registry)
+
+
+def test_the_units_package_answers_like_the_registry():
+    import physure.units as package
+    from physure.domain.measurement.units import CompoundUnit, units
+
+    assert package.km is units.km
+    assert isinstance(package.km, CompoundUnit)
+    assert "km" in dir(package)
+    assert package.available_units == units.available_units
+    with pytest.raises(AttributeError, match=r"physure\.units"):
+        _ = package.attodB

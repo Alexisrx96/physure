@@ -40,10 +40,8 @@ try:
         QuantityMatrix,
         QuantityVector,
         RationalUnit,
-        UnitDefinition,
         UnitRegistry,
         batch_to_si_inplace,
-        convert_units_inplace,
         eval_dual_number,
         parse_unit_expression,
         propagate_hessian_uncertainty,
@@ -65,7 +63,6 @@ except ImportError as _err:
     ) from _err
 
 if TYPE_CHECKING:
-    from physure._jit import jit
     from physure.application.context import (
         get_current_system,
         get_propagation_mode,
@@ -83,6 +80,7 @@ if TYPE_CHECKING:
     )
     from physure.application.factories import QuantityFactory
     from physure.application.io import load_state, save_state
+    from physure.application.jit import jit
     from physure.application.startup import (
         create_default_system,
         create_system,
@@ -232,7 +230,7 @@ def _load_default_system(name: str) -> Any:
 
 
 def _load_jit(name: str) -> Any:
-    from physure._jit import jit
+    from physure.application.jit import jit
 
     return jit
 
@@ -380,9 +378,7 @@ __all__ = [
     "PruningConfig",
     "Quantity",
     "RationalUnit",
-    "UnitDefinition",
     "UnitRegistry",
-    "convert_units_inplace",
     "eval_dual_number",
     "parse_unit_expression",
     "propagate_hessian_uncertainty",

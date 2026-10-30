@@ -1,3 +1,4 @@
-from .tracer import jit
+"""Tracing primitives for compile-time unit checking.
 
-__all__ = ["jit"]
+`physure.jit`, which uses them, lives in `physure.application.jit`.
+"""

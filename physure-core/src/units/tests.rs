@@ -245,7 +245,23 @@ fn degree_is_a_scaled_radian_not_a_scaled_steradian() {
         deg.same_dimensions(&reg.get_unit("rad").unwrap()),
         "a degree and a radian have to be interconvertible"
     );
-    assert!((deg.scale - 0.0174532925).abs() < 1e-12, "deg carries the degrees → radians factor");
+    assert_eq!(deg.scale, std::f64::consts::PI / 180.0, "deg carries the degrees → radians factor");
+}
+
+/// A relation that holds by definition has to come out exact, not as 60.000043 or 760.0021:
+/// the factors in physure.conf are the exact values of their definitions.
+#[test]
+fn scale_ratios_that_are_exact_by_definition_come_out_exact() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let scale = |symbol: &str| reg.get_unit(symbol).unwrap().scale;
+    let close = |got: f64, expected: f64| (got - expected).abs() <= expected.abs() * 1e-14;
+    assert!(close(scale("deg") / scale("arcmin"), 60.0));
+    assert!(close(scale("arcmin") / scale("arcsec"), 60.0));
+    assert!(close(scale("atm") / scale("Torr"), 760.0));
+    assert!(close(scale("gal") / scale("inch").powi(3), 231.0));
+    assert!(close(scale("acre") / scale("ft").powi(2), 43560.0));
+    assert!(close(scale("hp") / (scale("ft") * scale("lbf")), 550.0));
+    assert!(close(scale("psi") / (scale("lbf") / scale("inch").powi(2)), 1.0));
 }
 
 /// The temperature scales are the registry's only affine units: their conversion needs an
@@ -287,7 +303,8 @@ fn temperature_scales_are_the_only_affine_units() {
         .collect();
     let mut affine: Vec<&str> = affine.into_iter().map(String::as_str).collect();
     affine.sort_unstable();
-    assert_eq!(affine, ["degC", "degF"], "only Celsius and Fahrenheit are affine");
+    // the registry keys the two scales by their symbols, the first name the catalog lists
+    assert_eq!(affine, ["°C", "°F"], "only Celsius and Fahrenheit are affine");
 }
 
 /// `degC` and `K` share dimensions *and* scale, differing only in their zero point, so unit
@@ -345,4 +362,664 @@ fn unity_is_dimensionless_like_percent_ppm_and_a_bare_number() {
     assert!(pct.same_dimensions(&unity), "% and unity should be the same (empty) dimension");
     assert!(ppm.same_dimensions(&unity), "ppm and unity should be the same (empty) dimension");
     assert!(bare.same_dimensions(&unity), "a bare number and unity should be the same (empty) dimension");
+}
+
+/// The doubles 1e-6 and 0.01 divide to 9.999999999999999e-05; the rationals the catalog states
+/// divide to exactly 1e-4. A conversion is rounded once, from the exact scales.
+#[test]
+fn a_conversion_is_rounded_once_from_the_exact_scales() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let ratio = |from: &str, to: &str| {
+        let from = Parser::parse_expression_with_registry(from, &reg).unwrap();
+        let to = Parser::parse_expression_with_registry(to, &reg).unwrap();
+        from.ratio_to(&to)
+    };
+    assert_eq!(ratio("ppm", "percent"), 1e-4);
+    assert_eq!(ratio("g/cm^3", "kg/m^3"), 1000.0);
+    assert_eq!(ratio("ft", "inch"), 12.0);
+    assert_eq!(ratio("mile", "ft"), 5280.0);
+    assert_eq!(ratio("lb", "oz"), 16.0);
+    assert_eq!(ratio("gal", "inch^3"), 231.0);
+    assert_eq!(ratio("acre", "ft^2"), 43560.0);
+}
+
+/// `scale` is the exact scale rounded once, for every unit of the catalog and for the units
+/// that prefixes and products build from them.
+#[test]
+fn the_scale_is_the_exact_scale_rounded_once() {
+    let (reg, _) = conf::build_registry_from_conf();
+    for (name, unit) in reg.base_units.iter().chain(reg.derived_units.iter()) {
+        let exact = unit.exact.as_ref().unwrap_or_else(|| panic!("{name} has no exact scale"));
+        assert_eq!(unit.scale.to_bits(), exact.to_f64().to_bits(), "{name}");
+    }
+    let tiny = reg.get_unit("qarcsec").unwrap();
+    assert_eq!(tiny.scale, 4.84813681109536e-36);
+    assert!(tiny.exact.is_some());
+    let product = reg.get_unit("km").unwrap().mul(&reg.get_unit("ms").unwrap());
+    assert_eq!(product.scale, 1.0);
+    assert!(product.exact.as_ref().is_some_and(ExactScale::is_one));
+}
+
+/// A fractional power cannot be held exactly (Python falls back to a float there too), except
+/// that 1 to any power is 1. A scale set from a bare `f64` is not exact either.
+#[test]
+fn what_cannot_be_exact_falls_back_to_the_double() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let root = reg.get_unit("km").unwrap().pow(Rational64::new(1, 2));
+    assert!(root.exact.is_none());
+    assert_eq!(root.scale, 1000f64.powf(0.5));
+    let root_of_one = reg.get_unit("m").unwrap().pow(Rational64::new(1, 2));
+    assert!(root_of_one.exact.as_ref().is_some_and(ExactScale::is_one));
+    let loose = length().with_scale(0.5);
+    assert!(loose.exact.is_none());
+    assert_eq!(loose.ratio_to(&length()), 0.5);
+    let sure = length().with_exact_scale(ExactScale::parse("1/3").unwrap());
+    assert_eq!(sure.scale, 1.0 / 3.0);
+    assert_eq!(sure.ratio_to(&length()), 1.0 / 3.0);
+}
+
+/// The catalog is parsed once and copied: a copy that is changed does not change the next one.
+#[test]
+fn every_call_gets_its_own_copy_of_the_catalog() {
+    let (mut first, mut constants) = conf::build_registry_from_conf();
+    first.add_base_unit("zzz_scratch".to_string());
+    constants.clear();
+    let (second, second_constants) = conf::build_registry_from_conf();
+    assert!(!second.contains("zzz_scratch"));
+    assert!(!second_constants.is_empty());
+    let (third, _) = conf::build_registry_from_conf();
+    assert_eq!(second, third);
+}
+
+/// The temperature scales are written in the catalog as the fractions they are, so the fixed
+/// points of the scales convert exactly in both directions.
+#[test]
+fn the_fixed_points_of_the_temperature_scales_convert_exactly() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let convert = |value: f64, from: &str, to: &str| {
+        let (scale, shift) = reg.get_unit(from).unwrap().affine_to(&reg.get_unit(to).unwrap());
+        value * scale + shift
+    };
+    assert_eq!(convert(100.0, "degC", "degF"), 212.0);
+    assert_eq!(convert(212.0, "degF", "degC"), 100.0);
+    assert_eq!(convert(0.0, "degC", "degF"), 32.0);
+    assert_eq!(convert(32.0, "degF", "degC"), 0.0);
+    assert_eq!(convert(-40.0, "degC", "degF"), -40.0);
+    assert_eq!(convert(-40.0, "degF", "degC"), -40.0);
+    assert_eq!(convert(0.0, "degC", "K"), 273.15);
+    assert_eq!(convert(273.15, "K", "degC"), 0.0);
+    assert_eq!(convert(-459.67, "degF", "K"), 0.0);
+    assert_eq!(convert(491.67, "degR", "degF"), 32.0);
+}
+
+/// A scale that arrived as a double has no exact zero point, and the shift falls back to the
+/// doubles; a conversion between two units without zero points has no shift at all.
+#[test]
+fn the_shift_falls_back_to_the_doubles_and_is_zero_without_zero_points() {
+    let celsius = length().with_scale(1.0).with_offset(273.15);
+    let fahrenheit = length().with_scale(5.0 / 9.0).with_offset(255.37222222222223);
+    let (scale, shift) = celsius.affine_to(&fahrenheit);
+    assert_eq!(scale, 1.0 / (5.0 / 9.0));
+    assert_eq!(shift, (273.15 - 255.37222222222223) / (5.0 / 9.0));
+    let (reg, _) = conf::build_registry_from_conf();
+    let (_, no_shift) = reg.get_unit("km").unwrap().affine_to(&reg.get_unit("mile").unwrap());
+    assert_eq!(no_shift, 0.0);
+}
+
+/// A temperature difference is a kelvin wide, whichever scale it is counted in: `delta_celsius`
+/// was declared at scale 1 on the dimension of kelvin and became a base unit of its own, so it
+/// converted to nothing.
+#[test]
+fn a_temperature_difference_converts_to_kelvin_and_to_the_other_differences() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let kelvin = reg.get_unit("K").unwrap();
+    for name in ["delta_celsius", "delta_degC", "degC_delta"] {
+        let converted = Quantity::new(5.0, name).unwrap().convert_to(&kelvin).unwrap();
+        assert_eq!(converted.value.mean(), 5.0, "{name}");
+    }
+    let delta_celsius = reg.get_unit("delta_celsius").unwrap();
+    let converted = Quantity::new(9.0, "delta_degF").unwrap().convert_to(&delta_celsius).unwrap();
+    assert_eq!(converted.value.mean(), 5.0);
+}
+
+/// Radian and steradian share the dimension symbol `A`; the catalog flags the steradian as a
+/// kind of its own, so an angle never converts into a solid angle.
+#[test]
+fn an_angle_does_not_convert_into_a_solid_angle() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let steradian = reg.get_unit("sr").unwrap();
+    let radian = reg.get_unit("rad").unwrap();
+    assert!(Quantity::new(1.0, "deg").unwrap().convert_to(&steradian).is_err());
+    assert!(Quantity::new(1.0, "rad").unwrap().convert_to(&steradian).is_err());
+    assert!(Quantity::new(1.0, "sr").unwrap().convert_to(&radian).is_err());
+    assert!(Quantity::new(180.0, "deg").unwrap().convert_to(&radian).is_ok());
+}
+
+/// `log10` and `pow10` are real functions of every backend: the Monte Carlo and unscented ones
+/// used to hand an unknown name back unchanged, which would have read a level as its own ratio.
+#[test]
+fn log10_and_pow10_are_functions_of_every_uncertainty_backend() {
+    use crate::quantity::Quantity;
+    for mode in ["gaussian", "monte_carlo", "unscented"] {
+        let level = Quantity::new_scalar(2.0, 0.01, RationalUnit::dimensionless(), Some(mode), Some(2000));
+        let ratio = level.value.propagate_function("pow10").unwrap();
+        assert!((ratio.mean() - 100.0).abs() < 1.0, "{mode}: {}", ratio.mean());
+        let back = ratio.propagate_function("log10").unwrap();
+        assert!((back.mean() - 2.0).abs() < 0.01, "{mode}: {}", back.mean());
+    }
+    let level = Quantity::new_scalar(2.0, 0.01, RationalUnit::dimensionless(), Some("gaussian"), None);
+    let ratio = level.value.propagate_function("pow10").unwrap();
+    assert_eq!(ratio.mean(), 100.0);
+    assert!((ratio.std_dev() - 100.0 * std::f64::consts::LN_10 * 0.01).abs() < 1e-12);
+}
+
+/// A level is a unit of its own kind: the catalog's `Log` lines are in the registry, `pH` is the
+/// level and no longer a picohenry, and a prefix has nothing to scale on a level.
+#[test]
+fn the_logarithmic_units_of_the_catalog_are_levels() {
+    use crate::units::parser::Parser;
+    let (reg, _) = conf::build_registry_from_conf();
+    for name in ["dB", "decibel", "pH"] {
+        let unit = reg.get_unit(name).unwrap_or_else(|| panic!("{name} should be known"));
+        assert!(unit.is_logarithmic(), "{name}");
+        assert!(unit.dimensions.is_empty(), "{name}");
+        assert_eq!(unit.scale, 1.0, "{name}");
+    }
+    assert_eq!(reg.get_unit("dB").unwrap(), reg.get_unit("decibel").unwrap());
+    assert_ne!(reg.get_unit("dB").unwrap(), reg.get_unit("pH").unwrap());
+    assert_ne!(reg.get_unit("dB").unwrap(), reg.get_unit("unity").unwrap());
+    // pH is the level; the picohenry is still there under its spelled-out name
+    assert!(!reg.get_unit("picohenry").unwrap().is_logarithmic());
+    assert_eq!(reg.get_unit("picohenry").unwrap().scale, 1e-12);
+    // no prefixes on a level, and no level inside a compound unit
+    assert!(reg.get_unit("mdB").is_none());
+    assert!(reg.get_unit("kilodecibel").is_none());
+    assert!(Parser::parse_expression("dB").unwrap().is_logarithmic());
+    for compound in ["dB/km", "dB*m", "dB^2", "1/dB", "dB/dB"] {
+        assert!(Parser::parse_expression(compound).is_err(), "{compound}");
+    }
+    assert!(Parser::parse_expression("dB/1").unwrap().is_logarithmic());
+}
+
+/// Levels convert through the ratio they stand for, with the operations of Python's
+/// `LogarithmicConverter`, so both sides agree to the last bit.
+#[test]
+fn levels_convert_to_ratios_and_to_each_other() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let convert = |value: f64, from: &str, to: &str| -> f64 {
+        Quantity::new(value, from).unwrap().convert_to(&reg.get_unit(to).unwrap()).unwrap().value.mean()
+    };
+    assert_eq!(convert(20.0, "dB", "unity"), 100.0);
+    assert_eq!(convert(20.0, "dB", "percent"), 100.0 / 0.01);
+    assert_eq!(convert(7.0, "pH", "unity"), 10f64.powf(7.0 / -1.0));
+    assert_eq!(convert(50.0, "percent", "dB"), 10.0 * (50.0f64 * 0.01).log10());
+    assert!((convert(50.0, "percent", "dB") + 3.010299956639812).abs() < 1e-12);
+    assert_eq!(convert(1.0, "unity", "dB"), 0.0);
+    assert_eq!(convert(3.0, "dB", "decibel"), 3.0);
+    assert!((convert(3.0, "dB", "pH") + 0.3).abs() < 1e-12);
+    assert!((convert(10.0, "ppm", "dB") + 50.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_level_does_not_convert_into_a_dimension_or_an_angle_and_a_ratio_must_be_positive() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let db = reg.get_unit("dB").unwrap();
+    for from in ["m", "rad", "sr", "deg"] {
+        assert!(Quantity::new(1.0, from).unwrap().convert_to(&db).is_err(), "{from} => dB");
+        assert!(Quantity::new(1.0, "dB").unwrap().convert_to(&reg.get_unit(from).unwrap()).is_err(), "dB => {from}");
+    }
+    assert!(Quantity::new(0.0, "unity").unwrap().convert_to(&db).is_err());
+    assert!(Quantity::new(-1.0, "unity").unwrap().convert_to(&db).is_err());
+}
+
+#[test]
+fn the_uncertainty_of_a_level_follows_the_logarithm() {
+    use crate::quantity::Quantity;
+    let (reg, _) = conf::build_registry_from_conf();
+    let unity = reg.get_unit("unity").unwrap();
+    let ratio = Quantity::with_uncertainty(10.0, 0.5, "dB").unwrap().convert_to(&unity).unwrap();
+    assert_eq!(ratio.value.mean(), 10.0);
+    // d(10^(x/10))/dx = 10^(x/10) ln(10) / 10; Python gives 1.151292546497023
+    assert!((ratio.value.std_dev() - 1.151292546497023).abs() < 1e-12);
+    let level = Quantity::with_uncertainty(2.0, 0.1, "unity").unwrap().convert_to(&reg.get_unit("dB").unwrap()).unwrap();
+    assert!((level.value.std_dev() - 0.21714724095162588).abs() < 1e-12);
+}
+
+/// Levels add as the quantities they stand for; a level and a plain quantity do not add; a
+/// level times a plain number is that level; nothing else is defined for a level.
+#[test]
+fn levels_combine_as_ratios_and_refuse_what_has_no_meaning() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    let sum = q(10.0, "dB").add(&q(20.0, "dB")).unwrap();
+    assert!(sum.unit.is_logarithmic());
+    assert_eq!(sum.value.mean(), 10.0 * (10f64.powf(1.0) + 10f64.powf(2.0)).log10());
+    assert!((sum.value.mean() - 20.41392685158225).abs() < 1e-12);
+    let difference = q(20.0, "dB").sub(&q(10.0, "dB")).unwrap();
+    assert!((difference.value.mean() - 19.54242509439325).abs() < 1e-12);
+    assert!(q(10.0, "dB").sub(&q(20.0, "dB")).is_err());
+    assert!(q(10.0, "dB").add(&q(1.0, "unity")).is_err());
+    assert!(q(1.0, "unity").add(&q(10.0, "dB")).is_err());
+    assert!(q(3.0, "dB").add(&q(3.0, "pH")).is_ok());
+
+    let doubled = q(10.0, "dB").mul(&q(2.0, "unity")).unwrap();
+    assert!(doubled.unit.is_logarithmic());
+    assert_eq!(doubled.value.mean(), 20.0);
+    assert_eq!(q(2.0, "unity").mul(&q(10.0, "dB")).unwrap().value.mean(), 20.0);
+    assert!(q(10.0, "dB").div(&q(2.0, "unity")).unwrap().unit.is_logarithmic());
+    for refused in [
+        q(10.0, "dB").mul(&q(2.0, "m")),
+        q(10.0, "dB").div(&q(2.0, "m")),
+        q(2.0, "m").div(&q(10.0, "dB")),
+        q(10.0, "dB").mul(&q(2.0, "dB")),
+        q(10.0, "dB").pow(2.0),
+        q(10.0, "dB").sqrt(),
+        q(10.0, "dB").ln(),
+        q(10.0, "dB").exp(),
+        q(10.0, "dB").sin(),
+    ] {
+        assert!(refused.is_err());
+    }
+    assert!(q(10.0, "dB").abs().unwrap().unit.is_logarithmic());
+    // the coherent value of a level is the ratio, so levels compare by what they stand for
+    assert!(q(20.0, "dB").approx_eq(&q(100.0, "unity"), 1e-12, 0.0));
+    assert!(!q(20.0, "dB").approx_eq(&q(20.0, "unity"), 1e-12, 0.0));
+}
+
+/// An absolute temperature is a point on an interval scale: an interval moves it, two points give
+/// an interval, and the sum of two points (or a point taken from an interval) has no meaning.
+#[test]
+fn temperature_points_and_intervals_follow_the_affine_algebra() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    let is = |result: crate::error::PhysureResult<Quantity>, mean: f64, unit: &str| {
+        let result = result.unwrap();
+        assert!((result.value.mean() - mean).abs() < 1e-9, "{} != {mean} {unit}", result.value.mean());
+        assert_eq!(result.unit.__repr__(), unit);
+    };
+    is(q(20.0, "degC").add(&q(5.0, "K")), 25.0, "degC");
+    is(q(5.0, "K").add(&q(20.0, "degC")), 25.0, "degC");
+    is(q(20.0, "degC").add(&q(9.0, "delta_fahrenheit")), 25.0, "degC");
+    is(q(20.0, "degF").add(&q(5.0, "K")), 29.0, "degF");
+    is(q(20.0, "degC").sub(&q(5.0, "K")), 15.0, "degC");
+    is(q(20.0, "degC").sub(&q(5.0, "degC")), 15.0, "K");
+    is(q(20.0, "degC").sub(&q(5.0, "degF")), 35.0, "K");
+    assert!(q(20.0, "degC").add(&q(5.0, "degC")).is_err());
+    assert!(q(20.0, "degC").add(&q(5.0, "degF")).is_err());
+    assert!(q(5.0, "K").sub(&q(20.0, "degC")).is_err());
+    assert!(q(20.0, "degC").add(&q(1.0, "m")).is_err());
+    assert!(q(20.0, "degC").sub(&q(1.0, "m")).is_err());
+}
+
+/// A sign keeps the scale; any other plain number would pick a scale for the caller; a quantity with
+/// dimensions takes the temperature as the absolute one it is.
+#[test]
+fn a_sign_keeps_the_scale_and_any_other_number_is_refused() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    for negated in [q(-1.0, "unity").mul(&q(25.0, "degC")), q(25.0, "degC").mul(&q(-1.0, "unity")), q(25.0, "degC").div(&q(-1.0, "unity"))] {
+        let negated = negated.unwrap();
+        assert_eq!(negated.value.mean(), -25.0);
+        assert_eq!(negated.unit.__repr__(), "degC");
+    }
+    assert_eq!(q(1.0, "unity").mul(&q(25.0, "degC")).unwrap().value.mean(), 25.0);
+    for refused in [
+        q(2.0, "unity").mul(&q(20.0, "degC")),
+        q(20.0, "degC").mul(&q(2.0, "unity")),
+        q(20.0, "degC").div(&q(2.0, "unity")),
+        q(1.0, "unity").div(&q(20.0, "degC")),
+        q(-1.0, "unity").div(&q(20.0, "degC")),
+        q(20.0, "degC").mul(&q(50.0, "percent")),
+    ] {
+        assert!(refused.is_err());
+    }
+    let energy = q(8.314, "J/(mol*K)").mul(&q(25.0, "degC")).unwrap();
+    assert!((energy.value.mean() - 8.314 * 298.15).abs() < 1e-9);
+    assert!((q(25.0, "degC").pow(2.0).unwrap().value.mean() - 298.15 * 298.15).abs() < 1e-9);
+    let ratio = q(100.0, "degC").div(&q(0.0, "degC").add(&q(50.0, "K")).unwrap()).unwrap();
+    assert!(ratio.unit.dimensions.is_empty());
+}
+
+/// Quantities compare by what they stand for, so the zero point of a temperature scale counts.
+#[test]
+fn a_temperature_compares_by_its_absolute_value() {
+    use crate::quantity::Quantity;
+    let q = |value: f64, unit: &str| Quantity::new(value, unit).unwrap();
+    assert_eq!(q(20.0, "degC").canonical_magnitude(), 293.15);
+    assert!((q(32.0, "degF").canonical_magnitude() - 273.15).abs() < 1e-12);
+    assert!(q(20.0, "degC").approx_eq(&q(293.15, "K"), 1e-12, 0.0));
+    assert!(q(20.0, "degC").approx_eq(&q(68.0, "degF"), 1e-12, 0.0));
+    assert!(!q(20.0, "degC").approx_eq(&q(20.0, "K"), 1e-12, 0.0));
+    assert_eq!(q(0.0, "degC").base_display(), "273.15 K");
+}
+
+/// A unit written as symbols prints the way a `CompoundUnit` does.
+#[test]
+fn a_unit_written_as_symbols_prints_like_a_compound_unit() {
+    use crate::units::parser::Parser;
+    let show = |text: &str| Parser::parse_expression_atomic(text).unwrap().symbolic_repr();
+    assert_eq!(show("kg*m/s^2"), "kg·m/s²");
+    assert_eq!(show("m/s^2"), "m/s²");
+    assert_eq!(show("s^-1"), "1/s");
+    assert_eq!(show("kg/(m*s^2)"), "kg/(m·s²)");
+    assert_eq!(show("m^(1/2)"), "m⁰⋅⁵");
+    assert_eq!(show("m"), "m");
+    assert_eq!(show("1"), "1");
+}
+
+/// What the core says about a unit expression: dimension, kind, linearity, alias, simplified form.
+#[test]
+fn the_facts_of_a_unit_expression() {
+    use crate::units::UnitKind;
+    let (reg, _) = conf::build_registry_from_conf();
+    let facts = |text: &str| reg.facts(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+    let dimension = |pairs: &[(&str, i64)]| pairs.iter().map(|(s, e)| (s.to_string(), (*e, 1))).collect::<Vec<_>>();
+
+    // a compound of recipe units is written out in base symbols and named by its recipe
+    let watt = facts("J/s");
+    assert_eq!(watt.dimension, dimension(&[("L", 2), ("M", 1), ("T", -3)]));
+    assert_eq!((watt.alias.as_str(), watt.simplified.as_str()), ("W", "kg·m²/s³"));
+    assert_eq!((watt.kind, watt.is_linear), (UnitKind::Delta, true));
+    assert_eq!(facts("N*m").alias, "J");
+    assert_eq!(facts("kg*m/s^2").alias, "N");
+    assert_eq!(facts("Hz").simplified, "1/s");
+    assert_eq!(facts("Hz").alias, "Hz");
+    assert_eq!(facts("Pa").simplified, "kg/(m·s²)");
+    // a unit at another scale stays what it is
+    for (kept, shown) in [("km/h", "km/h"), ("L/min", "L/min"), ("BTU/h", "BTU/h"), ("g/cm^3", "g/cm³"), ("ft*lbf", "ft·lbf")] {
+        assert_eq!(facts(kept).simplified, shown, "{kept}");
+    }
+    assert_eq!(facts("km/h").dimension, dimension(&[("L", 1), ("T", -1)]));
+    assert_eq!(facts("g/cm^3").alias, "g/cm³");
+    assert_eq!(facts("ft*lbf").alias, "ft·lbf");
+    // temperature scales and levels
+    let celsius = facts("degC");
+    assert_eq!((celsius.kind, celsius.is_linear), (UnitKind::Point, false));
+    assert_eq!(celsius.dimension, dimension(&[("O", 1)]));
+    assert_eq!((facts("delta_celsius").kind, facts("delta_celsius").is_linear), (UnitKind::Delta, true));
+    let decibel = facts("dB");
+    assert!(decibel.dimension.is_empty());
+    assert_eq!((decibel.kind, decibel.is_linear), (UnitKind::Delta, false));
+    // the unit one is nothing to write; a prefixed unit that happens to be 1 is a unit
+    assert_eq!(facts("unity").simplified, "1");
+    assert_eq!(facts("hectopercent").simplified, "hectopercent");
+    // a unit written by its symbol is shown by its shortest name, by another name as written
+    assert_eq!(facts("deg").alias, "°");
+    assert_eq!(facts("gallon").alias, "gallon");
+    assert_eq!(facts("kilometer").alias, "km");
+    assert_eq!(facts("attoampere").alias, "aA");
+    assert_eq!(facts("kilometer").simplified, "kilometer");
+    assert!(reg.facts("furlongs_per_fortnight").is_err());
+}
+
+/// A unit written as symbols stands for what the registry says each symbol is, with exact scales:
+/// `km/h` is 5/18 m/s, and the factor between two of them is rounded once.
+#[test]
+fn a_unit_written_as_symbols_expands_and_converts_by_the_registry() {
+    use crate::units::parser::Parser;
+    let (reg, _) = conf::build_registry_from_conf();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+
+    let kmh = reg.expand(&atomic("km/h")).unwrap();
+    assert!(kmh.same_dimensions(&reg.expand(&atomic("m/s")).unwrap()));
+    assert_eq!(kmh.scale, 1000.0 / 3600.0);
+
+    assert_eq!(reg.factor_between(&atomic("km/h"), &atomic("m/s")).unwrap(), 1000.0 / 3600.0);
+    assert_eq!(reg.factor_between(&atomic("kWh"), &atomic("J")).unwrap(), 3.6e6);
+    assert_eq!(reg.factor_between(&atomic("kg*m/s^2"), &atomic("N")).unwrap(), 1.0);
+    // the offset of a temperature scale is not part of a factor
+    assert_eq!(reg.factor_between(&atomic("degC"), &atomic("K")).unwrap(), 1.0);
+
+    assert!(reg.factor_between(&atomic("m"), &atomic("s")).is_err());
+    assert!(reg.expand(&atomic("furlongs_per_fortnight")).is_err());
+    assert!(reg.expand(&atomic("dB/km")).is_err());
+}
+
+/// A system is the catalog plus what it adds: a registry built with extra conf text knows the
+/// extra units, a later definition wins, and the default registry is not touched.
+#[test]
+fn a_registry_can_be_built_from_the_catalog_plus_extra_text() {
+    use crate::units::parser::Parser;
+    let extra = "[Units]\nfurlong = 201.168, L, [fur, furlong]\n";
+    let (reg, _) = conf::build_registry_with(extra).unwrap();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert_eq!(reg.factor_between(&atomic("fur"), &atomic("m")).unwrap(), 201.168);
+    assert_eq!(reg.facts("furlong").unwrap().dimension, vec![("L".to_string(), (1, 1))]);
+    // the metre is still the metre
+    assert_eq!(reg.factor_between(&atomic("km"), &atomic("m")).unwrap(), 1000.0);
+
+    let (default, _) = conf::build_registry_from_conf();
+    assert!(default.facts("furlong").is_err());
+
+    // a later definition wins
+    let (redefined, _) = conf::build_registry_with("[Units]\nfoot = 0.3, L, [ft, foot]\n").unwrap();
+    assert_eq!(redefined.factor_between(&atomic("ft"), &atomic("m")).unwrap(), 0.3);
+}
+
+/// A text parsed after another starts from the base units of the first: money is a dimension
+/// (`$`) whose base unit is the first unit at scale 1, a second unit of it is scaled from that
+/// one, and a second unit at scale 1 on a dimension that has a base unit is a name for it.
+#[test]
+fn a_later_text_starts_from_the_base_units_of_the_first() {
+    use crate::units::parser::Parser;
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    conf::parse_physure_conf("[Units]\nUSD = 1.0, $, noprefix, [USD, dollar]\n", &mut reg, &mut constants);
+    conf::parse_physure_conf("[Units]\nEUR = 1.08, $, noprefix, [EUR, euro]\nsmoot = 1.0, L, [smoot]\n", &mut reg, &mut constants);
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert_eq!(reg.factor_between(&atomic("EUR"), &atomic("USD")).unwrap(), 1.08);
+    assert_eq!(reg.facts("EUR").unwrap().dimension, vec![("$".to_string(), (1, 1))]);
+    assert_eq!(reg.factor_between(&atomic("smoot"), &atomic("m")).unwrap(), 1.0);
+    assert_eq!(reg.dimension_base.get("L").map(String::as_str), Some("m"));
+    assert_eq!(reg.dimension_base.get("$").map(String::as_str), Some("USD"));
+}
+
+/// What a system is made of is read all or nothing: a line the parser cannot read is a problem,
+/// nothing of a refused text is kept, and the embedded catalog has no line the parser refuses.
+#[test]
+fn extending_a_registry_is_all_or_nothing_and_the_catalog_has_no_unreadable_line() {
+    use std::collections::HashMap;
+    let (mut catalog, mut catalog_constants) = (UnitRegistry::new(), HashMap::new());
+    let outcome = conf::extend_registry(&mut catalog, &mut catalog_constants, conf::DEFAULT_PHYSURE_CONF);
+    assert!(outcome.is_ok(), "{:?}", outcome.err());
+
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    let before = reg.clone();
+    let text = "[Units]\nfurlong = 201.168, L, [fur, furlong]\nleague = lots, L, [lg]\nbad line\n[Prefixes]\nzorro = zz, many\n";
+    let problems = conf::extend_registry(&mut reg, &mut constants, text).unwrap_err();
+    assert_eq!(problems.len(), 3, "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("league") && p.contains("is not a number")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("bad line")), "{problems:?}");
+    assert!(problems.iter().any(|p| p.contains("zorro")), "{problems:?}");
+    assert!(reg == before, "nothing of a refused text is kept, not even its good line");
+
+    let accepted = conf::extend_registry(&mut reg, &mut constants, "[Units]\nfurlong = 201.168, L, [fur, furlong]\n");
+    assert!(accepted.is_ok());
+    assert!(reg.facts("fur").is_ok());
+
+    // a unit whose dimension cannot be read is a problem too, and its names are not registered
+    let unreadable = conf::extend_registry(&mut reg, &mut constants, "[Units]\nsmurf = 2.0, Q, [smf]\n");
+    assert!(unreadable.is_err());
+    assert!(reg.facts("smf").is_err());
+}
+
+/// The settings of a conf are process-wide, and a registry does not own them: extending one does
+/// not apply a `[Settings]` section.
+#[test]
+fn extending_a_registry_does_not_apply_its_settings() {
+    let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    let before = crate::settings::max_loop_iterations();
+    conf::extend_registry(&mut reg, &mut constants, "[Settings]\nmax_loop_iterations = 7\n").unwrap();
+    assert_eq!(crate::settings::max_loop_iterations(), before);
+}
+
+/// A level can be the level of a quantity: `dBW` is 10 * log10(P / 1 W) and has the dimensions of a
+/// power, `dBm` is the same against a milliwatt.
+#[test]
+fn a_level_can_have_a_dimension() {
+    use crate::quantity::Quantity;
+    use crate::units::parser::Parser;
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    let text = "[Units]\ndBW = Log, 10, 1.0, M*L^2*T^-3, [dBW]\ndBm = Log, 10, 0.001, M*L^2*T^-3, [dBm]\n";
+    conf::extend_registry(&mut reg, &mut constants, text).unwrap();
+    let (dbw, dbm, watt) = (reg.get_unit("dBW").unwrap(), reg.get_unit("dBm").unwrap(), reg.get_unit("W").unwrap());
+    assert!(dbw.is_logarithmic() && dbm.is_logarithmic());
+    assert!(dbw.same_dimensions(&watt));
+    let q = |value: f64, unit: &RationalUnit| Quantity::new_scalar(value, 0.0, unit.clone(), None, None);
+    let mean = |quantity: Quantity| quantity.value.mean();
+    assert!((mean(q(30.0, &dbw).convert_to(&watt).unwrap()) - 1000.0).abs() < 1e-9);
+    assert!((mean(q(0.0, &dbm).convert_to(&watt).unwrap()) - 0.001).abs() < 1e-15);
+    assert!(mean(q(30.0, &dbm).convert_to(&dbw).unwrap()).abs() < 1e-9);
+    assert!((mean(q(1000.0, &watt).convert_to(&dbw).unwrap()) - 30.0).abs() < 1e-9);
+    // levels of a power add as the powers: 10 dBW + 10 dBW is 20 W
+    let sum = q(10.0, &dbw).add(&q(10.0, &dbw)).unwrap();
+    assert!(sum.unit.is_logarithmic());
+    assert!((mean(sum) - 10.0 * 20f64.log10()).abs() < 1e-9);
+    // not a plain quantity, not another dimension, and no factor between units
+    assert!(q(10.0, &dbw).add(&q(1.0, &watt)).is_err());
+    assert!(q(1.0, &dbw).convert_to(&reg.get_unit("m").unwrap()).is_err());
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert!(reg.factor_between(&atomic("dBW"), &atomic("W")).is_err());
+    let facts = reg.facts("dBW").unwrap();
+    let expected: Vec<(String, (i64, i64))> = vec![("L".into(), (2, 1)), ("M".into(), (1, 1)), ("T".into(), (-3, 1))];
+    assert_eq!(facts.dimension, expected);
+    assert!(!facts.is_linear);
+}
+
+/// A prefix factor is a decimal or a fraction, as the factor of a unit is: `1/3` stays exact.
+#[test]
+fn a_prefix_factor_can_be_a_fraction() {
+    use crate::units::parser::Parser;
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    conf::extend_registry(&mut reg, &mut constants, "[Prefixes]\nthird = th, 1/3\n").unwrap();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    assert_eq!(reg.factor_between(&atomic("thm"), &atomic("m")).unwrap(), 1.0 / 3.0);
+    assert_eq!(reg.factor_between(&atomic("thirdm"), &atomic("m")).unwrap(), 1.0 / 3.0);
+}
+
+/// A unit that the catalog marks `noprefix` takes no prefix, under any of its names, and a later
+/// definition without the flag takes it back.
+#[test]
+fn a_noprefix_unit_takes_no_prefix() {
+    let (mut reg, mut constants) = conf::build_registry_from_conf();
+    for name in ["kh", "kin", "kinch", "kmi", "kmile"] {
+        assert!(reg.facts(name).is_err(), "{name} must not be a unit");
+    }
+    assert!(reg.facts("km").is_ok());
+    assert!(reg.facts("kilometer").is_ok());
+
+    conf::extend_registry(&mut reg, &mut constants, "[Units]\nUSD = 1.0, $, noprefix, [USD, dollar]\n").unwrap();
+    assert!(reg.facts("USD").is_ok());
+    assert!(reg.facts("mUSD").is_err());
+    assert!(reg.facts("millidollar").is_err());
+
+    conf::extend_registry(&mut reg, &mut constants, "[Units]\nUSD = 1.0, $, [USD, dollar]\n").unwrap();
+    assert!(reg.facts("mUSD").is_ok());
+}
+
+/// The plan the registry gives for a conversion is what `Quantity::convert_to` does: a factor, the
+/// two coefficients of a temperature conversion, or the two stages of a level.
+#[test]
+fn the_registry_plans_a_conversion() {
+    use crate::units::parser::Parser;
+    use crate::units::registry::{Conversion, Stage};
+    let (reg, _) = conf::build_registry_from_conf();
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    let plan = |from: &str, to: &str| reg.conversion(&atomic(from), &atomic(to));
+
+    assert_eq!(plan("km", "m").unwrap(), Conversion::Affine { scale: 1000.0, shift: 0.0 });
+    assert_eq!(plan("degC", "degF").unwrap(), Conversion::Affine { scale: 1.8, shift: 32.0 });
+    assert_eq!(plan("degC", "K").unwrap(), Conversion::Affine { scale: 1.0, shift: 273.15 });
+    // the same level under another name needs nothing
+    assert_eq!(plan("decibel", "dB").unwrap(), Conversion::Affine { scale: 1.0, shift: 0.0 });
+    // a prefixed temperature scale keeps its zero point
+    assert_eq!(plan("centicelsius", "K").unwrap(), Conversion::Affine { scale: 0.01, shift: 273.15 });
+    // a level goes through the ratio it stands for
+    match plan("dB", "percent").unwrap() {
+        Conversion::Level { from: Stage::Level(log), to: Stage::Scale(scale) } => {
+            assert_eq!((log.factor, log.reference, scale), (10.0, 1.0, 0.01));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(plan("m", "s").is_err());
+    assert!(plan("rad", "sr").is_err());
+}
+
+/// A dimension is measured in the base units the registry declares for its symbols.
+#[test]
+fn a_dimension_is_measured_in_the_base_units() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let energy = [("L".to_string(), (2, 1)), ("M".to_string(), (1, 1)), ("T".to_string(), (-2, 1))];
+    let unit = reg.unit_of_dimension(&energy).unwrap();
+    let expected: std::collections::HashMap<String, (i64, i64)> =
+        [("m".to_string(), (2, 1)), ("kg".to_string(), (1, 1)), ("s".to_string(), (-2, 1))].into();
+    assert_eq!(unit.dimensions_map(), expected);
+    // the powers are exact fractions
+    let noise = reg.unit_of_dimension(&[("T".to_string(), (-1, 2))]).unwrap();
+    assert_eq!(noise.dimensions_map().get("s"), Some(&(-1, 2)));
+    // a symbol with no base unit is an error that says which
+    let error = reg.unit_of_dimension(&[("X".to_string(), (1, 1))]).unwrap_err();
+    assert!(error.to_string().contains("'X'"), "{error}");
+}
+
+/// `**` is the power, as in Python, and an exponent can be a decimal: both are read exactly.
+#[test]
+fn the_power_can_be_written_with_two_stars_and_a_decimal() {
+    use crate::units::parser::Parser;
+    let parse = |text: &str| Parser::parse_expression_atomic(text).unwrap().dimensions_map();
+    assert_eq!(parse("m**2"), parse("m^2"));
+    assert_eq!(parse("kg*m/s**2"), parse("kg*m/s^2"));
+    assert_eq!(parse("s**0.5").get("s"), Some(&(1, 2)));
+    assert_eq!(parse("s**-0.5").get("s"), Some(&(-1, 2)));
+    assert_eq!(parse("m^2.25").get("m"), Some(&(9, 4)));
+    assert_eq!(parse("V/Hz**0.5").get("Hz"), Some(&(-1, 2)));
+    // a decimal point that no digit follows is not part of a number
+    assert!(Parser::parse_expression_atomic("m**2.").is_err());
+}
+
+/// A prefixed name is a unit when the prefix scales it, and `resolvable_names` lists them all.
+#[test]
+fn the_registry_knows_prefixed_names_and_lists_them() {
+    let (reg, _) = conf::build_registry_from_conf();
+    for name in ["m", "km", "kilometer", "kPa", "min", "dB"] {
+        assert!(reg.knows(name), "{name}");
+    }
+    for name in ["attodB", "kpH", "xyzzy", "km/s", ""] {
+        assert!(!reg.knows(name), "{name}");
+    }
+    let names = reg.resolvable_names();
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "sorted, without repeats");
+    for name in ["m", "km", "kilometer", "kPa", "dB"] {
+        assert!(names.contains(&name.to_string()), "{name}");
+    }
+    assert!(!names.contains(&"attodB".to_string()));
+    assert!(names.iter().all(|name| reg.knows(name)), "every listed name is known");
+    assert!(names.len() > reg.names().len());
+}
+
+/// The registry lists the names it holds for a unit: units and aliases, not prefixed forms.
+#[test]
+fn the_registry_lists_its_names() {
+    let (reg, _) = conf::build_registry_from_conf();
+    let names = reg.names();
+    for name in ["m", "meter", "N", "degC", "dB"] {
+        assert!(names.contains(&name.to_string()), "{name}");
+    }
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "sorted, without repeats");
+    assert!(!names.contains(&"kilometer".to_string()), "a prefixed name is read, not held");
+}
+
+/// A prefix scales a unit, and the unit `1` (`unity`) is the number one: `E1` is not a unit.
+#[test]
+fn unity_takes_no_prefix() {
+    let (reg, _) = conf::build_registry_from_conf();
+    assert!(reg.get_unit("unity").is_some());
+    assert!(reg.get_unit("1").is_some());
+    for name in ["kunity", "kilounity", "E1", "k1"] {
+        assert!(reg.get_unit(name).is_none(), "{name}");
+    }
 }

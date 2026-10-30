@@ -67,19 +67,18 @@ fn prefixed_literals_carry_their_scale() {
         ("1 Hz", 1.0, "Hz"),
         ("1 Pa", 1.0, "Pa"),
         ("1 rad", 1.0, "rad"),
-        // physure.conf:185 declares degree to 10 significant digits (π/180 is
-        // 0.017453292519943295); this asserts the parser preserves the registry's value.
-        ("1 deg", 0.0174532925, "deg"),
+        // The registry's degree is π/180 to the last bit; the parser has to keep it.
+        ("1 deg", std::f64::consts::PI / 180.0, "deg"),
         ("1 min", 60.0, "min"),
         ("1 h", 3600.0, "h"),
         // Symbols carrying a digit. `a0` parsed as `1 a * 0` — the Bohr radius evaluated
         // to zero — until `unit_term` accepted digits after the first character.
-        ("1 a0", 5.29177210903e-11, "a0"),
+        ("1 a0", 5.29177210544e-11, "a0"),
         ("1 tau0", 2.4188843265e-17, "tau0"),
         // Non-ASCII symbols. The registry lookup was `is_ascii_alphabetic`-only, so these
         // resolved to "" and fell through to the expression parser, which rejects them.
         ("1 Å", 1e-10, "Å"),
-        ("1 °", 0.0174532925, "°"),
+        ("1 °", std::f64::consts::PI / 180.0, "°"),
         ("1 Ω", 1.0, "Ω"),
     ];
 
@@ -754,7 +753,7 @@ fn trig_takes_an_angle_and_propagates_the_derivative() {
 
     // An angle in its own unit is converted first: `deg` carries the degrees → radians
     // factor as its scale, so sin(90°) is 1, not sin(90 rad) = 0.894.
-    let deg: f64 = 0.0174532925; // the factor physure.conf gives `deg`
+    let deg: f64 = std::f64::consts::PI / 180.0; // the factor physure.conf gives `deg`
     assert_close(eval_quantity("sin(90 deg)").value.mean(), 1.0, "sin(90 deg)");
     let cos_deg = eval_quantity("cos(45 +/- 1 deg)");
     assert_close(cos_deg.value.mean(), (45.0 * deg).cos(), "cos(45 deg)");
@@ -815,7 +814,7 @@ fn transcendentals_accept_a_dimensionless_quantity_and_reject_a_dimensioned_one(
 #[test]
 fn degrees_are_an_angle_in_radians_not_in_steradians() {
     let radians = eval_quantity("90 deg => rad");
-    assert_close(radians.value.mean(), 90.0 * 0.0174532925, "90 deg in radians");
+    assert_close(radians.value.mean(), 90.0 * std::f64::consts::PI / 180.0, "90 deg in radians");
     assert_eq!(radians.unit.__repr__(), "rad");
 
     let sum = eval_quantity("30 deg + 15 deg");
@@ -1075,4 +1074,103 @@ fn equation_strings_may_carry_units() {
         eval_phs("f = \"y = a * b\"\nf(a = 2.0)").is_err(),
         "a missing non-unit argument was accepted",
     );
+}
+
+/// A conversion is rounded once from the exact scales of the catalog, so a relation that holds
+/// by definition comes out as written: `1 ppm => percent` was `9.999999999999999e-05` and
+/// `1 ft => inch` was `12.000000000000002`.
+#[test]
+fn conversions_are_rounded_once_from_exact_scales() {
+    let cases = [
+        ("1 ppm => percent", 1e-4),
+        ("1 g/cm^3 => kg/m^3", 1000.0),
+        ("1 ft => inch", 12.0),
+        ("1 mile => ft", 5280.0),
+        ("1 lb => oz", 16.0),
+        ("1 gal => inch^3", 231.0),
+        ("1 acre => ft^2", 43560.0),
+        ("1 ft + 1 inch => inch", 13.0),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(eval_quantity(src).value.mean(), expected, "{src}");
+    }
+}
+
+/// The fixed points of the temperature scales convert exactly: `100 degC => degF` was
+/// `211.99999999999997`, because the catalog wrote the Fahrenheit zero point as a rounded decimal.
+#[test]
+fn the_fixed_points_of_the_temperature_scales_are_exact_in_phs() {
+    let cases = [
+        ("100 degC => degF", 212.0),
+        ("212 degF => degC", 100.0),
+        ("0 degC => degF", 32.0),
+        ("32 degF => degC", 0.0),
+        ("491.67 degR => degF", 32.0),
+        ("25 degC => K", 298.15),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(eval_quantity(src).value.mean(), expected, "{src}");
+    }
+}
+
+/// The logarithmic units of the catalog work in PHS: they convert through the ratio they
+/// stand for, add as the quantities they stand for, and are refused where they have no meaning.
+#[test]
+fn levels_work_in_phs() {
+    let mean = |src: &str| eval_quantity(src).value.mean();
+    assert_eq!(mean("20 dB => unity"), 100.0);
+    assert_eq!(mean("20 dB => percent"), 10000.0);
+    assert!((mean("50 percent => dB") + 3.010299956639812).abs() < 1e-12);
+    assert_eq!(mean("7 pH => unity"), 10f64.powf(-7.0));
+    assert_eq!(mean("3 dB => decibel"), 3.0);
+    assert!((mean("10 dB + 20 dB") - 20.41392685158225).abs() < 1e-12);
+    assert_eq!(mean("10 dB * 2"), 20.0);
+    for refused in [
+        "10 dB + 1 unity",
+        "10 dB * 2 m",
+        "10 dB ^ 2",
+        "1 rad => dB",
+        "0 unity => dB",
+        "ln(10 dB)",
+        "1 mdB",
+    ] {
+        assert!(eval_phs(refused).is_err(), "{refused} should be refused");
+    }
+}
+
+/// The sign of a temperature literal keeps its scale: `-40 degC` is minus forty in degrees Celsius
+/// (233.15 K), where it used to be minus 313.15 K, a temperature below absolute zero.
+#[test]
+fn the_sign_of_a_temperature_literal_keeps_its_scale() {
+    let mean = |src: &str| eval_quantity(src).value.mean();
+    assert!((mean("-40 degC => K") - 233.15).abs() < 1e-12);
+    assert!((mean("-40 degC => degF") + 40.0).abs() < 1e-12);
+    assert!((mean("-40 degF => degC") + 40.0).abs() < 1e-12);
+    assert_eq!(mean("-(25 degC)"), -25.0);
+    assert_eq!(mean("x = 25 degC\n-x"), -25.0);
+    assert_eq!(eval_quantity("-40 degC").unit.__repr__(), "degC");
+}
+
+/// The algebra of points and intervals in PHS, and the comparisons that follow from it.
+#[test]
+fn temperatures_add_compare_and_refuse_as_points_and_intervals() {
+    let mean = |src: &str| eval_quantity(src).value.mean();
+    assert!((mean("20 degC + 5 K => degC") - 25.0).abs() < 1e-12);
+    assert!((mean("20 degC - 5 K => degC") - 15.0).abs() < 1e-12);
+    assert!((mean("20 degC - 5 degC => K") - 15.0).abs() < 1e-12);
+    assert!((mean("8.314 J/(mol*K) * 25 degC => J/mol") - 8.314 * 298.15).abs() < 1e-9);
+    for refused in ["20 degC + 5 degC", "5 K - 20 degC", "2 * 20 degC", "20 degC / 2", "1 / 20 degC"] {
+        assert!(eval_phs(refused).is_err(), "{refused} should be refused");
+    }
+    let truth = |src: &str| match eval_phs(src).unwrap().into_iter().last() {
+        Some(PhsValue::Bool(b)) => b,
+        other => panic!("{src:?} produced {other:?}, expected a Bool"),
+    };
+    assert!(truth("20 degC == 293.15 K"));
+    assert!(truth("20 degC == 68 degF"));
+    assert!(truth("20 degC > 280 K"));
+    assert!(truth("20 degC < 70 degF"));
+    assert!(!truth("20 degC > 70 degF"));
+    assert_eq!(eval_quantity("min(20 degC, 280 K)").unit.__repr__(), "K");
+    assert_eq!(eval_quantity("max(20 degC, 280 K)").unit.__repr__(), "degC");
 }

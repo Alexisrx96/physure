@@ -11,7 +11,7 @@ def test_celsius_conversion():
 
     q_c = Quantity(
         0, unit=celsius, system=system
-    )  # Celsius usa AffineConverter(1.0, 273.15)
+    )  # Celsius tiene un punto cero en 273.15
     q_k = q_c.to(kelvin)
     assert q_k.magnitude == 273.15  # Debe sumar el offset
 

@@ -21,7 +21,10 @@ else:
         jnp = None
         Tracer = None
 
-from physure.core.dispatcher import enforce_tensor_contract
+from physure.core.dispatcher import (
+    BackendManager,
+    enforce_tensor_contract,
+)
 from physure.core.protocols import BackendOps, Boolean, Numeric
 
 try:
@@ -603,64 +606,6 @@ class JaxBackend(BackendOps):
         return matrix[row_slice, col_slice]
 
 
-_jax_registered = False
-
-
 def register_jax_behavior():
-    """Registers Quantity as a JAX Pytree."""
-    global _jax_registered
-    if _jax_registered:
-        return
-    _jax_registered = True
-    try:
-        import jax
-
-        # Register Quantity
-        from physure.domain.measurement.quantity import Quantity
-
-        jax.tree_util.register_pytree_node(
-            Quantity,
-            Quantity.tree_flatten,
-            Quantity.tree_unflatten,
-        )
-
-        from physure.domain.measurement.uncertainty import (
-            CovarianceModel,
-            VarianceModel,
-        )
-
-        def cov_flatten(m):
-            keys = tuple(sorted(m.lineage.keys()))
-            values = tuple(m.lineage[k] for k in keys)
-            return (m.std_dev_internal, values), (m.vector_slice, keys)
-
-        def cov_unflatten(aux, children):
-            vector_slice, keys = aux
-            std_dev, values = children
-            lineage = dict(zip(keys, values, strict=False))
-            return CovarianceModel(
-                std_dev_internal=std_dev,
-                lineage=lineage,
-                vector_slice=vector_slice,
-            )
-
-        jax.tree_util.register_pytree_node(
-            CovarianceModel,
-            cov_flatten,
-            cov_unflatten,
-        )
-
-        def var_flatten(m):
-            return (m.variance,), ()
-
-        def var_unflatten(_aux, children):
-            return VarianceModel(variance=children[0])
-
-        jax.tree_util.register_pytree_node(
-            VarianceModel,
-            var_flatten,
-            var_unflatten,
-        )
-
-    except (ImportError, NameError):
-        pass
+    """Tells the model that JAX is in play so it registers its pytrees."""
+    BackendManager.announce("jax")

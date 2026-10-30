@@ -44,7 +44,9 @@ def _relative_uncertainty(q: Quantity) -> float:
 
 def mass_to_moles(mass_q: Quantity, species: Species) -> Quantity:
     """Converts a mass Quantity to moles, including molar-mass uncertainty."""
-    from physure import Q_
+    from physure.application.factories import QuantityFactory
+
+    Q_ = QuantityFactory()
     from physure.domain.measurement.equivalencies import equivalencies
 
     with equivalencies(molar_equivalency(species)):
@@ -63,7 +65,9 @@ def mass_to_moles(mass_q: Quantity, species: Species) -> Quantity:
 
 def moles_to_mass(mol_q: Quantity, species: Species) -> Quantity:
     """Converts a moles Quantity to mass, including molar-mass uncertainty."""
-    from physure import Q_
+    from physure.application.factories import QuantityFactory
+
+    Q_ = QuantityFactory()
     from physure.domain.measurement.equivalencies import equivalencies
 
     with equivalencies(molar_equivalency(species)):

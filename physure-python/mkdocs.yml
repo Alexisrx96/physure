@@ -4,6 +4,8 @@ repo_url: https://github.com/Alexisrx96/physure
 repo_name: Alexisrx96/physure
 edit_uri: edit/main/docs/
 docs_dir: ../docs
+exclude_docs: |
+  superpowers/
 
 theme:
   name: material

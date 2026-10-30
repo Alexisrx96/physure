@@ -7,27 +7,17 @@ creation of `Quantity` instances in a variety of ways.
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any, TypeVar, overload
 
 from physure.application.context import get_active_system
 from physure.domain.measurement.quantity import (
     Quantity,
 )
+from physure.domain.measurement.quantity_text import parse_quantity_text
 
 if TYPE_CHECKING:
     from physure.domain.measurement.system import UnitSystem
     from physure.domain.measurement.units import CompoundUnit
-
-# Matches only the leading numeric literal (optional sign, int/float, optional
-# exponent); the unit is whatever text follows and is sliced off in Python.
-# No trailing `.*$` wildcard and an unambiguous digit pattern
-# (`\d+\.?\d*|\.\d+`, not `\d*\.?\d+`), so there is nothing to force the engine
-# to re-partition a long digit run — immune to ReDoS backtracking.
-_NUMBER_PREFIX_REGEX = re.compile(
-    r"\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)"
-)
-
 
 _V = TypeVar("_V")
 _U = TypeVar("_U")
@@ -183,7 +173,7 @@ class QuantityFactory:
 
         # Handle string parsing if value is a string and no unit is provided
         if isinstance(value, str) and unit is None:
-            value, unit = self._parse_string_value(value, system)
+            value, unit = parse_quantity_text(value, system)
 
         # Handle string unit resolution
         # ponytail: `unit` is Any here because this __call__ impl backs
@@ -216,33 +206,3 @@ class QuantityFactory:
         factory = SpecializedQuantityFactory(default_unit, system)
         self._cache[default_unit] = factory
         return factory
-
-    def _parse_string_value(
-        self, value_str: str, system: UnitSystem
-    ) -> tuple[float | str, CompoundUnit]:
-        """Parses a string like '10 m/s' into a value and a unit."""
-        match = _NUMBER_PREFIX_REGEX.match(value_str)
-        if not match:
-            return value_str, system.get_unit("dimensionless")
-
-        num_str = match.group(1)
-        unit_str = value_str[match.end() :].strip()
-        try:
-            parsed_value = float(num_str)
-            # If the number was an integer (e.g., "10"), convert back to int
-            # for cleanness
-            if (
-                parsed_value.is_integer()
-                and "." not in num_str
-                and "e" not in num_str.lower()
-            ):
-                parsed_value = int(parsed_value)
-        except ValueError:
-            return value_str, system.get_unit("dimensionless")
-
-        unit = (
-            system.get_unit(unit_str)
-            if unit_str
-            else system.get_unit("dimensionless")
-        )
-        return parsed_value, unit

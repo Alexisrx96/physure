@@ -168,22 +168,3 @@ dev = [
 [project.scripts]
 physure = "physure.cli:main"
 
-[project.entry-points."physure.units"]
-meter     = "physure.units.core:meter"
-kilogram  = "physure.units.core:kilogram"
-second    = "physure.units.core:second"
-ampere    = "physure.units.core:ampere"
-kelvin    = "physure.units.core:kelvin"
-mole      = "physure.units.core:mole"
-candela   = "physure.units.core:candela"
-newton    = "physure.units.core:newton"
-joule     = "physure.units.core:joule"
-watt      = "physure.units.core:watt"
-pascal    = "physure.units.core:pascal"
-hertz     = "physure.units.core:hertz"
-coulomb   = "physure.units.core:coulomb"
-volt      = "physure.units.core:volt"
-ohm       = "physure.units.core:ohm"
-radian    = "physure.units.core:radian"
-steradian = "physure.units.core:steradian"
-unity     = "physure.units.core:unity"

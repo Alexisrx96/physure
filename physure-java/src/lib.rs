@@ -550,13 +550,15 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
                 Ok(s) => s,
                 Err(_) => return std::ptr::null_mut(),
             };
-            let converted_val = res.canonical_magnitude() / r_unit.scale;
+            // `res` is already in the target unit: its value and its spread are what to hand back
+            // (the canonical magnitude carries the scale and the zero point of the unit).
+            let converted_val = res.value.mean();
             let j_q = match env.new_object(
                 q_class,
                 "(DDLjava/lang/String;)V",
                 &[
                     JValue::Double(converted_val),
-                    JValue::Double(res.value.std_dev() / r_unit.scale),
+                    JValue::Double(res.value.std_dev()),
                     JValue::Object(&unit_jstr),
                 ],
             ) {

@@ -1,6 +1,6 @@
 # Torch Compile Integration
 
-**Last Updated:** January 7, 2026
+**Last Updated:** October 29, 2026
 
 This document details the strategies used to make `physure.Quantity` compatible with `torch.compile` (TorchDynamo/Inductor).
 
@@ -20,21 +20,22 @@ if torch.compiler.is_compiling():
 
 This effectively "inlines" the `Quantity` logic as pure Python operations without global state lookups during compilation.
 
-## 2. Frozen Dataclasses & In-Place Mutation
+## 2. Units and Dimensions Are Objects of the Extension
 
-`physure.domain.measurement.dimensions.Dimension` is a frozen dataclass. In `units.py`, we previously used in-place multiplication:
+A unit is a `RationalUnit` of the Rust extension (`CompoundUnit` is a subclass of it) and a `Dimension` holds one; their algebra, parsing and conversion plans are the core's. Dynamo cannot trace into the constructors and operators of an extension type, so every operation on a unit on the compiled path is a graph break. What stays in the graph is the arithmetic on the tensors between those calls.
 
-```python
-overall *= system.UNIT_DIMENSIONS[unit] ** exp
-```
+The breaks are counted with `torch._dynamo.explain` (torch 2.13, CPU, Python 3.14) on quantities of tensors:
 
-Dynamo flagged this as an unsupported mutation of a frozen class or a complex side-effect. We changed this to explicit assignment:
+| Expression | Graph breaks | Graphs |
+|---|---|---|
+| `(a + b) * 2.0` | 6 | 7 |
+| `a * b` | 4 | 5 |
+| `a / b` | 6 | 7 |
+| `a.to('km')` | 2 | 3 |
+| `s.to('km/h')` | 2 | 3 |
+| `t.to('K')` (degC) | 2 | 3 |
 
-```python
-overall = overall * (system.UNIT_DIMENSIONS[unit] ** exp)
-```
-
-This is friendlier to the FX graph capture.
+These counts are the gate of the unit work (A1): moving the unit algebra, the conversion plans, the point/level arithmetic and the exact powers into the core left each of them where it was. A change that makes one larger is a regression, whatever it speeds up.
 
 ## 3. FakeTensors & Backend Operations
 
@@ -45,7 +46,7 @@ TorchInductor uses `FakeTensor` (meta-tensors without data) to propagate shapes 
 
 ## 4. Verification
 
-We added `tests/ext/test_torch_compile.py`.
+`tests/ext/test_torch_compile.py` compiles `(a + b) * 2.0` over two quantities with `backend="aot_eager"` and checks the compiled result against the eager one: the magnitude, the unit and the gradients.
 Command: `uv run pytest tests/ext/test_torch_compile.py`
 
-This test uses `backend="aot_eager"` to verify graph capture without requiring a C++ compiler (MSVC) on Windows CI environments, while `fullgraph=True` ensures no graph breaks occur.
+It uses `aot_eager` to verify the capture without a C++ compiler (MSVC) on Windows CI, and `fullgraph=False`: the constructors of the extension are graph breaks (section 2), which `fullgraph=True` would reject. It does not count the breaks; the table above does.
