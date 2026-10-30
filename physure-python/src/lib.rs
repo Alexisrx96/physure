@@ -1860,6 +1860,20 @@ fn unit_facts<'py>(py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyD
     facts_dict(py, &registry, expression)
 }
 
+/// Unit symbols with exponents `(numerator, denominator)` as text, by the core's rule for powers: `kg·m/s²`,
+/// `1/s`, `m^(1/2)`. What `CompoundUnit` prints; a fraction is never a decimal, and the text reads back.
+#[pyfunction]
+fn unit_text(exponents: Vec<(String, (i64, i64))>) -> String {
+    ::physure_core::units::unit_text(&exponents)
+}
+
+/// Dimension symbols with exponents `(numerator, denominator)` as a formula by the same rule: `L²·M·T⁻²`,
+/// `L^(1/2)`. What `Dimension` prints.
+#[pyfunction]
+fn formula_text(exponents: Vec<(String, (i64, i64))>) -> String {
+    ::physure_core::units::formula_text(&exponents)
+}
+
 fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -> PyResult<Bound<'py, PyDict>> {
     let facts = registry.facts(expression).map_err(value_error)?;
     let out = PyDict::new(py);
@@ -1901,6 +1915,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(to_arrow_record_batch, m)?)?;
     m.add_function(wrap_pyfunction!(dim_vector_from_dict, m)?)?;
     m.add_function(wrap_pyfunction!(unit_facts, m)?)?;
+    m.add_function(wrap_pyfunction!(unit_text, m)?)?;
+    m.add_function(wrap_pyfunction!(formula_text, m)?)?;
     m.add_function(wrap_pyfunction!(register_quantity_factory, m)?)?;
     m.add_function(wrap_pyfunction!(tokenize_phs_expression, m)?)?;
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;

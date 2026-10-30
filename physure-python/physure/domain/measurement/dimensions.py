@@ -14,12 +14,10 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
-from physure.core.formatting import to_superscript
-
 if TYPE_CHECKING:
     from typing import Self
 
-from physure._core import RationalUnit
+from physure._core import RationalUnit, formula_text
 from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentEntityProtocol,
@@ -151,15 +149,7 @@ class Dimension(BaseExponentEntity):
         """Calculates the analytical string of a dimension."""
         if not key:
             return "Dimensionless"
-        parts = []
-        for symbol, (n, d) in key:
-            if (n, d) == (1, 1):
-                parts.append(symbol)
-            elif d == 1:
-                parts.append(f"{symbol}{to_superscript(n)}")
-            else:
-                parts.append(f"{symbol}^({n}/{d})")
-        return "·".join(parts)
+        return formula_text(list(key))
 
     @classmethod
     def _of(cls, unit: RationalUnit) -> Dimension:

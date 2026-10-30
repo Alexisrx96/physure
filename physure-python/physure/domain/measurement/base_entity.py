@@ -7,7 +7,7 @@ from fractions import Fraction
 from functools import singledispatchmethod
 from typing import Any, Protocol
 
-from physure.core.formatting import to_superscript
+from physure._core import unit_text
 
 # Exponents dictionary type alias: maps base unit or dimension symbol to power/exponent
 ExponentsDict = dict[str, Any]
@@ -115,24 +115,13 @@ class BaseExponentEntity:
         return str(self.exponents)
 
     def __str__(self) -> str:
-        numerator, denominator = [], []
-        for unit, exp in sorted(self.exponents.items()):
-            power = abs(exp)
-            if type(power) is not int:
-                power = float(power)  # a Fraction shows as its decimal
-            formatted = f"{unit}{to_superscript(power) if power != 1 else ''}"
-            (numerator if exp > 0 else denominator).append(formatted)
-        n = "·".join(numerator)
-        d = "·".join(denominator)
-        if "·" in d:
-            d = f"({d})"
-        if d and n:
-            return f"{n}/{d}"
-        if d and not n:
-            return f"1/{d}"
-        if n and not d:
-            return n
-        return "1"
+        # the core's rule for powers: superscript digits for a whole power, ^(n/d) for a fraction
+        return unit_text(
+            [
+                (unit, exact_power(exp))
+                for unit, exp in sorted(self.exponents.items())
+            ]
+        )
 
     @singledispatchmethod
     def __rtruediv__(self, other: complex) -> Any:
