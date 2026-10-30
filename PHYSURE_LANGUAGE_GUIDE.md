@@ -11,11 +11,11 @@ Quantities consist of a numerical magnitude, an optional uncertainty, and a phys
 
 ```phs
 # Quantity literals with SI or derived units
-presion = 100.0 kPa
-velocidad = 25.0 m / s
-resistencia = 50.0 Ohm
-medicion = 10.0 +/- 0.5 m        # Measurement with 0.5 m standard deviation
-porcentaje = 5.0 %               # Relative uncertainty or percentage
+pressure = 100.0 kPa
+speed = 25.0 m / s
+resistance = 50.0 Ohm
+measurement = 10.0 +/- 0.5 m        # Measurement with 0.5 m standard deviation
+percentage = 5.0 %               # Relative uncertainty or percentage
 
 # Unit Conversion Operator '=>'
 p_bar = 100.0 kPa => bar         # Converts 100.0 kPa to bar
@@ -39,28 +39,28 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m) * cos(y / 1.0 m)
 ### 1.3 Control Flow & Local Bindings
 ```phs
 x * 2.0 where x = 10.0 m
-energia where energia = 0.5 * 2.0 kg * (3.0 m/s)^2
-if P > 50.0 kPa then "Alta Presion" else "Presion Normal"
+energy where energy = 0.5 * 2.0 kg * (3.0 m/s)^2
+if P > 50.0 kPa then "High Pressure" else "Normal Pressure"
 ```
 
 ### 1.3.1 Strings & Interpolation
-Un string entrecomillado es exactamente el texto escrito: nunca se resuelve como variable,
-aunque exista una con ese nombre. Para meter un valor se usa `{...}`, y ahi si se evalua la
-expresion en el entorno actual.
+A quoted string is exactly the text written: it is never resolved as a variable, even if
+one exists with that name. To put a value in, use `{...}`, which does evaluate the expression
+in the current environment.
 
 ```phs
 v = 3.0 m/s
-"v"                             # -> "v", el nombre, no la cantidad
-deriv("0.5 * m * v^2", "v")     # -> m * v   (v y m siguen siendo simbolos)
+"v"                             # -> "v", the name, not the quantity
+deriv("0.5 * m * v^2", "v")     # -> m * v   (v and m are still symbols)
 
 m = 2.0 kg
 "0.5 * {m} * v^2"               # -> "0.5 * 2.0 kg * v^2"
-deriv("0.5 * {m} * v^2", "v")   # -> 2 * kg * v   (m ya es constante, con unidad)
+deriv("0.5 * {m} * v^2", "v")   # -> 2 * kg * v   (m is already a constant, with a unit)
 ```
 
-Asi una constante se congela en la formula sin alterarla en silencio, y la unidad viaja con
-ella hasta el resultado simbolico. La interpolacion se transpila a los tres objetivos:
-concatenacion en Python y Java, `format!` en Rust.
+This way a constant is frozen into the formula without being silently altered, and its unit
+travels with it to the symbolic result. The interpolation is transpiled to the three targets:
+concatenation in Python and Java, `format!` in Rust.
 
 ### 1.4 Imports & Domain Modules
 ```phs
@@ -68,7 +68,7 @@ use solve, deriv, integral from calc
 use plot, plot3d, export3d from plot
 use linspace, gradient, trapz from array
 
-# Un modulo .phs local se importa por ruta, relativa al script que se ejecuta:
+# A local .phs module is imported by path, relative to the script being run:
 # import "./thermodynamics.phs"
 ```
 

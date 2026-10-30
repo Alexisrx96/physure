@@ -693,9 +693,7 @@ class Quantity(
                 system = get_active_system()
                 number, unit = parse_quantity_text(value, system)
                 return Quantity.from_input(number, unit, system)
-            raise ValueError(
-                f"No se puede validar Quantity desde {type(value)}"
-            )
+            raise ValueError(f"Cannot validate Quantity from {type(value)}")
 
         def validate_from_dict(value: Any) -> Quantity:
             if isinstance(value, dict):
@@ -708,13 +706,11 @@ class Quantity(
                 sys = create_system(f"{system_name.lower()}.conf")
                 if unit is None:
                     raise ValueError(
-                        f"No se puede validar Quantity desde {type(value)}"
+                        f"Cannot validate Quantity from {type(value)}"
                     )
                 u = sys.get_unit(unit)
                 return Quantity.from_input(mag, u, sys)
-            raise ValueError(
-                f"No se puede validar Quantity desde {type(value)}"
-            )
+            raise ValueError(f"Cannot validate Quantity from {type(value)}")
 
         return core_schema.union_schema(
             [

@@ -229,13 +229,13 @@ physure Quantity, not a plain float/int — use `.magnitude` to unwrap one.
 """
 
 
-def __NAME___hello(nombre: str) -> str:
-    return f"Hola, {nombre}, desde __NAME__.py"
+def __NAME___hello(name: str) -> str:
+    return f"Hello, {name}, from __NAME__.py"
 "#;
 
 const DRIVER_RUST_TEMPLATE: &str = r#""""Loads ext/__NAME__.<so|dylib|dll> and hot-reloads it without restarting.
 
-Uso: python driver.py   (corre build_plugin.[sh|ps1|cmd] al menos una vez antes)
+Usage: python driver.py   (run build_plugin.[sh|ps1|cmd] at least once first)
 """
 
 from pathlib import Path
@@ -259,15 +259,15 @@ def main() -> None:
     build()
     interp = Interpreter(base_dir=str(HERE))
     print("__NAME___double(21) =", interp.evaluate("__NAME___double(21)")[0])
-    print('__NAME___shout("hola") =', interp.evaluate('__NAME___shout("hola")')[0])
+    print('__NAME___shout("hello") =', interp.evaluate('__NAME___shout("hello")')[0])
 
-    print("\n--- hot reload: __NAME___double x2 -> x10, sin reiniciar ---")
+    print("\n--- hot reload: __NAME___double x2 -> x10, without restarting ---")
     original = PLUGIN_SRC.read_text()
     PLUGIN_SRC.write_text(original.replace("args[0].number * 2.0", "args[0].number * 10.0"))
     try:
         build()
         reloaded = interp.reload_native_ext()
-        print("funciones recargadas:", reloaded)
+        print("reloaded functions:", reloaded)
         print("__NAME___double(21) =", interp.evaluate("__NAME___double(21)")[0])
     finally:
         PLUGIN_SRC.write_text(original)
@@ -280,7 +280,7 @@ if __name__ == "__main__":
 
 const DRIVER_PY_TEMPLATE: &str = r#""""Loads ext/__NAME__.py functions into a PHS interpreter.
 
-Uso: python driver.py
+Usage: python driver.py
 """
 
 from pathlib import Path
@@ -305,7 +305,7 @@ if __name__ == "__main__":
 const DRIVER_BOTH_TEMPLATE: &str = r#""""Runs the native plugin (ext/__NAME__.rs) and the .py ext (ext/__NAME__.py),
 then hot-reloads the native plugin without restarting the process.
 
-Uso: python driver.py   (corre build_plugin.[sh|ps1|cmd] al menos una vez antes)
+Usage: python driver.py   (run build_plugin.[sh|ps1|cmd] at least once first)
 """
 
 from pathlib import Path
@@ -333,16 +333,16 @@ def main() -> None:
     print("funciones .py registradas:", registered)
 
     print("__NAME___double(21) =", interp.evaluate("__NAME___double(21)")[0])
-    print('__NAME___shout("hola") =', interp.evaluate('__NAME___shout("hola")')[0])
+    print('__NAME___shout("hello") =', interp.evaluate('__NAME___shout("hello")')[0])
     print('__NAME___hello("mundo") =', interp.evaluate('__NAME___hello("mundo")')[0])
 
-    print("\n--- hot reload: __NAME___double x2 -> x10, sin reiniciar ---")
+    print("\n--- hot reload: __NAME___double x2 -> x10, without restarting ---")
     original = PLUGIN_SRC.read_text()
     PLUGIN_SRC.write_text(original.replace("args[0].number * 2.0", "args[0].number * 10.0"))
     try:
         build()
         reloaded = interp.reload_native_ext()
-        print("funciones recargadas:", reloaded)
+        print("reloaded functions:", reloaded)
         print("__NAME___double(21) =", interp.evaluate("__NAME___double(21)")[0])
     finally:
         PLUGIN_SRC.write_text(original)

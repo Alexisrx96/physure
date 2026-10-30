@@ -53,11 +53,11 @@ fn print_help() {
     println!("    --html, --view           Generate and open HTML report");
     println!();
     println!("EXAMPLES:");
-    println!("    phs 1_cargas.phs");
+    println!("    phs 1_loads.phs");
     println!("    phs --repl");
     println!("    phs doc --save");
-    println!("    phs transpile 1_cargas.phs --target python");
-    println!("    phs transpile 1_cargas.phs -t java -o Calculator.java");
+    println!("    phs transpile 1_loads.phs --target python");
+    println!("    phs transpile 1_loads.phs -t java -o Calculator.java");
     println!("    phs new-plugin myplugin --lang rust");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
@@ -495,11 +495,11 @@ fn generate_language_docs_md() -> String {
     md.push_str("Quantities consist of a numerical magnitude, an optional uncertainty, and a physical unit expression.\n\n");
     md.push_str("```phs\n");
     md.push_str("# Quantity literals with SI or derived units\n");
-    md.push_str("presion = 100.0 kPa\n");
-    md.push_str("velocidad = 25.0 m / s\n");
-    md.push_str("resistencia = 50.0 Ohm\n");
-    md.push_str("medicion = 10.0 +/- 0.5 m        # Measurement with 0.5 m standard deviation\n");
-    md.push_str("porcentaje = 5.0 %               # Relative uncertainty or percentage\n\n");
+    md.push_str("pressure = 100.0 kPa\n");
+    md.push_str("speed = 25.0 m / s\n");
+    md.push_str("resistance = 50.0 Ohm\n");
+    md.push_str("measurement = 10.0 +/- 0.5 m        # Measurement with 0.5 m standard deviation\n");
+    md.push_str("percentage = 5.0 %               # Relative uncertainty or percentage\n\n");
     md.push_str("# Unit Conversion Operator '=>'\n");
     md.push_str("p_bar = 100.0 kPa => bar         # Converts 100.0 kPa to bar\n");
     md.push_str("v_kmh = 25.0 m / s => km / h     # Converts 25 m/s to km/h\n");
@@ -519,8 +519,8 @@ fn generate_language_docs_md() -> String {
 
     md.push_str("### 1.3 Control Flow & Local Bindings\n");
     md.push_str("```phs\n");
-    md.push_str("duplo = x * 2.0 where x = 10.0 m\n");
-    md.push_str("estado = if presion > 50.0 kPa then \"Alta Presion\" else \"Presion Normal\"\n");
+    md.push_str("doubled = x * 2.0 where x = 10.0 m\n");
+    md.push_str("status = if pressure > 50.0 kPa then \"High Pressure\" else \"Normal Pressure\"\n");
     md.push_str("```\n\n");
 
     md.push_str("### 1.4 Imports & Domain Modules\n");

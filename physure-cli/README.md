@@ -49,15 +49,15 @@ F_e => nN                      # convert on the spot
 F_e: .3e                       # ...or format in scientific notation
 
 # Measurements carry uncertainty through the whole calculation
-velocidad = 25.0 +/- 0.5 m / s
-masa      = 2.0 +/- 0.1 kg
-energia_cinetica = 0.5 * masa * velocidad^2
+speed = 25.0 +/- 0.5 m / s
+mass  = 2.0 +/- 0.1 kg
+kinetic_energy = 0.5 * mass * speed^2
 
 # Assert a measured value against an expected one within N-sigma
 g_exp = 9.81 +/- 0.05 m / s^2
 g_exp == 9.80 m / s^2 +/- 2 sigma
 
-"El radio es {r} y la fuerza es {F_e => nN}"
+"The radius is {r} and the force is {F_e => nN}"
 ```
 
 ```bash
