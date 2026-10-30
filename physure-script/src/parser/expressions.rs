@@ -278,28 +278,12 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         primary_pair = inner.next().unwrap();
     }
 
-    let left = match primary_pair.as_rule() {
-        Rule::quantity => parse_quantity(primary_pair)?,
-        Rule::number => parse_number_quantity(primary_pair)?,
-        Rule::method_call => parse_method_call(primary_pair)?,
-        Rule::function_call => parse_function_call(primary_pair)?,
-        Rule::identifier => Expr::Identifier(primary_pair.as_str().to_string()),
-        Rule::string_lit => Expr::Str(primary_pair.as_str().trim_matches('"').to_string()),
-        Rule::bool_lit => parse_bool_lit(primary_pair)?,
-        Rule::if_expr => parse_if_expr(primary_pair)?,
-        Rule::for_expr => parse_for_expr(primary_pair)?,
-        Rule::vector_literal => parse_vector_literal(primary_pair)?,
-        Rule::expr => parse_expr(primary_pair)?,
-        Rule::base_expr => parse_base_expr(primary_pair)?,
-        Rule::conv_expr => parse_conv_expr(primary_pair)?,
-        Rule::comp_expr => parse_comp_expr(primary_pair)?,
-        _ => return Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", primary_pair.as_rule()))),
-    };
+    let left = parse_primary_pair(primary_pair)?;
 
     let result = if let Some(op_pair) = inner.next() {
         if op_pair.as_rule() == Rule::op_pow {
             let right_pair = inner.next().unwrap();
-            let right = parse_factor(right_pair)?;
+            let right = parse_primary_pair(right_pair)?;
             Expr::BinaryOp {
                 op: BinaryOp::Pow,
                 left: Box::new(left),
@@ -320,6 +304,28 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         })
     } else {
         Ok(result)
+    }
+}
+
+/// The expression a primary pair stands for. Every primary is a `method_call` pair (the base, then
+/// zero or more `.name(...)`), so the base is read through here too.
+fn parse_primary_pair(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    match pair.as_rule() {
+        Rule::quantity => parse_quantity(pair),
+        Rule::number => parse_number_quantity(pair),
+        Rule::method_call => parse_method_call(pair),
+        Rule::function_call => parse_function_call(pair),
+        Rule::identifier => Ok(Expr::Identifier(pair.as_str().to_string())),
+        Rule::string_lit => Ok(Expr::Str(pair.as_str().trim_matches('"').to_string())),
+        Rule::bool_lit => parse_bool_lit(pair),
+        Rule::if_expr => parse_if_expr(pair),
+        Rule::for_expr => parse_for_expr(pair),
+        Rule::vector_literal => parse_vector_literal(pair),
+        Rule::expr => parse_expr(pair),
+        Rule::base_expr => parse_base_expr(pair),
+        Rule::conv_expr => parse_conv_expr(pair),
+        Rule::comp_expr => parse_comp_expr(pair),
+        other => Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", other))),
     }
 }
 
@@ -453,15 +459,7 @@ fn parse_function_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr>
 
 fn parse_method_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
-    let base_pair = inner.next().unwrap();
-    let mut current_expr = match base_pair.as_rule() {
-        Rule::quantity => parse_quantity(base_pair)?,
-        Rule::function_call => parse_function_call(base_pair)?,
-        Rule::identifier => Expr::Identifier(base_pair.as_str().to_string()),
-        Rule::string_lit => Expr::Str(base_pair.as_str().trim_matches('"').to_string()),
-        Rule::expr => parse_expr(base_pair)?,
-        _ => parse_base_expr(base_pair)?,
-    };
+    let mut current_expr = parse_primary_pair(inner.next().unwrap())?;
 
     while let Some(method_item) = inner.next() {
         if method_item.as_rule() == Rule::identifier {
