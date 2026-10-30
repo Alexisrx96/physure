@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from fractions import Fraction
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 from physure.core.formatting import to_superscript
@@ -127,13 +128,16 @@ class Dimension(BaseExponentEntity):
                 "_analytical_representation",
                 cls._calculate_representation(key),
             )
+            # read-only: the instance is shared by everything that builds it
             object.__setattr__(
                 instance,
                 "exponents",
-                {
-                    symbol: n if d == 1 else Fraction(n, d)
-                    for symbol, (n, d) in key
-                },
+                MappingProxyType(
+                    {
+                        symbol: n if d == 1 else Fraction(n, d)
+                        for symbol, (n, d) in key
+                    }
+                ),
             )
             cls._cache[key] = cast("Dimension", instance)
         if items is not None:
@@ -168,6 +172,10 @@ class Dimension(BaseExponentEntity):
         self, exponents: ExponentsDict | None = None
     ):
         """Initializes the dimension. Logic is handled in __new__."""
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Pickles the powers; the flyweight finds the instance again."""
+        return (type(self), (dict(self.exponents),))
 
     def __hash__(self) -> int:
         """Returns a hash value for the dimension based on its powers."""

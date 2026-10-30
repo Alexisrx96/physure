@@ -11,6 +11,7 @@ from fractions import Fraction
 import pytest
 
 from physure import Q_
+from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.units import CompoundUnit
 
 METRE = CompoundUnit({"m": 1})
@@ -83,3 +84,29 @@ def test_a_power_that_is_not_a_number_is_refused():
         CompoundUnit({"m": "square"})
     with pytest.raises((TypeError, ValueError)):
         CompoundUnit({"m": None})
+
+
+@pytest.mark.parametrize(
+    "entity",
+    [CompoundUnit({"m": 1, "s": -2}), Dimension({"L": 1, "T": -2})],
+)
+def test_the_powers_of_a_shared_instance_cannot_be_written(entity):
+    # the instance is the one everybody who builds the same powers gets
+    before = dict(entity.exponents)
+    with pytest.raises(TypeError):
+        entity.exponents["L"] = 5
+    with pytest.raises(TypeError):
+        del entity.exponents[next(iter(entity.exponents))]
+    assert entity.exponents == before
+    # a copy is a plain dictionary a caller can build on
+    copy = entity.exponents.copy()
+    assert type(copy) is dict
+    copy["x"] = 1
+    assert "x" not in entity.exponents
+
+
+def test_a_dimension_with_a_fractional_power_pickles():
+    dimension = Dimension({"L": 2, "T": Fraction(-3, 2)})
+    clone = pickle.loads(pickle.dumps(dimension))
+    assert clone == dimension
+    assert clone.exponents == dimension.exponents

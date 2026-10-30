@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, cast, overload
 
 # sympy imported lazily in to_latex()
@@ -145,13 +146,16 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         instance = cls._cache.get(key)
         if instance is None:
             instance = RationalUnit.__new__(cls, dict(key))
+            # read-only: the instance is shared by everything that builds it
             object.__setattr__(
                 instance,
                 "exponents",
-                {
-                    symbol: n if d == 1 else Fraction(n, d)
-                    for symbol, (n, d) in key
-                },
+                MappingProxyType(
+                    {
+                        symbol: n if d == 1 else Fraction(n, d)
+                        for symbol, (n, d) in key
+                    }
+                ),
             )
             cls._cache[key] = cast("CompoundUnit", instance)
         if items is not None:
@@ -172,7 +176,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         By returning (reconstruct_compound_unit, (args,)), we bypass direct
         class lookups that can be corrupted by namespace shadowing.
         """
-        return (reconstruct_compound_unit, (self.exponents,))
+        return (reconstruct_compound_unit, (dict(self.exponents),))
 
     def __hash__(self) -> int:
         """Returns a hash value for the compound unit."""
