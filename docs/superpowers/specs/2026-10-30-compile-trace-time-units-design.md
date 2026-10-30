@@ -1,7 +1,7 @@
 # Units out of the way of `torch.compile` (N4) — design
 
 **Date:** 2026-10-30
-**Status:** approved by the maintainer ("Proceed", 2026-10-30) as three stages. S1 was tried and **did not move the counts** (see "S1 outcome"); what is built is the measurement and the gate. S2 waits for the maintainer's decision.
+**Status:** approved by the maintainer ("Proceed", 2026-10-30) as three stages. S1 was tried and **did not move the counts** (see "S1 outcome"); what is built is the measurement and the gate. The benchmark (below) shows the breaks are not the bottleneck, so S2 is parked.
 **Base:** local `main` @ `0747d64`
 **Follows:** the draft `2026-10-30-draft-jit-trace-time-units.md` (next step N4 of `2026-10-30-post-a1-inventory.md`).
 
@@ -60,6 +60,24 @@ Why piecemeal fixes cannot lower the headline numbers:
 - **The `any(mask)` branch cannot be removed by a type check.** Choosing `VarianceModel` or `CovarianceModel` by whether any element of the standard deviation is non-zero is a decision about data. Dropping it while compiling would change results silently (an uncertain array would lose its correlation tracking inside the compiled region, so `x - x` would stop cancelling). A safe version needs an "exactly zero" fact carried by the uncertainty object, set where the zero is known to be a Python scalar, and used by `from_input` and `_convert_by_plan`. That is a change to the uncertainty classes, not a local edit.
 
 So the Python-state fixes are prerequisites of a zero-break compiled graph, not steps toward a lower count on their own. The count falls only when S2 removes the Rust-object calls.
+
+## Benchmark: are the breaks the bottleneck? (2026-10-30)
+
+`benchmarks/bench_compile_training_step.py`: one forward and backward pass of a small physics loss (`e = 0.5 * m * (d / t)**2`, squared error against a target in joules, `.mean()`), as plain tensors and as `Quantity`, eager and `torch.compile(backend="aot_eager")`. torch 2.13.0+cpu, Python 3.14.6; median of 7 batches of 20 steps. Inductor is not available on this machine (no C++ compiler), so kernel fusion was not measured.
+
+| n | plain eager | plain compiled | `Quantity` eager | `Quantity` compiled | compile warm-up (`Quantity`) |
+|---|---|---|---|---|---|
+| 100 | 0.08 ms | 0.19 ms | 1.7 ms (22x) | 4.2 ms (55x) | 4.3 s |
+| 1,000 | 0.08 ms | 0.21 ms | **89.6 ms (1,163x)** | 94.7 ms | 4.7 s |
+| 4,000 | 0.16 ms | 0.25 ms | **1,044 ms (6,446x)** | 1,046 ms | 5.7 s |
+
+What it says:
+
+- **The graph breaks are not the bottleneck.** Compiling the `Quantity` step makes it slower at n = 100 (4.2 ms against 1.7 ms: guards and resume functions around four breaks per quantity) and changes nothing at n = 1,000 and above. The most that removing every break could recover is that 2.5 ms at small sizes, plus the multi-second warm-up.
+- **The cost is quadratic in the array length, and it is in eager mode.** With torch tensors, `Quantity * Quantity` and `Quantity / Quantity` build a dense `N x N` diagonal Jacobian (`_arithmetic_mixin._mul_quantities` and `_div_quantities` call `backend.diagonal_operator`, which for torch is `torch.diag`). Timing a single multiply: 23 ms at 1,000 elements, 73 ms at 2,000, 229 ms at 4,000, 491 ms at 8,000, 2,046 ms at 16,000. A million elements would ask for 4 TB, and the benchmark died there with `DefaultCPUAllocator: not enough memory`. The numpy backend uses `scipy.sparse.diags` for the same operator and is flat (0.8 ms at 16,000 elements).
+- Even with the exact quantities of this benchmark (no uncertainty) the Jacobians are built, because nothing short-circuits on a zero uncertainty.
+
+So for the use that motivated N4, training loops over `Quantity` tensors, the unit bookkeeping costs three to four orders of magnitude more than the graph breaks do, and for a reason unrelated to units or Dynamo. S2 is not worth starting before that is fixed. The fix is a separate item (a sparse diagonal for torch, as numpy has, or skipping the Jacobian when the uncertainties are exactly zero).
 
 ## Acceptance
 
