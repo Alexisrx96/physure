@@ -10,6 +10,8 @@ Releasing 0.3.0 showed three things that the workflows and the old skill did not
 2. **Java stops one step short.** `physure-java/pom.xml` configures the Central publishing plugin with `autoPublish` set to `false`, so a green `java-release.yml` leaves the deployment waiting in the Sonatype portal until someone presses Publish. Maven Central answers 404 for `physure-java` 0.2.4 and 0.3.0 and lists 0.2.3 as latest.
 3. **Pushing a tag costs about 12 minutes.** The local `pre-push` hook (`.git/hooks/pre-push`, untracked) runs `scripts/pre_push_clean_test.py` for every push, and a tag push is not an exception; a delete and a re-push is two passes. For 0.3.0 the Python tag was done with `git push` (more than an hour of waiting in total) and the other two with the GitHub API, which pushes no objects. That choice was made by the assistant, disclosed afterwards, and is open to the maintainer's veto.
 
+4. **The bumps leave the lock files stale.** The workflows change `Cargo.toml`, `__init__.py`, `pyproject.toml` or `pom.xml` and nothing else. After 0.3.0, `Cargo.lock` still has 0.2.4 for the six workspace crates and `physure-python/uv.lock` has 0.2.4 for `physure`. The next build rewrites both, so every checkout carries an uncommitted diff of lock files until someone commits it (as `50bb0ca` and `5afb14e` did for earlier releases).
+
 ## Options for 1
 
 | Option | Mechanism | For | Against |
@@ -24,6 +26,10 @@ Releasing 0.3.0 showed three things that the workflows and the old skill did not
 - Keep `autoPublish=false` as a deliberate human gate before the one registry that cannot be undone, and have the Java job write the portal link into its job summary so the step is not forgotten.
 - Or set it to `true` and treat Java like PyPI and crates.io.
 
+## Options for 4
+
+The bump workflows run `cargo update --workspace` and `uv lock` and add the lock files to the same commit as the version, or a follow-up job opens a sync PR. The first is one more step in a job that pushes straight to `main`, so it has to run before the tag is created; the lock files must change only in the lines for the package versions, which the review of the first release that uses it can check.
+
 ## Options for 3
 
 The hook exists to check code before it leaves the machine. A tag that points to a commit already on `main` carries no new code. The hook could skip a push that only creates or deletes tag refs (the information is in its stdin: local and remote refs and object names). It is a local file, so the change is a script under version control plus an installation step, not a pull request to the hook itself.
@@ -35,6 +41,7 @@ For 1, B, tried first on a throwaway tag in a fork or against the `check-version
 ## Open questions
 
 - A, B or D? A needs a secret that only the maintainer can create.
+- Should the bump commits carry the lock files (option for 4)?
 - Does Java keep its manual Publish gate? And what happened to the 0.2.4 deployment: is it still waiting in the portal?
 - May the assistant keep using the GitHub API to recreate tags, or should it always `git push` and wait?
 

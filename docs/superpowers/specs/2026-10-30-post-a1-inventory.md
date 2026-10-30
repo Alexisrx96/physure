@@ -47,6 +47,7 @@ Sizes (S: hours, M: a day or two, L: a week or more) and risks are estimates, no
 | Stale local tag | the local `v0.2.4` points to the bump commit; the remote tag was moved to `e1a1e0d`, so `git fetch --tags` refuses to update it | `git fetch origin tag v0.2.4 --force` (a local-only ref) |
 | `from physure import units` | is the registry itself unless `import physure.units` ran first, then the forwarding package; both answer the same | document, or make it one object (A2b decides) |
 | `DimVector` | public type of the core, used by the Rust crates, exported by `physure`, unused by Python's `Dimension` | decided in the A1 cleanup to keep; revisit only if the Rust crates stop using it |
+| Lock files after a bump | after the three bumps `Cargo.lock` still says 0.2.4 for the six workspace crates and `physure-python/uv.lock` says 0.2.4 for `physure`; any build or `uv` command regenerates them, so they show up as uncommitted changes in every checkout (the same drift was fixed by hand before, in `50bb0ca` and `5afb14e`) | sync them in one commit after the release, or make the bump workflows do it (belongs with F4) |
 | Local leftovers | empty `physure/core/parsing/` and `domain/measurement/ports/` directories (only `__pycache__`) and `physure_core.pdb`, all ignored by git | delete by hand, no commit |
 
 ## 5. Proposed order
