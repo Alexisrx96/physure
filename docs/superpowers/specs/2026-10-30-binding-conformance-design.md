@@ -29,6 +29,8 @@ The first run of the Java contract test failed on four of 44 rows. `UnitRegistry
 
 The WASM binding had the same bug and was fixed in August (`f3fbfc1`); the Java one was not. Every scale and every whole exponent agreed. This is the kind of answer the project forbids ("never silently drop a dimension"), and it is in the Java artifact up to 0.3.0.
 
+A second defect turned up afterwards, not through the contract but while measuring the cost of a call (`2026-10-30`, for the question of per-LTS builds): `get_registry(_handle)` in `physure-java/src/lib.rs` ignored its handle and parsed the embedded catalog on every call (about 0.8 ms per `getUnitScale`), and `initRegistryFromPath` and `initRegistryFromContent` built the custom registry and dropped it, returning a plain `PhsInterpreter::default()`. A unit defined in a custom conf was therefore unknown to its own registry. The handle is now a `RegistryHandle { registry, interpreter }`, the embedded catalog is parsed once per process (a `OnceLock`) and copied into each new registry, and `CustomRegistryTest` (6 tests; 4 of them fail on the old code with "Unknown unit") holds it. `getUnitScale` went from about 800 µs to 2.6 µs and `getUnitPowers` to 11 µs (release native library, JDK 25, this machine). Not fixed: the PHS interpreter behind `evaluate` has a single catalog per process, so a custom conf still does not reach it (a change in `physure-script`, not done and not yet in the inventory), and WASM's `evaluate` has the same limit.
+
 ## Decisions (maintainer, 2026-10-30)
 
 | Question | Decision | Rejected |
