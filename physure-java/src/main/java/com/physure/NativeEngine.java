@@ -27,18 +27,8 @@ public class NativeEngine {
 
     private static void loadFromJar() throws Exception {
         String libName = System.mapLibraryName("physure_java");
-        String os = System.getProperty("os.name").toLowerCase();
-        String arch = System.getProperty("os.arch").toLowerCase();
-        
-        String resourcePath = "/natives/";
-        if (os.contains("win")) {
-            resourcePath += "windows/";
-        } else if (os.contains("mac")) {
-            resourcePath += "macos/";
-        } else {
-            resourcePath += "linux/";
-        }
-        resourcePath += arch + "/" + libName;
+        String resourcePath = NativeLibraryLocator.resourcePath(
+            System.getProperty("os.name"), System.getProperty("os.arch"), libName);
 
         try (InputStream in = NativeEngine.class.getResourceAsStream(resourcePath)) {
             if (in == null) {

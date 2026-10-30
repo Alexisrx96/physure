@@ -62,5 +62,4 @@ These change behaviour for callers whose code relied on the old answers, which w
 - **`evaluate` costs about 0.4 ms per call** in Java; it is the interpreter, not the binding.
 - **Unit text is not idempotent in its spacing**: a unit the core builds reads `m * s^-1`, the same unit typed reads `m*s^-1`. Cosmetic; both are the same unit.
 - **A conf with text before its first section is accepted** (`this is not a conf [[[` is ignored), as are blank and comment lines; an unreadable line inside a section is an error.
-- **Java is tested on Linux x64 in CI and on Windows here**; the natives for macOS and aarch64 that the jar ships are not loaded by any test.
 - **CI has not run**: `bindings.yml` with the new tests, and the Maven build on a runner.

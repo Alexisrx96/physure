@@ -138,8 +138,9 @@ produces — but the release workflows themselves accept more than that:
 3. Watch it tag `java-vX.Y.Z` and push; its last step starts
    `java-release.yml` (see "How a release really runs").
 4. Watch the release run: jobs `check-version` → `native-libs` (5-platform
-   matrix) + `bindings-tests` (the golden-file tests of the Java and WASM
-   bindings, `bindings.yml`) → `publish` (Maven Central via Sonatype Central
+   matrix) + `bindings-tests` (the strict tests of the Java and WASM
+   bindings, on every LTS Java and on every platform the jar ships a library
+   for, `bindings.yml`) → `publish` (Maven Central via Sonatype Central
    Portal, GPG-signed; `-DskipTests`, the tests ran in `bindings-tests`).
 5. **A green `publish` job is a public release.** `physure-java/pom.xml` sets
    `autoPublish` to `true` (decided 2026-10-30), so the deployment is released

@@ -72,7 +72,7 @@ Measured on this machine (Windows x64, Maven 3.9.16, `wasm-pack`, Node):
 - Python is not in this file. It is checked against the core by its own suites, which read `unit_semantics.json` (dimension by physical symbol, kind, linearity, alias, simplified form) and compare the whole catalog; the bindings return base-unit exponents (`kg`, `m`, `s`), a different shape, so the draft's "one golden file for all four" was not possible and was not forced.
 - It checks unit expressions, not quantities, PHS evaluation or the calculus calls.
 - Java 25 already calls `-source 8 -target 8` obsolete ("will be removed in a future release"). The day a JDK drops 8 the newest entry of the matrix fails to compile the jar; the choice then is to raise `maven.compiler.target` (ending Java 8 support, a breaking change) or to stop testing that JDK. The matrix is what will show it.
-- Java is tested on Linux x64 in CI. The jar also ships natives for macOS, Windows and aarch64 Linux, which no test loads.
+- Java was tested on Linux x64 in CI only, while the jar also ships natives for macOS, Windows and aarch64 Linux that no test loaded. `bindings.yml` now has a leg for each (see `2026-10-30-binding-strictness-design.md`); none has run on GitHub yet.
 - Do not write "bit for bit across Python, Rust, the JVM and WebAssembly" in documentation: what is measured is the scale and the exponents of 44 expressions in three of the four.
 
 ## Open for review

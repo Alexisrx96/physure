@@ -1,5 +1,6 @@
 # The Java and WASM bindings are held to what the core says about a unit
-# (tests/golden/unit_dimension_scale.tsv, the same file physure-core's own test reads).
+# (tests/golden/unit_dimension_scale.tsv, the same file physure-core's own test reads),
+# and the Java binding is tested on every LTS Java and on every platform its jar ships a library for.
 #
 # Runs when something a binding is built from changes, and as the first step of
 # java-release.yml and wasm-release.yml (`uses:`), so a release cannot start
@@ -41,45 +42,94 @@ permissions:
   contents: read
 
 jobs:
-  # The native library does not depend on the JDK that loads it (the JNI interface is stable), so it
-  # is built once and every Java version in the matrix tests the same file.
+  # The native library does not depend on the JDK that loads it (the JNI interface is stable), so it is
+  # built once for each platform the jar ships a library for, and every Java version tested on that platform
+  # loads the same file.
   native:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        continue-on-error: true
-      - name: Build the native library
-        run: cargo build -p physure-java
-      - uses: actions/upload-artifact@v4
-        with:
-          name: physure-java-native
-          path: target/debug/libphysure_java.so
-          retention-days: 1
-
-  # Every LTS release of Java, from the 8 the jar targets (maven.compiler.target) to the newest.
-  java:
-    needs: native
     strategy:
       fail-fast: false
       matrix:
-        java: ["8", "11", "17", "21", "25"]
-    runs-on: ubuntu-latest
+        include:
+          - { id: linux-x64,   runner: ubuntu-latest,    lib: libphysure_java.so }
+          - { id: linux-arm64, runner: ubuntu-24.04-arm, lib: libphysure_java.so }
+          - { id: macos-arm64, runner: macos-latest,     lib: libphysure_java.dylib }
+          # built for Intel on the Apple Silicon runner and loaded by an x64 JDK, which runs under Rosetta
+          - { id: macos-x64,   runner: macos-latest,     lib: libphysure_java.dylib, target: x86_64-apple-darwin }
+          - { id: windows-x64, runner: windows-latest,   lib: physure_java.dll }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
+        with:
+          key: ${{ matrix.id }}
+      - name: Build the native library
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.target }}" ]; then
+            cargo build -p physure-java --target "${{ matrix.target }}"
+            built="target/${{ matrix.target }}/debug"
+          else
+            cargo build -p physure-java
+            built="target/debug"
+          fi
+          mkdir -p native-out
+          cp "$built/${{ matrix.lib }}" native-out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: physure-java-native-${{ matrix.id }}
+          path: native-out/${{ matrix.lib }}
+          retention-days: 1
+
+  # Every LTS release of Java, from the 8 the jar targets (maven.compiler.target) to the newest, on Linux x64;
+  # and on one JDK each, the other platforms the jar ships a library for. `stage` is where the release
+  # workflow puts that platform's library inside the jar (java-release.yml, native-libs).
+  java:
+    needs: native
+    name: java ${{ matrix.java }} on ${{ matrix.native }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { native: linux-x64,   runner: ubuntu-latest,    arch: x64,     stage: linux/amd64,     java: "8" }
+          - { native: linux-x64,   runner: ubuntu-latest,    arch: x64,     stage: linux/amd64,     java: "11" }
+          - { native: linux-x64,   runner: ubuntu-latest,    arch: x64,     stage: linux/amd64,     java: "17" }
+          - { native: linux-x64,   runner: ubuntu-latest,    arch: x64,     stage: linux/amd64,     java: "21" }
+          - { native: linux-x64,   runner: ubuntu-latest,    arch: x64,     stage: linux/amd64,     java: "25" }
+          - { native: linux-arm64, runner: ubuntu-24.04-arm, arch: aarch64, stage: linux/aarch64,   java: "21" }
+          - { native: macos-arm64, runner: macos-latest,     arch: aarch64, stage: macos/aarch64,   java: "21" }
+          - { native: macos-x64,   runner: macos-latest,     arch: x64,     stage: macos/amd64,     java: "21" }
+          - { native: windows-x64, runner: windows-latest,   arch: x64,     stage: windows/amd64,   java: "21" }
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
+          architecture: ${{ matrix.arch }}
       # The tests load the real native library from target/debug.
       - uses: actions/download-artifact@v4
         with:
-          name: physure-java-native
+          name: physure-java-native-${{ matrix.native }}
           path: target/debug
       - name: Run the Java tests on Java ${{ matrix.java }}
         working-directory: physure-java
         run: mvn -B test
+      # A user of the jar has no library path: the jar carries its library and the loader finds it by the
+      # name the JVM reports for the platform. Package the jar the way java-release.yml does and run it.
+      - name: The packaged jar loads its own library
+        if: matrix.java != '8'
+        shell: bash
+        run: |
+          mkdir -p "physure-java/src/main/resources/natives/${{ matrix.stage }}"
+          cp target/debug/* "physure-java/src/main/resources/natives/${{ matrix.stage }}/"
+          mvn -B -f physure-java/pom.xml -DskipTests -Dmaven.javadoc.skip=true package
+          jar="$(ls physure-java/target/physure-*[0-9].jar)"
+          java -Djava.library.path= -cp "$jar" physure-java/src/smoke/PackagedJarSmoke.java
 
   wasm:
     runs-on: ubuntu-latest
