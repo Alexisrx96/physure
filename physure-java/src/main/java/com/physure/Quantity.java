@@ -179,6 +179,11 @@ public class Quantity {
         return this.value < converted.getValue();
     }
 
+    /**
+     * True when the two values differ by less than 1e-6 in this quantity's unit. The tolerance is absolute, so
+     * it is blind to quantities of a very small magnitude (1e-9 m and 5e-9 m are "equal") and strict for a
+     * very large one; {@link #physAssert(Quantity)} is the core's comparison.
+     */
     public boolean approxEquals(Quantity other) {
         Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
         return Math.abs(this.value - converted.getValue()) < 1e-6;

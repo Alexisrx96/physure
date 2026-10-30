@@ -70,6 +70,18 @@ class LinearAlgebraStrictTest {
     }
 
     @Test
+    void aNormAndASelfDotProductKeepTheUncertaintyOfTheirComponents() {
+        QuantityVector measured = v(new Quantity(3, 0.1, "m"), new Quantity(4, 0.1, "m"));
+        // first order: sqrt((3*0.1)^2 + (4*0.1)^2) / 5 = 0.1, and 2 * sqrt((3*0.1)^2 + (4*0.1)^2) = 1.0 for the square.
+        // Two independent factors would give 0.0707 and 0.707: x * x is x^2, not a product of two measurements.
+        assertEquals(0.1, measured.norm().getUncertainty(), 1e-9);
+        assertEquals(1.0, measured.dot(measured).getUncertainty(), 1e-9);
+        // a different vector with the same numbers is a different measurement
+        QuantityVector other = v(new Quantity(3, 0.1, "m"), new Quantity(4, 0.1, "m"));
+        assertEquals(Math.sqrt(0.5), measured.dot(other).getUncertainty(), 1e-9);
+    }
+
+    @Test
     void aUnitVectorIsDimensionlessAndTheZeroVectorHasNone() {
         QuantityVector unit = v(q(3, "m"), q(4, "m")).unitVector();
         near(0.6, unit.get(0));

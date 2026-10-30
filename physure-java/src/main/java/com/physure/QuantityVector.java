@@ -36,15 +36,25 @@ public class QuantityVector {
         return components;
     }
 
+    /**
+     * The dot product. The components of two different vectors are independent measurements, so their
+     * uncertainties combine as such; a vector dotted with itself is not: {@code x * x} is {@code x^2}, whose
+     * uncertainty is {@code 2 x u} and not the {@code sqrt(2) x u} of two independent factors.
+     */
     public Quantity dot(QuantityVector other) {
         if (size() != other.size()) {
             throw new IllegalArgumentException("Vector dimension mismatch in dot product");
         }
-        Quantity sum = components.get(0).mul(other.get(0));
+        Quantity sum = product(components.get(0), other.get(0));
         for (int i = 1; i < size(); i++) {
-            sum = sum.add(components.get(i).mul(other.get(i)));
+            sum = sum.add(product(components.get(i), other.get(i)));
         }
         return sum;
+    }
+
+    /** One component times another: a quantity times itself is its square, fully correlated with itself. */
+    private static Quantity product(Quantity a, Quantity b) {
+        return a == b ? a.pow(2) : a.mul(b);
     }
 
     public QuantityVector cross(QuantityVector other) {
@@ -61,9 +71,9 @@ public class QuantityVector {
         return QuantityVector.of(c1, c2, c3);
     }
 
+    /** The length: {@code sqrt(x1^2 + x2^2 + ...)}, each square taken as a square of one measurement. */
     public Quantity norm() {
-        Quantity dotVal = dot(this);
-        return dotVal.pow(0.5);
+        return dot(this).pow(0.5);
     }
 
     public QuantityVector unitVector() {
