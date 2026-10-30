@@ -34,7 +34,7 @@ def test_temperature_difference():
     t1 = Quantity(100, unit=celsius, system=system)
     t2 = Quantity(90, unit=celsius, system=system)
     diff = t1 - t2
-    # Con el Fast Path:
+    # With the fast path:
     # diff.magnitude = 100 - 90 = 10
     # diff.unit = Kelvin (Delta)
     assert diff.magnitude == 10
