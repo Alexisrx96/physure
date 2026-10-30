@@ -16,6 +16,7 @@ pub mod builtins;
 pub mod check;
 pub mod limits;
 pub mod plugin;
+pub mod report;
 
 pub use codegen::{transpile, Target};
 pub use ast::{Expr, Program, Statement};
