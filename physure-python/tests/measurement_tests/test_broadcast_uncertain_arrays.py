@@ -11,9 +11,9 @@ import pytest
 
 from physure import Q_
 
-torch = pytest.importorskip("torch")
+from ._array_backends import AVAILABLE, wrapper
 
-BACKENDS = ["numpy", "torch"]
+BACKENDS = AVAILABLE
 # (shape of a, shape of b): the result has the shape numpy broadcasts them to
 PAIRS = [
     ((4, 5), (5,)),
@@ -31,7 +31,7 @@ def operands(shape_a, shape_b, lib):
     rng = np.random.default_rng(7)
     a, b = rng.random(shape_a) + 1.0, rng.random(shape_b) + 1.0
     ua, ub = 0.05 * a, 0.03 * b
-    wrap = torch.as_tensor if lib == "torch" else (lambda x: x)
+    wrap = wrapper(lib)
 
     def quantity(value, uncertainty, unit):
         # a 0-d value is a Python float on both backends: that is how a scalar quantity is written
@@ -69,7 +69,7 @@ EXPECTED = {
 @pytest.mark.parametrize("lib", BACKENDS)
 @pytest.mark.parametrize("shapes", PAIRS, ids=str)
 @pytest.mark.parametrize("op", list(EXPECTED))
-def test_broadcast_standard_uncertainty_follows_the_gum(op, shapes, lib):
+def test_broadcast_standard_uncertainty_follows_the_gum(op, shapes, lib, x64):
     (a, b, ua, ub), (qa, qb_same_unit, qb_other_unit) = operands(*shapes, lib)
     right = qb_same_unit if op in ("add", "sub") else qb_other_unit
     result = {
@@ -95,7 +95,9 @@ def test_broadcast_standard_uncertainty_follows_the_gum(op, shapes, lib):
     [((4, 5), (5,)), ((4, 1), (1, 5)), ((3,), (1,)), ((4, 5), ())],
     ids=str,
 )
-def test_a_broadcast_operand_is_one_error_shared_by_its_copies(shapes, lib):
+def test_a_broadcast_operand_is_one_error_shared_by_its_copies(
+    shapes, lib, x64
+):
     """The error of ``b`` is common to every copy of it, so dividing it out again leaves ``a`` alone."""
     (_, _, ua, _), (qa, _, qb) = operands(*shapes, lib)
     ua_full = np.broadcast_to(ua, np.broadcast_shapes(*shapes))
@@ -116,12 +118,14 @@ def test_a_broadcast_operand_is_one_error_shared_by_its_copies(shapes, lib):
 
 
 @pytest.mark.parametrize("lib", BACKENDS)
-def test_a_small_uncertain_operand_times_a_plain_array_is_scaled_by_it(lib):
+def test_a_small_uncertain_operand_times_a_plain_array_is_scaled_by_it(
+    lib, x64
+):
     """An uncertain ``b`` of shape (5,) times an array without uncertainty of shape (4, 5): ``sigma = |array| * ub``."""
     rng = np.random.default_rng(9)
     b, plain = rng.random(5) + 1.0, rng.random((4, 5)) + 1.0
     ub = 0.03 * b
-    wrap = torch.as_tensor if lib == "torch" else (lambda x: x)
+    wrap = wrapper(lib)
     qb = Q_(wrap(b), "s", wrap(ub))
     for result, expected in (
         (qb * wrap(plain), np.abs(plain) * ub),
@@ -140,3 +144,43 @@ def test_an_unsupported_combination_is_a_clean_error_not_a_rust_panic():
     b = Q_(np.ones((2, 4)), "s", np.full((2, 4), 0.1))  # not broadcastable
     with pytest.raises(ValueError, match="broadcast"):
         a * b
+
+
+@pytest.mark.usefixtures("x64")
+@pytest.mark.parametrize("lib", BACKENDS)
+@pytest.mark.parametrize("op", ["add", "sub", "mul", "div"])
+def test_a_scalar_on_the_left_gives_the_magnitude_plain_arithmetic_gives(
+    op, lib
+):
+    """`scalar / array` is computed as `array ** -1 * scalar` for its uncertainty, but its magnitude is the quotient."""
+    rng = np.random.default_rng(1)
+    values = rng.random(300) * 9 + 0.1
+    scalar = float(rng.random() * 9 + 0.1)
+    wrap = wrapper(lib)
+    unit_scalar = "m" if op in ("add", "sub") else "s"
+    qs = Q_(scalar, unit_scalar, 0.02)
+    qa = Q_(wrap(values), "m", wrap(0.01 * values))
+    result = {
+        "add": lambda: qs + qa,
+        "sub": lambda: qs - qa,
+        "mul": lambda: qs * qa,
+        "div": lambda: qs / qa,
+    }[op]()
+    expected = {
+        "add": scalar + values,
+        "sub": scalar - values,
+        "mul": scalar * values,
+        "div": scalar / values,
+    }[op]
+    np.testing.assert_array_equal(as_numpy(result.magnitude), expected)
+
+
+def test_the_scalar_left_quotient_keeps_the_gradient_of_its_magnitude():
+    torch = pytest.importorskip("torch")
+    values = (torch.rand(8, dtype=torch.float64) + 1.0).requires_grad_(True)
+    scalar = 3.0
+    quotient = Q_(scalar, "s", 0.02) / Q_(values, "m", 0.01 * values.detach())
+    quotient.magnitude.sum().backward()
+    np.testing.assert_allclose(
+        values.grad.numpy(), -scalar / values.detach().numpy() ** 2
+    )

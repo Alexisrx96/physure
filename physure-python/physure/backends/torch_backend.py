@@ -178,8 +178,9 @@ class TorchBackend(BackendOps):
     def pow(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise power."""
         if getattr(x, "is_sparse", False) and isinstance(y, (int, float)):
-            # a sparse tensor has `pow` with a scalar exponent only, not with a tensor one
-            return torch.pow(x, y)
+            # a sparse tensor has `pow` with a scalar exponent only, not with a tensor one;
+            # and only a positive exponent keeps its unstored zeros zero (0 ** 0 is 1)
+            return torch.pow(x if y > 0 else x.to_dense(), y)
         return torch.pow(self.asarray(x), self.asarray(y))
 
     @enforce_tensor_contract

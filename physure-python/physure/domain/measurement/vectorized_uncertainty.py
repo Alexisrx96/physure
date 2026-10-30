@@ -247,9 +247,13 @@ class CovarianceStore:
         if isinstance(self._core, CoreStore):
             # The Rust core holds numpy arrays. A torch Jacobian keeps its autograd
             # graph only for the Python lineage store (`python_lineage()`); the core
-            # takes its values, as `register_diagonal` does.
+            # takes its values, as `register_diagonal` does. A JAX array, or a
+            # diagonal the backend rebuilt from a numpy vector, is converted the same way.
             final_jacs = [
-                jac.detach().cpu().numpy() if hasattr(jac, "detach") else jac
+                np.asarray(
+                    jac.detach().cpu() if hasattr(jac, "detach") else jac,
+                    dtype=np.float64,
+                )
                 for jac in final_jacs
             ]
         self._core.propagate(out_id, input_ids, final_jacs)

@@ -1,20 +1,19 @@
-"""Uncertain torch arrays propagate by the law of propagation of uncertainty (JCGM 100:2008, GUM 5.1).
+"""Uncertain arrays propagate by the law of propagation of uncertainty (JCGM 100:2008, GUM 5.1).
 
 The expected values are written out from the GUM formulas for uncorrelated inputs, not taken from the code under
-test, and the numpy backend (the Rust covariance store) is checked against the same numbers: torch has to agree
-with both. A quantity combined with itself is fully correlated, which is what ``a - a == 0`` and ``a * a == a ** 2``
+test. numpy (the Rust covariance store) is the reference, and torch and JAX have to give the same numbers. A quantity combined with itself is fully correlated, which is what ``a - a == 0`` and ``a * a == a ** 2``
 say.
 """
 
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
-
 from physure import Q_
 
+from ._array_backends import AVAILABLE, wrapper
+
 SHAPES = [(4,), (2, 3)]
-BACKENDS = ["numpy", "torch"]
+BACKENDS = AVAILABLE
 
 
 def inputs(shape, lib, dtype=np.float64):
@@ -22,7 +21,7 @@ def inputs(shape, lib, dtype=np.float64):
     a, b = rng.random(shape) + 1.0, rng.random(shape) + 1.0
     ua, ub = 0.05 * a, 0.03 * b
     a, b, ua, ub = (x.astype(dtype) for x in (a, b, ua, ub))
-    wrap = torch.as_tensor if lib == "torch" else (lambda x: x)
+    wrap = wrapper(lib)
     return (a, b, ua, ub), (
         Q_(wrap(a), "m", wrap(ua)),
         Q_(wrap(b), "m", wrap(ub)),
@@ -65,6 +64,7 @@ CASES = {
 }
 
 
+@pytest.mark.usefixtures("x64")
 @pytest.mark.parametrize("lib", BACKENDS)
 @pytest.mark.parametrize("shape", SHAPES, ids=str)
 @pytest.mark.parametrize("name", list(CASES))
@@ -80,6 +80,7 @@ def test_standard_uncertainty_follows_the_gum(name, shape, lib):
 
 @pytest.mark.parametrize("name", ["a + b", "a * s", "a / s", "a * a"])
 def test_float32_torch_agrees_with_the_gum_to_single_precision(name):
+    pytest.importorskip("torch")
     operation, expected = CASES[name]
     (a, b, ua, ub), quantities = inputs((5,), "torch", dtype=np.float32)
     got = as_numpy(operation(*quantities).uncertainty)
@@ -92,6 +93,7 @@ def test_float32_torch_agrees_with_the_gum_to_single_precision(name):
 
 
 def test_the_magnitude_keeps_its_gradient_when_the_inputs_carry_an_uncertainty():
+    torch = pytest.importorskip("torch")
     a = (torch.rand(6, dtype=torch.float64) + 1.0).requires_grad_(True)
     b = (torch.rand(6, dtype=torch.float64) + 1.0).requires_grad_(True)
     product = Q_(a, "m", 0.05 * a.detach()) * Q_(b, "s", 0.03 * b.detach())

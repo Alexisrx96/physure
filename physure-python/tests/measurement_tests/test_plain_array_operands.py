@@ -8,19 +8,19 @@ if the tensor were in the quantity's unit. A bare number must not be added to a 
 import numpy as np
 import pytest
 
-torch = pytest.importorskip("torch")
-
 from physure import Q_
 from physure.domain.exceptions import IncompatibleUnitsError
 
-BACKENDS = ["numpy", "torch"]
+from ._array_backends import AVAILABLE, wrapper
+
+BACKENDS = AVAILABLE
 VALUES = np.array([1.0, 2.0, 3.0])
 UNCERTAINTIES = np.array([0.1, 0.2, 0.15])
 NUMBERS = np.array([2.0, 4.0, 5.0])
 
 
 def build(lib, uncertain):
-    wrap = torch.as_tensor if lib == "torch" else (lambda x: x)
+    wrap = wrapper(lib)
     quantity = (
         Q_(wrap(VALUES), "s", wrap(UNCERTAINTIES))
         if uncertain
@@ -47,6 +47,7 @@ def values(x):
 @pytest.mark.parametrize(
     "uncertain", [False, True], ids=["exact", "uncertain"]
 )
+@pytest.mark.usefixtures("x64")
 @pytest.mark.parametrize("lib", BACKENDS)
 class TestUnitsWithPlainArrays:
     def test_quantity_times_and_divided_by_an_array_keeps_its_unit(
@@ -90,6 +91,7 @@ class TestUnitsWithPlainArrays:
                 operation()
 
 
+@pytest.mark.usefixtures("x64")
 @pytest.mark.parametrize("lib", BACKENDS)
 def test_the_standard_uncertainty_of_a_quantity_with_a_plain_array_follows_the_gum(
     lib,
@@ -118,9 +120,10 @@ def test_the_standard_uncertainty_of_a_quantity_with_a_plain_array_follows_the_g
     )
 
 
+@pytest.mark.usefixtures("x64")
 @pytest.mark.parametrize("lib", BACKENDS)
 def test_a_dimensionless_quantity_can_be_added_to_a_plain_array(lib):
-    wrap = torch.as_tensor if lib == "torch" else (lambda x: x)
+    wrap = wrapper(lib)
     ratio = Q_(wrap(VALUES), "")
     np.testing.assert_allclose(
         values((ratio + wrap(NUMBERS)).magnitude), VALUES + NUMBERS

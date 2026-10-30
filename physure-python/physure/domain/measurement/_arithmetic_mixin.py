@@ -1048,6 +1048,7 @@ class ArithmeticMixin:
         operand: Numeric,
         result: Numeric,
         coefficient: Numeric | None,
+        sign: float = 1.0,
     ) -> Numeric:
         """The Jacobian of `result` with respect to one `operand`, `result_size x operand_size`.
 
@@ -1057,7 +1058,9 @@ class ArithmeticMixin:
         against an array) feeds every result element it was copied into, so its operator
         has one entry per result element, in the column of the element it came from:
         those copies carry one error, not independent ones, and the covariance store
-        needs the operator in the operand's own size.
+        needs the operator in the operand's own size. `sign` (`-1.0` for the right side
+        of a subtraction) is applied to the coefficients, not to the operator: a sparse
+        operator does not take every backend's `mul`.
         """
         backend = self._backend
         out_shape = tuple(backend.shape(result))
@@ -1066,10 +1069,19 @@ class ArithmeticMixin:
         )
         if operand_shape == out_shape:
             if coefficient is None:
-                return backend.identity_operator(
+                identity = backend.identity_operator(
                     backend.size(result), reference=operand
                 )
+                return identity if sign == 1.0 else backend.mul(identity, sign)
+            if sign != 1.0:
+                coefficient = backend.mul(coefficient, sign)
             return backend.diagonal_operator(coefficient)
+        if sign != 1.0:
+            if coefficient is None:
+                coefficient = backend.ones(
+                    (backend.size(result),), reference=result
+                )
+            coefficient = backend.mul(coefficient, sign)
         return backend.broadcast_operator(
             coefficient, operand_shape, out_shape, reference=result
         )
@@ -1150,10 +1162,11 @@ class ArithmeticMixin:
                 self.magnitude, new_magnitude, None
             )
             j_other = self._operand_jacobian(
-                other.magnitude, new_magnitude, None
+                other.magnitude,
+                new_magnitude,
+                None,
+                sign=1.0 if is_add else -1.0,
             )
-            if not is_add:
-                j_other = self._backend.mul(j_other, -1.0)
             return self._add_sub_array_path(
                 other, new_magnitude, j_self, j_other, op
             )
@@ -1362,8 +1375,21 @@ class ArithmeticMixin:
     ) -> Quantity:
         """Divides two quantities."""
         if self._scalar_with_array(other):
-            # s / A == A**-1 * s: the first-order propagation is the same
-            return (other**-1) * self
+            # s / A == A**-1 * s for the propagation (first order, the same
+            # Jacobians), but the magnitude is the quotient itself, not 1/a * s:
+            # the two differ in the last digit for a quarter of the elements.
+            swapped = (other**-1) * self
+            exact = other._backend.truediv(self.magnitude, other.magnitude)
+            result = type(self)._fast_new(
+                exact,
+                swapped.unit,
+                swapped.uncertainty,
+                swapped.system,
+                swapped.dimension,
+                other._backend,
+            )
+            result._uncertainty_obj = swapped._uncertainty_obj
+            return result
         rust_res = self._check_and_handle_rust_propagation(other, "truediv")
         if rust_res is not None:
             return rust_res

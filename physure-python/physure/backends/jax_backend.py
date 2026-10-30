@@ -470,8 +470,12 @@ class JaxBackend(BackendOps):
             if coefficients is None
             else jnp.reshape(coefficients, (-1,))
         )
-        return self.sparse_matrix(
-            values, (jnp.arange(out_size), columns), (out_size, size)
+        # dense, like `identity_operator` and `diagonal_operator` of this backend: a BCOO is
+        # not an `is_array` here, so the covariance code read it as a scalar
+        return (
+            jnp.zeros((out_size, size), dtype=values.dtype)
+            .at[jnp.arange(out_size), columns]
+            .set(values)
         )
 
     def _has_sparse(self) -> bool:
