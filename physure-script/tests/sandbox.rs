@@ -176,3 +176,26 @@ fn a_sandboxed_for_expression_stays_on_one_thread() {
 fn run_sandboxed_with(interp: PhsInterpreter, source: &'static str) -> Result<Vec<PhsValue>, String> {
     on_a_stack(physure_script::limits::SANDBOX_THREAD_STACK_BYTES, move || run(&interp, source))
 }
+
+/// Mean and standard deviation of `y = x * x + x` for `x = 10 +/- 1 m`, with Monte Carlo propagation selected.
+fn monte_carlo_result(seed: Option<u64>) -> (f64, f64) {
+    run_sandboxed(sandbox(), move |interp| {
+        let _mode = physure_core::uncertainty::mode::scoped(physure_core::PropagationMode::MonteCarlo);
+        let evaluate = || match run(&interp, "x = 10 +/- 1 m\ny = x * 1 + x\ny").unwrap().pop() {
+            Some(PhsValue::Quantity(q)) => (q.value.mean(), q.value.std_dev()),
+            other => panic!("expected a quantity, got {other:?}"),
+        };
+        match seed {
+            Some(seed) => physure_core::uncertainty::with_seed(seed, evaluate),
+            None => evaluate(),
+        }
+    })
+}
+
+#[test]
+fn monte_carlo_is_reproducible_under_a_seed_and_random_without_one() {
+    assert_eq!(monte_carlo_result(Some(42)), monte_carlo_result(Some(42)));
+    assert_ne!(monte_carlo_result(Some(42)), monte_carlo_result(Some(43)));
+    // the control: without a seed the draws differ, so the equality above is not an accident of the model
+    assert_ne!(monte_carlo_result(None), monte_carlo_result(None));
+}

@@ -1,7 +1,7 @@
 # A validation surface for agents and language models (N5) — design
 
 **Date:** 2026-10-30
-**Status:** approved by the maintainer ("do it", 2026-10-30) after the design below was presented in chat; N5a in progress on `feat/agent-validation-surface`, N5b and N5c not started.
+**Status:** approved by the maintainer ("do it", 2026-10-30) after the design below was presented in chat; N5a built on `feat/agent-validation-surface` (not yet merged), N5b and N5c not started.
 **Base:** local `main` @ `b3e83f4`
 **Follows:** the draft `2026-10-30-draft-llm-validation-surface.md` (next step N5 of `2026-10-30-post-a1-inventory.md`), which builds on `docs/LLM_SLM_SYNTAX_EXPOSURE_SPEC.md`.
 
@@ -26,7 +26,7 @@ Four things a PHS program can do that an outside caller must not be able to do, 
 3. **Write files.** The 3D mesh export builtin writes `std::fs::write(&filename, ...)` (`builtins/plot.rs`, the only `std::fs` write reachable from a builtin).
 4. **Kill the process.** `fn f(x) = f(x)` then `f(1)` overflows the native stack and aborts the whole process (checked with the release `phs`). Every user-function call goes through `call_function_node_at` (`interpreter/expressions.rs`) and nothing bounds the depth. The only loop bounds that exist are `max_loop_iterations` (ranges, `linspace`, `parallel_map`), `max_pipeline_steps`, a `while` cap of 10,000 iterations, and the parser's `MAX_NESTING_DEPTH` of 64.
 
-Also relevant: Monte Carlo draws from `rand::thread_rng()` in two places (`physure-core/src/uncertainty/monte_carlo.rs`), so it is the only source of non-determinism; the default propagation mode is Gaussian. A `for` expression over `parallel_threshold` elements and `parallel_map` run on rayon, which would reorder draws.
+Also relevant: Monte Carlo draws from `rand::thread_rng()` in two places (`physure-core/src/uncertainty/monte_carlo.rs`), so it is the only source of non-determinism. PHS text cannot select it (no script or test mentions it); the host's `physure.conf` or `set_propagation_mode` does, and the conf is read from the working directory, so an agent evaluation on a machine configured for Monte Carlo would not repeat. A `for` expression over `parallel_threshold` (10,000) elements and `parallel_map` run on rayon, which would reorder draws.
 
 ## The pieces
 
@@ -44,19 +44,21 @@ Each stage gets its own plan (`docs/superpowers/plans/`) when it starts, and is 
 
 | Field | Default (unrestricted) | Sandboxed |
 |---|---|---|
-| `max_call_depth: usize` | a generous constant, **applies to every interpreter** | a smaller value calibrated to the sandbox thread |
+| `max_call_depth: usize` | 1,000, **applies to every interpreter** | 200 |
 | `deadline: Option<Instant>` | `None` | `Some(start + timeout)` |
 | `max_output_bytes: Option<usize>` | `None` | `Some(1 MiB)` |
+| `max_stack_bytes: Option<usize>` | `None` | `Some(48 MiB)` |
 | `allow_files: bool` | `true` | `false` |
 | `sequential: bool` | `false` | `true` |
 
 - `PhsInterpreter` gets a `limits: Limits` field (default as above) and `PhsInterpreter::sandboxed(Limits)`: an in-memory resolver with no modules (an `import` of anything but a builtin domain fails like an unknown module), no base dir (no plugin ever loads), `allow_files = false`, `sequential = true`.
-- **Call depth.** `call_function_node_at` counts depth in a thread-local with a guard that decrements on every exit path. Past `max_call_depth` it returns an error with a stable prefix (`call depth limit`), never a native overflow. The unrestricted default is high enough for real recursion but below what the smallest stack we run on survives, calibrated by a test that runs the limit in a debug build (the largest frames).
-- **Deadline.** `check_budget()` is called at each statement, each user-function call, each `while` iteration and each `for`-expression item; it compares `Instant::now()` against the deadline only when one is set. Past it: an error with the prefix `time limit`. It is cooperative: a single native operation that never returns to the interpreter is not interrupted; the one-process-per-call design of N5b/N5c is what bounds that (below).
+- **Call depth.** `call_function_node_at` counts depth in a thread-local with a guard that decrements on every exit path. Past `max_call_depth` it returns an error with a stable prefix (`call depth limit`).
+- **Stack budget.** Depth alone does not bound the stack: measured with a probe, a PHS call costs **15 to 20 KB in release and about 100 KB in debug**, and a function body with 40 nested parentheses multiplies that. So `check_budget()` (run at each `eval_expr`) also compares the address of a local with a floor set when the statement started (`StackScope`, in `eval_statement_with_env`); past `max_stack_bytes` it errors with the prefix `stack limit`. `run_sandboxed(limits, f)` runs `f` on a 64 MiB thread so the 48 MiB budget has headroom for the native frames between two checks. The unrestricted default (1,000 deep, no budget) is a net for hosts with a big stack only: a 1 MiB main thread (Windows) overflows near 60 levels and 8 MiB near 400, as before. Running the CLI's scripts on a big-stack thread would close that and is not part of N5.
+- **Deadline.** `check_budget()` is called at each statement, each user-function call, each `while` iteration and each expression; it compares `Instant::now()` against the deadline only when one is set. Past it: an error with the prefix `time limit`. It is cooperative: a single native operation that never returns to the interpreter is not interrupted; the one-process-per-call design of N5b/N5c is what bounds that (below).
 - **Files.** The mesh-export builtin returns an error with the prefix `forbidden:` when `allow_files` is false. No other builtin touches the filesystem.
 - **Sequential.** `sequential` makes the `for`-expression and `parallel_map` take their existing single-thread branch, the one a debug session already uses.
 - **Output cap.** Applied where results are rendered into a report (N5b); `Limits` carries the number.
-- **`physure-core`.** `physure_core::uncertainty::with_seed(seed, f)`: while `f` runs on this thread, the two `thread_rng()` sites draw from `StdRng::seed_from_u64(seed)` advanced by a per-scope counter instead, so a sequential evaluation is reproducible. Outside a scope nothing changes.
+- **`physure-core`.** `physure_core::uncertainty::with_seed(seed, f)`: while `f` runs on this thread, the two `thread_rng()` sites draw from `StdRng::seed_from_u64(seed ^ counter * golden)` with a per-scope counter instead, so a sequential evaluation is reproducible. Outside a scope nothing changes.
 - **Not a promise of the sandbox:** memory exhaustion by a single native allocation, and CPU spent inside one native call. N5b/N5c bound those by running each evaluation in a child process killed after a hard timeout.
 
 ## N5b — the JSON
