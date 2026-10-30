@@ -181,6 +181,20 @@ that turns the sandbox off; `phs <script.phs>` is the unrestricted way to run a 
 - `phs unit <symbol>` prints `{unit, dimension, kind, linear, alias, simplified}`, or `{"error": ...}` and exit 1.
 - `phs check -` reads the program from stdin, like `phs eval -`.
 
+### As an MCP server
+
+```json
+{ "mcpServers": { "physure": { "command": "phs", "args": ["mcp"] } } }
+```
+
+`phs mcp` speaks the Model Context Protocol over stdio (protocol versions 2024-11-05, 2025-03-26 and 2025-06-18) and
+offers four read-only tools: `evaluate` (the report above, with `source`, optional `seed` and `timeout_ms`), `check`
+(dimension findings without running), `convert` (`value`, `from`, `to`; absolute temperatures included) and
+`describe_unit` (`symbol`), plus the resource `phs://language`, the language reference that `phs doc` writes.
+`evaluate` and `check` run the program in a child `phs` process that is killed if it does not finish, so a crash or a
+hang cannot take the server down; a wrong program is a normal answer (`ok: false`), and `isError` is reserved for the
+tool failing to run.
+
 ## Transpile: verified physics, real starting code
 
 Once a `.phs` script is validated, hand the dev team something they can build on instead of a

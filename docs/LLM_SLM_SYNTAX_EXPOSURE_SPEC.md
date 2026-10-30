@@ -1,6 +1,7 @@
 # 🤖 Exposing PHS Syntax to LLMs and SLMs — Architecture & Roadmap Specification
 
 **Status**: Architecture Proposal / Next Steps  
+**Update (2026-10-30)**: part of this is built under other names: `phs eval` (sandboxed run with structured JSON), `phs check`, `phs unit` and `phs mcp` (tools `evaluate`, `check`, `convert`, `describe_unit`, resource `phs://language`). `phs spec --prompt`, `phs spec --json` and the CI sync of section 3 are not built. See `physure-cli/README.md` ("Agents").  
 **Author**: Alexisrx96 / Irvin Torres & Antigravity AI  
 **Date**: August 2026  
 **Project**: Physure Meta-Lang (PHS)
