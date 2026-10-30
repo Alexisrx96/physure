@@ -233,6 +233,21 @@ class SparseLinAlgOps(Protocol):
         """Returns a diagonal operator from the given values."""
         ...
 
+    def broadcast_operator(
+        self,
+        coefficients: Any,
+        shape: tuple[int, ...],
+        out_shape: tuple[int, ...],
+        reference: Any = None,
+    ) -> Any:
+        """Returns the Jacobian of a result with respect to an operand that was broadcast.
+
+        The operator is ``out_size x operand_size``: row ``i`` has one entry, the
+        coefficient at result element ``i``, in the column of the operand element that
+        result element was copied from. ``coefficients=None`` means 1.
+        """
+        ...
+
     def sparse_matrix(
         self,
         data: Any,

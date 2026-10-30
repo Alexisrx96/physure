@@ -932,7 +932,8 @@ class CovarianceModel(Uncertainty[UncType]):
             in_slices.append(other.ensure_vector_slice(backend))
         else:
             std = getattr(other, "std_dev", other)
-            in_slices.append(store.register_independent_array(std))
+            # the same model is the same variable, however many operations it takes part in
+            in_slices.append(store.register_independent_model(other, std))
         jacobians.append(jac_other)
 
     def _add_vector_path(

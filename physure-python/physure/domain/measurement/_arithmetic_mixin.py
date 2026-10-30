@@ -1023,6 +1023,57 @@ class ArithmeticMixin:
             return other.to(self.unit).magnitude
         return other.magnitude
 
+    def _scalar_with_array(self, other: object) -> bool:
+        """True for a scalar quantity meeting an array quantity (`scalar op array`).
+
+        The scalar's own backend is the scalar one, which reads an array result as a
+        scalar and either drops the array's uncertainty (`scalar + array` answered with
+        the scalar's alone) or fails. The array operand has the machinery for the
+        result, so it drives the operation.
+        """
+        if not isinstance(other, _q()):
+            return False
+        is_scalar = (
+            not self._backend.is_array(self.magnitude)
+            or len(self._backend.shape(self.magnitude)) == 0
+        )
+        return (
+            is_scalar
+            and other._backend.is_array(other.magnitude)
+            and len(other._backend.shape(other.magnitude)) > 0
+        )
+
+    def _operand_jacobian(
+        self,
+        operand: Numeric,
+        result: Numeric,
+        coefficient: Numeric | None,
+    ) -> Numeric:
+        """The Jacobian of `result` with respect to one `operand`, `result_size x operand_size`.
+
+        `coefficient` is the partial derivative at each element of the (flattened)
+        result; `None` is 1. An operand of the result's shape gets the diagonal
+        operator. An operand that was broadcast (a row against a matrix, a scalar
+        against an array) feeds every result element it was copied into, so its operator
+        has one entry per result element, in the column of the element it came from:
+        those copies carry one error, not independent ones, and the covariance store
+        needs the operator in the operand's own size.
+        """
+        backend = self._backend
+        out_shape = tuple(backend.shape(result))
+        operand_shape = (
+            tuple(backend.shape(operand)) if backend.is_array(operand) else ()
+        )
+        if operand_shape == out_shape:
+            if coefficient is None:
+                return backend.identity_operator(
+                    backend.size(result), reference=operand
+                )
+            return backend.diagonal_operator(coefficient)
+        return backend.broadcast_operator(
+            coefficient, operand_shape, out_shape, reference=result
+        )
+
     def _mul_numeric_internal(
         self, other: Numeric, new_magnitude: Numeric, new_unit: CompoundUnit
     ) -> Quantity:
@@ -1033,7 +1084,9 @@ class ArithmeticMixin:
                 _, other_flat = self._backend.broadcast_and_flatten(
                     [self.magnitude, other]
                 )
-                j_self = self._backend.diagonal_operator(other_flat)
+                j_self = self._operand_jacobian(
+                    self.magnitude, new_magnitude, other_flat
+                )
             else:
                 j_self = self._backend.mul(
                     self._backend.identity_operator(
@@ -1058,7 +1111,9 @@ class ArithmeticMixin:
                     [self.magnitude, other]
                 )
                 recip_flat = self._backend.truediv(1.0, other_flat)
-                j_self = self._backend.diagonal_operator(recip_flat)
+                j_self = self._operand_jacobian(
+                    self.magnitude, new_magnitude, recip_flat
+                )
             else:
                 j_self = self._backend.mul(
                     self._backend.identity_operator(
@@ -1089,13 +1144,13 @@ class ArithmeticMixin:
         new_magnitude = backend_op(self.magnitude, other.magnitude)
 
         if self._backend.is_array(new_magnitude):
-            size = self._backend.size(new_magnitude)
-            # Jacobians are (signed) identity matrices for addition
-            j_self = self._backend.identity_operator(
-                size, reference=self.magnitude
+            # Jacobians are (signed) identity matrices for addition, or the
+            # broadcast operator of an operand that was copied into the result
+            j_self = self._operand_jacobian(
+                self.magnitude, new_magnitude, None
             )
-            j_other = self._backend.identity_operator(
-                size, reference=other.magnitude
+            j_other = self._operand_jacobian(
+                other.magnitude, new_magnitude, None
             )
             if not is_add:
                 j_other = self._backend.mul(j_other, -1.0)
@@ -1146,6 +1201,10 @@ class ArithmeticMixin:
     ) -> Quantity:
         op = "add" if is_add else "sub"
         self._reject_bare_number_add_sub(other)
+        if self._scalar_with_array(other):
+            # s + A == A + s;  s - A == -(A - s)
+            swapped = other._add_sub_impl(self, is_add)
+            return swapped if is_add else -swapped
         rust_res = self._check_and_handle_rust_propagation(other, op)
         if rust_res is not None:
             return rust_res
@@ -1174,6 +1233,15 @@ class ArithmeticMixin:
 
         # 5. Generic Path (Unit Conversion Required)
         if not is_other_q:
+            if isinstance(
+                other, (int, float, complex)
+            ) or self._backend.is_array(other):
+                # a bare number gets here only for a dimensionless quantity
+                # (`_reject_bare_number_add_sub`): it is an exact dimensionless quantity
+                exact = type(self).from_input(
+                    other, CompoundUnit({}), self.system
+                )
+                return self._add_sub_impl(exact, is_add)
             return NotImplemented
 
         if self.dimension != other.dimension:
@@ -1194,6 +1262,8 @@ class ArithmeticMixin:
 
     def __mul__(self, other: Quantity | Numeric | CompoundUnit) -> Quantity:
         """Multiplies two quantities."""
+        if self._scalar_with_array(other):
+            return other.__mul__(self)
         rust_res = self._check_and_handle_rust_propagation(other, "mul")
         if rust_res is not None:
             return rust_res
@@ -1225,7 +1295,8 @@ class ArithmeticMixin:
                 self.magnitude,
                 other.magnitude if is_other_q else other,
             )
-            new_unit = self.unit * (other.unit if is_other_q else other)
+            # a plain number or array is dimensionless: it leaves the unit alone
+            new_unit = self.unit * other.unit if is_other_q else self.unit
             res = type(self).from_input(new_val, new_unit, self.system)
             self._record_op("mul", other, res)
             return res
@@ -1237,8 +1308,9 @@ class ArithmeticMixin:
         if is_numeric_other:
             other = cast("Numeric", other)
             new_magnitude = self._backend.mul(self.magnitude, other)
-            new_unit = self.unit * other
-            return self._mul_numeric_internal(other, new_magnitude, new_unit)
+            # a plain number or array is dimensionless: it leaves the unit alone
+            # (`unit * ndarray` is numpy's reflected product, an array of units)
+            return self._mul_numeric_internal(other, new_magnitude, self.unit)
 
         # 3. Quantity * Quantity multiplication
         if is_other_q:
@@ -1257,8 +1329,12 @@ class ArithmeticMixin:
                 [self.magnitude, other.magnitude]
             )
             # Jacobians: dz/dx = y, dz/dy = x
-            j_self = self._backend.diagonal_operator(other_flat)
-            j_other = self._backend.diagonal_operator(self_flat)
+            j_self = self._operand_jacobian(
+                self.magnitude, new_magnitude, other_flat
+            )
+            j_other = self._operand_jacobian(
+                other.magnitude, new_magnitude, self_flat
+            )
         else:
             j_self = other.magnitude
             j_other = self.magnitude
@@ -1285,6 +1361,9 @@ class ArithmeticMixin:
         self, other: Quantity | Numeric | CompoundUnit
     ) -> Quantity:
         """Divides two quantities."""
+        if self._scalar_with_array(other):
+            # s / A == A**-1 * s: the first-order propagation is the same
+            return (other**-1) * self
         rust_res = self._check_and_handle_rust_propagation(other, "truediv")
         if rust_res is not None:
             return rust_res
@@ -1316,7 +1395,8 @@ class ArithmeticMixin:
                 self.magnitude,
                 other.magnitude if is_other_q else other,
             )
-            new_unit = self.unit / (other.unit if is_other_q else other)
+            # a plain number or array is dimensionless: it leaves the unit alone
+            new_unit = self.unit / other.unit if is_other_q else self.unit
             res = type(self).from_input(new_val, new_unit, self.system)
             self._record_op("truediv", other, res)
             return res
@@ -1328,8 +1408,7 @@ class ArithmeticMixin:
         if is_numeric_other:
             other = cast("Numeric", other)
             new_magnitude = self._backend.truediv(self.magnitude, other)
-            new_unit = self.unit / other
-            return self._div_numeric_internal(other, new_magnitude, new_unit)
+            return self._div_numeric_internal(other, new_magnitude, self.unit)
 
         # 4. Quantity / Quantity Path
         if is_other_q:
@@ -1348,12 +1427,16 @@ class ArithmeticMixin:
                 [self.magnitude, other.magnitude]
             )
             recip_flat = self._backend.truediv(1.0, other_flat)
-            j_self = self._backend.diagonal_operator(recip_flat)
+            j_self = self._operand_jacobian(
+                self.magnitude, new_magnitude, recip_flat
+            )
             neg_z_over_y = self._backend.mul(
                 self._backend.truediv(new_magnitude.ravel(), other_flat),
                 -1.0,
             )
-            j_other = self._backend.diagonal_operator(neg_z_over_y)
+            j_other = self._operand_jacobian(
+                other.magnitude, new_magnitude, neg_z_over_y
+            )
         else:
             j_self = 1.0 / other.magnitude
             j_other = -self.magnitude / (other.magnitude**2)

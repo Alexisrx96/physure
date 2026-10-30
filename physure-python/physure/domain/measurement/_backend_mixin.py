@@ -245,19 +245,47 @@ class BackendMixin:
 
     @classmethod
     def _torch_arithmetic(cls, func: Any, args: tuple[Any, ...]) -> Any:
-        """Delegate torch arithmetic to Python operators."""
+        """Delegate torch arithmetic to the Quantity operators.
+
+        `tensor + quantity` reaches here as `Tensor.add` (the method, not `torch.add`),
+        with the tensor first. The operator has to be the quantity's reflected one:
+        calling `operator.add(tensor, quantity)` would come straight back into this
+        hook, and falling through to `_torch_fallback` would stamp the quantity's unit
+        on the tensor (a bare tensor added to seconds is seconds, and `tensor / seconds`
+        is seconds).
+        """
         import torch
 
-        if func == torch.add:
-            return operator.add(args[0], args[1])
-        if func == torch.sub:
-            return operator.sub(args[0], args[1])
-        if func == torch.mul:
-            return operator.mul(args[0], args[1])
-        if func in (torch.div, torch.true_divide):
-            return operator.truediv(args[0], args[1])
-        if func == torch.pow:
-            return operator.pow(args[0], args[1])
+        forward = {
+            "add": operator.add,
+            "sub": operator.sub,
+            "mul": operator.mul,
+            "div": operator.truediv,
+            "true_divide": operator.truediv,
+            "pow": operator.pow,
+        }
+        reflected = {
+            "add": "__radd__",
+            "sub": "__rsub__",
+            "mul": "__rmul__",
+            "div": "__rtruediv__",
+            "true_divide": "__rtruediv__",
+        }
+        name = next(
+            (
+                n
+                for n in forward
+                if func in (getattr(torch, n), getattr(torch.Tensor, n))
+            ),
+            None,
+        )
+        if name is None or len(args) < 2:
+            return NotImplemented
+        left, right = args[0], args[1]
+        if isinstance(left, _q()):
+            return forward[name](left, right)
+        if isinstance(right, _q()) and name in reflected:
+            return getattr(right, reflected[name])(left)
         return NotImplemented
 
     @classmethod

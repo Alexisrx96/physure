@@ -448,6 +448,32 @@ class JaxBackend(BackendOps):
         """Returns a diagonal operator from the given values."""
         return jnp.diag(diagonal)
 
+    def broadcast_operator(
+        self,
+        coefficients: Any,
+        shape: tuple[int, ...],
+        out_shape: tuple[int, ...],
+        reference: Any = None,
+    ) -> Any:
+        """Returns the Jacobian of a result with respect to an operand that was broadcast."""
+        out_size = 1
+        for extent in out_shape:
+            out_size *= extent
+        size = 1
+        for extent in shape:
+            size *= extent
+        columns = jnp.broadcast_to(
+            jnp.arange(size).reshape(shape), out_shape
+        ).reshape(-1)
+        values = (
+            jnp.ones(out_size)
+            if coefficients is None
+            else jnp.reshape(coefficients, (-1,))
+        )
+        return self.sparse_matrix(
+            values, (jnp.arange(out_size), columns), (out_size, size)
+        )
+
     def _has_sparse(self) -> bool:
         try:
             from jax.experimental import sparse

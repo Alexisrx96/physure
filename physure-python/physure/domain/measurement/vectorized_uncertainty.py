@@ -57,6 +57,11 @@ class CovarianceStore:
     _core: CoreStore = field(init=False)
     _next_idx: int = 0
     _initialized: bool = False
+    # model -> its slot: a scalar (or size-1) uncertainty used in several array
+    # operations is one variable
+    _model_slots: dict[int, tuple[Any, slice]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         """Initializes the core Rust store."""
@@ -240,8 +245,9 @@ class CovarianceStore:
         ]
 
         if isinstance(self._core, CoreStore):
-            # The Rust core holds numpy arrays. A torch Jacobian keeps its autograd graph only for the Python
-            # lineage store (`python_lineage()`); the core takes its values, as `register_diagonal` does.
+            # The Rust core holds numpy arrays. A torch Jacobian keeps its autograd
+            # graph only for the Python lineage store (`python_lineage()`); the core
+            # takes its values, as `register_diagonal` does.
             final_jacs = [
                 jac.detach().cpu().numpy() if hasattr(jac, "detach") else jac
                 for jac in final_jacs
@@ -295,6 +301,23 @@ class CovarianceStore:
                 raise RuntimeError(
                     "Rust CoreStore.register_diagonal missing."
                 ) from err
+
+    def register_independent_model(
+        self, model: Any, std_dev: Numeric
+    ) -> slice:
+        """Registers `model`'s standard deviation once and returns the same slot on every later use.
+
+        An uncertainty that is not a vector model (a scalar's, say) has no slot of its
+        own. Registering it afresh at each use made `(a * s) / s` treat the two `s` as
+        independent errors instead of one, and the result carried an uncertainty that
+        the shared factor should have cancelled.
+        """
+        known = self._model_slots.get(id(model))
+        if known is not None and known[0] is model:
+            return known[1]
+        slc = self.register_independent_array(std_dev)
+        self._model_slots[id(model)] = (model, slc)
+        return slc
 
     def register_independent_array(self, std_dev: Numeric) -> slice:
         """Registers a new independent array and returns its slice."""

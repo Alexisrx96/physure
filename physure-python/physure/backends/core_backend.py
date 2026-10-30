@@ -181,6 +181,16 @@ class CoreBackend(BackendOps):
         """Diagonal operators are not supported for scalar core quantities."""
         raise NotImplementedError(self.CORE_NOT_SUPPORTED)
 
+    def broadcast_operator(
+        self,
+        coefficients: Any,
+        shape: tuple[int, ...],
+        out_shape: tuple[int, ...],
+        reference: Any = None,
+    ) -> Any:
+        """Broadcast operators are not supported for scalar core quantities."""
+        raise NotImplementedError(self.CORE_NOT_SUPPORTED)
+
     def sparse_matrix(
         self,
         data: Any,
