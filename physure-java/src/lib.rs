@@ -3,26 +3,58 @@ use jni::objects::{JClass, JString, JObject, JValue};
 use jni::sys::{jdouble, jlong, jobject, jstring};
 use physure_core::{UnitRegistry, Quantity};
 use physure_script::PhsInterpreter;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 // Helper to throw a Java PhysureException
 fn throw_physure_exception(env: &mut JNIEnv, msg: &str) {
     let _ = env.throw_new("com/physure/PhysureException", msg);
 }
 
-// Helper to convert dynamic units from interpreter
-fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
-    unsafe { &mut *(handle as *mut PhsInterpreter) }
+/// What a Java `UnitRegistry` owns, and what its `long` handle points to: the unit catalog it was built
+/// from (the embedded one, plus the custom conf it was given) and the PHS interpreter `evaluate` runs on.
+struct RegistryHandle {
+    registry: UnitRegistry,
+    interpreter: PhsInterpreter,
 }
 
-fn get_registry(_handle: jlong) -> UnitRegistry {
-    let mut reg = UnitRegistry::new();
-    let mut constants = std::collections::HashMap::new();
-    physure_core::units::conf::parse_physure_conf(
-        physure_core::units::conf::DEFAULT_PHYSURE_CONF,
-        &mut reg,
-        &mut constants,
-    );
-    reg
+/// The embedded catalog and its constants, parsed once per process: parsing it is the expensive part of
+/// a call, and a registry of its own only needs a copy.
+fn default_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
+    static DEFAULT: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
+    DEFAULT.get_or_init(|| {
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        physure_core::units::conf::parse_physure_conf(
+            physure_core::units::conf::DEFAULT_PHYSURE_CONF,
+            &mut reg,
+            &mut constants,
+        );
+        (reg, constants)
+    })
+}
+
+/// A new registry over the embedded catalog extended by `custom` conf text, as the raw handle Java keeps.
+fn new_handle(custom: Option<&str>) -> jlong {
+    let (mut registry, mut constants) = default_catalog().clone();
+    if let Some(text) = custom {
+        physure_core::units::conf::parse_physure_conf(text, &mut registry, &mut constants);
+    }
+    let handle = RegistryHandle { registry, interpreter: PhsInterpreter::default() };
+    Box::into_raw(Box::new(handle)) as jlong
+}
+
+fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
+    unsafe { &mut (*(handle as *mut RegistryHandle)).interpreter }
+}
+
+/// The registry of `handle`; 0 (the static quantity operations, which carry no registry) is the embedded catalog.
+fn get_registry(handle: jlong) -> &'static UnitRegistry {
+    if handle == 0 {
+        &default_catalog().0
+    } else {
+        unsafe { &(*(handle as *const RegistryHandle)).registry }
+    }
 }
 
 fn get_rust_quantity(
@@ -63,9 +95,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistry(
     _env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    let interpreter = PhsInterpreter::default();
-    let boxed = Box::new(interpreter);
-    Box::into_raw(boxed) as jlong
+    new_handle(None)
 }
 
 #[no_mangle]
@@ -82,30 +112,13 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistryFromPath<'local
         }
     };
 
-    let mut reg = UnitRegistry::new();
-    let mut constants = std::collections::HashMap::new();
-
-    // 1. Load embedded default master
-    physure_core::units::conf::parse_physure_conf(
-        physure_core::units::conf::DEFAULT_PHYSURE_CONF,
-        &mut reg,
-        &mut constants,
-    );
-
-    // 2. Load custom override path
     match std::fs::read_to_string(&path_str) {
-        Ok(content) => {
-            physure_core::units::conf::parse_physure_conf(&content, &mut reg, &mut constants);
-        }
+        Ok(content) => new_handle(Some(&content)),
         Err(e) => {
             throw_physure_exception(&mut env, &format!("Failed to read physure.conf at '{}': {}", path_str, e));
-            return 0;
+            0
         }
     }
-
-    let interpreter = PhsInterpreter::default();
-    let boxed = Box::new(interpreter);
-    Box::into_raw(boxed) as jlong
 }
 
 #[no_mangle]
@@ -122,22 +135,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_initRegistryFromContent<'lo
         }
     };
 
-    let mut reg = UnitRegistry::new();
-    let mut constants = std::collections::HashMap::new();
-
-    // 1. Load embedded default master
-    physure_core::units::conf::parse_physure_conf(
-        physure_core::units::conf::DEFAULT_PHYSURE_CONF,
-        &mut reg,
-        &mut constants,
-    );
-
-    // 2. Load custom override content
-    physure_core::units::conf::parse_physure_conf(&content_str, &mut reg, &mut constants);
-
-    let interpreter = PhsInterpreter::default();
-    let boxed = Box::new(interpreter);
-    Box::into_raw(boxed) as jlong
+    new_handle(Some(&content_str))
 }
 
 #[no_mangle]
@@ -148,7 +146,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_destroyRegistry(
 ) {
     if handle != 0 {
         unsafe {
-            let _ = Box::from_raw(handle as *mut PhsInterpreter);
+            let _ = Box::from_raw(handle as *mut RegistryHandle);
         }
     }
 }
