@@ -1,7 +1,7 @@
 # Units out of the way of `torch.compile` (N4) — design
 
 **Date:** 2026-10-30
-**Status:** approved by the maintainer ("Proceed", 2026-10-30) as three stages; S1 in progress on `feat/jit-trace-time-units`, S2 and S3 not started.
+**Status:** approved by the maintainer ("Proceed", 2026-10-30) as three stages. S1 was tried and **did not move the counts** (see "S1 outcome"); what is built is the measurement and the gate. S2 waits for the maintainer's decision.
 **Base:** local `main` @ `0747d64`
 **Follows:** the draft `2026-10-30-draft-jit-trace-time-units.md` (next step N4 of `2026-10-30-post-a1-inventory.md`).
 
@@ -48,6 +48,18 @@ Every break traced to its physure source line (`TORCH_LOGS=graph_breaks`):
 - **S1 — Python-only causes** (any torch version, no private API): read `get_uncertainty_model` without `ContextVar.get()` while `torch.compiler.is_compiling()`, as the tracer context already does; make the `any(mask)` check not branch on tensor data while compiling; remove avoidable Rust-object construction from `Quantity` creation where it is not needed. Each is measured on its own against the baseline.
 - **S2 — Rust-object calls** (`kind_of`, `dimension_of`, `RationalUnit.__new__`, `parse_unit_expression`): a time-boxed spike of two mechanisms, then a go/no-go report to the maintainer before anything is built on it. (i) The opaque value types above, feature-tested, needing `__fx_repr__`s, `Dimension`/`UnitSystem` registration and a `__getattr__`-free `UnitSystem` on the compiled path. (ii) A table of unit-algebra results keyed by the identity of the operand units, filled by one disabled call and read as constants afterwards (works on any torch; costs one recompile on warm-up).
 - **S3 — verification**: the six-expression table before and after, values and gradients of compiled equal to eager (`tests/ext/test_torch_compile.py`), the `bench_unit_ops.py` gate (no row more than 10 % slower), a training-step benchmark (compiled, with and without `Quantity`) that either shows the overhead removed or says honestly that it was not the bottleneck, and the table in `docs/torch_compile_integration.md` corrected.
+
+## S1 outcome (2026-10-30): the counts do not move
+
+S1 was tried one cause at a time, measured after each. Mirroring `get_uncertainty_model` for compiled code (a module global that `uncertainty_model` sets next to the `ContextVar`, which Dynamo reads as a constant) removed that break from the log of `(a + b) * 2.0`, and the count stayed at 6: the next read on the same path, `get_propagation_mode` (`context.py:325`), broke in its place. The mirror was reverted because it added behaviour (a global that is not isolated per thread) and bought nothing measurable.
+
+Why piecemeal fixes cannot lower the headline numbers:
+
+- **Every `Quantity` creation pays the Rust-object breaks.** `a * b` creates one quantity and breaks 4 times; `(a + b) * 2.0` creates two and breaks 6; `a / b` breaks 7. `RationalUnit.__new__` (twice), `dimension_of`, `kind_of` and, for `.to`, `parse_unit_expression` are called on each one. While they stay, removing a Python-state break only moves the break to the next unsupported call.
+- **More `ContextVar` reads sit on the same path**: `get_propagation_mode`, the covariance store (`vectorized_uncertainty._current_store`), the equivalencies, and `get_current_system`, which is already a deliberate `torch.compiler.disable` (itself a break). Each needs the same treatment before any of them pays off.
+- **The `any(mask)` branch cannot be removed by a type check.** Choosing `VarianceModel` or `CovarianceModel` by whether any element of the standard deviation is non-zero is a decision about data. Dropping it while compiling would change results silently (an uncertain array would lose its correlation tracking inside the compiled region, so `x - x` would stop cancelling). A safe version needs an "exactly zero" fact carried by the uncertainty object, set where the zero is known to be a Python scalar, and used by `from_input` and `_convert_by_plan`. That is a change to the uncertainty classes, not a local edit.
+
+So the Python-state fixes are prerequisites of a zero-break compiled graph, not steps toward a lower count on their own. The count falls only when S2 removes the Rust-object calls.
 
 ## Acceptance
 
