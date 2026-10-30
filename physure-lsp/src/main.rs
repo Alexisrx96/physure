@@ -1,3 +1,4 @@
+mod dimensions;
 mod i18n;
 mod incremental;
 
@@ -382,7 +383,10 @@ impl Backend {
         let diagnostics = match outcome {
             Ok(outcome) => {
                 self.doc_states.write().unwrap().insert(uri.clone(), outcome.state);
-                outcome.diagnostics
+                // what the buffer says about dimensions, from the program the checker parses (nothing if it does not parse)
+                let mut diagnostics = outcome.diagnostics;
+                diagnostics.extend(dimensions::dimension_diagnostics(&text));
+                diagnostics
             }
             Err(_) => vec![Diagnostic {
                 range: Range {

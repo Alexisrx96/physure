@@ -4,6 +4,7 @@ use std::fs;
 use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
+mod check;
 mod config;
 mod debug;
 mod export;
@@ -59,6 +60,7 @@ fn print_help() {
     println!("    phs transpile 1_loads.phs --target python");
     println!("    phs transpile 1_loads.phs -t java -o Calculator.java");
     println!("    phs new-plugin myplugin --lang rust");
+    println!("    phs check orbit_sim.phs                (dimensions, without running; --json for tools)");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
     println!("    phs upgrade");
@@ -679,6 +681,11 @@ fn main() {
 
     if args[1] == "new-plugin" {
         scaffold::run_new_plugin(&args);
+        return;
+    }
+
+    if args[1] == "check" {
+        check::run_check(&args);
         return;
     }
 
