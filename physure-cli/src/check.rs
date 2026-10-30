@@ -5,7 +5,6 @@
 //! fail), 1 when there is at least one, and 2 when a file cannot be read or does not parse.
 
 use physure_script::{check_source, Severity};
-use std::fs;
 
 /// What `phs check` prints and the exit code it ends with.
 pub struct Report {
@@ -32,7 +31,7 @@ pub fn check_files(files: &[&str], json: bool) -> Report {
     let mut records: Vec<serde_json::Value> = Vec::new();
     let mut exit_code = 0;
     for file in files {
-        let source = match fs::read_to_string(file) {
+        let source = match crate::eval::read_source(file) {
             Ok(source) => source,
             Err(error) => {
                 lines.push(format!("{file}: cannot read: {error}"));
@@ -73,7 +72,7 @@ mod tests {
 
     fn file_with(name: &str, source: &str) -> String {
         let path = std::env::temp_dir().join(format!("phs-check-{}-{name}", std::process::id()));
-        fs::write(&path, source).unwrap();
+        std::fs::write(&path, source).unwrap();
         path.to_string_lossy().into_owned()
     }
 

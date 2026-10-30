@@ -7,6 +7,7 @@ use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 mod check;
 mod config;
 mod debug;
+mod eval;
 mod export;
 mod html;
 mod katex_assets;
@@ -61,6 +62,8 @@ fn print_help() {
     println!("    phs transpile 1_loads.phs -t java -o Calculator.java");
     println!("    phs new-plugin myplugin --lang rust");
     println!("    phs check orbit_sim.phs                (dimensions, without running; --json for tools)");
+    println!("    phs eval orbit_sim.phs --seed 1        (sandboxed run, one JSON document; - reads stdin)");
+    println!("    phs unit kWh                           (dimension, kind and alias of a unit, as JSON)");
     println!("    phs export orbit_sim.phs --fn kinetic_energy --native -o dist/");
     println!("    phs debug orbit_sim.phs --break 12");
     println!("    phs upgrade");
@@ -686,6 +689,16 @@ fn main() {
 
     if args[1] == "check" {
         check::run_check(&args);
+        return;
+    }
+
+    if args[1] == "eval" {
+        eval::run_eval(&args);
+        return;
+    }
+
+    if args[1] == "unit" {
+        eval::run_unit(&args);
         return;
     }
 
