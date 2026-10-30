@@ -24,6 +24,39 @@ No PyPI/crates.io tokens exist locally for any of these — never try
 per-run tokens (OIDC Trusted Publishing for PyPI/crates.io; stored
 secrets in a required-reviewer GitHub environment for Maven/npm).
 
+## How a release really runs (read this first)
+
+Verified on 0.3.0. The order is:
+
+1. The work is merged by PR (a merge commit keeps one commit per change).
+2. A `docs(changelog): cut X.Y.Z` PR moves `[Unreleased]` to the new version
+   with its date and tags (as #66 did for 0.2.4 and #69 for 0.3.0). A PR that
+   only touches `*.md` runs no CI: `tests.yml` has `paths-ignore: '*.md'`.
+3. Trigger the `bump-*` workflows **one at a time**, each with
+   `-f bump=minor` (or `patch`/`major`). They commit, tag and push straight
+   to main, so no version bump can go through a PR, and a hand edit of a
+   version file would be bumped again by the workflow.
+4. **Recreate each tag by hand.** The tag a bump workflow pushes is pushed
+   with `GITHUB_TOKEN`, and GitHub does not start workflows from events that
+   token causes, so `release.yml`, `core-release.yml` and `java-release.yml`
+   do **not** start on their own (seen on 0.3.0: no run for any of the three
+   tags). Delete the tag and create it again at the same commit, as the user:
+
+   ```bash
+   SHA=$(git rev-parse origin/main)   # the commit "chore: release <tag>"
+   gh api -X DELETE repos/Alexisrx96/physure/git/refs/tags/<tag>
+   gh api repos/Alexisrx96/physure/git/refs -f ref=refs/tags/<tag> -f sha="$SHA"
+   ```
+
+   `git push origin :<tag>` followed by `git push origin <tag>` does the
+   same, but each `git push` runs the whole pre-push hook (build and tests,
+   about 12 minutes), so it takes twice that. Never skip the hook with
+   `--no-verify`. The API call pushes no objects, and the tag points at a
+   commit that is already on main. A tag nobody has used yet is safe to
+   delete; check there is no GitHub release for it first.
+5. Wait for each release run and verify it before the next bump (steps
+   below). Publishing to PyPI, crates.io and Maven Central cannot be undone.
+
 ## Two independent versions worth knowing about
 
 - `physure-wasm/Cargo.toml` has `version.workspace = true` — it silently
@@ -59,30 +92,43 @@ produces — but the release workflows themselves accept more than that:
    `minor`/`major`).
 3. Watch it commit + tag + push:
    `gh run watch $(gh run list --workflow bump-release.yml --limit 1 --json databaseId -q '.[0].databaseId')`.
-   This chain-triggers `release.yml`.
+   It does **not** start `release.yml`: recreate the tag `vX.Y.Z` (see "How a
+   release really runs").
 4. Watch the release run: `gh run watch` (jobs: `check-version` →
    `wheels` / `sdist` → `publish` → `github-release`).
 5. Verify: `pip index versions physure` or
-   https://pypi.org/project/physure/.
+   https://pypi.org/project/physure/ (`curl -s https://pypi.org/pypi/physure/json`
+   lists the files), then smoke-test the published wheel in an isolated
+   environment: `uv run --no-project --isolated --with physure==X.Y.Z python -I -c "import physure; print(physure.__version__)"`.
 
 ## Steps: Rust core release
 
 1. Confirm main is green.
 2. Trigger: `gh workflow run bump-core-release.yml -f bump=patch`.
-3. Watch it tag `core-vX.Y.Z` and push, chain-triggering `core-release.yml`.
+3. Watch it tag `core-vX.Y.Z` and push. It does **not** start
+   `core-release.yml`: recreate the tag (see "How a release really runs").
 4. Watch the release run: jobs `check-version` → `publish` (crates.io) +
    `phs-binaries` (5-platform matrix) → `github-release`.
-5. Verify: https://crates.io/crates/physure, and check the GitHub release
-   has all 5 `phs-*` binary archives attached.
+5. Verify: https://crates.io/crates/physure (the API needs a `User-Agent`
+   header), and check the GitHub release has all 5 `phs-*` binary archives
+   attached.
 
 ## Steps: Java release
 
 1. Confirm main is green.
 2. Trigger: `gh workflow run bump-java-release.yml -f bump=patch`.
-3. Watch it tag `java-vX.Y.Z` and push, chain-triggering `java-release.yml`.
+3. Watch it tag `java-vX.Y.Z` and push. It does **not** start
+   `java-release.yml`: recreate the tag (see "How a release really runs").
 4. Watch the release run: jobs `check-version` → `native-libs` (5-platform
    matrix) → `publish` (Maven Central via Sonatype Central Portal, GPG-signed).
-5. Verify: https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java
+5. **Publish the deployment by hand.** `physure-java/pom.xml` sets
+   `autoPublish` to `false`, so a green `publish` job only uploads and
+   validates the deployment in the Sonatype Central Portal: someone has to
+   press "Publish" at https://central.sonatype.com/publishing/deployments
+   (needs the maintainer's portal login). Until then
+   `https://repo1.maven.org/maven2/io/github/alexisrx96/physure-java/X.Y.Z/`
+   is a 404.
+6. Verify: https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java
    (propagation to Maven Central search can take a few hours).
 
 ## Steps: WASM/npm release
@@ -109,9 +155,11 @@ produces — but the release workflows themselves accept more than that:
 
 - Any `bump-*.yml` fails to push → main moved or is protected; rerun
   after rebasing, or push manually with the version it computed.
+- No run of the release workflow after a bump → expected: recreate the tag
+  (see "How a release really runs").
 - Any `check-version` job failure → tag doesn't match the package's
-  version file; delete the bad tag (`git push origin :<tag>`), fix the
-  version file, re-tag.
+  version file; delete the bad tag (the `gh api -X DELETE` call above, or
+  `git push origin :<tag>`), fix the version file, re-tag.
 - `release.yml`/`core-release.yml` publish failure mentioning trusted
   publisher / OIDC → the PyPI/crates.io Trusted Publisher config (repo,
   workflow filename, environment name) is missing or wrong — that's set
