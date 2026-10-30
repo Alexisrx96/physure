@@ -117,13 +117,15 @@ If you need a battle-tested converter with a decade of integrations, pint and as
 
 | Benchmark | Result |
 |---|---|
-| Cold import | ~21 ms |
-| Unit multiply/divide (Rust core) | ~54 ns |
-| Scalar add with dimension check | ~40 ns |
-| 10⁶-element tensor op, `@torch.compile` | 1.17× vs. pure PyTorch |
-| Covariance propagation (sparse blocks) | ~7 µs |
+| Cold `import physure` (on top of the interpreter start) | ~19 ms |
+| First `Q_(...)` (builds the default unit system) | ~0.2 s |
+| Unit multiply/divide (Rust core) | ~170 ns |
+| Scalar add with dimension check (Rust core) | ~175 ns |
+| Covariance propagation (sparse blocks) | ~9.5 µs |
 
-Full methodology and reproduction steps: [BENCHMARKS.md](https://github.com/Alexisrx96/physure/blob/main/BENCHMARKS.md).
+Measured on a Windows laptop in use (Intel i5-13420H, Python 3.14, 0.3.0): treat the values as orders of magnitude, and see the page below for the spread and the environment. The `@torch.compile` overhead is not reported here because it could not be measured on that machine.
+
+Full methodology and reproduction steps: [docs/benchmarks.md](https://github.com/Alexisrx96/physure/blob/main/docs/benchmarks.md).
 
 ## Installation
 

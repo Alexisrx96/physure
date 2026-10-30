@@ -56,14 +56,13 @@ Run the full tour with `cargo run --example quickstart`.
 
 ## Performance
 
-Criterion micro-benchmarks (see [BENCHMARKS.md](https://github.com/Alexisrx96/physure/blob/main/BENCHMARKS.md)):
+Criterion micro-benchmarks (see [docs/benchmarks.md](https://github.com/Alexisrx96/physure/blob/main/docs/benchmarks.md), which gives the machine and the full list):
 
 | Operation | Time |
 |---|---|
-| Unit multiply / divide | ~54 ns |
-| Scalar add with dimension check | ~40 ns |
-| Compiled symbolic eval | ~14 ns |
-| Sparse covariance propagation | ~7 µs |
+| Unit multiply / divide | ~170 ns |
+| Scalar add with dimension check | ~175 ns |
+| Sparse covariance propagation | ~9.5 µs |
 
 ```bash
 cargo bench
