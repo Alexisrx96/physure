@@ -10,7 +10,7 @@
 Releasing 0.3.0 showed four things that the workflows and the old `release` skill did not say.
 
 1. **The bump did not start the release.** `bump-release.yml`, `bump-core-release.yml` and `bump-java-release.yml` commit, tag and push with `GITHUB_TOKEN`. GitHub does not start workflows from events caused by that token (only `workflow_dispatch` and `repository_dispatch` escape the rule), so `release.yml`, `core-release.yml` and `java-release.yml` never started: each of the three tags had to be deleted and created again by a person.
-2. **Java stopped one step short.** `physure-java/pom.xml` had `autoPublish` set to `false`, so a green `java-release.yml` left the deployment waiting in the Sonatype Central Portal. Maven Central answered 404 for `physure-java` 0.2.4 and 0.3.0.
+2. **Java stopped one step short.** `physure-java/pom.xml` had `autoPublish` set to `false`, so a green `java-release.yml` left the deployment waiting in the Sonatype Central Portal until someone pressed Publish. On Maven Central, `io.github.alexisrx96:physure` has 0.3.0 (released that way) and no 0.2.4: it never got out. *(The first version of this spec looked under `physure-java`, the artifact id up to 0.2.3, and wrongly reported that neither version was published; corrected the same day.)*
 3. **Pushing a tag cost about 12 minutes.** The local `pre-push` hook runs `scripts/pre_push_clean_test.py` (ruff, `cargo test`, a wheel, the Python matrix) for every push, tags included, and a delete plus a re-push is two passes.
 4. **The bumps left the lock files stale.** After 0.3.0, `Cargo.lock` still said 0.2.4 for the seven workspace crates and `physure-python/uv.lock` for `physure`. The next build rewrote both, so every checkout carried an uncommitted lock-file diff until someone committed it (`50bb0ca` and `5afb14e` did for earlier releases).
 
@@ -55,7 +55,7 @@ Recovery is documented in the skill: `gh workflow run <release>.yml --ref <tag>`
 
 ## Consequences
 
-- **Java is public as soon as the portal validates the deployment.** Maven Central cannot be undone. The 0.2.4 and 0.3.0 deployments were uploaded under the old setting and still have to be published (or dropped) in https://central.sonatype.com/publishing/deployments by the maintainer; nothing in this change touches them.
+- **Java is public as soon as the portal validates the deployment.** Maven Central cannot be undone. If a 0.2.4 deployment is still staged in https://central.sonatype.com/publishing/deployments, the maintainer has to publish or drop it; nothing in this change touches it.
 - **The hook is a local file.** `.git/hooks/pre-push` is untracked and only calls `scripts/pre_push_clean_test.py`, so the change reaches a checkout through the script, which is tracked. No installation step is needed where the hook already exists.
 - **The bump workflows need `actions: write`**, which they did not have. It lets the job start workflows of this repository and nothing else.
 

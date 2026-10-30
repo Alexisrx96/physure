@@ -16,7 +16,7 @@ version file.
 |---|---|---|---|---|
 | `physure` (Python) | `bump-release.yml` — bumps `physure-python/physure/__init__.py` | `release.yml` | `vX.Y.Z` | PyPI (Trusted Publishing) |
 | `physure` (Rust crate) | `bump-core-release.yml` — bumps `[workspace.package] version` in root `Cargo.toml` | `core-release.yml` — also builds and attaches prebuilt `phs` + `physure-lsp` binaries (5 platforms) to the GitHub release | `core-vX.Y.Z` | crates.io (Trusted Publishing) |
-| `physure-java` | `bump-java-release.yml` — bumps `physure-java/pom.xml` | `java-release.yml` — builds native JNI libs (5 platforms), publishes via Sonatype Central Portal | `java-vX.Y.Z` | Maven Central |
+| `physure-java` | `bump-java-release.yml` — bumps `physure-java/pom.xml` | `java-release.yml` — builds native JNI libs (5 platforms), publishes via Sonatype Central Portal | `java-vX.Y.Z` | Maven Central (`io.github.alexisrx96:physure`) |
 | `physure` (npm/WASM) | **none — manual** | `wasm-release.yml` | `wasm-vX.Y.Z` | npm |
 
 No PyPI/crates.io tokens exist locally for any of these — never try
@@ -142,14 +142,19 @@ produces — but the release workflows themselves accept more than that:
 5. **A green `publish` job is a public release.** `physure-java/pom.xml` sets
    `autoPublish` to `true` (decided 2026-10-30), so the deployment is released
    as soon as the portal validates it, and Maven Central cannot be undone.
-   Until the artifact propagates,
-   `https://repo1.maven.org/maven2/io/github/alexisrx96/physure-java/X.Y.Z/`
-   can still answer 404. The 0.2.4 and 0.3.0 deployments were uploaded when
-   the setting was `false`: they wait in
-   https://central.sonatype.com/publishing/deployments for the maintainer to
-   press "Publish" (or drop them).
-6. Verify: https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java
-   (propagation to Maven Central search can take a few hours).
+   The artifact is `io.github.alexisrx96:physure`: the directory is
+   `physure-java`, and `physure-java` was the artifact id up to 0.2.3, which
+   is why a lookup under that name shows 0.2.3 as the latest. Until the
+   artifact propagates,
+   `https://repo1.maven.org/maven2/io/github/alexisrx96/physure/X.Y.Z/`
+   can still answer 404. 0.3.0 is there (released from the portal under the
+   old setting); 0.2.4 never reached Maven Central, so if its deployment is
+   still staged in https://central.sonatype.com/publishing/deployments,
+   publish it or drop it.
+6. Verify: `curl -s https://repo1.maven.org/maven2/io/github/alexisrx96/physure/maven-metadata.xml`
+   lists the released versions, and
+   https://central.sonatype.com/artifact/io.github.alexisrx96/physure shows
+   the page (propagation to the search can take a few hours).
 
 ## Steps: WASM/npm release
 
