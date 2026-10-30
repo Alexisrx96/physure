@@ -1,6 +1,6 @@
 # Draft: the layering exceptions that outlived A1 (F2)
 
-**Status:** DRAFT, not approved. Source: finding F2 of `2026-10-30-post-a1-inventory.md`. Related: section "A2b: honest names" of `2026-10-27-a2-layering-contract-design.md`.
+**Status:** DRAFT, not approved. **Partly implemented** on the branch `refactor/a1-layering-exceptions` (two commits): option B for all records, and option C for #2 and #4. Source: finding F2 of `2026-10-30-post-a1-inventory.md`. Related: section "A2b: honest names" of `2026-10-27-a2-layering-contract-design.md`.
 
 ## Problem
 
@@ -22,7 +22,7 @@ The reasons for #1 to #5 come from the import lines; #6 was read only from the m
 
 ## Options
 
-- **A. Do nothing until A2b.** The renames and moves of A2b change which layer each module is in, so some records disappear on their own. The cost is that the labels keep lying until then.
+- **A. Do nothing until A2b.** This was assumed to remove records on its own. It does not: the A2b list in the A2 spec moves `application/context.py`, `application/tracing/context.py`, `domain/exceptions.py` and `core/functional.py`, and renames the lowest package; none of the four records that remain is about those modules. Waiting for A2b removes none of them, and the labels keep lying meanwhile.
 - **B. Relabel now.** Change `cause = "a1"` to a cause that is true (for example `a2b`, "removed when the modules move"), and fix the header of the file. Smallest honest change.
 - **C. Remove the imports now.** The small ones are cheap and independent of A2b:
   - #2 and #4: move `parse_unit_string` down into the model, as `quantity_text.py` was moved in A2 PR D. It is now a thin call into the core.
@@ -32,7 +32,7 @@ The reasons for #1 to #5 come from the import lines; #6 was read only from the m
 
 ## Recommendation
 
-B immediately (one small commit, no behaviour change), then C for #2 and #4, which are mechanical, and leave #1, #3, #5 and #6 for A2b where the layers are redrawn. #7 goes with the release work.
+B immediately (one small commit, no behaviour change), then C for #2 and #4, which are mechanical (done: `parse_unit_string` moved to `domain/measurement/unit_text.py`). #1, #3, #5 and #6 need a design of their own (a hook that the application fills in, as for the default system), not A2b. #7 goes with the release work.
 
 ## Open questions
 
@@ -47,4 +47,4 @@ B immediately (one small commit, no behaviour change), then C for #2 and #4, whi
 
 ## Size and dependencies
 
-Size M for B plus C on #2 and #4, risk low. #1, #3, #5, #6 depend on A2b (N1).
+Size M for B plus C on #2 and #4, risk low (done). #1, #3, #5, #6: a hook that inverts the dependency, size M, risk medium because #3 and #5 sit on the first-use path; independent of A2b (N1).
