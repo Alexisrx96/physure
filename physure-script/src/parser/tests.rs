@@ -100,8 +100,8 @@ use super::*;
     /// `x * y` by `term`'s `_is_implicit_mul` — the same juxtaposition rule `1/2 m v^2` relies
     /// on to skip the `*` between a coefficient and a symbol. But nothing in the repo's docs,
     /// README examples, or test suite ever spells two *bare names* side by side on purpose,
-    /// and it reads exactly like a forgotten operator: `total = masa velocidad` used to
-    /// silently return `masa * velocidad` with a plausible-looking unit and no error at all.
+    /// and it reads exactly like a forgotten operator: `total = mass speed` used to
+    /// silently return `mass * speed` with a plausible-looking unit and no error at all.
     #[test]
     fn test_bare_identifier_juxtaposition_is_rejected() {
         let err = parse_phs("x y").unwrap_err();
@@ -232,7 +232,7 @@ use super::*;
 
     #[test]
     fn test_assignment_fn_standalone() {
-        let code = "f(v: m / s) =\n    resta = 1 m / s\n    v * 2 - resta";
+        let code = "f(v: m / s) =\n    offset = 1 m / s\n    v * 2 - offset";
         let pairs = PhsParser::parse(Rule::assignment_fn, code);
         assert!(pairs.is_ok());
     }

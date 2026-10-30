@@ -633,7 +633,7 @@ mod const_fold_tests {
     #[test]
     fn where_bindings_are_inlined_instead_of_emitted_as_a_let_call() {
         let program =
-            crate::parser::parse_phs("duplo = a + b where a = 2.0 m, b = a * 3.0").unwrap();
+            crate::parser::parse_phs("doubled = a + b where a = 2.0 m, b = a * 3.0").unwrap();
 
         for target in [Target::Python, Target::Rust, Target::Java, Target::JavaScript, Target::TypeScript] {
             let name = format!("{target:?}");

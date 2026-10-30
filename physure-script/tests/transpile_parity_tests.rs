@@ -39,8 +39,8 @@ const TEST_CASES: &[ParityTestCase] = &[
         // every bound name in scope, including the first, and `v = 3.0 m/s` would otherwise
         // collide with a variable named `m` (see physure-script/tests/unit_shadowing.rs).
         name: "string_interpolation",
-        script: "mass = 2.0 kg\nv = 3.0 m/s\nlabel = \"masa {mass} a {v}\"\n",
-        expected_substring: "masa 2.0 kg a 3.0 m/s",
+        script: "mass = 2.0 kg\nv = 3.0 m/s\nlabel = \"mass {mass} at {v}\"\n",
+        expected_substring: "mass 2.0 kg at 3.0 m/s",
     },
     ParityTestCase {
         name: "uncertainty",
@@ -54,7 +54,7 @@ const TEST_CASES: &[ParityTestCase] = &[
     },
     ParityTestCase {
         name: "where_clause",
-        script: "duplo = a + b where a = 2.0 m, b = a * 3.0\n",
+        script: "doubled = a + b where a = 2.0 m, b = a * 3.0\n",
         expected_substring: "8",
     },
     ParityTestCase {

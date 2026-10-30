@@ -46,19 +46,19 @@ def test_load_phs_with_chaining(tmp_path):
     # (kwargs dispatch, cross-module chaining, real dimensional coercion, `.to()` conversion
     # on the result) on the unit family that works correctly today.
     geom_file = tmp_path / "geom.phs"
-    geom_file.write_text("fn area_tubo(d: m) = 3.1415926535 * (d / 2)^2\n")
+    geom_file.write_text("fn pipe_area(d: m) = 3.1415926535 * (d / 2)^2\n")
     hydr_file = tmp_path / "hydr.phs"
-    hydr_file.write_text("fn fuerza_empuje(P: kg/(m*s^2), A: m^2) = P * A\n")
+    hydr_file.write_text("fn thrust_force(P: kg/(m*s^2), A: m^2) = P * A\n")
 
     geom = physure.load_phs(geom_file)
     hydr = physure.load_phs(hydr_file)
 
     # Chaining the domain-Quantity output of one loaded module directly into another's
     # kwarg -- the real point of the bridge: A never passes through a string.
-    fuerza = hydr.fuerza_empuje(
-        P="500000 kg/(m*s^2)", A=geom.area_tubo(d="0.05 m")
+    force = hydr.thrust_force(
+        P="500000 kg/(m*s^2)", A=geom.pipe_area(d="0.05 m")
     )
-    assert fuerza.to("N").magnitude == pytest.approx(981.7477, rel=1e-6)
+    assert force.to("N").magnitude == pytest.approx(981.7477, rel=1e-6)
 
 
 def test_load_phs_accepts_positional_args(tmp_path):

@@ -1003,11 +1003,11 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "geom".to_string(),
-            "fn area_tubo(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
+            "fn pipe_area(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
         );
         sources.insert(
             "hydr".to_string(),
-            "/// Hydraulic force\n/// @param P Pressure in kg/(m*s^2)\n/// @param A Area in m^2\nfn fuerza_empuje(P: kg/(m*s^2), A: m^2) = P * A\n".to_string(),
+            "/// Hydraulic force\n/// @param P Pressure in kg/(m*s^2)\n/// @param A Area in m^2\nfn thrust_force(P: kg/(m*s^2), A: m^2) = P * A\n".to_string(),
         );
 
         let server = Server::http("127.0.0.1:0").unwrap();
@@ -1056,8 +1056,8 @@ mod tests {
         assert!(catalog.modules.contains_key("hydr"));
 
         let hydr = &catalog.modules["hydr"];
-        assert!(hydr.functions.contains_key("fuerza_empuje"));
-        let f = &hydr.functions["fuerza_empuje"];
+        assert!(hydr.functions.contains_key("thrust_force"));
+        let f = &hydr.functions["thrust_force"];
         assert_eq!(f.params.len(), 2);
         assert_eq!(f.params[0].name, "P");
         assert_eq!(f.params[0].expected_unit.as_deref(), Some("kg/(m*s^2)"));
@@ -1067,7 +1067,7 @@ mod tests {
     fn test_server_invoke_function_success_and_kwargs() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url))
+        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url))
             .send_json(serde_json::json!({
                 "d": "0.05 m"
             }))
@@ -1087,7 +1087,7 @@ mod tests {
     fn test_server_invoke_wrong_dimensions_returns_400() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url))
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url))
             .send_json(serde_json::json!({
                 "d": "10 s" // seconds instead of meters
             }));
@@ -1127,7 +1127,7 @@ mod tests {
             "steps": [
                 {
                     "module": "geom",
-                    "function": "area_tubo",
+                    "function": "pipe_area",
                     "inputs": {
                         "d": "0.05 m"
                     },
@@ -1135,12 +1135,12 @@ mod tests {
                 },
                 {
                     "module": "hydr",
-                    "function": "fuerza_empuje",
+                    "function": "thrust_force",
                     "inputs": {
                         "P": "500000 kg/(m*s^2)",
                         "A": { "$ref": "area" }
                     },
-                    "output": "fuerza"
+                    "output": "force"
                 }
             ]
         });
@@ -1154,10 +1154,10 @@ mod tests {
         assert_eq!(resp["status"], "success");
         let results = &resp["results"];
         assert!(results["area"].is_object());
-        assert!(results["fuerza"].is_object());
+        assert!(results["force"].is_object());
 
-        let fuerza_mag = results["fuerza"]["magnitude"].as_f64().unwrap();
-        assert!((fuerza_mag - 981.7477).abs() < 0.1);
+        let force_mag = results["force"]["magnitude"].as_f64().unwrap();
+        assert!((force_mag - 981.7477).abs() < 0.1);
     }
 
     #[test]
@@ -1190,8 +1190,8 @@ mod tests {
     fn test_server_percent_encoded_url_routes() {
         let (_server, base_url) = create_test_server(None);
 
-        // POST /api/v1/geom/area_tubo with percent-encoded characters e.g. %61%72%65%61_tubo ("area_tubo")
-        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/%61%72%65%61_tubo", base_url))
+        // POST /api/v1/geom/pipe_area with percent-encoded characters e.g. %70%69%70%65_area ("pipe_area")
+        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/%70%69%70%65_area", base_url))
             .send_json(serde_json::json!({
                 "d": "0.05 m"
             }))
@@ -1276,10 +1276,10 @@ mod tests {
     fn test_server_kwargs_missing_parameter_returns_400_not_500() {
         let (_server, base_url) = create_test_server(None);
 
-        // area_tubo requires "d"; sending an empty object used to `return Err(..)` straight
+        // pipe_area requires "d"; sending an empty object used to `return Err(..)` straight
         // out of `handle_request`, producing tiny_http's bodyless fallback 500 instead of a
         // clean 400 JSON error.
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url)).send_json(serde_json::json!({}));
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url)).send_json(serde_json::json!({}));
 
         assert!(resp.is_err());
         match resp.unwrap_err() {
@@ -1300,7 +1300,7 @@ mod tests {
         // `d: null` fails `json_value_to_phs_value` (falls into its catch-all `Err` arm).
         // The `?` on that call used to propagate straight out of `handle_request` via
         // `PhysureResult<()>`, again producing tiny_http's bodyless fallback 500.
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url))
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url))
             .send_json(serde_json::json!({ "d": null }));
 
         assert!(resp.is_err());
@@ -1320,7 +1320,7 @@ mod tests {
     fn test_server_kwargs_unexpected_parameter_returns_400() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url)).send_json(serde_json::json!({
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url)).send_json(serde_json::json!({
             "d": "0.05 m",
             "not_a_real_param": 1
         }));
@@ -1385,7 +1385,7 @@ mod tests {
     fn test_server_cors_header_absent_on_error_responses_without_token() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url)).send_json(serde_json::json!({}));
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url)).send_json(serde_json::json!({}));
         match resp.unwrap_err() {
             ureq::Error::Status(code, response) => {
                 assert_eq!(code, 400);
@@ -1447,12 +1447,12 @@ mod tests {
 
         let pipeline_body = serde_json::json!({
             "steps": [
-                { "module": "geom", "function": "area_tubo", "inputs": { "d": "0.05 m" }, "output": "area" },
+                { "module": "geom", "function": "pipe_area", "inputs": { "d": "0.05 m" }, "output": "area" },
                 {
                     "module": "hydr",
-                    "function": "fuerza_empuje",
+                    "function": "thrust_force",
                     "inputs": { "P": "500000 kg/(m*s^2)", "A": { "$ref": "area" } },
-                    "output": "fuerza"
+                    "output": "force"
                 }
             ]
         });
@@ -1464,8 +1464,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp["status"], "success");
-        let fuerza_mag = resp["results"]["fuerza"]["magnitude"].as_f64().unwrap();
-        assert!((fuerza_mag - 981.7477).abs() < 0.1);
+        let force_mag = resp["results"]["force"]["magnitude"].as_f64().unwrap();
+        assert!((force_mag - 981.7477).abs() < 0.1);
     }
 
     // --- Finding I1: bounded worker pool, exercised through the real `ModelServer::run` -----
@@ -1483,7 +1483,7 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "geom".to_string(),
-            "fn area_tubo(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
+            "fn pipe_area(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
         );
         let config = ModelServerConfig {
             host: "127.0.0.1".to_string(),
@@ -1503,7 +1503,7 @@ mod tests {
             .map(|_| {
                 let url = base_url.clone();
                 std::thread::spawn(move || -> serde_json::Value {
-                    ureq::post(&format!("{}/api/v1/geom/area_tubo", url))
+                    ureq::post(&format!("{}/api/v1/geom/pipe_area", url))
                         .send_json(serde_json::json!({ "d": "0.05 m" }))
                         .expect("request must succeed")
                         .into_json()

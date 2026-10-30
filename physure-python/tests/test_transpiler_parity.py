@@ -56,9 +56,9 @@ area = 3.14159265 * r^2
         "string_interpolation",
         """mass = 2.0 kg
 v = 3.0 m/s
-label = "masa {mass} a {v}"
+label = "mass {mass} at {v}"
 """,
-        {"label": "masa 2.0 kg a 3.0 m/s"},
+        {"label": "mass 2.0 kg at 3.0 m/s"},
     ),
     # 6. Uncertainty Propagation
     (
@@ -82,9 +82,9 @@ r = eq5(I = -2mA, V = -12V) => kOhm
     # 8. `where` clause: inline local bindings scoped to a single expression
     (
         "where_clause",
-        """duplo = a + b where a = 2.0 m, b = a * 3.0
+        """doubled = a + b where a = 2.0 m, b = a * 3.0
 """,
-        {"duplo": "8"},
+        {"doubled": "8"},
     ),
 ]
 

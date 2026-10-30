@@ -253,8 +253,8 @@ impl PhsModule {
     ///
     /// This is cross-module composition — `self` and `inner` may be (and in the motivating
     /// use case, are) two different `.phs` files loaded independently, e.g. a hydraulics
-    /// module's `fuerza_empuje(P, A)` composed with a geometry module's `area_tubo(d)` bound
-    /// to `fuerza_empuje`'s `A` parameter. The design spec's `compose(&self, outer_fn,
+    /// module's `thrust_force(P, A)` composed with a geometry module's `pipe_area(d)` bound
+    /// to `thrust_force`'s `A` parameter. The design spec's `compose(&self, outer_fn,
     /// inner_fn, bind_param) -> PhysureResult<PhsFunction>` (same-module, single `&self`,
     /// undefined `PhsFunction` return type) does not cover this — it was superseded before
     /// this method existed by the plan's own test, which requires composing across two
@@ -278,7 +278,7 @@ impl PhsModule {
     /// `ComposedFunction::call`'s expected argument order is: `outer_fn`'s parameters, in their
     /// declared order, *skipping* `bind_param` (which is supplied by `inner_fn`'s result
     /// instead of the caller), followed by `inner_fn`'s parameters in their declared order.
-    /// E.g. for `fuerza_empuje(P, A)` composed with `area_tubo(d)` bound to `"A"`, the composed
+    /// E.g. for `thrust_force(P, A)` composed with `pipe_area(d)` bound to `"A"`, the composed
     /// function takes `[P, d]` — `A` is never supplied directly.
     ///
     /// # Errors
@@ -768,7 +768,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m)
     #[test]
     fn test_composed_function_splices_bind_param_result_into_the_middle_of_outer_args() {
         // The plan's own composition test only exercises binding the *last* outer parameter
-        // (`fuerza_empuje(P, A)` bound on `A`), which never has to prove the splice actually
+        // (`thrust_force(P, A)` bound on `A`), which never has to prove the splice actually
         // reinserts the inner result at the right position -- pushing it last would look
         // identical. Use a 3-param outer function bound on its *middle* parameter, with each
         // param declared in a genuinely *different* unit (m / s / kg), so a bug that always
