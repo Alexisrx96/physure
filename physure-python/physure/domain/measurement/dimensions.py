@@ -287,6 +287,6 @@ class Dimension(BaseExponentEntity):
 
 def get_dimension(unit_expression: str) -> Dimension:
     """Returns a Dimension object parsed from a unit expression string."""
-    from physure.application.parsing import parse_unit_string
+    from physure.domain.measurement.unit_text import parse_unit_string
 
     return cast("Dimension", parse_unit_string(unit_expression, Dimension))

@@ -7,13 +7,13 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from physure.application.factories import QuantityFactory
-from physure.application.parsing import parse_unit_string
 from physure.domain.exceptions import UnknownUnitError
 from physure.domain.measurement.definitions_text import (
     prefix_definition_text,
     unit_definition_text,
 )
 from physure.domain.measurement.dimensions import Dimension
+from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import (
     _CORE_ERRORS,
     CompoundUnit,

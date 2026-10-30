@@ -1,4 +1,4 @@
-# physure/application/parsing.py
+# physure/domain/measurement/unit_text.py
 """Unit string parsing: the core's parser."""
 
 from __future__ import annotations

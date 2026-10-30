@@ -234,7 +234,7 @@ def test_standard_units_do_not_load_sympy():
 
     sympy_was_loaded = "sympy" in sys.modules
 
-    from physure.application.parsing import parse_unit_string
+    from physure.domain.measurement.unit_text import parse_unit_string
     from physure.domain.measurement.units import CompoundUnit
 
     # Clear cache to force a fresh parse

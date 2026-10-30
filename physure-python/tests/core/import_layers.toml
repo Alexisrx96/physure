@@ -94,12 +94,6 @@ kind = "top"
 cause = "a1"
 
 [[exception]]
-importer = "physure.domain.measurement.system"
-imported = "physure.application.parsing"
-kind = "top"
-cause = "a1"
-
-[[exception]]
 importer = "physure.ext.io"
 imported = "physure"
 kind = "top"
@@ -110,12 +104,6 @@ importer = "physure.application.context"
 imported = "physure.application.startup"
 kind = "lazy"
 count = 2
-cause = "a1"
-
-[[exception]]
-importer = "physure.domain.measurement.dimensions"
-imported = "physure.application.parsing"
-kind = "lazy"
 cause = "a1"
 
 [[exception]]
