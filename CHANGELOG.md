@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
+**Tags:** `v0.3.0`, `core-v0.3.0`, `java-v0.3.0`
+
 **Upgrading from 0.2.x.** This release moves the unit algebra into the Rust core and deletes the Python code that duplicated it, so several things that were Python objects are now data or answers of the core. What to change in code written against 0.2.x (each is described below):
 
 - `UnitSystem.register_unit(...)` takes `scale`, `offset` and `level` instead of a converter object, and `physure.domain.measurement.converters` is gone.
