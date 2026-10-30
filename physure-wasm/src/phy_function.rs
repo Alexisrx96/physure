@@ -38,6 +38,7 @@ impl PhyFunction {
                 .state
                 .try_borrow_mut()
                 .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
+            state.check_evaluable()?;
             register_body(&mut state.interpreter, body).map_err(to_js_error)?;
             if state.interpreter.get_fn_params(name).is_none() {
                 return Err(to_js_error(PhysureError::Generic(format!(
@@ -78,6 +79,7 @@ impl PhyFunction {
             .state
             .try_borrow_mut()
             .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
+        state.check_evaluable()?;
         match state.interpreter.run_statement(stmt).map_err(to_js_error)? {
             PhsValue::Quantity(q) => Ok(Quantity::from_core(q)),
             PhsValue::Number(n) => Ok(Quantity::from_core(CoreQuantity::new_scalar(
@@ -283,6 +285,7 @@ impl PhyFunction {
             .state
             .try_borrow_mut()
             .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
+        state.check_evaluable()?;
         match state.interpreter.run_statement(stmt).map_err(to_js_error)? {
             PhsValue::String(s) => Ok(s),
             PhsValue::Equation(_, rhs) => Ok(rhs.to_phs_string()),
@@ -301,6 +304,7 @@ impl PhyFunction {
                 .state
                 .try_borrow_mut()
                 .map_err(|_| js_sys::Error::new("Registry is currently borrowed"))?;
+            state.check_evaluable()?;
             register_body(&mut state.interpreter, body).map_err(to_js_error)?;
         }
         Ok(PhyFunction {

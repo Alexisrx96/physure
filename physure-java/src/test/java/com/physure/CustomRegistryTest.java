@@ -69,4 +69,38 @@ class CustomRegistryTest {
         PhysureException e = assertThrows(PhysureException.class, () -> new UnitRegistry(missing));
         assertTrue(e.getMessage().contains("nope.conf"), e.getMessage());
     }
+
+    /**
+     * PHS evaluation resolves units through the embedded catalog (the interpreter has one catalog per process),
+     * so on a registry that gives a unit of it another meaning it would answer with the old one while
+     * getUnitScale answers with the new: the registry would disagree with itself without a word.
+     */
+    @Test
+    void aRegistryThatRedefinesAUnitRefusesPhsEvaluationInsteadOfUsingTheOldMeaning() {
+        try (UnitRegistry registry = UnitRegistry.fromContent("[Units]\nkm = 7.0, L, [km]\n")) {
+            assertEquals(7.0, registry.getUnitScale("km"), 0.0);
+            PhysureException refused = assertThrows(PhysureException.class, () -> registry.evaluate("1 km"));
+            assertTrue(refused.getMessage().contains("redefines km"), refused.getMessage());
+            assertThrows(PhysureException.class, () -> registry.evaluateRaw("1 m"));
+            assertThrows(PhysureException.class, () -> registry.solve("x = 2 * y", "x"));
+            assertThrows(PhysureException.class, () -> new PhyFunction(registry, "f", "f(x) = x"));
+        }
+    }
+
+    @Test
+    void aRegistryThatOnlyAddsUnitsStillEvaluatesAndFailsLoudlyOnTheNewOnes() {
+        try (UnitRegistry registry = UnitRegistry.fromContent(FURLONG)) {
+            assertEquals(3.0, registry.evaluate("1 m + 2 m").getValue());
+            assertEquals(201.168, registry.getUnitScale("fur"), 0.0);
+            PhysureException unknown = assertThrows(PhysureException.class, () -> registry.evaluate("5 fur"));
+            assertTrue(unknown.getMessage().contains("Unknown unit"), unknown.getMessage());
+        }
+    }
+
+    @Test
+    void aDefinitionWithTheSameValueRedefinesNothing() {
+        try (UnitRegistry registry = UnitRegistry.fromContent("[Units]\nfoot = 0.3048, L, [ft, foot, feet]\n")) {
+            assertEquals(1.0, registry.evaluate("1 ft").to("ft").getValue(), 1e-12);
+        }
+    }
 }

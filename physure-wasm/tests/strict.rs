@@ -422,3 +422,23 @@ fn a_body_that_is_not_a_definition_is_an_error() {
     assert!(PhyFunction::new(&registry, "bad", "1 +").is_err());
     assert!(PhyFunction::new(&registry, "empty", "").is_err());
 }
+
+// ---- a registry that redefines a unit cannot evaluate: the interpreter has one catalog per process
+
+#[wasm_bindgen_test]
+fn a_registry_that_redefines_a_unit_refuses_phs_evaluation_instead_of_using_the_old_meaning() {
+    let custom = UnitRegistry::from_content("[Units]\nkm = 7.0, L, [km]\n").unwrap();
+    assert_eq!(custom.get_unit_scale("km").unwrap(), 7.0);
+    assert!(message(custom.evaluate("1 km").unwrap_err()).contains("redefines km"));
+    assert!(custom.evaluate("1 m").is_err());
+    assert!(custom.solve("x = 2 * y", "x").is_err());
+    assert!(PhyFunction::new(&custom, "f", "f(x) = x").is_err());
+}
+
+#[wasm_bindgen_test]
+fn a_registry_that_only_adds_units_still_evaluates_and_fails_loudly_on_the_new_ones() {
+    let custom = UnitRegistry::from_content("[Units]\nfurlong = 201.168, L, [fur, furlong]\n").unwrap();
+    assert_eq!(custom.evaluate("1 m + 2 m").unwrap().trim(), "3.0 m");
+    assert_eq!(custom.get_unit_scale("fur").unwrap(), 201.168);
+    assert!(message(custom.evaluate("5 fur").unwrap_err()).contains("Unknown unit"));
+}

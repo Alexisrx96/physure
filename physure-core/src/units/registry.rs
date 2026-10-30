@@ -591,6 +591,23 @@ impl UnitRegistry {
         names
     }
 
+    /// The names that mean something else in this registry than they do in `base`: a unit both define with
+    /// another dimension, scale, zero point or level (`km = 7.0` where `base` has the kilometre), and the
+    /// word `prefixes` if the prefixes differ. A name that `base` does not know is a new unit, not a
+    /// redefinition. Whoever resolves units through `base` (the PHS interpreter has one catalog per process)
+    /// would answer for these names with the old meaning, so it needs to know which they are.
+    pub fn redefinitions_of(&self, base: &UnitRegistry) -> Vec<String> {
+        let mut changed: Vec<String> = self
+            .names()
+            .into_iter()
+            .filter(|name| matches!((base.get_unit(name), self.get_unit(name)), (Some(was), Some(now)) if was != now))
+            .collect();
+        if self.prefixes != base.prefixes || self.prefix_names != base.prefix_names {
+            changed.push("prefixes".to_string());
+        }
+        changed
+    }
+
     /// Whether `name` is a unit: one of `names()`, or a prefix and a unit written together
     /// (`km`, `kilometer`). A level takes no prefix (`attodB` is not a unit) and neither does a
     /// unit the catalog marks `noprefix`.

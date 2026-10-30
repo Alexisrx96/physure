@@ -16,6 +16,10 @@ fn throw_physure_exception(env: &mut JNIEnv, msg: &str) {
 struct RegistryHandle {
     registry: UnitRegistry,
     interpreter: PhsInterpreter,
+    /// The names of the embedded catalog that this registry's definitions give another meaning (empty unless
+    /// it was built from a conf that redefines one). PHS evaluation resolves units through the embedded
+    /// catalog, so it would answer for these names with the old meaning.
+    redefined: Vec<String>,
 }
 
 /// The embedded catalog and its constants, parsed once per process: parsing it is the expensive part of
@@ -39,11 +43,13 @@ fn default_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
 /// left out (and the `[Settings]` of a conf, which are process-wide, are not the registry's to change).
 fn new_handle(custom: Option<&str>) -> Result<jlong, String> {
     let (mut registry, mut constants) = default_catalog().clone();
+    let mut redefined = Vec::new();
     if let Some(text) = custom {
         physure_core::units::conf::extend_registry(&mut registry, &mut constants, text)
             .map_err(|problems| format!("Invalid unit definitions: {}", problems.join("; ")))?;
+        redefined = registry.redefinitions_of(&default_catalog().0);
     }
-    let handle = RegistryHandle { registry, interpreter: new_interpreter() };
+    let handle = RegistryHandle { registry, interpreter: new_interpreter(), redefined };
     Ok(Box::into_raw(Box::new(handle)) as jlong)
 }
 
@@ -62,6 +68,29 @@ fn new_interpreter() -> PhsInterpreter {
 
 fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
     unsafe { &mut (*(handle as *mut RegistryHandle)).interpreter }
+}
+
+/// Throws and returns true when PHS evaluation on `handle` would ignore a definition of its registry: the
+/// interpreter has one unit catalog per process, the embedded one, so `1 km` on a registry that redefines
+/// `km` would answer 1000 m while `getUnitScale("km")` answers the registry's own value. An error says so;
+/// the old meaning, silently, does not.
+fn refuse_evaluation_on_redefined_units(env: &mut JNIEnv, handle: jlong) -> bool {
+    let redefined = unsafe { &(*(handle as *const RegistryHandle)).redefined };
+    if redefined.is_empty() {
+        return false;
+    }
+    throw_physure_exception(
+        env,
+        &format!(
+            concat!(
+                "This registry redefines {} of the embedded catalog, but PHS evaluation (evaluate, solve, deriv, ",
+                "integral and functions) uses the embedded catalog and would ignore the new meaning; getUnitScale, ",
+                "getUnitExponents and getUnitPowers use the registry's own definitions"
+            ),
+            redefined.join(", ")
+        ),
+    );
+    true
 }
 
 /// The registry of `handle`; 0 (the static quantity operations, which carry no registry) is the embedded catalog.
@@ -373,6 +402,9 @@ pub extern "system" fn Java_com_physure_NativeEngine_evaluateExpression<'local>(
     interpreter_handle: jlong,
     expr: JString<'local>,
 ) -> jstring {
+    if refuse_evaluation_on_redefined_units(&mut env, interpreter_handle) {
+        return std::ptr::null_mut();
+    }
     let interpreter = get_interpreter(interpreter_handle);
     let expr_str: String = match env.get_string(&expr) {
         Ok(s) => s.into(),
@@ -435,6 +467,9 @@ pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantity<'local>(
     interpreter_handle: jlong,
     expr: JString<'local>,
 ) -> jobject {
+    if refuse_evaluation_on_redefined_units(&mut env, interpreter_handle) {
+        return std::ptr::null_mut();
+    }
     let interpreter = get_interpreter(interpreter_handle);
     let expr_str: String = match env.get_string(&expr) {
         Ok(s) => s.into(),
