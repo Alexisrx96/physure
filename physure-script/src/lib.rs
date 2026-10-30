@@ -13,10 +13,12 @@ pub mod exporter;
 pub mod value;
 pub mod symbolic;
 pub mod builtins;
+pub mod check;
 pub mod plugin;
 
 pub use codegen::{transpile, Target};
 pub use ast::{Expr, Program, Statement};
+pub use check::{check_program, check_source, Diagnostic, Severity};
 pub use debug::{DebugAction, DebugContext, DebugHook, StackFrame};
 pub use lexer::{PhsLexer, PhsToken, TokenKind};
 pub use parser::{parse_phs, parse_phs_with_lines};
