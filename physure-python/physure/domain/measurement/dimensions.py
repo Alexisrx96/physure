@@ -30,8 +30,6 @@ from physure.domain.measurement.base_entity import (
 
 _DIMENSION_NAME_REGISTRY: dict[Dimension | None, str] = {}
 
-DIMENSIONLESS = None
-
 # Canonical Basis for SI plus supplementary (Angle, Money):
 # [Length, Mass, Time, Current, Temperature, Amount, Luminous, Angle, Money]
 SI_ORDER: Final[tuple[str, ...]] = (
@@ -45,7 +43,6 @@ SI_ORDER: Final[tuple[str, ...]] = (
     "A",
     "$",
 )
-SI_INDICES: Final[dict[str, int]] = {s: i for i, s in enumerate(SI_ORDER)}
 
 
 def register_dimension(dimension: Dimension, name: str):

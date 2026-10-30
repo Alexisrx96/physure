@@ -191,14 +191,6 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         return cls(r_unit.dimensions)
 
     # --- System-Dependent Methods ---
-    def _compound_factor(self, system: UnitSystem) -> float:
-        """Calculate the unit's total conversion factor relative to SI units."""
-        registry = system.core_registry
-        try:
-            return registry.factor_between(self, registry.expand(self))
-        except _CORE_ERRORS as error:
-            raise _python_error(error, self, self) from error
-
     @classmethod
     def of_dimension(
         cls, dimension: Dimension, system: UnitSystem
@@ -464,7 +456,6 @@ def wrap_arithmetic(
 for method_name in [
     "dimension",
     "simplify",
-    "_compound_factor",
     "conversion_factor_to",
     "to_latex",
     "_repr_latex_",

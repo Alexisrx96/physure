@@ -223,37 +223,6 @@ class UnitSystem:
         """
         return self.get_unit(unit) if isinstance(unit, str) else unit
 
-    def get_base_unit_for_dimension(
-        self, dimension: Dimension
-    ) -> CompoundUnit:
-        """Returns the preferred base unit for a physical dimension."""
-        base_units_str = self.settings.get("base_units", "")
-        if not base_units_str:
-            # Fallback to SI-like defaults if not specified
-            # This is a bit simplified, ideally we look into a default mapping.
-            return CompoundUnit({})
-
-        # Parse "L:ft, M:lb, T:s"
-        mapping = {}
-        for entry in base_units_str.split(","):
-            if ":" in entry:
-                dim_sym, unit_sym = [s.strip() for s in entry.split(":")]
-                mapping[Dimension.from_string(dim_sym)] = unit_sym
-
-        # Build compound unit from dimension components
-        result = CompoundUnit({})
-        for dim_sym, exp in dimension.exponents.items():
-            comp_dim = Dimension.from_string(dim_sym)
-            if comp_dim in mapping:
-                part = CompoundUnit({mapping[comp_dim]: 1})
-                result = result * (part**exp)
-            else:
-                # Fallback to SI for missing components?
-                # Or just keep as is.
-                pass
-
-        return result if not result.is_dimensionless else CompoundUnit({})
-
     def __contains__(self, item: str) -> bool:
         """Checks if the registry of the system resolves a unit or alias."""
         try:
