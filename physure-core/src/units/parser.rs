@@ -192,9 +192,17 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
+    /// Parses a unit expression against the catalog of the innermost `units::with_catalog` scope on this
+    /// thread if there is one (no copy of it is made), and against the embedded catalog (plus a
+    /// `physure.conf` in the working directory) if there is not.
     pub fn parse_expression(input: &str) -> PhysureResult<RationalUnit> {
-        let (registry, _) = crate::units::conf::build_registry_from_conf();
-        Self::parse_expression_impl(input, Some(&registry))
+        crate::units::with_current_catalog(|scoped| match scoped {
+            Some(registry) => Self::parse_expression_impl(input, Some(registry)),
+            None => {
+                let (registry, _) = crate::units::conf::build_registry_from_conf();
+                Self::parse_expression_impl(input, Some(&registry))
+            }
+        })
     }
 
     /// Like `parse_expression`, but resolves each symbol against `registry` first so
