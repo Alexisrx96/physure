@@ -31,31 +31,21 @@ pub fn check_files(files: &[&str], json: bool) -> Report {
     let mut records: Vec<serde_json::Value> = Vec::new();
     let mut exit_code = 0;
     for file in files {
-        let source = match crate::eval::read_source(file) {
-            Ok(source) => source,
-            Err(error) => {
-                lines.push(format!("{file}: cannot read: {error}"));
-                exit_code = 2;
-                continue;
-            }
-        };
-        let findings = match check_source(&source) {
+        let findings = match findings_of(file) {
             Ok(findings) => findings,
-            Err(error) => {
-                lines.push(format!("{file}: does not parse: {error}"));
+            Err(message) => {
+                lines.push(message);
                 exit_code = 2;
                 continue;
             }
         };
         for finding in findings {
-            let severity = if finding.severity == Severity::Error { "error" } else { "warning" };
             if finding.severity == Severity::Error && exit_code == 0 {
                 exit_code = 1;
             }
-            lines.push(format!("{file}:{}: {severity}[{}]: {}", finding.line, finding.code, finding.message));
-            records.push(serde_json::json!({
-                "file": file, "line": finding.line, "severity": severity, "code": finding.code, "message": finding.message,
-            }));
+            let (line, record) = describe(file, &finding);
+            lines.push(line);
+            records.push(record);
         }
     }
     let output = if json { serde_json::to_string_pretty(&records).unwrap_or_default() } else { lines.join("\n") };
@@ -64,6 +54,22 @@ pub fn check_files(files: &[&str], json: bool) -> Report {
         eprintln!("{}", lines.iter().filter(|l| l.contains("cannot read") || l.contains("does not parse")).cloned().collect::<Vec<_>>().join("\n"));
     }
     Report { output, exit_code }
+}
+
+/// The findings of one file, or the line that says why it could not be checked.
+fn findings_of(file: &str) -> Result<Vec<physure_script::Diagnostic>, String> {
+    let source = crate::eval::read_source(file).map_err(|error| format!("{file}: cannot read: {error}"))?;
+    check_source(&source).map_err(|error| format!("{file}: does not parse: {error}"))
+}
+
+/// A finding as a line of text and as a JSON record.
+fn describe(file: &str, finding: &physure_script::Diagnostic) -> (String, serde_json::Value) {
+    let severity = if finding.severity == Severity::Error { "error" } else { "warning" };
+    let line = format!("{file}:{}: {severity}[{}]: {}", finding.line, finding.code, finding.message);
+    let record = serde_json::json!({
+        "file": file, "line": finding.line, "severity": severity, "code": finding.code, "message": finding.message,
+    });
+    (line, record)
 }
 
 #[cfg(test)]

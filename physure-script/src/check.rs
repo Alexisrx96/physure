@@ -281,53 +281,59 @@ impl<'a> Checker<'a> {
             if let Some(line) = lines.get(index) {
                 self.line = *line;
             }
-            match statement {
-                Statement::Assignment(node) => {
-                    let ty = self.expr(&node.value, env, depth);
-                    env.insert(node.name.clone(), ty);
-                }
-                Statement::Expr(e) => {
-                    let ty = self.expr(e, env, depth);
-                    if index + 1 == statements.len() {
-                        yielded.push(ty);
-                    }
-                }
-                Statement::Return(e) => {
-                    let ty = self.expr(e, env, depth);
-                    yielded.push(ty);
-                }
-                Statement::GuardReturn { cond, value } => {
-                    self.expr(cond, env, depth);
-                    let ty = self.expr(value, env, depth);
-                    yielded.push(ty);
-                }
-                Statement::While { cond, body, body_lines } => {
-                    self.expr(cond, env, depth);
-                    let mut inner = env.clone();
-                    self.block(body, body_lines, &mut inner, depth);
-                    // the body may or may not have run: what it assigned is no longer known
-                    let mut bound = HashSet::new();
-                    collect_assigned(body, &mut bound);
-                    for name in bound {
-                        env.insert(name, Ty::Unknown);
-                    }
-                }
-                Statement::FunctionDef(node) => {
-                    // a variable of the same name no longer is what a call reaches
-                    env.remove(&node.name);
-                    self.define(node, depth);
-                }
-                Statement::Import(import) => {
-                    if let ImportSpecifier::Symbols(symbols) = &import.specifier {
-                        for symbol in symbols {
-                            env.insert(symbol.alias.clone().unwrap_or_else(|| symbol.name.clone()), Ty::Unknown);
-                        }
-                    }
-                }
-                Statement::Export(_) => {}
+            let is_last = index + 1 == statements.len();
+            if let Some(ty) = self.statement(statement, is_last, env, depth) {
+                yielded.push(ty);
             }
         }
         join(yielded)
+    }
+
+    /// Checks one statement; the type it yields to its block, if it yields one.
+    fn statement(&mut self, statement: &Statement, is_last: bool, env: &mut Env, depth: usize) -> Option<Ty> {
+        match statement {
+            Statement::Assignment(node) => {
+                let ty = self.expr(&node.value, env, depth);
+                env.insert(node.name.clone(), ty);
+                None
+            }
+            Statement::Expr(e) => {
+                let ty = self.expr(e, env, depth);
+                is_last.then_some(ty)
+            }
+            Statement::Return(e) => Some(self.expr(e, env, depth)),
+            Statement::GuardReturn { cond, value } => {
+                self.expr(cond, env, depth);
+                Some(self.expr(value, env, depth))
+            }
+            Statement::While { cond, body, body_lines } => {
+                self.while_loop(cond, body, body_lines, env, depth);
+                None
+            }
+            Statement::FunctionDef(node) => {
+                // a variable of the same name no longer is what a call reaches
+                env.remove(&node.name);
+                self.define(node, depth);
+                None
+            }
+            Statement::Import(import) => {
+                bind_imported(&import.specifier, env);
+                None
+            }
+            Statement::Export(_) => None,
+        }
+    }
+
+    fn while_loop(&mut self, cond: &Expr, body: &[Statement], body_lines: &[usize], env: &mut Env, depth: usize) {
+        self.expr(cond, env, depth);
+        let mut inner = env.clone();
+        self.block(body, body_lines, &mut inner, depth);
+        // the body may or may not have run: what it assigned is no longer known
+        let mut bound = HashSet::new();
+        collect_assigned(body, &mut bound);
+        for name in bound {
+            env.insert(name, Ty::Unknown);
+        }
     }
 
     /// Registers a function and checks its body once, for the dimensions it declares.
@@ -464,81 +470,95 @@ impl<'a> Checker<'a> {
 
     fn arithmetic(&mut self, op: BinaryOp, a: &Dim, b: &Dim) -> Ty {
         match op {
-            BinaryOp::Add | BinaryOp::Sub => {
-                let word = if op == BinaryOp::Add { "add" } else { "subtract" };
-                if !a.same_dimension(b) {
-                    self.report(
-                        Severity::Error,
-                        "dimension-mismatch",
-                        format!("cannot {word}: the left side is {}, the right side is {}", a.text(), b.text()),
-                    );
-                    return Ty::Unknown;
-                }
-                let point = match (op, a.point, b.point) {
-                    (BinaryOp::Add, true, true) => {
-                        self.report(
-                            Severity::Error,
-                            "temperature-points",
-                            "two absolute temperatures cannot be added: one of them is an interval (K, delta_celsius)".to_string(),
-                        );
-                        return Ty::Unknown;
-                    }
-                    (BinaryOp::Sub, false, true) => {
-                        self.report(
-                            Severity::Error,
-                            "temperature-points",
-                            "an absolute temperature cannot be subtracted from an interval".to_string(),
-                        );
-                        return Ty::Unknown;
-                    }
-                    (BinaryOp::Add, true, false) | (BinaryOp::Add, false, true) | (BinaryOp::Sub, true, false) => true,
-                    _ => false,
-                };
-                let constant = match (a.constant, b.constant, op) {
-                    (Some(x), Some(y), BinaryOp::Add) => Some(x + y),
-                    (Some(x), Some(y), _) => Some(x - y),
-                    _ => None,
-                };
-                Ty::Qty(Dim { exps: a.exps.clone(), point, constant })
+            BinaryOp::Add | BinaryOp::Sub => self.add_sub(op, a, b),
+            BinaryOp::Mul | BinaryOp::Div => self.mul_div(op, a, b),
+            BinaryOp::Pow => self.power(a, b),
+            BinaryOp::Convert | BinaryOp::Range => Ty::Unknown,
+        }
+    }
+
+    fn add_sub(&mut self, op: BinaryOp, a: &Dim, b: &Dim) -> Ty {
+        let word = if op == BinaryOp::Add { "add" } else { "subtract" };
+        if !a.same_dimension(b) {
+            self.report(
+                Severity::Error,
+                "dimension-mismatch",
+                format!("cannot {word}: the left side is {}, the right side is {}", a.text(), b.text()),
+            );
+            return Ty::Unknown;
+        }
+        let Some(point) = self.temperature_point(op, a.point, b.point) else {
+            return Ty::Unknown;
+        };
+        let constant = match (a.constant, b.constant, op) {
+            (Some(x), Some(y), BinaryOp::Add) => Some(x + y),
+            (Some(x), Some(y), _) => Some(x - y),
+            _ => None,
+        };
+        Ty::Qty(Dim { exps: a.exps.clone(), point, constant })
+    }
+
+    /// Whether the result of a sum or difference is an absolute temperature; `None` (after reporting) when the
+    /// operands may not be combined at all.
+    fn temperature_point(&mut self, op: BinaryOp, left_point: bool, right_point: bool) -> Option<bool> {
+        match (op, left_point, right_point) {
+            (BinaryOp::Add, true, true) => {
+                self.report(
+                    Severity::Error,
+                    "temperature-points",
+                    "two absolute temperatures cannot be added: one of them is an interval (K, delta_celsius)".to_string(),
+                );
+                None
             }
-            BinaryOp::Mul | BinaryOp::Div => {
-                if (a.point && b.exps.is_empty()) || (b.point && a.exps.is_empty() && op == BinaryOp::Mul) {
-                    self.report(
-                        Severity::Error,
-                        "temperature-points",
-                        "an absolute temperature cannot be multiplied or divided by a plain number: the result depends on the scale".to_string(),
-                    );
-                    return Ty::Unknown;
-                }
-                let sign = if op == BinaryOp::Mul { 1 } else { -1 };
-                let mut result = a.combine(b, sign);
-                result.constant = match (a.constant, b.constant) {
-                    (Some(x), Some(y)) if op == BinaryOp::Mul => Some(x * y),
-                    (Some(x), Some(y)) if y != 0.0 => Some(x / y),
-                    _ => None,
-                };
+            (BinaryOp::Sub, false, true) => {
+                self.report(
+                    Severity::Error,
+                    "temperature-points",
+                    "an absolute temperature cannot be subtracted from an interval".to_string(),
+                );
+                None
+            }
+            (BinaryOp::Add, true, false) | (BinaryOp::Add, false, true) | (BinaryOp::Sub, true, false) => Some(true),
+            _ => Some(false),
+        }
+    }
+
+    fn mul_div(&mut self, op: BinaryOp, a: &Dim, b: &Dim) -> Ty {
+        if (a.point && b.exps.is_empty()) || (b.point && a.exps.is_empty() && op == BinaryOp::Mul) {
+            self.report(
+                Severity::Error,
+                "temperature-points",
+                "an absolute temperature cannot be multiplied or divided by a plain number: the result depends on the scale".to_string(),
+            );
+            return Ty::Unknown;
+        }
+        let sign = if op == BinaryOp::Mul { 1 } else { -1 };
+        let mut result = a.combine(b, sign);
+        result.constant = match (a.constant, b.constant) {
+            (Some(x), Some(y)) if op == BinaryOp::Mul => Some(x * y),
+            (Some(x), Some(y)) if y != 0.0 => Some(x / y),
+            _ => None,
+        };
+        Ty::Qty(result)
+    }
+
+    fn power(&mut self, a: &Dim, b: &Dim) -> Ty {
+        if !b.exps.is_empty() {
+            self.report(
+                Severity::Error,
+                "bad-exponent",
+                format!("an exponent must be a dimensionless constant, this one is {}", b.text()),
+            );
+            return Ty::Unknown;
+        }
+        match b.constant.and_then(as_rational) {
+            Some(power) => {
+                let mut result = a.pow(power);
+                result.constant = a.constant.map(|x| x.powf(*power.numer() as f64 / *power.denom() as f64));
                 Ty::Qty(result)
             }
-            BinaryOp::Pow => {
-                if !b.exps.is_empty() {
-                    self.report(
-                        Severity::Error,
-                        "bad-exponent",
-                        format!("an exponent must be a dimensionless constant, this one is {}", b.text()),
-                    );
-                    return Ty::Unknown;
-                }
-                match b.constant.and_then(as_rational) {
-                    Some(power) => {
-                        let mut result = a.pow(power);
-                        result.constant = a.constant.map(|x| x.powf(*power.numer() as f64 / *power.denom() as f64));
-                        Ty::Qty(result)
-                    }
-                    None if a.exps.is_empty() => Ty::Qty(Dim::dimensionless()),
-                    None => Ty::Unknown,
-                }
-            }
-            BinaryOp::Convert | BinaryOp::Range => Ty::Unknown,
+            None if a.exps.is_empty() => Ty::Qty(Dim::dimensionless()),
+            None => Ty::Unknown,
         }
     }
 
@@ -643,19 +663,7 @@ impl<'a> Checker<'a> {
                 Some(dim) => Ty::Qty(Dim { point: false, ..dim.pow(Rational64::new(1, 2)) }),
                 None => Ty::Unknown,
             },
-            "sin" | "cos" | "tan" | "exp" | "ln" | "log" => match only(args) {
-                Some(dim) => {
-                    if !dim.is_plain_or_angle() {
-                        self.report(
-                            Severity::Error,
-                            "bad-argument",
-                            format!("{name} expects an angle or a dimensionless value, got {}", dim.text()),
-                        );
-                    }
-                    Ty::Qty(Dim::dimensionless())
-                }
-                None => Ty::Unknown,
-            },
+            "sin" | "cos" | "tan" | "exp" | "ln" | "log" => self.dimensionless_function(name, only(args)),
             "abs" | "floor" | "ceil" | "uncertainty" | "sigma" => match only(args) {
                 Some(dim) => Ty::Qty(Dim { constant: None, ..dim }),
                 None => Ty::Unknown,
@@ -664,35 +672,9 @@ impl<'a> Checker<'a> {
                 Some(Ty::Qty(dim)) => Ty::Qty(Dim { constant: None, ..dim.clone() }),
                 _ => Ty::Unknown,
             },
-            "min" | "max" => {
-                let dims: Vec<&Dim> = args.iter().filter_map(|t| if let Ty::Qty(d) = t { Some(d) } else { None }).collect();
-                if dims.len() != args.len() || dims.is_empty() {
-                    return Ty::Unknown;
-                }
-                if dims.iter().any(|d| !d.same_dimension(dims[0])) {
-                    self.report(
-                        Severity::Warning,
-                        "mixed-extremum",
-                        format!(
-                            "{name} of different dimensions ({}) compares their magnitudes in base units, which means nothing",
-                            dims.iter().map(|d| d.text()).collect::<Vec<_>>().join(", ")
-                        ),
-                    );
-                    return Ty::Unknown;
-                }
-                Ty::Qty(Dim { constant: None, ..dims[0].clone() })
-            }
+            "min" | "max" => self.extremum(name, args),
             "op_<" | "op_>" | "op_<=" | "op_>=" | "op_==" | "op_!=" | "op_\u{2260}" | "op_\u{2264}" | "op_\u{2265}" | "op_\u{2248}" | "op_approx" => {
-                if let [Ty::Qty(a), Ty::Qty(b)] = args {
-                    if !a.same_dimension(b) {
-                        self.report(
-                            Severity::Error,
-                            "dimension-mismatch",
-                            format!("cannot compare {} with {}", a.text(), b.text()),
-                        );
-                    }
-                }
-                Ty::Bool
+                self.comparison(args)
             }
             "op_and" | "op_or" | "op_not" => Ty::Bool,
             "ternary" | "if_then_else" => match args {
@@ -701,6 +683,50 @@ impl<'a> Checker<'a> {
             },
             _ => Ty::Unknown,
         }
+    }
+
+    /// `sin`, `exp`, `ln`...: the interpreter takes an angle or a dimensionless value and answers a pure number.
+    fn dimensionless_function(&mut self, name: &str, argument: Option<Dim>) -> Ty {
+        let Some(dim) = argument else {
+            return Ty::Unknown;
+        };
+        if !dim.is_plain_or_angle() {
+            self.report(
+                Severity::Error,
+                "bad-argument",
+                format!("{name} expects an angle or a dimensionless value, got {}", dim.text()),
+            );
+        }
+        Ty::Qty(Dim::dimensionless())
+    }
+
+    /// `min` and `max` compare base-unit magnitudes with no dimension check, which the interpreter accepts.
+    fn extremum(&mut self, name: &str, args: &[Ty]) -> Ty {
+        let dims: Vec<&Dim> = args.iter().filter_map(|t| if let Ty::Qty(d) = t { Some(d) } else { None }).collect();
+        if dims.len() != args.len() || dims.is_empty() {
+            return Ty::Unknown;
+        }
+        if dims.iter().any(|d| !d.same_dimension(dims[0])) {
+            self.report(
+                Severity::Warning,
+                "mixed-extremum",
+                format!(
+                    "{name} of different dimensions ({}) compares their magnitudes in base units, which means nothing",
+                    dims.iter().map(|d| d.text()).collect::<Vec<_>>().join(", ")
+                ),
+            );
+            return Ty::Unknown;
+        }
+        Ty::Qty(Dim { constant: None, ..dims[0].clone() })
+    }
+
+    fn comparison(&mut self, args: &[Ty]) -> Ty {
+        if let [Ty::Qty(a), Ty::Qty(b)] = args {
+            if !a.same_dimension(b) {
+                self.report(Severity::Error, "dimension-mismatch", format!("cannot compare {} with {}", a.text(), b.text()));
+            }
+        }
+        Ty::Bool
     }
 }
 
@@ -720,6 +746,15 @@ fn join(types: Vec<Ty>) -> Ty {
     match types.split_first() {
         Some((first, rest)) if rest.iter().all(|t| t == first) => first.clone(),
         _ => Ty::Unknown,
+    }
+}
+
+/// An import of named symbols binds each of them (under its alias) to something the pass cannot type.
+fn bind_imported(specifier: &ImportSpecifier, env: &mut Env) {
+    if let ImportSpecifier::Symbols(symbols) = specifier {
+        for symbol in symbols {
+            env.insert(symbol.alias.clone().unwrap_or_else(|| symbol.name.clone()), Ty::Unknown);
+        }
     }
 }
 

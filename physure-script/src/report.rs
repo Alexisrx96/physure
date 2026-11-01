@@ -105,7 +105,29 @@ fn syntax_report(message: String) -> Report {
 }
 
 fn run_program(interp: &PhsInterpreter, program: &crate::ast::Program, registry: &UnitRegistry) -> Report {
-    let mut diagnostics: Vec<Finding> = check_program(program, registry)
+    let mut diagnostics = static_findings(program, registry);
+    // the interpreter refuses what the checker already reported: say it once
+    let reported: HashSet<usize> = diagnostics.iter().filter(|d| d.severity == "error").map(|d| d.line).collect();
+    let mut collected = Collected { results: Vec::new(), bytes: 0, cap: interp.limits.max_output_bytes };
+    let mut env = HashMap::new();
+    for (statement, &line) in program.statements.iter().zip(&program.lines) {
+        let go_on = match interp.eval_statement_with_env(statement, &mut env) {
+            Ok(PhsValue::None) => true,
+            Ok(value) => collected.add(statement, line, &value, registry, &mut diagnostics),
+            Err(failure) => record_failure(line, failure.to_string(), &reported, &mut diagnostics),
+        };
+        if !go_on {
+            break;
+        }
+    }
+    diagnostics.sort_by_key(|d| d.line);
+    let ok = !diagnostics.iter().any(|d| d.severity == "error");
+    Report { ok, results: collected.results, diagnostics }
+}
+
+/// What the static checker finds in the program, as report findings.
+fn static_findings(program: &crate::ast::Program, registry: &UnitRegistry) -> Vec<Finding> {
+    check_program(program, registry)
         .into_iter()
         .map(|d| Finding {
             line: d.line,
@@ -113,45 +135,42 @@ fn run_program(interp: &PhsInterpreter, program: &crate::ast::Program, registry:
             code: d.code.to_string(),
             message: d.message,
         })
-        .collect();
-    // the interpreter refuses what the checker already reported: say it once
-    let reported: HashSet<usize> = diagnostics.iter().filter(|d| d.severity == "error").map(|d| d.line).collect();
-    let cap = interp.limits.max_output_bytes;
-    let mut env = HashMap::new();
-    let mut results = Vec::new();
-    let mut bytes = 0usize;
-    for (statement, &line) in program.statements.iter().zip(&program.lines) {
-        match interp.eval_statement_with_env(statement, &mut env) {
-            Ok(PhsValue::None) => {}
-            Ok(value) => {
-                let rendered = render(&value, registry);
-                bytes += rendered.text.len();
-                if let Some(cap) = cap.filter(|cap| bytes > *cap) {
-                    diagnostics.push(error(line, "limit", format!("output limit of {cap} bytes reached; the results from line {line} on are omitted")));
-                    break;
-                }
-                let name = match statement {
-                    Statement::Assignment(node) => Some(node.name.clone()),
-                    _ => None,
-                };
-                results.push(Item { line, name, value: rendered });
-            }
-            Err(failure) => {
-                let message = failure.to_string();
-                let code = classify(&message);
-                if code == "runtime" && reported.contains(&line) {
-                    continue;
-                }
-                diagnostics.push(error(line, code, message));
-                if code == "limit" {
-                    break;
-                }
-            }
+        .collect()
+}
+
+/// The values rendered so far, and how much output they came to.
+struct Collected {
+    results: Vec<Item>,
+    bytes: usize,
+    cap: Option<usize>,
+}
+
+impl Collected {
+    /// Adds the value of a statement; false when the output cap ends the run.
+    fn add(&mut self, statement: &Statement, line: usize, value: &PhsValue, registry: &UnitRegistry, diagnostics: &mut Vec<Finding>) -> bool {
+        let rendered = render(value, registry);
+        self.bytes += rendered.text.len();
+        if let Some(cap) = self.cap.filter(|cap| self.bytes > *cap) {
+            diagnostics.push(error(line, "limit", format!("output limit of {cap} bytes reached; the results from line {line} on are omitted")));
+            return false;
         }
+        let name = match statement {
+            Statement::Assignment(node) => Some(node.name.clone()),
+            _ => None,
+        };
+        self.results.push(Item { line, name, value: rendered });
+        true
     }
-    diagnostics.sort_by_key(|d| d.line);
-    let ok = !diagnostics.iter().any(|d| d.severity == "error");
-    Report { ok, results, diagnostics }
+}
+
+/// Records a statement's runtime error; false when it ends the run (a limit).
+fn record_failure(line: usize, message: String, reported: &HashSet<usize>, diagnostics: &mut Vec<Finding>) -> bool {
+    let code = classify(&message);
+    if code == "runtime" && reported.contains(&line) {
+        return true;
+    }
+    diagnostics.push(error(line, code, message));
+    code != "limit"
 }
 
 fn error(line: usize, code: &str, message: String) -> Finding {
