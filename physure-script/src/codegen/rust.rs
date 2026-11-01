@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::codegen::{CodeGenerator, CodegenError};
+use crate::codegen::{terminate_statement, CodeGenerator, CodegenError};
 use std::collections::HashSet;
 
 pub struct RustTranspiler;
@@ -78,42 +78,47 @@ impl RustTranspiler {
             Statement::Export(_) => Ok(String::new()),
             Statement::FunctionDef(node) => self.generate_function_def(node),
             Statement::Assignment(node) => self.generate_assignment(node, declared_vars, known_bools),
-            Statement::Expr(expr) => {
-                match super::as_assert_call(expr, known_bools) {
-                    Some(super::AssertShape::Bool { condition }) => {
-                        Ok(format!("assert!({}, \"assertion failed\")", self.generate_expr(condition)?))
-                    }
-                    Some(super::AssertShape::BoolWithMessage { condition, message }) => {
-                        Ok(format!("assert!({}, \"{{}}\", {})", self.generate_expr(condition)?, self.generate_expr(message)?))
-                    }
-                    Some(super::AssertShape::Quantities { kind, actual, expected }) => {
-                        let a_code = self.generate_expr(actual)?;
-                        let b_code = self.generate_expr(expected)?;
-                        let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
-                        Ok(format!("({}).{}(&({}))?", a_code, method, b_code))
-                    }
-                    None => self.generate_expr(expr),
-                }
-            }
+            Statement::Expr(expr) => self.generate_expr_statement(expr, known_bools),
             Statement::Return(expr) => Ok(format!("return {};", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if {} {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
             }
-            Statement::While { cond, body, .. } => {
-                let cond_str = self.generate_expr(cond)?;
-                let mut lines = Vec::new();
-                for s in body {
-                    let stmt_code = self.generate_statement(s, declared_vars, known_bools)?;
-                    if !stmt_code.is_empty() {
-                        let stmt_with_semi = terminate_statement(stmt_code);
-                        for line in stmt_with_semi.lines() {
-                            lines.push(format!("  {}", line));
-                        }
-                    }
-                }
-                Ok(format!("while {} {{\n{}\n}}", cond_str, lines.join("\n")))
-            }
+            Statement::While { cond, body, .. } => self.generate_while(cond, body, declared_vars, known_bools),
         }
+    }
+
+    /// An expression statement: an `assert` call becomes the check it stands for.
+    fn generate_expr_statement(&self, expr: &Expr, known_bools: &HashSet<String>) -> Result<String, CodegenError> {
+        match super::as_assert_call(expr, known_bools) {
+            Some(super::AssertShape::Bool { condition }) => {
+                Ok(format!("assert!({}, \"assertion failed\")", self.generate_expr(condition)?))
+            }
+            Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                Ok(format!("assert!({}, \"{{}}\", {})", self.generate_expr(condition)?, self.generate_expr(message)?))
+            }
+            Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                let a_code = self.generate_expr(actual)?;
+                let b_code = self.generate_expr(expected)?;
+                let method = if kind == "assert" { "phs_assert" } else { "phs_exact_assert" };
+                Ok(format!("({}).{}(&({}))?", a_code, method, b_code))
+            }
+            None => self.generate_expr(expr),
+        }
+    }
+
+    fn generate_while(
+        &self,
+        cond: &Expr,
+        body: &[Statement],
+        declared_vars: &mut HashSet<String>,
+        known_bools: &mut HashSet<String>,
+    ) -> Result<String, CodegenError> {
+        let cond_str = self.generate_expr(cond)?;
+        let mut lines = Vec::new();
+        for s in body {
+            super::push_block_lines(&mut lines, self.generate_statement(s, declared_vars, known_bools)?);
+        }
+        Ok(format!("while {} {{\n{}\n}}", cond_str, lines.join("\n")))
     }
 
     fn generate_function_def(&self, node: &FunctionDefNode) -> Result<String, CodegenError> {
@@ -166,117 +171,86 @@ impl RustTranspiler {
 
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
-            Expr::Quantity(node) => {
-                if let Some(reason) = node.asymmetric_refusal() {
-                    return Err(CodegenError::Generic(reason));
-                }
-                let unit = match &node.unit {
-                    Some(u) => format!("\"{}\"", u),
-                    None => "\"\"".to_string(),
-                };
-                if let Some(uncertainty) = node.uncertainty {
-                    Ok(format!(
-                        "Quantity::with_uncertainty({:?}, {:?}, {}).unwrap()",
-                        node.magnitude, uncertainty, unit
-                    ))
-                } else {
-                    Ok(format!(
-                        "Quantity::new({:?}, {}).unwrap()",
-                        node.magnitude, unit
-                    ))
-                }
-            }
-            Expr::Str(text) => {
-                // `format!` is the native equivalent. A brace the user wrote as text has to
-                // be doubled, or it would be read as a placeholder of its own.
-                let parts = super::split_interpolated(text);
-                let mut fmt = String::new();
-                let mut args = Vec::new();
-                for part in &parts {
-                    match part {
-                        super::StrPart::Text(t) => fmt.push_str(&t.replace('{', "{{").replace('}', "}}")),
-                        super::StrPart::Expr(e) => {
-                            fmt.push_str("{}");
-                            args.push(self.generate_expr(e)?);
-                        }
-                    }
-                }
-                Ok(if args.is_empty() {
-                    format!("{:?}.to_string()", fmt)
-                } else {
-                    format!("format!({:?}, {})", fmt, args.join(", "))
-                })
-            }
+            Expr::Quantity(node) => quantity_expr(node),
+            Expr::Str(text) => self.string_expr(text),
             Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Expr::Identifier(name) => Ok(name.clone()),
-            Expr::BinaryOp { op, left, right } => {
-                let left_code = self.generate_expr(left)?;
-                match op {
-                    // Parenthesised like the Python target: without it a nested
-                    // operand is re-associated by Rust's own precedence, so
-                    // `12 m / (3 s * 2)` emitted as `12 / 3 * 2` and answered 8
-                    // where PHS answers 2.
-                    //
-                    // Operands are borrowed (`&(...)`) rather than moved: `Quantity` has no
-                    // `Copy`, so a variable used twice in one expression (`x + 2.0 / x`, which
-                    // a convergence loop's body writes routinely) would otherwise fail to
-                    // compile with "use of moved value" on its second use.
-                    BinaryOp::Add => Ok(format!("(&({}) + &({}))", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Sub => Ok(format!("(&({}) - &({}))", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Mul => Ok(format!("(&({}) * &({}))", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Div => Ok(format!("(&({}) / &({}))", left_code, self.generate_expr(right)?)),
-                    BinaryOp::Pow => {
-                        if let Expr::Quantity(q) = &**right {
-                            if q.magnitude.fract() == 0.0 {
-                                return Ok(format!("{}.powi({}).unwrap()", left_code, q.magnitude as i32));
-                            }
-                        }
-                        Ok(format!("{}.powf({}).unwrap()", left_code, self.generate_expr(right)?))
-                    }
-                    BinaryOp::Convert => {
-                        let unit_str = super::expr_to_unit_string(right);
-                        Ok(format!("({}).to(\"{}\").unwrap()", left_code, unit_str))
-                    }
-                    BinaryOp::Range => return Err(super::range_is_not_transpilable()),
-                }
-            }
-            Expr::FunctionCall { name, args, kwargs } => {
-                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
-                    let l_str = self.generate_expr(l)?;
-                    let r_str = self.generate_expr(r)?;
-                    return Ok(format!("({}.canonical_magnitude() {} {}.canonical_magnitude())", l_str, op_sym, r_str));
-                }
-                if let Some(logical) = super::as_logical_op(expr) {
-                    return Ok(match logical {
-                        super::LogicalOp::Not(x) => format!("(!{})", self.generate_expr(x)?),
-                        super::LogicalOp::And(l, r) => format!("({} && {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                        super::LogicalOp::Or(l, r) => format!("({} || {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                    });
-                }
-                if !kwargs.is_empty() {
-                    return Err(CodegenError::Generic(format!(
-                        "Named arguments are not supported in Rust codegen (call to '{}')",
-                        name
-                    )));
-                }
-                if (name == "assert" || name == "exact_assert") && matches!(args.len(), 1 | 2) {
-                    return Err(CodegenError::Generic(format!(
-                        "'{}' can only be used as a standalone statement, not nested inside an expression",
-                        name
-                    )));
-                }
-                let mut arg_codes = Vec::new();
-                for arg in args {
-                    arg_codes.push(self.generate_expr(arg)?);
-                }
-                Ok(format!("{}({})", name, arg_codes.join(", ")))
-            }
+            Expr::BinaryOp { op, left, right } => self.binary_expr(*op, left, right),
+            Expr::FunctionCall { name, args, kwargs } => self.call_expr(expr, name, args, kwargs),
             Expr::ForExpr { var, iterable, body } => {
                 let it_str = self.generate_expr(iterable)?;
                 let body_str = self.generate_expr(body)?;
                 Ok(format!("({}).into_iter().map(|{}| {}).collect::<Vec<_>>()", it_str, var, body_str))
             }
         }
+    }
+
+    fn string_expr(&self, text: &str) -> Result<String, CodegenError> {
+        // `format!` is the native equivalent. A brace the user wrote as text has to
+        // be doubled, or it would be read as a placeholder of its own.
+        let parts = super::split_interpolated(text);
+        let mut fmt = String::new();
+        let mut args = Vec::new();
+        for part in &parts {
+            match part {
+                super::StrPart::Text(t) => fmt.push_str(&t.replace('{', "{{").replace('}', "}}")),
+                super::StrPart::Expr(e) => {
+                    fmt.push_str("{}");
+                    args.push(self.generate_expr(e)?);
+                }
+            }
+        }
+        Ok(if args.is_empty() {
+            format!("{:?}.to_string()", fmt)
+        } else {
+            format!("format!({:?}, {})", fmt, args.join(", "))
+        })
+    }
+
+    fn binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr) -> Result<String, CodegenError> {
+        let left_code = self.generate_expr(left)?;
+        // Parenthesised like the Python target: without it a nested
+        // operand is re-associated by Rust's own precedence, so
+        // `12 m / (3 s * 2)` emitted as `12 / 3 * 2` and answered 8
+        // where PHS answers 2.
+        //
+        // Operands are borrowed (`&(...)`) rather than moved: `Quantity` has no
+        // `Copy`, so a variable used twice in one expression (`x + 2.0 / x`, which
+        // a convergence loop's body writes routinely) would otherwise fail to
+        // compile with "use of moved value" on its second use.
+        let operator = match op {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Pow => return self.power_expr(&left_code, right),
+            BinaryOp::Convert => return Ok(format!("({}).to(\"{}\").unwrap()", left_code, super::expr_to_unit_string(right))),
+            BinaryOp::Range => return Err(super::range_is_not_transpilable()),
+        };
+        Ok(format!("(&({}) {} &({}))", left_code, operator, self.generate_expr(right)?))
+    }
+
+    fn power_expr(&self, left_code: &str, right: &Expr) -> Result<String, CodegenError> {
+        if let Expr::Quantity(q) = right {
+            if q.magnitude.fract() == 0.0 {
+                return Ok(format!("{}.powi({}).unwrap()", left_code, q.magnitude as i32));
+            }
+        }
+        Ok(format!("{}.powf({}).unwrap()", left_code, self.generate_expr(right)?))
+    }
+
+    fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {
+        if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+            let l_str = self.generate_expr(l)?;
+            let r_str = self.generate_expr(r)?;
+            return Ok(format!("({}.canonical_magnitude() {} {}.canonical_magnitude())", l_str, op_sym, r_str));
+        }
+        if let Some(logical) = super::as_logical_op(expr) {
+            return super::c_logical_expr(logical, |e| self.generate_expr(e));
+        }
+        super::refuse_unsupported_call("Rust", name, args, kwargs)?;
+        let arg_codes = args.iter().map(|a| self.generate_expr(a)).collect::<Result<Vec<_>, _>>()?;
+        Ok(format!("{}({})", name, arg_codes.join(", ")))
     }
 
     /// Wraps the ordinary transpiled function (renamed `<name>_impl`) in a `#[no_mangle] extern
@@ -377,22 +351,19 @@ impl RustTranspiler {
     }
 }
 
-/// Appends a trailing `;` to a non-tail statement's generated code unless it already ends in
-/// `;` or `}` (a block-shaped statement -- `while`, an `if { return ...; }` guard -- is already
-/// self-terminating, so adding another would just be noise). Every non-tail statement spliced
-/// into a Rust block needs one: `generate_statement`'s `Statement::Assignment`/`Return` arms
-/// already return a string ending in `;`, but the `Statement::Expr` arm's `assert!(...)` (the
-/// Bool and BoolWithMessage assert forms) and the pre-existing `(...).phs_assert(&(...))?`
-/// (the Quantities form) both come back WITHOUT one, matching how those same strings are used
-/// verbatim as a function's tail expression elsewhere (which must NOT have a trailing `;`).
-/// Without this, a non-final `assert(...)` inside a plain `fn` body -- an ordinary mid-function
-/// validation check -- produced Rust that failed to compile with "expected `;`".
-fn terminate_statement(stmt_code: String) -> String {
-    if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
-        stmt_code
-    } else {
-        format!("{};", stmt_code)
+/// A quantity literal, with its uncertainty and unit when it has them.
+fn quantity_expr(node: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
+    if let Some(reason) = node.asymmetric_refusal() {
+        return Err(CodegenError::Generic(reason));
     }
+    let unit = match &node.unit {
+        Some(u) => format!("\"{}\"", u),
+        None => "\"\"".to_string(),
+    };
+    Ok(match node.uncertainty {
+        Some(uncertainty) => format!("Quantity::with_uncertainty({:?}, {:?}, {}).unwrap()", node.magnitude, uncertainty, unit),
+        None => format!("Quantity::new({:?}, {}).unwrap()", node.magnitude, unit),
+    })
 }
 
 /// Renders a decorator's message argument as a Rust string literal. `{:?}` on a `&str` already

@@ -398,6 +398,85 @@ pub(crate) fn to_pascal_case(name: &str) -> String {
         .collect()
 }
 
+/// Appends a trailing `;` to a non-tail statement's generated code unless it already ends in
+/// `;` or `}` (a block-shaped statement -- `while`, an `if { return ...; }` guard, a nested
+/// function definition -- is already self-terminating, so adding another would just be noise).
+/// Every non-tail statement spliced into a block needs one: an assignment or a `return` already
+/// comes back ending in `;`, but an `assert` check does not, because the same string is used
+/// verbatim as a function's tail expression elsewhere (which must NOT have a trailing `;`).
+pub(crate) fn terminate_statement(stmt_code: String) -> String {
+    if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
+        stmt_code
+    } else {
+        format!("{};", stmt_code)
+    }
+}
+
+/// Adds a statement's code to the lines of a block body: terminated, indented two spaces, and left
+/// out altogether when the statement produced nothing.
+pub(crate) fn push_block_lines(lines: &mut Vec<String>, stmt_code: String) {
+    if stmt_code.is_empty() {
+        return;
+    }
+    for line in terminate_statement(stmt_code).lines() {
+        lines.push(format!("  {}", line));
+    }
+}
+
+/// The form Java and JS/TS share for a binary operator, a method call on the left operand: `l.add(r)`,
+/// `l.pow(2)`, `l.convertTo("km")`. `generate` writes the right operand in the target's own syntax.
+pub(crate) fn method_binary_expr(
+    op: BinaryOp,
+    l: &str,
+    right: &Expr,
+    generate: impl FnOnce(&Expr) -> Result<String, CodegenError>,
+) -> Result<String, CodegenError> {
+    let method = match op {
+        BinaryOp::Add => "add",
+        BinaryOp::Sub => "subtract",
+        BinaryOp::Mul => "multiply",
+        BinaryOp::Div => "divide",
+        BinaryOp::Convert => return Ok(format!("{}.convertTo(\"{}\")", l, expr_to_unit_string(right))),
+        BinaryOp::Pow => {
+            return match right {
+                Expr::Quantity(q) => Ok(format!("{}.pow({})", l, q.magnitude)),
+                _ => Ok(format!("{}.pow({}.getValue())", l, generate(right)?)),
+            };
+        }
+        BinaryOp::Range => return Err(range_is_not_transpilable()),
+    };
+    Ok(format!("{}.{}({})", l, method, generate(right)?))
+}
+
+/// `!x`, `x && y` and `x || y`: the spelling Java, JS/TS and Rust share.
+pub(crate) fn c_logical_expr(
+    logical: LogicalOp,
+    mut generate: impl FnMut(&Expr) -> Result<String, CodegenError>,
+) -> Result<String, CodegenError> {
+    Ok(match logical {
+        LogicalOp::Not(x) => format!("(!{})", generate(x)?),
+        LogicalOp::And(l, r) => format!("({} && {})", generate(l)?, generate(r)?),
+        LogicalOp::Or(l, r) => format!("({} || {})", generate(l)?, generate(r)?),
+    })
+}
+
+/// Refuses what a target cannot say in a call: named arguments, and an `assert` nested in an expression.
+pub(crate) fn refuse_unsupported_call(target: &str, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<(), CodegenError> {
+    if !kwargs.is_empty() {
+        return Err(CodegenError::Generic(format!(
+            "Named arguments are not supported in {} codegen (call to '{}')",
+            target, name
+        )));
+    }
+    if (name == "assert" || name == "exact_assert") && matches!(args.len(), 1 | 2) {
+        return Err(CodegenError::Generic(format!(
+            "'{}' can only be used as a standalone statement, not nested inside an expression",
+            name
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod pascal_case_tests {
     use super::to_pascal_case;

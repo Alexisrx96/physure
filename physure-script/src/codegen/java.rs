@@ -1,5 +1,5 @@
 use crate::ast::{AssignmentNode, BinaryOp, Expr, FunctionDefNode, Program, Statement};
-use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
+use crate::codegen::{push_block_lines, refuse_unsupported_call, snake_to_camel, terminate_statement, CodeGenerator, CodegenError};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -131,20 +131,7 @@ impl JavaTranspiler {
         if is_bool_now {
             return Ok(format!("{}boolean {} = {};", indent, var_name, val));
         }
-        let literal = match &node.value {
-            Expr::Str(text) => Some(text.as_str()),
-            _ => None,
-        };
-        let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
-        if literal.is_some() && !is_equation {
-            Ok(format!("{}String {} = {};", indent, var_name, val))
-        } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
-            Ok(format!("{}PhyEquation {} = {};", indent, var_name, if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val }))
-        } else if val.starts_with("PhyFunction") {
-            Ok(format!("{}PhyFunction {} = {};", indent, var_name, val))
-        } else {
-            Ok(format!("{}Quantity {} = {};", indent, var_name, val))
-        }
+        Ok(java_declaration(indent, &var_name, &node.value, val))
     }
 
     fn generate_function_def_stmt(&self, f: &FunctionDefNode) -> Result<String, CodegenError> {
@@ -180,155 +167,96 @@ impl JavaTranspiler {
         match stmt {
             Statement::FunctionDef(f) => self.generate_function_def_stmt(f),
             Statement::Assignment(node) => self.generate_java_assignment(node, "", declared_vars, known_bool_vars),
-            Statement::Expr(expr) => {
-                match super::as_assert_call(expr, known_bool_vars) {
-                    Some(super::AssertShape::Bool { condition }) => {
-                        Ok(format!("if (!({})) throw new AssertionError(\"assertion failed\")", self.generate_expr(condition)?))
-                    }
-                    Some(super::AssertShape::BoolWithMessage { condition, message }) => {
-                        Ok(format!("if (!({})) throw new AssertionError({})", self.generate_expr(condition)?, self.generate_expr(message)?))
-                    }
-                    Some(super::AssertShape::Quantities { kind, actual, expected }) => {
-                        let a_code = self.generate_expr(actual)?;
-                        let b_code = self.generate_expr(expected)?;
-                        let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
-                        Ok(format!("{}.{}({})", a_code, method, b_code))
-                    }
-                    None => self.generate_expr(expr),
-                }
-            }
+            Statement::Expr(expr) => self.generate_expr_statement(expr, known_bool_vars),
             Statement::Return(expr) => Ok(format!("return {}", self.generate_expr(expr)?)),
             Statement::GuardReturn { cond, value } => {
                 Ok(format!("if ({}) {{ return {}; }}", self.generate_expr(cond)?, self.generate_expr(value)?))
             }
-            Statement::While { cond, body, .. } => {
-                let cond_str = self.generate_expr(cond)?;
-                let mut lines = Vec::new();
-                for s in body {
-                    let stmt_code = self.generate_statement(s, declared_vars, known_bool_vars)?;
-                    if !stmt_code.is_empty() {
-                        let stmt_with_semi = terminate_statement(stmt_code);
-                        for line in stmt_with_semi.lines() {
-                            lines.push(format!("  {}", line));
-                        }
-                    }
-                }
-                Ok(format!("while ({}) {{\n{}\n}}", cond_str, lines.join("\n")))
-            }
+            Statement::While { cond, body, .. } => self.generate_while(cond, body, declared_vars, known_bool_vars),
             _ => Ok(String::new()),
         }
     }
 
+    fn string_expr(&self, text: &str) -> Result<String, CodegenError> {
+        // Java has no interpolating literal, but `+` concatenates and calls
+        // toString() on each operand, which is what the interpreter does too.
+        let parts = super::split_interpolated(text);
+        let mut pieces = Vec::new();
+        for (i, part) in parts.iter().enumerate() {
+            match part {
+                super::StrPart::Text(t) => pieces.push(format!("{:?}", t)),
+                super::StrPart::Expr(e) => {
+                    // The chain has to start from a String, or `+` between two
+                    // numbers would add them instead of concatenating.
+                    if i == 0 {
+                        pieces.push("\"\"".to_string());
+                    }
+                    pieces.push(self.generate_expr(e)?);
+                }
+            }
+        }
+        Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
+    }
+
+    fn binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr) -> Result<String, CodegenError> {
+        let l = self.generate_expr(left)?;
+        super::method_binary_expr(op, &l, right, |e| self.generate_expr(e))
+    }
+
+    fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {
+        if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+            return Ok(comparison_expr(op_sym, &self.generate_expr(l)?, &self.generate_expr(r)?));
+        }
+        if let Some(logical) = super::as_logical_op(expr) {
+            return super::c_logical_expr(logical, |e| self.generate_expr(e));
+        }
+        refuse_unsupported_call("Java", name, args, kwargs)?;
+        let arg_strs = args.iter().map(|a| self.generate_expr(a)).collect::<Result<Vec<_>, _>>()?;
+        Ok(format!("{}({})", snake_to_camel(name), arg_strs.join(", ")))
+    }
+
+    /// An expression statement: an `assert` call becomes the check it stands for.
+    fn generate_expr_statement(&self, expr: &Expr, known_bool_vars: &HashSet<String>) -> Result<String, CodegenError> {
+        match super::as_assert_call(expr, known_bool_vars) {
+            Some(super::AssertShape::Bool { condition }) => {
+                Ok(format!("if (!({})) throw new AssertionError(\"assertion failed\")", self.generate_expr(condition)?))
+            }
+            Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                Ok(format!("if (!({})) throw new AssertionError({})", self.generate_expr(condition)?, self.generate_expr(message)?))
+            }
+            Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                let a_code = self.generate_expr(actual)?;
+                let b_code = self.generate_expr(expected)?;
+                let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
+                Ok(format!("{}.{}({})", a_code, method, b_code))
+            }
+            None => self.generate_expr(expr),
+        }
+    }
+
+    fn generate_while(
+        &self,
+        cond: &Expr,
+        body: &[Statement],
+        declared_vars: &mut HashSet<String>,
+        known_bool_vars: &mut HashSet<String>,
+    ) -> Result<String, CodegenError> {
+        let cond_str = self.generate_expr(cond)?;
+        let mut lines = Vec::new();
+        for s in body {
+            push_block_lines(&mut lines, self.generate_statement(s, declared_vars, known_bool_vars)?);
+        }
+        Ok(format!("while ({}) {{\n{}\n}}", cond_str, lines.join("\n")))
+    }
+
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
-            Expr::Str(text) => {
-                // Java has no interpolating literal, but `+` concatenates and calls
-                // toString() on each operand, which is what the interpreter does too.
-                let parts = super::split_interpolated(text);
-                let mut pieces = Vec::new();
-                for (i, part) in parts.iter().enumerate() {
-                    match part {
-                        super::StrPart::Text(t) => pieces.push(format!("{:?}", t)),
-                        super::StrPart::Expr(e) => {
-                            // The chain has to start from a String, or `+` between two
-                            // numbers would add them instead of concatenating.
-                            if i == 0 {
-                                pieces.push("\"\"".to_string());
-                            }
-                            pieces.push(self.generate_expr(e)?);
-                        }
-                    }
-                }
-                Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
-            }
+            Expr::Str(text) => self.string_expr(text),
             Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
-            Expr::Quantity(q) => {
-                if let Some(reason) = q.asymmetric_refusal() {
-                    return Err(CodegenError::Generic(reason));
-                }
-                let mut args = vec![format!("{:?}", q.magnitude)];
-                
-                let is_with_unc = q.uncertainty.is_some();
-                if let Some(unc) = q.uncertainty {
-                    args.push(format!("{:?}", unc));
-                }
-                if let Some(ref unit) = q.unit {
-                    args.push(format!("\"{}\"", unit));
-                }
-
-                if is_with_unc {
-                    Ok(format!("Quantity.withUncertainty({})", args.join(", ")))
-                } else if q.unit.is_some() {
-                    Ok(format!("Quantity.of({})", args.join(", ")))
-                } else {
-                    Ok(format!("Quantity.of({})", args.join(", ")))
-                }
-            }
-            Expr::BinaryOp { op, left, right } => {
-                let l = self.generate_expr(left)?;
-                if *op == BinaryOp::Convert {
-                    let unit_str = super::expr_to_unit_string(right);
-                    Ok(format!("{}.convertTo(\"{}\")", l, unit_str))
-                } else if *op == BinaryOp::Pow {
-                    if let Expr::Quantity(q) = &**right {
-                        return Ok(format!("{}.pow({})", l, q.magnitude));
-                    }
-                    let r = self.generate_expr(right)?;
-                    Ok(format!("{}.pow({}.getValue())", l, r))
-                } else {
-                    let r = self.generate_expr(right)?;
-                    let method = match op {
-                        BinaryOp::Add => "add",
-                        BinaryOp::Sub => "subtract",
-                        BinaryOp::Mul => "multiply",
-                        BinaryOp::Div => "divide",
-                        BinaryOp::Pow => unreachable!(),
-                        BinaryOp::Convert => unreachable!(),
-                        BinaryOp::Range => return Err(super::range_is_not_transpilable()),
-                    };
-                    Ok(format!("{}.{}({})", l, method, r))
-                }
-            }
-            Expr::FunctionCall { name, args, kwargs } => {
-                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
-                    let l_str = self.generate_expr(l)?;
-                    let r_str = self.generate_expr(r)?;
-                    return Ok(match op_sym {
-                        ">" => format!("{}.greaterThan({})", l_str, r_str),
-                        "<" => format!("{}.lessThan({})", l_str, r_str),
-                        ">=" => format!("!{}.lessThan({})", l_str, r_str),
-                        "<=" => format!("!{}.greaterThan({})", l_str, r_str),
-                        "==" => format!("{}.equals({})", l_str, r_str),
-                        "!=" => format!("!{}.equals({})", l_str, r_str),
-                        _ => unreachable!(),
-                    });
-                }
-                if let Some(logical) = super::as_logical_op(expr) {
-                    return Ok(match logical {
-                        super::LogicalOp::Not(x) => format!("(!{})", self.generate_expr(x)?),
-                        super::LogicalOp::And(l, r) => format!("({} && {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                        super::LogicalOp::Or(l, r) => format!("({} || {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                    });
-                }
-                if !kwargs.is_empty() {
-                    return Err(CodegenError::Generic(format!(
-                        "Named arguments are not supported in Java codegen (call to '{}')",
-                        name
-                    )));
-                }
-                if (name == "assert" || name == "exact_assert") && matches!(args.len(), 1 | 2) {
-                    return Err(CodegenError::Generic(format!(
-                        "'{}' can only be used as a standalone statement, not nested inside an expression",
-                        name
-                    )));
-                }
-                let mut arg_strs = Vec::new();
-                for a in args {
-                    arg_strs.push(self.generate_expr(a)?);
-                }
-                Ok(format!("{}({})", snake_to_camel(name), arg_strs.join(", ")))
-            }
+            Expr::Quantity(q) => quantity_expr(q),
+            Expr::BinaryOp { op, left, right } => self.binary_expr(*op, left, right),
+            Expr::FunctionCall { name, args, kwargs } => self.call_expr(expr, name, args, kwargs),
             Expr::ForExpr { var, iterable, body } => {
                 let it_str = self.generate_expr(iterable)?;
                 let var_str = snake_to_camel(var);
@@ -339,20 +267,51 @@ impl JavaTranspiler {
     }
 }
 
-/// Appends a trailing `;` to a non-tail statement's generated code unless it already ends in
-/// `;` or `}` (a block-shaped statement -- `while`, an `if { return ...; }` guard, a nested
-/// function definition -- is already self-terminating, so adding another would just be noise).
-/// `generate_java_assignment` now bakes its own trailing `;` into every branch (needed so
-/// `generate_program`'s call site, which doesn't wrap its result at all, still gets one), so
-/// unconditionally appending `;` at a call site -- as `generate_function_def_stmt`'s
-/// per-statement loop used to -- double-terminates any non-tail `Assignment` inside a function
-/// body. Mirrors `rust.rs`'s identically-named helper, added for the same bug class one task
-/// earlier in this plan (commit `3a9a46f`).
-fn terminate_statement(stmt_code: String) -> String {
-    if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
-        stmt_code
+/// A quantity literal, with its uncertainty and unit when it has them.
+fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
+    if let Some(reason) = q.asymmetric_refusal() {
+        return Err(CodegenError::Generic(reason));
+    }
+    let mut args = vec![format!("{:?}", q.magnitude)];
+    if let Some(unc) = q.uncertainty {
+        args.push(format!("{:?}", unc));
+    }
+    if let Some(ref unit) = q.unit {
+        args.push(format!("\"{}\"", unit));
+    }
+    let constructor = if q.uncertainty.is_some() { "withUncertainty" } else { "of" };
+    Ok(format!("Quantity.{}({})", constructor, args.join(", ")))
+}
+
+/// The Java method that carries out a comparison operator.
+fn comparison_expr(op_sym: &str, l_str: &str, r_str: &str) -> String {
+    match op_sym {
+        ">" => format!("{}.greaterThan({})", l_str, r_str),
+        "<" => format!("{}.lessThan({})", l_str, r_str),
+        ">=" => format!("!{}.lessThan({})", l_str, r_str),
+        "<=" => format!("!{}.greaterThan({})", l_str, r_str),
+        "==" => format!("{}.equals({})", l_str, r_str),
+        "!=" => format!("!{}.equals({})", l_str, r_str),
+        _ => unreachable!(),
+    }
+}
+
+/// The declaration of a variable first assigned `val`, typed by what the expression is.
+fn java_declaration(indent: &str, var_name: &str, value: &Expr, val: String) -> String {
+    let literal = match value {
+        Expr::Str(text) => Some(text.as_str()),
+        _ => None,
+    };
+    let is_equation = literal.is_some_and(|t| t.contains('=') && !t.contains('{'));
+    if literal.is_some() && !is_equation {
+        format!("{}String {} = {};", indent, var_name, val)
+    } else if (val.starts_with('"') && val.contains('=')) || val.contains(".solve(") || val.starts_with("PhyEquation") {
+        let init = if val.starts_with('"') { format!("PhyEquation.of({})", val) } else { val };
+        format!("{}PhyEquation {} = {};", indent, var_name, init)
+    } else if val.starts_with("PhyFunction") {
+        format!("{}PhyFunction {} = {};", indent, var_name, val)
     } else {
-        format!("{};", stmt_code)
+        format!("{}Quantity {} = {};", indent, var_name, val)
     }
 }
 
