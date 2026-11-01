@@ -143,6 +143,90 @@ fn parse_uncertainty_val(raw: &str, is_sigma: &mut bool) -> PhysureResult<(f64, 
     Ok((value, is_percent))
 }
 
+/// The magnitude a `number` token spells, infinities included.
+fn parse_magnitude(s: &str) -> PhysureResult<f64> {
+    Ok(match s {
+        "inf" | "+inf" | "infinity" | "+infinity" | "oo" | "+oo" | "∞" | "+∞" => f64::INFINITY,
+        "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
+        _ => s.parse::<f64>().map_err(|_| PhysureError::Generic(format!("Invalid number: {}", s)))?,
+    })
+}
+
+/// One value for `+/- 0.5`, two for the asymmetric `+/- (0.5, 0.4)`, upper first. `uncertainty_pair`
+/// nests them, so the halves are collected by rule rather than by position.
+fn collect_uncertainty_halves(pair: pest::iterators::Pair<Rule>, halves: &mut Vec<(f64, bool)>, is_sigma: &mut bool) -> PhysureResult<()> {
+    for u_inner in pair.into_inner() {
+        match u_inner.as_rule() {
+            Rule::uncertainty_val => halves.push(parse_uncertainty_val(u_inner.as_str(), is_sigma)?),
+            Rule::uncertainty_pair => {
+                for half in u_inner.into_inner() {
+                    if half.as_rule() == Rule::uncertainty_val {
+                        halves.push(parse_uncertainty_val(half.as_str(), is_sigma)?);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// `+/- 0.5%` is a *relative* uncertainty. The percent sign was stripped and then never
+/// applied, so `9.81 +/- 0.5% m/s^2` claimed ±0.5 instead of ±0.049 — twenty times too
+/// wide, and nothing in the output said so.
+fn apply_percent_uncertainty(halves: &mut [(f64, bool)], magnitude: Option<f64>, magnitude_expr: Option<&Expr>) -> PhysureResult<()> {
+    if !halves.iter().any(|(_, is_percent)| *is_percent) {
+        return Ok(());
+    }
+    let base = magnitude.or(match magnitude_expr {
+        Some(Expr::Quantity(q)) => Some(q.magnitude),
+        _ => None,
+    });
+    // Anything else only knows its magnitude at run time, and a percentage of an
+    // unknown is not a number: say so instead of inventing one.
+    let Some(mag) = base else {
+        return Err(PhysureError::Generic(
+            "A percent uncertainty needs a literal magnitude to apply to; use an absolute value like `+/- 0.05`".into(),
+        ));
+    };
+    for (value, is_percent) in halves.iter_mut() {
+        if *is_percent {
+            *value = mag.abs() * *value / 100.0;
+        }
+    }
+    Ok(())
+}
+
+/// The quantity a literal magnitude, or an expression standing for one, makes together with its unit and uncertainty.
+fn build_quantity(
+    magnitude: Option<f64>,
+    magnitude_expr: Option<Expr>,
+    unit: Option<String>,
+    uncertainty: Option<f64>,
+    uncertainty_lower: Option<f64>,
+    is_sigma: bool,
+) -> PhysureResult<Expr> {
+    if let Some(mag) = magnitude {
+        return Ok(Expr::Quantity(QuantityNode { magnitude: mag, uncertainty, uncertainty_lower, is_sigma, unit }));
+    }
+    let Some(mag_expr) = magnitude_expr else {
+        return Err(PhysureError::Generic("Missing magnitude in quantity".to_string()));
+    };
+    let Some(u) = unit else {
+        return Ok(mag_expr);
+    };
+    Ok(match mag_expr {
+        Expr::Quantity(mut q) => {
+            q.unit = Some(u);
+            q.is_sigma = is_sigma;
+            q.uncertainty = uncertainty.or(q.uncertainty);
+            q.uncertainty_lower = uncertainty_lower.or(q.uncertainty_lower);
+            Expr::Quantity(q)
+        }
+        other => Expr::BinaryOp { op: BinaryOp::Mul, left: Box::new(other), right: Box::new(Expr::Identifier(u)) },
+    })
+}
+
 pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut magnitude = None;
     let mut magnitude_expr = None;
@@ -156,34 +240,13 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::number => {
-                let s = inner.as_str().trim();
-                let mag = match s {
-                    "inf" | "+inf" | "infinity" | "+infinity" | "oo" | "+oo" | "∞" | "+∞" => f64::INFINITY,
-                    "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
-                    _ => s.parse::<f64>().map_err(|_| PhysureError::Generic(format!("Invalid number: {}", s)))?,
-                };
-                magnitude = Some(mag);
+                magnitude = Some(parse_magnitude(inner.as_str().trim())?);
             }
             Rule::expr => {
                 magnitude_expr = Some(parse_expr(inner)?);
             }
             Rule::uncertainty => {
-                // One value for `+/- 0.5`, two for the asymmetric `+/- (0.5, 0.4)`, upper
-                // first. `uncertainty_pair` nests them, so the halves are collected by rule
-                // rather than by position.
-                for u_inner in inner.into_inner() {
-                    match u_inner.as_rule() {
-                        Rule::uncertainty_val => halves.push(parse_uncertainty_val(u_inner.as_str(), &mut is_sigma)?),
-                        Rule::uncertainty_pair => {
-                            for half in u_inner.into_inner() {
-                                if half.as_rule() == Rule::uncertainty_val {
-                                    halves.push(parse_uncertainty_val(half.as_str(), &mut is_sigma)?);
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
+                collect_uncertainty_halves(inner, &mut halves, &mut is_sigma)?;
             }
             Rule::unit_expr => {
                 let (u, leftover) = with_unit_catalog(|registry| split_unit_expr(inner, registry));
@@ -194,31 +257,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
         }
     }
 
-    // `+/- 0.5%` is a *relative* uncertainty. The percent sign was stripped and then never
-    // applied, so `9.81 +/- 0.5% m/s^2` claimed ±0.5 instead of ±0.049 — twenty times too
-    // wide, and nothing in the output said so.
-    if halves.iter().any(|(_, is_percent)| *is_percent) {
-        let base = magnitude.or(match &magnitude_expr {
-            Some(Expr::Quantity(q)) => Some(q.magnitude),
-            _ => None,
-        });
-        match base {
-            Some(mag) => {
-                for (value, is_percent) in halves.iter_mut() {
-                    if *is_percent {
-                        *value = mag.abs() * *value / 100.0;
-                    }
-                }
-            }
-            // Anything else only knows its magnitude at run time, and a percentage of an
-            // unknown is not a number: say so instead of inventing one.
-            None => {
-                return Err(PhysureError::Generic(
-                    "A percent uncertainty needs a literal magnitude to apply to; use an absolute value like `+/- 0.05`".into(),
-                ))
-            }
-        }
-    }
+    apply_percent_uncertainty(&mut halves, magnitude, magnitude_expr.as_ref())?;
 
     // `+/- (0.5, 0.4)` is +0.5 and -0.4: upper half first, in the order the operator reads.
     // That convention lives here and nowhere else — swapping these two lines (and the
@@ -226,35 +265,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
     let uncertainty = halves.first().map(|(v, _)| *v);
     let uncertainty_lower = halves.get(1).map(|(v, _)| *v);
 
-    let quantity_expr = if let Some(mag) = magnitude {
-        Expr::Quantity(QuantityNode {
-            magnitude: mag,
-            uncertainty,
-            uncertainty_lower,
-            is_sigma,
-            unit,
-        })
-    } else if let Some(mag_expr) = magnitude_expr {
-        if let Some(u) = unit {
-            if let Expr::Quantity(mut q) = mag_expr {
-                q.unit = Some(u);
-                q.is_sigma = is_sigma;
-                q.uncertainty = uncertainty.or(q.uncertainty);
-                q.uncertainty_lower = uncertainty_lower.or(q.uncertainty_lower);
-                Expr::Quantity(q)
-            } else {
-                Expr::BinaryOp {
-                    op: BinaryOp::Mul,
-                    left: Box::new(mag_expr),
-                    right: Box::new(Expr::Identifier(u)),
-                }
-            }
-        } else {
-            mag_expr
-        }
-    } else {
-        return Err(PhysureError::Generic("Missing magnitude in quantity".to_string()));
-    };
+    let quantity_expr = build_quantity(magnitude, magnitude_expr, unit, uncertainty, uncertainty_lower, is_sigma)?;
 
     match unit_leftover {
         Some((op, remainder)) => {
@@ -268,4 +279,3 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
         None => Ok(quantity_expr),
     }
 }
-

@@ -457,33 +457,35 @@ fn parse_function_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr>
     Ok(Expr::FunctionCall { name, args, kwargs })
 }
 
+/// The `call_arg`s that follow a method name: a `name value` pair is a keyword argument.
+fn parse_method_args(
+    inner: &mut pest::iterators::Pairs<Rule>,
+    args: &mut Vec<Expr>,
+    kwargs: &mut Vec<(String, Expr)>,
+) -> PhysureResult<()> {
+    while inner.peek().is_some_and(|p| p.as_rule() == Rule::call_arg) {
+        let mut arg_inner = inner.next().unwrap().into_inner();
+        let first = arg_inner.next().unwrap();
+        if first.as_rule() == Rule::identifier && arg_inner.peek().is_some() {
+            let value = parse_expr(arg_inner.next().unwrap())?;
+            kwargs.push((first.as_str().to_string(), value));
+        } else {
+            args.push(parse_expr(first)?);
+        }
+    }
+    Ok(())
+}
+
 fn parse_method_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let mut current_expr = parse_primary_pair(inner.next().unwrap())?;
 
     while let Some(method_item) = inner.next() {
         if method_item.as_rule() == Rule::identifier {
-            let method_name = method_item.as_str().to_string();
             let mut args = vec![current_expr];
             let mut kwargs = Vec::new();
-
-            while let Some(call_arg_pair) = inner.peek() {
-                if call_arg_pair.as_rule() == Rule::call_arg {
-                    let arg_pair = inner.next().unwrap();
-                    let mut arg_inner = arg_pair.into_inner();
-                    let first = arg_inner.next().unwrap();
-                    if first.as_rule() == Rule::identifier && arg_inner.peek().is_some() {
-                        let kwarg_name = first.as_str().to_string();
-                        let value = parse_expr(arg_inner.next().unwrap())?;
-                        kwargs.push((kwarg_name, value));
-                    } else {
-                        args.push(parse_expr(first)?);
-                    }
-                } else {
-                    break;
-                }
-            }
-            current_expr = Expr::FunctionCall { name: method_name, args, kwargs };
+            parse_method_args(&mut inner, &mut args, &mut kwargs)?;
+            current_expr = Expr::FunctionCall { name: method_item.as_str().to_string(), args, kwargs };
         }
     }
 
