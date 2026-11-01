@@ -45,6 +45,8 @@
     <physure.native.dir>${project.basedir}/../target/debug</physure.native.dir>
     <!-- Set by the native-access profile on Java 24+, empty before (older JVMs reject the option). -->
     <physure.native.access></physure.native.access>
+    <!-- JaCoCo's agent line when the coverage profile is on; surefire appends it (@{argLine}) to its own options. -->
+    <argLine></argLine>
   </properties>
 
   <dependencies>
@@ -75,7 +77,7 @@
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
-          <argLine>-Djava.library.path=${physure.native.dir} ${physure.native.access}</argLine>
+          <argLine>@{argLine} -Djava.library.path=${physure.native.dir} ${physure.native.access}</argLine>
         </configuration>
       </plugin>
       <!-- Required by Maven Central: sources + javadoc jars alongside the main jar. -->
@@ -133,6 +135,36 @@
       <properties>
         <physure.native.access>--enable-native-access=ALL-UNNAMED</physure.native.access>
       </properties>
+    </profile>
+    <!-- `mvn -Pcoverage test` writes target/site/jacoco/jacoco.xml, which SonarQube reads
+         (sonar.coverage.jacoco.xmlReportPaths). Off by default: the agent is not needed to run the tests, and
+         the release JDKs of the matrix do not all have a JaCoCo that reads their class files. -->
+    <profile>
+      <id>coverage</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>0.8.13</version>
+            <executions>
+              <execution>
+                <id>prepare-agent</id>
+                <goals>
+                  <goal>prepare-agent</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>report</id>
+                <phase>test</phase>
+                <goals>
+                  <goal>report</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
     <profile>
       <id>release</id>

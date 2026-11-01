@@ -133,18 +133,24 @@ def find_llvm_cov_env() -> tuple[dict, str | None]:
 
 
 def compile_physure_java():
-    """Compile physure-java so the Java sensor has class files (sonar.java.binaries)."""
+    """Run physure-java's tests with JaCoCo: that gives the Java sensor class files (sonar.java.binaries) and a
+    coverage report (sonar.coverage.jacoco.xmlReportPaths). The tests load the native library, so build it first."""
     mvn_bin = shutil.which("mvn")
     if not mvn_bin:
-        log_warning("mvn not found. Skipping physure-java compile (Java analysis will fail without target/classes).")
+        log_warning("mvn not found. Skipping physure-java (Java analysis will fail without target/classes).")
         return
 
-    log_info("Compiling physure-java for SonarQube Java analysis...")
+    log_info("Building the native library and running physure-java's tests with coverage...")
     try:
-        subprocess.run([mvn_bin, "-q", "compile"], cwd=REPO_ROOT / "physure-java", check=True)
-        log_success("physure-java compiled successfully (target/classes)")
+        subprocess.run([find_cargo_bin(), "build", "-p", "physure-java"], cwd=REPO_ROOT, check=True)
+        subprocess.run([mvn_bin, "-q", "-Pcoverage", "test"], cwd=REPO_ROOT / "physure-java", check=True)
+        log_success("physure-java tested with coverage (target/classes, target/site/jacoco/jacoco.xml)")
     except Exception as e:
-        log_warning(f"physure-java compile failed: {e}")
+        log_warning(f"physure-java coverage run failed: {e}; compiling only")
+        try:
+            subprocess.run([mvn_bin, "-q", "compile"], cwd=REPO_ROOT / "physure-java", check=True)
+        except Exception as e2:
+            log_warning(f"physure-java compile failed: {e2}")
 
 
 def main():
@@ -185,16 +191,22 @@ def main():
     # 2. Run Rust Coverage (if cargo-llvm-cov is available)
     env, llvm_cov_bin = find_llvm_cov_env()
     if llvm_cov_bin:
-        log_info("Generating Rust LCOV coverage via cargo-llvm-cov...")
+        log_info("Generating Rust LCOV coverage via cargo-llvm-cov (core, script, cli, lsp)...")
         cargo_bin = find_cargo_bin()
-        # no --auto-install: cargo-llvm-cov dropped it, and find_llvm_cov_env has already found the tool
-        cov_cmd = [cargo_bin, "llvm-cov", "--lcov", "--output-path", "lcov.info"]
+        report = REPO_ROOT / "lcov.info"
+        # One instrumented run over the crates CI tests; the report names every file by its path, and each
+        # SonarQube project reads the copy in its own folder (files outside its base dir are ignored).
+        # No --auto-install: cargo-llvm-cov dropped it, and find_llvm_cov_env has already found the tool.
+        cov_cmd = [
+            cargo_bin, "llvm-cov",
+            "-p", "physure", "-p", "physure-script", "-p", "physure-cli", "-p", "physure-lsp",
+            "--lcov", "--output-path", str(report),
+        ]
         try:
-            subprocess.run(cov_cmd, cwd=PHYSURE_CORE, env=env, check=True)
-            filter_script = PHYSURE_CORE / "scripts" / "filter_lcov.py"
-            if filter_script.exists():
-                subprocess.run([sys.executable, str(filter_script), str(PHYSURE_CORE / "lcov.info")], check=False)
-            log_success("Rust coverage report generated successfully (lcov.info)")
+            subprocess.run(cov_cmd, cwd=REPO_ROOT, env=env, check=True)
+            for crate in ("physure-core", "physure-script", "physure-cli", "physure-lsp"):
+                shutil.copy(report, REPO_ROOT / crate / "lcov.info")
+            log_success("Rust coverage report generated successfully (lcov.info in each crate)")
         except Exception as e:
             log_warning(f"Rust coverage generation failed: {e}")
     else:
