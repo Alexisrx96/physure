@@ -23,14 +23,34 @@ fn format_val_latex(val: &PhsValue, i18n: &I18nLabels, precision_override: Optio
     }
 }
 
-pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = PhysureConfig::load();
-    let i18n = cfg.i18n();
+/// Where the live paper is served.
+const ADDRESS: &str = "127.0.0.1:3000";
 
-    let server = Server::http("127.0.0.1:3000").map_err(|e| format!("{}", e))?;
+pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
+    let page = live_paper(title, code, steps);
+
+    let server = Server::http(ADDRESS).map_err(|e| format!("{}", e))?;
     println!("\x1b[1;32m🚀 Physure Scientific Live Paper (100% offline) running at http://localhost:3000\x1b[0m");
     println!("\x1b[90mPress Ctrl+C to stop the server\x1b[0m");
     let _ = open::that("http://localhost:3000");
+
+    serve_page(&server, &page);
+    Ok(())
+}
+
+/// Answers every request with the page, for as long as the server lives.
+fn serve_page(server: &Server, page: &str) {
+    for request in server.incoming_requests() {
+        let response = Response::from_string(page)
+            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+        let _ = request.respond(response);
+    }
+}
+
+/// The whole paper as one self-contained HTML page: the title block, the abstract, a section for each calculation,
+/// plot and paragraph of prose, and the source.
+fn live_paper(title: &str, code: &str, steps: &[ExecutionStep]) -> String {
+    let i18n = PhysureConfig::load().i18n();
 
     let meta = extract_metadata(code);
     let paper_title = meta.title.clone().unwrap_or_else(|| title.to_string());
@@ -52,67 +72,9 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars:
         );
     }
 
-    let mut content_html = String::new();
-    let mut eq_counter = 1;
-    let mut fig_counter = 1;
+    let content_html = steps_html(steps, &i18n);
 
-    for step in steps.iter() {
-        if step.is_display_text {
-            if let PhsValue::String(ref text) = step.value {
-                content_html.push_str(&format!(
-                    r#"<div class="latex-prose">
-                        <p>{}</p>
-                    </div>"#,
-                    escape_html(text).replace("\n", "<br/>")
-                ));
-            }
-            continue;
-        }
-
-        match &step.value {
-            PhsValue::Plot(PlotData { title: p_title, svg, .. }) => {
-                content_html.push_str(&format!(
-                    r#"<figure class="latex-figure">
-                        <div class="fig-frame">
-                            {}
-                        </div>
-                        <figcaption class="fig-caption">
-                            <strong>{} {}.</strong> {}.
-                        </figcaption>
-                    </figure>"#,
-                    svg, i18n.fig_prefix, fig_counter, escape_html(p_title)
-                ));
-                fig_counter += 1;
-            }
-            _ => {
-                let is_true = matches!(&step.value, PhsValue::Quantity(q) if q.value.mean() > 0.5)
-                    || matches!(&step.value, PhsValue::Bool(true));
-                let eq_num = eq_counter;
-                eq_counter += 1;
-
-                if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, &i18n) {
-                    content_html.push_str(&format!(
-                        r#"<div class="latex-eq-container">
-                            <div class="latex-eq-main">\[ {} \]</div>
-                            <div class="latex-eq-num">({})</div>
-                        </div>"#,
-                        cmp, eq_num
-                    ));
-                } else {
-                    let eval_latex = format_val_latex(&step.value, &i18n, step.precision_override);
-                    content_html.push_str(&format!(
-                        r#"<div class="latex-eq-container">
-                            <div class="latex-eq-main">\[ {} \quad {} \]</div>
-                            <div class="latex-eq-num">({})</div>
-                        </div>"#,
-                        step.latex_expr, eval_latex, eq_num
-                    ));
-                }
-            }
-        }
-    }
-
-    let html_content = format!(r#"<!DOCTYPE html>
+    format!(r#"<!DOCTYPE html>
 <html lang="{}">
 <head>
     <meta charset="UTF-8">
@@ -332,38 +294,72 @@ pub fn start_web_server(title: &str, code: &str, steps: &[ExecutionStep], _vars:
         content_html,
         i18n.sec_appendix,
         escape_html(code)
-    );
+    )
+}
 
-    for request in server.incoming_requests() {
-        let response = Response::from_string(&html_content)
-            .with_header(tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
-        let _ = request.respond(response);
+/// The body of the paper: prose, figures and numbered equations, in the order of the steps.
+fn steps_html(steps: &[ExecutionStep], i18n: &I18nLabels) -> String {
+    let mut content_html = String::new();
+    let mut eq_counter = 1;
+    let mut fig_counter = 1;
+
+    for step in steps.iter() {
+        if step.is_display_text {
+            if let PhsValue::String(ref text) = step.value {
+                content_html.push_str(&format!(
+                    r#"<div class="latex-prose">
+                        <p>{}</p>
+                    </div>"#,
+                    escape_html(text).replace("\n", "<br/>")
+                ));
+            }
+            continue;
+        }
+
+        match &step.value {
+            PhsValue::Plot(PlotData { title: p_title, svg, .. }) => {
+                content_html.push_str(&format!(
+                    r#"<figure class="latex-figure">
+                        <div class="fig-frame">
+                            {}
+                        </div>
+                        <figcaption class="fig-caption">
+                            <strong>{} {}.</strong> {}.
+                        </figcaption>
+                    </figure>"#,
+                    svg, i18n.fig_prefix, fig_counter, escape_html(p_title)
+                ));
+                fig_counter += 1;
+            }
+            _ => {
+                let is_true = matches!(&step.value, PhsValue::Quantity(q) if q.value.mean() > 0.5)
+                    || matches!(&step.value, PhsValue::Bool(true));
+                let eq_num = eq_counter;
+                eq_counter += 1;
+
+                if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, i18n) {
+                    content_html.push_str(&format!(
+                        r#"<div class="latex-eq-container">
+                            <div class="latex-eq-main">\[ {} \]</div>
+                            <div class="latex-eq-num">({})</div>
+                        </div>"#,
+                        cmp, eq_num
+                    ));
+                } else {
+                    let eval_latex = format_val_latex(&step.value, i18n, step.precision_override);
+                    content_html.push_str(&format!(
+                        r#"<div class="latex-eq-container">
+                            <div class="latex-eq-main">\[ {} \quad {} \]</div>
+                            <div class="latex-eq-num">({})</div>
+                        </div>"#,
+                        step.latex_expr, eval_latex, eq_num
+                    ));
+                }
+            }
+        }
     }
-    Ok(())
+    content_html
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use physure_core::quantity::Quantity;
-    use physure_core::units::RationalUnit;
-
-    #[test]
-    fn format_val_latex_applies_gum_rounding_to_an_uncertain_quantity() {
-        let i18n = PhysureConfig::load().i18n();
-        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
-        let latex = format_val_latex(&PhsValue::Quantity(q), &i18n, None);
-        assert!(latex.contains("630"), "expected the GUM-rounded mean, got: {latex}");
-        assert!(latex.contains("40"), "expected the GUM-rounded uncertainty, got: {latex}");
-        assert!(!latex.contains("40.0195264839553"), "expected no un-rounded uncertainty, got: {latex}");
-    }
-
-    #[test]
-    fn format_val_latex_respects_a_precision_override() {
-        let i18n = PhysureConfig::load().i18n();
-        let q = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::dimensionless(), None, None);
-        let latex = format_val_latex(&PhsValue::Quantity(q), &i18n, Some(2));
-        assert!(latex.contains("3.14"), "expected 2 decimal places, got: {latex}");
-        assert!(!latex.contains("3.14159265"), "expected the override to actually apply, got: {latex}");
-    }
-}
+mod tests;

@@ -1,20 +1,27 @@
 use std::collections::HashMap;
 use std::io;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::CrosstermBackend,
+    backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph, Row, Table, TableState},
     Frame, Terminal,
 };
 use physure_script::value::{PhsValue, PlotData};
-use arboard::Clipboard;
 use crate::step::ExecutionStep;
+
+/// Puts a text on the clipboard; false when it could not.
+type SetClipboard = Box<dyn FnMut(&str) -> bool>;
+
+/// The clipboard of the system. A machine without one (a server, a session over SSH) just does not copy.
+fn system_clipboard(text: &str) -> bool {
+    arboard::Clipboard::new().is_ok_and(|mut clipboard| clipboard.set_text(text).is_ok())
+}
 
 /// What the dashboard remembers between frames and keys: the selected step, how far the code is scrolled, and
 /// the line of text at the bottom.
@@ -22,10 +29,15 @@ struct DashboardState {
     table_state: TableState,
     code_scroll: u16,
     status_msg: String,
+    set_clipboard: SetClipboard,
 }
 
 impl DashboardState {
     fn new(step_count: usize) -> Self {
+        Self::with_clipboard(step_count, Box::new(system_clipboard))
+    }
+
+    fn with_clipboard(step_count: usize, set_clipboard: SetClipboard) -> Self {
         let mut table_state = TableState::default();
         if step_count > 0 {
             table_state.select(Some(0));
@@ -34,6 +46,7 @@ impl DashboardState {
             table_state,
             code_scroll: 0,
             status_msg: String::from("Nav: ▲/▼ (Select Step) | w/s (Scroll Code) | 'c' (Copy) | 'q' (Quit)"),
+            set_clipboard,
         }
     }
 
@@ -65,10 +78,8 @@ impl DashboardState {
             return;
         };
         let copy_str = format!("{} = {}", step.label, step.value);
-        if let Ok(mut cb) = Clipboard::new() {
-            if cb.set_text(copy_str.clone()).is_ok() {
-                self.status_msg = format!("Copied to clipboard: {}", copy_str);
-            }
+        if (self.set_clipboard)(&copy_str) {
+            self.status_msg = format!("Copied to clipboard: {}", copy_str);
         }
     }
 
@@ -100,7 +111,7 @@ fn detail_text(step: Option<&ExecutionStep>) -> String {
         PhsValue::Quantity(q) => {
             format!(
                 "Target: {}\nExpr: {}\nValue: {}\nUnit: {}\nRepr: {}",
-                step.label, step.expr_code, q, q.unit.__repr__(), q.to_string()
+                step.label, step.expr_code, q, q.unit.__repr__(), q
             )
         }
         PhsValue::Plot(PlotData { title, ascii, .. }) => {
@@ -121,7 +132,11 @@ fn step_rows(steps: &[ExecutionStep]) -> Vec<Row<'static>> {
         .iter()
         .map(|step| {
             let val_str = step.value.to_string();
-            let truncated_val = if val_str.len() > 30 { format!("{}...", &val_str[..27]) } else { val_str };
+            let truncated_val = if val_str.chars().count() > 30 {
+                format!("{}...", val_str.chars().take(27).collect::<String>())
+            } else {
+                val_str
+            };
             Row::new(vec![step.label.clone(), step.expr_code.clone(), truncated_val])
         })
         .collect()
@@ -185,6 +200,27 @@ fn draw_dashboard(f: &mut Frame<'_>, code_lines: &[&str], steps: &[ExecutionStep
     f.render_widget(footer, chunks[2]);
 }
 
+/// Draws the dashboard and applies the keys `next_event` brings, until one asks to leave. `next_event` waits a
+/// moment for the terminal and says what came, if anything. A key that is released is not a key pressed: Windows
+/// terminals report both, and a key would otherwise act twice.
+fn run_dashboard<B: Backend>(
+    terminal: &mut Terminal<B>,
+    code_lines: &[&str],
+    steps: &[ExecutionStep],
+    state: &mut DashboardState,
+    mut next_event: impl FnMut() -> io::Result<Option<Event>>,
+) -> io::Result<()> {
+    loop {
+        terminal.draw(|f| draw_dashboard(f, code_lines, steps, state))?;
+
+        if let Some(Event::Key(key)) = next_event()? {
+            if key.kind != KeyEventKind::Release && !state.handle_key(key.code, steps, code_lines.len()) {
+                return Ok(());
+            }
+        }
+    }
+}
+
 pub fn run_tui(code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -195,20 +231,20 @@ pub fn run_tui(code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsV
     let mut state = DashboardState::new(steps.len());
     let code_lines: Vec<&str> = code.lines().collect();
 
-    loop {
-        terminal.draw(|f| draw_dashboard(f, &code_lines, steps, &mut state))?;
-
+    let result = run_dashboard(&mut terminal, &code_lines, steps, &mut state, || {
         if event::poll(std::time::Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if !state.handle_key(key.code, steps, code_lines.len()) {
-                    break;
-                }
-            }
+            event::read().map(Some)
+        } else {
+            Ok(None)
         }
-    }
+    });
 
+    // the terminal is given back even when the dashboard failed
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
-    Ok(())
+    Ok(result?)
 }
+
+#[cfg(test)]
+mod tests;

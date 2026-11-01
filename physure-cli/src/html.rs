@@ -557,9 +557,9 @@ mod tests {
     #[test]
     fn format_val_latex_respects_a_precision_override() {
         let i18n = PhysureConfig::load().i18n();
-        let q = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::dimensionless(), None, None);
+        let q = Quantity::new_scalar(std::f64::consts::PI, 0.0, RationalUnit::dimensionless(), None, None);
         let latex = format_val_latex(&PhsValue::Quantity(q), &i18n, Some(2));
         assert!(latex.contains("3.14"), "expected 2 decimal places, got: {latex}");
-        assert!(!latex.contains("3.14159265"), "expected the override to actually apply, got: {latex}");
+        assert!(!latex.contains("3.14159"), "expected the override to actually apply, got: {latex}");
     }
 }
