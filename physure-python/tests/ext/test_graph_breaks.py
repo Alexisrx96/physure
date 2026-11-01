@@ -35,13 +35,19 @@ def _torch_minor() -> str:
 
 @pytest.mark.skipif(torch is None, reason="PyTorch not installed")
 @pytest.mark.skipif(
-    torch is not None and sys.version_info >= (3, 14) and tuple(int(x) for x in torch.__version__.split(".")[:2]) < (2, 10),
+    torch is not None
+    and sys.version_info >= (3, 14)
+    and tuple(int(x) for x in torch.__version__.split(".")[:2]) < (2, 10),
     reason="torch.compile on Python 3.14+ requires torch >= 2.10",
 )
 def test_graph_breaks_do_not_go_up():
     if _torch_minor() not in BASELINE:
         pytest.skip(f"no graph-break baseline for torch {_torch_minor()}")
-    script = Path(__file__).resolve().parents[2] / "benchmarks" / "count_graph_breaks.py"
+    script = (
+        Path(__file__).resolve().parents[2]
+        / "benchmarks"
+        / "count_graph_breaks.py"
+    )
     spec = importlib.util.spec_from_file_location("count_graph_breaks", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -49,5 +55,11 @@ def test_graph_breaks_do_not_go_up():
     baseline = BASELINE[_torch_minor()]
     counts = module.count_breaks()
     assert set(counts) == set(baseline)
-    worse = {name: (counts[name], baseline[name]) for name in baseline if counts[name][0] > baseline[name][0]}
-    assert not worse, f"more graph breaks than the baseline (now, baseline): {worse}"
+    worse = {
+        name: (counts[name], baseline[name])
+        for name in baseline
+        if counts[name][0] > baseline[name][0]
+    }
+    assert not worse, (
+        f"more graph breaks than the baseline (now, baseline): {worse}"
+    )

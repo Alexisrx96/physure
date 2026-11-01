@@ -56,7 +56,9 @@ def make_inputs(n: int):
     return mass, torch.rand(n) + 1.0, torch.rand(n) + 1.0, torch.rand(n)
 
 
-def time_step(fn, n: int, repeats: int = 7, per_batch: int = 20) -> tuple[float, float]:
+def time_step(
+    fn, n: int, repeats: int = 7, per_batch: int = 20
+) -> tuple[float, float]:
     """(warm-up seconds, median seconds per step) of forward + backward."""
     mass = torch.rand(n, requires_grad=True)
     d, t, target = torch.rand(n) + 1.0, torch.rand(n) + 1.0, torch.rand(n)
@@ -88,25 +90,62 @@ def main() -> None:
     backends = ["aot_eager"] + (["inductor"] if inductor_available() else [])
     rows = []
     for n in SIZES:
-        entries = [("plain eager", plain_step), ("Quantity eager", quantity_step)]
+        entries = [
+            ("plain eager", plain_step),
+            ("Quantity eager", quantity_step),
+        ]
         for backend in backends:
-            entries.append((f"plain compiled ({backend})", torch.compile(plain_step, backend=backend)))
-            entries.append((f"Quantity compiled ({backend})", torch.compile(quantity_step, backend=backend)))
+            entries.append(
+                (
+                    f"plain compiled ({backend})",
+                    torch.compile(plain_step, backend=backend),
+                )
+            )
+            entries.append(
+                (
+                    f"Quantity compiled ({backend})",
+                    torch.compile(quantity_step, backend=backend),
+                )
+            )
         for name, fn in entries:
             if "compiled" in name:
                 torch._dynamo.reset()
             warmup, step = time_step(fn, n)
-            rows.append({"n": n, "variant": name, "warmup_s": round(warmup, 3), "step_ms": round(step * 1000, 3)})
+            rows.append(
+                {
+                    "n": n,
+                    "variant": name,
+                    "warmup_s": round(warmup, 3),
+                    "step_ms": round(step * 1000, 3),
+                }
+            )
     if "--json" in sys.argv:
-        print(json.dumps({"torch": torch.__version__, "python": sys.version.split()[0], "backends": backends, "rows": rows}))
+        print(
+            json.dumps(
+                {
+                    "torch": torch.__version__,
+                    "python": sys.version.split()[0],
+                    "backends": backends,
+                    "rows": rows,
+                }
+            )
+        )
         return
-    print(f"torch {torch.__version__}  python {sys.version.split()[0]}  backends {backends}")
+    print(
+        f"torch {torch.__version__}  python {sys.version.split()[0]}  backends {backends}"
+    )
     for n in SIZES:
         print(f"\nn = {n:,}")
         print(f"{'variant':34} {'warm-up s':>10} {'ms/step':>10}")
-        base = next(r["step_ms"] for r in rows if r["n"] == n and r["variant"] == "plain eager")
+        base = next(
+            r["step_ms"]
+            for r in rows
+            if r["n"] == n and r["variant"] == "plain eager"
+        )
         for r in (r for r in rows if r["n"] == n):
-            print(f"{r['variant']:34} {r['warmup_s']:10.2f} {r['step_ms']:10.3f}   x{r['step_ms'] / base:5.1f}")
+            print(
+                f"{r['variant']:34} {r['warmup_s']:10.2f} {r['step_ms']:10.3f}   x{r['step_ms'] / base:5.1f}"
+            )
 
 
 if __name__ == "__main__":

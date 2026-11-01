@@ -40,12 +40,24 @@ def count_breaks(verbose: bool = False) -> dict[str, tuple[int, int]]:
         a, b = Q_(torch.randn(4, 4), "m"), Q_(torch.randn(4, 4), "m")
         s, t = Q_(torch.randn(4, 4), "m/s"), Q_(torch.randn(4, 4), "degC")
         explanation = dynamo.explain(fn)(a, b, s, t)
-        results[name] = (explanation.graph_break_count, explanation.graph_count)
+        results[name] = (
+            explanation.graph_break_count,
+            explanation.graph_count,
+        )
         if verbose:
             seen = set()
             for reason in explanation.break_reasons:
-                frames = [f for f in (reason.user_stack or []) if "physure" in f.filename.replace("\\", "/") and ".venv" not in f.filename]
-                where = f"{frames[-1].filename.replace(chr(92), '/').split('physure/')[-1]}:{frames[-1].lineno} `{(frames[-1].line or '').strip()[:60]}`" if frames else "?"
+                frames = [
+                    f
+                    for f in (reason.user_stack or [])
+                    if "physure" in f.filename.replace("\\", "/")
+                    and ".venv" not in f.filename
+                ]
+                where = (
+                    f"{frames[-1].filename.replace(chr(92), '/').split('physure/')[-1]}:{frames[-1].lineno} `{(frames[-1].line or '').strip()[:60]}`"
+                    if frames
+                    else "?"
+                )
                 key = (str(reason.reason).strip().splitlines()[0][:100], where)
                 if key not in seen:
                     seen.add(key)
@@ -56,7 +68,15 @@ def count_breaks(verbose: bool = False) -> dict[str, tuple[int, int]]:
 if __name__ == "__main__":
     counts = count_breaks(verbose="-v" in sys.argv)
     if "--json" in sys.argv:
-        print(json.dumps({"torch": torch.__version__, "python": sys.version.split()[0], "counts": counts}))
+        print(
+            json.dumps(
+                {
+                    "torch": torch.__version__,
+                    "python": sys.version.split()[0],
+                    "counts": counts,
+                }
+            )
+        )
     else:
         print(f"torch {torch.__version__}  python {sys.version.split()[0]}")
         print(f"{'expression':16} breaks graphs")
