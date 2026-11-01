@@ -664,6 +664,13 @@ impl<'a> Checker<'a> {
                 None => Ty::Unknown,
             },
             "sin" | "cos" | "tan" | "exp" | "ln" | "log" => self.dimensionless_function(name, only(args)),
+            // a count of degrees of freedom and a coverage factor are plain numbers; an expanded
+            // uncertainty is in the unit of the measurement it expands
+            "dof" | "coverage_factor" => Ty::Qty(Dim::dimensionless()),
+            "expanded" => match args.first() {
+                Some(Ty::Qty(dim)) => Ty::Qty(Dim { constant: None, point: false, ..dim.clone() }),
+                _ => Ty::Unknown,
+            },
             "abs" | "floor" | "ceil" | "uncertainty" | "sigma" => match only(args) {
                 Some(dim) => Ty::Qty(Dim { constant: None, ..dim }),
                 None => Ty::Unknown,

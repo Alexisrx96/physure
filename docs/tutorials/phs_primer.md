@@ -78,6 +78,28 @@ a leading `1` would otherwise round to a coarse `±0.2`). The full, unrounded va
 lost — it stays available for every further calculation, and an explicit format spec like
 `kinetic_energy:.6f` still shows exactly the precision you ask for.
 
+### Degrees of freedom and expanded uncertainty
+
+A standard uncertainty that comes from `n` observations is itself uncertain, by `n - 1` degrees of freedom. Declare them
+after the uncertainty with `dof` (or `ν`), and PHS combines them through every calculation by the Welch–Satterthwaite
+formula, so that a result can say how wide its interval is at a given confidence:
+
+```phs
+l_s = 50000623 +/- 25 dof 18 nm
+d0 = 215 +/- 5.8 dof 24 nm
+d_theta = 0 +/- 16.599 dof 2 nm
+length = l_s + d0 + d_theta
+
+nu_eff = dof(length)                 # effective degrees of freedom
+k95 = coverage_factor(length, 0.95)  # Student-t factor, at nu_eff truncated to an integer
+U95 = expanded(length, 0.95)         # U = k * u_c, in nm
+```
+
+`dof(x)` is `inf` for a measurement that declares none, and `from_samples([9.8, 10.1, 10.0] V)` makes a measurement from
+observations (the mean, `s/√n`, `n − 1` degrees of freedom). The complete worked example of the Guide to the Expression
+of Uncertainty in Measurement, Annex H.1, is the file `dof_example.phs` next to this page: its six contributions give
+`nu_eff = 16.75`, `k95 = 2.12` and `U95 = 67.1 nm`, the 0.07 µm the Guide prints.
+
 ## 4. `where` for showing intermediate steps
 
 ```phs

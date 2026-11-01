@@ -35,6 +35,16 @@ Files: create `physure-core/src/math/stats.rs`, `physure-core/src/uncertainty/do
 - [x] `CHANGELOG.md` `[Unreleased]` → Added: the core API (what, why, the H.1 result). `docs/scientific_gaps_and_rigor.md` §1.1: the TODO becomes a pointer to the test, status line updated; `docs/ROADMAP.md` tick left for D4 (the feature is complete when all five bindings have it).
 - [x] Commit the spec and plan, then D1.
 
-## Stages D2, D3, D4
+## Stage D2 — PHS (done)
+
+- [x] Core: `Quantity::from_samples_in(samples, unit)`, so that a program with a unit in hand needs no unit string.
+- [x] `QuantityNode.dof` (`#[serde(default)]`) and `QuantityNode::dof_refusal(target)`; the 24 literal constructions get `dof: None`.
+- [x] Grammar `dof_op`, `dof_value` (with a sign, so that `dof -2` is refused as what it is), `dof_clause`, last in `uncertainty`. Parser: `check_dof` refuses an asymmetric pair, a `sigma` bound and a non-positive number. 5 parser tests.
+- [x] Interpreter: `eval_quantity_literal` applies `with_dof`. Builtins `dof`, `coverage_factor`, `expanded`, `from_samples` in `builtins/dof.rs`. 11 tests in `physure-script/tests/degrees_of_freedom.rs`, among them the Guide's H.1 program and the tutorial file.
+- [x] Checker: `dof` and `coverage_factor` are dimensionless, `expanded` keeps the unit (1 test in `tests/check.rs`).
+- [x] Generators: Python and Rust carry the clause, Java and JavaScript/TypeScript refuse it (`tests/codegen_dof.rs`). The new builtins are written as ordinary calls by every target, like the existing ones; Python gets them in D3 (`physure.ext.helpers`).
+- [x] Language server: completion and hover for the four builtins and for `dof`. Docs: the language specification, the primer (section 3) and `docs/tutorials/dof_example.phs`.
+
+## Stages D3, D4
 
 Planned in the spec ("Staging"). Their tasks are written here when the stage starts.

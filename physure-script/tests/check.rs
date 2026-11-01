@@ -367,3 +367,15 @@ fn a_function_called_before_it_is_defined_and_one_that_is_shadowed_are_unknown()
     assert!(errors("f(1 m) + 1 s\nfn f(x) = x").is_empty());
     assert!(errors("fn f(x) = x\nf = 3 kg\nf(1 m) + 1 s").is_empty());
 }
+
+// ---- degrees of freedom
+
+#[test]
+fn degrees_of_freedom_are_a_plain_number_and_an_expanded_uncertainty_keeps_the_unit() {
+    assert_refused("x = 1 +/- 0.1 dof 5 m\ndof(x) + 1 m", 2, "dimension-mismatch");
+    assert_refused("x = 1 +/- 0.1 dof 5 m\ncoverage_factor(x, 0.95) + 1 m", 2, "dimension-mismatch");
+    assert_refused("x = 1 +/- 0.1 dof 5 m\nexpanded(x, 0.95) + 1 s", 2, "dimension-mismatch");
+    assert_clean("x = 1 +/- 0.1 dof 5 m\nexpanded(x, 0.95) + 1 mm");
+    assert_clean("x = 1 +/- 0.1 dof 5 m\ndof(x) + 1");
+    assert_clean("x = 1 +/- 0.1 dof 5 m\ncoverage_factor(x, 0.95) * x");
+}

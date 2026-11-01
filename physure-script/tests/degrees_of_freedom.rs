@@ -153,3 +153,17 @@ l = l_s + d0 + d1 + d2 + d_theta + d_alpha
     assert!(close(quantity(&format!("{program}expanded(l, 0.95)")).value.mean(), 67.124_395_567_715_7));
     assert!(close(quantity(&format!("{program}expanded(l, 0.99)")).value.mean(), 92.483_235_483_489_64));
 }
+
+/// The worked example the tutorial ships (`docs/tutorials/dof_example.phs`) runs, and says what the primer says.
+#[test]
+fn the_tutorial_example_runs_and_gives_the_numbers_the_primer_quotes() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/tutorials/dof_example.phs")).unwrap();
+    let values = eval_phs(&source).unwrap_or_else(|e| panic!("dof_example.phs failed: {e}"));
+    let [.., PhsValue::Number(nu_eff), PhsValue::Number(k95), PhsValue::Quantity(u95), PhsValue::Quantity(u99)] = values.as_slice() else {
+        panic!("the last four values are nu_eff, k95, U95 and U99: {values:?}");
+    };
+    assert_eq!(format!("{nu_eff:.2}"), "16.75");
+    assert_eq!(format!("{k95:.2}"), "2.12");
+    assert_eq!(format!("{:.1}", u95.value.mean()), "67.1");
+    assert_eq!(format!("{:.1}", u99.value.mean()), "92.5");
+}

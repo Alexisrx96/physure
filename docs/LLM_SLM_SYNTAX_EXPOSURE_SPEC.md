@@ -102,6 +102,11 @@ You are an expert generator of Physure Script (PHS) code. Follow these strict ru
   `velocity = 25.0 m / s`
 - Measurement uncertainty: `g = 9.81 +/- 0.05 m / s ^ 2`.
 - Asymmetric uncertainty: `d = 12.3 +/- (0.5, 0.4) pb`.
+- Degrees of freedom of a standard uncertainty: `v = 10.003 +/- 0.002 dof 9 V` (`ν 9` and `dof inf` also work;
+  not with an asymmetric pair or `sigma`). `dof(v)` is the effective degrees of freedom of any result
+  (Welch–Satterthwaite), `coverage_factor(v, 0.95)` the Student-t factor for a coverage probability,
+  `expanded(v, 0.95)` the expanded uncertainty `U = k·u` as a quantity in the unit of `v`, and
+  `from_samples([9.8, 10.1, 10.0] V)` a Type A evaluation (mean, `s/√n`, `n−1` degrees of freedom).
 - Shadowed unit disambiguation: If a variable `s` is bound earlier in the script, quote the unit:
   `g_exp = 9.81 m / "s ^ 2"` (quotes keep `s` as a unit second instead of variable `s`).
 

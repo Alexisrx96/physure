@@ -242,6 +242,9 @@ fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
     if let Some(reason) = q.asymmetric_refusal() {
         return Err(CodegenError::Generic(reason));
     }
+    if let Some(reason) = q.dof_refusal("the JavaScript generator") {
+        return Err(CodegenError::Generic(reason));
+    }
     let mut args = vec![format!("{}", q.magnitude)];
     if let Some(unc) = q.uncertainty {
         args.push(format!("{}", unc));

@@ -286,7 +286,12 @@ impl PythonTranspiler {
         } else {
             String::new()
         };
-        Ok(format!("Q_({:?}, \"{}\"{})", node.magnitude, unit_str, unc_str))
+        let dof_str = match node.dof {
+            Some(nu) if nu.is_infinite() => ", dof=float(\"inf\")".to_string(),
+            Some(nu) => format!(", dof={:?}", nu),
+            None => String::new(),
+        };
+        Ok(format!("Q_({:?}, \"{}\"{}{})", node.magnitude, unit_str, unc_str, dof_str))
     }
 }
 

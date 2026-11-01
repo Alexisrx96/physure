@@ -360,8 +360,13 @@ fn quantity_expr(node: &crate::ast::QuantityNode) -> Result<String, CodegenError
         Some(u) => format!("\"{}\"", u),
         None => "\"\"".to_string(),
     };
+    let dof = match node.dof {
+        Some(nu) if nu.is_infinite() => ".with_dof(f64::INFINITY).unwrap()".to_string(),
+        Some(nu) => format!(".with_dof({:?}).unwrap()", nu),
+        None => String::new(),
+    };
     Ok(match node.uncertainty {
-        Some(uncertainty) => format!("Quantity::with_uncertainty({:?}, {:?}, {}).unwrap()", node.magnitude, uncertainty, unit),
+        Some(uncertainty) => format!("Quantity::with_uncertainty({:?}, {:?}, {}).unwrap(){}", node.magnitude, uncertainty, unit, dof),
         None => format!("Quantity::new({:?}, {}).unwrap()", node.magnitude, unit),
     })
 }

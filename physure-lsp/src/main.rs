@@ -229,6 +229,10 @@ fn builtin_completions() -> Vec<CompletionItem> {
         ("trapz", "trapz(y_array, x_array)", "Numerical integration (area under curve) — requires `use trapz from array`"),
         ("linspace", "linspace(start, stop, n)", "Evenly spaced vector range — requires `use linspace from array`"),
         ("plot", "plot(x_array, y_array)", "Plot one vector array against another — requires `use plot from plot`"),
+        ("dof", "dof(x)", "Effective degrees of freedom of a measurement (Welch–Satterthwaite); `inf` when none is finite"),
+        ("coverage_factor", "coverage_factor(x, p)", "Student-t coverage factor for the coverage probability p, at the effective degrees of freedom truncated to an integer"),
+        ("expanded", "expanded(x, p)", "Expanded uncertainty U = k·u_c in the unit of x, for the coverage probability p"),
+        ("from_samples", "from_samples([x1, x2, ...] unit)", "Type A evaluation: the mean with its standard error and n−1 degrees of freedom"),
     ];
 
     for (name, label, doc) in builtins {
@@ -638,6 +642,10 @@ fn lookup_hover_doc(word: &str, locale: &str) -> Option<String> {
         "matmul" => Some("**Built-in Function**: `matmul(matrix_a, matrix_b)`\n\nComputes matrix multiplication of two matrices.\n\n**Domain**: `array` (requires `use matmul from array`).".to_string()),
         "det" => Some("**Built-in Function**: `det(matrix)`\n\nComputes determinant of a square matrix.\n\n**Domain**: `array` (requires `use det from array`).".to_string()),
         "unit_vector" => Some("**Built-in Function**: `unit_vector(vec)`\n\nNormalizes vector to a unit vector.\n\n**Domain**: `array` (requires `use unit_vector from array`).".to_string()),
+        "dof" | "ν" => Some("**Degrees of freedom**: `dof(x)` is the effective degrees of freedom of a measurement (Welch–Satterthwaite, JCGM 100:2008 G.4); in a literal, `10.003 +/- 0.002 dof 9 V` declares that the uncertainty rests on 9 degrees of freedom (`ν 9` and `dof inf` also work).".to_string()),
+        "coverage_factor" => Some("**Built-in Function**: `coverage_factor(x, p)`\n\nThe two-sided Student-t factor k_p for the coverage probability p (0.95 gives about 2 for many degrees of freedom), at the effective degrees of freedom of `x` truncated to an integer, as the Guide recommends.".to_string()),
+        "expanded" => Some("**Built-in Function**: `expanded(x, p)`\n\nThe expanded uncertainty U = k_p · u_c in the unit of `x`, an exact bound and not a measurement.".to_string()),
+        "from_samples" => Some("**Built-in Function**: `from_samples([x1, x2, ...] unit)`\n\nA Type A evaluation: the mean of the observations, `s/√n` as its standard uncertainty and n−1 degrees of freedom.".to_string()),
         "plot" => Some("**Built-in Function**: `plot(x_array, y_array)`\n\nPlots one vector array against another in 2D.\n\n**Domain**: `plot` (requires `use plot from plot`).".to_string()),
         "plot3d" => Some("**Built-in Function**: `plot3d(expr: string, title?: string)`\n\nRenders a 3D physical surface Z = f(x, y) in WebGL with interactive OrbitControls, Colorbar legend, and Raycaster point inspection.\n\n**Domain**: `plot` (requires `use plot3d from plot`).".to_string()),
         "export3d" | "export_3d" => Some("**Built-in Function**: `export3d(expr: string, filename: string, format?: string)`\n\nExports 3D physical surface geometries to standard 3D formats (`html`, `stl`, `obj`, `gltf`, `ply`).\n\n**Domain**: `plot` (requires `use export3d from plot`).".to_string()),
