@@ -130,24 +130,12 @@ impl UnitRegistry {
         let mut state = self.state.try_borrow_mut().map_err(|_| borrow_err())?;
         state.in_catalog(|interpreter| {
             let program = parse_phs(source).map_err(to_js_error)?;
-            let mut result = String::new();
-            for (idx, stmt) in program.statements.iter().enumerate() {
-                if idx > 0 {
-                    result.push('\n');
-                }
+            let mut lines = Vec::new();
+            for stmt in &program.statements {
                 let value = interpreter.run_statement(stmt).map_err(to_js_error)?;
-                match value {
-                    PhsValue::None => match stmt {
-                        Statement::Assignment(node) => match interpreter.get_var(&node.name) {
-                            Some(v) => result.push_str(&v.to_string()),
-                            None => result.push_str("None"),
-                        },
-                        _ => result.push_str("None"),
-                    },
-                    other => result.push_str(&other.to_string()),
-                }
+                lines.push(value_text(interpreter, stmt, value));
             }
-            Ok(result)
+            Ok(lines.join("\n"))
         })
     }
 
@@ -161,6 +149,17 @@ impl UnitRegistry {
 
     pub fn solve(&self, equation: &str, wrt: &str) -> Result<String, JsValue> {
         self.evaluate(&format!("solve(\"{}\", \"{}\")", escape_phs_str(equation), escape_phs_str(wrt)))
+    }
+}
+
+/// The text of a statement's value: an assignment that gave none shows the variable it set.
+fn value_text(interpreter: &PhsInterpreter, stmt: &Statement, value: PhsValue) -> String {
+    match value {
+        PhsValue::None => match stmt {
+            Statement::Assignment(node) => interpreter.get_var(&node.name).map_or("None".to_string(), |v| v.to_string()),
+            _ => "None".to_string(),
+        },
+        other => other.to_string(),
     }
 }
 
