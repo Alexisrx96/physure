@@ -677,18 +677,8 @@ impl Quantity {
     /// quantity with dimensions of its own takes the temperature as the absolute one it is
     /// (`R * T`, `T^4`), which is what a product with a temperature means.
     fn scale_or_absolute(&self, other: &Quantity, divide: bool) -> PhysureResult<Quantity> {
-        let sign = |q: &Quantity| {
-            let exact = q.unit.is_plain_number() && q.value.std_dev() == 0.0;
-            exact.then(|| q.value.mean()).filter(|mean| mean.abs() == 1.0)
-        };
-        if self.unit.is_affine() {
-            if let Some(sign) = sign(other) {
-                return self.mirrored(sign);
-            }
-        } else if !divide {
-            if let Some(sign) = sign(self) {
-                return other.mirrored(sign);
-            }
+        if let Some(mirrored) = self.mirrored_by_sign(other, divide) {
+            return mirrored;
         }
         let plain = |q: &Quantity| q.unit.dimensions.is_empty() && !q.unit.is_logarithmic();
         let point = if self.unit.is_affine() { self } else { other };
@@ -702,6 +692,21 @@ impl Quantity {
         }
         let (a, b) = (self.to_delta()?, other.to_delta()?);
         if divide { a.div(&b) } else { a.mul(&b) }
+    }
+
+    /// The temperature mirrored by the pure sign it is multiplied by (`-1 * 25 degC`), when the other is one.
+    fn mirrored_by_sign(&self, other: &Quantity, divide: bool) -> Option<PhysureResult<Quantity>> {
+        let sign = |q: &Quantity| {
+            let exact = q.unit.is_plain_number() && q.value.std_dev() == 0.0;
+            exact.then(|| q.value.mean()).filter(|mean| mean.abs() == 1.0)
+        };
+        if self.unit.is_affine() {
+            sign(other).map(|sign| self.mirrored(sign))
+        } else if !divide {
+            sign(self).map(|sign| other.mirrored(sign))
+        } else {
+            None
+        }
     }
 
     /// This quantity times a sign, in its own unit.
