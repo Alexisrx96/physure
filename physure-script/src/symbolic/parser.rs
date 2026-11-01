@@ -132,22 +132,15 @@ impl SymbolicParser {
 
     fn parse_power(&mut self) -> PhysureResult<Node> {
         let mut left = self.parse_unary()?;
-        while let Some(t) = self.peek() {
-            if t.value == "^" || t.value == "**" {
-                self.next();
-                let mut right = self.parse_power()?;
-                if matches!(right, Node::Number(_)) {
-                    if let Some(next_t) = self.peek() {
-                        if matches!(next_t.kind, TokenKind::Ident(_)) {
-                            let factor = self.parse_power()?;
-                            right = Node::Mul(vec![right, factor]);
-                        }
-                    }
-                }
-                left = Node::Pow(Box::new(left), Box::new(right));
-            } else {
-                break;
+        while self.peek().is_some_and(|t| t.value == "^" || t.value == "**") {
+            self.next();
+            let mut right = self.parse_power()?;
+            // a number exponent followed by a name takes the name along
+            if matches!(right, Node::Number(_)) && self.peek().is_some_and(|next_t| matches!(next_t.kind, TokenKind::Ident(_))) {
+                let factor = self.parse_power()?;
+                right = Node::Mul(vec![right, factor]);
             }
+            left = Node::Pow(Box::new(left), Box::new(right));
         }
         Ok(left)
     }

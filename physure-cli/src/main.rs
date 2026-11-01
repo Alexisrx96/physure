@@ -722,6 +722,15 @@ fn precision_override(stmt: &physure_script::ast::Statement) -> Option<u32> {
         })
 }
 
+/// Prints a value the way the terminal shows it: a display text as it is, anything else as a `label = value` card.
+fn print_value(shown_label: &str, val: &PhsValue, is_disp: bool, precision_override: Option<u32>) {
+    match val {
+        PhsValue::String(txt) if is_disp => println!("{}", txt),
+        _ if is_disp => {}
+        _ => RichRenderer::render_variable_card(shown_label, val, precision_override),
+    }
+}
+
 /// Runs the program, printing each value as it comes unless a viewer will show them, and returns the steps.
 fn run_statements(
     interp: &mut PhsInterpreter,
@@ -750,11 +759,7 @@ fn run_statements(
                 let is_disp = is_disp
                     || (matches!(stmt, physure_script::ast::Statement::Expr(_)) && matches!(val, PhsValue::String(_)));
                 if !quiet {
-                    match &val {
-                        PhsValue::String(txt) if is_disp => println!("{}", txt),
-                        _ if is_disp => {}
-                        _ => RichRenderer::render_variable_card(&shown_label, &val, precision_override),
-                    }
+                    print_value(&shown_label, &val, is_disp, precision_override);
                 }
 
                 steps.push(ExecutionStep {

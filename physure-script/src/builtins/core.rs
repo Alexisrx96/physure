@@ -168,107 +168,29 @@ pub fn eval_core_builtin(
     const A_NUMBER_OR_QUANTITY: &str = "a number or quantity";
     match name {
         "parallel_map" => parallel_map(args, interpreter, env),
-        "format" => {
-            let Some(val) = args.first() else { return Ok(None) };
-            match args.get(1) {
-                Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
-                // No spec, nothing to apply — hand the value back untouched.
-                _ => Ok(Some(val.clone())),
-            }
-        }
+        "format" => format_builtin(args),
         "assert" => assert_builtin(args),
         // No Bool overload here, unlike `assert` above -- boolean equality is expressed as
         // `assert(left == right)`, not `exact_assert(left == right)`. This omission is
         // deliberate, not an oversight; do not add a symmetrical Bool arm.
-        "exact_assert" => match args {
-            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
-                a.phs_exact_assert(b)?;
-                Ok(Some(PhsValue::None))
-            }
-            _ => Err(PhysureError::Generic(format!(
-                "exact_assert received ({}); expected exact_assert(Quantity, Quantity)",
-                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
-            ))),
-        },
+        "exact_assert" => exact_assert_builtin(args),
         "op_>" | "op_gt" => compare(args, |l, r| l > r),
         "op_<" | "op_lt" => compare(args, |l, r| l < r),
         "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
         "op_<=" | "op_lte" => compare(args, |l, r| l <= r),
         "op_==" | "op_eq" => equality(args),
-        "op_!=" | "op_neq" => {
-            if let Some(res) = bool_equality(args, "!=", false) {
-                return res;
-            }
-            compare(args, |l, r| (l - r).abs() >= 1e-9)
-        }
+        "op_!=" | "op_neq" => not_equal(args),
         "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
-        "ternary" | "if_then_else" => {
-            // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
-            // for anything else) instead of the shared `is_truthy` -- fine while every
-            // comparison built a dimensionless Quantity, wrong the moment one builds a real
-            // `PhsValue::Bool` instead.
-            let cond_true = args.first().is_some_and(crate::interpreter::helpers::is_truthy);
-            if cond_true {
-                Ok(args.get(1).cloned())
-            } else {
-                Ok(args.get(2).cloned())
-            }
-        }
-        // The standard uncertainty as a quantity in the same unit, so it can be fed back
-        // into arithmetic (`uncertainty(x) / x => %`). Anything without one reports zero.
-        "uncertainty" | "sigma" => match args.first() {
-            Some(PhsValue::Quantity(q)) => Ok(Some(PhsValue::Quantity(
-                physure_core::Quantity::new_scalar(q.value.std_dev(), 0.0, q.unit.clone(), None, None),
-            ))),
-            Some(PhsValue::Number(_)) => Ok(Some(PhsValue::Number(0.0))),
-            _ => Err(PhysureError::Generic("uncertainty expects a quantity".into())),
-        },
-        "vector" => {
-            Ok(Some(PhsValue::Vector(args.to_vec())))
-        }
-        "sqrt" => unary(
-            name,
-            args,
-            A_NUMBER_OR_QUANTITY,
-            |n| {
-                if n < 0.0 {
-                    Err(PhysureError::DomainError(format!("sqrt of a negative value ({n}) is undefined for real numbers")))
-                } else {
-                    Ok(n.sqrt())
-                }
-            },
-            |q| q.sqrt(),
-        ),
+        "ternary" | "if_then_else" => ternary(args),
+        "uncertainty" | "sigma" => uncertainty_builtin(args),
+        "vector" => Ok(Some(PhsValue::Vector(args.to_vec()))),
+        "sqrt" => unary(name, args, A_NUMBER_OR_QUANTITY, sqrt_number, |q| q.sqrt()),
         "sin" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.sin()), |q| q.sin()),
         "cos" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.cos()), |q| q.cos()),
         "exp" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.exp()), |q| q.exp()),
-        "ln" => unary(
-            name,
-            args,
-            A_NUMBER_OR_QUANTITY,
-            |n| {
-                if n <= 0.0 {
-                    Err(PhysureError::DomainError(format!("ln of a non-positive value ({n}) is undefined for real numbers")))
-                } else {
-                    Ok(n.ln())
-                }
-            },
-            |q| q.ln(),
-        ),
+        "ln" => unary(name, args, A_NUMBER_OR_QUANTITY, ln_number, |q| q.ln()),
         "abs" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.abs()), |q| q.abs()),
-        "log" => unary(
-            name,
-            args,
-            A_NUMBER_OR_QUANTITY,
-            |n| {
-                if n <= 0.0 {
-                    Err(PhysureError::DomainError(format!("log of a non-positive value ({n}) is undefined for real numbers")))
-                } else {
-                    Ok(n.log10())
-                }
-            },
-            |q| q.log10(),
-        ),
+        "log" => unary(name, args, A_NUMBER_OR_QUANTITY, log10_number, |q| q.log10()),
         "tan" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.tan()), |q| q.tan()),
         // Flooring the mean says nothing about how well it is known, so the unit
         // and the uncertainty ride along instead of being reset to zero.
@@ -278,6 +200,84 @@ pub fn eval_core_builtin(
         "max" => extremum(name, args, true),
         "round" => round_builtin(args),
         _ => Ok(None),
+    }
+}
+
+fn sqrt_number(n: f64) -> PhysureResult<f64> {
+    if n < 0.0 {
+        Err(PhysureError::DomainError(format!("sqrt of a negative value ({n}) is undefined for real numbers")))
+    } else {
+        Ok(n.sqrt())
+    }
+}
+
+fn ln_number(n: f64) -> PhysureResult<f64> {
+    if n <= 0.0 {
+        Err(PhysureError::DomainError(format!("ln of a non-positive value ({n}) is undefined for real numbers")))
+    } else {
+        Ok(n.ln())
+    }
+}
+
+fn log10_number(n: f64) -> PhysureResult<f64> {
+    if n <= 0.0 {
+        Err(PhysureError::DomainError(format!("log of a non-positive value ({n}) is undefined for real numbers")))
+    } else {
+        Ok(n.log10())
+    }
+}
+
+fn format_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    let Some(val) = args.first() else { return Ok(None) };
+    match args.get(1) {
+        Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+        // No spec, nothing to apply — hand the value back untouched.
+        _ => Ok(Some(val.clone())),
+    }
+}
+
+fn exact_assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    match args {
+        [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+            a.phs_exact_assert(b)?;
+            Ok(Some(PhsValue::None))
+        }
+        _ => Err(PhysureError::Generic(format!(
+            "exact_assert received ({}); expected exact_assert(Quantity, Quantity)",
+            args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
+fn not_equal(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    if let Some(res) = bool_equality(args, "!=", false) {
+        return res;
+    }
+    compare(args, |l, r| (l - r).abs() >= 1e-9)
+}
+
+fn ternary(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
+    // for anything else) instead of the shared `is_truthy` -- fine while every
+    // comparison built a dimensionless Quantity, wrong the moment one builds a real
+    // `PhsValue::Bool` instead.
+    let cond_true = args.first().is_some_and(crate::interpreter::helpers::is_truthy);
+    if cond_true {
+        Ok(args.get(1).cloned())
+    } else {
+        Ok(args.get(2).cloned())
+    }
+}
+
+/// The standard uncertainty as a quantity in the same unit, so it can be fed back
+/// into arithmetic (`uncertainty(x) / x => %`). Anything without one reports zero.
+fn uncertainty_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    match args.first() {
+        Some(PhsValue::Quantity(q)) => Ok(Some(PhsValue::Quantity(
+            physure_core::Quantity::new_scalar(q.value.std_dev(), 0.0, q.unit.clone(), None, None),
+        ))),
+        Some(PhsValue::Number(_)) => Ok(Some(PhsValue::Number(0.0))),
+        _ => Err(PhysureError::Generic("uncertainty expects a quantity".into())),
     }
 }
 

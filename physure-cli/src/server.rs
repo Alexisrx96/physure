@@ -885,6 +885,18 @@ struct ServeArgs {
     token: Option<String>,
 }
 
+/// Reads the value after the flag at `i` with `parse` and hands it to `set`. True when there was one, which the
+/// caller then skips.
+fn take_flag_value<T>(args: &[String], i: usize, parse: impl Fn(&str) -> Option<T>, set: impl FnOnce(T)) -> bool {
+    match args.get(i + 1).and_then(|v| parse(v)) {
+        Some(value) => {
+            set(value);
+            true
+        }
+        None => false,
+    }
+}
+
 fn parse_serve_args(args: &[String]) -> ServeArgs {
     let mut parsed = ServeArgs { target: None, port: 8080, host: "127.0.0.1".to_string(), token: None };
 
@@ -896,24 +908,9 @@ fn parse_serve_args(args: &[String]) -> ServeArgs {
         }
         match arg.as_str() {
             "serve" => {}
-            "--port" | "-p" => {
-                if let Some(p) = args.get(i + 1).and_then(|v| v.parse::<u16>().ok()) {
-                    parsed.port = p;
-                    skip_next = true;
-                }
-            }
-            "--host" => {
-                if let Some(h) = args.get(i + 1) {
-                    parsed.host = h.clone();
-                    skip_next = true;
-                }
-            }
-            "--token" => {
-                if let Some(t) = args.get(i + 1) {
-                    parsed.token = Some(t.clone());
-                    skip_next = true;
-                }
-            }
+            "--port" | "-p" => skip_next = take_flag_value(args, i, |v| v.parse::<u16>().ok(), |p| parsed.port = p),
+            "--host" => skip_next = take_flag_value(args, i, |v| Some(v.to_string()), |h| parsed.host = h),
+            "--token" => skip_next = take_flag_value(args, i, |v| Some(v.to_string()), |t| parsed.token = Some(t)),
             _ => {
                 if parsed.target.is_none() && !arg.starts_with('-') {
                     parsed.target = Some(arg.clone());
