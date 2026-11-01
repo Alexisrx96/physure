@@ -112,3 +112,7 @@ interactive_3d.html
 
 # Isolated git worktrees for parallel subagent implementation work
 .worktrees/
+
+# LLVM coverage runs leave raw profiles next to the crate they were run in
+*.profraw
+lcov.cov.info
