@@ -12,6 +12,7 @@ preserve startup performance.
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, overload
 
 from physure.core.dispatcher import BackendManager
@@ -139,6 +140,308 @@ def _apply_aesthetic_style(
         ax.figure.tight_layout()
 
 
+def _values_of(value: Quantity | Numeric | None) -> Numeric | None:
+    """The numpy magnitude of a quantity, or of an array-like; None stays None."""
+    from physure.domain.measurement.quantity import Quantity
+
+    return to_numpy(value.magnitude if isinstance(value, Quantity) else value)
+
+
+def _uncertainty_of(value: Quantity | Numeric | None) -> Numeric | None:
+    """The numpy uncertainty of a quantity; None for anything else."""
+    from physure.domain.measurement.quantity import Quantity
+
+    return to_numpy(value.uncertainty) if isinstance(value, Quantity) else None
+
+
+def _axis_label(
+    value: Quantity | Numeric | None, default: str
+) -> tuple[str, str]:
+    """The name of an axis (the symbol of its quantity, or `default`) and its unit ("" if none)."""
+    from physure.domain.measurement.quantity import Quantity
+
+    if not isinstance(value, Quantity):
+        return default, ""
+    return value.symbol or default, str(value.unit) if value.unit else ""
+
+
+def _with_unit(label: str, unit: str) -> str:
+    """`label (unit)`, or the label alone when there is no unit."""
+    return f"{label} ({unit})" if unit else label
+
+
+@dataclass
+class _PlotData:
+    """What `plot` draws: y and x as numpy values with their uncertainties, and the axis texts."""
+
+    y_val: Any
+    y_unc: Any
+    x_val: Any
+    x_unc: Any
+    y_name: str
+    xlabel: str
+    ylabel: str
+
+
+@dataclass
+class _PlotCall:
+    """One call of a drawer of `plot`: where, what, in which color, and the options left."""
+
+    ax: Any
+    fig: Any
+    data: _PlotData
+    color: str
+    label: str
+    kwargs: dict[str, Any]
+
+
+def _plot_data(
+    y: Quantity | Numeric, x: Quantity | Numeric | None
+) -> tuple[_PlotData, int]:
+    """Reads y and x for `plot` and says how many dimensions y has; a scalar is one point."""
+    import numpy as np
+
+    y_val = _values_of(y)
+    y_unc = _uncertainty_of(y)
+    x_val = _values_of(x)
+    ndim = len(y_val.shape) if hasattr(y_val, "shape") else 0
+    if ndim == 0:
+        y_val = np.array([y_val])
+        if y_unc is not None:
+            y_unc = np.array([y_unc])
+        if x_val is None:
+            x_val = np.array([0])
+        ndim = 1
+
+    y_name, y_unit = _axis_label(y, "Value")
+    x_name, x_unit = _axis_label(x, "Index")
+    xlabel = _with_unit(x_name, x_unit) if x_val is not None else "Index"
+    data = _PlotData(
+        y_val,
+        y_unc,
+        x_val,
+        _uncertainty_of(x),
+        y_name,
+        xlabel,
+        _with_unit(y_name, y_unit),
+    )
+    return data, ndim
+
+
+def _default_plot_kind(ndim: int) -> str:
+    """The kind of plot a y of this many dimensions gets when none is asked for."""
+    return {1: "line", 2: "heatmap"}.get(ndim, "slices")
+
+
+def _plot_axes(plt: Any, ax: Axes | None, kind: str) -> tuple[Any, Any]:
+    """The figure and axes `plot` draws on: the given ones, or new (3-D for a surface)."""
+    if ax is not None:
+        return ax.figure, ax
+    if kind == "surface":
+        fig = plt.figure(figsize=(8, 6))
+        return fig, fig.add_subplot(111, projection="3d")
+    return plt.subplots(figsize=(8, 5))
+
+
+def _labelled_colorbar(
+    fig: Any, ax: Any, mappable: Any, label: str, **options: Any
+) -> None:
+    """A colorbar for `mappable`, titled with the quantity and styled like the rest of the plots."""
+    cbar = fig.colorbar(mappable, ax=ax, **options)
+    cbar.set_label(
+        label, rotation=270, labelpad=15, fontsize=10, color="#1F2937"
+    )
+    cbar.ax.tick_params(labelsize=9, colors="#4B5563")
+
+
+def _line_inputs(data: _PlotData) -> tuple[Any, Any, Any]:
+    """x, y and the uncertainty of y for a line, in the order of x (a continuous line)."""
+    import numpy as np
+
+    if len(data.x_val.shape) == 1 and len(data.y_val.shape) == 1:
+        order = np.argsort(data.x_val)
+        y_unc = data.y_unc
+        if (
+            y_unc is not None
+            and hasattr(y_unc, "__len__")
+            and len(y_unc) == len(data.y_val)
+        ):
+            y_unc = y_unc[order]
+        return data.x_val[order], data.y_val[order], y_unc
+    return data.x_val, data.y_val, data.y_unc
+
+
+def _draw_line(call: _PlotCall) -> None:
+    import numpy as np
+
+    data, kwargs = call.data, call.kwargs
+    if data.x_val is None:
+        data.x_val = np.arange(len(data.y_val))
+    x_val, y_val, y_unc = _line_inputs(data)
+
+    linewidth = kwargs.pop("linewidth", 2.0)
+    zorder = kwargs.pop("zorder", 3)
+    call.ax.plot(
+        x_val,
+        y_val,
+        color=call.color,
+        linewidth=linewidth,
+        label=call.label,
+        zorder=zorder,
+        **kwargs,
+    )
+
+    # Shaded uncertainty band
+    if y_unc is not None and np.any(y_unc > 0):
+        if np.isscalar(y_unc) or y_unc.ndim == 0:
+            y_unc = np.full_like(y_val, y_unc)
+        call.ax.fill_between(
+            x_val,
+            y_val - y_unc,
+            y_val + y_unc,
+            color=call.color,
+            alpha=0.15,
+            zorder=2,
+            label=f"{call.label} uncertainty",
+        )
+
+
+def _draw_scatter(call: _PlotCall) -> None:
+    import numpy as np
+
+    data, kwargs = call.data, call.kwargs
+    if data.x_val is None:
+        data.x_val = np.arange(len(data.y_val))
+
+    has_x_err = data.x_unc is not None and np.any(data.x_unc > 0)
+    has_y_err = data.y_unc is not None and np.any(data.y_unc > 0)
+
+    if has_x_err or has_y_err:
+        elinewidth = kwargs.pop("elinewidth", 1.5)
+        capsize = kwargs.pop("capsize", 3)
+        capthick = kwargs.pop("capthick", 1.0)
+        markersize = kwargs.pop("markersize", 6)
+        markeredgecolor = kwargs.pop("markeredgecolor", "white")
+        markeredgewidth = kwargs.pop("markeredgewidth", 1.0)
+        zorder = kwargs.pop("zorder", 3)
+        call.ax.errorbar(
+            data.x_val,
+            data.y_val,
+            xerr=data.x_unc if has_x_err else None,
+            yerr=data.y_unc if has_y_err else None,
+            fmt="o",
+            color=call.color,
+            ecolor=call.color,
+            elinewidth=elinewidth,
+            capsize=capsize,
+            capthick=capthick,
+            markersize=markersize,
+            markeredgecolor=markeredgecolor,
+            markeredgewidth=markeredgewidth,
+            label=call.label,
+            zorder=zorder,
+            **kwargs,
+        )
+    else:
+        edgecolor = kwargs.pop("edgecolor", "white")
+        linewidth = kwargs.pop("linewidth", 0.5)
+        s = kwargs.pop("s", 45)
+        zorder = kwargs.pop("zorder", 3)
+        call.ax.scatter(
+            data.x_val,
+            data.y_val,
+            color=call.color,
+            edgecolor=edgecolor,
+            linewidth=linewidth,
+            s=s,
+            label=call.label,
+            zorder=zorder,
+            **kwargs,
+        )
+
+
+def _index_labels_without_x(data: _PlotData) -> None:
+    """A matrix drawn with no x is labelled by the position of its cells."""
+    if data.x_val is None:
+        data.xlabel = "Column Index"
+        data.ylabel = "Row Index"
+
+
+def _draw_heatmap(call: _PlotCall) -> None:
+    kwargs = call.kwargs
+    cmap = kwargs.pop("cmap", "plasma")
+    image = call.ax.imshow(call.data.y_val, cmap=cmap, aspect="auto", **kwargs)
+    _labelled_colorbar(call.fig, call.ax, image, call.data.ylabel)
+    _index_labels_without_x(call.data)
+
+
+def _draw_contour(call: _PlotCall) -> None:
+    kwargs = call.kwargs
+    cmap = kwargs.pop("cmap", "plasma")
+    filled = kwargs.pop("filled", True)
+    draw = call.ax.contourf if filled else call.ax.contour
+    contours = draw(call.data.y_val, cmap=cmap, **kwargs)
+    _labelled_colorbar(call.fig, call.ax, contours, call.data.ylabel)
+    _index_labels_without_x(call.data)
+
+
+def _draw_surface(call: _PlotCall) -> None:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # ponytail: ax is Axes3D here (created via projection="3d" or passed in
+    # by the caller); base Axes stubs don't expose 3D methods.
+    ax_3d: Axes3D = call.ax  # pyright: ignore[reportAssignmentType]
+    data, kwargs = call.data, call.kwargs
+    cmap = kwargs.pop("cmap", plt.get_cmap("plasma"))
+    rows, cols = data.y_val.shape
+    x_mesh, y_mesh = np.meshgrid(np.arange(cols), np.arange(rows))
+
+    surf = ax_3d.plot_surface(
+        x_mesh,
+        y_mesh,
+        data.y_val,
+        cmap=cmap,
+        linewidth=0,
+        antialiased=True,
+        rcount=100,
+        ccount=100,
+        **kwargs,
+    )
+    _labelled_colorbar(
+        call.fig, ax_3d, surf, data.ylabel, shrink=0.6, aspect=12, pad=0.08
+    )
+    ax_3d.set_zlabel(data.ylabel, fontsize=10, color="#1F2937", labelpad=8)
+    data.xlabel = "X Index"
+    data.ylabel = "Y Index"
+
+
+def _draw_hist(call: _PlotCall) -> None:
+    data, kwargs = call.data, call.kwargs
+    call.ax.hist(
+        data.y_val.flatten(),
+        bins=kwargs.pop("bins", "auto"),
+        color=call.color,
+        edgecolor="white",
+        alpha=0.85,
+        rwidth=0.9,
+        zorder=3,
+        **kwargs,
+    )
+    data.xlabel = data.ylabel
+    data.ylabel = "Frequency"
+
+
+_PLOT_DRAWERS: dict[str, Callable[[_PlotCall], None]] = {
+    "line": _draw_line,
+    "scatter": _draw_scatter,
+    "heatmap": _draw_heatmap,
+    "contour": _draw_contour,
+    "surface": _draw_surface,
+    "hist": _draw_hist,
+}
+
+
 def plot(
     y: Quantity | Numeric,
     x: Quantity | Numeric | None = None,
@@ -168,273 +471,31 @@ def plot(
             "Matplotlib is required for plotting. Install it via `pip install matplotlib`."
         ) from e
 
-    import numpy as np
-
-    from physure.domain.measurement.quantity import Quantity
-
-    # Process y quantity
-    y_is_q = isinstance(y, Quantity)
-    y_val = to_numpy(y.magnitude) if y_is_q else to_numpy(y)
-    y_unc = to_numpy(y.uncertainty) if y_is_q else None
-    y_unit_str = str(y.unit) if (y_is_q and y.unit) else ""
-    y_label = (y.symbol or "Value") if y_is_q else "Value"
-
-    # Process x quantity
-    x_is_q = isinstance(x, Quantity)
-    x_val = (
-        to_numpy(x.magnitude)
-        if x_is_q
-        else (to_numpy(x) if x is not None else None)
-    )
-    x_unc = to_numpy(x.uncertainty) if x_is_q else None
-    x_unit_str = str(x.unit) if (x_is_q and x.unit) else ""
-    x_label = (x.symbol or "Index") if x_is_q else "Index"
-
-    # Handle shape and dimensions
-    shape = y_val.shape if hasattr(y_val, "shape") else ()
-    ndim = len(shape)
-
-    # Cast 0D scalar to 1D
-    if ndim == 0:
-        y_val = np.array([y_val])
-        if y_unc is not None:
-            y_unc = np.array([y_unc])
-        if x_val is None:
-            x_val = np.array([0])
-        ndim = 1
-
-    # Auto-detect plot kind
+    data, ndim = _plot_data(y, x)
     if kind is None:
-        if ndim == 1:
-            kind = "line"
-        elif ndim == 2:
-            kind = "heatmap"
-        else:
-            kind = "slices"
+        kind = _default_plot_kind(ndim)
+    if kind not in _PLOT_DRAWERS and kind not in ("slices", "3d"):
+        raise ValueError(f"Unknown plot kind: {kind}")
 
-    # Setup axes
-    if ax is None:
-        if kind == "surface":
-            fig = plt.figure(figsize=(8, 6))
-            ax = fig.add_subplot(111, projection="3d")
-        else:
-            fig, ax = plt.subplots(figsize=(8, 5))
-    else:
-        fig = ax.figure
-
-    # Build axis label texts
-    ylabel_text = f"{y_label} ({y_unit_str})" if y_unit_str else y_label
-    if x_val is not None:
-        xlabel_text = f"{x_label} ({x_unit_str})" if x_unit_str else x_label
-    else:
-        xlabel_text = "Index"
+    fig, ax = _plot_axes(plt, ax, kind)
 
     # Plot customizations
     color = kwargs.pop("color", COLORS[0])
-    label = kwargs.pop("label", y_label)
+    label = kwargs.pop("label", data.y_name)
     title = kwargs.pop("title", None)
 
-    if kind == "line":
-        if x_val is None:
-            x_val = np.arange(len(y_val))
-
-        # Sort coordinates for line continuity
-        if len(x_val.shape) == 1 and len(y_val.shape) == 1:
-            sort_idx = np.argsort(x_val)
-            x_val_sorted = x_val[sort_idx]
-            y_val_sorted = y_val[sort_idx]
-            if (
-                y_unc is not None
-                and hasattr(y_unc, "__len__")
-                and len(y_unc) == len(y_val)
-            ):
-                y_unc_sorted = y_unc[sort_idx]
-            else:
-                y_unc_sorted = y_unc
-        else:
-            x_val_sorted = x_val
-            y_val_sorted = y_val
-            y_unc_sorted = y_unc
-
-        # Main line plot
-        linewidth = kwargs.pop("linewidth", 2.0)
-        zorder = kwargs.pop("zorder", 3)
-        ax.plot(
-            x_val_sorted,
-            y_val_sorted,
-            color=color,
-            linewidth=linewidth,
-            label=label,
-            zorder=zorder,
-            **kwargs,
-        )
-
-        # Shaded uncertainty band
-        if y_unc_sorted is not None and np.any(y_unc_sorted > 0):
-            if np.isscalar(y_unc_sorted) or y_unc_sorted.ndim == 0:
-                y_unc_sorted = np.full_like(y_val_sorted, y_unc_sorted)
-            ax.fill_between(
-                x_val_sorted,
-                y_val_sorted - y_unc_sorted,
-                y_val_sorted + y_unc_sorted,
-                color=color,
-                alpha=0.15,
-                zorder=2,
-                label=f"{label} uncertainty",
-            )
-
-    elif kind == "scatter":
-        if x_val is None:
-            x_val = np.arange(len(y_val))
-
-        has_x_err = x_unc is not None and np.any(x_unc > 0)
-        has_y_err = y_unc is not None and np.any(y_unc > 0)
-
-        if has_x_err or has_y_err:
-            elinewidth = kwargs.pop("elinewidth", 1.5)
-            capsize = kwargs.pop("capsize", 3)
-            capthick = kwargs.pop("capthick", 1.0)
-            markersize = kwargs.pop("markersize", 6)
-            markeredgecolor = kwargs.pop("markeredgecolor", "white")
-            markeredgewidth = kwargs.pop("markeredgewidth", 1.0)
-            zorder = kwargs.pop("zorder", 3)
-            ax.errorbar(
-                x_val,
-                y_val,
-                xerr=x_unc if has_x_err else None,
-                yerr=y_unc if has_y_err else None,
-                fmt="o",
-                color=color,
-                ecolor=color,
-                elinewidth=elinewidth,
-                capsize=capsize,
-                capthick=capthick,
-                markersize=markersize,
-                markeredgecolor=markeredgecolor,
-                markeredgewidth=markeredgewidth,
-                label=label,
-                zorder=zorder,
-                **kwargs,
-            )
-        else:
-            edgecolor = kwargs.pop("edgecolor", "white")
-            linewidth = kwargs.pop("linewidth", 0.5)
-            s = kwargs.pop("s", 45)
-            zorder = kwargs.pop("zorder", 3)
-            ax.scatter(
-                x_val,
-                y_val,
-                color=color,
-                edgecolor=edgecolor,
-                linewidth=linewidth,
-                s=s,
-                label=label,
-                zorder=zorder,
-                **kwargs,
-            )
-
-    elif kind == "heatmap":
-        cmap = kwargs.pop("cmap", "plasma")
-        im = ax.imshow(y_val, cmap=cmap, aspect="auto", **kwargs)
-
-        cbar = fig.colorbar(im, ax=ax)
-        cbar.set_label(
-            ylabel_text,
-            rotation=270,
-            labelpad=15,
-            fontsize=10,
-            color="#1F2937",
-        )
-        cbar.ax.tick_params(labelsize=9, colors="#4B5563")
-
-        if x_val is None:
-            xlabel_text = "Column Index"
-            ylabel_text = "Row Index"
-
-    elif kind == "contour":
-        cmap = kwargs.pop("cmap", "plasma")
-        filled = kwargs.pop("filled", True)
-        if filled:
-            cnt = ax.contourf(y_val, cmap=cmap, **kwargs)
-        else:
-            cnt = ax.contour(y_val, cmap=cmap, **kwargs)
-
-        cbar = fig.colorbar(cnt, ax=ax)
-        cbar.set_label(
-            ylabel_text,
-            rotation=270,
-            labelpad=15,
-            fontsize=10,
-            color="#1F2937",
-        )
-        cbar.ax.tick_params(labelsize=9, colors="#4B5563")
-
-        if x_val is None:
-            xlabel_text = "Column Index"
-            ylabel_text = "Row Index"
-
-    elif kind == "surface":
-        # ponytail: ax is Axes3D here (created via projection="3d" above or
-        # passed in by the caller); base Axes stubs don't expose 3D methods.
-        ax_3d: Axes3D = ax  # pyright: ignore[reportAssignmentType]
-        cmap = kwargs.pop("cmap", plt.get_cmap("plasma"))
-        rows, cols = y_val.shape
-        X, Y = np.meshgrid(np.arange(cols), np.arange(rows))
-
-        surf = ax_3d.plot_surface(
-            X,
-            Y,
-            y_val,
-            cmap=cmap,
-            linewidth=0,
-            antialiased=True,
-            rcount=100,
-            ccount=100,
-            **kwargs,
-        )
-
-        cbar = fig.colorbar(surf, ax=ax_3d, shrink=0.6, aspect=12, pad=0.08)
-        cbar.set_label(
-            ylabel_text,
-            rotation=270,
-            labelpad=15,
-            fontsize=10,
-            color="#1F2937",
-        )
-        cbar.ax.tick_params(labelsize=9, colors="#4B5563")
-
-        ax_3d.set_zlabel(ylabel_text, fontsize=10, color="#1F2937", labelpad=8)
-        xlabel_text = "X Index"
-        ylabel_text = "Y Index"
-
-    elif kind == "hist":
-        ax.hist(
-            y_val.flatten(),
-            bins=kwargs.pop("bins", "auto"),
-            color=color,
-            edgecolor="white",
-            alpha=0.85,
-            rwidth=0.9,
-            zorder=3,
-            **kwargs,
-        )
-        xlabel_text = ylabel_text
-        ylabel_text = "Frequency"
-
-    elif kind == "slices":
+    if kind == "slices":
         plt.close(fig)
         return plot_slices(y, **kwargs)
-
-    elif kind == "3d":
+    if kind == "3d":
         plt.close(fig)
         return plot_3d(y, x=x, **kwargs)
 
-    else:
-        raise ValueError(f"Unknown plot kind: {kind}")
+    _PLOT_DRAWERS[kind](_PlotCall(ax, fig, data, color, label, kwargs))
 
-    if theme == "physure" and kind != "slices" and kind != "surface":
+    if theme == "physure" and kind != "surface":
         _apply_aesthetic_style(
-            ax, title=title, xlabel=xlabel_text, ylabel=ylabel_text
+            ax, title=title, xlabel=data.xlabel, ylabel=data.ylabel
         )
     elif title:
         ax.set_title(title)
@@ -671,6 +732,146 @@ def plot_interactive(
     return fig
 
 
+def _columns_of(
+    data: dict[str, Quantity | Numeric]
+    | Sequence[Quantity | Numeric]
+    | pd.DataFrame,
+    names: list[str] | None = None,
+) -> tuple[Any, list[Any]]:
+    """The columns of a dict, a list or a DataFrame, with their names."""
+    from physure.domain.measurement.quantity import Quantity
+
+    if isinstance(data, dict):
+        return list(data.values()), list(data.keys())
+    if isinstance(data, list):
+        if names:
+            return data, names
+        return data, [
+            q.symbol if isinstance(q, Quantity) and q.symbol else f"Dim {idx}"
+            for idx, q in enumerate(data)
+        ]
+    if hasattr(data, "columns"):
+        # ponytail: duck-typed DataFrame check so pandas stays optional;
+        # hasattr narrowing can't give ty a real type for `.columns`.
+        columns = list(data.columns)  # ty: ignore[not-iterable]
+        return [data[col] for col in columns], columns
+    raise TypeError(
+        "data must be a dict, list of quantities, or pandas DataFrame."
+    )
+
+
+def _read_columns(
+    data: dict[str, Quantity | Numeric]
+    | Sequence[Quantity | Numeric]
+    | pd.DataFrame,
+    names: list[str] | None = None,
+) -> tuple[list[Any], list[str], list[Any]]:
+    """The arrays of the columns of `data`, the label of each axis (with unit) and the names."""
+    cols, col_names = _columns_of(data, names)
+    arrays = [_values_of(q) for q in cols]
+    units = [_axis_label(q, "")[1] for q in cols]
+
+    num_samples = len(arrays[0])
+    if any(len(arr) != num_samples for arr in arrays):
+        raise ValueError("All quantities must have the same length.")
+
+    labels = [
+        f"{name}\n({unit})" if unit else name
+        for name, unit in zip(col_names, units, strict=False)
+    ]
+    return arrays, labels, col_names
+
+
+def _normalize_columns(arrays: list[Any]) -> tuple[Any, list[Any], list[Any]]:
+    """The columns scaled to [0, 1] (a constant one to 0.5), with the minimum and maximum."""
+    import numpy as np
+
+    normalized = np.zeros((len(arrays[0]), len(arrays)))
+    mins = []
+    maxs = []
+    for c, arr in enumerate(arrays):
+        col_min = np.min(arr)
+        col_max = np.max(arr)
+        mins.append(col_min)
+        maxs.append(col_max)
+        if col_max > col_min:
+            normalized[:, c] = (arr - col_min) / (col_max - col_min)
+        else:
+            normalized[:, c] = 0.5
+    return normalized, mins, maxs
+
+
+def _target_colors(
+    target: Quantity | Numeric | None, cmap: str
+) -> tuple[Any, float, float, str]:
+    """The color of each line by its target, the range of the target and its colorbar title."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if target is None:
+        return None, 0.0, 1.0, ""
+    target_val = _values_of(target)
+    name, unit = _axis_label(target, "Target")
+
+    t_min = float(np.min(target_val))
+    t_max = float(np.max(target_val))
+    if t_max > t_min:
+        target_norm = (target_val - t_min) / (t_max - t_min)
+    else:
+        target_norm = np.zeros_like(target_val)
+
+    colors = plt.get_cmap(cmap)(target_norm)
+    return colors, t_min, t_max, _with_unit(name, unit)
+
+
+def _draw_parallel_lines(ax: Axes, normalized: Any, colors: Any) -> None:
+    import numpy as np
+
+    positions = np.arange(normalized.shape[1])
+    for i in range(normalized.shape[0]):
+        ax.plot(
+            positions,
+            normalized[i, :],
+            color=colors[i] if colors is not None else COLORS[0],
+            alpha=0.6 if colors is not None else 0.4,
+            linewidth=1.5 if colors is not None else 1.0,
+        )
+
+
+def _mark_parallel_axes(
+    ax: Axes, labels: list[str], mins: list[Any], maxs: list[Any]
+) -> None:
+    """One vertical axis per column, with its name below and its range at both ends."""
+    import numpy as np
+
+    ax.set_xticks(np.arange(len(mins)))
+    ax.set_xticklabels(
+        labels, fontsize=10, fontweight="medium", color="#1F2937"
+    )
+    for c in range(len(mins)):
+        ax.axvline(c, color="#D1D5DB", linestyle="-", linewidth=1.0, zorder=1)
+        ax.text(
+            c,
+            1.01,
+            f"{maxs[c]:.2g}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+            color="#4B5563",
+            fontweight="semibold",
+        )
+        ax.text(
+            c,
+            -0.01,
+            f"{mins[c]:.2g}",
+            ha="center",
+            va="top",
+            fontsize=8,
+            color="#4B5563",
+            fontweight="semibold",
+        )
+
+
 def plot_parallel_coordinates(
     data: dict[str, Quantity | Numeric]
     | Sequence[Quantity | Numeric]
@@ -702,150 +903,20 @@ def plot_parallel_coordinates(
             "Install it via `pip install matplotlib`."
         ) from e
 
-    import numpy as np
-
-    from physure.domain.measurement.quantity import Quantity
-
-    cols = []
-    col_names = []
-
-    if isinstance(data, dict):
-        for k, v in data.items():
-            cols.append(v)
-            col_names.append(k)
-    elif isinstance(data, list):
-        cols = data
-        if names:
-            col_names = names
-        else:
-            for idx, q in enumerate(cols):
-                if isinstance(q, Quantity) and q.symbol:
-                    col_names.append(q.symbol)
-                else:
-                    col_names.append(f"Dim {idx}")
-    elif hasattr(data, "columns"):
-        # ponytail: duck-typed DataFrame check so pandas stays optional;
-        # hasattr narrowing can't give ty a real type for `.columns`.
-        for col in data.columns:  # ty: ignore[not-iterable]
-            cols.append(data[col])
-            col_names.append(col)
-    else:
-        raise TypeError(
-            "data must be a dict, list of quantities, or pandas DataFrame."
-        )
-
-    arrays = []
-    units = []
-    for q in cols:
-        if isinstance(q, Quantity):
-            arrays.append(to_numpy(q.magnitude))
-            units.append(str(q.unit) if q.unit else "")
-        else:
-            arrays.append(to_numpy(q))
-            units.append("")
-
-    num_samples = len(arrays[0])
-    for arr in arrays:
-        if len(arr) != num_samples:
-            raise ValueError("All quantities must have the same length.")
-
-    num_cols = len(arrays)
-    normalized = np.zeros((num_samples, num_cols))
-    mins = []
-    maxs = []
-
-    for c in range(num_cols):
-        arr = arrays[c]
-        col_min = np.min(arr)
-        col_max = np.max(arr)
-        mins.append(col_min)
-        maxs.append(col_max)
-        if col_max > col_min:
-            normalized[:, c] = (arr - col_min) / (col_max - col_min)
-        else:
-            normalized[:, c] = 0.5
-
-    colors = None
-    t_min = 0.0
-    t_max = 1.0
-    target_unit = ""
-    target_label = "Target"
-
-    if target is not None:
-        if isinstance(target, Quantity):
-            target_val = to_numpy(target.magnitude)
-            target_unit = str(target.unit) if target.unit else ""
-            target_label = target.symbol or "Target"
-        else:
-            target_val = to_numpy(target)
-            target_unit = ""
-            target_label = "Target"
-
-        t_min = float(np.min(target_val))
-        t_max = float(np.max(target_val))
-        if t_max > t_min:
-            target_norm = (target_val - t_min) / (t_max - t_min)
-        else:
-            target_norm = np.zeros_like(target_val)
-
-        cm = plt.get_cmap(cmap)
-        colors = cm(target_norm)
+    arrays, labels, _ = _read_columns(data, names)
+    normalized, mins, maxs = _normalize_columns(arrays)
+    colors, t_min, t_max, target_title = _target_colors(target, cmap)
 
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 5))
     else:
         fig = ax.figure
 
-    for i in range(num_samples):
-        line_color = colors[i] if colors is not None else COLORS[0]
-        alpha = 0.6 if colors is not None else 0.4
-        linewidth = 1.5 if colors is not None else 1.0
-        ax.plot(
-            np.arange(num_cols),
-            normalized[i, :],
-            color=line_color,
-            alpha=alpha,
-            linewidth=linewidth,
-        )
+    _draw_parallel_lines(ax, normalized, colors)
+    _mark_parallel_axes(ax, labels, mins, maxs)
 
-    ax.set_xticks(np.arange(num_cols))
-    x_labels = []
-    for name, unit in zip(col_names, units, strict=False):
-        if unit:
-            x_labels.append(f"{name}\n({unit})")
-        else:
-            x_labels.append(name)
-    ax.set_xticklabels(
-        x_labels, fontsize=10, fontweight="medium", color="#1F2937"
-    )
-
-    for c in range(num_cols):
-        ax.axvline(c, color="#D1D5DB", linestyle="-", linewidth=1.0, zorder=1)
-        ax.text(
-            c,
-            1.01,
-            f"{maxs[c]:.2g}",
-            ha="center",
-            va="bottom",
-            fontsize=8,
-            color="#4B5563",
-            fontweight="semibold",
-        )
-        ax.text(
-            c,
-            -0.01,
-            f"{mins[c]:.2g}",
-            ha="center",
-            va="top",
-            fontsize=8,
-            color="#4B5563",
-            fontweight="semibold",
-        )
-
-    ax.spines["top"].set_visible(False)
-    ax.spines["bottom"].set_visible(False)
-    ax.spines["left"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+    for side in ("top", "bottom", "left", "right"):
+        ax.spines[side].set_visible(False)
     ax.get_yaxis().set_visible(False)
     ax.set_facecolor("white")
 
@@ -855,11 +926,8 @@ def plot_parallel_coordinates(
         )
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=ax, pad=0.05)
-        cbar_title = (
-            f"{target_label} ({target_unit})" if target_unit else target_label
-        )
         cbar.set_label(
-            cbar_title,
+            target_title,
             rotation=270,
             labelpad=15,
             fontsize=10,
@@ -878,6 +946,44 @@ def plot_parallel_coordinates(
     return ax
 
 
+def _style_pair_cell(ax: Axes) -> None:
+    ax.set_facecolor("white")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#D1D5DB")
+    ax.spines["bottom"].set_color("#D1D5DB")
+    ax.tick_params(colors="#4B5563", labelsize=8)
+
+
+def _fill_pair_cell(ax: Axes, arrays: list[Any], i: int, j: int) -> None:
+    """The cell of row i, column j: a histogram on the diagonal, a scatter below, nothing above."""
+    if i == j:
+        ax.hist(
+            arrays[i],
+            bins="auto",
+            color=COLORS[0],
+            edgecolor="white",
+            alpha=0.85,
+            rwidth=0.9,
+            zorder=3,
+        )
+    elif j < i:
+        ax.scatter(
+            arrays[j],
+            arrays[i],
+            color=COLORS[1],
+            edgecolor="white",
+            linewidth=0.5,
+            s=20,
+            alpha=0.7,
+            zorder=3,
+        )
+    else:
+        ax.set_visible(False)
+        return
+    ax.grid(True, linestyle="--", linewidth=0.5, color="#F3F4F6", zorder=0)
+
+
 def plot_pairplot(
     data: dict[str, Quantity | Numeric]
     | Sequence[Quantity | Numeric]
@@ -889,12 +995,15 @@ def plot_pairplot(
 
     Args:
         data: Dict of 1D Quantities/arrays, list of 1D Quantities/arrays, or a pandas DataFrame.
-        cmap: Colormap for plots.
+        cmap: Not used: the cells take the two colors of the palette.
         **kwargs: Extra plotting options.
 
     Returns:
         Matrix of Matplotlib axes.
     """
+    del (
+        cmap
+    )  # kept so that the call of plot_parallel_coordinates works here too
     try:
         import matplotlib.pyplot as plt
     except ImportError as e:
@@ -904,48 +1013,8 @@ def plot_pairplot(
 
     import numpy as np
 
-    from physure.domain.measurement.quantity import Quantity
-
-    cols = []
-    col_names = []
-
-    if isinstance(data, dict):
-        for k, v in data.items():
-            cols.append(v)
-            col_names.append(k)
-    elif isinstance(data, list):
-        cols = data
-        for idx, q in enumerate(cols):
-            if isinstance(q, Quantity) and q.symbol:
-                col_names.append(q.symbol)
-            else:
-                col_names.append(f"Dim {idx}")
-    elif hasattr(data, "columns"):
-        # ponytail: duck-typed DataFrame check so pandas stays optional;
-        # hasattr narrowing can't give ty a real type for `.columns`.
-        for col in data.columns:  # ty: ignore[not-iterable]
-            cols.append(data[col])
-            col_names.append(col)
-    else:
-        raise TypeError(
-            "data must be a dict, list of quantities, or pandas DataFrame."
-        )
-
-    arrays = []
-    units = []
-    for q in cols:
-        if isinstance(q, Quantity):
-            arrays.append(to_numpy(q.magnitude))
-            units.append(str(q.unit) if q.unit else "")
-        else:
-            arrays.append(to_numpy(q))
-            units.append("")
-
+    arrays, axis_labels, _ = _read_columns(data)
     num_cols = len(arrays)
-    num_samples = len(arrays[0])
-    for arr in arrays:
-        if len(arr) != num_samples:
-            raise ValueError("All quantities must have the same length.")
 
     fig, axes = plt.subplots(
         num_cols,
@@ -957,75 +1026,16 @@ def plot_pairplot(
     if num_cols == 1:
         axes = np.array([[axes]])
 
-    axis_labels = []
-    for name, unit in zip(col_names, units, strict=False):
-        if unit:
-            axis_labels.append(f"{name}\n({unit})")
-        else:
-            axis_labels.append(name)
-
+    label_style = {"fontsize": 9, "fontweight": "medium", "color": "#1F2937"}
     for i in range(num_cols):
         for j in range(num_cols):
             ax = axes[i, j]
-            ax.set_facecolor("white")
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-            ax.spines["left"].set_color("#D1D5DB")
-            ax.spines["bottom"].set_color("#D1D5DB")
-            ax.tick_params(colors="#4B5563", labelsize=8)
-
-            if i == j:
-                ax.hist(
-                    arrays[i],
-                    bins="auto",
-                    color=COLORS[0],
-                    edgecolor="white",
-                    alpha=0.85,
-                    rwidth=0.9,
-                    zorder=3,
-                )
-                ax.grid(
-                    True,
-                    linestyle="--",
-                    linewidth=0.5,
-                    color="#F3F4F6",
-                    zorder=0,
-                )
-            elif j < i:
-                ax.scatter(
-                    arrays[j],
-                    arrays[i],
-                    color=COLORS[1],
-                    edgecolor="white",
-                    linewidth=0.5,
-                    s=20,
-                    alpha=0.7,
-                    zorder=3,
-                )
-                ax.grid(
-                    True,
-                    linestyle="--",
-                    linewidth=0.5,
-                    color="#F3F4F6",
-                    zorder=0,
-                )
-            else:
-                ax.set_visible(False)
-
+            _style_pair_cell(ax)
+            _fill_pair_cell(ax, arrays, i, j)
             if i == num_cols - 1:
-                ax.set_xlabel(
-                    axis_labels[j],
-                    fontsize=9,
-                    fontweight="medium",
-                    color="#1F2937",
-                )
+                ax.set_xlabel(axis_labels[j], **label_style)
             if j == 0:
-                ax.set_ylabel(
-                    axis_labels[i],
-                    fontsize=9,
-                    fontweight="medium",
-                    color="#1F2937",
-                )
+                ax.set_ylabel(axis_labels[i], **label_style)
 
     title = kwargs.pop("title", "Pairwise Scatter Grid (Corner Plot)")
     fig.suptitle(
@@ -1153,13 +1163,8 @@ def _prepare_3d_mesh(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str]:
     import numpy as np
 
-    from physure.domain.measurement.quantity import Quantity
-
-    z_is_q = isinstance(z, Quantity)
-    z_val = to_numpy(z.magnitude) if z_is_q else to_numpy(z)
-    z_unit_str = str(z.unit) if (z_is_q and z.unit) else ""
-    z_label = (z.symbol or "Z") if z_is_q else "Z"
-    zlabel_text = f"{z_label} ({z_unit_str})" if z_unit_str else z_label
+    z_val = _values_of(z)
+    zlabel_text = _with_unit(*_axis_label(z, "Z"))
 
     if z_val.ndim == 1:
         z_val = z_val.reshape((1, -1))
@@ -1168,25 +1173,10 @@ def _prepare_3d_mesh(
 
     rows, cols = z_val.shape
 
-    x_is_q = isinstance(x, Quantity)
-    x_val = (
-        to_numpy(x.magnitude)
-        if x_is_q
-        else (to_numpy(x) if x is not None else None)
-    )
-    x_unit_str = str(x.unit) if (x_is_q and x.unit) else ""
-    x_label = (x.symbol or "X") if x_is_q else "X"
-    xlabel_text = f"{x_label} ({x_unit_str})" if x_unit_str else x_label
-
-    y_is_q = isinstance(y, Quantity)
-    y_val = (
-        to_numpy(y.magnitude)
-        if y_is_q
-        else (to_numpy(y) if y is not None else None)
-    )
-    y_unit_str = str(y.unit) if (y_is_q and y.unit) else ""
-    y_label = (y.symbol or "Y") if y_is_q else "Y"
-    ylabel_text = f"{y_label} ({y_unit_str})" if y_unit_str else y_label
+    x_val = _values_of(x)
+    xlabel_text = _with_unit(*_axis_label(x, "X"))
+    y_val = _values_of(y)
+    ylabel_text = _with_unit(*_axis_label(y, "Y"))
 
     x_grid_1d = (
         np.arange(cols, dtype=float) if x_val is None else x_val.flatten()
@@ -1202,20 +1192,20 @@ def _prepare_3d_mesh(
         and y_val is not None
         and y_val.ndim == 2
     ):
-        X_grid, Y_grid = x_val, y_val
+        x_grid, y_grid = x_val, y_val
     else:
-        X_grid, Y_grid = np.meshgrid(x_grid_1d[:cols], y_grid_1d[:rows])
+        x_grid, y_grid = np.meshgrid(x_grid_1d[:cols], y_grid_1d[:rows])
 
-    return X_grid, Y_grid, z_val, xlabel_text, ylabel_text, zlabel_text
+    return x_grid, y_grid, z_val, xlabel_text, ylabel_text, zlabel_text
 
 
 def _mesh_triangles(
-    X: np.ndarray, Y: np.ndarray, Z: np.ndarray
+    x_mesh: np.ndarray, y_mesh: np.ndarray, z_mesh: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
     import numpy as np
 
-    rows, cols = Z.shape
-    verts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+    rows, cols = z_mesh.shape
+    verts = np.column_stack([x_mesh.ravel(), y_mesh.ravel(), z_mesh.ravel()])
 
     r_idx, c_idx = np.meshgrid(
         np.arange(rows - 1), np.arange(cols - 1), indexing="ij"
@@ -1247,11 +1237,11 @@ def _compute_face_normals(verts: np.ndarray, faces: np.ndarray) -> np.ndarray:
     return normals / norms
 
 
-def _map_z_to_rgb(Z: np.ndarray, cmap_name: str = "plasma") -> np.ndarray:
+def _map_z_to_rgb(z_mesh: np.ndarray, cmap_name: str = "plasma") -> np.ndarray:
     import matplotlib.pyplot as plt
     import numpy as np
 
-    z_flat = Z.ravel()
+    z_flat = z_mesh.ravel()
     z_min, z_max = np.min(z_flat), np.max(z_flat)
     z_norm = (
         (z_flat - z_min) / (z_max - z_min)
@@ -1717,6 +1707,99 @@ def _export_html_threejs(
     return html_content
 
 
+def _resolve_3d_backend(backend: str) -> str:
+    """The 3-D backend to use: Plotly if it is installed, else the HTML viewer, for 'auto'."""
+    if backend == "auto":
+        try:
+            import plotly  # noqa: F401
+
+            backend = "plotly"
+        except ImportError:
+            backend = "html"
+    return backend.lower()
+
+
+def _plot_3d_plotly(
+    mesh: tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str],
+    title: str,
+    cmap: str,
+    filename: str | None,
+) -> Any:
+    try:
+        import plotly.graph_objects as go
+    except ImportError as e:
+        raise ImportError(
+            "Plotly is required for the 'plotly' 3D backend. "
+            "Install it via `pip install plotly`."
+        ) from e
+
+    x_grid, y_grid, z_grid, xlabel, ylabel, zlabel = mesh
+    fig = go.Figure(
+        data=[
+            go.Surface(
+                z=z_grid,
+                x=x_grid,
+                y=y_grid,
+                colorscale=cmap,
+                colorbar={"title": zlabel},
+            )
+        ]
+    )
+    fig.update_layout(
+        title=title,
+        scene={
+            "xaxis_title": xlabel,
+            "yaxis_title": ylabel,
+            "zaxis_title": zlabel,
+            "camera": {
+                "eye": {"x": 1.5, "y": 1.5, "z": 1.2},
+                "projection": {"type": "perspective"},
+            },
+        },
+        margin={"l": 0, "r": 0, "b": 0, "t": 40},
+    )
+    if filename:
+        if filename.endswith(".html"):
+            fig.write_html(filename)
+        else:
+            fig.write_image(filename)
+    return fig
+
+
+def _plot_3d_matplotlib(
+    mesh: tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str],
+    title: str,
+    cmap: str,
+    filename: str | None,
+) -> Any:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as e:
+        raise ImportError(
+            "Matplotlib is required for the 'matplotlib' 3D backend."
+        ) from e
+
+    x_grid, y_grid, z_grid, xlabel, ylabel, zlabel = mesh
+    fig = plt.figure(figsize=(9, 7))
+    ax = fig.add_subplot(111, projection="3d")
+    cm = plt.get_cmap(cmap)
+    surf = ax.plot_surface(
+        x_grid, y_grid, z_grid, cmap=cm, linewidth=0, antialiased=True
+    )
+    cbar = fig.colorbar(surf, ax=ax, shrink=0.6, aspect=12, pad=0.08)
+    cbar.set_label(
+        zlabel, rotation=270, labelpad=15, fontsize=10, color="#1F2937"
+    )
+    ax.set_xlabel(xlabel, fontsize=10, color="#1F2937", labelpad=8)
+    ax.set_ylabel(ylabel, fontsize=10, color="#1F2937", labelpad=8)
+    ax.set_zlabel(zlabel, fontsize=10, color="#1F2937", labelpad=8)
+    ax.set_title(title)
+
+    if filename:
+        fig.savefig(filename)
+    return ax
+
+
 def plot_3d(
     z: Quantity | Numeric,
     x: Quantity | Numeric | None = None,
@@ -1742,62 +1825,18 @@ def plot_3d(
     Returns:
         Plotly Figure object, Three.js HTML string, or Matplotlib Axes3D.
     """
-    X_grid, Y_grid, Z_grid, xlabel, ylabel, zlabel = _prepare_3d_mesh(z, x, y)
+    mesh = _prepare_3d_mesh(z, x, y)
+    x_grid, y_grid, z_grid, xlabel, ylabel, zlabel = mesh
     title_str = title or f"3D Surface of {zlabel}"
 
-    if backend == "auto":
-        try:
-            import plotly  # noqa: F401
-
-            backend = "plotly"
-        except ImportError:
-            backend = "html"
-
-    backend = backend.lower()
+    backend = _resolve_3d_backend(backend)
 
     if backend == "plotly":
-        try:
-            import plotly.graph_objects as go
-        except ImportError as e:
-            raise ImportError(
-                "Plotly is required for the 'plotly' 3D backend. "
-                "Install it via `pip install plotly`."
-            ) from e
+        return _plot_3d_plotly(mesh, title_str, cmap, filename)
 
-        fig = go.Figure(
-            data=[
-                go.Surface(
-                    z=Z_grid,
-                    x=X_grid,
-                    y=Y_grid,
-                    colorscale=cmap,
-                    colorbar=dict(title=zlabel),
-                )
-            ]
-        )
-        fig.update_layout(
-            title=title_str,
-            scene=dict(
-                xaxis_title=xlabel,
-                yaxis_title=ylabel,
-                zaxis_title=zlabel,
-                camera=dict(
-                    eye=dict(x=1.5, y=1.5, z=1.2),
-                    projection=dict(type="perspective"),
-                ),
-            ),
-            margin=dict(l=0, r=0, b=0, t=40),
-        )
-        if filename:
-            if filename.endswith(".html"):
-                fig.write_html(filename)
-            else:
-                fig.write_image(filename)
-        return fig
-
-    elif backend in ("html", "threejs", "webgl"):
-        verts, faces = _mesh_triangles(X_grid, Y_grid, Z_grid)
-        colors = _map_z_to_rgb(Z_grid, cmap_name=cmap)
+    if backend in ("html", "threejs", "webgl"):
+        verts, faces = _mesh_triangles(x_grid, y_grid, z_grid)
+        colors = _map_z_to_rgb(z_grid, cmap_name=cmap)
         return _export_html_threejs(
             verts,
             faces,
@@ -1809,37 +1848,101 @@ def plot_3d(
             filename=filename,
         )
 
-    elif backend in ("matplotlib", "mpl"):
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError as e:
-            raise ImportError(
-                "Matplotlib is required for the 'matplotlib' 3D backend."
-            ) from e
+    if backend in ("matplotlib", "mpl"):
+        return _plot_3d_matplotlib(mesh, title_str, cmap, filename)
 
-        fig = plt.figure(figsize=(9, 7))
-        ax = fig.add_subplot(111, projection="3d")
-        cm = plt.get_cmap(cmap)
-        surf = ax.plot_surface(
-            X_grid, Y_grid, Z_grid, cmap=cm, linewidth=0, antialiased=True
-        )
-        cbar = fig.colorbar(surf, ax=ax, shrink=0.6, aspect=12, pad=0.08)
-        cbar.set_label(
-            zlabel, rotation=270, labelpad=15, fontsize=10, color="#1F2937"
-        )
-        ax.set_xlabel(xlabel, fontsize=10, color="#1F2937", labelpad=8)
-        ax.set_ylabel(ylabel, fontsize=10, color="#1F2937", labelpad=8)
-        ax.set_zlabel(zlabel, fontsize=10, color="#1F2937", labelpad=8)
-        ax.set_title(title_str)
+    raise ValueError(
+        f"Unknown 3D backend: {backend}. "
+        "Choose from 'auto', 'plotly', 'html'/'threejs', 'matplotlib'."
+    )
 
+
+# the formats the native exporter returns as text
+_NATIVE_TEXT_FORMATS = (
+    "obj",
+    "gltf",
+    "glb",
+    "ply",
+    "html",
+    "threejs",
+    "stl_ascii",
+)
+
+
+def _export_3d_native(
+    mesh: tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str],
+    title: str,
+    rust_fmt: str,
+    filename: str,
+) -> str | bytes:
+    """The mesh in one format by the native engine, written to `filename` when there is one."""
+    from physure._core import export_mesh_3d_native
+
+    x_grid, y_grid, z_grid, xlabel, ylabel, zlabel = mesh
+    rows, cols = z_grid.shape
+    out_bytes = export_mesh_3d_native(
+        title,
+        xlabel,
+        ylabel,
+        zlabel,
+        [float(v) for v in x_grid.flatten()],
+        [float(v) for v in y_grid.flatten()],
+        [float(v) for v in z_grid.flatten()],
+        rows,
+        cols,
+        rust_fmt,
+    )
+
+    if rust_fmt in _NATIVE_TEXT_FORMATS:
+        res_str = out_bytes.decode("utf-8")
         if filename:
-            fig.savefig(filename)
-        return ax
-    else:
-        raise ValueError(
-            f"Unknown 3D backend: {backend}. "
-            "Choose from 'auto', 'plotly', 'html'/'threejs', 'matplotlib'."
+            # newline="": the file holds the text as it is returned, on Windows too
+            with open(filename, "w", encoding="utf-8", newline="") as f:
+                f.write(res_str)
+        return res_str
+    if filename:
+        with open(filename, "wb") as f:
+            f.write(out_bytes)
+    return out_bytes
+
+
+def _export_3d_python(
+    mesh: tuple[np.ndarray, np.ndarray, np.ndarray, str, str, str],
+    title: str,
+    fmt: str,
+    filename: str,
+    binary: bool,
+    cmap: str,
+) -> str | bytes:
+    """The mesh in one format by the Python exporters, for a build without the native one."""
+    x_grid, y_grid, z_grid, xlabel, ylabel, zlabel = mesh
+    verts, faces = _mesh_triangles(x_grid, y_grid, z_grid)
+    colors = _map_z_to_rgb(z_grid, cmap_name=cmap)
+
+    fmt_req = fmt.lower()
+    if fmt_req == "stl":
+        return _export_stl(verts, faces, filename=filename, binary=binary)
+    if fmt_req == "obj":
+        return _export_obj(verts, faces, colors=colors, filename=filename)
+    if fmt_req == "ply":
+        return _export_ply(verts, faces, colors=colors, filename=filename)
+    if fmt_req in ("gltf", "glb"):
+        return _export_gltf(verts, faces, colors=colors, filename=filename)
+    if fmt_req in ("html", "threejs"):
+        return _export_html_threejs(
+            verts,
+            faces,
+            colors,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            zlabel=zlabel,
+            title=title,
+            filename=filename,
         )
+    raise ValueError(
+        f"Unsupported 3D export format: {fmt}. "
+        "Choose from 'stl', 'obj', 'ply', 'gltf', 'glb', 'html'."
+    ) from None
 
 
 def export_3d(
@@ -1863,81 +1966,16 @@ def export_3d(
     - PLY (.ply): Polygon mesh file format.
     - HTML (.html): Standalone interactive Three.js 3D WebGL viewer.
     """
-    X_grid, Y_grid, Z_grid, xlabel, ylabel, zlabel = _prepare_3d_mesh(z, x, y)
-    title = kwargs.get("title", f"Physure 3D Mesh: {zlabel}")
+    mesh = _prepare_3d_mesh(z, x, y)
+    title = kwargs.get("title", f"Physure 3D Mesh: {mesh[5]}")
 
     if fmt is None:
-        ext = filename.split(".")[-1].lower() if "." in filename else "stl"
-        fmt = ext
+        fmt = filename.split(".")[-1].lower() if "." in filename else "stl"
 
     fmt_req = fmt.lower()
     rust_fmt = "stl_ascii" if (fmt_req == "stl" and not binary) else fmt_req
 
     try:
-        from physure._core import export_mesh_3d_native
-
-        rows, cols = Z_grid.shape
-        x_flat = [float(v) for v in X_grid.flatten()]
-        y_flat = [float(v) for v in Y_grid.flatten()]
-        z_flat = [float(v) for v in Z_grid.flatten()]
-
-        out_bytes = export_mesh_3d_native(
-            title,
-            xlabel,
-            ylabel,
-            zlabel,
-            x_flat,
-            y_flat,
-            z_flat,
-            rows,
-            cols,
-            rust_fmt,
-        )
-
-        if rust_fmt in (
-            "obj",
-            "gltf",
-            "glb",
-            "ply",
-            "html",
-            "threejs",
-            "stl_ascii",
-        ):
-            res_str = out_bytes.decode("utf-8")
-            if filename:
-                with open(filename, "w", encoding="utf-8") as f:
-                    f.write(res_str)
-            return res_str
-        else:
-            if filename:
-                with open(filename, "wb") as f:
-                    f.write(out_bytes)
-            return out_bytes
+        return _export_3d_native(mesh, title, rust_fmt, filename)
     except (ImportError, AttributeError):
-        verts, faces = _mesh_triangles(X_grid, Y_grid, Z_grid)
-        colors = _map_z_to_rgb(Z_grid, cmap_name=cmap)
-
-        if fmt_req == "stl":
-            return _export_stl(verts, faces, filename=filename, binary=binary)
-        elif fmt_req == "obj":
-            return _export_obj(verts, faces, colors=colors, filename=filename)
-        elif fmt_req == "ply":
-            return _export_ply(verts, faces, colors=colors, filename=filename)
-        elif fmt_req in ("gltf", "glb"):
-            return _export_gltf(verts, faces, colors=colors, filename=filename)
-        elif fmt_req in ("html", "threejs"):
-            return _export_html_threejs(
-                verts,
-                faces,
-                colors,
-                xlabel=xlabel,
-                ylabel=ylabel,
-                zlabel=zlabel,
-                title=title,
-                filename=filename,
-            )
-        else:
-            raise ValueError(
-                f"Unsupported 3D export format: {fmt}. "
-                "Choose from 'stl', 'obj', 'ply', 'gltf', 'glb', 'html'."
-            ) from None
+        return _export_3d_python(mesh, title, fmt, filename, binary, cmap)
