@@ -6,6 +6,25 @@
 
 Sizes (S: hours, M: a day or two, L: a week or more) and risks are estimates, not measurements.
 
+## 0. Where each item stands (updated 2026-10-31)
+
+The rest of this document is the inventory as written on 2026-10-30. This table records what happened to each item afterwards, from the git history of local `main`.
+
+| Item | Outcome | Where |
+|---|---|---|
+| F1 one benchmarks page | Done | `docs: one benchmarks page, measured on 0.3.0` |
+| F2 layering exceptions | Done: the unit-string parser moved to `domain/measurement/unit_text.py` | `refactor: the unit-string parser lives with the model that calls it` |
+| F3 binding conformance | Done: a golden TSV read by the core, Java and WASM tests, plus a JDK 8 to 25 matrix | `test/binding-conformance`, `test/java-lts-matrix` |
+| F4 release pipeline | Done, **unverified**: no workflow has run on GitHub yet | `chore/release-pipeline` |
+| F5 unit display rule | Done: `^(n/d)` for fractional powers, the micro sign is the prefix `u` | `feat(core): one rule for how a power is written` |
+| N1 package renames (A2b) | Open | |
+| N2 static dimension checking | Done: `physure_script::check`, `phs check`, language-server diagnostics | `2026-10-30-static-dimension-checking-design.md` |
+| N3 extract the symbolic engine | Measured, not done: no binding can drop the interpreter | `2026-10-30-symbolic-extraction-measurement.md` |
+| N4 units and `torch.compile` | Partly: a graph-break gate and a benchmark. The breaks are not the bottleneck, so the unit-object work (S2) is parked | `2026-10-30-compile-trace-time-units-design.md` |
+| N5 validation surface for agents | Done: a sandboxed interpreter, `phs eval`, `phs unit`, `phs mcp` | `2026-10-30-agent-validation-surface-design.md` |
+
+Found while doing N4, and not in this inventory: uncertain arrays on torch raised `TypeError` on most operations, uncertain arrays of different shapes crashed the Rust covariance store, a quantity times or divided by a plain array lost its unit, and a scalar quantity beside an array lost the array's uncertainty. All four are fixed and checked against the GUM formulas (`CHANGELOG.md`, [Unreleased] / Fixed). Still open from that work: the torch speed-up (`perf/torch-sparse-diagonal`, parked) and the dense Jacobians the numpy covariance store needs for large uncertain arrays.
+
 ## 1. State at 0.3.0
 
 | Thing | State | Evidence |
