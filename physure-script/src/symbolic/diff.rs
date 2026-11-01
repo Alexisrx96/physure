@@ -1,6 +1,36 @@
 use physure_core::error::PhysureResult;
 use super::ast::Node;
 
+/// The derivative of a bare name: 1 for the variable, `y'` for the dependent variable (and for `y'`, `y''`...),
+/// `d^2y/dx^2` for `dy/dx` when `leibniz`, 0 for anything else.
+fn diff_name(name: &str, var: &str, dep_var: Option<&str>, leibniz: bool) -> Node {
+    if name == var {
+        return Node::Number(1.0);
+    }
+    let Some(d) = dep_var else {
+        let is_derivative = name.ends_with('\'') && name.chars().any(|c| c.is_alphanumeric() && c != '\'');
+        return if is_derivative { Node::Symbol(format!("{}'", name)) } else { Node::Number(0.0) };
+    };
+    if name == d || (name.starts_with(d) && name[d.len()..].chars().all(|c| c == '\'')) {
+        Node::Symbol(format!("{}'", name))
+    } else if leibniz && (name == format!("d{}/d{}", d, var) || name == format!("d({})/d({})", d, var)) {
+        Node::Symbol(format!("d^2{}/d{}^2", d, var))
+    } else {
+        Node::Number(0.0)
+    }
+}
+
+fn is_known_function_name(s: &str) -> bool {
+    matches!(
+        s,
+        "sin" | "cos" | "tan" | "cot" | "sec" | "csc" | "cosec"
+            | "asin" | "arcsin" | "acos" | "arccos" | "atan" | "arctan"
+            | "acot" | "arccot" | "asec" | "arcsec" | "acsc" | "arccsc"
+            | "arccosec" | "sinh" | "cosh" | "tanh" | "coth" | "sech"
+            | "csch" | "abs" | "sqrt" | "ln" | "exp" | "log" | "e" | "pi"
+    )
+}
+
 impl Node {
     pub fn diff_node(&self, var: &str) -> PhysureResult<Node> {
         self.diff_node_implicit(var, None)
@@ -9,38 +39,8 @@ impl Node {
     pub fn diff_node_implicit(&self, var: &str, dep_var: Option<&str>) -> PhysureResult<Node> {
         Ok(match self {
             Node::Number(_) => Node::Number(0.0),
-            Node::Symbol(s) => {
-                if s == var {
-                    Node::Number(1.0)
-                } else if let Some(d) = dep_var {
-                    if s == d || (s.starts_with(d) && s[d.len()..].chars().all(|c| c == '\'')) {
-                        Node::Symbol(format!("{}'", s))
-                    } else if s == &format!("d{}/d{}", d, var) || s == &format!("d({})/d({})", d, var) {
-                        Node::Symbol(format!("d^2{}/d{}^2", d, var))
-                    } else {
-                        Node::Number(0.0)
-                    }
-                } else if s.ends_with('\'') && s.chars().any(|c| c.is_alphanumeric() && c != '\'') {
-                    Node::Symbol(format!("{}'", s))
-                } else {
-                    Node::Number(0.0)
-                }
-            }
-            Node::Quantity(name, _) => {
-                if name == var {
-                    Node::Number(1.0)
-                } else if let Some(d) = dep_var {
-                    if name == d || (name.starts_with(d) && name[d.len()..].chars().all(|c| c == '\'')) {
-                        Node::Symbol(format!("{}'", name))
-                    } else {
-                        Node::Number(0.0)
-                    }
-                } else if name.ends_with('\'') && name.chars().any(|c| c.is_alphanumeric() && c != '\'') {
-                    Node::Symbol(format!("{}'", name))
-                } else {
-                    Node::Number(0.0)
-                }
-            }
+            Node::Symbol(s) => diff_name(s, var, dep_var, true),
+            Node::Quantity(name, _) => diff_name(name, var, dep_var, false),
             Node::Add(terms) => Node::Add(
                 terms
                     .iter()
@@ -70,31 +70,7 @@ impl Node {
                 let denom = Node::Pow(b.clone(), Box::new(Node::Number(2.0)));
                 Node::Div(Box::new(numerator), Box::new(denom))
             }
-            Node::Pow(base, exp) => {
-                let db = base.diff_node_implicit(var, dep_var)?;
-                let dv = exp.diff_node_implicit(var, dep_var)?;
-                let exp_dep = exp.depends_on(var) || dep_var.map_or(false, |d| exp.depends_on(d));
-                if let Node::Number(n) = **exp {
-                    Node::Mul(vec![
-                        Node::Number(n),
-                        Node::Pow(base.clone(), Box::new(Node::Number(n - 1.0))),
-                        db,
-                    ])
-                } else if !exp_dep {
-                    Node::Mul(vec![
-                        (**exp).clone(),
-                        Node::Pow(base.clone(), Box::new(Node::Sub(exp.clone(), Box::new(Node::Number(1.0))))),
-                        db,
-                    ])
-                } else {
-                    let term1 = Node::Mul(vec![dv, Node::Ln(base.clone())]);
-                    let term2 = Node::Div(Box::new(Node::Mul(vec![(**exp).clone(), db])), base.clone());
-                    Node::Mul(vec![
-                        self.clone(),
-                        Node::Add(vec![term1, term2]),
-                    ])
-                }
-            }
+            Node::Pow(base, exp) => self.diff_pow(base, exp, var, dep_var)?,
             Node::Sin(u) => Node::Mul(vec![Node::Cos(u.clone()), u.diff_node_implicit(var, dep_var)?]),
             Node::Cos(u) => Node::Mul(vec![Node::Number(-1.0), Node::Sin(u.clone()), u.diff_node_implicit(var, dep_var)?]),
             Node::Tan(u) => Node::Mul(vec![Node::Pow(Box::new(Node::Sec(u.clone())), Box::new(Node::Number(2.0))), u.diff_node_implicit(var, dep_var)?]),
@@ -124,42 +100,7 @@ impl Node {
                 Node::Pow(u.clone(), Box::new(Node::Number(-0.5))),
                 u.diff_node_implicit(var, dep_var)?
             ]),
-            Node::Equation(a, b) => {
-                let is_known_fn = |s: &str| -> bool {
-                    matches!(
-                        s,
-                        "sin" | "cos" | "tan" | "cot" | "sec" | "csc" | "cosec"
-                            | "asin" | "arcsin" | "acos" | "arccos" | "atan" | "arctan"
-                            | "acot" | "arccot" | "asec" | "arcsec" | "acsc" | "arccsc"
-                            | "arccosec" | "sinh" | "cosh" | "tanh" | "coth" | "sech"
-                            | "csch" | "abs" | "sqrt" | "ln" | "exp" | "log" | "e" | "pi"
-                    )
-                };
-                let mut symbols = std::collections::HashSet::new();
-                self.free_symbols(&mut symbols);
-                let mut dep_vars: Vec<_> = symbols
-                    .into_iter()
-                    .filter(|s| s != var && !is_known_fn(s))
-                    .collect();
-                dep_vars.sort();
-                if let Some(dep_var) = dep_vars.first() {
-                    let d_a = a.diff_node_implicit(var, Some(dep_var))?.simplify();
-                    let d_b = b.diff_node_implicit(var, Some(dep_var))?.simplify();
-                    let diff_eq = Node::Equation(Box::new(d_a), Box::new(d_b));
-                    let target_deriv = format!("{}'", dep_var);
-                    let solved_res = diff_eq.solve_equation(&target_deriv);
-                    if let Ok(ref solved) = solved_res {
-                        Node::Equation(Box::new(Node::Symbol(target_deriv)), Box::new(solved.clone()))
-                    } else {
-                        diff_eq.simplify()
-                    }
-                } else {
-                    Node::Equation(
-                        Box::new(a.diff_node_implicit(var, dep_var)?),
-                        Box::new(b.diff_node_implicit(var, dep_var)?),
-                    )
-                }
-            }
+            Node::Equation(a, b) => self.diff_equation(a, b, var, dep_var)?,
             Node::Integral(u, v) => {
                 if v == var {
                     (**u).clone()
@@ -167,6 +108,58 @@ impl Node {
                     Node::Integral(Box::new(u.diff_node_implicit(var, dep_var)?), v.clone())
                 }
             }
+        })
+    }
+
+    fn diff_pow(&self, base: &Node, exp: &Node, var: &str, dep_var: Option<&str>) -> PhysureResult<Node> {
+        let db = base.diff_node_implicit(var, dep_var)?;
+        let dv = exp.diff_node_implicit(var, dep_var)?;
+        let exp_dep = exp.depends_on(var) || dep_var.map_or(false, |d| exp.depends_on(d));
+        Ok(if let Node::Number(n) = *exp {
+            Node::Mul(vec![
+                Node::Number(n),
+                Node::Pow(Box::new(base.clone()), Box::new(Node::Number(n - 1.0))),
+                db,
+            ])
+        } else if !exp_dep {
+            Node::Mul(vec![
+                exp.clone(),
+                Node::Pow(Box::new(base.clone()), Box::new(Node::Sub(Box::new(exp.clone()), Box::new(Node::Number(1.0))))),
+                db,
+            ])
+        } else {
+            let term1 = Node::Mul(vec![dv, Node::Ln(Box::new(base.clone()))]);
+            let term2 = Node::Div(Box::new(Node::Mul(vec![exp.clone(), db])), Box::new(base.clone()));
+            Node::Mul(vec![
+                self.clone(),
+                Node::Add(vec![term1, term2]),
+            ])
+        })
+    }
+
+    /// The derivative of an equation: when it holds a dependent variable besides `var`, the equation of the
+    /// dependent variable's derivative, solved for it if it can be.
+    fn diff_equation(&self, a: &Node, b: &Node, var: &str, dep_var: Option<&str>) -> PhysureResult<Node> {
+        let mut symbols = std::collections::HashSet::new();
+        self.free_symbols(&mut symbols);
+        let mut dep_vars: Vec<_> = symbols
+            .into_iter()
+            .filter(|s| s != var && !is_known_function_name(s))
+            .collect();
+        dep_vars.sort();
+        let Some(found) = dep_vars.first() else {
+            return Ok(Node::Equation(
+                Box::new(a.diff_node_implicit(var, dep_var)?),
+                Box::new(b.diff_node_implicit(var, dep_var)?),
+            ));
+        };
+        let d_a = a.diff_node_implicit(var, Some(found))?.simplify();
+        let d_b = b.diff_node_implicit(var, Some(found))?.simplify();
+        let diff_eq = Node::Equation(Box::new(d_a), Box::new(d_b));
+        let target_deriv = format!("{}'", found);
+        Ok(match diff_eq.solve_equation(&target_deriv) {
+            Ok(solved) => Node::Equation(Box::new(Node::Symbol(target_deriv)), Box::new(solved)),
+            Err(_) => diff_eq.simplify(),
         })
     }
 

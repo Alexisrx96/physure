@@ -201,6 +201,24 @@ fn to_add_terms(node: &Node) -> Vec<Node> {
     }
 }
 
+/// A sum of terms as one node: 0 for none, the term itself for one, the simplified sum otherwise.
+fn sum_node(mut terms: Vec<Node>) -> Node {
+    match terms.len() {
+        0 => Node::Number(0.0),
+        1 => terms.remove(0),
+        _ => Node::Add(terms).simplify(),
+    }
+}
+
+/// A product of factors as one node: 1 for none, the factor itself for one, the simplified product otherwise.
+fn product_node(mut factors: Vec<Node>) -> Node {
+    match factors.len() {
+        0 => Node::Number(1.0),
+        1 => factors.remove(0),
+        _ => Node::Mul(factors).simplify(),
+    }
+}
+
 // Helpers for pattern matching ODE forms
 fn extract_2nd_order_const_coeffs(
     expr: &Node,
@@ -215,42 +233,38 @@ fn extract_2nd_order_const_coeffs(
     let mut c = 0.0;
     let mut non_dep_terms = Vec::new();
 
-    let terms = to_add_terms(expr);
-
-    for term in terms {
+    for term in to_add_terms(expr) {
         let s = term.to_phs_string();
-        if s.contains(&prime2) {
-            if let Some(coeff) = extract_const_coeff(&term, &prime2) {
-                a += coeff;
-            } else {
-                return None;
-            }
+        // the order of the derivative decides which coefficient the term belongs to
+        let (coefficient, name) = if s.contains(&prime2) {
+            (&mut a, prime2.as_str())
         } else if s.contains(&prime1) {
-            if let Some(coeff) = extract_const_coeff(&term, &prime1) {
-                b += coeff;
-            } else {
-                return None;
-            }
+            (&mut b, prime1.as_str())
         } else if s.contains(dep_var) {
-            if let Some(coeff) = extract_const_coeff(&term, dep_var) {
-                c += coeff;
-            } else {
-                return None;
-            }
+            (&mut c, dep_var)
         } else {
             non_dep_terms.push(Node::Mul(vec![Node::Number(-1.0), term]).simplify());
-        }
+            continue;
+        };
+        *coefficient += extract_const_coeff(&term, name)?;
     }
 
     if a != 0.0 {
-        let rhs = if non_dep_terms.is_empty() {
-            Node::Number(0.0)
-        } else if non_dep_terms.len() == 1 {
-            non_dep_terms[0].clone()
-        } else {
-            Node::Add(non_dep_terms).simplify()
-        };
-        Some((a, b, c, rhs))
+        Some((a, b, c, sum_node(non_dep_terms)))
+    } else {
+        None
+    }
+}
+
+/// A term with the dependent variable in it, as the coefficient that multiplies it: `k * y` gives `k`.
+fn dependent_coefficient(term: &Node, dep_var: &str) -> Option<Node> {
+    let (target_f, other_f): (Vec<Node>, Vec<Node>) = match term {
+        Node::Mul(fs) => fs.iter().cloned().partition(|f| f.to_phs_string() == dep_var),
+        Node::Symbol(sym) if sym == dep_var => (vec![term.clone()], vec![Node::Number(1.0)]),
+        _ => return None,
+    };
+    if target_f.len() == 1 {
+        Some(product_node(other_f))
     } else {
         None
     }
@@ -266,58 +280,19 @@ fn extract_1st_order_linear(
     let mut p_terms = Vec::new();
     let mut q_terms = Vec::new();
 
-    let terms = to_add_terms(expr);
-
-    for term in terms {
+    for term in to_add_terms(expr) {
         let s = term.to_phs_string();
         if s.contains(&prime1) {
-            if let Some(coeff) = extract_const_coeff(&term, &prime1) {
-                y_prime_coeff += coeff;
-            } else {
-                return None;
-            }
+            y_prime_coeff += extract_const_coeff(&term, &prime1)?;
         } else if s.contains(dep_var) {
-            // Factor out dep_var
-            let (target_f, other_f) = match &term {
-                Node::Mul(fs) => fs.iter().cloned().partition(|f| f.to_phs_string() == dep_var),
-                Node::Symbol(sym) if sym == dep_var => (vec![term.clone()], vec![Node::Number(1.0)]),
-                _ => return None,
-            };
-            if target_f.len() == 1 {
-                let coeff_node = if other_f.is_empty() {
-                    Node::Number(1.0)
-                } else if other_f.len() == 1 {
-                    other_f[0].clone()
-                } else {
-                    Node::Mul(other_f).simplify()
-                };
-                p_terms.push(coeff_node);
-            } else {
-                return None;
-            }
+            p_terms.push(dependent_coefficient(&term, dep_var)?);
         } else {
             q_terms.push(Node::Mul(vec![Node::Number(-1.0), term]).simplify());
         }
     }
 
     if y_prime_coeff == 1.0 {
-        let p_x = if p_terms.is_empty() {
-            Node::Number(0.0)
-        } else if p_terms.len() == 1 {
-            p_terms[0].clone()
-        } else {
-            Node::Add(p_terms).simplify()
-        };
-
-        let q_x = if q_terms.is_empty() {
-            Node::Number(0.0)
-        } else if q_terms.len() == 1 {
-            q_terms[0].clone()
-        } else {
-            Node::Add(q_terms).simplify()
-        };
-
-        Some((p_x, q_x))
+        Some((sum_node(p_terms), sum_node(q_terms)))
     } else {
         None
     }
@@ -331,47 +306,32 @@ fn extract_1st_order_separable(
     let prime1 = format!("{}'", dep_var);
     // y' - f(x)*g(y) = 0 => y' = f(x)*g(y)
     let terms = to_add_terms(expr);
-
-    if terms.len() == 2 {
-        let has_prime = terms[0].to_phs_string().contains(&prime1) || terms[1].to_phs_string().contains(&prime1);
-        if has_prime {
-            let (prime_term, other_term) = if terms[0].to_phs_string().contains(&prime1) {
-                (&terms[0], &terms[1])
-            } else {
-                (&terms[1], &terms[0])
-            };
-
-            if prime_term.to_phs_string() == prime1 {
-                let rhs = Node::Mul(vec![Node::Number(-1.0), other_term.clone()]).simplify();
-                // Partition rhs into f(x) and g(y)
-                let (x_factors, y_factors) = match &rhs {
-                    Node::Mul(fs) => fs.iter().cloned().partition(|f| !f.depends_on(dep_var)),
-                    other if !other.depends_on(dep_var) => (vec![other.clone()], vec![Node::Number(1.0)]),
-                    other if !other.depends_on(indep_var) => (vec![Node::Number(1.0)], vec![other.clone()]),
-                    _ => return None,
-                };
-
-                let f_x = if x_factors.is_empty() {
-                    Node::Number(1.0)
-                } else if x_factors.len() == 1 {
-                    x_factors[0].clone()
-                } else {
-                    Node::Mul(x_factors).simplify()
-                };
-
-                let g_y = if y_factors.is_empty() {
-                    Node::Number(1.0)
-                } else if y_factors.len() == 1 {
-                    y_factors[0].clone()
-                } else {
-                    Node::Mul(y_factors).simplify()
-                };
-
-                return Some((f_x, g_y));
-            }
-        }
+    if terms.len() != 2 {
+        return None;
     }
-    None
+
+    let has_prime = |t: &Node| t.to_phs_string().contains(&prime1);
+    let (prime_term, other_term) = if has_prime(&terms[0]) {
+        (&terms[0], &terms[1])
+    } else if has_prime(&terms[1]) {
+        (&terms[1], &terms[0])
+    } else {
+        return None;
+    };
+    if prime_term.to_phs_string() != prime1 {
+        return None;
+    }
+
+    let rhs = Node::Mul(vec![Node::Number(-1.0), other_term.clone()]).simplify();
+    // Partition rhs into f(x) and g(y)
+    let (x_factors, y_factors) = match &rhs {
+        Node::Mul(fs) => fs.iter().cloned().partition(|f| !f.depends_on(dep_var)),
+        other if !other.depends_on(dep_var) => (vec![other.clone()], vec![Node::Number(1.0)]),
+        other if !other.depends_on(indep_var) => (vec![Node::Number(1.0)], vec![other.clone()]),
+        _ => return None,
+    };
+
+    Some((product_node(x_factors), product_node(y_factors)))
 }
 
 fn extract_const_coeff(term: &Node, var: &str) -> Option<f64> {
