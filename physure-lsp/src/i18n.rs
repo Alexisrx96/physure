@@ -11,19 +11,24 @@ fn is_spanish(locale: &str) -> bool {
     tag == "es" || tag.starts_with("es-") || tag.starts_with("es_")
 }
 
+/// What each unit measures: the unit, then its name in English and in Spanish.
+const QUANTITY_NAMES: [(&str, &str, &str); 7] = [
+    ("m", "Length", "Longitud"),
+    ("kg", "Mass", "Masa"),
+    ("s", "Time", "Tiempo"),
+    ("N", "Force", "Fuerza"),
+    ("Pa", "Pressure / Stress", "Presión / Esfuerzo"),
+    ("J", "Energy / Work", "Energía / Trabajo"),
+    ("W", "Power", "Potencia"),
+];
+
 /// What a unit measures, in the language of `locale`.
 pub fn quantity_name(unit: &str, locale: &str) -> Option<&'static str> {
-    let es = is_spanish(locale);
-    Some(match unit {
-        "m" => if es { "Longitud" } else { "Length" },
-        "kg" => if es { "Masa" } else { "Mass" },
-        "s" => if es { "Tiempo" } else { "Time" },
-        "N" => if es { "Fuerza" } else { "Force" },
-        "Pa" => if es { "Presión / Esfuerzo" } else { "Pressure / Stress" },
-        "J" => if es { "Energía / Trabajo" } else { "Energy / Work" },
-        "W" => if es { "Potencia" } else { "Power" },
-        _ => return None,
-    })
+    let spanish = is_spanish(locale);
+    QUANTITY_NAMES
+        .iter()
+        .find(|(symbol, _, _)| *symbol == unit)
+        .map(|(_, english, spanish_name)| if spanish { *spanish_name } else { *english })
 }
 
 #[cfg(test)]

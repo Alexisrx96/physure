@@ -24,7 +24,7 @@ impl DocState {
     }
 }
 
-use physure_script::ast::{Expr, ImportSpecifier};
+use physure_script::ast::{DecoratorNode, Expr, FunctionDefNode, ImportSpecifier};
 use physure_script::debug::collect_declared;
 use std::collections::HashSet;
 
@@ -41,102 +41,112 @@ pub fn analyze(statements: &[Statement]) -> Vec<StmtDeps> {
 }
 
 fn analyze_one(stmt: &Statement) -> StmtDeps {
+    let no_locals = HashSet::new();
     match stmt {
         Statement::Assignment(node) => {
             let mut reads = HashSet::new();
-            collect_expr_reads(&node.value, &HashSet::new(), &mut reads);
-            for d in &node.decorators {
-                for arg in &d.args {
-                    collect_expr_reads(arg, &HashSet::new(), &mut reads);
-                }
-            }
+            collect_expr_reads(&node.value, &no_locals, &mut reads);
+            plain_decorator_reads(&node.decorators, &no_locals, &mut reads);
             StmtDeps { writes: vec![node.name.clone()], reads }
         }
-        Statement::FunctionDef(node) => {
-            let mut declared: HashSet<String> = node.params.iter().cloned().collect();
-            for s in &node.body_stmts {
-                collect_declared(s, &mut declared);
-            }
-            let mut reads = HashSet::new();
-            // Only `check_ensures` (physure-script/src/interpreter.rs) binds a synthetic
-            // `result` name into a clone of the local env -- `check_requires` and every other
-            // decorator evaluate against the plain params/locals set, so a real global
-            // literally named `result` referenced from e.g. `@requires` must still count as a
-            // read, not be assumed function-local. `validate_decorators` forbidding a param
-            // literally named `result` only rules out the param-shadowing case, not this one.
-            let mut ensures_locals = declared.clone();
-            ensures_locals.insert("result".to_string());
-            for d in &node.decorators {
-                let locals_for_decorator = if d.name == "ensures" { &ensures_locals } else { &declared };
-                for arg in &d.args {
-                    collect_expr_reads(arg, locals_for_decorator, &mut reads);
-                }
-            }
-            for s in &node.body_stmts {
-                collect_stmt_reads(s, &declared, &mut reads);
-            }
-            StmtDeps { writes: vec![node.name.clone()], reads }
-        }
-        Statement::Import(node) => {
-            let writes = match &node.specifier {
-                ImportSpecifier::Symbols(syms) => syms
-                    .iter()
-                    .map(|s| s.alias.clone().unwrap_or_else(|| s.name.clone()))
-                    .collect(),
-                // Wildcard/ModuleAlias: statically unknowable which names get bound -- under-
-                // report rather than guess, same rule collect_declared already uses.
-                //
-                // Known ceiling: because a wildcard import's writes are invisible here,
-                // touched_names/dirty-tracking can't detect that editing `use * from mod` to
-                // point at a *different* module should invalidate a name the old module
-                // exported but the new one doesn't -- env keeps the stale binding, and nothing
-                // reruns to notice, since no statement in the document textually reads
-                // "compute" the way a normal read/write edge would need. Fixing this properly
-                // would mean actually resolving the wildcard's target module during this
-                // AST-only analysis pass (filesystem I/O, not a name-based dependency edge) --
-                // a real architectural expansion, not an aligned fix, so it's accepted as a
-                // known, narrow gap rather than chased here. Upgrade path: `apply_change` could
-                // additionally treat any statement containing a wildcard `Import` in the
-                // changed span as fully invalidating and re-resolving the module it names, if
-                // this is ever observed to matter in practice.
-                ImportSpecifier::Wildcard | ImportSpecifier::ModuleAlias(_) => Vec::new(),
-            };
-            StmtDeps { writes, reads: HashSet::new() }
-        }
-        Statement::While { cond, body, .. } => {
-            // §4.4: verified against the interpreter that a while body's writes always leak
-            // to the top level, unconditionally -- no "did this name already exist" filter.
-            let mut declared = HashSet::new();
-            for s in body {
-                collect_declared(s, &mut declared);
-            }
-            // Reads are NOT scoped by `declared` the way a function's params/locals are: a
-            // while loop introduces no fresh child scope (§4.4 confirmed the body executes
-            // directly against the shared top-level env, unlike a function call's separate
-            // env clone), so even a name the body itself assigns must still count as reading
-            // whatever came from before the loop -- most importantly `cond`'s own use of a
-            // name the body reassigns (`i` in `while i < 5 { i = i + 1 }` reads the pre-loop
-            // `i`; it is not something the body "locally" owns the way a param would be).
-            let mut reads = HashSet::new();
-            collect_expr_reads(cond, &HashSet::new(), &mut reads);
-            for s in body {
-                collect_stmt_reads(s, &HashSet::new(), &mut reads);
-            }
-            StmtDeps { writes: declared.into_iter().collect(), reads }
-        }
-        Statement::Expr(expr) | Statement::Return(expr) => {
-            let mut reads = HashSet::new();
-            collect_expr_reads(expr, &HashSet::new(), &mut reads);
-            StmtDeps { writes: Vec::new(), reads }
-        }
-        Statement::GuardReturn { cond, value } => {
-            let mut reads = HashSet::new();
-            collect_expr_reads(cond, &HashSet::new(), &mut reads);
-            collect_expr_reads(value, &HashSet::new(), &mut reads);
-            StmtDeps { writes: Vec::new(), reads }
-        }
+        Statement::FunctionDef(node) => function_deps(node),
+        Statement::Import(node) => StmtDeps { writes: import_writes(&node.specifier), reads: HashSet::new() },
+        Statement::While { cond, body, .. } => while_deps(cond, body),
+        Statement::Expr(expr) | Statement::Return(expr) => StmtDeps { writes: Vec::new(), reads: reads_of(&[expr]) },
+        Statement::GuardReturn { cond, value } => StmtDeps { writes: Vec::new(), reads: reads_of(&[cond, value]) },
         Statement::Export(_) => StmtDeps::default(),
     }
+}
+
+/// The names the expressions read, none of them local.
+fn reads_of(exprs: &[&Expr]) -> HashSet<String> {
+    let mut reads = HashSet::new();
+    for expr in exprs {
+        collect_expr_reads(expr, &HashSet::new(), &mut reads);
+    }
+    reads
+}
+
+/// Reads of an assignment's decorator arguments: every decorator sees the same names.
+fn plain_decorator_reads(decorators: &[DecoratorNode], locals: &HashSet<String>, out: &mut HashSet<String>) {
+    for arg in decorators.iter().flat_map(|d| &d.args) {
+        collect_expr_reads(arg, locals, out);
+    }
+}
+
+/// Reads of a function's decorator arguments, `locals` being the names its body owns.
+///
+/// Only `check_ensures` (physure-script/src/interpreter.rs) binds a synthetic `result` name into a
+/// clone of the local env -- `check_requires` and every other decorator evaluate against the plain
+/// params/locals set, so a real global literally named `result` referenced from e.g. `@requires` must
+/// still count as a read, not be assumed function-local. `validate_decorators` forbidding a param
+/// literally named `result` only rules out the param-shadowing case, not this one.
+fn function_decorator_reads(decorators: &[DecoratorNode], locals: &HashSet<String>, out: &mut HashSet<String>) {
+    let mut ensures_locals = locals.clone();
+    ensures_locals.insert("result".to_string());
+    for d in decorators {
+        let visible = if d.name == "ensures" { &ensures_locals } else { locals };
+        for arg in &d.args {
+            collect_expr_reads(arg, visible, out);
+        }
+    }
+}
+
+fn function_deps(node: &FunctionDefNode) -> StmtDeps {
+    let mut declared: HashSet<String> = node.params.iter().cloned().collect();
+    for s in &node.body_stmts {
+        collect_declared(s, &mut declared);
+    }
+    let mut reads = HashSet::new();
+    function_decorator_reads(&node.decorators, &declared, &mut reads);
+    for s in &node.body_stmts {
+        collect_stmt_reads(s, &declared, &mut reads);
+    }
+    StmtDeps { writes: vec![node.name.clone()], reads }
+}
+
+fn import_writes(specifier: &ImportSpecifier) -> Vec<String> {
+    match specifier {
+        ImportSpecifier::Symbols(syms) => syms.iter().map(|s| s.alias.clone().unwrap_or_else(|| s.name.clone())).collect(),
+        // Wildcard/ModuleAlias: statically unknowable which names get bound -- under-
+        // report rather than guess, same rule collect_declared already uses.
+        //
+        // Known ceiling: because a wildcard import's writes are invisible here,
+        // touched_names/dirty-tracking can't detect that editing `use * from mod` to
+        // point at a *different* module should invalidate a name the old module
+        // exported but the new one doesn't -- env keeps the stale binding, and nothing
+        // reruns to notice, since no statement in the document textually reads
+        // "compute" the way a normal read/write edge would need. Fixing this properly
+        // would mean actually resolving the wildcard's target module during this
+        // AST-only analysis pass (filesystem I/O, not a name-based dependency edge) --
+        // a real architectural expansion, not an aligned fix, so it's accepted as a
+        // known, narrow gap rather than chased here. Upgrade path: `apply_change` could
+        // additionally treat any statement containing a wildcard `Import` in the
+        // changed span as fully invalidating and re-resolving the module it names, if
+        // this is ever observed to matter in practice.
+        ImportSpecifier::Wildcard | ImportSpecifier::ModuleAlias(_) => Vec::new(),
+    }
+}
+
+fn while_deps(cond: &Expr, body: &[Statement]) -> StmtDeps {
+    // §4.4: verified against the interpreter that a while body's writes always leak
+    // to the top level, unconditionally -- no "did this name already exist" filter.
+    let mut declared = HashSet::new();
+    for s in body {
+        collect_declared(s, &mut declared);
+    }
+    // Reads are NOT scoped by `declared` the way a function's params/locals are: a
+    // while loop introduces no fresh child scope (§4.4 confirmed the body executes
+    // directly against the shared top-level env, unlike a function call's separate
+    // env clone), so even a name the body itself assigns must still count as reading
+    // whatever came from before the loop -- most importantly `cond`'s own use of a
+    // name the body reassigns (`i` in `while i < 5 { i = i + 1 }` reads the pre-loop
+    // `i`; it is not something the body "locally" owns the way a param would be).
+    let mut reads = reads_of(&[cond]);
+    for s in body {
+        collect_stmt_reads(s, &HashSet::new(), &mut reads);
+    }
+    StmtDeps { writes: declared.into_iter().collect(), reads }
 }
 
 /// Reads inside a nested statement (a function body or while body), relative to the
@@ -149,27 +159,15 @@ fn collect_stmt_reads(stmt: &Statement, locals: &HashSet<String>, out: &mut Hash
     match stmt {
         Statement::Assignment(node) => {
             collect_expr_reads(&node.value, locals, out);
-            for d in &node.decorators {
-                for arg in &d.args {
-                    collect_expr_reads(arg, locals, out);
-                }
-            }
+            plain_decorator_reads(&node.decorators, locals, out);
         }
         Statement::FunctionDef(node) => {
-            // Same @ensures-only exemption as analyze_one's FunctionDef arm -- see its comment.
-            let mut ensures_locals = locals.clone();
-            ensures_locals.insert("result".to_string());
-            for d in &node.decorators {
-                let locals_for_decorator = if d.name == "ensures" { &ensures_locals } else { locals };
-                for arg in &d.args {
-                    collect_expr_reads(arg, locals_for_decorator, out);
-                }
-            }
+            function_decorator_reads(&node.decorators, locals, out);
             for s in &node.body_stmts {
                 collect_stmt_reads(s, locals, out);
             }
         }
-        Statement::Import(_) => {}
+        Statement::Import(_) | Statement::Export(_) => {}
         Statement::While { cond, body, .. } => {
             collect_expr_reads(cond, locals, out);
             for s in body {
@@ -181,18 +179,15 @@ fn collect_stmt_reads(stmt: &Statement, locals: &HashSet<String>, out: &mut Hash
             collect_expr_reads(cond, locals, out);
             collect_expr_reads(value, locals, out);
         }
-        Statement::Export(_) => {}
     }
 }
 
 fn collect_expr_reads(expr: &Expr, locals: &HashSet<String>, out: &mut HashSet<String>) {
     match expr {
-        Expr::Quantity(_) => {}
-        Expr::Bool(_) => {}
+        Expr::Quantity(_) | Expr::Bool(_) => {}
+        Expr::Identifier(name) if is_template(name) => collect_template_reads(name, locals, out),
         Expr::Identifier(name) => {
-            if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
-                collect_template_reads(name, locals, out);
-            } else if !locals.contains(name) {
+            if !locals.contains(name) {
                 out.insert(name.clone());
             }
         }
@@ -201,37 +196,41 @@ fn collect_expr_reads(expr: &Expr, locals: &HashSet<String>, out: &mut HashSet<S
             collect_expr_reads(left, locals, out);
             collect_expr_reads(right, locals, out);
         }
-        Expr::FunctionCall { name, args, kwargs } => {
-            // `where`/`let` desugars to this internal 3-arg pseudo-call: args[0] is a bare
-            // name local to args[2] only, evaluated against the *outer* scope for args[1]
-            // (§4.3). Not a real callable -- "let" itself must not be treated as a read.
-            if name == "let" && args.len() == 3 {
-                if let Expr::Identifier(bound_name) = &args[0] {
-                    collect_expr_reads(&args[1], locals, out);
-                    let mut inner = locals.clone();
-                    inner.insert(bound_name.clone());
-                    collect_expr_reads(&args[2], &inner, out);
-                    return;
-                }
-            }
-            // §4.1: the callee's name is a bare String field, not a nested Identifier --
-            // resolution goes through env.get(name) exactly like an Identifier read does.
-            if !locals.contains(name) {
-                out.insert(name.clone());
-            }
-            for arg in args {
-                collect_expr_reads(arg, locals, out);
-            }
-            for (_, arg) in kwargs {
-                collect_expr_reads(arg, locals, out);
-            }
-        }
+        Expr::FunctionCall { name, args, kwargs } => function_call_reads(name, args, kwargs, locals, out),
         Expr::ForExpr { var, iterable, body } => {
             collect_expr_reads(iterable, locals, out);
             let mut inner = locals.clone();
             inner.insert(var.clone());
             collect_expr_reads(body, &inner, out);
         }
+    }
+}
+
+/// Whether an identifier is really a backtick or `{...}` template.
+fn is_template(name: &str) -> bool {
+    name.starts_with('`') || (name.contains('{') && name.contains('}'))
+}
+
+fn function_call_reads(name: &str, args: &[Expr], kwargs: &[(String, Expr)], locals: &HashSet<String>, out: &mut HashSet<String>) {
+    // `where`/`let` desugars to this internal 3-arg pseudo-call: args[0] is a bare
+    // name local to args[2] only, evaluated against the *outer* scope for args[1]
+    // (§4.3). Not a real callable -- "let" itself must not be treated as a read.
+    if let [Expr::Identifier(bound_name), value, body] = args {
+        if name == "let" {
+            collect_expr_reads(value, locals, out);
+            let mut inner = locals.clone();
+            inner.insert(bound_name.clone());
+            collect_expr_reads(body, &inner, out);
+            return;
+        }
+    }
+    // §4.1: the callee's name is a bare String field, not a nested Identifier --
+    // resolution goes through env.get(name) exactly like an Identifier read does.
+    if !locals.contains(name) {
+        out.insert(name.to_string());
+    }
+    for arg in args.iter().chain(kwargs.iter().map(|(_, arg)| arg)) {
+        collect_expr_reads(arg, locals, out);
     }
 }
 
@@ -492,6 +491,30 @@ pub struct ChangeOutcome {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Non-dirty statements keep their cached diagnostic, remapped from its old index (the
+/// suffix region can be at a different index than before if the changed span's length
+/// differs -- an insertion or deletion). Dirty slots get filled in by the run loop.
+fn carried_diagnostics(
+    old_diagnostics: &[Option<Diagnostic>],
+    new_len: usize,
+    dirty: &HashSet<usize>,
+    prefix: usize,
+    len_diff: isize,
+) -> Vec<Option<Diagnostic>> {
+    (0..new_len)
+        .map(|i| {
+            if dirty.contains(&i) {
+                return None;
+            }
+            let old_i = if i < prefix { i } else { (i as isize - len_diff) as usize };
+            // `old_i` is only ever in-bounds because every apply_change return path keeps
+            // `state.diagnostics.len() == state.statements.len()` -- i.e. `old_diagnostics`
+            // here has exactly `old_statements.len()` entries, one per old statement.
+            old_diagnostics.get(old_i).cloned().flatten()
+        })
+        .collect()
+}
+
 /// Applies one document change (the full new text, per `TextDocumentSyncKind::FULL`) against
 /// `prev` -- `None` on first open, `Some` on every edit after. Parses, diffs against `prev`'s
 /// last-known-good statements, invalidates stale `env` entries, re-runs exactly the dirty
@@ -525,21 +548,7 @@ pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
         compute_dirty(&old_statements, &new_statements);
     let len_diff = new_statements.len() as isize - old_statements.len() as isize;
 
-    // Non-dirty statements keep their cached diagnostic, remapped from its old index (the
-    // suffix region can be at a different index than before if the changed span's length
-    // differs -- an insertion or deletion). Dirty slots get filled in by the run loop below.
-    let mut diagnostics_by_stmt: Vec<Option<Diagnostic>> = Vec::with_capacity(new_statements.len());
-    for i in 0..new_statements.len() {
-        if dirty.contains(&i) {
-            diagnostics_by_stmt.push(None);
-        } else {
-            let old_i = if i < prefix { i } else { (i as isize - len_diff) as usize };
-            // `old_i` is only ever in-bounds because every apply_change return path keeps
-            // `state.diagnostics.len() == state.statements.len()` -- i.e. `old_diagnostics`
-            // here has exactly `old_statements.len()` entries, one per old statement.
-            diagnostics_by_stmt.push(old_diagnostics.get(old_i).cloned().flatten());
-        }
-    }
+    let mut diagnostics_by_stmt = carried_diagnostics(&old_diagnostics, new_statements.len(), &dirty, prefix, len_diff);
 
     // §4.2: invalidate every name either side of the changed span used to write, once, up
     // front -- subsumes per-statement invalidation and correctly handles a renamed write too.
