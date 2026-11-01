@@ -104,13 +104,13 @@ class Dimension(BaseExponentEntity):
         if found is not None:
             return cast("Self", found)
 
+        pairs = (
+            (symbol, _pair(value))
+            for symbol, value in (exponents or {}).items()
+        )
         key = tuple(
             sorted(
-                (
-                    (symbol, pair)
-                    for symbol, value in (exponents or {}).items()
-                    if (pair := _pair(value))[0] != 0
-                ),
+                ((symbol, pair) for symbol, pair in pairs if pair[0] != 0),
                 key=_symbol_order,
             )
         )

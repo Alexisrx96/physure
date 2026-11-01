@@ -444,7 +444,8 @@ class Quantity(
                 1.0, other.unit, 0.0, self.system, self.dimension
             )
             converted_one = one_other.to(self.unit)
-            return float(converted_one.magnitude) == 1.0
+            # exact on purpose: `approx_eq` is the comparison with a tolerance
+            return float(converted_one.magnitude) == 1.0  # NOSONAR
         except Exception:
             return False
 

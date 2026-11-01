@@ -8,7 +8,7 @@ backend-agnostic execution via the Array API standard.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import array_api_compat
@@ -159,35 +159,60 @@ def _add_sub_nonlinear(
     xp = get_xp(val1, val2)
     if unit1.dimension(system) != unit2.dimension(system):
         raise IncompatibleUnitsError(unit1, unit2)
-    op = xp.subtract if subtract else xp.add
     point1 = unit1.kind(system) == "absolute"
     point2 = unit2.kind(system) == "absolute"
-
     if point1 or point2:
-        if point1 and point2:
-            if not subtract:
-                raise ValueError(
-                    "Cannot add two absolute quantities. "
-                    "Did you mean to add a difference?"
-                )
-            base = unit1.base_unit(system)
-            return (
-                xp.subtract(
-                    _convert(xp, val1, unit1, base, system),
-                    _convert(xp, val2, unit2, base, system),
-                ),
-                base,
-            )
-        if point1:
-            factor = unit2.conversion_factor_to(unit1, system)
-            return op(val1, xp.multiply(val2, factor)), unit1
-        if subtract:
-            raise ValueError(
-                "Cannot subtract an absolute quantity from a difference."
-            )
-        factor = unit1.conversion_factor_to(unit2, system)
-        return xp.add(xp.multiply(val1, factor), val2), unit2
+        return _add_sub_with_point(
+            xp, (val1, unit1, point1), (val2, unit2, point2), system, subtract
+        )
+    return _add_sub_levels(xp, (val1, unit1), (val2, unit2), system, subtract)
 
+
+def _add_sub_with_point(
+    xp: Any,
+    first: tuple[Numeric, CompoundUnit, bool],
+    second: tuple[Numeric, CompoundUnit, bool],
+    system: UnitSystem,
+    subtract: bool,
+) -> tuple[Numeric, CompoundUnit]:
+    """Adds or subtracts when at least one side is a point; each is (value, unit, is a point)."""
+    val1, unit1, point1 = first
+    val2, unit2, point2 = second
+    if point1 and point2:
+        if not subtract:
+            raise ValueError(
+                "Cannot add two absolute quantities. "
+                "Did you mean to add a difference?"
+            )
+        base = unit1.base_unit(system)
+        return (
+            xp.subtract(
+                _convert(xp, val1, unit1, base, system),
+                _convert(xp, val2, unit2, base, system),
+            ),
+            base,
+        )
+    if point1:
+        factor = unit2.conversion_factor_to(unit1, system)
+        op = xp.subtract if subtract else xp.add
+        return op(val1, xp.multiply(val2, factor)), unit1
+    if subtract:
+        raise ValueError(
+            "Cannot subtract an absolute quantity from a difference."
+        )
+    factor = unit1.conversion_factor_to(unit2, system)
+    return xp.add(xp.multiply(val1, factor), val2), unit2
+
+
+def _add_sub_levels(
+    xp: Any,
+    first: tuple[Numeric, CompoundUnit],
+    second: tuple[Numeric, CompoundUnit],
+    system: UnitSystem,
+    subtract: bool,
+) -> tuple[Numeric, CompoundUnit]:
+    """Adds or subtracts two levels (dB): as the quantities they stand for."""
+    (val1, unit1), (val2, unit2) = first, second
     if not (unit1.kind(system) == "delta" and unit2.kind(system) == "delta"):
         raise ValueError("Unexpected kind of unit.")
     # both are levels, since _check_nonlinear found a unit that is not a scale
@@ -197,6 +222,7 @@ def _add_sub_nonlinear(
             f"quantity ('{unit1}' and '{unit2}'): convert one of them first."
         )
     plain = unit1.base_unit(system)
+    op = xp.subtract if subtract else xp.add
     combined = op(
         _convert(xp, val1, unit1, plain, system),
         _convert(xp, val2, unit2, plain, system),

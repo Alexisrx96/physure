@@ -6,8 +6,9 @@ from __future__ import annotations
 _SUPERSCRIPT_CHARS = "⁰¹²³⁴⁵⁶⁷⁸⁹⋅⁻"
 _SUPERSCRIPT_MAP = str.maketrans("0123456789.-", _SUPERSCRIPT_CHARS)
 _SUPERSCRIPT_REVERSE_MAP = str.maketrans(_SUPERSCRIPT_CHARS, "0123456789.-")
-_SUBSCRIPT_MAP = str.maketrans("0123456789-", "₀₁₂₃₄₅₆₇₈₉₋")
-_SUBSCRIPT_REVERSE_MAP = str.maketrans("₀₁₂₃₄₅₆₇₈₉₋", "0123456789-")
+_SUBSCRIPT_CHARS = "₀₁₂₃₄₅₆₇₈₉₋"
+_SUBSCRIPT_MAP = str.maketrans("0123456789-", _SUBSCRIPT_CHARS)
+_SUBSCRIPT_REVERSE_MAP = str.maketrans(_SUBSCRIPT_CHARS, "0123456789-")
 
 
 def to_superscript(n: str | float) -> str:
@@ -22,7 +23,7 @@ def to_superscript(n: str | float) -> str:
 def to_subscript(n: str | float) -> str:
     """Convert an integer to its subscript representation."""
     result = str(n).translate(_SUBSCRIPT_MAP)
-    return "".join(c for c in result if c in "₀₁₂₃₄₅₆₇₈₉₋")
+    return "".join(c for c in result if c in _SUBSCRIPT_CHARS)
 
 
 def subscript_to_ascii(s: str) -> str:

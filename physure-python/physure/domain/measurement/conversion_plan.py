@@ -79,7 +79,7 @@ def apply_conversion(
     if plan["kind"] == "affine":
         scale, shift = plan["scale"], plan["shift"]
         new_magnitude = backend.mul(magnitude, scale)
-        if shift != 0.0:
+        if shift:  # a plan with no shift adds nothing
             new_magnitude = backend.add(new_magnitude, shift)
         return new_magnitude, backend.mul(uncertainty, abs(scale))
 

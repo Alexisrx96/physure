@@ -70,6 +70,38 @@ def _product(exponents: Mapping[str, float]) -> str:
     )
 
 
+def _unit_fields(
+    dimension_text: str,
+    scale: Number | None,
+    offset: Number,
+    level: tuple[Number, Number] | None,
+    recipe: CompoundUnit | None,
+) -> tuple[list[str], str | None]:
+    """The fields of a `[Units]` line after the symbol, and the recipe text if one is written."""
+    has_zero_point = Fraction(_number(offset)) != 0
+    if level is not None:
+        if scale is not None:
+            raise ValueError("A level has no scale.")
+        if has_zero_point or recipe is not None:
+            raise ValueError("A level has no zero point and no recipe.")
+        factor, reference = level
+        return [
+            "Log",
+            _number(factor),
+            _number(reference),
+            dimension_text,
+        ], None
+    number = _number(1.0 if scale is None else scale)
+    if has_zero_point:
+        if recipe is not None:
+            raise ValueError("A unit with a zero point has no recipe.")
+        return [number, _number(offset), dimension_text], None
+    # next to a dimensionless "1" a third field reads as a zero point
+    if recipe is not None and dimension_text != "1":
+        return [number, dimension_text], _product(recipe.exponents)
+    return [number, dimension_text], None
+
+
 def unit_definition_text(
     symbol: str,
     dimension: Dimension,
@@ -111,29 +143,9 @@ def unit_definition_text(
     names = list(dict.fromkeys([symbol, *aliases]))
     for name in names:
         _name(name)
-    dimension_text = _product(dimension.exponents)
-    has_zero_point = Fraction(_number(offset)) != 0
-    recipe_text = None
-    if level is not None:
-        if scale is not None:
-            raise ValueError("A level has no scale.")
-        if has_zero_point or recipe is not None:
-            raise ValueError("A level has no zero point and no recipe.")
-        factor, reference = level
-        fields = ["Log", _number(factor), _number(reference), dimension_text]
-    elif has_zero_point:
-        if recipe is not None:
-            raise ValueError("A unit with a zero point has no recipe.")
-        fields = [
-            _number(1.0 if scale is None else scale),
-            _number(offset),
-            dimension_text,
-        ]
-    else:
-        fields = [_number(1.0 if scale is None else scale), dimension_text]
-        # next to a dimensionless "1" a third field reads as a zero point
-        if recipe is not None and dimension_text != "1":
-            recipe_text = _product(recipe.exponents)
+    fields, recipe_text = _unit_fields(
+        _product(dimension.exponents), scale, offset, level, recipe
+    )
     if not allow_prefixes:
         fields.append("noprefix")
     if recipe_text is not None:

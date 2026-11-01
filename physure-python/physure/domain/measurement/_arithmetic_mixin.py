@@ -819,35 +819,40 @@ class ArithmeticMixin:
             rest.dimension.is_dimensionless and not rest._is_level()
         )
         if rest_is_plain:
-            number = rest.magnitude if isinstance(rest, _q()) else rest
-            no_uncertainty = not isinstance(rest, _q()) or (
-                self._is_zero_uncertainty(rest.uncertainty)
-            )
-            is_sign = (
-                no_uncertainty
-                and isinstance(number, (int, float))
-                and abs(number) == 1
-                and (point is self or not divide)
-            )
-            if not is_sign:
-                point._refuse_plain_number()
-            return type(self).from_input(
-                self._backend.mul(point.magnitude, number),
-                point.unit,
-                self.system,
-                uncertainty=point.uncertainty,
-            )
-        a = (
-            self.to(self.unit.base_unit(self.system))
-            if self._is_absolute()
-            else self
-        )
-        b = (
-            other.to(other.unit.base_unit(other.system))
-            if other._is_absolute()
-            else other
-        )
+            return self._point_times_plain(point, rest, divide)
+        a = self._in_base_unit_if_absolute(self)
+        b = self._in_base_unit_if_absolute(other)
         return a / b if divide else a * b
+
+    @staticmethod
+    def _in_base_unit_if_absolute(quantity: Quantity) -> Quantity:
+        """An absolute temperature in its base unit (K), anything else as it is."""
+        if quantity._is_absolute():
+            return quantity.to(quantity.unit.base_unit(quantity.system))
+        return quantity
+
+    def _point_times_plain(
+        self, point: Quantity, rest: Quantity | Numeric, divide: bool
+    ) -> Quantity:
+        """An absolute temperature times (or over) a plain number: only a pure sign is allowed."""
+        number = rest.magnitude if isinstance(rest, _q()) else rest
+        no_uncertainty = not isinstance(rest, _q()) or (
+            self._is_zero_uncertainty(rest.uncertainty)
+        )
+        is_sign = (
+            no_uncertainty
+            and isinstance(number, (int, float))
+            and abs(number) == 1
+            and (point is self or not divide)
+        )
+        if not is_sign:
+            point._refuse_plain_number()
+        return type(self).from_input(
+            self._backend.mul(point.magnitude, number),
+            point.unit,
+            self.system,
+            uncertainty=point.uncertainty,
+        )
 
     def _apply_transcendental(self, func_name: str) -> Quantity:
         """Applies a dimensionless transcendental function (sin, exp, etc.).
@@ -1067,16 +1072,17 @@ class ArithmeticMixin:
         operand_shape = (
             tuple(backend.shape(operand)) if backend.is_array(operand) else ()
         )
+        negated = sign < 0  # `sign` is +1.0 or -1.0
         if operand_shape == out_shape:
             if coefficient is None:
                 identity = backend.identity_operator(
                     backend.size(result), reference=operand
                 )
-                return identity if sign == 1.0 else backend.mul(identity, sign)
-            if sign != 1.0:
+                return backend.mul(identity, sign) if negated else identity
+            if negated:
                 coefficient = backend.mul(coefficient, sign)
             return backend.diagonal_operator(coefficient)
-        if sign != 1.0:
+        if negated:
             if coefficient is None:
                 coefficient = backend.ones(
                     (backend.size(result),), reference=result
@@ -1215,25 +1221,22 @@ class ArithmeticMixin:
         op = "add" if is_add else "sub"
         self._reject_bare_number_add_sub(other)
         if self._scalar_with_array(other):
-            # s + A == A + s;  s - A == -(A - s)
+            # a scalar on the left of an array: the array drives, since s + A is
+            # A + s and s - A is the negation of A - s
             swapped = other._add_sub_impl(self, is_add)
             return swapped if is_add else -swapped
         rust_res = self._check_and_handle_rust_propagation(other, op)
         if rust_res is not None:
             return rust_res
 
-        if isinstance(other, _q()):
+        is_other_q = isinstance(other, _q())
+        if is_other_q:
             # 1. Affine and Logarithmic Logic (MUST BE ABOVE INITIAL CHECKS)
-            res_affine = self._affine_check(other, is_add=is_add)
-            if res_affine is not None:
-                return res_affine
-
-            res_log = self._logarithmic_add_sub(other, is_add=is_add)
-            if res_log is not None:
-                return res_log
+            res_nonlinear = self._nonlinear_add_sub(other, is_add)
+            if res_nonlinear is not None:
+                return res_nonlinear
 
         # 2. Optimized path for no uncertainty
-        is_other_q = isinstance(other, _q())
         fast = self._add_sub_no_unc_path(other, is_other_q, is_add, op)
         if fast is not None:
             return fast
@@ -1245,7 +1248,22 @@ class ArithmeticMixin:
             )
 
         # 5. Generic Path (Unit Conversion Required)
-        if not is_other_q:
+        return self._add_sub_converting(other, is_add)
+
+    def _nonlinear_add_sub(
+        self, other: Quantity, is_add: bool
+    ) -> Quantity | None:
+        """The sum of a quantity with a point or a level, None when neither is involved."""
+        result = self._affine_check(other, is_add=is_add)
+        if result is None:
+            result = self._logarithmic_add_sub(other, is_add=is_add)
+        return result
+
+    def _add_sub_converting(
+        self, other: Quantity | Numeric, is_add: bool
+    ) -> Quantity:
+        """Adds or subtracts after making `other` a quantity in this unit."""
+        if not isinstance(other, _q()):
             if isinstance(
                 other, (int, float, complex)
             ) or self._backend.is_array(other):

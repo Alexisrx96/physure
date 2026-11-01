@@ -82,7 +82,7 @@ _CORE_ERRORS = (_CoreUnknownUnitError, _CoreUnitMismatchError)
 
 def _python_error(
     error: ValueError, source: CompoundUnit, target: CompoundUnit
-) -> Exception:
+) -> IncompatibleUnitsError | UnknownUnitError:
     """The exception Python raises for an error of the core registry."""
     if isinstance(error, _CoreUnitMismatchError):
         return IncompatibleUnitsError(source, target)

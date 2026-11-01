@@ -7,7 +7,6 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from physure.application.factories import QuantityFactory
-from physure.domain.exceptions import UnknownUnitError
 from physure.domain.measurement.definitions_text import (
     prefix_definition_text,
     unit_definition_text,
@@ -176,6 +175,9 @@ class UnitSystem:
             ValueError: The core cannot take the unit, or the arguments
                 contradict each other (a level has no scale).
         """
+        del (
+            name
+        )  # a label for the callers' sake; the registry does not keep it
         self.extend_core(
             unit_definition_text(
                 symbol,
@@ -227,7 +229,7 @@ class UnitSystem:
         """Checks if the registry of the system resolves a unit or alias."""
         try:
             self.get_unit(item)
-        except (UnknownUnitError, ValueError):
+        except ValueError:  # an UnknownUnitError is one
             return False
         return True
 

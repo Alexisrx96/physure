@@ -12,6 +12,23 @@ from physure.domain.symbolic import (
 )
 
 
+def _argument_source(arg: Any) -> str:
+    """An argument as PHS source: a quantity with its unit, anything else as it prints."""
+    if isinstance(arg, Quantity):
+        return f"{arg.magnitude} {clean_unit_str(arg.unit)}"
+    return str(arg)
+
+
+def _last_result(results: Any) -> Any:
+    """The last value of an evaluation (a core quantity as a Quantity); None when it gave none."""
+    if not results:
+        return None
+    res = results[-1]
+    if isinstance(res, CoreQuantity):
+        return Quantity(res.magnitude, res.unit)
+    return res
+
+
 class PhyFunction:
     """Represents a physical or mathematical function registered in the Physure context.
 
@@ -38,7 +55,7 @@ class PhyFunction:
             return self._custom_params
         return self.interpreter.get_fn_params(self.name) or []
 
-    def __call__(self, *args, **kwargs) -> "Quantity":
+    def __call__(self, *args, **kwargs) -> "Quantity | None":
         """Evaluate the function with positional or keyword arguments via the Rust engine."""
         if hasattr(self, "_py_callable") and self._py_callable is not None:
             return self._py_callable(*args, **kwargs)
@@ -47,39 +64,20 @@ class PhyFunction:
             return self.compose(args[0])
 
         params = self.get_params()
-        formatted_args = []
-
         if kwargs:
-            for p in params:
-                if p in kwargs:
-                    arg = kwargs[p]
-                    if isinstance(arg, Quantity):
-                        formatted_args.append(
-                            f"{arg.magnitude} {clean_unit_str(arg.unit)}"
-                        )
-                    else:
-                        formatted_args.append(str(arg))
-                else:
-                    raise ValueError(
-                        f"Missing parameter '{p}' for function '{self.name}'"
-                    )
+            missing = next((p for p in params if p not in kwargs), None)
+            if missing is not None:
+                raise ValueError(
+                    f"Missing parameter '{missing}' for function '{self.name}'"
+                )
+            arguments = [kwargs[p] for p in params]
         else:
-            for arg in args:
-                if isinstance(arg, Quantity):
-                    formatted_args.append(
-                        f"{arg.magnitude} {clean_unit_str(arg.unit)}"
-                    )
-                else:
-                    formatted_args.append(str(arg))
+            arguments = list(args)
 
-        call_str = f"{self.name}({', '.join(formatted_args)})"
-        results = self.interpreter.evaluate(call_str)
-        if not results:
-            return None
-        res = results[-1]
-        if isinstance(res, CoreQuantity):
-            return Quantity(res.magnitude, res.unit)
-        return res
+        sources = ", ".join(_argument_source(arg) for arg in arguments)
+        return _last_result(
+            self.interpreter.evaluate(f"{self.name}({sources})")
+        )
 
     def deriv(self, var: str) -> "PhyFunction":
         """Return a new PhyFunction that is the derivative with respect to `var`."""
@@ -248,11 +246,11 @@ class PhyEquation:
             solved_expr = f"{var} = {solved_expr}"
         return PhyEquation(solved_expr, interpreter=self.interpreter)
 
-    def __call__(self, **kwargs) -> Quantity:
+    def __call__(self, **kwargs) -> Quantity | None:
         """Call this equation with keyword arguments to solve the unknown on the fly."""
         import re
 
-        tokens = re.findall(r"\b[A-Za-z_][A-Za-z0-9_]*\b", self.expression)
+        tokens = re.findall(r"\b[A-Za-z_](?a:\w)*\b", self.expression)
         known_keys = set(kwargs.keys())
         builtins_set = {
             "sin",
@@ -291,13 +289,7 @@ solve_fn({args_str})
 """
         from physure._core import evaluate_phs_native
 
-        results = evaluate_phs_native(script)
-        if not results:
-            return None
-        res = results[-1]
-        if isinstance(res, CoreQuantity):
-            return Quantity(res.magnitude, res.unit)
-        return res
+        return _last_result(evaluate_phs_native(script))
 
     @property
     def lhs(self) -> str:
