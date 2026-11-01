@@ -8,7 +8,8 @@ use super::parser::SymbolicParser;
 /// 1. 1st-order separable: dy/dx = f(x) * g(y)
 /// 2. 1st-order linear: y' + P(x)*y = Q(x)
 /// 3. 2nd-order linear homogeneous with constant coefficients: a*y'' + b*y' + c*y = 0
-/// 4. 2nd-order linear non-homogeneous with constant coefficients: a*y'' + b*y' + c*y = f(x)
+/// 4. 2nd-order linear with constant coefficients and a constant right-hand side: a*y'' + b*y' + c*y = k
+///    (any other right-hand side is refused: the homogeneous solution alone would not solve it)
 pub fn dsolve_str(eq_str: &str, dep_var: &str, indep_var: &str) -> PhysureResult<String> {
     let sol_node = dsolve(eq_str, dep_var, indep_var)?;
     Ok(sol_node.to_phs_string())
@@ -134,8 +135,12 @@ fn solve_2nd_order_const_coeffs(
         }
     }
 
-    let lhs_y = Node::Symbol(dep_var.to_string());
-    Ok(Node::Equation(Box::new(lhs_y), Box::new(y_h)))
+    // Any other right-hand side needs a particular solution this solver does not find. The homogeneous
+    // solution alone is not an answer to the equation, so it is refused, not returned.
+    Err(PhysureError::Generic(format!(
+        "dsolve cannot solve a second-order equation whose right-hand side is '{}': only a homogeneous one or a constant one is supported",
+        rhs.to_phs_string()
+    )))
 }
 
 /// Solves 1st order linear ODE: y' + P(x)*y = Q(x)
