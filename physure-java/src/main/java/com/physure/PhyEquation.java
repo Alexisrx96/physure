@@ -27,7 +27,14 @@ public class PhyEquation {
 
     public PhyEquation(UnitRegistry registry, String expression) {
         this.registry = registry != null ? registry : DEFAULT_REGISTRY;
-        this.expression = Objects.requireNonNull(expression, "expression").trim().replaceAll("^\"|\"$", "");
+        this.expression = withoutOuterQuotes(Objects.requireNonNull(expression, "expression").trim());
+    }
+
+    /** The text without a double quote at its start and one at its end. */
+    private static String withoutOuterQuotes(String text) {
+        int start = text.startsWith("\"") ? 1 : 0;
+        int end = text.length() > start && text.endsWith("\"") ? text.length() - 1 : text.length();
+        return text.substring(start, end);
     }
 
     public static PhyEquation of(String expression) {
