@@ -1,6 +1,7 @@
 package com.physure;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -52,16 +53,6 @@ public class PhyFunction {
         this.singleLambda = null;
         this.multiLambda = null;
         this.registry.evaluateRaw(body);
-    }
-
-    /**
-     * Internal constructor for already-registered functions.
-     */
-    private PhyFunction(UnitRegistry registry, String name) {
-        this.registry = registry;
-        this.name = name;
-        this.singleLambda = null;
-        this.multiLambda = null;
     }
 
     private boolean isWrittenInJava() {
@@ -128,9 +119,9 @@ public class PhyFunction {
     }
 
     /**
-     * Returns a new PhyFunction representing the symbolic derivative of this function with respect to var.
+     * Returns a new PhyFunction representing the symbolic derivative of this function with respect to variable.
      */
-    public PhyFunction deriv(String var) {
+    public PhyFunction deriv(String variable) {
         String[] params = getParams();
         if (params == null || params.length == 0) {
             throw new IllegalStateException("Cannot differentiate a function with no parameters.");
@@ -138,18 +129,18 @@ public class PhyFunction {
 
         String paramsJoined = String.join(", ", params);
         String callExpr = name + "(" + paramsJoined + ")";
-        String derivResult = registry.deriv(callExpr, var);
+        String derivResult = registry.deriv(callExpr, variable);
 
-        String newName = "d_" + name + "_d_" + var;
+        String newName = "d_" + name + "_d_" + variable;
         String newBody = newName + "(" + paramsJoined + ") = " + derivResult;
 
         return new PhyFunction(registry, newName, newBody);
     }
 
     /**
-     * Returns a new PhyFunction representing the symbolic integral of this function with respect to var.
+     * Returns a new PhyFunction representing the symbolic integral of this function with respect to variable.
      */
-    public PhyFunction integral(String var) {
+    public PhyFunction integral(String variable) {
         String[] params = getParams();
         if (params == null || params.length == 0) {
             throw new IllegalStateException("Cannot integrate a function with no parameters.");
@@ -157,9 +148,9 @@ public class PhyFunction {
 
         String paramsJoined = String.join(", ", params);
         String callExpr = name + "(" + paramsJoined + ")";
-        String integralResult = registry.integral(callExpr, var);
+        String integralResult = registry.integral(callExpr, variable);
 
-        String newName = "int_" + name + "_d_" + var;
+        String newName = "int_" + name + "_d_" + variable;
         String newBody = newName + "(" + paramsJoined + ") = " + integralResult;
 
         return new PhyFunction(registry, newName, newBody);
@@ -169,7 +160,7 @@ public class PhyFunction {
      * Solves this function equation for a target variable, returning a new PhyFunction representing the solved formula.
      * E.g. solve("m") for kinetic_energy(m, v) generates solved function: solve_kinetic_energy_for_m(target, v) = target / (0.5 * v^2)
      */
-    public PhyFunction solve(String var) {
+    public PhyFunction solve(String variable) {
         String[] params = getParams();
         if (params == null || params.length == 0) {
             throw new IllegalStateException("Cannot solve a function with no parameters.");
@@ -180,8 +171,8 @@ public class PhyFunction {
         String targetName = "target";
 
         // Solve the equation: kinetic_energy(m, v) = target
-        String solveResult = registry.solve(callExpr + " = " + targetName, var);
-        // the answer is the equation `var = ...`: the body of the new function is its right-hand side
+        String solveResult = registry.solve(callExpr + " = " + targetName, variable);
+        // the answer is the equation `variable = ...`: the body of the new function is its right-hand side
         int equalsSign = solveResult.indexOf('=');
         if (equalsSign >= 0) {
             solveResult = solveResult.substring(equalsSign + 1).trim();
@@ -191,13 +182,13 @@ public class PhyFunction {
         List<String> newParamsList = new ArrayList<>();
         newParamsList.add(targetName);
         for (String p : params) {
-            if (!p.equals(var)) {
+            if (!p.equals(variable)) {
                 newParamsList.add(p);
             }
         }
         String newParamsJoined = String.join(", ", newParamsList);
 
-        String newName = "solve_" + name + "_for_" + var;
+        String newName = "solve_" + name + "_for_" + variable;
         String newBody = newName + "(" + newParamsJoined + ") = " + solveResult;
 
         return new PhyFunction(registry, newName, newBody);
@@ -317,9 +308,7 @@ public class PhyFunction {
     private List<String> combineParams(String[] p1, String[] p2) {
         List<String> combined = new ArrayList<>();
         if (p1 != null) {
-            for (String p : p1) {
-                combined.add(p);
-            }
+            Collections.addAll(combined, p1);
         }
         if (p2 != null) {
             for (String p : p2) {

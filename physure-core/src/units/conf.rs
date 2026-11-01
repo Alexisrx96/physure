@@ -258,7 +258,8 @@ fn parse_number(text: &str) -> Option<(f64, Option<crate::units::exact::ExactSca
     }
 }
 
-fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
+/// A unit line cut into its name, its values and the names it lists in brackets: `name = values [alias, alias]`.
+fn cut_unit_line(line: &str) -> Option<(&str, &str, Vec<String>)> {
     let (left, aliases_str) = match line.split_once('[') {
         Some((l, r)) => {
             let r = r.trim_end_matches(']').trim();
@@ -267,20 +268,18 @@ fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
         None => (line, ""),
     };
 
-    let (key, val_part) = match left.split_once('=') {
-        Some((k, v)) => (k.trim(), v.trim()),
-        None => return None,
-    };
+    let (key, val_part) = left.split_once('=').map(|(k, v)| (k.trim(), v.trim()))?;
 
-    let mut aliases: Vec<String> = if !aliases_str.is_empty() {
-        aliases_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        vec![]
-    };
+    let aliases: Vec<String> = aliases_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some((key, val_part, aliases))
+}
+
+fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
+    let (key, val_part, mut aliases) = cut_unit_line(line)?;
 
     if !aliases.contains(&key.to_string()) {
         aliases.insert(0, key.to_string());
@@ -293,28 +292,27 @@ fn is_single_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
+/// The fields of a unit line's values, without the flags (`noprefix`, `own_kind`); a single field with spaces in it
+/// is read as the fields separated by them.
+fn unit_value_fields(val_part: &str) -> Vec<&str> {
+    let parts: Vec<&str> = val_part
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !is_flag(s))
+        .collect();
+
+    if parts.len() == 1 && parts[0].contains(' ') {
+        return parts[0]
+            .split_whitespace()
+            .filter(|s| !s.is_empty() && !is_flag(s))
+            .collect();
+    }
+    parts
+}
+
 fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) -> Result<(), String> {
-    let (left, aliases_str) = match line.split_once('[') {
-        Some((l, r)) => {
-            let r = r.trim_end_matches(']').trim();
-            (l.trim(), r)
-        }
-        None => (line, ""),
-    };
-
-    let (key, val_part) = match left.split_once('=') {
-        Some((k, v)) => (k.trim(), v.trim()),
-        None => return Err("a unit line is `name = factor, dimension, [names]`".to_string()),
-    };
-
-    let mut aliases: Vec<String> = if !aliases_str.is_empty() {
-        aliases_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        vec![]
+    let Some((key, val_part, mut aliases)) = cut_unit_line(line) else {
+        return Err("a unit line is `name = factor, dimension, [names]`".to_string());
     };
 
     // The names in the order the catalog lists them: the first one is the unit's symbol in Python.
@@ -331,18 +329,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
     let no_prefix = val_part.split(',').any(|field| field.trim() == "noprefix");
 
-    let mut parts: Vec<&str> = val_part
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && !is_flag(s))
-        .collect();
-
-    if parts.len() == 1 && parts[0].contains(' ') {
-        parts = parts[0]
-            .split_whitespace()
-            .filter(|s| !s.is_empty() && !is_flag(s))
-            .collect();
-    }
+    let parts = unit_value_fields(val_part);
 
     if parts.is_empty() {
         return Err("the line has no value".to_string());

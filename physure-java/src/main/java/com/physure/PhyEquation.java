@@ -27,7 +27,7 @@ public class PhyEquation {
 
     public PhyEquation(UnitRegistry registry, String expression) {
         this.registry = registry != null ? registry : DEFAULT_REGISTRY;
-        this.expression = Objects.requireNonNull(expression, "expression").trim().replaceAll("(?:^\")|(?:\"$)", "");
+        this.expression = Objects.requireNonNull(expression, "expression").trim().replaceAll("^\"|\"$", "");
     }
 
     public static PhyEquation of(String expression) {
@@ -94,39 +94,48 @@ public class PhyEquation {
     }
 
     public PhyEquation add(PhyEquation other) {
-        return new PhyEquation(registry, "(" + getLhs() + ") + (" + other.getLhs() + ") = (" + getRhs() + ") + (" + other.getRhs() + ")");
+        return combined("+", other.getLhs(), other.getRhs());
     }
 
     public PhyEquation add(Object val) {
         String s = source(val);
-        return new PhyEquation(registry, "(" + getLhs() + ") + (" + s + ") = (" + getRhs() + ") + (" + s + ")");
+        return combined("+", s, s);
     }
 
     public PhyEquation sub(PhyEquation other) {
-        return new PhyEquation(registry, "(" + getLhs() + ") - (" + other.getLhs() + ") = (" + getRhs() + ") - (" + other.getRhs() + ")");
+        return combined("-", other.getLhs(), other.getRhs());
     }
 
     public PhyEquation sub(Object val) {
         String s = source(val);
-        return new PhyEquation(registry, "(" + getLhs() + ") - (" + s + ") = (" + getRhs() + ") - (" + s + ")");
+        return combined("-", s, s);
     }
 
     public PhyEquation mul(PhyEquation other) {
-        return new PhyEquation(registry, "(" + getLhs() + ") * (" + other.getLhs() + ") = (" + getRhs() + ") * (" + other.getRhs() + ")");
+        return combined("*", other.getLhs(), other.getRhs());
     }
 
     public PhyEquation mul(Object val) {
         String s = source(val);
-        return new PhyEquation(registry, "(" + getLhs() + ") * (" + s + ") = (" + getRhs() + ") * (" + s + ")");
+        return combined("*", s, s);
     }
 
     public PhyEquation div(PhyEquation other) {
-        return new PhyEquation(registry, "(" + getLhs() + ") / (" + other.getLhs() + ") = (" + getRhs() + ") / (" + other.getRhs() + ")");
+        return combined("/", other.getLhs(), other.getRhs());
     }
 
     public PhyEquation div(Object val) {
         String s = source(val);
-        return new PhyEquation(registry, "(" + getLhs() + ") / (" + s + ") = (" + getRhs() + ") / (" + s + ")");
+        return combined("/", s, s);
+    }
+
+    /** Each side of this equation combined with the matching side of {@code otherLhs = otherRhs} by {@code operator}. */
+    private PhyEquation combined(String operator, String otherLhs, String otherRhs) {
+        return new PhyEquation(registry, combine(getLhs(), operator, otherLhs) + " = " + combine(getRhs(), operator, otherRhs));
+    }
+
+    private static String combine(String own, String operator, String other) {
+        return "(" + own + ") " + operator + " (" + other + ")";
     }
 
     /** A value as PHS source: a quantity keeps its precision and its uncertainty, anything else is its text. */
@@ -139,10 +148,10 @@ public class PhyEquation {
         return expression;
     }
 
-    public PhyEquation solve(String var) {
-        String solvedExpr = registry.solve(expression, var);
+    public PhyEquation solve(String variable) {
+        String solvedExpr = registry.solve(expression, variable);
         if (!solvedExpr.contains("=")) {
-            solvedExpr = var + " = " + solvedExpr;
+            solvedExpr = variable + " = " + solvedExpr;
         }
         return new PhyEquation(registry, solvedExpr);
     }

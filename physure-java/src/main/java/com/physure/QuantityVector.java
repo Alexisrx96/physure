@@ -61,8 +61,12 @@ public class QuantityVector {
         if (size() != 3 || other.size() != 3) {
             throw new IllegalArgumentException("Cross product requires 3D vectors");
         }
-        Quantity a1 = get(0), a2 = get(1), a3 = get(2);
-        Quantity b1 = other.get(0), b2 = other.get(1), b3 = other.get(2);
+        Quantity a1 = get(0);
+        Quantity a2 = get(1);
+        Quantity a3 = get(2);
+        Quantity b1 = other.get(0);
+        Quantity b2 = other.get(1);
+        Quantity b3 = other.get(2);
 
         Quantity c1 = a2.mul(b3).sub(a3.mul(b2));
         Quantity c2 = a3.mul(b1).sub(a1.mul(b3));

@@ -794,9 +794,7 @@ fn main() {
 
 /// Runs the script (or snippet) named by the first argument and shows the result the way the flags ask.
 fn run_script(args: &[String]) {
-    let is_tui = args.iter().any(|a| a == "--tui");
-    let is_web = args.iter().any(|a| a == "--web");
-    let is_view = args.iter().any(|a| a == "--view" || a == "--html");
+    let viewer = viewer_for(args);
 
     let mut raw_input = args[1].as_str();
     if raw_input.starts_with("phs://") {
@@ -821,36 +819,66 @@ fn run_script(args: &[String]) {
     let vars_map = HashMap::new();
     let i18n = PhysureConfig::load().i18n();
 
-    let quiet = is_tui || is_web || is_view;
+    let quiet = viewer != Viewer::Terminal;
     if !quiet {
         RichRenderer::render_header(raw_input);
     }
 
     let steps = run_statements(&mut interp, &program, &code, raw_input, &i18n, quiet);
 
-    if is_tui {
-        if let Err(e) = tui::run_tui(&code, &steps, &vars_map) {
-            eprintln!("TUI Error: {}", e);
+    match viewer {
+        Viewer::Tui => {
+            if let Err(e) = tui::run_tui(&code, &steps, &vars_map) {
+                eprintln!("TUI Error: {}", e);
+            }
         }
-    } else if is_web {
-        if let Err(e) = web::start_web_server(raw_input, &code, &steps, &vars_map) {
-            eprintln!("Web Visualizer Error: {}", e);
+        Viewer::Web => {
+            if let Err(e) = web::start_web_server(raw_input, &code, &steps, &vars_map) {
+                eprintln!("Web Visualizer Error: {}", e);
+            }
         }
-    } else if is_view {
-        // Default: next to the script, same base name -- `calc.phs --html` used to always
-        // land in the OS temp dir under a timestamp nobody could predict or find again once
-        // the browser tab closed, which defeats the report's own point as a keepable
-        // artifact. `-o`/`--output` overrides it; safe to reuse now that `-o` alone no
-        // longer also means "transpile" (see `handle_transpile`).
-        let html_output_path = match get_flag_value(args, "--output").or_else(|| get_flag_value(args, "-o")) {
-            Some(custom) => std::path::PathBuf::from(custom),
-            None if std::path::Path::new(raw_input).exists() => std::path::Path::new(raw_input).with_extension("html"),
-            None => std::path::PathBuf::from("physure_report.html"),
-        };
-        if let Err(e) = html::open_standalone_html(raw_input, &html_output_path, &code, &steps, &vars_map) {
-            eprintln!("HTML Report Error: {}", e);
+        Viewer::Html => {
+            let html_output_path = html_report_path(args, raw_input);
+            if let Err(e) = html::open_standalone_html(raw_input, &html_output_path, &code, &steps, &vars_map) {
+                eprintln!("HTML Report Error: {}", e);
+            }
         }
+        Viewer::Terminal => RichRenderer::render_summary_box(&vars_map),
+    }
+}
+
+/// Where a script's values are shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Viewer {
+    Tui,
+    Web,
+    Html,
+    Terminal,
+}
+
+fn viewer_for(args: &[String]) -> Viewer {
+    if args.iter().any(|a| a == "--tui") {
+        Viewer::Tui
+    } else if args.iter().any(|a| a == "--web") {
+        Viewer::Web
+    } else if args.iter().any(|a| a == "--view" || a == "--html") {
+        Viewer::Html
     } else {
-        RichRenderer::render_summary_box(&vars_map);
+        Viewer::Terminal
+    }
+}
+
+/// Where the HTML report of a script is written.
+///
+/// Default: next to the script, same base name -- `calc.phs --html` used to always
+/// land in the OS temp dir under a timestamp nobody could predict or find again once
+/// the browser tab closed, which defeats the report's own point as a keepable
+/// artifact. `-o`/`--output` overrides it; safe to reuse now that `-o` alone no
+/// longer also means "transpile" (see `handle_transpile`).
+fn html_report_path(args: &[String], raw_input: &str) -> std::path::PathBuf {
+    match get_flag_value(args, "--output").or_else(|| get_flag_value(args, "-o")) {
+        Some(custom) => std::path::PathBuf::from(custom),
+        None if std::path::Path::new(raw_input).exists() => std::path::Path::new(raw_input).with_extension("html"),
+        None => std::path::PathBuf::from("physure_report.html"),
     }
 }

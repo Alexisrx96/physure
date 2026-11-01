@@ -11,6 +11,9 @@ import java.util.Map;
  * Compatible with Java 8+.
  */
 public class NativeEngine {
+    private NativeEngine() {
+    }
+
     static {
         try {
             // Attempt to load standard system library
@@ -20,7 +23,7 @@ public class NativeEngine {
             try {
                 loadFromJar();
             } catch (Exception ex) {
-                throw new RuntimeException("Failed to load native library physure_java", ex);
+                throw new IllegalStateException("Failed to load native library physure_java", ex);
             }
         }
     }
