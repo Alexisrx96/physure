@@ -75,88 +75,17 @@ fn check_statement_decorators(stmt: &Statement) -> PhysureResult<()> {
 }
 
 fn check_decorator_list(decorators: &[DecoratorNode], func: Option<&FunctionDefNode>) -> PhysureResult<()> {
-    if decorators.is_empty() {
-        return Ok(());
-    }
-    let mut has_stable = false;
-    let mut has_experimental = false;
-    let mut has_ensures = false;
-
     for dec in decorators {
-        if !KNOWN_DECORATORS.contains(&dec.name.as_str()) {
-            return Err(PhysureError::Generic(format!("Unknown decorator '@{}'", dec.name)));
-        }
-        match dec.name.as_str() {
-            "requires" | "ensures" => {
-                if func.is_none() {
-                    return Err(PhysureError::Generic(format!(
-                        "@{} (or @range, which desugars into @requires) is only valid on a function definition, not a variable assignment",
-                        dec.name
-                    )));
-                }
-                if dec.args.len() != 2 {
-                    return Err(PhysureError::Generic(format!(
-                        "@{} expects 2 arguments (condition, message), got {}",
-                        dec.name,
-                        dec.args.len()
-                    )));
-                }
-                if dec.name == "ensures" {
-                    has_ensures = true;
-                }
-            }
-            "stable" => {
-                if !dec.args.is_empty() {
-                    return Err(PhysureError::Generic("@stable takes no arguments".to_string()));
-                }
-                has_stable = true;
-            }
-            "experimental" => {
-                if !dec.args.is_empty() {
-                    return Err(PhysureError::Generic("@experimental takes no arguments".to_string()));
-                }
-                has_experimental = true;
-            }
-            "implicit_units" => {
-                if func.is_none() {
-                    return Err(PhysureError::Generic(
-                        "@implicit_units is only valid on a function definition, not a variable assignment".to_string(),
-                    ));
-                }
-                if !dec.args.is_empty() {
-                    return Err(PhysureError::Generic("@implicit_units takes no arguments".to_string()));
-                }
-            }
-            "precision" => {
-                if func.is_some() {
-                    return Err(PhysureError::Generic(
-                        "@precision is only valid on a variable assignment, not a function definition".to_string(),
-                    ));
-                }
-                if dec.args.len() != 1 {
-                    return Err(PhysureError::Generic(format!(
-                        "@precision expects exactly 1 argument (a positive integer), got {}",
-                        dec.args.len()
-                    )));
-                }
-                let is_valid_count = matches!(
-                    &dec.args[0],
-                    Expr::Quantity(QuantityNode { magnitude, .. }) if *magnitude > 0.0 && magnitude.fract() == 0.0
-                );
-                if !is_valid_count {
-                    return Err(PhysureError::Generic("@precision's argument must be a positive whole number".to_string()));
-                }
-            }
-            _ => unreachable!("checked against KNOWN_DECORATORS above"),
-        }
+        check_decorator(dec, func)?;
     }
 
-    if has_stable && has_experimental {
+    let has = |name: &str| decorators.iter().any(|d| d.name == name);
+    if has("stable") && has("experimental") {
         return Err(PhysureError::Generic(
             "A function cannot be both @stable and @experimental".to_string(),
         ));
     }
-    if has_ensures {
+    if has("ensures") {
         if let Some(f) = func {
             if f.params.iter().any(|p| p == "result") {
                 return Err(PhysureError::Generic(format!(
@@ -166,6 +95,76 @@ fn check_decorator_list(decorators: &[DecoratorNode], func: Option<&FunctionDefN
                 )));
             }
         }
+    }
+    Ok(())
+}
+
+/// One decorator on its own: a known name, valid where it is written, with the arguments it takes.
+fn check_decorator(dec: &DecoratorNode, func: Option<&FunctionDefNode>) -> PhysureResult<()> {
+    if !KNOWN_DECORATORS.contains(&dec.name.as_str()) {
+        return Err(PhysureError::Generic(format!("Unknown decorator '@{}'", dec.name)));
+    }
+    match dec.name.as_str() {
+        "requires" | "ensures" => check_contract(dec, func.is_some()),
+        "stable" | "experimental" => check_no_arguments(dec),
+        "implicit_units" => {
+            if func.is_none() {
+                return Err(PhysureError::Generic(
+                    "@implicit_units is only valid on a function definition, not a variable assignment".to_string(),
+                ));
+            }
+            check_no_arguments(dec)
+        }
+        "precision" => check_precision(dec, func.is_some()),
+        _ => unreachable!("checked against KNOWN_DECORATORS above"),
+    }
+}
+
+fn check_no_arguments(dec: &DecoratorNode) -> PhysureResult<()> {
+    if dec.args.is_empty() {
+        Ok(())
+    } else {
+        Err(PhysureError::Generic(format!("@{} takes no arguments", dec.name)))
+    }
+}
+
+/// `@requires` and `@ensures`: only on a function, with a condition and a message.
+fn check_contract(dec: &DecoratorNode, on_function: bool) -> PhysureResult<()> {
+    if !on_function {
+        return Err(PhysureError::Generic(format!(
+            "@{} (or @range, which desugars into @requires) is only valid on a function definition, not a variable assignment",
+            dec.name
+        )));
+    }
+    if dec.args.len() != 2 {
+        return Err(PhysureError::Generic(format!(
+            "@{} expects 2 arguments (condition, message), got {}",
+            dec.name,
+            dec.args.len()
+        )));
+    }
+    Ok(())
+}
+
+/// `@precision`: only on a variable assignment, with one positive whole number.
+fn check_precision(dec: &DecoratorNode, on_function: bool) -> PhysureResult<()> {
+    if on_function {
+        return Err(PhysureError::Generic(
+            "@precision is only valid on a variable assignment, not a function definition".to_string(),
+        ));
+    }
+    if dec.args.len() != 1 {
+        return Err(PhysureError::Generic(format!(
+            "@precision expects exactly 1 argument (a positive integer), got {}",
+            dec.args.len()
+        )));
+    }
+    let is_valid_count = matches!(
+        &dec.args[0],
+        Expr::Quantity(QuantityNode { magnitude, .. }) if *magnitude > 0.0 && magnitude.fract() == 0.0
+    );
+    if !is_valid_count {
+        return Err(PhysureError::Generic("@precision's argument must be a positive whole number".to_string()));
     }
     Ok(())
 }

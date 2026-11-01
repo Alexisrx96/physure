@@ -86,23 +86,26 @@ pub(crate) fn preprocess_symbolic_expression(expr_str: &str, interpreter: &PhsIn
     let mut result = expr_str.trim().to_string();
     for (name, val) in &interpreter.env {
         if let PhsValue::Function(func) = val {
-            let fn_pattern = format!("{}(", name);
-            if result.contains(&fn_pattern) {
-                let body_expr = match func.body_stmts.last() {
-                    Some(crate::ast::Statement::Expr(ref e)) => expr_to_string(e),
-                    Some(crate::ast::Statement::Assignment(ref a)) => expr_to_string(&a.value),
-                    _ => String::new(),
-                };
-                let body_code = format!("({})", body_expr);
-                if let Some(start) = result.find(&fn_pattern) {
-                    if let Some(end) = result[start..].find(')') {
-                        result.replace_range(start..=start + end, &body_code);
-                    }
-                }
-            }
+            inline_call(&mut result, name, func);
         }
     }
     result
+}
+
+/// Replaces the first call of `name` in `text` (as far as its first closing parenthesis) with the body of `func`.
+fn inline_call(text: &mut String, name: &str, func: &crate::ast::FunctionDefNode) {
+    let fn_pattern = format!("{}(", name);
+    let Some(start) = text.find(&fn_pattern) else {
+        return;
+    };
+    let body_expr = match func.body_stmts.last() {
+        Some(crate::ast::Statement::Expr(ref e)) => expr_to_string(e),
+        Some(crate::ast::Statement::Assignment(ref a)) => expr_to_string(&a.value),
+        _ => String::new(),
+    };
+    if let Some(end) = text[start..].find(')') {
+        text.replace_range(start..=start + end, &format!("({})", body_expr));
+    }
 }
 
 #[cfg(test)]
