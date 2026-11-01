@@ -83,6 +83,10 @@ fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsVa
         UnitParser::parse_expression(clean_unit_str)?
     };
     let q = Quantity::new_scalar(node.magnitude, node.uncertainty.unwrap_or(0.0), unit, None, None);
+    let q = match node.dof {
+        Some(nu) => q.with_dof(nu)?,
+        None => q,
+    };
     if node.is_sigma {
         Ok(PhsValue::SigmaBound(q, node.uncertainty.unwrap_or(1.0)))
     } else {

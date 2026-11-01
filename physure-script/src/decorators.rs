@@ -180,6 +180,7 @@ mod tests {
             uncertainty: None,
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: None,
         })
     }

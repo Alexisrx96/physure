@@ -7,7 +7,7 @@ pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
     let mut inner = pair.into_inner();
     let first = match inner.next() {
         Some(f) => f,
-        None => return Ok(Expr::Quantity(QuantityNode { magnitude: 0.0, uncertainty: None, uncertainty_lower: None, is_sigma: false, unit: None })),
+        None => return Ok(Expr::Quantity(QuantityNode { magnitude: 0.0, uncertainty: None, uncertainty_lower: None, is_sigma: false, dof: None, unit: None })),
     };
     let mut result = match first.as_rule() {
         Rule::if_expr => parse_if_expr(first)?,
@@ -299,7 +299,7 @@ fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     if negate {
         Ok(Expr::BinaryOp {
             op: BinaryOp::Mul,
-            left: Box::new(Expr::Quantity(QuantityNode { magnitude: -1.0, uncertainty: None, uncertainty_lower: None, is_sigma: false, unit: None })),
+            left: Box::new(Expr::Quantity(QuantityNode { magnitude: -1.0, uncertainty: None, uncertainty_lower: None, is_sigma: false, dof: None, unit: None })),
             right: Box::new(result),
         })
     } else {
@@ -425,6 +425,7 @@ fn parse_number_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
         uncertainty: None,
         uncertainty_lower: None,
         is_sigma: false,
+        dof: None,
         unit: None,
     }))
 }

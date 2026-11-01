@@ -1,4 +1,5 @@
 pub mod core;
+pub mod dof;
 pub mod array;
 pub mod calc;
 pub mod plot;

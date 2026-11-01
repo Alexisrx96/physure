@@ -183,6 +183,7 @@ pub fn eval_core_builtin(
         "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
         "ternary" | "if_then_else" => ternary(args),
         "uncertainty" | "sigma" => uncertainty_builtin(args),
+        "dof" | "coverage_factor" | "expanded" | "from_samples" => crate::builtins::dof::eval_dof_builtin(name, args),
         "vector" => Ok(Some(PhsValue::Vector(args.to_vec()))),
         "sqrt" => unary(name, args, A_NUMBER_OR_QUANTITY, sqrt_number, |q| q.sqrt()),
         "sin" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.sin()), |q| q.sin()),

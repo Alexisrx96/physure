@@ -26,7 +26,14 @@ uncertainty_val = { number ~ (sigma_op | "%")? }
 // reaches here, because the `+/-` and `±` lookahead that guards the whole rule fails on a
 // bare `+`.
 uncertainty_pair = { "(" ~ uncertainty_val ~ "," ~ uncertainty_val ~ ")" }
-uncertainty     = { uncertainty_op ~ (uncertainty_pair | uncertainty_val) }
+// The degrees of freedom of a standard uncertainty: `10.003 +/- 0.002 dof 9 V`, `ν 9`, `dof inf`. A keyword
+// after the value, like `sigma`, and not a parenthesis: a parenthesis after `+/-` already means the
+// asymmetric pair above. A pair, a `sigma` bound or a non-positive number cannot carry one; `parser.rs` says so.
+dof_op          = { "dof" | "ν" }
+// The sign is accepted so that `dof -2` is refused for what it is, and not read as the unit `dof` minus 2.
+dof_value       = @{ "-"? ~ number }
+dof_clause      = { dof_op ~ dof_value }
+uncertainty     = { uncertainty_op ~ (uncertainty_pair | uncertainty_val) ~ dof_clause? }
 
 _unit_ws        = _{ (" " | "\t")+ }
 _unit_char      = _{ LETTER | "_" | "°" | "%" | "$" }

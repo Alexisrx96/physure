@@ -11,6 +11,7 @@ use super::trait_def::UncertaintyValue;
 use crate::error::{PhysureError, PhysureResult};
 use crate::math::stats::{normal_two_sided, student_t_two_sided};
 use crate::quantity::Quantity;
+use crate::units::RationalUnit;
 
 /// An expanded uncertainty, with everything needed to say how it was obtained. It is a result of its own
 /// and never a `±` that could be read as a standard uncertainty.
@@ -82,6 +83,15 @@ impl Quantity {
     /// # Errors
     /// Fewer than two observations, or one that is not finite.
     pub fn from_samples(samples: &[f64], unit_expr: &str) -> PhysureResult<Quantity> {
+        let unit = Quantity::with_uncertainty(0.0, 0.0, unit_expr)?.unit;
+        Quantity::from_samples_in(samples, unit)
+    }
+
+    /// [`Quantity::from_samples`] for a unit already in hand, as a PHS program has it.
+    ///
+    /// # Errors
+    /// Fewer than two observations, or one that is not finite.
+    pub fn from_samples_in(samples: &[f64], unit: RationalUnit) -> PhysureResult<Quantity> {
         if samples.len() < 2 {
             return Err(PhysureError::DomainError(format!(
                 "a Type A evaluation needs at least two observations, got {}",
@@ -95,7 +105,7 @@ impl Quantity {
         let mean = samples.iter().sum::<f64>() / n;
         let variance = samples.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (n - 1.0);
         let standard_error = (variance / n).sqrt();
-        let quantity = Quantity::with_uncertainty(mean, standard_error, unit_expr)?;
+        let quantity = Quantity::new_scalar(mean, standard_error, unit, None, None);
         if standard_error > 0.0 {
             quantity.with_dof(n - 1.0)
         } else {

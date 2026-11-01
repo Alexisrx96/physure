@@ -316,6 +316,7 @@ mod tests {
             uncertainty: Some(0.5),
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("kg".to_string()),
         });
         let result = transpiler.generate_expr(&q).unwrap();
@@ -330,6 +331,7 @@ mod tests {
             uncertainty: Some(0.5),
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("kg".to_string()),
         });
         let result = transpiler.generate_expr(&q).unwrap();

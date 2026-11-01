@@ -303,6 +303,7 @@ mod tests {
             uncertainty: Some(0.1),
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("m".to_string()),
         };
         let res = tp.generate_quantity(&q).unwrap();

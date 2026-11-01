@@ -154,9 +154,18 @@ fn parse_magnitude(s: &str) -> PhysureResult<f64> {
 
 /// One value for `+/- 0.5`, two for the asymmetric `+/- (0.5, 0.4)`, upper first. `uncertainty_pair`
 /// nests them, so the halves are collected by rule rather than by position.
-fn collect_uncertainty_halves(pair: pest::iterators::Pair<Rule>, halves: &mut Vec<(f64, bool)>, is_sigma: &mut bool) -> PhysureResult<()> {
+fn collect_uncertainty_halves(
+    pair: pest::iterators::Pair<Rule>,
+    halves: &mut Vec<(f64, bool)>,
+    is_sigma: &mut bool,
+    dof: &mut Option<f64>,
+) -> PhysureResult<()> {
     for u_inner in pair.into_inner() {
         match u_inner.as_rule() {
+            Rule::dof_clause => {
+                let number = u_inner.into_inner().find(|p| p.as_rule() == Rule::dof_value);
+                *dof = number.map(|n| parse_magnitude(n.as_str().trim())).transpose()?;
+            }
             Rule::uncertainty_val => halves.push(parse_uncertainty_val(u_inner.as_str(), is_sigma)?),
             Rule::uncertainty_pair => {
                 for half in u_inner.into_inner() {
@@ -167,6 +176,28 @@ fn collect_uncertainty_halves(pair: pest::iterators::Pair<Rule>, halves: &mut Ve
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// The degrees of freedom of a standard uncertainty make sense only for one: a single, symmetric value
+/// that is the uncertainty itself and not a `sigma` bound on it, and a positive number (or `inf`).
+fn check_dof(dof: Option<f64>, halves: &[(f64, bool)], is_sigma: bool) -> PhysureResult<()> {
+    let Some(nu) = dof else { return Ok(()) };
+    if halves.len() > 1 {
+        return Err(PhysureError::Generic(
+            "Degrees of freedom describe a standard uncertainty, which is one symmetric value: an asymmetric \
+             `+/- (a, b)` cannot carry `dof`"
+                .into(),
+        ));
+    }
+    if is_sigma {
+        return Err(PhysureError::Generic(
+            "`sigma` makes the value a bound on the uncertainty, not a standard uncertainty, so it has no `dof`".into(),
+        ));
+    }
+    if nu.is_nan() || nu <= 0.0 {
+        return Err(PhysureError::Generic(format!("Degrees of freedom must be positive, got {nu}")));
     }
     Ok(())
 }
@@ -205,9 +236,10 @@ fn build_quantity(
     uncertainty: Option<f64>,
     uncertainty_lower: Option<f64>,
     is_sigma: bool,
+    dof: Option<f64>,
 ) -> PhysureResult<Expr> {
     if let Some(mag) = magnitude {
-        return Ok(Expr::Quantity(QuantityNode { magnitude: mag, uncertainty, uncertainty_lower, is_sigma, unit }));
+        return Ok(Expr::Quantity(QuantityNode { magnitude: mag, uncertainty, uncertainty_lower, is_sigma, dof, unit }));
     }
     let Some(mag_expr) = magnitude_expr else {
         return Err(PhysureError::Generic("Missing magnitude in quantity".to_string()));
@@ -219,6 +251,7 @@ fn build_quantity(
         Expr::Quantity(mut q) => {
             q.unit = Some(u);
             q.is_sigma = is_sigma;
+            q.dof = dof.or(q.dof);
             q.uncertainty = uncertainty.or(q.uncertainty);
             q.uncertainty_lower = uncertainty_lower.or(q.uncertainty_lower);
             Expr::Quantity(q)
@@ -234,6 +267,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
     let mut unit_leftover: Option<(BinaryOp, String)> = None;
 
     let mut is_sigma = false;
+    let mut dof = None;
     // (value, was written as a percentage), upper half first.
     let mut halves: Vec<(f64, bool)> = Vec::new();
 
@@ -246,7 +280,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
                 magnitude_expr = Some(parse_expr(inner)?);
             }
             Rule::uncertainty => {
-                collect_uncertainty_halves(inner, &mut halves, &mut is_sigma)?;
+                collect_uncertainty_halves(inner, &mut halves, &mut is_sigma, &mut dof)?;
             }
             Rule::unit_expr => {
                 let (u, leftover) = with_unit_catalog(|registry| split_unit_expr(inner, registry));
@@ -257,6 +291,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
         }
     }
 
+    check_dof(dof, &halves, is_sigma)?;
     apply_percent_uncertainty(&mut halves, magnitude, magnitude_expr.as_ref())?;
 
     // `+/- (0.5, 0.4)` is +0.5 and -0.4: upper half first, in the order the operator reads.
@@ -265,7 +300,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
     let uncertainty = halves.first().map(|(v, _)| *v);
     let uncertainty_lower = halves.get(1).map(|(v, _)| *v);
 
-    let quantity_expr = build_quantity(magnitude, magnitude_expr, unit, uncertainty, uncertainty_lower, is_sigma)?;
+    let quantity_expr = build_quantity(magnitude, magnitude_expr, unit, uncertainty, uncertainty_lower, is_sigma, dof)?;
 
     match unit_leftover {
         Some((op, remainder)) => {

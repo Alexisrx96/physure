@@ -521,6 +521,7 @@ fn node_to_expr(node: &Node) -> Expr {
             uncertainty: None,
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: None,
         }),
         Node::Symbol(s) | Node::Quantity(s, _) => Expr::Identifier(s.clone()),

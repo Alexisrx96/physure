@@ -221,6 +221,54 @@ use super::*;
     }
 
     #[test]
+    fn a_literal_declares_its_degrees_of_freedom_after_the_uncertainty() {
+        // `dof` or the Greek nu, with `+/-` or `±`, before or after the unit
+        for code in [
+            "x = 10.003 +/- 0.002 dof 9 V",
+            "x = 10.003 ± 0.002 dof 9 V",
+            "x = 10.003 +/- 0.002 ν 9 V",
+            "x = 10.003 V +/- 0.002 dof 9",
+            "x = 10.003 V ± 0.002 ν 9",
+            "x = 10.003 +/- 0.002 dof 9.0 V",
+        ] {
+            let q = parse_one_quantity(code);
+            assert_eq!((q.magnitude, q.uncertainty, q.dof), (10.003, Some(0.002), Some(9.0)), "{code}");
+            assert_eq!(q.unit.as_deref(), Some("V"), "{code}");
+        }
+    }
+
+    #[test]
+    fn the_degrees_of_freedom_may_be_fractional_infinite_and_follow_a_percentage() {
+        assert_eq!(parse_one_quantity("x = 5 +/- 0.2 dof 16.7 m").dof, Some(16.7));
+        assert_eq!(parse_one_quantity("x = 5 +/- 0.2 dof inf m").dof, Some(f64::INFINITY));
+        let relative = parse_one_quantity("x = 5 +/- 2% dof 4 m");
+        assert_eq!((relative.uncertainty, relative.dof), (Some(0.1), Some(4.0)));
+    }
+
+    #[test]
+    fn a_literal_without_the_clause_has_none() {
+        assert_eq!(parse_one_quantity("x = 75.0 +/- 0.5 kg").dof, None);
+        assert_eq!(parse_one_quantity("x = 75.0 kg").dof, None);
+    }
+
+    #[test]
+    fn degrees_of_freedom_that_make_no_sense_are_refused_when_the_program_is_read() {
+        let refused = |code: &str| parse_phs(code).err().unwrap_or_else(|| panic!("{code} should not parse")).to_string();
+        assert!(refused("x = 5 +/- (0.5, 0.4) dof 4 m").contains("asymmetric"));
+        assert!(refused("x = 5 +/- 2 sigma dof 4 m").contains("sigma"));
+        assert!(refused("x = 5 +/- 0.5 dof 0 m").contains("positive"));
+        assert!(refused("x = 5 +/- 0.5 dof -2 m").contains("positive, got -2"));
+    }
+
+    #[test]
+    fn dof_and_nu_stay_ordinary_names_outside_the_clause() {
+        // a variable called dof, a call dof(x), and a sum with a parenthesised addend are not the clause
+        let prog = parse_phs("dof = 3\ny = dof + 1\nz = 12.3 + (0.5)").unwrap();
+        assert_eq!(prog.statements.len(), 3);
+        assert!(parse_phs("a = 5 +/- 1 m\nb = dof(a)").is_ok());
+    }
+
+    #[test]
     fn test_exports() {
         let code = "export E as \"kinetic_energy\"";
         let prog = parse_phs(code).unwrap();

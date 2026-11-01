@@ -741,6 +741,7 @@ r3 = circuito_abierto(5 V, 2 A)
                             uncertainty: None,
                             uncertainty_lower: None,
                             is_sigma: false,
+                            dof: None,
                             unit: None,
                         })),
                         right: Box::new(Expr::Identifier("m".to_string())),
@@ -753,6 +754,7 @@ r3 = circuito_abierto(5 V, 2 A)
                             uncertainty: None,
                             uncertainty_lower: None,
                             is_sigma: false,
+                            dof: None,
                             unit: None,
                         })),
                     })
@@ -768,6 +770,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     uncertainty: None,
                     uncertainty_lower: None,
                     is_sigma: false,
+                    dof: None,
                     unit: Some("kg".to_string()),
                 }),
                 decorators: Vec::new(),
@@ -779,6 +782,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     uncertainty: None,
                     uncertainty_lower: None,
                     is_sigma: false,
+                    dof: None,
                     unit: Some("m/s".to_string()),
                 }),
                 decorators: Vec::new(),
@@ -823,6 +827,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         uncertainty: Some(0.5),
                         uncertainty_lower: None,
                         is_sigma: false,
+                        dof: None,
                         unit: Some("kg".to_string()),
                     }),
                     decorators: Vec::new(),
@@ -889,6 +894,7 @@ r3 = circuito_abierto(5 V, 2 A)
             uncertainty: None,
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("m^3 / (kg * s^2)".to_string()),
         }));
         resolver.add_module("constants".to_string(), export);
