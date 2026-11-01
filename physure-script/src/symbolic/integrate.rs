@@ -124,114 +124,16 @@ fn integrate_ln(u: &Node, var: &str) -> PhysureResult<Node> {
 }
 
 fn integrate_pow(base: &Node, exp: &Node, var: &str) -> PhysureResult<Node> {
-    if !base.depends_on(var) && exp.depends_on(var) {
-        if let Some(ArgForm::Var) = arg_form(exp, var) {
-            return Ok(Node::Div(Box::new(Node::Pow(Box::new(base.clone()), Box::new(exp.clone()))), Box::new(Node::Ln(Box::new(base.clone())))));
-        }
-        if let Some(ArgForm::Linear(a)) = arg_form(exp, var) {
-            return Ok(Node::Div(Box::new(Node::Pow(Box::new(base.clone()), Box::new(exp.clone()))), Box::new(Node::Mul(vec![Node::Number(a), Node::Ln(Box::new(base.clone()))]))));
-        }
+    if let Some(result) = integrate_exponential(base, exp, var) {
+        return Ok(result);
     }
 
     let Node::Number(n) = exp else {
-        if !base.depends_on(var) && exp.depends_on(var) {
-            match arg_form(exp, var) {
-                Some(ArgForm::Var) => {
-                    return Ok(Node::Div(
-                        Box::new(Node::Pow(Box::new(base.clone()), Box::new(exp.clone()))),
-                        Box::new(Node::Ln(Box::new(base.clone()))),
-                    ));
-                }
-                Some(ArgForm::Linear(k)) => {
-                    return Ok(Node::Div(
-                        Box::new(Node::Pow(Box::new(base.clone()), Box::new(exp.clone()))),
-                        Box::new(Node::Mul(vec![Node::Number(k), Node::Ln(Box::new(base.clone()))])),
-                    ));
-                }
-                _ => {}
-            }
-        }
         return Ok(Node::Integral(Box::new(Node::Pow(Box::new(base.clone()), Box::new(exp.clone()))), var.to_string()));
     };
 
-    if *n == 2.0 {
-        if let Node::Sec(u) = base {
-            match arg_form(u, var) {
-                Some(ArgForm::Var) => return Ok(Node::Tan(Box::new((**u).clone()))),
-                Some(ArgForm::Linear(a)) => return Ok(Node::Div(Box::new(Node::Tan(Box::new((**u).clone()))), Box::new(Node::Number(a)))),
-                _ => {}
-            }
-        }
-        if let Node::Csc(u) = base {
-            match arg_form(u, var) {
-                Some(ArgForm::Var) => return Ok(Node::Mul(vec![Node::Number(-1.0), Node::Cot(Box::new((**u).clone()))])),
-                Some(ArgForm::Linear(a)) => return Ok(Node::Div(Box::new(Node::Mul(vec![Node::Number(-1.0), Node::Cot(Box::new((**u).clone()))])), Box::new(Node::Number(a)))),
-                _ => {}
-            }
-        }
-    } else if *n == -2.0 {
-        if let Node::Cos(u) = base {
-            match arg_form(u, var) {
-                Some(ArgForm::Var) => return Ok(Node::Tan(Box::new((**u).clone()))),
-                Some(ArgForm::Linear(a)) => return Ok(Node::Div(Box::new(Node::Tan(Box::new((**u).clone()))), Box::new(Node::Number(a)))),
-                _ => {}
-            }
-        }
-        if let Node::Sin(u) = base {
-            match arg_form(u, var) {
-                Some(ArgForm::Var) => return Ok(Node::Mul(vec![Node::Number(-1.0), Node::Cot(Box::new((**u).clone()))])),
-                Some(ArgForm::Linear(a)) => return Ok(Node::Div(Box::new(Node::Mul(vec![Node::Number(-1.0), Node::Cot(Box::new((**u).clone()))])), Box::new(Node::Number(a)))),
-                _ => {}
-            }
-        }
-    }
-
-    // fallback inverse trig for 1/(a^2 + x^2) and 1/sqrt(1 - x^2)
-    if *n == -1.0 {
-        if let Node::Add(terms) = base {
-            if terms.len() == 2 {
-                let mut x_term = None;
-                let mut const_term = None;
-                for t in terms {
-                    if let Node::Pow(b, e) = t {
-                        if let Node::Number(2.0) = **e {
-                            if let Some(ArgForm::Var) = arg_form(b, var) {
-                                x_term = Some((**b).clone());
-                            } else if let Some(ArgForm::Linear(a)) = arg_form(b, var) {
-                                x_term = Some(Node::Mul(vec![Node::Number(a), (**b).clone()])); // Simplified for 1/(a^2 + (bx)^2)
-                            }
-                        }
-                    } else if let Node::Number(v) = t {
-                        const_term = Some(*v);
-                    } else if let Some(ArgForm::Var) = arg_form(t, var) {
-                        // x term, but not x^2. Ignore.
-                    }
-                }
-                if let (Some(x), Some(c)) = (x_term, const_term) {
-                    if c > 0.0 {
-                        let a = c.sqrt();
-                        return Ok(Node::Mul(vec![
-                            Node::Div(Box::new(Node::Number(1.0)), Box::new(Node::Number(a))),
-                            Node::Arctan(Box::new(Node::Div(Box::new(x), Box::new(Node::Number(a)))))
-                        ]));
-                    }
-                }
-            }
-        }
-    } else if *n == -0.5 {
-        if let Node::Sub(c, xsq) = base {
-            if let Node::Number(c_val) = **c {
-                if c_val == 1.0 {
-                    if let Node::Pow(b, e) = &**xsq {
-                        if let Node::Number(2.0) = **e {
-                            if let Some(ArgForm::Var) = arg_form(&b, var) {
-                                return Ok(Node::Arcsin(Box::new((**b).clone())));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if let Some(result) = integrate_trig_square(base, *n, var).or_else(|| integrate_inverse_trig(base, *n, var)) {
+        return Ok(result);
     }
 
     match arg_form(base, var) {
@@ -259,6 +161,103 @@ fn integrate_pow(base: &Node, exp: &Node, var: &str) -> PhysureResult<Node> {
             Node::Symbol(var.to_string()),
         ])),
         None => Ok(Node::Integral(Box::new(Node::Pow(Box::new(base.clone()), Box::new(Node::Number(*n)))), var.to_string())),
+    }
+}
+
+/// `a^(k x)` with a constant base: `a^(k x) / (k ln a)`.
+fn integrate_exponential(base: &Node, exp: &Node, var: &str) -> Option<Node> {
+    if base.depends_on(var) || !exp.depends_on(var) {
+        return None;
+    }
+    let power = Node::Pow(Box::new(base.clone()), Box::new(exp.clone()));
+    let ln_base = Node::Ln(Box::new(base.clone()));
+    match arg_form(exp, var)? {
+        ArgForm::Var => Some(Node::Div(Box::new(power), Box::new(ln_base))),
+        ArgForm::Linear(k) => Some(Node::Div(Box::new(power), Box::new(Node::Mul(vec![Node::Number(k), ln_base])))),
+        ArgForm::Constant => None,
+    }
+}
+
+/// `sec(u)^2` and `cos(u)^-2` (tangent), `csc(u)^2` and `sin(u)^-2` (minus the cotangent), for `u` linear in the variable.
+fn integrate_trig_square(base: &Node, n: f64, var: &str) -> Option<Node> {
+    let (u, antiderivative) = match (n == 2.0, n == -2.0, base) {
+        (true, _, Node::Sec(u)) | (_, true, Node::Cos(u)) => (u, Node::Tan(Box::new((**u).clone()))),
+        (true, _, Node::Csc(u)) | (_, true, Node::Sin(u)) => {
+            (u, Node::Mul(vec![Node::Number(-1.0), Node::Cot(Box::new((**u).clone()))]))
+        }
+        _ => return None,
+    };
+    match arg_form(u, var)? {
+        ArgForm::Var => Some(antiderivative),
+        ArgForm::Linear(a) => Some(Node::Div(Box::new(antiderivative), Box::new(Node::Number(a)))),
+        ArgForm::Constant => None,
+    }
+}
+
+/// Fallback inverse trig for `1/(a^2 + x^2)` (n = -1) and `1/sqrt(1 - x^2)` (n = -0.5).
+fn integrate_inverse_trig(base: &Node, n: f64, var: &str) -> Option<Node> {
+    if n == -1.0 {
+        integrate_arctan_form(base, var)
+    } else if n == -0.5 {
+        integrate_arcsin_form(base, var)
+    } else {
+        None
+    }
+}
+
+fn integrate_arctan_form(base: &Node, var: &str) -> Option<Node> {
+    let Node::Add(terms) = base else {
+        return None;
+    };
+    if terms.len() != 2 {
+        return None;
+    }
+    let mut x_term = None;
+    let mut const_term = None;
+    for t in terms {
+        if let Node::Pow(b, e) = t {
+            if let Node::Number(2.0) = **e {
+                match arg_form(b, var) {
+                    Some(ArgForm::Var) => x_term = Some((**b).clone()),
+                    // Simplified for 1/(a^2 + (bx)^2)
+                    Some(ArgForm::Linear(a)) => x_term = Some(Node::Mul(vec![Node::Number(a), (**b).clone()])),
+                    _ => {}
+                }
+            }
+        } else if let Node::Number(v) = t {
+            const_term = Some(*v);
+        }
+        // a bare x term, but not x^2, is ignored
+    }
+    let (Some(x), Some(c)) = (x_term, const_term) else {
+        return None;
+    };
+    if c > 0.0 {
+        let a = c.sqrt();
+        return Some(Node::Mul(vec![
+            Node::Div(Box::new(Node::Number(1.0)), Box::new(Node::Number(a))),
+            Node::Arctan(Box::new(Node::Div(Box::new(x), Box::new(Node::Number(a))))),
+        ]));
+    }
+    None
+}
+
+fn integrate_arcsin_form(base: &Node, var: &str) -> Option<Node> {
+    let Node::Sub(c, xsq) = base else {
+        return None;
+    };
+    if !matches!(**c, Node::Number(c_val) if c_val == 1.0) {
+        return None;
+    }
+    let Node::Pow(b, e) = &**xsq else {
+        return None;
+    };
+    if !matches!(**e, Node::Number(2.0)) {
+        return None;
+    }
+    match arg_form(b, var) {
+        Some(ArgForm::Var) => Some(Node::Arcsin(Box::new((**b).clone()))),
+        _ => None,
     }
 }
 
@@ -342,19 +341,30 @@ fn try_integration_by_parts(u: &Node, dv: &Node, var: &str) -> Option<Node> {
     None
 }
 
+/// The product of the factors when they are all numbers; `None` as soon as one is not.
+fn constant_coefficient(factors: &[&Node]) -> Option<f64> {
+    let mut c = 1.0;
+    for f in factors {
+        match f {
+            Node::Number(v) => c *= v,
+            _ => return None,
+        }
+    }
+    Some(c)
+}
+
+/// `coeff * node`, written as `node` itself when the coefficient is 1.
+fn scaled(coeff: f64, node: Node) -> Node {
+    if coeff == 1.0 {
+        node
+    } else {
+        Node::Mul(vec![Node::Number(coeff), node])
+    }
+}
+
 fn integrate_mul(factors: &[Node], var: &str) -> PhysureResult<Node> {
     let (const_factors, non_const): (Vec<&Node>, Vec<&Node>) =
         factors.iter().partition(|f| !f.depends_on(var));
-    let const_coeff = |fs: &[&Node]| -> Option<f64> {
-        let mut c = 1.0;
-        for f in fs {
-            match f {
-                Node::Number(v) => c *= v,
-                _ => return None,
-            }
-        }
-        Some(c)
-    };
 
     match non_const.len() {
         0 => Ok(Node::Mul(vec![
@@ -363,7 +373,7 @@ fn integrate_mul(factors: &[Node], var: &str) -> PhysureResult<Node> {
         ])),
         1 => {
             let inner = non_const[0].integrate_node(var)?;
-            match const_coeff(&const_factors) {
+            match constant_coefficient(&const_factors) {
                 Some(c) => Ok(Node::Mul(vec![Node::Number(c), inner])),
                 None => {
                     let mut parts: Vec<Node> = const_factors.into_iter().cloned().collect();
@@ -373,34 +383,31 @@ fn integrate_mul(factors: &[Node], var: &str) -> PhysureResult<Node> {
             }
         }
         2 => {
-            let coeff = const_coeff(&const_factors).unwrap_or(1.0);
-            for (p, q) in [(non_const[0], non_const[1]), (non_const[1], non_const[0])] {
-                if let Some(antideriv) = try_general_power_antiderivative(p, q, var) {
-                    if coeff == 1.0 {
-                        return Ok(antideriv);
-                    }
-                    return Ok(Node::Mul(vec![Node::Number(coeff), antideriv]));
-                }
-                if let Some((antideriv, remaining)) = try_u_substitution(p, q, var, coeff) {
-                    if remaining == 1.0 {
-                        return Ok(antideriv);
-                    }
-                    return Ok(Node::Mul(vec![Node::Number(remaining), antideriv]));
-                }
-            }
-            // Try Integration by Parts: ∫ u dv = u v - ∫ v du
-            for (u, dv) in [(non_const[0], non_const[1]), (non_const[1], non_const[0])] {
-                if let Some(res) = try_integration_by_parts(u, dv, var) {
-                    if coeff == 1.0 {
-                        return Ok(res);
-                    }
-                    return Ok(Node::Mul(vec![Node::Number(coeff), res]));
-                }
-            }
-            Ok(Node::Integral(Box::new(Node::Mul(factors.to_vec())), var.to_string()))
+            let coeff = constant_coefficient(&const_factors).unwrap_or(1.0);
+            Ok(integrate_pair(factors, non_const[0], non_const[1], coeff, var))
         }
         _ => Ok(Node::Integral(Box::new(Node::Mul(factors.to_vec())), var.to_string())),
     }
+}
+
+/// A product of two factors that depend on the variable: a general power, a substitution, integration by parts,
+/// or else left as an integral.
+fn integrate_pair(factors: &[Node], first: &Node, second: &Node, coeff: f64, var: &str) -> Node {
+    for (p, q) in [(first, second), (second, first)] {
+        if let Some(antideriv) = try_general_power_antiderivative(p, q, var) {
+            return scaled(coeff, antideriv);
+        }
+        if let Some((antideriv, remaining)) = try_u_substitution(p, q, var, coeff) {
+            return scaled(remaining, antideriv);
+        }
+    }
+    // Try Integration by Parts: ∫ u dv = u v - ∫ v du
+    for (u, dv) in [(first, second), (second, first)] {
+        if let Some(res) = try_integration_by_parts(u, dv, var) {
+            return scaled(coeff, res);
+        }
+    }
+    Node::Integral(Box::new(Node::Mul(factors.to_vec())), var.to_string())
 }
 
 fn try_general_power_antiderivative(p: &Node, q: &Node, var: &str) -> Option<Node> {
@@ -427,72 +434,85 @@ fn integrate_div(a: &Node, b: &Node, var: &str) -> PhysureResult<Node> {
         return Ok(Node::Div(Box::new(inner), Box::new(b.clone())));
     }
     if matches!(a, Node::Number(v) if *v == 1.0) {
-        match arg_form(b, var) {
-            Some(ArgForm::Var) => return Ok(Node::Ln(Box::new(b.clone()))),
-            Some(ArgForm::Linear(coeff)) => {
-                return Ok(Node::Div(
-                    Box::new(Node::Ln(Box::new(b.clone()))),
-                    Box::new(Node::Number(coeff)),
-                ));
-            }
-            _ => {
-                if let Node::Add(terms) = b {
-                    if terms.len() == 2 {
-                        let mut c_val = None;
-                        let mut x_sq_base = None;
-                        for t in terms {
-                            if let Node::Number(c) = t {
-                                c_val = Some(*c);
-                            } else if let Node::Pow(base, exp) = t {
-                                if let Node::Number(2.0) = **exp {
-                                    if let Some(ArgForm::Var) = arg_form(base, var) {
-                                        x_sq_base = Some((**base).clone());
-                                    }
-                                }
-                            }
-                        }
-                        if let (Some(c), Some(base_node)) = (c_val, x_sq_base) {
-                            if c > 0.0 {
-                                let k = c.sqrt();
-                                if k == 1.0 {
-                                    return Ok(Node::Arctan(Box::new(base_node)));
-                                } else {
-                                    return Ok(Node::Div(
-                                        Box::new(Node::Arctan(Box::new(Node::Div(Box::new(base_node), Box::new(Node::Number(k)))))),
-                                        Box::new(Node::Number(k)),
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if let Some(result) = integrate_reciprocal(b, var) {
+            return Ok(result);
         }
     }
-    // Logarithmic Quotient Rule: ∫ g'(x)/g(x) dx = ln|g(x)|
-    if let Ok(db) = b.diff_node(var) {
-        let db_simp = db.simplify();
-        let a_simp = a.simplify();
-        if db_simp == a_simp {
-            return Ok(Node::Ln(Box::new(Node::Abs(Box::new(b.clone())))));
-        }
-        
-        if let Node::Mul(factors) = &a_simp {
-            if factors.len() == 2 {
-                if let Node::Number(k) = factors[0] {
-                    if factors[1] == db_simp {
-                        return Ok(Node::Mul(vec![Node::Number(k), Node::Ln(Box::new(Node::Abs(Box::new(b.clone()))))]));
-                    }
-                }
-            }
-        }
-        
-        // Also check if a_simp / db_simp is a constant?
-        // simple heuristic: if a is k*db, it will simplify to Mul(k, db)
+    if let Some(result) = logarithmic_quotient(a, b, var) {
+        return Ok(result);
     }
     Err(PhysureError::UnsupportedIntegration("Quotient integration not supported".into()))
 }
 
+/// `1 / b`: a logarithm when `b` is linear in the variable, an arctangent when it is `c + x^2`.
+fn integrate_reciprocal(b: &Node, var: &str) -> Option<Node> {
+    match arg_form(b, var) {
+        Some(ArgForm::Var) => Some(Node::Ln(Box::new(b.clone()))),
+        Some(ArgForm::Linear(coeff)) => Some(Node::Div(
+            Box::new(Node::Ln(Box::new(b.clone()))),
+            Box::new(Node::Number(coeff)),
+        )),
+        _ => integrate_arctan_reciprocal(b, var),
+    }
+}
+
+/// `1 / (c + x^2)` for a positive `c`: `arctan(x / k) / k` with `k = sqrt(c)`.
+fn integrate_arctan_reciprocal(b: &Node, var: &str) -> Option<Node> {
+    let Node::Add(terms) = b else {
+        return None;
+    };
+    if terms.len() != 2 {
+        return None;
+    }
+    let mut c_val = None;
+    let mut x_sq_base = None;
+    for t in terms {
+        if let Node::Number(c) = t {
+            c_val = Some(*c);
+        } else if let Node::Pow(base, exp) = t {
+            if let Node::Number(2.0) = **exp {
+                if let Some(ArgForm::Var) = arg_form(base, var) {
+                    x_sq_base = Some((**base).clone());
+                }
+            }
+        }
+    }
+    let (Some(c), Some(base_node)) = (c_val, x_sq_base) else {
+        return None;
+    };
+    if c > 0.0 {
+        let k = c.sqrt();
+        if k == 1.0 {
+            return Some(Node::Arctan(Box::new(base_node)));
+        }
+        return Some(Node::Div(
+            Box::new(Node::Arctan(Box::new(Node::Div(Box::new(base_node), Box::new(Node::Number(k)))))),
+            Box::new(Node::Number(k)),
+        ));
+    }
+    None
+}
+
+/// Logarithmic Quotient Rule: ∫ g'(x)/g(x) dx = ln|g(x)|, and the same with a numeric factor.
+fn logarithmic_quotient(a: &Node, b: &Node, var: &str) -> Option<Node> {
+    let db_simp = b.diff_node(var).ok()?.simplify();
+    let a_simp = a.simplify();
+    let ln_abs = || Node::Ln(Box::new(Node::Abs(Box::new(b.clone()))));
+    if db_simp == a_simp {
+        return Some(ln_abs());
+    }
+    // Also check if a_simp / db_simp is a constant?
+    // simple heuristic: if a is k*db, it will simplify to Mul(k, db)
+    let Node::Mul(factors) = &a_simp else {
+        return None;
+    };
+    if factors.len() == 2 && factors[1] == db_simp {
+        if let Node::Number(k) = factors[0] {
+            return Some(Node::Mul(vec![Node::Number(k), ln_abs()]));
+        }
+    }
+    None
+}
 
 fn integrate_tan(u: &Node, var: &str) -> PhysureResult<Node> {
     let ln_sec = Node::Ln(Box::new(Node::Abs(Box::new(Node::Sec(Box::new(u.clone()))))));
