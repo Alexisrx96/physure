@@ -32,29 +32,14 @@ fn unit_chain_tokens(unit: &str) -> Vec<UnitToken> {
         if ch == '*' || ch == '/' {
             pending_op = Some((ch, idx));
             in_exponent = false;
-            idx += ch_len;
-            continue;
-        }
-        if ch == '^' {
+        } else if ch == '^' {
             in_exponent = true;
-            idx += ch_len;
-            continue;
-        }
-        if ch.is_alphanumeric() || matches!(ch, '_' | '°' | '%' | '$') {
-            let start = idx;
-            let mut end = idx;
-            while end < unit.len() {
-                let c = unit[end..].chars().next().unwrap();
-                if c.is_alphanumeric() || matches!(c, '_' | '°' | '%' | '$') {
-                    end += c.len_utf8();
-                } else {
-                    break;
-                }
-            }
+        } else if is_unit_word_char(ch) {
+            let end = idx + unit[idx..].chars().take_while(|c| is_unit_word_char(*c)).map(char::len_utf8).sum::<usize>();
             // A run that starts with a digit is an exponent or an embedded power, never a name.
-            if !in_exponent && !bytes[start].is_ascii_digit() {
+            if !in_exponent && !bytes[idx].is_ascii_digit() {
                 tokens.push(UnitToken {
-                    text: unit[start..end].to_string(),
+                    text: unit[idx..end].to_string(),
                     op: pending_op.take(),
                 });
             }
@@ -65,6 +50,10 @@ fn unit_chain_tokens(unit: &str) -> Vec<UnitToken> {
     }
 
     tokens
+}
+
+fn is_unit_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '°' | '%' | '$')
 }
 
 /// The error raised when a unit-chain word is also a name the script bound.
@@ -161,50 +150,61 @@ fn check_statement_shadowing(stmt: &Statement, bound: &mut HashSet<String>, line
     Ok(())
 }
 
+fn check_quantity_shadowing(node: &QuantityNode, bound: &HashSet<String>, line: usize, col: usize) -> PhysureResult<()> {
+    let Some(unit) = &node.unit else { return Ok(()) };
+    for token in unit_chain_tokens(unit) {
+        // The first word used to be exempt — juxtaposition is never multiplication, so
+        // `3 m` was read as a quantity even in a script that bound `m`. But that same
+        // exemption let `fn kinetic_energy(m, v) = 1/2 m v^2` silently read its own `m`
+        // parameter as the *metre* attached to the `2` split out of `1/2`, dropping the
+        // mass argument entirely (see unit_shadowing.rs's
+        // `the_kinetic_energy_shorthand_that_motivated_this_check_is_rejected`). The
+        // first word is checked exactly like every later one now, at the cost of also
+        // flagging an ordinary standalone literal whose unit happens to collide with a
+        // name in scope — still cheaper than a confident wrong answer.
+        if bound.contains(&token.text) {
+            return Err(unit_shadowing_error(node.magnitude, unit, &token, line, col));
+        }
+    }
+    Ok(())
+}
+
+fn check_call_shadowing(
+    name: &str,
+    args: &[Expr],
+    kwargs: &[(String, Expr)],
+    bound: &HashSet<String>,
+    line: usize,
+    col: usize,
+) -> PhysureResult<()> {
+    // `where` desugars to `let(name, value, body)` (see `parse_where_expr`), and the
+    // binding is only visible in the body — its own value expression predates it.
+    if name == "let" && args.len() == 3 {
+        if let Expr::Identifier(var) = &args[0] {
+            check_expr_shadowing(&args[1], bound, line, col)?;
+            let mut local = bound.clone();
+            local.insert(var.clone());
+            return check_expr_shadowing(&args[2], &local, line, col);
+        }
+    }
+    for arg in args {
+        check_expr_shadowing(arg, bound, line, col)?;
+    }
+    for (_, value) in kwargs {
+        check_expr_shadowing(value, bound, line, col)?;
+    }
+    Ok(())
+}
+
 fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: usize) -> PhysureResult<()> {
     match expr {
-        Expr::Quantity(node) => {
-            let Some(unit) = &node.unit else { return Ok(()) };
-            for token in unit_chain_tokens(unit) {
-                // The first word used to be exempt — juxtaposition is never multiplication, so
-                // `3 m` was read as a quantity even in a script that bound `m`. But that same
-                // exemption let `fn kinetic_energy(m, v) = 1/2 m v^2` silently read its own `m`
-                // parameter as the *metre* attached to the `2` split out of `1/2`, dropping the
-                // mass argument entirely (see unit_shadowing.rs's
-                // `the_kinetic_energy_shorthand_that_motivated_this_check_is_rejected`). The
-                // first word is checked exactly like every later one now, at the cost of also
-                // flagging an ordinary standalone literal whose unit happens to collide with a
-                // name in scope — still cheaper than a confident wrong answer.
-                if bound.contains(&token.text) {
-                    return Err(unit_shadowing_error(node.magnitude, unit, &token, line, col));
-                }
-            }
-            Ok(())
-        }
+        Expr::Quantity(node) => check_quantity_shadowing(node, bound, line, col),
         Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => Ok(()),
         Expr::BinaryOp { left, right, .. } => {
             check_expr_shadowing(left, bound, line, col)?;
             check_expr_shadowing(right, bound, line, col)
         }
-        Expr::FunctionCall { name, args, kwargs } => {
-            // `where` desugars to `let(name, value, body)` (see `parse_where_expr`), and the
-            // binding is only visible in the body — its own value expression predates it.
-            if name == "let" && args.len() == 3 {
-                if let Expr::Identifier(var) = &args[0] {
-                    check_expr_shadowing(&args[1], bound, line, col)?;
-                    let mut local = bound.clone();
-                    local.insert(var.clone());
-                    return check_expr_shadowing(&args[2], &local, line, col);
-                }
-            }
-            for arg in args {
-                check_expr_shadowing(arg, bound, line, col)?;
-            }
-            for (_, value) in kwargs {
-                check_expr_shadowing(value, bound, line, col)?;
-            }
-            Ok(())
-        }
+        Expr::FunctionCall { name, args, kwargs } => check_call_shadowing(name, args, kwargs, bound, line, col),
         Expr::ForExpr { var, iterable, body } => {
             check_expr_shadowing(iterable, bound, line, col)?;
             let mut local = bound.clone();

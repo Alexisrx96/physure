@@ -38,135 +38,100 @@ impl<'a> PhsLexer<'a> {
                 continue;
             }
 
-            let start = self.pos;
-
             // Comments: # ... or // ...
             if ch == '#' || (ch == '/' && self.input[self.pos..].starts_with("//")) {
-                while self.pos < len {
-                    let c = self.input[self.pos..].chars().next().unwrap();
-                    self.pos += c.len_utf8();
-                    if c == '\n' {
-                        break;
-                    }
-                }
+                self.skip_comment();
                 continue;
             }
 
-            // Display text fence: ``` ... ```
-            if self.input[self.pos..].starts_with("```") {
-                let fence_start = self.pos;
-                let text_start = fence_start + 3;
-                if let Some(end_rel) = self.input[text_start..].find("```") {
-                    let text = self.input[text_start..text_start + end_rel].to_string();
-                    self.pos = text_start + end_rel + 3;
-                    tokens.push(PhsToken {
-                        kind: TokenKind::StringLiteral(text.clone()),
-                        value: text,
-                        pos: fence_start,
-                    });
-                    tokens.push(PhsToken {
-                        kind: TokenKind::Op("```".to_string()),
-                        value: "```".to_string(),
-                        pos: fence_start,
-                    });
-                    continue;
-                }
-                // No closing fence on this line (e.g. a fence that spans multiple lines,
-                // when tokenized line-by-line by callers like the LSP). Leave `self.pos`
-                // untouched and fall through so the opening "```" is lexed as a plain
-                // operator instead of leaving `self.pos` stranded past this branch.
-            }
-
-            // String literals: "..." or '...'
-            if ch == '"' || ch == '\'' {
-                let quote = ch;
-                self.pos += 1;
-                let str_start = self.pos;
-                while self.pos < len {
-                    let c = self.input[self.pos..].chars().next().unwrap();
-                    if c == quote {
-                        break;
-                    }
-                    self.pos += c.len_utf8();
-                }
-                if self.pos >= len {
-                    return Err(PhysureError::Generic(format!(
-                        "Unclosed string literal starting at column {}",
-                        start
-                    )));
-                }
-                let content = self.input[str_start..self.pos].to_string();
-                self.pos += 1; // consume closing quote
-                tokens.push(PhsToken {
-                    kind: TokenKind::StringLiteral(content.clone()),
-                    value: content,
-                    pos: start,
-                });
+            if self.lex_display_fence(&mut tokens) {
                 continue;
             }
-
-            // Square root symbol
-            if ch == '√' {
-                self.pos += '√'.len_utf8();
-                tokens.push(PhsToken {
-                    kind: TokenKind::Sqrt,
-                    value: "√".to_string(),
-                    pos: start,
-                });
-                continue;
-            }
-
-            // Superscript digits
-            if is_superscript(ch) {
-                let end = self.consume_while(is_superscript);
-                let val = self.input[start..end].to_string();
-                tokens.push(PhsToken {
-                    kind: TokenKind::Sup(val.clone()),
-                    value: val,
-                    pos: start,
-                });
-                continue;
-            }
-
-            // Numbers: digits, decimal, exponent
-            if ch.is_ascii_digit() || (ch == '.' && self.peek_digit()) {
-                let end = self.consume_number();
-                let val_str = &self.input[start..end];
-                let clean_str = val_str.replace(' ', "");
-                let num: f64 = clean_str.parse().map_err(|_| {
-                    PhysureError::Generic(format!("Invalid number literal: '{}'", val_str))
-                })?;
-                tokens.push(PhsToken {
-                    kind: TokenKind::Number(num),
-                    value: val_str.to_string(),
-                    pos: start,
-                });
-                continue;
-            }
-
-            // Identifiers: letters, underscores, and trailing prime marks (')
-            if ch.is_alphabetic() || ch == '_' {
-                self.consume_while(|c| c.is_alphanumeric() || c == '_');
-                self.consume_while(|c| c == '\'');
-                let val = self.input[start..self.pos].to_string();
-                tokens.push(PhsToken {
-                    kind: TokenKind::Ident(val.clone()),
-                    value: val,
-                    pos: start,
-                });
-                continue;
-            }
-
-            // Operators & Punctuation
-            let op_str = self.consume_operator()?;
-            tokens.push(PhsToken {
-                kind: TokenKind::Op(op_str.clone()),
-                value: op_str,
-                pos: start,
-            });
+            let start = self.pos;
+            tokens.push(self.lex_token(ch, start)?);
         }
 
         Ok(tokens)
+    }
+
+    /// Skips to the start of the next line (or the end of the input).
+    fn skip_comment(&mut self) {
+        self.pos = self.input[self.pos..].find('\n').map_or(self.input.len(), |newline| self.pos + newline + 1);
+    }
+
+    /// Display text fence: ``` ... ```, as its text and then the fence itself. Returns false, with nothing
+    /// consumed, when there is no closing fence on this line (e.g. a fence that spans multiple lines, when
+    /// tokenized line-by-line by callers like the LSP): the opening "```" is then lexed as a plain operator.
+    fn lex_display_fence(&mut self, tokens: &mut Vec<PhsToken>) -> bool {
+        if !self.input[self.pos..].starts_with("```") {
+            return false;
+        }
+        let fence_start = self.pos;
+        let text_start = fence_start + 3;
+        let Some(end_rel) = self.input[text_start..].find("```") else {
+            return false;
+        };
+        let text = self.input[text_start..text_start + end_rel].to_string();
+        self.pos = text_start + end_rel + 3;
+        tokens.push(token(TokenKind::StringLiteral(text.clone()), text, fence_start));
+        tokens.push(token(TokenKind::Op("```".to_string()), "```".to_string(), fence_start));
+        true
+    }
+
+    /// The token that starts with `ch` at `start`: a string, a square root, superscript digits, a number,
+    /// an identifier or an operator.
+    fn lex_token(&mut self, ch: char, start: usize) -> PhysureResult<PhsToken> {
+        if ch == '"' || ch == '\'' {
+            return self.lex_string(ch, start);
+        }
+        if ch == '√' {
+            self.pos += ch.len_utf8();
+            return Ok(token(TokenKind::Sqrt, "√".to_string(), start));
+        }
+        if is_superscript(ch) {
+            let end = self.consume_while(is_superscript);
+            let val = self.input[start..end].to_string();
+            return Ok(token(TokenKind::Sup(val.clone()), val, start));
+        }
+        // Numbers: digits, decimal, exponent
+        if ch.is_ascii_digit() || (ch == '.' && self.peek_digit()) {
+            return self.lex_number(start);
+        }
+        // Identifiers: letters, underscores, and trailing prime marks (')
+        if ch.is_alphabetic() || ch == '_' {
+            self.consume_while(|c| c.is_alphanumeric() || c == '_');
+            self.consume_while(|c| c == '\'');
+            let val = self.input[start..self.pos].to_string();
+            return Ok(token(TokenKind::Ident(val.clone()), val, start));
+        }
+        // Operators & Punctuation
+        let op_str = self.consume_operator()?;
+        Ok(token(TokenKind::Op(op_str.clone()), op_str, start))
+    }
+
+    /// String literals: "..." or '...'
+    fn lex_string(&mut self, quote: char, start: usize) -> PhysureResult<PhsToken> {
+        self.pos += 1;
+        let str_start = self.pos;
+        self.consume_while(|c| c != quote);
+        if self.pos >= self.input.len() {
+            return Err(PhysureError::Generic(format!(
+                "Unclosed string literal starting at column {}",
+                start
+            )));
+        }
+        let content = self.input[str_start..self.pos].to_string();
+        self.pos += 1; // consume closing quote
+        Ok(token(TokenKind::StringLiteral(content.clone()), content, start))
+    }
+
+    fn lex_number(&mut self, start: usize) -> PhysureResult<PhsToken> {
+        let end = self.consume_number();
+        let val_str = &self.input[start..end];
+        let num: f64 = val_str.replace(' ', "").parse().map_err(|_| {
+            PhysureError::Generic(format!("Invalid number literal: '{}'", val_str))
+        })?;
+        Ok(token(TokenKind::Number(num), val_str.to_string(), start))
     }
 
     fn peek_digit(&self) -> bool {
@@ -193,37 +158,31 @@ impl<'a> PhsLexer<'a> {
     fn consume_number(&mut self) -> usize {
         let mut seen_dot = false;
         let mut seen_e = false;
-        while self.pos < self.input.len() {
-            let ch = self.input[self.pos..].chars().next().unwrap();
+        while let Some(ch) = self.input[self.pos..].chars().next() {
             if ch.is_ascii_digit() {
                 self.pos += 1;
             } else if ch == '.' && !seen_dot && !seen_e {
                 seen_dot = true;
                 self.pos += 1;
             } else if (ch == 'e' || ch == 'E') && !seen_e {
-                let rest = &self.input[self.pos + ch.len_utf8()..];
-                let mut chars = rest.chars();
-                let mut next_c = chars.next();
-                if next_c == Some('+') || next_c == Some('-') {
-                    next_c = chars.next();
-                }
-                if next_c.map_or(false, |c| c.is_ascii_digit()) {
-                    seen_e = true;
-                    self.pos += ch.len_utf8();
-                    if self.pos < self.input.len() {
-                        let sign_c = self.input[self.pos..].chars().next().unwrap();
-                        if sign_c == '+' || sign_c == '-' {
-                            self.pos += sign_c.len_utf8();
-                        }
-                    }
-                } else {
+                let Some(marker_len) = self.exponent_marker_len() else {
                     break;
-                }
+                };
+                seen_e = true;
+                self.pos += marker_len;
             } else {
                 break;
             }
         }
         self.pos
+    }
+
+    /// The length of the `e`/`E` at the current position, with its sign if it has one, when a digit follows:
+    /// `1e5` and `1e-5` have an exponent, `1em` does not.
+    fn exponent_marker_len(&self) -> Option<usize> {
+        let after_e = &self.input[self.pos + 1..];
+        let sign_len = usize::from(matches!(after_e.chars().next(), Some('+' | '-')));
+        after_e[sign_len..].chars().next().filter(|c| c.is_ascii_digit()).map(|_| 1 + sign_len)
     }
 
     fn consume_operator(&mut self) -> PhysureResult<String> {
@@ -251,6 +210,10 @@ impl<'a> PhsLexer<'a> {
             ch, self.pos, self.input
         )))
     }
+}
+
+fn token(kind: TokenKind, value: String, pos: usize) -> PhsToken {
+    PhsToken { kind, value, pos }
 }
 
 fn is_superscript(c: char) -> bool {
