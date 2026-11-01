@@ -340,53 +340,51 @@ fn complete_compare_files(compare: &serde_json::Value) -> Option<Vec<String>> {
         .collect()
 }
 
+/// Why a nightly upgrade is not needed, when it is not: phs already is on the latest commit of main, or main
+/// moved only by files nothing is built from. A failed check here is never a reason to refuse an upgrade the
+/// user explicitly asked for -- the answer is then `None`, and the upgrade goes on.
+fn nightly_up_to_date_note() -> Option<String> {
+    let running_sha = option_env!("PHS_BUILD_SHA")?;
+    let commit = github_get("https://api.github.com/repos/Alexisrx96/physure/commits/main").ok()?;
+    let latest_sha = commit["sha"].as_str()?;
+    let latest_short = &latest_sha[..latest_sha.len().min(7)];
+    if latest_short == running_sha {
+        return Some(format!("phs is already on the latest commit ({running_sha})."));
+    }
+    let compare_url = format!(
+        "https://api.github.com/repos/Alexisrx96/physure/compare/{running_sha}...{latest_sha}"
+    );
+    let compare = github_get(&compare_url).ok()?;
+    let files = complete_compare_files(&compare)?;
+    if is_relevant_change(&files) {
+        return None;
+    }
+    Some(format!(
+        "main moved ({running_sha} -> {latest_short}) but no relevant crate or workspace build input changed -- phs is already effectively up to date."
+    ))
+}
+
+/// The installed `physure-lsp` to replace: next to `phs`, or else in `~/.cargo/bin`.
+fn installed_lsp_path(phs_installed: &std::path::Path, lsp_name: &str) -> Option<std::path::PathBuf> {
+    phs_installed
+        .parent()
+        .map(|dir| dir.join(lsp_name))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            dirs::home_dir()
+                .map(|h| h.join(".cargo").join("bin").join(lsp_name))
+                .filter(|p| p.exists())
+        })
+}
+
 fn run_nightly_upgrade() {
     if !which_cargo_found() {
         eprintln!("cargo not found on PATH. Install Rust from https://rustup.rs then re-run `phs upgrade --nightly`.");
         std::process::exit(1);
     }
 
-    let running_sha = option_env!("PHS_BUILD_SHA");
-    let mut should_rebuild = true;
-    let mut status_note: Option<String> = None;
-
-    if let Some(running_sha) = running_sha {
-        if let Ok(commit) =
-            github_get("https://api.github.com/repos/Alexisrx96/physure/commits/main")
-        {
-            if let Some(latest_sha) = commit["sha"].as_str() {
-                let latest_short = &latest_sha[..latest_sha.len().min(7)];
-                if latest_short == running_sha {
-                    should_rebuild = false;
-                    status_note = Some(format!(
-                        "phs is already on the latest commit ({running_sha})."
-                    ));
-                } else {
-                    let compare_url = format!(
-                        "https://api.github.com/repos/Alexisrx96/physure/compare/{running_sha}...{latest_sha}"
-                    );
-                    // A failed diagnostic check here is never a reason to refuse an upgrade
-                    // the user explicitly asked for -- should_rebuild simply stays true.
-                    if let Ok(compare) = github_get(&compare_url) {
-                        if let Some(files) = complete_compare_files(&compare) {
-                            if !is_relevant_change(&files) {
-                                should_rebuild = false;
-                                status_note = Some(format!(
-                                "main moved ({running_sha} -> {latest_short}) but no relevant crate or workspace build input changed -- phs is already effectively up to date."
-                            ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !should_rebuild {
-        println!(
-            "{}",
-            status_note.unwrap_or_else(|| "phs is already up to date.".to_string())
-        );
+    if let Some(note) = nightly_up_to_date_note() {
+        println!("{note}");
         return;
     }
 
@@ -417,15 +415,7 @@ fn run_nightly_upgrade() {
 
     let exe = if cfg!(windows) { ".exe" } else { "" };
     let lsp_name = format!("physure-lsp{exe}");
-    let lsp_target = phs_installed
-        .parent()
-        .map(|dir| dir.join(&lsp_name))
-        .filter(|p| p.exists())
-        .or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.join(".cargo").join("bin").join(&lsp_name))
-                .filter(|p| p.exists())
-        });
+    let lsp_target = installed_lsp_path(&phs_installed, &lsp_name);
     match lsp_target {
         Some(target) => {
             println!("Building physure-lsp from main...");
