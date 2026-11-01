@@ -572,7 +572,7 @@ fn eval_definite_integral(expr_str: &str, var_str: &str, a: f64, b: f64, interpr
     if a.is_infinite() || b.is_infinite() {
         return Ok(improper_integral(&mut eval_at, a, b));
     }
-    Ok(quad_gauss_kronrod(&mut eval_at, a, b, 100))
+    Ok(quad_gauss_legendre(&mut eval_at, a, b, 100))
 }
 
 /// The antiderivative evaluated at both ends, when the integrand has one the interpreter can evaluate there.
@@ -621,24 +621,21 @@ fn improper_integral(eval_at: &mut impl FnMut(f64) -> f64, a: f64, b: f64) -> f6
             fx * dxdt
         }
     };
-    quad_gauss_kronrod(&mut transform_eval, to_unit_interval(a), to_unit_interval(b), 100)
+    quad_gauss_legendre(&mut transform_eval, to_unit_interval(a), to_unit_interval(b), 100)
 }
 
-fn quad_gauss_kronrod<F>(mut f: F, a: f64, b: f64, steps: usize) -> f64
+/// Composite three-point Gauss-Legendre quadrature over `steps` equal panels of `[a, b]` (exact for a polynomial of
+/// degree 5 or less on each panel).
+fn quad_gauss_legendre<F>(mut f: F, a: f64, b: f64, steps: usize) -> f64
 where F: FnMut(f64) -> f64 {
     let h = (b - a) / steps as f64;
+    let half_h = 0.5 * h;
+    // the nodes mid, mid +- half_h * sqrt(3/5) carry the weights 8/9, 5/9, 5/9 (of the panel's length)
+    let offset = half_h * 0.774_596_669_241_483_4;
     let mut sum = 0.0;
     for i in 0..steps {
-        let x0 = a + i as f64 * h;
-        let x1 = x0 + h;
-        let mid = 0.5 * (x0 + x1);
-        let half_h = 0.5 * h;
-        let f0 = f(x0);
-        let f1 = f(mid - half_h * 0.5773502691896257);
-        let f2 = f(mid);
-        let f3 = f(mid + half_h * 0.5773502691896257);
-        let f4 = f(x1);
-        sum += (half_h / 9.0) * (f0 + 4.0 * f2 + f4 + 2.0 * (f1 + f3));
+        let mid = a + (i as f64 + 0.5) * h;
+        sum += half_h * (5.0 * (f(mid - offset) + f(mid + offset)) + 8.0 * f(mid)) / 9.0;
     }
     sum
 }

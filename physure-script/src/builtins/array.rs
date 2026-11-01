@@ -89,8 +89,10 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     };
     let start = mean_or(&args[0], 0.0);
     let stop = mean_or(&args[1], 1.0);
+    // a literal such as `5` is a dimensionless quantity, not a bare number
     let count = match args.get(2) {
         Some(PhsValue::Number(n)) => *n as usize,
+        Some(PhsValue::Quantity(q)) => q.value.mean() as usize,
         _ => 50,
     };
     let unit = args[..2].iter().find_map(|v| match v {
