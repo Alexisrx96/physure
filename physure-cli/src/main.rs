@@ -107,39 +107,45 @@ fn run_repl() {
             break;
         }
 
-        let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
-        if trimmed == "exit" || trimmed == "quit" {
-            println!("Goodbye!");
-            break;
+        match line.trim() {
+            "" => {}
+            "exit" | "quit" => {
+                println!("Goodbye!");
+                break;
+            }
+            "help" => print_repl_help(),
+            trimmed => eval_repl_line(&interp, &mut env, trimmed),
         }
-        if trimmed == "help" {
-            println!("Enter physical expressions, assignments, or functions.");
-            println!("Examples:");
-            println!("  m = 75.0 kg");
-            println!("  v = 10 m / s");
-            println!("  E = 1/2 m v^2 => J");
-            println!("  f(x: m) = x * 2");
-            continue;
-        }
+    }
+}
 
-        match parse_phs(trimmed) {
-            Ok(program) => {
-                for stmt in &program.statements {
-                    match interp.eval_statement_with_env(stmt, &mut env) {
-                        Ok(val) => {
-                            if val != PhsValue::None {
-                                println!("=> {}", val);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Error: {}", e);
-                        }
-                    }
+fn print_repl_help() {
+    println!("Enter physical expressions, assignments, or functions.");
+    println!("Examples:");
+    println!("  m = 75.0 kg");
+    println!("  v = 10 m / s");
+    println!("  E = 1/2 m v^2 => J");
+    println!("  f(x: m) = x * 2");
+}
+
+/// Evaluates what was typed at the prompt in the session's environment, reporting each error.
+fn eval_repl_line(interp: &PhsInterpreter, env: &mut HashMap<String, PhsValue>, line: &str) {
+    let program = match parse_phs(line) {
+        Ok(program) => program,
+        Err(e) => {
+            eprintln!("Parse Error: {:?}", e);
+            return;
+        }
+    };
+    for stmt in &program.statements {
+        match interp.eval_statement_with_env(stmt, env) {
+            Ok(val) => {
+                if val != PhsValue::None {
+                    println!("=> {}", val);
                 }
             }
             Err(e) => {
-                eprintln!("Parse Error: {:?}", e);
+                eprintln!("Error: {}", e);
             }
         }
     }
@@ -168,19 +174,7 @@ fn handle_transpile(args: &[String]) -> bool {
         return false;
     }
 
-    let mut script_path = None;
-    for (i, arg) in args.iter().enumerate().skip(1) {
-        if arg == "transpile" || arg == "--target" || arg == "-t" || arg == "--output" || arg == "-o" {
-            continue;
-        }
-        if i > 0 && (args[i - 1] == "--target" || args[i - 1] == "-t" || args[i - 1] == "--output" || args[i - 1] == "-o") {
-            continue;
-        }
-        script_path = Some(arg.clone());
-        break;
-    }
-
-    let script_path = match script_path {
+    let script_path = match transpile_script_path(args) {
         Some(p) => p,
         None => {
             eprintln!("Error: missing script file path for transpilation");
@@ -190,39 +184,7 @@ fn handle_transpile(args: &[String]) -> bool {
 
     let target_flag_val = get_flag_value(args, "--target").or_else(|| get_flag_value(args, "-t"));
     let output_flag_val = get_flag_value(args, "--output").or_else(|| get_flag_value(args, "-o"));
-
-    let target = match (target_flag_val.as_deref(), output_flag_val.as_deref()) {
-        (Some("python") | Some("py"), _) => Target::Python,
-        (Some("java"), Some(out_p)) => {
-            let class_name = std::path::Path::new(out_p)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Main");
-            Target::JavaWithClass(class_name.to_string())
-        }
-        (Some("java"), None) => Target::Java,
-        (Some("js") | Some("javascript"), _) => Target::JavaScript,
-        (Some("ts") | Some("typescript"), _) => Target::TypeScript,
-        (Some(_), _) => Target::Rust,
-        (None, Some(out_p)) => {
-            if out_p.ends_with(".py") {
-                Target::Python
-            } else if out_p.ends_with(".java") {
-                let class_name = std::path::Path::new(out_p)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Main");
-                Target::JavaWithClass(class_name.to_string())
-            } else if out_p.ends_with(".ts") {
-                Target::TypeScript
-            } else if out_p.ends_with(".js") {
-                Target::JavaScript
-            } else {
-                Target::Rust
-            }
-        }
-        (None, None) => Target::Rust,
-    };
+    let target = transpile_target(target_flag_val.as_deref(), output_flag_val.as_deref());
 
     let code = match fs::read_to_string(&script_path) {
         Ok(c) => c,
@@ -280,6 +242,42 @@ fn handle_transpile(args: &[String]) -> bool {
     };
     println!("✓ Transpiled '{}' -> '{}' ({} target)", script_path, out_file_path, target_name);
     true
+}
+
+/// The script to transpile: the first argument that is neither the subcommand, a flag nor a flag's value.
+fn transpile_script_path(args: &[String]) -> Option<String> {
+    let is_flag = |a: &str| matches!(a, "--target" | "-t" | "--output" | "-o");
+    args.iter()
+        .enumerate()
+        .skip(1)
+        .find(|(i, arg)| !(arg.as_str() == "transpile" || is_flag(arg)) && !is_flag(&args[i - 1]))
+        .map(|(_, arg)| arg.clone())
+}
+
+/// A Java target named after the output file, so the class and the file agree.
+fn java_target(out_path: &str) -> Target {
+    let class_name = std::path::Path::new(out_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Main");
+    Target::JavaWithClass(class_name.to_string())
+}
+
+/// The target a transpile asks for: the `--target` if there is one, else what the output file's extension says.
+fn transpile_target(target_flag: Option<&str>, output_flag: Option<&str>) -> Target {
+    match (target_flag, output_flag) {
+        (Some("python") | Some("py"), _) => Target::Python,
+        (Some("java"), Some(out_p)) => java_target(out_p),
+        (Some("java"), None) => Target::Java,
+        (Some("js") | Some("javascript"), _) => Target::JavaScript,
+        (Some("ts") | Some("typescript"), _) => Target::TypeScript,
+        (Some(_), _) => Target::Rust,
+        (None, Some(out_p)) if out_p.ends_with(".py") => Target::Python,
+        (None, Some(out_p)) if out_p.ends_with(".java") => java_target(out_p),
+        (None, Some(out_p)) if out_p.ends_with(".ts") => Target::TypeScript,
+        (None, Some(out_p)) if out_p.ends_with(".js") => Target::JavaScript,
+        (None, _) => Target::Rust,
+    }
 }
 
 fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::I18nLabels) -> (String, String, String, bool) {
@@ -345,116 +343,101 @@ fn format_statement_latex(stmt: &physure_script::ast::Statement, i18n: &config::
     }
 }
 
+#[derive(serde::Deserialize)]
+struct DaemonRequest {
+    id: usize,
+    source: String,
+    /// Path of the file being edited, sent by the editor so `use ... from
+    /// <plugin/module>` can be resolved relative to it. `None` for ad-hoc
+    /// snippets with no file (falls back to no plugin/module resolution).
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct DaemonLineResult {
+    line: usize,
+    output: String,
+}
+
+#[derive(serde::Serialize)]
+struct DaemonDiagnostic {
+    line: usize,
+    message: String,
+    severity: String,
+}
+
+#[derive(serde::Serialize)]
+struct DaemonResponse {
+    id: usize,
+    results: Vec<DaemonLineResult>,
+    diagnostics: Vec<DaemonDiagnostic>,
+}
+
+/// How the editor shows a value: a plot as an image (or, for an HTML page, a data URL), anything else as text.
+fn daemon_output(val: &PhsValue) -> String {
+    let PhsValue::Plot(p) = val else {
+        return val.to_string();
+    };
+    let trimmed = p.svg.trim_start();
+    if trimmed.starts_with("<!DOCTYPE") || trimmed.starts_with("<html") {
+        let b64 = base64_encode_bytes(p.svg.as_bytes());
+        format!("[PLOT_HTML:data:text/html;charset=utf-8;base64,{}]", b64)
+    } else {
+        format!("[PLOT_IMAGE:data:image/svg+xml;utf8,{}]", p.svg)
+    }
+}
+
+fn daemon_error(line: usize, message: String) -> DaemonDiagnostic {
+    DaemonDiagnostic { line, message, severity: "error".to_string() }
+}
+
+/// Runs one request's source statement by statement: each value is a result on its line, each error a diagnostic.
+fn run_daemon_request(req: &DaemonRequest) -> DaemonResponse {
+    let mut results = Vec::new();
+    let mut diagnostics = Vec::new();
+    let interp = match req.path.as_deref().and_then(|p| std::path::Path::new(p).parent()) {
+        Some(dir) if !dir.as_os_str().is_empty() => PhsInterpreter::with_base_dir(dir),
+        _ => PhsInterpreter::default(),
+    };
+    let mut env = HashMap::new();
+
+    match physure_script::parse_phs_with_lines(&req.source) {
+        Ok(statements_with_lines) => {
+            for (line_num, stmt) in statements_with_lines {
+                match interp.eval_statement_with_env(&stmt, &mut env) {
+                    Ok(val) if val != PhsValue::None => {
+                        results.push(DaemonLineResult { line: line_num, output: daemon_output(&val) });
+                    }
+                    Ok(_) => {}
+                    Err(e) => diagnostics.push(daemon_error(line_num, e.to_string())),
+                }
+            }
+        }
+        Err(e) => diagnostics.push(daemon_error(0, format!("{:?}", e))),
+    }
+
+    DaemonResponse { id: req.id, results, diagnostics }
+}
+
 fn run_daemon() {
     use std::io::{self, BufRead, Write};
-    use serde::{Deserialize, Serialize};
-
-    #[derive(Deserialize)]
-    struct DaemonRequest {
-        id: usize,
-        source: String,
-        /// Path of the file being edited, sent by the editor so `use ... from
-        /// <plugin/module>` can be resolved relative to it. `None` for ad-hoc
-        /// snippets with no file (falls back to no plugin/module resolution).
-        #[serde(default)]
-        path: Option<String>,
-    }
-
-    #[derive(Serialize)]
-    struct DaemonLineResult {
-        line: usize,
-        output: String,
-    }
-
-    #[derive(Serialize)]
-    struct DaemonDiagnostic {
-        line: usize,
-        message: String,
-        severity: String,
-    }
-
-    #[derive(Serialize)]
-    struct DaemonResponse {
-        id: usize,
-        results: Vec<DaemonLineResult>,
-        diagnostics: Vec<DaemonDiagnostic>,
-    }
 
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut handle = stdout.lock();
 
     for line_res in stdin.lock().lines() {
-        let line_str = match line_res {
-            Ok(l) => l,
-            Err(_) => break,
-        };
+        let Ok(line_str) = line_res else { break };
 
         let trimmed = line_str.trim();
         if trimmed.is_empty() {
             continue;
         }
 
-        let req: DaemonRequest = match serde_json::from_str(trimmed) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        let Ok(req) = serde_json::from_str::<DaemonRequest>(trimmed) else { continue };
 
-        let mut results = Vec::new();
-        let mut diagnostics = Vec::new();
-        let interp = match req.path.as_deref().and_then(|p| std::path::Path::new(p).parent()) {
-            Some(dir) if !dir.as_os_str().is_empty() => PhsInterpreter::with_base_dir(dir),
-            _ => PhsInterpreter::default(),
-        };
-        let mut env = HashMap::new();
-
-        match physure_script::parse_phs_with_lines(&req.source) {
-            Ok(statements_with_lines) => {
-                for (line_num, stmt) in statements_with_lines {
-                    match interp.eval_statement_with_env(&stmt, &mut env) {
-                        Ok(val) => {
-                            if val != PhsValue::None {
-                                let output = match &val {
-                                    PhsValue::Plot(p) => {
-                                        let trimmed = p.svg.trim_start();
-                                        if trimmed.starts_with("<!DOCTYPE") || trimmed.starts_with("<html") {
-                                            let b64 = base64_encode_bytes(p.svg.as_bytes());
-                                            format!("[PLOT_HTML:data:text/html;charset=utf-8;base64,{}]", b64)
-                                        } else {
-                                            format!("[PLOT_IMAGE:data:image/svg+xml;utf8,{}]", p.svg)
-                                        }
-                                    }
-                                    _ => val.to_string(),
-                                };
-                                results.push(DaemonLineResult { line: line_num, output });
-                            }
-                        }
-                        Err(e) => {
-                            diagnostics.push(DaemonDiagnostic {
-                                line: line_num,
-                                message: e.to_string(),
-                                severity: "error".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                diagnostics.push(DaemonDiagnostic {
-                    line: 0,
-                    message: format!("{:?}", e),
-                    severity: "error".to_string(),
-                });
-            }
-        }
-
-        let resp = DaemonResponse {
-            id: req.id,
-            results,
-            diagnostics,
-        };
-
-        if let Ok(json_str) = serde_json::to_string(&resp) {
+        if let Ok(json_str) = serde_json::to_string(&run_daemon_request(&req)) {
             let _ = writeln!(handle, "{}", json_str);
             let _ = handle.flush();
         }
@@ -649,96 +632,163 @@ fn run_doc_generator(args: &[String]) {
     }
 }
 
+/// The commands named by a flag anywhere in the arguments (and bare `help`/`doc`/`repl`/`daemon`). True when one ran.
+fn run_flag_command(args: &[String]) -> bool {
+    let has = |names: &[&str]| args.iter().any(|a| names.contains(&a.as_str()));
+    if has(&["--daemon", "-d", "daemon"]) {
+        run_daemon();
+    } else if has(&["--version", "-V"]) {
+        print_version();
+    } else if args.len() < 2 || has(&["--help", "-h", "help"]) {
+        print_help();
+    } else if has(&["--doc", "doc", "docs", "--docs"]) {
+        run_doc_generator(args);
+    } else if has(&["--repl", "-r", "repl"]) {
+        run_repl();
+    } else {
+        return false;
+    }
+    true
+}
+
+/// The subcommands named by the first argument. True when one ran.
+fn run_subcommand(args: &[String]) -> bool {
+    match args[1].as_str() {
+        "register-protocol" => {
+            if let Err(e) = protocol::register_phs_protocol() {
+                eprintln!("Failed to register phs:// protocol: {}", e);
+                process::exit(1);
+            }
+        }
+        "new-plugin" => scaffold::run_new_plugin(args),
+        "check" => check::run_check(args),
+        "eval" => eval::run_eval(args),
+        "unit" => eval::run_unit(args),
+        "mcp" => mcp::run_mcp(),
+        "export" => export::run_export(args),
+        "debug" => debug::run_debug(args),
+        "pack" => package::run_pack(args),
+        "serve" => server::run_serve(args),
+        "upgrade" => upgrade::run_upgrade(args.iter().any(|a| a == "--nightly")),
+        _ => return false,
+    }
+    true
+}
+
+/// The text of a script argument: the file it names, or, when it names none, the argument itself as a snippet.
+fn read_script_or_snippet(raw_input: &str) -> String {
+    if let Ok(content) = fs::read_to_string(raw_input) {
+        content
+    } else if raw_input.ends_with(".phs") {
+        eprintln!("error: file not found '{}'", raw_input);
+        process::exit(1);
+    } else {
+        raw_input.to_string()
+    }
+}
+
+/// The label under which a statement's value is shown: for a bare expression, the statement's own source line.
+///
+/// `format_statement_latex` gives every bare (unassigned) expression statement the
+/// same generic "expr" label -- fine for the LaTeX/TUI paths, which also carry
+/// `expr_code`/a table column alongside it, but the plain `label = value` card
+/// has no other column, so two such statements printed identically with no way to
+/// tell which value came from which line. Swap in the statement's own source line
+/// (already available from the parser's `Program::lines`) for that one case.
+fn display_label(stmt: &physure_script::ast::Statement, line: Option<usize>, code: &str, label: &str) -> String {
+    if !matches!(stmt, physure_script::ast::Statement::Expr(_)) {
+        return label.to_string();
+    }
+    line.and_then(|n| code.lines().nth(n.saturating_sub(1)))
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| label.to_string())
+}
+
+/// `@precision(N)` decorates a variable assignment; `decorators.rs` already guarantees
+/// (at parse time) that when present it's exactly 1 positive whole-number argument, so
+/// this only needs to read it back out, not re-validate it.
+fn precision_override(stmt: &physure_script::ast::Statement) -> Option<u32> {
+    let physure_script::ast::Statement::Assignment(node) = stmt else {
+        return None;
+    };
+    node.decorators
+        .iter()
+        .find(|d| d.name == "precision")
+        .and_then(|d| d.args.first())
+        .and_then(|arg| match arg {
+            physure_script::ast::Expr::Quantity(q) if q.magnitude > 0.0 && q.magnitude.fract() == 0.0 => Some(q.magnitude as u32),
+            _ => None,
+        })
+}
+
+/// Runs the program, printing each value as it comes unless a viewer will show them, and returns the steps.
+fn run_statements(
+    interp: &mut PhsInterpreter,
+    program: &physure_script::ast::Program,
+    code: &str,
+    raw_input: &str,
+    i18n: &config::I18nLabels,
+    quiet: bool,
+) -> Vec<ExecutionStep> {
+    let mut steps = Vec::new();
+    for (stmt_idx, stmt) in program.statements.iter().enumerate() {
+        let (label, expr_code, latex_expr, is_disp) = format_statement_latex(stmt, i18n);
+        let line_no = program.lines.get(stmt_idx).copied();
+        let shown_label = display_label(stmt, line_no, code, &label);
+        let precision_override = precision_override(stmt);
+
+        match interp.run_statement(stmt) {
+            Ok(val) if val != PhsValue::None => {
+                // A bare (unassigned) expression that evaluates to a String is a print,
+                // not a named quantity -- showing it as `"<template source>" = <computed
+                // text>` repeats the message twice with a confusing "=" between them. This
+                // folds into the same `is_disp` signal the backtick-note convention
+                // already used (both mean "render as plain text, not a label=value card"),
+                // so both the terminal print below and the HTML report's existing
+                // `is_display_text` handling pick it up with no separate fix needed there.
+                let is_disp = is_disp
+                    || (matches!(stmt, physure_script::ast::Statement::Expr(_)) && matches!(val, PhsValue::String(_)));
+                if !quiet {
+                    match &val {
+                        PhsValue::String(txt) if is_disp => println!("{}", txt),
+                        _ if is_disp => {}
+                        _ => RichRenderer::render_variable_card(&shown_label, &val, precision_override),
+                    }
+                }
+
+                steps.push(ExecutionStep {
+                    label,
+                    expr_code,
+                    latex_expr,
+                    value: val,
+                    is_display_text: is_disp,
+                    precision_override,
+                });
+            }
+            Ok(_) => {}
+            Err(e) => {
+                let line_text = line_no
+                    .and_then(|n| code.lines().nth(n.saturating_sub(1)))
+                    .unwrap_or("");
+                RichRenderer::render_runtime_error(raw_input, &e, &expr_code, line_no, line_text);
+                process::exit(1);
+            }
+        }
+    }
+    steps
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.iter().any(|a| a == "--daemon" || a == "-d" || a == "daemon") {
-        run_daemon();
+    if run_flag_command(&args) || run_subcommand(&args) || handle_transpile(&args) {
         return;
     }
+    run_script(&args);
+}
 
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        print_version();
-        return;
-    }
-
-    if args.len() < 2 || args.iter().any(|a| a == "--help" || a == "-h" || a == "help") {
-        print_help();
-        return;
-    }
-
-    if args.iter().any(|a| a == "--doc" || a == "doc" || a == "docs" || a == "--docs") {
-        run_doc_generator(&args);
-        return;
-    }
-
-    if args.iter().any(|a| a == "--repl" || a == "-r" || a == "repl") {
-        run_repl();
-        return;
-    }
-
-    if args[1] == "register-protocol" {
-        if let Err(e) = protocol::register_phs_protocol() {
-            eprintln!("Failed to register phs:// protocol: {}", e);
-            process::exit(1);
-        }
-        return;
-    }
-
-    if args[1] == "new-plugin" {
-        scaffold::run_new_plugin(&args);
-        return;
-    }
-
-    if args[1] == "check" {
-        check::run_check(&args);
-        return;
-    }
-
-    if args[1] == "eval" {
-        eval::run_eval(&args);
-        return;
-    }
-
-    if args[1] == "unit" {
-        eval::run_unit(&args);
-        return;
-    }
-
-    if args[1] == "mcp" {
-        mcp::run_mcp();
-        return;
-    }
-
-    if args[1] == "export" {
-        export::run_export(&args);
-        return;
-    }
-
-    if args[1] == "debug" {
-        debug::run_debug(&args);
-        return;
-    }
-
-    if args[1] == "pack" {
-        package::run_pack(&args);
-        return;
-    }
-
-    if args[1] == "serve" {
-        server::run_serve(&args);
-        return;
-    }
-
-    if args[1] == "upgrade" {
-        let nightly = args.iter().any(|a| a == "--nightly");
-        upgrade::run_upgrade(nightly);
-        return;
-    }
-
-    if handle_transpile(&args) {
-        return;
-    }
-
+/// Runs the script (or snippet) named by the first argument and shows the result the way the flags ask.
+fn run_script(args: &[String]) {
     let is_tui = args.iter().any(|a| a == "--tui");
     let is_web = args.iter().any(|a| a == "--web");
     let is_view = args.iter().any(|a| a == "--view" || a == "--html");
@@ -748,14 +798,7 @@ fn main() {
         raw_input = raw_input.trim_start_matches("phs://").trim_start_matches('/');
     }
 
-    let code = if let Ok(content) = fs::read_to_string(raw_input) {
-        content
-    } else if raw_input.ends_with(".phs") {
-        eprintln!("error: file not found '{}'", raw_input);
-        process::exit(1);
-    } else {
-        raw_input.to_string()
-    };
+    let code = read_script_or_snippet(raw_input);
 
     let program = match parse_phs(&code) {
         Ok(s) => s,
@@ -771,93 +814,14 @@ fn main() {
     };
     let mut interp = PhsInterpreter::with_base_dir(script_dir);
     let vars_map = HashMap::new();
-    let mut steps = Vec::new();
     let i18n = PhysureConfig::load().i18n();
 
-    if !is_tui && !is_web && !is_view {
+    let quiet = is_tui || is_web || is_view;
+    if !quiet {
         RichRenderer::render_header(raw_input);
     }
 
-    for (stmt_idx, stmt) in program.statements.iter().enumerate() {
-        let (label, expr_code, latex_expr, is_disp) = format_statement_latex(stmt, &i18n);
-        // `format_statement_latex` gives every bare (unassigned) expression statement the
-        // same generic "expr" label -- fine for the LaTeX/TUI paths, which also carry
-        // `expr_code`/a table column alongside it, but the plain `label = value` card below
-        // has no other column, so two such statements printed identically with no way to
-        // tell which value came from which line. Swap in the statement's own source line
-        // (already available from the parser's `Program::lines`) for that one case.
-        let display_label = if matches!(stmt, physure_script::ast::Statement::Expr(_)) {
-            program
-                .lines
-                .get(stmt_idx)
-                .and_then(|n| code.lines().nth(n.saturating_sub(1)))
-                .map(|line| line.trim().to_string())
-                .filter(|line| !line.is_empty())
-                .unwrap_or_else(|| label.clone())
-        } else {
-            label.clone()
-        };
-        // `@precision(N)` decorates a variable assignment; `decorators.rs` already guarantees
-        // (at parse time) that when present it's exactly 1 positive whole-number argument, so
-        // this only needs to read it back out, not re-validate it.
-        let precision_override = match stmt {
-            physure_script::ast::Statement::Assignment(node) => node
-                .decorators
-                .iter()
-                .find(|d| d.name == "precision")
-                .and_then(|d| d.args.first())
-                .and_then(|arg| match arg {
-                    physure_script::ast::Expr::Quantity(q) if q.magnitude > 0.0 && q.magnitude.fract() == 0.0 => {
-                        Some(q.magnitude as u32)
-                    }
-                    _ => None,
-                }),
-            _ => None,
-        };
-
-        match interp.run_statement(stmt) {
-            Ok(val) => {
-                if val != PhsValue::None {
-                    // A bare (unassigned) expression that evaluates to a String is a print,
-                    // not a named quantity -- showing it as `"<template source>" = <computed
-                    // text>` repeats the message twice with a confusing "=" between them. This
-                    // folds into the same `is_disp` signal the backtick-note convention
-                    // already used (both mean "render as plain text, not a label=value card"),
-                    // so both the terminal print below and the HTML report's existing
-                    // `is_display_text` handling pick it up with no separate fix needed there.
-                    let is_disp = is_disp
-                        || (matches!(stmt, physure_script::ast::Statement::Expr(_))
-                            && matches!(val, PhsValue::String(_)));
-                    if !is_tui && !is_web && !is_view {
-                        if is_disp {
-                            if let PhsValue::String(ref txt) = val {
-                                println!("{}", txt);
-                            }
-                        } else {
-                            RichRenderer::render_variable_card(&display_label, &val, precision_override);
-                        }
-                    }
-
-                    steps.push(ExecutionStep {
-                        label,
-                        expr_code,
-                        latex_expr,
-                        value: val,
-                        is_display_text: is_disp,
-                        precision_override,
-                    });
-                }
-            }
-            Err(e) => {
-                let line_no = program.lines.get(stmt_idx).copied();
-                let line_text = line_no
-                    .and_then(|n| code.lines().nth(n.saturating_sub(1)))
-                    .unwrap_or("");
-                RichRenderer::render_runtime_error(raw_input, &e, &expr_code, line_no, line_text);
-                process::exit(1);
-            }
-        }
-    }
+    let steps = run_statements(&mut interp, &program, &code, raw_input, &i18n, quiet);
 
     if is_tui {
         if let Err(e) = tui::run_tui(&code, &steps, &vars_map) {
@@ -873,7 +837,7 @@ fn main() {
         // the browser tab closed, which defeats the report's own point as a keepable
         // artifact. `-o`/`--output` overrides it; safe to reuse now that `-o` alone no
         // longer also means "transpile" (see `handle_transpile`).
-        let html_output_path = match get_flag_value(&args, "--output").or_else(|| get_flag_value(&args, "-o")) {
+        let html_output_path = match get_flag_value(args, "--output").or_else(|| get_flag_value(args, "-o")) {
             Some(custom) => std::path::PathBuf::from(custom),
             None if std::path::Path::new(raw_input).exists() => std::path::Path::new(raw_input).with_extension("html"),
             None => std::path::PathBuf::from("physure_report.html"),
