@@ -441,11 +441,15 @@ fn ensure_path_within_base(base: &Path, rel_path: &str) -> PhysureResult<std::pa
     Ok(full_path)
 }
 
-/// CLI runner for `phs pack [dir_or_manifest] [-o <output.phspkg>] [--allow-execution]`.
-pub fn run_pack(args: &[String]) {
-    let mut target_dir_or_file = None;
-    let mut output_override = None;
-    let mut allow_execution = false;
+/// What `phs pack` was given: the directory or manifest, the output file, and whether to evaluate the modules.
+struct PackArgs {
+    target: Option<String>,
+    output: Option<String>,
+    allow_execution: bool,
+}
+
+fn parse_pack_args(args: &[String]) -> PackArgs {
+    let mut parsed = PackArgs { target: None, output: None, allow_execution: false };
 
     let mut skip_next = false;
     for (i, arg) in args.iter().enumerate().skip(1) {
@@ -453,29 +457,28 @@ pub fn run_pack(args: &[String]) {
             skip_next = false;
             continue;
         }
-        if arg == "pack" {
-            continue;
-        }
-        if arg == "-o" || arg == "--output" {
-            if i + 1 < args.len() {
-                output_override = Some(args[i + 1].clone());
-                skip_next = true;
+        match arg.as_str() {
+            "pack" => {}
+            "-o" | "--output" => {
+                if i + 1 < args.len() {
+                    parsed.output = Some(args[i + 1].clone());
+                    skip_next = true;
+                }
             }
-            continue;
-        }
-        if arg == "--allow-execution" {
-            allow_execution = true;
-            continue;
-        }
-        if target_dir_or_file.is_none() {
-            target_dir_or_file = Some(arg.clone());
+            "--allow-execution" => parsed.allow_execution = true,
+            _ => {
+                if parsed.target.is_none() {
+                    parsed.target = Some(arg.clone());
+                }
+            }
         }
     }
+    parsed
+}
 
-    let input_path = target_dir_or_file.unwrap_or_else(|| ".".to_string());
-    let path = Path::new(&input_path);
-
-    let (manifest_path, base_dir) = if path.is_file() {
+/// The manifest file and its directory for what `phs pack` was pointed at; exits when there is none.
+fn locate_manifest(path: &Path) -> (PathBuf, PathBuf) {
+    if path.is_file() {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         (path.to_path_buf(), parent.to_path_buf())
     } else if path.is_dir() {
@@ -491,7 +494,32 @@ pub fn run_pack(args: &[String]) {
     } else {
         eprintln!("Error: path '{}' does not exist", path.display());
         std::process::exit(1);
-    };
+    }
+}
+
+fn print_validated_modules(report: &PackageValidationReport) {
+    println!("✓ Validated {} exported module(s):", report.modules.len());
+    for m in &report.modules {
+        println!(
+            "  - module '{}' ({}): {} function(s) [{}]",
+            m.export_name,
+            m.relative_path,
+            m.signature_count,
+            m.function_names.join(", ")
+        );
+    }
+    if let Some(ref entry) = report.entry_file {
+        println!("  - entry file: {}", entry);
+    }
+}
+
+/// CLI runner for `phs pack [dir_or_manifest] [-o <output.phspkg>] [--allow-execution]`.
+pub fn run_pack(args: &[String]) {
+    let PackArgs { target, output, allow_execution } = parse_pack_args(args);
+
+    let input_path = target.unwrap_or_else(|| ".".to_string());
+    let (manifest_path, base_dir) = locate_manifest(Path::new(&input_path));
+    let output_override = output;
 
     println!("📦 Reading manifest '{}'...", manifest_path.display());
     let manifest = match Manifest::from_file(&manifest_path) {
@@ -516,19 +544,7 @@ pub fn run_pack(args: &[String]) {
     let output_path_opt = output_override.map(PathBuf::from);
     match manifest.pack(&base_dir, output_path_opt, allow_execution) {
         Ok((bundle_path, report)) => {
-            println!("✓ Validated {} exported module(s):", report.modules.len());
-            for m in &report.modules {
-                println!(
-                    "  - module '{}' ({}): {} function(s) [{}]",
-                    m.export_name,
-                    m.relative_path,
-                    m.signature_count,
-                    m.function_names.join(", ")
-                );
-            }
-            if let Some(ref entry) = report.entry_file {
-                println!("  - entry file: {}", entry);
-            }
+            print_validated_modules(&report);
             let file_size = fs::metadata(&bundle_path)
                 .map(|meta| meta.len())
                 .unwrap_or(0);

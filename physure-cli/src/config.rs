@@ -26,41 +26,42 @@ pub struct I18nLabels {
     pub html_generated: &'static str,
 }
 
+/// Where a `physure.conf` is looked for, in order: here, one level up, then the user's own directories.
+fn candidate_paths() -> Vec<PathBuf> {
+    let mut candidate_paths = vec![
+        PathBuf::from("physure.conf"),
+        PathBuf::from("../physure.conf"),
+    ];
+
+    if let Ok(user_dir) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
+        candidate_paths.push(PathBuf::from(&user_dir).join(".config/physure/physure.conf"));
+        candidate_paths.push(PathBuf::from(&user_dir).join("physure.conf"));
+        candidate_paths.push(PathBuf::from(&user_dir).join(".physure.conf"));
+    }
+    candidate_paths
+}
+
+/// The `lang` (or `language`) a conf file sets, lower-cased; the last such line wins.
+fn language_in(content: &str) -> Option<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !(line.starts_with('#') || line.starts_with(';') || line.is_empty()))
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| matches!(key.trim().to_lowercase().as_str(), "lang" | "language"))
+        .map(|(_, val)| val.trim().trim_matches('"').trim_matches('\'').to_lowercase())
+        .last()
+}
+
 impl PhysureConfig {
     pub fn load() -> Self {
-        let mut lang = "en".to_string();
-
-        let mut candidate_paths = vec![
-            PathBuf::from("physure.conf"),
-            PathBuf::from("../physure.conf"),
-        ];
-
-        if let Ok(user_dir) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
-            candidate_paths.push(PathBuf::from(&user_dir).join(".config/physure/physure.conf"));
-            candidate_paths.push(PathBuf::from(&user_dir).join("physure.conf"));
-            candidate_paths.push(PathBuf::from(&user_dir).join(".physure.conf"));
-        }
-
-        for path in candidate_paths {
-            if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with('#') || trimmed.starts_with(';') || trimmed.is_empty() {
-                            continue;
-                        }
-                        if let Some((k, v)) = trimmed.split_once('=') {
-                            let key = k.trim().to_lowercase();
-                            let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-                            if key == "lang" || key == "language" {
-                                lang = val.to_lowercase();
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-        }
+        // the first conf file that exists is the one: if it cannot be read, the default language stands
+        let lang = candidate_paths()
+            .into_iter()
+            .find(|path| path.exists())
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|content| language_in(&content))
+            .unwrap_or_else(|| "en".to_string());
 
         PhysureConfig { lang }
     }
