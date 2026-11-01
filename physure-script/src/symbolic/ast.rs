@@ -39,67 +39,90 @@ pub enum Node {
     Integral(Box<Node>, String),
 }
 
+/// The unit of a sum: that of its terms, which must agree (a term whose unit is unknown agrees with any).
+fn infer_sum_unit(terms: &[Node]) -> PhysureResult<Option<RationalUnit>> {
+    let mut result: Option<RationalUnit> = None;
+    for t in terms {
+        let Some(u) = t.infer_unit()? else {
+            continue;
+        };
+        match &result {
+            None => result = Some(u),
+            Some(existing) if *existing != u => {
+                return Err(PhysureError::IncompatibleDimensions {
+                    op: "Add",
+                    dim1: existing.__repr__(),
+                    dim2: u.__repr__(),
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
+fn infer_product_unit(factors: &[Node]) -> PhysureResult<Option<RationalUnit>> {
+    let mut acc: Option<RationalUnit> = None;
+    for f in factors {
+        if let Some(u) = f.infer_unit()? {
+            acc = Some(match acc {
+                Some(a) => a.mul(&u),
+                None => u,
+            });
+        }
+    }
+    Ok(acc)
+}
+
+fn infer_quotient_unit(a: &Node, b: &Node) -> PhysureResult<Option<RationalUnit>> {
+    let ua = a.infer_unit()?;
+    let ub = b.infer_unit()?;
+    Ok(match (ua, ub) {
+        (Some(a), Some(b)) => Some(a.div(&b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(RationalUnit::dimensionless().div(&b)),
+        (None, None) => None,
+    })
+}
+
+fn infer_power_unit(base: &Node, exp: &Node) -> PhysureResult<Option<RationalUnit>> {
+    let Some(u) = base.infer_unit()? else {
+        return Ok(None);
+    };
+    if let Node::Number(n) = *exp {
+        let r = Rational64::from_f64(n).unwrap_or(Rational64::new(0, 1));
+        Ok(Some(u.pow(r)))
+    } else {
+        Err(PhysureError::NonConstantExponent("Cannot raise a dimensioned quantity to a non-constant power".to_string()))
+    }
+}
+
+fn infer_equation_unit(a: &Node, b: &Node) -> PhysureResult<Option<RationalUnit>> {
+    let ua = a.infer_unit()?;
+    let ub = b.infer_unit()?;
+    if let (Some(x), Some(y)) = (&ua, &ub) {
+        if x != y {
+            return Err(PhysureError::IncompatibleDimensions {
+                op: "Equation",
+                dim1: x.__repr__(),
+                dim2: y.__repr__(),
+            });
+        }
+    }
+    Ok(ua.or(ub))
+}
+
 impl Node {
     pub fn infer_unit(&self) -> PhysureResult<Option<RationalUnit>> {
         match self {
             Node::Number(_) => Ok(Some(RationalUnit::dimensionless())),
             Node::Symbol(_) => Ok(None),
             Node::Quantity(_, u) => Ok(Some(u.clone())),
-            Node::Add(terms) => {
-                let mut result: Option<RationalUnit> = None;
-                for t in terms {
-                    if let Some(u) = t.infer_unit()? {
-                        match &result {
-                            None => result = Some(u),
-                            Some(existing) if *existing != u => {
-                                return Err(PhysureError::IncompatibleDimensions {
-                                    op: "Add",
-                                    dim1: existing.__repr__(),
-                                    dim2: u.__repr__(),
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Ok(result)
-            }
+            Node::Add(terms) => infer_sum_unit(terms),
             Node::Sub(a, b) => Node::Add(vec![(**a).clone(), (**b).clone()]).infer_unit(),
-            Node::Mul(factors) => {
-                let mut acc: Option<RationalUnit> = None;
-                for f in factors {
-                    if let Some(u) = f.infer_unit()? {
-                        acc = Some(match acc {
-                            Some(a) => a.mul(&u),
-                            None => u,
-                        });
-                    }
-                }
-                Ok(acc)
-            }
-            Node::Div(a, b) => {
-                let ua = a.infer_unit()?;
-                let ub = b.infer_unit()?;
-                Ok(match (ua, ub) {
-                    (Some(a), Some(b)) => Some(a.div(&b)),
-                    (Some(a), None) => Some(a),
-                    (None, Some(b)) => {
-                        Some(RationalUnit::dimensionless().div(&b))
-                    }
-                    (None, None) => None,
-                })
-            }
-            Node::Pow(base, exp) => match base.infer_unit()? {
-                None => Ok(None),
-                Some(u) => {
-                    if let Node::Number(n) = **exp {
-                        let r = Rational64::from_f64(n).unwrap_or(Rational64::new(0, 1));
-                        Ok(Some(u.pow(r)))
-                    } else {
-                        Err(PhysureError::NonConstantExponent("Cannot raise a dimensioned quantity to a non-constant power".to_string()))
-                    }
-                }
-            },
+            Node::Mul(factors) => infer_product_unit(factors),
+            Node::Div(a, b) => infer_quotient_unit(a, b),
+            Node::Pow(base, exp) => infer_power_unit(base, exp),
             Node::Sin(u) | Node::Cos(u) | Node::Tan(u) | Node::Cot(u) | Node::Sec(u) | Node::Csc(u) |
             Node::Arcsin(u) | Node::Arccos(u) | Node::Arctan(u) | Node::Arccot(u) | Node::Arcsec(u) | Node::Arccsc(u) |
             Node::Sinh(u) | Node::Cosh(u) | Node::Tanh(u) | Node::Coth(u) | Node::Sech(u) | Node::Csch(u) |
@@ -112,27 +135,8 @@ impl Node {
                 Ok(None)
             }
             Node::Abs(u) => u.infer_unit(),
-            Node::Sqrt(u) => {
-                if let Some(unit) = u.infer_unit()? {
-                    Ok(Some(unit.pow(Rational64::new(1, 2))))
-                } else {
-                    Ok(None)
-                }
-            }
-            Node::Equation(a, b) => {
-                let ua = a.infer_unit()?;
-                let ub = b.infer_unit()?;
-                if let (Some(x), Some(y)) = (&ua, &ub) {
-                    if x != y {
-                        return Err(PhysureError::IncompatibleDimensions {
-                            op: "Equation",
-                            dim1: x.__repr__(),
-                            dim2: y.__repr__(),
-                        });
-                    }
-                }
-                Ok(ua.or(ub))
-            }
+            Node::Sqrt(u) => Ok(u.infer_unit()?.map(|unit| unit.pow(Rational64::new(1, 2)))),
+            Node::Equation(a, b) => infer_equation_unit(a, b),
             Node::Integral(u, _) => u.infer_unit(),
         }
     }
@@ -263,6 +267,34 @@ fn sort_key(n: &Node) -> String {
     format!("{n:?}")
 }
 
+/// The terms with the same base added up into one coefficient each, in the order the bases first appear.
+fn collect_like_terms(rest: Vec<Node>) -> Vec<(Node, f64)> {
+    let mut collected: Vec<(Node, f64)> = Vec::new();
+    for t in rest {
+        let (coeff, base) = extract_coeff(t);
+        if let Some(entry) = collected.iter_mut().find(|(n, _)| *n == base) {
+            entry.1 += coeff;
+        } else {
+            collected.push((base, coeff));
+        }
+    }
+    collected
+}
+
+/// `count * t`, written as `t` itself when the count is 1 and with the count as the first factor of a product.
+fn scaled_term(t: Node, count: f64) -> Node {
+    if count == 1.0 {
+        return t;
+    }
+    match t {
+        Node::Mul(mut factors) => {
+            factors.insert(0, Node::Number(count));
+            Node::Mul(factors)
+        }
+        _ => Node::Mul(vec![Node::Number(count), t]),
+    }
+}
+
 fn simplify_add(terms: Vec<Node>) -> Node {
     let flat = flatten_add(terms);
     let mut const_sum = 0.0;
@@ -273,31 +305,10 @@ fn simplify_add(terms: Vec<Node>) -> Node {
             other => rest.push(other),
         }
     }
-    let mut collected: Vec<(Node, f64)> = Vec::new();
-    for t in rest {
-        let (coeff, base) = extract_coeff(t);
-        if let Some(entry) = collected.iter_mut().find(|(n, _)| *n == base) {
-            entry.1 += coeff;
-        } else {
-            collected.push((base, coeff));
-        }
-    }
-    let mut out_terms: Vec<Node> = collected
+    let mut out_terms: Vec<Node> = collect_like_terms(rest)
         .into_iter()
         .filter(|(_, count)| *count != 0.0)
-        .map(|(t, count)| {
-            if count == 1.0 {
-                t
-            } else {
-                match t {
-                    Node::Mul(mut factors) => {
-                        factors.insert(0, Node::Number(count));
-                        Node::Mul(factors)
-                    }
-                    _ => Node::Mul(vec![Node::Number(count), t]),
-                }
-            }
-        })
+        .map(|(t, count)| scaled_term(t, count))
         .collect();
     if const_sum != 0.0 || out_terms.is_empty() {
         out_terms.push(Node::Number(const_sum));
@@ -391,10 +402,9 @@ fn add_power(node: Node, exp: f64, powers: &mut Vec<(Node, f64)>) {
     }
 }
 
-fn reconstruct_from_powers(const_prod: f64, powers: Vec<(Node, f64)>) -> Node {
-    if const_prod == 0.0 {
-        return Node::Number(0.0);
-    }
+/// The factors with a positive power as the numerator and those with a negative power as the denominator,
+/// each raised to the absolute value of its power.
+fn split_powers(powers: Vec<(Node, f64)>) -> (Vec<Node>, Vec<Node>) {
     let mut numerator: Vec<Node> = Vec::new();
     let mut denominator: Vec<Node> = Vec::new();
     for (f, exp) in powers {
@@ -413,17 +423,41 @@ fn reconstruct_from_powers(const_prod: f64, powers: Vec<(Node, f64)>) -> Node {
             Node::Pow(Box::new(f), Box::new(Node::Number(abs_exp)))
         });
     }
+    (numerator, denominator)
+}
 
-    let mut const_prod_num = const_prod;
-    let mut extra_denom: Option<f64> = None;
-
+/// A constant like 1/3 (or -1/3) as its sign and the whole number to divide by; `None` for any other constant.
+fn unit_fraction(const_prod: f64) -> Option<f64> {
     if const_prod != 0.0 && const_prod.abs() < 1.0 {
         let recip = (1.0 / const_prod.abs()).round();
         if (1.0 / const_prod.abs() - recip).abs() < 1e-9 && recip > 1.0 {
-            extra_denom = Some(recip);
-            const_prod_num = if const_prod < 0.0 { -1.0 } else { 1.0 };
+            return Some(recip);
         }
     }
+    None
+}
+
+/// The factor itself for one, their product otherwise.
+fn single_or_product(mut nodes: Vec<Node>) -> Node {
+    if nodes.len() == 1 {
+        nodes.remove(0)
+    } else {
+        Node::Mul(nodes)
+    }
+}
+
+fn reconstruct_from_powers(const_prod: f64, powers: Vec<(Node, f64)>) -> Node {
+    if const_prod == 0.0 {
+        return Node::Number(0.0);
+    }
+    let (mut numerator, mut denominator) = split_powers(powers);
+
+    let extra_denom = unit_fraction(const_prod);
+    let const_prod_num = match extra_denom {
+        Some(_) if const_prod < 0.0 => -1.0,
+        Some(_) => 1.0,
+        None => const_prod,
+    };
 
     if const_prod_num != 1.0 || numerator.is_empty() {
         numerator.push(Node::Number(const_prod_num));
@@ -432,22 +466,13 @@ fn reconstruct_from_powers(const_prod: f64, powers: Vec<(Node, f64)>) -> Node {
         denominator.push(Node::Number(d));
     }
     numerator.sort_by_key(sort_key);
-    let num_node = if numerator.len() == 1 {
-        numerator.into_iter().next().unwrap()
-    } else {
-        Node::Mul(numerator)
-    };
+    let num_node = single_or_product(numerator);
 
     if denominator.is_empty() {
         return num_node;
     }
     denominator.sort_by_key(sort_key);
-    let denom_node = if denominator.len() == 1 {
-        denominator.into_iter().next().unwrap()
-    } else {
-        Node::Mul(denominator)
-    };
-    Node::Div(Box::new(num_node), Box::new(denom_node))
+    Node::Div(Box::new(num_node), Box::new(single_or_product(denominator)))
 }
 
 fn simplify_mul(factors: Vec<Node>) -> Node {
