@@ -1024,3 +1024,13 @@ fn unity_takes_no_prefix() {
         assert!(reg.get_unit(name).is_none(), "{name}");
     }
 }
+
+/// Without a `physure.conf` in the working directory, unit text is read against the embedded catalog itself and
+/// not a copy of it: two calls see one registry at one address.
+#[test]
+fn with_conf_registry_gives_the_embedded_catalog_by_reference() {
+    let first = conf::with_conf_registry(|registry| registry as *const UnitRegistry);
+    let second = conf::with_conf_registry(|registry| registry as *const UnitRegistry);
+    assert_eq!(first, second);
+    conf::with_conf_registry(|registry| assert!(registry.get_unit("km").is_some()));
+}

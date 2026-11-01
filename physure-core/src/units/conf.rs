@@ -558,6 +558,22 @@ pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
     (reg, constants)
 }
 
+/// Runs `f` against the catalog that unit text is read against when nothing says otherwise: the embedded
+/// catalog plus the `physure.conf` of the working directory, if there is one.
+///
+/// It is looked for on every call, so a file that appears, changes or goes away is seen. Without one,
+/// `f` gets the embedded catalog itself, by reference: no copy is made, which is what turning a unit
+/// string into a unit costs most when the catalog is copied first. With one, the merged registry is built
+/// as `build_registry_from_conf` builds it.
+pub fn with_conf_registry<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
+    if Path::new("physure.conf").is_file() {
+        let (registry, _) = build_registry_from_conf();
+        f(&registry)
+    } else {
+        f(&embedded_catalog().0)
+    }
+}
+
 fn normalize_dimension_symbols(expr: &str, dim_to_base: &HashMap<String, String>) -> String {
     let mut out = String::new();
     let mut chars = expr.chars().peekable();

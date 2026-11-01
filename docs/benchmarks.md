@@ -90,8 +90,10 @@ Earlier versions of this page gave $3.1\times$ for eager mode and $1.2\times$ fo
 | **`quantity_add_scalar`** | **175.7 ns** | Scalar addition with dimensional validation. |
 | **`quantity_mul_scalar`** | **194.7 ns** | Scalar product with dimensional accumulation. |
 | **`covariance_propagate`** | **9.48 µs** | Sparse covariance propagation by blocks. |
-| **`parse_compound_unit`** | **218 µs** | Reading `kg*m/s^2` with `Parser::parse_expression`: every call copies the catalog registry. |
-| **`parse_prefixed_compound_unit`** | **185 µs** | Reading `km/h`, the same. |
+| **`parse_compound_unit`** | **6.1 µs** | Reading `kg*m/s^2` with `Parser::parse_expression`. The embedded catalog is read by reference; it used to be copied on every call (130 µs on the machine of this row). |
+| **`parse_prefixed_compound_unit`** | **6.1 µs** | Reading `km/h`, the same (128 µs before). |
+
+The two parsing rows were re-measured on 2026-11-01 (`--warm-up-time 1 --measurement-time 3`, before and after the change on one machine and one session), so they are not comparable with the rows above them, which come from an earlier session; the 218 µs and 185 µs this page gave before were that earlier session's figures for the copy. A `physure.conf` in the working directory is still looked for on every call (a `stat`), and read when there is one.
 
 The previous version of this table included `compiled_symbolic_eval`; that benchmark no longer exists (the symbolic benchmark was removed when the symbolic engine moved to `physure-script`), and the prefixed-unit, conversion and parsing ones are new. The old figures in this section are not comparable with these: they came from another machine and from before `RationalUnit` carried exact rational scales.
 
