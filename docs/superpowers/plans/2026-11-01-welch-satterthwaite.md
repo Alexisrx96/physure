@@ -11,29 +11,29 @@ Files: create `physure-core/src/math/stats.rs`, `physure-core/src/uncertainty/do
 
 ### Task 1: the quantile
 
-- [ ] `scripts/gen_student_t_golden.py`: for ν in 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 30, 40, 60, 100, 300, 1000, 10000, ∞ and p in 0.5, 0.683, 0.9, 0.95, 0.954, 0.99, 0.997, 0.999, write `nu<TAB>p<TAB>k` with 17 significant digits from `scipy.stats.t.ppf((1 + p) / 2, nu)` (`norm.ppf` for ∞) to `tests/golden/student_t_two_sided.tsv`. Run it.
-- [ ] `physure-core/tests/student_t_golden.rs`: read the TSV, call `physure_core::math::stats::student_t_two_sided(p, nu)`, assert relative error < 1e-9 for each row; assert the Guide's table values (ν = 16: 2.12 and 2.92 to 3 digits). Run: it fails to compile.
-- [ ] `math/stats.rs`: `ln_gamma` (Lanczos), `reg_inc_beta`, `reg_lower_gamma`, `normal_two_sided`, `student_t_two_sided(p, nu) -> PhysureResult<f64>` (`p` outside (0, 1) or `nu` ≤ 0 or NaN is a `DomainError`). Run the test: it passes.
+- [x] `scripts/gen_student_t_golden.py`: for ν in 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 30, 40, 60, 100, 300, 1000, 10000, ∞ and p in 0.5, 0.683, 0.9, 0.95, 0.954, 0.99, 0.997, 0.999, write `nu<TAB>p<TAB>k` with 17 significant digits from `scipy.stats.t.ppf((1 + p) / 2, nu)` (`norm.ppf` for ∞) to `tests/golden/student_t_two_sided.tsv`. Run it.
+- [x] `physure-core/tests/student_t_golden.rs`: read the TSV, call `physure_core::math::stats::student_t_two_sided(p, nu)`, assert relative error < 1e-9 for each row; assert the Guide's table values (ν = 16: 2.12 and 2.92 to 3 digits). Run: it fails to compile.
+- [x] `math/stats.rs`: `ln_gamma` (Lanczos), `reg_inc_beta`, `reg_lower_gamma`, `normal_two_sided`, `student_t_two_sided(p, nu) -> PhysureResult<f64>` (`p` outside (0, 1) or `nu` ≤ 0 or NaN is a `DomainError`). Run the test: it passes.
 
 ### Task 2: the table and ν_eff
 
-- [ ] `physure-core/tests/effective_dof.rs`, first test `a_source_without_a_declared_dof_has_an_infinite_one`; then `the_dof_of_independent_sources_combine_by_welch_satterthwaite` (two sources, hand-computed); `a_shared_source_is_counted_once`; `a_sum_of_equal_independent_sources_has_twice_the_dof`; `infinite_dof_leaves_the_others_alone`. They fail to compile.
-- [ ] `uncertainty/dof.rs`: the table, `declare_dof(id, nu)`, `dof_of(id)`; `impl Lineage { pub fn effective_dof(&self) -> f64 }`. Tests pass.
+- [x] `physure-core/tests/effective_dof.rs`, first test `a_source_without_a_declared_dof_has_an_infinite_one`; then `the_dof_of_independent_sources_combine_by_welch_satterthwaite` (two sources, hand-computed); `a_shared_source_is_counted_once`; `a_sum_of_equal_independent_sources_has_twice_the_dof`; `infinite_dof_leaves_the_others_alone`. They fail to compile.
+- [x] `uncertainty/dof.rs`: the table, `declare_dof(id, nu)`, `dof_of(id)`; `impl Lineage { pub fn effective_dof(&self) -> f64 }`. Tests pass.
 
 ### Task 3: the `Quantity` API
 
-- [ ] Tests: `with_dof_declares_the_dof_of_the_one_source`, `with_dof_twice_with_the_same_value_is_a_no_op`, `with_dof_with_another_value_is_refused`, `with_dof_refuses_a_derived_an_exact_and_a_non_gaussian_quantity`, `with_dof_refuses_zero_negative_and_nan`, `from_samples_is_type_a` (mean, `s/√n`, ν = n − 1; n < 2 refused; equal samples exact), `coverage_factor_truncates_the_dof` (ν_eff 16.75 uses 16; ν_eff 0.4 uses 1; ν_eff ∞ is 1.95996), `expanded_reports_every_part`.
-- [ ] `uncertainty/expanded.rs`: `Expanded`; `impl Quantity { with_dof, from_samples, effective_dof, coverage_factor, expanded }`. Export `Expanded` from `uncertainty` and the crate root. Tests pass.
+- [x] Tests: `with_dof_declares_the_dof_of_the_one_source`, `with_dof_twice_with_the_same_value_is_a_no_op`, `with_dof_with_another_value_is_refused`, `with_dof_refuses_a_derived_an_exact_and_a_non_gaussian_quantity`, `with_dof_refuses_zero_negative_and_nan`, `from_samples_is_type_a` (mean, `s/√n`, ν = n − 1; n < 2 refused; equal samples exact), `coverage_factor_truncates_the_dof` (ν_eff 16.75 uses 16; ν_eff 0.4 uses 1; ν_eff ∞ is 1.95996), `expanded_reports_every_part`.
+- [x] `uncertainty/expanded.rs`: `Expanded`; `impl Quantity { with_dof, from_samples, effective_dof, coverage_factor, expanded }`. Export `Expanded` from `uncertainty` and the crate root. Tests pass.
 
 ### Task 4: the Guide
 
-- [ ] `a_h1_end_gauge_calibration_reproduces_the_guide` in `effective_dof.rs`: six independent quantities with the budget of the spec, summed through the public API; assert the computed column to 1e-9 and the published column to its digits (`u_c` rounds to 32 nm, ν_eff cut at one decimal is 16.7, `k` is 2.12 and 2.92, `U` is 0.07 µm and 0.09 µm).
+- [x] `a_h1_end_gauge_calibration_reproduces_the_guide` in `effective_dof.rs`: six independent quantities with the budget of the spec, summed through the public API; assert the computed column to 1e-9 and the published column to its digits (`u_c` rounds to 32 nm, ν_eff cut at one decimal is 16.7, `k` is 2.12 and 2.92, `U` is 0.07 µm and 0.09 µm).
 
 ### Task 5: close the stage
 
-- [ ] `cargo test -p physure`; `cargo clippy -p physure` shows nothing new in the files touched.
-- [ ] `CHANGELOG.md` `[Unreleased]` → Added: the core API (what, why, the H.1 result). `docs/scientific_gaps_and_rigor.md` §1.1: the TODO becomes a pointer to the test, status line updated; `docs/ROADMAP.md` tick left for D4 (the feature is complete when all five bindings have it).
-- [ ] Commit the spec and plan, then D1.
+- [x] `cargo test -p physure`; `cargo clippy -p physure` shows nothing new in the files touched.
+- [x] `CHANGELOG.md` `[Unreleased]` → Added: the core API (what, why, the H.1 result). `docs/scientific_gaps_and_rigor.md` §1.1: the TODO becomes a pointer to the test, status line updated; `docs/ROADMAP.md` tick left for D4 (the feature is complete when all five bindings have it).
+- [x] Commit the spec and plan, then D1.
 
 ## Stages D2, D3, D4
 

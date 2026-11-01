@@ -1,6 +1,7 @@
 pub mod trait_def;
 pub mod lineage;
 pub mod dof;
+pub mod expanded;
 pub mod mode;
 pub mod gaussian;
 pub mod moments;
@@ -12,6 +13,7 @@ pub use trait_def::{UncertaintyBackend, UncertaintyValue};
 pub use gaussian::GaussianBackend;
 pub use lineage::Lineage;
 pub use dof::{declare_dof, dof_of};
+pub use expanded::Expanded;
 pub use mode::{ModeGuard, PropagationMode, propagation_mode, set_propagation_mode};
 pub use moments::{AsymmetricMoments, MomentLineage, MomentsBackend, SourceMoments};
 pub use shapes::{AsymmetryShape, DimidiatedGaussian, FechnerGaussian, ShapeKind};
