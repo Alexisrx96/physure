@@ -25,7 +25,9 @@ if TYPE_CHECKING:
     from physure.domain.measurement.quantity import Quantity
 
 _ARROW_RE = re.compile(r"<=>|->|=|→|⇌")
-_TERM_RE = re.compile(r"^\s*\d*\s*([A-Za-z0-9()]+)\s*$")
+# a coefficient is optional; whitespace is matched in one place before it and
+# one after it, so that a long run of spaces cannot be split in many ways
+_TERM_RE = re.compile(r"^\s*(?:\d+\s*)?([A-Za-z0-9()]+)\s*$")
 
 
 def _split_terms(side: str) -> list[str]:

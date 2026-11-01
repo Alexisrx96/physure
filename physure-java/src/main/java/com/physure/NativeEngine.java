@@ -1,8 +1,8 @@
 package com.physure;
 
-import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Map;
 
@@ -37,10 +37,11 @@ public class NativeEngine {
             if (in == null) {
                 throw new UnsatisfiedLinkError("Native library " + libName + " not found at " + resourcePath);
             }
-            File temp = File.createTempFile("libphysure_java-", "-" + libName);
-            temp.deleteOnExit();
-            Files.copy(in, temp.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            System.load(temp.getAbsolutePath());
+            // NIO creates the file readable and writable by its owner only, which the shared temp directory needs
+            Path temp = Files.createTempFile("libphysure_java-", "-" + libName);
+            temp.toFile().deleteOnExit();
+            Files.copy(in, temp, StandardCopyOption.REPLACE_EXISTING);
+            System.load(temp.toAbsolutePath().toString());
         }
     }
 

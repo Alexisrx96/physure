@@ -833,9 +833,11 @@ def simplify_mul(factors: list[Node]) -> Node:
             continue
         dest = numerator if exp > 0.0 else denominator
         abs_exp = abs(exp)
-        dest.append(
-            f if abs_exp == 1.0 else Pow(f, Number(abs_exp))
-        )  # NOSONAR
+        # exact on purpose, as the zeros and ones around it: an exponent of
+        # a symbolic term is 1 only when it was written so, and a tolerance
+        # would turn x**1.0000000001 into x
+        is_unit_power = abs_exp == 1.0  # NOSONAR
+        dest.append(f if is_unit_power else Pow(f, Number(abs_exp)))
 
     if const_prod[0] != 1.0 or not numerator:  # NOSONAR
         numerator.append(Number(const_prod[0]))
