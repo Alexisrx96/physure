@@ -66,172 +66,162 @@ impl PhsInterpreter {
             }
         }
         match (l_val, r_val) {
-            (PhsValue::Function(f), PhsValue::Function(g)) => {
-                let (params, param_units) = if !f.params.is_empty() {
-                    (f.params.clone(), f.param_units.clone())
-                } else {
-                    (g.params.clone(), g.param_units.clone())
-                };
-                let args_expr: Vec<Expr> = params.iter().map(|p| Expr::Identifier(p.clone())).collect();
-                let body = Statement::Expr(Expr::BinaryOp {
-                    op,
-                    left: Box::new(Expr::FunctionCall { name: f.name.clone(), args: args_expr.clone(), kwargs: Vec::new() }),
-                    right: Box::new(Expr::FunctionCall { name: g.name.clone(), args: args_expr, kwargs: Vec::new() }),
-                });
-                let name = match op {
-                    BinaryOp::Add => format!("{}_add_{}", f.name, g.name),
-                    BinaryOp::Sub => format!("{}_sub_{}", f.name, g.name),
-                    BinaryOp::Mul => format!("{}_mul_{}", f.name, g.name),
-                    BinaryOp::Div => format!("{}_div_{}", f.name, g.name),
-                    _ => format!("{}_op_{}", f.name, g.name),
-                };
-                Ok(PhsValue::Function(crate::ast::FunctionDefNode {
-                    name,
-                    params,
-                    param_units,
-                    body_stmts: vec![body],
-                    body_lines: vec![],
-                    decorators: Vec::new(),
-                    doc: None,
-                }))
-            }
-            (PhsValue::Equation(l1, r1), PhsValue::Equation(l2, r2)) => {
-                let new_l = node_op(op, l1, l2)?.simplify();
-                let new_r = node_op(op, r1, r2)?.simplify();
-                Ok(PhsValue::Equation(new_l, new_r))
-            }
+            (PhsValue::Function(f), PhsValue::Function(g)) => Ok(PhsValue::Function(combine_functions(op, &f, &g))),
+            (PhsValue::Equation(l1, r1), PhsValue::Equation(l2, r2)) => equation_op(op, (l1, r1), (l2, r2)),
             (PhsValue::Equation(l, r), other) => {
                 let node = value_to_symbolic_node(&other)?;
-                let new_l = node_op(op, l, node.clone())?.simplify();
-                let new_r = node_op(op, r, node)?.simplify();
-                Ok(PhsValue::Equation(new_l, new_r))
+                equation_op(op, (l, r), (node.clone(), node))
             }
             (other, PhsValue::Equation(l, r)) => {
                 let node = value_to_symbolic_node(&other)?;
-                let new_l = node_op(op, node.clone(), l)?.simplify();
-                let new_r = node_op(op, node, r)?.simplify();
-                Ok(PhsValue::Equation(new_l, new_r))
+                equation_op(op, (node.clone(), node), (l, r))
             }
             (PhsValue::Vector(l_vec), PhsValue::Vector(r_vec)) => {
                 if l_vec.len() != r_vec.len() {
                     return Err(PhysureError::Generic("Vector length mismatch in binary operation".into()));
                 }
-                let mut results = Vec::new();
-                for (l_item, r_item) in l_vec.into_iter().zip(r_vec.into_iter()) {
-                    results.push(self.eval_binary_op_vals(op, l_item, r_item)?);
-                }
-                Ok(PhsValue::Vector(results))
+                let pairs = l_vec.into_iter().zip(r_vec);
+                collect_vector(pairs, |(l_item, r_item)| self.eval_binary_op_vals(op, l_item, r_item))
             }
-            (PhsValue::Vector(v_vec), scalar) => {
-                let mut results = Vec::new();
-                for item in v_vec {
-                    results.push(self.eval_binary_op_vals(op, item, scalar.clone())?);
-                }
-                Ok(PhsValue::Vector(results))
-            }
-            (scalar, PhsValue::Vector(v_vec)) => {
-                let mut results = Vec::new();
-                for item in v_vec {
-                    results.push(self.eval_binary_op_vals(op, scalar.clone(), item)?);
-                }
-                Ok(PhsValue::Vector(results))
-            }
-            (PhsValue::Quantity(l), PhsValue::Quantity(r)) => {
-                let res = match op {
-                    BinaryOp::Add => l.add(&r)?,
-                    BinaryOp::Sub => l.sub(&r)?,
-                    BinaryOp::Mul => l.mul(&r)?,
-                    BinaryOp::Div => l.div(&r)?,
-                    BinaryOp::Pow => {
-                        if r.unit == RationalUnit::dimensionless() && r.value.std_dev() == 0.0 {
-                            l.pow(r.value.mean())?
-                        } else {
-                            return Err(PhysureError::Generic("Exponent must be a dimensionless constant".into()));
-                        }
-                    }
-                    BinaryOp::Convert | BinaryOp::Range => unreachable!(),
-                };
-                Ok(PhsValue::Quantity(res))
-            }
+            (PhsValue::Vector(v_vec), scalar) => collect_vector(v_vec, |item| self.eval_binary_op_vals(op, item, scalar.clone())),
+            (scalar, PhsValue::Vector(v_vec)) => collect_vector(v_vec, |item| self.eval_binary_op_vals(op, scalar.clone(), item)),
+            (PhsValue::Quantity(l), PhsValue::Quantity(r)) => quantity_op(op, l, r),
             (PhsValue::Quantity(l), PhsValue::Number(r)) => {
-                let r_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
-                self.eval_binary_op_vals(op, PhsValue::Quantity(l), PhsValue::Quantity(r_q))
+                self.eval_binary_op_vals(op, PhsValue::Quantity(l), PhsValue::Quantity(plain_quantity(r)))
             }
             (PhsValue::Number(l), PhsValue::Quantity(r)) => {
-                let l_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
-                self.eval_binary_op_vals(op, PhsValue::Quantity(l_q), PhsValue::Quantity(r))
+                self.eval_binary_op_vals(op, PhsValue::Quantity(plain_quantity(l)), PhsValue::Quantity(r))
             }
-            (PhsValue::Number(l), PhsValue::Number(r)) => {
-                let res = match op {
-                    BinaryOp::Add => l + r,
-                    BinaryOp::Sub => l - r,
-                    BinaryOp::Mul => l * r,
-                    BinaryOp::Div => {
-                        if r == 0.0 {
-                            return Err(PhysureError::Generic("Division by zero".into()));
-                        }
-                        l / r
-                    }
-                    BinaryOp::Pow => {
-                        if l < 0.0 && r.fract() != 0.0 {
-                            return Err(PhysureError::DomainError(format!(
-                                "{l}^{r} cannot be computed for a negative base with a non-integer exponent"
-                            )));
-                        }
-                        l.powf(r)
-                    }
-                    BinaryOp::Convert | BinaryOp::Range => unreachable!(),
-                };
-                Ok(PhsValue::Number(res))
-            }
+            (PhsValue::Number(l), PhsValue::Number(r)) => number_op(op, l, r),
             // A bare word that isn't a bound variable arrives here as a String, so these
             // four arms are where `5 foobar` is decided. The unit parser now reports the
             // offending symbol and the nearest registered one; swallowing that with `if
             // let Ok` would replace a usable message with a bare "Unknown unit symbol".
-            (PhsValue::Quantity(l), PhsValue::String(r)) => {
-                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&r))?;
-                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit.clone(), None, None);
-                let res = match op {
-                    BinaryOp::Mul => l.mul(&unit_q)?,
-                    BinaryOp::Div => l.div(&unit_q)?,
-                    BinaryOp::Convert => l.convert_to(&parsed_unit)?,
-                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                };
-                Ok(PhsValue::Quantity(res))
-            }
-            (PhsValue::Number(l), PhsValue::String(r)) => {
-                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&r))?;
-                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
-                let num_q = Quantity::new_scalar(l, 0.0, RationalUnit::dimensionless(), None, None);
-                let res = match op {
-                    BinaryOp::Mul => num_q.mul(&unit_q)?,
-                    BinaryOp::Div => num_q.div(&unit_q)?,
-                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                };
-                Ok(PhsValue::Quantity(res))
-            }
-            (PhsValue::String(l), PhsValue::Quantity(r)) => {
-                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&l))?;
-                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
-                let res = match op {
-                    BinaryOp::Mul => unit_q.mul(&r)?,
-                    BinaryOp::Pow => unit_q.pow(r.value.mean())?,
-                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                };
-                Ok(PhsValue::Quantity(res))
-            }
-            (PhsValue::String(l), PhsValue::Number(r)) => {
-                let parsed_unit = UnitParser::parse_expression(strip_unit_comment(&l))?;
-                let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
-                let num_q = Quantity::new_scalar(r, 0.0, RationalUnit::dimensionless(), None, None);
-                let res = match op {
-                    BinaryOp::Mul => unit_q.mul(&num_q)?,
-                    BinaryOp::Pow => unit_q.pow(r)?,
-                    _ => return Err(PhysureError::Generic("Unsupported op with unit string".into())),
-                };
-                Ok(PhsValue::Quantity(res))
-            }
+            (PhsValue::Quantity(l), PhsValue::String(r)) => quantity_by_unit_text(op, l, &r, true),
+            (PhsValue::Number(l), PhsValue::String(r)) => quantity_by_unit_text(op, plain_quantity(l), &r, false),
+            (PhsValue::String(l), PhsValue::Quantity(r)) => unit_text_by_quantity(op, &l, r),
+            (PhsValue::String(l), PhsValue::Number(r)) => unit_text_by_quantity(op, &l, plain_quantity(r)),
             _ => Err(PhysureError::Generic("Invalid operand types for binary operation".into())),
         }
     }
+}
+
+/// A dimensionless quantity of exactly `x`.
+fn plain_quantity(x: f64) -> Quantity {
+    Quantity::new_scalar(x, 0.0, RationalUnit::dimensionless(), None, None)
+}
+
+/// `f op g` for two functions: the function that applies `op` to what each returns for the same arguments.
+fn combine_functions(op: BinaryOp, f: &crate::ast::FunctionDefNode, g: &crate::ast::FunctionDefNode) -> crate::ast::FunctionDefNode {
+    let (params, param_units) = if !f.params.is_empty() {
+        (f.params.clone(), f.param_units.clone())
+    } else {
+        (g.params.clone(), g.param_units.clone())
+    };
+    let args_expr: Vec<Expr> = params.iter().map(|p| Expr::Identifier(p.clone())).collect();
+    let body = Statement::Expr(Expr::BinaryOp {
+        op,
+        left: Box::new(Expr::FunctionCall { name: f.name.clone(), args: args_expr.clone(), kwargs: Vec::new() }),
+        right: Box::new(Expr::FunctionCall { name: g.name.clone(), args: args_expr, kwargs: Vec::new() }),
+    });
+    let name = match op {
+        BinaryOp::Add => format!("{}_add_{}", f.name, g.name),
+        BinaryOp::Sub => format!("{}_sub_{}", f.name, g.name),
+        BinaryOp::Mul => format!("{}_mul_{}", f.name, g.name),
+        BinaryOp::Div => format!("{}_div_{}", f.name, g.name),
+        _ => format!("{}_op_{}", f.name, g.name),
+    };
+    crate::ast::FunctionDefNode {
+        name,
+        params,
+        param_units,
+        body_stmts: vec![body],
+        body_lines: vec![],
+        decorators: Vec::new(),
+        doc: None,
+    }
+}
+
+/// `op` applied to both sides of two equations (a plain value being the equation `x = x`).
+fn equation_op(op: BinaryOp, left: (Node, Node), right: (Node, Node)) -> PhysureResult<PhsValue> {
+    let new_l = node_op(op, left.0, right.0)?.simplify();
+    let new_r = node_op(op, left.1, right.1)?.simplify();
+    Ok(PhsValue::Equation(new_l, new_r))
+}
+
+/// The vector of `f` applied to each item, or the first error.
+fn collect_vector<T>(items: impl IntoIterator<Item = T>, f: impl FnMut(T) -> PhysureResult<PhsValue>) -> PhysureResult<PhsValue> {
+    items.into_iter().map(f).collect::<PhysureResult<Vec<_>>>().map(PhsValue::Vector)
+}
+
+fn quantity_op(op: BinaryOp, l: Quantity, r: Quantity) -> PhysureResult<PhsValue> {
+    let res = match op {
+        BinaryOp::Add => l.add(&r)?,
+        BinaryOp::Sub => l.sub(&r)?,
+        BinaryOp::Mul => l.mul(&r)?,
+        BinaryOp::Div => l.div(&r)?,
+        BinaryOp::Pow => {
+            if r.unit == RationalUnit::dimensionless() && r.value.std_dev() == 0.0 {
+                l.pow(r.value.mean())?
+            } else {
+                return Err(PhysureError::Generic("Exponent must be a dimensionless constant".into()));
+            }
+        }
+        BinaryOp::Convert | BinaryOp::Range => unreachable!(),
+    };
+    Ok(PhsValue::Quantity(res))
+}
+
+fn number_op(op: BinaryOp, l: f64, r: f64) -> PhysureResult<PhsValue> {
+    let res = match op {
+        BinaryOp::Add => l + r,
+        BinaryOp::Sub => l - r,
+        BinaryOp::Mul => l * r,
+        BinaryOp::Div => {
+            if r == 0.0 {
+                return Err(PhysureError::Generic("Division by zero".into()));
+            }
+            l / r
+        }
+        BinaryOp::Pow => {
+            if l < 0.0 && r.fract() != 0.0 {
+                return Err(PhysureError::DomainError(format!(
+                    "{l}^{r} cannot be computed for a negative base with a non-integer exponent"
+                )));
+            }
+            l.powf(r)
+        }
+        BinaryOp::Convert | BinaryOp::Range => unreachable!(),
+    };
+    Ok(PhsValue::Number(res))
+}
+
+fn unsupported_with_unit_text() -> PhysureError {
+    PhysureError::Generic("Unsupported op with unit string".into())
+}
+
+/// `quantity op unit-word`: `5 m / s`, and a conversion to the unit the word names when `convert` (a plain number
+/// is not converted: `5 => m` stays unsupported).
+fn quantity_by_unit_text(op: BinaryOp, l: Quantity, text: &str, convert: bool) -> PhysureResult<PhsValue> {
+    let parsed_unit = UnitParser::parse_expression(strip_unit_comment(text))?;
+    let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit.clone(), None, None);
+    let res = match op {
+        BinaryOp::Mul => l.mul(&unit_q)?,
+        BinaryOp::Div => l.div(&unit_q)?,
+        BinaryOp::Convert if convert => l.convert_to(&parsed_unit)?,
+        _ => return Err(unsupported_with_unit_text()),
+    };
+    Ok(PhsValue::Quantity(res))
+}
+
+/// `unit-word op quantity`: `m * 5`, `s ^ 2`.
+fn unit_text_by_quantity(op: BinaryOp, text: &str, r: Quantity) -> PhysureResult<PhsValue> {
+    let parsed_unit = UnitParser::parse_expression(strip_unit_comment(text))?;
+    let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);
+    let res = match op {
+        BinaryOp::Mul => unit_q.mul(&r)?,
+        BinaryOp::Pow => unit_q.pow(r.value.mean())?,
+        _ => return Err(unsupported_with_unit_text()),
+    };
+    Ok(PhsValue::Quantity(res))
 }
