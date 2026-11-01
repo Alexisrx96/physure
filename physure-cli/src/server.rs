@@ -1509,5 +1509,147 @@ mod tests {
         }
         assert_eq!(ok_count, 64);
     }
-}
 
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("phs_server_unit_{label}_{}_{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_server_loads_the_modules_of_a_directory_a_file_and_a_manifest() {
+        let dir = scratch_dir("load");
+        fs::write(dir.join("one.phs"), "fn one() = 1 m\n").unwrap();
+        fs::write(dir.join("two.phs"), "fn two() = 2 m\n").unwrap();
+        fs::write(dir.join("notes.txt"), "not a module").unwrap();
+
+        let from_dir = ModelServer::from_path(&dir, ModelServerConfig::default()).unwrap();
+        let mut names: Vec<&String> = from_dir.modules.keys().collect();
+        names.sort();
+        assert_eq!(names, ["one", "two"]);
+
+        let from_file = ModelServer::from_path(dir.join("one.phs"), ModelServerConfig::default()).unwrap();
+        assert_eq!(from_file.modules.len(), 1);
+
+        fs::write(dir.join("phs.toml"), "[package]\nname = \"pkg\"\nversion = \"1.0.0\"\n\n[exports]\nfirst = \"one.phs\"\n").unwrap();
+        let from_manifest = ModelServer::from_path(&dir, ModelServerConfig::default()).unwrap();
+        assert!(from_manifest.modules.contains_key("first") && from_manifest.modules.len() == 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_server_says_why_it_could_not_load_what_it_was_given() {
+        let dir = scratch_dir("load_errors");
+        let empty = ModelServer::from_path(&dir, ModelServerConfig::default()).err().unwrap().to_string();
+        assert!(empty.contains("No .phs modules"), "{empty}");
+        let absent = ModelServer::from_path(dir.join("nowhere"), ModelServerConfig::default()).err().unwrap().to_string();
+        assert!(absent.contains("does not exist"), "{absent}");
+        fs::write(dir.join("data.json"), "{}").unwrap();
+        let wrong_kind = ModelServer::from_path(dir.join("data.json"), ModelServerConfig::default()).err().unwrap().to_string();
+        assert!(wrong_kind.contains("Unrecognized file format"), "{wrong_kind}");
+        fs::write(dir.join("broken.phs"), "fn broken( = ").unwrap();
+        assert!(ModelServer::from_path(dir.join("broken.phs"), ModelServerConfig::default()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_arguments_are_read_in_any_order_and_a_bad_port_is_left_out() {
+        let args = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
+        let parsed = parse_serve_args(&args(&["phs", "serve", "models", "--port", "9100", "--host", "0.0.0.0", "--token", "t"]));
+        assert_eq!(
+            (parsed.target.as_deref(), parsed.port, parsed.host.as_str(), parsed.token.as_deref()),
+            (Some("models"), 9100, "0.0.0.0", Some("t"))
+        );
+        let defaults = parse_serve_args(&args(&["phs", "serve"]));
+        assert_eq!((defaults.target, defaults.port, defaults.host.as_str(), defaults.token), (None, 8080, "127.0.0.1", None));
+        // a port that is not a number is not consumed with its value: the value is then the target
+        let bad_port = parse_serve_args(&args(&["phs", "serve", "-p", "many", "--host"]));
+        assert_eq!((bad_port.port, bad_port.target.as_deref()), (8080, Some("many")));
+        // a flag is never the target
+        assert_eq!(parse_serve_args(&args(&["phs", "serve", "--other"])).target, None);
+    }
+
+    #[test]
+    fn the_banner_lists_the_modules_and_the_endpoints() {
+        let (model, _) = create_test_server(None);
+        print_server_banner(&model, "127.0.0.1:8080", false);
+        print_server_banner(&model, "127.0.0.1:8080", true);
+    }
+
+    #[test]
+    fn json_values_become_phs_values_by_what_they_spell() {
+        let phs = |value: serde_json::Value| json_value_to_phs_value(&value);
+        assert_eq!(phs(serde_json::json!(2.5)).unwrap(), PhsValue::Number(2.5));
+        assert_eq!(phs(serde_json::json!(true)).unwrap(), PhsValue::Bool(true));
+        assert_eq!(phs(serde_json::json!("7")).unwrap(), PhsValue::Number(7.0));
+        assert_eq!(phs(serde_json::json!("false")).unwrap(), PhsValue::Bool(false));
+        assert_eq!(phs(serde_json::json!("true")).unwrap(), PhsValue::Bool(true));
+        assert_eq!(phs(serde_json::json!("just words")).unwrap(), PhsValue::String("just words".to_string()));
+        assert!(matches!(phs(serde_json::json!("3 m")).unwrap(), PhsValue::Quantity(_)));
+        // a number followed by something that is not a unit is an error, not a string
+        assert!(phs(serde_json::json!("3 notaunit")).unwrap_err().to_string().contains("Invalid unit"));
+        // words with a space that do not start with a number stay words
+        assert_eq!(phs(serde_json::json!("two words")).unwrap(), PhsValue::String("two words".to_string()));
+        assert!(phs(serde_json::json!([1, 2])).unwrap_err().to_string().contains("Unsupported JSON value"));
+        assert!(phs(serde_json::json!(null)).is_err());
+    }
+
+    #[test]
+    fn phs_values_are_described_for_the_wire() {
+        let metre = physure_core::Quantity::new(2.0, "m").unwrap();
+        assert_eq!(phs_value_to_json(&PhsValue::Quantity(metre))["type"], "quantity");
+        assert_eq!(phs_value_to_json(&PhsValue::Number(1.5))["value"], 1.5);
+        assert_eq!(phs_value_to_json(&PhsValue::Bool(true))["type"], "bool");
+        assert_eq!(phs_value_to_json(&PhsValue::String("s".to_string()))["value"], "s");
+        assert_eq!(phs_value_to_json(&PhsValue::None)["type"], "none");
+        assert_eq!(phs_value_to_json(&PhsValue::Vector(vec![PhsValue::Number(1.0)]))["type"], "other");
+    }
+
+    #[test]
+    fn a_percent_encoded_name_is_decoded_and_a_broken_escape_is_left_alone() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn a_preflight_request_is_answered_and_granted_only_with_a_token() {
+        let (_, url) = create_test_server(Some("tok"));
+        let granted = ureq::request("OPTIONS", &format!("{url}/api/v1/geom/pipe_area")).call().unwrap();
+        assert_eq!(granted.status(), 200);
+        assert_eq!(granted.header("Access-Control-Allow-Origin"), Some("*"));
+        assert!(granted.header("Access-Control-Allow-Headers").unwrap().contains("X-API-Key"));
+        let (_, open_url) = create_test_server(None);
+        let plain = ureq::request("OPTIONS", &format!("{open_url}/health")).call().unwrap();
+        assert_eq!(plain.status(), 200);
+        assert_eq!(plain.header("Access-Control-Allow-Origin"), None);
+    }
+
+    #[test]
+    fn a_request_that_cannot_be_served_gets_a_json_error() {
+        let (_, url) = create_test_server(None);
+        let status = |answer: Result<ureq::Response, ureq::Error>| match answer {
+            Ok(response) => response.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(other) => panic!("{other}"),
+        };
+        assert_eq!(status(ureq::get(&format!("{url}/nowhere")).call()), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom")).send_json(serde_json::json!({}))), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/nothing/pipe_area")).send_json(serde_json::json!({}))), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom/nothing")).send_json(serde_json::json!({}))), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom/pipe_area")).send_string("{")), 400);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom/pipe_area")).send_json(serde_json::json!([1]))), 400);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_string("nope")), 400);
+        let bad_reference = serde_json::json!({"steps": [
+            {"module": "geom", "function": "pipe_area", "inputs": {"d": {"$ref": "missing"}}, "output": "a"}]});
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_json(bad_reference)), 400);
+        let bad_input = serde_json::json!({"steps": [
+            {"module": "geom", "function": "pipe_area", "inputs": {"d": [1]}, "output": "a"}]});
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_json(bad_input)), 400);
+        let unknown_module = serde_json::json!({"steps": [
+            {"module": "nope", "function": "pipe_area", "inputs": {"d": "1 m"}, "output": "a"}]});
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_json(unknown_module)), 400);
+    }
+}
