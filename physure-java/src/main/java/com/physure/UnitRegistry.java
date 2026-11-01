@@ -14,6 +14,8 @@ import java.util.Objects;
  * Compatible with Java 8+.
  */
 public class UnitRegistry implements AutoCloseable {
+    private static final String VARIABLE = "variable";
+    private static final String ARGUMENT_SEPARATOR = "\", \"";
     private final long handle;
     private boolean closed = false;
 
@@ -129,7 +131,7 @@ public class UnitRegistry implements AutoCloseable {
      *     PHS string, and a quote would end it and make the rest a statement of its own
      */
     public synchronized String solve(String equation, String variable) {
-        return evaluateRaw("solve(\"" + text(equation, "equation") + "\", \"" + text(variable, "variable") + "\")");
+        return evaluateRaw("solve(\"" + text(equation, "equation") + ARGUMENT_SEPARATOR + text(variable, VARIABLE) + "\")");
     }
 
     /**
@@ -139,7 +141,7 @@ public class UnitRegistry implements AutoCloseable {
      * @throws IllegalArgumentException if an argument contains a double quote
      */
     public synchronized String deriv(String expression, String variable) {
-        return evaluateRaw("deriv(\"" + text(expression, "expression") + "\", \"" + text(variable, "variable") + "\")");
+        return evaluateRaw("deriv(\"" + text(expression, "expression") + ARGUMENT_SEPARATOR + text(variable, VARIABLE) + "\")");
     }
 
     /**
@@ -149,7 +151,7 @@ public class UnitRegistry implements AutoCloseable {
      * @throws IllegalArgumentException if an argument contains a double quote
      */
     public synchronized String integral(String expression, String variable) {
-        return evaluateRaw("integral(\"" + text(expression, "expression") + "\", \"" + text(variable, "variable") + "\")");
+        return evaluateRaw("integral(\"" + text(expression, "expression") + ARGUMENT_SEPARATOR + text(variable, VARIABLE) + "\")");
     }
 
     private static String text(String argument, String name) {

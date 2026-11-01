@@ -67,9 +67,8 @@ class BindingContractTest {
 
             tests.add(DynamicTest.dynamicTest(expression + " scale", () ->
                     assertEquals(scale, registry.getUnitScale(expression), 0.0, expression)));
-            tests.add(DynamicTest.dynamicTest(expression + " exponents", () -> {
-                assertEquals(exponents, registry.getUnitPowers(expression), expression);
-            }));
+            tests.add(DynamicTest.dynamicTest(expression + " exponents", () ->
+                    assertEquals(exponents, registry.getUnitPowers(expression), expression)));
         }
         assertTrue(tests.size() >= 80, "the golden file should hold its rows, found " + tests.size() / 2);
         return tests;

@@ -1,6 +1,7 @@
 package com.physure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
  * handle, so a unit defined in a custom conf was "unknown" and every call cost about 0.8 ms.
  */
 class CustomRegistryTest {
+    private static final String ONE_KM_IN_METRES = "1 km => m";
     private static final String FURLONG = "[Units]\nfurlong = 201.168, L, [fur, furlong]\n";
 
     @Test
@@ -79,7 +81,7 @@ class CustomRegistryTest {
     void evaluateReadsUnitsAgainstTheRegistrysOwnCatalog() {
         try (UnitRegistry registry = UnitRegistry.fromContent("[Units]\nkm = 7.0, L, [km]\nfurlong = 201.168, L, [fur, furlong]\n")) {
             assertEquals(7.0, registry.getUnitScale("km"), 0.0);
-            assertEquals(7.0, registry.evaluate("1 km => m").getValue(), 1e-12);
+            assertEquals(7.0, registry.evaluate(ONE_KM_IN_METRES).getValue(), 1e-12);
             assertEquals(5 * 201.168, registry.evaluate("5 fur => m").getValue(), 1e-9);
             assertEquals(2 * 201.168, registry.evaluate("2 fur + 0 m => m").getValue(), 1e-9);
         }
@@ -99,8 +101,8 @@ class CustomRegistryTest {
     void theDefaultRegistryAndACustomOneEachAnswerWithTheirOwnMeaningInTurn() {
         try (UnitRegistry custom = UnitRegistry.fromContent("[Units]\nkm = 7.0, L, [km]\n"); UnitRegistry plain = new UnitRegistry()) {
             for (int i = 0; i < 3; i++) {
-                assertEquals(7.0, custom.evaluate("1 km => m").getValue(), 1e-12);
-                assertEquals(1000.0, plain.evaluate("1 km => m").getValue(), 1e-9);
+                assertEquals(7.0, custom.evaluate(ONE_KM_IN_METRES).getValue(), 1e-12);
+                assertEquals(1000.0, plain.evaluate(ONE_KM_IN_METRES).getValue(), 1e-9);
             }
         }
     }
@@ -115,7 +117,7 @@ class CustomRegistryTest {
                 results.add(pool.submit(() -> {
                     try (UnitRegistry own = UnitRegistry.fromContent("[Units]\nkm = " + km + ", L, [km]\n")) {
                         for (int i = 0; i < 100; i++) {
-                            if (Math.abs(own.evaluate("1 km => m").getValue() - km) > 1e-9) return false;
+                            if (Math.abs(own.evaluate(ONE_KM_IN_METRES).getValue() - km) > 1e-9) return false;
                         }
                         return true;
                     }
@@ -131,7 +133,7 @@ class CustomRegistryTest {
     void anUnknownUnitIsStillAnErrorOnARegistryThatDoesNotHaveIt() {
         try (UnitRegistry registry = UnitRegistry.fromContent(FURLONG)) {
             PhysureException unknown = assertThrows(PhysureException.class, () -> registry.evaluate("5 parsecs_of_nothing"));
-            assertTrue(unknown.getMessage().length() > 0);
+            assertFalse(unknown.getMessage().isEmpty());
         }
     }
 

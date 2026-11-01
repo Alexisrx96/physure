@@ -7,7 +7,7 @@ public final class LoaderSmokeMain {
 
     public static void main(String[] args) {
         try (UnitRegistry registry = new UnitRegistry()) {
-            System.out.println("km=" + registry.getUnitScale("km"));
+            System.out.println("km=" + registry.getUnitScale("km")); // NOSONAR java:S106: the parent test reads this process's output
         }
     }
 }

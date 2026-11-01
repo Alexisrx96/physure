@@ -83,6 +83,17 @@ public class QuantityMatrix {
         return determinant(data);
     }
 
+    /** The row without its element at {@code column}. */
+    private static List<Quantity> withoutColumn(List<Quantity> row, int column) {
+        List<Quantity> kept = new ArrayList<>(row.size() - 1);
+        for (int k = 0; k < row.size(); k++) {
+            if (k != column) {
+                kept.add(row.get(k));
+            }
+        }
+        return kept;
+    }
+
     private static Quantity determinant(List<List<Quantity>> m) {
         int n = m.size();
         if (n == 1) {
@@ -95,9 +106,7 @@ public class QuantityMatrix {
         for (int c = 0; c < n; c++) {
             List<List<Quantity>> minor = new ArrayList<>();
             for (int r = 1; r < n; r++) {
-                List<Quantity> row = new ArrayList<>(m.get(r));
-                row.remove(c);
-                minor.add(row);
+                minor.add(withoutColumn(m.get(r), c));
             }
             Quantity term = m.get(0).get(c).mul(determinant(minor));
             if (sum == null) {

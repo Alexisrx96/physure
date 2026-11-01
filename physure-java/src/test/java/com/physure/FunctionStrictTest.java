@@ -11,6 +11,11 @@ import org.junit.jupiter.api.Test;
 
 /** Strict tests of {@link PhyFunction} and {@link PhyEquation}: definitions, calls and the algebra of functions. */
 class FunctionStrictTest {
+    private static final String A_IS_B = "a = b";
+    private static final String A_AT_MOST_C = "a <= c";
+    private static final String Y_IS_X_PLUS_ONE = "y = x + 1";
+    private static final String FORCE_LAW = "F = m * a";
+    private static final String ACCELERATION = "m/s^2";
     private static UnitRegistry registry;
 
     @BeforeAll
@@ -146,10 +151,10 @@ class FunctionStrictTest {
 
     @Test
     void anEquationSplitsOnItsOwnEqualsSignOnly() {
-        assertEquals("a", PhyEquation.of(registry, "a = b").getLhs());
-        assertEquals("b", PhyEquation.of(registry, "a = b").getRhs());
-        assertEquals("a <= c", PhyEquation.of(registry, "a <= c").getLhs());
-        assertEquals("0", PhyEquation.of(registry, "a <= c").getRhs());
+        assertEquals("a", PhyEquation.of(registry, A_IS_B).getLhs());
+        assertEquals("b", PhyEquation.of(registry, A_IS_B).getRhs());
+        assertEquals(A_AT_MOST_C, PhyEquation.of(registry, A_AT_MOST_C).getLhs());
+        assertEquals("0", PhyEquation.of(registry, A_AT_MOST_C).getRhs());
         assertEquals("a == b", PhyEquation.of(registry, "a == b").getLhs());
         assertEquals("y", PhyEquation.of(registry, "y = (a >= b)").getLhs());
         assertEquals("(a >= b)", PhyEquation.of(registry, "y = (a >= b)").getRhs());
@@ -158,18 +163,18 @@ class FunctionStrictTest {
 
     @Test
     void substitutionTakesTheReplacementAsTextAndOnlyForWholeNames() {
-        assertEquals("y = (2) + 1", PhyEquation.of(registry, "y = x + 1").substitute("x", 2).getExpression());
-        assertEquals("y = ($1) + 1", PhyEquation.of(registry, "y = x + 1").substitute("x", "$1").getExpression());
-        assertEquals("y = (a\\b) + 1", PhyEquation.of(registry, "y = x + 1").substitute("x", "a\\b").getExpression());
+        assertEquals("y = (2) + 1", PhyEquation.of(registry, Y_IS_X_PLUS_ONE).substitute("x", 2).getExpression());
+        assertEquals("y = ($1) + 1", PhyEquation.of(registry, Y_IS_X_PLUS_ONE).substitute("x", "$1").getExpression());
+        assertEquals("y = (a\\b) + 1", PhyEquation.of(registry, Y_IS_X_PLUS_ONE).substitute("x", "a\\b").getExpression());
         assertEquals("y = xx + (1)", PhyEquation.of(registry, "y = xx + x").substitute("x", 1).getExpression());
     }
 
     @Test
     void anEquationIsSolvedForAVariableAndEvaluatedWithNamedArguments() {
-        PhyEquation force = PhyEquation.of(registry, "F = m * a");
+        PhyEquation force = PhyEquation.of(registry, FORCE_LAW);
         String solved = force.solve("a").getExpression();
         assertTrue(solved.contains("F") && solved.contains("m"), solved);
-        Quantity result = force.call("m", Quantity.of(2, "kg"), "a", Quantity.of(3, "m/s^2"));
+        Quantity result = force.call("m", Quantity.of(2, "kg"), "a", Quantity.of(3, ACCELERATION));
         near(6, result);
         assertEquals(0, result.getUncertainty());
         assertEquals("N", result.to("N").getUnit());
@@ -177,25 +182,25 @@ class FunctionStrictTest {
 
     @Test
     void anEquationKeepsTheUncertaintyOfItsArguments() {
-        PhyEquation force = PhyEquation.of(registry, "F = m * a");
-        Quantity result = force.call("m", Quantity.withUncertainty(2, 0.1, "kg"), "a", Quantity.of(3, "m/s^2"));
+        PhyEquation force = PhyEquation.of(registry, FORCE_LAW);
+        Quantity result = force.call("m", Quantity.withUncertainty(2, 0.1, "kg"), "a", Quantity.of(3, ACCELERATION));
         near(6, result);
         assertEquals(6 * 0.05, result.getUncertainty(), 1e-9);
     }
 
     @Test
     void callingAnEquationNeedsPairsAndExactlyOneUnknown() {
-        PhyEquation force = PhyEquation.of(registry, "F = m * a");
+        PhyEquation force = PhyEquation.of(registry, FORCE_LAW);
         assertThrows(IllegalArgumentException.class, () -> force.call("m"));
         assertThrows(IllegalArgumentException.class, () -> force.call("m", Quantity.of(2, "kg")));
-        assertThrows(IllegalArgumentException.class, () -> force.call("m", Quantity.of(2, "kg"), "a", Quantity.of(3, "m/s^2"), "F", Quantity.of(1, "N")));
+        assertThrows(IllegalArgumentException.class, () -> force.call("m", Quantity.of(2, "kg"), "a", Quantity.of(3, ACCELERATION), "F", Quantity.of(1, "N")));
         assertThrows(NullPointerException.class, () -> PhyEquation.of(registry, null));
     }
 
     @Test
     void anEquationCombinesWithAnotherOnBothSides() {
-        PhyEquation sum = PhyEquation.of(registry, "a = b").add(PhyEquation.of(registry, "c = d"));
+        PhyEquation sum = PhyEquation.of(registry, A_IS_B).add(PhyEquation.of(registry, "c = d"));
         assertEquals("(a) + (c) = (b) + (d)", sum.getExpression());
-        assertEquals("(a) * (2.0 m) = (b) * (2.0 m)", PhyEquation.of(registry, "a = b").mul(Quantity.of(2, "m")).getExpression());
+        assertEquals("(a) * (2.0 m) = (b) * (2.0 m)", PhyEquation.of(registry, A_IS_B).mul(Quantity.of(2, "m")).getExpression());
     }
 }

@@ -19,6 +19,7 @@ import java.util.regex.Pattern;
  * Compatible with Java 8+.
  */
 public class Quantity {
+    private static final String OTHER = "other";
     /**
      * A decimal number. Digits, then an optional fraction: {@code \d+\.?\d*} accepts the same text but splits a
      * run of digits between its two parts in every possible way when the rest of the pattern fails (quadratic).
@@ -67,7 +68,7 @@ public class Quantity {
     }
 
     public Quantity add(Quantity other) {
-        return NativeEngine.addQuantities(this, Objects.requireNonNull(other, "other"));
+        return NativeEngine.addQuantities(this, Objects.requireNonNull(other, OTHER));
     }
 
     public Quantity sub(Quantity other) {
@@ -75,7 +76,7 @@ public class Quantity {
     }
 
     public Quantity subtract(Quantity other) {
-        return NativeEngine.subQuantities(this, Objects.requireNonNull(other, "other"));
+        return NativeEngine.subQuantities(this, Objects.requireNonNull(other, OTHER));
     }
 
     public Quantity mul(Quantity other) {
@@ -83,7 +84,7 @@ public class Quantity {
     }
 
     public Quantity multiply(Quantity other) {
-        return NativeEngine.mulQuantities(this, Objects.requireNonNull(other, "other"));
+        return NativeEngine.mulQuantities(this, Objects.requireNonNull(other, OTHER));
     }
 
     /** Multiplies by a plain number: the core's rules apply (a plain number does not scale a temperature point). */
@@ -96,7 +97,7 @@ public class Quantity {
     }
 
     public Quantity divide(Quantity other) {
-        return NativeEngine.divQuantities(this, Objects.requireNonNull(other, "other"));
+        return NativeEngine.divQuantities(this, Objects.requireNonNull(other, OTHER));
     }
 
     /** Divides by a plain number: dividing by zero is a {@link PhysureException}. */
@@ -170,16 +171,16 @@ public class Quantity {
             return x;
         }
         // exact decimal arithmetic: scaling by 10^decimals and rounding to a long overflows for large values
-        return new BigDecimal(x).setScale(decimals, RoundingMode.HALF_UP).doubleValue();
+        return new BigDecimal(x).setScale(decimals, RoundingMode.HALF_UP).doubleValue(); // NOSONAR java:S2111: the exact binary value is the point; valueOf would round the shortest decimal text instead
     }
 
     public boolean greaterThan(Quantity other) {
-        Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
+        Quantity converted = Objects.requireNonNull(other, OTHER).to(this.unit);
         return this.value > converted.getValue();
     }
 
     public boolean lessThan(Quantity other) {
-        Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
+        Quantity converted = Objects.requireNonNull(other, OTHER).to(this.unit);
         return this.value < converted.getValue();
     }
 
@@ -189,7 +190,7 @@ public class Quantity {
      * very large one; {@link #physAssert(Quantity)} is the core's comparison.
      */
     public boolean approxEquals(Quantity other) {
-        Quantity converted = Objects.requireNonNull(other, "other").to(this.unit);
+        Quantity converted = Objects.requireNonNull(other, OTHER).to(this.unit);
         return Math.abs(this.value - converted.getValue()) < 1e-6;
     }
 

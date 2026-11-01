@@ -211,22 +211,22 @@ public class PhyFunction {
      * @throws UnsupportedOperationException if the two are not of the same kind
      */
     public PhyFunction add(PhyFunction other) {
-        return combine(other, "+", "add", (a, b) -> a.add(b));
+        return combine(other, "+", "add", Quantity::add);
     }
 
     /** this(x) - other(x); see {@link #add(PhyFunction)}. */
     public PhyFunction subtract(PhyFunction other) {
-        return combine(other, "-", "subtract", (a, b) -> a.subtract(b));
+        return combine(other, "-", "subtract", Quantity::subtract);
     }
 
     /** this(x) * other(x); see {@link #add(PhyFunction)}. */
     public PhyFunction multiply(PhyFunction other) {
-        return combine(other, "*", "multiply", (a, b) -> a.multiply(b));
+        return combine(other, "*", "multiply", Quantity::multiply);
     }
 
     /** this(x) / other(x); see {@link #add(PhyFunction)}. */
     public PhyFunction divide(PhyFunction other) {
-        return combine(other, "/", "divide", (a, b) -> a.divide(b));
+        return combine(other, "/", "divide", Quantity::divide);
     }
 
     /**

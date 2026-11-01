@@ -12,9 +12,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.Test;
  * the native handle and use from several threads.
  */
 class RegistryStrictTest {
+    private static final String X_IS_ONE = "x = 1";
     private static UnitRegistry registry;
 
     @BeforeAll
@@ -142,7 +145,7 @@ class RegistryStrictTest {
         // a quote would end the PHS string they are put in, and the rest would be a statement of its own
         assertThrows(IllegalArgumentException.class, () -> registry.solve("x = \"a\"", "x"));
         assertThrows(IllegalArgumentException.class, () -> registry.deriv("t\"); 1/0; (\"t", "t"));
-        assertThrows(IllegalArgumentException.class, () -> registry.solve("x = 1", "x\", \"y"));
+        assertThrows(IllegalArgumentException.class, () -> registry.solve(X_IS_ONE, "x\", \"y"));
         assertThrows(IllegalArgumentException.class, () -> registry.integral("x", "\""));
     }
 
@@ -194,7 +197,7 @@ class RegistryStrictTest {
         assertThrows(NullPointerException.class, () -> registry.evaluate(null));
         assertThrows(NullPointerException.class, () -> registry.evaluateRaw(null));
         assertThrows(NullPointerException.class, () -> registry.solve(null, "x"));
-        assertThrows(NullPointerException.class, () -> registry.solve("x = 1", null));
+        assertThrows(NullPointerException.class, () -> registry.solve(X_IS_ONE, null));
         assertThrows(NullPointerException.class, () -> registry.deriv(null, "x"));
         assertThrows(NullPointerException.class, () -> registry.integral("x", null));
         assertThrows(NullPointerException.class, () -> UnitRegistry.fromContent(null));
@@ -214,8 +217,8 @@ class RegistryStrictTest {
         calls.add(() -> closed.getUnitPowers("m"));
         calls.add(() -> closed.evaluate("1 m"));
         calls.add(() -> closed.evaluateRaw("1 m"));
-        calls.add(() -> closed.getCategories());
-        calls.add(() -> closed.solve("x = 1", "x"));
+        calls.add(closed::getCategories);
+        calls.add(() -> closed.solve(X_IS_ONE, "x"));
         calls.add(() -> closed.deriv("x", "x"));
         calls.add(() -> closed.integral("x", "x"));
         for (Callable<Object> call : calls) {
@@ -283,10 +286,10 @@ class RegistryStrictTest {
     }
 
     @Test
-    void closingARegistryWhileAnotherThreadUsesItIsSafe() throws Exception {
+    void closingARegistryWhileAnotherThreadUsesItIsSafe() throws InterruptedException, ExecutionException, TimeoutException {
         for (int round = 0; round < 50; round++) {
-            UnitRegistry shared = new UnitRegistry();
-            ExecutorService pool = Executors.newFixedThreadPool(2);
+            UnitRegistry shared = new UnitRegistry(); // NOSONAR java:S2095: the closer thread closes it, which is the test
+            ExecutorService pool = Executors.newFixedThreadPool(2); // NOSONAR java:S2095: shut down in the finally block
             try {
                 Future<?> user = pool.submit(() -> {
                     try {

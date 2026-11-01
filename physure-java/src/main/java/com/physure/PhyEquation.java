@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
  */
 public class PhyEquation {
     private static final UnitRegistry DEFAULT_REGISTRY = new UnitRegistry();
-    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z_0-9]*");
+    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_]\\w*");
 
     private final UnitRegistry registry;
     private final String expression;
@@ -27,7 +27,7 @@ public class PhyEquation {
 
     public PhyEquation(UnitRegistry registry, String expression) {
         this.registry = registry != null ? registry : DEFAULT_REGISTRY;
-        this.expression = Objects.requireNonNull(expression, "expression").trim().replaceAll("^\"|\"$", "");
+        this.expression = Objects.requireNonNull(expression, "expression").trim().replaceAll("(?:^\")|(?:\"$)", "");
     }
 
     public static PhyEquation of(String expression) {
@@ -45,27 +45,42 @@ public class PhyEquation {
     private int equationSign() {
         int depth = 0;
         boolean inString = false;
-        for (int i = 0; i < expression.length(); i++) {
+        int i = 0;
+        while (i < expression.length()) {
             char c = expression.charAt(i);
             if (inString) {
                 inString = c != '"';
             } else if (c == '"') {
                 inString = true;
-            } else if (c == '(' || c == '[' || c == '{') {
-                depth++;
-            } else if (c == ')' || c == ']' || c == '}') {
-                depth--;
-            } else if (c == '=' && depth == 0) {
-                char before = i > 0 ? expression.charAt(i - 1) : ' ';
-                char after = i + 1 < expression.length() ? expression.charAt(i + 1) : ' ';
-                if (after == '=') {
-                    i++;
-                } else if (before != '<' && before != '>' && before != '!' && before != '=') {
+            } else if (depth == 0 && c == '=') {
+                if (charAt(i + 1) == '=') {
+                    i++; // `==` is a comparison, and so is its second sign
+                } else if (!endsComparison(charAt(i - 1))) {
                     return i;
                 }
+            } else {
+                depth += bracketDelta(c);
             }
+            i++;
         }
         return -1;
+    }
+
+    /** The character of the expression at {@code i}, or a space outside it. */
+    private char charAt(int i) {
+        return i >= 0 && i < expression.length() ? expression.charAt(i) : ' ';
+    }
+
+    /** True for the characters that make a following {@code =} part of {@code <=}, {@code >=}, {@code !=} or {@code ==}. */
+    private static boolean endsComparison(char before) {
+        return before == '<' || before == '>' || before == '!' || before == '=';
+    }
+
+    private static int bracketDelta(char c) {
+        if ("([{".indexOf(c) >= 0) {
+            return 1;
+        }
+        return ")]}".indexOf(c) >= 0 ? -1 : 0;
     }
 
     public String getLhs() {
@@ -186,7 +201,7 @@ public class PhyEquation {
     private String unknownVariable(Set<String> given) {
         Set<String> unknown = new LinkedHashSet<>();
         Set<String> functions = new HashSet<>();
-        Matcher functionCalls = Pattern.compile("([A-Za-z_][A-Za-z_0-9]*)\\s*\\(").matcher(expression);
+        Matcher functionCalls = Pattern.compile("([A-Za-z_]\\w*)\\s*\\(").matcher(expression);
         while (functionCalls.find()) {
             functions.add(functionCalls.group(1));
         }
