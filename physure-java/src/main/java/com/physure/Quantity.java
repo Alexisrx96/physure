@@ -19,7 +19,11 @@ import java.util.regex.Pattern;
  * Compatible with Java 8+.
  */
 public class Quantity {
-    private static final String NUMBER = "(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?";
+    /**
+     * A decimal number. Digits, then an optional fraction: {@code \d+\.?\d*} accepts the same text but splits a
+     * run of digits between its two parts in every possible way when the rest of the pattern fails (quadratic).
+     */
+    private static final String NUMBER = "(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
     /** value, an optional uncertainty written {@code +/-} or the core's {@code ±}, and the unit if there is one. */
     private static final Pattern WRITTEN = Pattern.compile(
         "^([+-]?(?:" + NUMBER + "|NaN|Infinity))"

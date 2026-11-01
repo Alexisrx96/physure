@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -26,6 +28,32 @@ class QuantityStrictTest {
 
     private static void near(double expected, double actual) {
         assertEquals(expected, actual, EPS * Math.max(1.0, Math.abs(expected)));
+    }
+
+    // ---- the text parser takes time linear in its input
+
+    @Test
+    void aLongRunOfDigitsThatIsNotAQuantityIsRefusedInLinearTime() {
+        // `\d+\.?\d*` split the digits between its two parts in every possible way before giving up:
+        // quadratic. Fifty thousand digits took seconds; the unambiguous form takes milliseconds.
+        // (`String.repeat` is Java 11; this module compiles for Java 8)
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < 50_000; i++) {
+            digits.append('1');
+        }
+        String written = digits.append('x').toString();
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () ->
+            assertThrows(IllegalArgumentException.class, () -> Quantity.parse(written)));
+    }
+
+    @Test
+    void theNumbersTheParserReadsAreStillTheSame() {
+        assertEquals(12.0, Quantity.parse("12 m").getValue(), 0.0);
+        assertEquals(12.0, Quantity.parse("12. m").getValue(), 0.0);
+        assertEquals(12.5, Quantity.parse("12.5 m").getValue(), 0.0);
+        assertEquals(0.5, Quantity.parse(".5 m").getValue(), 0.0);
+        assertEquals(1.5e3, Quantity.parse("1.5e3 m").getValue(), 0.0);
+        assertEquals(125.0, Quantity.parse("125 +/- 5 m").getValue(), 0.0);
     }
 
     // ---- uncertainty survives every operation

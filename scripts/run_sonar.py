@@ -187,7 +187,8 @@ def main():
     if llvm_cov_bin:
         log_info("Generating Rust LCOV coverage via cargo-llvm-cov...")
         cargo_bin = find_cargo_bin()
-        cov_cmd = [cargo_bin, "llvm-cov", "--auto-install", "--lcov", "--output-path", "lcov.info"]
+        # no --auto-install: cargo-llvm-cov dropped it, and find_llvm_cov_env has already found the tool
+        cov_cmd = [cargo_bin, "llvm-cov", "--lcov", "--output-path", "lcov.info"]
         try:
             subprocess.run(cov_cmd, cwd=PHYSURE_CORE, env=env, check=True)
             filter_script = PHYSURE_CORE / "scripts" / "filter_lcov.py"
