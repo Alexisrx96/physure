@@ -39,7 +39,7 @@ impl DataExporter for Exporter {
                 json.push_str(", ");
             }
             first = false;
-            json.push_str(&format!("\"{}\": {}", k, value_to_json(v)));
+            json.push_str(&format!("{}: {}", json_string(k), value_to_json(v)));
         }
         json.push('}');
         Ok(json)
@@ -54,7 +54,7 @@ impl DataExporter for Exporter {
 
         for k in keys {
             let v = exports.get(k).unwrap();
-            csv.push_str(&format!("{},{}\n", k, value_to_csv(v)));
+            csv.push_str(&format!("{},{}\n", csv_field(k), value_to_csv(v)));
         }
         Ok(csv)
     }
@@ -73,25 +73,55 @@ impl DataExporter for Exporter {
                 py.push_str(", ");
             }
             first = false;
-            py.push_str(&format!("'{}': {}", k, value_to_py(v)));
+            py.push_str(&format!("{}: {}", py_string(k), value_to_py(v)));
         }
         py.push('}');
         Ok(py)
     }
 }
 
+/// `s` as a JSON string literal, with the quotes, backslashes and control characters escaped.
+fn json_string(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// A JSON number. JSON has no `NaN` or infinity, so they are `null`.
+fn json_number(n: f64) -> String {
+    if n.is_finite() { format!("{}", n) } else { "null".to_string() }
+}
+
+/// `s` as one quoted CSV field: a quote inside it is doubled.
+fn csv_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// A CSV field, quoted only when it has to be.
+fn csv_field(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) { csv_quote(s) } else { s.to_string() }
+}
+
+/// `s` as a Python string literal in single quotes.
+fn py_string(s: &str) -> String {
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', "\\n").replace('\r', "\\r"))
+}
+
 fn value_to_json(v: &PhsValue) -> String {
     match v {
         PhsValue::None => "null".to_string(),
-        PhsValue::Number(n) => format!("{}", n),
+        PhsValue::Number(n) => json_number(*n),
         PhsValue::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
-        PhsValue::String(s) => format!("\"{}\"", s),
-        PhsValue::Quantity(q) => format!("{{\"value\": {}, \"unit\": \"{}\"}}", q.value.mean(), q.unit.__repr__()),
+        PhsValue::String(s) => json_string(s),
+        PhsValue::Quantity(q) => format!("{{\"value\": {}, \"unit\": {}}}", json_number(q.value.mean()), json_string(&q.unit.__repr__())),
         PhsValue::Function(_) => "\"<function>\"".to_string(),
-        PhsValue::Sigma(k) => format!("{}", k),
-        PhsValue::SigmaBound(q, k) => format!("{{\"value\": {}, \"unit\": \"{}\", \"sigma\": {}}}", q.value.mean(), q.unit.__repr__(), k),
-        PhsValue::Plot(p) => format!("\"{}\"", p.ascii.replace('\n', "\\n")),
-        PhsValue::Equation(l, r) => format!("\"{} = {}\"", l.to_phs_string(), r.to_phs_string()),
+        PhsValue::Sigma(k) => json_number(*k),
+        PhsValue::SigmaBound(q, k) => format!(
+            "{{\"value\": {}, \"unit\": {}, \"sigma\": {}}}",
+            json_number(q.value.mean()),
+            json_string(&q.unit.__repr__()),
+            json_number(*k)
+        ),
+        PhsValue::Plot(p) => json_string(&p.ascii),
+        PhsValue::Equation(l, r) => json_string(&format!("{} = {}", l.to_phs_string(), r.to_phs_string())),
         PhsValue::Vector(vec) => {
             let mut s = String::new();
             s.push('[');
@@ -112,7 +142,7 @@ fn value_to_csv(v: &PhsValue) -> String {
         PhsValue::None => "".to_string(),
         PhsValue::Number(n) => format!("{}", n),
         PhsValue::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
-        PhsValue::String(s) => format!("\"{}\"", s),
+        PhsValue::String(s) => csv_quote(s),
         PhsValue::Quantity(q) => {
             let unit = q.unit.__repr__();
             if unit.is_empty() {
@@ -124,8 +154,8 @@ fn value_to_csv(v: &PhsValue) -> String {
         PhsValue::Function(_) => "<function>".to_string(),
         PhsValue::Sigma(k) => format!("{}σ", k),
         PhsValue::SigmaBound(q, k) => format!("{} ± {}σ", q, k),
-        PhsValue::Plot(p) => format!("\"{}\"", p.ascii.replace('\n', " ")),
-        PhsValue::Equation(l, r) => format!("\"{} = {}\"", l.to_phs_string(), r.to_phs_string()),
+        PhsValue::Plot(p) => csv_quote(&p.ascii.replace('\n', " ")),
+        PhsValue::Equation(l, r) => csv_quote(&format!("{} = {}", l.to_phs_string(), r.to_phs_string())),
         PhsValue::Vector(vec) => {
             let mut s = String::new();
             s.push_str("\"[");
@@ -147,13 +177,13 @@ fn value_to_py(v: &PhsValue) -> String {
         PhsValue::None => "None".to_string(),
         PhsValue::Number(n) => format!("{}", n),
         PhsValue::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
-        PhsValue::String(s) => format!("'{}'", s),
-        PhsValue::Quantity(q) => format!("{{'value': {}, 'unit': '{}'}}", q.value.mean(), q.unit.__repr__()),
+        PhsValue::String(s) => py_string(s),
+        PhsValue::Quantity(q) => format!("{{'value': {}, 'unit': {}}}", q.value.mean(), py_string(&q.unit.__repr__())),
         PhsValue::Function(_) => "'<function>'".to_string(),
         PhsValue::Sigma(k) => format!("{}", k),
-        PhsValue::SigmaBound(q, k) => format!("{{'value': {}, 'unit': '{}', 'sigma': {}}}", q.value.mean(), q.unit.__repr__(), k),
-        PhsValue::Plot(p) => format!("'{}'", p.ascii.replace('\n', "\\n")),
-        PhsValue::Equation(l, r) => format!("'{} = {}'", l.to_phs_string(), r.to_phs_string()),
+        PhsValue::SigmaBound(q, k) => format!("{{'value': {}, 'unit': {}, 'sigma': {}}}", q.value.mean(), py_string(&q.unit.__repr__()), k),
+        PhsValue::Plot(p) => py_string(&p.ascii),
+        PhsValue::Equation(l, r) => py_string(&format!("{} = {}", l.to_phs_string(), r.to_phs_string())),
         PhsValue::Vector(vec) => {
             let mut s = String::new();
             s.push('[');

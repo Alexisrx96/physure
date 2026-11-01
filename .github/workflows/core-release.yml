@@ -12,6 +12,13 @@ name: Core Release
 on:
   push:
     tags: ["core-v*", "py-core-v*"]
+  workflow_dispatch:
+    # Started by the bump workflow (`gh workflow run ... --ref <tag>`). Run from a branch by hand,
+    # the check-version job fails (the ref is not a tag of the right version) before anything is built.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

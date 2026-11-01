@@ -25,7 +25,10 @@ if TYPE_CHECKING:
     from physure.domain.measurement.quantity import Quantity
 
 _ARROW_RE = re.compile(r"<=>|->|=|→|⇌")
-_TERM_RE = re.compile(r"^\s*\d*\s*([A-Za-z0-9()]+)\s*$")
+# a coefficient is optional. Its digits and the whitespace after it are possessive:
+# the species class also takes digits, and a run of digits or of spaces that could
+# be split between the two in many ways would make a failing match quadratic
+_TERM_RE = re.compile(r"^\s*(?:\d++\s*+)?([A-Za-z0-9()]+)\s*$")
 
 
 def _split_terms(side: str) -> list[str]:

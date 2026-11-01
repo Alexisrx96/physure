@@ -62,56 +62,29 @@ impl Mesh3DData {
         let has_full_x = self.x_grid.len() == self.rows * self.cols;
         let has_full_y = self.y_grid.len() == self.rows * self.cols;
 
-        let mut x_min = f64::INFINITY; let mut x_max = f64::NEG_INFINITY;
-        let mut y_min = f64::INFINITY; let mut y_max = f64::NEG_INFINITY;
-        let mut z_min = f64::INFINITY; let mut z_max = f64::NEG_INFINITY;
+        let (mut x_extent, mut y_extent, mut z_extent) = (Extent::new(), Extent::new(), Extent::new());
 
         for r in 0..self.rows {
-            let y_val = if has_full_y {
-                0.0
-            } else if r < self.y_grid.len() {
-                self.y_grid[r]
-            } else {
-                r as f64
-            };
-
             for c in 0..self.cols {
                 let idx = r * self.cols + c;
-                let x_val = if has_full_x {
-                    self.x_grid[idx]
-                } else if c < self.x_grid.len() {
-                    self.x_grid[c]
-                } else {
-                    c as f64
-                };
-
-                let y_final = if has_full_y {
-                    self.y_grid[idx]
-                } else {
-                    y_val
-                };
-
+                let x_val = axis_value(&self.x_grid, has_full_x, idx, c);
+                let y_final = axis_value(&self.y_grid, has_full_y, idx, r);
                 let z_val = if idx < self.z_grid.len() {
                     self.z_grid[idx]
                 } else {
                     0.0
                 };
 
-                if x_val < x_min { x_min = x_val; }
-                if x_val > x_max { x_max = x_val; }
-                if y_final < y_min { y_min = y_final; }
-                if y_final > y_max { y_max = y_final; }
-                if z_val < z_min { z_min = z_val; }
-                if z_val > z_max { z_max = z_val; }
+                x_extent.include(x_val);
+                y_extent.include(y_final);
+                z_extent.include(z_val);
 
                 raw_verts.push([x_val, y_final, z_val]);
             }
         }
 
-        let x_span = if x_max != x_min { x_max - x_min } else { 1.0 };
-        let y_span = if y_max != y_min { y_max - y_min } else { 1.0 };
+        let (z_min, x_span, y_span, z_span) = (z_extent.min, x_extent.span(), y_extent.span(), z_extent.span());
         let xy_extent = x_span.max(y_span);
-        let z_span = if z_max != z_min { z_max - z_min } else { 1.0 };
 
         // Proportionally scale height (Z) relative to physical XY extent (max Z height ~ 0.5 * xy_extent)
         let z_scale = (0.5 * xy_extent) / z_span;
@@ -845,6 +818,44 @@ impl Mesh3DData {
 }
 
 /// Helper function to map normalized t in [0, 1] to Plasma RGB values.
+/// The smallest and largest of the values seen so far.
+struct Extent {
+    min: f64,
+    max: f64,
+}
+
+impl Extent {
+    fn new() -> Self {
+        Extent { min: f64::INFINITY, max: f64::NEG_INFINITY }
+    }
+
+    fn include(&mut self, value: f64) {
+        if value < self.min {
+            self.min = value;
+        }
+        if value > self.max {
+            self.max = value;
+        }
+    }
+
+    /// The distance from the smallest to the largest; 1 when they are the same, so it can be divided by.
+    fn span(&self) -> f64 {
+        if self.max != self.min { self.max - self.min } else { 1.0 }
+    }
+}
+
+/// The coordinate of node `idx` (in row or column `i`) along an axis: the per-node value when the grid has
+/// one for every node, else the axis grid at `i`, else `i` itself.
+fn axis_value(grid: &[f64], full: bool, idx: usize, i: usize) -> f64 {
+    if full {
+        grid[idx]
+    } else if i < grid.len() {
+        grid[i]
+    } else {
+        i as f64
+    }
+}
+
 fn plasma_colormap(t: f64) -> [f64; 3] {
     let t = t.clamp(0.0, 1.0);
     // Smooth plasma approximation curve

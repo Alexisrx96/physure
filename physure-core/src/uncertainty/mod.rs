@@ -13,7 +13,7 @@ pub use lineage::Lineage;
 pub use mode::{ModeGuard, PropagationMode, propagation_mode, set_propagation_mode};
 pub use moments::{AsymmetricMoments, MomentLineage, MomentsBackend, SourceMoments};
 pub use shapes::{AsymmetryShape, DimidiatedGaussian, FechnerGaussian, ShapeKind};
-pub use monte_carlo::MonteCarloBackend;
+pub use monte_carlo::{with_seed, MonteCarloBackend};
 pub use unscented::UnscentedBackend;
 
 #[cfg(test)]

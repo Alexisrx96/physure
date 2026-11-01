@@ -22,43 +22,46 @@ pub struct I18nLabels {
     pub else_word: &'static str,
     pub true_word: &'static str,
     pub false_word: &'static str,
+    pub manuscript_title: &'static str,
+    pub html_generated: &'static str,
+}
+
+/// Where a `physure.conf` is looked for, in order: here, one level up, then the user's own directories.
+fn candidate_paths() -> Vec<PathBuf> {
+    let mut candidate_paths = vec![
+        PathBuf::from("physure.conf"),
+        PathBuf::from("../physure.conf"),
+    ];
+
+    if let Ok(user_dir) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
+        candidate_paths.push(PathBuf::from(&user_dir).join(".config/physure/physure.conf"));
+        candidate_paths.push(PathBuf::from(&user_dir).join("physure.conf"));
+        candidate_paths.push(PathBuf::from(&user_dir).join(".physure.conf"));
+    }
+    candidate_paths
+}
+
+/// The `lang` (or `language`) a conf file sets, lower-cased; the last such line wins.
+fn language_in(content: &str) -> Option<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !(line.starts_with('#') || line.starts_with(';') || line.is_empty()))
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| matches!(key.trim().to_lowercase().as_str(), "lang" | "language"))
+        .map(|(_, val)| val.trim().trim_matches('"').trim_matches('\'').to_lowercase())
+        .last()
 }
 
 impl PhysureConfig {
     pub fn load() -> Self {
-        let mut lang = "en".to_string();
-
-        let mut candidate_paths = vec![
-            PathBuf::from("physure.conf"),
-            PathBuf::from("../physure.conf"),
-        ];
-
-        if let Ok(user_dir) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
-            candidate_paths.push(PathBuf::from(&user_dir).join(".config/physure/physure.conf"));
-            candidate_paths.push(PathBuf::from(&user_dir).join("physure.conf"));
-            candidate_paths.push(PathBuf::from(&user_dir).join(".physure.conf"));
-        }
-
-        for path in candidate_paths {
-            if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    for line in content.lines() {
-                        let trimmed = line.trim();
-                        if trimmed.starts_with('#') || trimmed.starts_with(';') || trimmed.is_empty() {
-                            continue;
-                        }
-                        if let Some((k, v)) = trimmed.split_once('=') {
-                            let key = k.trim().to_lowercase();
-                            let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-                            if key == "lang" || key == "language" {
-                                lang = val.to_lowercase();
-                            }
-                        }
-                    }
-                }
-                break;
-            }
-        }
+        // the first conf file that exists is the one: if it cannot be read, the default language stands
+        let lang = candidate_paths()
+            .into_iter()
+            .find(|path| path.exists())
+            .and_then(|path| fs::read_to_string(path).ok())
+            .and_then(|content| language_in(&content))
+            .unwrap_or_else(|| "en".to_string());
 
         PhysureConfig { lang }
     }
@@ -80,6 +83,8 @@ impl PhysureConfig {
                 else_word: "si no",
                 true_word: "Verdadero",
                 false_word: "Falso",
+                manuscript_title: "Manuscrito Científico Physure",
+                html_generated: "Manuscrito científico HTML generado (100% offline):",
             },
             "fr" => I18nLabels {
                 abstract_title: "Résumé / Abstract",
@@ -96,6 +101,8 @@ impl PhysureConfig {
                 else_word: "sinon",
                 true_word: "Vrai",
                 false_word: "Faux",
+                manuscript_title: "Manuscrit scientifique Physure",
+                html_generated: "Manuscrit scientifique HTML généré (100 % hors ligne) :",
             },
             "de" => I18nLabels {
                 abstract_title: "Zusammenfassung / Abstract",
@@ -112,6 +119,8 @@ impl PhysureConfig {
                 else_word: "sonst",
                 true_word: "Wahr",
                 false_word: "Falsch",
+                manuscript_title: "Wissenschaftliches Manuskript Physure",
+                html_generated: "Wissenschaftliches HTML-Manuskript erstellt (100 % offline):",
             },
             _ => I18nLabels {
                 abstract_title: "Abstract",
@@ -128,7 +137,44 @@ impl PhysureConfig {
                 else_word: "else",
                 true_word: "True",
                 false_word: "False",
+                manuscript_title: "Physure Scientific Manuscript",
+                html_generated: "Scientific HTML manuscript generated (100% offline):",
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels(lang: &str) -> I18nLabels {
+        PhysureConfig { lang: lang.to_string() }.i18n()
+    }
+
+    #[test]
+    fn english_is_the_default_and_an_unknown_language_falls_back_to_it() {
+        for lang in ["en", "", "pt", "xx"] {
+            let l = labels(lang);
+            assert_eq!(l.html_lang, "en", "{lang}");
+            assert_eq!(l.manuscript_title, "Physure Scientific Manuscript", "{lang}");
+            assert!(l.html_generated.starts_with("Scientific HTML manuscript generated"), "{lang}");
+        }
+    }
+
+    #[test]
+    fn every_language_has_its_own_manuscript_title_and_message() {
+        let en = labels("en");
+        for (lang, title) in [
+            ("es", "Manuscrito Científico Physure"),
+            ("es-mx", "Manuscrito Científico Physure"),
+            ("fr", "Manuscrit scientifique Physure"),
+            ("de", "Wissenschaftliches Manuskript Physure"),
+        ] {
+            let l = labels(lang);
+            assert_eq!(l.manuscript_title, title, "{lang}");
+            assert_ne!(l.html_generated, en.html_generated, "{lang}");
+            assert!(!l.html_generated.is_empty(), "{lang}");
         }
     }
 }

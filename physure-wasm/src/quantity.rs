@@ -29,19 +29,21 @@ impl Quantity {
         self.inner.to_string()
     }
 
+    // The three getters read one consistent triple, the one `toString` shows: `2 m * 3 km` is 6000 m^2.
+    // The stored magnitude (6) next to the scale-less symbol `m^2` would be 1000 times too small.
     #[wasm_bindgen(getter)]
     pub fn value(&self) -> f64 {
-        self.inner.value.mean()
+        self.inner.display_parts().0
     }
 
     #[wasm_bindgen(getter)]
     pub fn uncertainty(&self) -> f64 {
-        self.inner.value.std_dev()
+        self.inner.display_parts().1
     }
 
     #[wasm_bindgen(getter)]
     pub fn unit(&self) -> String {
-        self.inner.unit.__repr__()
+        self.inner.display_parts().2
     }
 
     pub fn add(&self, other: &Quantity) -> Result<Quantity, JsValue> {

@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 
 UncType = TypeVar("UncType")
 
+_NEEDS_JACOBIANS = (
+    "propagate_mul_div requires explicit jac_self and jac_other."
+)
+_NEEDS_VALUE_OR_JAC = "Either value or jac must be provided to power()"
+
 
 class Uncertainty(ABC, Generic[UncType]):
     """Abstract base class for uncertainty models.
@@ -128,6 +133,16 @@ class Uncertainty(ABC, Generic[UncType]):
                 return VarianceModel(variance=std_dev)
             return CovarianceModel.from_standard(std_dev, measurement_id)
 
+        return cls._scalar_from_standard(std_dev, measurement_id, backend)
+
+    @classmethod
+    def _scalar_from_standard(
+        cls,
+        std_dev: UncType,
+        measurement_id: str | None,
+        backend: BackendOps,
+    ) -> Uncertainty[UncType] | None:
+        """The model of one standard deviation: a scalar, or an array of one element."""
         # Scalar dispatch. Provenance tracking is always on, matching the Rust core:
         # without it a quantity is treated as independent of itself and `x - x`
         # comes out at std_dev*sqrt(2) instead of zero. It used to be reached only
@@ -407,9 +422,7 @@ class LineageModel(Uncertainty[UncType]):
         inferred from the values.
         """
         if jac_self is None or jac_other is None:
-            raise ValueError(
-                "propagate_mul_div requires explicit jac_self and jac_other."
-            )
+            raise ValueError(_NEEDS_JACOBIANS)
         return self.add(other, jac_self, jac_other, out_magnitude=result_value)
 
     def power(
@@ -421,9 +434,7 @@ class LineageModel(Uncertainty[UncType]):
         """Propagates uncertainty for exponentiation."""
         if jac is None:
             if value is None:
-                raise ValueError(
-                    "Either value or jac must be provided to power()"
-                )
+                raise ValueError(_NEEDS_VALUE_OR_JAC)
             jac = exponent * cast("Any", value) ** (exponent - 1)
         return self.scale(jac)
 
@@ -671,9 +682,7 @@ class VarianceModel(Uncertainty[UncType]):
         val1/val2 misclassifies mul as div when val2 is close to +/-1).
         """
         if jac_self is None or jac_other is None:
-            raise ValueError(
-                "propagate_mul_div requires explicit jac_self and jac_other."
-            )
+            raise ValueError(_NEEDS_JACOBIANS)
 
         return self.add(other, jac_self, jac_other, out_magnitude=result_value)
 
@@ -687,9 +696,7 @@ class VarianceModel(Uncertainty[UncType]):
         backend = BackendManager.get_backend(self.variance)
         if jac is None:
             if value is None:
-                raise ValueError(
-                    "Either value or jac must be provided to power()"
-                )
+                raise ValueError(_NEEDS_VALUE_OR_JAC)
             term = backend.pow(value, exponent - 1)
             jac = backend.mul(term, exponent)
 
@@ -932,7 +939,8 @@ class CovarianceModel(Uncertainty[UncType]):
             in_slices.append(other.ensure_vector_slice(backend))
         else:
             std = getattr(other, "std_dev", other)
-            in_slices.append(store.register_independent_array(std))
+            # the same model is the same variable, however many operations it takes part in
+            in_slices.append(store.register_independent_model(other, std))
         jacobians.append(jac_other)
 
     def _add_vector_path(
@@ -1058,9 +1066,7 @@ class CovarianceModel(Uncertainty[UncType]):
         val1/val2 misclassifies mul as div when val2 is close to +/-1).
         """
         if jac_self is None or jac_other is None:
-            raise ValueError(
-                "propagate_mul_div requires explicit jac_self and jac_other."
-            )
+            raise ValueError(_NEEDS_JACOBIANS)
 
         return cast(
             "CovarianceModel",
@@ -1077,9 +1083,7 @@ class CovarianceModel(Uncertainty[UncType]):
         backend = BackendManager.get_backend(self.std_dev_internal)
         if jac is None:
             if value is None:
-                raise ValueError(
-                    "Either value or jac must be provided to power()"
-                )
+                raise ValueError(_NEEDS_VALUE_OR_JAC)
             term = backend.pow(value, exponent - 1)
             jac = backend.mul(term, exponent)
 

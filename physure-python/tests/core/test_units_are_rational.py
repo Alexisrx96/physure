@@ -69,8 +69,8 @@ def test_a_unit_with_a_fractional_power_pickles():
 
 
 def test_a_fractional_power_is_shown_as_the_decimal_it_always_was():
-    assert str(METRE**0.5) == "m⁰⋅⁵"
-    assert str(METRE**-0.5) == "1/m⁰⋅⁵"
+    assert str(METRE**0.5) == "m^(1/2)"
+    assert str(METRE**-0.5) == "1/m^(1/2)"
     assert str(METRE**2 / CompoundUnit({"s": 1})) == "m²/s"
 
 

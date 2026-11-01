@@ -179,6 +179,45 @@ impl FechnerGaussian {
     ///
     /// Scale-free, which is what makes the inverse map a one-dimensional search: the shape is
     /// fixed by the ratio alone, and the variance only sets how wide it is afterwards.
+    /// The moments that settle the half-widths without any search: not numbers, or a zero variance. `None`
+    /// when the search is needed.
+    fn degenerate_moments(variance: f64, third: f64) -> Option<PhysureResult<(f64, f64)>> {
+        if !variance.is_finite() || !third.is_finite() || variance < 0.0 {
+            return Some(Err(PhysureError::Generic(format!(
+                "Cannot recover half-widths from a non-finite or negative variance: \
+                 ({variance}, {third})"
+            ))));
+        }
+        if variance != 0.0 {
+            return None;
+        }
+        Some(if third == 0.0 {
+            Ok((0.0, 0.0))
+        } else {
+            Err(PhysureError::Generic(format!(
+                "A zero variance cannot carry a third moment of {third}"
+            )))
+        })
+    }
+
+    /// The ratio σ⁺/σ⁻ whose skewness is `target`, by bisection; infinite past what the search can reach.
+    fn ratio_for_skewness(target: f64) -> f64 {
+        if target >= Self::skewness_of_ratio(Self::RATIO_MAX) {
+            // The one-sided limit, where the closed form is exact and the search is not.
+            return f64::INFINITY;
+        }
+        let (mut lo, mut hi) = (1.0, Self::RATIO_MAX);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if Self::skewness_of_ratio(mid) < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
     fn skewness_of_ratio(ratio: f64) -> f64 {
         let d = ratio - 1.0;
         let variance = ratio + (1.0 - FRAC_2_PI) * d * d;
@@ -211,20 +250,8 @@ impl AsymmetryShape for FechnerGaussian {
     /// would need an unbounded ratio to close the last gap. A skewness beyond
     /// [`FechnerGaussian::max_skewness`] has no `(sigma-, sigma+)` form under this shape.
     fn sigmas_from_moments(&self, variance: f64, third: f64) -> PhysureResult<(f64, f64)> {
-        if !variance.is_finite() || !third.is_finite() || variance < 0.0 {
-            return Err(PhysureError::Generic(format!(
-                "Cannot recover half-widths from a non-finite or negative variance: \
-                 ({variance}, {third})"
-            )));
-        }
-        if variance == 0.0 {
-            return if third == 0.0 {
-                Ok((0.0, 0.0))
-            } else {
-                Err(PhysureError::Generic(format!(
-                    "A zero variance cannot carry a third moment of {third}"
-                )))
-            };
+        if let Some(degenerate) = Self::degenerate_moments(variance, third) {
+            return degenerate;
         }
 
         let skew = third / variance.powf(1.5);
@@ -240,22 +267,7 @@ impl AsymmetryShape for FechnerGaussian {
             )));
         }
 
-        let ratio = if target >= Self::skewness_of_ratio(Self::RATIO_MAX) {
-            // The one-sided limit, where the closed form is exact and the search is not.
-            f64::INFINITY
-        } else {
-            let (mut lo, mut hi) = (1.0, Self::RATIO_MAX);
-            for _ in 0..100 {
-                let mid = 0.5 * (lo + hi);
-                if Self::skewness_of_ratio(mid) < target {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-            }
-            0.5 * (lo + hi)
-        };
-
+        let ratio = Self::ratio_for_skewness(target);
         let (narrow, wide) = if ratio.is_finite() {
             let d = ratio - 1.0;
             let narrow = (variance / (ratio + (1.0 - FRAC_2_PI) * d * d)).sqrt();

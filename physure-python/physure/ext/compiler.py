@@ -64,6 +64,7 @@ def compile_physics_model(
     >>> round(fast_drag(1.225, 10.0, 2.5, 0.3), 4)
     45.9375
     """
+    del target  # reserved for other code generators; every target compiles the same kernel today
     system = get_default_system()
     param_names = list(inspect.signature(func).parameters)
 

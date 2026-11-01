@@ -330,6 +330,28 @@ class NumpyBackend(BackendOps):
         """Returns an identity operator (matrix) of the given size."""
         return sparse.eye(size, format="csr")
 
+    def broadcast_operator(
+        self,
+        coefficients: Any,
+        shape: tuple[int, ...],
+        out_shape: tuple[int, ...],
+        reference: Any = None,
+    ) -> Any:
+        """Returns the Jacobian of a result with respect to an operand that was broadcast."""
+        out_size = int(np.prod(out_shape, dtype=np.int64))
+        size = int(np.prod(shape, dtype=np.int64))
+        columns = np.broadcast_to(
+            np.arange(size).reshape(shape), out_shape
+        ).reshape(-1)
+        values = (
+            np.ones(out_size)
+            if coefficients is None
+            else np.asarray(coefficients, dtype=np.float64).reshape(-1)
+        )
+        return sparse.csr_matrix(
+            (values, (np.arange(out_size), columns)), shape=(out_size, size)
+        )
+
     def diagonal_operator(self, diagonal: Any) -> Any:
         """Returns a diagonal operator from the given values."""
         # ponytail: scipy-stubs types offsets as a single int; a list

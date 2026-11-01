@@ -6,13 +6,68 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const GITHUB_API: &str = "https://api.github.com/repos/Alexisrx96/physure";
+
+/// What an upgrade works on: where GitHub is, which `phs` is replaced and which version it is, where a
+/// `physure-lsp` is looked for besides next to it, and the scratch directory the downloads and builds use.
+/// `Upgrade::current()` is the real thing; a test builds its own around a local server and a temporary directory.
+struct Upgrade {
+    api: String,
+    phs_installed: PathBuf,
+    home: Option<PathBuf>,
+    running: semver::Version,
+    os: &'static str,
+    arch: &'static str,
+    scratch: PathBuf,
+}
+
+impl Upgrade {
+    fn current() -> Result<Self, String> {
+        let phs_installed = std::env::current_exe()
+            .map_err(|e| format!("Could not determine the running phs's own path: {e}"))?;
+        Ok(Upgrade {
+            api: GITHUB_API.to_string(),
+            phs_installed,
+            home: dirs::home_dir(),
+            running: semver::Version::parse(env!("CARGO_PKG_VERSION"))
+                .expect("CARGO_PKG_VERSION is always valid semver"),
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            scratch: std::env::temp_dir().join(format!("phs-upgrade-{}", std::process::id())),
+        })
+    }
+}
+
+/// Builds `krate`'s `bin` from `main` into the given root and says where the binary ended up.
+type Installer<'a> = &'a dyn Fn(&str, &str, &Path) -> Result<PathBuf, String>;
 
 pub fn run_upgrade(nightly: bool) {
-    if nightly {
-        run_nightly_upgrade();
+    let outcome = Upgrade::current().and_then(|upgrade| {
+        if nightly {
+            nightly_upgrade(
+                &upgrade,
+                which_cargo_found(),
+                &cargo_install_from_main,
+                option_env!("PHS_BUILD_SHA"),
+            )
+        } else {
+            stable_upgrade(&upgrade)
+        }
+    });
+    if let Err(e) = outcome {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+}
+
+fn exe_suffix() -> &'static str {
+    if cfg!(windows) {
+        ".exe"
     } else {
-        run_stable_upgrade();
+        ""
     }
 }
 
@@ -88,13 +143,29 @@ fn download_file(url: &str, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The `tar` that reads both release archive types. On Windows that is the bsdtar that ships in
+/// `System32` (Windows 10 1803+), named by its full path: a `tar` found on `PATH` may be the GNU
+/// one that comes with Git for Windows, and that one takes the `C:` of `C:\dir\file` for a remote
+/// host ("Cannot connect to C: resolve failed").
+fn tar_program() -> PathBuf {
+    if cfg!(windows) {
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            let system_tar = Path::new(&root).join("System32").join("tar.exe");
+            if system_tar.exists() {
+                return system_tar;
+            }
+        }
+    }
+    PathBuf::from("tar")
+}
+
 /// Extracts `archive` (`.zip` or `.tar.gz`) into `dest_dir` by shelling out to the system
 /// `tar` -- bsdtar, which every target platform ships by default (Windows 10 1803+, macOS,
 /// Linux), reads both archive types through the same `-xf`, so this needs no archive-handling
 /// crate.
 fn extract_archive(archive: &Path, dest_dir: &Path) -> Result<(), String> {
     fs::create_dir_all(dest_dir).map_err(|e| format!("creating {}: {e}", dest_dir.display()))?;
-    let status = std::process::Command::new("tar")
+    let status = Command::new(tar_program())
         .arg("-xf")
         .arg(archive)
         .arg("-C")
@@ -154,157 +225,158 @@ fn replace_binary(installed: &Path, new_content: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The default (non-`--nightly`) upgrade flow: checks GitHub for the latest `core-v*` release,
-/// and if it's newer than the running `phs`, downloads and extracts the platform-appropriate
-/// asset, then replaces the running `phs` binary and (if present alongside it or in
-/// `~/.cargo/bin`) `physure-lsp`. Prints progress and exits 1 on any failure that prevents `phs`
-/// itself from being updated; a `physure-lsp` replace failure alone is reported but non-fatal.
-fn run_stable_upgrade() {
-    println!("Checking for the latest release...");
-    let releases = match github_get("https://api.github.com/repos/Alexisrx96/physure/releases") {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("Failed to check for updates: {e}");
-            std::process::exit(1);
-        }
-    };
-    let Some(releases_arr) = releases.as_array() else {
-        eprintln!("Unexpected response from GitHub releases API.");
-        std::process::exit(1);
-    };
-    let Some(release) = releases_arr.iter().find(|r| {
-        r["tag_name"]
-            .as_str()
-            .map(|t| t.starts_with("core-v"))
-            .unwrap_or(false)
-    }) else {
-        eprintln!("No core-v* release found on GitHub.");
-        std::process::exit(1);
-    };
-    let tag = release["tag_name"].as_str().unwrap_or("");
-    let Some(latest) = parse_core_tag_version(tag) else {
-        eprintln!("Could not parse a version from release tag '{tag}'.");
-        std::process::exit(1);
-    };
-    let running = semver::Version::parse(env!("CARGO_PKG_VERSION"))
-        .expect("CARGO_PKG_VERSION is always valid semver");
+/// The release the default upgrade installs: its version, the asset built for this platform and where to fetch it.
+struct Release {
+    version: semver::Version,
+    asset_name: &'static str,
+    download_url: String,
+}
 
-    match latest.cmp(&running) {
+/// What `plan_stable_upgrade` makes of GitHub's list of releases: nothing to do (and the words to tell the user),
+/// or a release to install.
+enum StablePlan {
+    Nothing(String),
+    Install(Release),
+}
+
+/// Reads GitHub's list of releases (newest first) the way the default upgrade needs it: the latest `core-v*`
+/// release, whether it is newer than `running`, and -- if it is -- the asset for `os`/`arch` with its URL.
+fn plan_stable_upgrade(
+    releases: &serde_json::Value,
+    running: &semver::Version,
+    os: &str,
+    arch: &str,
+) -> Result<StablePlan, String> {
+    let releases = releases
+        .as_array()
+        .ok_or("Unexpected response from GitHub releases API.")?;
+    let release = releases
+        .iter()
+        .find(|r| r["tag_name"].as_str().is_some_and(|t| t.starts_with("core-v")))
+        .ok_or("No core-v* release found on GitHub.")?;
+    let tag = release["tag_name"].as_str().unwrap_or("");
+    let latest = parse_core_tag_version(tag)
+        .ok_or_else(|| format!("Could not parse a version from release tag '{tag}'."))?;
+
+    match latest.cmp(running) {
         std::cmp::Ordering::Equal => {
-            println!("phs is already up to date ({running}).");
-            return;
+            return Ok(StablePlan::Nothing(format!(
+                "phs is already up to date ({running})."
+            )))
         }
         std::cmp::Ordering::Less => {
-            println!(
+            return Ok(StablePlan::Nothing(format!(
                 "Running {running} is newer than the latest published release ({latest}) -- probably a --nightly build. Nothing to do."
-            );
-            return;
+            )))
         }
         std::cmp::Ordering::Greater => {}
     }
 
-    let Some(asset_name) = platform_asset_name() else {
-        eprintln!(
-            "No prebuilt binary for {}/{}. Try `phs upgrade --nightly` (requires cargo) or install manually.",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        );
-        std::process::exit(1);
-    };
-    let Some(asset) = release["assets"].as_array().and_then(|assets| {
-        assets
-            .iter()
-            .find(|a| a["name"].as_str() == Some(asset_name))
-    }) else {
-        eprintln!("Release {tag} has no asset named '{asset_name}'.");
-        std::process::exit(1);
-    };
-    let Some(download_url) = asset["browser_download_url"].as_str() else {
-        eprintln!("Release asset '{asset_name}' has no download URL.");
-        std::process::exit(1);
-    };
+    let asset_name = asset_name_for(os, arch).ok_or_else(|| {
+        format!("No prebuilt binary for {os}/{arch}. Try `phs upgrade --nightly` (requires cargo) or install manually.")
+    })?;
+    let asset = release["assets"]
+        .as_array()
+        .and_then(|assets| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str() == Some(asset_name))
+        })
+        .ok_or_else(|| format!("Release {tag} has no asset named '{asset_name}'."))?;
+    let download_url = asset["browser_download_url"]
+        .as_str()
+        .ok_or_else(|| format!("Release asset '{asset_name}' has no download URL."))?;
+    Ok(StablePlan::Install(Release {
+        version: latest,
+        asset_name,
+        download_url: download_url.to_string(),
+    }))
+}
 
-    let tmp_dir = std::env::temp_dir().join(format!("phs-upgrade-{}", std::process::id()));
-    if let Err(e) = fs::create_dir_all(&tmp_dir) {
-        eprintln!("Failed to create temp directory {}: {e}", tmp_dir.display());
-        std::process::exit(1);
-    }
-    let archive_path = tmp_dir.join(asset_name);
-
-    println!("Downloading {asset_name}...");
-    if let Err(e) = download_file(download_url, &archive_path) {
-        eprintln!("Download failed: {e}");
-        let _ = fs::remove_dir_all(&tmp_dir);
-        std::process::exit(1);
-    }
-
-    let extract_dir = tmp_dir.join("extracted");
-    if let Err(e) = extract_archive(&archive_path, &extract_dir) {
-        eprintln!("Extraction failed: {e}");
-        let _ = fs::remove_dir_all(&tmp_dir);
-        std::process::exit(1);
-    }
-
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    let phs_installed = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Could not determine the running phs's own path: {e}");
-            let _ = fs::remove_dir_all(&tmp_dir);
-            std::process::exit(1);
+/// The default (non-`--nightly`) upgrade flow: checks GitHub for the latest `core-v*` release,
+/// and if it's newer than the running `phs`, downloads and extracts the platform-appropriate
+/// asset, then replaces the running `phs` binary and (if present alongside it or in
+/// `~/.cargo/bin`) `physure-lsp`. Prints progress and fails on anything that prevents `phs`
+/// itself from being updated; a `physure-lsp` replace failure alone is reported but non-fatal.
+fn stable_upgrade(upgrade: &Upgrade) -> Result<(), String> {
+    println!("Checking for the latest release...");
+    let releases = github_get(&format!("{}/releases", upgrade.api))
+        .map_err(|e| format!("Failed to check for updates: {e}"))?;
+    let release = match plan_stable_upgrade(
+        &releases,
+        &upgrade.running,
+        upgrade.os,
+        upgrade.arch,
+    )? {
+        StablePlan::Nothing(note) => {
+            println!("{note}");
+            return Ok(());
         }
+        StablePlan::Install(release) => release,
     };
-    let phs_extracted = extract_dir.join(format!("phs{exe}"));
-    match replace_binary(&phs_installed, &phs_extracted) {
-        Ok(()) => println!("phs: {running} -> {latest}"),
-        Err(e) => {
-            eprintln!("Failed to replace phs: {e}");
-            let _ = fs::remove_dir_all(&tmp_dir);
-            std::process::exit(1);
-        }
-    }
 
-    let lsp_name = format!("physure-lsp{exe}");
+    fs::create_dir_all(&upgrade.scratch).map_err(|e| {
+        format!(
+            "Failed to create temp directory {}: {e}",
+            upgrade.scratch.display()
+        )
+    })?;
+    let result = install_release(upgrade, &release);
+    let _ = fs::remove_dir_all(&upgrade.scratch);
+    result
+}
+
+/// Downloads and unpacks `release` and puts it in place of the installed `phs` and, if there is one, `physure-lsp`.
+fn install_release(upgrade: &Upgrade, release: &Release) -> Result<(), String> {
+    let archive_path = upgrade.scratch.join(release.asset_name);
+    println!("Downloading {}...", release.asset_name);
+    download_file(&release.download_url, &archive_path)
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    let extract_dir = upgrade.scratch.join("extracted");
+    extract_archive(&archive_path, &extract_dir).map_err(|e| format!("Extraction failed: {e}"))?;
+
+    let phs_extracted = extract_dir.join(format!("phs{}", exe_suffix()));
+    replace_binary(&upgrade.phs_installed, &phs_extracted)
+        .map_err(|e| format!("Failed to replace phs: {e}"))?;
+    println!("phs: {} -> {}", upgrade.running, release.version);
+
+    replace_lsp(upgrade, &extract_dir, &release.version);
+    Ok(())
+}
+
+/// Puts the `physure-lsp` of an extracted release in place of the installed one, when the release has one.
+/// A failure here is told to the user but is not the upgrade's: `phs` itself is already updated.
+fn replace_lsp(upgrade: &Upgrade, extract_dir: &Path, version: &semver::Version) {
+    let lsp_name = format!("physure-lsp{}", exe_suffix());
     let lsp_extracted = extract_dir.join(&lsp_name);
-    if lsp_extracted.exists() {
-        let lsp_target = phs_installed
-            .parent()
-            .map(|dir| dir.join(&lsp_name))
-            .filter(|p| p.exists())
-            .or_else(|| {
-                dirs::home_dir()
-                    .map(|h| h.join(".cargo").join("bin").join(&lsp_name))
-                    .filter(|p| p.exists())
-            });
-        match lsp_target {
-            Some(target) => match replace_binary(&target, &lsp_extracted) {
-                Ok(()) => println!("physure-lsp: updated to {latest}"),
-                Err(e) => eprintln!(
-                    "phs updated, but failed to replace physure-lsp: {e} (try again after closing any editor using it)"
-                ),
-            },
-            None => println!("physure-lsp not found alongside phs or in ~/.cargo/bin; skipped."),
-        }
+    if !lsp_extracted.exists() {
+        return;
     }
-
-    let _ = fs::remove_dir_all(&tmp_dir);
+    let target = installed_lsp_path(&upgrade.phs_installed, &lsp_name, upgrade.home.as_deref());
+    match target {
+        Some(target) => match replace_binary(&target, &lsp_extracted) {
+            Ok(()) => println!("physure-lsp: updated to {version}"),
+            Err(e) => eprintln!(
+                "phs updated, but failed to replace physure-lsp: {e} (try again after closing any editor using it)"
+            ),
+        },
+        None => println!("physure-lsp not found alongside phs or in ~/.cargo/bin; skipped."),
+    }
 }
 
 fn which_cargo_found() -> bool {
     let lookup = if cfg!(windows) { "where" } else { "which" };
-    std::process::Command::new(lookup)
+    Command::new(lookup)
         .arg("cargo")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
-fn cargo_install_from_main(
-    krate: &str,
-    bin: &str,
-    install_root: &Path,
-) -> Result<std::path::PathBuf, String> {
-    let mut cmd = std::process::Command::new("cargo");
+/// The `cargo install` that builds `krate` from the tip of `main` into `install_root`.
+fn cargo_install_command(krate: &str, bin: &str, install_root: &Path) -> Command {
+    let mut cmd = Command::new("cargo");
     cmd.args([
         "install",
         "--git",
@@ -318,10 +390,24 @@ fn cargo_install_from_main(
     }
     cmd.args(["--locked", "--force", "--root"])
         .arg(install_root);
+    cmd
+}
+
+fn cargo_install_from_main(krate: &str, bin: &str, install_root: &Path) -> Result<PathBuf, String> {
+    run_install(cargo_install_command(krate, bin, install_root), krate, bin, install_root)
+}
+
+/// Runs an install command and says where it left `bin`: under `install_root/bin`.
+fn run_install(
+    mut cmd: Command,
+    krate: &str,
+    bin: &str,
+    install_root: &Path,
+) -> Result<PathBuf, String> {
     match cmd.status() {
         Ok(s) if s.success() => Ok(install_root
             .join("bin")
-            .join(format!("{bin}{}", if cfg!(windows) { ".exe" } else { "" }))),
+            .join(format!("{bin}{}", exe_suffix()))),
         Ok(s) => Err(format!("cargo install {krate} exited with {s}")),
         Err(e) => Err(format!("failed to run cargo install for {krate}: {e}")),
     }
@@ -340,96 +426,74 @@ fn complete_compare_files(compare: &serde_json::Value) -> Option<Vec<String>> {
         .collect()
 }
 
-fn run_nightly_upgrade() {
-    if !which_cargo_found() {
-        eprintln!("cargo not found on PATH. Install Rust from https://rustup.rs then re-run `phs upgrade --nightly`.");
-        std::process::exit(1);
+/// Why a nightly upgrade is not needed, when it is not: phs already is on the latest commit of main, or main
+/// moved only by files nothing is built from. A failed check here is never a reason to refuse an upgrade the
+/// user explicitly asked for -- the answer is then `None`, and the upgrade goes on.
+fn nightly_up_to_date_note(api: &str, running_sha: Option<&str>) -> Option<String> {
+    let running_sha = running_sha?;
+    let commit = github_get(&format!("{api}/commits/main")).ok()?;
+    let latest_sha = commit["sha"].as_str()?;
+    let latest_short = &latest_sha[..latest_sha.len().min(7)];
+    if latest_short == running_sha {
+        return Some(format!("phs is already on the latest commit ({running_sha})."));
     }
-
-    let running_sha = option_env!("PHS_BUILD_SHA");
-    let mut should_rebuild = true;
-    let mut status_note: Option<String> = None;
-
-    if let Some(running_sha) = running_sha {
-        if let Ok(commit) =
-            github_get("https://api.github.com/repos/Alexisrx96/physure/commits/main")
-        {
-            if let Some(latest_sha) = commit["sha"].as_str() {
-                let latest_short = &latest_sha[..latest_sha.len().min(7)];
-                if latest_short == running_sha {
-                    should_rebuild = false;
-                    status_note = Some(format!(
-                        "phs is already on the latest commit ({running_sha})."
-                    ));
-                } else {
-                    let compare_url = format!(
-                        "https://api.github.com/repos/Alexisrx96/physure/compare/{running_sha}...{latest_sha}"
-                    );
-                    // A failed diagnostic check here is never a reason to refuse an upgrade
-                    // the user explicitly asked for -- should_rebuild simply stays true.
-                    if let Ok(compare) = github_get(&compare_url) {
-                        if let Some(files) = complete_compare_files(&compare) {
-                            if !is_relevant_change(&files) {
-                                should_rebuild = false;
-                                status_note = Some(format!(
-                                "main moved ({running_sha} -> {latest_short}) but no relevant crate or workspace build input changed -- phs is already effectively up to date."
-                            ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    let compare = github_get(&format!("{api}/compare/{running_sha}...{latest_sha}")).ok()?;
+    let files = complete_compare_files(&compare)?;
+    if is_relevant_change(&files) {
+        return None;
     }
+    Some(format!(
+        "main moved ({running_sha} -> {latest_short}) but no relevant crate or workspace build input changed -- phs is already effectively up to date."
+    ))
+}
 
-    if !should_rebuild {
-        println!(
-            "{}",
-            status_note.unwrap_or_else(|| "phs is already up to date.".to_string())
-        );
-        return;
-    }
-
-    let phs_installed = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Could not determine the running phs's own path: {e}");
-            std::process::exit(1);
-        }
-    };
-    let temp_root =
-        std::env::temp_dir().join(format!("phs-upgrade-nightly-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&temp_root);
-    println!("Building phs from main...");
-    let phs_built = match cargo_install_from_main("physure-cli", "phs", &temp_root) {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("Failed to build phs: {e}");
-            let _ = fs::remove_dir_all(&temp_root);
-            std::process::exit(1);
-        }
-    };
-    if let Err(e) = replace_binary(&phs_installed, &phs_built) {
-        eprintln!("Failed to replace phs: {e}");
-        let _ = fs::remove_dir_all(&temp_root);
-        std::process::exit(1);
-    }
-
-    let exe = if cfg!(windows) { ".exe" } else { "" };
-    let lsp_name = format!("physure-lsp{exe}");
-    let lsp_target = phs_installed
+/// The installed `physure-lsp` to replace: next to `phs`, or else in `home`'s `.cargo/bin`.
+fn installed_lsp_path(phs_installed: &Path, lsp_name: &str, home: Option<&Path>) -> Option<PathBuf> {
+    phs_installed
         .parent()
-        .map(|dir| dir.join(&lsp_name))
+        .map(|dir| dir.join(lsp_name))
         .filter(|p| p.exists())
         .or_else(|| {
-            dirs::home_dir()
-                .map(|h| h.join(".cargo").join("bin").join(&lsp_name))
+            home.map(|h| h.join(".cargo").join("bin").join(lsp_name))
                 .filter(|p| p.exists())
-        });
-    match lsp_target {
+        })
+}
+
+/// The `--nightly` upgrade flow: unless `phs` is already as new as `main` (or `main` changed nothing it is built
+/// from), builds `phs` -- and `physure-lsp`, if there is one to replace -- from `main` with `install` and puts them
+/// in place of the installed ones.
+fn nightly_upgrade(
+    upgrade: &Upgrade,
+    cargo_found: bool,
+    install: Installer,
+    running_sha: Option<&str>,
+) -> Result<(), String> {
+    if !cargo_found {
+        return Err("cargo not found on PATH. Install Rust from https://rustup.rs then re-run `phs upgrade --nightly`.".to_string());
+    }
+    if let Some(note) = nightly_up_to_date_note(&upgrade.api, running_sha) {
+        println!("{note}");
+        return Ok(());
+    }
+
+    let _ = fs::remove_dir_all(&upgrade.scratch);
+    let result = nightly_install(upgrade, install);
+    let _ = fs::remove_dir_all(&upgrade.scratch);
+    result
+}
+
+fn nightly_install(upgrade: &Upgrade, install: Installer) -> Result<(), String> {
+    println!("Building phs from main...");
+    let phs_built = install("physure-cli", "phs", &upgrade.scratch)
+        .map_err(|e| format!("Failed to build phs: {e}"))?;
+    replace_binary(&upgrade.phs_installed, &phs_built)
+        .map_err(|e| format!("Failed to replace phs: {e}"))?;
+
+    let lsp_name = format!("physure-lsp{}", exe_suffix());
+    match installed_lsp_path(&upgrade.phs_installed, &lsp_name, upgrade.home.as_deref()) {
         Some(target) => {
             println!("Building physure-lsp from main...");
-            let result = cargo_install_from_main("physure-lsp", "physure-lsp", &temp_root)
+            let result = install("physure-lsp", "physure-lsp", &upgrade.scratch)
                 .and_then(|built| replace_binary(&target, &built));
             if let Err(e) = result {
                 eprintln!(
@@ -439,9 +503,8 @@ fn run_nightly_upgrade() {
         }
         None => println!("physure-lsp not found alongside phs or in ~/.cargo/bin; skipped."),
     }
-
-    let _ = fs::remove_dir_all(&temp_root);
     println!("Done. Run `phs --version` to confirm the new commit.");
+    Ok(())
 }
 
 /// The four crate directories that actually compile into `phs`/`physure-lsp`. Both binaries
@@ -478,11 +541,6 @@ fn asset_name_for(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-/// `asset_name_for` for the platform this binary is actually running on.
-fn platform_asset_name() -> Option<&'static str> {
-    asset_name_for(std::env::consts::OS, std::env::consts::ARCH)
-}
-
 /// True if any changed file falls under one of the crates that compile into
 /// `phs`/`physure-lsp`, or is a root workspace manifest/lockfile that controls their build.
 fn is_relevant_change(files: &[String]) -> bool {
@@ -494,214 +552,4 @@ fn is_relevant_change(files: &[String]) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_core_tag_version_reads_a_core_tag() {
-        assert_eq!(
-            parse_core_tag_version("core-v0.2.4"),
-            Some(semver::Version::new(0, 2, 4))
-        );
-    }
-
-    #[test]
-    fn parse_core_tag_version_rejects_other_tag_shapes() {
-        assert_eq!(parse_core_tag_version("v0.2.4"), None);
-        assert_eq!(parse_core_tag_version("py-v0.2.4"), None);
-        assert_eq!(parse_core_tag_version("py-core-v0.2.4"), None);
-        assert_eq!(parse_core_tag_version("core-vnotaversion"), None);
-    }
-
-    #[test]
-    fn asset_name_for_covers_every_core_release_yml_target() {
-        assert_eq!(
-            asset_name_for("windows", "x86_64"),
-            Some("phs-windows-x86_64.zip")
-        );
-        assert_eq!(
-            asset_name_for("linux", "x86_64"),
-            Some("phs-linux-x86_64.tar.gz")
-        );
-        assert_eq!(
-            asset_name_for("linux", "aarch64"),
-            Some("phs-linux-aarch64.tar.gz")
-        );
-        assert_eq!(
-            asset_name_for("macos", "x86_64"),
-            Some("phs-macos-x86_64.tar.gz")
-        );
-        assert_eq!(
-            asset_name_for("macos", "aarch64"),
-            Some("phs-macos-aarch64.tar.gz")
-        );
-    }
-
-    #[test]
-    fn asset_name_for_is_none_for_an_unsupported_target() {
-        assert_eq!(asset_name_for("freebsd", "x86_64"), None);
-    }
-
-    #[test]
-    fn platform_asset_name_finds_a_match_on_the_platform_running_this_test() {
-        // This repo's CI and dev machines are always one of the five core-release.yml
-        // targets, so this should never be None in practice.
-        assert!(platform_asset_name().is_some());
-    }
-
-    #[test]
-    fn is_relevant_change_true_for_any_of_the_four_crate_directories() {
-        assert!(is_relevant_change(&[
-            "physure-core/src/quantity.rs".to_string()
-        ]));
-        assert!(is_relevant_change(&[
-            "physure-script/src/interpreter/mod.rs".to_string()
-        ]));
-        assert!(is_relevant_change(&["physure-cli/src/main.rs".to_string()]));
-        assert!(is_relevant_change(&[
-            "physure-lsp/src/incremental.rs".to_string()
-        ]));
-    }
-
-    #[test]
-    fn is_relevant_change_false_for_unrelated_paths() {
-        assert!(!is_relevant_change(&[
-            "physure-python/physure/__init__.py".to_string()
-        ]));
-        assert!(!is_relevant_change(&[
-            "docs/tutorials/phs_primer.md".to_string()
-        ]));
-        assert!(!is_relevant_change(&["README.md".to_string()]));
-        assert!(!is_relevant_change(&[]));
-    }
-
-    #[test]
-    fn is_relevant_change_true_for_workspace_build_inputs() {
-        assert!(is_relevant_change(&["Cargo.toml".to_string()]));
-        assert!(is_relevant_change(&["Cargo.lock".to_string()]));
-    }
-
-    #[test]
-    fn complete_compare_files_rejects_incomplete_or_malformed_lists() {
-        assert!(complete_compare_files(&serde_json::json!({})).is_none());
-        assert!(complete_compare_files(&serde_json::json!({"files": null})).is_none());
-        assert!(complete_compare_files(&serde_json::json!({"files": [{}]})).is_none());
-        assert!(complete_compare_files(&serde_json::json!({
-            "files": (0..300).map(|i| serde_json::json!({"filename": format!("docs/{i}")})).collect::<Vec<_>>()
-        }))
-        .is_none());
-    }
-
-    #[test]
-    fn complete_compare_files_accepts_a_complete_filename_list() {
-        assert_eq!(
-            complete_compare_files(&serde_json::json!({
-                "files": [{"filename": "README.md"}, {"filename": "Cargo.lock"}]
-            })),
-            Some(vec!["README.md".to_string(), "Cargo.lock".to_string()])
-        );
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn make_way_for_renames_an_existing_file_out_of_the_target_path() {
-        use std::io::Read;
-        use std::os::windows::fs::OpenOptionsExt;
-
-        // The exact sharing the Windows loader grants a running exe's image: read + delete,
-        // but *not* write. A plain `File::open` handle grants write-sharing by default and
-        // would let a direct overwrite succeed, so it wouldn't catch a regression here --
-        // only these flags actually reproduce the "Acceso denegado" failure `cargo install`
-        // hit rebuilding a running phs.exe.
-        const FILE_SHARE_READ: u32 = 0x1;
-        const FILE_SHARE_DELETE: u32 = 0x4;
-
-        let dir = std::env::temp_dir().join(format!("phs-upgrade-test-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let target = dir.join("phs.exe");
-        fs::write(&target, b"old content").unwrap();
-
-        // Hold `target` open the way a running phs.exe would hold itself open, across the
-        // whole first `make_way_for` call below.
-        let mut locked = fs::OpenOptions::new()
-            .read(true)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_DELETE)
-            .open(&target)
-            .unwrap();
-
-        // Prove this is really the locked-executable scenario and not an idle-file rename:
-        // a direct overwrite attempt fails with ERROR_SHARING_VIOLATION while `locked` is
-        // open.
-        let overwrite_err = fs::OpenOptions::new()
-            .write(true)
-            .open(&target)
-            .unwrap_err();
-        assert_eq!(
-            overwrite_err.raw_os_error(),
-            Some(32),
-            "expected ERROR_SHARING_VIOLATION"
-        );
-
-        make_way_for(&target).unwrap();
-
-        assert!(
-            !target.exists(),
-            "the original path should be free for a new file"
-        );
-        assert_eq!(
-            fs::read(target.with_extension("old")).unwrap(),
-            b"old content"
-        );
-
-        // The handle opened before the rename is still valid -- this is the property that
-        // lets a process keep running normally after being renamed out from under itself.
-        let mut still_readable = String::new();
-        locked.read_to_string(&mut still_readable).unwrap();
-        assert_eq!(still_readable, "old content");
-        drop(locked);
-
-        // A second call (a second upgrade in a row) must not fail just because a stale
-        // .old from the first one is still sitting there.
-        fs::write(&target, b"new content").unwrap();
-        make_way_for(&target).unwrap();
-        assert!(!target.exists());
-        assert_eq!(
-            fs::read(target.with_extension("old")).unwrap(),
-            b"new content"
-        );
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn make_way_for_renames_on_every_platform() {
-        let dir =
-            std::env::temp_dir().join(format!("phs-upgrade-test-portable-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let target = dir.join("phs");
-        fs::write(&target, b"old content").unwrap();
-
-        make_way_for(&target).unwrap();
-
-        assert!(
-            !target.exists(),
-            "the original path should be free for a new file"
-        );
-        assert_eq!(
-            fs::read(target.with_extension("old")).unwrap(),
-            b"old content"
-        );
-
-        // A second call (a second upgrade in a row) must not fail just because a stale
-        // .old from the first one is still sitting there.
-        fs::write(&target, b"new content").unwrap();
-        make_way_for(&target).unwrap();
-        assert!(!target.exists());
-        assert_eq!(
-            fs::read(target.with_extension("old")).unwrap(),
-            b"new content"
-        );
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-}
+mod tests;

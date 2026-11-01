@@ -344,6 +344,16 @@ class PythonBackend(BackendOps):
         """Returns a diagonal operator from the given values."""
         raise NotImplementedError(self.SPARSE_NOT_SUPPORTED)
 
+    def broadcast_operator(
+        self,
+        coefficients: Any,
+        shape: tuple[int, ...],
+        out_shape: tuple[int, ...],
+        reference: Any = None,
+    ) -> Any:
+        """Returns the Jacobian of a result with respect to an operand that was broadcast."""
+        raise NotImplementedError(self.SPARSE_NOT_SUPPORTED)
+
     def sparse_matrix(
         self,
         data: Any,

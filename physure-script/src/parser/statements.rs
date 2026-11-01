@@ -47,58 +47,49 @@ fn parse_import(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
     let mut specifier = ImportSpecifier::Wildcard;
     let mut is_use = false;
     let mut alias = None;
-    
+
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::import_symbols => {
                 is_use = true;
-                let symbols_str = inner.as_str().trim();
-                if symbols_str == "*" {
-                    specifier = ImportSpecifier::Wildcard;
-                } else {
-                    let mut symbols = Vec::new();
-                    for sym_pair in inner.into_inner() {
-                        if sym_pair.as_rule() == Rule::import_symbol_item {
-                            let mut name = String::new();
-                            let mut sym_alias = None;
-                            for p in sym_pair.into_inner() {
-                                if name.is_empty() {
-                                    name = p.as_str().to_string();
-                                } else {
-                                    sym_alias = Some(p.as_str().to_string());
-                                }
-                            }
-                            symbols.push(ImportSymbol { name, alias: sym_alias });
-                        }
-                    }
-                    specifier = ImportSpecifier::Symbols(symbols);
-                }
+                specifier = parse_import_symbols(inner);
             }
             Rule::string_lit => {
                 path = inner.as_str().trim_matches('"').to_string();
             }
+            Rule::identifier if path.is_empty() => {
+                path = inner.as_str().to_string();
+            }
             Rule::identifier => {
-                if is_use && path.is_empty() {
-                    path = inner.as_str().to_string();
-                } else if !is_use && path.is_empty() {
-                    path = inner.as_str().to_string();
-                } else {
-                    alias = Some(inner.as_str().to_string());
-                }
+                alias = Some(inner.as_str().to_string());
             }
             _ => {}
         }
     }
-    
+
     if !is_use {
-        if let Some(a) = alias {
-            specifier = ImportSpecifier::ModuleAlias(a);
-        } else {
-            specifier = ImportSpecifier::Wildcard; // default for `import "path"`
-        }
+        // `import "path"` brings in everything, under the alias if it is given one
+        specifier = alias.map_or(ImportSpecifier::Wildcard, ImportSpecifier::ModuleAlias);
     }
-    
+
     Ok(Statement::Import(ImportNode { path, specifier }))
+}
+
+/// `*`, or the named symbols of a `use`, each with the alias it is imported under if it has one.
+fn parse_import_symbols(pair: pest::iterators::Pair<Rule>) -> ImportSpecifier {
+    if pair.as_str().trim() == "*" {
+        return ImportSpecifier::Wildcard;
+    }
+    let symbols = pair
+        .into_inner()
+        .filter(|sym_pair| sym_pair.as_rule() == Rule::import_symbol_item)
+        .map(|sym_pair| {
+            let mut names = sym_pair.into_inner().map(|p| p.as_str().to_string());
+            let name = names.next().unwrap_or_default();
+            ImportSymbol { name, alias: names.last() }
+        })
+        .collect();
+    ImportSpecifier::Symbols(symbols)
 }
 
 fn parse_export(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
@@ -139,34 +130,14 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
                 name = inner.as_str().to_string();
             }
             Rule::params => {
-                for p in inner.into_inner() {
-                    if p.as_rule() == Rule::param_item {
-                        let mut param_inner = p.into_inner();
-                        let id_str = param_inner.next().unwrap().as_str().to_string();
-                        let unit_str = param_inner.next().map(|u| u.as_str().trim().to_string());
-                        params.push(id_str);
-                        param_units.push(unit_str);
-                    } else {
-                        params.push(p.as_str().to_string());
-                        param_units.push(None);
-                    }
-                }
+                (params, param_units) = parse_params(inner);
             }
             Rule::expr => {
                 body_lines.push(def_line);
                 body_stmts.push(Statement::Expr(parse_expr(inner)?));
             }
             Rule::block_body => {
-                for stmt_pair in inner.into_inner() {
-                    if stmt_pair.as_rule() == Rule::stmt {
-                        body_lines.push(stmt_pair.line_col().0);
-                        let inner_stmt = stmt_pair.into_inner().next().unwrap();
-                        body_stmts.push(parse_statement(inner_stmt)?);
-                    } else if stmt_pair.as_rule() != Rule::_nl_indent {
-                        body_lines.push(stmt_pair.line_col().0);
-                        body_stmts.push(parse_statement(stmt_pair)?);
-                    }
-                }
+                parse_block_body(inner, &mut body_stmts, &mut body_lines)?;
             }
             _ => {}
         }
@@ -181,6 +152,38 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         decorators: Vec::new(),
         doc: None,
     }))
+}
+
+/// The parameter names of a `fn`, and the unit each one is declared in (`None` when it has none).
+fn parse_params(pair: pest::iterators::Pair<Rule>) -> (Vec<String>, Vec<Option<String>>) {
+    let mut params = Vec::new();
+    let mut param_units = Vec::new();
+    for p in pair.into_inner() {
+        if p.as_rule() == Rule::param_item {
+            let mut param_inner = p.into_inner();
+            params.push(param_inner.next().unwrap().as_str().to_string());
+            param_units.push(param_inner.next().map(|u| u.as_str().trim().to_string()));
+        } else {
+            params.push(p.as_str().to_string());
+            param_units.push(None);
+        }
+    }
+    (params, param_units)
+}
+
+/// The statements of an indented `fn` body, each with the line it starts on.
+fn parse_block_body(pair: pest::iterators::Pair<Rule>, body_stmts: &mut Vec<Statement>, body_lines: &mut Vec<usize>) -> PhysureResult<()> {
+    for stmt_pair in pair.into_inner() {
+        if stmt_pair.as_rule() == Rule::stmt {
+            body_lines.push(stmt_pair.line_col().0);
+            let inner_stmt = stmt_pair.into_inner().next().unwrap();
+            body_stmts.push(parse_statement(inner_stmt)?);
+        } else if stmt_pair.as_rule() != Rule::_nl_indent {
+            body_lines.push(stmt_pair.line_col().0);
+            body_stmts.push(parse_statement(stmt_pair)?);
+        }
+    }
+    Ok(())
 }
 
 fn parse_assignment(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {

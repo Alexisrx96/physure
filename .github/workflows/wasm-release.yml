@@ -46,8 +46,14 @@ jobs:
             exit 1
           fi
 
-  publish:
+  # The binding tests (bindings.yml: the golden file, run against the real native library or the wasm
+  # build) must pass on this commit before anything is published.
+  bindings-tests:
     needs: check-version
+    uses: ./.github/workflows/bindings.yml
+
+  publish:
+    needs: [check-version, bindings-tests]
     runs-on: ubuntu-latest
     environment: npm
     steps:

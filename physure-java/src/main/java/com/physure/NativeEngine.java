@@ -1,8 +1,8 @@
 package com.physure;
 
-import java.io.File;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Map;
 
@@ -11,6 +11,9 @@ import java.util.Map;
  * Compatible with Java 8+.
  */
 public class NativeEngine {
+    private NativeEngine() {
+    }
+
     static {
         try {
             // Attempt to load standard system library
@@ -20,34 +23,25 @@ public class NativeEngine {
             try {
                 loadFromJar();
             } catch (Exception ex) {
-                throw new RuntimeException("Failed to load native library physure_java", ex);
+                throw new IllegalStateException("Failed to load native library physure_java", ex);
             }
         }
     }
 
     private static void loadFromJar() throws Exception {
         String libName = System.mapLibraryName("physure_java");
-        String os = System.getProperty("os.name").toLowerCase();
-        String arch = System.getProperty("os.arch").toLowerCase();
-        
-        String resourcePath = "/natives/";
-        if (os.contains("win")) {
-            resourcePath += "windows/";
-        } else if (os.contains("mac")) {
-            resourcePath += "macos/";
-        } else {
-            resourcePath += "linux/";
-        }
-        resourcePath += arch + "/" + libName;
+        String resourcePath = NativeLibraryLocator.resourcePath(
+            System.getProperty("os.name"), System.getProperty("os.arch"), libName);
 
         try (InputStream in = NativeEngine.class.getResourceAsStream(resourcePath)) {
             if (in == null) {
                 throw new UnsatisfiedLinkError("Native library " + libName + " not found at " + resourcePath);
             }
-            File temp = File.createTempFile("libphysure_java-", "-" + libName);
-            temp.deleteOnExit();
-            Files.copy(in, temp.toPath(), StandardCopyOption.REPLACE_EXISTING);
-            System.load(temp.getAbsolutePath());
+            // NIO creates the file readable and writable by its owner only, which the shared temp directory needs
+            Path temp = Files.createTempFile("libphysure_java-", "-" + libName);
+            temp.toFile().deleteOnExit();
+            Files.copy(in, temp, StandardCopyOption.REPLACE_EXISTING);
+            System.load(temp.toAbsolutePath().toString());
         }
     }
 
@@ -84,6 +78,7 @@ public class NativeEngine {
      * @return A map of unit symbols to their exponents, or null on error.
      */
     public static native Map<String, Integer> getUnitExponents(long registryHandle, String expr);
+    public static native Map<String, Double> getUnitPowers(long registryHandle, String expr);
 
     /**
      * Returns the base-SI scale factor of a unit expression.
@@ -103,6 +98,7 @@ public class NativeEngine {
      * @return String representation of evaluation outputs.
      */
     public static native String evaluateExpression(long registryHandle, String expr);
+    public static native Quantity evaluateQuantity(long registryHandle, String expr);
 
     /**
      * Returns categories mapping (e.g. "length" -> ["m", "cm", "km", ...]).

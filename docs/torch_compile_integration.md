@@ -30,12 +30,14 @@ The breaks are counted with `torch._dynamo.explain` (torch 2.13, CPU, Python 3.1
 |---|---|---|
 | `(a + b) * 2.0` | 6 | 7 |
 | `a * b` | 4 | 5 |
-| `a / b` | 6 | 7 |
+| `a / b` | 7 | 8 |
 | `a.to('km')` | 2 | 3 |
 | `s.to('km/h')` | 2 | 3 |
 | `t.to('K')` (degC) | 2 | 3 |
 
-These counts are the gate of the unit work (A1): moving the unit algebra, the conversion plans, the point/level arithmetic and the exact powers into the core left each of them where it was. A change that makes one larger is a regression, whatever it speeds up.
+These counts are the gate of the unit work (A1): moving the unit algebra, the conversion plans, the point/level arithmetic and the exact powers into the core left each of them where it was. A change that makes one larger is a regression, whatever it speeds up. `benchmarks/count_graph_breaks.py` produces the table (`-v` names the physure source line behind each break) and `tests/ext/test_graph_breaks.py` holds it as a baseline per torch version. (This document said 6 for `a / b`; it measures 7, stably, on torch 2.13.)
+
+Where the breaks come from, on torch 2.13: `UnitRegistry.kind_of` and `UnitRegistry.dimension_of` (calls into a Rust object), `RationalUnit.__new__` (construction of a Rust object, twice per `Quantity`), `parse_unit_expression` (a unit string given to `.to`), `ContextVar.get` (the propagation mode, the uncertainty model, the covariance store) and `Tensor.item()` from the `any(mask)` branch in `Uncertainty.from_standard`. Every `Quantity` created inside a compiled function pays the first four, so removing the Python-state breaks alone does not lower the counts; see the design `2026-10-30-compile-trace-time-units-design.md` for what was tried and what is left.
 
 ## 3. FakeTensors & Backend Operations
 

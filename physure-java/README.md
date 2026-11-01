@@ -1,6 +1,6 @@
 # physure — JVM FFI Bindings
 
-This package contains JVM JNI bindings for the high-performance `physure` core physics engine. It is compatible with **Java 8** through the most recent Java versions.
+This package contains JVM JNI bindings for the high-performance `physure` core physics engine. It is compatible with **Java 8** through the most recent Java versions, and its test suite runs in CI on every LTS release: **8, 11, 17, 21 and 25**.
 
 ## Project Structure
 
@@ -34,6 +34,19 @@ On compilation, cargo outputs the library into `target/release/`:
 The published jar bundles prebuilt natives for Linux/macOS/Windows (x86_64 + aarch64) under
 `/natives/`, so no `-Djava.library.path` setup is needed.
 
+### Java 24 and later
+
+The jar loads its JNI library with `System.loadLibrary` (or `System.load` for the copy bundled in the jar).
+From Java 24 the JVM prints a warning for that call unless native access is enabled, and a later release
+will block it. Start the application with `--enable-native-access=ALL-UNNAMED` to avoid both; older JVMs
+do not know the option, so pass it only on 24 and later.
+
+## Threads
+
+A `UnitRegistry` can be shared between threads: every call holds the registry's lock (the PHS interpreter
+behind `evaluate` is one mutable native object), and `close()` takes the same lock. Registries do not share
+state, so one per thread never waits. `Quantity`, `QuantityVector` and `QuantityMatrix` are immutable.
+
 ## Usage in Java 8+
 
 To load and use the native engine inside your Java project:
@@ -51,6 +64,8 @@ public class Main {
             // 1. Get exponents of unit expressions
             Map<String, Integer> exponents = registry.getUnitExponents("kg*m/s^2");
             System.out.println("Exponents: " + exponents); // {kg=1, m=1, s=-2}
+            // Whole numbers only: a fractional power such as s^0.5 throws PhysureException.
+            // registry.getUnitPowers("s^0.5") answers it exactly: {s=0.5}
 
             // 2. Get scale factor
             double scale = registry.getUnitScale("cm");

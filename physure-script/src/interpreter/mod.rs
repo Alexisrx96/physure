@@ -6,7 +6,7 @@ pub(crate) use statements::StepMode;
 pub(crate) mod helpers;
 
 use std::collections::HashMap;
-use physure_core::error::PhysureResult;
+use physure_core::error::{PhysureError, PhysureResult};
 use std::sync::{Arc, Mutex};
 
 /// A host-registered function callable from PHS source by name. Lets embedders
@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
 
 use crate::debug::{DebugHook, StackFrame};
+use crate::limits::Limits;
 use crate::resolver::{ModuleResolver, FsModuleResolver};
 use crate::PhsValue;
 
@@ -23,6 +24,7 @@ pub struct PhsInterpreter {
     pub env: HashMap<String, PhsValue>,
     pub resolver: Arc<dyn ModuleResolver>,
     pub externals: HashMap<String, ExternalFn>,
+    pub limits: Limits,
     pub(crate) plugin_state: Arc<Mutex<crate::plugin::PluginState>>,
     pub(crate) plugin_base_dir: Option<std::path::PathBuf>,
     /// call-name -> (domain, canonical builtin name), populated by `use x from calc` etc.
@@ -65,6 +67,7 @@ impl PhsInterpreter {
             env: HashMap::new(),
             resolver,
             externals: HashMap::new(),
+            limits: Limits::default(),
             plugin_state: Arc::new(Mutex::new(crate::plugin::PluginState::default())),
             plugin_base_dir: None,
             unlocked_builtins: Arc::new(Mutex::new(HashMap::new())),
@@ -80,6 +83,14 @@ impl PhsInterpreter {
         Self::default()
     }
 
+    /// An interpreter for text from outside: an empty module resolver (no file is read), no base dir (no native
+    /// plugin is ever loaded), and the given limits. Nothing here can be re-enabled by the program it runs.
+    pub fn sandboxed(limits: Limits) -> Self {
+        let mut interp = Self::new(Arc::new(crate::resolver::MemoryModuleResolver::new()));
+        interp.limits = limits;
+        interp
+    }
+
     /// `PhsInterpreter` derives `Clone`, and `call_stack`/`breakpoints`/`step_mode` are
     /// `Arc<Mutex<..>>` -- every clone shares the *same* underlying call stack, breakpoint list,
     /// and step state, not an independent copy. `physure-script/src/function.rs`'s
@@ -93,6 +104,17 @@ impl PhsInterpreter {
         let mut interp = Self::new(resolver);
         interp.debug_hook = Some(hook);
         interp
+    }
+
+    /// Stops an evaluation that has run past its deadline or its stack budget (see [`Limits`]). Cheap when
+    /// neither is set: two `Option` tests.
+    pub(crate) fn check_budget(&self) -> PhysureResult<()> {
+        if let Some(deadline) = self.limits.deadline {
+            if std::time::Instant::now() >= deadline {
+                return Err(PhysureError::Generic("time limit reached".to_string()));
+            }
+        }
+        crate::limits::check_stack(self.limits.max_stack_bytes).map_err(PhysureError::Generic)
     }
 
     pub(crate) fn debug_hook_is_set(&self) -> bool {

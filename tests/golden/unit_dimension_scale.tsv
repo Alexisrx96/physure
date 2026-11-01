@@ -1,0 +1,53 @@
+# What a binding must return for a unit expression, as physure-core says it.
+# Columns (tab-separated): expression, scale, exponents.
+#   scale     the factor to the base-SI magnitude, an f64 in the shortest form that reads back exactly
+#   exponents the exponent of each base unit, `symbol:exponent` joined by `;` (`-` when there are none),
+#             each exponent the numerator over the denominator as an f64 (a fractional power is not an integer)
+# Read by physure-core/tests/binding_contract_golden.rs, physure-java/src/test and physure-wasm/tests.
+# Lines starting with `#` and blank lines are skipped. To change a row on purpose, run
+#   PHYSURE_BLESS_GOLDEN=1 cargo test -p physure --test binding_contract_golden
+# and review the diff: a changed scale or exponent is a change in what every binding answers.
+BTU/h	0.2930710701722222	kg:1.0;m:2.0;s:-3.0
+Hz	1.0	s:-1.0
+J/s	1.0	kg:1.0;m:2.0;s:-3.0
+K	1.0	K:1.0
+L/min	1.6666666666666667e-5	m:3.0;s:-1.0
+N*m	1.0	kg:1.0;m:2.0;s:-2.0
+Pa	1.0	kg:1.0;m:-1.0;s:-2.0
+cal	4.184	kg:1.0;m:2.0;s:-2.0
+dB	1.0	-
+degC	1.0	K:1.0
+degF	0.5555555555555556	K:1.0
+delta_celsius	1.0	K:1.0
+delta_fahrenheit	0.5555555555555556	K:1.0
+eV	1.602176634e-19	kg:1.0;m:2.0;s:-2.0
+ft*lbf	1.3558179483314003	kg:1.0;m:2.0;s:-2.0
+g/cm^3	1000.0	kg:1.0;m:-3.0
+gallon	0.003785411784	m:3.0
+hp	745.6998715822702	kg:1.0;m:2.0;s:-3.0
+kWh	3600000.0	kg:1.0;m:2.0;s:-2.0
+kg	1.0	kg:1.0
+kg*m/s^2	1.0	kg:1.0;m:1.0;s:-2.0
+km	1000.0	m:1.0
+km/h	0.2777777777777778	m:1.0;s:-1.0
+m	1.0	m:1.0
+m/s^2	1.0	m:1.0;s:-2.0
+mmHg	133.322387415	kg:1.0;m:-1.0;s:-2.0
+mol/L	1000.0	m:-3.0;mol:1.0
+pH	1.0	-
+percent	0.01	-
+ppm	1e-6	-
+psi	6894.757293168362	kg:1.0;m:-1.0;s:-2.0
+s	1.0	s:1.0
+s^0.5	1.0	s:0.5
+m^1.5	1.0	m:1.5
+Hz^0.5	1.0	s:-0.5
+kg^0.25*m/s^0.5	1.0	kg:0.25;m:1.0;s:-0.5
+m^-1	1.0	m:-1.0
+km^2	1000000.0	m:2.0
+mm^3	1e-9	m:3.0
+kilometer	1000.0	m:1.0
+attoampere	1e-18	A:1.0
+unity	1.0	-
+N/m^2	1.0	kg:1.0;m:-1.0;s:-2.0
+W*h	3600.0	kg:1.0;m:2.0;s:-2.0

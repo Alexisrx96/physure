@@ -28,6 +28,48 @@ fn count_vec_get(vec: &[(Node, usize)], item: &Node) -> usize {
     vec.iter().find(|(n, _)| n == item).map(|(_, c)| *c).unwrap_or(0)
 }
 
+/// How many times each factor that is not a number occurs among `factors`.
+fn non_number_counts(factors: &[Node]) -> Vec<(Node, usize)> {
+    let mut counts: Vec<(Node, usize)> = Vec::new();
+    for factor in factors {
+        if !matches!(factor, Node::Number(_)) {
+            count_vec_add(&mut counts, factor);
+        }
+    }
+    counts
+}
+
+/// The factors every term has, with the number of times every term has them (the smallest count among the terms).
+fn common_factor_counts(term_factors: &[Vec<Node>]) -> Vec<(Node, usize)> {
+    let Some((first_term, other_terms)) = term_factors.split_first() else {
+        return Vec::new();
+    };
+    let mut common_counts = non_number_counts(first_term);
+    for term in other_terms {
+        let current_counts = non_number_counts(term);
+        for (node, count) in common_counts.iter_mut() {
+            let current_cnt = count_vec_get(&current_counts, node);
+            *count = (*count).min(current_cnt);
+        }
+    }
+    common_counts
+}
+
+/// A term's factors once one occurrence of each shared factor is taken out, as a node.
+fn remaining_term(term: Vec<Node>, shared_factors: &[Node]) -> Node {
+    let mut rem = term;
+    for sf in shared_factors {
+        if let Some(pos) = rem.iter().position(|x| x == sf) {
+            rem.remove(pos);
+        }
+    }
+    match rem.len() {
+        0 => Node::Number(1.0),
+        1 => rem.pop().unwrap(),
+        _ => Node::Mul(rem).simplify(),
+    }
+}
+
 fn factor_add(terms: &[Node]) -> Node {
     let terms_factored: Vec<Node> = terms.iter().map(Node::factor).collect();
     let flat_terms = flatten_add(terms_factored);
@@ -42,26 +84,7 @@ fn factor_add(terms: &[Node]) -> Node {
     }).collect();
 
     // Step 2: Find intersection of non-number terms
-    let mut common_counts: Vec<(Node, usize)> = Vec::new();
-    if let Some(first_term) = term_factors.first() {
-        for factor in first_term {
-            if !matches!(factor, Node::Number(_)) {
-                count_vec_add(&mut common_counts, factor);
-            }
-        }
-        for term in &term_factors[1..] {
-            let mut current_counts: Vec<(Node, usize)> = Vec::new();
-            for factor in term {
-                if !matches!(factor, Node::Number(_)) {
-                    count_vec_add(&mut current_counts, factor);
-                }
-            }
-            for (node, count) in common_counts.iter_mut() {
-                let current_cnt = count_vec_get(&current_counts, node);
-                *count = (*count).min(current_cnt);
-            }
-        }
-    }
+    let common_counts = common_factor_counts(&term_factors);
 
     // Step 3: Check if common factors exist
     let mut shared_factors = Vec::new();
@@ -76,22 +99,7 @@ fn factor_add(terms: &[Node]) -> Node {
     }
 
     // Step 4: Divide out common factors from each term
-    let mut remaining_terms = Vec::new();
-    for term in term_factors {
-        let mut rem = term;
-        for sf in &shared_factors {
-            if let Some(pos) = rem.iter().position(|x| x == sf) {
-                rem.remove(pos);
-            }
-        }
-        if rem.is_empty() {
-            remaining_terms.push(Node::Number(1.0));
-        } else if rem.len() == 1 {
-            remaining_terms.push(rem.pop().unwrap());
-        } else {
-            remaining_terms.push(Node::Mul(rem).simplify());
-        }
-    }
+    let remaining_terms: Vec<Node> = term_factors.into_iter().map(|term| remaining_term(term, &shared_factors)).collect();
 
     let inner_sum = Node::Add(remaining_terms).simplify();
     shared_factors.push(inner_sum);

@@ -141,75 +141,129 @@ impl DebugHook for CliDebugHook {
                 DebuggerCommand::Step => return DebugAction::StepInto,
                 DebuggerCommand::Next => return DebugAction::StepOver,
                 DebuggerCommand::Finish => return DebugAction::StepOut,
-                DebuggerCommand::Locals => {
-                    let Some(frame) = ctx.call_stack.last() else {
-                        println!("(no locals at global scope)");
-                        continue;
-                    };
-                    for name in &frame.declared {
-                        if let Some(val) = ctx.env.get(name) {
-                            RichRenderer::render_variable_card(name, val, None);
-                        }
-                    }
-                }
-                DebuggerCommand::Globals => {
-                    let local_names: std::collections::HashSet<&str> = ctx
-                        .call_stack
-                        .last()
-                        .map(|f| f.declared.iter().map(String::as_str).collect())
-                        .unwrap_or_default();
-                    for (name, val) in ctx.env {
-                        if !local_names.contains(name.as_str()) {
-                            RichRenderer::render_variable_card(name, val, None);
-                        }
-                    }
-                }
-                DebuggerCommand::Backtrace => {
-                    for (depth, frame) in ctx.call_stack.iter().rev().enumerate() {
-                        println!("  #{depth} {} (called from line {})", frame.fn_name, frame.call_site_line);
-                    }
-                }
-                DebuggerCommand::Print(expr_src) => {
-                    match parse_phs(&expr_src) {
-                        Ok(prog) if !prog.statements.is_empty() => {
-                            let interp = PhsInterpreter::default();
-                            let physure_script::Statement::Expr(e) = &prog.statements[0] else {
-                                println!("error: not an expression");
-                                continue;
-                            };
-                            match interp.eval_expr(e, ctx.env) {
-                                Ok(v) => println!("{v}"),
-                                Err(err) => println!("error: {err}"),
-                            }
-                        }
-                        _ => println!("error: could not parse '{expr_src}'"),
-                    }
-                }
-                DebuggerCommand::Inspect(name) => {
-                    let Some(val) = ctx.env.get(&name) else {
-                        println!("error: no variable named '{name}'");
-                        continue;
-                    };
-                    let scope = ctx
-                        .call_stack
-                        .last()
-                        .filter(|f| f.declared.contains(&name))
-                        .map(|f| ScopeKind::Local { owner_fn: f.fn_name.clone(), frame_depth: ctx.call_stack.len() })
-                        .unwrap_or(ScopeKind::Global);
-                    let insp = inspect(&name, val, scope, &self.registry);
-                    println!("{name}");
-                    println!("  kind        : {:?}", insp.kind);
-                    println!("  scope       : {:?}", insp.scope);
-                    println!("  measure     : {:?}", insp.measure);
-                    println!("  unit        : {:?}", insp.unit_display);
-                    println!("  prefix      : {:?}", insp.prefix);
-                    println!("  dimension   : {:?}", insp.dimension);
-                    println!("  uncertainty : {:?}", insp.uncertainty);
-                }
+                DebuggerCommand::Locals => print_locals(ctx),
+                DebuggerCommand::Globals => print_globals(ctx),
+                DebuggerCommand::Backtrace => print_backtrace(ctx),
+                DebuggerCommand::Print(expr_src) => print_expression(&expr_src, ctx),
+                DebuggerCommand::Inspect(name) => inspect_variable(&name, ctx, &self.registry),
                 DebuggerCommand::Unknown(cmd) => {
                     println!("unknown command '{cmd}' -- try print/inspect/locals/globals/backtrace/step/next/finish/continue");
                 }
             }
+        }
+    }
+}
+
+fn print_locals(ctx: &DebugContext) {
+    let Some(frame) = ctx.call_stack.last() else {
+        println!("(no locals at global scope)");
+        return;
+    };
+    for name in &frame.declared {
+        if let Some(val) = ctx.env.get(name) {
+            RichRenderer::render_variable_card(name, val, None);
+        }
+    }
+}
+
+fn print_globals(ctx: &DebugContext) {
+    let local_names: std::collections::HashSet<&str> = ctx
+        .call_stack
+        .last()
+        .map(|f| f.declared.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    for (name, val) in ctx.env {
+        if !local_names.contains(name.as_str()) {
+            RichRenderer::render_variable_card(name, val, None);
+        }
+    }
+}
+
+fn print_backtrace(ctx: &DebugContext) {
+    for (depth, frame) in ctx.call_stack.iter().rev().enumerate() {
+        println!("  #{depth} {} (called from line {})", frame.fn_name, frame.call_site_line);
+    }
+}
+
+/// `print <expression>`: the expression evaluated in the paused scope.
+fn print_expression(expr_src: &str, ctx: &DebugContext) {
+    let prog = match parse_phs(expr_src) {
+        Ok(prog) if !prog.statements.is_empty() => prog,
+        _ => {
+            println!("error: could not parse '{expr_src}'");
+            return;
+        }
+    };
+    let physure_script::Statement::Expr(e) = &prog.statements[0] else {
+        println!("error: not an expression");
+        return;
+    };
+    match PhsInterpreter::default().eval_expr(e, ctx.env) {
+        Ok(v) => println!("{v}"),
+        Err(err) => println!("error: {err}"),
+    }
+}
+
+/// `inspect <name>`: what the variable is, in which scope, with its unit, prefix, dimension and uncertainty.
+fn inspect_variable(name: &str, ctx: &DebugContext, registry: &physure_core::UnitRegistry) {
+    let Some(val) = ctx.env.get(name) else {
+        println!("error: no variable named '{name}'");
+        return;
+    };
+    let scope = ctx
+        .call_stack
+        .last()
+        .filter(|f| f.declared.iter().any(|declared| declared == name))
+        .map(|f| ScopeKind::Local { owner_fn: f.fn_name.clone(), frame_depth: ctx.call_stack.len() })
+        .unwrap_or(ScopeKind::Global);
+    let insp = inspect(name, val, scope, registry);
+    println!("{name}");
+    println!("  kind        : {:?}", insp.kind);
+    println!("  scope       : {:?}", insp.scope);
+    println!("  measure     : {:?}", insp.measure);
+    println!("  unit        : {:?}", insp.unit_display);
+    println!("  prefix      : {:?}", insp.prefix);
+    println!("  dimension   : {:?}", insp.dimension);
+    println!("  uncertainty : {:?}", insp.uncertainty);
+}
+
+/// `--break N` or `--break N:condition`: sets the breakpoint, or says why it cannot.
+fn add_line_breakpoint(interp: &mut PhsInterpreter, raw: Option<&String>) {
+    let Some(spec) = raw.and_then(|v| parse_break_flag(v)) else {
+        eprintln!(
+            "warning: could not parse breakpoint '{}' (line numbers must be 1 or greater)",
+            raw.map(String::as_str).unwrap_or("")
+        );
+        return;
+    };
+    match spec {
+        BreakpointSpec::Line(l) => interp.add_breakpoint(Breakpoint::Line(l)),
+        BreakpointSpec::Conditional(l, cond_src) => match parse_phs(&cond_src) {
+            Ok(prog) if !prog.statements.is_empty() => {
+                if let physure_script::Statement::Expr(e) = prog.statements.into_iter().next().unwrap() {
+                    interp.add_breakpoint(Breakpoint::Conditional(l, e));
+                }
+            }
+            _ => eprintln!("warning: could not parse breakpoint condition '{cond_src}'"),
+        },
+    }
+}
+
+fn add_breakpoints(interp: &mut PhsInterpreter, args: &[String]) {
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--break-fn" => {
+                if let Some(name) = args.get(i + 1) {
+                    interp.add_breakpoint(Breakpoint::FunctionEntry(name.clone()));
+                }
+                i += 2;
+            }
+            "--break" => {
+                add_line_breakpoint(interp, args.get(i + 1));
+                i += 2;
+            }
+            _ => i += 1,
         }
     }
 }
@@ -222,17 +276,13 @@ pub fn run_debug(args: &[String]) {
             process::exit(1);
         }
     };
-    let code = match std::fs::read_to_string(&script_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: could not read '{}': {}", script_path, e);
-            process::exit(1);
-        }
-    };
-    let program = match parse_phs(&code) {
+    let loaded = std::fs::read_to_string(&script_path)
+        .map_err(|e| format!("could not read '{}': {}", script_path, e))
+        .and_then(|code| parse_phs(&code).map_err(|e| format!("parse failed: {}", e)));
+    let program = match loaded {
         Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: parse failed: {}", e);
+        Err(message) => {
+            eprintln!("error: {message}");
             process::exit(1);
         }
     };
@@ -242,41 +292,7 @@ pub fn run_debug(args: &[String]) {
         Arc::new(physure_script::resolver::FsModuleResolver::default()),
         Arc::new(CliDebugHook { registry }),
     );
-
-    let mut i = 2;
-    while i < args.len() {
-        if args[i] == "--break-fn" {
-            if let Some(name) = args.get(i + 1) {
-                interp.add_breakpoint(Breakpoint::FunctionEntry(name.clone()));
-            }
-            i += 2;
-        } else if args[i] == "--break" {
-            let raw = args.get(i + 1);
-            if let Some(spec) = raw.and_then(|v| parse_break_flag(v)) {
-                match spec {
-                    BreakpointSpec::Line(l) => interp.add_breakpoint(Breakpoint::Line(l)),
-                    BreakpointSpec::Conditional(l, cond_src) => {
-                        match parse_phs(&cond_src) {
-                            Ok(prog) if !prog.statements.is_empty() => {
-                                if let physure_script::Statement::Expr(e) = prog.statements.into_iter().next().unwrap() {
-                                    interp.add_breakpoint(Breakpoint::Conditional(l, e));
-                                }
-                            }
-                            _ => eprintln!("warning: could not parse breakpoint condition '{cond_src}'"),
-                        }
-                    }
-                }
-            } else {
-                eprintln!(
-                    "warning: could not parse breakpoint '{}' (line numbers must be 1 or greater)",
-                    raw.map(String::as_str).unwrap_or("")
-                );
-            }
-            i += 2;
-        } else {
-            i += 1;
-        }
-    }
+    add_breakpoints(&mut interp, args);
 
     match interp.run_statements_with_lines(&program) {
         Ok(_) => println!("Program finished."),

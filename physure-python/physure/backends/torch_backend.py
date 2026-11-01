@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -176,6 +177,10 @@ class TorchBackend(BackendOps):
     @enforce_tensor_contract
     def pow(self, x: Numeric, y: Numeric) -> Numeric:
         """Element-wise power."""
+        if getattr(x, "is_sparse", False) and isinstance(y, (int, float)):
+            # a sparse tensor has `pow` with a scalar exponent only, not with a tensor one;
+            # and only a positive exponent keeps its unstored zeros zero (0 ** 0 is 1)
+            return torch.pow(x if y > 0 else x.to_dense(), y)
         return torch.pow(self.asarray(x), self.asarray(y))
 
     @enforce_tensor_contract
@@ -425,6 +430,39 @@ class TorchBackend(BackendOps):
         device = getattr(reference, "device", None)
         dtype = getattr(reference, "dtype", None)
         return torch.eye(size, device=device, dtype=dtype)
+
+    def broadcast_operator(
+        self,
+        coefficients: Any,
+        shape: tuple[int, ...],
+        out_shape: tuple[int, ...],
+        reference: Any = None,
+    ) -> Any:
+        """Returns the Jacobian of a result with respect to an operand that was broadcast."""
+        device = getattr(reference, "device", None)
+        out_size = math.prod(out_shape)
+        size = math.prod(shape)
+        columns = (
+            torch.arange(size, device=device)
+            .reshape(shape)
+            .expand(out_shape)
+            .reshape(-1)
+        )
+        if coefficients is None:
+            values = torch.ones(
+                out_size,
+                device=device,
+                dtype=getattr(reference, "dtype", None),
+            )
+        else:
+            values = torch.reshape(self.asarray(coefficients), (-1,))
+        rows = torch.arange(out_size, device=values.device)
+        return torch.sparse_coo_tensor(
+            torch.stack([rows, columns.to(values.device)]),
+            values,
+            (out_size, size),
+            check_invariants=False,
+        ).coalesce()
 
     def diagonal_operator(self, diagonal: Any) -> Any:
         """Returns a diagonal operator from the given diagonal values."""

@@ -50,21 +50,8 @@ pub fn laplace(node: &Node, t_var: &str, s_var: &str) -> PhysureResult<Node> {
             let (t_factors, const_factors): (Vec<_>, Vec<_>) =
                 factors.iter().cloned().partition(|f| f.depends_on(t_var));
 
-            let const_node = if const_factors.is_empty() {
-                Node::Number(1.0)
-            } else if const_factors.len() == 1 {
-                const_factors[0].clone()
-            } else {
-                Node::Mul(const_factors).simplify()
-            };
-
-            let t_node = if t_factors.is_empty() {
-                Node::Number(1.0)
-            } else if t_factors.len() == 1 {
-                t_factors[0].clone()
-            } else {
-                Node::Mul(t_factors).simplify()
-            };
+            let const_node = product_node(const_factors);
+            let t_node = product_node(t_factors);
 
             let l_t = laplace(&t_node, t_var, s_var)?;
             Ok(Node::Mul(vec![const_node, l_t]).simplify())
@@ -92,48 +79,16 @@ pub fn laplace(node: &Node, t_var: &str, s_var: &str) -> PhysureResult<Node> {
         }
 
         // L{sin(w * t)} = w / (s^2 + w^2)
-        Node::Sin(ref inner) => {
-            if let Some(w) = extract_linear_coeff(inner, t_var) {
-                let w_sq = Node::Mul(vec![w.clone(), w.clone()]).simplify();
-                let s_sq = Node::Pow(Box::new(s), Box::new(Node::Number(2.0)));
-                let den = Node::Add(vec![s_sq, w_sq]).simplify();
-                return Ok(Node::Div(Box::new(w), Box::new(den)).simplify());
-            }
-            Err(PhysureError::Generic("Unsupported inner arg in sin for laplace".into()))
-        }
+        Node::Sin(ref inner) => laplace_oscillation(inner, t_var, s, "sin", false, false),
 
         // L{cos(w * t)} = s / (s^2 + w^2)
-        Node::Cos(ref inner) => {
-            if let Some(w) = extract_linear_coeff(inner, t_var) {
-                let w_sq = Node::Mul(vec![w.clone(), w.clone()]).simplify();
-                let s_sq = Node::Pow(Box::new(s.clone()), Box::new(Node::Number(2.0)));
-                let den = Node::Add(vec![s_sq, w_sq]).simplify();
-                return Ok(Node::Div(Box::new(s.clone()), Box::new(den)).simplify());
-            }
-            Err(PhysureError::Generic("Unsupported inner arg in cos for laplace".into()))
-        }
+        Node::Cos(ref inner) => laplace_oscillation(inner, t_var, s, "cos", true, false),
 
         // L{sinh(a * t)} = a / (s^2 - a^2)
-        Node::Sinh(ref inner) => {
-            if let Some(a) = extract_linear_coeff(inner, t_var) {
-                let a_sq = Node::Mul(vec![a.clone(), a.clone()]).simplify();
-                let s_sq = Node::Pow(Box::new(s.clone()), Box::new(Node::Number(2.0)));
-                let den = Node::Sub(Box::new(s_sq), Box::new(a_sq)).simplify();
-                return Ok(Node::Div(Box::new(a), Box::new(den)).simplify());
-            }
-            Err(PhysureError::Generic("Unsupported inner arg in sinh for laplace".into()))
-        }
+        Node::Sinh(ref inner) => laplace_oscillation(inner, t_var, s, "sinh", false, true),
 
         // L{cosh(a * t)} = s / (s^2 - a^2)
-        Node::Cosh(ref inner) => {
-            if let Some(a) = extract_linear_coeff(inner, t_var) {
-                let a_sq = Node::Mul(vec![a.clone(), a.clone()]).simplify();
-                let s_sq = Node::Pow(Box::new(s.clone()), Box::new(Node::Number(2.0)));
-                let den = Node::Sub(Box::new(s_sq), Box::new(a_sq)).simplify();
-                return Ok(Node::Div(Box::new(s.clone()), Box::new(den)).simplify());
-            }
-            Err(PhysureError::Generic("Unsupported inner arg in cosh for laplace".into()))
-        }
+        Node::Cosh(ref inner) => laplace_oscillation(inner, t_var, s, "cosh", true, true),
 
         other => Err(PhysureError::Generic(format!(
             "Laplace transform not implemented for expression '{}'",
@@ -142,69 +97,45 @@ pub fn laplace(node: &Node, t_var: &str, s_var: &str) -> PhysureResult<Node> {
     }
 }
 
+/// A product of factors as one node: 1 for none, the factor itself for one, the simplified product otherwise.
+fn product_node(mut factors: Vec<Node>) -> Node {
+    match factors.len() {
+        0 => Node::Number(1.0),
+        1 => factors.remove(0),
+        _ => Node::Mul(factors).simplify(),
+    }
+}
+
+/// The transform of `sin`, `cos`, `sinh` or `cosh` of `w * t`: `w` (or `s`, with `numerator_is_s`) over
+/// `s^2 + w^2` (`s^2 - w^2` for the hyperbolic ones).
+fn laplace_oscillation(inner: &Node, t_var: &str, s: Node, name: &str, numerator_is_s: bool, hyperbolic: bool) -> PhysureResult<Node> {
+    let Some(w) = extract_linear_coeff(inner, t_var) else {
+        return Err(PhysureError::Generic(format!("Unsupported inner arg in {} for laplace", name)));
+    };
+    let w_sq = Node::Mul(vec![w.clone(), w.clone()]).simplify();
+    let s_sq = Node::Pow(Box::new(s.clone()), Box::new(Node::Number(2.0)));
+    let den = if hyperbolic {
+        Node::Sub(Box::new(s_sq), Box::new(w_sq))
+    } else {
+        Node::Add(vec![s_sq, w_sq])
+    }
+    .simplify();
+    let numerator = if numerator_is_s { s } else { w };
+    Ok(Node::Div(Box::new(numerator), Box::new(den)).simplify())
+}
+
 pub fn inv_laplace(node: &Node, s_var: &str, t_var: &str) -> PhysureResult<Node> {
     let t = Node::Symbol(t_var.to_string());
     let s = Node::Symbol(s_var.to_string());
 
-    match node.simplify() {
-        // L^-1{c / s} = c
-        Node::Div(ref num, ref den) if **den == s => Ok((**num).clone()),
-
-        // L^-1{1 / s^2} = t
-        Node::Div(ref num, ref den) if matches!(**den, Node::Pow(ref b, ref e) if **b == s && **e == Node::Number(2.0)) && **num == Node::Number(1.0) => {
-            Ok(t)
+    let simplified = node.simplify();
+    if let Node::Div(num, den) = &simplified {
+        if let Some(result) = inv_laplace_fraction(num, den, &s, &t, s_var) {
+            return result;
         }
+    }
 
-        // L^-1{1 / (s - a)} = exp(a * t)
-        Node::Div(ref num, ref den) if matches!(**den, Node::Sub(ref a, _) if **a == s) && **num == Node::Number(1.0) => {
-            if let Node::Sub(ref a_node, ref b_node) = **den {
-                if **a_node == s {
-                    let a = (**b_node).clone();
-                    let at = Node::Mul(vec![a, t.clone()]).simplify();
-                    return Ok(Node::Exp(Box::new(at)));
-                }
-            }
-            Err(PhysureError::Generic("Failed to invert Laplace pattern".into()))
-        }
-
-        // L^-1{w / (s^2 + w^2)} = sin(w * t)
-        Node::Div(ref num, ref den) if matches!(**den, Node::Add(_)) => {
-            if let Node::Add(ref ts) = **den {
-                if ts.len() == 2 {
-                    let (s_term, w_term) = if ts[0].to_phs_string().contains(s_var) {
-                        (&ts[0], &ts[1])
-                    } else {
-                        (&ts[1], &ts[0])
-                    };
-
-                    if matches!(s_term, Node::Pow(ref b, ref e) if **b == s && **e == Node::Number(2.0)) {
-                        // w^2 = w_term
-                        let w = match w_term {
-                            Node::Number(val) => Node::Number(val.sqrt()),
-                            Node::Pow(b, e) if **e == Node::Number(2.0) => (**b).clone(),
-                            other => Node::Sqrt(Box::new(other.clone())),
-                        };
-
-                        if **num == s {
-                            // L^-1{s / (s^2 + w^2)} = cos(w * t)
-                            let wt = Node::Mul(vec![w, t.clone()]).simplify();
-                            return Ok(Node::Cos(Box::new(wt)));
-                        } else if **num == w {
-                            // L^-1{w / (s^2 + w^2)} = sin(w * t)
-                            let wt = Node::Mul(vec![w, t.clone()]).simplify();
-                            return Ok(Node::Sin(Box::new(wt)));
-                        } else if **num == Node::Number(1.0) {
-                            // 1 / (s^2 + w^2) = (1/w) * sin(w * t)
-                            let wt = Node::Mul(vec![w.clone(), t.clone()]).simplify();
-                            let sin_wt = Node::Sin(Box::new(wt));
-                            return Ok(Node::Div(Box::new(sin_wt), Box::new(w)).simplify());
-                        }
-                    }
-                }
-            }
-            Err(PhysureError::Generic("Failed to invert Laplace fraction".into()))
-        }
-
+    match simplified {
         // Linear sum
         Node::Add(terms) => {
             let mut inv_terms = Vec::new();
@@ -219,6 +150,66 @@ pub fn inv_laplace(node: &Node, s_var: &str, t_var: &str) -> PhysureResult<Node>
             other.to_phs_string()
         ))),
     }
+}
+
+/// The inverse transform of `num / den` for the fractions it knows; `None` for the rest.
+fn inv_laplace_fraction(num: &Node, den: &Node, s: &Node, t: &Node, s_var: &str) -> Option<PhysureResult<Node>> {
+    // L^-1{c / s} = c
+    if *den == *s {
+        return Some(Ok(num.clone()));
+    }
+    let num_is_one = *num == Node::Number(1.0);
+
+    // L^-1{1 / s^2} = t
+    if num_is_one && matches!(den, Node::Pow(b, e) if **b == *s && **e == Node::Number(2.0)) {
+        return Some(Ok(t.clone()));
+    }
+
+    // L^-1{1 / (s - a)} = exp(a * t)
+    if let Node::Sub(a_node, b_node) = den {
+        if num_is_one && **a_node == *s {
+            let at = Node::Mul(vec![(**b_node).clone(), t.clone()]).simplify();
+            return Some(Ok(Node::Exp(Box::new(at))));
+        }
+    }
+
+    if let Node::Add(ts) = den {
+        return Some(invert_oscillation(num, ts, s, t, s_var));
+    }
+    None
+}
+
+/// L^-1{w / (s^2 + w^2)} = sin(w * t), and the cosine and the `1 / (s^2 + w^2)` variants.
+fn invert_oscillation(num: &Node, ts: &[Node], s: &Node, t: &Node, s_var: &str) -> PhysureResult<Node> {
+    if ts.len() == 2 {
+        let (s_term, w_term) = if ts[0].to_phs_string().contains(s_var) {
+            (&ts[0], &ts[1])
+        } else {
+            (&ts[1], &ts[0])
+        };
+
+        if matches!(s_term, Node::Pow(b, e) if **b == *s && **e == Node::Number(2.0)) {
+            // w^2 = w_term
+            let w = match w_term {
+                Node::Number(val) => Node::Number(val.sqrt()),
+                Node::Pow(b, e) if **e == Node::Number(2.0) => (**b).clone(),
+                other => Node::Sqrt(Box::new(other.clone())),
+            };
+            let wt = Node::Mul(vec![w.clone(), t.clone()]).simplify();
+
+            if *num == *s {
+                // L^-1{s / (s^2 + w^2)} = cos(w * t)
+                return Ok(Node::Cos(Box::new(wt)));
+            } else if *num == w {
+                // L^-1{w / (s^2 + w^2)} = sin(w * t)
+                return Ok(Node::Sin(Box::new(wt)));
+            } else if *num == Node::Number(1.0) {
+                // 1 / (s^2 + w^2) = (1/w) * sin(w * t)
+                return Ok(Node::Div(Box::new(Node::Sin(Box::new(wt))), Box::new(w)).simplify());
+            }
+        }
+    }
+    Err(PhysureError::Generic("Failed to invert Laplace fraction".into()))
 }
 
 fn extract_linear_coeff(node: &Node, var: &str) -> Option<Node> {

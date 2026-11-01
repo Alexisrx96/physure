@@ -1,6 +1,6 @@
 //! What the core says about a unit is what Python said before the core could (A1, stage 1c).
 //!
-//! `physure-python/tests/core/golden/unit_semantics.json` freezes the dimension, kind, linearity, alias
+//! `tests/golden/unit_semantics.json` (at the repository root, read by Python as well) freezes the dimension, kind, linearity, alias
 //! and simplified form that Python gave for 32 representative unit expressions. The core has to
 //! reproduce them.
 
@@ -10,7 +10,7 @@ use serde_json::Value;
 
 #[test]
 fn the_core_says_what_python_said_before_it_could() {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../physure-python/tests/core/golden/unit_semantics.json");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/golden/unit_semantics.json");
     let golden: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     let (registry, _) = build_registry_from_conf();
     let expressions = golden.as_object().unwrap();

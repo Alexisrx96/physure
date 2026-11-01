@@ -177,18 +177,18 @@ mod tests {
     /// variant (the same one `Quantity::new` itself uses internally), which is what makes
     /// `"N"` actually expand to `kg*m*s^-2` and compare correctly against the computed
     /// quantity. The physics/numbers in the plan's test were already right (verified by hand:
-    /// P = 5 bar = 500000 Pa, A = area_tubo(50mm) = pi*(25mm)^2 = 1963.495 mm^2 =
+    /// P = 5 bar = 500000 Pa, A = pipe_area(50mm) = pi*(25mm)^2 = 1963.495 mm^2 =
     /// 0.001963495 m^2, F = P*A = 981.75 N) -- only this parser call was wrong.
     #[test]
     fn test_symbolic_composition_between_modules() {
-        let geom_code = "fn area_tubo(d: mm) = 3.1415926535 * (d / 2)^2";
-        let hydr_code = "fn fuerza_empuje(P: bar, A: mm^2) = P * A";
+        let geom_code = "fn pipe_area(d: mm) = 3.1415926535 * (d / 2)^2";
+        let hydr_code = "fn thrust_force(P: bar, A: mm^2) = P * A";
 
         let geom = PhsModule::from_source("geom", geom_code).unwrap();
         let hydr = PhsModule::from_source("hydr", hydr_code).unwrap();
 
         let composite_fn = hydr
-            .compose_with(&geom, "fuerza_empuje", "area_tubo", "A")
+            .compose_with(&geom, "thrust_force", "pipe_area", "A")
             .unwrap();
 
         // Evaluate composite directly: P = 5 bar, d = 50 mm.
@@ -213,11 +213,11 @@ mod tests {
     }
 
     fn geom_module() -> PhsModule {
-        PhsModule::from_source("geom", "fn area_tubo(d: mm) = 3.1415926535 * (d / 2)^2").unwrap()
+        PhsModule::from_source("geom", "fn pipe_area(d: mm) = 3.1415926535 * (d / 2)^2").unwrap()
     }
 
     fn hydr_module() -> PhsModule {
-        PhsModule::from_source("hydr", "fn fuerza_empuje(P: bar, A: mm^2) = P * A").unwrap()
+        PhsModule::from_source("hydr", "fn thrust_force(P: bar, A: mm^2) = P * A").unwrap()
     }
 
     #[test]
@@ -228,7 +228,7 @@ mod tests {
 
         pipeline.add_step(PipelineStep {
             module_name: "geom".to_string(),
-            function_name: "area_tubo".to_string(),
+            function_name: "pipe_area".to_string(),
             inputs: HashMap::from([(
                 "d".to_string(),
                 PipelineArg::Literal(PhsValue::Quantity(
@@ -239,7 +239,7 @@ mod tests {
         });
         pipeline.add_step(PipelineStep {
             module_name: "hydr".to_string(),
-            function_name: "fuerza_empuje".to_string(),
+            function_name: "thrust_force".to_string(),
             inputs: HashMap::from([
                 (
                     "P".to_string(),
@@ -280,7 +280,7 @@ mod tests {
 
         pipeline.add_step(PipelineStep {
             module_name: "hydr".to_string(),
-            function_name: "fuerza_empuje".to_string(),
+            function_name: "thrust_force".to_string(),
             inputs: HashMap::from([
                 (
                     "P".to_string(),
@@ -309,7 +309,7 @@ mod tests {
         // Note: "hydr" module is deliberately never added.
         pipeline.add_step(PipelineStep {
             module_name: "hydr".to_string(),
-            function_name: "fuerza_empuje".to_string(),
+            function_name: "thrust_force".to_string(),
             inputs: HashMap::new(),
             output_alias: "force".to_string(),
         });
@@ -347,8 +347,8 @@ mod tests {
         pipeline.add_module(geom_module());
         pipeline.add_step(PipelineStep {
             module_name: "geom".to_string(),
-            function_name: "area_tubo".to_string(),
-            // "d" is area_tubo's only parameter, and it's never supplied.
+            function_name: "pipe_area".to_string(),
+            // "d" is pipe_area's only parameter, and it's never supplied.
             inputs: HashMap::new(),
             output_alias: "area".to_string(),
         });
@@ -370,7 +370,7 @@ mod tests {
         pipeline.add_module(geom_module());
         pipeline.add_step(PipelineStep {
             module_name: "geom".to_string(),
-            function_name: "area_tubo".to_string(),
+            function_name: "pipe_area".to_string(),
             inputs: HashMap::from([(
                 "d".to_string(),
                 PipelineArg::Literal(PhsValue::Quantity(
@@ -420,7 +420,7 @@ mod tests {
         pipeline.add_module(geom_module());
         pipeline.add_step(PipelineStep {
             module_name: "geom".to_string(),
-            function_name: "area_tubo".to_string(),
+            function_name: "pipe_area".to_string(),
             inputs: HashMap::from([(
                 "d".to_string(),
                 PipelineArg::Literal(PhsValue::Quantity(
@@ -440,7 +440,7 @@ mod tests {
         pipeline.add_module(geom_module());
         pipeline.add_step(PipelineStep {
             module_name: "geom".to_string(),
-            function_name: "area_tubo".to_string(),
+            function_name: "pipe_area".to_string(),
             inputs: HashMap::from([
                 (
                     "d".to_string(),

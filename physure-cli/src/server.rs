@@ -113,84 +113,21 @@ impl ModelServer {
     /// Loads `.phs` modules from a directory, manifest file, or single `.phs` file.
     pub fn from_path(path: impl AsRef<Path>, config: ModelServerConfig) -> PhysureResult<Self> {
         let p = path.as_ref();
-        let mut sources = HashMap::new();
 
-        if p.is_file() {
-            let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if file_name == "phs.toml" {
-                // Load from manifest exports
-                let manifest = crate::package::Manifest::from_file(p)?;
-                let base_dir = p.parent().unwrap_or_else(|| Path::new("."));
-                // Syntax-only: this call only needs `report.modules`' paths/names to build the
-                // `sources` map below. The actual execution of each module's top-level code
-                // happens deliberately, right after, in `Self::new`'s own `PhsModule::from_source`
-                // call per module -- that's the operator-trusted "instantiate for serving" step,
-                // not a "check an unknown package" step, so it's unaffected by this `false`.
-                let report = manifest.validate(base_dir, false)?;
-                for mod_info in report.modules {
-                    let full_path = base_dir.join(&mod_info.relative_path);
-                    let source = fs::read_to_string(&full_path).map_err(|e| {
-                        PhysureError::Generic(format!(
-                            "Error reading module '{}': {}",
-                            full_path.display(),
-                            e
-                        ))
-                    })?;
-                    sources.insert(mod_info.export_name, source);
-                }
-            } else if p.extension().and_then(|e| e.to_str()) == Some("phs") {
-                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
-                let source = fs::read_to_string(p).map_err(|e| {
-                    PhysureError::Generic(format!("Error reading file '{}': {}", p.display(), e))
-                })?;
-                sources.insert(stem.to_string(), source);
-            } else {
-                return Err(PhysureError::Generic(format!(
-                    "Unrecognized file format '{}'. Expected .phs or phs.toml",
-                    p.display()
-                )));
-            }
+        let sources = if p.is_file() {
+            sources_from_file(p)?
         } else if p.is_dir() {
             let manifest_candidate = p.join("phs.toml");
             if manifest_candidate.is_file() {
                 return Self::from_path(&manifest_candidate, config);
             }
-
-            // Load all top-level *.phs files
-            let entries = fs::read_dir(p).map_err(|e| {
-                PhysureError::Generic(format!(
-                    "Cannot read directory '{}': {}",
-                    p.display(),
-                    e
-                ))
-            })?;
-
-            for entry in entries {
-                let entry = entry.map_err(|e| {
-                    PhysureError::Generic(format!("Error reading directory entry: {}", e))
-                })?;
-                let file_path = entry.path();
-                if file_path.is_file()
-                    && file_path.extension().and_then(|e| e.to_str()) == Some("phs")
-                {
-                    if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
-                        let source = fs::read_to_string(&file_path).map_err(|e| {
-                            PhysureError::Generic(format!(
-                                "Error reading '{}': {}",
-                                file_path.display(),
-                                e
-                            ))
-                        })?;
-                        sources.insert(stem.to_string(), source);
-                    }
-                }
-            }
+            sources_from_dir(p)?
         } else {
             return Err(PhysureError::Generic(format!(
                 "Path '{}' does not exist",
                 p.display()
             )));
-        }
+        };
 
         if sources.is_empty() {
             return Err(PhysureError::Generic(format!(
@@ -387,308 +324,186 @@ impl ModelServer {
         // (so same-origin callers aren't broken) but without the headers that would let a
         // cross-origin browser request through.
         if method == Method::Options {
-            let mut response = Response::empty(200);
-            if self.cors_enabled() {
-                response = response
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap())
-                    .with_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization, X-API-Key"[..]).unwrap());
-            }
-            let _ = request.respond(response);
+            self.respond_to_preflight(request);
             return Ok(());
         }
 
         // Authenticate
         if !self.check_auth(&request) {
-            let err_json = serde_json::json!({
-                "status": "error",
-                "error": "Unauthorized: missing or invalid API token"
-            });
-            let response = Response::from_string(err_json.to_string())
-                .with_status_code(StatusCode(401))
-                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-            let _ = request.respond(response);
+            self.respond(request, error_reply(401, "Unauthorized: missing or invalid API token".to_string()));
             return Ok(());
         }
 
-        // Routing
-        match (&method, path) {
-            (Method::Get, "" | "/health" | "/api/v1/health") => {
-                let mut loaded_names: Vec<&String> = self.modules.keys().collect();
-                loaded_names.sort();
-                let resp_json = serde_json::json!({
-                    "status": "ok",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "modules_loaded": self.modules.len(),
-                    "modules": loaded_names
-                });
-                let response = self.with_cors(
-                    Response::from_string(resp_json.to_string())
-                        .with_status_code(StatusCode(200))
-                        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()),
-                );
-                let _ = request.respond(response);
-            }
+        let reply = self.route(&mut request, &method, path);
+        self.respond(request, reply);
+        Ok(())
+    }
+
+    fn respond_to_preflight(&self, request: Request) {
+        let mut response = Response::empty(200);
+        if self.cors_enabled() {
+            response = response
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Methods"[..], &b"GET, POST, OPTIONS"[..]).unwrap())
+                .with_header(Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type, Authorization, X-API-Key"[..]).unwrap());
+        }
+        let _ = request.respond(response);
+    }
+
+    /// Sends a JSON reply, with the content type and CORS header it asks for.
+    fn respond(&self, request: Request, reply: Reply) {
+        let mut response = Response::from_string(reply.body.to_string()).with_status_code(StatusCode(reply.status));
+        if reply.content_type {
+            response = response.with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
+        }
+        if reply.cors {
+            response = self.with_cors(response);
+        }
+        let _ = request.respond(response);
+    }
+
+    fn route(&self, request: &mut Request, method: &Method, path: &str) -> Reply {
+        match (method, path) {
+            (Method::Get, "" | "/health" | "/api/v1/health") => self.health_reply(),
             (Method::Get, "/api/v1/catalog" | "/catalog") => {
                 let catalog = self.build_catalog();
                 let resp_json = serde_json::to_value(&catalog).unwrap_or(serde_json::json!({"status": "error"}));
-                let response = self.with_cors(
-                    Response::from_string(resp_json.to_string())
-                        .with_status_code(StatusCode(200))
-                        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()),
-                );
-                let _ = request.respond(response);
+                cors_reply(200, resp_json)
             }
-            (Method::Post, "/api/v1/pipeline" | "/pipeline") => {
-                let mut body = String::new();
-                if let Err(e) = std::io::Read::take(request.as_reader(), MAX_REQUEST_BODY_BYTES).read_to_string(&mut body) {
-                    let err_json = serde_json::json!({ "status": "error", "error": format!("Failed to read body: {}", e) });
-                    let _ = request.respond(Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)));
-                    return Ok(());
-                }
-
-                let pipeline_req: PipelineRequestJson = match serde_json::from_str(&body) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let err_json = serde_json::json!({ "status": "error", "error": format!("Invalid JSON pipeline request: {}", e) });
-                        let _ = request.respond(Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()));
-                        return Ok(());
-                    }
-                };
-
-                // Reject an oversized pipeline immediately, before doing any further work
-                // (JSON-to-PipelineStep conversion, module lookups, execution). Defense in
-                // depth on top of the interpreter-level `max_pipeline_steps` ceiling: cheap,
-                // and avoids the below step-building work entirely for the oversized case.
-                let max_steps = physure_core::max_pipeline_steps();
-                if pipeline_req.steps.len() > max_steps {
-                    let err_json = serde_json::json!({
-                        "status": "error",
-                        "error": format!(
-                            "pipeline has {} steps, exceeding the max_pipeline_steps ceiling of {}; raise `max_pipeline_steps` in physure.conf's [Settings] section if this is a legitimate workload",
-                            pipeline_req.steps.len(), max_steps
-                        )
-                    });
-                    let _ = request.respond(Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()));
-                    return Ok(());
-                }
-
-                // Build the step list directly against `self.modules` (already parsed once
-                // at server startup) instead of instantiating a `physure_script::pipeline::
-                // PhsPipeline`, which would require re-parsing every loaded module's source
-                // from scratch on every request -- see `execute_pipeline_steps`'s doc
-                // comment for why.
-                let mut steps = Vec::with_capacity(pipeline_req.steps.len());
-                let mut build_error = None;
-                for step_json in pipeline_req.steps {
-                    let mut inputs = HashMap::new();
-                    for (param_name, arg_val) in step_json.inputs {
-                        if let Some(ref_obj) = arg_val.as_object() {
-                            if let Some(ref_name) = ref_obj.get("$ref").and_then(|r| r.as_str()) {
-                                inputs.insert(param_name, PipelineArg::Reference(ref_name.to_string()));
-                                continue;
-                            }
-                        }
-                        match json_value_to_phs_value(&arg_val) {
-                            Ok(val) => {
-                                inputs.insert(param_name, PipelineArg::Literal(val));
-                            }
-                            Err(e) => {
-                                build_error = Some(format!("Invalid argument '{}' in step '{}': {}", param_name, step_json.output, e));
-                                break;
-                            }
-                        }
-                    }
-                    if build_error.is_some() {
-                        break;
-                    }
-                    steps.push(PipelineStep {
-                        module_name: step_json.module,
-                        function_name: step_json.function,
-                        inputs,
-                        output_alias: step_json.output,
-                    });
-                }
-
-                if let Some(err_msg) = build_error {
-                    let err_json = serde_json::json!({ "status": "error", "error": err_msg });
-                    let _ = request.respond(Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()));
-                    return Ok(());
-                }
-
-                match self.execute_pipeline_steps(&steps) {
-                    Ok(outputs) => {
-                        let mut results_json = serde_json::Map::new();
-                        for (alias, val) in outputs {
-                            results_json.insert(alias, phs_value_to_json(&val));
-                        }
-                        let resp = serde_json::json!({
-                            "status": "success",
-                            "results": serde_json::Value::Object(results_json)
-                        });
-                        let response = self.with_cors(
-                            Response::from_string(resp.to_string())
-                                .with_status_code(StatusCode(200))
-                                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()),
-                        );
-                        let _ = request.respond(response);
-                    }
-                    Err(e) => {
-                        let err_json = serde_json::json!({ "status": "error", "error": e.to_string() });
-                        let response = self.with_cors(
-                            Response::from_string(err_json.to_string())
-                                .with_status_code(StatusCode(400))
-                                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()),
-                        );
-                        let _ = request.respond(response);
-                    }
-                }
-            }
-            (Method::Post, p) if p.starts_with("/api/v1/") => {
-                let segments: Vec<&str> = p.trim_start_matches("/api/v1/").split('/').collect();
-                if segments.len() != 2 {
-                    let err_json = serde_json::json!({ "status": "error", "error": format!("Invalid function route '{}'. Expected /api/v1/:module/:function", p) });
-                    let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(404)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                    let _ = request.respond(response);
-                    return Ok(());
-                }
-
-                let module_name = percent_decode(segments[0]);
-                let fn_name = percent_decode(segments[1]);
-
-                let module = match self.modules.get(&module_name) {
-                    Some(m) => m,
-                    None => {
-                        let mut available: Vec<&String> = self.modules.keys().collect();
-                        available.sort();
-                        let err_json = serde_json::json!({
-                            "status": "error",
-                            "error": format!("Module '{}' not found. Available modules: {:?}", module_name, available)
-                        });
-                        let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(404)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                        let _ = request.respond(response);
-                        return Ok(());
-                    }
-                };
-
-                let sig = match module.functions.get(&fn_name) {
-                    Some(s) => s,
-                    None => {
-                        let mut available: Vec<&String> = module.functions.keys().collect();
-                        available.sort();
-                        let err_json = serde_json::json!({
-                            "status": "error",
-                            "error": format!("Function '{}' not found in module '{}'. Available functions: {:?}", fn_name, module_name, available)
-                        });
-                        let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(404)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                        let _ = request.respond(response);
-                        return Ok(());
-                    }
-                };
-
-                let mut body = String::new();
-                if let Err(e) = std::io::Read::take(request.as_reader(), MAX_REQUEST_BODY_BYTES).read_to_string(&mut body) {
-                    let err_json = serde_json::json!({ "status": "error", "error": format!("Failed to read request body: {}", e) });
-                    let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                    let _ = request.respond(response);
-                    return Ok(());
-                }
-
-                let json_args: serde_json::Value = if body.trim().is_empty() {
-                    serde_json::Value::Object(serde_json::Map::new())
-                } else {
-                    match serde_json::from_str(&body) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let err_json = serde_json::json!({ "status": "error", "error": format!("Invalid JSON request body: {}", e) });
-                            let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                            let _ = request.respond(response);
-                            return Ok(());
-                        }
-                    }
-                };
-
-                // Prepare call arguments
-                let call_args_result: PhysureResult<Vec<PhsValue>> = if let Some(arr) = json_args.get("args").and_then(|a| a.as_array()) {
-                    // Positional args
-                    arr.iter().map(json_value_to_phs_value).collect()
-                } else if let Some(map) = json_args.as_object() {
-                    // Keyword args mapped to parameter order. Both branches below become
-                    // this block's own `Err(...)` value via `.collect()` -- never a `return`
-                    // or `?` that would unwind out of `handle_request` itself. An escape
-                    // like that would skip the `call_args_result` match just below (which
-                    // exists specifically to turn a bad request into a clean 400 JSON
-                    // response) and fall through to `tiny_http`'s "request dropped without
-                    // `.respond()`" fallback -- an opaque, bodyless HTTP 500 (pentest
-                    // finding I4, confirmed live with both a missing parameter and a
-                    // wrong-JSON-type parameter).
-                    if let Some(unexpected) = map.keys().find(|k| !sig.params.iter().any(|p| &p.name == *k)) {
-                        Err(PhysureError::Generic(format!(
-                            "Unexpected parameter '{}' for {}.{}()",
-                            unexpected, module_name, fn_name
-                        )))
-                    } else {
-                        sig.params
-                            .iter()
-                            .map(|param| match map.get(&param.name) {
-                                Some(val_json) => json_value_to_phs_value(val_json),
-                                None => Err(PhysureError::Generic(format!(
-                                    "Missing required parameter '{}' for {}.{}()",
-                                    param.name, module_name, fn_name
-                                ))),
-                            })
-                            .collect::<PhysureResult<Vec<PhsValue>>>()
-                    }
-                } else {
-                    Err(PhysureError::Generic("Request body must be a JSON object of parameters or {\"args\": [...]}".into()))
-                };
-
-                let call_args = match call_args_result {
-                    Ok(args) => args,
-                    Err(e) => {
-                        let err_json = serde_json::json!({ "status": "error", "error": e.to_string() });
-                        let response = Response::from_string(err_json.to_string()).with_status_code(StatusCode(400)).with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                        let _ = request.respond(response);
-                        return Ok(());
-                    }
-                };
-
-                match module.invoke(&fn_name, &call_args) {
-                    Ok(result) => {
-                        let resp = serde_json::json!({
-                            "status": "success",
-                            "result": phs_value_to_json(&result)
-                        });
-                        let response = self.with_cors(
-                            Response::from_string(resp.to_string())
-                                .with_status_code(StatusCode(200))
-                                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()),
-                        );
-                        let _ = request.respond(response);
-                    }
-                    Err(e) => {
-                        let err_json = serde_json::json!({ "status": "error", "error": e.to_string() });
-                        let response = self.with_cors(
-                            Response::from_string(err_json.to_string())
-                                .with_status_code(StatusCode(400))
-                                .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap()),
-                        );
-                        let _ = request.respond(response);
-                    }
-                }
-            }
-            _ => {
-                let err_json = serde_json::json!({
-                    "status": "error",
-                    "error": format!("Not Found: {} {}", method, path)
-                });
-                let response = Response::from_string(err_json.to_string())
-                    .with_status_code(StatusCode(404))
-                    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap());
-                let _ = request.respond(response);
-            }
+            (Method::Post, "/api/v1/pipeline" | "/pipeline") => self.pipeline_reply(request),
+            (Method::Post, p) if p.starts_with("/api/v1/") => self.function_reply(request, p),
+            _ => error_reply(404, format!("Not Found: {} {}", method, path)),
         }
-        Ok(())
+    }
+
+    fn health_reply(&self) -> Reply {
+        let mut loaded_names: Vec<&String> = self.modules.keys().collect();
+        loaded_names.sort();
+        cors_reply(
+            200,
+            serde_json::json!({
+                "status": "ok",
+                "version": env!("CARGO_PKG_VERSION"),
+                "modules_loaded": self.modules.len(),
+                "modules": loaded_names
+            }),
+        )
+    }
+
+    fn pipeline_reply(&self, request: &mut Request) -> Reply {
+        let mut body = String::new();
+        if let Err(e) = std::io::Read::take(request.as_reader(), MAX_REQUEST_BODY_BYTES).read_to_string(&mut body) {
+            // the one error answer without a content type
+            return Reply {
+                status: 400,
+                body: serde_json::json!({ "status": "error", "error": format!("Failed to read body: {}", e) }),
+                content_type: false,
+                cors: false,
+            };
+        }
+
+        let pipeline_req: PipelineRequestJson = match serde_json::from_str(&body) {
+            Ok(p) => p,
+            Err(e) => return error_reply(400, format!("Invalid JSON pipeline request: {}", e)),
+        };
+
+        // Reject an oversized pipeline immediately, before doing any further work
+        // (JSON-to-PipelineStep conversion, module lookups, execution). Defense in
+        // depth on top of the interpreter-level `max_pipeline_steps` ceiling: cheap,
+        // and avoids the below step-building work entirely for the oversized case.
+        let max_steps = physure_core::max_pipeline_steps();
+        if pipeline_req.steps.len() > max_steps {
+            return error_reply(
+                400,
+                format!(
+                    "pipeline has {} steps, exceeding the max_pipeline_steps ceiling of {}; raise `max_pipeline_steps` in physure.conf's [Settings] section if this is a legitimate workload",
+                    pipeline_req.steps.len(), max_steps
+                ),
+            );
+        }
+
+        // Build the step list directly against `self.modules` (already parsed once
+        // at server startup) instead of instantiating a `physure_script::pipeline::
+        // PhsPipeline`, which would require re-parsing every loaded module's source
+        // from scratch on every request -- see `execute_pipeline_steps`'s doc
+        // comment for why.
+        let steps = match build_pipeline_steps(pipeline_req.steps) {
+            Ok(steps) => steps,
+            Err(message) => return error_reply(400, message),
+        };
+
+        match self.execute_pipeline_steps(&steps) {
+            Ok(outputs) => {
+                let mut results_json = serde_json::Map::new();
+                for (alias, val) in outputs {
+                    results_json.insert(alias, phs_value_to_json(&val));
+                }
+                cors_reply(
+                    200,
+                    serde_json::json!({
+                        "status": "success",
+                        "results": serde_json::Value::Object(results_json)
+                    }),
+                )
+            }
+            Err(e) => cors_reply(400, serde_json::json!({ "status": "error", "error": e.to_string() })),
+        }
+    }
+
+    /// `POST /api/v1/:module/:function`: calls the function with the JSON body's arguments.
+    fn function_reply(&self, request: &mut Request, p: &str) -> Reply {
+        let segments: Vec<&str> = p.trim_start_matches("/api/v1/").split('/').collect();
+        if segments.len() != 2 {
+            return error_reply(404, format!("Invalid function route '{}'. Expected /api/v1/:module/:function", p));
+        }
+
+        let module_name = percent_decode(segments[0]);
+        let fn_name = percent_decode(segments[1]);
+
+        let Some(module) = self.modules.get(&module_name) else {
+            let mut available: Vec<&String> = self.modules.keys().collect();
+            available.sort();
+            return error_reply(404, format!("Module '{}' not found. Available modules: {:?}", module_name, available));
+        };
+
+        let Some(sig) = module.functions.get(&fn_name) else {
+            let mut available: Vec<&String> = module.functions.keys().collect();
+            available.sort();
+            return error_reply(
+                404,
+                format!("Function '{}' not found in module '{}'. Available functions: {:?}", fn_name, module_name, available),
+            );
+        };
+
+        let mut body = String::new();
+        if let Err(e) = std::io::Read::take(request.as_reader(), MAX_REQUEST_BODY_BYTES).read_to_string(&mut body) {
+            return error_reply(400, format!("Failed to read request body: {}", e));
+        }
+
+        let json_args: serde_json::Value = if body.trim().is_empty() {
+            serde_json::Value::Object(serde_json::Map::new())
+        } else {
+            match serde_json::from_str(&body) {
+                Ok(v) => v,
+                Err(e) => return error_reply(400, format!("Invalid JSON request body: {}", e)),
+            }
+        };
+
+        let call_args = match call_arguments(&json_args, sig, &module_name, &fn_name) {
+            Ok(args) => args,
+            Err(e) => return error_reply(400, e.to_string()),
+        };
+
+        match module.invoke(&fn_name, &call_args) {
+            Ok(result) => cors_reply(
+                200,
+                serde_json::json!({
+                    "status": "success",
+                    "result": phs_value_to_json(&result)
+                }),
+            ),
+            Err(e) => cors_reply(400, serde_json::json!({ "status": "error", "error": e.to_string() })),
+        }
     }
 
     /// Starts the request-handling worker pool on `server`, bounded to
@@ -721,32 +536,202 @@ impl ModelServer {
             for _ in 0..SERVER_WORKER_THREADS {
                 let model = std::sync::Arc::clone(&model);
                 let server = &server;
-                scope.spawn(move || loop {
-                    match server.recv() {
-                        Ok(request) => {
-                            if let Err(e) = model.handle_request(request) {
-                                eprintln!("Error handling request: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Server connection error, worker thread exiting: {}", e);
-                            // Wake exactly one more sibling worker blocked in `recv()` so
-                            // shutdown cascades through the whole pool (each exiting
-                            // worker wakes the next) instead of leaving the other workers
-                            // parked in `recv()` forever, which would otherwise make this
-                            // `thread::scope` block never return.
-                            server.unblock();
-                            break;
-                        }
-                    }
-                });
+                scope.spawn(move || model.serve_requests(server));
             }
         });
         Ok(())
     }
+
+    /// One worker of the pool: takes requests off `server` until it fails.
+    fn serve_requests(&self, server: &Server) {
+        loop {
+            match server.recv() {
+                Ok(request) => {
+                    if let Err(e) = self.handle_request(request) {
+                        eprintln!("Error handling request: {}", e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Server connection error, worker thread exiting: {}", e);
+                    // Wake exactly one more sibling worker blocked in `recv()` so
+                    // shutdown cascades through the whole pool (each exiting
+                    // worker wakes the next) instead of leaving the other workers
+                    // parked in `recv()` forever, which would otherwise make this
+                    // `thread::scope` block never return.
+                    server.unblock();
+                    break;
+                }
+            }
+        }
+    }
 }
 
-/// Coerces a [`serde_json::Value`] into a [`PhsValue`].
+/// An HTTP reply with a JSON body: its status, whether it carries the content type, and whether it carries
+/// the CORS header (when CORS is enabled at all).
+struct Reply {
+    status: u16,
+    body: serde_json::Value,
+    content_type: bool,
+    cors: bool,
+}
+
+/// A JSON error answer: the status and `{"status": "error", "error": message}`.
+fn error_reply(status: u16, message: String) -> Reply {
+    Reply {
+        status,
+        body: serde_json::json!({ "status": "error", "error": message }),
+        content_type: true,
+        cors: false,
+    }
+}
+
+/// An answer to a call that was understood: carries the CORS header when the server grants it.
+fn cors_reply(status: u16, body: serde_json::Value) -> Reply {
+    Reply { status, body, content_type: true, cors: true }
+}
+
+/// The module sources of a single file: a `phs.toml` manifest's exports, or one `.phs` module.
+fn sources_from_file(p: &Path) -> PhysureResult<HashMap<String, String>> {
+    let mut sources = HashMap::new();
+    let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if file_name == "phs.toml" {
+        // Load from manifest exports
+        let manifest = crate::package::Manifest::from_file(p)?;
+        let base_dir = p.parent().unwrap_or_else(|| Path::new("."));
+        // Syntax-only: this call only needs `report.modules`' paths/names to build the
+        // `sources` map below. The actual execution of each module's top-level code
+        // happens deliberately, right after, in `Self::new`'s own `PhsModule::from_source`
+        // call per module -- that's the operator-trusted "instantiate for serving" step,
+        // not a "check an unknown package" step, so it's unaffected by this `false`.
+        let report = manifest.validate(base_dir, false)?;
+        for mod_info in report.modules {
+            let full_path = base_dir.join(&mod_info.relative_path);
+            let source = fs::read_to_string(&full_path).map_err(|e| {
+                PhysureError::Generic(format!(
+                    "Error reading module '{}': {}",
+                    full_path.display(),
+                    e
+                ))
+            })?;
+            sources.insert(mod_info.export_name, source);
+        }
+    } else if p.extension().and_then(|e| e.to_str()) == Some("phs") {
+        let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
+        let source = fs::read_to_string(p).map_err(|e| {
+            PhysureError::Generic(format!("Error reading file '{}': {}", p.display(), e))
+        })?;
+        sources.insert(stem.to_string(), source);
+    } else {
+        return Err(PhysureError::Generic(format!(
+            "Unrecognized file format '{}'. Expected .phs or phs.toml",
+            p.display()
+        )));
+    }
+    Ok(sources)
+}
+
+/// The module sources of every top-level `*.phs` file in a directory.
+fn sources_from_dir(p: &Path) -> PhysureResult<HashMap<String, String>> {
+    let mut sources = HashMap::new();
+    let entries = fs::read_dir(p).map_err(|e| {
+        PhysureError::Generic(format!(
+            "Cannot read directory '{}': {}",
+            p.display(),
+            e
+        ))
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            PhysureError::Generic(format!("Error reading directory entry: {}", e))
+        })?;
+        let file_path = entry.path();
+        if file_path.is_file() && file_path.extension().and_then(|e| e.to_str()) == Some("phs") {
+            if let Some(stem) = file_path.file_stem().and_then(|s| s.to_str()) {
+                let source = fs::read_to_string(&file_path).map_err(|e| {
+                    PhysureError::Generic(format!(
+                        "Error reading '{}': {}",
+                        file_path.display(),
+                        e
+                    ))
+                })?;
+                sources.insert(stem.to_string(), source);
+            }
+        }
+    }
+    Ok(sources)
+}
+
+/// The pipeline steps of a request: each input is a literal value or a `{"$ref": "alias"}` to an earlier step.
+fn build_pipeline_steps(steps_json: Vec<PipelineStepJson>) -> Result<Vec<PipelineStep>, String> {
+    let mut steps = Vec::with_capacity(steps_json.len());
+    for step_json in steps_json {
+        let mut inputs = HashMap::new();
+        for (param_name, arg_val) in step_json.inputs {
+            let reference = arg_val.as_object().and_then(|o| o.get("$ref")).and_then(|r| r.as_str());
+            if let Some(ref_name) = reference {
+                inputs.insert(param_name, PipelineArg::Reference(ref_name.to_string()));
+                continue;
+            }
+            match json_value_to_phs_value(&arg_val) {
+                Ok(val) => {
+                    inputs.insert(param_name, PipelineArg::Literal(val));
+                }
+                Err(e) => {
+                    return Err(format!("Invalid argument '{}' in step '{}': {}", param_name, step_json.output, e));
+                }
+            }
+        }
+        steps.push(PipelineStep {
+            module_name: step_json.module,
+            function_name: step_json.function,
+            inputs,
+            output_alias: step_json.output,
+        });
+    }
+    Ok(steps)
+}
+
+/// The arguments of a function call from the JSON body: positional under `"args"`, or by parameter name.
+///
+/// Every failure here is this function's own `Err(...)` value -- never a `return` or `?` that would unwind
+/// out of `handle_request` itself. An escape like that would skip the match on this result (which exists
+/// specifically to turn a bad request into a clean 400 JSON response) and fall through to `tiny_http`'s
+/// "request dropped without `.respond()`" fallback -- an opaque, bodyless HTTP 500 (pentest finding I4,
+/// confirmed live with both a missing parameter and a wrong-JSON-type parameter).
+fn call_arguments(
+    json_args: &serde_json::Value,
+    sig: &physure_script::module::FunctionSignature,
+    module_name: &str,
+    fn_name: &str,
+) -> PhysureResult<Vec<PhsValue>> {
+    if let Some(arr) = json_args.get("args").and_then(|a| a.as_array()) {
+        // Positional args
+        return arr.iter().map(json_value_to_phs_value).collect();
+    }
+    let Some(map) = json_args.as_object() else {
+        return Err(PhysureError::Generic("Request body must be a JSON object of parameters or {\"args\": [...]}".into()));
+    };
+    // Keyword args mapped to parameter order.
+    if let Some(unexpected) = map.keys().find(|k| !sig.params.iter().any(|p| &p.name == *k)) {
+        return Err(PhysureError::Generic(format!(
+            "Unexpected parameter '{}' for {}.{}()",
+            unexpected, module_name, fn_name
+        )));
+    }
+    sig.params
+        .iter()
+        .map(|param| match map.get(&param.name) {
+            Some(val_json) => json_value_to_phs_value(val_json),
+            None => Err(PhysureError::Generic(format!(
+                "Missing required parameter '{}' for {}.{}()",
+                param.name, module_name, fn_name
+            ))),
+        })
+        .collect()
+}
+
+/// Coerces a [`serde_json::Value`] into a [`PhsValue`]./// Coerces a [`serde_json::Value`] into a [`PhsValue`].
 pub fn json_value_to_phs_value(val: &serde_json::Value) -> PhysureResult<PhsValue> {
     match val {
         serde_json::Value::Number(n) => {
@@ -757,36 +742,32 @@ pub fn json_value_to_phs_value(val: &serde_json::Value) -> PhysureResult<PhsValu
             }
         }
         serde_json::Value::Bool(b) => Ok(PhsValue::Bool(*b)),
-        serde_json::Value::String(s) => {
-            let trimmed = s.trim();
-            if trimmed.contains(' ') {
-                let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
-                if let Ok(mag) = parts[0].parse::<f64>() {
-                    let unit_str = parts[1].trim();
-                    match physure_core::Quantity::new(mag, unit_str) {
-                        Ok(q) => return Ok(PhsValue::Quantity(q)),
-                        Err(e) => {
-                            return Err(PhysureError::Generic(format!(
-                                "Invalid unit '{}' in quantity '{}': {}",
-                                unit_str, s, e
-                            )))
-                        }
-                    }
-                }
-            } else if let Ok(n) = trimmed.parse::<f64>() {
-                return Ok(PhsValue::Number(n));
-            } else if trimmed == "true" {
-                return Ok(PhsValue::Bool(true));
-            } else if trimmed == "false" {
-                return Ok(PhsValue::Bool(false));
-            }
-            Ok(PhsValue::String(trimmed.to_string()))
-        }
+        serde_json::Value::String(s) => string_to_phs_value(s),
         _ => Err(PhysureError::Generic(format!(
             "Unsupported JSON value type for calculation: {:?}",
             val
         ))),
     }
+}
+
+/// A string argument as the value it spells: a quantity (`"9.81 m/s^2"`), a number, a Bool, or else the text.
+fn string_to_phs_value(s: &str) -> PhysureResult<PhsValue> {
+    let trimmed = s.trim();
+    if let Some((magnitude, unit)) = trimmed.split_once(' ') {
+        if let Ok(mag) = magnitude.parse::<f64>() {
+            let unit_str = unit.trim();
+            return physure_core::Quantity::new(mag, unit_str)
+                .map(PhsValue::Quantity)
+                .map_err(|e| PhysureError::Generic(format!("Invalid unit '{}' in quantity '{}': {}", unit_str, s, e)));
+        }
+    } else if let Ok(n) = trimmed.parse::<f64>() {
+        return Ok(PhsValue::Number(n));
+    } else if trimmed == "true" {
+        return Ok(PhsValue::Bool(true));
+    } else if trimmed == "false" {
+        return Ok(PhsValue::Bool(false));
+    }
+    Ok(PhsValue::String(trimmed.to_string()))
 }
 
 /// Formats a [`PhsValue`] into a structured JSON response object.
@@ -896,12 +877,28 @@ fn validate_auth_token(token: &Option<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// CLI runner for `phs serve [dir_or_file_or_manifest] [--port <port>] [--host <host>] [--token <auth_token>]`.
-pub fn run_serve(args: &[String]) {
-    let mut target_path = None;
-    let mut port = 8080u16;
-    let mut host = "127.0.0.1".to_string();
-    let mut token = None;
+/// What `phs serve` was given.
+struct ServeArgs {
+    target: Option<String>,
+    port: u16,
+    host: String,
+    token: Option<String>,
+}
+
+/// Reads the value after the flag at `i` with `parse` and hands it to `set`. True when there was one, which the
+/// caller then skips.
+fn take_flag_value<T>(args: &[String], i: usize, parse: impl Fn(&str) -> Option<T>, set: impl FnOnce(T)) -> bool {
+    match args.get(i + 1).and_then(|v| parse(v)) {
+        Some(value) => {
+            set(value);
+            true
+        }
+        None => false,
+    }
+}
+
+fn parse_serve_args(args: &[String]) -> ServeArgs {
+    let mut parsed = ServeArgs { target: None, port: 8080, host: "127.0.0.1".to_string(), token: None };
 
     let mut skip_next = false;
     for (i, arg) in args.iter().enumerate().skip(1) {
@@ -909,43 +906,52 @@ pub fn run_serve(args: &[String]) {
             skip_next = false;
             continue;
         }
-        if arg == "serve" {
-            continue;
-        }
-        if arg == "--port" || arg == "-p" {
-            if i + 1 < args.len() {
-                if let Ok(p) = args[i + 1].parse::<u16>() {
-                    port = p;
-                    skip_next = true;
+        match arg.as_str() {
+            "serve" => {}
+            "--port" | "-p" => skip_next = take_flag_value(args, i, |v| v.parse::<u16>().ok(), |p| parsed.port = p),
+            "--host" => skip_next = take_flag_value(args, i, |v| Some(v.to_string()), |h| parsed.host = h),
+            "--token" => skip_next = take_flag_value(args, i, |v| Some(v.to_string()), |t| parsed.token = Some(t)),
+            _ => {
+                if parsed.target.is_none() && !arg.starts_with('-') {
+                    parsed.target = Some(arg.clone());
                 }
             }
-            continue;
-        }
-        if arg == "--host" {
-            if i + 1 < args.len() {
-                host = args[i + 1].clone();
-                skip_next = true;
-            }
-            continue;
-        }
-        if arg == "--token" {
-            if i + 1 < args.len() {
-                token = Some(args[i + 1].clone());
-                skip_next = true;
-            }
-            continue;
-        }
-        if target_path.is_none() && !arg.starts_with('-') {
-            target_path = Some(arg.clone());
         }
     }
+    parsed
+}
+
+fn print_server_banner(server: &ModelServer, bind_addr: &str, has_token: bool) {
+    println!("✓ Loaded {} module(s):", server.modules.len());
+    for (name, module) in &server.modules {
+        let fn_names: Vec<&String> = module.functions.keys().collect();
+        println!("  - module '{}' ({} function(s))", name, fn_names.len());
+    }
+
+    if has_token {
+        println!("🔒 Authentication: Enabled (Bearer token or X-API-Key header required)");
+    } else {
+        println!("⚠️  Authentication: Disabled (local development mode)");
+    }
+
+    println!("\n🌐 Physure Model Server running at http://{}", bind_addr);
+    println!("   - Health Check: GET  http://{}/health", bind_addr);
+    println!("   - API Catalog:  GET  http://{}/api/v1/catalog", bind_addr);
+    println!("   - Call Formula: POST http://{}/api/v1/:module/:function", bind_addr);
+    println!("   - Run Pipeline: POST http://{}/api/v1/pipeline", bind_addr);
+    println!("\nPress Ctrl+C to stop.\n");
+}
+
+/// CLI runner for `phs serve [dir_or_file_or_manifest] [--port <port>] [--host <host>] [--token <auth_token>]`.
+pub fn run_serve(args: &[String]) {
+    let ServeArgs { target, port, host, token } = parse_serve_args(args);
 
     if let Err(msg) = validate_auth_token(&token) {
         eprintln!("Configuration Error: {}", msg);
         std::process::exit(1);
     }
 
-    let input_path = target_path.unwrap_or_else(|| ".".to_string());
+    let input_path = target.unwrap_or_else(|| ".".to_string());
     let config = ModelServerConfig {
         host: host.clone(),
         port,
@@ -970,24 +976,7 @@ pub fn run_serve(args: &[String]) {
         }
     };
 
-    println!("✓ Loaded {} module(s):", server_inst.modules.len());
-    for (name, module) in &server_inst.modules {
-        let fn_names: Vec<&String> = module.functions.keys().collect();
-        println!("  - module '{}' ({} function(s))", name, fn_names.len());
-    }
-
-    if token.is_some() {
-        println!("🔒 Authentication: Enabled (Bearer token or X-API-Key header required)");
-    } else {
-        println!("⚠️  Authentication: Disabled (local development mode)");
-    }
-
-    println!("\n🌐 Physure Model Server running at http://{}", bind_addr);
-    println!("   - Health Check: GET  http://{}/health", bind_addr);
-    println!("   - API Catalog:  GET  http://{}/api/v1/catalog", bind_addr);
-    println!("   - Call Formula: POST http://{}/api/v1/:module/:function", bind_addr);
-    println!("   - Run Pipeline: POST http://{}/api/v1/pipeline", bind_addr);
-    println!("\nPress Ctrl+C to stop.\n");
+    print_server_banner(&server_inst, &bind_addr, token.is_some());
 
     if let Err(e) = server_inst.run(http_server) {
         eprintln!("Server error: {}", e);
@@ -1003,11 +992,11 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "geom".to_string(),
-            "fn area_tubo(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
+            "fn pipe_area(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
         );
         sources.insert(
             "hydr".to_string(),
-            "/// Hydraulic force\n/// @param P Pressure in kg/(m*s^2)\n/// @param A Area in m^2\nfn fuerza_empuje(P: kg/(m*s^2), A: m^2) = P * A\n".to_string(),
+            "/// Hydraulic force\n/// @param P Pressure in kg/(m*s^2)\n/// @param A Area in m^2\nfn thrust_force(P: kg/(m*s^2), A: m^2) = P * A\n".to_string(),
         );
 
         let server = Server::http("127.0.0.1:0").unwrap();
@@ -1056,8 +1045,8 @@ mod tests {
         assert!(catalog.modules.contains_key("hydr"));
 
         let hydr = &catalog.modules["hydr"];
-        assert!(hydr.functions.contains_key("fuerza_empuje"));
-        let f = &hydr.functions["fuerza_empuje"];
+        assert!(hydr.functions.contains_key("thrust_force"));
+        let f = &hydr.functions["thrust_force"];
         assert_eq!(f.params.len(), 2);
         assert_eq!(f.params[0].name, "P");
         assert_eq!(f.params[0].expected_unit.as_deref(), Some("kg/(m*s^2)"));
@@ -1067,7 +1056,7 @@ mod tests {
     fn test_server_invoke_function_success_and_kwargs() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url))
+        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url))
             .send_json(serde_json::json!({
                 "d": "0.05 m"
             }))
@@ -1087,7 +1076,7 @@ mod tests {
     fn test_server_invoke_wrong_dimensions_returns_400() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url))
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url))
             .send_json(serde_json::json!({
                 "d": "10 s" // seconds instead of meters
             }));
@@ -1127,7 +1116,7 @@ mod tests {
             "steps": [
                 {
                     "module": "geom",
-                    "function": "area_tubo",
+                    "function": "pipe_area",
                     "inputs": {
                         "d": "0.05 m"
                     },
@@ -1135,12 +1124,12 @@ mod tests {
                 },
                 {
                     "module": "hydr",
-                    "function": "fuerza_empuje",
+                    "function": "thrust_force",
                     "inputs": {
                         "P": "500000 kg/(m*s^2)",
                         "A": { "$ref": "area" }
                     },
-                    "output": "fuerza"
+                    "output": "force"
                 }
             ]
         });
@@ -1154,10 +1143,10 @@ mod tests {
         assert_eq!(resp["status"], "success");
         let results = &resp["results"];
         assert!(results["area"].is_object());
-        assert!(results["fuerza"].is_object());
+        assert!(results["force"].is_object());
 
-        let fuerza_mag = results["fuerza"]["magnitude"].as_f64().unwrap();
-        assert!((fuerza_mag - 981.7477).abs() < 0.1);
+        let force_mag = results["force"]["magnitude"].as_f64().unwrap();
+        assert!((force_mag - 981.7477).abs() < 0.1);
     }
 
     #[test]
@@ -1190,8 +1179,8 @@ mod tests {
     fn test_server_percent_encoded_url_routes() {
         let (_server, base_url) = create_test_server(None);
 
-        // POST /api/v1/geom/area_tubo with percent-encoded characters e.g. %61%72%65%61_tubo ("area_tubo")
-        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/%61%72%65%61_tubo", base_url))
+        // POST /api/v1/geom/pipe_area with percent-encoded characters e.g. %70%69%70%65_area ("pipe_area")
+        let resp: serde_json::Value = ureq::post(&format!("{}/api/v1/geom/%70%69%70%65_area", base_url))
             .send_json(serde_json::json!({
                 "d": "0.05 m"
             }))
@@ -1276,10 +1265,10 @@ mod tests {
     fn test_server_kwargs_missing_parameter_returns_400_not_500() {
         let (_server, base_url) = create_test_server(None);
 
-        // area_tubo requires "d"; sending an empty object used to `return Err(..)` straight
+        // pipe_area requires "d"; sending an empty object used to `return Err(..)` straight
         // out of `handle_request`, producing tiny_http's bodyless fallback 500 instead of a
         // clean 400 JSON error.
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url)).send_json(serde_json::json!({}));
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url)).send_json(serde_json::json!({}));
 
         assert!(resp.is_err());
         match resp.unwrap_err() {
@@ -1300,7 +1289,7 @@ mod tests {
         // `d: null` fails `json_value_to_phs_value` (falls into its catch-all `Err` arm).
         // The `?` on that call used to propagate straight out of `handle_request` via
         // `PhysureResult<()>`, again producing tiny_http's bodyless fallback 500.
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url))
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url))
             .send_json(serde_json::json!({ "d": null }));
 
         assert!(resp.is_err());
@@ -1320,7 +1309,7 @@ mod tests {
     fn test_server_kwargs_unexpected_parameter_returns_400() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url)).send_json(serde_json::json!({
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url)).send_json(serde_json::json!({
             "d": "0.05 m",
             "not_a_real_param": 1
         }));
@@ -1385,7 +1374,7 @@ mod tests {
     fn test_server_cors_header_absent_on_error_responses_without_token() {
         let (_server, base_url) = create_test_server(None);
 
-        let resp = ureq::post(&format!("{}/api/v1/geom/area_tubo", base_url)).send_json(serde_json::json!({}));
+        let resp = ureq::post(&format!("{}/api/v1/geom/pipe_area", base_url)).send_json(serde_json::json!({}));
         match resp.unwrap_err() {
             ureq::Error::Status(code, response) => {
                 assert_eq!(code, 400);
@@ -1447,12 +1436,12 @@ mod tests {
 
         let pipeline_body = serde_json::json!({
             "steps": [
-                { "module": "geom", "function": "area_tubo", "inputs": { "d": "0.05 m" }, "output": "area" },
+                { "module": "geom", "function": "pipe_area", "inputs": { "d": "0.05 m" }, "output": "area" },
                 {
                     "module": "hydr",
-                    "function": "fuerza_empuje",
+                    "function": "thrust_force",
                     "inputs": { "P": "500000 kg/(m*s^2)", "A": { "$ref": "area" } },
-                    "output": "fuerza"
+                    "output": "force"
                 }
             ]
         });
@@ -1464,8 +1453,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp["status"], "success");
-        let fuerza_mag = resp["results"]["fuerza"]["magnitude"].as_f64().unwrap();
-        assert!((fuerza_mag - 981.7477).abs() < 0.1);
+        let force_mag = resp["results"]["force"]["magnitude"].as_f64().unwrap();
+        assert!((force_mag - 981.7477).abs() < 0.1);
     }
 
     // --- Finding I1: bounded worker pool, exercised through the real `ModelServer::run` -----
@@ -1483,7 +1472,7 @@ mod tests {
         let mut sources = HashMap::new();
         sources.insert(
             "geom".to_string(),
-            "fn area_tubo(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
+            "fn pipe_area(d: m) = 3.1415926535 * (d / 2)^2\n".to_string(),
         );
         let config = ModelServerConfig {
             host: "127.0.0.1".to_string(),
@@ -1503,7 +1492,7 @@ mod tests {
             .map(|_| {
                 let url = base_url.clone();
                 std::thread::spawn(move || -> serde_json::Value {
-                    ureq::post(&format!("{}/api/v1/geom/area_tubo", url))
+                    ureq::post(&format!("{}/api/v1/geom/pipe_area", url))
                         .send_json(serde_json::json!({ "d": "0.05 m" }))
                         .expect("request must succeed")
                         .into_json()
@@ -1520,5 +1509,147 @@ mod tests {
         }
         assert_eq!(ok_count, 64);
     }
-}
 
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("phs_server_unit_{label}_{}_{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_server_loads_the_modules_of_a_directory_a_file_and_a_manifest() {
+        let dir = scratch_dir("load");
+        fs::write(dir.join("one.phs"), "fn one() = 1 m\n").unwrap();
+        fs::write(dir.join("two.phs"), "fn two() = 2 m\n").unwrap();
+        fs::write(dir.join("notes.txt"), "not a module").unwrap();
+
+        let from_dir = ModelServer::from_path(&dir, ModelServerConfig::default()).unwrap();
+        let mut names: Vec<&String> = from_dir.modules.keys().collect();
+        names.sort();
+        assert_eq!(names, ["one", "two"]);
+
+        let from_file = ModelServer::from_path(dir.join("one.phs"), ModelServerConfig::default()).unwrap();
+        assert_eq!(from_file.modules.len(), 1);
+
+        fs::write(dir.join("phs.toml"), "[package]\nname = \"pkg\"\nversion = \"1.0.0\"\n\n[exports]\nfirst = \"one.phs\"\n").unwrap();
+        let from_manifest = ModelServer::from_path(&dir, ModelServerConfig::default()).unwrap();
+        assert!(from_manifest.modules.contains_key("first") && from_manifest.modules.len() == 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_server_says_why_it_could_not_load_what_it_was_given() {
+        let dir = scratch_dir("load_errors");
+        let empty = ModelServer::from_path(&dir, ModelServerConfig::default()).err().unwrap().to_string();
+        assert!(empty.contains("No .phs modules"), "{empty}");
+        let absent = ModelServer::from_path(dir.join("nowhere"), ModelServerConfig::default()).err().unwrap().to_string();
+        assert!(absent.contains("does not exist"), "{absent}");
+        fs::write(dir.join("data.json"), "{}").unwrap();
+        let wrong_kind = ModelServer::from_path(dir.join("data.json"), ModelServerConfig::default()).err().unwrap().to_string();
+        assert!(wrong_kind.contains("Unrecognized file format"), "{wrong_kind}");
+        fs::write(dir.join("broken.phs"), "fn broken( = ").unwrap();
+        assert!(ModelServer::from_path(dir.join("broken.phs"), ModelServerConfig::default()).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_arguments_are_read_in_any_order_and_a_bad_port_is_left_out() {
+        let args = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
+        let parsed = parse_serve_args(&args(&["phs", "serve", "models", "--port", "9100", "--host", "0.0.0.0", "--token", "t"]));
+        assert_eq!(
+            (parsed.target.as_deref(), parsed.port, parsed.host.as_str(), parsed.token.as_deref()),
+            (Some("models"), 9100, "0.0.0.0", Some("t"))
+        );
+        let defaults = parse_serve_args(&args(&["phs", "serve"]));
+        assert_eq!((defaults.target, defaults.port, defaults.host.as_str(), defaults.token), (None, 8080, "127.0.0.1", None));
+        // a port that is not a number is not consumed with its value: the value is then the target
+        let bad_port = parse_serve_args(&args(&["phs", "serve", "-p", "many", "--host"]));
+        assert_eq!((bad_port.port, bad_port.target.as_deref()), (8080, Some("many")));
+        // a flag is never the target
+        assert_eq!(parse_serve_args(&args(&["phs", "serve", "--other"])).target, None);
+    }
+
+    #[test]
+    fn the_banner_lists_the_modules_and_the_endpoints() {
+        let (model, _) = create_test_server(None);
+        print_server_banner(&model, "127.0.0.1:8080", false);
+        print_server_banner(&model, "127.0.0.1:8080", true);
+    }
+
+    #[test]
+    fn json_values_become_phs_values_by_what_they_spell() {
+        let phs = |value: serde_json::Value| json_value_to_phs_value(&value);
+        assert_eq!(phs(serde_json::json!(2.5)).unwrap(), PhsValue::Number(2.5));
+        assert_eq!(phs(serde_json::json!(true)).unwrap(), PhsValue::Bool(true));
+        assert_eq!(phs(serde_json::json!("7")).unwrap(), PhsValue::Number(7.0));
+        assert_eq!(phs(serde_json::json!("false")).unwrap(), PhsValue::Bool(false));
+        assert_eq!(phs(serde_json::json!("true")).unwrap(), PhsValue::Bool(true));
+        assert_eq!(phs(serde_json::json!("just words")).unwrap(), PhsValue::String("just words".to_string()));
+        assert!(matches!(phs(serde_json::json!("3 m")).unwrap(), PhsValue::Quantity(_)));
+        // a number followed by something that is not a unit is an error, not a string
+        assert!(phs(serde_json::json!("3 notaunit")).unwrap_err().to_string().contains("Invalid unit"));
+        // words with a space that do not start with a number stay words
+        assert_eq!(phs(serde_json::json!("two words")).unwrap(), PhsValue::String("two words".to_string()));
+        assert!(phs(serde_json::json!([1, 2])).unwrap_err().to_string().contains("Unsupported JSON value"));
+        assert!(phs(serde_json::json!(null)).is_err());
+    }
+
+    #[test]
+    fn phs_values_are_described_for_the_wire() {
+        let metre = physure_core::Quantity::new(2.0, "m").unwrap();
+        assert_eq!(phs_value_to_json(&PhsValue::Quantity(metre))["type"], "quantity");
+        assert_eq!(phs_value_to_json(&PhsValue::Number(1.5))["value"], 1.5);
+        assert_eq!(phs_value_to_json(&PhsValue::Bool(true))["type"], "bool");
+        assert_eq!(phs_value_to_json(&PhsValue::String("s".to_string()))["value"], "s");
+        assert_eq!(phs_value_to_json(&PhsValue::None)["type"], "none");
+        assert_eq!(phs_value_to_json(&PhsValue::Vector(vec![PhsValue::Number(1.0)]))["type"], "other");
+    }
+
+    #[test]
+    fn a_percent_encoded_name_is_decoded_and_a_broken_escape_is_left_alone() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn a_preflight_request_is_answered_and_granted_only_with_a_token() {
+        let (_, url) = create_test_server(Some("tok"));
+        let granted = ureq::request("OPTIONS", &format!("{url}/api/v1/geom/pipe_area")).call().unwrap();
+        assert_eq!(granted.status(), 200);
+        assert_eq!(granted.header("Access-Control-Allow-Origin"), Some("*"));
+        assert!(granted.header("Access-Control-Allow-Headers").unwrap().contains("X-API-Key"));
+        let (_, open_url) = create_test_server(None);
+        let plain = ureq::request("OPTIONS", &format!("{open_url}/health")).call().unwrap();
+        assert_eq!(plain.status(), 200);
+        assert_eq!(plain.header("Access-Control-Allow-Origin"), None);
+    }
+
+    #[test]
+    fn a_request_that_cannot_be_served_gets_a_json_error() {
+        let (_, url) = create_test_server(None);
+        let status = |answer: Result<ureq::Response, ureq::Error>| match answer {
+            Ok(response) => response.status(),
+            Err(ureq::Error::Status(code, _)) => code,
+            Err(other) => panic!("{other}"),
+        };
+        assert_eq!(status(ureq::get(&format!("{url}/nowhere")).call()), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom")).send_json(serde_json::json!({}))), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/nothing/pipe_area")).send_json(serde_json::json!({}))), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom/nothing")).send_json(serde_json::json!({}))), 404);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom/pipe_area")).send_string("{")), 400);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/geom/pipe_area")).send_json(serde_json::json!([1]))), 400);
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_string("nope")), 400);
+        let bad_reference = serde_json::json!({"steps": [
+            {"module": "geom", "function": "pipe_area", "inputs": {"d": {"$ref": "missing"}}, "output": "a"}]});
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_json(bad_reference)), 400);
+        let bad_input = serde_json::json!({"steps": [
+            {"module": "geom", "function": "pipe_area", "inputs": {"d": [1]}, "output": "a"}]});
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_json(bad_input)), 400);
+        let unknown_module = serde_json::json!({"steps": [
+            {"module": "nope", "function": "pipe_area", "inputs": {"d": "1 m"}, "output": "a"}]});
+        assert_eq!(status(ureq::post(&format!("{url}/api/v1/pipeline")).send_json(unknown_module)), 400);
+    }
+}

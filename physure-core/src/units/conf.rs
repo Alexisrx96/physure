@@ -70,136 +70,160 @@ fn parse_conf(
         }
 
         match current_section {
-            "Settings" if apply_settings => {
-                if let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) {
-                    match key {
-                        "propagation_mode" => match raw.parse::<PropagationMode>() {
-                            Ok(mode) => {
-                                set_propagation_mode(mode);
-                            }
-                            // A conf is read before there is anywhere to report to, and the mode
-                            // it names is not worth refusing to start over. Saying so on stderr
-                            // beats falling back to correlated with nothing on screen: that is
-                            // the wrong answer that looks right.
-                            Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
-                        },
-                        "parallel_threshold" => match raw.parse::<usize>() {
-                            Ok(n) => {
-                                crate::settings::set_parallel_threshold(n);
-                            }
-                            Err(_) => eprintln!(
-                                "physure.conf: invalid parallel_threshold '{raw}'; keeping default"
-                            ),
-                        },
-                        "max_loop_iterations" => match raw.parse::<usize>() {
-                            Ok(n) => {
-                                crate::settings::set_max_loop_iterations(n);
-                            }
-                            Err(_) => eprintln!(
-                                "physure.conf: invalid max_loop_iterations '{raw}'; keeping default"
-                            ),
-                        },
-                        "max_pipeline_steps" => match raw.parse::<usize>() {
-                            Ok(n) => {
-                                crate::settings::set_max_pipeline_steps(n);
-                            }
-                            Err(_) => eprintln!(
-                                "physure.conf: invalid max_pipeline_steps '{raw}'; keeping default"
-                            ),
-                        },
-                        _ => {}
-                    }
-                }
-            }
-            "Prefixes" => {
-                if let Some((name, val_part)) = line.split_once('=') {
-                    let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
-                    if parts.len() >= 2 {
-                        let symbol = parts[0];
-                        if let Some((factor, exact)) = parse_number(parts[1]) {
-                            registry.add_prefix_exact(symbol.to_string(), factor, exact);
-                            registry.add_prefix_name(name.trim().to_string(), symbol.to_string());
-                        } else {
-                            problems.push(format!("{line}: the factor of a prefix is a number, not '{}'", parts[1]));
-                        }
-                    } else {
-                        problems.push(format!("{line}: a prefix is `name = symbol, factor`"));
-                    }
-                }
-            }
+            "Settings" if apply_settings => apply_setting(line),
+            "Prefixes" => read_prefix(line, registry, problems),
             "Units" => {
                 unit_lines.push(line);
-                // Detect base unit declarations (scale 1.0 with a single dimension symbol)
-                if let Some((left, aliases_str)) = split_unit_line(line) {
-                    let parts: Vec<&str> = left.split(',').map(|s| s.trim()).collect();
-                    if parts.len() >= 2 {
-                        let factor: f64 = parts[0].parse().unwrap_or(0.0);
-                        let dim_symbol = parts[1];
-                        let symbol = aliases_str.first().cloned().unwrap_or_default();
-                        // Dimension "1" is the dimensionless marker `unity = 1.0, 1, [1]`
-                        // declares itself against -- `parse_unit_line` below already treats it
-                        // as "no dimension" (so `%`/`ppm` don't inherit a spurious `unity`
-                        // dimension). Without this guard here too, this pass ran first and
-                        // called `add_base_unit` on it anyway, registering a real, poisoned
-                        // `("unity", (1,1))` dimension in `base_units` that `get_unit` finds
-                        // before it ever reaches `parse_unit_line`'s correct, empty-dimension
-                        // registration in `derived_units` -- so `unity` could not convert to
-                        // or add with `%`, `ppm`, or a bare number, despite all four being
-                        // dimensionless.
-                        if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() && dim_symbol != "1" {
-                            // Only the first declaration at scale 1 for a dimension symbol
-                            // is that dimension's base unit, and it wins: `physure.conf`
-                            // declares both `radian` and `steradian` against `A`, and
-                            // overwriting made steradian the base of angle (`90 deg => rad`
-                            // failed as a unit mismatch and `1 deg + 1 sr` was accepted).
-                            // A later one is the same quantity under another name
-                            // (`delta_celsius` is a kelvin: as a base unit of its own it
-                            // could not convert to K) unless the catalog says it is a kind
-                            // of its own: `steradian` is flagged `own_kind`.
-                            let first = !dim_to_base.contains_key(dim_symbol);
-                            let own_kind = parts.contains(&"own_kind");
-                            if is_single_ident(dim_symbol) && (first || own_kind) {
-                                dim_to_base.entry(dim_symbol.to_string()).or_insert_with(|| symbol.clone());
-                                registry.add_base_unit(symbol.clone());
-                                registry.base_dimension.insert(symbol.clone(), dim_symbol.to_string());
-                            }
-                        }
-                    }
-                }
+                declare_base_unit(line, registry, &mut dim_to_base);
             }
-            "Constants" => {
-                if let Some((name, val_part)) = line.split_once('=') {
-                    let name = name.trim();
-                    let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
-                    if !parts.is_empty() {
-                        let expr = parts[0];
-                        let desc = if parts.len() >= 2 { Some(parts[1].to_string()) } else { None };
-                        let latex = if parts.len() >= 3 { Some(parts[2].to_string()) } else { None };
-                        constants.insert(name.to_string(), expr.to_string());
-                        registry.constants_meta.insert(name.to_string(), crate::units::registry::ConstantMetadata {
-                            value: expr.to_string(),
-                            description: desc,
-                            latex_symbol: latex,
-                        });
-                    }
-                }
-            }
-            "Categories" => {
-                if let Some((cat_name, list_str)) = line.split_once('=') {
-                    let cat_name = cat_name.trim();
-                    let list_str = list_str.trim().trim_start_matches('[').trim_end_matches(']').trim();
-                    let items: Vec<String> = list_str
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    registry.categories.insert(cat_name.to_string(), items);
-                }
-            }
+            "Constants" => read_constant(line, registry, constants),
+            "Categories" => read_category(line, registry),
             _ => {}
         }
     }
 
+    register_fallback_bases(registry, &mut dim_to_base);
+
+    // Pass 2: Parse and register all units using the dynamic dimension map
+    for line in unit_lines {
+        if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
+            problems.push(format!("{line}: {reason}"));
+        }
+    }
+}
+
+/// One line of `[Settings]`. A value that does not read is reported on stderr and the default stays.
+fn apply_setting(line: &str) {
+    let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) else {
+        return;
+    };
+    match key {
+        "propagation_mode" => match raw.parse::<PropagationMode>() {
+            Ok(mode) => {
+                set_propagation_mode(mode);
+            }
+            // A conf is read before there is anywhere to report to, and the mode
+            // it names is not worth refusing to start over. Saying so on stderr
+            // beats falling back to correlated with nothing on screen: that is
+            // the wrong answer that looks right.
+            Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
+        },
+        "parallel_threshold" => apply_count_setting(key, raw, |n| {
+            crate::settings::set_parallel_threshold(n);
+        }),
+        "max_loop_iterations" => apply_count_setting(key, raw, |n| {
+            crate::settings::set_max_loop_iterations(n);
+        }),
+        "max_pipeline_steps" => apply_count_setting(key, raw, |n| {
+            crate::settings::set_max_pipeline_steps(n);
+        }),
+        _ => {}
+    }
+}
+
+fn apply_count_setting(key: &str, raw: &str, set: impl FnOnce(usize)) {
+    match raw.parse::<usize>() {
+        Ok(n) => set(n),
+        Err(_) => eprintln!("physure.conf: invalid {key} '{raw}'; keeping default"),
+    }
+}
+
+/// One line of `[Prefixes]`: `name = symbol, factor`.
+fn read_prefix(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
+    let Some((name, val_part)) = line.split_once('=') else {
+        return;
+    };
+    let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 2 {
+        problems.push(format!("{line}: a prefix is `name = symbol, factor`"));
+        return;
+    }
+    let symbol = parts[0];
+    if let Some((factor, exact)) = parse_number(parts[1]) {
+        registry.add_prefix_exact(symbol.to_string(), factor, exact);
+        registry.add_prefix_name(name.trim().to_string(), symbol.to_string());
+    } else {
+        problems.push(format!("{line}: the factor of a prefix is a number, not '{}'", parts[1]));
+    }
+}
+
+/// A line of `[Units]` that declares the base unit of a dimension (scale 1 with a single dimension symbol).
+fn declare_base_unit(line: &str, registry: &mut UnitRegistry, dim_to_base: &mut HashMap<String, String>) {
+    let Some((left, aliases_str)) = split_unit_line(line) else {
+        return;
+    };
+    let parts: Vec<&str> = left.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 2 {
+        return;
+    }
+    let factor: f64 = parts[0].parse().unwrap_or(0.0);
+    let dim_symbol = parts[1];
+    let symbol = aliases_str.first().cloned().unwrap_or_default();
+    // Dimension "1" is the dimensionless marker `unity = 1.0, 1, [1]`
+    // declares itself against -- `parse_unit_line` below already treats it
+    // as "no dimension" (so `%`/`ppm` don't inherit a spurious `unity`
+    // dimension). Without this guard here too, this pass ran first and
+    // called `add_base_unit` on it anyway, registering a real, poisoned
+    // `("unity", (1,1))` dimension in `base_units` that `get_unit` finds
+    // before it ever reaches `parse_unit_line`'s correct, empty-dimension
+    // registration in `derived_units` -- so `unity` could not convert to
+    // or add with `%`, `ppm`, or a bare number, despite all four being
+    // dimensionless.
+    if factor == 1.0 && !dim_symbol.is_empty() && !symbol.is_empty() && dim_symbol != "1" {
+        // Only the first declaration at scale 1 for a dimension symbol
+        // is that dimension's base unit, and it wins: `physure.conf`
+        // declares both `radian` and `steradian` against `A`, and
+        // overwriting made steradian the base of angle (`90 deg => rad`
+        // failed as a unit mismatch and `1 deg + 1 sr` was accepted).
+        // A later one is the same quantity under another name
+        // (`delta_celsius` is a kelvin: as a base unit of its own it
+        // could not convert to K) unless the catalog says it is a kind
+        // of its own: `steradian` is flagged `own_kind`.
+        let first = !dim_to_base.contains_key(dim_symbol);
+        let own_kind = parts.contains(&"own_kind");
+        if is_single_ident(dim_symbol) && (first || own_kind) {
+            dim_to_base.entry(dim_symbol.to_string()).or_insert_with(|| symbol.clone());
+            registry.add_base_unit(symbol.clone());
+            registry.base_dimension.insert(symbol.clone(), dim_symbol.to_string());
+        }
+    }
+}
+
+/// One line of `[Constants]`: `name = expression, description, latex`.
+fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMap<String, String>) {
+    let Some((name, val_part)) = line.split_once('=') else {
+        return;
+    };
+    let name = name.trim();
+    let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
+    let expr = parts[0];
+    let desc = parts.get(1).map(|s| s.to_string());
+    let latex = parts.get(2).map(|s| s.to_string());
+    constants.insert(name.to_string(), expr.to_string());
+    registry.constants_meta.insert(name.to_string(), crate::units::registry::ConstantMetadata {
+        value: expr.to_string(),
+        description: desc,
+        latex_symbol: latex,
+    });
+}
+
+/// One line of `[Categories]`: `name = [unit, unit, ...]`.
+fn read_category(line: &str, registry: &mut UnitRegistry) {
+    let Some((cat_name, list_str)) = line.split_once('=') else {
+        return;
+    };
+    let cat_name = cat_name.trim();
+    let list_str = list_str.trim().trim_start_matches('[').trim_end_matches(']').trim();
+    let items: Vec<String> = list_str
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    registry.categories.insert(cat_name.to_string(), items);
+}
+
+/// The SI base units and the standard dimension symbols, for a conf that does not map them itself.
+fn register_fallback_bases(registry: &mut UnitRegistry, dim_to_base: &mut HashMap<String, String>) {
     // Ensure SI base units are registered as base_units
     for &base in &["m", "s", "kg", "A", "K", "mol", "cd", "rad"] {
         if !registry.base_units.contains_key(base) {
@@ -217,18 +241,11 @@ fn parse_conf(
     dim_to_base.entry("J".into()).or_insert_with(|| "cd".into());
     dim_to_base.entry("A".into()).or_insert_with(|| "rad".into());
 
-    for (dimension, base) in &dim_to_base {
+    for (dimension, base) in dim_to_base.iter() {
         registry.base_dimension.entry(base.clone()).or_insert_with(|| dimension.clone());
     }
 
     registry.dimension_base = dim_to_base.clone();
-
-    // Pass 2: Parse and register all units using the dynamic dimension map
-    for line in unit_lines {
-        if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
-            problems.push(format!("{line}: {reason}"));
-        }
-    }
 }
 
 /// A positive number of the catalog as the double and, when it is a decimal or a fraction, the
@@ -241,7 +258,8 @@ fn parse_number(text: &str) -> Option<(f64, Option<crate::units::exact::ExactSca
     }
 }
 
-fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
+/// A unit line cut into its name, its values and the names it lists in brackets: `name = values [alias, alias]`.
+fn cut_unit_line(line: &str) -> Option<(&str, &str, Vec<String>)> {
     let (left, aliases_str) = match line.split_once('[') {
         Some((l, r)) => {
             let r = r.trim_end_matches(']').trim();
@@ -250,20 +268,18 @@ fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
         None => (line, ""),
     };
 
-    let (key, val_part) = match left.split_once('=') {
-        Some((k, v)) => (k.trim(), v.trim()),
-        None => return None,
-    };
+    let (key, val_part) = left.split_once('=').map(|(k, v)| (k.trim(), v.trim()))?;
 
-    let mut aliases: Vec<String> = if !aliases_str.is_empty() {
-        aliases_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        vec![]
-    };
+    let aliases: Vec<String> = aliases_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some((key, val_part, aliases))
+}
+
+fn split_unit_line(line: &str) -> Option<(&str, Vec<String>)> {
+    let (key, val_part, mut aliases) = cut_unit_line(line)?;
 
     if !aliases.contains(&key.to_string()) {
         aliases.insert(0, key.to_string());
@@ -276,28 +292,27 @@ fn is_single_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
+/// The fields of a unit line's values, without the flags (`noprefix`, `own_kind`); a single field with spaces in it
+/// is read as the fields separated by them.
+fn unit_value_fields(val_part: &str) -> Vec<&str> {
+    let parts: Vec<&str> = val_part
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !is_flag(s))
+        .collect();
+
+    if parts.len() == 1 && parts[0].contains(' ') {
+        return parts[0]
+            .split_whitespace()
+            .filter(|s| !s.is_empty() && !is_flag(s))
+            .collect();
+    }
+    parts
+}
+
 fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) -> Result<(), String> {
-    let (left, aliases_str) = match line.split_once('[') {
-        Some((l, r)) => {
-            let r = r.trim_end_matches(']').trim();
-            (l.trim(), r)
-        }
-        None => (line, ""),
-    };
-
-    let (key, val_part) = match left.split_once('=') {
-        Some((k, v)) => (k.trim(), v.trim()),
-        None => return Err("a unit line is `name = factor, dimension, [names]`".to_string()),
-    };
-
-    let mut aliases: Vec<String> = if !aliases_str.is_empty() {
-        aliases_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
-    } else {
-        vec![]
+    let Some((key, val_part, mut aliases)) = cut_unit_line(line) else {
+        return Err("a unit line is `name = factor, dimension, [names]`".to_string());
     };
 
     // The names in the order the catalog lists them: the first one is the unit's symbol in Python.
@@ -314,18 +329,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
 
     let no_prefix = val_part.split(',').any(|field| field.trim() == "noprefix");
 
-    let mut parts: Vec<&str> = val_part
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && !is_flag(s))
-        .collect();
-
-    if parts.len() == 1 && parts[0].contains(' ') {
-        parts = parts[0]
-            .split_whitespace()
-            .filter(|s| !s.is_empty() && !is_flag(s))
-            .collect();
-    }
+    let parts = unit_value_fields(val_part);
 
     if parts.is_empty() {
         return Err("the line has no value".to_string());
@@ -334,19 +338,7 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`. Its dimension
     // is "1" when it is the logarithm of a ratio, or the dimensions of a quantity (`dBW`).
     if parts[0].eq_ignore_ascii_case("log") {
-        let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
-        let (Some(factor), Some(reference), Some(dimension)) = (number(1), number(2), parts.get(3).copied()) else {
-            return Err("a level is `Log, factor, reference, dimension`".to_string());
-        };
-        // `1` is a level of a plain ratio; any other dimension is a level of a quantity (`dBW`)
-        let quantity = if dimension == "1" {
-            RationalUnit::dimensionless()
-        } else {
-            let normalized = normalize_dimension_symbols(dimension, dim_to_base);
-            crate::units::parser::Parser::parse_expression_with_registry(&normalized, registry)
-                .map_err(|_| format!("cannot read the dimension '{dimension}' of the level {symbol}"))?
-        };
-        registry.add_level(symbol.clone(), quantity, factor, reference);
+        register_level(&parts, &symbol, registry, dim_to_base)?;
         register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
         return Ok(());
     }
@@ -361,16 +353,8 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // Absolute affine units carry a zero point between the factor and the dimension:
     // `celsius = 1.0, 273.15, O`. Only a 3+ field line can be one, so `unity = 1.0, 1` and
     // friends — where field 2 is the dimension "1" — keep reading field 2 as the dimension.
-    let mut offset = 0.0;
-    let mut exact_offset = None;
-    let mut dim_index = 1;
-    if parts.len() > 2 {
-        if let Some((parsed, exact)) = parse_number(parts[1]) {
-            offset = parsed;
-            exact_offset = exact;
-            dim_index = 2;
-        }
-    }
+    let (offset, exact_offset, dim_index) = zero_point(&parts);
+    let scale = UnitScale { factor, exact, offset, exact_offset };
 
     let dim_str = if parts.len() > dim_index { parts[dim_index] } else { "1" };
 
@@ -380,71 +364,131 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
     // dimension "unity", so `2 m * 3 %` printed "m * unity" instead of plain metres.
     if dim_str == "1" || dim_str.is_empty() {
-        let mut u = match &exact {
+        let mut u = match &scale.exact {
             Some(e) => RationalUnit::new_from_dimensions([]).with_exact_scale(e.clone()),
-            None => RationalUnit::new_from_dimensions([]).with_scale(factor),
+            None => RationalUnit::new_from_dimensions([]).with_scale(scale.factor),
         };
         u.display_name = Some(symbol.clone());
         registry.add_derived_unit(symbol.clone(), u);
     } else if !base_symbol.is_empty() {
-        if offset != 0.0 {
-            registry.add_affine_unit_exact(symbol.clone(), &base_symbol, factor, exact, offset, exact_offset);
-        } else if factor == 1.0 && symbol == base_symbol {
-            registry.add_base_unit(symbol.clone());
-        } else {
-            registry.add_scaled_unit_exact(symbol.clone(), &base_symbol, factor, exact);
-        }
+        register_on_base(registry, &symbol, &base_symbol, scale);
     } else {
-        let recipe_index = dim_index + 1;
-        let recipe_str = if parts.len() > recipe_index
-            && !parts[recipe_index].is_empty()
-            && !is_flag(parts[recipe_index])
-        {
-            parts[recipe_index]
-        } else {
-            ""
-        };
-
-        let parsed_unit_opt = if !recipe_str.is_empty() {
-            crate::units::parser::Parser::parse_expression_with_registry(recipe_str, registry).ok()
-        } else {
-            None
-        };
-
-        let parsed_unit_opt = parsed_unit_opt.or_else(|| {
-            let normalized_dim = normalize_dimension_symbols(dim_str, dim_to_base);
-            crate::units::parser::Parser::parse_expression_with_registry(&normalized_dim, registry).ok()
-        });
-
-        if let Some(parsed_unit) = parsed_unit_opt {
-            let rescaled = match (&parsed_unit.exact, &exact) {
-                (Some(p), Some(e)) => {
-                    let combined = p.mul(e);
-                    parsed_unit.with_exact_scale(combined)
-                }
-                _ => {
-                    let product = parsed_unit.scale * factor;
-                    parsed_unit.with_scale(product)
-                }
-            };
-            // Carry the zero point through here too: dropping it would silently turn an
-            // affine definition into a purely multiplicative one.
-            let mut u = rescaled.with_offset(offset);
-            if let Some(e) = exact_offset {
-                u = u.with_exact_offset(e);
-            }
-            u.display_name = Some(symbol.clone());
-            // A recipe at scale 1 is a name for its base symbols (`N` is `kg*m/s^2`).
-            if !recipe_str.is_empty() && factor == 1.0 && offset == 0.0 {
-                registry.note_recipe(&symbol, &u.dimensions, &names);
-            }
-            registry.add_derived_unit(symbol.clone(), u);
-        } else {
-            return Err(format!("cannot read the dimension '{dim_str}' of {symbol}, or its recipe"));
-        }
+        let recipe_str = recipe_field(&parts, dim_index + 1);
+        register_recipe_unit(registry, &symbol, &names, (dim_str, recipe_str), &scale, dim_to_base)?;
     }
 
     register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
+    Ok(())
+}
+
+/// A unit's scale as its line writes it: the factor, and the zero point of an affine unit; each with its exact
+/// rational when it has one.
+struct UnitScale {
+    factor: f64,
+    exact: Option<crate::units::exact::ExactScale>,
+    offset: f64,
+    exact_offset: Option<crate::units::exact::ExactScale>,
+}
+
+/// The zero point of an affine unit (`celsius = 1.0, 273.15, O`) and the index of the dimension field after it.
+fn zero_point(parts: &[&str]) -> (f64, Option<crate::units::exact::ExactScale>, usize) {
+    if parts.len() > 2 {
+        if let Some((parsed, exact)) = parse_number(parts[1]) {
+            return (parsed, exact, 2);
+        }
+    }
+    (0.0, None, 1)
+}
+
+/// The recipe field of a unit line (`N = 1.0, F, kg*m/s^2`): empty when the line has none or it is a flag.
+fn recipe_field<'a>(parts: &[&'a str], index: usize) -> &'a str {
+    match parts.get(index) {
+        Some(field) if !field.is_empty() && !is_flag(field) => field,
+        _ => "",
+    }
+}
+
+/// A level `Log, factor, reference, dimension`: `1` as the dimension is a level of a plain ratio, any other
+/// dimension is a level of a quantity (`dBW`).
+fn register_level(
+    parts: &[&str],
+    symbol: &str,
+    registry: &mut UnitRegistry,
+    dim_to_base: &HashMap<String, String>,
+) -> Result<(), String> {
+    let number = |index: usize| parts.get(index).and_then(|text| text.parse::<f64>().ok());
+    let (Some(factor), Some(reference), Some(dimension)) = (number(1), number(2), parts.get(3).copied()) else {
+        return Err("a level is `Log, factor, reference, dimension`".to_string());
+    };
+    let quantity = if dimension == "1" {
+        RationalUnit::dimensionless()
+    } else {
+        let normalized = normalize_dimension_symbols(dimension, dim_to_base);
+        crate::units::parser::Parser::parse_expression_with_registry(&normalized, registry)
+            .map_err(|_| format!("cannot read the dimension '{dimension}' of the level {symbol}"))?
+    };
+    registry.add_level(symbol.to_string(), quantity, factor, reference);
+    Ok(())
+}
+
+/// A unit on the base unit of its dimension: affine with a zero point, the base unit itself at scale 1, or scaled.
+fn register_on_base(registry: &mut UnitRegistry, symbol: &str, base_symbol: &str, scale: UnitScale) {
+    let UnitScale { factor, exact, offset, exact_offset } = scale;
+    if offset != 0.0 {
+        registry.add_affine_unit_exact(symbol.to_string(), base_symbol, factor, exact, offset, exact_offset);
+    } else if factor == 1.0 && symbol == base_symbol {
+        registry.add_base_unit(symbol.to_string());
+    } else {
+        registry.add_scaled_unit_exact(symbol.to_string(), base_symbol, factor, exact);
+    }
+}
+
+/// A unit defined by a recipe or by its dimension spelled out (`dimension`, `recipe`): the unit that text reads
+/// as, rescaled by the line's factor.
+fn register_recipe_unit(
+    registry: &mut UnitRegistry,
+    symbol: &str,
+    names: &[String],
+    (dim_str, recipe_str): (&str, &str),
+    scale: &UnitScale,
+    dim_to_base: &HashMap<String, String>,
+) -> Result<(), String> {
+    let parsed_unit_opt = if !recipe_str.is_empty() {
+        crate::units::parser::Parser::parse_expression_with_registry(recipe_str, registry).ok()
+    } else {
+        None
+    };
+
+    let parsed_unit_opt = parsed_unit_opt.or_else(|| {
+        let normalized_dim = normalize_dimension_symbols(dim_str, dim_to_base);
+        crate::units::parser::Parser::parse_expression_with_registry(&normalized_dim, registry).ok()
+    });
+
+    let Some(parsed_unit) = parsed_unit_opt else {
+        return Err(format!("cannot read the dimension '{dim_str}' of {symbol}, or its recipe"));
+    };
+    let rescaled = match (&parsed_unit.exact, &scale.exact) {
+        (Some(p), Some(e)) => {
+            let combined = p.mul(e);
+            parsed_unit.with_exact_scale(combined)
+        }
+        _ => {
+            let product = parsed_unit.scale * scale.factor;
+            parsed_unit.with_scale(product)
+        }
+    };
+    // Carry the zero point through here too: dropping it would silently turn an
+    // affine definition into a purely multiplicative one.
+    let mut u = rescaled.with_offset(scale.offset);
+    if let Some(e) = &scale.exact_offset {
+        u = u.with_exact_offset(e.clone());
+    }
+    u.display_name = Some(symbol.to_string());
+    // A recipe at scale 1 is a name for its base symbols (`N` is `kg*m/s^2`).
+    if !recipe_str.is_empty() && scale.factor == 1.0 && scale.offset == 0.0 {
+        registry.note_recipe(symbol, &u.dimensions, names);
+    }
+    registry.add_derived_unit(symbol.to_string(), u);
     Ok(())
 }
 

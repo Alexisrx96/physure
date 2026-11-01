@@ -7,16 +7,93 @@ use crate::units::exact::ExactScale;
 
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
 
-/// An exponent as superscript digits: `2` is `²`, `0.5` is `⁰⋅⁵`.
-fn superscript(exponent: f64) -> String {
+/// The dimensions of a product, or of a quotient with `subtract`: both sorted lists merged, the exponents of a
+/// symbol they share added (subtracted), and a symbol whose exponent comes out as zero dropped.
+fn combine_dimensions(a: &DimVec, b: &DimVec, subtract: bool) -> DimVec {
+    let signed = |v: &(i64, i64)| if subtract { (-v.0, v.1) } else { *v };
+    let mut new_dims = DimVec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        let (k1, v1) = &a[i];
+        let (k2, v2) = &b[j];
+        match k1.cmp(k2) {
+            std::cmp::Ordering::Less => {
+                new_dims.push((k1.clone(), *v1));
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                new_dims.push((k2.clone(), signed(v2)));
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                let r1 = Rational64::new(v1.0, v1.1);
+                let (n2, d2) = signed(v2);
+                let res = r1 + Rational64::new(n2, d2);
+                if *res.numer() != 0 {
+                    new_dims.push((k1.clone(), (*res.numer(), *res.denom())));
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    new_dims.extend(a[i..].iter().cloned());
+    new_dims.extend(b[j..].iter().map(|(k, v)| (k.clone(), signed(v))));
+    new_dims
+}
+
+/// A whole number as superscript digits: `2` is `²` and `-1` is `⁻¹`.
+fn superscript(number: i64) -> String {
     const DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
-    format!("{exponent}")
+    number
+        .to_string()
         .chars()
         .map(|c| match c {
-            '.' => '⋅',
+            '-' => '⁻',
             digit => DIGITS[digit as usize - '0' as usize],
         })
         .collect()
+}
+
+/// The power of a symbol as text, the one rule for it wherever a unit or a dimension is printed: a whole
+/// power is superscript digits (`m²`, `s⁻¹`), a fractional power is the exact fraction in parentheses
+/// (`s^(1/2)`, `s^(-1/3)`). Never the decimal of a fraction: a third as `⁰⋅³³³³…` is a number that is not
+/// the exponent, and no unit parser reads it back, while `^(1/3)` is exact and is read.
+pub fn power_text(numerator: i64, denominator: i64) -> String {
+    if denominator == 1 {
+        superscript(numerator)
+    } else {
+        format!("^({numerator}/{denominator})")
+    }
+}
+
+/// Unit symbols with exponents as a product, the way a `CompoundUnit` prints: the symbols in the order
+/// given, positive exponents above the bar and negative ones below it, `kg·m/s²`, `kg/(m·s²)`, `1/s`,
+/// `m^(1/2)`. What it writes is a unit the parser reads back.
+pub fn unit_text(dimensions: &[(String, (i64, i64))]) -> String {
+    let (mut numerator, mut denominator) = (Vec::new(), Vec::new());
+    for (symbol, (n, d)) in dimensions {
+        let term = if (n.abs(), *d) == (1, 1) { symbol.clone() } else { format!("{symbol}{}", power_text(n.abs(), *d)) };
+        if *n > 0 { numerator.push(term) } else { denominator.push(term) }
+    }
+    let (n, d) = (numerator.join("·"), denominator.join("·"));
+    let d = if d.contains('·') { format!("({d})") } else { d };
+    match (n.is_empty(), d.is_empty()) {
+        (false, false) => format!("{n}/{d}"),
+        (true, false) => format!("1/{d}"),
+        (false, true) => n,
+        (true, true) => "1".to_string(),
+    }
+}
+
+/// Dimension symbols with exponents as a formula, the way a `Dimension` prints: no bar, every exponent on its
+/// symbol, `L·M·T⁻²`, `L^(1/2)`, `T^(-1/2)`. It is `unit_text`'s power rule over another layout.
+pub fn formula_text(dimensions: &[(String, (i64, i64))]) -> String {
+    dimensions
+        .iter()
+        .map(|(symbol, (n, d))| if (*n, *d) == (1, 1) { symbol.clone() } else { format!("{symbol}{}", power_text(*n, *d)) })
+        .collect::<Vec<_>>()
+        .join("·")
 }
 
 /// What makes a unit a *level*: `level = factor * log10(ratio / reference)`, so `dB` is
@@ -293,40 +370,7 @@ impl RationalUnit {
     }
 
     pub fn mul(&self, other: &Self) -> Self {
-        let mut new_dims = DimVec::new();
-        let (mut i, mut j) = (0, 0);
-        while i < self.dimensions.len() && j < other.dimensions.len() {
-            let (k1, v1) = &self.dimensions[i];
-            let (k2, v2) = &other.dimensions[j];
-            match k1.cmp(k2) {
-                std::cmp::Ordering::Less => {
-                    new_dims.push((k1.clone(), *v1));
-                    i += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    new_dims.push((k2.clone(), *v2));
-                    j += 1;
-                }
-                std::cmp::Ordering::Equal => {
-                    let r1 = Rational64::new(v1.0, v1.1);
-                    let r2 = Rational64::new(v2.0, v2.1);
-                    let res = r1 + r2;
-                    if *res.numer() != 0 {
-                        new_dims.push((k1.clone(), (*res.numer(), *res.denom())));
-                    }
-                    i += 1;
-                    j += 1;
-                }
-            }
-        }
-        while i < self.dimensions.len() {
-            new_dims.push(self.dimensions[i].clone());
-            i += 1;
-        }
-        while j < other.dimensions.len() {
-            new_dims.push(other.dimensions[j].clone());
-            j += 1;
-        }
+        let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, false);
         let id = Self::calculate_id(&new_dims);
         let display_name = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
             self.display_name.clone()
@@ -355,41 +399,7 @@ impl RationalUnit {
     }
 
     pub fn div(&self, other: &Self) -> Self {
-        let mut new_dims = DimVec::new();
-        let (mut i, mut j) = (0, 0);
-        while i < self.dimensions.len() && j < other.dimensions.len() {
-            let (k1, v1) = &self.dimensions[i];
-            let (k2, v2) = &other.dimensions[j];
-            match k1.cmp(k2) {
-                std::cmp::Ordering::Less => {
-                    new_dims.push((k1.clone(), *v1));
-                    i += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    new_dims.push((k2.clone(), (-v2.0, v2.1)));
-                    j += 1;
-                }
-                std::cmp::Ordering::Equal => {
-                    let r1 = Rational64::new(v1.0, v1.1);
-                    let r2 = Rational64::new(v2.0, v2.1);
-                    let res = r1 - r2;
-                    if *res.numer() != 0 {
-                        new_dims.push((k1.clone(), (*res.numer(), *res.denom())));
-                    }
-                    i += 1;
-                    j += 1;
-                }
-            }
-        }
-        while i < self.dimensions.len() {
-            new_dims.push(self.dimensions[i].clone());
-            i += 1;
-        }
-        while j < other.dimensions.len() {
-            let (k2, v2) = &other.dimensions[j];
-            new_dims.push((k2.clone(), (-v2.0, v2.1)));
-            j += 1;
-        }
+        let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, true);
         let id = Self::calculate_id(&new_dims);
         let display_name = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
             self.display_name.clone()
@@ -469,7 +479,8 @@ impl RationalUnit {
             } else if *den == 1 {
                 parts.push(format!("{}^{}", base, num));
             } else {
-                parts.push(format!("{}^{}/{}", base, num, den));
+                // parenthesised so that the unit parser reads it back: `m^1/2` is `m^1` divided by 2
+                parts.push(format!("{}^({}/{})", base, num, den));
             }
         }
         parts.join(" * ")
@@ -502,21 +513,7 @@ impl RationalUnit {
     /// `kg/(m·s²)`, `1/s`. It reads the dimensions as symbols, so it is meant for a unit parsed
     /// with `Parser::parse_expression_atomic`.
     pub fn symbolic_repr(&self) -> String {
-        let (mut numerator, mut denominator) = (Vec::new(), Vec::new());
-        for (symbol, (n, d)) in &self.dimensions {
-            let exponent = *n as f64 / *d as f64;
-            let shown = exponent.abs();
-            let term = if shown == 1.0 { symbol.clone() } else { format!("{symbol}{}", superscript(shown)) };
-            if exponent > 0.0 { numerator.push(term) } else { denominator.push(term) }
-        }
-        let (n, d) = (numerator.join("·"), denominator.join("·"));
-        let d = if d.contains('·') { format!("({d})") } else { d };
-        match (n.is_empty(), d.is_empty()) {
-            (false, false) => format!("{n}/{d}"),
-            (true, false) => format!("1/{d}"),
-            (false, true) => n,
-            (true, true) => "1".to_string(),
-        }
+        unit_text(&self.dimensions)
     }
 
     pub fn __repr__(&self) -> String {

@@ -444,7 +444,8 @@ class Quantity(
                 1.0, other.unit, 0.0, self.system, self.dimension
             )
             converted_one = one_other.to(self.unit)
-            return float(converted_one.magnitude) == 1.0
+            # exact on purpose: `approx_eq` is the comparison with a tolerance
+            return float(converted_one.magnitude) == 1.0  # NOSONAR
         except Exception:
             return False
 
@@ -693,9 +694,7 @@ class Quantity(
                 system = get_active_system()
                 number, unit = parse_quantity_text(value, system)
                 return Quantity.from_input(number, unit, system)
-            raise ValueError(
-                f"No se puede validar Quantity desde {type(value)}"
-            )
+            raise ValueError(f"Cannot validate Quantity from {type(value)}")
 
         def validate_from_dict(value: Any) -> Quantity:
             if isinstance(value, dict):
@@ -708,13 +707,11 @@ class Quantity(
                 sys = create_system(f"{system_name.lower()}.conf")
                 if unit is None:
                     raise ValueError(
-                        f"No se puede validar Quantity desde {type(value)}"
+                        f"Cannot validate Quantity from {type(value)}"
                     )
                 u = sys.get_unit(unit)
                 return Quantity.from_input(mag, u, sys)
-            raise ValueError(
-                f"No se puede validar Quantity desde {type(value)}"
-            )
+            raise ValueError(f"Cannot validate Quantity from {type(value)}")
 
         return core_schema.union_schema(
             [

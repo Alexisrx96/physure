@@ -16,18 +16,47 @@ pub fn format_symbol_latex(name: &str) -> String {
     format!("\\text{{{}}}", escape_latex_text(name))
 }
 
+/// A quantity literal: its magnitude, then its unit if it has one.
+fn quantity_summary(q: &physure_script::ast::QuantityNode) -> String {
+    let mut s = physure_core::quantity::format_float(q.magnitude);
+    if let Some(ref u) = q.unit {
+        let u_s = physure_script::ast::unit_to_latex(u);
+        if !u_s.is_empty() {
+            s = format!("{}\\, {}", s, u_s);
+        }
+    }
+    s
+}
+
+fn binary_summary(op: &physure_script::ast::BinaryOp, l: &str, r: &str) -> String {
+    match op {
+        physure_script::ast::BinaryOp::Add => format!("{} + {}", l, r),
+        physure_script::ast::BinaryOp::Sub => format!("{} - {}", l, r),
+        physure_script::ast::BinaryOp::Mul => format!("{} \\cdot {}", l, r),
+        physure_script::ast::BinaryOp::Div => format!("\\frac{{{}}}{{{}}}", l, r),
+        physure_script::ast::BinaryOp::Pow => format!("{{{}}}^{{{}}}", l, r),
+        physure_script::ast::BinaryOp::Convert => format!("{} \\Rightarrow {}", l, r),
+        physure_script::ast::BinaryOp::Range => format!("{} .. {}", l, r),
+    }
+}
+
+/// A call: `solve` and the conditional in words, any other as `name(args)`.
+fn call_summary(name: &str, args: &[physure_script::ast::Expr], i18n: &I18nLabels) -> String {
+    let args_s: Vec<String> = args.iter().map(|a| format_expr_latex_summary(a, i18n)).collect();
+    if name == "solve" && args.len() == 2 {
+        let eq_str = args_s[0].trim_matches('"').replace('_', "\\_");
+        let var_str = args_s[1].trim_matches('"').replace('_', "\\_");
+        format!("\\text{{{} }} {} \\text{{ {} }} {}:", i18n.solve_from, eq_str, i18n.solve_solving_for, var_str)
+    } else if (name == "ternary" || name == "if_then_else") && args.len() == 3 {
+        format!("\\text{{{} }} {} \\text{{ {} }} {} \\text{{ {} }} {}", i18n.if_word, args_s[0], i18n.then_word, args_s[1], i18n.else_word, args_s[2])
+    } else {
+        format!("\\text{{{}}}({})", escape_latex_text(name), args_s.join(", "))
+    }
+}
+
 pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLabels) -> String {
     match expr {
-        physure_script::ast::Expr::Quantity(q) => {
-            let mut s = physure_core::quantity::format_float(q.magnitude);
-            if let Some(ref u) = q.unit {
-                let u_s = physure_script::ast::unit_to_latex(u);
-                if !u_s.is_empty() {
-                    s = format!("{}\\, {}", s, u_s);
-                }
-            }
-            s
-        }
+        physure_script::ast::Expr::Quantity(q) => quantity_summary(q),
         physure_script::ast::Expr::Bool(b) => {
             let verdict = if *b { i18n.true_word } else { i18n.false_word };
             format!("\\text{{{}}}", verdict)
@@ -39,28 +68,9 @@ pub fn format_expr_latex_summary(expr: &physure_script::ast::Expr, i18n: &I18nLa
         physure_script::ast::Expr::BinaryOp { op, left, right } => {
             let l = format_expr_latex_summary(left, i18n);
             let r = format_expr_latex_summary(right, i18n);
-            match op {
-                physure_script::ast::BinaryOp::Add => format!("{} + {}", l, r),
-                physure_script::ast::BinaryOp::Sub => format!("{} - {}", l, r),
-                physure_script::ast::BinaryOp::Mul => format!("{} \\cdot {}", l, r),
-                physure_script::ast::BinaryOp::Div => format!("\\frac{{{}}}{{{}}}", l, r),
-                physure_script::ast::BinaryOp::Pow => format!("{{{}}}^{{{}}}", l, r),
-                physure_script::ast::BinaryOp::Convert => format!("{} \\Rightarrow {}", l, r),
-                physure_script::ast::BinaryOp::Range => format!("{} .. {}", l, r),
-            }
+            binary_summary(op, &l, &r)
         }
-        physure_script::ast::Expr::FunctionCall { name, args, .. } => {
-            let args_s: Vec<String> = args.iter().map(|a| format_expr_latex_summary(a, i18n)).collect();
-            if name == "solve" && args.len() == 2 {
-                let eq_str = args_s[0].trim_matches('"').replace('_', "\\_");
-                let var_str = args_s[1].trim_matches('"').replace('_', "\\_");
-                format!("\\text{{{} }} {} \\text{{ {} }} {}:", i18n.solve_from, eq_str, i18n.solve_solving_for, var_str)
-            } else if (name == "ternary" || name == "if_then_else") && args.len() == 3 {
-                format!("\\text{{{} }} {} \\text{{ {} }} {} \\text{{ {} }} {}", i18n.if_word, args_s[0], i18n.then_word, args_s[1], i18n.else_word, args_s[2])
-            } else {
-                format!("\\text{{{}}}({})", escape_latex_text(name), args_s.join(", "))
-            }
-        }
+        physure_script::ast::Expr::FunctionCall { name, args, .. } => call_summary(name, args, i18n),
         physure_script::ast::Expr::ForExpr { var, iterable, body } => {
             let it = format_expr_latex_summary(iterable, i18n);
             let b = format_expr_latex_summary(body, i18n);

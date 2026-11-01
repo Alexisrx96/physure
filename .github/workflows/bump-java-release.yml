@@ -1,6 +1,7 @@
 # Manually-triggered version bump for physure-java: bumps the version in
-# physure-java/pom.xml, commits, tags `java-vX.Y.Z`, and pushes. The tag
-# push then triggers java-release.yml, which publishes to Maven Central.
+# physure-java/pom.xml, commits, tags `java-vX.Y.Z`, pushes, and starts
+# java-release.yml, which publishes to Maven Central (and, since autoPublish is
+# on, makes the release public).
 #
 # physure-java has its own independent version from the Rust core and
 # Python wrapper — see bump-core-release.yml / bump-release.yml.
@@ -18,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # to start the release workflow with `gh workflow run`
 
 jobs:
   bump:
@@ -50,3 +52,11 @@ jobs:
           git tag "java-v${{ steps.bump.outputs.new }}"
           git push origin HEAD:${{ github.ref_name }}
           git push origin "java-v${{ steps.bump.outputs.new }}"
+
+      # A tag pushed with GITHUB_TOKEN starts no workflow (GitHub does not let that token cause
+      # runs), so the release is started by hand from here. workflow_dispatch is the exception.
+      - name: Start the release pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run java-release.yml --ref "java-v${{ steps.bump.outputs.new }}"

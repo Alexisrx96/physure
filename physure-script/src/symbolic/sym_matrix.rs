@@ -9,6 +9,56 @@ pub struct SymMatrix {
     pub data: Vec<Vec<Node>>,
 }
 
+/// The `[...]` groups at the top level of the text between a matrix's outer brackets, brackets included.
+fn top_level_groups(inner: &str) -> Vec<String> {
+    let mut groups = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+
+    for ch in inner.chars() {
+        match ch {
+            '[' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ']' => {
+                depth -= 1;
+                current.push(ch);
+                if depth == 0 {
+                    groups.push(std::mem::take(&mut current));
+                }
+            }
+            _ if depth > 0 => current.push(ch),
+            _ => {}
+        }
+    }
+    groups
+}
+
+/// The entries of one `[a, b, c]` row; `None` when the text is not bracketed.
+fn parse_row(group: &str) -> PhysureResult<Option<Vec<Node>>> {
+    let r_str = group.trim();
+    if !(r_str.starts_with('[') && r_str.ends_with(']')) {
+        return Ok(None);
+    }
+    let content = &r_str[1..r_str.len() - 1];
+    let mut row_nodes = Vec::new();
+    for item in content.split(',') {
+        if !item.trim().is_empty() {
+            row_nodes.push(SymbolicParser::parse_str(item.trim())?);
+        }
+    }
+    Ok(Some(row_nodes))
+}
+
+/// The matrix without row 0 and without column `col`.
+fn minor(mat: &[Vec<Node>], col: usize) -> Vec<Vec<Node>> {
+    mat[1..]
+        .iter()
+        .map(|row| row.iter().enumerate().filter(|(c, _)| *c != col).map(|(_, e)| e.clone()).collect())
+        .collect()
+}
+
 impl SymMatrix {
     pub fn new(data: Vec<Vec<Node>>) -> PhysureResult<Self> {
         let rows = data.len();
@@ -34,42 +84,11 @@ impl SymMatrix {
             return Err(PhysureError::Generic("Matrix must be enclosed in []".into()));
         }
         let inner = &trimmed[1..trimmed.len() - 1].trim();
-        
-        let mut rows = Vec::new();
-        let mut current_row = String::new();
-        let mut depth = 0;
 
-        for ch in inner.chars() {
-            match ch {
-                '[' => {
-                    depth += 1;
-                    current_row.push(ch);
-                }
-                ']' => {
-                    depth -= 1;
-                    current_row.push(ch);
-                    if depth == 0 {
-                        let r_str = current_row.trim();
-                        if r_str.starts_with('[') && r_str.ends_with(']') {
-                            let content = &r_str[1..r_str.len() - 1];
-                            let items: Vec<&str> = content.split(',').collect();
-                            let mut row_nodes = Vec::new();
-                            for item in items {
-                                if !item.trim().is_empty() {
-                                    row_nodes.push(SymbolicParser::parse_str(item.trim())?);
-                                }
-                            }
-                            rows.push(row_nodes);
-                        }
-                        current_row.clear();
-                    }
-                }
-                ',' if depth == 0 => {}
-                _ => {
-                    if depth > 0 {
-                        current_row.push(ch);
-                    }
-                }
+        let mut rows = Vec::new();
+        for group in top_level_groups(inner) {
+            if let Some(row_nodes) = parse_row(&group)? {
+                rows.push(row_nodes);
             }
         }
 
@@ -125,25 +144,12 @@ impl SymMatrix {
 
         // Laplace cofactor expansion along row 0
         let mut terms = Vec::new();
-        for col in 0..n {
-            let elem = &mat[0][col];
+        for (col, elem) in mat[0].iter().enumerate() {
             if matches!(elem.simplify(), Node::Number(val) if val == 0.0) {
                 continue;
             }
 
-            // Build submatrix excluding row 0 and column `col`
-            let mut submat = Vec::new();
-            for r in 1..n {
-                let mut subrow = Vec::new();
-                for c in 0..n {
-                    if c != col {
-                        subrow.push(mat[r][c].clone());
-                    }
-                }
-                submat.push(subrow);
-            }
-
-            let sub_det = self.det_recursive(&submat)?;
+            let sub_det = self.det_recursive(&minor(mat, col))?;
             let term = Node::Mul(vec![elem.clone(), sub_det]).simplify();
 
             if col % 2 == 0 {
@@ -153,13 +159,11 @@ impl SymMatrix {
             }
         }
 
-        if terms.is_empty() {
-            Ok(Node::Number(0.0))
-        } else if terms.len() == 1 {
-            Ok(terms[0].clone())
-        } else {
-            Ok(Node::Add(terms).simplify())
-        }
+        Ok(match terms.len() {
+            0 => Node::Number(0.0),
+            1 => terms.remove(0),
+            _ => Node::Add(terms).simplify(),
+        })
     }
 
     pub fn charpoly(&self, lambda_var: &str) -> PhysureResult<Node> {

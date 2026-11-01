@@ -65,7 +65,7 @@ class BackendManager:
     def announce(cls, name: str) -> None:
         """Called by a backend module once its library is in play."""
         cls._announced.add(name)
-        for hook in list(cls._load_hooks.get(name, ())):
+        for hook in tuple(cls._load_hooks.get(name, ())):
             hook()
 
     @classmethod

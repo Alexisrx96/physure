@@ -1,3 +1,5 @@
+mod dimensions;
+mod i18n;
 mod incremental;
 
 use std::collections::HashMap;
@@ -10,11 +12,17 @@ struct Backend {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
     doc_states: RwLock<HashMap<Url, incremental::DocState>>,
+    /// The language the client asked for in `initialize` (`InitializeParams.locale`); English
+    /// until it says otherwise.
+    locale: RwLock<String>,
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        if let Some(locale) = params.locale {
+            *self.locale.write().unwrap() = locale;
+        }
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -110,217 +118,11 @@ impl LanguageServer for Backend {
             return Ok(Some(CompletionResponse::Array(Vec::new())));
         }
 
-        let mut items = Vec::new();
-
-        // 1. Built-in Functions
-        let builtins = vec![
-            ("abs", "abs(x)", "Absolute value of a physical quantity"),
-            ("round", "round(x, ndigits?)", "Round quantity to decimal places"),
-            ("sqrt", "sqrt(x)", "Square root of a physical quantity"),
-            ("sin", "sin(x)", "Sine of an angle or dimensionless quantity"),
-            ("cos", "cos(x)", "Cosine of an angle or dimensionless quantity"),
-            ("tan", "tan(x)", "Tangent of an angle or dimensionless quantity"),
-            ("exp", "exp(x)", "Exponential e^x"),
-            ("log", "log(x)", "Natural logarithm"),
-            ("ln", "ln(x)", "Natural logarithm (alias)"),
-            ("solve", "solve(equation, target)", "Solve an equation symbolically — requires `use solve from calc`"),
-            ("deriv", "deriv(expression, variable)", "Symbolic derivative — requires `use deriv from calc`"),
-            ("diff", "diff(expression, variable)", "Symbolic derivative (alias) — requires `use diff from calc`"),
-            ("integral", "integral(expression, variable)", "Symbolic indefinite integral — requires `use integral from calc`"),
-            ("integrate", "integrate(expression, variable)", "Symbolic indefinite integral (alias) — requires `use integrate from calc`"),
-            ("gradient", "gradient(y_array, x_array)", "Numerical derivative dy/dx for vector data — requires `use gradient from array`"),
-            ("trapz", "trapz(y_array, x_array)", "Numerical integration (area under curve) — requires `use trapz from array`"),
-            ("linspace", "linspace(start, stop, n)", "Evenly spaced vector range — requires `use linspace from array`"),
-            ("plot", "plot(x_array, y_array)", "Plot one vector array against another — requires `use plot from plot`"),
-        ];
-
-        for (name, label, doc) in builtins {
-            items.push(CompletionItem {
-                label: name.to_string(),
-                kind: Some(CompletionItemKind::FUNCTION),
-                detail: Some(label.to_string()),
-                documentation: Some(Documentation::String(doc.to_string())),
-                insert_text: Some(format!("{}($1)", name)),
-                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                sort_text: Some(format!("m_builtin_{}", name)),
-                ..Default::default()
-            });
-        }
-
-        // 2. Control Keywords
-        let keywords = vec![
-            ("where", "expr where var = value", "Local binding, `a * b where a = 2 m, b = 3 m`"),
-            ("if", "if cond then expr1 else expr2", "Conditional expression"),
-            ("then", "then expr1", "Conditional then branch"),
-            ("else", "else expr2", "Conditional else branch"),
-            ("use", "use name from <domain|module>", "Import name(s) from a domain (calc/plot/array), .phs module, or plugin/ext file"),
-            ("from", "use name from <domain|module>", "Source clause of a `use` statement"),
-            ("as", "use name as alias from <domain|module>", "Aliases an imported name"),
-            ("import", "import \"path/to/module\"", "Imports an entire module"),
-            ("export", "export name", "Exports a name from the current module"),
-        ];
-
-        for (kw, label, doc) in keywords {
-            items.push(CompletionItem {
-                label: kw.to_string(),
-                kind: Some(CompletionItemKind::KEYWORD),
-                detail: Some(label.to_string()),
-                documentation: Some(Documentation::String(doc.to_string())),
-                sort_text: Some(format!("m_keyword_{}", kw)),
-                ..Default::default()
-            });
-        }
-
-        // 2b. Builtin domains (targets of `use ... from <domain>`)
-        let domains = vec![
-            ("core", "Always-available builtins: format, comparisons, ternary, vector, sqrt, sin, cos, exp, ln, abs, log, tan, floor, ceil, min, max, round"),
-            ("calc", "Symbolic calculus: deriv, diff, integral, integrate, solve"),
-            ("plot", "Plotting: plot"),
-            ("array", "Array/numeric helpers: linspace, gradient, trapz"),
-        ];
-
-        for (name, doc) in domains {
-            items.push(CompletionItem {
-                label: name.to_string(),
-                kind: Some(CompletionItemKind::MODULE),
-                detail: Some(format!("domain '{}'", name)),
-                documentation: Some(Documentation::String(doc.to_string())),
-                sort_text: Some(format!("m_domain_{}", name)),
-                ..Default::default()
-            });
-        }
-
-        // 3. Physical Units & Aliases dynamically loaded from UnitRegistry
-        let (registry, _) = physure_core::units::conf::build_registry_from_conf();
-        let mut seen = std::collections::HashSet::new();
-
-        // 3a. Primary Base Units
-        for name in registry.base_units.keys() {
-            if seen.insert(name.clone()) {
-                let meta = registry.unit_meta.get(name);
-                let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Base Unit");
-                let desc = meta.and_then(|m| m.description.as_deref()).unwrap_or("");
-                items.push(CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::UNIT),
-                    detail: Some(format!("{} • Base Unit", category)),
-                    documentation: Some(Documentation::String(format!("Physure base unit `{}`. {}", name, desc))),
-                    sort_text: Some(format!("z_unit_0_{}", name)),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // 3b. Derived & Scaled Units (V, Pa, Ohm, Ω, kPa, MPa, kN, kJ, kW, etc.)
-        for (name, unit) in &registry.derived_units {
-            if seen.insert(name.clone()) {
-                let meta = registry.unit_meta.get(name);
-                let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Derived Unit");
-                let desc = meta.and_then(|m| m.description.as_deref()).unwrap_or("");
-                let dim_str = unit.base_repr();
-                items.push(CompletionItem {
-                    label: name.clone(),
-                    kind: Some(CompletionItemKind::UNIT),
-                    detail: Some(format!("{} • {}", category, if dim_str.is_empty() { "Unit".into() } else { dim_str })),
-                    documentation: Some(Documentation::String(format!("Physure physical unit `{}`. {}", name, desc))),
-                    sort_text: Some(format!("z_unit_1_{}", name)),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // 3c. Unit Aliases (Volts, Volt, Pascal, Pascals, ohmio, ohmios, voltio, voltios, etc.)
-        for (alias, target_symbol) in &registry.aliases {
-            if seen.insert(alias.clone()) {
-                let meta = registry.unit_meta.get(target_symbol);
-                let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Unit Alias");
-                items.push(CompletionItem {
-                    label: alias.clone(),
-                    kind: Some(CompletionItemKind::UNIT),
-                    detail: Some(format!("Alias for {} ({})", target_symbol, category)),
-                    documentation: Some(Documentation::String(format!("Physure unit alias `{}` -> `{}`", alias, target_symbol))),
-                    sort_text: Some(format!("z_unit_2_{}", alias)),
-                    ..Default::default()
-                });
-            }
-        }
-
-        // 4. Greek Letters & Mathematical Symbols (Unicode, names & LaTeX aliases)
-        let greek_symbols = vec![
-            ("Δ", "Δ", "Delta", "Greek letter Delta (Difference / Change / Variation)"),
-            ("delta", "Δ", "Delta (-> Δ)", "Inserts Greek letter Delta (Δ)"),
-            ("Delta", "Δ", "Delta (-> Δ)", "Inserts Greek letter Delta (Δ)"),
-            ("\\delta", "Δ", "LaTeX \\delta (-> Δ)", "Inserts Greek letter Delta (Δ)"),
-            ("σ", "σ", "Sigma", "Greek letter Sigma (Uncertainty / Standard Deviation / Stress)"),
-            ("sigma", "σ", "Sigma (-> σ)", "Inserts Greek letter Sigma (σ)"),
-            ("\\sigma", "σ", "LaTeX \\sigma (-> σ)", "Inserts Greek letter Sigma (σ)"),
-            ("Ω", "Ω", "Omega", "Greek letter Omega (Electric resistance unit Ohm)"),
-            ("omega", "Ω", "Omega (-> Ω)", "Inserts Greek letter Omega (Ω)"),
-            ("Omega", "Ω", "Omega (-> Ω)", "Inserts Greek letter Omega (Ω)"),
-            ("\\omega", "ω", "LaTeX \\omega (-> ω)", "Inserts Greek letter lowercase Omega (ω)"),
-            ("\\Omega", "Ω", "LaTeX \\Omega (-> Ω)", "Inserts Greek letter capital Omega (Ω)"),
-            ("π", "π", "Pi", "Greek letter Pi (3.14159...)"),
-            ("pi", "π", "Pi (-> π)", "Inserts Greek letter Pi (π)"),
-            ("\\pi", "π", "LaTeX \\pi (-> π)", "Inserts Greek letter Pi (π)"),
-            ("θ", "θ", "Theta", "Greek letter Theta (Angle / Temperature)"),
-            ("theta", "θ", "Theta (-> θ)", "Inserts Greek letter Theta (θ)"),
-            ("\\theta", "θ", "LaTeX \\theta (-> θ)", "Inserts Greek letter Theta (θ)"),
-            ("λ", "λ", "Lambda", "Greek letter Lambda (Wavelength)"),
-            ("lambda", "λ", "Lambda (-> λ)", "Inserts Greek letter Lambda (λ)"),
-            ("\\lambda", "λ", "LaTeX \\lambda (-> λ)", "Inserts Greek letter Lambda (λ)"),
-            ("μ", "μ", "Mu / Micro", "Greek letter Mu / Micro prefix"),
-            ("mu", "μ", "Mu (-> μ)", "Inserts Greek letter Mu (μ)"),
-            ("micro", "μ", "Micro (-> μ)", "Inserts Micro prefix (μ)"),
-            ("\\mu", "μ", "LaTeX \\mu (-> μ)", "Inserts Greek letter Mu (μ)"),
-            ("α", "α", "Alpha", "Greek letter Alpha (Coefficient)"),
-            ("alpha", "α", "Alpha (-> α)", "Inserts Greek letter Alpha (α)"),
-            ("\\alpha", "α", "LaTeX \\alpha (-> α)", "Inserts Greek letter Alpha (α)"),
-            ("β", "β", "Beta", "Greek letter Beta"),
-            ("beta", "β", "Beta (-> β)", "Inserts Greek letter Beta (β)"),
-            ("\\beta", "β", "LaTeX \\beta (-> β)", "Inserts Greek letter Beta (β)"),
-            ("γ", "γ", "Gamma", "Greek letter Gamma"),
-            ("gamma", "γ", "Gamma (-> γ)", "Inserts Greek letter Gamma (γ)"),
-            ("\\gamma", "γ", "LaTeX \\gamma (-> γ)", "Inserts Greek letter Gamma (γ)"),
-            ("ε", "ε", "Epsilon", "Greek letter Epsilon (Permittivity / Strain)"),
-            ("epsilon", "ε", "Epsilon (-> ε)", "Inserts Greek letter Epsilon (ε)"),
-            ("\\epsilon", "ε", "LaTeX \\epsilon (-> ε)", "Inserts Greek letter Epsilon (ε)"),
-            ("η", "η", "Eta", "Greek letter Eta (Efficiency)"),
-            ("eta", "η", "Eta (-> η)", "Inserts Greek letter Eta (η)"),
-            ("\\eta", "η", "LaTeX \\eta (-> η)", "Inserts Greek letter Eta (η)"),
-            ("ρ", "ρ", "Rho", "Greek letter Rho (Density / Resistivity)"),
-            ("rho", "ρ", "Rho (-> ρ)", "Inserts Greek letter Rho (ρ)"),
-            ("\\rho", "ρ", "LaTeX \\rho (-> ρ)", "Inserts Greek letter Rho (ρ)"),
-            ("τ", "τ", "Tau", "Greek letter Tau (Torque / Time constant)"),
-            ("tau", "τ", "Tau (-> τ)", "Inserts Greek letter Tau (τ)"),
-            ("\\tau", "τ", "LaTeX \\tau (-> τ)", "Inserts Greek letter Tau (τ)"),
-            ("ϕ", "ϕ", "Phi", "Greek letter Phi (Magnetic flux / Phase)"),
-            ("phi", "ϕ", "Phi (-> ϕ)", "Inserts Greek letter Phi (ϕ)"),
-            ("\\phi", "ϕ", "LaTeX \\phi (-> ϕ)", "Inserts Greek letter Phi (ϕ)"),
-            ("ψ", "ψ", "Psi", "Greek letter Psi (Wavefunction)"),
-            ("psi", "ψ", "Psi (-> ψ)", "Inserts Greek letter Psi (ψ)"),
-            ("\\psi", "ψ", "LaTeX \\psi (-> ψ)", "Inserts Greek letter Psi (ψ)"),
-            ("ω", "ω", "Omega (lowercase)", "Greek letter lowercase Omega (Angular frequency)"),
-            ("∞", "∞", "Infinity", "Infinity symbol ∞"),
-            ("infinity", "∞", "Infinity (-> ∞)", "Inserts infinity symbol ∞"),
-            ("\\infty", "∞", "LaTeX \\infty (-> ∞)", "Inserts infinity symbol ∞"),
-            ("±", "±", "Plus-Minus", "Uncertainty operator ±"),
-            ("+/-", "±", "Plus-Minus (-> ±)", "Inserts uncertainty operator ±"),
-            ("\\pm", "±", "LaTeX \\pm (-> ±)", "Inserts uncertainty operator ±"),
-            ("Å", "Å", "Angstrom", "Angstrom length unit Å"),
-            ("°", "°", "Degree", "Degree angle symbol °"),
-        ];
-
-        for (label, insert_text, detail, doc) in greek_symbols {
-            items.push(CompletionItem {
-                label: label.to_string(),
-                kind: Some(CompletionItemKind::CONSTANT),
-                detail: Some(format!("Greek Symbol • {}", detail)),
-                documentation: Some(Documentation::String(doc.to_string())),
-                insert_text: Some(insert_text.to_string()),
-                sort_text: Some(format!("z_greek_{}", label)),
-                ..Default::default()
-            });
-        }
+        let mut items = builtin_completions();
+        items.extend(keyword_completions());
+        items.extend(domain_completions());
+        items.extend(unit_completions());
+        items.extend(symbol_completions());
 
         Ok(Some(CompletionResponse::Array(items)))
     }
@@ -334,7 +136,8 @@ impl LanguageServer for Backend {
             let line = text.lines().nth(pos.line as usize).unwrap_or("");
             let word = extract_word_at_pos(line, pos.character as usize);
 
-            if let Some(doc) = lookup_hover_doc(&word) {
+            let locale = self.locale.read().unwrap().clone();
+            if let Some(doc) = lookup_hover_doc(&word, &locale) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -374,7 +177,10 @@ impl Backend {
         let diagnostics = match outcome {
             Ok(outcome) => {
                 self.doc_states.write().unwrap().insert(uri.clone(), outcome.state);
-                outcome.diagnostics
+                // what the buffer says about dimensions, from the program the checker parses (nothing if it does not parse)
+                let mut diagnostics = outcome.diagnostics;
+                diagnostics.extend(dimensions::dimension_diagnostics(&text));
+                diagnostics
             }
             Err(_) => vec![Diagnostic {
                 range: Range {
@@ -397,6 +203,251 @@ impl Backend {
 
         self.client.publish_diagnostics(uri, diagnostics, None).await;
     }
+}
+
+/// The always-available builtin functions.
+fn builtin_completions() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    // 1. Built-in Functions
+    let builtins = vec![
+        ("abs", "abs(x)", "Absolute value of a physical quantity"),
+        ("round", "round(x, ndigits?)", "Round quantity to decimal places"),
+        ("sqrt", "sqrt(x)", "Square root of a physical quantity"),
+        ("sin", "sin(x)", "Sine of an angle or dimensionless quantity"),
+        ("cos", "cos(x)", "Cosine of an angle or dimensionless quantity"),
+        ("tan", "tan(x)", "Tangent of an angle or dimensionless quantity"),
+        ("exp", "exp(x)", "Exponential e^x"),
+        ("log", "log(x)", "Natural logarithm"),
+        ("ln", "ln(x)", "Natural logarithm (alias)"),
+        ("solve", "solve(equation, target)", "Solve an equation symbolically — requires `use solve from calc`"),
+        ("deriv", "deriv(expression, variable)", "Symbolic derivative — requires `use deriv from calc`"),
+        ("diff", "diff(expression, variable)", "Symbolic derivative (alias) — requires `use diff from calc`"),
+        ("integral", "integral(expression, variable)", "Symbolic indefinite integral — requires `use integral from calc`"),
+        ("integrate", "integrate(expression, variable)", "Symbolic indefinite integral (alias) — requires `use integrate from calc`"),
+        ("gradient", "gradient(y_array, x_array)", "Numerical derivative dy/dx for vector data — requires `use gradient from array`"),
+        ("trapz", "trapz(y_array, x_array)", "Numerical integration (area under curve) — requires `use trapz from array`"),
+        ("linspace", "linspace(start, stop, n)", "Evenly spaced vector range — requires `use linspace from array`"),
+        ("plot", "plot(x_array, y_array)", "Plot one vector array against another — requires `use plot from plot`"),
+    ];
+
+    for (name, label, doc) in builtins {
+        items.push(CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some(label.to_string()),
+            documentation: Some(Documentation::String(doc.to_string())),
+            insert_text: Some(format!("{}($1)", name)),
+            insert_text_format: Some(InsertTextFormat::SNIPPET),
+            sort_text: Some(format!("m_builtin_{}", name)),
+            ..Default::default()
+        });
+    }
+
+    items
+}
+
+/// The control keywords.
+fn keyword_completions() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    // 2. Control Keywords
+    let keywords = vec![
+        ("where", "expr where var = value", "Local binding, `a * b where a = 2 m, b = 3 m`"),
+        ("if", "if cond then expr1 else expr2", "Conditional expression"),
+        ("then", "then expr1", "Conditional then branch"),
+        ("else", "else expr2", "Conditional else branch"),
+        ("use", "use name from <domain|module>", "Import name(s) from a domain (calc/plot/array), .phs module, or plugin/ext file"),
+        ("from", "use name from <domain|module>", "Source clause of a `use` statement"),
+        ("as", "use name as alias from <domain|module>", "Aliases an imported name"),
+        ("import", "import \"path/to/module\"", "Imports an entire module"),
+        ("export", "export name", "Exports a name from the current module"),
+    ];
+
+    for (kw, label, doc) in keywords {
+        items.push(CompletionItem {
+            label: kw.to_string(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            detail: Some(label.to_string()),
+            documentation: Some(Documentation::String(doc.to_string())),
+            sort_text: Some(format!("m_keyword_{}", kw)),
+            ..Default::default()
+        });
+    }
+
+    items
+}
+
+/// The builtin domains, the targets of `use ... from <domain>`.
+fn domain_completions() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    // 2b. Builtin domains (targets of `use ... from <domain>`)
+    let domains = vec![
+        ("core", "Always-available builtins: format, comparisons, ternary, vector, sqrt, sin, cos, exp, ln, abs, log, tan, floor, ceil, min, max, round"),
+        ("calc", "Symbolic calculus: deriv, diff, integral, integrate, solve"),
+        ("plot", "Plotting: plot"),
+        ("array", "Array/numeric helpers: linspace, gradient, trapz"),
+    ];
+
+    for (name, doc) in domains {
+        items.push(CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::MODULE),
+            detail: Some(format!("domain '{}'", name)),
+            documentation: Some(Documentation::String(doc.to_string())),
+            sort_text: Some(format!("m_domain_{}", name)),
+            ..Default::default()
+        });
+    }
+
+    items
+}
+
+/// The units, derived and scaled units and unit aliases of the catalog.
+fn unit_completions() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    // 3. Physical Units & Aliases dynamically loaded from UnitRegistry
+    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
+    let mut seen = std::collections::HashSet::new();
+
+    // 3a. Primary Base Units
+    for name in registry.base_units.keys() {
+        if seen.insert(name.clone()) {
+            let meta = registry.unit_meta.get(name);
+            let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Base Unit");
+            let desc = meta.and_then(|m| m.description.as_deref()).unwrap_or("");
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::UNIT),
+                detail: Some(format!("{} • Base Unit", category)),
+                documentation: Some(Documentation::String(format!("Physure base unit `{}`. {}", name, desc))),
+                sort_text: Some(format!("z_unit_0_{}", name)),
+                ..Default::default()
+            });
+        }
+    }
+
+    // 3b. Derived & Scaled Units (V, Pa, Ohm, Ω, kPa, MPa, kN, kJ, kW, etc.)
+    for (name, unit) in &registry.derived_units {
+        if seen.insert(name.clone()) {
+            let meta = registry.unit_meta.get(name);
+            let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Derived Unit");
+            let desc = meta.and_then(|m| m.description.as_deref()).unwrap_or("");
+            let dim_str = unit.base_repr();
+            items.push(CompletionItem {
+                label: name.clone(),
+                kind: Some(CompletionItemKind::UNIT),
+                detail: Some(format!("{} • {}", category, if dim_str.is_empty() { "Unit".into() } else { dim_str })),
+                documentation: Some(Documentation::String(format!("Physure physical unit `{}`. {}", name, desc))),
+                sort_text: Some(format!("z_unit_1_{}", name)),
+                ..Default::default()
+            });
+        }
+    }
+
+    // 3c. Unit Aliases (Volts, Volt, Pascal, Pascals, ohmio, ohmios, voltio, voltios, etc.)
+    for (alias, target_symbol) in &registry.aliases {
+        if seen.insert(alias.clone()) {
+            let meta = registry.unit_meta.get(target_symbol);
+            let category = meta.and_then(|m| m.category.as_deref()).unwrap_or("Unit Alias");
+            items.push(CompletionItem {
+                label: alias.clone(),
+                kind: Some(CompletionItemKind::UNIT),
+                detail: Some(format!("Alias for {} ({})", target_symbol, category)),
+                documentation: Some(Documentation::String(format!("Physure unit alias `{}` -> `{}`", alias, target_symbol))),
+                sort_text: Some(format!("z_unit_2_{}", alias)),
+                ..Default::default()
+            });
+        }
+    }
+
+    items
+}
+
+/// Greek letters and mathematical symbols, by Unicode, name and LaTeX alias.
+fn symbol_completions() -> Vec<CompletionItem> {
+    let mut items = Vec::new();
+
+    // 4. Greek Letters & Mathematical Symbols (Unicode, names & LaTeX aliases)
+    let greek_symbols = vec![
+        ("Δ", "Δ", "Delta", "Greek letter Delta (Difference / Change / Variation)"),
+        ("delta", "Δ", "Delta (-> Δ)", "Inserts Greek letter Delta (Δ)"),
+        ("Delta", "Δ", "Delta (-> Δ)", "Inserts Greek letter Delta (Δ)"),
+        ("\\delta", "Δ", "LaTeX \\delta (-> Δ)", "Inserts Greek letter Delta (Δ)"),
+        ("σ", "σ", "Sigma", "Greek letter Sigma (Uncertainty / Standard Deviation / Stress)"),
+        ("sigma", "σ", "Sigma (-> σ)", "Inserts Greek letter Sigma (σ)"),
+        ("\\sigma", "σ", "LaTeX \\sigma (-> σ)", "Inserts Greek letter Sigma (σ)"),
+        ("Ω", "Ω", "Omega", "Greek letter Omega (Electric resistance unit Ohm)"),
+        ("omega", "Ω", "Omega (-> Ω)", "Inserts Greek letter Omega (Ω)"),
+        ("Omega", "Ω", "Omega (-> Ω)", "Inserts Greek letter Omega (Ω)"),
+        ("\\omega", "ω", "LaTeX \\omega (-> ω)", "Inserts Greek letter lowercase Omega (ω)"),
+        ("\\Omega", "Ω", "LaTeX \\Omega (-> Ω)", "Inserts Greek letter capital Omega (Ω)"),
+        ("π", "π", "Pi", "Greek letter Pi (3.14159...)"),
+        ("pi", "π", "Pi (-> π)", "Inserts Greek letter Pi (π)"),
+        ("\\pi", "π", "LaTeX \\pi (-> π)", "Inserts Greek letter Pi (π)"),
+        ("θ", "θ", "Theta", "Greek letter Theta (Angle / Temperature)"),
+        ("theta", "θ", "Theta (-> θ)", "Inserts Greek letter Theta (θ)"),
+        ("\\theta", "θ", "LaTeX \\theta (-> θ)", "Inserts Greek letter Theta (θ)"),
+        ("λ", "λ", "Lambda", "Greek letter Lambda (Wavelength)"),
+        ("lambda", "λ", "Lambda (-> λ)", "Inserts Greek letter Lambda (λ)"),
+        ("\\lambda", "λ", "LaTeX \\lambda (-> λ)", "Inserts Greek letter Lambda (λ)"),
+        ("μ", "μ", "Mu / Micro", "Greek letter Mu / Micro prefix"),
+        ("mu", "μ", "Mu (-> μ)", "Inserts Greek letter Mu (μ)"),
+        ("micro", "μ", "Micro (-> μ)", "Inserts Micro prefix (μ)"),
+        ("\\mu", "μ", "LaTeX \\mu (-> μ)", "Inserts Greek letter Mu (μ)"),
+        ("α", "α", "Alpha", "Greek letter Alpha (Coefficient)"),
+        ("alpha", "α", "Alpha (-> α)", "Inserts Greek letter Alpha (α)"),
+        ("\\alpha", "α", "LaTeX \\alpha (-> α)", "Inserts Greek letter Alpha (α)"),
+        ("β", "β", "Beta", "Greek letter Beta"),
+        ("beta", "β", "Beta (-> β)", "Inserts Greek letter Beta (β)"),
+        ("\\beta", "β", "LaTeX \\beta (-> β)", "Inserts Greek letter Beta (β)"),
+        ("γ", "γ", "Gamma", "Greek letter Gamma"),
+        ("gamma", "γ", "Gamma (-> γ)", "Inserts Greek letter Gamma (γ)"),
+        ("\\gamma", "γ", "LaTeX \\gamma (-> γ)", "Inserts Greek letter Gamma (γ)"),
+        ("ε", "ε", "Epsilon", "Greek letter Epsilon (Permittivity / Strain)"),
+        ("epsilon", "ε", "Epsilon (-> ε)", "Inserts Greek letter Epsilon (ε)"),
+        ("\\epsilon", "ε", "LaTeX \\epsilon (-> ε)", "Inserts Greek letter Epsilon (ε)"),
+        ("η", "η", "Eta", "Greek letter Eta (Efficiency)"),
+        ("eta", "η", "Eta (-> η)", "Inserts Greek letter Eta (η)"),
+        ("\\eta", "η", "LaTeX \\eta (-> η)", "Inserts Greek letter Eta (η)"),
+        ("ρ", "ρ", "Rho", "Greek letter Rho (Density / Resistivity)"),
+        ("rho", "ρ", "Rho (-> ρ)", "Inserts Greek letter Rho (ρ)"),
+        ("\\rho", "ρ", "LaTeX \\rho (-> ρ)", "Inserts Greek letter Rho (ρ)"),
+        ("τ", "τ", "Tau", "Greek letter Tau (Torque / Time constant)"),
+        ("tau", "τ", "Tau (-> τ)", "Inserts Greek letter Tau (τ)"),
+        ("\\tau", "τ", "LaTeX \\tau (-> τ)", "Inserts Greek letter Tau (τ)"),
+        ("ϕ", "ϕ", "Phi", "Greek letter Phi (Magnetic flux / Phase)"),
+        ("phi", "ϕ", "Phi (-> ϕ)", "Inserts Greek letter Phi (ϕ)"),
+        ("\\phi", "ϕ", "LaTeX \\phi (-> ϕ)", "Inserts Greek letter Phi (ϕ)"),
+        ("ψ", "ψ", "Psi", "Greek letter Psi (Wavefunction)"),
+        ("psi", "ψ", "Psi (-> ψ)", "Inserts Greek letter Psi (ψ)"),
+        ("\\psi", "ψ", "LaTeX \\psi (-> ψ)", "Inserts Greek letter Psi (ψ)"),
+        ("ω", "ω", "Omega (lowercase)", "Greek letter lowercase Omega (Angular frequency)"),
+        ("∞", "∞", "Infinity", "Infinity symbol ∞"),
+        ("infinity", "∞", "Infinity (-> ∞)", "Inserts infinity symbol ∞"),
+        ("\\infty", "∞", "LaTeX \\infty (-> ∞)", "Inserts infinity symbol ∞"),
+        ("±", "±", "Plus-Minus", "Uncertainty operator ±"),
+        ("+/-", "±", "Plus-Minus (-> ±)", "Inserts uncertainty operator ±"),
+        ("\\pm", "±", "LaTeX \\pm (-> ±)", "Inserts uncertainty operator ±"),
+        ("Å", "Å", "Angstrom", "Angstrom length unit Å"),
+        ("°", "°", "Degree", "Degree angle symbol °"),
+    ];
+
+    for (label, insert_text, detail, doc) in greek_symbols {
+        items.push(CompletionItem {
+            label: label.to_string(),
+            kind: Some(CompletionItemKind::CONSTANT),
+            detail: Some(format!("Greek Symbol • {}", detail)),
+            documentation: Some(Documentation::String(doc.to_string())),
+            insert_text: Some(insert_text.to_string()),
+            sort_text: Some(format!("z_greek_{}", label)),
+            ..Default::default()
+        });
+    }
+
+    items
 }
 
 enum UseContext {
@@ -482,57 +533,56 @@ fn from_target_completions(uri: &Url) -> Vec<CompletionItem> {
         if let Some(dir) = path.parent() {
             let current_stem = path.file_stem().and_then(|s| s.to_str());
 
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let candidate = entry.path();
-                    if candidate.extension().and_then(|e| e.to_str()) != Some("phs") {
-                        continue;
-                    }
-                    let Some(stem) = candidate.file_stem().and_then(|s| s.to_str()) else {
-                        continue;
-                    };
-                    if Some(stem) == current_stem {
-                        continue;
-                    }
-                    items.push(CompletionItem {
-                        label: stem.to_string(),
-                        kind: Some(CompletionItemKind::MODULE),
-                        detail: Some(format!("PhysureScript module `{stem}.phs`")),
-                        documentation: Some(Documentation::String(format!(
-                            "Local module `{stem}.phs`"
-                        ))),
-                        sort_text: Some(format!("m_from_module_{stem}")),
-                        ..Default::default()
-                    });
+            for stem in stems_with_extension(dir, "phs") {
+                if Some(stem.as_str()) == current_stem {
+                    continue;
                 }
+                items.push(CompletionItem {
+                    label: stem.clone(),
+                    kind: Some(CompletionItemKind::MODULE),
+                    detail: Some(format!("PhysureScript module `{stem}.phs`")),
+                    documentation: Some(Documentation::String(format!(
+                        "Local module `{stem}.phs`"
+                    ))),
+                    sort_text: Some(format!("m_from_module_{stem}")),
+                    ..Default::default()
+                });
             }
 
             let dll_ext = std::env::consts::DLL_EXTENSION;
-            if let Ok(entries) = std::fs::read_dir(dir.join("ext")) {
-                for entry in entries.flatten() {
-                    let candidate = entry.path();
-                    if candidate.extension().and_then(|e| e.to_str()) != Some(dll_ext) {
-                        continue;
-                    }
-                    let Some(stem) = candidate.file_stem().and_then(|s| s.to_str()) else {
-                        continue;
-                    };
-                    items.push(CompletionItem {
-                        label: stem.to_string(),
-                        kind: Some(CompletionItemKind::CLASS),
-                        detail: Some(format!("Native plugin `ext/{stem}.{dll_ext}`")),
-                        documentation: Some(Documentation::String(format!(
-                            "Native `.rs` plugin loaded from `ext/{stem}.{dll_ext}`"
-                        ))),
-                        sort_text: Some(format!("m_from_plugin_{stem}")),
-                        ..Default::default()
-                    });
-                }
+            for stem in stems_with_extension(&dir.join("ext"), dll_ext) {
+                items.push(CompletionItem {
+                    label: stem.clone(),
+                    kind: Some(CompletionItemKind::CLASS),
+                    detail: Some(format!("Native plugin `ext/{stem}.{dll_ext}`")),
+                    documentation: Some(Documentation::String(format!(
+                        "Native `.rs` plugin loaded from `ext/{stem}.{dll_ext}`"
+                    ))),
+                    sort_text: Some(format!("m_from_plugin_{stem}")),
+                    ..Default::default()
+                });
             }
         }
     }
 
     items
+}
+
+/// The names, without extension, of the files in `dir` that have the extension `ext`.
+fn stems_with_extension(dir: &std::path::Path, ext: &str) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let candidate = entry.path();
+            if candidate.extension().and_then(|e| e.to_str()) != Some(ext) {
+                return None;
+            }
+            candidate.file_stem().and_then(|s| s.to_str()).map(str::to_string)
+        })
+        .collect()
 }
 
 // LSP `Position.character` is a UTF-16 code-unit offset, not a byte offset.
@@ -561,7 +611,19 @@ fn extract_word_at_pos(line: &str, utf16_char_idx: usize) -> String {
     line[start..end].to_string()
 }
 
-fn lookup_hover_doc(word: &str) -> Option<String> {
+/// The hover of a unit: the same lines for every language, with the name of the quantity it
+/// measures taken from the table of `locale`.
+fn unit_hover(unit: &str, locale: &str, si_base: Option<&str>, dimension: &str) -> Option<String> {
+    let quantity = i18n::quantity_name(unit, locale)?;
+    let mut doc = format!("**Physical Unit**: `{unit}`\n\n* **Quantity**: {quantity}\n");
+    if let Some(base) = si_base {
+        doc.push_str(&format!("* **SI Base**: `{base}`\n"));
+    }
+    doc.push_str(&format!("* **Dimension**: `{dimension}`"));
+    Some(doc)
+}
+
+fn lookup_hover_doc(word: &str, locale: &str) -> Option<String> {
     match word {
         "solve" => Some("**Built-in Function**: `solve(equation, target)`\n\nSolves an equation symbolically for target variable.\n\n**Domain**: `calc` (requires `use solve from calc`).".to_string()),
         "deriv" | "diff" => Some("**Built-in Function**: `deriv(expression, variable)`\n\nDifferentiates a mathematical expression symbolically.\n\n**Domain**: `calc` (requires `use deriv from calc`).".to_string()),
@@ -599,13 +661,13 @@ fn lookup_hover_doc(word: &str) -> Option<String> {
         "core" => Some("**Builtin domain**: `core`\n\nAlways available without `use`: format, comparisons, ternary, vector, sqrt, sin, cos, exp, ln, abs, log, tan, floor, ceil, min, max, round.".to_string()),
         "calc" => Some("**Builtin domain**: `calc`\n\n`use ... from calc` unlocks: deriv, diff, integral, integrate, solve, substitute, limit, grad, div, curl, laplacian, simplify, expand.".to_string()),
         "array" => Some("**Builtin domain**: `array`\n\n`use ... from array` unlocks: linspace, gradient, trapz, dot, cross, norm, unit_vector, transpose, matmul, det.".to_string()),
-        "m" => Some("**Physical Unit**: `m`\n\n* **Quantity**: Length (Longitud)\n* **Dimension**: `[L]`".to_string()),
-        "kg" => Some("**Physical Unit**: `kg`\n\n* **Quantity**: Mass (Masa)\n* **Dimension**: `[M]`".to_string()),
-        "s" => Some("**Physical Unit**: `s`\n\n* **Quantity**: Time (Tiempo)\n* **Dimension**: `[T]`".to_string()),
-        "N" => Some("**Physical Unit**: `N`\n\n* **Quantity**: Force (Fuerza)\n* **SI Base**: `kg·m·s⁻²`\n* **Dimension**: `[M·L·T⁻²]`".to_string()),
-        "Pa" => Some("**Physical Unit**: `Pa`\n\n* **Quantity**: Pressure / Stress\n* **SI Base**: `kg·m⁻¹·s⁻²`\n* **Dimension**: `[M·L⁻¹·T⁻²]`".to_string()),
-        "J" => Some("**Physical Unit**: `J`\n\n* **Quantity**: Energy / Work\n* **SI Base**: `kg·m²·s⁻²`\n* **Dimension**: `[M·L²·T⁻²]`".to_string()),
-        "W" => Some("**Physical Unit**: `W`\n\n* **Quantity**: Power (Potencia)\n* **SI Base**: `kg·m²·s⁻³`\n* **Dimension**: `[M·L²·T⁻³]`".to_string()),
+        "m" => unit_hover("m", locale, None, "[L]"),
+        "kg" => unit_hover("kg", locale, None, "[M]"),
+        "s" => unit_hover("s", locale, None, "[T]"),
+        "N" => unit_hover("N", locale, Some("kg·m·s⁻²"), "[M·L·T⁻²]"),
+        "Pa" => unit_hover("Pa", locale, Some("kg·m⁻¹·s⁻²"), "[M·L⁻¹·T⁻²]"),
+        "J" => unit_hover("J", locale, Some("kg·m²·s⁻²"), "[M·L²·T⁻²]"),
+        "W" => unit_hover("W", locale, Some("kg·m²·s⁻³"), "[M·L²·T⁻³]"),
         _ => None,
     }
 }
@@ -640,65 +702,94 @@ fn extract_user_docstring(text: &str, word: &str) -> Option<String> {
         return None;
     }
     let lines: Vec<&str> = text.lines().collect();
+    let (idx, is_fn) = find_definition(&lines, word)?;
+    let trimmed = lines[idx].trim();
+
+    // 1. Look upwards ONLY for contiguous `///` doc comment lines (ignoring `#` regular comments)
+    let doc_lines = doc_comments_above(&lines, idx);
+
+    // 2. Look inside function body / definition for a triple-quoted docstring block
+    let raw_doc_text = if !doc_lines.is_empty() {
+        doc_lines.join("\n")
+    } else {
+        docstring_below(&lines, idx)
+    };
+
+    let doc_text = normalize_html_to_markdown(&raw_doc_text);
+    let kind = if is_fn { "User Function" } else { "User Variable" };
+    let mut markdown = format!("**{}**: `{}`\n\n", kind, trimmed);
+    if !doc_text.is_empty() {
+        markdown.push_str(&doc_text);
+    } else {
+        markdown.push_str("*Defined in current PhysureScript module.*");
+    }
+    Some(markdown)
+}
+
+/// The first line that defines `word` as a function or a variable, and whether it is a function.
+fn find_definition(lines: &[&str], word: &str) -> Option<(usize, bool)> {
     let fn_prefix1 = format!("fn {}", word);
     let var_prefix1 = format!("{} =", word);
     let var_prefix2 = format!("{}=", word);
 
-    for (idx, line) in lines.iter().enumerate() {
+    lines.iter().enumerate().find_map(|(idx, line)| {
         let trimmed = line.trim();
         let is_fn = trimmed.starts_with(&fn_prefix1) || (trimmed.contains(&format!("{}(", word)) && trimmed.contains('=')) || trimmed.starts_with(&format!("fn {}(", word));
         let is_var = trimmed.starts_with(&var_prefix1) || trimmed.starts_with(&var_prefix2);
+        (is_fn || is_var).then_some((idx, is_fn))
+    })
+}
 
-        if is_fn || is_var {
-            let mut doc_lines = Vec::new();
-
-            // 1. Look upwards ONLY for contiguous `///` doc comment lines (ignoring `#` regular comments)
-            if idx > 0 {
-                let mut prev_idx = idx;
-                while prev_idx > 0 {
-                    prev_idx -= 1;
-                    let prev_line = lines[prev_idx].trim();
-                    if prev_line.starts_with("///") {
-                        let content = prev_line.trim_start_matches("///");
-                        let clean_line = if content.starts_with(' ') { &content[1..] } else { content };
-                        doc_lines.insert(0, clean_line);
-                    } else {
-                        break;
-                    }
-                }
-            }
-
-            // 2. Look inside function body / definition for `'''` or `"""` docstring block
-            let raw_doc_text = if !doc_lines.is_empty() {
-                doc_lines.join("\n")
-            } else if idx + 1 < lines.len() {
-                let next_line = lines[idx + 1].trim();
-                if next_line.starts_with("'''") || next_line.starts_with("\"\"\"") {
-                    next_line.trim_matches('\'').trim_matches('"').trim().to_string()
-                } else {
-                    "".to_string()
-                }
-            } else {
-                "".to_string()
-            };
-
-            let doc_text = normalize_html_to_markdown(&raw_doc_text);
-            let kind = if is_fn { "User Function" } else { "User Variable" };
-            let mut markdown = format!("**{}**: `{}`\n\n", kind, trimmed);
-            if !doc_text.is_empty() {
-                markdown.push_str(&doc_text);
-            } else {
-                markdown.push_str("*Defined in current PhysureScript module.*");
-            }
-            return Some(markdown);
+/// The contiguous `///` lines right above line `idx`, in reading order, without the marker.
+fn doc_comments_above<'a>(lines: &[&'a str], idx: usize) -> Vec<&'a str> {
+    let mut doc_lines = Vec::new();
+    for prev_line in lines[..idx].iter().rev() {
+        let prev_line = prev_line.trim();
+        if !prev_line.starts_with("///") {
+            break;
         }
+        let content = prev_line.trim_start_matches("///");
+        doc_lines.insert(0, content.strip_prefix(' ').unwrap_or(content));
     }
-    None
+    doc_lines
+}
+
+/// The one-line triple-quoted docstring on the line after `idx`; empty when there is none.
+fn docstring_below(lines: &[&str], idx: usize) -> String {
+    let Some(next_line) = lines.get(idx + 1).map(|l| l.trim()) else {
+        return String::new();
+    };
+    if next_line.starts_with("\'\'\'") || next_line.starts_with("\"\"\"") {
+        next_line.trim_matches('\'').trim_matches('"').trim().to_string()
+    } else {
+        String::new()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_unit_hover_is_english_by_default() {
+        let doc = lookup_hover_doc("m", "").unwrap();
+        assert!(doc.contains("* **Quantity**: Length\n"), "{doc}");
+        assert!(doc.contains("`[L]`"));
+        assert!(!doc.contains("Longitud"));
+        let force = lookup_hover_doc("N", "en").unwrap();
+        assert!(force.contains("* **Quantity**: Force\n* **SI Base**: `kg·m·s⁻²`\n* **Dimension**: `[M·L·T⁻²]`"), "{force}");
+    }
+
+    #[test]
+    fn a_unit_hover_follows_the_locale_of_the_client() {
+        let doc = lookup_hover_doc("m", "es-MX").unwrap();
+        assert!(doc.contains("* **Quantity**: Longitud\n"), "{doc}");
+        assert!(!doc.contains("Length"));
+        // the rest of the hover does not change with the language
+        assert!(lookup_hover_doc("W", "es").unwrap().contains("`kg·m²·s⁻³`"));
+        // a keyword has one text for everybody
+        assert_eq!(lookup_hover_doc("else", "es"), lookup_hover_doc("else", "en"));
+    }
 
     #[test]
     fn use_statement_context_detects_names_vs_from_target() {
@@ -722,24 +813,24 @@ mod tests {
     #[test]
     fn test_extract_user_docstring_ignores_hash_comments_and_supports_html() {
         let script = r#"
-# --- 4. Funciones Definidas por el Usuario y Parámetros con Tipo ---
-/// <b>Cálculo de Energía Cinética</b>
-/// <p>Calcula la energía de un objeto de masa <i>m</i> a velocidad <i>v</i>.</p>
+# --- 4. User-defined functions and typed parameters ---
+/// <b>Kinetic energy calculation</b>
+/// <p>Computes the energy of an object of mass <i>m</i> at speed <i>v</i>.</p>
 /// <ul>
-///   <li><b>m</b>: Masa del cuerpo [kg]</li>
-///   <li><b>v</b>: Velocidad del cuerpo [m/s]</li>
+///   <li><b>m</b>: Mass of the body [kg]</li>
+///   <li><b>v</b>: Speed of the body [m/s]</li>
 /// </ul>
 f(v: m / s) =
-    resta = 1 m / s
-    v * 2 - resta
+    offset = 1 m / s
+    v * 2 - offset
 "#;
         let doc = extract_user_docstring(script, "f");
         assert!(doc.is_some());
         let doc_str = doc.unwrap();
-        assert!(doc_str.contains("**Cálculo de Energía Cinética**"));
-        assert!(doc_str.contains("Calcula la energía"));
-        assert!(doc_str.contains("* **m**: Masa del cuerpo [kg]"));
-        assert!(doc_str.contains("* **v**: Velocidad del cuerpo [m/s]"));
+        assert!(doc_str.contains("**Kinetic energy calculation**"));
+        assert!(doc_str.contains("Computes the energy"));
+        assert!(doc_str.contains("* **m**: Mass of the body [kg]"));
+        assert!(doc_str.contains("* **v**: Speed of the body [m/s]"));
         assert!(!doc_str.contains("Funciones Definidas"));
     }
 }
@@ -753,6 +844,7 @@ async fn main() {
         client,
         documents: RwLock::new(HashMap::new()),
         doc_states: RwLock::new(HashMap::new()),
+        locale: RwLock::new("en".to_string()),
     });
 
     // Serialized, not the default concurrency_level(4): on_change persists a DocState that

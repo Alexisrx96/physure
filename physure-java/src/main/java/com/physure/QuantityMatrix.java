@@ -72,19 +72,50 @@ public class QuantityMatrix {
         return new QuantityMatrix(res);
     }
 
+    /**
+     * The determinant, by cofactor expansion along the first row: the cost grows as n!, which is fine for the
+     * small matrices of a formula and not for a large one. Its unit is the product of one entry from each row.
+     */
     public Quantity det() {
         if (rows != cols) {
             throw new IllegalArgumentException("Determinant requires a square matrix");
         }
-        if (rows == 1) {
-            return get(0, 0);
+        return determinant(data);
+    }
+
+    /** The row without its element at {@code column}. */
+    private static List<Quantity> withoutColumn(List<Quantity> row, int column) {
+        List<Quantity> kept = new ArrayList<>(row.size() - 1);
+        for (int k = 0; k < row.size(); k++) {
+            if (k != column) {
+                kept.add(row.get(k));
+            }
         }
-        if (rows == 2) {
-            Quantity a = get(0, 0), b = get(0, 1);
-            Quantity c = get(1, 0), d = get(1, 1);
-            return a.mul(d).sub(b.mul(c));
+        return kept;
+    }
+
+    private static Quantity determinant(List<List<Quantity>> m) {
+        int n = m.size();
+        if (n == 1) {
+            return m.get(0).get(0);
         }
-        throw new UnsupportedOperationException("det currently supports up to 2x2 matrices in Java 8");
+        if (n == 2) {
+            return m.get(0).get(0).mul(m.get(1).get(1)).sub(m.get(0).get(1).mul(m.get(1).get(0)));
+        }
+        Quantity sum = null;
+        for (int c = 0; c < n; c++) {
+            List<List<Quantity>> minor = new ArrayList<>();
+            for (int r = 1; r < n; r++) {
+                minor.add(withoutColumn(m.get(r), c));
+            }
+            Quantity term = m.get(0).get(c).mul(determinant(minor));
+            if (sum == null) {
+                sum = term;
+            } else {
+                sum = c % 2 == 0 ? sum.add(term) : sum.sub(term);
+            }
+        }
+        return sum;
     }
 
     @Override

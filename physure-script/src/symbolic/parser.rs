@@ -104,24 +104,27 @@ impl SymbolicParser {
 
     fn parse_product(&mut self) -> PhysureResult<Node> {
         let mut left = self.parse_power()?;
-        while let Some(t) = self.peek() {
-            if t.value == "*" {
-                self.next();
-                let right = self.parse_power()?;
-                left = Node::Mul(vec![left, right]);
-            } else if t.value == "/" {
-                self.next();
-                let right = self.parse_power()?;
-                left = Node::Div(Box::new(left), Box::new(right));
-            } else if matches!(t.kind, TokenKind::Ident(_)) || t.value == "(" || matches!(t.kind, TokenKind::Sqrt) {
-                // Implicit multiplication, which is how a quantity reaches the symbolic
-                // layer: `deriv("0.5 * 2.0 kg * v^2", "v")` stranded `kg` after the number
-                // and the whole derivative silently collapsed to 0. The unit rides along as
-                // a symbolic constant, exactly as a bare `kg` already did.
-                let right = self.parse_power()?;
-                left = Node::Mul(vec![left, right]);
-            } else {
-                break;
+        while let Some(step) = self.peek().map(product_step) {
+            match step {
+                ProductStep::Mul => {
+                    self.next();
+                    let right = self.parse_power()?;
+                    left = Node::Mul(vec![left, right]);
+                }
+                ProductStep::Div => {
+                    self.next();
+                    let right = self.parse_power()?;
+                    left = Node::Div(Box::new(left), Box::new(right));
+                }
+                ProductStep::Implicit => {
+                    // Implicit multiplication, which is how a quantity reaches the symbolic
+                    // layer: `deriv("0.5 * 2.0 kg * v^2", "v")` stranded `kg` after the number
+                    // and the whole derivative silently collapsed to 0. The unit rides along as
+                    // a symbolic constant, exactly as a bare `kg` already did.
+                    let right = self.parse_power()?;
+                    left = Node::Mul(vec![left, right]);
+                }
+                ProductStep::Stop => break,
             }
         }
         Ok(left)
@@ -129,22 +132,15 @@ impl SymbolicParser {
 
     fn parse_power(&mut self) -> PhysureResult<Node> {
         let mut left = self.parse_unary()?;
-        while let Some(t) = self.peek() {
-            if t.value == "^" || t.value == "**" {
-                self.next();
-                let mut right = self.parse_power()?;
-                if matches!(right, Node::Number(_)) {
-                    if let Some(next_t) = self.peek() {
-                        if matches!(next_t.kind, TokenKind::Ident(_)) {
-                            let factor = self.parse_power()?;
-                            right = Node::Mul(vec![right, factor]);
-                        }
-                    }
-                }
-                left = Node::Pow(Box::new(left), Box::new(right));
-            } else {
-                break;
+        while self.peek().is_some_and(|t| t.value == "^" || t.value == "**") {
+            self.next();
+            let mut right = self.parse_power()?;
+            // a number exponent followed by a name takes the name along
+            if matches!(right, Node::Number(_)) && self.peek().is_some_and(|next_t| matches!(next_t.kind, TokenKind::Ident(_))) {
+                let factor = self.parse_power()?;
+                right = Node::Mul(vec![right, factor]);
             }
+            left = Node::Pow(Box::new(left), Box::new(right));
         }
         Ok(left)
     }
@@ -171,46 +167,20 @@ impl SymbolicParser {
 
         match tok.kind {
             TokenKind::Number(n) => Ok(Node::Number(n)),
-            TokenKind::Ident(ref name) => {
-                if let Some(next_t) = self.peek() {
-                    if next_t.value == "(" {
-                        return self.parse_func_call(name);
-                    }
-                }
-                if name.len() > 1 && name.ends_with('e') {
-                    if let Some(next_t) = self.peek() {
-                        if next_t.value == "^" || next_t.value == "**" {
-                            let prefix = name[..name.len() - 1].to_string();
-                            self.tokens.insert(self.pos, PhsToken {
-                                kind: TokenKind::Ident("e".to_string()),
-                                value: "e".to_string(),
-                                pos: tok.pos + prefix.len(),
-                            });
-                            return Ok(Node::Symbol(prefix));
-                        }
-                    }
-                }
-                Ok(Node::Symbol(name.clone()))
-            }
+            TokenKind::Ident(ref name) => self.parse_identifier(name, tok.pos),
             TokenKind::Op(ref op) if op == "(" => {
                 let node = self.parse_equality()?;
-                if let Some(close_t) = self.next() {
-                    if close_t.value != ")" {
-                        return Err(PhysureError::Generic("Expected closing ')'".to_string()));
-                    }
-                } else {
-                    return Err(PhysureError::Generic("Expected closing ')'".to_string()));
+                match self.next() {
+                    Some(close_t) if close_t.value == ")" => Ok(node),
+                    _ => Err(PhysureError::Generic("Expected closing ')'".to_string())),
                 }
-                Ok(node)
             }
             TokenKind::StringLiteral(ref s) => {
                 Self::parse_str(s)
             }
             TokenKind::Sqrt => {
-                if let Some(next_t) = self.peek() {
-                    if next_t.value == "(" {
-                        return self.parse_func_call("sqrt");
-                    }
+                if self.peek().is_some_and(|next_t| next_t.value == "(") {
+                    return self.parse_func_call("sqrt");
                 }
                 Err(PhysureError::Generic("Expected '(' after sqrt".to_string()))
             }
@@ -221,23 +191,28 @@ impl SymbolicParser {
         }
     }
 
+    /// A name: a function call when `(` follows, otherwise a symbol. A name ending in `e` before `^` is the
+    /// symbol and the constant `e` (`2xe^x`), so the `e` goes back as a token of its own.
+    fn parse_identifier(&mut self, name: &str, pos: usize) -> PhysureResult<Node> {
+        if self.peek().is_some_and(|next_t| next_t.value == "(") {
+            return self.parse_func_call(name);
+        }
+        let before_power = self.peek().is_some_and(|next_t| next_t.value == "^" || next_t.value == "**");
+        if name.len() > 1 && name.ends_with('e') && before_power {
+            let prefix = name[..name.len() - 1].to_string();
+            self.tokens.insert(self.pos, PhsToken {
+                kind: TokenKind::Ident("e".to_string()),
+                value: "e".to_string(),
+                pos: pos + prefix.len(),
+            });
+            return Ok(Node::Symbol(prefix));
+        }
+        Ok(Node::Symbol(name.to_string()))
+    }
+
     fn parse_func_call(&mut self, name: &str) -> PhysureResult<Node> {
         self.next(); // consume '('
-        let mut args = Vec::new();
-        if let Some(t) = self.peek() {
-            if t.value != ")" {
-                loop {
-                    args.push(self.parse_equality()?);
-                    if let Some(next_t) = self.peek() {
-                        if next_t.value == "," {
-                            self.next();
-                            continue;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
+        let mut args = self.parse_call_arguments()?;
         if let Some(close_t) = self.next() {
             if close_t.value != ")" {
                 return Err(PhysureError::Generic("Expected closing ')' after function arguments".to_string()));
@@ -245,105 +220,6 @@ impl SymbolicParser {
         }
 
         match name {
-            "sqrt" => {
-                if args.len() != 1 {
-                    return Err(PhysureError::Generic("sqrt requires 1 argument".to_string()));
-                }
-                Ok(Node::Sqrt(Box::new(args.remove(0))))
-            }
-            "sin" => {
-                if args.len() != 1 {
-                    return Err(PhysureError::Generic("sin requires 1 argument".to_string()));
-                }
-                Ok(Node::Sin(Box::new(args.remove(0))))
-            }
-            "cos" => {
-                if args.len() != 1 {
-                    return Err(PhysureError::Generic("cos requires 1 argument".to_string()));
-                }
-                Ok(Node::Cos(Box::new(args.remove(0))))
-            }
-
-            "ln" | "log" => {
-                if args.len() != 1 {
-                    return Err(PhysureError::Generic("ln/log requires 1 argument".to_string()));
-                }
-                Ok(Node::Ln(Box::new(args.remove(0))))
-            }
-            "exp" => {
-                if args.len() != 1 {
-                    return Err(PhysureError::Generic("exp requires 1 argument".to_string()));
-                }
-                Ok(Node::Exp(Box::new(args.remove(0))))
-            }
-            "tan" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("tan requires 1 argument".to_string())); }
-                Ok(Node::Tan(Box::new(args.remove(0))))
-            }
-            "cot" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("cot requires 1 argument".to_string())); }
-                Ok(Node::Cot(Box::new(args.remove(0))))
-            }
-            "sec" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("sec requires 1 argument".to_string())); }
-                Ok(Node::Sec(Box::new(args.remove(0))))
-            }
-            "csc" | "cosec" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("csc requires 1 argument".to_string())); }
-                Ok(Node::Csc(Box::new(args.remove(0))))
-            }
-            "arcsin" | "asin" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("arcsin requires 1 argument".to_string())); }
-                Ok(Node::Arcsin(Box::new(args.remove(0))))
-            }
-            "arccos" | "acos" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("arccos requires 1 argument".to_string())); }
-                Ok(Node::Arccos(Box::new(args.remove(0))))
-            }
-            "arctan" | "atan" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("arctan requires 1 argument".to_string())); }
-                Ok(Node::Arctan(Box::new(args.remove(0))))
-            }
-            "arccot" | "acot" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("arccot requires 1 argument".to_string())); }
-                Ok(Node::Arccot(Box::new(args.remove(0))))
-            }
-            "arcsec" | "asec" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("arcsec requires 1 argument".to_string())); }
-                Ok(Node::Arcsec(Box::new(args.remove(0))))
-            }
-            "arccsc" | "acsc" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("arccsc requires 1 argument".to_string())); }
-                Ok(Node::Arccsc(Box::new(args.remove(0))))
-            }
-            "sinh" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("sinh requires 1 argument".to_string())); }
-                Ok(Node::Sinh(Box::new(args.remove(0))))
-            }
-            "cosh" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("cosh requires 1 argument".to_string())); }
-                Ok(Node::Cosh(Box::new(args.remove(0))))
-            }
-            "tanh" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("tanh requires 1 argument".to_string())); }
-                Ok(Node::Tanh(Box::new(args.remove(0))))
-            }
-            "coth" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("coth requires 1 argument".to_string())); }
-                Ok(Node::Coth(Box::new(args.remove(0))))
-            }
-            "sech" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("sech requires 1 argument".to_string())); }
-                Ok(Node::Sech(Box::new(args.remove(0))))
-            }
-            "csch" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("csch requires 1 argument".to_string())); }
-                Ok(Node::Csch(Box::new(args.remove(0))))
-            }
-            "abs" => {
-                if args.len() != 1 { return Err(PhysureError::Generic("abs requires 1 argument".to_string())); }
-                Ok(Node::Abs(Box::new(args.remove(0))))
-            }
             "deriv" | "diff" => {
                 if args.len() != 2 {
                     return Err(PhysureError::Generic("deriv requires 2 arguments: expr, var".to_string()));
@@ -358,7 +234,83 @@ impl SymbolicParser {
                 let var_str = args[1].to_phs_string();
                 args[0].integrate_node(&var_str)
             }
-            _ => Err(PhysureError::Generic(format!("Unknown symbolic function '{}'", name))),
+            _ => match unary_function(name) {
+                Some((label, build)) => {
+                    if args.len() != 1 {
+                        return Err(PhysureError::Generic(format!("{} requires 1 argument", label)));
+                    }
+                    Ok(build(Box::new(args.remove(0))))
+                }
+                None => Err(PhysureError::Generic(format!("Unknown symbolic function '{}'", name))),
+            },
         }
     }
+
+    /// The comma-separated arguments up to (not including) the closing `)`.
+    fn parse_call_arguments(&mut self) -> PhysureResult<Vec<Node>> {
+        let mut args = Vec::new();
+        if self.peek().is_some_and(|t| t.value != ")") {
+            loop {
+                args.push(self.parse_equality()?);
+                if self.peek().is_some_and(|next_t| next_t.value == ",") {
+                    self.next();
+                } else {
+                    break;
+                }
+            }
+        }
+        Ok(args)
+    }
+}
+
+/// What follows a factor in a product.
+#[derive(Clone, Copy)]
+enum ProductStep {
+    Mul,
+    Div,
+    /// A name, `(` or a root next to a factor: multiplication without an operator.
+    Implicit,
+    Stop,
+}
+
+fn product_step(t: &PhsToken) -> ProductStep {
+    if t.value == "*" {
+        ProductStep::Mul
+    } else if t.value == "/" {
+        ProductStep::Div
+    } else if matches!(t.kind, TokenKind::Ident(_)) || t.value == "(" || matches!(t.kind, TokenKind::Sqrt) {
+        ProductStep::Implicit
+    } else {
+        ProductStep::Stop
+    }
+}
+
+/// The node built by a one-argument symbolic function, by the name it is written with, and the name its
+/// arity error uses.
+fn unary_function(name: &str) -> Option<(&'static str, fn(Box<Node>) -> Node)> {
+    Some(match name {
+        "sqrt" => ("sqrt", Node::Sqrt),
+        "sin" => ("sin", Node::Sin),
+        "cos" => ("cos", Node::Cos),
+        "ln" | "log" => ("ln/log", Node::Ln),
+        "exp" => ("exp", Node::Exp),
+        "tan" => ("tan", Node::Tan),
+        "cot" => ("cot", Node::Cot),
+        "sec" => ("sec", Node::Sec),
+        "csc" | "cosec" => ("csc", Node::Csc),
+        "arcsin" | "asin" => ("arcsin", Node::Arcsin),
+        "arccos" | "acos" => ("arccos", Node::Arccos),
+        "arctan" | "atan" => ("arctan", Node::Arctan),
+        "arccot" | "acot" => ("arccot", Node::Arccot),
+        "arcsec" | "asec" => ("arcsec", Node::Arcsec),
+        "arccsc" | "acsc" => ("arccsc", Node::Arccsc),
+        "sinh" => ("sinh", Node::Sinh),
+        "cosh" => ("cosh", Node::Cosh),
+        "tanh" => ("tanh", Node::Tanh),
+        "coth" => ("coth", Node::Coth),
+        "sech" => ("sech", Node::Sech),
+        "csch" => ("csch", Node::Csch),
+        "abs" => ("abs", Node::Abs),
+        _ => return None,
+    })
 }

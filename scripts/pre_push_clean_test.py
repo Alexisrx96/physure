@@ -7,6 +7,8 @@ Optimized prebuild workflow matching CI:
 3. Prebuild Stripped ABI3 PyO3 Wheel once (maturin build --release --strip)
 4. Fast Python matrix testing in clean, isolated virtual environments
 
+A push that only creates or deletes tags is let through at once (see push_refs.py).
+
 Options:
   --quick        Test only against the current active Python version
   --clean-after  Clean up test virtual environments after completion
@@ -18,6 +20,8 @@ import shutil
 import sys
 import subprocess
 from pathlib import Path
+
+import push_refs
 
 os.environ["MPLBACKEND"] = "Agg"
 os.environ["UV_LINK_MODE"] = "copy"
@@ -88,6 +92,13 @@ def main():
     parser.add_argument("--quick", action="store_true", help="Test only against the current Python version")
     parser.add_argument("--clean-after", action="store_true", help="Clean up test venvs directory after completion")
     args = parser.parse_args()
+
+    # A push that only creates or deletes tags, on commits the remote already has, carries no
+    # new code: there is nothing to verify (see push_refs.py). Any push with a branch runs it all.
+    pushed = push_refs.read_pushed_refs()
+    if pushed is not None and push_refs.only_tags_are_pushed(pushed):
+        print("Only tags that add no commit are being pushed: nothing new to verify.")
+        sys.exit(0)
 
     config = load_env()
     is_quick = args.quick or os.environ.get("PREPUSH_QUICK", "").lower() in ("true", "1")

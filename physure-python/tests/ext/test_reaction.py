@@ -139,3 +139,29 @@ def test_malformed_term_raises():
 def test_empty_term_raises():
     with pytest.raises(ValueError, match="Invalid reaction term"):
         Reaction.from_string("-> H2O")
+
+
+def test_a_term_with_a_coefficient_is_read_by_its_species():
+    from physure.ext.chemistry.reaction import _parse_species
+
+    for term in ("H2O", " 2 H2O ", "2H2O", "\t2\tH2O"):
+        assert _parse_species(term).formula == "H2O"
+    for number in ("2", "22", " 12 "):
+        with pytest.raises(ValueError, match="Invalid formula"):
+            _parse_species(number)
+
+
+def test_a_long_run_of_spaces_or_digits_is_refused_in_linear_time():
+    import time
+
+    from physure.ext.chemistry.reaction import _parse_species
+
+    for term in (
+        " " * 200_000 + "!",
+        "1" * 200_000 + "!",
+        "1" * 100_000 + " " * 100_000 + "!",
+    ):
+        started = time.perf_counter()
+        with pytest.raises(ValueError, match="Invalid reaction term"):
+            _parse_species(term)
+        assert time.perf_counter() - started < 1.0

@@ -102,7 +102,8 @@ fn repr_higher_integer_power() {
 #[test]
 fn repr_fractional_power() {
     let sqrt_l = length().pow(Rational64::new(1, 2));
-    assert_eq!(sqrt_l.__repr__(), "L^1/2");
+    // parenthesised: the parser reads `L^1/2` as `L^1` divided by 2
+    assert_eq!(sqrt_l.__repr__(), "L^(1/2)");
 }
 
 fn dims(pairs: &[(&str, i64, i64)]) -> RationalUnit {
@@ -706,7 +707,7 @@ fn a_unit_written_as_symbols_prints_like_a_compound_unit() {
     assert_eq!(show("m/s^2"), "m/s²");
     assert_eq!(show("s^-1"), "1/s");
     assert_eq!(show("kg/(m*s^2)"), "kg/(m·s²)");
-    assert_eq!(show("m^(1/2)"), "m⁰⋅⁵");
+    assert_eq!(show("m^(1/2)"), "m^(1/2)");
     assert_eq!(show("m"), "m");
     assert_eq!(show("1"), "1");
 }

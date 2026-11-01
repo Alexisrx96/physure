@@ -5,7 +5,7 @@ import numpy as np
 
 from physure import Q_
 from physure._core import UnitRegistry as RustUnitRegistry
-from physure.application.parsing import parse_unit_string
+from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import CompoundUnit
 
 

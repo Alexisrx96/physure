@@ -61,13 +61,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn next_token(&mut self) -> PhysureResult<Token> {
-        while let Some(&c) = self.chars.peek() {
-            if c.is_whitespace() {
-                self.chars.next();
-                continue;
-            }
-            break;
-        }
+        while self.chars.next_if(|c| c.is_whitespace()).is_some() {}
 
         let c = match self.chars.next() {
             Some(c) => c,
@@ -77,36 +71,21 @@ impl<'a> Lexer<'a> {
         match c {
             '(' => Ok(Token::LParen),
             ')' => Ok(Token::RParen),
-            '*' => {
-                // `**` is the power, as in Python: `m**2` is `m^2`
-                if self.chars.peek() == Some(&'*') {
-                    self.chars.next();
-                    return Ok(Token::Pow);
-                }
-                Ok(Token::Mul)
-            }
+            // `**` is the power, as in Python: `m**2` is `m^2`
+            '*' if self.chars.next_if_eq(&'*').is_some() => Ok(Token::Pow),
+            '*' => Ok(Token::Mul),
             '/' => Ok(Token::Div),
             '^' => Ok(Token::Pow),
             '0'..='9' => self.number(c, false),
-            '-' => {
-                if let Some(&d) = self.chars.peek() {
-                    if d.is_ascii_digit() {
-                        self.chars.next();
-                        return self.number(d, true);
-                    }
-                }
-                Err(PhysureError::ParseError("Unexpected character '-'".into()))
-            }
+            '-' => match self.chars.next_if(|d| d.is_ascii_digit()) {
+                Some(d) => self.number(d, true),
+                None => Err(PhysureError::ParseError("Unexpected character '-'".into())),
+            },
             _ if is_unit_char(c) => {
                 let mut sym = String::new();
                 sym.push(c);
-                while let Some(&next_c) = self.chars.peek() {
-                    if is_unit_char(next_c) || next_c.is_ascii_digit() {
-                        sym.push(next_c);
-                        self.chars.next();
-                    } else {
-                        break;
-                    }
+                while let Some(next_c) = self.chars.next_if(|&n| is_unit_char(n) || n.is_ascii_digit()) {
+                    sym.push(next_c);
                 }
                 Ok(Token::Symbol(sym))
             }
@@ -192,9 +171,17 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
+    /// Parses a unit expression against the catalog of the innermost `units::with_catalog` scope on this
+    /// thread if there is one (no copy of it is made), and against the embedded catalog (plus a
+    /// `physure.conf` in the working directory) if there is not.
     pub fn parse_expression(input: &str) -> PhysureResult<RationalUnit> {
-        let (registry, _) = crate::units::conf::build_registry_from_conf();
-        Self::parse_expression_impl(input, Some(&registry))
+        crate::units::with_current_catalog(|scoped| match scoped {
+            Some(registry) => Self::parse_expression_impl(input, Some(registry)),
+            None => {
+                let (registry, _) = crate::units::conf::build_registry_from_conf();
+                Self::parse_expression_impl(input, Some(&registry))
+            }
+        })
     }
 
     /// Like `parse_expression`, but resolves each symbol against `registry` first so
@@ -267,37 +254,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_factor(&mut self) -> PhysureResult<RationalUnit> {
-        let mut base = match &self.current_token {
+        let base = match &self.current_token {
             Token::Symbol(sym) => {
                 let symbol_name = sym.clone();
                 self.advance()?;
-                // Check if symbol has embedded exponent like "m2" or "s-1"
-                let (name, exp_opt) = split_embedded_exponent(&symbol_name);
-                let u = match (self.registry, self.registry.and_then(|r| r.get_unit(&name))) {
-                    (_, Some(registered)) => registered,
-                    // A registry was supplied and the symbol isn't in it: this is a typo
-                    // or an invented unit. Fabricating a dimension for it would let
-                    // `5 metre + 5 meter` fail as a dimension mismatch instead of the
-                    // spelling mistake it is, so refuse and suggest the nearest symbol.
-                    (Some(registry), None) => {
-                        return Err(PhysureError::UnknownUnit {
-                            suggestion: registry.closest_symbol(&name),
-                            symbol: name,
-                        })
-                    }
-                    // Atomic mode (`parse_expression_atomic`): every symbol is its own
-                    // dimension by design, so there is nothing to check against.
-                    (None, None) => {
-                        let mut dims = HashMap::new();
-                        dims.insert(name, (1, 1));
-                        RationalUnit::new_from_dimensions(dims)
-                    }
-                };
-                if let Some((n, d)) = exp_opt {
-                    Self::power(&u, Rational64::new(n, d))?
-                } else {
-                    u
-                }
+                self.resolve_symbol(&symbol_name)?
             }
             Token::LParen => {
                 self.advance()?;
@@ -318,47 +279,82 @@ impl<'a> Parser<'a> {
         // Parse optional exponent operator ^ or ** or raw Token::Number (e.g. s-1 or m2)
         if self.current_token == Token::Pow {
             self.advance()?;
-            let exp_rat = match self.current_token {
-                Token::Number(n, d) => {
-                    self.advance()?;
-                    Rational64::new(n, d)
-                }
-                Token::LParen => {
-                    self.advance()?;
-                    let num = match self.current_token {
-                        Token::Number(n, _) => {
-                            self.advance()?;
-                            n
-                        }
-                        ref tok => return Err(PhysureError::ParseError(format!("Expected exponent number inside '(', got {:?}", tok))),
-                    };
-                    let den = if self.current_token == Token::Div {
-                        self.advance()?;
-                        match self.current_token {
-                            Token::Number(d, _) => {
-                                self.advance()?;
-                                d
-                            }
-                            ref tok => return Err(PhysureError::ParseError(format!("Expected denominator inside '(', got {:?}", tok))),
-                        }
-                    } else {
-                        1
-                    };
-                    if self.current_token != Token::RParen {
-                        return Err(PhysureError::ParseError("Expected ')'".into()));
-                    }
-                    self.advance()?;
-                    Rational64::new(num, den)
-                }
-                ref tok => return Err(PhysureError::ParseError(format!("Expected exponent number after '^', got {:?}", tok))),
-            };
-            base = Self::power(&base, exp_rat)?;
+            let exp_rat = self.parse_exponent()?;
+            Self::power(&base, exp_rat)
         } else if let Token::Number(n, d) = self.current_token {
             self.advance()?;
-            base = Self::power(&base, Rational64::new(n, d))?;
+            Self::power(&base, Rational64::new(n, d))
+        } else {
+            Ok(base)
         }
+    }
 
-        Ok(base)
+    /// The unit a symbol names, with the exponent embedded in it (`m2`, `s-1`) applied.
+    fn resolve_symbol(&self, symbol_name: &str) -> PhysureResult<RationalUnit> {
+        // Check if symbol has embedded exponent like "m2" or "s-1"
+        let (name, exp_opt) = split_embedded_exponent(symbol_name);
+        let u = match (self.registry, self.registry.and_then(|r| r.get_unit(&name))) {
+            (_, Some(registered)) => registered,
+            // A registry was supplied and the symbol isn't in it: this is a typo
+            // or an invented unit. Fabricating a dimension for it would let
+            // `5 metre + 5 meter` fail as a dimension mismatch instead of the
+            // spelling mistake it is, so refuse and suggest the nearest symbol.
+            (Some(registry), None) => {
+                return Err(PhysureError::UnknownUnit {
+                    suggestion: registry.closest_symbol(&name),
+                    symbol: name,
+                })
+            }
+            // Atomic mode (`parse_expression_atomic`): every symbol is its own
+            // dimension by design, so there is nothing to check against.
+            (None, None) => {
+                let mut dims = HashMap::new();
+                dims.insert(name, (1, 1));
+                RationalUnit::new_from_dimensions(dims)
+            }
+        };
+        if let Some((n, d)) = exp_opt {
+            Self::power(&u, Rational64::new(n, d))
+        } else {
+            Ok(u)
+        }
+    }
+
+    /// The exponent after `^`: a number, or `(n)` and `(n/d)` in parentheses.
+    fn parse_exponent(&mut self) -> PhysureResult<Rational64> {
+        match self.current_token {
+            Token::Number(n, d) => {
+                self.advance()?;
+                Ok(Rational64::new(n, d))
+            }
+            Token::LParen => {
+                self.advance()?;
+                let num = self.take_integer("Expected exponent number inside '('")?;
+                let den = if self.current_token == Token::Div {
+                    self.advance()?;
+                    self.take_integer("Expected denominator inside '('")?
+                } else {
+                    1
+                };
+                if self.current_token != Token::RParen {
+                    return Err(PhysureError::ParseError("Expected ')'".into()));
+                }
+                self.advance()?;
+                Ok(Rational64::new(num, den))
+            }
+            ref tok => Err(PhysureError::ParseError(format!("Expected exponent number after '^', got {:?}", tok))),
+        }
+    }
+
+    /// The whole number at the current token (consumed), or the parse error `expected`.
+    fn take_integer(&mut self, expected: &str) -> PhysureResult<i64> {
+        match self.current_token {
+            Token::Number(n, _) => {
+                self.advance()?;
+                Ok(n)
+            }
+            ref tok => Err(PhysureError::ParseError(format!("{}, got {:?}", expected, tok))),
+        }
     }
 }
 

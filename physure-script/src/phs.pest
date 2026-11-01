@@ -96,8 +96,13 @@ primary_base   = _{
   | ("(" ~ expr ~ ")")
 }
 _has_dot      = _{ !".." ~ "." }
-method_call   = { primary_base ~ (_has_dot ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")+ }
-primary       = _{ method_call | primary_base }
+// One rule for a primary with or without method calls: `method_call | primary_base` parsed the base
+// once for the method-call attempt and again for the plain alternative whenever no `.name(...)`
+// followed, which doubles the work at every nesting level of parentheses (24 nested parentheses
+// took 53 s, 50 would take longer than the age of the universe). A primary with no call is a
+// `method_call` pair with the base alone.
+method_call   = { primary_base ~ (_has_dot ~ identifier ~ "(" ~ (call_arg ~ ("," ~ call_arg)*)? ~ ")")* }
+primary       = _{ method_call }
 
 _is_pow     = _{ &"^" }
 _is_minus   = _{ &"-" }

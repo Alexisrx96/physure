@@ -41,10 +41,45 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.source>8</maven.compiler.source>
     <maven.compiler.target>8</maven.compiler.target>
+    <!-- Where `cargo build -p physure-java` leaves the native library the tests load. -->
+    <physure.native.dir>${project.basedir}/../target/debug</physure.native.dir>
+    <!-- Set by the native-access profile on Java 24+, empty before (older JVMs reject the option). -->
+    <physure.native.access></physure.native.access>
+    <!-- JaCoCo's agent line when the coverage profile is on; surefire appends it (@{argLine}) to its own options. -->
+    <argLine></argLine>
   </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>5.10.3</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
 
   <build>
     <plugins>
+      <!-- Java 9+ rejects the obsolete-option notices of the 8 target; they are about the build, not the jar. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <compilerArgs>
+            <arg>-Xlint:-options</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <!-- The tests call the real native library, so build it first: `cargo build -p physure-java`. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <argLine>@{argLine} -Djava.library.path=${physure.native.dir} ${physure.native.access}</argLine>
+        </configuration>
+      </plugin>
       <!-- Required by Maven Central: sources + javadoc jars alongside the main jar. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -78,6 +113,59 @@
   <!-- GPG signing and the Central Portal publish step only run under -Prelease,
        so a plain `mvn verify` works locally without any signing key configured. -->
   <profiles>
+    <!-- Compile against the Java 8 API when the JDK can (9+): the source and target flags alone let a Java 9+ method
+         compile into a jar that has to run on 8. JDK 8 itself has no release option, so it keeps source and target. -->
+    <profile>
+      <id>release-8-api</id>
+      <activation>
+        <jdk>[9,)</jdk>
+      </activation>
+      <properties>
+        <maven.compiler.release>8</maven.compiler.release>
+      </properties>
+    </profile>
+    <!-- Java 24 warns when System.loadLibrary is called without native access, and a later release will
+         block it: NativeEngine loads the JNI library, so the tests say so up front. Applications that use
+         the jar on Java 24+ enable native access for it (see README). -->
+    <profile>
+      <id>native-access</id>
+      <activation>
+        <jdk>[24,)</jdk>
+      </activation>
+      <properties>
+        <physure.native.access>--enable-native-access=ALL-UNNAMED</physure.native.access>
+      </properties>
+    </profile>
+    <!-- `mvn -Pcoverage test` writes target/site/jacoco/jacoco.xml, which SonarQube reads
+         (sonar.coverage.jacoco.xmlReportPaths). Off by default: the agent is not needed to run the tests, and
+         the release JDKs of the matrix do not all have a JaCoCo that reads their class files. -->
+    <profile>
+      <id>coverage</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <version>0.8.13</version>
+            <executions>
+              <execution>
+                <id>prepare-agent</id>
+                <goals>
+                  <goal>prepare-agent</goal>
+                </goals>
+              </execution>
+              <execution>
+                <id>report</id>
+                <phase>test</phase>
+                <goals>
+                  <goal>report</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <id>release</id>
       <build>
@@ -101,7 +189,8 @@
             <extensions>true</extensions>
             <configuration>
               <publishingServerId>central</publishingServerId>
-              <autoPublish>false</autoPublish>
+              <!-- true: a green java-release run is a public release, like PyPI and crates.io (decided 2026-10-30). -->
+              <autoPublish>true</autoPublish>
             </configuration>
           </plugin>
         </plugins>

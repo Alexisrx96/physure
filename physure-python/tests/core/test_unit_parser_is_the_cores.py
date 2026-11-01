@@ -7,8 +7,8 @@ import textwrap
 import pytest
 
 from physure import Q_
-from physure.application.parsing import parse_unit_string
 from physure.domain.measurement.dimensions import Dimension
+from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import CompoundUnit
 
 

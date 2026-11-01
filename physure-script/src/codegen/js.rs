@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, FunctionDefNode, Program, Statement};
+use crate::ast::{Expr, FunctionDefNode, Program, Statement};
 use crate::codegen::{snake_to_camel, CodeGenerator, CodegenError};
 use std::collections::HashSet;
 
@@ -45,49 +45,9 @@ impl CodeGenerator for JsTranspiler {
                     functions.push(self.generate_function_def_stmt(f)?);
                 }
                 Statement::Assignment(node) => {
-                    let val = self.generate_expr(&node.value)?;
-                    let var_name = snake_to_camel(&node.name);
-                    let is_str_literal = matches!(&node.value, Expr::Str(_));
-                    let is_bool_now = super::is_definitely_bool(&node.value, &known_bools);
-                    if is_bool_now {
-                        known_bools.insert(node.name.clone());
-                    } else {
-                        known_bools.remove(&node.name);
-                    }
-                    main_declared_vars.insert(var_name.clone());
-                    // `const` unless a later `while` loop reassigns this variable.
-                    let keyword = if reassigned.contains(&var_name) { "let" } else { "const" };
-                    if self.typed {
-                        let ty = if is_bool_now { "boolean" } else if is_str_literal { "string" } else { "Quantity" };
-                        main_stmts.push(format!("{} {}: {} = {};", keyword, var_name, ty, val));
-                    } else {
-                        main_stmts.push(format!("{} {} = {};", keyword, var_name, val));
-                    }
-                    main_stmts.push(format!("console.log(`{}: ${{{}}}`);", node.name, var_name));
+                    self.push_assignment(node, &mut known_bools, &mut main_declared_vars, &reassigned, &mut main_stmts)?;
                 }
-                Statement::Expr(expr) => {
-                    match super::as_assert_call(expr, &known_bools) {
-                        Some(super::AssertShape::Bool { condition }) => {
-                            let cond_code = self.generate_expr(condition)?;
-                            main_stmts.push(format!("if (!({})) throw new Error(\"assertion failed\");", cond_code));
-                        }
-                        Some(super::AssertShape::BoolWithMessage { condition, message }) => {
-                            let cond_code = self.generate_expr(condition)?;
-                            let msg_code = self.generate_expr(message)?;
-                            main_stmts.push(format!("if (!({})) throw new Error({});", cond_code, msg_code));
-                        }
-                        Some(super::AssertShape::Quantities { kind, actual, expected }) => {
-                            let a_code = self.generate_expr(actual)?;
-                            let b_code = self.generate_expr(expected)?;
-                            let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
-                            main_stmts.push(format!("{}.{}({});", a_code, method, b_code));
-                        }
-                        None => {
-                            let val = self.generate_expr(expr)?;
-                            main_stmts.push(format!("console.log({});", val));
-                        }
-                    }
-                }
+                Statement::Expr(expr) => self.push_expr_statement(expr, &known_bools, &mut main_stmts)?,
                 Statement::While { .. } => {
                     main_stmts.push(self.generate_statement(stmt, &mut main_declared_vars)?);
                 }
@@ -110,6 +70,58 @@ impl CodeGenerator for JsTranspiler {
 }
 
 impl JsTranspiler {
+    /// A top-level assignment, followed by the line that logs what it set.
+    fn push_assignment(
+        &self,
+        node: &crate::ast::AssignmentNode,
+        known_bools: &mut HashSet<String>,
+        main_declared_vars: &mut HashSet<String>,
+        reassigned: &HashSet<String>,
+        main_stmts: &mut Vec<String>,
+    ) -> Result<(), CodegenError> {
+        let val = self.generate_expr(&node.value)?;
+        let var_name = snake_to_camel(&node.name);
+        let is_str_literal = matches!(&node.value, Expr::Str(_));
+        let is_bool_now = super::is_definitely_bool(&node.value, known_bools);
+        if is_bool_now {
+            known_bools.insert(node.name.clone());
+        } else {
+            known_bools.remove(&node.name);
+        }
+        main_declared_vars.insert(var_name.clone());
+        // `const` unless a later `while` loop reassigns this variable.
+        let keyword = if reassigned.contains(&var_name) { "let" } else { "const" };
+        if self.typed {
+            let ty = if is_bool_now { "boolean" } else if is_str_literal { "string" } else { "Quantity" };
+            main_stmts.push(format!("{} {}: {} = {};", keyword, var_name, ty, val));
+        } else {
+            main_stmts.push(format!("{} {} = {};", keyword, var_name, val));
+        }
+        main_stmts.push(format!("console.log(`{}: ${{{}}}`);", node.name, var_name));
+        Ok(())
+    }
+
+    /// A top-level expression: an `assert` call becomes the check it stands for, anything else is logged.
+    fn push_expr_statement(&self, expr: &Expr, known_bools: &HashSet<String>, main_stmts: &mut Vec<String>) -> Result<(), CodegenError> {
+        let line = match super::as_assert_call(expr, known_bools) {
+            Some(super::AssertShape::Bool { condition }) => {
+                format!("if (!({})) throw new Error(\"assertion failed\");", self.generate_expr(condition)?)
+            }
+            Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                format!("if (!({})) throw new Error({});", self.generate_expr(condition)?, self.generate_expr(message)?)
+            }
+            Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                let a_code = self.generate_expr(actual)?;
+                let b_code = self.generate_expr(expected)?;
+                let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
+                format!("{}.{}({});", a_code, method, b_code)
+            }
+            None => format!("console.log({});", self.generate_expr(expr)?),
+        };
+        main_stmts.push(line);
+        Ok(())
+    }
+
     fn generate_function_def_stmt(&self, f: &FunctionDefNode) -> Result<String, CodegenError> {
         let mut out = String::new();
         let params: Vec<String> = f
@@ -165,17 +177,7 @@ impl JsTranspiler {
                 let cond_str = self.generate_expr(cond)?;
                 let mut lines = Vec::new();
                 for s in body {
-                    let stmt_code = self.generate_statement(s, declared_vars)?;
-                    if !stmt_code.is_empty() {
-                        let stmt_with_semi = if stmt_code.ends_with(';') || stmt_code.ends_with('}') {
-                            stmt_code
-                        } else {
-                            format!("{};", stmt_code)
-                        };
-                        for line in stmt_with_semi.lines() {
-                            lines.push(format!("  {}", line));
-                        }
-                    }
+                    super::push_block_lines(&mut lines, self.generate_statement(s, declared_vars)?);
                 }
                 Ok(format!("while ({}) {{\n{}\n}}", cond_str, lines.join("\n")))
             }
@@ -183,102 +185,48 @@ impl JsTranspiler {
         }
     }
 
+    fn string_expr(&self, text: &str) -> Result<String, CodegenError> {
+        let parts = super::split_interpolated(text);
+        let mut out = String::from("`");
+        for part in &parts {
+            match part {
+                super::StrPart::Text(t) => out.push_str(&escape_template_text(t)),
+                super::StrPart::Expr(e) => {
+                    out.push_str("${");
+                    out.push_str(&self.generate_expr(e)?);
+                    out.push('}');
+                }
+            }
+        }
+        out.push('`');
+        Ok(out)
+    }
+
+    fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {
+        if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+            let l_str = self.generate_expr(l)?;
+            let r_str = self.generate_expr(r)?;
+            return Ok(format!("({}.getValue() {} {}.getValue())", l_str, op_sym, r_str));
+        }
+        if let Some(logical) = super::as_logical_op(expr) {
+            return super::c_logical_expr(logical, |e| self.generate_expr(e));
+        }
+        super::refuse_unsupported_call("JS/TS", name, args, kwargs)?;
+        let arg_strs = args.iter().map(|a| self.generate_expr(a)).collect::<Result<Vec<_>, _>>()?;
+        Ok(format!("{}({})", snake_to_camel(name), arg_strs.join(", ")))
+    }
+
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
-            Expr::Str(text) => {
-                let parts = super::split_interpolated(text);
-                let mut out = String::from("`");
-                for part in &parts {
-                    match part {
-                        super::StrPart::Text(t) => out.push_str(&escape_template_text(t)),
-                        super::StrPart::Expr(e) => {
-                            out.push_str("${");
-                            out.push_str(&self.generate_expr(e)?);
-                            out.push('}');
-                        }
-                    }
-                }
-                out.push('`');
-                Ok(out)
-            }
+            Expr::Str(text) => self.string_expr(text),
             Expr::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             Expr::Identifier(id) => Ok(snake_to_camel(id)),
-            Expr::Quantity(q) => {
-                if let Some(reason) = q.asymmetric_refusal() {
-                    return Err(CodegenError::Generic(reason));
-                }
-                let mut args = vec![format!("{}", q.magnitude)];
-
-                let is_with_unc = q.uncertainty.is_some();
-                if let Some(unc) = q.uncertainty {
-                    args.push(format!("{}", unc));
-                }
-                if let Some(ref unit) = q.unit {
-                    args.push(format!("\"{}\"", unit));
-                }
-
-                if is_with_unc {
-                    Ok(format!("Quantity.withUncertainty({})", args.join(", ")))
-                } else {
-                    Ok(format!("Quantity.of({})", args.join(", ")))
-                }
-            }
+            Expr::Quantity(q) => quantity_expr(q),
             Expr::BinaryOp { op, left, right } => {
                 let l = self.generate_expr(left)?;
-                if *op == BinaryOp::Convert {
-                    let unit_str = super::expr_to_unit_string(right);
-                    Ok(format!("{}.convertTo(\"{}\")", l, unit_str))
-                } else if *op == BinaryOp::Pow {
-                    if let Expr::Quantity(q) = &**right {
-                        return Ok(format!("{}.pow({})", l, q.magnitude));
-                    }
-                    let r = self.generate_expr(right)?;
-                    Ok(format!("{}.pow({}.getValue())", l, r))
-                } else {
-                    let r = self.generate_expr(right)?;
-                    let method = match op {
-                        BinaryOp::Add => "add",
-                        BinaryOp::Sub => "subtract",
-                        BinaryOp::Mul => "multiply",
-                        BinaryOp::Div => "divide",
-                        BinaryOp::Pow => unreachable!(),
-                        BinaryOp::Convert => unreachable!(),
-                        BinaryOp::Range => return Err(super::range_is_not_transpilable()),
-                    };
-                    Ok(format!("{}.{}({})", l, method, r))
-                }
+                super::method_binary_expr(*op, &l, right, |e| self.generate_expr(e))
             }
-            Expr::FunctionCall { name, args, kwargs } => {
-                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
-                    let l_str = self.generate_expr(l)?;
-                    let r_str = self.generate_expr(r)?;
-                    return Ok(format!("({}.getValue() {} {}.getValue())", l_str, op_sym, r_str));
-                }
-                if let Some(logical) = super::as_logical_op(expr) {
-                    return Ok(match logical {
-                        super::LogicalOp::Not(x) => format!("(!{})", self.generate_expr(x)?),
-                        super::LogicalOp::And(l, r) => format!("({} && {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                        super::LogicalOp::Or(l, r) => format!("({} || {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                    });
-                }
-                if !kwargs.is_empty() {
-                    return Err(CodegenError::Generic(format!(
-                        "Named arguments are not supported in JS/TS codegen (call to '{}')",
-                        name
-                    )));
-                }
-                if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && matches!(args.len(), 1 | 2) {
-                    return Err(CodegenError::Generic(format!(
-                        "'{}' can only be used as a standalone statement, not nested inside an expression",
-                        name
-                    )));
-                }
-                let mut arg_strs = Vec::new();
-                for a in args {
-                    arg_strs.push(self.generate_expr(a)?);
-                }
-                Ok(format!("{}({})", snake_to_camel(name), arg_strs.join(", ")))
-            }
+            Expr::FunctionCall { name, args, kwargs } => self.call_expr(expr, name, args, kwargs),
             Expr::ForExpr { var, iterable, body } => {
                 let it_str = self.generate_expr(iterable)?;
                 let var_str = snake_to_camel(var);
@@ -287,6 +235,22 @@ impl JsTranspiler {
             }
         }
     }
+}
+
+/// A quantity literal, with its uncertainty and unit when it has them.
+fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
+    if let Some(reason) = q.asymmetric_refusal() {
+        return Err(CodegenError::Generic(reason));
+    }
+    let mut args = vec![format!("{}", q.magnitude)];
+    if let Some(unc) = q.uncertainty {
+        args.push(format!("{}", unc));
+    }
+    if let Some(ref unit) = q.unit {
+        args.push(format!("\"{}\"", unit));
+    }
+    let constructor = if q.uncertainty.is_some() { "withUncertainty" } else { "of" };
+    Ok(format!("Quantity.{}({})", constructor, args.join(", ")))
 }
 
 /// Escapes the characters that would otherwise break out of a template literal:
@@ -298,7 +262,7 @@ fn escape_template_text(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::QuantityNode;
+    use crate::ast::{BinaryOp, QuantityNode};
 
     #[test]
     fn test_transpile_function_def_js() {

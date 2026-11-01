@@ -1,11 +1,12 @@
 use crate::error::to_js_error;
-use physure_core::units::conf::{parse_physure_conf, DEFAULT_PHYSURE_CONF};
+use physure_core::units::conf::{extend_registry, parse_physure_conf, DEFAULT_PHYSURE_CONF};
 use physure_core::units::parser::Parser;
 use physure_core::UnitRegistry as CoreUnitRegistry;
 use physure_script::{parse_phs, PhsInterpreter, PhsValue, Statement};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::OnceLock;
 use wasm_bindgen::prelude::*;
 
 pub(crate) struct RegistryState {
@@ -13,11 +14,30 @@ pub(crate) struct RegistryState {
     pub(crate) interpreter: PhsInterpreter,
 }
 
+impl RegistryState {
+    /// Runs `f` with the interpreter while the registry's own catalog is the one that unit text is read
+    /// against: the parser deciding that a word after a number is a unit, and the quantities built from unit
+    /// text as the program runs. Without it a registry built from a custom conf answered `getUnitScale`
+    /// with its definitions and `evaluate` with the embedded ones.
+    pub(crate) fn in_catalog<R>(&mut self, f: impl FnOnce(&mut PhsInterpreter) -> R) -> R {
+        let RegistryState { registry, interpreter } = self;
+        physure_core::units::with_catalog(registry, || f(interpreter))
+    }
+}
+
+/// The embedded catalog and its constants, parsed once: a registry only needs a copy.
+fn default_catalog() -> &'static (CoreUnitRegistry, HashMap<String, String>) {
+    static DEFAULT: OnceLock<(CoreUnitRegistry, HashMap<String, String>)> = OnceLock::new();
+    DEFAULT.get_or_init(|| {
+        let mut registry = CoreUnitRegistry::new();
+        let mut constants = HashMap::new();
+        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut registry, &mut constants);
+        (registry, constants)
+    })
+}
+
 fn load_default() -> CoreUnitRegistry {
-    let mut registry = CoreUnitRegistry::new();
-    let mut constants = HashMap::new();
-    parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut registry, &mut constants);
-    registry
+    default_catalog().0.clone()
 }
 
 fn create_interpreter() -> PhsInterpreter {
@@ -55,17 +75,21 @@ impl UnitRegistry {
         }
     }
 
+    /// A registry over the embedded catalog extended by `content`, read strictly: a line that cannot be read
+    /// throws an error naming it, and is not a definition quietly left out (the `[Settings]` of a conf are
+    /// process-wide and not the registry's to change).
     #[wasm_bindgen(js_name = fromContent)]
-    pub fn from_content(content: &str) -> UnitRegistry {
-        let mut registry = load_default();
-        let mut constants = HashMap::new();
-        parse_physure_conf(content, &mut registry, &mut constants);
-        UnitRegistry {
+    pub fn from_content(content: &str) -> Result<UnitRegistry, JsValue> {
+        let (mut registry, mut constants) = default_catalog().clone();
+        extend_registry(&mut registry, &mut constants, content).map_err(|problems| {
+            js_sys::Error::new(&format!("Invalid unit definitions: {}", problems.join("; ")))
+        })?;
+        Ok(UnitRegistry {
             state: Rc::new(RefCell::new(RegistryState {
                 registry,
                 interpreter: create_interpreter(),
             })),
-        }
+        })
     }
 
     #[wasm_bindgen(js_name = getUnitExponents)]
@@ -103,26 +127,16 @@ impl UnitRegistry {
     }
 
     pub fn evaluate(&self, source: &str) -> Result<String, JsValue> {
-        let program = parse_phs(source).map_err(to_js_error)?;
         let mut state = self.state.try_borrow_mut().map_err(|_| borrow_err())?;
-        let mut result = String::new();
-        for (idx, stmt) in program.statements.iter().enumerate() {
-            if idx > 0 {
-                result.push('\n');
+        state.in_catalog(|interpreter| {
+            let program = parse_phs(source).map_err(to_js_error)?;
+            let mut lines = Vec::new();
+            for stmt in &program.statements {
+                let value = interpreter.run_statement(stmt).map_err(to_js_error)?;
+                lines.push(value_text(interpreter, stmt, value));
             }
-            let value = state.interpreter.run_statement(stmt).map_err(to_js_error)?;
-            match value {
-                PhsValue::None => match stmt {
-                    Statement::Assignment(node) => match state.interpreter.get_var(&node.name) {
-                        Some(v) => result.push_str(&v.to_string()),
-                        None => result.push_str("None"),
-                    },
-                    _ => result.push_str("None"),
-                },
-                other => result.push_str(&other.to_string()),
-            }
-        }
-        Ok(result)
+            Ok(lines.join("\n"))
+        })
     }
 
     pub fn deriv(&self, expr: &str, wrt: &str) -> Result<String, JsValue> {
@@ -135,6 +149,17 @@ impl UnitRegistry {
 
     pub fn solve(&self, equation: &str, wrt: &str) -> Result<String, JsValue> {
         self.evaluate(&format!("solve(\"{}\", \"{}\")", escape_phs_str(equation), escape_phs_str(wrt)))
+    }
+}
+
+/// The text of a statement's value: an assignment that gave none shows the variable it set.
+fn value_text(interpreter: &PhsInterpreter, stmt: &Statement, value: PhsValue) -> String {
+    match value {
+        PhsValue::None => match stmt {
+            Statement::Assignment(node) => interpreter.get_var(&node.name).map_or("None".to_string(), |v| v.to_string()),
+            _ => "None".to_string(),
+        },
+        other => other.to_string(),
     }
 }
 
@@ -180,7 +205,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn from_content_applies_an_override_on_top_of_the_default_config() {
-        let reg = UnitRegistry::from_content("[Units]\nfurlong = 201.168 m\n");
+        let reg = UnitRegistry::from_content("[Units]\nfurlong = 201.168 m\n").unwrap();
         let scale = reg.get_unit_scale("furlong").unwrap();
         assert!((scale - 201.168).abs() < 1e-6);
     }

@@ -10,7 +10,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/physure?color=F59E0B&labelColor=18181A)](https://pypi.org/project/physure/)
 [![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure-java?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure-java)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure)
 [![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
 [![Python 3.11–3.14](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-F59E0B?labelColor=18181A)](https://pypi.org/project/physure/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](https://github.com/Alexisrx96/physure/blob/main/LICENSE)
@@ -117,13 +117,15 @@ If you need a battle-tested converter with a decade of integrations, pint and as
 
 | Benchmark | Result |
 |---|---|
-| Cold import | ~21 ms |
-| Unit multiply/divide (Rust core) | ~54 ns |
-| Scalar add with dimension check | ~40 ns |
-| 10⁶-element tensor op, `@torch.compile` | 1.17× vs. pure PyTorch |
-| Covariance propagation (sparse blocks) | ~7 µs |
+| Cold `import physure` (on top of the interpreter start) | ~19 ms |
+| First `Q_(...)` (builds the default unit system) | ~0.2 s |
+| Unit multiply/divide (Rust core) | ~170 ns |
+| Scalar add with dimension check (Rust core) | ~175 ns |
+| Covariance propagation (sparse blocks) | ~9.5 µs |
 
-Full methodology and reproduction steps: [BENCHMARKS.md](https://github.com/Alexisrx96/physure/blob/main/BENCHMARKS.md).
+Measured on a Windows laptop in use (Intel i5-13420H, Python 3.14, 0.3.0): treat the values as orders of magnitude, and see the page below for the spread and the environment. The `@torch.compile` overhead is not reported here because it could not be measured on that machine.
+
+Full methodology and reproduction steps: [docs/benchmarks.md](https://github.com/Alexisrx96/physure/blob/main/docs/benchmarks.md).
 
 ## Installation
 

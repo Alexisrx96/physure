@@ -278,36 +278,34 @@ mod tests {
     }
 }
 
+/// A product of units such as `kg * m^2` as LaTeX text: `\text{kg} \cdot \text{m}^{2}`.
+fn latex_unit_part(part: &str) -> String {
+    part.split('*')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(|t| match t.split_once('^') {
+            Some((base, exp)) => format!("\\text{{{}}}^{{{}}}", base.trim(), exp.trim()),
+            None => format!("\\text{{{}}}", t),
+        })
+        .collect::<Vec<_>>()
+        .join(" \\cdot ")
+}
+
 pub fn unit_to_latex(unit_str: &str) -> String {
     let u = unit_str.trim();
     if u.is_empty() || u == "1" || u == "Dimensionless" {
         return String::new();
     }
 
-    fn format_part(part: &str) -> String {
-        let terms: Vec<&str> = part.split('*').collect();
-        let mut formatted_terms = Vec::new();
-        for t in terms {
-            let clean = t.trim();
-            if clean.is_empty() { continue; }
-            if let Some((base, exp)) = clean.split_once('^') {
-                formatted_terms.push(format!("\\text{{{}}}^{{{}}}", base.trim(), exp.trim()));
-            } else {
-                formatted_terms.push(format!("\\text{{{}}}", clean));
-            }
-        }
-        formatted_terms.join(" \\cdot ")
-    }
-
     if let Some((num, den)) = u.split_once('/') {
-        let num_latex = format_part(num);
-        let den_latex = format_part(den);
+        let num_latex = latex_unit_part(num);
+        let den_latex = latex_unit_part(den);
         if num_latex.is_empty() {
             format!("\\frac{{1}}{{{}}}", den_latex)
         } else {
             format!("\\frac{{{}}}{{{}}}", num_latex, den_latex)
         }
     } else {
-        format_part(u)
+        latex_unit_part(u)
     }
 }

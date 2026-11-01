@@ -108,29 +108,7 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
     if let PhsValue::Range(start, end) = value {
         return format!("{} .. {}", apply_format_spec(start, spec), apply_format_spec(end, spec));
     }
-    // `frac` writes the number as a fraction and `ifrac` as a mixed one — `1.5` is `3/2`
-    // and `1 1/2`. Only when one applies: a number with no small fraction behind it keeps
-    // its decimal rather than being rounded into a lie.
-    let mixed_frac = match spec {
-        "frac" => Some(false),
-        "ifrac" => Some(true),
-        _ => None,
-    };
-    let digits = spec.trim_start_matches('.').trim_end_matches(char::is_alphabetic);
-    let precision: usize = digits.parse().unwrap_or(6);
-    let kind = spec.chars().last().filter(|c| c.is_alphabetic()).unwrap_or('f');
-    let render = |n: f64| match mixed_frac {
-        Some(mixed) => physure_core::quantity::format_fraction(n, mixed)
-            .unwrap_or_else(|| physure_core::quantity::format_float(n)),
-        None => match kind {
-            'e' => format!("{:.*e}", precision, n),
-            'g' => {
-                let s = format!("{:.*}", precision, n);
-                s.trim_end_matches('0').trim_end_matches('.').to_string()
-            }
-            _ => format!("{:.*}", precision, n),
-        },
-    };
+    let render = |n: f64| render_number(n, spec);
     match value {
         PhsValue::Number(n) => render(*n),
         PhsValue::Quantity(q) => {
@@ -154,342 +132,302 @@ fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
     }
 }
 
+/// One number as the format spec writes it: a fraction, or `.3f`, `.2e`, `.4g`.
+fn render_number(n: f64, spec: &str) -> String {
+    // `frac` writes the number as a fraction and `ifrac` as a mixed one — `1.5` is `3/2`
+    // and `1 1/2`. Only when one applies: a number with no small fraction behind it keeps
+    // its decimal rather than being rounded into a lie.
+    let mixed_frac = match spec {
+        "frac" => Some(false),
+        "ifrac" => Some(true),
+        _ => None,
+    };
+    if let Some(mixed) = mixed_frac {
+        return physure_core::quantity::format_fraction(n, mixed)
+            .unwrap_or_else(|| physure_core::quantity::format_float(n));
+    }
+    let digits = spec.trim_start_matches('.').trim_end_matches(char::is_alphabetic);
+    let precision: usize = digits.parse().unwrap_or(6);
+    let kind = spec.chars().last().filter(|c| c.is_alphabetic()).unwrap_or('f');
+    match kind {
+        'e' => format!("{:.*e}", precision, n),
+        'g' => {
+            let s = format!("{:.*}", precision, n);
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        }
+        _ => format!("{:.*}", precision, n),
+    }
+}
+
 pub fn eval_core_builtin(
     name: &str,
     args: &[PhsValue],
     interpreter: &PhsInterpreter,
     env: &std::collections::HashMap<String, PhsValue>,
 ) -> PhysureResult<Option<PhsValue>> {
+    const A_NUMBER_OR_QUANTITY: &str = "a number or quantity";
     match name {
-        "parallel_map" => {
-            let (func, v) = match (args.first(), args.get(1)) {
-                (Some(PhsValue::Function(f)), Some(PhsValue::Vector(v))) => (f, v),
-                _ => return Err(PhysureError::Generic("parallel_map expects (fn, vector)".into())),
-            };
-            // The input vector is already fully materialized by the time it reaches here --
-            // built by a for-expression, `vector(...)`, or anything else -- so it carries the
-            // same unbounded-allocation risk the for-expression's own range check guards
-            // against (see `physure_core::settings::max_loop_iterations`'s doc comment).
-            // Checked against the borrowed vector, before the `.clone()` below (which would
-            // otherwise double an oversized input's memory) and before
-            // `.into_par_iter().collect()` allocates a second `Vec<PhsValue>` the same size.
-            let ceiling = physure_core::settings::max_loop_iterations();
-            if v.len() > ceiling {
-                return Err(PhysureError::Generic(format!(
-                    "parallel_map received a vector with {} elements, exceeding the max_loop_iterations ceiling of {ceiling}; raise `max_loop_iterations` in physure.conf's [Settings] section if this is a legitimate workload",
-                    v.len()
-                )));
-            }
-            let vec = v.clone();
-            // A breakpoint inside a rayon worker closure isn't a coherent debugging
-            // experience -- pausing one of N racing threads while the rest continue -- so a
-            // debug session forces this back to plain sequential `.map()` instead of silently
-            // ignoring any breakpoint set inside `func`.
-            if interpreter.debug_hook_is_set() {
-                let results: PhysureResult<Vec<PhsValue>> = vec
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, item)| {
-                        interpreter
-                            .call_function_node(func, vec![item], env)
-                            .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
-                    })
-                    .collect();
-                return Ok(Some(PhsValue::Vector(results?)));
-            }
-            use rayon::prelude::*;
-            let results: Vec<PhsValue> = vec
-                .into_par_iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    interpreter
-                        .call_function_node(func, vec![item], env)
-                        .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
-                })
-                .collect::<PhysureResult<Vec<PhsValue>>>()?;
-            Ok(Some(PhsValue::Vector(results)))
-        }
-        "format" => {
-            let Some(val) = args.first() else { return Ok(None) };
-            match args.get(1) {
-                Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
-                // No spec, nothing to apply — hand the value back untouched.
-                _ => Ok(Some(val.clone())),
-            }
-        }
-        "assert" => match args {
-            [PhsValue::Bool(cond)] => {
-                if *cond {
-                    Ok(Some(PhsValue::None))
-                } else {
-                    Err(PhysureError::AssertionFailed { kind: "assert", message: "condition was False".to_string() })
-                }
-            }
-            [PhsValue::Bool(cond), PhsValue::String(msg)] => {
-                if *cond {
-                    Ok(Some(PhsValue::None))
-                } else {
-                    Err(PhysureError::AssertionFailed { kind: "assert", message: msg.clone() })
-                }
-            }
-            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
-                a.phs_assert(b)?;
-                Ok(Some(PhsValue::None))
-            }
-            _ => Err(PhysureError::Generic(format!(
-                "assert received ({}); expected assert(Bool), assert(Bool, String), or assert(Quantity, Quantity)",
-                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
-            ))),
-        },
+        "parallel_map" => parallel_map(args, interpreter, env),
+        "format" => format_builtin(args),
+        "assert" => assert_builtin(args),
         // No Bool overload here, unlike `assert` above -- boolean equality is expressed as
         // `assert(left == right)`, not `exact_assert(left == right)`. This omission is
         // deliberate, not an oversight; do not add a symmetrical Bool arm.
-        "exact_assert" => match args {
-            [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
-                a.phs_exact_assert(b)?;
-                Ok(Some(PhsValue::None))
-            }
-            _ => Err(PhysureError::Generic(format!(
-                "exact_assert received ({}); expected exact_assert(Quantity, Quantity)",
-                args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
-            ))),
-        },
+        "exact_assert" => exact_assert_builtin(args),
         "op_>" | "op_gt" => compare(args, |l, r| l > r),
         "op_<" | "op_lt" => compare(args, |l, r| l < r),
         "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
         "op_<=" | "op_lte" => compare(args, |l, r| l <= r),
-        "op_==" | "op_eq" => {
-            if let Some(res) = bool_equality(args, "==", true) {
-                return res;
-            }
-            // `x == 5.0 +/- 0.2` asks whether x lies within k sigma of the target, so it
-            // is a tolerance test rather than an ordinary comparison.
-            if let (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma)))
-            | (Some(PhsValue::SigmaBound(target_q, k_sigma)), Some(PhsValue::Quantity(l))) =
-                (args.first(), args.get(1))
-            {
-                let unc = if l.value.std_dev() > 0.0 { l.value.std_dev() } else { 0.05 };
-                let (a, b) = comparable(l, target_q)?;
-                return Ok(Some(boolean((a - b).abs() <= k_sigma * unc)));
-            }
-            compare(args, |l, r| (l - r).abs() < 1e-9)
-        }
-        "op_!=" | "op_neq" => {
-            if let Some(res) = bool_equality(args, "!=", false) {
-                return res;
-            }
-            compare(args, |l, r| (l - r).abs() >= 1e-9)
-        }
+        "op_==" | "op_eq" => equality(args),
+        "op_!=" | "op_neq" => not_equal(args),
         "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
-        "ternary" | "if_then_else" => {
-            // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
-            // for anything else) instead of the shared `is_truthy` -- fine while every
-            // comparison built a dimensionless Quantity, wrong the moment one builds a real
-            // `PhsValue::Bool` instead.
-            let cond_true = args.first().is_some_and(crate::interpreter::helpers::is_truthy);
-            if cond_true {
-                Ok(args.get(1).cloned())
-            } else {
-                Ok(args.get(2).cloned())
-            }
-        }
-        // The standard uncertainty as a quantity in the same unit, so it can be fed back
-        // into arithmetic (`uncertainty(x) / x => %`). Anything without one reports zero.
-        "uncertainty" | "sigma" => match args.first() {
-            Some(PhsValue::Quantity(q)) => Ok(Some(PhsValue::Quantity(
-                physure_core::Quantity::new_scalar(q.value.std_dev(), 0.0, q.unit.clone(), None, None),
-            ))),
-            Some(PhsValue::Number(_)) => Ok(Some(PhsValue::Number(0.0))),
-            _ => Err(PhysureError::Generic("uncertainty expects a quantity".into())),
-        },
-        "vector" => {
-            Ok(Some(PhsValue::Vector(args.to_vec())))
-        }
-        "sqrt" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("sqrt expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) if *n < 0.0 => Err(PhysureError::DomainError(format!(
-                    "sqrt of a negative value ({n}) is undefined for real numbers"
-                ))),
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.sqrt()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.sqrt()?))),
-                _ => Err(PhysureError::Generic("sqrt expects a number or quantity".into())),
-            }
-        }
-        "sin" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("sin expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.sin()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.sin()?))),
-                _ => Err(PhysureError::Generic("sin expects a number or quantity".into())),
-            }
-        }
-        "cos" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("cos expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.cos()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.cos()?))),
-                _ => Err(PhysureError::Generic("cos expects a number or quantity".into())),
-            }
-        }
-        "exp" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("exp expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.exp()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.exp()?))),
-                _ => Err(PhysureError::Generic("exp expects a number or quantity".into())),
-            }
-        }
-        "ln" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("ln expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) if *n <= 0.0 => Err(PhysureError::DomainError(format!(
-                    "ln of a non-positive value ({n}) is undefined for real numbers"
-                ))),
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.ln()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.ln()?))),
-                _ => Err(PhysureError::Generic("ln expects a number or quantity".into())),
-            }
-        }
-        "abs" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("abs expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.abs()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.abs()?))),
-                _ => Err(PhysureError::Generic("abs expects a number or quantity".into())),
-            }
-        }
-        "log" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("log expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) if *n <= 0.0 => Err(PhysureError::DomainError(format!(
-                    "log of a non-positive value ({n}) is undefined for real numbers"
-                ))),
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.log10()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.log10()?))),
-                _ => Err(PhysureError::Generic("log expects a number or quantity".into())),
-            }
-        }
-        "tan" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("tan expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.tan()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.tan()?))),
-                _ => Err(PhysureError::Generic("tan expects a number or quantity".into())),
-            }
-        }
-        "floor" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("floor expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.floor()))),
-                // Flooring the mean says nothing about how well it is known, so the unit
-                // and the uncertainty ride along instead of being reset to zero.
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.floor()?))),
-                _ => Err(PhysureError::Generic("floor expects number or quantity".into())),
-            }
-        }
-        "ceil" => {
-            if args.len() != 1 {
-                return Err(PhysureError::Generic("ceil expects 1 argument".into()));
-            }
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number(n.ceil()))),
-                PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.ceil()?))),
-                _ => Err(PhysureError::Generic("ceil expects number or quantity".into())),
-            }
-        }
-        "min" => {
-            if args.is_empty() {
-                return Err(PhysureError::Generic("min expects arguments".into()));
-            }
-            let mut best = &args[0];
-            for arg in args.iter().skip(1) {
-                // compare by base-SI magnitude but return the original
-                let best_mag = match best {
-                    PhsValue::Number(n) => *n,
-                    PhsValue::Quantity(q) => q.canonical_magnitude(),
-                    _ => return Err(PhysureError::Generic("min expects numbers or quantities".into())),
-                };
-                let arg_mag = match arg {
-                    PhsValue::Number(n) => *n,
-                    PhsValue::Quantity(q) => q.canonical_magnitude(),
-                    _ => return Err(PhysureError::Generic("min expects numbers or quantities".into())),
-                };
-                if arg_mag < best_mag {
-                    best = arg;
-                }
-            }
-            Ok(Some(best.clone()))
-        }
-        "max" => {
-            if args.is_empty() {
-                return Err(PhysureError::Generic("max expects arguments".into()));
-            }
-            let mut best = &args[0];
-            for arg in args.iter().skip(1) {
-                let best_mag = match best {
-                    PhsValue::Number(n) => *n,
-                    PhsValue::Quantity(q) => q.canonical_magnitude(),
-                    _ => return Err(PhysureError::Generic("max expects numbers or quantities".into())),
-                };
-                let arg_mag = match arg {
-                    PhsValue::Number(n) => *n,
-                    PhsValue::Quantity(q) => q.canonical_magnitude(),
-                    _ => return Err(PhysureError::Generic("max expects numbers or quantities".into())),
-                };
-                if arg_mag > best_mag {
-                    best = arg;
-                }
-            }
-            Ok(Some(best.clone()))
-        }
-        "round" => {
-            if args.is_empty() {
-                return Err(PhysureError::Generic("round expects arguments".into()));
-            }
-            let decimals = match args.get(1) {
-                Some(PhsValue::Number(d)) => *d as i32,
-                Some(PhsValue::Quantity(q)) => q.canonical_magnitude() as i32,
-                _ => 0,
-            };
-            let factor = 10.0f64.powi(decimals);
-            match &args[0] {
-                PhsValue::Number(n) => Ok(Some(PhsValue::Number((n * factor).round() / factor))),
-                PhsValue::Quantity(q) => {
-                    use physure_core::quantity::Quantity;
-                    // Rounding the mean says nothing about how well it is known, so the
-                    // uncertainty rides along untouched rather than being reset to zero.
-                    let rounded = Quantity::new_scalar(
-                        (q.value.mean() * factor).round() / factor,
-                        q.value.std_dev(),
-                        q.unit.clone(),
-                        None,
-                        None,
-                    );
-                    Ok(Some(PhsValue::Quantity(rounded)))
-                }
-                _ => Err(PhysureError::Generic("round expects number or quantity".into())),
-            }
-        }
+        "ternary" | "if_then_else" => ternary(args),
+        "uncertainty" | "sigma" => uncertainty_builtin(args),
+        "vector" => Ok(Some(PhsValue::Vector(args.to_vec()))),
+        "sqrt" => unary(name, args, A_NUMBER_OR_QUANTITY, sqrt_number, |q| q.sqrt()),
+        "sin" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.sin()), |q| q.sin()),
+        "cos" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.cos()), |q| q.cos()),
+        "exp" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.exp()), |q| q.exp()),
+        "ln" => unary(name, args, A_NUMBER_OR_QUANTITY, ln_number, |q| q.ln()),
+        "abs" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.abs()), |q| q.abs()),
+        "log" => unary(name, args, A_NUMBER_OR_QUANTITY, log10_number, |q| q.log10()),
+        "tan" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.tan()), |q| q.tan()),
+        // Flooring the mean says nothing about how well it is known, so the unit
+        // and the uncertainty ride along instead of being reset to zero.
+        "floor" => unary(name, args, "number or quantity", |n| Ok(n.floor()), |q| q.floor()),
+        "ceil" => unary(name, args, "number or quantity", |n| Ok(n.ceil()), |q| q.ceil()),
+        "min" => extremum(name, args, false),
+        "max" => extremum(name, args, true),
+        "round" => round_builtin(args),
         _ => Ok(None),
     }
 }
 
+fn sqrt_number(n: f64) -> PhysureResult<f64> {
+    if n < 0.0 {
+        Err(PhysureError::DomainError(format!("sqrt of a negative value ({n}) is undefined for real numbers")))
+    } else {
+        Ok(n.sqrt())
+    }
+}
+
+fn ln_number(n: f64) -> PhysureResult<f64> {
+    if n <= 0.0 {
+        Err(PhysureError::DomainError(format!("ln of a non-positive value ({n}) is undefined for real numbers")))
+    } else {
+        Ok(n.ln())
+    }
+}
+
+fn log10_number(n: f64) -> PhysureResult<f64> {
+    if n <= 0.0 {
+        Err(PhysureError::DomainError(format!("log of a non-positive value ({n}) is undefined for real numbers")))
+    } else {
+        Ok(n.log10())
+    }
+}
+
+fn format_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    let Some(val) = args.first() else { return Ok(None) };
+    match args.get(1) {
+        Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+        // No spec, nothing to apply — hand the value back untouched.
+        _ => Ok(Some(val.clone())),
+    }
+}
+
+fn exact_assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    match args {
+        [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+            a.phs_exact_assert(b)?;
+            Ok(Some(PhsValue::None))
+        }
+        _ => Err(PhysureError::Generic(format!(
+            "exact_assert received ({}); expected exact_assert(Quantity, Quantity)",
+            args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
+fn not_equal(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    if let Some(res) = bool_equality(args, "!=", false) {
+        return res;
+    }
+    compare(args, |l, r| (l - r).abs() >= 1e-9)
+}
+
+fn ternary(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
+    // for anything else) instead of the shared `is_truthy` -- fine while every
+    // comparison built a dimensionless Quantity, wrong the moment one builds a real
+    // `PhsValue::Bool` instead.
+    let cond_true = args.first().is_some_and(crate::interpreter::helpers::is_truthy);
+    if cond_true {
+        Ok(args.get(1).cloned())
+    } else {
+        Ok(args.get(2).cloned())
+    }
+}
+
+/// The standard uncertainty as a quantity in the same unit, so it can be fed back
+/// into arithmetic (`uncertainty(x) / x => %`). Anything without one reports zero.
+fn uncertainty_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    match args.first() {
+        Some(PhsValue::Quantity(q)) => Ok(Some(PhsValue::Quantity(
+            physure_core::Quantity::new_scalar(q.value.std_dev(), 0.0, q.unit.clone(), None, None),
+        ))),
+        Some(PhsValue::Number(_)) => Ok(Some(PhsValue::Number(0.0))),
+        _ => Err(PhysureError::Generic("uncertainty expects a quantity".into())),
+    }
+}
+
+/// A function of exactly one number or quantity: `on_number` for a number, `on_quantity` for a quantity (the unit
+/// and the uncertainty are the quantity method's to carry along).
+fn unary(
+    name: &str,
+    args: &[PhsValue],
+    expects: &str,
+    on_number: impl FnOnce(f64) -> PhysureResult<f64>,
+    on_quantity: impl FnOnce(&physure_core::Quantity) -> PhysureResult<physure_core::Quantity>,
+) -> PhysureResult<Option<PhsValue>> {
+    if args.len() != 1 {
+        return Err(PhysureError::Generic(format!("{name} expects 1 argument")));
+    }
+    match &args[0] {
+        PhsValue::Number(n) => Ok(Some(PhsValue::Number(on_number(*n)?))),
+        PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(on_quantity(q)?))),
+        _ => Err(PhysureError::Generic(format!("{name} expects {expects}"))),
+    }
+}
+
+fn parallel_map(
+    args: &[PhsValue],
+    interpreter: &PhsInterpreter,
+    env: &std::collections::HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
+    let (func, v) = match (args.first(), args.get(1)) {
+        (Some(PhsValue::Function(f)), Some(PhsValue::Vector(v))) => (f, v),
+        _ => return Err(PhysureError::Generic("parallel_map expects (fn, vector)".into())),
+    };
+    // The input vector is already fully materialized by the time it reaches here --
+    // built by a for-expression, `vector(...)`, or anything else -- so it carries the
+    // same unbounded-allocation risk the for-expression's own range check guards
+    // against (see `physure_core::settings::max_loop_iterations`'s doc comment).
+    // Checked against the borrowed vector, before the `.clone()` below (which would
+    // otherwise double an oversized input's memory) and before
+    // `.into_par_iter().collect()` allocates a second `Vec<PhsValue>` the same size.
+    let ceiling = physure_core::settings::max_loop_iterations();
+    if v.len() > ceiling {
+        return Err(PhysureError::Generic(format!(
+            "parallel_map received a vector with {} elements, exceeding the max_loop_iterations ceiling of {ceiling}; raise `max_loop_iterations` in physure.conf's [Settings] section if this is a legitimate workload",
+            v.len()
+        )));
+    }
+    let vec = v.clone();
+    let call = |(i, item): (usize, PhsValue)| {
+        interpreter
+            .call_function_node(func, vec![item], env)
+            .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
+    };
+    // A breakpoint inside a rayon worker closure isn't a coherent debugging
+    // experience -- pausing one of N racing threads while the rest continue -- so a
+    // debug session forces this back to plain sequential `.map()` instead of silently
+    // ignoring any breakpoint set inside `func`.
+    if interpreter.debug_hook_is_set() || interpreter.limits.sequential {
+        let results = vec.into_iter().enumerate().map(call).collect::<PhysureResult<Vec<PhsValue>>>()?;
+        return Ok(Some(PhsValue::Vector(results)));
+    }
+    use rayon::prelude::*;
+    let results = vec.into_par_iter().enumerate().map(call).collect::<PhysureResult<Vec<PhsValue>>>()?;
+    Ok(Some(PhsValue::Vector(results)))
+}
+
+fn assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    match args {
+        [PhsValue::Bool(cond)] => bool_assertion(*cond, "condition was False"),
+        [PhsValue::Bool(cond), PhsValue::String(msg)] => bool_assertion(*cond, msg),
+        [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
+            a.phs_assert(b)?;
+            Ok(Some(PhsValue::None))
+        }
+        _ => Err(PhysureError::Generic(format!(
+            "assert received ({}); expected assert(Bool), assert(Bool, String), or assert(Quantity, Quantity)",
+            args.iter().map(PhsValue::type_name).collect::<Vec<_>>().join(", ")
+        ))),
+    }
+}
+
+fn bool_assertion(cond: bool, message: &str) -> PhysureResult<Option<PhsValue>> {
+    if cond {
+        Ok(Some(PhsValue::None))
+    } else {
+        Err(PhysureError::AssertionFailed { kind: "assert", message: message.to_string() })
+    }
+}
+
+fn equality(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    if let Some(res) = bool_equality(args, "==", true) {
+        return res;
+    }
+    // `x == 5.0 +/- 0.2` asks whether x lies within k sigma of the target, so it
+    // is a tolerance test rather than an ordinary comparison.
+    if let (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma)))
+    | (Some(PhsValue::SigmaBound(target_q, k_sigma)), Some(PhsValue::Quantity(l))) =
+        (args.first(), args.get(1))
+    {
+        let unc = if l.value.std_dev() > 0.0 { l.value.std_dev() } else { 0.05 };
+        let (a, b) = comparable(l, target_q)?;
+        return Ok(Some(boolean((a - b).abs() <= k_sigma * unc)));
+    }
+    compare(args, |l, r| (l - r).abs() < 1e-9)
+}
+
+/// `min` and `max`: the argument with the smallest (or, with `want_greater`, largest) base-SI magnitude, as it
+/// was written.
+fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<Option<PhsValue>> {
+    if args.is_empty() {
+        return Err(PhysureError::Generic(format!("{name} expects arguments")));
+    }
+    let magnitude = |v: &PhsValue| match v {
+        PhsValue::Number(n) => Ok(*n),
+        PhsValue::Quantity(q) => Ok(q.canonical_magnitude()),
+        _ => Err(PhysureError::Generic(format!("{name} expects numbers or quantities"))),
+    };
+    let mut best = &args[0];
+    for arg in args.iter().skip(1) {
+        let best_mag = magnitude(best)?;
+        let arg_mag = magnitude(arg)?;
+        if (want_greater && arg_mag > best_mag) || (!want_greater && arg_mag < best_mag) {
+            best = arg;
+        }
+    }
+    Ok(Some(best.clone()))
+}
+
+fn round_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    if args.is_empty() {
+        return Err(PhysureError::Generic("round expects arguments".into()));
+    }
+    let decimals = match args.get(1) {
+        Some(PhsValue::Number(d)) => *d as i32,
+        Some(PhsValue::Quantity(q)) => q.canonical_magnitude() as i32,
+        _ => 0,
+    };
+    let factor = 10.0f64.powi(decimals);
+    match &args[0] {
+        PhsValue::Number(n) => Ok(Some(PhsValue::Number((n * factor).round() / factor))),
+        PhsValue::Quantity(q) => {
+            // Rounding the mean says nothing about how well it is known, so the
+            // uncertainty rides along untouched rather than being reset to zero.
+            let rounded = physure_core::Quantity::new_scalar(
+                (q.value.mean() * factor).round() / factor,
+                q.value.std_dev(),
+                q.unit.clone(),
+                None,
+                None,
+            );
+            Ok(Some(PhsValue::Quantity(rounded)))
+        }
+        _ => Err(PhysureError::Generic("round expects number or quantity".into())),
+    }
+}

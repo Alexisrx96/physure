@@ -15,7 +15,7 @@ pub use units::{RationalUnit, UnitRegistry, DimVector, UnitKind};
 pub use quantity::Quantity;
 pub use linalg::{QuantityVector, QuantityMatrix};
 pub use covariance::{CovarianceStore, PruningConfig};
-pub use uncertainty::{UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, PropagationMode, UnscentedBackend, propagation_mode, set_propagation_mode};
+pub use uncertainty::{UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, PropagationMode, with_seed, UnscentedBackend, propagation_mode, set_propagation_mode};
 pub use plotting::Mesh3DData;
 pub use settings::{
     parallel_threshold, set_parallel_threshold, max_loop_iterations, set_max_loop_iterations,

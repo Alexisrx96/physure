@@ -256,7 +256,9 @@ def _fit_scale_and_sse(
         except (ZeroDivisionError, ValueError, OverflowError):
             return None
     sum_xx = sum(x * x for x in xs)
-    if sum_xx == 0.0 or not math.isfinite(sum_xx):
+    if sum_xx <= 0.0 or not math.isfinite(
+        sum_xx
+    ):  # a sum of squares is never negative
         return None
     sum_xy = sum(x * y for x, y in zip(xs, targets, strict=True))
     k = sum_xy / sum_xx

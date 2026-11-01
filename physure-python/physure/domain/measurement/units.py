@@ -82,7 +82,7 @@ _CORE_ERRORS = (_CoreUnknownUnitError, _CoreUnitMismatchError)
 
 def _python_error(
     error: ValueError, source: CompoundUnit, target: CompoundUnit
-) -> Exception:
+) -> IncompatibleUnitsError | UnknownUnitError:
     """The exception Python raises for an error of the core registry."""
     if isinstance(error, _CoreUnitMismatchError):
         return IncompatibleUnitsError(source, target)
@@ -305,17 +305,25 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
 
         Args:
         system (UnitSystem | None, optional): The system to check for aliases.
-        use_alias (bool, optional): If True, uses a registered alias if one
-        exists. Defaults to False.
+        Defaults to the active system.
+        use_alias (bool, optional): If True, uses the name the system gives
+        this unit if it has one (``J`` for ``kg·m²/s²``). Defaults to False:
+        a unit prints as the symbols it is made of, whatever it is called.
 
         Returns:
         str: The string representation of the unit.
         """
-        if use_alias and system:
-            try:
-                return system.core_registry.alias_of(self)
-            except _CORE_ERRORS as error:
-                raise _python_error(error, self, self) from error
+        if use_alias:
+            if system is None:
+                try:
+                    system = get_default_system()
+                except RuntimeError:
+                    system = None  # no system, so no names to look up
+            if system is not None:
+                try:
+                    return system.core_registry.alias_of(self)
+                except _CORE_ERRORS as error:
+                    raise _python_error(error, self, self) from error
 
         return super().__str__()
 

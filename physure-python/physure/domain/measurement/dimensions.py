@@ -14,12 +14,10 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
-from physure.core.formatting import to_superscript
-
 if TYPE_CHECKING:
     from typing import Self
 
-from physure._core import RationalUnit
+from physure._core import RationalUnit, formula_text
 from physure.domain.measurement.base_entity import (
     BaseExponentEntity,
     ExponentEntityProtocol,
@@ -106,13 +104,13 @@ class Dimension(BaseExponentEntity):
         if found is not None:
             return cast("Self", found)
 
+        pairs = (
+            (symbol, _pair(value))
+            for symbol, value in (exponents or {}).items()
+        )
         key = tuple(
             sorted(
-                (
-                    (symbol, pair)
-                    for symbol, value in (exponents or {}).items()
-                    if (pair := _pair(value))[0] != 0
-                ),
+                ((symbol, pair) for symbol, pair in pairs if pair[0] != 0),
                 key=_symbol_order,
             )
         )
@@ -151,15 +149,7 @@ class Dimension(BaseExponentEntity):
         """Calculates the analytical string of a dimension."""
         if not key:
             return "Dimensionless"
-        parts = []
-        for symbol, (n, d) in key:
-            if (n, d) == (1, 1):
-                parts.append(symbol)
-            elif d == 1:
-                parts.append(f"{symbol}{to_superscript(n)}")
-            else:
-                parts.append(f"{symbol}^({n}/{d})")
-        return "·".join(parts)
+        return formula_text(list(key))
 
     @classmethod
     def _of(cls, unit: RationalUnit) -> Dimension:
@@ -297,6 +287,6 @@ class Dimension(BaseExponentEntity):
 
 def get_dimension(unit_expression: str) -> Dimension:
     """Returns a Dimension object parsed from a unit expression string."""
-    from physure.application.parsing import parse_unit_string
+    from physure.domain.measurement.unit_text import parse_unit_string
 
     return cast("Dimension", parse_unit_string(unit_expression, Dimension))

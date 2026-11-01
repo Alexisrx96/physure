@@ -23,51 +23,8 @@ impl CodeGenerator for PythonTranspiler {
 
         for stmt in &program.statements {
             match stmt {
-                Statement::Assignment(node) => {
-                    if super::is_definitely_bool(&node.value, &known_bools) {
-                        known_bools.insert(node.name.clone());
-                    } else {
-                        known_bools.remove(&node.name);
-                    }
-                    let stmt_str = self.generate_assignment(node)?;
-                    out.push_str(&stmt_str);
-                    out.push('\n');
-                    out.push_str(&format!("print(f\"{}: {{{}}}\")\n", node.name, sanitize_identifier(&node.name)));
-                }
-                Statement::Expr(expr) => {
-                    match super::as_assert_call(expr, &known_bools) {
-                        Some(super::AssertShape::Bool { condition }) => {
-                            let cond_code = self.generate_expr(condition)?;
-                            out.push_str(&format!("if not ({}): raise AssertionError(\"assertion failed\")\n", cond_code));
-                        }
-                        Some(super::AssertShape::BoolWithMessage { condition, message }) => {
-                            let cond_code = self.generate_expr(condition)?;
-                            let msg_code = self.generate_expr(message)?;
-                            out.push_str(&format!("if not ({}): raise AssertionError({})\n", cond_code, msg_code));
-                        }
-                        Some(super::AssertShape::Quantities { kind, actual, expected }) => {
-                            let a_code = self.generate_expr(actual)?;
-                            let b_code = self.generate_expr(expected)?;
-                            let line = if kind == "assert" {
-                                format!(
-                                    "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(\"assert failed: {{}} != {{}}\".format({a}, {b}))",
-                                    a = a_code, b = b_code
-                                )
-                            } else {
-                                format!(
-                                    "if not ({a}).exact_eq({b}): raise AssertionError(\"exact_assert failed: {{}} != {{}}\".format({a}, {b}))",
-                                    a = a_code, b = b_code
-                                )
-                            };
-                            out.push_str(&line);
-                            out.push('\n');
-                        }
-                        None => {
-                            let expr_str = self.generate_expr(expr)?;
-                            out.push_str(&format!("print({})\n", expr_str));
-                        }
-                    }
-                }
+                Statement::Assignment(node) => out.push_str(&self.assignment_lines(node, &mut known_bools)?),
+                Statement::Expr(expr) => out.push_str(&self.expr_statement_lines(expr, &known_bools)?),
                 _ => {
                     let stmt_str = self.generate_statement(stmt)?;
                     if !stmt_str.is_empty() {
@@ -94,7 +51,58 @@ fn sanitize_identifier(name: &str) -> String {
         .replace('Ω', "omega")
 }
 
+/// An identifier, or the multi-line text a backtick literal holds.
+fn identifier_expr(name: &str) -> String {
+    if name.starts_with('`') || name.contains('\n') {
+        format!("\"\"\"{}\"\"\"", name.trim_matches('`').trim())
+    } else {
+        sanitize_identifier(name)
+    }
+}
+
 impl PythonTranspiler {
+    /// A top-level assignment, followed by the line that prints what it set.
+    fn assignment_lines(&self, node: &AssignmentNode, known_bools: &mut HashSet<String>) -> Result<String, CodegenError> {
+        if super::is_definitely_bool(&node.value, known_bools) {
+            known_bools.insert(node.name.clone());
+        } else {
+            known_bools.remove(&node.name);
+        }
+        let stmt_str = self.generate_assignment(node)?;
+        Ok(format!("{}\nprint(f\"{}: {{{}}}\")\n", stmt_str, node.name, sanitize_identifier(&node.name)))
+    }
+
+    /// A top-level expression: an `assert` call becomes the check it stands for, anything else is printed.
+    fn expr_statement_lines(&self, expr: &Expr, known_bools: &HashSet<String>) -> Result<String, CodegenError> {
+        Ok(match super::as_assert_call(expr, known_bools) {
+            Some(super::AssertShape::Bool { condition }) => {
+                let cond_code = self.generate_expr(condition)?;
+                format!("if not ({}): raise AssertionError(\"assertion failed\")\n", cond_code)
+            }
+            Some(super::AssertShape::BoolWithMessage { condition, message }) => {
+                let cond_code = self.generate_expr(condition)?;
+                let msg_code = self.generate_expr(message)?;
+                format!("if not ({}): raise AssertionError({})\n", cond_code, msg_code)
+            }
+            Some(super::AssertShape::Quantities { kind, actual, expected }) => {
+                let a_code = self.generate_expr(actual)?;
+                let b_code = self.generate_expr(expected)?;
+                if kind == "assert" {
+                    format!(
+                        "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(\"assert failed: {{}} != {{}}\".format({a}, {b}))\n",
+                        a = a_code, b = b_code
+                    )
+                } else {
+                    format!(
+                        "if not ({a}).exact_eq({b}): raise AssertionError(\"exact_assert failed: {{}} != {{}}\".format({a}, {b}))\n",
+                        a = a_code, b = b_code
+                    )
+                }
+            }
+            None => format!("print({})\n", self.generate_expr(expr)?),
+        })
+    }
+
     fn generate_statement(&self, stmt: &Statement) -> Result<String, CodegenError> {
         match stmt {
             Statement::Import(node) => self.generate_import(node),
@@ -185,89 +193,11 @@ impl PythonTranspiler {
     fn generate_expr(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
             Expr::Quantity(node) => self.generate_quantity(node),
-            Expr::Str(text) => {
-                // Not an f-string: `{2 m + 3 m}` is PHS, not Python, so each interpolated
-                // expression is transpiled on its own and concatenated.
-                let parts = super::split_interpolated(text);
-                let mut pieces = Vec::new();
-                for part in &parts {
-                    match part {
-                        super::StrPart::Text(t) => pieces.push(format!("{:?}", t)),
-                        super::StrPart::Expr(e) => pieces.push(format!("str({})", self.generate_expr(e)?)),
-                    }
-                }
-                Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
-            }
+            Expr::Str(text) => self.string_expr(text),
             Expr::Bool(b) => Ok(if *b { "True" } else { "False" }.to_string()),
-            Expr::Identifier(name) => {
-                if name.starts_with('`') || name.contains('\n') {
-                    let clean = name.trim_matches('`').trim();
-                    Ok(format!("\"\"\"{}\"\"\"", clean))
-                } else {
-                    Ok(sanitize_identifier(name))
-                }
-            }
-            Expr::BinaryOp { op, left, right } => {
-                let l_str = self.generate_expr(left)?;
-                if *op == BinaryOp::Convert {
-                    let unit_str = super::expr_to_unit_string(right);
-                    Ok(format!("{}.to(\"{}\")", l_str, unit_str))
-                } else if *op == BinaryOp::Pow {
-                    if let Expr::Quantity(q) = &**right {
-                        if q.unit.is_none() || q.unit.as_deref() == Some("") {
-                            return Ok(format!("({} ** {:?})", l_str, q.magnitude));
-                        }
-                    }
-                    let r_str = self.generate_expr(right)?;
-                    Ok(format!("({} ** {})", l_str, r_str))
-                } else {
-                    let r_str = self.generate_expr(right)?;
-                    let op_str = match op {
-                        BinaryOp::Add => "+",
-                        BinaryOp::Sub => "-",
-                        BinaryOp::Mul => "*",
-                        BinaryOp::Div => "/",
-                        BinaryOp::Pow => unreachable!(),
-                        BinaryOp::Convert => unreachable!(),
-                        BinaryOp::Range => return Err(super::range_is_not_transpilable()),
-                    };
-                    Ok(format!("({} {} {})", l_str, op_str, r_str))
-                }
-            }
-            Expr::FunctionCall { name, args, kwargs } => {
-                if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
-                    let l_str = self.generate_expr(l)?;
-                    let r_str = self.generate_expr(r)?;
-                    return Ok(format!("({} {} {})", l_str, op_sym, r_str));
-                }
-                if let Some(logical) = super::as_logical_op(expr) {
-                    return Ok(match logical {
-                        super::LogicalOp::Not(x) => format!("(not {})", self.generate_expr(x)?),
-                        super::LogicalOp::And(l, r) => format!("({} and {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                        super::LogicalOp::Or(l, r) => format!("({} or {})", self.generate_expr(l)?, self.generate_expr(r)?),
-                    });
-                }
-                if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && matches!(args.len(), 1 | 2) {
-                    return Err(CodegenError::Generic(format!(
-                        "'{}' can only be used as a standalone statement, not nested inside an expression",
-                        name
-                    )));
-                }
-                let mut arg_strs = Vec::new();
-                for (i, arg) in args.iter().enumerate() {
-                    let arg_s = self.generate_expr(arg)?;
-                    if name == "format" && i == 1 && !arg_s.starts_with('"') {
-                        arg_strs.push(format!("\"{}\"", arg_s));
-                    } else {
-                        arg_strs.push(arg_s);
-                    }
-                }
-                for (kwarg_name, kwarg_expr) in kwargs {
-                    let kwarg_s = self.generate_expr(kwarg_expr)?;
-                    arg_strs.push(format!("{}={}", sanitize_identifier(kwarg_name), kwarg_s));
-                }
-                Ok(format!("{}({})", sanitize_identifier(name), arg_strs.join(", ")))
-            }
+            Expr::Identifier(name) => Ok(identifier_expr(name)),
+            Expr::BinaryOp { op, left, right } => self.binary_expr(*op, left, right),
+            Expr::FunctionCall { name, args, kwargs } => self.call_expr(expr, name, args, kwargs),
             Expr::ForExpr { var, iterable, body } => {
                 let it_str = self.generate_expr(iterable)?;
                 let body_str = self.generate_expr(body)?;
@@ -276,6 +206,76 @@ impl PythonTranspiler {
         }
     }
     
+    fn string_expr(&self, text: &str) -> Result<String, CodegenError> {
+        // Not an f-string: `{2 m + 3 m}` is PHS, not Python, so each interpolated
+        // expression is transpiled on its own and concatenated.
+        let parts = super::split_interpolated(text);
+        let mut pieces = Vec::new();
+        for part in &parts {
+            match part {
+                super::StrPart::Text(t) => pieces.push(format!("{:?}", t)),
+                super::StrPart::Expr(e) => pieces.push(format!("str({})", self.generate_expr(e)?)),
+            }
+        }
+        Ok(if pieces.len() == 1 { pieces.remove(0) } else { format!("({})", pieces.join(" + ")) })
+    }
+
+    fn binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr) -> Result<String, CodegenError> {
+        let l_str = self.generate_expr(left)?;
+        let op_str = match op {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Convert => return Ok(format!("{}.to(\"{}\")", l_str, super::expr_to_unit_string(right))),
+            BinaryOp::Pow => {
+                return match right {
+                    Expr::Quantity(q) if q.unit.is_none() || q.unit.as_deref() == Some("") => {
+                        Ok(format!("({} ** {:?})", l_str, q.magnitude))
+                    }
+                    _ => Ok(format!("({} ** {})", l_str, self.generate_expr(right)?)),
+                };
+            }
+            BinaryOp::Range => return Err(super::range_is_not_transpilable()),
+        };
+        Ok(format!("({} {} {})", l_str, op_str, self.generate_expr(right)?))
+    }
+
+    fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {
+        if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
+            let l_str = self.generate_expr(l)?;
+            let r_str = self.generate_expr(r)?;
+            return Ok(format!("({} {} {})", l_str, op_sym, r_str));
+        }
+        if let Some(logical) = super::as_logical_op(expr) {
+            return Ok(match logical {
+                super::LogicalOp::Not(x) => format!("(not {})", self.generate_expr(x)?),
+                super::LogicalOp::And(l, r) => format!("({} and {})", self.generate_expr(l)?, self.generate_expr(r)?),
+                super::LogicalOp::Or(l, r) => format!("({} or {})", self.generate_expr(l)?, self.generate_expr(r)?),
+            });
+        }
+        if (name == "assert" || name == "exact_assert") && kwargs.is_empty() && matches!(args.len(), 1 | 2) {
+            return Err(CodegenError::Generic(format!(
+                "'{}' can only be used as a standalone statement, not nested inside an expression",
+                name
+            )));
+        }
+        let mut arg_strs = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            let arg_s = self.generate_expr(arg)?;
+            if name == "format" && i == 1 && !arg_s.starts_with('"') {
+                arg_strs.push(format!("\"{}\"", arg_s));
+            } else {
+                arg_strs.push(arg_s);
+            }
+        }
+        for (kwarg_name, kwarg_expr) in kwargs {
+            let kwarg_s = self.generate_expr(kwarg_expr)?;
+            arg_strs.push(format!("{}={}", sanitize_identifier(kwarg_name), kwarg_s));
+        }
+        Ok(format!("{}({})", sanitize_identifier(name), arg_strs.join(", ")))
+    }
+
     fn generate_quantity(&self, node: &QuantityNode) -> Result<String, CodegenError> {
         if let Some(reason) = node.asymmetric_refusal() {
             return Err(CodegenError::Generic(reason));

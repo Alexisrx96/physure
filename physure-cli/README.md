@@ -49,15 +49,15 @@ F_e => nN                      # convert on the spot
 F_e: .3e                       # ...or format in scientific notation
 
 # Measurements carry uncertainty through the whole calculation
-velocidad = 25.0 +/- 0.5 m / s
-masa      = 2.0 +/- 0.1 kg
-energia_cinetica = 0.5 * masa * velocidad^2
+speed = 25.0 +/- 0.5 m / s
+mass  = 2.0 +/- 0.1 kg
+kinetic_energy = 0.5 * mass * speed^2
 
 # Assert a measured value against an expected one within N-sigma
 g_exp = 9.81 +/- 0.05 m / s^2
 g_exp == 9.80 m / s^2 +/- 2 sigma
 
-"El radio es {r} y la fuerza es {F_e => nN}"
+"The radius is {r} and the force is {F_e => nN}"
 ```
 
 ```bash
@@ -129,6 +129,72 @@ developer *as* the specification: it shows its work.
   v2) or a Python `.py` extension module by the same syntax — bring your own domain functions
   without forking the interpreter. Scaffold one with `phs new-plugin myplugin --lang rust`.
 
+## Check: dimensions, without running
+
+```bash
+phs check orbit_sim.phs            # file:line: error[dimension-mismatch]: ...
+phs check a.phs b.phs --json       # an array of findings, for tools
+```
+
+`phs check` reads a script and says where a sum, a comparison, a conversion or a call mixes
+incompatible dimensions, where a unit is not in the catalog, and where an absolute temperature
+is used as an interval. It is silent unless the interpreter would refuse the operation: a value it
+cannot type (an imported name, a vector) silences what depends on it. A parameter with a unit
+(`fn f(m: kg, v: m/s)`) is checked at every call; one without takes the dimensions of each call and
+its body is checked for them. The exit code is 1 when there is an error (warnings do not fail it),
+2 when a file cannot be read or does not parse. The language server reports the same findings as
+diagnostics while you type.
+
+## Agents: evaluate with units, as JSON
+
+```bash
+echo 'x = 9.81 +/- 0.02 m/s^2
+x * 2 s' | phs eval -                  # one JSON document on stdout
+phs eval orbit_sim.phs --seed 1 --timeout-ms 2000
+phs unit kWh                            # dimension, kind and alias of a unit
+```
+
+`phs eval` is for text you did not write: a model's equation, a pasted script. It runs in a sandbox: `import`
+finds no file, no native plugin is loaded, the mesh export that writes a file is refused, recursion and the
+native stack are bounded, evaluation stops at `--timeout-ms` (default 5000), the output is capped at 1 MiB, and
+Monte Carlo draws are seeded (`--seed`, default 0) so the same input gives the same answer. There is no flag
+that turns the sandbox off; `phs <script.phs>` is the unrestricted way to run a script.
+
+```json
+{ "ok": true,
+  "results": [
+    { "line": 2, "kind": "quantity", "text": "19.62 ± 0.04 m * s^-1",
+      "value": 19.62, "uncertainty": 0.04, "unit": "m * s^-1", "dimension": "L·T⁻¹" } ],
+  "diagnostics": [ { "line": 5, "severity": "error", "code": "dimension-mismatch", "message": "..." } ] }
+```
+
+- `results` has one item per statement that has a value (`name` for an assignment). `kind` is `quantity`,
+  `number`, `bool`, `string`, `vector` (with every element in `items`), `matrix`, `function`, `equation`,
+  `range`, `plot` or `sigma`. A quantity carries `value`, `uncertainty` and `unit` (an expression the unit
+  parser reads back; the empty string for no unit) as one consistent triple, and its `dimension` as the core
+  writes it (`1` for dimensionless).
+- `diagnostics` merges the static checker (`dimension-mismatch`, `unknown-unit`, `unknown-name`, ...), `syntax`,
+  `runtime`, `limit` (depth, stack, time or output) and `forbidden`. A runtime error on a line the checker
+  already reported is not repeated. After a `limit` the run stops; after any other error it goes on.
+- The exit code is 0 when `ok`, 1 when there is an error, 2 for a usage error or an unreadable file. A watchdog
+  ends the process with a `limit` report if the deadline is not honoured.
+- `phs unit <symbol>` prints `{unit, dimension, kind, linear, alias, simplified}`, or `{"error": ...}` and exit 1.
+- `phs check -` reads the program from stdin, like `phs eval -`.
+
+### As an MCP server
+
+```json
+{ "mcpServers": { "physure": { "command": "phs", "args": ["mcp"] } } }
+```
+
+`phs mcp` speaks the Model Context Protocol over stdio (protocol versions 2024-11-05, 2025-03-26 and 2025-06-18) and
+offers four read-only tools: `evaluate` (the report above, with `source`, optional `seed` and `timeout_ms`), `check`
+(dimension findings without running), `convert` (`value`, `from`, `to`; absolute temperatures included) and
+`describe_unit` (`symbol`), plus the resource `phs://language`, the language reference that `phs doc` writes.
+`evaluate` and `check` run the program in a child `phs` process that is killed if it does not finish, so a crash or a
+hang cannot take the server down; a wrong program is a normal answer (`ok: false`), and `isError` is reserved for the
+tool failing to run.
+
 ## Transpile: verified physics, real starting code
 
 Once a `.phs` script is validated, hand the dev team something they can build on instead of a
@@ -151,6 +217,7 @@ USAGE:
     phs <script.phs> [OPTIONS]
     phs --repl
     phs transpile <script.phs> [--target <rust|python|java>] [--output <file>]
+    phs check <script.phs>... [--json]
     phs register-protocol
     phs new-plugin <name> [--lang <rust|python|both>] [--dir <path>]
 

@@ -25,6 +25,10 @@ pub(crate) enum StepMode {
     Out(usize),
 }
 
+fn module_aliases_unsupported() -> PhysureError {
+    PhysureError::Generic("Module aliases not yet supported by interpreter".into())
+}
+
 impl PhsInterpreter {
     pub fn eval_str(&mut self, code: &str) -> PhysureResult<Vec<PhsValue>> {
         let prog = crate::parse_phs(code)?;
@@ -189,10 +193,12 @@ impl PhsInterpreter {
     }
 
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
         self.eval_statement_with_env_at(stmt, env, 0)
     }
 
     pub(crate) fn eval_statement_with_env_at(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>, line: usize) -> PhysureResult<PhsValue> {
+        self.check_budget()?;
         self.debug_checkpoint(line, env)?;
         match stmt {
             Statement::Assignment(node) => {
@@ -223,6 +229,7 @@ impl PhsInterpreter {
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
                 while is_truthy(&self.eval_expr(cond, env)?) {
+                    self.check_budget()?;
                     if count >= DEFAULT_MAX_LOOP_ITERATIONS {
                         return Err(PhysureError::Generic(format!(
                             "while loop did not converge after {} iterations",
@@ -244,67 +251,13 @@ impl PhsInterpreter {
     /// always on, so this only matters for `calc`/`plot`/`array`), `.phs` modules,
     /// and native plugin stems (`<base_dir>/ext/<stem>.<DLL_EXTENSION>`, dlopen'd lazily).
     fn resolve_use(&self, node: &crate::ast::ImportNode, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
-        use crate::ast::ImportSpecifier;
-
         if let Some(members) = crate::builtins::domain_members(&node.path) {
-            let domain: &'static str = match node.path.as_str() {
-                "calc" => "calc",
-                "plot" => "plot",
-                "array" => "array",
-                _ => unreachable!("domain_members returned Some for unknown domain"),
-            };
-            let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
-            match &node.specifier {
-                ImportSpecifier::Wildcard => {
-                    for &member in members {
-                        unlocked.insert(member.to_string(), (domain, member.to_string()));
-                    }
-                }
-                ImportSpecifier::Symbols(syms) => {
-                    for sym in syms {
-                        if !members.contains(&sym.name.as_str()) {
-                            return Err(PhysureError::Generic(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
-                        }
-                        let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                        unlocked.insert(call_name, (domain, sym.name.clone()));
-                    }
-                }
-                ImportSpecifier::ModuleAlias(_alias) => {
-                    return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
-                }
-            }
+            self.unlock_domain(node, members)?;
             return Ok(PhsValue::None);
         }
 
         if let Ok(export) = self.resolver.resolve(&node.path) {
-            match &node.specifier {
-                ImportSpecifier::Wildcard => {
-                    for (name, expr) in export.symbols {
-                        let val = self.eval_expr(&expr, env)?;
-                        env.insert(name, val);
-                    }
-                    for (name, func) in export.functions {
-                        env.insert(name, PhsValue::Function(func));
-                    }
-                }
-                ImportSpecifier::Symbols(syms) => {
-                    for sym in syms {
-                        if let Some(expr) = export.symbols.get(&sym.name) {
-                            let val = self.eval_expr(expr, env)?;
-                            let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                            env.insert(target_name, val);
-                        } else if let Some(func) = export.functions.get(&sym.name) {
-                            let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                            env.insert(target_name, PhsValue::Function(func.clone()));
-                        } else {
-                            return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, node.path)));
-                        }
-                    }
-                }
-                ImportSpecifier::ModuleAlias(_alias) => {
-                    return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
-                }
-            }
+            self.import_module(node, &export, env)?;
             return Ok(PhsValue::None);
         }
 
@@ -318,6 +271,85 @@ impl PhsInterpreter {
         }
 
         Err(PhysureError::Generic(format!("No such module or domain '{}'", node.path)))
+    }
+
+    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable.
+    fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str]) -> PhysureResult<()> {
+        use crate::ast::ImportSpecifier;
+
+        let domain: &'static str = match node.path.as_str() {
+            "calc" => "calc",
+            "plot" => "plot",
+            "array" => "array",
+            _ => unreachable!("domain_members returned Some for unknown domain"),
+        };
+        let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
+        match &node.specifier {
+            ImportSpecifier::Wildcard => {
+                for &member in members {
+                    unlocked.insert(member.to_string(), (domain, member.to_string()));
+                }
+            }
+            ImportSpecifier::Symbols(syms) => {
+                for sym in syms {
+                    if !members.contains(&sym.name.as_str()) {
+                        return Err(PhysureError::Generic(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
+                    }
+                    let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                    unlocked.insert(call_name, (domain, sym.name.clone()));
+                }
+            }
+            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        }
+        Ok(())
+    }
+
+    /// `use "module"`: binds the module's exported symbols (evaluated) and functions in `env`.
+    fn import_module(
+        &self,
+        node: &crate::ast::ImportNode,
+        export: &crate::resolver::ModuleExport,
+        env: &mut HashMap<String, PhsValue>,
+    ) -> PhysureResult<()> {
+        use crate::ast::ImportSpecifier;
+
+        match &node.specifier {
+            ImportSpecifier::Wildcard => {
+                for (name, expr) in &export.symbols {
+                    let val = self.eval_expr(expr, env)?;
+                    env.insert(name.clone(), val);
+                }
+                for (name, func) in &export.functions {
+                    env.insert(name.clone(), PhsValue::Function(func.clone()));
+                }
+            }
+            ImportSpecifier::Symbols(syms) => {
+                for sym in syms {
+                    self.import_symbol(sym, &node.path, export, env)?;
+                }
+            }
+            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        }
+        Ok(())
+    }
+
+    fn import_symbol(
+        &self,
+        sym: &crate::ast::ImportSymbol,
+        module: &str,
+        export: &crate::resolver::ModuleExport,
+        env: &mut HashMap<String, PhsValue>,
+    ) -> PhysureResult<()> {
+        let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+        if let Some(expr) = export.symbols.get(&sym.name) {
+            let val = self.eval_expr(expr, env)?;
+            env.insert(target_name, val);
+        } else if let Some(func) = export.functions.get(&sym.name) {
+            env.insert(target_name, PhsValue::Function(func.clone()));
+        } else {
+            return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, module)));
+        }
+        Ok(())
     }
 
     /// Installs the requested (possibly aliased) subset of `functions` into
@@ -340,9 +372,7 @@ impl PhsInterpreter {
                     dynamic.insert(target_name, f.clone());
                 }
             }
-            ImportSpecifier::ModuleAlias(_alias) => {
-                return Err(PhysureError::Generic("Module aliases not yet supported by interpreter".into()));
-            }
+            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
         }
         Ok(())
     }

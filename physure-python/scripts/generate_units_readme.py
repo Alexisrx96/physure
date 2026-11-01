@@ -35,6 +35,10 @@ def generate_units_markdown():
         sym = parts[0]
         factor = parts[1]
         md.append(f"| {pref_name} | `{sym}` | {factor} |")
+    md.append(
+        "\nThe micro sign, `µ` (U+00B5, as a keyboard types it) or `μ` (U+03BC, the Greek letter), is read as `u`: "
+        "`µm` is `um`. A fractional power is written `s^(1/2)` and a whole one with superscripts, `m²`."
+    )
     md.append("\n")
 
     # 3. Units grouped by dimension
