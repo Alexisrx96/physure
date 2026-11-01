@@ -35,7 +35,7 @@ Every break traced to its physure source line (`TORCH_LOGS=graph_breaks`):
 | `UnitRegistry.kind_of` | `domain/measurement/units.py:232`, from `_is_absolute()` in every `*` and `/` | call into a Rust object |
 | `UnitRegistry.dimension_of` | `units.py:112`, from `Quantity.__post_init__` on every creation | call into a Rust object |
 | `RationalUnit.__new__` | `quantity.py:201` (`_CoreRationalUnit(dims)` in `Quantity.__new__`) and `quantity.py:258` (`getattr(u, "dimensions")` on the core's unit in `__init__`) | construction of a Rust object |
-| `parse_unit_expression` | `application/parsing.py:24` (a unit string in `.to('km')`) | call into a Rust function |
+| `parse_unit_expression` | `domain/measurement/unit_text.py` (`_native_parse`; `application/parsing.py` when measured, moved by F2) (a unit string in `.to('km')`) | call into a Rust function |
 | `ContextVar.get` | `application/context.py:272` (`get_uncertainty_model`) | Python state |
 | `Tensor.item()` | `backends/torch_backend.py:265` from `if not backend.any(mask)` in `Uncertainty.from_standard` (`uncertainty.py:127`) | a branch on tensor data |
 
