@@ -216,75 +216,72 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitPowers<'local>(
 /// (numerator over denominator, as the WASM binding returns them) when it is true.
 fn unit_exponent_map<'local>(mut env: JNIEnv<'local>, registry_handle: jlong, expr: JString<'local>, exact: bool) -> jobject {
     let reg = get_registry(registry_handle);
-    let expr_str: String = match env.get_string(&expr) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Invalid JNI string: {}", e));
-            return std::ptr::null_mut();
+    match exponent_map(&mut env, reg, &expr, exact) {
+        Ok(map) => map.into_raw(),
+        Err(failure) => {
+            // a failure with a message is a PhysureException; one without is a JNI call that already left its own
+            if let Some(message) = failure {
+                throw_physure_exception(&mut env, &message);
+            }
+            std::ptr::null_mut()
         }
-    };
+    }
+}
 
-    let unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&expr_str, &reg) {
-        Ok(u) => u,
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Unit parse error for '{}': {}", expr_str, e));
-            return std::ptr::null_mut();
-        }
-    };
-
-    let map_class = match env.find_class("java/util/HashMap") {
-        Ok(c) => c,
-        Err(_) => return std::ptr::null_mut(),
-    };
-
-    let map_obj = match env.new_object(map_class, "()V", &[]) {
-        Ok(o) => o,
-        Err(_) => return std::ptr::null_mut(),
-    };
+/// The map `unit_exponent_map` returns, or why there is none (`Some(message)` to throw, `None` to just return null).
+fn exponent_map<'local>(
+    env: &mut JNIEnv<'local>,
+    reg: &UnitRegistry,
+    expr: &JString<'local>,
+    exact: bool,
+) -> Result<JObject<'local>, Option<String>> {
+    let expr_str: String = env.get_string(expr).map_err(|e| Some(format!("Invalid JNI string: {}", e)))?.into();
+    let unit = physure_core::units::parser::Parser::parse_expression_with_registry(&expr_str, reg)
+        .map_err(|e| Some(format!("Unit parse error for '{}': {}", expr_str, e)))?;
+    let map_class = env.find_class("java/util/HashMap").map_err(|_| None)?;
+    let map_obj = env.new_object(map_class, "()V", &[]).map_err(|_| None)?;
 
     if !exact {
         if let Some((symbol, (num, den))) = unit.dimensions.iter().find(|(_, (_, den))| *den != 1) {
-            throw_physure_exception(
-                &mut env,
-                &format!(
-                    "Unit '{}' has the fractional exponent {}/{} on '{}': getUnitExponents returns whole numbers, use getUnitPowers",
-                    expr_str, num, den, symbol
-                ),
-            );
-            return std::ptr::null_mut();
+            return Err(Some(format!(
+                "Unit '{}' has the fractional exponent {}/{} on '{}': getUnitExponents returns whole numbers, use getUnitPowers",
+                expr_str, num, den, symbol
+            )));
         }
     }
 
-    let value_class = match env.find_class(if exact { "java/lang/Double" } else { "java/lang/Integer" }) {
-        Ok(c) => c,
-        Err(_) => return std::ptr::null_mut(),
-    };
-
+    let value_class = env
+        .find_class(if exact { "java/lang/Double" } else { "java/lang/Integer" })
+        .map_err(|_| None)?;
     for (symbol, (num, den)) in &unit.dimensions {
-        let key_jstr = match env.new_string(symbol) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        let value = if exact {
-            env.new_object(&value_class, "(D)V", &[JValue::Double(*num as f64 / *den as f64)])
-        } else {
-            env.new_object(&value_class, "(I)V", &[JValue::Int(*num as i32)])
-        };
-        let val_obj = match value {
-            Ok(o) => o,
-            Err(_) => continue,
-        };
-
-        let _ = env.call_method(
-            &map_obj,
-            "put",
-            "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-            &[JValue::Object(&key_jstr), JValue::Object(&val_obj)],
-        );
+        // an entry the JVM cannot build is left out
+        let _ = put_exponent(env, &map_obj, &value_class, symbol, (*num, *den), exact);
     }
+    Ok(map_obj)
+}
 
-    map_obj.into_raw()
+/// Puts `symbol -> exponent` in the Java map: a `Double` (numerator over denominator) when `exact`, an `Integer` if not.
+fn put_exponent<'local>(
+    env: &mut JNIEnv<'local>,
+    map: &JObject<'local>,
+    value_class: &JClass<'local>,
+    symbol: &str,
+    (num, den): (i64, i64),
+    exact: bool,
+) -> Result<(), jni::errors::Error> {
+    let key = env.new_string(symbol)?;
+    let value = if exact {
+        env.new_object(value_class, "(D)V", &[JValue::Double(num as f64 / den as f64)])?
+    } else {
+        env.new_object(value_class, "(I)V", &[JValue::Int(num as i32)])?
+    };
+    env.call_method(
+        map,
+        "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+        &[JValue::Object(&key), JValue::Object(&value)],
+    )?;
+    Ok(())
 }
 
 #[no_mangle]
@@ -386,54 +383,40 @@ fn evaluate_expression<'local>(
     expr: JString<'local>,
 ) -> jstring {
     let interpreter = get_interpreter(interpreter_handle);
-    let expr_str: String = match env.get_string(&expr) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Invalid JNI string: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-
-    let statements = match physure_script::parse_phs(&expr_str) {
-        Ok(s) => s,
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Syntax error: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-
-    let mut result_str = String::new();
-    for (idx, stmt) in statements.statements.iter().enumerate() {
-        if idx > 0 {
-            result_str.push_str("\n");
-        }
-        match interpreter.run_statement(stmt) {
-            Ok(val) => {
-                match val {
-                    physure_script::PhsValue::None => {
-                        if let physure_script::Statement::Assignment(node) = stmt {
-                            if let Some(v) = interpreter.get_var(&node.name) {
-                                result_str.push_str(&v.to_string());
-                            } else {
-                                result_str.push_str("None");
-                            }
-                        } else {
-                            result_str.push_str("None");
-                        }
-                    }
-                    other => result_str.push_str(&other.to_string()),
-                }
-            }
-            Err(e) => {
-                throw_physure_exception(&mut env, &format!("{}", e));
-                return std::ptr::null_mut();
-            }
+    match evaluated_text(&mut env, interpreter, &expr) {
+        Ok(text) => env.new_string(text).map_or(std::ptr::null_mut(), |s| s.into_raw()),
+        Err(message) => {
+            throw_physure_exception(&mut env, &message);
+            std::ptr::null_mut()
         }
     }
+}
 
-    match env.new_string(result_str) {
-        Ok(s) => s.into_raw(),
-        Err(_) => std::ptr::null_mut(),
+/// The PHS source Java passed, or the message of the exception to throw.
+fn source_text(env: &mut JNIEnv, expr: &JString) -> Result<String, String> {
+    env.get_string(expr).map(String::from).map_err(|e| format!("Invalid JNI string: {}", e))
+}
+
+/// Runs the source and returns the value of each statement, one per line.
+fn evaluated_text(env: &mut JNIEnv, interpreter: &mut PhsInterpreter, expr: &JString) -> Result<String, String> {
+    let source = source_text(env, expr)?;
+    let program = physure_script::parse_phs(&source).map_err(|e| format!("Syntax error: {}", e))?;
+    let mut lines = Vec::new();
+    for stmt in &program.statements {
+        let value = interpreter.run_statement(stmt).map_err(|e| e.to_string())?;
+        lines.push(match value {
+            physure_script::PhsValue::None => assigned_value(interpreter, stmt).map_or("None".to_string(), |v| v.to_string()),
+            other => other.to_string(),
+        });
+    }
+    Ok(lines.join("\n"))
+}
+
+/// What a statement that produced no value left behind: the variable an assignment set.
+fn assigned_value(interpreter: &PhsInterpreter, stmt: &physure_script::Statement) -> Option<physure_script::PhsValue> {
+    match stmt {
+        physure_script::Statement::Assignment(node) => interpreter.get_var(&node.name).map(|v| v.clone()),
+        _ => None,
     }
 }
 
@@ -460,72 +443,39 @@ fn evaluate_quantity<'local>(
     expr: JString<'local>,
 ) -> jobject {
     let interpreter = get_interpreter(interpreter_handle);
-    let expr_str: String = match env.get_string(&expr) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Invalid JNI string: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-
-    let program = match physure_script::parse_phs(&expr_str) {
-        Ok(p) => p,
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Syntax error: {}", e));
-            return std::ptr::null_mut();
-        }
-    };
-
-    let mut last = physure_script::PhsValue::None;
-    for stmt in &program.statements {
-        match interpreter.run_statement(stmt) {
-            Ok(physure_script::PhsValue::None) => {
-                // an assignment's value is the variable it set
-                last = match stmt {
-                    physure_script::Statement::Assignment(node) => interpreter.get_var(&node.name).map(|v| v.clone()).unwrap_or(physure_script::PhsValue::None),
-                    _ => physure_script::PhsValue::None,
-                };
-            }
-            Ok(value) => last = value,
-            Err(e) => {
-                throw_physure_exception(&mut env, &format!("{}", e));
-                return std::ptr::null_mut();
-            }
-        }
-    }
-
-    let quantity = match last {
-        physure_script::PhsValue::Quantity(q) => q,
-        physure_script::PhsValue::Number(n) => match Quantity::new(n, "") {
-            Ok(q) => q,
-            Err(e) => {
-                throw_physure_exception(&mut env, &format!("{}", e));
-                return std::ptr::null_mut();
-            }
-        },
-        physure_script::PhsValue::Bool(b) => match Quantity::new(if b { 1.0 } else { 0.0 }, "") {
-            Ok(q) => q,
-            Err(e) => {
-                throw_physure_exception(&mut env, &format!("{}", e));
-                return std::ptr::null_mut();
-            }
-        },
-        physure_script::PhsValue::None => {
-            throw_physure_exception(&mut env, "The expression produced no value");
-            return std::ptr::null_mut();
-        }
-        other => {
-            throw_physure_exception(&mut env, &format!("The expression did not produce a quantity: {}", other));
-            return std::ptr::null_mut();
-        }
-    };
-
-    match make_java_quantity(&mut env, quantity) {
+    let built = last_quantity(&mut env, interpreter, &expr)
+        .and_then(|q| make_java_quantity(&mut env, q).map_err(|e| format!("Failed to build Java Quantity: {}", e)));
+    match built {
         Ok(j_q) => j_q.into_raw(),
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
+        Err(message) => {
+            throw_physure_exception(&mut env, &message);
             std::ptr::null_mut()
         }
+    }
+}
+
+/// Runs the source and returns its last value as a quantity, or the message of the exception to throw.
+fn last_quantity(env: &mut JNIEnv, interpreter: &mut PhsInterpreter, expr: &JString) -> Result<Quantity, String> {
+    let source = source_text(env, expr)?;
+    let program = physure_script::parse_phs(&source).map_err(|e| format!("Syntax error: {}", e))?;
+    let mut last = physure_script::PhsValue::None;
+    for stmt in &program.statements {
+        last = match interpreter.run_statement(stmt).map_err(|e| e.to_string())? {
+            // an assignment's value is the variable it set
+            physure_script::PhsValue::None => assigned_value(interpreter, stmt).unwrap_or(physure_script::PhsValue::None),
+            value => value,
+        };
+    }
+    as_quantity(last)
+}
+
+fn as_quantity(value: physure_script::PhsValue) -> Result<Quantity, String> {
+    match value {
+        physure_script::PhsValue::Quantity(q) => Ok(q),
+        physure_script::PhsValue::Number(n) => Quantity::new(n, "").map_err(|e| e.to_string()),
+        physure_script::PhsValue::Bool(b) => Quantity::new(if b { 1.0 } else { 0.0 }, "").map_err(|e| e.to_string()),
+        physure_script::PhsValue::None => Err("The expression produced no value".to_string()),
+        other => Err(format!("The expression did not produce a quantity: {}", other)),
     }
 }
 
