@@ -8,15 +8,15 @@ use crate::katex_assets::{KATEX_CSS, KATEX_JS, AUTO_RENDER_JS};
 use crate::config::{I18nLabels, PhysureConfig};
 use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text, resolve_comparison_latex};
 
-struct ScriptMetadata {
-    title: Option<String>,
-    author: Option<String>,
-    institution: Option<String>,
-    date: Option<String>,
-    abstract_text: Option<String>,
+pub(crate) struct ScriptMetadata {
+    pub(crate) title: Option<String>,
+    pub(crate) author: Option<String>,
+    pub(crate) institution: Option<String>,
+    pub(crate) date: Option<String>,
+    pub(crate) abstract_text: Option<String>,
 }
 
-fn extract_metadata(code: &str) -> ScriptMetadata {
+pub(crate) fn extract_metadata(code: &str) -> ScriptMetadata {
     let mut meta = ScriptMetadata {
         title: None,
         author: None,
@@ -41,7 +41,7 @@ fn extract_metadata(code: &str) -> ScriptMetadata {
     meta
 }
 
-fn escape_html(input: &str) -> String {
+pub(crate) fn escape_html(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -79,7 +79,7 @@ fn base64_encode(input: &str) -> String {
 
 /// `format_float`/`gum_round` both hand back plain-decimal or `1.23e4`-style strings; this
 /// turns the latter into `1.23 \times 10^{4}` for LaTeX.
-fn sci_notation_to_latex(mut s: String) -> String {
+pub(crate) fn sci_notation_to_latex(mut s: String) -> String {
     if s.contains('e') || s.contains('E') {
         let parts: Vec<&str> = s.split(['e', 'E']).collect();
         if parts.len() == 2 {
@@ -89,89 +89,174 @@ fn sci_notation_to_latex(mut s: String) -> String {
     s
 }
 
+/// A measurement as LaTeX: its value (GUM-rounded with its uncertainty, if it has one), then its unit.
+pub(crate) fn quantity_latex(q: &physure_core::Quantity, precision_override: Option<u32>) -> String {
+    let std_dev = q.value.std_dev();
+    let val_s = if std_dev > 0.0 {
+        // GUM rounding correlates the two, so both come from one call rather than
+        // each being formatted to its own independent precision.
+        let (mean_s, unc_s) = physure_core::quantity::gum_round(q.value.mean(), std_dev, precision_override);
+        format!("({} \\pm {})", sci_notation_to_latex(mean_s), sci_notation_to_latex(unc_s))
+    } else {
+        match precision_override {
+            Some(n) => sci_notation_to_latex(format!("{:.*}", n as usize, q.value.mean())),
+            None => sci_notation_to_latex(physure_core::quantity::format_float(q.value.mean())),
+        }
+    };
+    let u_s = unit_to_latex(&q.unit.__repr__());
+    if u_s.is_empty() {
+        format!("= {}", val_s)
+    } else {
+        format!("= {}\\; {}", val_s, u_s)
+    }
+}
+
+/// A vector as LaTeX: all of it, or its first three items, an ellipsis and the last when it is longer than four.
+fn vector_latex(v: &[PhsValue], i18n: &I18nLabels) -> String {
+    let items: Vec<String> = v.iter().map(|item| {
+        let s = format_val_latex(item, i18n, None);
+        s.trim_start_matches("= ").to_string()
+    }).collect();
+    if items.len() > 4 {
+        format!("= [{}, \\dots, {}]", items[..3].join(", "), items.last().unwrap_or(&String::new()))
+    } else {
+        format!("= [{}]", items.join(", "))
+    }
+}
+
+/// Any other value, from the text it prints as: a Bool, a number with a unit, or else raw math.
+pub(crate) fn printed_value_latex(val: &PhsValue, i18n: &I18nLabels) -> String {
+    let raw = val.to_string();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed == "True" || trimmed == "False" {
+        return format!("= \\text{{{}}}", trimmed);
+    }
+
+    let mut parts = trimmed.splitn(2, ' ');
+    let first = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("").trim();
+
+    let Ok(num) = first.parse::<f64>() else {
+        return format!("= {}", render_raw_math(trimmed, i18n));
+    };
+    let val_s = sci_notation_to_latex(physure_core::quantity::format_float(num));
+    if rest.is_empty() {
+        format!("= {}", val_s)
+    } else {
+        format!("= {}\\; {}", val_s, unit_to_latex(rest))
+    }
+}
+
 fn format_val_latex(val: &PhsValue, i18n: &I18nLabels, precision_override: Option<u32>) -> String {
     match val {
-        PhsValue::Quantity(q) => {
-            let std_dev = q.value.std_dev();
-            let val_s = if std_dev > 0.0 {
-                // GUM rounding correlates the two, so both come from one call rather than
-                // each being formatted to its own independent precision.
-                let (mean_s, unc_s) = physure_core::quantity::gum_round(q.value.mean(), std_dev, precision_override);
-                format!("({} \\pm {})", sci_notation_to_latex(mean_s), sci_notation_to_latex(unc_s))
-            } else {
-                match precision_override {
-                    Some(n) => sci_notation_to_latex(format!("{:.*}", n as usize, q.value.mean())),
-                    None => sci_notation_to_latex(physure_core::quantity::format_float(q.value.mean())),
-                }
-            };
-            let u_s = unit_to_latex(&q.unit.__repr__());
-            if u_s.is_empty() {
-                format!("= {}", val_s)
-            } else {
-                format!("= {}\\; {}", val_s, u_s)
-            }
-        }
-        PhsValue::Number(n) => {
-            let mut s = physure_core::quantity::format_float(*n);
-            if s.contains('e') || s.contains('E') {
-                let parts: Vec<&str> = s.split(['e', 'E']).collect();
-                if parts.len() == 2 {
-                    s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
-                }
-            }
-            format!("= {}", s)
-        }
+        PhsValue::Quantity(q) => quantity_latex(q, precision_override),
+        PhsValue::Number(n) => format!("= {}", sci_notation_to_latex(physure_core::quantity::format_float(*n))),
         PhsValue::Bool(b) => format!("= \\text{{{}}}", if *b { "True" } else { "False" }),
-        PhsValue::Vector(v) => {
-            let items: Vec<String> = v.iter().map(|item| {
-                let s = format_val_latex(item, i18n, None);
-                s.trim_start_matches("= ").to_string()
-            }).collect();
-            if items.len() > 4 {
-                format!("= [{}, \\dots, {}]", items[..3].join(", "), items.last().unwrap_or(&String::new()))
-            } else {
-                format!("= [{}]", items.join(", "))
-            }
-        },
+        PhsValue::Vector(v) => vector_latex(v, i18n),
         PhsValue::Function(func) => {
             match func.body_stmts.last() {
                 Some(physure_script::ast::Statement::Expr(e)) => format!("= {}", format_expr_latex_summary(e, i18n)),
                 _ => format!("= \\text{{{}}}", escape_latex_text(&func.name)),
             }
         }
-        _ => {
-            let raw = val.to_string();
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return String::new();
-            }
-            if trimmed == "True" || trimmed == "False" {
-                return format!("= \\text{{{}}}", trimmed);
-            }
+        _ => printed_value_latex(val, i18n),
+    }
+}
 
-            let mut parts = trimmed.splitn(2, ' ');
-            let first = parts.next().unwrap_or("");
-            let rest = parts.next().unwrap_or("").trim();
+/// A figure: a 3D plot (an HTML page) in a frame of its own, any other plot as the SVG itself.
+fn plot_figure_html(p_title: &str, svg: &str, i18n: &I18nLabels, number: usize) -> String {
+    let trimmed_svg = svg.trim_start();
+    if trimmed_svg.starts_with("<!DOCTYPE") || trimmed_svg.starts_with("<html") {
+        let b64 = base64_encode(svg);
+        format!(
+            r#"<figure class="latex-figure native-3d-figure">
+                            <div class="fig-frame-3d">
+                                <iframe src="data:text/html;charset=utf-8;base64,{}" style="width: 100%; height: 100%; border: none;" sandbox="allow-scripts allow-same-origin"></iframe>
+                            </div>
+                            <figcaption class="fig-caption">
+                                <strong>{} {}.</strong> {}.
+                            </figcaption>
+                        </figure>"#,
+            b64, i18n.fig_prefix, number, escape_html(p_title)
+        )
+    } else {
+        format!(
+            r#"<figure class="latex-figure">
+                            <div class="fig-frame">
+                                {}
+                            </div>
+                            <figcaption class="fig-caption">
+                                <strong>{} {}.</strong> {}.
+                            </figcaption>
+                        </figure>"#,
+            svg, i18n.fig_prefix, number, escape_html(p_title)
+        )
+    }
+}
 
-            if let Ok(num) = first.parse::<f64>() {
-                let mut val_s = physure_core::quantity::format_float(num);
-                if val_s.contains('e') || val_s.contains('E') {
-                    let p: Vec<&str> = val_s.split(['e', 'E']).collect();
-                    if p.len() == 2 {
-                        val_s = format!("{} \\times 10^{{{}}}", p[0], p[1].trim_start_matches('+'));
-                    }
-                }
-                if !rest.is_empty() {
-                    let u_s = unit_to_latex(rest);
-                    format!("= {}\\; {}", val_s, u_s)
-                } else {
-                    format!("= {}", val_s)
-                }
-            } else {
-                format!("= {}", render_raw_math(trimmed, i18n))
-            }
+/// The math of a step: a comparison with its verdict, or the expression followed by its value.
+fn step_math_latex(step: &ExecutionStep, i18n: &I18nLabels) -> String {
+    let is_true = matches!(&step.value, PhsValue::Quantity(q) if q.value.mean() > 0.5)
+        || matches!(&step.value, PhsValue::Bool(true));
+
+    if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, i18n) {
+        return cmp;
+    }
+    let mut eval_latex = format_val_latex(&step.value, i18n, step.precision_override);
+    if !step.latex_expr.is_empty() && eval_latex.starts_with("= ") {
+        let trimmed_expr = step.latex_expr.trim_end();
+        if trimmed_expr.ends_with('=') || trimmed_expr.ends_with("\\Rightarrow") {
+            eval_latex = eval_latex.trim_start_matches("= ").to_string();
         }
     }
+    if step.latex_expr.is_empty() {
+        eval_latex
+    } else {
+        format!("{} {}", step.latex_expr, eval_latex)
+    }
+}
+
+/// The body of the manuscript: prose paragraphs, numbered figures and numbered equations, in the order of the steps.
+fn manuscript_content_html(steps: &[ExecutionStep], i18n: &I18nLabels) -> String {
+    let mut content_html = String::new();
+    let mut eq_counter = 1;
+    let mut fig_counter = 1;
+
+    for step in steps.iter() {
+        if step.is_display_text {
+            if let PhsValue::String(ref text) = step.value {
+                content_html.push_str(&format!(
+                    r#"<div class="latex-prose">
+                        <p>{}</p>
+                    </div>"#,
+                    escape_html(text).replace("\n", "<br/>")
+                ));
+            }
+            continue;
+        }
+
+        if let PhsValue::Plot(PlotData { title: p_title, svg, .. }) = &step.value {
+            content_html.push_str(&plot_figure_html(p_title, svg, i18n, fig_counter));
+            fig_counter += 1;
+            continue;
+        }
+
+        let math_body = step_math_latex(step, i18n);
+        let eq_num = eq_counter;
+        eq_counter += 1;
+
+        content_html.push_str(&format!(
+            r#"<div class="latex-eq-container">
+                        <div class="latex-eq-main">\[ {} \]</div>
+                        <div class="latex-eq-num">({})</div>
+                    </div>"#,
+            math_body, eq_num
+        ));
+    }
+    content_html
 }
 
 pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &str, steps: &[ExecutionStep], _vars: &HashMap<String, PhsValue>) -> Result<(), Box<dyn std::error::Error>> {
@@ -198,87 +283,7 @@ pub fn open_standalone_html(title: &str, output_path: &std::path::Path, code: &s
         );
     }
 
-    let mut content_html = String::new();
-    let mut eq_counter = 1;
-    let mut fig_counter = 1;
-
-    for step in steps.iter() {
-        if step.is_display_text {
-            if let PhsValue::String(ref text) = step.value {
-                content_html.push_str(&format!(
-                    r#"<div class="latex-prose">
-                        <p>{}</p>
-                    </div>"#,
-                    escape_html(text).replace("\n", "<br/>")
-                ));
-            }
-            continue;
-        }
-
-        match &step.value {
-            PhsValue::Plot(PlotData { title: p_title, svg, .. }) => {
-                let trimmed_svg = svg.trim_start();
-                if trimmed_svg.starts_with("<!DOCTYPE") || trimmed_svg.starts_with("<html") {
-                    let b64 = base64_encode(svg);
-                    content_html.push_str(&format!(
-                        r#"<figure class="latex-figure native-3d-figure">
-                            <div class="fig-frame-3d">
-                                <iframe src="data:text/html;charset=utf-8;base64,{}" style="width: 100%; height: 100%; border: none;" sandbox="allow-scripts allow-same-origin"></iframe>
-                            </div>
-                            <figcaption class="fig-caption">
-                                <strong>{} {}.</strong> {}.
-                            </figcaption>
-                        </figure>"#,
-                        b64, i18n.fig_prefix, fig_counter, escape_html(p_title)
-                    ));
-                } else {
-                    content_html.push_str(&format!(
-                        r#"<figure class="latex-figure">
-                            <div class="fig-frame">
-                                {}
-                            </div>
-                            <figcaption class="fig-caption">
-                                <strong>{} {}.</strong> {}.
-                            </figcaption>
-                        </figure>"#,
-                        svg, i18n.fig_prefix, fig_counter, escape_html(p_title)
-                    ));
-                }
-                fig_counter += 1;
-            }
-            _ => {
-                let is_true = matches!(&step.value, PhsValue::Quantity(q) if q.value.mean() > 0.5)
-                    || matches!(&step.value, PhsValue::Bool(true));
-
-                let math_body = if let Some(cmp) = resolve_comparison_latex(&step.latex_expr, is_true, &i18n) {
-                    cmp
-                } else {
-                    let mut eval_latex = format_val_latex(&step.value, &i18n, step.precision_override);
-                    if !step.latex_expr.is_empty() && eval_latex.starts_with("= ") {
-                        let trimmed_expr = step.latex_expr.trim_end();
-                        if trimmed_expr.ends_with('=') || trimmed_expr.ends_with("\\Rightarrow") {
-                            eval_latex = eval_latex.trim_start_matches("= ").to_string();
-                        }
-                    }
-                    if step.latex_expr.is_empty() {
-                        eval_latex
-                    } else {
-                        format!("{} {}", step.latex_expr, eval_latex)
-                    }
-                };
-                let eq_num = eq_counter;
-                eq_counter += 1;
-
-                content_html.push_str(&format!(
-                    r#"<div class="latex-eq-container">
-                        <div class="latex-eq-main">\[ {} \]</div>
-                        <div class="latex-eq-num">({})</div>
-                    </div>"#,
-                    math_body, eq_num
-                ));
-            }
-        }
-    }
+    let content_html = manuscript_content_html(steps, &i18n);
 
     let html_content = format!(r#"<!DOCTYPE html>
 <html lang="{}">

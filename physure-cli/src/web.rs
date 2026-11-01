@@ -1,97 +1,17 @@
 use std::collections::HashMap;
 use tiny_http::{Response, Server};
 use physure_script::value::{PhsValue, PlotData};
-use physure_script::ast::unit_to_latex;
 use crate::step::ExecutionStep;
 use crate::katex_assets::{KATEX_CSS, KATEX_JS, AUTO_RENDER_JS};
 use crate::config::{I18nLabels, PhysureConfig};
-use crate::latex::{render_raw_math, format_expr_latex_summary, escape_latex_text, resolve_comparison_latex};
+use crate::latex::{format_expr_latex_summary, escape_latex_text, resolve_comparison_latex};
+use crate::html::{escape_html, extract_metadata, printed_value_latex, quantity_latex, sci_notation_to_latex};
 
-struct ScriptMetadata {
-    title: Option<String>,
-    author: Option<String>,
-    institution: Option<String>,
-    date: Option<String>,
-    abstract_text: Option<String>,
-}
-
-fn extract_metadata(code: &str) -> ScriptMetadata {
-    let mut meta = ScriptMetadata {
-        title: None,
-        author: None,
-        institution: None,
-        date: None,
-        abstract_text: None,
-    };
-    for line in code.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("# @title:") {
-            meta.title = Some(trimmed.trim_start_matches("# @title:").trim().to_string());
-        } else if trimmed.starts_with("# @author:") {
-            meta.author = Some(trimmed.trim_start_matches("# @author:").trim().to_string());
-        } else if trimmed.starts_with("# @institution:") {
-            meta.institution = Some(trimmed.trim_start_matches("# @institution:").trim().to_string());
-        } else if trimmed.starts_with("# @date:") {
-            meta.date = Some(trimmed.trim_start_matches("# @date:").trim().to_string());
-        } else if trimmed.starts_with("# @abstract:") {
-            meta.abstract_text = Some(trimmed.trim_start_matches("# @abstract:").trim().to_string());
-        }
-    }
-    meta
-}
-
-fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// `format_float`/`gum_round` both hand back plain-decimal or `1.23e4`-style strings; this
-/// turns the latter into `1.23 \times 10^{4}` for LaTeX.
-fn sci_notation_to_latex(mut s: String) -> String {
-    if s.contains('e') || s.contains('E') {
-        let parts: Vec<&str> = s.split(['e', 'E']).collect();
-        if parts.len() == 2 {
-            s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
-        }
-    }
-    s
-}
-
+/// Like the manuscript's, but a vector is printed whole rather than abbreviated.
 fn format_val_latex(val: &PhsValue, i18n: &I18nLabels, precision_override: Option<u32>) -> String {
     match val {
-        PhsValue::Quantity(q) => {
-            let std_dev = q.value.std_dev();
-            let val_s = if std_dev > 0.0 {
-                // GUM rounding correlates the two, so both come from one call rather than
-                // each being formatted to its own independent precision.
-                let (mean_s, unc_s) = physure_core::quantity::gum_round(q.value.mean(), std_dev, precision_override);
-                format!("({} \\pm {})", sci_notation_to_latex(mean_s), sci_notation_to_latex(unc_s))
-            } else {
-                match precision_override {
-                    Some(n) => sci_notation_to_latex(format!("{:.*}", n as usize, q.value.mean())),
-                    None => sci_notation_to_latex(physure_core::quantity::format_float(q.value.mean())),
-                }
-            };
-            let u_s = unit_to_latex(&q.unit.__repr__());
-            if u_s.is_empty() {
-                format!("= {}", val_s)
-            } else {
-                format!("= {}\\; {}", val_s, u_s)
-            }
-        }
-        PhsValue::Number(n) => {
-            let mut s = physure_core::quantity::format_float(*n);
-            if s.contains('e') || s.contains('E') {
-                let parts: Vec<&str> = s.split(['e', 'E']).collect();
-                if parts.len() == 2 {
-                    s = format!("{} \\times 10^{{{}}}", parts[0], parts[1].trim_start_matches('+'));
-                }
-            }
-            format!("= {}", s)
-        }
+        PhsValue::Quantity(q) => quantity_latex(q, precision_override),
+        PhsValue::Number(n) => format!("= {}", sci_notation_to_latex(physure_core::quantity::format_float(*n))),
         PhsValue::Bool(b) => format!("= \\text{{{}}}", if *b { "True" } else { "False" }),
         PhsValue::Function(func) => {
             match func.body_stmts.last() {
@@ -99,38 +19,7 @@ fn format_val_latex(val: &PhsValue, i18n: &I18nLabels, precision_override: Optio
                 _ => format!("= \\text{{{}}}", escape_latex_text(&func.name)),
             }
         }
-        _ => {
-            let raw = val.to_string();
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return String::new();
-            }
-            if trimmed == "True" || trimmed == "False" {
-                return format!("= \\text{{{}}}", trimmed);
-            }
-
-            let mut parts = trimmed.splitn(2, ' ');
-            let first = parts.next().unwrap_or("");
-            let rest = parts.next().unwrap_or("").trim();
-
-            if let Ok(num) = first.parse::<f64>() {
-                let mut val_s = physure_core::quantity::format_float(num);
-                if val_s.contains('e') || val_s.contains('E') {
-                    let p: Vec<&str> = val_s.split(['e', 'E']).collect();
-                    if p.len() == 2 {
-                        val_s = format!("{} \\times 10^{{{}}}", p[0], p[1].trim_start_matches('+'));
-                    }
-                }
-                if !rest.is_empty() {
-                    let u_s = unit_to_latex(rest);
-                    format!("= {}\\; {}", val_s, u_s)
-                } else {
-                    format!("= {}", val_s)
-                }
-            } else {
-                format!("= {}", render_raw_math(trimmed, i18n))
-            }
-        }
+        _ => printed_value_latex(val, i18n),
     }
 }
 
