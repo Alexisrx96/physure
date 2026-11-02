@@ -55,6 +55,15 @@ Files: create `physure-core/src/math/stats.rs`, `physure-core/src/uncertainty/do
 - [x] Helpers for exported scripts (`physure.ext.helpers`), imported by the Python target; the Guide's program transpiled and run.
 - [x] 14 tests in `tests/test_degrees_of_freedom.py` and the doctests; the whole suite passes.
 
-## Stage D4
+## Stage D4a — WASM and the golden file (done)
 
-Planned in the spec ("Staging"). Its tasks are written here when the stage starts.
+- [x] `scripts/gen_uncertainty_dof_golden.py` writes `tests/golden/uncertainty_dof.tsv` from the formulas and scipy: 11 budgets, `nu_eff`, `k`, `u_c`, `U`.
+- [x] `physure-core/tests/uncertainty_dof_golden.rs`: the core reproduces every row.
+- [x] WASM: `withDof`, `fromSamples`, `effectiveDof`, `coverageFactor`, `expandedUncertainty` on the binding's `Quantity` (it wraps the core's, so the sources survive every operation); `physure-wasm/tests/uncertainty_dof.rs` reads the golden file and runs under Node (`wasm-pack test --node`: 4 new tests, the other 88 unchanged).
+- [x] The JavaScript and TypeScript generators write `.withDof(nu)`; Java still refuses (below).
+
+## Stage D4b — Java (open)
+
+**Finding.** A Java `Quantity` is `(value, uncertainty, unit)` and nothing else. Every native operation (`NativeEngine.addQuantities` and the rest) rebuilds both operands as new core quantities, with a new source of uncertainty each, and turns the result back into a triple. So a Java result does not know which measurements it came from, and its effective degrees of freedom cannot be computed (the same reason `x.subtract(x)` is `sqrt(2) u` in Java and 0 everywhere else). The spec assumed the Java binding wrapped the core's `Quantity` as WASM does; it does not.
+
+Options, for the maintainer: (A) make the Java `Quantity` carry its sources (ids and coefficients, with the degrees of freedom) across the JNI boundary, which gives the right answer through arithmetic and also makes Java correlation-aware like the other bindings, a change of behaviour for Java; (B) support the single measurement only (`withDof`, `fromSamples`, `effectiveDof`, `coverageFactor`, `expanded` on a measurement) and raise on a result of arithmetic, with an explicit budget helper for combinations; (C) leave Java out of this feature and treat provenance in Java as a piece of its own.

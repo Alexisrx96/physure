@@ -31,14 +31,22 @@ fn rust_declares_them_on_the_quantity_it_builds() {
 }
 
 #[test]
-fn the_targets_that_cannot_carry_them_yet_refuse() {
-    for (name, target) in [
-        ("Java", Target::Java),
-        ("Java", Target::JavaWithClass("Model".to_string())),
-        ("JavaScript", Target::JavaScript),
-        ("JavaScript", Target::TypeScript),
-    ] {
-        let error = emit(NINE, target).expect_err(name);
-        assert!(error.contains("degrees of freedom") && error.contains("cannot be carried") && error.contains(name), "{name}: {error}");
+fn javascript_and_typescript_declare_them_with_with_dof() {
+    for target in [Target::JavaScript, Target::TypeScript] {
+        let code = emit(NINE, target.clone()).unwrap();
+        assert!(code.contains("Quantity.withUncertainty(10.003, 0.002, \"V\").withDof(9)"), "{code}");
+        let infinite = emit("x = 10.003 +/- 0.002 dof inf V
+", target.clone()).unwrap();
+        assert!(infinite.contains(".withDof(Infinity)"), "{infinite}");
+        assert!(!emit("x = 10.003 +/- 0.002 V
+", target).unwrap().contains("withDof"));
+    }
+}
+
+#[test]
+fn java_refuses_them_until_its_quantities_keep_the_sources_they_came_from() {
+    for target in [Target::Java, Target::JavaWithClass("Model".to_string())] {
+        let error = emit(NINE, target).expect_err("Java");
+        assert!(error.contains("degrees of freedom") && error.contains("cannot be carried") && error.contains("Java"), "{error}");
     }
 }

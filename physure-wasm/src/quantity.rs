@@ -24,6 +24,43 @@ impl Quantity {
             .map_err(to_js_error)
     }
 
+    /// A Type A evaluation (JCGM 100:2008 4.2) of repeated observations: the mean, its standard uncertainty
+    /// `s / sqrt(n)` and `n - 1` degrees of freedom. Observations that are all equal give an exact quantity.
+    #[wasm_bindgen(js_name = fromSamples)]
+    pub fn from_samples(samples: Vec<f64>, unit: &str) -> Result<Quantity, JsValue> {
+        CoreQuantity::from_samples(&samples, unit)
+            .map(Quantity::from_core)
+            .map_err(to_js_error)
+    }
+
+    /// This measurement with `nu` degrees of freedom declared for its standard uncertainty. The degrees of freedom
+    /// belong to one measurement: an exact quantity, a result that combines several, `nu` that is not positive or
+    /// differs from what the measurement already has is an error.
+    #[wasm_bindgen(js_name = withDof)]
+    pub fn with_dof(&self, nu: f64) -> Result<Quantity, JsValue> {
+        self.inner.clone().with_dof(nu).map(Quantity::from_core).map_err(to_js_error)
+    }
+
+    /// The effective degrees of freedom (Welch-Satterthwaite, JCGM 100:2008 G.4.1); `Infinity` when none of the
+    /// measurements it comes from has a finite number.
+    #[wasm_bindgen(js_name = effectiveDof)]
+    pub fn effective_dof(&self) -> Result<f64, JsValue> {
+        self.inner.effective_dof().map_err(to_js_error)
+    }
+
+    /// The coverage factor for the coverage probability `p` in (0, 1): the Student-t factor at the effective
+    /// degrees of freedom truncated to an integer, the normal factor when they are infinite.
+    #[wasm_bindgen(js_name = coverageFactor)]
+    pub fn coverage_factor(&self, p: f64) -> Result<f64, JsValue> {
+        self.inner.coverage_factor(p).map_err(to_js_error)
+    }
+
+    /// The expanded uncertainty `U = k u_c` for the coverage probability `p`, in the unit `uncertainty` is in.
+    #[wasm_bindgen(js_name = expandedUncertainty)]
+    pub fn expanded_uncertainty(&self, p: f64) -> Result<f64, JsValue> {
+        Ok(self.inner.coverage_factor(p).map_err(to_js_error)? * self.uncertainty())
+    }
+
     #[wasm_bindgen(js_name = toString)]
     pub fn to_js_string(&self) -> String {
         self.inner.to_string()
