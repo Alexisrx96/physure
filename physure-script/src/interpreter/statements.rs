@@ -192,6 +192,24 @@ impl PhsInterpreter {
         Ok(())
     }
 
+    /// Runs `program` with `bindings` visible as variables and returns the value of its last statement, without
+    /// touching the interpreter: the program runs in a copy of the environment, so neither the bindings nor
+    /// anything the program assigns stays behind, and a binding named like a variable shadows it for this call
+    /// only.
+    ///
+    /// This is how a binding calls a function with values it holds. The values arrive as they are, with the
+    /// sources of their uncertainty: writing them as source text would make a new measurement of each, and
+    /// `f(x, x)` would no longer see one.
+    pub fn run_program_with(&self, program: &Program, bindings: Vec<(String, PhsValue)>) -> PhysureResult<PhsValue> {
+        let mut env = self.env.clone();
+        env.extend(bindings);
+        let mut last = PhsValue::None;
+        for stmt in &program.statements {
+            last = self.eval_statement_with_env(stmt, &mut env)?;
+        }
+        Ok(last)
+    }
+
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
         self.eval_statement_with_env_at(stmt, env, 0)
