@@ -1,5 +1,5 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JObject, JValue};
+use jni::objects::{JClass, JDoubleArray, JLongArray, JObject, JString, JValue};
 use jni::sys::{jdouble, jlong, jobject, jstring};
 use physure_core::{UnitRegistry, Quantity};
 use physure_script::{parse_phs, PhsInterpreter};
@@ -73,12 +73,23 @@ fn get_registry(handle: jlong) -> &'static UnitRegistry {
     }
 }
 
+/// The sources of the uncertainty that a Java `Quantity` holds: `(id, contribution)` pairs, which the core
+/// merges as it does for any quantity. Java mints the one id of a quantity it constructed on its first use.
+fn read_sources(env: &mut JNIEnv, java_q: &JObject) -> Result<Vec<(u32, f64)>, jni::errors::Error> {
+    let ids = JLongArray::from(env.call_method(java_q, "sourceIds", "()[J", &[])?.l()?);
+    let coefficients = JDoubleArray::from(env.call_method(java_q, "sourceCoefficients", "()[D", &[])?.l()?);
+    let mut raw_ids = vec![0; env.get_array_length(&ids)? as usize];
+    let mut raw_coefficients = vec![0.0; env.get_array_length(&coefficients)? as usize];
+    env.get_long_array_region(&ids, 0, &mut raw_ids)?;
+    env.get_double_array_region(&coefficients, 0, &mut raw_coefficients)?;
+    Ok(raw_ids.into_iter().zip(raw_coefficients).map(|(id, c)| (id as u32, c)).collect())
+}
+
 fn get_rust_quantity(
     env: &mut JNIEnv,
     java_q: &JObject,
 ) -> Result<Quantity, jni::errors::Error> {
     let value: f64 = env.get_field(java_q, "value", "D")?.d()?;
-    let uncertainty: f64 = env.get_field(java_q, "uncertainty", "D")?.d()?;
     let unit_jstr: JString = env.get_field(java_q, "unit", "Ljava/lang/String;")?.l()?.into();
     let unit_str: String = env.get_string(&unit_jstr)?.into();
     
@@ -91,31 +102,67 @@ fn get_rust_quantity(
         }
     };
     
-    // the uncertainty goes in with the value: dropping it here made every operation answer "exactly"
-    let built = if uncertainty == 0.0 {
-        Quantity::new(value, &unit_str)
-    } else {
-        Quantity::with_uncertainty(value, uncertainty, &unit_str)
+    // The uncertainty goes in as the sources the Java quantity holds, not as a number: a number would make a
+    // new measurement of an old one, and `x - x` would no longer be zero.
+    let sources = read_sources(env, java_q)?;
+    let unit = Quantity::new(value, &unit_str)
+        .map_err(|e| {
+            let _ = env.throw_new("com/physure/PhysureException", &format!("{}", e));
+            jni::errors::Error::JavaException
+        })?
+        .unit;
+    Ok(Quantity::from_sources(value, sources, unit))
+}
+
+/// A Java `Quantity` from its numbers, its unit and its sources (`None` when the core's model keeps none, and
+/// Java then mints one on the first use).
+fn java_quantity<'local>(
+    env: &mut JNIEnv<'local>,
+    value: f64,
+    uncertainty: f64,
+    unit: &str,
+    sources: Option<Vec<(u32, f64)>>,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let q_class = env.find_class("com/physure/Quantity")?;
+    let unit_jstr = env.new_string(unit)?;
+    let (ids, coefficients) = match sources {
+        Some(terms) => {
+            let ids = env.new_long_array(terms.len() as i32)?;
+            let coefficients = env.new_double_array(terms.len() as i32)?;
+            let raw_ids: Vec<jlong> = terms.iter().map(|&(id, _)| jlong::from(id)).collect();
+            let raw_coefficients: Vec<f64> = terms.iter().map(|&(_, c)| c).collect();
+            env.set_long_array_region(&ids, 0, &raw_ids)?;
+            env.set_double_array_region(&coefficients, 0, &raw_coefficients)?;
+            (JObject::from(ids), JObject::from(coefficients))
+        }
+        None => (JObject::null(), JObject::null()),
     };
-    built.map_err(|e| {
-        let _ = env.throw_new("com/physure/PhysureException", &format!("{}", e));
-        jni::errors::Error::JavaException
-    })
+    env.new_object(
+        q_class,
+        "(DDLjava/lang/String;[J[D)V",
+        &[
+            JValue::Double(value),
+            JValue::Double(uncertainty),
+            JValue::Object(&unit_jstr),
+            JValue::Object(&ids),
+            JValue::Object(&coefficients),
+        ],
+    )
 }
 
 fn make_java_quantity<'local>(
     env: &mut JNIEnv<'local>,
     q: Quantity,
 ) -> Result<JObject<'local>, jni::errors::Error> {
-    let q_class = env.find_class("com/physure/Quantity")?;
-    // the magnitude, uncertainty and unit as one consistent triple (`2 m * 3 km` is 6000 m^2, not 6 m^2)
+    // the magnitude, uncertainty, unit and sources as one consistent set (`2 m * 3 km` is 6000 m^2, not 6 m^2)
     let (value, uncertainty, unit) = q.display_parts();
-    let unit_jstr = env.new_string(unit)?;
-    env.new_object(
-        q_class,
-        "(DDLjava/lang/String;)V",
-        &[JValue::Double(value), JValue::Double(uncertainty), JValue::Object(&unit_jstr)],
-    )
+    java_quantity(env, value, uncertainty, &unit, q.display_sources())
+}
+
+/// A source id from the core's one counter, for the first use of a quantity that Java constructed.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_newSourceId(_env: JNIEnv, _class: JClass) -> jlong {
+    jlong::from(physure_core::uncertainty::new_source_id())
 }
 
 #[no_mangle]
@@ -669,33 +716,16 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
 
     match q.convert_to(&r_unit) {
         Ok(res) => {
-            let q_class = match env.find_class("com/physure/Quantity") {
-                Ok(c) => c,
-                Err(_) => return std::ptr::null_mut(),
-            };
-            let unit_jstr = match env.new_string(&unit_str) {
-                Ok(s) => s,
-                Err(_) => return std::ptr::null_mut(),
-            };
-            // `res` is already in the target unit: its value and its spread are what to hand back
-            // (the canonical magnitude carries the scale and the zero point of the unit).
-            let converted_val = res.value.mean();
-            let j_q = match env.new_object(
-                q_class,
-                "(DDLjava/lang/String;)V",
-                &[
-                    JValue::Double(converted_val),
-                    JValue::Double(res.value.std_dev()),
-                    JValue::Object(&unit_jstr),
-                ],
-            ) {
-                Ok(o) => o,
+            // `res` is already in the target unit: its value, its spread and its sources are what to hand back
+            // (the canonical magnitude carries the scale and the zero point of the unit). A conversion is the
+            // same measurement in another unit, so it keeps the sources and mints none.
+            match java_quantity(&mut env, res.value.mean(), res.value.std_dev(), &unit_str, res.sources()) {
+                Ok(j_q) => j_q.into_raw(),
                 Err(e) => {
                     throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    return std::ptr::null_mut();
+                    std::ptr::null_mut()
                 }
-            };
-            j_q.into_raw()
+            }
         }
         Err(e) => {
             throw_physure_exception(&mut env, &format!("{}", e));

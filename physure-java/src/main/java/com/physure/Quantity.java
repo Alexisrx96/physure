@@ -16,6 +16,13 @@ import java.util.regex.Pattern;
  * units combine, how an uncertainty propagates and what a temperature point plus an interval is. This
  * class does not repeat any of that, and an operation the core refuses (incompatible dimensions,
  * a division by zero) is a {@link PhysureException}, never a number.
+ * <p>
+ * A quantity is also a <b>measurement</b>: it remembers the sources of its uncertainty, and so does every
+ * result derived from it. Reusing a measurement therefore cancels or accumulates as the GUM says
+ * ({@code x.subtract(x)} is exactly zero, {@code x.multiply(x)} has uncertainty {@code 2 |x| u}), while two
+ * quantities constructed separately are two measurements even when their numbers are equal. The identity
+ * of a measurement is not part of {@link #equals(Object)} and {@link #hashCode()}, which compare the three
+ * numbers and the unit as before: two equal quantities can behave differently in arithmetic.
  * Compatible with Java 8+.
  */
 public class Quantity {
@@ -32,9 +39,41 @@ public class Quantity {
             + "(?:\\s+(.*))?$",
         Pattern.DOTALL);
 
+    /** The sources of an uncertainty: ids from the core's counter, and what each one contributes (signed, in this unit). */
+    private static final class Sources {
+        private static final Sources EXACT = new Sources(new long[0], new double[0]);
+
+        private final long[] ids;
+        private final double[] coefficients;
+
+        private Sources(long[] ids, double[] coefficients) {
+            this.ids = ids;
+            this.coefficients = coefficients;
+        }
+
+        /** The same sources scaled to add up to {@code target} instead of {@code current}; none if {@code target} is zero. */
+        private Sources scaled(double current, double target) {
+            if (target == 0.0 || current == 0.0) {
+                return EXACT;
+            }
+            double factor = target / current;
+            double[] scaled = new double[coefficients.length];
+            for (int i = 0; i < scaled.length; i++) {
+                scaled[i] = coefficients[i] * factor;
+            }
+            return new Sources(ids, scaled);
+        }
+    }
+
     private final double value;
     private final double uncertainty;
     private final String unit;
+    /**
+     * Null until needed for a quantity constructed here: a result of the core arrives with its sources, and the
+     * first use of a quantity with an uncertainty mints one id for it (see {@link #sources()}). Volatile and
+     * immutable, so that threads racing on the first use agree on the id.
+     */
+    private volatile Sources sources;
 
     public Quantity(double value, String unit) {
         this(value, 0.0, unit);
@@ -53,6 +92,49 @@ public class Quantity {
         this.value = value;
         this.uncertainty = Math.abs(uncertainty);
         this.unit = unit != null ? unit.trim() : "";
+    }
+
+    /** A result of the native engine: the sources it reports, or none when the core's model keeps none (they are then minted on first use). */
+    Quantity(double value, double uncertainty, String unit, long[] ids, double[] coefficients) {
+        this(value, uncertainty, unit);
+        if (ids != null && coefficients != null) {
+            this.sources = new Sources(ids, coefficients);
+        }
+    }
+
+    private Quantity(double value, double uncertainty, String unit, Sources sources) {
+        this(value, uncertainty, unit);
+        this.sources = sources;
+    }
+
+    /**
+     * The sources of this quantity's uncertainty, minting the one id of a quantity constructed here the first
+     * time they are needed. Nothing is minted at construction, so building a quantity needs no native library
+     * and one that is never used in arithmetic never takes an id.
+     */
+    private Sources sources() {
+        Sources known = sources;
+        if (known != null) {
+            return known;
+        }
+        synchronized (this) {
+            if (sources == null) {
+                sources = uncertainty == 0.0
+                    ? Sources.EXACT
+                    : new Sources(new long[] {NativeEngine.newSourceId()}, new double[] {uncertainty});
+            }
+            return sources;
+        }
+    }
+
+    /** Read by the native engine: the ids of the sources of the uncertainty. */
+    long[] sourceIds() {
+        return sources().ids;
+    }
+
+    /** Read by the native engine: what each source contributes, in this quantity's unit. */
+    double[] sourceCoefficients() {
+        return sources().coefficients;
     }
 
     public double getValue() {
@@ -161,9 +243,13 @@ public class Quantity {
     /**
      * Rounds the value and the uncertainty to {@code decimals} decimal places (half up); a negative count
      * rounds to tens, hundreds... {@code NaN} and infinity are returned as they are.
+     * The result is the same measurement, presented with fewer digits, and not a new one: its sources are
+     * the same, scaled to add up to the rounded uncertainty (an uncertainty that rounds to zero is exact).
      */
     public Quantity round(int decimals) {
-        return new Quantity(roundTo(this.value, decimals), roundTo(this.uncertainty, decimals), this.unit);
+        double roundedUncertainty = roundTo(this.uncertainty, decimals);
+        return new Quantity(roundTo(this.value, decimals), roundedUncertainty, this.unit,
+            sources().scaled(this.uncertainty, roundedUncertainty));
     }
 
     private static double roundTo(double x, int decimals) {

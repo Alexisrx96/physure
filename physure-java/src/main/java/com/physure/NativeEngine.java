@@ -108,6 +108,12 @@ public class NativeEngine {
      */
     public static native Map<String, String[]> getCategories(long registryHandle);
 
+    /**
+     * A fresh source id from the core's one counter (the same one PHS and Python mint theirs from), for the first
+     * use of a quantity constructed in Java: two measurements never share an id by accident.
+     */
+    static native long newSourceId();
+
     // --- Quantity JNI math operations ---
     public static native Quantity addQuantities(Quantity a, Quantity b);
     public static native Quantity subQuantities(Quantity a, Quantity b);
