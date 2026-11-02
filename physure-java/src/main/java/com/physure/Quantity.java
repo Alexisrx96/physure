@@ -235,6 +235,63 @@ public class Quantity {
     }
 
     /**
+     * Declares that the uncertainty of this measurement has {@code nu} degrees of freedom (JCGM 100:2008 4.3.2):
+     * how well the uncertainty itself is known, as a Type A evaluation of {@code n} observations has
+     * {@code n - 1}. Use {@code Double.POSITIVE_INFINITY} for one known exactly. They belong to the
+     * <b>measurement</b>, so this quantity must be one: an exact quantity, or a result that combines several
+     * measurements, has none to declare (declare them on each before combining), and a source that already has
+     * another number cannot be given a second one. Returns this quantity.
+     *
+     * @throws PhysureException if {@code nu} is not positive, or the quantity cannot carry it
+     */
+    public Quantity withDof(double nu) {
+        NativeEngine.declareDof(this, nu);
+        return this;
+    }
+
+    /**
+     * A Type A evaluation (JCGM 100:2008 4.2): the mean of the observations, its experimental standard
+     * deviation {@code s / sqrt(n)} as the standard uncertainty, and {@code n - 1} degrees of freedom.
+     * Observations that are all equal have no spread to estimate and give an exact quantity.
+     *
+     * @throws PhysureException if there are fewer than two observations or one is not finite
+     */
+    public static Quantity fromSamples(double[] samples, String unit) {
+        return NativeEngine.fromSamples(Objects.requireNonNull(samples, "samples"), Objects.requireNonNull(unit, "unit"));
+    }
+
+    /**
+     * The effective degrees of freedom of the uncertainty by the Welch-Satterthwaite formula
+     * (JCGM 100:2008 G.4.1), combining those of the sources it came from; infinite when none of them has a
+     * finite number, and for an exact quantity.
+     */
+    public double effectiveDof() {
+        return NativeEngine.effectiveDof(this);
+    }
+
+    /**
+     * The coverage factor {@code k_p} for a coverage probability {@code p} strictly between 0 and 1: the
+     * Student-t factor at the effective degrees of freedom truncated to an integer, as the Guide recommends
+     * (G.4.1), or the normal factor when they are infinite.
+     *
+     * @throws PhysureException if {@code p} is outside (0, 1)
+     */
+    public double coverageFactor(double p) {
+        return NativeEngine.expanded(this, p)[0];
+    }
+
+    /**
+     * The expanded uncertainty {@code U = k_p * u_c} for a coverage probability {@code p}, with the factor and
+     * the degrees of freedom it came from, in this quantity's unit.
+     *
+     * @throws PhysureException if {@code p} is outside (0, 1)
+     */
+    public ExpandedUncertainty expanded(double p) {
+        double[] parts = NativeEngine.expanded(this, p);
+        return new ExpandedUncertainty(value, uncertainty, parts[1], parts[0], p, parts[2], unit);
+    }
+
+    /**
      * Rounds the value and the uncertainty to {@code decimals} decimal places (half up); a negative count
      * rounds to tens, hundreds... {@code NaN} and infinity are returned as they are.
      * The result is the same measurement, presented with fewer digits, and not a new one: its sources are

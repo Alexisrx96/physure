@@ -123,6 +123,15 @@ public class NativeEngine {
     /** The core's {@code sin}, {@code cos}, {@code tan} or {@code abs} of a quantity, by name. */
     static native Quantity mathFunction(Quantity q, String name);
     public static native Quantity convertQuantity(Quantity q, String targetUnit);
+    /** Declares {@code nu} degrees of freedom for the one source of {@code q}; the core refuses what cannot carry them. */
+    static native void declareDof(Quantity q, double nu);
+    static native double effectiveDof(Quantity q);
+    /** {@code {k, U, nu_eff}} of {@code q} for the coverage probability {@code p}. */
+    static native double[] expanded(Quantity q, double p);
+    /** A Type A evaluation: the mean of the observations, {@code s / sqrt(n)} and {@code n - 1} degrees of freedom. */
+    static native Quantity fromSamples(double[] samples, String unit);
+    /** {@code {mean, uncertainty}} as text, rounded by the Guide's rule. */
+    static native String[] gumRound(double mean, double uncertainty);
     public static native void assertQuantities(Quantity a, Quantity b);
     public static native void assertExactQuantities(Quantity a, Quantity b);
     public static native String[] getFunctionParams(long registryHandle, String funcName);

@@ -160,6 +160,99 @@ fn make_java_quantity<'local>(
     java_quantity(env, value, uncertainty, &unit, q.display_sources())
 }
 
+/// What the core says of the quantity that Java holds. Its refusal is a `PhysureException`, and `default` is
+/// only returned with that exception pending.
+fn ask<T>(env: &mut JNIEnv, q_obj: &JObject, default: T, f: impl FnOnce(Quantity) -> PhysureResult<T>) -> T {
+    let Ok(q) = get_rust_quantity(env, q_obj) else { return default };
+    f(q).unwrap_or_else(|e| {
+        throw_physure_exception(env, &e.to_string());
+        default
+    })
+}
+
+/// Declares `nu` degrees of freedom for the one source of the quantity (JCGM 100:2008 4.3.2). The id is the one
+/// the Java object holds, so every copy of the measurement shares them.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_declareDof<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+    nu: jdouble,
+) {
+    ask(&mut env, &q_obj, (), |q| q.with_dof(nu).map(|_| ()))
+}
+
+/// The effective degrees of freedom of the quantity by Welch-Satterthwaite (JCGM 100:2008 G.4.1).
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_effectiveDof<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+) -> jdouble {
+    ask(&mut env, &q_obj, 0.0, |q| q.effective_dof())
+}
+
+/// `{k, U, nu_eff}` of the quantity for the coverage probability `p`: the coverage factor, the expanded
+/// uncertainty (in the unit of the quantity) and the effective degrees of freedom they came from.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_expanded<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+    p: jdouble,
+) -> jobject {
+    let Some(parts) = ask(&mut env, &q_obj, None, |q| {
+        q.expanded(p).map(|e| Some([e.coverage_factor, e.expanded_uncertainty, e.dof_eff]))
+    }) else {
+        return std::ptr::null_mut();
+    };
+    match env.new_double_array(parts.len() as i32) {
+        Ok(array) if env.set_double_array_region(&array, 0, &parts).is_ok() => array.into_raw(),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// A Type A evaluation (JCGM 100:2008 4.2): the mean of the observations with its standard error and `n - 1`
+/// degrees of freedom.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_fromSamples<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    samples: JDoubleArray<'local>,
+    unit: JString<'local>,
+) -> jobject {
+    let Ok(count) = env.get_array_length(&samples) else { return std::ptr::null_mut() };
+    let mut values = vec![0.0; count as usize];
+    if env.get_double_array_region(&samples, 0, &mut values).is_err() {
+        return std::ptr::null_mut();
+    }
+    let unit: String = match env.get_string(&unit) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    answer(&mut env, Quantity::from_samples(&values, &unit))
+}
+
+/// `{mean, uncertainty}` as text, rounded by the Guide's rule (JCGM 100:2008 7.2.6), which is the core's.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_gumRound<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    mean: jdouble,
+    uncertainty: jdouble,
+) -> jobject {
+    let (value, spread) = physure_core::quantity::gum_round(mean, uncertainty, None);
+    let Ok(string_class) = env.find_class("java/lang/String") else { return std::ptr::null_mut() };
+    let Ok(array) = env.new_object_array(2, &string_class, JObject::null()) else { return std::ptr::null_mut() };
+    for (index, text) in [value, spread].iter().enumerate() {
+        let Ok(jtext) = env.new_string(text) else { return std::ptr::null_mut() };
+        if env.set_object_array_element(&array, index as i32, &jtext).is_err() {
+            return std::ptr::null_mut();
+        }
+    }
+    array.into_raw()
+}
+
 /// The Java object for the core's answer, or the `PhysureException` for its refusal (a null return with the
 /// exception pending).
 fn answer(env: &mut JNIEnv, result: PhysureResult<Quantity>) -> jobject {
