@@ -1,5 +1,6 @@
 package com.physure;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -181,7 +182,8 @@ public class PhyEquation {
      * Calls this equation by providing named arguments: every variable of the equation but one is given, and
      * the answer is the value of the one left, solved for.
      * E.g. eq.call("R", Quantity.of(10.0, "ohm"), "I", Quantity.of(2.0, "A")) for {@code V = R * I} -> Quantity(20.0, "V")
-     * A quantity argument keeps its uncertainty.
+     * A quantity argument is bound by value, with the sources of its uncertainty: the same measurement given
+     * under two names is one measurement. Any other argument is PHS source.
      *
      * @throws IllegalArgumentException if the arguments are not name and value pairs, or the equation does
      *     not have exactly one variable that is not among them
@@ -190,27 +192,43 @@ public class PhyEquation {
         if (args.length % 2 != 0) {
             throw new IllegalArgumentException("Arguments must be key-value pairs (String name, Quantity or String value).");
         }
-        Map<String, String> argMap = new LinkedHashMap<>();
+        Map<String, String> texts = new LinkedHashMap<>();
+        Map<String, Quantity> measurements = new LinkedHashMap<>();
         for (int i = 0; i < args.length; i += 2) {
-            argMap.put(Objects.requireNonNull(args[i], "argument name").toString(), source(args[i + 1]));
+            String name = Objects.requireNonNull(args[i], "argument name").toString();
+            // the last value given under a name is the one used, whatever its kind
+            texts.remove(name);
+            measurements.remove(name);
+            if (args[i + 1] instanceof Quantity) {
+                measurements.put(name, (Quantity) args[i + 1]);
+            } else {
+                texts.put(name, source(args[i + 1]));
+            }
         }
-        return callMap(argMap);
+        return callWith(texts, measurements);
     }
 
     /**
      * Calls this equation with a map of argument values (PHS source each): see {@link #call(Object...)}.
      */
     public Quantity callMap(Map<String, String> args) {
-        String unknown = unknownVariable(args.keySet());
+        return callWith(args, Collections.<String, Quantity>emptyMap());
+    }
+
+    private Quantity callWith(Map<String, String> texts, Map<String, Quantity> measurements) {
+        Set<String> given = new LinkedHashSet<>(texts.keySet());
+        given.addAll(measurements.keySet());
+        String unknown = unknownVariable(given);
         String solved = registry.solve(expression, unknown);
         int sign = solved.indexOf('=');
         String result = sign < 0 ? solved.trim() : solved.substring(sign + 1).trim();
-        // by substitution, not by assigning the arguments: assigning would leave them behind in the
-        // registry's interpreter, where the next evaluation could read them
-        for (Map.Entry<String, String> arg : args.entrySet()) {
+        // A text argument is substituted, and a measurement is bound for the call only: assigning either to the
+        // registry's interpreter would leave it there, where the next evaluation could read it.
+        for (Map.Entry<String, String> arg : texts.entrySet()) {
             result = replaceName(result, arg.getKey(), "(" + arg.getValue() + ")");
         }
-        return registry.evaluate(result);
+        return registry.evaluateWith(result, measurements.keySet().toArray(new String[0]),
+            measurements.values().toArray(new Quantity[0]));
     }
 
     /** The one variable of the equation that is neither a function nor among the arguments. */

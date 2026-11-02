@@ -179,6 +179,73 @@ class ProvenanceTest {
         assertEquals(0.2, magnitude.subtract(x).getUncertainty(), 1e-12, "|x| - x = -2x: the sources add up");
     }
 
+    // ---- calls bind quantities by value, with their sources
+
+    @Test
+    void aFunctionCalledWithOneMeasurementTwiceSeesOneMeasurement() {
+        try (UnitRegistry registry = new UnitRegistry()) {
+            PhyFunction difference = new PhyFunction(registry, "difference", "difference(a, b) = a - b");
+            Quantity x = measured(10.0, 0.5, "m");
+            assertExact(0.0, difference.call(x, x));
+            Quantity y = measured(10.0, 0.5, "m");
+            assertEquals(0.5 * Math.sqrt(2), difference.call(x, y).getUncertainty(), 1e-12);
+        }
+    }
+
+    @Test
+    void aFunctionOfAMeasurementAccumulatesItsOwnSourceAsTheDerivativeSays() {
+        try (UnitRegistry registry = new UnitRegistry()) {
+            PhyFunction area = new PhyFunction(registry, "area", "area(w, h) = w * h");
+            Quantity x = measured(10.0, 0.5, "m");
+            assertEquals(2 * 10.0 * 0.5, area.call(x, x).getUncertainty(), 1e-9);
+            assertEquals("m^2", area.call(x, x).getUnit());
+        }
+    }
+
+    @Test
+    void aFunctionCallLeavesNothingBehindInTheRegistry() {
+        try (UnitRegistry registry = new UnitRegistry()) {
+            PhyFunction difference = new PhyFunction(registry, "difference", "difference(a, b) = a - b");
+            Quantity x = measured(10.0, 0.5, "m");
+            difference.call(x, x);
+            assertThrows(PhysureException.class, () -> registry.evaluate("_arg0"), "the argument was bound for the call only");
+            registry.evaluate("a = 3 m");
+            difference.call(x, x);
+            assertEquals(3.0, registry.evaluate("a").getValue(), 0.0, "a variable of the registry is not the function's parameter");
+        }
+    }
+
+    @Test
+    void aFunctionStillTakesArgumentsAsPhsSource() {
+        try (UnitRegistry registry = new UnitRegistry()) {
+            PhyFunction difference = new PhyFunction(registry, "difference", "difference(a, b) = a - b");
+            assertEquals(6.0, difference.call("10 m", "4 m").getValue(), EPS);
+        }
+    }
+
+    @Test
+    void anEquationCalledWithOneMeasurementUnderTwoNamesSeesOneMeasurement() {
+        try (UnitRegistry registry = new UnitRegistry()) {
+            PhyEquation difference = new PhyEquation(registry, "D = A - B");
+            Quantity x = measured(10.0, 0.5, "m");
+            assertExact(0.0, difference.call("A", x, "B", x));
+            Quantity y = measured(10.0, 0.5, "m");
+            assertEquals(0.5 * Math.sqrt(2), difference.call("A", x, "B", y).getUncertainty(), 1e-12);
+        }
+    }
+
+    @Test
+    void anEquationTakesAMeasurementByValueAndATextArgumentAsSource() {
+        try (UnitRegistry registry = new UnitRegistry()) {
+            PhyEquation ohm = new PhyEquation(registry, "V = R * I");
+            Quantity r = measured(10.0, 0.5, "ohm");
+            Quantity volts = ohm.call("R", r, "I", "2 A");
+            assertEquals(20.0, volts.getValue(), EPS);
+            assertEquals(1.0, volts.getUncertainty(), 1e-12);
+            assertThrows(PhysureException.class, () -> registry.evaluate("R"), "nothing was assigned in the registry");
+        }
+    }
+
     // ---- an operation the core refuses is still an error
 
     @Test

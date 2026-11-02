@@ -99,6 +99,11 @@ public class NativeEngine {
      */
     public static native String evaluateExpression(long registryHandle, String expr);
     public static native Quantity evaluateQuantity(long registryHandle, String expr);
+    /**
+     * Like {@link #evaluateQuantity}, with {@code values} visible under {@code names} for this call only: bound
+     * as they are, with the sources of their uncertainty, and not written into the source as text.
+     */
+    static native Quantity evaluateQuantityWith(long registryHandle, String expr, String[] names, Quantity[] values);
 
     /**
      * Returns categories mapping (e.g. "length" -> ["m", "cm", "km", ...]).

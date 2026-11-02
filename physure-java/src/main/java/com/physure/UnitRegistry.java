@@ -96,6 +96,18 @@ public class UnitRegistry implements AutoCloseable {
     }
 
     /**
+     * Evaluates like {@link #evaluate(String)} with the quantities {@code values} visible under {@code names}
+     * for this call only. They are bound as they are, with the sources of their uncertainty: written into the
+     * source as text they would be new measurements, and {@code f(x, x)} would not see one. Neither the names
+     * nor anything the source assigns stays in the registry.
+     */
+    synchronized Quantity evaluateWith(String expr, String[] names, Quantity[] values) {
+        Objects.requireNonNull(expr, "expr");
+        checkClosed();
+        return NativeEngine.evaluateQuantityWith(handle, expr, names, values);
+    }
+
+    /**
      * Evaluates a math or PHS text statement block and returns the raw string output.
      */
     public synchronized String evaluateRaw(String expr) {

@@ -1,6 +1,7 @@
 package com.physure;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
@@ -90,7 +91,8 @@ public class PhyFunction {
     /**
      * Calls the function with strongly-typed Quantity arguments and returns a Quantity result.
      * E.g. func.call(new Quantity(10.0, "kg"), new Quantity(5.0, "m/s")) -> Quantity(125.0, "J")
-     * The arguments cross as they are, uncertainty included.
+     * The arguments cross by value, with the sources of their uncertainty: a measurement passed twice is one
+     * measurement, so {@code f(x, x)} cancels or accumulates as the GUM says.
      *
      * @throws IllegalArgumentException if a function written in Java is called with the wrong number of arguments
      */
@@ -107,11 +109,12 @@ public class PhyFunction {
         if (registry == null) {
             throw new IllegalStateException("'" + name + "' has no function behind it");
         }
-        List<String> sources = new ArrayList<>();
-        for (Quantity arg : args) {
-            sources.add(Objects.requireNonNull(arg, "argument").toPhs());
+        String[] names = new String[args.length];
+        for (int i = 0; i < args.length; i++) {
+            Objects.requireNonNull(args[i], "argument");
+            names[i] = "_arg" + i;
         }
-        return registry.evaluate(callSource(sources));
+        return registry.evaluateWith(callSource(Arrays.asList(names)), names, args);
     }
 
     private String callSource(List<String> arguments) {

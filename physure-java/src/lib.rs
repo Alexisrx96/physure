@@ -1,9 +1,9 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JDoubleArray, JLongArray, JObject, JString, JValue};
+use jni::objects::{JClass, JDoubleArray, JLongArray, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jdouble, jlong, jobject, jstring};
 use physure_core::error::{PhysureError, PhysureResult};
 use physure_core::{UnitRegistry, Quantity};
-use physure_script::{parse_phs, PhsInterpreter};
+use physure_script::{parse_phs, PhsInterpreter, PhsValue};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -611,6 +611,49 @@ fn evaluate_quantity<'local>(
             std::ptr::null_mut()
         }
     }
+}
+
+/// Evaluates PHS like `evaluateQuantity`, with the Java quantities `values` visible under `names`: bound by
+/// value, with the sources of their uncertainty, and not written into the source as text (which would make a
+/// new measurement of each, so `f(x, x)` would not see one). Nothing stays in the registry's interpreter.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantityWith<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    interpreter_handle: jlong,
+    expr: JString<'local>,
+    names: JObjectArray<'local>,
+    values: JObjectArray<'local>,
+) -> jobject {
+    let Ok(bindings) = bindings(&mut env, &names, &values) else { return std::ptr::null_mut() };
+    let result = physure_core::units::with_catalog(get_registry(interpreter_handle), || {
+        source_text(&mut env, &expr).and_then(|source| {
+            let program = parse_phs(&source).map_err(|e| format!("Syntax error: {}", e))?;
+            let value = get_interpreter(interpreter_handle).run_program_with(&program, bindings).map_err(|e| e.to_string())?;
+            as_quantity(value)
+        })
+    });
+    answer(&mut env, result.map_err(PhysureError::Generic))
+}
+
+/// The `(name, quantity)` pairs of two parallel Java arrays. A JNI failure (or a unit the core refuses) leaves
+/// its exception pending.
+fn bindings(env: &mut JNIEnv, names: &JObjectArray, values: &JObjectArray) -> Result<Vec<(String, PhsValue)>, jni::errors::Error> {
+    let count = env.get_array_length(names)?;
+    let mut bindings = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let name = JString::from(env.get_object_array_element(names, index)?);
+        let name: String = env.get_string(&name)?.into();
+        let value = env.get_object_array_element(values, index)?;
+        let quantity = get_rust_quantity(env, &value)?;
+        // as when the argument was written into the source, where `NaN m` is not a number PHS reads
+        if !quantity.value.mean().is_finite() {
+            throw_physure_exception(env, &format!("The value given for '{}' is not a finite number: {}", name, quantity.value.mean()));
+            return Err(jni::errors::Error::JavaException);
+        }
+        bindings.push((name, PhsValue::Quantity(quantity)));
+    }
+    Ok(bindings)
 }
 
 /// Runs the source and returns its last value as a quantity, or the message of the exception to throw.
