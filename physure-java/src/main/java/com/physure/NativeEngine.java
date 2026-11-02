@@ -120,6 +120,8 @@ public class NativeEngine {
     public static native Quantity mulQuantities(Quantity a, Quantity b);
     public static native Quantity divQuantities(Quantity a, Quantity b);
     public static native Quantity powQuantity(Quantity q, double power);
+    /** The core's {@code sin}, {@code cos}, {@code tan} or {@code abs} of a quantity, by name. */
+    static native Quantity mathFunction(Quantity q, String name);
     public static native Quantity convertQuantity(Quantity q, String targetUnit);
     public static native void assertQuantities(Quantity a, Quantity b);
     public static native void assertExactQuantities(Quantity a, Quantity b);

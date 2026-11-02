@@ -5,7 +5,6 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.DoubleUnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -214,30 +213,25 @@ public class Quantity {
     /**
      * The sine of this angle. The angle is read in its unit (90 {@code deg} is 1) and a quantity that is not
      * an angle is a {@link PhysureException}; a plain number is taken as radians. The uncertainty of the
-     * angle propagates: {@code |cos x| * u}.
+     * angle propagates ({@code |cos x| * u}) with its sources, as the core does it.
      */
     public Quantity sin() {
-        return trigonometric(Math::sin, Math::cos);
+        return NativeEngine.mathFunction(this, "sin");
     }
 
     /** The cosine of this angle; see {@link #sin()}. */
     public Quantity cos() {
-        return trigonometric(Math::cos, Math::sin);
+        return NativeEngine.mathFunction(this, "cos");
     }
 
     /** The tangent of this angle; see {@link #sin()}. */
     public Quantity tan() {
-        return trigonometric(Math::tan, x -> 1.0 / (Math.cos(x) * Math.cos(x)));
+        return NativeEngine.mathFunction(this, "tan");
     }
 
-    private Quantity trigonometric(DoubleUnaryOperator function, DoubleUnaryOperator derivative) {
-        Quantity angle = unit.isEmpty() || unit.equals("unity") ? this : to("rad");
-        double x = angle.value;
-        return new Quantity(function.applyAsDouble(x), Math.abs(derivative.applyAsDouble(x)) * angle.uncertainty, "");
-    }
-
+    /** The absolute value: where the measurement sits changes, how well it is known does not, and its sources stay. */
     public Quantity abs() {
-        return new Quantity(Math.abs(this.value), this.uncertainty, this.unit);
+        return NativeEngine.mathFunction(this, "abs");
     }
 
     /**

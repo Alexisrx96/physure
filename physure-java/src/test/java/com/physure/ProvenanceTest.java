@@ -159,6 +159,26 @@ class ProvenanceTest {
         }
     }
 
+    // ---- functions of a measurement are the core's, so they keep its sources
+
+    @Test
+    void aTrigonometricFunctionOfAMeasurementKeepsItsSources() {
+        Quantity angle = measured(30.0, 1.0, "deg");
+        assertExact(0.0, angle.sin().subtract(angle.sin()));
+        assertExact(1.0, angle.tan().divide(angle.tan()));
+        assertExact(0.0, angle.cos().subtract(angle.cos()));
+    }
+
+    @Test
+    void theAbsoluteValueOfANegativeMeasurementIsMinusItAndKeepsItsSources() {
+        Quantity x = measured(-3.0, 0.1, "m");
+        Quantity magnitude = x.abs();
+        assertEquals(3.0, magnitude.getValue(), EPS);
+        assertEquals(0.1, magnitude.getUncertainty(), EPS);
+        assertExact(0.0, magnitude.add(x));
+        assertEquals(0.2, magnitude.subtract(x).getUncertainty(), 1e-12, "|x| - x = -2x: the sources add up");
+    }
+
     // ---- an operation the core refuses is still an error
 
     @Test

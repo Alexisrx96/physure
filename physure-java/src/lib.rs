@@ -1,6 +1,7 @@
 use jni::JNIEnv;
 use jni::objects::{JClass, JDoubleArray, JLongArray, JObject, JString, JValue};
 use jni::sys::{jdouble, jlong, jobject, jstring};
+use physure_core::error::{PhysureError, PhysureResult};
 use physure_core::{UnitRegistry, Quantity};
 use physure_script::{parse_phs, PhsInterpreter};
 use std::collections::HashMap;
@@ -157,6 +158,24 @@ fn make_java_quantity<'local>(
     // the magnitude, uncertainty, unit and sources as one consistent set (`2 m * 3 km` is 6000 m^2, not 6 m^2)
     let (value, uncertainty, unit) = q.display_parts();
     java_quantity(env, value, uncertainty, &unit, q.display_sources())
+}
+
+/// The Java object for the core's answer, or the `PhysureException` for its refusal (a null return with the
+/// exception pending).
+fn answer(env: &mut JNIEnv, result: PhysureResult<Quantity>) -> jobject {
+    match result {
+        Ok(res) => match make_java_quantity(env, res) {
+            Ok(j_q) => j_q.into_raw(),
+            Err(e) => {
+                throw_physure_exception(env, &format!("Failed to build Java Quantity: {}", e));
+                std::ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            throw_physure_exception(env, &format!("{}", e));
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// A source id from the core's one counter, for the first use of a quantity that Java constructed.
@@ -544,21 +563,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_addQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.add(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.add(&q2))
 }
 
 #[no_mangle]
@@ -577,21 +582,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_subQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.sub(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.sub(&q2))
 }
 
 #[no_mangle]
@@ -610,21 +601,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_mulQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.mul(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.mul(&q2))
 }
 
 #[no_mangle]
@@ -643,21 +620,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_divQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.div(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.div(&q2))
 }
 
 #[no_mangle]
@@ -672,21 +635,36 @@ pub extern "system" fn Java_com_physure_NativeEngine_powQuantity<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q.pow(power) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q.pow(power))
+}
+
+/// The function of a quantity that Java asked for, by name: the core's own `sin`, `cos`, `tan` and `abs`, which
+/// read the angle unit, refuse what is not an angle and carry the sources through the derivative.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_mathFunction<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+    name: JString<'local>,
+) -> jobject {
+    let q = match get_rust_quantity(&mut env, &q_obj) {
+        Ok(q) => q,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let name: String = match env.get_string(&name) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    answer(
+        &mut env,
+        match name.as_str() {
+            "sin" => q.sin(),
+            "cos" => q.cos(),
+            "tan" => q.tan(),
+            "abs" => q.abs(),
+            other => Err(PhysureError::Generic(format!("'{}' is not a function of a quantity", other))),
+        },
+    )
 }
 
 #[no_mangle]
