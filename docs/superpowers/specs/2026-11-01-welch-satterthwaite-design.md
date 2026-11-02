@@ -13,7 +13,7 @@
 | Declaring ν | **A new literal syntax in PHS**, plus functions elsewhere | functions only; Python and Rust only |
 | The PHS syntax | **A keyword after the value**: `10.003 +/- 0.002 dof 9 V` (`ν 9`, `dof inf`) | a parenthesised group `(dof 9)`, which collides with the asymmetric pair `(0.5, 0.4)` |
 | Using a fractional ν_eff | **Truncate, as JCGM 100:2008 G.4.1**; ν_eff is reported untruncated | truncate by default with a switch; always the fractional value |
-| Bindings | **All five**: Rust, PHS, Python, WASM, Java | Rust, PHS and Python first; Rust and PHS only |
+| Bindings | **All five**: Rust, PHS, Python, WASM, Java. **Java was left out on 2026-11-01**, when D4 showed that a Java `Quantity` keeps no record of its sources (see "Java") | Rust, PHS and Python first; Rust and PHS only |
 
 ## What the code has and lacks
 
@@ -46,7 +46,7 @@ Missing: the degrees of freedom ν_i of each source, a Student-t quantile (`phys
 ### 4. Python, WASM, Java
 
 - **Python**: `Q_(v, unit, uncertainty=u, dof=9)`, `Q_.from_samples(values, unit)`, `q.dof`, `q.coverage_factor(p=0.95)`, `q.expanded(p=0.95)` (a frozen result object with a readable `str`, e.g. `10.0030 ± 0.0059 V (k=2.12, p=95 %)`), all in the Rust core: no runtime dependency. Array magnitudes and Python-lineage mode raise. `Lineage.__reduce__` carries the ν of its sources, because ids are per process.
-- **WASM**: `withDof`, `fromSamples`, `dof`, `coverageFactor(p)`, `expandedUncertainty(p)`. **Java**: `Quantity.withDof`, `fromSamples`, `effectiveDof`, `coverageFactor`, `expanded`.
+- **WASM**: `withDof`, `fromSamples`, `dof`, `coverageFactor(p)`, `expandedUncertainty(p)`. **Java**: see "Java" below.
 - `tests/golden/uncertainty_dof.tsv` freezes the answers; the core, Java and WASM check themselves against it, as for `unit_dimension_scale.tsv`.
 
 ## Validation
@@ -73,15 +73,22 @@ Missing: the degrees of freedom ν_i of each source, a Student-t quantile (`phys
 | D1 | The core: the side table, `effective_dof`, `student_t_two_sided`, the `Quantity` methods, `Expanded`, the H.1 test and the quantile grid | `cargo test -p physure` passes with the H.1 and grid tests |
 | D2 | PHS: the literal, the builtins, the checker, the LSP, `phs doc`, the language spec | `cargo test -p physure-script -p physure-cli -p physure-lsp`; the H.1 example written in PHS |
 | D3 | Python | `pytest` with the H.1 example in Python; doctests |
-| D4 | WASM and Java, the golden file | the Java matrix and the WASM tests |
+| D4 | WASM and the golden file (Java: see "Java") | the WASM tests under Node; the core and WASM reproduce the golden file |
 
 Each stage ends with a commit, a CHANGELOG entry and green tests. Nothing is pushed or merged without the maintainer's word.
+
+## Java
+
+The spec assumed that the Java binding wraps the core's `Quantity`, as WASM does. It does not: a Java `Quantity` is `(value, uncertainty, unit)` and nothing else, and every native operation rebuilds both operands as new core quantities, with a new source of uncertainty each, and turns the result back into a triple. A Java result therefore does not know which measurements it came from, its effective degrees of freedom cannot be computed, and (for the same reason) `x.subtract(x)` is `sqrt(2) u` in Java and 0 in every other binding.
+
+**Decision (maintainer, 2026-11-01): leave Java out of this feature.** The Java generator keeps refusing the `dof` clause with a clear message and the Java API gets nothing, so that nothing half-built reaches Maven Central (where a green release is public). Making Java quantities carry their sources across JNI (ids, coefficients and degrees of freedom; the core lineage rebuilt and read in every operation) is a piece of its own, with its own design: it changes Java's behaviour for every correlated expression, and then `withDof`, `fromSamples`, `effectiveDof`, `coverageFactor` and `expanded` come with it, checked against `tests/golden/uncertainty_dof.tsv`.
 
 ## Not in this piece
 
 - ν_eff for arrays or the covariance stores (numpy / torch / jax); Python-lineage mode.
 - Type B distributions and a ν derived from a reliability; declaring correlations.
 - Asymmetric coverage intervals and the Monte Carlo coverage of JCGM 101.
+- Degrees of freedom in Java (see "Java").
 - The `physure.ext.metrology.MetrologyQuantity` sketched in `scientific_roadmap.md` §2.2: `with_dof` and `from_samples` replace it.
 
 ## Risks
