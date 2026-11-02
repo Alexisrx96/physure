@@ -45,6 +45,16 @@ Files: create `physure-core/src/math/stats.rs`, `physure-core/src/uncertainty/do
 - [x] Generators: Python and Rust carry the clause, Java and JavaScript/TypeScript refuse it (`tests/codegen_dof.rs`). The new builtins are written as ordinary calls by every target, like the existing ones; Python gets them in D3 (`physure.ext.helpers`).
 - [x] Language server: completion and hover for the four builtins and for `dof`. Docs: the language specification, the primer (section 3) and `docs/tutorials/dof_example.phs`.
 
-## Stages D3, D4
+## Stage D3 — Python (done)
 
-Planned in the spec ("Staging"). Their tasks are written here when the stage starts.
+- [x] Core, so that the rules live once: `Lineage::declare_dof` (the single-source rule) and `declared_dofs`, `coverage_factor_for(p, nu_eff)` (the truncation), `type_a(samples)`; `Quantity::with_dof`, `coverage_factor` and `from_samples_in` call them.
+- [x] PyO3: `Lineage.effective_dof`, `declare_dof`, `declared_dofs`, `from_terms(terms, dofs)` and `__reduce__` carrying the dofs; module functions `coverage_factor`, `type_a_evaluation`, `gum_round`.
+- [x] Python: `physure/domain/measurement/degrees_of_freedom.py` (`DegreesOfFreedomMixin`: `with_dof`, `dof`, `coverage_factor`, `expanded`; frozen `ExpandedUncertainty` with a GUM-rounded text), `Quantity.from_input(..., dof=)` and the `dof=` keyword of the factories, `Q_.from_samples`.
+- [x] Arrays, `python_lineage()` and the sampling modes raise `NotImplementedError`.
+- [x] Found by the tests: `Quantity.to` minted a new source (see the CHANGELOG); fixed in `_convert_by_plan`.
+- [x] Helpers for exported scripts (`physure.ext.helpers`), imported by the Python target; the Guide's program transpiled and run.
+- [x] 14 tests in `tests/test_degrees_of_freedom.py` and the doctests; the whole suite passes.
+
+## Stage D4
+
+Planned in the spec ("Staging"). Its tasks are written here when the stage starts.

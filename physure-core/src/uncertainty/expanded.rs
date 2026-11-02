@@ -5,7 +5,6 @@
 //! value came from and how much each contributes. The other models, which propagate a distribution and
 //! not a decomposition, **raise** with the reason: a number they did not compute is never returned.
 
-use super::dof::declare_dof;
 use super::lineage::Lineage;
 use super::trait_def::UncertaintyValue;
 use crate::error::{PhysureError, PhysureResult};
@@ -32,6 +31,49 @@ pub struct Expanded {
     pub dof_eff: f64,
 }
 
+/// The coverage factor `k_p` for effective degrees of freedom `nu_eff`: the two-sided Student-t factor at
+/// `nu_eff` **truncated to an integer** (not below one), as JCGM 100:2008 G.4.1 recommends, or the normal
+/// factor when they are infinite. The one place the truncation is decided, for every binding.
+///
+/// # Errors
+/// `p` outside (0, 1), or `nu_eff` not positive.
+pub fn coverage_factor_for(p: f64, nu_eff: f64) -> PhysureResult<f64> {
+    if nu_eff.is_infinite() {
+        normal_two_sided(p)
+    } else {
+        student_t_two_sided(p, nu_eff.floor().max(1.0))
+    }
+}
+
+/// A Type A evaluation of observations (JCGM 100:2008 4.2): the mean, its experimental standard deviation
+/// `s / sqrt(n)` as the standard uncertainty, and `n - 1` degrees of freedom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypeA {
+    pub mean: f64,
+    pub standard_error: f64,
+    pub dof: f64,
+}
+
+/// The Type A evaluation of `samples`.
+///
+/// # Errors
+/// Fewer than two observations, or one that is not finite.
+pub fn type_a(samples: &[f64]) -> PhysureResult<TypeA> {
+    if samples.len() < 2 {
+        return Err(PhysureError::DomainError(format!(
+            "a Type A evaluation needs at least two observations, got {}",
+            samples.len()
+        )));
+    }
+    if let Some(bad) = samples.iter().find(|x| !x.is_finite()) {
+        return Err(PhysureError::DomainError(format!("an observation must be finite, got {bad}")));
+    }
+    let n = samples.len() as f64;
+    let mean = samples.iter().sum::<f64>() / n;
+    let variance = samples.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (n - 1.0);
+    Ok(TypeA { mean, standard_error: (variance / n).sqrt(), dof: n - 1.0 })
+}
+
 impl Quantity {
     /// The lineage of a Gaussian quantity, the only model whose degrees of freedom can be read.
     fn gaussian_lineage(&self) -> PhysureResult<&Lineage> {
@@ -56,22 +98,7 @@ impl Quantity {
     /// An exact quantity, one with several sources, one that is not Gaussian, `nu` not positive, or `nu`
     /// different from what this source already has.
     pub fn with_dof(self, nu: f64) -> PhysureResult<Quantity> {
-        let terms = self.gaussian_lineage()?.terms();
-        match terms {
-            [(id, _)] => declare_dof(*id, nu)?,
-            [] => {
-                return Err(PhysureError::DomainError(
-                    "an exact quantity has no uncertainty to have degrees of freedom".to_string(),
-                ))
-            }
-            many => {
-                return Err(PhysureError::DomainError(format!(
-                    "a quantity that combines {} sources has no degrees of freedom to declare: declare \
-                     them on each measurement before combining",
-                    many.len()
-                )))
-            }
-        }
+        self.gaussian_lineage()?.declare_dof(nu)?;
         Ok(self)
     }
 
@@ -92,22 +119,10 @@ impl Quantity {
     /// # Errors
     /// Fewer than two observations, or one that is not finite.
     pub fn from_samples_in(samples: &[f64], unit: RationalUnit) -> PhysureResult<Quantity> {
-        if samples.len() < 2 {
-            return Err(PhysureError::DomainError(format!(
-                "a Type A evaluation needs at least two observations, got {}",
-                samples.len()
-            )));
-        }
-        if let Some(bad) = samples.iter().find(|x| !x.is_finite()) {
-            return Err(PhysureError::DomainError(format!("an observation must be finite, got {bad}")));
-        }
-        let n = samples.len() as f64;
-        let mean = samples.iter().sum::<f64>() / n;
-        let variance = samples.iter().map(|x| (x - mean) * (x - mean)).sum::<f64>() / (n - 1.0);
-        let standard_error = (variance / n).sqrt();
-        let quantity = Quantity::new_scalar(mean, standard_error, unit, None, None);
-        if standard_error > 0.0 {
-            quantity.with_dof(n - 1.0)
+        let evaluation = type_a(samples)?;
+        let quantity = Quantity::new_scalar(evaluation.mean, evaluation.standard_error, unit, None, None);
+        if evaluation.standard_error > 0.0 {
+            quantity.with_dof(evaluation.dof)
         } else {
             Ok(quantity)
         }
@@ -130,12 +145,7 @@ impl Quantity {
     /// # Errors
     /// `p` outside (0, 1), or a quantity that is not Gaussian.
     pub fn coverage_factor(&self, p: f64) -> PhysureResult<f64> {
-        let nu_eff = self.effective_dof()?;
-        if nu_eff.is_infinite() {
-            normal_two_sided(p)
-        } else {
-            student_t_two_sided(p, nu_eff.floor().max(1.0))
-        }
+        coverage_factor_for(p, self.effective_dof()?)
     }
 
     /// The expanded uncertainty `U = k_p u_c` for a coverage probability `p`, with the factor and the

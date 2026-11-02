@@ -34,6 +34,7 @@ use ::physure_core::{
 };
 use ::physure_core::units::registry::{Conversion, Stage};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
+use ::physure_core::uncertainty::{coverage_factor_for, declare_dof, type_a};
 use ::physure_core::uncertainty::moments::{self, AsymmetricMoments, MomentsBackend};
 use physure_script::symbolic::Expr;
 
@@ -1618,10 +1619,16 @@ impl PyLineage {
         PyLineage(Lineage::exact())
     }
 
-    /// Rebuilds from `(source_id, coefficient)` pairs as produced by `terms()`.
+    /// Rebuilds from `(source_id, coefficient)` pairs as produced by `terms()`, and the degrees of freedom
+    /// `(source_id, nu)` that `declared_dofs()` reported for them.
     #[staticmethod]
-    fn from_terms(terms: Vec<(u32, f64)>) -> Self {
-        PyLineage(Lineage::from_terms(terms))
+    #[pyo3(signature = (terms, dofs = None))]
+    fn from_terms(terms: Vec<(u32, f64)>, dofs: Option<Vec<(u32, f64)>>) -> PyResult<Self> {
+        let lineage = PyLineage(Lineage::from_terms(terms));
+        for (id, nu) in dofs.unwrap_or_default() {
+            declare_dof(id, nu).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        }
+        Ok(lineage)
     }
 
     /// Mints a source id that no other lineage will reuse.
@@ -1649,6 +1656,24 @@ impl PyLineage {
     /// The `(source_id, coefficient)` pairs, sorted by id.
     fn terms(&self) -> Vec<(u32, f64)> {
         self.0.terms().to_vec()
+    }
+
+    /// The effective degrees of freedom of this value by the Welch–Satterthwaite formula (JCGM 100:2008
+    /// G.4.1); `inf` when none of its sources has a finite number, and for an exact value.
+    fn effective_dof(&self) -> f64 {
+        self.0.effective_dof()
+    }
+
+    /// Declares `nu` degrees of freedom for the one measurement this lineage is. A `ValueError` for an exact
+    /// lineage, one that combines several sources, a `nu` that is not positive, or one that differs from what
+    /// the source already declared.
+    fn declare_dof(&self, nu: f64) -> PyResult<()> {
+        self.0.declare_dof(nu).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// `(source_id, nu)` of the sources of this lineage that declared a finite number of degrees of freedom.
+    fn declared_dofs(&self) -> Vec<(u32, f64)> {
+        self.0.declared_dofs()
     }
 
     #[getter]
@@ -1690,9 +1715,9 @@ impl PyLineage {
     // source id and leave the restored value uncorrelated with its own siblings.
     // `from_terms` also reserves the ids it sees, so a lineage restored in a fresh
     // process cannot collide with one minted there later.
-    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (Vec<(u32, f64)>,))> {
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (Vec<(u32, f64)>, Vec<(u32, f64)>))> {
         let from_terms = py.get_type::<PyLineage>().getattr("from_terms")?;
-        Ok((from_terms.unbind(), (self.0.terms().to_vec(),)))
+        Ok((from_terms.unbind(), (self.0.terms().to_vec(), self.0.declared_dofs())))
     }
 }
 
@@ -1833,6 +1858,32 @@ impl PyMomentsBackend {
     }
 }
 
+/// The coverage factor `k_p` for a coverage probability `p` and effective degrees of freedom `nu_eff`: the
+/// two-sided Student-t factor at `nu_eff` truncated to an integer (JCGM 100:2008 G.4.1), the normal factor
+/// when they are infinite. A `ValueError` for `p` outside (0, 1) or a `nu_eff` that is not positive.
+#[pyfunction]
+fn coverage_factor(p: f64, nu_eff: f64) -> PyResult<f64> {
+    coverage_factor_for(p, nu_eff).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// The Type A evaluation of observations (JCGM 100:2008 4.2): `(mean, standard_error, dof)` with the
+/// experimental standard deviation of the mean `s / sqrt(n)` and `n - 1` degrees of freedom. A `ValueError`
+/// for fewer than two observations or one that is not finite.
+#[pyfunction]
+fn type_a_evaluation(samples: Vec<f64>) -> PyResult<(f64, f64, f64)> {
+    let evaluation = type_a(&samples).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok((evaluation.mean, evaluation.standard_error, evaluation.dof))
+}
+
+/// A value and its standard uncertainty as the GUM presents them (JCGM 100:2008 7.2.6): the uncertainty to one or
+/// two significant figures and the value to the same decimal place, as the two strings `(value, uncertainty)`.
+/// `sig_figs` overrides the number of figures of the uncertainty.
+#[pyfunction]
+#[pyo3(signature = (mean, std_dev, sig_figs = None))]
+fn gum_round(mean: f64, std_dev: f64, sig_figs: Option<u32>) -> (String, String) {
+    ::physure_core::quantity::gum_round(mean, std_dev, sig_figs)
+}
+
 /// The largest skewness a pair of half-widths can express, reached only when one side is zero.
 #[pyfunction]
 fn max_skewness() -> f64 {
@@ -1892,6 +1943,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAsymmetricMoments>()?;
     m.add_class::<PyMomentsBackend>()?;
     m.add_function(wrap_pyfunction!(max_skewness, m)?)?;
+    m.add_function(wrap_pyfunction!(coverage_factor, m)?)?;
+    m.add_function(wrap_pyfunction!(gum_round, m)?)?;
+    m.add_function(wrap_pyfunction!(type_a_evaluation, m)?)?;
     m.add_function(wrap_pyfunction!(default_conf, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;

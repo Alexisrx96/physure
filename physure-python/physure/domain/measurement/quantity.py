@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 from physure.domain.exceptions import IncompatibleUnitsError
 from physure.domain.measurement.conversion_plan import apply_conversion
 from physure.domain.measurement.uncertainty import (
+    LineageModel,
     Uncertainty,
 )
 from physure.domain.measurement.units import (
@@ -135,12 +136,16 @@ from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
 from physure.domain.measurement._backend_mixin import (  # noqa: E402
     BackendMixin,
 )
+from physure.domain.measurement.degrees_of_freedom import (  # noqa: E402
+    DegreesOfFreedomMixin,
+)
 
 
 @dataclass(frozen=False)
 class Quantity(
     ArithmeticMixin,
     BackendMixin,
+    DegreesOfFreedomMixin,
     CoreQuantity,
     Generic[ValueType, UncType, UnitType],
 ):
@@ -457,8 +462,12 @@ class Quantity(
         system: UnitSystem,
         uncertainty: Any = 0.0,
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Self:
-        """Creates a Quantity from raw input values."""
+        """Creates a Quantity from raw input values.
+
+        `dof` declares the degrees of freedom of the standard uncertainty (`with_dof`).
+        """
         resolved_system = system
 
         backend = BackendManager.get_backend(value)
@@ -503,7 +512,7 @@ class Quantity(
             # Upgrade to rich model (handles active store + scalar/array logic)
             u_obj = Uncertainty.from_standard(uncertainty)
 
-        return cls(
+        quantity = cls(
             magnitude=cast("Numeric", value),
             unit=unit,
             uncertainty=raw_uncertainty,
@@ -511,6 +520,9 @@ class Quantity(
             symbol=symbol,
             _uncertainty_obj=u_obj,
         )
+        if dof is not None:
+            quantity.with_dof(dof)
+        return quantity
 
     @staticmethod
     def _reject_asymmetric_pair(
@@ -1111,15 +1123,25 @@ class Quantity(
             self.uncertainty,
             self._backend,
         )
-        return cast(
-            "Quantity[ValueType, UncType, UnitType]",
-            Quantity.from_input(
-                magnitude,
-                target_unit,
-                self.system,
-                uncertainty=uncertainty,
-            ),
+        converted = Quantity.from_input(
+            magnitude,
+            target_unit,
+            self.system,
+            uncertainty=uncertainty,
         )
+        # A conversion restates the same measurement in another unit, so it keeps the
+        # sources it came from, rescaled: `x.to("mm") - x.to("mm")` is zero and the degrees
+        # of freedom stay with it. `from_input` alone would mint a new, independent source.
+        model = self._uncertainty_obj
+        if (
+            isinstance(model, LineageModel)
+            and isinstance(uncertainty, (int, float))
+            and uncertainty > 0
+        ):
+            converted._uncertainty_obj = LineageModel(
+                native=model.native.rescaled_to(float(uncertainty))
+            )
+        return cast("Quantity[ValueType, UncType, UnitType]", converted)
 
     def plot(
         self,

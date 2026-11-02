@@ -62,6 +62,36 @@ pub fn dof_of(id: u32) -> f64 {
 }
 
 impl Lineage {
+    /// Declares `nu` degrees of freedom for the measurement this lineage describes, which must be
+    /// exactly one source: the degrees of freedom belong to a measurement, and a result that combines
+    /// several has those of its sources (declare them on each before combining).
+    ///
+    /// # Errors
+    /// An exact lineage, one with several sources, `nu` not positive, or `nu` different from what the
+    /// source already has.
+    pub fn declare_dof(&self, nu: f64) -> PhysureResult<()> {
+        match self.terms() {
+            [(id, _)] => declare_dof(*id, nu),
+            [] => Err(PhysureError::DomainError(
+                "an exact quantity has no uncertainty to have degrees of freedom".to_string(),
+            )),
+            many => Err(PhysureError::DomainError(format!(
+                "a quantity that combines {} sources has no degrees of freedom to declare: declare \
+                 them on each measurement before combining",
+                many.len()
+            ))),
+        }
+    }
+
+    /// The degrees of freedom declared for the sources of this lineage, `(source id, nu)`, for those that
+    /// have a finite number: what a serialized lineage must carry so that it can be rebuilt elsewhere.
+    pub fn declared_dofs(&self) -> Vec<(u32, f64)> {
+        self.terms()
+            .iter()
+            .filter_map(|&(id, _)| Some((id, dof_of(id))).filter(|(_, nu)| nu.is_finite()))
+            .collect()
+    }
+
     /// The effective degrees of freedom of the value this lineage describes (Welch–Satterthwaite).
     ///
     /// `+∞` when no source has a finite number of them, and for an exact value. Written with the

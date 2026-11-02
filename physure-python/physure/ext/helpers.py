@@ -41,6 +41,36 @@ def approx_eq(
         return False
 
 
+def dof(x: Any) -> float:
+    """Effective degrees of freedom of a measurement (`inf` for a number or an exact quantity)."""
+    return float(getattr(x, "dof", math.inf))
+
+
+def _probability(p: Any) -> float:
+    """A coverage probability: a number, or the dimensionless quantity a PHS literal becomes."""
+    return float(getattr(p, "magnitude", p))
+
+
+def coverage_factor(x: Any, p: Any) -> float:
+    """Coverage factor for the coverage probability `p` (Student-t at the effective dof)."""
+    from physure._core import coverage_factor as _coverage_factor
+
+    return float(_coverage_factor(_probability(p), dof(x)))
+
+
+def expanded(x: Any, p: Any) -> Any:
+    """Expanded uncertainty `U = k u_c`, an exact quantity in the unit of `x` (0.0 for a number)."""
+    if not hasattr(x, "expanded"):
+        return 0.0
+    result = x.expanded(_probability(p))
+    return Q_(result.expanded_uncertainty, result.unit)
+
+
+def from_samples(values: Any) -> Any:
+    """Type A evaluation of repeated observations (mean, standard error, `n - 1` dof)."""
+    return Q_.from_samples(values)
+
+
 def linspace(start: Any, stop: Any, num: int = 50) -> Any:
     """Generate linearly spaced numbers or Quantities."""
     import numpy as np

@@ -13,7 +13,7 @@ pub use trait_def::{UncertaintyBackend, UncertaintyValue};
 pub use gaussian::GaussianBackend;
 pub use lineage::Lineage;
 pub use dof::{declare_dof, dof_of};
-pub use expanded::Expanded;
+pub use expanded::{coverage_factor_for, type_a, Expanded, TypeA};
 pub use mode::{ModeGuard, PropagationMode, propagation_mode, set_propagation_mode};
 pub use moments::{AsymmetricMoments, MomentLineage, MomentsBackend, SourceMoments};
 pub use shapes::{AsymmetryShape, DimidiatedGaussian, FechnerGaussian, ShapeKind};

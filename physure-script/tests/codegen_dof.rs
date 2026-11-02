@@ -18,7 +18,7 @@ fn python_writes_the_degrees_of_freedom_as_a_keyword() {
     assert!(code.contains("Q_(10.003, \"V\", uncertainty=0.002, dof=9.0)"), "{code}");
     let infinite = emit("x = 10.003 +/- 0.002 dof inf V\n", Target::Python).unwrap();
     assert!(infinite.contains("dof=float(\"inf\")"), "{infinite}");
-    assert!(!emit("x = 10.003 +/- 0.002 V\n", Target::Python).unwrap().contains("dof"));
+    assert!(!emit("x = 10.003 +/- 0.002 V\n", Target::Python).unwrap().contains("dof="));
 }
 
 #[test]
