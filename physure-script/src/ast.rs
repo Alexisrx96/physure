@@ -149,26 +149,14 @@ pub struct QuantityNode {
     #[serde(default)]
     pub is_sigma: bool,
     /// The degrees of freedom of the standard uncertainty, when the literal declared them:
-    /// `10.003 +/- 0.002 dof 9 V`. A consumer that cannot carry them refuses (`dof_refusal`)
-    /// rather than drop them: a quantity with nine degrees of freedom is not one with infinitely many.
+    /// `10.003 +/- 0.002 dof 9 V`. A consumer must carry them, or refuse the quantity, and never drop
+    /// them: a quantity with nine degrees of freedom is not one with infinitely many.
     #[serde(default)]
     pub dof: Option<f64>,
     pub unit: Option<String>,
 }
 
 impl QuantityNode {
-    /// The reason a consumer that has no place for degrees of freedom cannot take this quantity, if it
-    /// declared them. `target` names the consumer ("the Java generator").
-    pub fn dof_refusal(&self, target: &str) -> Option<String> {
-        self.dof.map(|nu| {
-            format!(
-                "The degrees of freedom of this quantity ({nu}) cannot be carried by {target} yet: leaving \
-                 them out would make an uncertainty known from {nu} observations look exact. \
-                 Remove `dof {nu}` or use a target that supports it."
-            )
-        })
-    }
-
     /// The reason this quantity cannot be used yet, if it is asymmetric.
     ///
     /// The grammar accepts `12.3 +/- (0.5, 0.4) pb` so the notation is settled and one place

@@ -272,9 +272,6 @@ fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
     if let Some(reason) = q.asymmetric_refusal() {
         return Err(CodegenError::Generic(reason));
     }
-    if let Some(reason) = q.dof_refusal("the Java generator") {
-        return Err(CodegenError::Generic(reason));
-    }
     let mut args = vec![format!("{:?}", q.magnitude)];
     if let Some(unc) = q.uncertainty {
         args.push(format!("{:?}", unc));
@@ -283,7 +280,13 @@ fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
         args.push(format!("\"{}\"", unit));
     }
     let constructor = if q.uncertainty.is_some() { "withUncertainty" } else { "of" };
-    Ok(format!("Quantity.{}({})", constructor, args.join(", ")))
+    // the degrees of freedom of the uncertainty (JCGM 100:2008 4.3.2) go with it: `withDof` returns the quantity
+    let dof = match q.dof {
+        Some(nu) if nu.is_infinite() => ".withDof(Double.POSITIVE_INFINITY)".to_string(),
+        Some(nu) => format!(".withDof({:?})", nu),
+        None => String::new(),
+    };
+    Ok(format!("Quantity.{}({}){}", constructor, args.join(", "), dof))
 }
 
 /// The Java method that carries out a comparison operator.

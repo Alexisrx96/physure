@@ -44,9 +44,12 @@ fn javascript_and_typescript_declare_them_with_with_dof() {
 }
 
 #[test]
-fn java_refuses_them_until_its_quantities_keep_the_sources_they_came_from() {
+fn java_declares_them_with_with_dof() {
     for target in [Target::Java, Target::JavaWithClass("Model".to_string())] {
-        let error = emit(NINE, target).expect_err("Java");
-        assert!(error.contains("degrees of freedom") && error.contains("cannot be carried") && error.contains("Java"), "{error}");
+        let code = emit(NINE, target.clone()).unwrap();
+        assert!(code.contains("Quantity.withUncertainty(10.003, 0.002, \"V\").withDof(9.0)"), "{code}");
+        let infinite = emit("x = 10.003 +/- 0.002 dof inf V\n", target.clone()).unwrap();
+        assert!(infinite.contains(".withDof(Double.POSITIVE_INFINITY)"), "{infinite}");
+        assert!(!emit("x = 10.003 +/- 0.002 V\n", target).unwrap().contains("withDof"));
     }
 }

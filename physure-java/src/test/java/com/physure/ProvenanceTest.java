@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -177,6 +178,19 @@ class ProvenanceTest {
         assertEquals(0.1, magnitude.getUncertainty(), EPS);
         assertExact(0.0, magnitude.add(x));
         assertEquals(0.2, magnitude.subtract(x).getUncertainty(), 1e-12, "|x| - x = -2x: the sources add up");
+    }
+
+    // ---- a vector product no longer needs to be told that a component is its own
+
+    @Test
+    void aDotProductSeesThatTwoComponentsShareAMeasurementWhateverObjectsHoldThem() {
+        Quantity x = measured(3.0, 0.1, "m");
+        QuantityVector a = new QuantityVector(Arrays.asList(x));
+        QuantityVector b = new QuantityVector(Arrays.asList(x.multiply(1.0)));
+        Quantity product = a.dot(b);
+        assertEquals(9.0, product.getValue(), EPS);
+        assertEquals(2 * 3.0 * 0.1, product.getUncertainty(), 1e-12, "the same measurement twice: 2 x u, not sqrt(2) x u");
+        assertEquals(0.1, new QuantityVector(Arrays.asList(x)).norm().getUncertainty(), 1e-12);
     }
 
     // ---- calls bind quantities by value, with their sources
