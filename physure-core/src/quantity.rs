@@ -176,12 +176,18 @@ impl Quantity {
     /// number and unit to other code (the Java and WASM bindings) has to take them from here, or from
     /// `Display`, and not from `value` and `unit` separately.
     pub fn display_parts(&self) -> (f64, f64, String) {
-        if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
+        if let Some(scale) = self.folded_scale() {
             let canonical_unit = self.unit.clone().with_unit_scale();
-            (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
+            (self.canonical_magnitude(), self.value.std_dev() * scale, canonical_unit.__repr__())
         } else {
             (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
         }
+    }
+
+    /// The scale that `display_parts` folds into the magnitude and the uncertainty: that of an anonymous
+    /// compound unit, which has no symbol to carry it. `None` for a unit that has a name or a scale of one.
+    pub(crate) fn folded_scale(&self) -> Option<f64> {
+        (self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9).then_some(self.unit.scale)
     }
 
     /// The default `Display` string, or one with `@precision(N)`'s override applied: `N`
