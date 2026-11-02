@@ -83,6 +83,8 @@ The spec assumed that the Java binding wraps the core's `Quantity`, as WASM does
 
 **Decision (maintainer, 2026-11-01): leave Java out of this feature.** The Java generator keeps refusing the `dof` clause with a clear message and the Java API gets nothing, so that nothing half-built reaches Maven Central (where a green release is public). Making Java quantities carry their sources across JNI (ids, coefficients and degrees of freedom; the core lineage rebuilt and read in every operation) is a piece of its own, with its own design: it changes Java's behaviour for every correlated expression, and then `withDof`, `fromSamples`, `effectiveDof`, `coverageFactor` and `expanded` come with it, checked against `tests/golden/uncertainty_dof.tsv`.
 
+**Done (2026-11-02):** the Java piece was designed and built on its own, in `docs/superpowers/specs/2026-11-02-java-provenance-design.md`. A Java `Quantity` now carries the sources of its uncertainty across JNI, `withDof`, `fromSamples`, `effectiveDof`, `coverageFactor` and `expanded` exist, Java is held to `tests/golden/uncertainty_dof.tsv`, and the Java generator writes the clause instead of refusing it.
+
 ## Not in this piece
 
 - ν_eff for arrays or the covariance stores (numpy / torch / jax); Python-lineage mode.

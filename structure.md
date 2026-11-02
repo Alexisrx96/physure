@@ -26,7 +26,7 @@ subgraph group_core["physure-core — pure Rust physics engine<br/>(crate physur
   node_units["units/<br/>RationalUnit with exact rational scales, UnitRegistry, .conf parsing,<br/>a catalog scoped to one run (scope.rs), unit text rules<br/>[units/mod.rs]"]
   node_math["math/<br/>dual numbers, Hessian propagation,<br/>interval arithmetic, sparse kernels<br/>[math/mod.rs]"]
   node_covariance[("covariance/<br/>CovarianceStore, PruningConfig<br/>[covariance/store.rs]")]
-  node_uncertainty["uncertainty/<br/>gaussian, unscented, monte-carlo (seedable),<br/>moments, lineage, mode<br/>[uncertainty/mod.rs]"]
+  node_uncertainty["uncertainty/<br/>gaussian, unscented, monte-carlo (seedable),<br/>moments, lineage, dof, expanded, sources, mode<br/>[uncertainty/mod.rs]"]
   node_serialization["serialization.rs + covariance/arrow.rs<br/>Arrow interchange<br/>[serialization.rs]"]
   node_linalgplot["linalg.rs · plotting.rs<br/>matrix helpers, plot data prep"]
 end

@@ -89,7 +89,7 @@ timeline
 * [ ] **Phase 4**: Symbolic linear algebra (Bareiss fraction-free det, Jordan/Smith canonical forms), number theory, combinatorics, and DPLL SAT solver.
 
 ### Subsystem 4: Scientific & Metrological Rigor Gaps (15% 📋)
-* [x] **Welch-Satterthwaite $\nu_{\text{eff}}$**: Effective degrees of freedom and Student-$t$ coverage factor $k_p$ (GUM §4.2, G.4). Core, PHS (`dof` clause and builtins), Python and WebAssembly; Java after its quantities keep their sources (see `docs/superpowers/specs/2026-11-01-welch-satterthwaite-design.md`).
+* [x] **Welch-Satterthwaite $\nu_{\text{eff}}$**: Effective degrees of freedom and Student-$t$ coverage factor $k_p$ (GUM §4.2, G.4). Core, PHS (`dof` clause and builtins), Python, WebAssembly and Java (see `docs/superpowers/specs/2026-11-01-welch-satterthwaite-design.md` and, for Java's quantities keeping their sources, `docs/superpowers/specs/2026-11-02-java-provenance-design.md`).
 * [ ] **Real Equations of State**: Peng-Robinson, Redlich-Kwong, and IAPWS-IF97 steam formulation.
 * [ ] **Anisotropic Physical Tensors**: 2nd and 4th-order tensors for stress-strain ($\boldsymbol{\sigma}, \boldsymbol{\varepsilon}$) and dielectric permittivity (ISO 80000-4).
 * [ ] **Verified Interval Arithmetic**: IEEE 1788 directed interval bounds to prevent floating-point rounding errors.
