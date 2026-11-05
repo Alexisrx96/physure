@@ -958,6 +958,17 @@ In the `tests` module of `conf.rs`, add:
     }
 
     #[test]
+    fn a_section_that_only_names_a_periodic_unit_keeps_the_rows() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        parse_physure_conf("[Compatibility]\nperiodic = hertz\n", &mut reg, &mut constants);
+        assert_eq!(marker_grants(), (true, true));
+    }
+
+    #[test]
     fn a_row_that_asks_for_a_sum_or_a_comparison_grants_nothing() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
@@ -1104,10 +1115,16 @@ with
 ```
 - after `mark_periodic(registry, &periodic_names, problems);` add
 ```rust
-    if apply_settings && has_compatibility {
+    // A section replaces the rows when it has rows, or when it is empty (an explicit "none"). A section that only
+    // names a periodic unit leaves them alone: a project that adds a unit of its own must not lose the grants.
+    if apply_settings && has_compatibility && (!compatibility_rows.is_empty() || periodic_names.is_empty()) {
         apply_compatibility(&compatibility_rows);
     }
 ```
+- in `mark_periodic` (written in Task 4), reword the problem so that it is true for a base unit and for a prefixed spelling too: replace
+`format!("[Compatibility] periodic: '{name}' is not a registered unit")` with
+`format!("[Compatibility] periodic: '{name}' does not name a unit defined in [Units] (a base unit or a prefixed spelling cannot be flagged)")`.
+(The tests of Task 4 assert only that the text names the unit, so they stay as they are.)
 
 - [ ] **Step 4: Write the rows into the embedded conf**
 
@@ -1118,7 +1135,8 @@ In `physure.conf`, replace the `[Compatibility]` section of Task 4 with:
 # Which base units a conversion may read as 1 (SI Brochure, Table 4: the expression of the radian and of the
 # steradian is 1). `unit, plain = convert` lets `=>`, `to` and a unit annotation identify that unit with 1 when the
 # rest of the unit agrees: `m*rad/s => m/s`, `cd/m^2 => lx`. Only `convert` is supported: a sum or a comparison
-# never reads a marker as 1. A conf that has this section replaces these rows; one that has none keeps them.
+# never reads a marker as 1. A conf with rows in this section replaces these rows (an empty section removes them
+# all); a conf with no section, or one that only names a periodic unit, keeps them.
 radian, plain = convert
 steradian, plain = convert
 # The SI reserves the hertz for periodic phenomena (Brochure, Table 4, footnote d), and a frequency and an angular
@@ -1296,6 +1314,9 @@ In `impl RationalUnit`, after `same_dimensions`, add:
     /// converts to `m/s`, `deg` to `unity`, `cd/m²` to `lx`. It never does for a level, for the `periodic` hertz
     /// (a frequency and an angular frequency differ by 2π), for one marker against another, or for two exponents
     /// of the same marker. A sum or a comparison does not call this: it keeps `same_dimensions`.
+    ///
+    /// The `periodic` flag follows how a unit is written, not what it is: `Hz`, `kHz`, `Hz^1` and `Hz*unity` carry
+    /// it, while `Hz^2/Hz` and `Hz*s*Hz` are the hertz and carry none, so a conversion to them is not refused.
     pub fn convertible_to(&self, target: &Self) -> bool {
         if self.same_dimensions(target) {
             return true;

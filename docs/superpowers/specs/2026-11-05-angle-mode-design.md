@@ -103,6 +103,8 @@ That is the whole default data. `level` and `frequency` are kinds so that the li
 
 **The mode and the list.** `angle_mode = dimension` does not read the list: angles are dimensions, which is today's behaviour byte for byte. So stage B's `@angles(dimension)` means "no list for this block". A project edits the list in its own `physure.conf` and the behaviour table shows what then flips: deleting `steradian, plain` keeps radiometry strict. Granting `radian, plain = convert add compare` would bring back `2 rad + 1`, which is the one thing this default exists to prevent, so stage A refuses such a row (above) and the spec's tests pin both the default and the refusal.
 
+**What a conf replaces.** A conf whose `[Compatibility]` section has rows replaces the rows in force (so a project can delete one), and an empty section removes them all. A conf with no section, or one that only names a `periodic` unit, leaves the rows alone: a project that adds a unit of its own must not lose the grants by doing so. `periodic` names add to the units that are flagged and never take one away; a conf that redefines the hertz has to name it again.
+
 **Where it lives.** A `[Compatibility]` section parsed by `conf.rs`, with problems reported like the other sections (an unknown kind or operation is an error of the conf, not a silent skip), into a process-wide table that `Quantity::add`, `sub`, `convert_to` and the others consult, since they have no registry. Same caveat as the mode: global state, reset by the `clean_state` fixture. The cost is a scan of a unit's short, sorted base exponents for the marker keys, with no allocation, and only when the strict comparison has already failed.
 
 ### The predicate and its callers
