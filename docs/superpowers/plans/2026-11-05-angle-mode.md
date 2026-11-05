@@ -1439,6 +1439,12 @@ git commit -m "feat(core): RationalUnit::convertible_to reads a marker as 1 for 
 - Modify: `physure-core/src/quantity.rs` (`convert_to`), `physure-core/src/units/registry.rs` (`factor_between`, `conversion`)
 - Test: `physure-core/tests/angle_mode.rs`
 
+**Test isolation in this task.** From here on conversions read the process-wide grants, so a test can be broken by another test:
+
+1. A lib test (inside `physure-core/src`) that changes a grant or the process-wide mode loads the catalog first (`build_registry_from_conf()`, or the conf tests' `settle_catalog_settings()`), BEFORE its first `set_marker_grants` or `set_angle_mode`: the catalog's first load applies `[Compatibility]` and would undo the change.
+2. A test whose answer depends on a grant goes in the library and takes `crate::settings::TEST_LOCK`. That includes an acceptance such as `rad => unity` through `Quantity::convert_to`, `UnitRegistry::conversion` or `factor_between`, and a refusal that holds only with a grant revoked. The integration tests (`physure-core/tests`, `physure-script/tests`) may only assert answers that are true under the default `(true, true)` grants, with `scoped(...)` for the mode, because they cannot revoke a grant without racing their own threads.
+3. An existing lib test that converts across `rad` or `sr` without the lock stays unlocked only if its answer is the same in both modes and under every grant (marker against marker, a level on either side, identical exponents). If it is not, lock it or add `scoped(...)`.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `physure-core/tests/angle_mode.rs`:
