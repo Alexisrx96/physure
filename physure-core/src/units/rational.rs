@@ -3,9 +3,34 @@ use num_rational::Rational64;
 use std::hash::{Hash, Hasher};
 use smallvec::SmallVec;
 use crate::error::{PhysureError, PhysureResult};
+use crate::units::angle_mode::{angle_mode, marker_converts_to_plain, AngleMode};
 use crate::units::exact::ExactScale;
 
 pub type DimVec = SmallVec<[(String, (i64, i64)); 4]>;
+
+/// The base units that the SI gives the expression 1 (Brochure, Table 4): in an expression they say what a quantity
+/// involves, and a conversion may read them as 1.
+const MARKERS: [&str; 2] = ["rad", "sr"];
+
+/// What is left of a unit when its physical dimension is set aside: the markers it carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarkerKind {
+    Plain,
+    Radian,
+    Steradian,
+    Mixed,
+}
+
+impl MarkerKind {
+    /// Whether a conversion may read this kind as the plain unit, as `[Compatibility]` says.
+    fn reads_as_plain(self) -> bool {
+        match self {
+            Self::Radian => marker_converts_to_plain("rad"),
+            Self::Steradian => marker_converts_to_plain("sr"),
+            Self::Plain | Self::Mixed => false,
+        }
+    }
+}
 
 /// The dimensions of a product, or of a quotient with `subtract`: both sorted lists merged, the exponents of a
 /// symbol they share added (subtracted), and a symbol whose exponent comes out as zero dropped.
@@ -367,6 +392,49 @@ impl RationalUnit {
     /// True if `other` has the same physical dimensions (ignoring scale) as `self`.
     pub fn same_dimensions(&self, other: &Self) -> bool {
         self.dimensions == other.dimensions
+    }
+
+    /// The base units of this unit that are not markers, with their exponents: its physical part.
+    fn physical_part(&self) -> impl Iterator<Item = &(String, (i64, i64))> {
+        self.dimensions.iter().filter(|(symbol, _)| !MARKERS.contains(&symbol.as_str()))
+    }
+
+    fn marker_kind(&self) -> MarkerKind {
+        match (self.get_exponent("rad").is_some(), self.get_exponent("sr").is_some()) {
+            (false, false) => MarkerKind::Plain,
+            (true, false) => MarkerKind::Radian,
+            (false, true) => MarkerKind::Steradian,
+            (true, true) => MarkerKind::Mixed,
+        }
+    }
+
+    /// Whether a *conversion* from this unit to `target` is allowed.
+    ///
+    /// Identical base exponents always convert, as they always did. Otherwise, in `Dimensionless` mode, a marker
+    /// (`rad`, `sr`) may be read as 1 when the rest of the unit agrees and `[Compatibility]` grants it: `m·rad/s`
+    /// converts to `m/s`, `deg` to `unity`, `cd/m²` to `lx`. It never does for a level, for the `periodic` hertz
+    /// (a frequency and an angular frequency differ by 2π), for one marker against another, or for two exponents
+    /// of the same marker. A sum or a comparison does not call this: it keeps `same_dimensions`.
+    ///
+    /// The `periodic` flag follows how a unit is written, not what it is: `Hz`, `kHz`, `Hz^1` and `Hz*unity` carry
+    /// it, while `Hz^2/Hz` and `Hz*s*Hz` are the hertz and carry none, so a conversion to them is not refused.
+    pub fn convertible_to(&self, target: &Self) -> bool {
+        if self.same_dimensions(target) {
+            return true;
+        }
+        if angle_mode() == AngleMode::Dimension
+            || self.is_logarithmic()
+            || target.is_logarithmic()
+            || self.periodic
+            || target.periodic
+            || !self.physical_part().eq(target.physical_part())
+        {
+            return false;
+        }
+        match (self.marker_kind(), target.marker_kind()) {
+            (MarkerKind::Plain, kind) | (kind, MarkerKind::Plain) => kind.reads_as_plain(),
+            _ => false,
+        }
     }
 
     pub fn get_exponent(&self, base: &str) -> Option<(i64, i64)> {
