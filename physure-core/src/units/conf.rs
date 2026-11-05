@@ -894,6 +894,18 @@ mod tests {
     }
 
     #[test]
+    fn a_section_with_rows_and_a_periodic_unit_replaces_the_rows() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        // The shape of the embedded conf: rows and `periodic` in one section. The periodic name must not keep the
+        // old rows alive.
+        let (mut reg, mut constants) = build_registry_from_conf();
+        parse_physure_conf("[Compatibility]\nradian, plain = convert\nperiodic = hertz\n", &mut reg, &mut constants);
+        assert_eq!(marker_grants(), (true, false));
+    }
+
+    #[test]
     fn a_row_that_asks_for_a_sum_or_a_comparison_grants_nothing() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
