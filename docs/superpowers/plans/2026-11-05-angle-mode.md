@@ -1825,8 +1825,10 @@ git commit -m "fix(check): stay silent on a conversion that differs only in the 
 ### Task 11: Python
 
 **Files:**
-- Modify: `physure-python/src/lib.rs`, `physure-python/physure/_core.pyi`, `physure-python/physure/application/context.py`, `physure-python/physure/__init__.py`
+- Modify: `physure-python/src/lib.rs`, `physure-python/physure/_core.pyi`, `physure-python/physure/application/context.py`, `physure-python/physure/__init__.py`, `physure-python/physure/application/startup.py`
 - Create: `physure-python/tests/core/test_angle_mode.py`
+
+A Python `UnitSystem` does not read the embedded conf: it builds its own core registry from the sections of the merged conf, one `extend_core` call per section (`startup.py`, `UnitSystemBuilder`). Today only `[Prefixes]` and `[Units]` reach it, so the `periodic = hertz` line of `[Compatibility]` would never flag the hertz of a Python system, and `Q_(10, "rad/s").to("Hz")` would give `10 Hz`, the 2π error the guard exists to stop. Step 4b forwards the section; the test `test_a_rate_of_angle_converts_to_per_second_but_not_to_hertz` is what proves it.
 
 - [ ] **Step 1: Prepare the build, carefully**
 
@@ -2084,6 +2086,56 @@ with
         "get_angle_mode": get_angle_mode,
 ```
 
+- [ ] **Step 4b: Give the system's core registry the `[Compatibility]` section**
+
+In `physure-python/physure/application/startup.py`, in `UnitSystemBuilder`, after the `add_units` method add:
+
+```python
+    def add_compatibility(
+        self, compatibility_data: dict[str, str]
+    ) -> UnitSystemBuilder:
+        """Adds the `[Compatibility]` section to the core registry of the system.
+
+        The core flags the units that `periodic` names (the hertz) on the
+        registry it builds, and a conversion refuses them against a unit that
+        carries a marker (`rad`, `sr`). The rows of the section are process-wide
+        settings, which a system conf does not change, so only `periodic` takes
+        effect here. configparser keeps the last value of a key, so a conf that
+        sets `periodic` replaces the value of the base conf: it has to name
+        `hertz` as well.
+        """
+        if not compatibility_data:
+            return self
+        self._system.extend_core(
+            _conf_section("Compatibility", compatibility_data)
+        )
+        return self
+```
+
+and in `create_system`, replace
+
+```python
+        .add_units(dict(parser.items("Units")) if "Units" in parser else {})
+        .add_constants(
+```
+
+with
+
+```python
+        .add_units(dict(parser.items("Units")) if "Units" in parser else {})
+        .add_compatibility(
+            dict(parser.items("Compatibility"))
+            if "Compatibility" in parser
+            else {}
+        )
+        .add_constants(
+```
+
+(`add_compatibility` must come after `add_units`: the core flags the stored unit that the name resolves to, so the unit has to be registered first.)
+
+Run: `uv run pytest tests/core/test_angle_mode.py::test_a_rate_of_angle_converts_to_per_second_but_not_to_hertz -v` after Step 5 below (it needs the built extension).
+Expected: pass. Without this step it fails with `10 Hz` instead of an error.
+
 - [ ] **Step 5: Build the extension and verify which one was built**
 
 Run (from `physure-python`): `uv run maturin develop --release`
@@ -2114,8 +2166,8 @@ Expected: no file would be reformatted. If one would, run `uv run ruff format ph
 - [ ] **Step 8: Commit**
 
 ```bash
-git add physure-python/src/lib.rs physure-python/physure/_core.pyi physure-python/physure/application/context.py physure-python/physure/__init__.py physure-python/tests/core/test_angle_mode.py
-git commit -m "feat(python): physure.angle_mode and get_angle_mode" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+git add physure-python/src/lib.rs physure-python/physure/_core.pyi physure-python/physure/application/context.py physure-python/physure/__init__.py physure-python/physure/application/startup.py physure-python/tests/core/test_angle_mode.py
+git commit -m "feat(python): physure.angle_mode, get_angle_mode, and the periodic hertz in a system" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2205,6 +2257,10 @@ git commit -m "docs: a conversion reads rad and sr as 1" -m "Co-Authored-By: Cla
 
 Run (background, `timeout: 600000`): `cargo test --workspace --exclude physure-python`
 Expected: the Task 0 baseline and nothing more. List every failure that is not in the baseline; there should be none.
+
+- [ ] **Step 1b: The hertz is periodic in every binding**
+
+Python's registry was the one that did not get the `[Compatibility]` section (Task 11, Step 4b). Check the others the same way, by reading, not by assuming: in `physure-wasm/src/registry.rs`, `physure-java/src/lib.rs`, `physure-lsp/src` and `physure-cli/src`, find every place that builds a `UnitRegistry` (`UnitRegistry::new()`, `build_registry_from_conf`, `parse_physure_conf`, `build_registry_with`, `from_conf`, `extend_registry`) and say, for each, whether the registry it builds can be asked for `Hz` and has the flag (`parse_physure_conf` of the embedded conf and `build_registry_from_conf` do; a bare `UnitRegistry::new()` extended only with unit lines does not). Expected: no binding that converts units builds a registry without the section. If one does, stop and report it with the file and line: that binding would convert `rad/s` to `Hz` without the 2π guard.
 
 - [ ] **Step 2: Clippy on what changed**
 
