@@ -1,4 +1,5 @@
 use crate::uncertainty::{PropagationMode, set_propagation_mode};
+use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
 use crate::units::registry::UnitRegistry;
 use std::collections::HashMap;
@@ -107,6 +108,14 @@ fn apply_setting(line: &str) {
             // beats falling back to correlated with nothing on screen: that is
             // the wrong answer that looks right.
             Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
+        },
+        "angle_mode" => match raw.parse::<AngleMode>() {
+            Ok(mode) => {
+                set_angle_mode(mode);
+            }
+            // Same reasoning as `propagation_mode`: a conf is read before there is anywhere to report to, and the
+            // mode it names is not worth refusing to start over.
+            Err(why) => eprintln!("physure.conf: {why}; keeping the angle mode in force"),
         },
         "parallel_threshold" => apply_count_setting(key, raw, |n| {
             crate::settings::set_parallel_threshold(n);
@@ -638,6 +647,40 @@ mod tests {
         );
         assert_eq!(crate::settings::max_loop_iterations(), 250);
         crate::settings::set_max_loop_iterations(original);
+    }
+
+    #[test]
+    fn the_embedded_conf_sets_the_default_angle_mode() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        assert_eq!(crate::units::angle_mode::angle_mode(), crate::units::angle_mode::AngleMode::Dimensionless);
+    }
+
+    #[test]
+    fn parses_angle_mode_from_settings_section() {
+        use crate::units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        set_angle_mode(AngleMode::Dimensionless);
+        parse_physure_conf("[Settings]\nangle_mode = dimension\n", &mut reg, &mut constants);
+        assert_eq!(angle_mode(), AngleMode::Dimension);
+    }
+
+    #[test]
+    fn a_bad_angle_mode_keeps_the_one_in_force() {
+        use crate::units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        set_angle_mode(AngleMode::Dimensionless);
+        parse_physure_conf("[Settings]\nangle_mode = degrees\n", &mut reg, &mut constants);
+        assert_eq!(angle_mode(), AngleMode::Dimensionless);
     }
 
     #[test]
