@@ -12,7 +12,7 @@
 
 **Working rules for this repository** (from `CLAUDE.md` and the maintainer's standing instructions):
 
-- Work only in the worktree `D:\Projects\physure\.claude\worktrees\angle-mode` on branch `feat/angle-mode`. Never commit on `main`. Do not push.
+- Work only in the git worktree of branch `feat/angle-mode` (`.claude/worktrees/angle-mode` under the repository's main checkout; `<worktree>` below is its absolute path on your machine). Never commit on `main`. Do not push.
 - English only: code, comments, commit messages.
 - Run each shell command on its own (no `&&` chains, no `$(...)`, no heredocs). Commit with `git commit -m "<subject>" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`.
 - The first `cargo` build in a fresh worktree compiles every dependency and takes minutes: run it with `run_in_background` and a long timeout.
@@ -1894,7 +1894,7 @@ A Python `UnitSystem` does not read the embedded conf: it builds its own core re
 
 - [ ] **Step 1: Prepare the build, carefully**
 
-Run (from `D:\Projects\physure\.claude\worktrees\angle-mode\physure-python`): `echo $VIRTUAL_ENV`
+Run (from `physure-python/` of the worktree): `echo $VIRTUAL_ENV`
 Expected: empty, or a path inside this worktree. If it names another checkout's `.venv`, `maturin develop` would write the extension there: unset it (`deactivate`, or start a clean shell) before going on.
 
 Run: `uv sync --all-extras --dev`
@@ -2204,7 +2204,7 @@ Run (from `physure-python`): `uv run maturin develop --release`
 Expected: ends with `Installed physure-...`. First build takes minutes: run it in the background.
 
 Run: `uv run python -c "import physure._core as c; print(c.__file__)"`
-Expected: a path inside `D:\Projects\physure\.claude\worktrees\angle-mode\physure-python\`. If it is under another checkout, stop and report it: the wrong venv was written.
+Expected: a path inside the worktree's own `physure-python/`. If it is under another checkout, stop and report it: the wrong venv was written.
 
 - [ ] **Step 6: Run the tests**
 
@@ -2245,7 +2245,7 @@ git commit -m "feat(python): physure.angle_mode, get_angle_mode, and the periodi
 In `CHANGELOG.md`, directly under the first `### Changed` heading of `## [Unreleased]`, add as the first bullet:
 
 ```markdown
-- **A conversion reads the radian and the steradian as 1, as the SI does.** `½·I·ω² => J` (finding `F-0001` of `physure-crucible`), `(10 rad/s) * (0.5 m) => m/s`, `(377 rad/s) * (0.1 H) => ohm` and `(100 cd) / (2 m)^2 => lx` were unit mismatches, because the catalog made the angle a base dimension. SI Brochure Table 4 gives `rad` and `sr` the expression 1, so `=>`, `to`, the binding of an annotated parameter and the registry's conversion plan now identify them with 1 when the rest of the unit agrees. Nothing else does: a sum or a comparison still refuses an angle against a plain number (`2 rad + 1`, `5 deg + 50 %`, `2 m*rad + 1 m`), `rad` still does not convert to `sr` or to a level, and `10 rad/s => Hz` is still refused, because the SI reserves the hertz for periodic phenomena and a frequency and an angular frequency differ by 2π (`(10 rad/s) / (2π rad) => Hz` is the way to write it). `[Settings] angle_mode = dimension` in `physure.conf`, `with physure.angle_mode("dimension"):` in Python, or `physure_core::units::angle_mode::scoped(AngleMode::Dimension)` in Rust brings back the old behaviour exactly, and `[Compatibility]` in `physure.conf` lists the markers a conversion may read as 1. Design: `docs/superpowers/specs/2026-11-05-angle-mode-design.md`.
+- **A conversion reads the radian and the steradian as 1, as the SI does.** `½·I·ω² => J` (the energy of a rotating disk), `(10 rad/s) * (0.5 m) => m/s`, `(377 rad/s) * (0.1 H) => ohm` and `(100 cd) / (2 m)^2 => lx` were unit mismatches, because the catalog made the angle a base dimension. SI Brochure Table 4 gives `rad` and `sr` the expression 1, so `=>`, `to`, the binding of an annotated parameter and the registry's conversion plan now identify them with 1 when the rest of the unit agrees. Nothing else does: a sum or a comparison still refuses an angle against a plain number (`2 rad + 1`, `5 deg + 50 %`, `2 m*rad + 1 m`), `rad` still does not convert to `sr` or to a level, and `10 rad/s => Hz` is still refused, because the SI reserves the hertz for periodic phenomena and a frequency and an angular frequency differ by 2π (`(10 rad/s) / (2π rad) => Hz` is the way to write it). `[Settings] angle_mode = dimension` in `physure.conf`, `with physure.angle_mode("dimension"):` in Python, or `physure_core::units::angle_mode::scoped(AngleMode::Dimension)` in Rust brings back the old behaviour exactly, and `[Compatibility]` in `physure.conf` lists the markers a conversion may read as 1. Design: `docs/superpowers/specs/2026-11-05-angle-mode-design.md`.
 - **Parallel loops and `parallel_map` run in the angle mode of the code that started them.** A scoped mode is per thread and a rayon worker is another thread, so the loop body used to run in the process mode.
 ```
 
@@ -2352,7 +2352,7 @@ Expected: the commits of Tasks 1–12 plus the spec and plan commits. Do not pus
 
 ---
 
-### Task 14: The crucible (separate repository `D:\Projects\physure-crucible`)
+### Task 14: The crucible (a separate, private repository, checked out next to this one)
 
 This task changes the crucible's wrapper so that `F-0001` passes on the PHS surface, and resolves the finding. It needs the maintainer's approval of the wrapper change, given on 2026-11-05. It runs after Tasks 1–13, because it needs a candidate built from this branch.
 
@@ -2363,7 +2363,7 @@ This task changes the crucible's wrapper so that `F-0001` passes on the PHS surf
 
 - [ ] **Step 1: Branch in the crucible**
 
-Run (from `D:\Projects\physure-crucible`): `git status --short`
+Run (from the crucible checkout): `git status --short`
 Expected: no output. If there is output, stop: it is not this task's.
 
 Run: `git switch -c fix/f0001-convert-before-compare`
@@ -2427,8 +2427,8 @@ Expected: 377 passed.
 Run (from the physure worktree, background, `timeout: 600000`): `cargo build --release -p physure-cli`
 Expected: `target/release/phs.exe` exists in the worktree.
 
-Run (from `D:\Projects\physure-crucible`):
-`.venv/Scripts/python.exe scripts/prepare_candidate.py --physure-root D:/Projects/physure/.claude/worktrees/angle-mode --phs D:/Projects/physure/.claude/worktrees/angle-mode/target/release/phs.exe --platform windows-x86_64 --output .artifacts/candidate-angle.toml`
+Run (from the crucible checkout; `<worktree>` is the absolute path of the physure worktree):
+`.venv/Scripts/python.exe scripts/prepare_candidate.py --physure-root <worktree> --phs <worktree>/target/release/phs.exe --platform windows-x86_64 --output .artifacts/candidate-angle.toml`
 Expected: writes the manifest (the script runs `cargo package -p physure --allow-dirty` with a 120 s limit; if it times out on the first build, run `cargo package -p physure --allow-dirty` once by hand in the worktree and repeat).
 
 - [ ] **Step 6: Run the gate**
