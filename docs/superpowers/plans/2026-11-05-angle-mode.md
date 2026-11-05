@@ -1212,7 +1212,7 @@ git commit -m "feat(core): read the rows of [Compatibility], conversions only" -
 
 **Files:**
 - Modify: `physure-core/src/units/rational.rs`
-- Test: `physure-core/tests/angle_mode.rs`
+- Test: `physure-core/tests/angle_mode.rs`, `physure-core/src/units/tests.rs`
 
 - [ ] **Step 1: Write the failing table test**
 
@@ -1258,6 +1258,8 @@ const NEVER: &[(&str, &str)] = &[
     // a level is not an angle
     ("rad", "dB"),
     ("sr", "dB"),
+    ("dB", "rad"),
+    ("dB", "sr"),
     // the physical part differs
     ("m*rad", "m^2"),
 ];
@@ -1287,6 +1289,40 @@ fn the_strict_mode_converts_only_what_has_identical_exponents() {
         let strict = unit(from).same_dimensions(&unit(to));
         assert_eq!(unit(from).convertible_to(&unit(to)), strict, "{from} => {to}");
     }
+}
+```
+
+- [ ] **Step 1b: Write the failing test of the grants**
+
+The grants are process-wide, and the tests of `physure-core/tests/angle_mode.rs` run on parallel threads, so this test belongs to the library: append it to `physure-core/src/units/tests.rs` (which has `use super::*;` and already uses `crate::settings::TEST_LOCK`):
+
+```rust
+/// Each grant of `[Compatibility]` belongs to its own marker: revoking one stops that marker, and only that one,
+/// from being read as 1 in a conversion.
+#[test]
+fn a_revoked_grant_stops_only_its_marker_reading_as_one() {
+    use crate::units::angle_mode::{scoped, set_marker_grants, AngleMode, RestoreProcessState};
+    use crate::units::parser::Parser;
+    let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _restore = RestoreProcessState::capture();
+    let _mode = scoped(AngleMode::Dimensionless);
+    // Load the catalog first: its first read applies [Compatibility] and would reset the grants set below.
+    let _ = crate::units::conf::build_registry_from_conf();
+    let u = |t: &str| Parser::parse_expression(t).unwrap_or_else(|e| panic!("{t}: {e}"));
+    let (rad, unity, lum, lx) = (u("rad"), u("unity"), u("cd/m^2"), u("lx"));
+
+    set_marker_grants(true, false);
+    assert!(rad.convertible_to(&unity) && unity.convertible_to(&rad));
+    assert!(!lum.convertible_to(&lx) && !lx.convertible_to(&lum));
+
+    set_marker_grants(false, true);
+    assert!(!rad.convertible_to(&unity) && !unity.convertible_to(&rad));
+    assert!(lum.convertible_to(&lx) && lx.convertible_to(&lum));
+
+    set_marker_grants(false, false);
+    assert!(!rad.convertible_to(&unity) && !lum.convertible_to(&lx));
+    // the strict comparison never reads the grants
+    assert!(u("rad").convertible_to(&u("deg")));
 }
 ```
 
@@ -1321,6 +1357,8 @@ enum MarkerKind {
 
 impl MarkerKind {
     /// Whether a conversion may read this kind as the plain unit, as `[Compatibility]` says.
+    ///
+    /// Plain against Plain never gets here: `same_dimensions` already accepted it.
     fn reads_as_plain(self) -> bool {
         match self {
             Self::Radian => marker_converts_to_plain("rad"),
@@ -1383,10 +1421,13 @@ In `impl RationalUnit`, after `same_dimensions`, add:
 Run: `cargo test -p physure --test angle_mode`
 Expected: all pass. A failure names the pair; check it against the table in the spec before changing the code.
 
+Run: `cargo test -p physure --lib`
+Expected: all pass, including `a_revoked_grant_stops_only_its_marker_reading_as_one`.
+
 - [ ] **Step 5: Commit**
 
 ```bash
-git add physure-core/src/units/rational.rs physure-core/tests/angle_mode.rs
+git add physure-core/src/units/rational.rs physure-core/tests/angle_mode.rs physure-core/src/units/tests.rs
 git commit -m "feat(core): RationalUnit::convertible_to reads a marker as 1 for a conversion" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ```
 

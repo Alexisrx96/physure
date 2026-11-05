@@ -1034,3 +1034,31 @@ fn with_conf_registry_gives_the_embedded_catalog_by_reference() {
     assert_eq!(first, second);
     conf::with_conf_registry(|registry| assert!(registry.get_unit("km").is_some()));
 }
+
+/// Each grant of `[Compatibility]` belongs to its own marker: revoking one stops that marker, and only that one,
+/// from being read as 1 in a conversion.
+#[test]
+fn a_revoked_grant_stops_only_its_marker_reading_as_one() {
+    use crate::units::angle_mode::{scoped, set_marker_grants, AngleMode, RestoreProcessState};
+    use crate::units::parser::Parser;
+    let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _restore = RestoreProcessState::capture();
+    let _mode = scoped(AngleMode::Dimensionless);
+    // Load the catalog first: its first read applies [Compatibility] and would reset the grants set below.
+    let _ = crate::units::conf::build_registry_from_conf();
+    let u = |t: &str| Parser::parse_expression(t).unwrap_or_else(|e| panic!("{t}: {e}"));
+    let (rad, unity, lum, lx) = (u("rad"), u("unity"), u("cd/m^2"), u("lx"));
+
+    set_marker_grants(true, false);
+    assert!(rad.convertible_to(&unity) && unity.convertible_to(&rad));
+    assert!(!lum.convertible_to(&lx) && !lx.convertible_to(&lum));
+
+    set_marker_grants(false, true);
+    assert!(!rad.convertible_to(&unity) && !unity.convertible_to(&rad));
+    assert!(lum.convertible_to(&lx) && lx.convertible_to(&lum));
+
+    set_marker_grants(false, false);
+    assert!(!rad.convertible_to(&unity) && !lum.convertible_to(&lx));
+    // the strict comparison never reads the grants
+    assert!(u("rad").convertible_to(&u("deg")));
+}

@@ -90,6 +90,8 @@ const NEVER: &[(&str, &str)] = &[
     // a level is not an angle
     ("rad", "dB"),
     ("sr", "dB"),
+    ("dB", "rad"),
+    ("dB", "sr"),
     // the physical part differs
     ("m*rad", "m^2"),
 ];

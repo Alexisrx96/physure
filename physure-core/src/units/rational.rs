@@ -23,6 +23,8 @@ enum MarkerKind {
 
 impl MarkerKind {
     /// Whether a conversion may read this kind as the plain unit, as `[Compatibility]` says.
+    ///
+    /// Plain against Plain never gets here: `same_dimensions` already accepted it.
     fn reads_as_plain(self) -> bool {
         match self {
             Self::Radian => marker_converts_to_plain("rad"),
