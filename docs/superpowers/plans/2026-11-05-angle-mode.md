@@ -17,6 +17,7 @@
 - Run each shell command on its own (no `&&` chains, no `$(...)`, no heredocs). Commit with `git commit -m "<subject>" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`.
 - The first `cargo` build in a fresh worktree compiles every dependency and takes minutes: run it with `run_in_background` and a long timeout.
 - Core and script tests that touch process-wide state take `crate::settings::TEST_LOCK` (unit tests inside `physure-core`) and restore what they change.
+- A lib unit test that changes the process-wide angle mode or the grants takes `crate::settings::TEST_LOCK` and holds a `crate::units::angle_mode::RestoreProcessState::capture()` guard; a test whose answer depends on them (a conversion that reads a marker as 1) takes the lock too. Integration tests under `physure-core/tests/` and `physure-script/tests/` run in their own process and use `scoped(...)` instead.
 - `physure-core` and `physure-script` are under the strict Sonar gate: every new branch needs a test in the same task.
 
 ## File structure
@@ -269,6 +270,7 @@ Create `physure-core/src/units/angle_mode.rs`:
 //! opens a [`scoped`] one inside each task.
 
 use std::cell::Cell;
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -346,12 +348,13 @@ pub fn set_angle_mode(mode: AngleMode) -> AngleMode {
 /// assert_eq!(angle_mode(), AngleMode::Dimensionless);
 /// ```
 pub fn scoped(mode: AngleMode) -> AngleModeGuard {
-    AngleModeGuard(OVERRIDE.with(|slot| slot.replace(Some(mode))))
+    AngleModeGuard(OVERRIDE.with(|slot| slot.replace(Some(mode))), PhantomData)
 }
 
 /// Restores the mode that was in force before its [`scoped`] call, including on unwind: a mode left switched on by a
 /// panicking test would silently change every later answer.
-pub struct AngleModeGuard(Option<AngleMode>);
+#[must_use = "the override ends when the guard is dropped; bind it with `let _guard = ...`"]
+pub struct AngleModeGuard(Option<AngleMode>, PhantomData<*const ()>);
 
 impl Drop for AngleModeGuard {
     fn drop(&mut self) {
@@ -371,10 +374,39 @@ pub fn marker_converts_to_plain(marker: &str) -> bool {
     }
 }
 
-/// Sets which markers a conversion may read as 1: what reading a `[Compatibility]` section calls.
+/// Sets which markers a conversion may read as 1: what reading the `[Compatibility]` section of the embedded conf or
+/// of the `physure.conf` of the working directory calls (a system conf does not change them).
 pub fn set_marker_grants(radian: bool, steradian: bool) {
     RADIAN_READ_AS_ONE.store(radian, Ordering::Relaxed);
     STERADIAN_READ_AS_ONE.store(steradian, Ordering::Relaxed);
+}
+
+/// Puts the process-wide mode and the grants back as they were when it was made, also on unwind. A test that
+/// changes either takes `crate::settings::TEST_LOCK` first and holds one of these for as long as it does.
+#[cfg(test)]
+pub(crate) struct RestoreProcessState {
+    mode: AngleMode,
+    radian: bool,
+    steradian: bool,
+}
+
+#[cfg(test)]
+impl RestoreProcessState {
+    pub(crate) fn capture() -> Self {
+        Self {
+            mode: AngleMode::from_u8(CONFIGURED.load(Ordering::Relaxed)),
+            radian: marker_converts_to_plain("rad"),
+            steradian: marker_converts_to_plain("sr"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for RestoreProcessState {
+    fn drop(&mut self) {
+        set_angle_mode(self.mode);
+        set_marker_grants(self.radian, self.steradian);
+    }
 }
 
 #[cfg(test)]
@@ -386,6 +418,7 @@ mod tests {
     fn every_spelling_the_conf_may_use_round_trips() {
         for mode in [AngleMode::Dimensionless, AngleMode::Dimension] {
             assert_eq!(mode.name().parse::<AngleMode>(), Ok(mode));
+            assert_eq!(AngleMode::from_u8(mode.as_u8()), mode);
         }
         assert_eq!("  Dimension ".parse::<AngleMode>(), Ok(AngleMode::Dimension));
     }
@@ -437,6 +470,7 @@ mod tests {
     #[test]
     fn the_process_wide_mode_is_set_and_the_old_one_returned() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = RestoreProcessState::capture();
         let original = set_angle_mode(AngleMode::Dimension);
         assert_eq!(angle_mode(), AngleMode::Dimension);
         assert_eq!(set_angle_mode(original), AngleMode::Dimension);
@@ -445,11 +479,11 @@ mod tests {
     #[test]
     fn only_the_two_markers_can_be_granted() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = RestoreProcessState::capture();
         set_marker_grants(true, false);
         assert!(marker_converts_to_plain("rad"));
         assert!(!marker_converts_to_plain("sr"));
         assert!(!marker_converts_to_plain("m"));
-        set_marker_grants(true, true);
     }
 }
 ```
@@ -497,6 +531,7 @@ In the `tests` module of `physure-core/src/units/conf.rs`, after `parses_max_loo
     fn the_embedded_conf_sets_the_default_angle_mode() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         assert_eq!(crate::units::angle_mode::angle_mode(), crate::units::angle_mode::AngleMode::Dimensionless);
     }
 
@@ -505,12 +540,12 @@ In the `tests` module of `physure-core/src/units/conf.rs`, after `parses_max_loo
         use crate::units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
-        let original = set_angle_mode(AngleMode::Dimensionless);
+        set_angle_mode(AngleMode::Dimensionless);
         parse_physure_conf("[Settings]\nangle_mode = dimension\n", &mut reg, &mut constants);
         assert_eq!(angle_mode(), AngleMode::Dimension);
-        set_angle_mode(original);
     }
 
     #[test]
@@ -518,12 +553,12 @@ In the `tests` module of `physure-core/src/units/conf.rs`, after `parses_max_loo
         use crate::units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
-        let original = set_angle_mode(AngleMode::Dimensionless);
+        set_angle_mode(AngleMode::Dimensionless);
         parse_physure_conf("[Settings]\nangle_mode = degrees\n", &mut reg, &mut constants);
         assert_eq!(angle_mode(), AngleMode::Dimensionless);
-        set_angle_mode(original);
     }
 ```
 
@@ -789,10 +824,6 @@ In the `tests` module of `conf.rs`, add:
         (marker_converts_to_plain("rad"), marker_converts_to_plain("sr"))
     }
 
-    fn restore_marker_grants() {
-        crate::units::angle_mode::set_marker_grants(true, true);
-    }
-
     #[test]
     fn the_embedded_conf_lets_a_conversion_read_both_markers_as_one() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -804,24 +835,24 @@ In the `tests` module of `conf.rs`, add:
     fn a_compatibility_section_replaces_the_rows() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         parse_physure_conf("[Compatibility]\nradian, plain = convert\n", &mut reg, &mut constants);
         assert_eq!(marker_grants(), (true, false));
         parse_physure_conf("[Compatibility]\nplain, steradian = convert\n", &mut reg, &mut constants);
         assert_eq!(marker_grants(), (false, true));
-        restore_marker_grants();
     }
 
     #[test]
     fn an_empty_compatibility_section_grants_nothing() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         parse_physure_conf("[Compatibility]\n", &mut reg, &mut constants);
         assert_eq!(marker_grants(), (false, false));
-        restore_marker_grants();
     }
 
     #[test]
@@ -838,26 +869,26 @@ In the `tests` module of `conf.rs`, add:
     fn a_row_that_asks_for_a_sum_or_a_comparison_grants_nothing() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         for row in ["radian, plain = convert add", "radian, plain = compare", "radian, plain = add compare convert"] {
             parse_physure_conf(&format!("[Compatibility]\n{row}\n"), &mut reg, &mut constants);
             assert_eq!(marker_grants(), (false, false), "{row}");
         }
-        restore_marker_grants();
     }
 
     #[test]
     fn two_markers_do_not_convert_into_each_other_and_a_plain_unit_is_not_a_marker() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         for row in ["radian, steradian = convert", "metre, plain = convert", "plain, plain = convert", "radian = convert"] {
             parse_physure_conf(&format!("[Compatibility]\n{row}\n"), &mut reg, &mut constants);
             assert_eq!(marker_grants(), (false, false), "{row}");
         }
-        restore_marker_grants();
     }
 
     #[test]

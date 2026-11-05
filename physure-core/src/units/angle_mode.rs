@@ -11,6 +11,7 @@
 //! opens a [`scoped`] one inside each task.
 
 use std::cell::Cell;
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -88,12 +89,13 @@ pub fn set_angle_mode(mode: AngleMode) -> AngleMode {
 /// assert_eq!(angle_mode(), AngleMode::Dimensionless);
 /// ```
 pub fn scoped(mode: AngleMode) -> AngleModeGuard {
-    AngleModeGuard(OVERRIDE.with(|slot| slot.replace(Some(mode))))
+    AngleModeGuard(OVERRIDE.with(|slot| slot.replace(Some(mode))), PhantomData)
 }
 
 /// Restores the mode that was in force before its [`scoped`] call, including on unwind: a mode left switched on by a
 /// panicking test would silently change every later answer.
-pub struct AngleModeGuard(Option<AngleMode>);
+#[must_use = "the override ends when the guard is dropped; bind it with `let _guard = ...`"]
+pub struct AngleModeGuard(Option<AngleMode>, PhantomData<*const ()>);
 
 impl Drop for AngleModeGuard {
     fn drop(&mut self) {
@@ -113,10 +115,39 @@ pub fn marker_converts_to_plain(marker: &str) -> bool {
     }
 }
 
-/// Sets which markers a conversion may read as 1: what reading a `[Compatibility]` section calls.
+/// Sets which markers a conversion may read as 1: what reading the `[Compatibility]` section of the embedded conf or
+/// of the `physure.conf` of the working directory calls (a system conf does not change them).
 pub fn set_marker_grants(radian: bool, steradian: bool) {
     RADIAN_READ_AS_ONE.store(radian, Ordering::Relaxed);
     STERADIAN_READ_AS_ONE.store(steradian, Ordering::Relaxed);
+}
+
+/// Puts the process-wide mode and the grants back as they were when it was made, also on unwind. A test that
+/// changes either takes `crate::settings::TEST_LOCK` first and holds one of these for as long as it does.
+#[cfg(test)]
+pub(crate) struct RestoreProcessState {
+    mode: AngleMode,
+    radian: bool,
+    steradian: bool,
+}
+
+#[cfg(test)]
+impl RestoreProcessState {
+    pub(crate) fn capture() -> Self {
+        Self {
+            mode: AngleMode::from_u8(CONFIGURED.load(Ordering::Relaxed)),
+            radian: marker_converts_to_plain("rad"),
+            steradian: marker_converts_to_plain("sr"),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for RestoreProcessState {
+    fn drop(&mut self) {
+        set_angle_mode(self.mode);
+        set_marker_grants(self.radian, self.steradian);
+    }
 }
 
 #[cfg(test)]
@@ -128,6 +159,7 @@ mod tests {
     fn every_spelling_the_conf_may_use_round_trips() {
         for mode in [AngleMode::Dimensionless, AngleMode::Dimension] {
             assert_eq!(mode.name().parse::<AngleMode>(), Ok(mode));
+            assert_eq!(AngleMode::from_u8(mode.as_u8()), mode);
         }
         assert_eq!("  Dimension ".parse::<AngleMode>(), Ok(AngleMode::Dimension));
     }
@@ -179,6 +211,7 @@ mod tests {
     #[test]
     fn the_process_wide_mode_is_set_and_the_old_one_returned() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = RestoreProcessState::capture();
         let original = set_angle_mode(AngleMode::Dimension);
         assert_eq!(angle_mode(), AngleMode::Dimension);
         assert_eq!(set_angle_mode(original), AngleMode::Dimension);
@@ -187,10 +220,10 @@ mod tests {
     #[test]
     fn only_the_two_markers_can_be_granted() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = RestoreProcessState::capture();
         set_marker_grants(true, false);
         assert!(marker_converts_to_plain("rad"));
         assert!(!marker_converts_to_plain("sr"));
         assert!(!marker_converts_to_plain("m"));
-        set_marker_grants(true, true);
     }
 }
