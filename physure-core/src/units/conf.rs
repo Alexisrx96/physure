@@ -651,10 +651,16 @@ mod tests {
 
     #[test]
     fn the_embedded_conf_sets_the_default_angle_mode() {
+        use crate::units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        assert_eq!(crate::units::angle_mode::angle_mode(), crate::units::angle_mode::AngleMode::Dimensionless);
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        // Start from the mode that is NOT the default, so only the conf line can bring `Dimensionless` back.
+        set_angle_mode(AngleMode::Dimension);
+        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+        assert_eq!(angle_mode(), AngleMode::Dimensionless);
     }
 
     #[test]
@@ -678,9 +684,10 @@ mod tests {
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
-        set_angle_mode(AngleMode::Dimensionless);
+        // Not the default, so a handler that falls back to the default on a bad value is caught.
+        set_angle_mode(AngleMode::Dimension);
         parse_physure_conf("[Settings]\nangle_mode = degrees\n", &mut reg, &mut constants);
-        assert_eq!(angle_mode(), AngleMode::Dimensionless);
+        assert_eq!(angle_mode(), AngleMode::Dimension);
     }
 
     #[test]
