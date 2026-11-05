@@ -168,6 +168,10 @@ pub struct RationalUnit {
     pub log: Option<LogScale>,
     pub id: u64,
     pub display_name: Option<String>,
+    /// Set on the hertz, with its prefixes and aliases, by `[Compatibility] periodic`: the SI reserves it for
+    /// periodic phenomena (Brochure, Table 4, footnote d), so a conversion never reads a marker as 1 against it.
+    /// It is not part of equality or of the hash: `Hz` and `s^-1` are the same unit.
+    pub periodic: bool,
 }
 
 impl Eq for RationalUnit {}
@@ -216,7 +220,7 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None }
+        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None, periodic: false }
     }
 
     /// Returns a copy of this unit with a different scale factor (same dimensions/id). The
@@ -348,6 +352,7 @@ impl RationalUnit {
             log: None,
             id: 0,
             display_name: None,
+            periodic: false,
         }
     }
 
@@ -372,12 +377,12 @@ impl RationalUnit {
     pub fn mul(&self, other: &Self) -> Self {
         let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, false);
         let id = Self::calculate_id(&new_dims);
-        let display_name = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
-            self.display_name.clone()
+        let (display_name, periodic) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+            (self.display_name.clone(), self.periodic)
         } else if self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9 {
-            other.display_name.clone()
+            (other.display_name.clone(), other.periodic)
         } else {
-            None
+            (None, false)
         };
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.mul(b)),
@@ -395,16 +400,16 @@ impl RationalUnit {
         } else {
             None
         };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }
     }
 
     pub fn div(&self, other: &Self) -> Self {
         let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, true);
         let id = Self::calculate_id(&new_dims);
-        let display_name = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
-            self.display_name.clone()
+        let (display_name, periodic) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+            (self.display_name.clone(), self.periodic)
         } else {
-            None
+            (None, false)
         };
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.div(b)),
@@ -412,7 +417,7 @@ impl RationalUnit {
         };
         let scale = exact.as_ref().map_or(self.scale / other.scale, ExactScale::to_f64);
         let log = if other.is_plain_number() { self.log } else { None };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -435,7 +440,7 @@ impl RationalUnit {
         };
         let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
         let log = if exp_r == Rational64::from_integer(1) { self.log } else { None };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name: None }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name: None, periodic: false }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

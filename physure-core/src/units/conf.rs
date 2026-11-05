@@ -57,6 +57,7 @@ fn parse_conf(
     let mut current_section = "";
     let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
+    let mut periodic_names: Vec<String> = Vec::new();
 
     // Pass 1: Extract Prefixes, Constants, Dimensions, and Base Units
     for line in conf_str.lines() {
@@ -79,6 +80,7 @@ fn parse_conf(
             }
             "Constants" => read_constant(line, registry, constants),
             "Categories" => read_category(line, registry),
+            "Compatibility" => read_compatibility_line(line, &mut periodic_names),
             _ => {}
         }
     }
@@ -91,6 +93,8 @@ fn parse_conf(
             problems.push(format!("{line}: {reason}"));
         }
     }
+
+    mark_periodic(registry, &periodic_names);
 }
 
 /// One line of `[Settings]`. A value that does not read is reported on stderr and the default stays.
@@ -229,6 +233,28 @@ fn read_category(line: &str, registry: &mut UnitRegistry) {
         .filter(|s| !s.is_empty())
         .collect();
     registry.categories.insert(cat_name.to_string(), items);
+}
+
+/// One line of `[Compatibility]`. `periodic = hertz` names units that the SI reserves for periodic phenomena; the
+/// other lines are rows, read in a later step of the same file.
+fn read_compatibility_line(line: &str, periodic: &mut Vec<String>) {
+    if let Some((key, names)) = line.split_once('=') {
+        if key.trim() == "periodic" {
+            periodic.extend(names.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_string));
+        }
+    }
+}
+
+/// Flags the units that `[Compatibility] periodic` names, once they are registered. A name is any spelling of the
+/// unit (`hertz`); the flag goes on the unit the registry keeps, so that its prefixes (built from a copy of it) and
+/// its aliases carry it.
+fn mark_periodic(registry: &mut UnitRegistry, names: &[String]) {
+    for name in names {
+        let symbol = registry.resolve_symbol(name);
+        if let Some(unit) = registry.derived_units.get_mut(&symbol) {
+            unit.periodic = true;
+        }
+    }
 }
 
 /// The SI base units and the standard dimension symbols, for a conf that does not map them itself.
