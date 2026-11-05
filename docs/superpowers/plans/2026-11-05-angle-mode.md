@@ -1059,7 +1059,7 @@ In the `tests` module of `conf.rs`, add:
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `cargo test -p physure --lib units::conf::tests::a_compatibility_section_replaces_the_rows`
-Expected: FAIL (`left: (true, true), right: (true, false)`): rows are not read yet.
+Expected: FAIL to compile (`cannot find function 'read_compatibility_row'` and `cannot find type 'Marker'`): the tests call them and Step 3 writes them.
 
 - [ ] **Step 3: Read the rows**
 
@@ -1163,7 +1163,7 @@ with
 `format!("[Compatibility] periodic: '{name}' is not a registered unit")` with
 `format!("[Compatibility] periodic: '{name}' does not name a unit defined in [Units] (a base unit or a prefixed spelling cannot be flagged)")`,
 and make its doc comment say the same: replace `A name that is not a registered unit is a problem.` with
-`A name that does not name a unit defined in `[Units]` (a base unit, or a prefixed spelling, cannot be flagged) is a problem.`
+"A name that does not name a unit defined in `[Units]` (a base unit, or a prefixed spelling, cannot be flagged) is a problem."
 (The tests of Task 4 assert only that the text names the unit, so they stay as they are.)
 
 - [ ] **Step 4: Write the rows into the embedded conf**
