@@ -94,7 +94,7 @@ fn parse_conf(
         }
     }
 
-    mark_periodic(registry, &periodic_names);
+    mark_periodic(registry, &periodic_names, problems);
 }
 
 /// One line of `[Settings]`. A value that does not read is reported on stderr and the default stays.
@@ -247,12 +247,13 @@ fn read_compatibility_line(line: &str, periodic: &mut Vec<String>) {
 
 /// Flags the units that `[Compatibility] periodic` names, once they are registered. A name is any spelling of the
 /// unit (`hertz`); the flag goes on the unit the registry keeps, so that its prefixes (built from a copy of it) and
-/// its aliases carry it.
-fn mark_periodic(registry: &mut UnitRegistry, names: &[String]) {
+/// its aliases carry it. A name that is not a registered unit is a problem.
+fn mark_periodic(registry: &mut UnitRegistry, names: &[String], problems: &mut Vec<String>) {
     for name in names {
         let symbol = registry.resolve_symbol(name);
-        if let Some(unit) = registry.derived_units.get_mut(&symbol) {
-            unit.periodic = true;
+        match registry.derived_units.get_mut(&symbol) {
+            Some(unit) => unit.periodic = true,
+            None => problems.push(format!("[Compatibility] periodic: '{name}' is not a registered unit")),
         }
     }
 }
@@ -730,5 +731,49 @@ mod tests {
         );
         assert_eq!(crate::settings::max_pipeline_steps(), 42);
         crate::settings::set_max_pipeline_steps(original);
+    }
+
+    #[test]
+    fn a_conf_can_name_a_unit_of_its_own_as_periodic() {
+        let (mut reg, mut constants) = build_registry_from_conf();
+        extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq\n",
+        )
+        .unwrap();
+        assert!(reg.get_unit("mf").unwrap().periodic, "an alias carries the flag");
+        assert!(reg.get_unit("kmf").unwrap().periodic, "a prefixed form carries the flag");
+        assert!(!reg.get_unit("m").unwrap().periodic, "a unit the section does not name does not");
+    }
+
+    #[test]
+    fn a_periodic_name_that_is_no_unit_is_a_problem_and_the_registry_stays_as_it_was() {
+        let (mut reg, mut constants) = build_registry_from_conf();
+        let (before, constants_before) = (reg.clone(), constants.clone());
+        let problems = extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq, nosuchunit\n",
+        )
+        .unwrap_err();
+        assert!(problems.iter().any(|problem| problem.contains("nosuchunit")), "{problems:?}");
+        assert_eq!(reg, before, "the unit that was fine is rolled back with the one that was not");
+        assert_eq!(constants, constants_before);
+        assert!(reg.get_unit("myfreq").is_none());
+    }
+
+    #[test]
+    fn a_strict_reading_ignores_the_lines_of_compatibility_that_are_not_periodic() {
+        let (mut reg, mut constants) = build_registry_from_conf();
+        let before = reg.clone();
+        // No `=`, a row, and a `periodic` that names nothing: none of them is a problem.
+        extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Compatibility]\nthis line has no equals sign\nradian, plain = convert\nperiodic =\n",
+        )
+        .unwrap();
+        assert_eq!(reg, before);
     }
 }

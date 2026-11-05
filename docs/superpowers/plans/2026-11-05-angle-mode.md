@@ -635,6 +635,7 @@ Create `physure-core/tests/angle_mode.rs`:
 ```rust
 //! The angle mode at the Rust API: the `periodic` flag, what a conversion may read as 1, and what nothing may.
 
+use physure_core::units::conf::build_registry_from_conf;
 use physure_core::units::{Parser, RationalUnit};
 
 fn unit(text: &str) -> RationalUnit {
@@ -649,6 +650,13 @@ fn the_hertz_is_periodic_under_every_spelling() {
 }
 
 #[test]
+fn the_hertz_stays_periodic_through_what_leaves_it_unchanged() {
+    for text in ["Hz*unity", "unity*Hz", "1*Hz", "Hz/unity", "(Hz)", "Hz^1", "Hz1"] {
+        assert!(unit(text).periodic, "{text} is a bare hertz and should carry the periodic flag");
+    }
+}
+
+#[test]
 fn nothing_else_is_periodic() {
     for text in ["s^-1", "1/s", "Hz*rad", "Hz^2", "Hz/Hz", "rad/s", "m/s", "kg*m/s^2", "rad", "unity"] {
         assert!(!unit(text).periodic, "{text} should not carry the periodic flag");
@@ -656,8 +664,27 @@ fn nothing_else_is_periodic() {
 }
 
 #[test]
+fn a_product_or_quotient_that_changes_the_hertz_is_not_the_hertz() {
+    for text in ["unity/Hz", "1/Hz", "Hz*percent", "Hz*rad"] {
+        assert!(!unit(text).periodic, "{text} is not a bare hertz and should not carry the periodic flag");
+    }
+}
+
+#[test]
 fn the_flag_is_not_part_of_equality() {
     assert_eq!(unit("Hz"), unit("s^-1"));
+}
+
+#[test]
+fn the_registry_keeps_the_flag_where_it_expands_a_unit_written_as_symbols() {
+    let (registry, _) = build_registry_from_conf();
+    let expand = |text: &str| {
+        let atomic = Parser::parse_expression_atomic(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        registry.expand(&atomic).unwrap_or_else(|e| panic!("{text}: {e}"))
+    };
+    assert!(expand("Hz").periodic, "Hz");
+    assert!(expand("Hz*unity").periodic, "Hz*unity");
+    assert!(!expand("Hz*rad").periodic, "Hz*rad");
 }
 ```
 
@@ -673,7 +700,9 @@ In `physure-core/src/units/rational.rs`, after `pub display_name: Option<String>
 ```rust
     /// Set on the hertz, with its prefixes and aliases, by `[Compatibility] periodic`: the SI reserves it for
     /// periodic phenomena (Brochure, Table 4, footnote d), so a conversion never reads a marker as 1 against it.
-    /// It is not part of equality or of the hash: `Hz` and `s^-1` are the same unit.
+    /// It survives what leaves the unit itself (a product with a plain number of scale 1, a quotient by one, a power of
+    /// 1) and nothing else: `Hz*rad`, `Hz^2` and `1/Hz` are not the hertz. It is not part of equality or of the hash:
+    /// `Hz` and `s^-1` are the same unit.
     pub periodic: bool,
 ```
 
@@ -733,7 +762,11 @@ with
 `RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name }`
 with
 `RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }`.
-6. In `pow`, replace `log, id, display_name: None }` with `log, id, display_name: None, periodic: false }`.
+6. In `pow`, after the line `let log = if exp_r == Rational64::from_integer(1) { self.log } else { None };` add
+```rust
+        let periodic = exp_r == Rational64::from_integer(1) && self.periodic;
+```
+and replace `log, id, display_name: None }` with `log, id, display_name: None, periodic }`. A power of 1 is the unit itself (`Hz^1`, and the `pow` that `UnitRegistry::expand` applies to every symbol), so it keeps the flag, as it keeps `log`; any other power does not.
 
 Equality and the hash are not touched.
 
@@ -756,7 +789,7 @@ In the `match current_section` of pass 1, after the `"Categories"` arm add:
 After the pass-2 loop (the `for line in unit_lines { ... }`), add:
 
 ```rust
-    mark_periodic(registry, &periodic_names);
+    mark_periodic(registry, &periodic_names, problems);
 ```
 
 and add these two functions after `read_category`:
@@ -774,15 +807,64 @@ fn read_compatibility_line(line: &str, periodic: &mut Vec<String>) {
 
 /// Flags the units that `[Compatibility] periodic` names, once they are registered. A name is any spelling of the
 /// unit (`hertz`); the flag goes on the unit the registry keeps, so that its prefixes (built from a copy of it) and
-/// its aliases carry it.
-fn mark_periodic(registry: &mut UnitRegistry, names: &[String]) {
+/// its aliases carry it. A name that is not a registered unit is a problem.
+fn mark_periodic(registry: &mut UnitRegistry, names: &[String], problems: &mut Vec<String>) {
     for name in names {
         let symbol = registry.resolve_symbol(name);
-        if let Some(unit) = registry.derived_units.get_mut(&symbol) {
-            unit.periodic = true;
+        match registry.derived_units.get_mut(&symbol) {
+            Some(unit) => unit.periodic = true,
+            None => problems.push(format!("[Compatibility] periodic: '{name}' is not a registered unit")),
         }
     }
 }
+```
+
+Also in the `tests` module of `conf.rs` add (they change no process-wide state, so they need neither the lock nor the guard):
+
+```rust
+    #[test]
+    fn a_conf_can_name_a_unit_of_its_own_as_periodic() {
+        let (mut reg, mut constants) = build_registry_from_conf();
+        extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq\n",
+        )
+        .unwrap();
+        assert!(reg.get_unit("mf").unwrap().periodic, "an alias carries the flag");
+        assert!(reg.get_unit("kmf").unwrap().periodic, "a prefixed form carries the flag");
+        assert!(!reg.get_unit("m").unwrap().periodic, "a unit the section does not name does not");
+    }
+
+    #[test]
+    fn a_periodic_name_that_is_no_unit_is_a_problem_and_the_registry_stays_as_it_was() {
+        let (mut reg, mut constants) = build_registry_from_conf();
+        let (before, constants_before) = (reg.clone(), constants.clone());
+        let problems = extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq, nosuchunit\n",
+        )
+        .unwrap_err();
+        assert!(problems.iter().any(|problem| problem.contains("nosuchunit")), "{problems:?}");
+        assert_eq!(reg, before, "the unit that was fine is rolled back with the one that was not");
+        assert_eq!(constants, constants_before);
+        assert!(reg.get_unit("myfreq").is_none());
+    }
+
+    #[test]
+    fn a_strict_reading_ignores_the_lines_of_compatibility_that_are_not_periodic() {
+        let (mut reg, mut constants) = build_registry_from_conf();
+        let before = reg.clone();
+        // No `=`, a row, and a `periodic` that names nothing: none of them is a problem.
+        extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Compatibility]\nthis line has no equals sign\nradian, plain = convert\nperiodic =\n",
+        )
+        .unwrap();
+        assert_eq!(reg, before);
+    }
 ```
 
 - [ ] **Step 5: Name the unit in the embedded conf**
@@ -794,18 +876,19 @@ area = ["m^2", "cm^2", "km^2", "ha", "acre"]
 
 [Compatibility]
 # The SI reserves the hertz for periodic phenomena (Brochure, Table 4, footnote d), and a frequency and an angular
-# frequency differ by a factor of 2*pi. A unit named here, with its prefixes and aliases, is not converted into one
-# that carries a marker: `rad/s => Hz` is refused, `(rad/s) / (2*pi*rad) => Hz` is not.
+# frequency differ by a factor of 2*pi. A unit named here, with its prefixes and aliases, is never converted to or from
+# a unit that carries a marker: `rad/s => Hz` is refused, `(rad/s) / (2*pi*rad) => Hz` is not. A conf that redefines
+# the unit must name it again here.
 periodic = hertz
 ```
 
 - [ ] **Step 6: Run the tests**
 
 Run: `cargo test -p physure --test angle_mode`
-Expected: 3 tests pass. If `the_hertz_is_periodic_under_every_spelling` fails for one spelling, read that spelling's path in `Parser::parse_expression` (`parser.rs`, `resolve_symbol`) before changing anything: the flag must come from `get_unit`.
+Expected: 6 tests pass. If `the_hertz_is_periodic_under_every_spelling` fails for one spelling, read that spelling's path in `Parser::parse_expression` (`parser.rs`, `resolve_symbol`) before changing anything: the flag must come from `get_unit`. If a case of `the_hertz_stays_periodic_through_what_leaves_it_unchanged` or the registry test fails, a path drops the flag that the design says must keep it (`mul`, `div` and `pow` keep it with `display_name`; `UnitRegistry::expand` calls `pow` and then `mul`): fix that path, do not weaken the test.
 
 Run: `cargo test -p physure --lib`
-Expected: pass (the unit-equality and hash tests prove nothing else moved).
+Expected: pass (the unit-equality and hash tests prove nothing else moved; the three new `units::conf::tests` pass).
 
 - [ ] **Step 7: Commit**
 
@@ -835,6 +918,7 @@ In the `tests` module of `conf.rs`, add:
     fn the_embedded_conf_lets_a_conversion_read_both_markers_as_one() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         assert_eq!(marker_grants(), (true, true));
     }
 
@@ -866,6 +950,7 @@ In the `tests` module of `conf.rs`, add:
     fn a_conf_without_the_section_keeps_the_rows() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         parse_physure_conf("[Settings]\nparallel_threshold = 10000\n", &mut reg, &mut constants);
@@ -899,11 +984,29 @@ In the `tests` module of `conf.rs`, add:
     }
 
     #[test]
+    fn a_row_without_an_equals_sign_grants_nothing() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let mut reg = UnitRegistry::new();
+        let mut constants = HashMap::new();
+        parse_physure_conf("[Compatibility]\nradian plain convert\n", &mut reg, &mut constants);
+        assert_eq!(marker_grants(), (false, false));
+    }
+
+    #[test]
     fn a_system_conf_does_not_change_the_grants_but_can_name_a_periodic_unit() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let (mut reg, mut constants) = build_registry_from_conf();
-        extend_registry(&mut reg, &mut constants, "[Compatibility]\nperiodic = becquerel\n").unwrap();
+        extend_registry(
+            &mut reg,
+            &mut constants,
+            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq\nradian, plain = convert\n",
+        )
+        .unwrap();
+        assert!(reg.get_unit("mf").unwrap().periodic);
         assert_eq!(marker_grants(), (true, true));
         extend_registry(&mut reg, &mut constants, "[Compatibility]\n").unwrap();
         assert_eq!(marker_grants(), (true, true));
@@ -999,7 +1102,7 @@ with
 ```rust
             "Compatibility" => read_compatibility_line(line, &mut periodic_names, &mut compatibility_rows),
 ```
-- after `mark_periodic(registry, &periodic_names);` add
+- after `mark_periodic(registry, &periodic_names, problems);` add
 ```rust
     if apply_settings && has_compatibility {
         apply_compatibility(&compatibility_rows);
@@ -1019,8 +1122,9 @@ In `physure.conf`, replace the `[Compatibility]` section of Task 4 with:
 radian, plain = convert
 steradian, plain = convert
 # The SI reserves the hertz for periodic phenomena (Brochure, Table 4, footnote d), and a frequency and an angular
-# frequency differ by a factor of 2*pi. A unit named here, with its prefixes and aliases, is not converted into one
-# that carries a marker: `rad/s => Hz` is refused, `(rad/s) / (2*pi*rad) => Hz` is not.
+# frequency differ by a factor of 2*pi. A unit named here, with its prefixes and aliases, is never converted to or from
+# a unit that carries a marker: `rad/s => Hz` is refused, `(rad/s) / (2*pi*rad) => Hz` is not. A conf that redefines
+# the unit must name it again here.
 periodic = hertz
 ```
 
