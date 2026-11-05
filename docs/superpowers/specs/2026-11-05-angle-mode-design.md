@@ -127,7 +127,7 @@ The override is thread-local, like `PropagationMode`'s, and rayon workers do not
 |---|---|
 | `physure.conf` | `[Settings] angle_mode` and the `[Compatibility]` section (everything that reads a conf: PHS, CLI, LSP, Rust API, Python, Java, WASM) |
 | Rust | `AngleMode`, `angle_mode()`, `set_angle_mode()`, `scoped()` |
-| Python | `physure.angle_mode("dimension")` as a context manager (a `#[pyclass(unsendable)]` holding the guard between `__enter__` and `__exit__`) and a getter; no process-wide setter (a later conf read would undo it, as for `propagation_mode`). The mode in force is recorded in the crucible candidate manifest, so a result can be traced to it. |
+| Python | `physure.angle_mode("dimension")` as a context manager (a `#[pyclass(unsendable)]` holding the guard between `__enter__` and `__exit__`) and a getter; no process-wide setter (a later conf read would undo it, as for `propagation_mode`). Recording the mode in force in the crucible candidate manifest, so that a result can be traced to it, is a later change in `physure-crucible` (its manifest is validated key by key and hashed), not part of this plan. |
 | PHS | nothing in A (stage B); programs follow the conf and the surrounding scoped mode |
 | Java, WASM | the conf only; no runtime setter in A |
 
@@ -135,7 +135,7 @@ The static checker (`check.rs`) reads dimensions through `dimension_of`/`facts`,
 
 ## Behaviour
 
-The `Today` column is measured for the rows probed above and for `2 rad + 1` and `1 rad == 1`; the other refusals follow from the strict comparison, which compares the exponents of `rad` and `sr` like any other base unit, and from the existing tests (`unit_literal_regression.rs`, `units/tests.rs`). The `Dimensionless` column is predicted from the code; the crucible case and the probes above are the acceptance test.
+The `Today` column is measured: every row of the table was run through `phs` @ `b27d0f8` on 2026-11-05 (the plan keeps the corpus). The `Dimensionless` column is predicted from the code. The `Dimensionless` column is predicted from the code; the crucible case and the probes above are the acceptance test.
 
 | Expression | Today | `Dimensionless` | `Dimension` |
 |---|---|---|---|
@@ -154,7 +154,8 @@ The `Today` column is measured for the rows probed above and for `2 rad + 1` and
 | `25 kg·m²·rad²·s⁻² - 25 J` | error | **error** (unchanged; convert first) | error |
 | `rad² + rad` | error | **error** (unchanged) | error |
 | `(10 rad/s) => Hz` | error | **error** (`radian, frequency` is not listed) | error |
-| `(10 rad/s) / (6.283185307179586 rad) => Hz` | error | `1.5915 Hz` | error |
+| `(10 rad/s) / (6.283185307179586 rad) => Hz` | `1.5915 Hz` (the `rad` cancels exactly) | `1.5915 Hz` | `1.5915 Hz` |
+| `(6.283185307179586 rad) * (50 Hz) => rad/s` | `314.159 rad/s` | `314.159 rad/s` | `314.159 rad/s` |
 | `deg => sr`, `rad + sr`, `1 deg + 1 sr` | error | **error** (`radian, steradian` is not listed) | error |
 | `1 rad => dB` | error | **error** (`level, radian` is not listed) | error |
 | `sin(9.81 m/s^2)` | error | error | error |
