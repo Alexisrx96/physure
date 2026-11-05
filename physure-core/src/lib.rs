@@ -12,6 +12,7 @@ pub mod plotting;
 pub mod settings;
 pub use error::{PhysureError, PhysureResult};
 pub use units::{RationalUnit, UnitRegistry, DimVector, UnitKind};
+pub use units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
 pub use quantity::Quantity;
 pub use linalg::{QuantityVector, QuantityMatrix};
 pub use covariance::{CovarianceStore, PruningConfig};
