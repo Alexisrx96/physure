@@ -79,14 +79,27 @@ Create `physure-script/tests/angle_mode_golden.rs`:
 //! A golden file that pins what the angle work must not change.
 //!
 //! `tests/golden/angle_mode_strict.tsv` (at the repository root) holds, for every expression of `CORPUS`, what PHS
-//! answered on `main` @ `b27d0f8`, before the angle mode existed. In `Dimension` mode the answers must be the same
-//! ones, byte for byte: that is the claim that the strict mode is today's behaviour.
+//! answered on `main` @ `b27d0f8`, before the angle mode existed: the verdict and, for a success, the value, and for a
+//! refusal, the text of the error. Once the angle mode exists, the strict mode (`Dimension`) must give the same rows,
+//! byte for byte: that is the claim that the strict mode is today's behaviour.
 //!
-//! The file is written once, on a tree that has no angle mode yet, with
+//! The file is written once, on a tree that has no angle mode yet. Recording refuses to overwrite an existing file, so
+//! delete it by hand before recording again. On Bash:
 //!
 //!     RECORD_GOLDEN=1 cargo test -p physure-script --test angle_mode_golden
+//!
+//! On PowerShell, set the variable first and remove it afterwards:
+//!
+//!     $env:RECORD_GOLDEN = "1"
+//!     cargo test -p physure-script --test angle_mode_golden
+//!     Remove-Item Env:RECORD_GOLDEN
+//!
+//! A recorded value depends on the number formatting and on the error text of the core, so the file may only be
+//! re-recorded on a tree that has no angle code (an unmodified `b27d0f8`), never on the feature branch after Task 2.
 
 use physure_script::interpreter::eval_phs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 
 const CORPUS: &[&str] = &[
@@ -136,13 +149,18 @@ const CORPUS: &[&str] = &[
 ];
 
 fn answer(source: &str) -> String {
-    match eval_phs(source) {
+    let text = match eval_phs(source) {
         Ok(values) => match values.last() {
             Some(value) => format!("ok {value}"),
             None => "ok".to_string(),
         },
-        Err(_) => "error".to_string(),
-    }
+        Err(e) => format!("error {e}"),
+    };
+    assert!(
+        !text.contains('\n') && !text.contains('\t'),
+        "the answer to {source:?} holds a newline or a tab, which would break the rows of the golden file: {text:?}",
+    );
+    text
 }
 
 fn golden_path() -> PathBuf {
@@ -155,25 +173,63 @@ fn render() -> String {
 
 #[test]
 fn the_answers_are_the_ones_recorded() {
-    if std::env::var_os("RECORD_GOLDEN").is_some() {
+    let current = render();
+    if std::env::var("RECORD_GOLDEN").as_deref() == Ok("1") {
         std::fs::create_dir_all(golden_path().parent().unwrap()).unwrap();
-        std::fs::write(golden_path(), render()).unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(golden_path())
+            .expect("the golden exists: delete it by hand to record again");
+        file.write_all(current.as_bytes()).unwrap();
         return;
     }
     let golden = std::fs::read_to_string(golden_path())
         .expect("tests/golden/angle_mode_strict.tsv is missing: record it with RECORD_GOLDEN=1");
-    assert_eq!(render(), golden.replace("\r\n", "\n"));
+    let golden = golden.replace("\r\n", "\n");
+    let golden_rows: Vec<&str> = golden.lines().collect();
+    let current_rows: Vec<&str> = current.lines().collect();
+    assert_eq!(
+        current_rows.len(),
+        golden_rows.len(),
+        "the corpus has {} rows and the golden file has {}",
+        current_rows.len(),
+        golden_rows.len(),
+    );
+    let disagreements: Vec<String> = current_rows
+        .iter()
+        .zip(&golden_rows)
+        .filter(|(current_row, golden_row)| current_row != golden_row)
+        .map(|(current_row, golden_row)| {
+            let (source, got) = current_row.split_once('\t').expect("every row is a source and an answer");
+            match golden_row.split_once('\t') {
+                Some((golden_source, expected)) if golden_source == source => {
+                    format!("{source}: expected {expected}, got {got}")
+                }
+                _ => format!("{source}: expected the row {golden_row:?}, got {got}"),
+            }
+        })
+        .collect();
+    assert!(
+        disagreements.is_empty(),
+        "{} disagreements with the golden file:\n{}",
+        disagreements.len(),
+        disagreements.join("\n"),
+    );
 }
 ```
 
 - [ ] **Step 2: Record the file, on the unmodified core**
 
-Run: `RECORD_GOLDEN=1 cargo test -p physure-script --test angle_mode_golden` (on PowerShell: set `$env:RECORD_GOLDEN = "1"` first, run, then `Remove-Item Env:RECORD_GOLDEN`)
+`tests/golden/angle_mode_strict.tsv` must not exist yet: recording refuses to overwrite it (delete it by hand only to record again, and only on a tree that has no angle code).
+
+Run on Bash: `RECORD_GOLDEN=1 cargo test -p physure-script --test angle_mode_golden`
+Run on PowerShell: set `$env:RECORD_GOLDEN = "1"` first, run `cargo test -p physure-script --test angle_mode_golden`, then `Remove-Item Env:RECORD_GOLDEN`.
 Expected: `test result: ok. 1 passed`
 
 - [ ] **Step 3: Read what was recorded**
 
-Open `tests/golden/angle_mode_strict.tsv`. Expected: 38 lines. The lines `(10 rad/s) / (6.283185307179586 rad) => Hz`, `(6.283185307179586 rad) * (50 Hz) => rad/s`, `(1 rad) + (90 deg)`, `(10 N*m/rad) * (2 rad) => J`, `(1 m) + (100 cm)`, `(20 dB) => percent`, `(5 Hz) => kHz`, `sin(90 deg)` and `sin(2 rad)` answer `ok ...`; every other line answers `error`. If any other line is `ok`, stop: the corpus does not match the spec's table and the spec must be corrected first.
+Open `tests/golden/angle_mode_strict.tsv`. Expected: 38 lines. The lines `(10 rad/s) / (6.283185307179586 rad) => Hz`, `(6.283185307179586 rad) * (50 Hz) => rad/s`, `(1 rad) + (90 deg)`, `(10 N*m/rad) * (2 rad) => J`, `(1 m) + (100 cm)`, `(20 dB) => percent`, `(5 Hz) => kHz`, `sin(90 deg)` and `sin(2 rad)` answer `ok ...` followed by the value; every other line answers `error ` followed by the core's message: a unit mismatch (`Unit mismatch: expected '...', got '...'`), and `sin expects an angle or a dimensionless value, got 'm/s^2'` for the `sin(9.81 m/s^2)` line. If any other line is `ok`, stop: the corpus does not match the spec's table and the spec must be corrected first.
 
 - [ ] **Step 4: Run it without the switch**
 
@@ -1298,13 +1354,13 @@ git commit -m "feat(core): a conversion reads rad and sr as 1; sums and comparis
 
 - [ ] **Step 1: Make the golden test run in `Dimension` mode**
 
-In `physure-script/tests/angle_mode_golden.rs`, add the import after `use physure_script::interpreter::eval_phs;`:
+In `physure-script/tests/angle_mode_golden.rs` (the file as Task 1 left it), add this import on the line before `use physure_script::interpreter::eval_phs;`, so that the imports stay in alphabetical order:
 
 ```rust
 use physure_core::units::angle_mode::{scoped, AngleMode};
 ```
 
-and change `render` to:
+and make `render` open with the guard that puts the thread in the strict mode, so that it reads:
 
 ```rust
 fn render() -> String {
@@ -1313,7 +1369,9 @@ fn render() -> String {
 }
 ```
 
-Also change the sentence of the header comment "The file is written once, on a tree that has no angle mode yet" to "The file was written once, on a tree that had no angle mode yet".
+`the_answers_are_the_ones_recorded`, `answer`, `golden_path` and the `CORPUS` stay as they are: the guard lives in `render`, which is the only caller of `answer`, so every row is evaluated in `Dimension` mode.
+
+Also change the sentence of the header comment "The file is written once, on a tree that has no angle mode yet." to "The file was written once, on a tree that had no angle mode yet." The rest of that paragraph (the refusal to overwrite and the Bash and PowerShell forms) stays.
 
 - [ ] **Step 2: Run it**
 

@@ -1,27 +1,27 @@
-(4 kg) * (0.5 m)^2 / 4 * (10 rad/s)^2 => J	error
-(10 rad/s) * (0.5 m) => m/s	error
-(2 m) * (0.5 rad) => m	error
-(10 N*m) * (3 rad/s) => W	error
-(377 rad/s) * (0.1 H) => ohm	error
-(2 rad) => unity	error
-(90 deg) => unity	error
-(100 cd) / (2 m)^2 => lx	error
-(5 lm) => cd	error
-(30 W) / (4 sr) / (2 m)^2 => W/m^2	error
-(2 rad => unity) + 1	error
-(25 kg*m^2*rad^2/s^2 => J) - (25 J)	error
-(10 rad/s) => Hz	error
-(10 rad/s) => kHz	error
-(10 Hz) => rad/s	error
+(4 kg) * (0.5 m)^2 / 4 * (10 rad/s)^2 => J	error Unit mismatch: expected 'kg * m^2 * rad^2 * s^-2', got 'J'
+(10 rad/s) * (0.5 m) => m/s	error Unit mismatch: expected 'm * rad * s^-1', got 'm/s'
+(2 m) * (0.5 rad) => m	error Unit mismatch: expected 'm * rad', got 'm'
+(10 N*m) * (3 rad/s) => W	error Unit mismatch: expected 'kg * m^2 * rad * s^-3', got 'W'
+(377 rad/s) * (0.1 H) => ohm	error Unit mismatch: expected 'A^-2 * kg * m^2 * rad * s^-3', got 'ohm'
+(2 rad) => unity	error Unit mismatch: expected 'rad', got 'unity'
+(90 deg) => unity	error Unit mismatch: expected 'deg', got 'unity'
+(100 cd) / (2 m)^2 => lx	error Unit mismatch: expected 'lx', got 'lx'
+(5 lm) => cd	error Unit mismatch: expected 'lm', got 'cd'
+(30 W) / (4 sr) / (2 m)^2 => W/m^2	error Unit mismatch: expected 'kg * s^-3 * sr^-1', got 'W/m^2'
+(2 rad => unity) + 1	error Unit mismatch: expected 'rad', got 'unity'
+(25 kg*m^2*rad^2/s^2 => J) - (25 J)	error Unit mismatch: expected 'kg*m^2*rad^2/s^2', got 'J'
+(10 rad/s) => Hz	error Unit mismatch: expected 'rad/s', got 'Hz'
+(10 rad/s) => kHz	error Unit mismatch: expected 'rad/s', got 'kHz'
+(10 Hz) => rad/s	error Unit mismatch: expected 'Hz', got 'rad/s'
 (10 rad/s) / (6.283185307179586 rad) => Hz	ok 1.59154943091895 Hz
 (6.283185307179586 rad) * (50 Hz) => rad/s	ok 314.159265358979 rad/s
-(2 rad) + 1	error
-1 + (2 rad)	error
-(5 deg) + (50 %)	error
-(1 rad) == 1	error
-(2 m*rad) + (1 m)	error
-(25 kg*m^2*rad^2/s^2) - (25 J)	error
-(1 rad)^2 + (1 rad)	error
+(2 rad) + 1	error Unit mismatch: expected 'rad', got ''
+1 + (2 rad)	error Unit mismatch: expected '', got 'rad'
+(5 deg) + (50 %)	error Unit mismatch: expected 'deg', got '%'
+(1 rad) == 1	error Unit mismatch: expected 'rad', got ''
+(2 m*rad) + (1 m)	error Unit mismatch: expected 'm*rad', got 'm'
+(25 kg*m^2*rad^2/s^2) - (25 J)	error Unit mismatch: expected 'kg*m^2*rad^2/s^2', got 'J'
+(1 rad)^2 + (1 rad)	error Unit mismatch: expected 'rad^2', got 'rad'
 (1 rad) + (90 deg)	ok 2.5707963267949 rad
 (10 N*m/rad) * (2 rad) => J	ok 20.0 J
 (1 m) + (100 cm)	ok 2.0 m
@@ -29,10 +29,10 @@
 (5 Hz) => kHz	ok 0.005 kHz
 sin(90 deg)	ok 1.0
 sin(2 rad)	ok 0.909297426825682
-(1 deg) => sr	error
-(1 rad) + (1 sr)	error
-(1 deg) + (1 sr)	error
-(1 rad) => dB	error
-sin(9.81 m/s^2)	error
-(1 rad/s) => sr/s	error
-(1 sr) => rad	error
+(1 deg) => sr	error Unit mismatch: expected 'deg', got 'sr'
+(1 rad) + (1 sr)	error Unit mismatch: expected 'rad', got 'sr'
+(1 deg) + (1 sr)	error Unit mismatch: expected 'deg', got 'sr'
+(1 rad) => dB	error Unit mismatch: expected 'rad', got 'dB'
+sin(9.81 m/s^2)	error sin expects an angle or a dimensionless value, got 'm/s^2'
+(1 rad/s) => sr/s	error Unit mismatch: expected 'rad/s', got 'sr/s'
+(1 sr) => rad	error Unit mismatch: expected 'sr', got 'rad'

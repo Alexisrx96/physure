@@ -1,14 +1,27 @@
 //! A golden file that pins what the angle work must not change.
 //!
 //! `tests/golden/angle_mode_strict.tsv` (at the repository root) holds, for every expression of `CORPUS`, what PHS
-//! answered on `main` @ `b27d0f8`, before the angle mode existed. In `Dimension` mode the answers must be the same
-//! ones, byte for byte: that is the claim that the strict mode is today's behaviour.
+//! answered on `main` @ `b27d0f8`, before the angle mode existed: the verdict and, for a success, the value, and for a
+//! refusal, the text of the error. Once the angle mode exists, the strict mode (`Dimension`) must give the same rows,
+//! byte for byte: that is the claim that the strict mode is today's behaviour.
 //!
-//! The file is written once, on a tree that has no angle mode yet, with
+//! The file is written once, on a tree that has no angle mode yet. Recording refuses to overwrite an existing file, so
+//! delete it by hand before recording again. On Bash:
 //!
 //!     RECORD_GOLDEN=1 cargo test -p physure-script --test angle_mode_golden
+//!
+//! On PowerShell, set the variable first and remove it afterwards:
+//!
+//!     $env:RECORD_GOLDEN = "1"
+//!     cargo test -p physure-script --test angle_mode_golden
+//!     Remove-Item Env:RECORD_GOLDEN
+//!
+//! A recorded value depends on the number formatting and on the error text of the core, so the file may only be
+//! re-recorded on a tree that has no angle code (an unmodified `b27d0f8`), never on the feature branch after Task 2.
 
 use physure_script::interpreter::eval_phs;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 
 const CORPUS: &[&str] = &[
@@ -58,13 +71,18 @@ const CORPUS: &[&str] = &[
 ];
 
 fn answer(source: &str) -> String {
-    match eval_phs(source) {
+    let text = match eval_phs(source) {
         Ok(values) => match values.last() {
             Some(value) => format!("ok {value}"),
             None => "ok".to_string(),
         },
-        Err(_) => "error".to_string(),
-    }
+        Err(e) => format!("error {e}"),
+    };
+    assert!(
+        !text.contains('\n') && !text.contains('\t'),
+        "the answer to {source:?} holds a newline or a tab, which would break the rows of the golden file: {text:?}",
+    );
+    text
 }
 
 fn golden_path() -> PathBuf {
@@ -77,12 +95,47 @@ fn render() -> String {
 
 #[test]
 fn the_answers_are_the_ones_recorded() {
-    if std::env::var_os("RECORD_GOLDEN").is_some() {
+    let current = render();
+    if std::env::var("RECORD_GOLDEN").as_deref() == Ok("1") {
         std::fs::create_dir_all(golden_path().parent().unwrap()).unwrap();
-        std::fs::write(golden_path(), render()).unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(golden_path())
+            .expect("the golden exists: delete it by hand to record again");
+        file.write_all(current.as_bytes()).unwrap();
         return;
     }
     let golden = std::fs::read_to_string(golden_path())
         .expect("tests/golden/angle_mode_strict.tsv is missing: record it with RECORD_GOLDEN=1");
-    assert_eq!(render(), golden.replace("\r\n", "\n"));
+    let golden = golden.replace("\r\n", "\n");
+    let golden_rows: Vec<&str> = golden.lines().collect();
+    let current_rows: Vec<&str> = current.lines().collect();
+    assert_eq!(
+        current_rows.len(),
+        golden_rows.len(),
+        "the corpus has {} rows and the golden file has {}",
+        current_rows.len(),
+        golden_rows.len(),
+    );
+    let disagreements: Vec<String> = current_rows
+        .iter()
+        .zip(&golden_rows)
+        .filter(|(current_row, golden_row)| current_row != golden_row)
+        .map(|(current_row, golden_row)| {
+            let (source, got) = current_row.split_once('\t').expect("every row is a source and an answer");
+            match golden_row.split_once('\t') {
+                Some((golden_source, expected)) if golden_source == source => {
+                    format!("{source}: expected {expected}, got {got}")
+                }
+                _ => format!("{source}: expected the row {golden_row:?}, got {got}"),
+            }
+        })
+        .collect();
+    assert!(
+        disagreements.is_empty(),
+        "{} disagreements with the golden file:\n{}",
+        disagreements.len(),
+        disagreements.join("\n"),
+    );
 }
