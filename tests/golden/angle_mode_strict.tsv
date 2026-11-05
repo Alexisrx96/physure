@@ -1,0 +1,38 @@
+(4 kg) * (0.5 m)^2 / 4 * (10 rad/s)^2 => J	error
+(10 rad/s) * (0.5 m) => m/s	error
+(2 m) * (0.5 rad) => m	error
+(10 N*m) * (3 rad/s) => W	error
+(377 rad/s) * (0.1 H) => ohm	error
+(2 rad) => unity	error
+(90 deg) => unity	error
+(100 cd) / (2 m)^2 => lx	error
+(5 lm) => cd	error
+(30 W) / (4 sr) / (2 m)^2 => W/m^2	error
+(2 rad => unity) + 1	error
+(25 kg*m^2*rad^2/s^2 => J) - (25 J)	error
+(10 rad/s) => Hz	error
+(10 rad/s) => kHz	error
+(10 Hz) => rad/s	error
+(10 rad/s) / (6.283185307179586 rad) => Hz	ok 1.59154943091895 Hz
+(6.283185307179586 rad) * (50 Hz) => rad/s	ok 314.159265358979 rad/s
+(2 rad) + 1	error
+1 + (2 rad)	error
+(5 deg) + (50 %)	error
+(1 rad) == 1	error
+(2 m*rad) + (1 m)	error
+(25 kg*m^2*rad^2/s^2) - (25 J)	error
+(1 rad)^2 + (1 rad)	error
+(1 rad) + (90 deg)	ok 2.5707963267949 rad
+(10 N*m/rad) * (2 rad) => J	ok 20.0 J
+(1 m) + (100 cm)	ok 2.0 m
+(20 dB) => percent	ok 10000.0 percent
+(5 Hz) => kHz	ok 0.005 kHz
+sin(90 deg)	ok 1.0
+sin(2 rad)	ok 0.909297426825682
+(1 deg) => sr	error
+(1 rad) + (1 sr)	error
+(1 deg) + (1 sr)	error
+(1 rad) => dB	error
+sin(9.81 m/s^2)	error
+(1 rad/s) => sr/s	error
+(1 sr) => rad	error
