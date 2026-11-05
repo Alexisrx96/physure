@@ -1,7 +1,7 @@
 # Angle mode: the radian is dimension one by default (stage A) — design
 
 **Date:** 2026-11-05
-**Status:** draft for the maintainer's review. Nothing is implemented.
+**Status:** draft for the maintainer's review. Nothing is implemented. Two spikes (S1, S2) are open and gate the plan; see "Open before implementation".
 **Base:** local `main` @ `b27d0f8` (21 commits ahead of `origin/main`); branch `feat/angle-mode`.
 **Follows:** finding `F-0001` of `physure-crucible` (`mechanics.rotating-disk-energy`, release blocker, open).
 **Stages:** this is stage **A** of three. **B** (decorated blocks in PHS: `@angles(dimension) { ... }`, chained and nested) and **C** (reusable sets of decorators) get their own specs; A only has to leave the seam they need (see "What A leaves for B and C").
@@ -63,7 +63,10 @@ Which callers use which predicate (the nine callers that CodeGraph lists for `sa
 |---|---|---|
 | `Quantity::add`, `sub`, `convert_to`, `approx_eq`, `phs_assert`, `combine_levels`; `UnitRegistry::conversion`, `factor_between`; `physure-script` `comparable` | mode-aware | they ask "can these be combined / converted" |
 | `Quantity::as_radians` (trig) | mode-aware | it asks "is this an angle"; `sin(9.81 m/s^2)` is still refused |
-| Python `PyQuantity.__eq__` against a bare number | **strict** | equality is not compatibility: `Q(5, 'deg') == 5.0` must not become true |
+| `PyQuantity.__eq__` (core wrapper, `physure-python/src/lib.rs`) against a bare number | **strict** | equality is not compatibility |
+| Python `Quantity.__eq__` (`quantity.py`, the class users hold) against a bare number | **rewritten**, see below | it tests `dimension.is_dimensionless` and then compares the raw magnitude, so once `dimension_of` drops `rad`, `Q_(5, 'deg') == 5.0` would become true |
+
+**The Python equality is wrong today and the default flip would widen it.** `Quantity.__eq__` returns `self.magnitude == other` for a dimensionless quantity, ignoring the unit's scale, so `Q_(5, '%') == 5.0` is already true (5 % is 0.05). By reading the code, not by running it: the compiled extension in the main checkout predates `unit_text` and cannot be imported. The fix is the same for both problems: compare after converting to the unit one (`self.to(unity).magnitude == other`), so `Q_(5, 'deg') == 5.0` is false, `Q_(1, 'rad') == 1.0` is true and `Q_(5, '%') == 0.05` is true. This is a behaviour fix of its own and goes in the changelog as such. The wider question, every other place that asks "is this dimensionless", is spike S1 below.
 
 The sum keeps the unit of the left operand, as today: `(1 m) + (1 m*rad)` is `2 m`.
 
@@ -119,6 +122,28 @@ This changes the default, so it is a breaking change of 0.3.x behaviour. The equ
 
 With the default flipped, `mechanics.rotating-disk-energy` should pass with no change to the case. The resolution is a reviewed metadata edit of the finding (`status = "resolved"`, `updated_at`, an addendum to `finding.md` with the run that shows it), made in `physure-crucible` after a new candidate is archived. A case for `Dimension` mode needs a way to select the mode inside the program, which is stage B (`@angles(dimension) { ... }`); until then it is not expressible and is not added.
 
+## Scientific basis (what the sources license and what they do not)
+
+Read on 2026-11-05. Quotes are from the JCGM VIM (verbatim) and from the French edition of the SI Brochure 9th edition, §2.3.3 p. 25 (my translation).
+
+- **SI Brochure.** "For historical and conventional reasons, plane and solid angles are considered in the SI as quantities of unit one." "When needed, the symbols rad and sr are written explicitly to emphasise that the quantity considered … is, or involves, plane angle or solid angle." "The use of steradians emphasises, for example, the distinction between flux and intensity units in radiometry and photometry." So the default mode follows the SI convention, and the SI treats the radian and the steradian **symmetrically**.
+- **VIM 1.2 (kind of quantity).** "Quantities of the same dimension are not necessarily of the same kind." Its examples of different kinds with the same dimension include moment of force and energy, and "number of entities, relative permeability, and mass fraction" (all dimension one). "Two quantities of the same kind are mutually comparable." Physure is dimension-based, not kind-based, apart from a few guards; it already treats `%`, `ppm` and `unity` as one pool and accepts `N*m => J`, so adding angles to the dimension-one pool is the same class of leniency, not a new one. `Dimension` mode is the strict reading for whoever wants it.
+- **BIPM.** The CCU task group on angle and dimensionless quantities (CCU-TG-ADQSIB) was closed in May 2024; its terms of reference included reviewing the historical supplementary units and "whether reintroduction would be of benefit". The Brochure has been revised since (the English PDF cover says V4.01, June 2026). **Not verified:** the revised wording of §2.3.3 and 2.3.4 in English, and the footnotes of Table 4 on the hertz and the newton metre; the fetched English PDF was truncated. This must be re-read before the spec is final.
+
+What this licenses for each choice:
+
+| Choice | Verdict |
+|---|---|
+| Default: `rad` is unit one | Licensed: it is the SI convention, stated as a convention. |
+| Levels (`dB`, `pH`) stay strict | Defensible, not mandated by the Brochure: a level is the logarithm of a ratio of two quantities of the same kind (VIM kind rule). Relaxing later is not a breaking change, tightening later is. (Which ISO/IEC 80000 part defines levels was not settled by the sources I found.) |
+| `sr` stays strict | Defensible, **not** SI-literal: the SI is symmetric. It is Physure policy, supported by the SI's own radiometry example (`lm` is `cd·sr` precisely to keep flux apart from intensity). Document it as a deliberate deviation, never as "the SI says so". |
+| Python: context manager, no process-wide setter | Neutral for rigour; better for reproducibility (a scoped, restored override), provided the mode in force is observable: expose `angle_mode()` and record it in the crucible candidate manifest. |
+
+## Open before implementation (spikes)
+
+- **S1: every consumer of "is this dimensionless".** About 10 sites in `physure-python` (`is_dimensionless`) and about 25 production sites in `physure-core` and `physure-script` (`dimensions.is_empty()`, `is_plain_number()`, `dimensionless()`). For each: does it follow the mode (it asks about compatibility) or stay strict (it asks about identity or about a pure number: equality with a bare number, `exp`/`ln` arguments, `float(q)`, a `pow` exponent)? Output: a table in this spec, and the tests that would fail. No production code.
+- **S2: `rad/s` ↔ `Hz`.** The rule makes `10 rad/s => Hz` give `10 Hz`. The SI reserves the hertz for periodic phenomena and relates angular frequency to frequency by ω = 2πf; 1 rad/s and 1 Hz are the same coherent expression `s⁻¹`, so this is a kind-of-quantity misuse like `N*m => J` (misleading), not an arithmetic error, but a reader who means cycles gets 2π wrong. Question: can a conversion that has `rad` on one side and `Hz` (or `Bq`) on the other be refused in the default mode, so that `(10 rad/s) / (2 pi rad) => Hz` (the `rad` cancels) is the way to say it? It needs the symbol of the target to survive to the check, which the expanded units of `registry.conversion` may not preserve. Output: a yes/no with a prototype, and the rule if yes.
+
 ## What A leaves for B and C
 
 - **A stackable scope.** `scoped` already restores the previous value, so nested blocks work; B's interpreter opens one per decorated block.
@@ -131,4 +156,4 @@ With the default flipped, `mechanics.rotating-disk-energy` should pass with no c
 - The steradian in `Dimensionless` mode (`lm ↔ cd`); it stays strict until someone has a case that needs it.
 - Changing the catalog's `angle = A`; the strict mode and `sr` need it.
 - A runtime setter for Java and WASM, and any PHS syntax.
-- Special-casing `rad/s ↔ Hz`. It is the SI reading, it follows from the rule, and `Dimension` mode is the protection for whoever wants the 2π caught.
+- Any decision on `rad/s ↔ Hz` beyond spike S2. Until S2 answers, the behaviour table shows what the bare rule gives, and `Dimension` mode is the protection for whoever wants the 2π caught.
