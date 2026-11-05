@@ -914,12 +914,21 @@ In the `tests` module of `conf.rs`, add:
         (marker_converts_to_plain("rad"), marker_converts_to_plain("sr"))
     }
 
+    /// The grants after reading `conf` with the grants first set to `start`. The caller holds `TEST_LOCK` and a
+    /// `RestoreProcessState` guard.
+    fn grants_after(conf: &str, start: (bool, bool)) -> (bool, bool) {
+        crate::units::angle_mode::set_marker_grants(start.0, start.1);
+        parse_physure_conf(conf, &mut UnitRegistry::new(), &mut HashMap::new());
+        marker_grants()
+    }
+
     #[test]
     fn the_embedded_conf_lets_a_conversion_read_both_markers_as_one() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        assert_eq!(marker_grants(), (true, true));
+        // Start from "none", so only the rows of the embedded conf can bring both back.
+        assert_eq!(grants_after(DEFAULT_PHYSURE_CONF, (false, false)), (true, true));
     }
 
     #[test]
@@ -927,12 +936,8 @@ In the `tests` module of `conf.rs`, add:
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        parse_physure_conf("[Compatibility]\nradian, plain = convert\n", &mut reg, &mut constants);
-        assert_eq!(marker_grants(), (true, false));
-        parse_physure_conf("[Compatibility]\nplain, steradian = convert\n", &mut reg, &mut constants);
-        assert_eq!(marker_grants(), (false, true));
+        assert_eq!(grants_after("[Compatibility]\nradian, plain = convert\n", (true, true)), (true, false));
+        assert_eq!(grants_after("[Compatibility]\nplain, steradian = convert\n", (true, true)), (false, true));
     }
 
     #[test]
@@ -940,10 +945,7 @@ In the `tests` module of `conf.rs`, add:
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        parse_physure_conf("[Compatibility]\n", &mut reg, &mut constants);
-        assert_eq!(marker_grants(), (false, false));
+        assert_eq!(grants_after("[Compatibility]\n", (true, true)), (false, false));
     }
 
     #[test]
@@ -951,10 +953,8 @@ In the `tests` module of `conf.rs`, add:
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        parse_physure_conf("[Settings]\nparallel_threshold = 10000\n", &mut reg, &mut constants);
-        assert_eq!(marker_grants(), (true, true));
+        // Not the default, so a conf that resets the rows to the default is caught.
+        assert_eq!(grants_after("[Settings]\nparallel_threshold = 10000\n", (true, false)), (true, false));
     }
 
     #[test]
@@ -962,47 +962,54 @@ In the `tests` module of `conf.rs`, add:
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        parse_physure_conf("[Compatibility]\nperiodic = hertz\n", &mut reg, &mut constants);
-        assert_eq!(marker_grants(), (true, true));
+        assert_eq!(grants_after("[Compatibility]\nperiodic = hertz\n", (true, false)), (true, false));
+        // A `periodic` line that names nothing is still a `periodic` line, not an empty section.
+        assert_eq!(grants_after("[Compatibility]\nperiodic =\n", (true, false)), (true, false));
     }
 
     #[test]
-    fn a_row_that_asks_for_a_sum_or_a_comparison_grants_nothing() {
+    fn a_section_with_rows_and_a_periodic_unit_replaces_the_rows() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        for row in ["radian, plain = convert add", "radian, plain = compare", "radian, plain = add compare convert"] {
-            parse_physure_conf(&format!("[Compatibility]\n{row}\n"), &mut reg, &mut constants);
-            assert_eq!(marker_grants(), (false, false), "{row}");
+        // The shape of the embedded conf: rows and `periodic` in one section. The periodic name must not keep the
+        // old rows alive.
+        let conf = "[Compatibility]\nradian, plain = convert\nperiodic = hertz\n";
+        assert_eq!(grants_after(conf, (true, true)), (true, false));
+    }
+
+    #[test]
+    fn a_row_that_cannot_be_read_grants_nothing() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        for row in [
+            // A sum or a comparison never reads a marker as 1, and the operation must be exactly `convert`.
+            "radian, plain = convert add",
+            "radian, plain = compare",
+            "radian, plain = add compare convert",
+            "radian, plain =",
+            "radian, plain = convert convert",
+            // Two markers do not convert into each other, and a plain unit is not a marker.
+            "radian, steradian = convert",
+            "metre, plain = convert",
+            "plain, plain = convert",
+            "radian = convert",
+            // No `=` at all.
+            "radian plain convert",
+        ] {
+            let conf = format!("[Compatibility]\n{row}\n");
+            assert_eq!(grants_after(&conf, (true, true)), (false, false), "{row}");
         }
     }
 
     #[test]
-    fn two_markers_do_not_convert_into_each_other_and_a_plain_unit_is_not_a_marker() {
+    fn a_row_that_cannot_be_read_does_not_cancel_the_one_beside_it() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        for row in ["radian, steradian = convert", "metre, plain = convert", "plain, plain = convert", "radian = convert"] {
-            parse_physure_conf(&format!("[Compatibility]\n{row}\n"), &mut reg, &mut constants);
-            assert_eq!(marker_grants(), (false, false), "{row}");
-        }
-    }
-
-    #[test]
-    fn a_row_without_an_equals_sign_grants_nothing() {
-        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        settle_catalog_settings();
-        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
-        let mut reg = UnitRegistry::new();
-        let mut constants = HashMap::new();
-        parse_physure_conf("[Compatibility]\nradian plain convert\n", &mut reg, &mut constants);
-        assert_eq!(marker_grants(), (false, false));
+        let conf = "[Compatibility]\nradian, plain = convert\nradian, plain = add\n";
+        assert_eq!(grants_after(conf, (false, false)), (true, false));
     }
 
     #[test]
@@ -1011,16 +1018,41 @@ In the `tests` module of `conf.rs`, add:
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         let (mut reg, mut constants) = build_registry_from_conf();
+        // Not the default, and not what the rows below would give: applying them would make this (true, true).
+        crate::units::angle_mode::set_marker_grants(true, false);
         extend_registry(
             &mut reg,
             &mut constants,
-            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq\nradian, plain = convert\n",
+            "[Units]\nmyfreq = 1.0, T^-1, 1/s, [mf]\n[Compatibility]\nperiodic = myfreq\nradian, plain = convert\nsteradian, plain = convert\n",
         )
         .unwrap();
         assert!(reg.get_unit("mf").unwrap().periodic);
-        assert_eq!(marker_grants(), (true, true));
+        assert_eq!(marker_grants(), (true, false));
         extend_registry(&mut reg, &mut constants, "[Compatibility]\n").unwrap();
-        assert_eq!(marker_grants(), (true, true));
+        assert_eq!(marker_grants(), (true, false));
+    }
+
+    fn row_error(row: &str) -> String {
+        match read_compatibility_row(row) {
+            Ok(_) => panic!("'{row}' should not be a readable row"),
+            Err(why) => why,
+        }
+    }
+
+    #[test]
+    fn a_row_that_cannot_be_read_says_why() {
+        assert!(row_error("radian plain convert").contains("kind, kind = operations"));
+        assert!(row_error("radian, plain = add").contains("not supported yet"));
+        assert!(row_error("radian, steradian = convert").contains("pairs a marker unit with `plain`"));
+        assert!(row_error("metre, plain = convert").contains("not a marker unit"));
+    }
+
+    #[test]
+    fn a_row_names_its_marker_in_either_order_and_either_spelling() {
+        assert!(matches!(read_compatibility_row("radian, plain = convert"), Ok(Marker::Radian)));
+        assert!(matches!(read_compatibility_row("rad, plain = convert"), Ok(Marker::Radian)));
+        assert!(matches!(read_compatibility_row("plain, steradian = convert"), Ok(Marker::Steradian)));
+        assert!(matches!(read_compatibility_row("sr, plain = convert"), Ok(Marker::Steradian)));
     }
 ```
 
@@ -1034,11 +1066,13 @@ Expected: FAIL (`left: (true, true), right: (true, false)`): rows are not read y
 In `conf.rs`, replace the Task 4 `read_compatibility_line` with this version, and add the three functions after it:
 
 ```rust
-/// One line of `[Compatibility]`. `periodic = hertz` names units that the SI reserves for periodic phenomena; any
-/// other line is a row, `radian, plain = convert`, kept for `apply_compatibility`.
-fn read_compatibility_line(line: &str, periodic: &mut Vec<String>, rows: &mut Vec<String>) {
+/// One line of `[Compatibility]`. `periodic = hertz` names units that the SI reserves for periodic phenomena (and
+/// sets `saw_periodic`, even when no name follows); any other line is a row, `radian, plain = convert`, kept for
+/// `apply_compatibility`.
+fn read_compatibility_line(line: &str, periodic: &mut Vec<String>, saw_periodic: &mut bool, rows: &mut Vec<String>) {
     match line.split_once('=') {
         Some((key, names)) if key.trim() == "periodic" => {
+            *saw_periodic = true;
             periodic.extend(names.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_string));
         }
         _ => rows.push(line.to_string()),
@@ -1051,9 +1085,9 @@ enum Marker {
     Steradian,
 }
 
-/// A row is `unit, plain = convert`, with the unit one of the two markers, in either order. Anything else is not
-/// supported yet: a sum or a comparison never reads a marker as 1 (Python decides those from `Dimension`, which stays
-/// strict), and two markers do not convert into each other.
+/// A row is `unit, plain = convert`, with the unit spelled `radian`/`rad` or `steradian`/`sr`, in either order.
+/// Anything else is not supported yet: a sum or a comparison never reads a marker as 1 (Python decides those from
+/// `Dimension`, which stays strict), and two markers do not convert into each other.
 fn read_compatibility_row(row: &str) -> Result<Marker, String> {
     let Some((kinds, operations)) = row.split_once('=') else {
         return Err(format!("[Compatibility] '{row}' is not `kind, kind = operations`"));
@@ -1061,7 +1095,7 @@ fn read_compatibility_row(row: &str) -> Result<Marker, String> {
     let operations: Vec<&str> = operations.split_whitespace().collect();
     if operations != ["convert"] {
         return Err(format!(
-            "[Compatibility] '{row}': only `convert` is supported, a sum or a comparison never reads a marker as 1"
+            "[Compatibility] '{row}': the operation must be exactly `convert` (`add` and `compare` are not supported yet)"
         ));
     }
     let kinds: Vec<&str> = kinds.split(',').map(str::trim).collect();
@@ -1095,6 +1129,7 @@ In `parse_conf`:
 
 - after `let mut periodic_names: Vec<String> = Vec::new();` add:
 ```rust
+    let mut saw_periodic = false;
     let mut compatibility_rows: Vec<String> = Vec::new();
     let mut has_compatibility = false;
 ```
@@ -1111,19 +1146,24 @@ with
 ```
 - replace the Task 4 arm with
 ```rust
-            "Compatibility" => read_compatibility_line(line, &mut periodic_names, &mut compatibility_rows),
+            "Compatibility" => {
+                read_compatibility_line(line, &mut periodic_names, &mut saw_periodic, &mut compatibility_rows)
+            }
 ```
 - after `mark_periodic(registry, &periodic_names, problems);` add
 ```rust
-    // A section replaces the rows when it has rows, or when it is empty (an explicit "none"). A section that only
-    // names a periodic unit leaves them alone: a project that adds a unit of its own must not lose the grants.
-    if apply_settings && has_compatibility && (!compatibility_rows.is_empty() || periodic_names.is_empty()) {
+    // A section replaces the rows when it has rows, or has no `periodic` line at all (an empty section is an explicit
+    // "none"). A section that only has a `periodic` line, even an empty one, leaves them alone: a project that adds a
+    // unit of its own must not lose the grants.
+    if apply_settings && has_compatibility && (!compatibility_rows.is_empty() || !saw_periodic) {
         apply_compatibility(&compatibility_rows);
     }
 ```
 - in `mark_periodic` (written in Task 4), reword the problem so that it is true for a base unit and for a prefixed spelling too: replace
 `format!("[Compatibility] periodic: '{name}' is not a registered unit")` with
-`format!("[Compatibility] periodic: '{name}' does not name a unit defined in [Units] (a base unit or a prefixed spelling cannot be flagged)")`.
+`format!("[Compatibility] periodic: '{name}' does not name a unit defined in [Units] (a base unit or a prefixed spelling cannot be flagged)")`,
+and make its doc comment say the same: replace `A name that is not a registered unit is a problem.` with
+`A name that does not name a unit defined in `[Units]` (a base unit, or a prefixed spelling, cannot be flagged) is a problem.`
 (The tests of Task 4 assert only that the text names the unit, so they stay as they are.)
 
 - [ ] **Step 4: Write the rows into the embedded conf**
@@ -1136,7 +1176,8 @@ In `physure.conf`, replace the `[Compatibility]` section of Task 4 with:
 # steradian is 1). `unit, plain = convert` lets `=>`, `to` and a unit annotation identify that unit with 1 when the
 # rest of the unit agrees: `m*rad/s => m/s`, `cd/m^2 => lx`. Only `convert` is supported: a sum or a comparison
 # never reads a marker as 1. A conf with rows in this section replaces these rows (an empty section removes them
-# all); a conf with no section, or one that only names a periodic unit, keeps them.
+# all); a conf with no section, or one that only names a periodic unit, keeps them. Comments go on their own line; an
+# inline `#` is read as part of the row.
 radian, plain = convert
 steradian, plain = convert
 # The SI reserves the hertz for periodic phenomena (Brochure, Table 4, footnote d), and a frequency and an angular
