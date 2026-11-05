@@ -30,6 +30,7 @@ The cause is the catalog, not an algorithm: `physure.conf` declares `[Dimensions
 | Question | Decision | Rejected |
 |---|---|---|
 | Governing rule | **Follow the SI.** Where the SI is explicit, Physure does what it says. Where it is silent, behaviour does not change. | Policies of our own that are stricter than the SI without a source |
+| Where the policy lives | **A compatibility list**: catalog data that says which kinds of quantity of unit one may be converted, added or compared. Proposed by the maintainer; its scope (three operations, kinds read from the units) is for review. | Guards hard-coded in the core |
 | Default | The radian and the steradian are unit one (SI Table 4). Strict (angle is a dimension) is the opt-in. | Strict default with an opt-in |
 | Ways to opt in | A `[Settings]` entry, a scoped override per call or block of code, and PHS syntax. | Only the global setting |
 | PHS syntax | **Decorated blocks**, chainable, nestable, with reusable sets of decorators (stages B and C). | A `with` keyword; a file-level directive |
@@ -65,26 +66,55 @@ pub fn scoped(m: AngleMode) -> AngleModeGuard      // thread-local; Drop restore
 
 ### The rule
 
-In `Dimensionless` mode two units are compatible when their base exponents agree **ignoring the base units `rad` and `sr`** (Table 4: both are 1; the SI is symmetric). Both are still carried through arithmetic and shown (`25 kg·m²·rad²·s⁻²`) until a conversion replaces the unit. The scale is respected: `deg` is π/180, and `90 deg => unity` is `1.5708`.
+In `Dimensionless` mode two units are dimensionally compatible when their base exponents agree **ignoring the base units `rad` and `sr`** (Table 4: both are 1; the SI is symmetric), and the compatibility list below then says whether that pair may be converted, added or compared. Both are still carried through arithmetic and shown (`25 kg·m²·rad²·s⁻²`) until a conversion replaces the unit. The scale is respected: `deg` is π/180, and `90 deg => unity` is `1.5708`.
 
 - `RationalUnit::same_dimensions` becomes mode-aware. The old comparison stays as `same_dimensions_strict`. The keys `"rad"` and `"sr"` are base units that `register_fallback_bases` (`conf.rs`) always registers (`sr` as a base of its own through the catalog's `own_kind` flag). A conf that maps those dimensions to other base units would not get the equivalence; that is accepted and stated rather than made configurable.
 - `UnitRegistry::dimension_of` skips the contributions of the base units `rad` and `sr` in this mode, so the dimension symbol `A` never appears. Every consumer of `dimension_of`/`facts` then agrees with what converts: Python's `Dimension`, `Quantity.dimension`, and the static checker of `physure-script`.
 
-### The guards
+### The dimension-one compatibility list
 
-Where the SI is explicit or the old behaviour has a reason, three refusals survive the rule:
+The rule says when `rad` and `sr` may be ignored; the list says **between which kinds of quantity, and for which operation**, that is allowed. It is catalog data in `physure.conf`, so every binding reads the same list, and it replaces the three refusals this spec first hard-coded (frequency against angular frequency, plane against solid angle, levels).
 
-| Guard | Refuses | Why |
-|---|---|---|
-| **G1, frequency is not angular frequency** | A conversion between a unit with a `rad` or `sr` exponent and a unit without it when either side is the hertz (any prefix, any alias; the catalog has no becquerel today, and the guard covers it if one is added): `10 rad/s => Hz`, `10 rad/s => kHz`. It does not refuse `(2π rad) * (50 Hz) => rad/s` (the exponents of `rad` agree) nor `(10 rad/s) / (6.283185307179586 rad) => Hz` (the `rad` cancels). | SI footnote (d) and §2.3.4: the hertz is for periodic phenomena and ignoring the 2π "can cause an error of 2π". Explicit, so the SI wins over the bare rule. |
-| **G2, plane angle is not solid angle** | Both sides carry an angle component and they are of different kinds (`rad` against `sr`): `deg => sr`, `rad + sr`, `1 deg + 1 sr`, `rad/s => sr/s`. A side with no angle component is fine. | A1 stage 2 decided it (`arcmin => sr` must be rejected) and the tests pin it; the SI is silent about converting one to the other, and its footnotes (b) and (c) say they are different in nature. So the old behaviour stands. The relation is deliberately not transitive: `rad` ~ `1` ~ `sr` but `rad` is not `sr`. |
-| **G3, levels** | Any conversion or sum with a logarithmic unit (`dB`, `pH`) where the angle exponents differ: `1 rad => dB`. | The SI does not treat levels; the VIM kind rule says a level is a logarithm of a ratio of same-kind quantities. Behaviour does not change; it is in `unit_literal_regression.rs` as a refused program. |
+**Kinds.** The kind of a unit is read from its base exponents:
+
+- each base unit flagged `own_kind` in the catalog is a kind of its own (`steradian` today; `radian` gets the flag too);
+- `one` is a unit with no such component: `unity`, `%`, `ppm`, a bare number;
+- `level` is a logarithmic unit (`dB`, `pH`);
+- `frequency` is the hertz. It is not a base-unit exponent, so how the check sees it is the open mechanism of S2.
+
+A unit with exactly one own-kind component (`rad`, `deg`, `rad²`, `m·rad/s`) is of that kind, with none it is `one`, and with more than one (`rad·sr`) it is `mixed`, compatible only with the identical combination. Two units of the same kind are always compatible (`rad` with `deg`, `rad²` with `rad`).
+
+**Operations.** `convert` (`=>`, `to`, the registry's plan), `add` (sum and difference), `compare` (`==`, `<`, `approx_eq`, `assert`). Products, quotients and powers are not governed by the list; the existing refusal of compound levels stays as it is.
+
+**The list.** Symmetric, and a pair that is not listed allows nothing:
+
+```
+[Compatibility]
+# kind, kind = operations
+radian, one     = convert add compare    # SI Table 4: rad is 1
+steradian, one  = convert add compare    # SI Table 4: sr is 1
+level, one      = convert                # as today: `20 dB => percent`
+frequency, one  = convert add compare    # a rate written as s^-1 may be called a frequency
+```
+
+Not listed, so refused, each for a reason:
+
+| Pair | Refused because |
+|---|---|
+| `radian`, `steradian` | A1 stage 2 decided it (`arcmin => sr` must be rejected) and the tests pin it. The SI is silent about converting one to the other, and its footnotes (b) and (c) say they differ in nature. The relation is deliberately not transitive: `rad` ~ `one` ~ `sr`, but `rad` is not `sr`. |
+| `radian`, `frequency` and `steradian`, `frequency` | SI footnote (d) and §2.3.4: the hertz is for periodic phenomena and ignoring the 2π "can cause an error of 2π". Explicit, so the SI wins over the bare rule: `10 rad/s => Hz` and `10 rad/s => kHz` are refused, while `(2π rad) * (50 Hz) => rad/s` and `(10 rad/s) / (6.283185307179586 rad) => Hz` work, because the `rad` exponents agree or cancel. |
+| `level`, `radian` and `level`, `steradian` | The SI does not treat levels; the VIM kind rule says a level is the logarithm of a ratio of same-kind quantities. Behaviour does not change (`1 rad => dB` is in `unit_literal_regression.rs` as a refused program). |
+| `level`, `frequency` | Same reason; nothing today accepts it. |
+
+**The mode and the list.** `angle_mode = dimension` does not consult the list: angles are dimensions, which is today's behaviour byte for byte. So the mode chooses between "the list" and "no list", and stage B's `@angles(dimension)` is "no list for this block". A project edits the list in its own `physure.conf`, and the behaviour table shows which rows then flip. For example, deleting `steradian, one` keeps radiometry strict, and `(100 cd) / (2 m)^2 => lx` and radiance to irradiance both go back to refused, because they depend on that one row. `5 deg + 50 %` and the series `1 - x²/2` depend on the same row, `radian, one`, and cannot be separated: both are a `rad` kind against `one`.
+
+**Where it lives.** A `[Compatibility]` section of the conf, parsed by `conf.rs` with its problems reported like the other sections (an unknown kind or operation is an error of the conf, not a silent skip), into a process-wide table that `Quantity::add`, `sub`, `convert_to` and the others consult, since they have no registry. Same caveat as the mode: global state, reset by the `clean_state` fixture. The cost is a scan of a unit's short, sorted base exponents for the own-kind keys, with no allocation; a unit without `rad` or `sr` pays one scan.
 
 Which callers use which predicate (the nine callers that CodeGraph lists for `same_dimensions` plus the two in `registry.rs`; the plan re-greps for any other before editing):
 
 | Caller | Predicate | Why |
 |---|---|---|
-| `Quantity::add`, `sub`, `convert_to`, `approx_eq`, `phs_assert`, `combine_levels`; `UnitRegistry::conversion`, `factor_between`; `physure-script` `comparable` | mode-aware, with the guards | they ask "can these be combined / converted" |
+| `Quantity::add`, `sub`, `convert_to`, `approx_eq`, `phs_assert`, `combine_levels`; `UnitRegistry::conversion`, `factor_between`; `physure-script` `comparable` | mode-aware, then the list with the operation: `add` for `add`/`sub`; `convert` for `convert_to`, `conversion`, `factor_between`; `compare` for `approx_eq`, `phs_assert`, `comparable`; `combine_levels` follows the level rows | they ask "can these be combined / converted" |
 | `Quantity::as_radians` (trig) | mode-aware | it asks "is this an angle"; `sin(9.81 m/s^2)` is still refused |
 | `PyQuantity.__eq__` (core wrapper, `physure-python/src/lib.rs`) against a bare number | **strict** | equality is not compatibility |
 | Python `Quantity.__eq__` (`quantity.py`, the class users hold) against a bare number | **rewritten**, see below | it tests `dimension.is_dimensionless` and then compares the raw magnitude, so once `dimension_of` drops `rad`, `Q_(5, 'deg') == 5.0` would become true |
@@ -101,13 +131,13 @@ The override is thread-local, like `PropagationMode`'s, and rayon workers do not
 
 | Surface | What A adds |
 |---|---|
-| `physure.conf` | `angle_mode` (everything that reads a conf: PHS, CLI, LSP, Rust API, Python, Java, WASM) |
+| `physure.conf` | `[Settings] angle_mode` and the `[Compatibility]` section (everything that reads a conf: PHS, CLI, LSP, Rust API, Python, Java, WASM) |
 | Rust | `AngleMode`, `angle_mode()`, `set_angle_mode()`, `scoped()` |
 | Python | `physure.angle_mode("dimension")` as a context manager (a `#[pyclass(unsendable)]` holding the guard between `__enter__` and `__exit__`) and a getter; no process-wide setter (a later conf read would undo it, as for `propagation_mode`). The mode in force is recorded in the crucible candidate manifest, so a result can be traced to it. |
 | PHS | nothing in A (stage B); programs follow the conf and the surrounding scoped mode |
 | Java, WASM | the conf only; no runtime setter in A |
 
-The static checker (`check.rs`) needs no change for the rule: it reads dimensions through `dimension_of`/`facts`. It does need G1 and G2 (it must not report an error the interpreter accepts, and must report the ones it refuses); that is part of spike S1.
+The static checker (`check.rs`) needs no change for the rule: it reads dimensions through `dimension_of`/`facts`. It does need the list (it must not report an error the interpreter accepts, and must report the ones it refuses); that is part of spike S1.
 
 ## Behaviour
 
@@ -122,15 +152,15 @@ The `Today` column is measured for the rows probed above and known from the exis
 | `(5 lm) => cd` | error | `5 cd` | error |
 | `(2 rad) => unity`, `(90 deg) => unity` | error | `2`, `1.5708` | error |
 | `5 deg + 50 %` | error | accepted (both are unit one, as `%` and `unity` already are) | error |
-| `(10 rad/s) => Hz` | error | **error (G1)** | error |
+| `(10 rad/s) => Hz` | error | **error** (`radian, frequency` is not listed) | error |
 | `(10 rad/s) / (6.283185307179586 rad) => Hz` | error | `1.5915 Hz` | error |
-| `deg => sr`, `rad + sr`, `1 deg + 1 sr` | error | **error (G2)** | error |
-| `1 rad => dB` | error | **error (G3)** | error |
+| `deg => sr`, `rad + sr`, `1 deg + 1 sr` | error | **error** (`radian, steradian` is not listed) | error |
+| `1 rad => dB` | error | **error** (`level, radian` is not listed) | error |
 | `sin(9.81 m/s^2)` | error | error | error |
 
 `Dimension` mode is today's behaviour, and the claim is tested, not argued (see below).
 
-One consequence to see: `(30 W) / (4 sr) / (2 m)^2 => W/m^2` (radiance to irradiance) becomes `W/m^2` without a solid angle. It is the SI's "sr is 1", numerically exact, and the SI itself recommends keeping `sr` in the expression for radiometry (footnote (g) and Table 6) precisely because of this. The mode keeps it in the unit and the display; `Dimension` mode refuses the conversion.
+One consequence to see: `(30 W) / (4 sr) / (2 m)^2 => W/m^2` (radiance to irradiance) becomes `W/m^2` without a solid angle. It is the SI's "sr is 1", numerically exact, and the SI itself recommends keeping `sr` in the expression for radiometry (footnote (g) and Table 6) precisely because of this. The mode keeps it in the unit and the display; `Dimension` mode refuses the conversion, and so does a project that deletes the `steradian, one` row.
 
 ## Compatibility
 
@@ -140,7 +170,7 @@ This changes the default, so it is a breaking change of 0.3.x behaviour. The equ
 
 - **Strict is today, byte for byte.** Before touching the core, record the answers of `main` @ `b27d0f8` for a corpus (every expression in the tables above, plus the units tests that mention `rad`, `deg`, `arcmin`, `arcsec` and `sr`); after the change, `Dimension` mode must reproduce them exactly. This is the golden-file method used for the large refactors of A1.
 - **The rule.** Core tests: each row of the behaviour table, both modes; `scoped` nests and restores, also on unwind; a bad conf value keeps the default and says so.
-- **The guards.** G1 with the hertz under a prefix (`kHz`) and an alias (`hertz`), and the two allowed spellings; G2 with `rad` against `sr` in a product and in a sum; G3 unchanged.
+- **The list.** Table-driven: for every pair of kinds and every operation, the answer equals the embedded list (a golden test, so a change to the list is a visible diff). The `frequency` rows with the hertz under a prefix (`kHz`) and an alias (`hertz`), and the two allowed spellings; `radian` against `steradian` in a product and in a sum; the level rows unchanged. A conf that deletes a row changes exactly the behaviour that row governs; a conf with an unknown kind or operation is refused with the line. `Dimension` mode ignores the list.
 - **Callers.** One test per row of the callers table, including the strict `PyQuantity.__eq__` and the rewritten Python equality.
 - **Threads.** A PHS program with a `for` over more than `parallel_threshold` items, run under `scoped(Dimension)`, gives the strict answer (it would give the default answer without the capture).
 - **Surfaces.** Python: the context manager (enter, exit, nested, exception inside), and the existing parity suites (`test_unit_algebra_parity`, `test_system_registry_parity`) run in both modes. Tests that pin the old default (to be found by running the suites, not by guessing) are either moved to `Dimension` mode on purpose or rewritten.
@@ -149,7 +179,7 @@ This changes the default, so it is a breaking change of 0.3.x behaviour. The equ
 
 ## `F-0001` and the crucible
 
-With the default flipped, `mechanics.rotating-disk-energy` should pass with no change to the case. The resolution is a reviewed metadata edit of the finding (`status = "resolved"`, `updated_at`, an addendum to `finding.md` with the run that shows it), made in `physure-crucible` after a new candidate is archived. A case for `Dimension` mode needs a way to select the mode inside the program, which is stage B (`@angles(dimension) { ... }`); until then it is not expressible and is not added. Cases for G1 (`rad/s => Hz` refused; `/ (2π rad)` accepted) and for the photometry formulas can be added now, since the default is what they exercise.
+With the default flipped, `mechanics.rotating-disk-energy` should pass with no change to the case. The resolution is a reviewed metadata edit of the finding (`status = "resolved"`, `updated_at`, an addendum to `finding.md` with the run that shows it), made in `physure-crucible` after a new candidate is archived. A case for `Dimension` mode needs a way to select the mode inside the program, which is stage B (`@angles(dimension) { ... }`); until then it is not expressible and is not added. Cases for the frequency rows (`rad/s => Hz` refused; `/ (2π rad)` accepted) and for the photometry formulas can be added now, since the default is what they exercise.
 
 ## What A leaves for B and C
 
@@ -160,8 +190,8 @@ With the default flipped, `mechanics.rotating-disk-energy` should pass with no c
 
 ## Open before implementation
 
-- **S1: every consumer of "is this dimensionless".** About 10 sites in `physure-python` (`is_dimensionless`) and about 25 production sites in `physure-core` and `physure-script` (`dimensions.is_empty()`, `is_plain_number()`, `dimensionless()`). For each: does it follow the mode (it asks about compatibility) or stay strict (it asks about identity or about a pure number: equality with a bare number, `exp`/`ln` arguments, `float(q)`, a `pow` exponent)? And where do G1 and G2 have to be checked (the checker, the registry plan, `convert_to`)? Output: a table in this spec, and the tests that would fail. No production code.
-- **S2: the mechanism of G1.** The policy is decided by the SI; what is open is how the check sees the hertz. `RationalUnit` carries a `display_name` that the registry sets for named units (and for prefixed ones), and `registry.conversion` sees the symbols before they are expanded, but `Quantity::convert_to` receives an expanded unit. Options: (a) compare the `display_name` of source and target (fragile for aliases and `s^-1` spellings, simple); (b) a catalog flag on `hertz` (like `own_kind`), carried on the unit through prefixes and aliases (robust, touches `RationalUnit`). Output: which one, with a prototype that passes the G1 tests above.
+- **S1: every consumer of "is this dimensionless".** About 10 sites in `physure-python` (`is_dimensionless`) and about 25 production sites in `physure-core` and `physure-script` (`dimensions.is_empty()`, `is_plain_number()`, `dimensionless()`). For each: does it follow the mode (it asks about compatibility) or stay strict (it asks about identity or about a pure number: equality with a bare number, `exp`/`ln` arguments, `float(q)`, a `pow` exponent)? And where does the list have to be consulted (the checker, the registry plan, `convert_to`, the two Python bridges)? Output: a table in this spec, and the tests that would fail. No production code.
+- **S2: how the check sees the `frequency` kind.** The policy is decided by the SI; what is open is how the check sees the hertz. `RationalUnit` carries a `display_name` that the registry sets for named units (and for prefixed ones), and `registry.conversion` sees the symbols before they are expanded, but `Quantity::convert_to` receives an expanded unit. Options: (a) compare the `display_name` of source and target (fragile for aliases and `s^-1` spellings, simple); (b) a catalog flag on `hertz` (like `own_kind`), carried on the unit through prefixes and aliases (robust, touches `RationalUnit`). Output: which one, with a prototype that passes the `frequency` rows of the list tests above.
 
 ## Not in this stage
 
