@@ -12,7 +12,10 @@
 
 use crate::error::{PhysureError, PhysureResult};
 
+// ~630 KB of minified JS: only the `html-viewer` feature (on by default) embeds it.
+#[cfg(feature = "html-viewer")]
 static THREE_JS: &str = include_str!("vendor/three.min.js");
+#[cfg(feature = "html-viewer")]
 static ORBIT_CONTROLS_JS: &str = include_str!("vendor/OrbitControls.min.js");
 
 /// Represents 3D mesh surface data with grid dimensions and physical unit labels.
@@ -468,6 +471,9 @@ pub fn sanitize_unit_label(raw: &str) -> String {
 
 impl Mesh3DData {
     /// Export to standalone HTML file containing Three.js WebGL 3D Interactive Viewer with quantitative analytical features.
+    ///
+    /// Needs the `html-viewer` feature (on by default).
+    #[cfg(feature = "html-viewer")]
     pub fn export_html_threejs(&self) -> String {
         let verts = self.vertices();
         let faces = self.faces();
@@ -811,7 +817,12 @@ impl Mesh3DData {
             "obj" => Ok(self.export_obj().into_bytes()),
             "gltf" | "glb" => Ok(self.export_gltf().into_bytes()),
             "ply" => Ok(self.export_ply().into_bytes()),
+            #[cfg(feature = "html-viewer")]
             "html" | "threejs" | "webgl" => Ok(self.export_html_threejs().into_bytes()),
+            #[cfg(not(feature = "html-viewer"))]
+            "html" | "threejs" | "webgl" => Err(PhysureError::Generic(
+                "the HTML viewer is not in this build (physure's `html-viewer` feature is off)".to_string(),
+            )),
             _ => Err(PhysureError::Generic(format!("Unsupported export format: {}", format))),
         }
     }
@@ -936,7 +947,12 @@ mod tests {
         let ply_str = mesh.export_ply();
         assert!(ply_str.contains("ply"));
 
-        let html_str = mesh.export_html_threejs();
-        assert!(html_str.contains("OrbitControls"));
+        #[cfg(feature = "html-viewer")]
+        {
+            let html_str = mesh.export_html_threejs();
+            assert!(html_str.contains("OrbitControls"));
+        }
+        #[cfg(not(feature = "html-viewer"))]
+        assert!(mesh.export_format("html").is_err());
     }
 }

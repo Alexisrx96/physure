@@ -261,7 +261,11 @@ fn plot_3d(
     );
 
     if name == "plot3d" {
+        // Without the viewer there is still the ASCII plot; the HTML part is empty.
+        #[cfg(feature = "html-viewer")]
         let html_str = mesh_data.export_html_threejs();
+        #[cfg(not(feature = "html-viewer"))]
+        let html_str = String::new();
         let ascii_plot = draw_3d_surface_ascii(&req.title, &req.title, interpreter)?;
         return Ok(plot_value(req.title, &req.x_unit, &req.y_unit, ascii_plot, html_str));
     }

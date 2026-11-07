@@ -11,8 +11,8 @@ name = "physure_wasm"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-physure-core = { workspace = true }
-physure-script = { workspace = true }
+physure-core = { workspace = true, features = ["html-viewer"] }
+physure-script = { workspace = true, features = ["html-viewer"] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"

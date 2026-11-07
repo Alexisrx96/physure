@@ -8,6 +8,8 @@ authors.workspace = true
 description = "Native Language Server Protocol (LSP) server for Physure PHS language written in Rust."
 
 [dependencies]
+# No `html-viewer`: the language server never writes a plot, so it does not
+# carry three.js.
 physure-core.workspace = true
 physure-script.workspace = true
 tower-lsp.workspace = true

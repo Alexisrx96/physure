@@ -8,12 +8,17 @@ repository.workspace = true
 homepage.workspace   = true
 authors.workspace    = true
 
+[features]
+default = ["html-viewer"]
+# `plot3d` returns the interactive HTML page too (embeds three.js, ~630 KB).
+html-viewer = ["physure-core/html-viewer"]
+
 [lib]
 name       = "physure_script"
 crate-type = ["rlib"]
 
 [dependencies]
-physure-core = { path = "../physure-core", package = "physure" }
+physure-core = { path = "../physure-core", package = "physure", default-features = false }
 num-rational.workspace = true
 num-traits.workspace   = true
 serde       = { version = "1", features = ["derive"] }
