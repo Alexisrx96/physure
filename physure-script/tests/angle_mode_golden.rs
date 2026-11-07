@@ -5,7 +5,7 @@
 //! refusal, the text of the error. Once the angle mode exists, the strict mode (`Dimension`) must give the same rows,
 //! byte for byte: that is the claim that the strict mode is today's behaviour.
 //!
-//! The file is written once, on a tree that has no angle mode yet. Recording refuses to overwrite an existing file, so
+//! The file was written once, on a tree that had no angle mode yet. Recording refuses to overwrite an existing file, so
 //! delete it by hand before recording again. On Bash:
 //!
 //!     RECORD_GOLDEN=1 cargo test -p physure-script --test angle_mode_golden
@@ -17,8 +17,10 @@
 //!     Remove-Item Env:RECORD_GOLDEN
 //!
 //! A recorded value depends on the number formatting and on the error text of the core, so the file may only be
-//! re-recorded on a tree that has no angle code (an unmodified `b27d0f8`), never on the feature branch after Task 2.
+//! re-recorded on a tree that has no angle code (a tree whose `physure-core` and `physure-script/src` are those of
+//! `b27d0f8`), never once `physure-core/src/units/angle_mode.rs` exists.
 
+use physure_core::units::angle_mode::{scoped, AngleMode};
 use physure_script::interpreter::eval_phs;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -90,6 +92,7 @@ fn golden_path() -> PathBuf {
 }
 
 fn render() -> String {
+    let _strict = scoped(AngleMode::Dimension);
     CORPUS.iter().map(|source| format!("{source}\t{}\n", answer(source))).collect()
 }
 

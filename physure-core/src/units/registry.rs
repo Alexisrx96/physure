@@ -533,7 +533,7 @@ impl UnitRegistry {
                 to.__repr__()
             )));
         }
-        if !from.same_dimensions(&to) {
+        if !from.convertible_to(&to) {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
         }
         Ok(from.ratio_to(&to))
@@ -559,7 +559,7 @@ impl UnitRegistry {
     /// answer of the core, rounded the same way.
     pub fn conversion(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<Conversion> {
         let (from, to) = (self.expand(from)?, self.expand(to)?);
-        if !from.same_dimensions(&to) {
+        if !from.convertible_to(&to) {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
         }
         if from.is_logarithmic() || to.is_logarithmic() {

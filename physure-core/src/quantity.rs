@@ -614,9 +614,10 @@ impl Quantity {
     }
 
     /// Converts this quantity to an equivalent one expressed in `target`'s unit/scale.
-    /// Errors if `target` has different physical dimensions.
+    /// Errors if `target` has different physical dimensions. In `Dimensionless` angle mode it may read `rad` and
+    /// `sr` as 1 (see `RationalUnit::convertible_to`); a sum or a comparison never does.
     pub fn convert_to(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
-        if !self.unit.same_dimensions(target) {
+        if !self.unit.convertible_to(target) {
             return Err(PhysureError::UnitMismatch {
                 expected: self.unit.__repr__(),
                 actual: target.__repr__(),
