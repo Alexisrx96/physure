@@ -1438,6 +1438,7 @@ git commit -m "feat(core): RationalUnit::convertible_to reads a marker as 1 for 
 **Files:**
 - Modify: `physure-core/src/quantity.rs` (`convert_to`), `physure-core/src/units/registry.rs` (`factor_between`, `conversion`)
 - Test: `physure-core/tests/angle_mode.rs`
+- Modify: `physure-script/tests/angle_mode_golden.rs` (it keeps asking for `Dimension` mode, Step 4)
 
 **Test isolation in this task.** From here on conversions read the process-wide grants, so a test can be broken by another test:
 
@@ -1580,32 +1581,9 @@ In `physure-core/src/quantity.rs`, in `convert_to`, replace `if !self.unit.same_
 
 In `physure-core/src/units/registry.rs`, in `factor_between` replace `if !from.same_dimensions(&to) {` with `if !from.convertible_to(&to) {`, and do the same in `conversion`. (The two lines are identical text; both are replaced. Leave every other `same_dimensions` call in the repository as it is.)
 
-- [ ] **Step 4: Run the tests**
+- [ ] **Step 4: Keep the golden strict**
 
-Run: `cargo test -p physure --test angle_mode`
-Expected: all pass, including `sums_and_comparisons_do_not_depend_on_the_angle_mode` (it covers 23 × 23 pairs).
-
-Run: `cargo test -p physure`
-Expected: no new failure against the Task 0 baseline. A failure in `units/tests.rs` that pins the old refusal of a conversion across `rad` is a test of the old default: move it under `scoped(AngleMode::Dimension)` and say so in the commit message; do not touch a test that pins a sum or a comparison.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add physure-core/src/quantity.rs physure-core/src/units/registry.rs physure-core/tests/angle_mode.rs
-git commit -m "feat(core): a conversion reads rad and sr as 1; sums and comparisons do not" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 8: PHS
-
-**Files:**
-- Create: `physure-script/tests/angle_mode.rs`
-- Modify: `physure-script/tests/angle_mode_golden.rs`
-
-- [ ] **Step 1: Make the golden test run in `Dimension` mode**
-
-In `physure-script/tests/angle_mode_golden.rs` (the file as Task 1 left it), add this import on the line before `use physure_script::interpreter::eval_phs;`, so that the imports stay in alphabetical order:
+From here on the default mode converts, so the golden test of Task 1, which evaluates its corpus on the thread's mode, would fail on the twelve rows of its first group. It pins the answers of `Dimension` mode, so it asks for that mode. In `physure-script/tests/angle_mode_golden.rs` (the file as Task 1 left it), add this import on the line before `use physure_script::interpreter::eval_phs;`, so that the imports stay in alphabetical order:
 
 ```rust
 use physure_core::units::angle_mode::{scoped, AngleMode};
@@ -1622,7 +1600,38 @@ fn render() -> String {
 
 `the_answers_are_the_ones_recorded`, `answer`, `golden_path` and the `CORPUS` stay as they are: the guard lives in `render`, which is the only caller of `answer`, so every row is evaluated in `Dimension` mode.
 
-Also change the sentence of the header comment "The file is written once, on a tree that has no angle mode yet." to "The file was written once, on a tree that had no angle mode yet." The rest of that paragraph (the refusal to overwrite and the Bash and PowerShell forms) stays.
+In the header comment, change three phrases (comment text only):
+
+- "The file is written once, on a tree that has no angle mode yet." becomes "The file was written once, on a tree that had no angle mode yet."
+- "(an unmodified `b27d0f8`)" becomes "(a tree whose `physure-core` and `physure-script/src` are those of `b27d0f8`)".
+- "never on the feature branch after Task 2" becomes "never once `physure-core/src/units/angle_mode.rs` exists".
+
+Run: `cargo test -p physure-script --test angle_mode_golden`
+Expected: pass. This is the claim "strict is today, byte for byte". Do not re-record `tests/golden/angle_mode_strict.tsv`.
+
+- [ ] **Step 5: Run the tests**
+
+Run: `cargo test -p physure --test angle_mode`
+Expected: all pass, including `sums_and_comparisons_do_not_depend_on_the_angle_mode` (it covers 23 × 23 pairs).
+
+Run: `cargo test -p physure`
+Expected: no new failure against the Task 0 baseline. A failure in `units/tests.rs` that pins the old refusal of a conversion across `rad` is a test of the old default: move it under `scoped(AngleMode::Dimension)` and say so in the commit message; do not touch a test that pins a sum or a comparison.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add physure-core/src/quantity.rs physure-core/src/units/registry.rs physure-core/tests/angle_mode.rs physure-script/tests/angle_mode_golden.rs
+git commit -m "feat(core): a conversion reads rad and sr as 1; sums and comparisons do not" -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 8: PHS
+
+**Files:**
+- Create: `physure-script/tests/angle_mode.rs`
+
+- [ ] **Step 1: (moved to Task 7, Step 4: the golden test is kept in `Dimension` mode there)**
 
 - [ ] **Step 2: Run it**
 
