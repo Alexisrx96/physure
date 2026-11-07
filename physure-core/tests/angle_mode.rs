@@ -210,7 +210,9 @@ const UNITS: &[&str] = &[
 ];
 
 /// What a sum, a difference and a comparison answer, as a comparable value.
-fn operators(a: &Quantity, b: &Quantity) -> (Result<(f64, String), String>, Result<(f64, String), String>, bool) {
+type Answer = Result<(f64, String), String>;
+
+fn operators(a: &Quantity, b: &Quantity) -> (Answer, Answer, bool) {
     let shown = |r: Result<Quantity, physure_core::PhysureError>| {
         r.map(|q| (q.value.mean(), q.unit.__repr__())).map_err(|e| e.to_string())
     };

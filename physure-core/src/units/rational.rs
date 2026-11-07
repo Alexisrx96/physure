@@ -198,7 +198,7 @@ pub struct RationalUnit {
     /// Set on the hertz, with its prefixes and aliases, by `[Compatibility] periodic`: the SI reserves it for
     /// periodic phenomena (Brochure, Table 4, footnote d), so a conversion never reads a marker as 1 against it.
     /// It survives what leaves the unit itself (a product with a plain number of scale 1, a quotient by one, a power of
-    /// 1) and nothing else: `Hz*rad`, `Hz^2` and `1/Hz` are not the hertz. It is not part of equality or of the hash:
+    /// one) and nothing else: `Hz*rad`, `Hz^2` and `1/Hz` are not the hertz. It is not part of equality or of the hash:
     /// `Hz` and `s^-1` are the same unit.
     pub periodic: bool,
 }
