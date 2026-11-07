@@ -14,12 +14,11 @@ from importlib import resources
 from pathlib import Path
 
 from physure._core import default_conf
-from physure.application.context import normalize_propagation_mode, use_system
+from physure.application.context import normalize_propagation_mode
 from physure.domain.measurement.dimensions import (
     Dimension,
 )
 from physure.domain.measurement.system import UnitSystem
-from physure.domain.measurement.units import CompoundUnit
 
 _CONF_FILE = "physure.conf"
 
@@ -120,15 +119,13 @@ class UnitSystemBuilder:
         if self._verbose:
             print("\n--- Phase 5: Initializing Constants ---")
         for value_str in constants_data.values():
+            # Validation only: a bad number or an unknown unit raises here, at
+            # load. (Building a Quantity per row, as this once did, cost ~60 ms
+            # for the 411 constants and checked nothing more.)
             value_str_part, unit_str = value_str.split(maxsplit=1)
-            value = float(value_str_part)
-            unit = (
+            float(value_str_part)
+            if unit_str.strip() != "1":
                 self._system.get_unit(unit_str.strip())
-                if unit_str.strip() != "1"
-                else CompoundUnit({})
-            )
-            with use_system(self._system):
-                _ = self._system.Q_(value, unit)
         return self
 
     def add_system_info(

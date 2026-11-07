@@ -12,10 +12,21 @@ from physure.backends.affine import propagate_affine  # noqa: F401
 if TYPE_CHECKING:
     import numpy as np
 else:
-    try:
-        import numpy as np
-    except ImportError:
-        np = None
+
+    class _LazyNumpy:
+        """Stands in for ``numpy`` and imports it on first attribute access.
+
+        A scalar ``Q_('3 m')`` never touches numpy, and importing it costs
+        60-100 ms of the first use (the budget is 500 ms).
+        """
+
+        def __getattr__(self, name: str) -> Any:
+            import numpy
+
+            globals()["np"] = numpy
+            return getattr(numpy, name)
+
+    np = _LazyNumpy()
 
 
 def _scipy() -> Any:

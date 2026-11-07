@@ -1,4 +1,3 @@
-import importlib.metadata
 import keyword
 import logging
 from collections.abc import Callable
@@ -98,7 +97,10 @@ class UnitRegistry:
             return
 
         try:
-            # importlib.metadata.entry_points(group=...) is standard since 3.10
+            # Imported here, not at module top: it costs ~90 ms and only a
+            # plugin lookup needs it.
+            import importlib.metadata
+
             eps = importlib.metadata.entry_points(group="physure.units")
             for ep in eps:
                 if (
