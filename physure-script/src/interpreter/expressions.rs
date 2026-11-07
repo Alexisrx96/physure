@@ -450,9 +450,13 @@ impl PhsInterpreter {
         // (e.g. I/O in external functions) may partially execute even if evaluation fails.
         if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() && !self.limits.sequential {
             use rayon::prelude::*;
+            // A scoped angle mode is per thread and a rayon worker is another thread: read it here and open it again
+            // inside each task, or the loop body would run in the process mode.
+            let angle_mode = physure_core::units::angle_mode::angle_mode();
             let results: Vec<PhsValue> = items
                 .into_par_iter()
                 .map(|item| {
+                    let _angle = physure_core::units::angle_mode::scoped(angle_mode);
                     let mut local_env = env.clone();
                     local_env.insert(var.to_string(), item);
                     self.eval_expr(body, &local_env)

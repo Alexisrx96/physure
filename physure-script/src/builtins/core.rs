@@ -325,7 +325,10 @@ fn parallel_map(
         )));
     }
     let vec = v.clone();
+    // See `eval_for`: the angle mode of the caller has to be opened again inside each task.
+    let angle_mode = physure_core::units::angle_mode::angle_mode();
     let call = |(i, item): (usize, PhsValue)| {
+        let _angle = physure_core::units::angle_mode::scoped(angle_mode);
         interpreter
             .call_function_node(func, vec![item], env)
             .map_err(|e| PhysureError::Generic(format!("parallel_map failed at index {i}: {e}")))
