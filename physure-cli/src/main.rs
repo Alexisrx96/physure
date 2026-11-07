@@ -494,6 +494,15 @@ fn generate_language_docs_md() -> String {
     md.push_str("p_bar = 100.0 kPa => bar         # Converts 100.0 kPa to bar\n");
     md.push_str("v_kmh = 25.0 m / s => km / h     # Converts 25 m/s to km/h\n");
     md.push_str("```\n\n");
+    md.push_str("#### Angles in a conversion\n\n");
+    md.push_str("The SI gives the radian and the steradian the expression 1, and `=>` follows it: an angle is read as 1 when a conversion needs it, so the formulas of mechanics, circuits and photometry convert without ceremony.\n\n");
+    md.push_str("```phs\n");
+    md.push_str("energy = 0.5 * (0.5 kg * m^2) * (10 rad/s)^2   # kg * m^2 * rad^2 * s^-2\n");
+    md.push_str("e_j = energy => J                              # 25 J\n");
+    md.push_str("v = (10 rad/s) * (0.5 m) => m/s                # 5 m/s\n");
+    md.push_str("lux = (100 cd) / (2 m)^2 => lx                 # 25 lx\n");
+    md.push_str("```\n\n");
+    md.push_str("A sum or a comparison never reads an angle as 1: `2 rad + 1` and `2 m*rad + 1 m` are errors, and the way is to convert first, `(2 rad => unity) + 1`. A rate of angle is not a frequency (they differ by 2π), so `10 rad/s => Hz` is an error; divide by the angle of a cycle instead, `(10 rad/s) / (6.283185307179586 rad) => Hz`. `angle_mode = dimension` in `physure.conf` makes the angle a dimension like any other.\n\n");
 
     md.push_str("### 1.2 Function Definitions & Docstrings\n");
     md.push_str("Functions can be defined with or without the optional `fn` keyword. Unit constraints on parameters are checked automatically.\n\n");
