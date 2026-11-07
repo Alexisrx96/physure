@@ -33,6 +33,7 @@ use ::physure_core::{
     DimVector, UnitKind,
 };
 use ::physure_core::units::registry::{Conversion, Stage};
+use ::physure_core::units::angle_mode::{self as angle, AngleMode, AngleModeGuard};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
 use ::physure_core::uncertainty::{coverage_factor_for, declare_dof, type_a};
 use ::physure_core::uncertainty::moments::{self, AsymmetricMoments, MomentsBackend};
@@ -43,7 +44,8 @@ use physure_script::symbolic::Expr;
 // `RationalUnit::id` is derived from the dimensions alone, so it cannot be the whole key:
 // J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
 // handed back whichever of them was cached first.
-static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>), PyObject>>> = OnceLock::new();
+// The key carries `periodic`: equality ignores the flag, but a flagged hertz must not be answered by an unflagged one.
+static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool), PyObject>>> = OnceLock::new();
 
 // The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
 // other backends, which live in Python, so Python registers the factory at import.
@@ -52,7 +54,7 @@ static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
-    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone());
+    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic);
     if let Some(existing) = cache.get(&key) {
         return Ok(existing.clone_ref(py));
     }
@@ -1936,6 +1938,47 @@ fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -
     Ok(out)
 }
 
+/// The angle mode in force on this thread: `"dimensionless"` or `"dimension"`.
+#[pyfunction]
+fn angle_mode() -> &'static str {
+    angle::angle_mode().name()
+}
+
+/// `with AngleModeScope("dimension"): ...` reads angles by the given mode until the block ends; scopes nest. The
+/// mode is that of the thread that made the scope: a guard restores a thread-local, so the object is not `Send`.
+#[pyclass(name = "AngleModeScope", module = "physure._core", unsendable)]
+struct PyAngleModeScope {
+    mode: AngleMode,
+    guards: Vec<AngleModeGuard>,
+}
+
+#[pymethods]
+impl PyAngleModeScope {
+    #[new]
+    fn new(mode: &str) -> PyResult<Self> {
+        let mode = mode.parse::<AngleMode>().map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(Self { mode, guards: Vec::new() })
+    }
+
+    fn __enter__(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        let guard = angle::scoped(slf.mode);
+        slf.guards.push(guard);
+        slf
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __exit__(
+        &mut self,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_value: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        // dropping the guard restores the mode that was in force before the matching `__enter__`
+        self.guards.pop();
+        false
+    }
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1947,6 +1990,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gum_round, m)?)?;
     m.add_function(wrap_pyfunction!(type_a_evaluation, m)?)?;
     m.add_function(wrap_pyfunction!(default_conf, m)?)?;
+    m.add_class::<PyAngleModeScope>()?;
+    m.add_function(wrap_pyfunction!(angle_mode, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add("UnknownUnitError", m.py().get_type::<UnknownUnitError>())?;

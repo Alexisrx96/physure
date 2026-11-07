@@ -325,6 +325,42 @@ def get_propagation_mode() -> str:
     return DEFAULT_PROPAGATION_MODE
 
 
+def angle_mode(mode: str) -> Any:
+    """Context manager that sets how a conversion reads the radian and the steradian.
+
+    ``"dimensionless"`` (the default, and what the SI does: both are 1 in an
+    expression) lets a conversion such as ``(w * r).to("m/s")`` or
+    ``energy.to("J")`` identify them with 1 where the compatibility rows of
+    ``physure.conf`` allow it. ``"dimension"`` makes the angle a dimension like
+    any other. A sum or a comparison never reads them as 1, in either mode. The
+    scope belongs to the thread that opens it.
+
+    Args:
+        mode: ``"dimensionless"`` or ``"dimension"``.
+
+    Raises:
+        ValueError: If the mode is neither.
+
+    Examples:
+        >>> import physure
+        >>> with physure.angle_mode("dimension"):
+        ...     physure.get_angle_mode()
+        'dimension'
+        >>> physure.get_angle_mode()
+        'dimensionless'
+    """
+    from physure._core import AngleModeScope
+
+    return AngleModeScope(mode)
+
+
+def get_angle_mode() -> str:
+    """Returns the mode a conversion reads angles by on this thread."""
+    from physure._core import angle_mode as core_angle_mode
+
+    return core_angle_mode()
+
+
 # For backward compatibility if needed, though get_current_system is preferred.
 get_active_system = get_current_system
 

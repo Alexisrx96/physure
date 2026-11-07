@@ -38,6 +38,7 @@ from physure.domain.measurement.uncertainty import (
     LineageModel,
     Uncertainty,
 )
+from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import (
     _CORE_ERRORS,
     CompoundUnit,
@@ -1110,11 +1111,18 @@ class Quantity(
         )
 
     def _convert_by_plan(
-        self, target_unit: CompoundUnit
+        self, target_unit: CompoundUnit, written: CompoundUnit | None = None
     ) -> Quantity[ValueType, UncType, UnitType]:
-        """Converts by the plan that the core registry gives for the two units."""
+        """Converts by the plan that the core registry gives for the two units.
+
+        `written` is the target as it was typed, before a recipe unit was replaced
+        by its base units: the core flags the hertz by how a unit is written, and
+        `Hz` is `s^-1` once simplified.
+        """
         try:
-            plan = self.system.core_registry.conversion(self.unit, target_unit)
+            plan = self.system.core_registry.conversion(
+                self.unit, written or target_unit
+            )
         except _CORE_ERRORS as error:
             raise _python_error(error, self.unit, target_unit) from error
         magnitude, uncertainty = apply_conversion(
@@ -1259,10 +1267,12 @@ class Quantity(
             >>> temp.to("K")
             Quantity(298.15, K)
         """
+        written_text = None
         if isinstance(target_unit, str):
             # Check if target_unit is a device string (e.g. "cuda", "cpu")
             if self._is_device_string(target_unit):
                 return self.to_device(target_unit)
+            written_text = target_unit
             target_unit = self.system.get_unit(target_unit)
 
         # Fast path for same unit
@@ -1270,7 +1280,20 @@ class Quantity(
             return self
 
         if self.dimension != target_unit.dimension(self.system):
-            return self._convert_via_equivalencies(target_unit, equivalencies)
+            # The core decides whether the dimensions differ only by an angle a
+            # conversion may read as 1 (`rad/s * m => m/s`); only a refusal of
+            # the core sends the pair on to the equivalencies.
+            written = (
+                parse_unit_string(written_text, CompoundUnit)
+                if written_text not in (None, "dimensionless")
+                else None
+            )
+            try:
+                return self._convert_by_plan(target_unit, written)
+            except IncompatibleUnitsError:
+                return self._convert_via_equivalencies(
+                    target_unit, equivalencies
+                )
 
         return self._convert_by_plan(target_unit)
 

@@ -90,6 +90,26 @@ class UnitSystemBuilder:
         self._system.extend_core(_conf_section("Units", units_data))
         return self
 
+    def add_compatibility(
+        self, compatibility_data: dict[str, str]
+    ) -> UnitSystemBuilder:
+        """Adds the `[Compatibility]` section to the core registry of the system.
+
+        The core flags the units that `periodic` names (the hertz) on the
+        registry it builds, and a conversion refuses them against a unit that
+        carries a marker (`rad`, `sr`). The rows of the section are process-wide
+        settings, which a system conf does not change, so only `periodic` takes
+        effect here. configparser keeps the last value of a key, so a conf that
+        sets `periodic` replaces the value of the base conf: it has to name
+        `hertz` as well.
+        """
+        if not compatibility_data:
+            return self
+        self._system.extend_core(
+            _conf_section("Compatibility", compatibility_data)
+        )
+        return self
+
     def add_constants(
         self, constants_data: dict[str, str]
     ) -> UnitSystemBuilder:
@@ -226,6 +246,11 @@ def create_system(
             dict(parser.items("Dimensions")) if "Dimensions" in parser else {}
         )
         .add_units(dict(parser.items("Units")) if "Units" in parser else {})
+        .add_compatibility(
+            dict(parser.items("Compatibility"))
+            if "Compatibility" in parser
+            else {}
+        )
         .add_constants(
             dict(parser.items("Constants")) if "Constants" in parser else {}
         )
