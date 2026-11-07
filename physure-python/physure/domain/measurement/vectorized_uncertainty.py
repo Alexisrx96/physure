@@ -29,6 +29,13 @@ else:
     np = _LazyNumpy()
 
 
+def _dense_host(jac: Any) -> Any:
+    """A Jacobian as a dense host array-like (sparse torch densified, autograd detached)."""
+    if getattr(jac, "is_sparse", False):
+        jac = jac.to_dense()
+    return jac.detach().cpu() if hasattr(jac, "detach") else jac
+
+
 def _scipy() -> Any:
     """Return the scipy module, or None if not installed.
 
@@ -260,11 +267,10 @@ class CovarianceStore:
             # graph only for the Python lineage store (`python_lineage()`); the core
             # takes its values, as `register_diagonal` does. A JAX array, or a
             # diagonal the backend rebuilt from a numpy vector, is converted the same way.
+            # The core takes dense arrays, so a sparse torch operator (the
+            # element-wise Jacobian is one) is densified here, as scipy's is above.
             final_jacs = [
-                np.asarray(
-                    jac.detach().cpu() if hasattr(jac, "detach") else jac,
-                    dtype=np.float64,
-                )
+                np.asarray(_dense_host(jac), dtype=np.float64)
                 for jac in final_jacs
             ]
         self._core.propagate(out_id, input_ids, final_jacs)
