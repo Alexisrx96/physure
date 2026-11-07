@@ -18,8 +18,8 @@ This document serves as the **single source of truth** for tracking project-wide
 | **4. Symbolic Math & CAS Engine** | 🚧 Phase 1 Done / Phase 2–4 In Progress | 35% | [Symbolic Math Roadmap](symbolic_math_roadmap.md) | `physure_core::cas`, Gröbner, Risch, ODEs, SAT |
 | **5. Diagramming Engine (`physure.diagrams`)**| 📋 Planned | 10% | [Diagramming Engine Roadmap](diagrams_roadmap.md) | Free-body diagrams, vectors, circuits, TikZ/SVG |
 | **6. Scientific Companion & Metrology** | 🚧 In Progress | 40% | [Scientific Companion Roadmap](scientific_roadmap.md) | Buckingham $\pi$, IAPWS-IF97, EKF, Polars/Xarray |
-| **7. Metrological Rigor & Physical Reality Gaps**| 📋 Planned | 15% | [Scientific Gaps & Rigor](scientific_gaps_and_rigor.md) | Welch-Satterthwaite, DAEs, Real EOS, Intervals |
-| **8. PHS Language Readiness (LAB-READY)** | 📋 Planned | 0% | [Language Readiness Roadmap](language_readiness_roadmap.md) | `physure-script` loops/concurrency, `physure-cli` debugger, `DebugHook` |
+| **7. Metrological Rigor & Physical Reality Gaps**| 🚧 In Progress | 17% | [Scientific Gaps & Rigor](scientific_gaps_and_rigor.md) | Welch-Satterthwaite, DAEs, Real EOS, Intervals |
+| **8. PHS Language Readiness (LAB-READY)** | ✅ Complete | 100% | [Language Readiness Roadmap](language_readiness_roadmap.md) | `physure-script` loops/concurrency, `physure-cli` debugger, `DebugHook` |
 
 ---
 
@@ -54,15 +54,15 @@ For detailed architectural designs, mathematical specifications, API proposals, 
 
 ---
 
-## 📅 Consolidated Master Timeline
+## 🏁 Consolidated Master Milestones
 
 ```mermaid
 timeline
-    title Physure Master Development Timeline
-    Q3 2026 (Completed) : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression
-    Q4 2026 (In Progress) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Rust Core Chemistry Module (physure_core::chemistry) : Risch Integration Engine : Buckingham Pi Nullspace Solver
-    Q1 2027 (Planned) : PHS DSL Chemistry Builtins : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : GUM Welch-Satterthwaite & Real Gas EOS
-    Q2 2027 (Planned) : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
+    title Physure Master Development Milestones
+    Done : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression : PHS LAB-READY (loops, concurrency, debugger, incremental LSP, compiled exports, decorators) : Rust-Owned Unit Algebra (A1) : GUM Welch-Satterthwaite : Angle Mode
+    Now : Rust Core Chemistry Module (physure_core::chemistry) : PHS DSL Chemistry Builtins : Buckingham Pi Nullspace Solver
+    Next : CAS Exact-Arithmetic Placement (S0) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Risch Integration Engine : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Real Gas EOS
+    Later : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
 ```
 
 ---
@@ -74,6 +74,9 @@ timeline
 * [x] Zero-copy Python bindings via PyO3 (`physure._core.Quantity`).
 * [x] `torch.compile` and `jax.jit` zero-overhead tracer compatibility.
 * [x] Standalone PHS DSL interpreter (`physure-cli`, `physure-script`).
+* [x] Unit algebra, conversion and dimensions owned by the Rust core; Python delegates (A1 program).
+* [x] Angle mode: `rad` and `sr` read as 1 for conversions, never for sums or comparisons.
+* [x] PHS LAB-READY: loops, concurrency, breakpoints, incremental LSP, compiled exports, decorators (Tracks A–F; the DAP adapter and cross-file incrementality remain as non-blocking follow-ons).
 
 ### Subsystem 2: Chemistry & Physical-Chemistry (50% 🚧)
 * [x] **Phase 1–4 Python Extension** (`physure.ext.chemistry`): Species, molar equivalency, reaction balancer, thermo/kinetics.
@@ -88,7 +91,7 @@ timeline
 * [ ] **Phase 3**: Risch decision-procedure integrator, analytical ODE solver (`dsolve`), PDE solver (`pdesolve`).
 * [ ] **Phase 4**: Symbolic linear algebra (Bareiss fraction-free det, Jordan/Smith canonical forms), number theory, combinatorics, and DPLL SAT solver.
 
-### Subsystem 4: Scientific & Metrological Rigor Gaps (15% 📋)
+### Subsystem 4: Scientific & Metrological Rigor Gaps (17% 🚧)
 * [x] **Welch-Satterthwaite $\nu_{\text{eff}}$**: Effective degrees of freedom and Student-$t$ coverage factor $k_p$ (GUM §4.2, G.4). Core, PHS (`dof` clause and builtins), Python, WebAssembly and Java (see `docs/superpowers/specs/2026-11-01-welch-satterthwaite-design.md` and, for Java's quantities keeping their sources, `docs/superpowers/specs/2026-11-02-java-provenance-design.md`).
 * [ ] **Real Equations of State**: Peng-Robinson, Redlich-Kwong, and IAPWS-IF97 steam formulation.
 * [ ] **Anisotropic Physical Tensors**: 2nd and 4th-order tensors for stress-strain ($\boldsymbol{\sigma}, \boldsymbol{\varepsilon}$) and dielectric permittivity (ISO 80000-4).
