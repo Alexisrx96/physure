@@ -379,3 +379,27 @@ fn degrees_of_freedom_are_a_plain_number_and_an_expanded_uncertainty_keeps_the_u
     assert_clean("x = 1 +/- 0.1 dof 5 m\ndof(x) + 1");
     assert_clean("x = 1 +/- 0.1 dof 5 m\ncoverage_factor(x, 0.95) * x");
 }
+
+// ---- the angle in a conversion
+
+#[test]
+fn a_conversion_that_differs_only_in_the_angle_is_left_to_the_interpreter() {
+    // `facts` gives `rad`, `deg` and `sr` the same dimension symbol `A`, so the checker cannot tell whether a
+    // conversion may read the angle as 1; it stays silent and the interpreter decides.
+    assert_clean("(10 rad/s) * (0.5 m) => m/s");
+    assert_clean("(100 cd) / (2 m)^2 => lx");
+    assert_clean("(2 rad) => unity");
+    assert!(found("(10 rad/s) => Hz").is_empty(), "silence is sound: the interpreter refuses it");
+    assert!(eval_phs("(10 rad/s) => Hz").is_err());
+}
+
+#[test]
+fn a_conversion_that_differs_in_more_than_the_angle_is_still_an_error() {
+    assert_refused("(10 rad/s) * (0.5 m) => m", 1, "dimension-mismatch");
+    assert_refused("(2 rad) => m", 1, "dimension-mismatch");
+}
+
+#[test]
+fn a_sum_across_the_angle_is_still_reported() {
+    assert_refused("(2 m*rad) + (1 m)", 1, "dimension-mismatch");
+}

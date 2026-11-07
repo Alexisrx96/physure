@@ -97,6 +97,11 @@ fn the_checker_finds_most_of_what_the_interpreter_refuses_for_a_dimension() {
         if !(text.contains("mismatch") || text.contains("ncompatible") || text.contains("dimension")) {
             continue;
         }
+        // a refusal that names an angle unit is the interpreter's to make: the checker cannot tell `rad` from `sr`, or
+        // whether a conversion may read the angle as 1, so it stays silent there on purpose
+        if text.split(|c: char| !c.is_alphanumeric()).any(|word| matches!(word, "rad" | "deg" | "sr")) {
+            continue;
+        }
         refused_for_dimension += 1;
         if check_source(&program).is_ok_and(|findings| !findings.is_empty()) {
             caught += 1;

@@ -89,6 +89,14 @@ impl Dim {
         self.exps == other.exps
     }
 
+    /// The same dimension once the angle is set aside: what a conversion may read as 1 in `Dimensionless` mode.
+    fn same_apart_from_angle(&self, other: &Dim) -> bool {
+        let without_angle = |dim: &Dim| -> BTreeMap<String, Rational64> {
+            dim.exps.iter().filter(|(symbol, _)| symbol.as_str() != "A").map(|(symbol, power)| (symbol.clone(), *power)).collect()
+        };
+        without_angle(self) == without_angle(other)
+    }
+
     fn combine(&self, other: &Dim, sign: i64) -> Dim {
         let mut exps = self.exps.clone();
         for (symbol, power) in &other.exps {
@@ -435,7 +443,10 @@ impl<'a> Checker<'a> {
             let Some(target) = self.unit_dim(clean) else { return Ty::Unknown };
             // a name that is not a variable is text, and the interpreter hands text back unconverted
             if let Ty::Qty(dim) = &from {
-                if !dim.same_dimension(&target) {
+                let angle_only = physure_core::units::angle_mode::angle_mode()
+                    == physure_core::units::angle_mode::AngleMode::Dimensionless
+                    && dim.same_apart_from_angle(&target);
+                if !dim.same_dimension(&target) && !angle_only {
                     self.report(
                         Severity::Error,
                         "dimension-mismatch",
