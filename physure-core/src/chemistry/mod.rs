@@ -12,3 +12,7 @@ pub use formula::{parse_formula, Composition};
 pub mod species;
 
 pub use species::{mass_to_moles, moles_to_mass, Species};
+
+pub mod reaction;
+
+pub use reaction::Reaction;
