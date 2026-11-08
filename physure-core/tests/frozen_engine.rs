@@ -1,0 +1,78 @@
+//! The engine block of a frozen file, through the public API only.
+
+use physure_core::frozen::engine::{check, engine_pairs, environment_pairs, read_engine, EngineIdentity, EnginePolicy, UNKNOWN};
+use physure_core::frozen::model::{FrozenFile, Pairs, Source};
+use physure_core::frozen::seal::{EntryInput, FrozenParts};
+
+const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+
+fn known() -> EngineIdentity {
+    let mut i = EngineIdentity::current();
+    i.commit = HEAD.into();
+    i
+}
+
+fn file(identity: &EngineIdentity, policy: EnginePolicy) -> FrozenFile {
+    FrozenFile::new(
+        "2026-11-08T10:00:00Z",
+        FrozenParts {
+            engine: engine_pairs(identity, policy, None).unwrap(),
+            environment: environment_pairs(),
+            witnesses: Pairs::default(),
+            sources: vec![Source::new("embedded", "[Constants]\nx = 1 m").unwrap(), Source::new("overrides", "").unwrap()],
+            witness_scripts: vec![],
+        },
+        EntryInput { time: "2026-11-08T10:00:00Z", action: "freeze", engine: &identity.short(), actor: "ci@host", reason: "test", diff: "n/a" },
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_file_frozen_with_a_known_engine_checks_against_it_and_against_nothing_else() {
+    let id = known();
+    let parsed = FrozenFile::parse(&file(&id, EnginePolicy::Build).render().unwrap()).unwrap();
+    assert!(parsed.verify().is_empty());
+    let block = read_engine(parsed.engine()).unwrap();
+    assert_eq!(block.identity, id);
+    assert!(check(&block.identity, None, block.policy, &id, || unreachable!()).is_ok());
+    let mut other = id.clone();
+    other.rustc = "rustc 0.0.0".into();
+    assert!(check(&block.identity, None, block.policy, &other, || unreachable!()).is_err());
+}
+
+#[test]
+fn the_running_engine_can_always_be_recorded_under_release_and_record() {
+    let now = EngineIdentity::current();
+    for policy in [EnginePolicy::Release, EnginePolicy::Record] {
+        let parsed = FrozenFile::parse(&file(&now, policy).render().unwrap()).unwrap();
+        assert!(parsed.verify().is_empty());
+    }
+    // build and binary are recorded only if the running build knows its commit
+    let build = engine_pairs(&now, EnginePolicy::Build, None);
+    assert_eq!(build.is_ok(), now.commit != UNKNOWN);
+}
+
+#[test]
+fn weakening_the_policy_in_the_text_breaks_the_seal() {
+    let text = file(&known(), EnginePolicy::Build).render().unwrap();
+    let weakened = text.replace("policy = build", "policy = record");
+    assert_ne!(weakened, text);
+    assert!(!FrozenFile::parse(&weakened).unwrap().verify().is_empty());
+}
+
+#[test]
+fn an_unknown_key_slipped_into_the_engine_block_is_refused_by_the_seal_and_by_the_reader() {
+    let text = file(&known(), EnginePolicy::Build).render().unwrap();
+    let with_knob = text.replace("[Engine]\n", "[Engine]\nenforce = never\n");
+    let parsed = FrozenFile::parse(&with_knob).unwrap();
+    assert!(!parsed.verify().is_empty());
+    assert!(read_engine(parsed.engine()).is_err());
+}
+
+#[test]
+fn the_policy_is_part_of_what_the_seal_protects_and_of_what_the_log_records() {
+    let a = file(&known(), EnginePolicy::Build);
+    let b = file(&known(), EnginePolicy::Release);
+    assert_ne!(a.seal_sha256(), b.seal_sha256());
+    assert_ne!(a.history()[0].engine_sha256(), b.history()[0].engine_sha256());
+}
