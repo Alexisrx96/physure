@@ -134,6 +134,104 @@ impl FromStr for EnginePolicy {
     }
 }
 
+/// One field in which the recorded and the running engines differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Difference {
+    pub field: &'static str,
+    pub recorded: String,
+    pub running: String,
+}
+
+/// Why the running engine is not the one a frozen file pins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineMismatch {
+    pub policy: EnginePolicy,
+    pub differences: Vec<Difference>,
+}
+
+impl std::fmt::Display for EngineMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "this is not the engine the configuration was validated with (policy {}):", self.policy.as_str())?;
+        for d in &self.differences {
+            write!(f, " {}: recorded {}, running {};", d.field, d.recorded, d.running)?;
+        }
+        Ok(())
+    }
+}
+
+fn same(differences: &mut Vec<Difference>, field: &'static str, recorded: &str, running: &str) {
+    if recorded != running {
+        differences.push(Difference { field, recorded: recorded.to_string(), running: running.to_string() });
+    }
+}
+
+/// Compares the engine a frozen file pins with the one that is running, under `policy`.
+///
+/// `recorded_binary` is the `binary_sha256` of the file, if it has one. `running_binary` must compute the hash of
+/// **the file that contains this engine** (for a Python extension module that is the module, not the
+/// interpreter) and is called **only** under the policy `binary` and only when a hash was recorded. Every doubt is
+/// a difference: an unknown commit equals nothing, a missing recorded hash under `binary` is a difference, an
+/// unreadable file is a difference. Under `build` a recorded hash is informational and ignored. `binary` attests
+/// the file at its path at check time, not the image in memory.
+pub fn check(
+    recorded: &EngineIdentity,
+    recorded_binary: Option<&str>,
+    policy: EnginePolicy,
+    running: &EngineIdentity,
+    running_binary: impl FnOnce() -> std::io::Result<String>,
+) -> Result<(), EngineMismatch> {
+    let mut differences = Vec::new();
+    match policy {
+        EnginePolicy::Record => {}
+        EnginePolicy::Release => same(&mut differences, "version", &recorded.version, &running.version),
+        EnginePolicy::Build => {
+            same(&mut differences, "version", &recorded.version, &running.version);
+            if recorded.commit == UNKNOWN || running.commit == UNKNOWN || recorded.commit != running.commit {
+                let shown = |c: &str| if c == UNKNOWN { "unknown (this build cannot be told apart from another)".to_string() } else { c.to_string() };
+                differences.push(Difference { field: "commit", recorded: shown(&recorded.commit), running: shown(&running.commit) });
+            }
+            same(&mut differences, "profile", &recorded.profile, &running.profile);
+            same(&mut differences, "target", &recorded.target, &running.target);
+            same(&mut differences, "features", &recorded.features, &running.features);
+            same(&mut differences, "rustc", &recorded.rustc, &running.rustc);
+            same(&mut differences, "flags", &recorded.flags, &running.flags);
+        }
+        EnginePolicy::Binary => match recorded_binary {
+            None => differences.push(Difference {
+                field: "binary_sha256",
+                recorded: "(not recorded)".to_string(),
+                running: "(the policy binary requires it)".to_string(),
+            }),
+            Some(recorded_hash) => match running_binary() {
+                Ok(running_hash) => same(&mut differences, "binary_sha256", recorded_hash, &running_hash),
+                Err(e) => differences.push(Difference {
+                    field: "binary_sha256",
+                    recorded: recorded_hash.to_string(),
+                    running: format!("(the file could not be read: {e})"),
+                }),
+            },
+        },
+    }
+    if differences.is_empty() {
+        Ok(())
+    } else {
+        Err(EngineMismatch { policy, differences })
+    }
+}
+
+/// Whether a frozen file may be made with this identity under `policy`: `build` and `binary` name a source
+/// revision (a binary hash alone does not tell an auditor which source it came from), so they need a known
+/// commit. `release` and `record` do not.
+pub fn freezable(identity: &EngineIdentity, policy: EnginePolicy) -> Result<(), String> {
+    if matches!(policy, EnginePolicy::Build | EnginePolicy::Binary) && identity.commit == UNKNOWN {
+        return Err(format!(
+            "this build does not know its commit (build it from a clean git checkout, or set PHYSURE_BUILD_COMMIT to the full hash when git is not available), so the policy {} cannot be recorded; use release or record",
+            policy.as_str()
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "../../build_support/commit.rs"]
 mod commit_rules;
@@ -250,5 +348,140 @@ mod tests {
             assert!(bad.parse::<EnginePolicy>().is_err(), "{bad:?}");
         }
         assert_eq!(EnginePolicy::default(), EnginePolicy::Build);
+    }
+
+    fn run_check(
+        recorded: &EngineIdentity,
+        recorded_binary: Option<&str>,
+        policy: EnginePolicy,
+        running: &EngineIdentity,
+        running_binary: Result<&str, &str>,
+    ) -> Result<(), EngineMismatch> {
+        check(recorded, recorded_binary, policy, running, || {
+            running_binary.map(str::to_string).map_err(|e| std::io::Error::other(e.to_string()))
+        })
+    }
+
+    fn fields(mismatch: &EngineMismatch) -> Vec<&str> {
+        mismatch.differences.iter().map(|d| d.field).collect()
+    }
+
+    #[test]
+    fn record_never_refuses() {
+        let a = identity(HEAD);
+        let mut b = identity(UNKNOWN);
+        b.version = "9.9.9".into();
+        assert!(run_check(&a, None, EnginePolicy::Record, &b, Err("unreadable")).is_ok());
+    }
+
+    #[test]
+    fn release_compares_only_the_version() {
+        let a = identity(HEAD);
+        let mut b = identity(UNKNOWN);
+        b.profile = "debug".into();
+        b.target = "aarch64-apple-darwin".into();
+        b.rustc = "rustc 1.0.0".into();
+        assert!(run_check(&a, None, EnginePolicy::Release, &b, Ok("x")).is_ok());
+        b.version = "0.3.2".into();
+        let m = run_check(&a, None, EnginePolicy::Release, &b, Ok("x")).unwrap_err();
+        assert_eq!(fields(&m), ["version"]);
+        assert_eq!((m.differences[0].recorded.as_str(), m.differences[0].running.as_str()), ("0.3.1", "0.3.2"));
+    }
+
+    #[test]
+    fn build_compares_every_field_one_at_a_time() {
+        let a = identity(HEAD);
+        assert!(run_check(&a, None, EnginePolicy::Build, &a.clone(), Ok("x")).is_ok());
+        let cases: [(&str, fn(&mut EngineIdentity)); 7] = [
+            ("version", |i| i.version = "0.3.2".into()),
+            ("commit", |i| i.commit = "89abcdef0123456789abcdef0123456789abcdef".into()),
+            ("profile", |i| i.profile = "debug".into()),
+            ("target", |i| i.target = "aarch64-apple-darwin".into()),
+            ("features", |i| i.features = String::new()),
+            ("rustc", |i| i.rustc = "rustc 1.98.0".into()),
+            ("flags", |i| i.flags = "opt-level=0;debug-assertions=on;panic=unwind;rustflags=00;target-features=00".into()),
+        ];
+        for (field, change) in cases {
+            let mut b = a.clone();
+            change(&mut b);
+            let m = run_check(&a, None, EnginePolicy::Build, &b, Ok("x")).unwrap_err();
+            assert_eq!(fields(&m), [field], "{field}");
+        }
+        let mut b = a.clone();
+        b.version = "0.3.2".into();
+        b.profile = "debug".into();
+        assert_eq!(fields(&run_check(&a, None, EnginePolicy::Build, &b, Ok("x")).unwrap_err()), ["version", "profile"]);
+    }
+
+    #[test]
+    fn an_unknown_commit_never_equals_anything_not_even_itself() {
+        let known = identity(HEAD);
+        let unknown = identity(UNKNOWN);
+        for (recorded, running) in [(&known, &unknown), (&unknown, &known), (&unknown, &unknown)] {
+            let m = run_check(recorded, None, EnginePolicy::Build, running, Ok("x")).unwrap_err();
+            assert_eq!(fields(&m), ["commit"]);
+            assert!(m.to_string().contains("unknown"), "{m}");
+        }
+    }
+
+    #[test]
+    fn a_hash_recorded_under_build_is_ignored() {
+        let a = identity(HEAD);
+        let mut b = a.clone();
+        b.profile = "debug".into();
+        let m = run_check(&a, Some("ab12"), EnginePolicy::Build, &b, Ok("ab12")).unwrap_err();
+        assert_eq!(fields(&m), ["profile"]);
+        assert!(run_check(&a, Some("ab12"), EnginePolicy::Build, &a, Ok("cd34")).is_ok(), "informational under build");
+    }
+
+    #[test]
+    fn binary_compares_the_hash_and_needs_one_to_have_been_recorded() {
+        let a = identity(HEAD);
+        assert!(run_check(&a, Some("ab12"), EnginePolicy::Binary, &a, Ok("ab12")).is_ok());
+        let m = run_check(&a, Some("ab12"), EnginePolicy::Binary, &a, Ok("cd34")).unwrap_err();
+        assert_eq!(fields(&m), ["binary_sha256"]);
+        let m = run_check(&a, None, EnginePolicy::Binary, &a, Ok("ab12")).unwrap_err();
+        assert!(m.to_string().contains("not recorded"), "{m}");
+        let m = run_check(&a, Some("ab12"), EnginePolicy::Binary, &a, Err("no such file")).unwrap_err();
+        assert!(m.to_string().contains("no such file"), "{m}");
+    }
+
+    #[test]
+    fn binary_does_not_look_at_the_other_fields_and_hashes_only_when_something_is_recorded() {
+        let a = identity(HEAD);
+        let mut b = identity(UNKNOWN);
+        b.version = "0.3.2".into();
+        assert!(run_check(&a, Some("ab12"), EnginePolicy::Binary, &b, Ok("ab12")).is_ok());
+        let result = check(&a, None, EnginePolicy::Binary, &a, || panic!("hashed although nothing was recorded"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn the_hash_is_only_read_under_binary() {
+        let a = identity(HEAD);
+        for policy in [EnginePolicy::Record, EnginePolicy::Release, EnginePolicy::Build] {
+            assert!(check(&a, Some("ab12"), policy, &a, || panic!("the executable was hashed under {policy:?}")).is_ok());
+        }
+    }
+
+    #[test]
+    fn the_mismatch_says_what_was_recorded_and_what_is_running() {
+        let a = identity(HEAD);
+        let mut b = a.clone();
+        b.commit = "89abcdef0123456789abcdef0123456789abcdef".into();
+        let text = run_check(&a, None, EnginePolicy::Build, &b, Ok("x")).unwrap_err().to_string();
+        assert!(text.contains("build") && text.contains("commit") && text.contains(HEAD) && text.contains("89abcdef"), "{text}");
+    }
+
+    #[test]
+    fn freezing_needs_a_known_commit_for_build_and_binary_only() {
+        let unknown = identity(UNKNOWN);
+        assert!(freezable(&unknown, EnginePolicy::Build).unwrap_err().contains("commit"));
+        assert!(freezable(&unknown, EnginePolicy::Binary).unwrap_err().contains("commit"));
+        assert!(freezable(&unknown, EnginePolicy::Release).is_ok());
+        assert!(freezable(&unknown, EnginePolicy::Record).is_ok());
+        for p in [EnginePolicy::Binary, EnginePolicy::Build, EnginePolicy::Release, EnginePolicy::Record] {
+            assert!(freezable(&identity(HEAD), p).is_ok());
+        }
     }
 }
