@@ -3,10 +3,26 @@
 use physure_core::frozen::canonical::exact_sha256;
 use physure_core::frozen::sha256::sha256_hex;
 use physure_core::frozen::time::rfc3339_from_unix;
-use physure_core::frozen::{EntryInput, FrozenFile, FrozenParts, Pairs, Source, WitnessScript};
+use physure_core::frozen::{
+    engine_pairs, EngineIdentity, EnginePolicy, EntryInput, FrozenFile, FrozenParts, Pairs, Source, WitnessScript,
+};
 
 fn entry<'a>(action: &'a str, reason: &'a str, time: &'a str) -> EntryInput<'a> {
     EntryInput { time, action, engine: "0.0.0+test", actor: "ci@host", reason, diff: "n/a" }
+}
+
+/// A valid `[Engine]` block with fixed fields, independent of the build running the test.
+fn engine() -> Pairs {
+    let identity = EngineIdentity {
+        version: "0.0.0".into(),
+        commit: "unknown".into(),
+        profile: "debug".into(),
+        target: "x86_64-unknown-linux-gnu".into(),
+        features: String::new(),
+        rustc: "rustc 1.97.1 (8bab26f4f 2026-07-14)".into(),
+        flags: "opt-level=0;debug-assertions=on;panic=unwind;rustflags=00;target-features=00".into(),
+    };
+    engine_pairs(&identity, EnginePolicy::Release, None).unwrap()
 }
 
 fn file() -> FrozenFile {
@@ -14,7 +30,7 @@ fn file() -> FrozenFile {
     FrozenFile::new(
         &created,
         FrozenParts {
-            engine: Pairs::new(&[("version", "0.0.0")]).unwrap(),
+            engine: engine(),
             environment: Pairs::default(),
             witnesses: Pairs::new(&[("user.w", "0")]).unwrap(),
             sources: vec![

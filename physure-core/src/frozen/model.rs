@@ -194,6 +194,7 @@ pub struct HistoryEntry {
     pub(crate) time: String,
     pub(crate) action: String,
     pub(crate) engine: String,
+    pub(crate) engine_sha256: String,
     pub(crate) actor: String,
     pub(crate) reason: String,
     pub(crate) old_content_sha256: String,
@@ -215,6 +216,9 @@ impl HistoryEntry {
     }
     pub fn engine(&self) -> &str {
         &self.engine
+    }
+    pub fn engine_sha256(&self) -> &str {
+        &self.engine_sha256
     }
     pub fn actor(&self) -> &str {
         &self.actor
@@ -238,10 +242,22 @@ impl HistoryEntry {
         &self.entry_sha256
     }
 
-    fn values(&self) -> [&String; 10] {
+    fn values(&self) -> [&String; 11] {
         [
-            &self.time, &self.action, &self.engine, &self.actor, &self.reason, &self.old_content_sha256,
-            &self.new_content_sha256, &self.diff, &self.prev_entry_sha256, &self.entry_sha256,
+            &self.time, &self.action, &self.engine, &self.engine_sha256, &self.actor, &self.reason,
+            &self.old_content_sha256, &self.new_content_sha256, &self.diff, &self.prev_entry_sha256, &self.entry_sha256,
+        ]
+    }
+
+    /// The fields that must be a SHA-256, and whether each may be empty (only in the first entry, where there is no
+    /// old content and no previous entry; `verify` checks that).
+    fn hash_fields(&self) -> [(&'static str, &String, bool); 5] {
+        [
+            ("engine_sha256", &self.engine_sha256, false),
+            ("old_content_sha256", &self.old_content_sha256, true),
+            ("new_content_sha256", &self.new_content_sha256, false),
+            ("prev_entry_sha256", &self.prev_entry_sha256, true),
+            ("entry_sha256", &self.entry_sha256, false),
         ]
     }
 }
@@ -263,9 +279,9 @@ pub struct FrozenFile {
     pub(crate) witness_scripts: Vec<WitnessScript>,
 }
 
-const HISTORY_FIELDS: [&str; 10] = [
-    "time", "action", "engine", "actor", "reason", "old_content_sha256", "new_content_sha256", "diff",
-    "prev_entry_sha256", "entry_sha256",
+const HISTORY_FIELDS: [&str; 11] = [
+    "time", "action", "engine", "engine_sha256", "actor", "reason", "old_content_sha256", "new_content_sha256",
+    "diff", "prev_entry_sha256", "entry_sha256",
 ];
 
 fn push_kv(out: &mut String, key: &str, value: &str) {
@@ -373,12 +389,7 @@ impl FrozenFile {
             if !is_rfc3339_utc(&entry.time) {
                 note(err(format!("[History.{n}] time is not a UTC time like 2026-11-07T14:03:11Z: {:?}", entry.time)));
             }
-            for (key, value, may_be_empty) in [
-                ("old_content_sha256", &entry.old_content_sha256, true),
-                ("new_content_sha256", &entry.new_content_sha256, false),
-                ("prev_entry_sha256", &entry.prev_entry_sha256, true),
-                ("entry_sha256", &entry.entry_sha256, false),
-            ] {
+            for (key, value, may_be_empty) in entry.hash_fields() {
                 if !(value.is_empty() && may_be_empty) && !is_sha256_hex(value) {
                     note(err(format!("[History.{n}] {key} is not a SHA-256 in lowercase hexadecimal: {value:?}")));
                 }
@@ -605,6 +616,7 @@ fn read_entry(n: u32, header_line: usize, mut fields: Vec<(String, String, usize
         time: take("time")?,
         action: take("action")?,
         engine: take("engine")?,
+        engine_sha256: take("engine_sha256")?,
         actor: take("actor")?,
         reason: take("reason")?,
         old_content_sha256: take("old_content_sha256")?,
@@ -619,12 +631,7 @@ fn read_entry(n: u32, header_line: usize, mut fields: Vec<(String, String, usize
             lines["time"], entry.time
         ));
     }
-    for (key, value, may_be_empty) in [
-        ("old_content_sha256", &entry.old_content_sha256, true),
-        ("new_content_sha256", &entry.new_content_sha256, false),
-        ("prev_entry_sha256", &entry.prev_entry_sha256, true),
-        ("entry_sha256", &entry.entry_sha256, false),
-    ] {
+    for (key, value, may_be_empty) in entry.hash_fields() {
         if !(value.is_empty() && may_be_empty) && !is_sha256_hex(value) {
             return err(format!("line {}: [History.{n}] {key} is not a SHA-256 in lowercase hexadecimal: {value:?}", lines[key]));
         }
@@ -721,6 +728,7 @@ mod tests {
             time: "2026-11-07T14:03:11Z".into(),
             action: "freeze".into(),
             engine: "0.3.1+9f2c1ab".into(),
+            engine_sha256: h('7'),
             actor: "irvin@host".into(),
             reason: "initial freeze".into(),
             old_content_sha256: String::new(),
@@ -792,6 +800,8 @@ mod tests {
             (good.replace("time = 2026-11-07T14:03:11Z", "time = yesterday"), "time"),
             (good.replace("created = 2026-11-07T14:03:11Z", "created = soon"), "created"),
             (good.replace("action = freeze\n", ""), "has no action"),
+            (good.replace(&format!("engine_sha256 = {}\n", h('7')), ""), "has no engine_sha256"),
+            (good.replace(&format!("engine_sha256 = {}", h('7')), "engine_sha256 ="), "engine_sha256 is not a SHA-256"),
             (good.replace("[Freeze]\n", "orphan = 1\n[Freeze]\n"), "before any section"),
             (good.replace("policy = build", "bad key = build"), "invalid key"),
         ];
@@ -937,6 +947,7 @@ mod tests {
             ("entry value", Box::new(|f| f.history[0].actor = "a\nb".into())),
             ("entry time", Box::new(|f| f.history[0].time = "now".into())),
             ("entry hash", Box::new(|f| f.history[0].entry_sha256 = String::new())),
+            ("entry engine hash", Box::new(|f| f.history[0].engine_sha256 = String::new())),
             ("origin", Box::new(|f| f.sources[0].origin = "embedded\nfake".into())),
             ("source framing", Box::new(|f| f.sources[0].text = "m = 1\n@@ end source 1".into())),
             ("source trailing newline", Box::new(|f| f.sources[0].text = "m = 1\n".into())),
@@ -989,5 +1000,6 @@ mod tests {
             (1, "2026-11-07T14:03:11Z", "freeze", "0.3.1+9f2c1ab", "irvin@host", "initial freeze", "added 3, removed 0, changed 0")
         );
         assert_eq!((e.old_content_sha256(), e.new_content_sha256(), e.prev_entry_sha256(), e.entry_sha256()), ("", h('c').as_str(), "", h('e').as_str()));
+        assert_eq!(e.engine_sha256(), h('7'));
     }
 }

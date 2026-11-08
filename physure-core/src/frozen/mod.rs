@@ -1,7 +1,9 @@
 //! Freezing the configuration: the data model of a sealed `physure.frozen.conf` and the hashes that seal it.
 //!
-//! See `docs/superpowers/specs/2026-11-07-conf-freeze-design.md`. This module is pure: it reads no clock, no
-//! environment and no file, and it never touches the unit registry.
+//! See `docs/superpowers/specs/2026-11-07-conf-freeze-design.md`. The model, the canonical form and the seal are
+//! pure: they read no clock, no environment and no file. Only `engine` looks outside: the identity the build script
+//! compiled in, [`environment_pairs`] (the machine, informational) and [`sha256_of_file`]. Nothing here touches the
+//! unit registry.
 
 pub mod sha256;
 pub mod canonical;

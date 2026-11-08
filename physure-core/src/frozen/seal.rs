@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use super::canonical::{canonical_pairs, content_sha256, exact_sha256, source_sha256};
+use super::engine::read_engine;
 use super::model::{FrozenError, FrozenFile, FrozenResult, HistoryEntry, Pairs, Source, WitnessScript, FORMAT_VERSION};
 use super::sha256::sha256_hex;
 use super::time::is_rfc3339_utc;
@@ -85,6 +86,11 @@ pub enum Problem {
     HistoryReason { n: u32, found: usize },
     Created { expected: String, found: String },
     HistoryTip { expected: String, found: String },
+    /// The last history entry does not record the current `[Engine]` block: the block was changed without a
+    /// reseal, or the entry's `engine_sha256` was altered. `expected` is the hash of the block as it is now.
+    HistoryEngine { expected: String, found: String },
+    /// The `[Engine]` block cannot be read (`read_engine`): a missing or unknown key, or an invalid value.
+    Engine { message: String },
     Seal { expected: String, found: String },
 }
 
@@ -153,6 +159,13 @@ impl fmt::Display for Problem {
             Problem::HistoryTip { expected, found } => {
                 write!(f, "the last history entry does not record the current content: expected {expected}, found {found}")
             }
+            Problem::HistoryEngine { expected, found } => write!(
+                f,
+                "the last history entry does not record the current [Engine] block (changed without a reseal, or the entry was altered): expected engine_sha256 {expected}, found {found}"
+            ),
+            Problem::Engine { message } => {
+                write!(f, "the [Engine] block cannot be read: expected the eight keys of a valid engine block, found: {message}")
+            }
             Problem::Seal { expected, found } => write!(
                 f,
                 "the seal does not match the format, creation time, content, engine, witnesses, scripts and history: expected {expected}, found {found}"
@@ -161,13 +174,21 @@ impl fmt::Display for Problem {
     }
 }
 
+/// The text an entry's hash is computed over (spec §5.3): labelled lines in a fixed order, every value one line.
+/// `engine_sha256` sits right after `engine`, so a change of the engine block is a change of the log.
 fn entry_sha256(entry: &HistoryEntry) -> String {
     let text = format!(
-        "n={}\ntime={}\naction={}\nengine={}\nactor={}\nreason={}\nold_content_sha256={}\nnew_content_sha256={}\ndiff={}\nprev_entry_sha256={}",
-        entry.n, entry.time, entry.action, entry.engine, entry.actor, entry.reason, entry.old_content_sha256,
-        entry.new_content_sha256, entry.diff, entry.prev_entry_sha256
+        "n={}\ntime={}\naction={}\nengine={}\nengine_sha256={}\nactor={}\nreason={}\nold_content_sha256={}\nnew_content_sha256={}\ndiff={}\nprev_entry_sha256={}",
+        entry.n, entry.time, entry.action, entry.engine, entry.engine_sha256, entry.actor, entry.reason,
+        entry.old_content_sha256, entry.new_content_sha256, entry.diff, entry.prev_entry_sha256
     );
     sha256_hex(text.as_bytes())
+}
+
+/// `engine_sha256`: the SHA-256 of the canonical pairs of `[Engine]`, the same value in the seal and in each
+/// history entry.
+fn engine_sha256(engine: &Pairs) -> String {
+    sha256_hex(canonical_pairs(engine.as_slice()).as_bytes())
 }
 
 /// The seal text (spec §4.1): labelled lines, each part a fixed-length hash or a one-line scalar, so no boundary
@@ -179,7 +200,7 @@ fn seal_text(file: &FrozenFile, content: &str, last_entry: &str) -> String {
         "physure-frozen-seal-1\nformat:{}\ncreated:{}\ncontent:{content}\nengine:{}\nwitnesses:{}\nscripts:{}\nhistory:{last_entry}\n",
         file.format,
         file.created,
-        sha256_hex(canonical_pairs(file.engine.as_slice()).as_bytes()),
+        engine_sha256(&file.engine),
         sha256_hex(canonical_pairs(file.witnesses.as_slice()).as_bytes()),
         sha256_hex(scripts.as_bytes()),
     )
@@ -272,6 +293,7 @@ impl FrozenFile {
             time: input.time.to_string(),
             action: input.action.to_string(),
             engine: input.engine.to_string(),
+            engine_sha256: engine_sha256(&self.engine),
             actor: input.actor.to_string(),
             reason: input.reason.to_string(),
             old_content_sha256: old,
@@ -322,6 +344,9 @@ impl FrozenFile {
             problems.push(Problem::Format { found: self.format });
         }
         problems.extend(self.framing_problems().into_iter().map(|found| Problem::Framing { found }));
+        if let Err(e) = read_engine(&self.engine) {
+            problems.push(Problem::Engine { message: e.0 });
+        }
         self.structure_problems(&mut problems);
         for (i, source) in self.sources.iter().enumerate() {
             let computed = source_sha256(&source.text);
@@ -393,6 +418,10 @@ impl FrozenFile {
         if last.new_content_sha256 != self.content_sha256 {
             problems.push(Problem::HistoryTip { expected: self.content_sha256.clone(), found: last.new_content_sha256.clone() });
         }
+        let engine = engine_sha256(&self.engine);
+        if last.engine_sha256 != engine {
+            problems.push(Problem::HistoryEngine { expected: engine, found: last.engine_sha256.clone() });
+        }
         let seal = seal_sha256(self, &content, &last.entry_sha256);
         if seal != self.seal_sha256 {
             problems.push(Problem::Seal { expected: self.seal_sha256.clone(), found: seal });
@@ -404,10 +433,35 @@ impl FrozenFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frozen::canonical::is_sha256_hex;
+    use crate::frozen::engine::{engine_pairs, EngineIdentity, EnginePolicy};
     use crate::frozen::model::{FrozenFile, Source, WitnessScript};
 
     fn pairs(items: &[(&str, &str)]) -> Pairs {
         Pairs::new(items).unwrap()
+    }
+
+    /// A valid `[Engine]` block with fixed fields (the fixtures must not depend on the build that runs them).
+    fn engine_block(policy: EnginePolicy) -> Pairs {
+        let identity = EngineIdentity {
+            version: "0.3.1".into(),
+            commit: "0123456789abcdef0123456789abcdef01234567".into(),
+            profile: "release".into(),
+            target: "x86_64-pc-windows-msvc".into(),
+            features: "html-viewer".into(),
+            rustc: "rustc 1.97.1 (8bab26f4f 2026-07-14)".into(),
+            flags: "opt-level=3;debug-assertions=off;panic=unwind;rustflags=00;target-features=00".into(),
+        };
+        engine_pairs(&identity, policy, None).unwrap()
+    }
+
+    fn engine() -> Pairs {
+        engine_block(EnginePolicy::Release)
+    }
+
+    /// The SHA-256 of a block's canonical pairs, computed here independently of `append_entry`.
+    fn block_sha256(block: &Pairs) -> String {
+        sha256_hex(canonical_pairs(block.as_slice()).as_bytes())
     }
 
     fn input<'a>(action: &'a str, reason: &'a str, time: &'a str) -> EntryInput<'a> {
@@ -415,10 +469,14 @@ mod tests {
     }
 
     fn fresh() -> FrozenFile {
+        fresh_with(engine())
+    }
+
+    fn fresh_with(engine: Pairs) -> FrozenFile {
         FrozenFile::new(
             "2026-11-07T14:03:11Z",
             FrozenParts {
-                engine: pairs(&[("version", "0.3.1"), ("policy", "build")]),
+                engine,
                 environment: pairs(&[("os", "windows")]),
                 witnesses: pairs(&[("builtin.conversion", "3ff0000000000000"), ("user.validation.1", "1a2b")]),
                 sources: vec![Source::new("embedded", "[Units]\nm = 1\nkg = 2").unwrap(), Source::new("overrides", "# mine\n").unwrap()],
@@ -579,6 +637,7 @@ mod tests {
         assert!(file.reseal(input("update", &"x".repeat(501), "2026-11-08T09:00:00Z")).is_err());
         assert!(file.reseal(input("update", &"x".repeat(500), "2026-11-08T09:00:00Z")).is_ok());
         let parts = || FrozenParts {
+            engine: engine(),
             sources: vec![Source::new("embedded", "").unwrap(), Source::new("overrides", "").unwrap()],
             ..FrozenParts::default()
         };
@@ -612,6 +671,8 @@ mod tests {
             Problem::HistoryReason { n: 1, found: 0 },
             Problem::Created { expected: "a".into(), found: "b".into() },
             Problem::HistoryTip { expected: "a".into(), found: "b".into() },
+            Problem::HistoryEngine { expected: "a".into(), found: "b".into() },
+            Problem::Engine { message: "[Engine] has no commit".into() },
             Problem::Seal { expected: "a".into(), found: "b".into() },
         ];
         for problem in all {
@@ -622,28 +683,34 @@ mod tests {
 
     // ---- Task 8 ----
 
-    fn with_blocks(engine: &[(&str, &str)], witnesses: &[(&str, &str)]) -> FrozenFile {
-        FrozenFile::new(
+    /// The seal of a file with these raw blocks and an otherwise fixed content and history. Since 1b an `[Engine]`
+    /// block with arbitrary keys can no longer be sealed (verify reads it), so the seal formula is applied directly:
+    /// the history entry is held fixed, and any difference comes from how the seal frames the two blocks.
+    fn seal_with_blocks(engine: &[(&str, &str)], witnesses: &[(&str, &str)]) -> String {
+        let mut file = FrozenFile::new(
             "2026-11-07T14:03:11Z",
             FrozenParts {
-                engine: pairs(engine),
-                witnesses: pairs(witnesses),
+                engine: self::engine(),
                 sources: vec![Source::new("embedded", "[Units]\nm = 1").unwrap(), Source::new("overrides", "").unwrap()],
                 ..FrozenParts::default()
             },
             input("freeze", "initial freeze", "2026-11-07T14:03:11Z"),
         )
-        .unwrap()
+        .unwrap();
+        file.engine = pairs(engine);
+        file.witnesses = pairs(witnesses);
+        let (content, last) = (file.content_sha256.clone(), file.history[0].entry_sha256.clone());
+        seal_sha256(&file, &content, &last)
     }
 
     #[test]
     fn moving_a_pair_between_engine_and_witnesses_changes_the_seal() {
-        let a = with_blocks(&[("a", "1")], &[("b", "2"), ("c", "3")]);
-        let b = with_blocks(&[("a", "1"), ("b", "2")], &[("c", "3")]);
-        assert_ne!(a.seal_sha256, b.seal_sha256);
-        let c = with_blocks(&[], &[("a", "1")]);
-        let d = with_blocks(&[("a", "1")], &[]);
-        assert_ne!(c.seal_sha256, d.seal_sha256);
+        let a = seal_with_blocks(&[("a", "1")], &[("b", "2"), ("c", "3")]);
+        let b = seal_with_blocks(&[("a", "1"), ("b", "2")], &[("c", "3")]);
+        assert_ne!(a, b);
+        let c = seal_with_blocks(&[], &[("a", "1")]);
+        let d = seal_with_blocks(&[("a", "1")], &[]);
+        assert_ne!(c, d);
     }
 
     #[test]
@@ -704,6 +771,7 @@ mod tests {
             FrozenFile::new(
                 "2026-11-07T14:03:11Z",
                 FrozenParts {
+                    engine: engine(),
                     sources: origins.iter().map(|o| Source::new(o, "m = 1").unwrap()).collect(),
                     witness_scripts: scripts.iter().map(|n| WitnessScript::new(n, "1 m").unwrap()).collect(),
                     witnesses: Pairs::from_vec(scripts.iter().map(|n| (format!("user.{n}"), "x".to_string())).collect())
@@ -760,6 +828,7 @@ mod tests {
         let made = FrozenFile::new(
             "2026-11-07T14:03:11Z",
             FrozenParts {
+                engine: engine(),
                 sources: vec![Source::new("embedded", "").unwrap(), Source::new("overrides", "").unwrap()],
                 witness_scripts: vec![WitnessScript::new("a", "1 m").unwrap()],
                 witnesses: pairs(&[("builtin.x", "1")]),
@@ -856,13 +925,14 @@ mod tests {
     }
 
     /// The seal of one small file, computed by hand outside Rust (Python's hashlib) from the seal text written in
-    /// the spec §4.1. If this fails, the code and the spec disagree.
+    /// the spec §4.1 and the entry text of §5.3 (with `engine_sha256` right after `engine`). If this fails, the
+    /// code and the spec disagree.
     #[test]
     fn the_seal_matches_an_independent_computation() {
         let file = FrozenFile::new(
             "2026-11-07T14:03:11Z",
             FrozenParts {
-                engine: pairs(&[("version", "0.3.1"), ("policy", "build")]),
+                engine: engine(),
                 environment: pairs(&[("os", "windows")]),
                 witnesses: pairs(&[("user.v1", "abc")]),
                 sources: vec![Source::new("embedded", "[Units]\nm = 1").unwrap(), Source::new("overrides", "").unwrap()],
@@ -879,11 +949,163 @@ mod tests {
         )
         .unwrap();
         assert_eq!(file.content_sha256(), INDEPENDENT_CONTENT);
+        assert_eq!(block_sha256(file.engine()), INDEPENDENT_ENGINE);
         assert_eq!(file.history()[0].entry_sha256(), INDEPENDENT_ENTRY);
         assert_eq!(file.seal_sha256(), INDEPENDENT_SEAL);
     }
 
     const INDEPENDENT_CONTENT: &str = "9c0d6a0d38b9562d9227f69c582e48040958a2417745956a6cfc9f5150ca77b7";
-    const INDEPENDENT_ENTRY: &str = "3290339cd37b6e840873b08c7257848c2171f06c97572eb47fe0a3119981c560";
-    const INDEPENDENT_SEAL: &str = "53575992acc402e8b960b424a8a6de0075f08aa3bb242b31439819165c1f917a";
+    const INDEPENDENT_ENGINE: &str = "a3727508d1f58d898990018132fa83fcb072dcb8e4a25e38c5a776a8572177b6";
+    const INDEPENDENT_ENTRY: &str = "baeda19c3d6aa850f052a90e45debc5e7c69b3f27f28f1cb714591ef7cfb3dbc";
+    const INDEPENDENT_SEAL: &str = "d66e5943b87d5ce93342ac9730f93be7fad6ff521afda1347b48a804b0833403";
+
+    // ---- Phase 1b, Task 5: the history records the engine block; verify reads it ----
+
+    fn has(file: &FrozenFile, wanted: impl Fn(&Problem) -> bool) -> bool {
+        file.verify().iter().any(wanted)
+    }
+
+    #[test]
+    fn a_new_file_records_the_engine_block_in_its_first_entry() {
+        let file = fresh();
+        assert_eq!(file.history()[0].engine_sha256(), block_sha256(file.engine()));
+        assert!(is_sha256_hex(file.history()[0].engine_sha256()));
+    }
+
+    #[test]
+    fn changing_the_engine_and_resealing_shows_in_the_log() {
+        let mut file = fresh_with(engine_block(EnginePolicy::Build));
+        file.set_engine(engine_block(EnginePolicy::Record));
+        // the caller's free-text diff says nothing about the engine: the log must show it anyway
+        file.reseal(EntryInput {
+            time: "2026-11-08T09:00:00Z",
+            action: "seal",
+            engine: "0.3.1+0123456789ab",
+            actor: "irvin@host",
+            reason: "weaken",
+            diff: "n/a",
+        })
+        .unwrap();
+        assert!(problems(&file).is_empty(), "{:?}", problems(&file));
+        let (first, second) = (&file.history()[0], &file.history()[1]);
+        assert_eq!(first.new_content_sha256(), second.new_content_sha256(), "only the engine changed");
+        assert_ne!(first.engine_sha256(), second.engine_sha256());
+        assert_eq!(first.engine_sha256(), block_sha256(&engine_block(EnginePolicy::Build)));
+        assert_eq!(second.engine_sha256(), block_sha256(&engine_block(EnginePolicy::Record)));
+        // hiding the weakening by dropping its entry and recomputing every hash and the seal: the log betrays it
+        let mut hidden = file.clone();
+        hidden.history.pop();
+        rechain(&mut hidden);
+        assert_eq!(
+            hidden.verify(),
+            vec![Problem::HistoryEngine {
+                expected: block_sha256(&engine_block(EnginePolicy::Record)),
+                found: block_sha256(&engine_block(EnginePolicy::Build)),
+            }]
+        );
+    }
+
+    #[test]
+    fn resealing_without_changing_the_engine_keeps_the_hash() {
+        let file = two_entries();
+        assert!(problems(&file).is_empty());
+        let (first, second) = (&file.history()[0], &file.history()[1]);
+        assert_ne!(first.new_content_sha256(), second.new_content_sha256(), "the overrides changed");
+        assert_eq!(first.engine_sha256(), second.engine_sha256());
+        assert_eq!(second.engine_sha256(), block_sha256(file.engine()));
+    }
+
+    #[test]
+    fn the_last_entry_must_record_the_current_engine_block() {
+        // the block replaced without resealing
+        let mut file = fresh();
+        let recorded = file.history[0].engine_sha256.clone();
+        file.engine = engine_block(EnginePolicy::Record);
+        let current = block_sha256(&file.engine);
+        assert!(
+            has(&file, |p| *p == Problem::HistoryEngine { expected: current.clone(), found: recorded.clone() }),
+            "{:?}",
+            problems(&file)
+        );
+        assert!(has(&file, |p| matches!(p, Problem::Seal { .. })), "{:?}", problems(&file));
+        // the same, by someone who recomputes every hash and the seal but leaves the log alone: the log betrays it
+        rechain(&mut file);
+        assert_eq!(file.verify(), vec![Problem::HistoryEngine { expected: current, found: recorded }]);
+
+        // the other way: the last entry's engine_sha256 forged in the text
+        let original = fresh();
+        let text = original.render().unwrap();
+        let line = format!("engine_sha256 = {}", original.history[0].engine_sha256);
+        assert!(text.contains(&line));
+        let forged = FrozenFile::parse(&text.replace(&line, &format!("engine_sha256 = {}", "0".repeat(64)))).unwrap();
+        assert!(has(&forged, |p| matches!(p, Problem::HistoryEntryHash { n: 1, .. })), "{:?}", problems(&forged));
+        assert!(has(&forged, |p| matches!(p, Problem::HistoryEngine { .. })), "{:?}", problems(&forged));
+        // and forged with every hash recomputed: still caught
+        let mut rehashed = original.clone();
+        rehashed.history[0].engine_sha256 = "0".repeat(64);
+        rechain(&mut rehashed);
+        assert_eq!(
+            rehashed.verify(),
+            vec![Problem::HistoryEngine { expected: block_sha256(&rehashed.engine), found: "0".repeat(64) }]
+        );
+    }
+
+    #[test]
+    fn an_unreadable_engine_block_is_a_problem() {
+        let toy = pairs(&[("version", "0.3.1"), ("policy", "build")]);
+        let mut file = fresh();
+        file.engine = toy.clone();
+        let named = |p: &Problem| matches!(p, Problem::Engine { message } if message.contains("commit"));
+        assert!(has(&file, named), "{:?}", problems(&file));
+        // fully rehashed, the block is still refused, and the problem survives a trip through text
+        file.history[0].engine_sha256 = block_sha256(&toy);
+        rechain(&mut file);
+        assert_eq!(file.verify().len(), 1, "{:?}", problems(&file));
+        assert!(has(&FrozenFile::parse(&file.render().unwrap()).unwrap(), named));
+        // it can be neither made nor resealed
+        let made = FrozenFile::new(
+            "2026-11-07T14:03:11Z",
+            FrozenParts {
+                engine: toy.clone(),
+                sources: vec![Source::new("embedded", "").unwrap(), Source::new("overrides", "").unwrap()],
+                ..FrozenParts::default()
+            },
+            input("freeze", "r", "2026-11-07T14:03:11Z"),
+        );
+        assert!(made.unwrap_err().to_string().contains("[Engine]"));
+        let mut sealed = fresh();
+        sealed.set_engine(toy);
+        assert!(sealed.reseal(input("seal", "r", "2026-11-08T09:00:00Z")).is_err());
+        assert_eq!(sealed.history.len(), 1, "a refused reseal leaves the history as it was");
+        // an unknown key in a block that is otherwise valid
+        let mut knob = engine().as_slice().to_vec();
+        knob.push(("enforce".into(), "never".into()));
+        let mut file = fresh();
+        file.engine = Pairs::from_vec(knob).unwrap();
+        assert!(has(&file, |p| matches!(p, Problem::Engine { message } if message.contains("enforce"))));
+    }
+
+    #[test]
+    fn the_render_parse_round_trip_keeps_engine_sha256_and_the_independent_seal_check_is_updated() {
+        let mut file = fresh_with(engine_block(EnginePolicy::Build));
+        file.set_engine(engine_block(EnginePolicy::Release));
+        file.reseal(input("update", "relaxed the pin", "2026-11-08T09:00:00Z")).unwrap();
+        let text = file.render().unwrap();
+        for entry in file.history() {
+            assert!(text.contains(&format!("engine_sha256 = {}\n", entry.engine_sha256())));
+        }
+        let again = FrozenFile::parse(&text).unwrap();
+        assert_eq!(again, file);
+        assert!(again.verify().is_empty());
+        // the field sits right after `engine` in each entry
+        assert!(text.contains(&format!("engine = 0.3.1+9f2c1ab\nengine_sha256 = {}\n", file.history()[1].engine_sha256())));
+        // missing or malformed: a parse error that names the line
+        let line = format!("engine_sha256 = {}\n", file.history()[1].engine_sha256());
+        let missing = FrozenFile::parse(&text.replace(&line, "")).unwrap_err().to_string();
+        assert!(missing.starts_with("line ") && missing.contains("[History.2] has no engine_sha256"), "{missing}");
+        for bad in ["", "xyz", &"A".repeat(64)] {
+            let message = FrozenFile::parse(&text.replace(&line, &format!("engine_sha256 = {bad}\n"))).unwrap_err().to_string();
+            assert!(message.starts_with("line ") && message.contains("engine_sha256 is not a SHA-256"), "{bad:?}: {message}");
+        }
+    }
 }
