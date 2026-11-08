@@ -41,7 +41,9 @@ fn gas_or(r: Option<&Quantity>) -> PhysureResult<Quantity> {
 /// Arrhenius equation: `k = A * exp(-Ea / (R T))`. `r` is `R`, the catalog's when `None`.
 pub fn arrhenius(a: &Quantity, ea: &Quantity, t: &Quantity, r: Option<&Quantity>) -> PhysureResult<Quantity> {
     let exponent = ea.div(&gas_or(r)?.mul(t)?)?.convert_to(&RationalUnit::dimensionless())?;
-    a.div(&exponent.exp()?)
+    // `a * exp(-x)`, not `a / exp(x)`: for x above about 709 the exponential is infinite and the
+    // rate (and its uncertainty) would come out 0 or NaN where `exp(-x)` is a real small number.
+    a.mul(&exponent.mul(&Quantity::new(-1.0, "")?)?.exp()?)
 }
 
 /// Clausius-Clapeyron relation: the pressure `P2` at `t2`, given `p1` at `t1` and the enthalpy of
@@ -165,5 +167,32 @@ mod tests {
         let p2 = clausius_clapeyron(&dh, &t1, &p1, &t2, None).unwrap();
         let back = clausius_clapeyron(&dh, &t2, &p2, &t1, None).unwrap();
         assert!(close(back.to("kPa").unwrap().value.mean(), 101.325));
+    }
+
+    #[test]
+    fn arrhenius_with_a_huge_barrier_underflows_instead_of_turning_nan() {
+        let a = Quantity::new(1e13, "s^-1").unwrap();
+        let ea = Quantity::with_uncertainty(2000.0, 10.0, "kJ/mol").unwrap();
+        let t = Quantity::new(298.15, "K").unwrap();
+        let k = arrhenius(&a, &ea, &t, None).unwrap();
+        assert!(k.value.mean().is_finite() && k.value.mean() >= 0.0 && k.value.mean() < 1e-300);
+        assert!(!k.value.std_dev().is_nan(), "std_dev {}", k.value.std_dev());
+    }
+
+    #[test]
+    fn arrhenius_where_the_exponential_overflows_but_the_rate_does_not() {
+        // Ea / RT is about 718: exp(718) is infinite, 1e13 * exp(-718) is a real (tiny) rate.
+        let a = Quantity::new(1e13, "s^-1").unwrap();
+        let ea = Quantity::with_uncertainty(1780.0, 1.0, "kJ/mol").unwrap();
+        let t = Quantity::new(298.15, "K").unwrap();
+        let k = arrhenius(&a, &ea, &t, None).unwrap();
+        let x = 1_780_000.0 / (R * 298.15);
+        assert!(x > 710.0);
+        let expected = 1e13 * (-x).exp();
+        assert!(expected > 0.0);
+        assert!((k.value.mean() - expected).abs() <= 1e-6 * expected, "{} vs {expected}", k.value.mean());
+        // (the spread itself is about 0.4 * k, whose square is below the smallest f64, so the
+        // quadrature sum of the core reports 0; what matters is that it is not NaN)
+        assert!(k.value.std_dev().is_finite());
     }
 }
