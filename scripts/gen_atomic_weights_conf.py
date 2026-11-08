@@ -49,7 +49,7 @@ NEXT_SECTION = "[Categories]"  # ... and ends on the line before this one
 FROZEN = """\
 # FROZEN. A released edition is never edited: a plant may have validated its calculations against these
 # numbers, and a library upgrade must not change them. A new CIAAW release is a NEW edition (for example
-# standard-2026) added next to this one; only the alias in [Chemistry] moves, in a release whose CHANGELOG
+# {next_edition}) added next to this one; only the alias in [Chemistry] moves, in a release whose CHANGELOG
 # says so. The test physure-core/tests/atomic_weights_ciaaw.rs fails if a number of this section changes.
 # The names standard-* and abridged-* are reserved for the editions of this library: a text of a user
 # (a conf of your own, a unit system) that has such a section is a problem, so it cannot edit this one.
@@ -60,7 +60,7 @@ STANDARD_HEADER = """\
 # intervals. The table the chemistry module reads by default: [Chemistry] atomic_weights = standard (at the
 # end of this block) is an alias that points here in this release.
 #
-""" + FROZEN + """\
+""" + FROZEN.format(next_edition="standard-2026") + """\
 # A definition of yours goes in [AtomicWeights], where it wins over whichever table is selected.
 #
 # DATA. CIAAW, Standard Atomic Weights 2024 (https://ciaaw.org/atomic-weights.htm): the table of the
@@ -75,25 +75,27 @@ STANDARD_HEADER = """\
 #       CIAAW prints value(n); U is n units of the last digit printed (22.989 769 28(2) is
 #       Na = 22.98976928, 0.00000002). U is the half-width of the interval in which the atomic weight of
 #       normal materials is expected to lie (Prohaska et al. 2022, sections 6-7). It is a decisional
-#       uncertainty, not an expanded uncertainty in the sense of the GUM: it has no coverage factor
-#       (Possolo et al., Pure Appl. Chem. 90, 395-424 (2018), doi:10.1515/pac-2016-0402). It is read as a
+#       uncertainty that "differs essentially" from the expanded uncertainty of the GUM, and no coverage
+#       probability is attached to it (Possolo et al., Pure Appl. Chem. 90, 395-424 (2018),
+#       doi:10.1515/pac-2016-0402). It is read as a
 #       uniform distribution on [value - U, value + U], the model Prohaska et al. propose and IUPAC
 #       recommends, and the registry stores its standard uncertainty U / sqrt(3).
 #   Sym = [a, b]
 #       The 14 elements for which CIAAW prints an interval (H, Li, B, C, N, O, Mg, Si, S, Cl, Ar, Br, Tl,
 #       Pb). The weight is the midpoint (a + b) / 2 and the standard uncertainty is (b - a) / sqrt(12)
 #       (IUPAC, "Interpretation and use of standard atomic weights", van der Veen et al.,
-#       doi:10.1515/pac-2017-1002, eqs. 1-2): the same rule as above with the half-width (b - a) / 2.
+#       doi:10.1515/pac-2017-1002, eqs. 1-2 of the peer-review manuscript PAC-REC-16-04-01): the same rule as above with the half-width (b - a) / 2.
 #   Sym = value, u, standard
 #       The number already is a standard uncertainty and is stored as given, for example an isotope mass
 #       with its own u: D = 2.01410177812, 0.00000000012, standard. No line of this section uses it.
 #   (Sym = value, U, interval spells out the first form.)
 #
 # WHY THIS TABLE IS THE DEFAULT AND THE ABRIDGED ONE IS AN OPTION. The "+-" of the CIAAW abridged table
-# is "a conservative value ... a simplified measure of the reliability of the abridged values" and, for
-# the weights quoted to more than five significant digits, only the place value of the last rounded
-# digit; for the interval elements its single value "does not correspond necessarily to the midpoints of
-# the intervals" (Prohaska et al. 2022, section 7, rules i-iii of the abridged table). Using it as a
+# is, in the words of the report, "A conservative +/- value ... is given as a simplified measure of the
+# reliability of the abridged values" and, for the weights quoted to more than five significant digits,
+# only the place value of the last rounded digit; for the interval elements its single value "does not
+# correspond necessarily to the midpoints of the intervals (in case of Li, Mg, S, Ar and Pb)" (Prohaska
+# et al. 2022, section 7, rules i-iii of the abridged table). Using it as a
 # half-width puts a rounding convention where the Commission's evaluation should be, so it is not the
 # default. It is the next section (abridged-2024), and [Chemistry] atomic_weights = abridged selects it.
 #
@@ -114,7 +116,7 @@ ABRIDGED_HEADER = """\
 # when [Chemistry] atomic_weights = abridged (an alias that points here in this release) or
 # abridged-2024 selects it.
 #
-""" + FROZEN + """\
+""" + FROZEN.format(next_edition="abridged-2026") + """\
 # A definition of yours goes in [AtomicWeights], where it wins over whichever table is selected.
 #
 # DATA. CIAAW, Abridged Standard Atomic Weights 2024 (https://ciaaw.org/abridged-atomic-weights.htm),
@@ -128,9 +130,9 @@ ABRIDGED_HEADER = """\
 # THE "+-". Each line is `Sym = value, U` as the page prints it, with the same grammar and the same
 # reading as the second column of [AtomicWeights:standard-2024]: U is the half-width of an interval, and
 # the registry stores the standard uncertainty U / sqrt(3) of a uniform distribution over it. For this
-# table the "+-" is, in the words of the Commission, "a conservative value ... a simplified measure of
-# the reliability of the abridged values" (Prohaska et al. 2022, section 7, rules i-iii of the abridged
-# table), so the standard uncertainty derived from it is conservative as well (Na: a half-width of 0.001
+# table the "+-" is, in the words of the report, "A conservative +/- value ... is given as a simplified
+# measure of the reliability of the abridged values" (Prohaska et al. 2022, section 7, rules i-iii of the
+# abridged table), so the standard uncertainty derived from it is conservative as well (Na: a half-width of 0.001
 # here, 0.00000002 in standard-2024): the difference is the conservatism of the abridged "+-", not a
 # better measurement. That is why standard-2024 is the default.
 #

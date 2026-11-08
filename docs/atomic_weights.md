@@ -33,13 +33,23 @@ and the sections that follow) is **generated** from those two files by
 [`scripts/gen_atomic_weights_conf.py`](https://github.com/Alexisrx96/physure/blob/main/scripts/gen_atomic_weights_conf.py)
 and is never edited by hand. Besides the two tables the block has the (empty) section `[AtomicWeights]`
 for your own definitions and `[Chemistry]`, which selects the table that is read (section 5). A line of a
-table looks like one of these:
+table looks like one of these. (These are lines of the shipped tables, shown for what they are; they are not
+a text to paste, because a text of yours cannot define a section called `standard-2024` or `abridged-2024`,
+section 5.3. A comment goes on a line of its own: a line is not cut at a `#`, so a line with a trailing
+comment is a bad line.)
 
-```ini
-Na = 22.98976928, 0.00000002     # standard-2024; CIAAW prints 22.989 769 28(2)
-H  = [1.00784, 1.00811]          # standard-2024; CIAAW prints [1.007 84, 1.008 11]
-Tc = 98, 0                       # either edition; CIAAW prints a dash: no standard atomic weight
-H  = 1.0080, 0.0002              # abridged-2024; CIAAW prints 1.0080 and a "±" of 0.0002
+```text
+[AtomicWeights:standard-2024]
+# CIAAW prints 22.989 769 28(2)
+Na = 22.98976928, 0.00000002
+# CIAAW prints [1.007 84, 1.008 11]
+H = [1.00784, 1.00811]
+# CIAAW prints a dash: no standard atomic weight (section 7), in both editions
+Tc = 98, 0
+
+[AtomicWeights:abridged-2024]
+# CIAAW prints 1.0080 and a "±" of 0.0002
+H = 1.0080, 0.0002
 ```
 
 ## 2. What the published uncertainty means
@@ -53,10 +63,14 @@ expanded uncertainty in the sense of the GUM.
   uncertainty".
 - Possolo, van der Veen, Meija and Hibbert, *Pure Appl. Chem.* 90(2), 395-424 (2018),
   [doi:10.1515/pac-2016-0402](https://doi.org/10.1515/pac-2016-0402): it is a "decisional expanded
-  uncertainty" that "differs essentially from the expanded uncertainty defined in the GUM".
+  uncertainty" that "differs essentially from the 'expanded uncertainty' defined in the GUM", where the
+  expanded uncertainty is a multiple of the combined standard uncertainty, "the multiplier (coverage factor)
+  being chosen so that the interval ... is believed to include the true value of the measurand with a
+  specified probability".
 
 So the published `U` is the half-width of an interval in which the atomic weight of normal materials is
-expected to lie, and it carries no coverage factor. Treating it as a standard uncertainty (as the Python
+expected to lie "with great certitude"; it is not a GUM expanded uncertainty, and no coverage probability is
+attached to it. Treating it as a standard uncertainty (as the Python
 package did before) overstates every uncertainty by a factor of `sqrt(3)`, because the standard uncertainty
 of a uniform distribution of half-width `U` is `U / sqrt(3)` (section 3).
 
@@ -65,8 +79,10 @@ of a uniform distribution of half-width `U` is `U / sqrt(3)` (section 3).
 Prohaska et al. write that "the uniform distribution on these intervals … can be used as a simple and
 practically useful model", and the IUPAC guidelines (van der Veen et al., *Interpretation and use of
 standard atomic weights*, [doi:10.1515/pac-2017-1002](https://doi.org/10.1515/pac-2017-1002)) turn it into
-a rule: for an interval `[a, b]` the standard uncertainty is `u(Ar) = (b - a) / sqrt(12)`; their own example
-says "the half-width of the interval is 0.01 and hence the standard uncertainty is 0.01/√3 = 0.006". physure
+a rule: for an interval `[a, b]` the standard uncertainty is `u(Ar) = (b - a) / sqrt(12)` (equations 1 and 2 of
+the Guidelines); their own example says "the half-width of the interval is 0.01 and hence the standard
+uncertainty is 0.01/√3 = 0.006". (The Guidelines quotations on this page were checked against the
+peer-review manuscript, Manuscript ID PAC-REC-16-04-01, not against the published article.) physure
 applies exactly that to every line of every table:
 
 | Printed by CIAAW | Weight stored | Standard uncertainty stored |
@@ -98,8 +114,9 @@ For a molecular weight IUPAC gives `u^2(Mr) = sum over elements E of nu_E^2 * u^
 contributes its stoichiometric coefficient `nu_E` times its standard uncertainty, and different elements
 are uncorrelated. physure follows this exactly, which has two consequences that are easy to get wrong:
 
-- the atoms of one element are **one quantity**, not independent copies. In `H2O` the two hydrogens add as
-  `2 u(H)`, not as `sqrt(2) u(H)`;
+- the atoms of one element are **one quantity**, not independent copies: the `nu_E` atoms of an element add
+  linearly, as `nu_E * u(Ar(E))`, and only the different elements combine in quadrature. In `H2O` the two
+  hydrogens add as `2 u(H)`, not as `sqrt(2) u(H)`;
 - the molar mass of an element is one stable uncertainty source in the Rust core, so two species that share
   an element are correlated through it, and a molar mass cancels against itself on a round trip
   (`moles_to_mass(mass_to_moles(m))` keeps the uncertainty of `m`).
@@ -126,18 +143,21 @@ These are first-order (GUM) propagations of the standard uncertainties; see sect
 - **`standard-2024`** holds the standard atomic weights proper. For the 70 elements with a single value the
   "±" is the half-width of the interval that CIAAW evaluated; for the 14 interval elements (Ar, B, Br, C, Cl,
   H, Pb, Li, Mg, N, O, Si, S, Tl) the table gives the interval itself, read as in section 3.
-- **`abridged-2024`** holds the abridged table, "best abridged to five digits" in the Commission's
-  recommendation of 2013. Its "±" is, in the words of Prohaska et al. (2022), section 7 (rules i-iii of the
-  abridged table), "a conservative value … a simplified measure of the reliability of the abridged values".
-  The standard uncertainty derived from it (`± / sqrt(3)`) is therefore conservative too.
+- **`abridged-2024`** holds the abridged table, which the CIAAW page quotes as "best abridged to five digits"
+  in the Commission's recommendation of 2013 (the header of the TSV has the quotation). Its "±" is, in the
+  words of Prohaska et al. (2022), section 7: "A conservative +/- value (Table 1, column 8) is given as a
+  simplified measure of the reliability of the abridged values", and for an element whose standard atomic
+  weight has more than five significant digits it is "the place value of the last rounded and thus least
+  significant digit" (rule ii). The standard uncertainty derived from it (`± / sqrt(3)`) is therefore
+  conservative too.
 
 ### 5.2 Why `standard-2024` is the default
 
 Using the abridged "±" as a half-width would put a rounding convention where the Commission's evaluation
 should be. For the elements whose weight has more than five significant digits the abridged "±" is just the
 place value of the last rounded digit, and for the interval elements the single abridged value "does not
-correspond necessarily to the midpoints of the intervals" (Prohaska et al. 2022, §7). Two examples from the
-data:
+correspond necessarily to the midpoints of the intervals (in case of Li, Mg, S, Ar and Pb)" (Prohaska et al.
+2022, §7, rule iii). Two examples from the data:
 
 - **Na**: abridged `22.990 ± 0.001`; the published value is `22.989 769 28(2)`, that is `U = 0.00000002`, fifty
   thousand times smaller than the abridged `0.001`.
@@ -207,7 +227,8 @@ selection comes before or after it, nor on whether they are in the same text:
 
 ```ini
 [AtomicWeights]
-Fe = 56.0, 0.3        # stored as 56.0 with the standard uncertainty 0.3 / sqrt(3) = 0.1732
+# stored as 56.0 with the standard uncertainty 0.3 / sqrt(3) = 0.1732
+Fe = 56.0, 0.3
 
 [Chemistry]
 atomic_weights = abridged-2024
@@ -293,10 +314,37 @@ produced a result.
    is how the tests of `atomic_weights_editions.rs` and the chemistry modules select a table), and compare
    the two results with the tolerance your procedure allows.
 
-**The limits of this guarantee.** It covers the **atomic weights only**. The other data of `physure.conf`
-(physical constants, unit definitions, prefixes) are versioned with the library release, not by edition. A
-setting that needs those frozen as well must also pin the version of the library, or carry a `physure.conf`
-of its own.
+**What is guaranteed, and by what.** "A pinned edition never changes meaning" means exactly this:
+
+- *The numbers of `standard-2024` and `abridged-2024` are the same in every release of the library.* The
+  fingerprint tests of `atomic_weights_ciaaw.rs` (section 9) fail on a change of a single bit, and a release
+  does not pass the tests of the repository with a changed edition.
+- *No text of yours can change them, and none can collide with a future one.* A section
+  `[AtomicWeights:standard-2024]` or `[AtomicWeights:abridged-2024]`, and any table whose name starts with
+  `standard-` or `abridged-`, is a problem whenever it is read from a text that is not the library's embedded
+  catalog: refused as a whole by the strict reading, reported on stderr and ignored by the lenient one (section
+  5.3). The embedded catalog is the only reader that is allowed to define them. So `atomic_weights =
+  standard-2024` selects the shipped table, and a table of yours called `standard-2026` cannot be silently merged
+  with the one a later release ships.
+- *What you add is reported.* Your `[AtomicWeights]` definitions apply on top of whichever edition is selected
+  (that is their purpose); `atomic_weight_edition()` says how many there are and carries a hash that identifies
+  them (section 6, item 3), so a report shows that a result is not the pure edition.
+
+**What is not guaranteed.**
+
+- A **modified build of the library**: the fingerprint is a test in the repository, not a check that runs
+  with the library, and nothing at run time stops someone from building the library with another conf. Whoever
+  must prove which numbers were used compares the report (and, for a stronger proof, the hash of the shipped
+  table, which is in this page) and pins the version of the library.
+- **Everything else in `physure.conf`.** The guarantee covers the **atomic weights only**. The other data of
+  the file (physical constants, unit definitions, prefixes) are versioned with the library release, not by
+  edition. A setting that needs those frozen as well must also pin the version of the library, or carry a
+  `physure.conf` of its own.
+- **A table of your own** is identified by its name alone, which is yours to keep unique; and **an alias** (`standard`,
+  `abridged`) moves by design when a release ships a newer edition.
+- A **problem in the working-directory `physure.conf`** does not stop the program: the line is ignored and
+  reported on stderr (section 5.3). Whoever audits a calculation reads the report, or reads their conf with the
+  strict reading.
 
 ## 7. Elements with no standard atomic weight
 
@@ -329,9 +377,9 @@ must be positive and finite, a number finite and not negative, and an interval n
 no third field. These definitions apply on top of whichever table is selected (section 5.4); to carry a
 whole table of your own, put the same lines in `[AtomicWeights:<your-edition>]` and select it (section 6).
 The parser is
-[`read_atomic_weight`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/units/conf.rs#L276)
+[`read_atomic_weight`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/units/conf.rs#L377)
 and the selector is
-[`read_chemistry`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/units/conf.rs#L309).
+[`read_chemistry`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/units/conf.rs#L410).
 
 ## 9. Verification performed
 
@@ -368,11 +416,14 @@ and the selector is
   formula parser; the Rust core is held to it to `1e-12`. The expected numbers in the unit tests are written
   by hand from the TSVs.
 - **Three discrepancies, explained.** Against the Python package's 2013 table the only values that moved by
-  more than their half-width are **O** (`15.999` in Python; now the interval midpoint `15.9994` of
+  more than the half-width of the *new* datum (`(b - a) / 2` of the new interval, or the new `U` of a single
+  value) are **O** (`15.999` in Python; now the interval midpoint `15.9994` of
   `[15.99903, 15.99977]`), **Tl** (`204.38`; now `204.3835`, the midpoint of `[204.382, 204.385]`) and **Lu**
   (`174.9668`; now `174.96669(5)`, a 2024 revision). For O and Tl the abridged value lies just *below* the
   interval, which its "±" covers. **Yb** is `173.045(10)` in the standard table and `173.05` in the abridged
-  table (rounded half-up); that is a rounding, not a disagreement.
+  table (rounded half-up); that is a rounding, not a disagreement. The largest move of all is **Ar**: Python's
+  conventional `39.948` against the new interval midpoint `39.8775` is `0.0705`, which is less than the new
+  half-width `0.0855` of `[39.792, 39.963]`, so it is not one of the three.
 
 To check the generator: `python scripts/gen_atomic_weights_conf.py` rewrites the block and changes nothing
 when the two TSVs and the block already agree.
@@ -384,8 +435,8 @@ when the two TSVs and the block already agree.
 - **Uniform distribution is a model.** IUPAC itself calls it "a simple and practically useful model"; it
   is chosen for its simplicity, and nothing in the sources says that the weights of normal materials are
   distributed uniformly within the interval.
-- **Monoisotopic elements.** For these, the basis of the published `U` is a coverage factor of `k = 6` on
-  the atomic-mass evaluation (Prohaska et al., section 6). IUPAC's recommendation is nevertheless to assign
+- **Monoisotopic elements.** For these, Prohaska et al. (section 9) state that "the coverage factor for the
+  uncertainty of the Ar° value of monoisotopic elements is k = 6 (for AME masses)". IUPAC's recommendation is nevertheless to assign
   the uniform distribution to every standard atomic weight, which is what is done here, so these standard
   uncertainties are on the conservative side.
 - **Normal materials only.** The interval is where the atomic weight of *normal materials* is expected to
@@ -414,7 +465,8 @@ when the two TSVs and the block already agree.
   [doi:10.1515/pac-2016-0402](https://doi.org/10.1515/pac-2016-0402)
 - van der Veen, A. M. H. et al. IUPAC *Guidelines for the use of atomic weights*, published as
   "Interpretation and use of standard atomic weights".
-  [doi:10.1515/pac-2017-1002](https://doi.org/10.1515/pac-2017-1002)
+  [doi:10.1515/pac-2017-1002](https://doi.org/10.1515/pac-2017-1002). The quotations of this page were checked
+  against the peer-review manuscript (Manuscript ID PAC-REC-16-04-01), not against the published version.
 - CIAAW, Standard Atomic Weights 2024: [ciaaw.org/atomic-weights.htm](https://ciaaw.org/atomic-weights.htm)
 - CIAAW, Abridged Standard Atomic Weights 2024:
   [ciaaw.org/abridged-atomic-weights.htm](https://ciaaw.org/abridged-atomic-weights.htm)

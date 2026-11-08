@@ -36,6 +36,7 @@ avogadro_constant = 6.022141e+23 mol^-1
 # from tests/golden/ciaaw_{standard,abridged}_atomic_weights_2024.tsv: never edit them by hand,
 # and never change a released edition (a new CIAAW release is a NEW edition; a fingerprint test
 # in physure-core/tests/atomic_weights_ciaaw.rs fails otherwise; see docs/atomic_weights.md).
+# A text of a user cannot define them, nor any table named standard-* or abridged-* (reserved).
 # [Chemistry] atomic_weights = <edition or alias> selects the table (aliases `standard`,
 # `abridged` move to the newest shipped edition; pin a name to be reproducible).
 # What goes in a conf of your own is [AtomicWeights] (no suffix): your definitions, applied on

@@ -146,7 +146,7 @@ mod tests {
     }
 
     #[test]
-    fn water_is_18_015_with_its_atoms_uncertainties_in_quadrature() {
+    fn water_is_18_015_with_its_hydrogens_adding_linearly_and_the_elements_in_quadrature() {
         let (mass, std) = Species::new("H2O").unwrap().molar_mass_parts().unwrap();
         assert!(close(mass, 2.0 * H + O));
         // H and O are intervals: u(H) = 0.00027 / sqrt(12), u(O) = 0.00074 / sqrt(12); sqrt((2 u(H))^2 + u(O)^2)
