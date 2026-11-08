@@ -384,6 +384,20 @@ mod tests {
         assert!(ResolveError::Missing { path: PathBuf::from("x.conf"), why: Why::Explicit }.to_string().contains("no fallback"));
     }
 
+    /// Every other test of the library assumes the unfrozen catalog. A `physure.frozen.conf` in the home directory or
+    /// anywhere above the repository, or `PHYSURE_CONF` / `PHYSURE_REQUIRE_FROZEN` set in the environment, changes
+    /// what every test reads: this one says so instead of letting the others fail mysteriously.
+    #[test]
+    fn no_frozen_file_is_in_force_for_the_unit_tests() {
+        for name in [ENV_CONF, ENV_REQUIRE] {
+            assert!(std::env::var_os(name).is_none(), "{name} is set in the environment of the tests: unset it");
+        }
+        let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let found = resolve(&inputs(None, None, None, crate_dir)).unwrap();
+        assert_eq!(found, Resolution::Unfrozen, "a {FROZEN_FILE_NAME} above the repository changes every test: move it");
+        assert_eq!(resolve_process(), Ok(Resolution::Unfrozen), "the tests' own process resolves to a frozen file");
+    }
+
     // ---- an unreadable current directory (Task 9, C9) ----
 
     fn gone() -> std::io::Error {

@@ -330,6 +330,8 @@ fn parse_conf(
     let mut current_section = "";
     // a section header has been seen (a line before the first one belongs to no section)
     let mut opened = false;
+    // (section, name) defined by this text, for the strict rule that a name is defined once per text
+    let mut defined: HashSet<(String, String)> = HashSet::new();
     let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
     let mut constant_lines: Vec<(&str, String)> = Vec::new();
@@ -406,6 +408,10 @@ fn parse_conf(
                 problems.push(format!("{line}: expected `key = value` in [{current_section}]"));
                 continue;
             }
+            if let Some(why) = strict_line_problem(current_section, line, &mut defined) {
+                problems.push(format!("{line}: {why}"));
+                continue;
+            }
         }
 
         match current_section {
@@ -458,6 +464,10 @@ fn parse_conf(
     for line in unit_lines {
         if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
             problems.push(format!("{line}: {reason}"));
+        } else if strict_sections {
+            if let Some(why) = unread_unit_fields(line, &dim_to_base) {
+                problems.push(format!("{line}: {why}"));
+            }
         }
     }
 
@@ -480,6 +490,56 @@ fn parse_conf(
             SettingsMode::Collect => collected.compatibility = Some(compatibility_rows),
         }
     }
+}
+
+/// What the strict reading of a frozen source refuses in one `key = value` line that the reader would otherwise
+/// drop in part: a name of `[Units]`, `[Constants]` or `[Prefixes]` defined a second time in the same text (the first
+/// definition would vanish), a prefix with more than `symbol, factor`, a constant with more than
+/// `value, description, latex`.
+fn strict_line_problem(section: &str, line: &str, defined: &mut HashSet<(String, String)>) -> Option<String> {
+    if !matches!(section, "Units" | "Constants" | "Prefixes") {
+        return None;
+    }
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    if !defined.insert((section.to_string(), key.to_string())) {
+        return Some(format!("'{key}' is defined a second time in [{section}] of this text; the first definition would be lost"));
+    }
+    let fields = value.split(',').count();
+    match section {
+        "Prefixes" if fields > 2 => Some("a prefix is `name = symbol, factor`; the fields after the factor are not read".into()),
+        "Constants" if fields > 3 => Some(
+            "a constant is `name = value, description, latex`; the fields after the third are not read (a description has no comma)".into(),
+        ),
+        _ => None,
+    }
+}
+
+/// The values of a unit line the reader does not look at, if there are any (a misspelt flag, a stray word): a level
+/// reads `Log, factor, reference, dimension`; another unit its factor, an optional zero point, its dimension, and a
+/// recipe only when the dimension is not one with a base unit. The flags are `noprefix` and `own_kind`.
+fn unread_unit_fields(line: &str, dim_to_base: &HashMap<String, String>) -> Option<String> {
+    let (_, val_part, _) = cut_unit_line(line)?;
+    let parts = unit_value_fields(val_part);
+    let read = if parts.first().is_some_and(|p| p.eq_ignore_ascii_case("log")) {
+        4
+    } else {
+        let (_, _, dim_index) = zero_point(&parts);
+        let dim = parts.get(dim_index).copied().unwrap_or("1");
+        match dim_to_base.get(dim) {
+            _ if dim == "1" || dim.is_empty() => dim_index + 1,
+            // the catalog names the base unit after its dimension (`bohr = 5.29e-11, L, m`): it says what the
+            // dimension already says, so nothing is lost
+            Some(base) if parts.get(dim_index + 1) == Some(&base.as_str()) => dim_index + 2,
+            Some(_) => dim_index + 1,
+            None => dim_index + 2,
+        }
+    };
+    let unread = parts.get(read..).filter(|rest| !rest.is_empty())?;
+    Some(format!(
+        "the values {} are not read (the flags are noprefix and own_kind; a recipe is read only for a dimension without a base unit, or when it is that base unit)",
+        unread.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ")
+    ))
 }
 
 /// Whether `header` (the text between the brackets) names a section of a conf, spelt exactly.
@@ -1640,6 +1700,16 @@ mod tests {
             ("[Dimensions]\nwhatever\n", "whatever"),
             ("zz_unit = 1.0, L\n[Units]\n", "zz_unit = 1.0, L"),
             ("\u{FEFF}[Settings]\nparallel_threshold = 5\n", "[Settings]"),
+            // fields the reader never looks at: a misspelt flag, a stray word, one field too many
+            ("[Units]\nzzq = 1.0, L, noprefx, [zzqq]\n", "noprefx"),
+            ("[Units]\nzzq = 2.0, L, garbage more\n", "garbage"),
+            ("[Units]\nzzdb = Log, 10, 1.0, 1, extra, noprefix, [zzdb]\n", "extra"),
+            ("[Prefixes]\nzzp = Q, 1000, extra\n", "extra"),
+            ("[Constants]\nzc = 1 m, a description, \\zeta, extra\n", "extra"),
+            // a name defined twice in one text: the first definition would be dropped
+            ("[Units]\nzzq = 2.0, L\nzzq = 3.0, L\n", "zzq"),
+            ("[Constants]\nzc = 1 m\n[Constants]\nzc = 2 m\n", "zc"),
+            ("[Prefixes]\nzzp = Q, 1000\nzzp = R, 10\n", "zzp"),
         ] {
             let problems = frozen_problems(text);
             assert!(!problems.is_empty(), "accepted: {text:?}");
@@ -1659,6 +1729,9 @@ mod tests {
         assert!(frozen_problems("[Constants]\nzz = -1.5 1\nyy = 2\nxx = 3.0e-3 J*mol^-1*K^-1, a description, x\n").is_empty());
         assert!(frozen_problems("[Compatibility]\nperiodic = hertz\nsr, plain = convert\n").is_empty());
         assert!(frozen_problems("# only a comment\n\n").is_empty());
+        // a recipe, the base unit named after its dimension, flags, a zero point and a level are all read
+        let units = "[Units]\nzza = 2.0, L, m, [zza]\nzzb = 1.0, M*L*T^-2, kg*m/s^2, noprefix, [zzb]\nzzc = 1.0, 10.0, O, [zzc]\nzzd = Log, 10, 1.0, 1, noprefix, [zzd]\nzze = 1.0, A, own_kind, [zze]\n";
+        assert!(frozen_problems(units).is_empty(), "{:?}", frozen_problems(units));
     }
 
     #[test]
