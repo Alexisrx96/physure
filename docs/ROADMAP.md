@@ -77,7 +77,7 @@ timeline
 
 ### Subsystem 2: Chemistry & Physical-Chemistry (50% 🚧)
 * [x] **Phase 1–4 Python Extension** (`physure.ext.chemistry`): Species, molar equivalency, reaction balancer, thermo/kinetics.
-* [ ] **Phase 5**: Rust core chemistry module (`physure_core::chemistry`) — periodic table `phf::Map`, recursive descent formula parser, Fraction RREF balancer, PyO3 bindings.
+* [ ] **Phase 5**: Rust core chemistry module (`physure_core::chemistry`) — periodic table, recursive descent formula parser, exact rational RREF balancer (✅ done in the core); PyO3 bindings (not done).
 * [ ] **Phase 6**: PHS DSL native chemistry builtins — `species()`, `molar_mass()`, `balance()`, `arrhenius()`, `gibbs()`, `mass_to_moles()`, `moles_to_mass()`.
 * [ ] **Phase 7**: Advanced reaction networks — multi-reaction stoichiometric matrix, kinetic ODE integration (RK4), chemical equilibrium solver (NASA CEA algorithm).
 * [ ] **Phase 8**: Cross-language chemistry bindings — C/FFI (`physure.h`), WebAssembly (`wasm-bindgen`), Java/JNI.

@@ -217,6 +217,8 @@ print(f"Rate constant: {k}") # 0.72 s^-1
 
 **Goal**: Port the core chemistry data structures and algorithms to Rust for performance, cross-language availability, and native PHS integration.
 
+> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, the periodic table is a sorted table searched by binary search (no `phf`) and the balancer uses its own checked rational arithmetic (no `num-rational`). `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
+
 #### 5.1. Module Structure (`physure-core/src/chemistry/`)
 
 ```
@@ -230,7 +232,7 @@ physure-core/src/chemistry/
 └── thermo.rs           # Arrhenius, Clausius-Clapeyron, Gibbs, standard data
 ```
 
-#### 5.2. Periodic Table in Rust (`elements.rs`)
+#### 5.2. Periodic Table in Rust (`elements.rs`) ✅
 
 A compile-time perfect hash map using [`phf`](https://crates.io/crates/phf) (build-dependency only, no runtime cost):
 
@@ -256,7 +258,7 @@ pub static ATOMIC_WEIGHTS: phf::Map<&'static str, (f64, f64)> = phf_map! {
 
 > 📄 **Reference**: Meija, J. et al. "Atomic weights of the elements 2013 (IUPAC Technical Report)." *Pure and Applied Chemistry* 88.3 (2016): 265-291. [DOI: 10.1515/pac-2015-0305](https://doi.org/10.1515/pac-2015-0305)
 
-#### 5.3. Formula Parser in Rust (`formula.rs`)
+#### 5.3. Formula Parser in Rust (`formula.rs`) ✅
 
 A recursive descent parser replacing the Python regex/stack approach. This handles nested parentheses (`Ca(NO3)2`), hydrates (`CuSO4·5H2O`), and Unicode subscripts (`H₂O`):
 
@@ -318,7 +320,7 @@ impl Species {
 }
 ```
 
-#### 5.5. Reaction Balancing in Rust (`reaction.rs`)
+#### 5.5. Reaction Balancing in Rust (`reaction.rs`) ✅
 
 Port the Python Fraction-based RREF to Rust using the [`num-rational`](https://crates.io/crates/num-rational) crate (compile-time only, no runtime allocation for small matrices):
 

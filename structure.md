@@ -29,6 +29,7 @@ subgraph group_core["physure-core — pure Rust physics engine<br/>(crate physur
   node_uncertainty["uncertainty/<br/>gaussian, unscented, monte-carlo (seedable),<br/>moments, lineage, dof, expanded, sources, mode<br/>[uncertainty/mod.rs]"]
   node_serialization["serialization.rs + covariance/arrow.rs<br/>Arrow interchange<br/>[serialization.rs]"]
   node_linalgplot["linalg.rs · plotting.rs<br/>matrix helpers, plot data prep"]
+  node_chemistry["chemistry/<br/>elements (IUPAC 2013 weights), formula parser, Species + molar mass,<br/>exact-rational reaction balancing, arrhenius / clausius_clapeyron / gibbs<br/>[chemistry/mod.rs]"]
 end
 
 subgraph group_script["physure-script — PhysureScript (PHS) language engine<br/>depends on physure-core"]
@@ -91,6 +92,7 @@ node_core -->|"propagates through"| node_uncertainty
 node_uncertainty -->|"tracks correlations in"| node_covariance
 node_covariance -->|"(de)serializes via"| node_serialization
 node_core -->|"exposes"| node_linalgplot
+node_core -->|"implements"| node_chemistry
 
 node_phs_engine -->|"workspace dep: shares physics types"| node_core
 node_phs_engine -->|"transpiles to targets"| node_codegen
@@ -143,6 +145,7 @@ click node_covariance "https://github.com/Alexisrx96/physure/blob/main/physure-c
 click node_uncertainty "https://github.com/Alexisrx96/physure/blob/main/physure-core/src/uncertainty/mod.rs"
 click node_serialization "https://github.com/Alexisrx96/physure/blob/main/physure-core/src/serialization.rs"
 click node_linalgplot "https://github.com/Alexisrx96/physure/blob/main/physure-core/src/linalg.rs"
+click node_chemistry "https://github.com/Alexisrx96/physure/blob/main/physure-core/src/chemistry/mod.rs"
 click node_phs_engine "https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/mod.rs"
 click node_codegen "https://github.com/Alexisrx96/physure/blob/main/physure-script/src/codegen/mod.rs"
 click node_symbolic_cas "https://github.com/Alexisrx96/physure/blob/main/physure-script/src/symbolic/mod.rs"
@@ -194,7 +197,7 @@ class node_workspace toneNeutral
 
 | Group | Purpose | Key rule |
 |---|---|---|
-| **physure-core** | Single source of truth for all physics: dimensional analysis (`units/`), numeric primitives — dual numbers, interval arithmetic, sparse Jacobians (`math/`), sparse covariance tracking (`covariance/`), and the propagation models — Gaussian, unscented, Monte Carlo, seedable for reproducible runs (`uncertainty/`). | No FFI deps of any kind — every binding wraps this, never duplicates it. |
+| **physure-core** | Single source of truth for all physics: dimensional analysis (`units/`), numeric primitives — dual numbers, interval arithmetic, sparse Jacobians (`math/`), sparse covariance tracking (`covariance/`), and the propagation models — Gaussian, unscented, Monte Carlo, seedable for reproducible runs (`uncertainty/`), and chemistry — formulas, molar masses, exact reaction balancing, kinetics and thermodynamics on `Quantity` (`chemistry/`; no binding uses it yet). | No FFI deps of any kind — every binding wraps this, never duplicates it. |
 | **physure-script** | The PhysureScript (PHS) DSL: pest grammar (`phs.pest`) → `parser/` → resolver → tree-walking interpreter, a small CAS (`symbolic/`, tokenised by `lexer.rs`, which the language parser does not use) for diff/integrate/solve, and transpilers to Python/Java/Rust/JavaScript/TypeScript (`codegen/`). A static dimension checker (`check.rs`), a sandboxed interpreter with limits on depth, stack, time and output (`limits.rs`), and the structured JSON report an agent reads (`report.rs`) sit on top of it. Shares physics types with `physure-core`. | This is the *only* implementation of PHS — nothing reimplements it in Python. |
 | **physure-python (Rust)** | PyO3 binding crate only. Compiles to `physure._core`. | Zero physics logic — pure glue over `physure-core` + `physure-script`. |
 | **physure-python (Python)** | The public library: `application/` (composition root: `Q_`, active-`UnitSystem` context, `.conf` merge and system construction), `domain/measurement` (`Quantity` over NumPy/Torch/JAX numbers; `UnitSystem`, which owns a core `UnitRegistry` built from the merged conf text; `CompoundUnit` and `Dimension`, flyweights over the extension's `RationalUnit` with exact powers; `Uncertainty`), `core/` (backend dispatch, protocols, the registry behind `physure.units`: the catalog's names plus plugins), `backends/` (NumPy/Torch/JAX/pure-Python), `_jit/` (compile-time unit checking via native `RationalUnit`), `ext/` (optional chemistry/pandas/numba, lazily imported), `nn/` (unit-aware `torch.nn` wrappers). | The native extension is mandatory (`physure/__init__.py` raises `ImportError` without it). Python keeps no unit algebra of its own: parsing, dimensions, conversion plans, kind, linearity, aliases, simplification and which names are units are asked of the core (`UnitSystem.core_registry`, `physure._core.UnitRegistry`), and the algebra of units and dimensions is `RationalUnit`'s. What stays in Python is what needs the numbers of a `Quantity` (applying a conversion plan with the operations of its backend, `conversion_plan.py`), presentation (names of dimensions, how a unit is shown) and writing a unit registered by hand as the conf line the core reads (`definitions_text.py`). The folder names `application/`, `domain/` and `core/` are historical: they import each other in both directions. |
