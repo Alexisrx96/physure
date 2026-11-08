@@ -1,5 +1,5 @@
 use crate::error::to_js_error;
-use physure_core::units::conf::{extend_registry, parse_physure_conf, DEFAULT_PHYSURE_CONF};
+use physure_core::units::conf::{extend_registry, load_embedded_catalog};
 use physure_core::units::parser::Parser;
 use physure_core::UnitRegistry as CoreUnitRegistry;
 use physure_script::{parse_phs, PhsInterpreter, PhsValue, Statement};
@@ -31,7 +31,7 @@ fn default_catalog() -> &'static (CoreUnitRegistry, HashMap<String, String>) {
     DEFAULT.get_or_init(|| {
         let mut registry = CoreUnitRegistry::new();
         let mut constants = HashMap::new();
-        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut registry, &mut constants);
+        load_embedded_catalog(&mut registry, &mut constants);
         (registry, constants)
     })
 }

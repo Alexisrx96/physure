@@ -17,7 +17,15 @@
 //! - abridged `x`, `±`: weight `x`, half-width `U` = the printed `±`, standard uncertainty `U / sqrt(3)`;
 //! - a dash (either table): the mass number of the last column and an uncertainty of 0.
 
-use physure_core::units::conf::build_registry_from_conf;
+use physure_core::units::conf::build_registry_with;
+use physure_core::units::UnitRegistry;
+use std::collections::HashMap;
+
+/// The shipped catalog and nothing else: a `physure.conf` in the working directory must not change what these
+/// tests assert about the shipped editions.
+fn embedded_catalog() -> (UnitRegistry, HashMap<String, String>) {
+    build_registry_with("").unwrap()
+}
 
 const STANDARD: &str = include_str!("../../tests/golden/ciaaw_standard_atomic_weights_2024.tsv");
 const ABRIDGED: &str = include_str!("../../tests/golden/ciaaw_abridged_atomic_weights_2024.tsv");
@@ -83,7 +91,7 @@ fn the_standard_table_has_the_shape_the_cross_check_found() {
 
 #[test]
 fn every_element_of_standard_2024_is_the_published_one() {
-    let (registry, _) = build_registry_from_conf();
+    let (registry, _) = embedded_catalog();
     let rows = standard_rows();
     assert_eq!(registry.atomic_weight_tables["standard-2024"].len(), rows.len(), "the section has exactly the elements of the table");
     for row in &rows {
@@ -120,7 +128,7 @@ fn the_abridged_table_has_the_shape_the_cross_check_found() {
 
 #[test]
 fn every_element_of_abridged_2024_is_the_published_one() {
-    let (registry, _) = build_registry_from_conf();
+    let (registry, _) = embedded_catalog();
     let rows = abridged_rows();
     assert_eq!(registry.atomic_weight_tables["abridged-2024"].len(), rows.len(), "the section has exactly the elements of the table");
     for row in &rows {
@@ -204,7 +212,7 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// The canonical text of an edition: `Sym=<weight bits in hex>,<standard uncertainty bits in hex>;` for every
 /// element in symbol order, the bits being the IEEE-754 binary64 pattern as 16 lower-case hex digits.
 fn canonical_text(edition: &str) -> String {
-    let (registry, _) = build_registry_from_conf();
+    let (registry, _) = embedded_catalog();
     let mut table: Vec<(&String, &(f64, f64))> = registry.atomic_weight_tables[edition].iter().collect();
     table.sort_by_key(|(symbol, _)| *symbol);
     table.iter().map(|(symbol, (weight, std))| format!("{symbol}={:016x},{:016x};", weight.to_bits(), std.to_bits())).collect()

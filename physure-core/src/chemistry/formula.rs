@@ -200,9 +200,9 @@ mod tests {
 
     #[test]
     fn an_element_of_the_catalog_in_scope_is_known_and_one_it_lacks_is_not() {
-        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        use crate::units::conf::{build_registry_with, extend_registry};
         assert!(message("D2O").contains("'D'"), "refused by default");
-        let (mut registry, mut constants) = build_registry_from_conf();
+        let (mut registry, mut constants) = build_registry_with("").unwrap();
         extend_registry(&mut registry, &mut constants, "[AtomicWeights]\nD = 2.01410177812, 0.00000000012, standard\n")
             .unwrap();
         let heavy = crate::units::with_catalog(&registry, || parse_formula("D2O")).unwrap();
@@ -215,9 +215,9 @@ mod tests {
 
     #[test]
     fn a_definition_of_an_element_is_known_under_every_edition() {
-        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        use crate::units::conf::{build_registry_with, extend_registry};
         for selection in ["standard", "standard-2024", "abridged", "abridged-2024"] {
-            let (mut registry, mut constants) = build_registry_from_conf();
+            let (mut registry, mut constants) = build_registry_with("").unwrap();
             let text = format!(
                 "[Chemistry]\natomic_weights = {selection}\n[AtomicWeights]\nD = 2.01410177812, 0.00000000012, standard\n"
             );
@@ -229,8 +229,8 @@ mod tests {
 
     #[test]
     fn the_element_is_checked_against_the_selected_edition_and_the_error_names_both() {
-        use crate::units::conf::{build_registry_from_conf, extend_registry};
-        let (mut registry, mut constants) = build_registry_from_conf();
+        use crate::units::conf::{build_registry_with, extend_registry};
+        let (mut registry, mut constants) = build_registry_with("").unwrap();
         extend_registry(
             &mut registry,
             &mut constants,
@@ -246,8 +246,8 @@ mod tests {
 
     #[test]
     fn an_edition_that_is_not_defined_fails_before_any_element_is_looked_at() {
-        use crate::units::conf::{build_registry_from_conf, extend_registry};
-        let (mut registry, mut constants) = build_registry_from_conf();
+        use crate::units::conf::{build_registry_with, extend_registry};
+        let (mut registry, mut constants) = build_registry_with("").unwrap();
         extend_registry(&mut registry, &mut constants, "[Chemistry]\natomic_weights = nope-1\n").unwrap();
         for formula in ["H2O", "Xx3", "NaCl"] {
             let err = crate::units::with_catalog(&registry, || parse_formula(formula)).unwrap_err();

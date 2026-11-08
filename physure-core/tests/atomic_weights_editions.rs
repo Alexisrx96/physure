@@ -12,15 +12,27 @@
 //! The expected numbers are hand-written from the CIAAW tables (`tests/golden/ciaaw_*_atomic_weights_2024.tsv`),
 //! never read back from the code under test. The embedded tables are held to the TSVs in `atomic_weights_ciaaw.rs`.
 
-use physure_core::units::conf::{build_registry_from_conf, extend_registry};
+use physure_core::units::conf::{build_registry_with, extend_registry};
 use physure_core::units::{resolve_atomic_weight_edition, UnitRegistry};
+use std::collections::HashMap;
+
+/// The shipped catalog and nothing else: a `physure.conf` in the working directory must not change what these
+/// tests assert about the shipped editions.
+fn embedded_catalog() -> (UnitRegistry, HashMap<String, String>) {
+    build_registry_with("").unwrap()
+}
 
 const STANDARD: &str = "standard-2024";
 const ABRIDGED: &str = "abridged-2024";
 
+/// What the edition report says about the definitions `Fe = 56.0, 0.3`: their number and the FNV-1a 64 hash of
+/// their canonical text `Fe=<weight bits>,<standard uncertainty bits>;`, computed outside this code (Python,
+/// `struct.pack('>d', x).hex()`). The weight is 56.0 and the standard uncertainty is 0.3 / sqrt(3).
+const FE_56: &str = "1 definitions (fnv1a:e03dd5b5b2476b01)";
+
 /// The embedded catalog with `texts` applied one after the other.
 fn registry_with(texts: &[&str]) -> UnitRegistry {
-    let (mut registry, mut constants) = build_registry_from_conf();
+    let (mut registry, mut constants) = embedded_catalog();
     for text in texts {
         extend_registry(&mut registry, &mut constants, text).unwrap();
     }
@@ -42,7 +54,7 @@ fn assert_abridged_values(registry: &UnitRegistry) {
 
 #[test]
 fn by_default_standard_2024_is_read_and_nothing_is_defined_by_the_user() {
-    let registry = build_registry_from_conf().0;
+    let registry = embedded_catalog().0;
     // H is the interval [1.00784, 1.00811] of the standard table
     assert_eq!(
         registry.atomic_weight("H"),
@@ -94,11 +106,11 @@ fn a_definition_of_yours_wins_under_the_standard_the_abridged_and_a_custom_table
     let custom = "[AtomicWeights:acme-2026-03]\nFe = 55.9, 0.1\nH = 1.00794, 0.00007\n";
     let expected = Some((56.0, 0.3 / 3f64.sqrt()));
     for (selection, label) in [
-        (select("standard"), "standard-2024 + 1 definitions"),
-        (select(STANDARD), "standard-2024 + 1 definitions"),
-        (select("abridged"), "abridged-2024 + 1 definitions"),
-        (select(ABRIDGED), "abridged-2024 + 1 definitions"),
-        (select("acme-2026-03"), "acme-2026-03 + 1 definitions"),
+        (select("standard"), format!("standard-2024 + {FE_56}")),
+        (select(STANDARD), format!("standard-2024 + {FE_56}")),
+        (select("abridged"), format!("abridged-2024 + {FE_56}")),
+        (select(ABRIDGED), format!("abridged-2024 + {FE_56}")),
+        (select("acme-2026-03"), format!("acme-2026-03 + {FE_56}")),
     ] {
         let one_text_each_way = [
             registry_with(&[&format!("{definitions}{custom}{selection}")]),
@@ -137,11 +149,11 @@ fn a_later_definition_replaces_an_earlier_one() {
     let registry = registry_with(&["[AtomicWeights]\nFe = 56.0, 0.5\n", "[AtomicWeights]\nFe = 57.0, 0.7\nCo = 59.0, 0.2\n"]);
     assert_eq!(registry.atomic_weight("Fe"), Some((57.0, 0.7 / 3f64.sqrt())));
     assert_eq!(registry.atomic_weights.len(), 2, "only the definitions of the user");
-    assert_eq!(registry.atomic_weight_edition(), "standard-2024 + 2 definitions");
+    assert_eq!(registry.atomic_weight_edition(), "standard-2024 + 2 definitions (fnv1a:3fccc6fb20553b8a)");
     // and inside one text
     let registry = registry_with(&["[AtomicWeights]\nFe = 56.0, 0.5\nFe = 58.0, 0.9\n"]);
     assert_eq!(registry.atomic_weight("Fe"), Some((58.0, 0.9 / 3f64.sqrt())));
-    assert_eq!(registry.atomic_weight_edition(), "standard-2024 + 1 definitions");
+    assert_eq!(registry.atomic_weight_edition(), "standard-2024 + 1 definitions (fnv1a:e9d85fb980104d81)");
 }
 
 #[test]
@@ -156,7 +168,7 @@ fn a_later_line_of_the_same_symbol_in_a_table_replaces_the_earlier_one_in_that_t
 #[test]
 fn an_added_isotope_is_found_under_both_shipped_editions() {
     let definitions = "[AtomicWeights]\nD = 2.01410177812, 0.00000000012, standard\n";
-    assert_eq!(build_registry_from_conf().0.atomic_weight("D"), None, "in neither shipped table");
+    assert_eq!(embedded_catalog().0.atomic_weight("D"), None, "in neither shipped table");
     for selection in [select("standard"), select(STANDARD), select("abridged"), select(ABRIDGED)] {
         for registry in [
             registry_with(&[&format!("{definitions}{selection}")]),
@@ -194,7 +206,7 @@ fn your_definitions_still_apply_over_a_complete_table_of_your_own() {
     ]);
     assert_eq!(registry.atomic_weight("Fe"), Some((56.0, 0.3 / 3f64.sqrt())));
     assert_eq!(registry.atomic_weight("Na"), None);
-    assert_eq!(registry.atomic_weight_edition(), "acme-2026-03 + 1 definitions");
+    assert_eq!(registry.atomic_weight_edition(), format!("acme-2026-03 + {FE_56}"));
 }
 
 // (f) the selected edition is not defined
@@ -204,12 +216,13 @@ fn a_selected_edition_that_is_not_defined_is_reported_until_some_text_defines_it
     let mut registry = registry_with(&[&select("nope-1")]);
     assert_eq!(registry.selected_atomic_weight_table_missing(), Some("nope-1"));
     assert_eq!(registry.atomic_weight("H"), None, "no fallback to any other table");
-    assert_eq!(registry.atomic_weight_edition(), "nope-1", "the report names what was asked for");
+    assert_eq!(registry.atomic_weight_edition(), "nope-1 (undefined)", "the report names what was asked for, and says it is not defined");
     // another text defines it: the problem is gone
     let mut constants = std::collections::HashMap::new();
     extend_registry(&mut registry, &mut constants, "[AtomicWeights:nope-1]\nH = 1.0, 0.1\n").unwrap();
     assert_eq!(registry.selected_atomic_weight_table_missing(), None);
     assert_eq!(registry.atomic_weight("H"), Some((1.0, 0.1 / 3f64.sqrt())));
+    assert_eq!(registry.atomic_weight_edition(), "nope-1");
 }
 
 #[test]
@@ -255,11 +268,11 @@ fn text_that_does_not_read_is_refused_with_one_problem_and_leaves_no_trace() {
     .iter()
     .map(ToString::to_string)
     .collect();
-    for section in ["AtomicWeights", "AtomicWeights:standard-2024", "AtomicWeights:abridged-2024"] {
+    for section in ["AtomicWeights", "AtomicWeights:acme-1"] {
         texts.push(format!("[{section}]\nFe = abc, 0.1\n"));
     }
     for text in &texts {
-        let (mut registry, mut constants) = build_registry_from_conf();
+        let (mut registry, mut constants) = embedded_catalog();
         let before = registry.clone();
         // a good selection and a good definition before the bad one must not survive the refusal
         let full = format!("[Chemistry]\natomic_weights = abridged\n[AtomicWeights]\nCo = 59.0, 0.2\n{text}");
@@ -276,14 +289,14 @@ fn text_that_does_not_read_is_refused_with_one_problem_and_leaves_no_trace() {
 #[test]
 fn edition_names_are_lowercase_ascii_letters_digits_and_dash_underscore_dot_starting_with_a_letter() {
     let longest = format!("a{}", "b".repeat(63));
-    for good in ["a", "acme-2026-03", "x_1.2", "abridged-2024", longest.as_str()] {
+    for good in ["a", "acme-2026-03", "x_1.2", "standard2026", "abridgedx", longest.as_str()] {
         let registry = registry_with(&[&format!("[AtomicWeights:{good}]\nH = 1.0, 0.1\n"), &select(good)]);
         assert_eq!(registry.atomic_weight("H"), Some((1.0, 0.1 / 3f64.sqrt())), "{good}");
     }
     let too_long = format!("a{}", "b".repeat(64));
     for bad in ["", "1abc", "-a", "_a", ".a", "Acme", "a b", "a/b", "a:b", "é", "a=b", too_long.as_str()] {
         for text in [format!("[AtomicWeights:{bad}]\nH = 1.0, 0.1\n"), select(bad)] {
-            let (mut registry, mut constants) = build_registry_from_conf();
+            let (mut registry, mut constants) = embedded_catalog();
             let before = registry.clone();
             let problems = extend_registry(&mut registry, &mut constants, &text).unwrap_err();
             assert_eq!(problems.len(), 1, "{text:?}: {problems:?}");
@@ -295,7 +308,7 @@ fn edition_names_are_lowercase_ascii_letters_digits_and_dash_underscore_dot_star
 #[test]
 fn a_table_cannot_be_called_like_an_alias_because_the_alias_would_shadow_it() {
     for alias in ["standard", "abridged"] {
-        let (mut registry, mut constants) = build_registry_from_conf();
+        let (mut registry, mut constants) = embedded_catalog();
         let before = registry.clone();
         let text = format!("[AtomicWeights:{alias}]\nH = 1.0, 0.1\n");
         let problems = extend_registry(&mut registry, &mut constants, &text).unwrap_err();
@@ -303,6 +316,59 @@ fn a_table_cannot_be_called_like_an_alias_because_the_alias_would_shadow_it() {
         assert!(problems[0].contains(alias) && problems[0].contains(resolve_atomic_weight_edition(alias)), "{problems:?}");
         assert_eq!(registry, before);
     }
+}
+
+// (g2) the shipped editions are frozen against user text, and their names are reserved
+
+/// The one problem of reading `text` strictly, the registry as it was.
+fn the_one_problem(text: &str) -> String {
+    let (mut registry, mut constants) = embedded_catalog();
+    let before = registry.clone();
+    let problems = extend_registry(&mut registry, &mut constants, text).unwrap_err();
+    assert_eq!(problems.len(), 1, "{text:?}: {problems:?}");
+    assert_eq!(registry, before, "{text:?} left a trace");
+    problems.into_iter().next().unwrap()
+}
+
+#[test]
+fn user_text_cannot_edit_a_shipped_edition() {
+    for name in [STANDARD, ABRIDGED] {
+        // with a line, with a line that would not read either, and with none: one problem, about the section
+        for body in ["H = 1.0, 0.1\n", "H = 1.0, 0.1\nFe = abc, 0.1\n", "Zz = 1.0, 0.1\n", ""] {
+            let problem = the_one_problem(&format!("[AtomicWeights:{name}]\n{body}"));
+            assert!(problem.contains(name) && problem.contains("frozen"), "{problem}");
+        }
+        // nor can it be redefined by a text that also selects it
+        let problem = the_one_problem(&format!("[Chemistry]\natomic_weights = {name}\n[AtomicWeights:{name}]\nH = 1.0, 0.1\n"));
+        assert!(problem.contains("frozen"), "{problem}");
+    }
+}
+
+#[test]
+fn the_names_of_future_shipped_editions_are_reserved() {
+    // a user table called `standard-2026` would be merged with the shipped one the day a release adds it
+    for name in ["standard-2026", "abridged-2026", "standard-", "abridged-x", "standard-acme", "abridged-2024-b"] {
+        let problem = the_one_problem(&format!("[AtomicWeights:{name}]\nH = 1.0, 0.1\n"));
+        assert!(problem.contains(name) && problem.contains("reserved"), "{problem}");
+    }
+    // other names are the user's, and so is selecting a reserved one (it is checked when it is used)
+    let registry = registry_with(&["[AtomicWeights:standardized-1]\nH = 1.0, 0.1\n", &select("standard-2026")]);
+    assert_eq!(registry.selected_atomic_weight_table_missing(), Some("standard-2026"));
+}
+
+#[test]
+fn the_embedded_catalog_defines_the_shipped_editions_and_the_lenient_reading_cannot_edit_them() {
+    let (mut registry, mut constants) = embedded_catalog();
+    assert_eq!(registry.atomic_weight_tables[STANDARD].len(), 118);
+    assert_eq!(registry.atomic_weight_tables[ABRIDGED].len(), 118);
+    // the working-directory conf is read leniently: the section is reported (stderr) and ignored
+    let before = registry.clone();
+    physure_core::units::conf::parse_physure_conf(
+        "[AtomicWeights:standard-2024]\nH = 1.0, 0.1\n[AtomicWeights:standard-2026]\nH = 1.0, 0.1\n",
+        &mut registry,
+        &mut constants,
+    );
+    assert_eq!(registry, before);
 }
 
 // (h) the last selection wins; the aliases
@@ -321,7 +387,46 @@ fn the_last_selection_wins() {
 #[test]
 fn a_text_without_a_chemistry_section_leaves_the_selection_alone() {
     let registry = registry_with(&[&select("abridged"), "[AtomicWeights]\nFe = 56.0, 0.3\n"]);
-    assert_eq!(registry.atomic_weight_edition(), "abridged-2024 + 1 definitions");
+    assert_eq!(registry.atomic_weight_edition(), format!("abridged-2024 + {FE_56}"));
+}
+
+// (i) the report identifies the definitions, not just their number
+
+#[test]
+fn the_report_tells_two_sets_of_definitions_apart_and_the_same_set_in_any_order_alike() {
+    let report = |text: &str| registry_with(&[text]).atomic_weight_edition();
+    // same count, different symbol / weight / uncertainty / kind of number: all different
+    let all = [
+        report("[AtomicWeights]\nFe = 56.0, 0.3\n"),
+        report("[AtomicWeights]\nFe = 56.0, 0.4\n"),
+        report("[AtomicWeights]\nFe = 56.1, 0.3\n"),
+        report("[AtomicWeights]\nCo = 56.0, 0.3\n"),
+        report("[AtomicWeights]\nFe = 56.0, 0.3, standard\n"),
+        report("[AtomicWeights]\nH = 1.5, 0.3, standard\n"),
+        report("[AtomicWeights]\nH = 1.5, 0.4, standard\n"),
+        report("[AtomicWeights]\nFe = 56.0, 0.3\nCo = 59.0, 0.2\n"),
+    ];
+    for (i, a) in all.iter().enumerate() {
+        for b in &all[i + 1..] {
+            assert_ne!(a, b);
+        }
+        assert!(a.starts_with("standard-2024 + ") && a.contains(" definitions (fnv1a:") && a.ends_with(')'), "{a}");
+    }
+    // `H = 1.5, 0.3, standard` and `H = 1.5, 0.4, standard`: hashed over the bits of the stored numbers
+    assert_eq!(all[5], "standard-2024 + 1 definitions (fnv1a:6ad53743530cd794)");
+    assert_eq!(all[6], "standard-2024 + 1 definitions (fnv1a:93696f4a450c59a2)");
+    // the order of the lines, and the text they come in, do not change it; a repeated symbol is the last one
+    let a = report("[AtomicWeights]\nFe = 57.0, 0.7\nCo = 59.0, 0.2\n");
+    assert_eq!(a, "standard-2024 + 2 definitions (fnv1a:3fccc6fb20553b8a)");
+    assert_eq!(a, report("[AtomicWeights]\nCo = 59.0, 0.2\nFe = 57.0, 0.7\n"));
+    assert_eq!(a, report("[AtomicWeights]\nFe = 1.0, 9.0\nCo = 59.0, 0.2\nFe = 57.0, 0.7\n"));
+    assert_eq!(a, registry_with(&["[AtomicWeights]\nFe = 57.0, 0.7\n", "[AtomicWeights]\nCo = 59.0, 0.2\n"]).atomic_weight_edition());
+}
+
+#[test]
+fn the_report_of_an_undefined_edition_says_so_next_to_the_definitions() {
+    let registry = registry_with(&[&select("nope-1"), "[AtomicWeights]\nFe = 56.0, 0.3\n"]);
+    assert_eq!(registry.atomic_weight_edition(), format!("nope-1 (undefined) + {FE_56}"));
 }
 
 #[test]

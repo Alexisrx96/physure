@@ -163,12 +163,31 @@ atomic_weights = abridged-2024
 - **An alias moves when a release ships a newer edition of its kind; a pinned name never changes meaning.**
   Every release that moves an alias says so in the CHANGELOG. Section 6 explains why that matters.
 - An edition name is lower-case ASCII letters, digits and `-`, `_`, `.`, starts with a letter, and has at
-  most 64 characters. Any other name, in `atomic_weights = ...` or in a section header, is a problem and the
-  text is refused. A table cannot be called `standard` or `abridged`: the alias would shadow it and it
-  could never be selected, so the section is refused.
+  most 64 characters. Any other name, in `atomic_weights = ...` or in a section header, is a problem. A table
+  cannot be called `standard` or `abridged`: the alias would shadow it and it could never be selected, so the
+  section is a problem.
+- **Names that start with `standard-` or `abridged-` are reserved** for the editions of this library, present
+  and future. A text of yours that has a section `[AtomicWeights:standard-2024]` or `[AtomicWeights:abridged-2024]`
+  (a shipped edition is frozen), or one called `standard-2026` (a name a later release may ship, and a table of
+  yours with that name would silently be merged with the shipped one), is a problem. Only the catalog embedded in
+  the library defines them. *Selecting* such a name with `atomic_weights = ...` is allowed: it is checked when
+  the weights are used.
 - `[Chemistry]` has one key. An unknown key, an empty value or an ill-formed one is a problem; the last
-  selection wins; as for every definition, a text with a problem is refused as a whole and nothing of it is
-  applied.
+  selection wins.
+- **A header that is a near miss is a problem too.** `[chemistry]`, `[Chemistry ]`, `[Atomicweights]` or
+  `[ AtomicWeights ]` (the same name, trimmed and compared without regard to case, but not spelt exactly so)
+  would otherwise be an unknown section, ignored without a word, and the choice or the weights in it would
+  silently fall back to the defaults. The problem names the right spelling. The same rule holds for the other
+  sections physure reads (`Settings`, `Dimensions`, `Prefixes`, `Units`, `Constants`, `Categories`,
+  `Compatibility`); a section name that is not close to any of them is still ignored, because a system conf
+  may have sections of its own.
+- **What a problem does depends on how the text is read.** A text read *strictly* (the definitions of a unit
+  system, `extend_registry`, the Python `extend_conf`) is refused as a whole and nothing of it is applied. The
+  `physure.conf` of the working directory is read *leniently*, as it always was: the line or section with the
+  problem is ignored and the rest of the file applies, but every problem is reported on stderr as
+  `physure.conf: <problem>; the line is ignored`, once per process for each distinct message (the file is
+  read again on every call that needs the catalog). A bad line in `[AtomicWeights]` or `[Chemistry]` is therefore
+  never silently turned into the defaults.
 - The selection is checked when the weights are used, not when it is read, so the choice and the table may
   come from different texts, in any order. If the selected edition is defined by no section, every use of
   the atomic weights fails with an error that names the edition; nothing is taken from another table.
@@ -231,6 +250,8 @@ produced a result.
   edition** with a new name, next to the old ones.
 - A fingerprint test enforces it (section 9): if either shipped table changes by a single bit, the test
   fails with a message that says to add a new edition instead.
+- A text of a user cannot edit a shipped edition, nor use a name reserved for one (section 5.3): that is
+  refused when the text is read, in the strict reading and in the working-directory conf alike.
 - Only the **aliases** (`standard`, `abridged`) move, when a release ships a newer edition, and the CHANGELOG
   of that release says so.
 
@@ -258,8 +279,14 @@ produced a result.
 3. *State the table in your report.* `chemistry::atomic_weight_edition()` returns the table that produced the
    weights of the catalog in scope, and `UnitRegistry::atomic_weight_edition()` does the same for a
    registry: the resolved edition (`standard-2024`, so an alias is reported as the edition it stood for),
-   followed by ` + N definitions` when your definitions are not empty (`standard-2024 + 2 definitions`;
-   `acme-2026-03`). A report can quote it.
+   followed by ` (undefined)` when no section defines the selected edition (`nope-1 (undefined)`: every use of
+   the weights is then an error), and by ` + N definitions (fnv1a:<hash>)` when your definitions are not empty
+   (`standard-2024 + 2 definitions (fnv1a:3fccc6fb20553b8a)`; `acme-2026-03`). The hash is the FNV-1a 64-bit
+   hash of the canonical text of the definitions (`Sym=<weight bits>,<standard-uncertainty bits>;` for every
+   symbol in symbol order, the format of the fingerprints of section 9), so two different sets of definitions
+   give different reports and the same set gives the same one however it was written ("1 definitions" is
+   written as is). A table of your own is identified by its name, which is yours to keep unique. A report can
+   quote it.
 4. *Assess a change before adopting it.* To see what moving to another edition would do to a calculation,
    evaluate the same calculation twice, each time against a registry with its own selection (the embedded
    catalog extended with `[Chemistry] atomic_weights = <edition>`, run inside `units::with_catalog`, which
@@ -283,8 +310,9 @@ isotope you mean in `[AtomicWeights]` (section 8) when that matters.
 ## 8. Overriding in your own conf
 
 A conf of your own, or a unit system, can replace an element, add one, or provide a whole table; a later
-definition wins and every section is read strictly (a bad line refuses the whole text and nothing is
-applied). All the atomic-weight sections share one grammar. Three forms of a line:
+definition wins. Read as the definitions of a unit system (or by `extend_registry`) a bad line refuses the whole
+text and nothing is applied; in the `physure.conf` of the working directory it is reported on stderr and ignored
+(section 5.3). All the atomic-weight sections share one grammar. Three forms of a line:
 
 ```ini
 [AtomicWeights]
@@ -366,10 +394,15 @@ when the two TSVs and the block already agree.
 - **The table is revised.** CIAAW revises the table every two years, so a new release of the data is a new
   edition: its TSV and its section must be added and regenerated together (add the TSV, extend the
   generator, add the edition's tests and fingerprint), and the frozen editions stay as they are.
-- **One edition per calculation.** The stable uncertainty source of an element is identified by its symbol,
-  not by edition, so quantities computed with different editions that are then combined in one expression
-  would share one source per element. Compare editions by evaluating the calculation twice (section 6), not
-  by mixing the results.
+- **Editions in one expression.** The stable uncertainty source of an element is identified by the symbol
+  *and the exact numbers* (weight and standard uncertainty) the catalog gives it. Quantities computed with
+  the same numbers share one source per element: they are correlated through it, and a molar mass cancels
+  against itself. Quantities computed with different numbers (another edition, a definition of yours) have
+  independent sources, and combine in quadrature: `M(H2O)` under `standard-2024` minus under `abridged-2024`
+  is `0.00035` with the uncertainty `sqrt(u1^2 + u2^2)`, never a difference of correlated values. That is the
+  honest treatment of two evaluations of one element, but it is not a statement that CIAAW's two tables are
+  independent measurements; to see what a change of edition does to a calculation, evaluate it twice
+  (section 6) and compare the results.
 - **What is frozen.** Only the atomic weights are versioned by edition (section 6). The chemistry module is
   reachable from Rust; Python and PHS do not use it yet.
 

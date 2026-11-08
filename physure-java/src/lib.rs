@@ -26,11 +26,7 @@ fn default_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
     DEFAULT.get_or_init(|| {
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
-        physure_core::units::conf::parse_physure_conf(
-            physure_core::units::conf::DEFAULT_PHYSURE_CONF,
-            &mut reg,
-            &mut constants,
-        );
+        physure_core::units::conf::load_embedded_catalog(&mut reg, &mut constants);
         (reg, constants)
     })
 }

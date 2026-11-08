@@ -1,7 +1,8 @@
 //! A chemical species and its molar mass.
 //!
-//! The uncertainty of the molar mass combines the tabulated uncertainty of each element in
-//! quadrature, weighted by the atom count (JCGM 100:2008 §5.1; the atoms are independent).
+//! The standard uncertainty of the molar mass follows IUPAC ("Interpretation and use of standard atomic weights"):
+//! `u^2(M) = sum over the elements E of nu_E^2 u^2(Ar(E))`. The `nu_E` atoms of one element are one quantity
+//! and add linearly (`nu_E * u(Ar(E))`); different elements are independent and combine in quadrature.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -11,12 +12,25 @@ use crate::error::{PhysureError, PhysureResult};
 use crate::quantity::Quantity;
 use crate::uncertainty::new_source_id;
 
-/// The one uncertainty source of each element for the life of the process: the tabulated
-/// uncertainty of carbon is the same measurement in CO2 and in C8H18, and in every call.
-fn element_source(symbol: &str) -> u32 {
-    static IDS: OnceLock<Mutex<HashMap<String, u32>>> = OnceLock::new();
+/// The one uncertainty source of each *datum* for the life of the process: the tabulated uncertainty of carbon is
+/// the same measurement in CO2 and in C8H18, and in every call. A datum is the element with the exact weight and
+/// the exact standard uncertainty that the catalog in scope gives it, so the same numbers are one source however
+/// they were reached, and different numbers (another edition, a definition of the user) are different sources:
+/// two independent evaluations of an element are not correlated because they share a symbol.
+fn element_source(symbol: &str, weight: f64, standard_uncertainty: f64) -> u32 {
+    static IDS: OnceLock<Mutex<HashMap<(String, u64, u64), u32>>> = OnceLock::new();
     let mut ids = IDS.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    *ids.entry(symbol.to_string()).or_insert_with(new_source_id)
+    *ids.entry((symbol.to_string(), weight.to_bits(), standard_uncertainty.to_bits())).or_insert_with(new_source_id)
+}
+
+/// One element of a formula in the catalog in scope.
+struct Term {
+    symbol: String,
+    /// Atoms of the element in the formula.
+    count: f64,
+    /// `(weight in g/mol, standard uncertainty)` of one atom's element, as the catalog gives them.
+    weight: f64,
+    standard_uncertainty: f64,
 }
 
 /// A compound or an element, read from a formula.
@@ -41,8 +55,8 @@ impl Species {
         &self.composition
     }
 
-    /// For each element: `(symbol, count * weight, count * standard uncertainty)`, from the catalog in scope.
-    fn terms(&self) -> PhysureResult<Vec<(String, f64, f64)>> {
+    /// The elements of the formula with their data, from the catalog in scope.
+    fn terms(&self) -> PhysureResult<Vec<Term>> {
         super::with_catalog_in_scope(|registry| {
             super::elements::check_table_is_defined(registry)?;
             self.composition
@@ -54,7 +68,7 @@ impl Species {
                             registry.selected_atomic_weight_edition()
                         ))
                     })?;
-                    Ok((element.clone(), f64::from(count) * weight, f64::from(count) * std))
+                    Ok(Term { symbol: element.clone(), count: f64::from(count), weight, standard_uncertainty: std })
                 })
                 .collect()
         })
@@ -64,21 +78,26 @@ impl Species {
     /// scope. An element the catalog has no weight for is an error.
     pub fn molar_mass_parts(&self) -> PhysureResult<(f64, f64)> {
         let terms = self.terms()?;
-        let mass = terms.iter().map(|(_, weight, _)| weight).sum();
-        let variance: f64 = terms.iter().map(|(_, _, std)| std * std).sum();
+        let mass = terms.iter().map(|t| t.count * t.weight).sum();
+        let variance: f64 = terms.iter().map(|t| (t.count * t.standard_uncertainty).powi(2)).sum();
         Ok((mass, variance.sqrt()))
     }
 
     /// The molar mass as a quantity in g/mol, with its uncertainty.
     ///
-    /// Each element is one stable source, so the molar mass cancels against itself (`n = m / M`
-    /// and back is `m` again) and two species with a common element are correlated through it.
-    /// The quantity is Gaussian whatever the global propagation mode is: it carries sources.
+    /// Each element, with the numbers the catalog gives it, is one stable source, so the molar mass cancels against
+    /// itself (`n = m / M` and back is `m` again) and two species with a common element are correlated through it.
+    /// The same element with other numbers (another edition, a definition of yours) is another source: the two are
+    /// independent evaluations, and combine in quadrature. The quantity is Gaussian whatever the global propagation
+    /// mode is: it carries sources.
     pub fn molar_mass(&self) -> PhysureResult<Quantity> {
         let unit = Quantity::new(1.0, "g/mol")?.unit;
         let terms = self.terms()?;
-        let mass = terms.iter().map(|(_, weight, _)| weight).sum();
-        let sources = terms.iter().map(|(element, _, std)| (element_source(element), *std)).collect();
+        let mass = terms.iter().map(|t| t.count * t.weight).sum();
+        let sources = terms
+            .iter()
+            .map(|t| (element_source(&t.symbol, t.weight, t.standard_uncertainty), t.count * t.standard_uncertainty))
+            .collect();
         Ok(Quantity::from_sources(mass, sources, unit))
     }
 }
@@ -216,8 +235,8 @@ mod tests {
 
     #[test]
     fn the_molar_mass_uses_the_weights_of_the_catalog_in_scope() {
-        use crate::units::conf::build_registry_from_conf;
-        let (mut registry, _) = build_registry_from_conf();
+        use crate::units::conf::build_registry_with;
+        let (mut registry, _) = build_registry_with("").unwrap();
         registry.atomic_weights.insert("H".into(), (2.0, 0.0));
         let h2 = Species::new("H2").unwrap();
         assert_eq!(crate::units::with_catalog(&registry, || h2.molar_mass_parts()).unwrap(), (4.0, 0.0));
@@ -227,8 +246,8 @@ mod tests {
 
     /// The embedded catalog with `texts` applied in order.
     fn catalog_with(texts: &[&str]) -> crate::units::UnitRegistry {
-        use crate::units::conf::{build_registry_from_conf, extend_registry};
-        let (mut registry, mut constants) = build_registry_from_conf();
+        use crate::units::conf::{build_registry_with, extend_registry};
+        let (mut registry, mut constants) = build_registry_with("").unwrap();
         for text in texts {
             extend_registry(&mut registry, &mut constants, text).unwrap();
         }
@@ -296,14 +315,14 @@ mod tests {
         let (parts, quantity) = crate::units::with_catalog(&registry, || (water.molar_mass_parts(), water.molar_mass()));
         assert!(parts.unwrap_err().to_string().contains("nope-1"));
         assert!(quantity.unwrap_err().to_string().contains("nope-1"));
-        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "nope-1");
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "nope-1 (undefined)");
     }
 
     #[test]
     fn an_element_the_catalog_lacks_is_an_error_naming_it() {
-        use crate::units::conf::build_registry_from_conf;
+        use crate::units::conf::build_registry_with;
         let zirconia = Species::new("ZrO2").unwrap();
-        let (mut registry, _) = build_registry_from_conf();
+        let (mut registry, _) = build_registry_with("").unwrap();
         registry.atomic_weight_tables.get_mut("standard-2024").unwrap().remove("Zr");
         let (parts, quantity) =
             crate::units::with_catalog(&registry, || (zirconia.molar_mass_parts(), zirconia.molar_mass()));
@@ -341,6 +360,50 @@ mod tests {
         let (_, u_h) = Species::new("H18").unwrap().molar_mass_parts().unwrap();
         let (_, u_o) = Species::new("O16").unwrap().molar_mass_parts().unwrap();
         assert!(close(diff.value.std_dev(), (u_h * u_h + u_o * u_o).sqrt()));
+    }
+
+    fn std_of(q: &Quantity) -> f64 {
+        q.value.std_dev()
+    }
+
+    #[test]
+    fn the_same_element_with_different_data_is_an_independent_source() {
+        // H2 by the default and H2 by a definition of the user (H = 1.5, u = 0.3): two evaluations of hydrogen,
+        // not one hydrogen counted twice
+        let default = Species::new("H2").unwrap().molar_mass().unwrap();
+        let registry = catalog_with(&["[AtomicWeights]\nH = 1.5, 0.3, standard\n"]);
+        let mine = crate::units::with_catalog(&registry, || Species::new("H2").unwrap().molar_mass()).unwrap();
+        assert!(close(mine.value.mean(), 3.0) && close(std_of(&mine), 0.6));
+        let diff = default.sub(&mine).unwrap();
+        let (u_a, u_b) = (2.0 * u_h(), 2.0 * 0.3);
+        assert!(close(diff.value.mean(), 2.0 * H - 3.0));
+        assert!(close(std_of(&diff), (u_a * u_a + u_b * u_b).sqrt()), "{} vs {}", std_of(&diff), (u_a * u_a + u_b * u_b).sqrt());
+    }
+
+    #[test]
+    fn two_editions_of_water_are_independent_and_the_same_edition_twice_cancels() {
+        let water = Species::new("H2O").unwrap();
+        let abridged = catalog_with(&["[Chemistry]\natomic_weights = abridged-2024\n"]);
+        let standard = water.molar_mass().unwrap();
+        let other = crate::units::with_catalog(&abridged, || water.molar_mass()).unwrap();
+        let diff = standard.sub(&other).unwrap();
+        // standard-2024 18.01535, abridged-2024 18.015
+        assert!((diff.value.mean() - 0.00035).abs() < 1e-9, "{}", diff.value.mean());
+        let u1 = ((2.0 * u_h()).powi(2) + u_o().powi(2)).sqrt();
+        let u2 = ((2.0 * 0.0002 / 3f64.sqrt()).powi(2) + (0.001 / 3f64.sqrt()).powi(2)).sqrt();
+        let expected = (u1 * u1 + u2 * u2).sqrt();
+        assert!(close(std_of(&diff), expected), "{} vs {expected}", std_of(&diff));
+        // the same edition twice is the same measurement: exactly 0 +- 0, whichever scope made it
+        let again = crate::units::with_catalog(&abridged, || water.molar_mass()).unwrap();
+        let zero = other.sub(&again).unwrap();
+        assert_eq!((zero.value.mean(), std_of(&zero)), (0.0, 0.0));
+        let mine = catalog_with(&["[AtomicWeights]\nH = 1.5, 0.3, standard\n"]);
+        let twice = (
+            crate::units::with_catalog(&mine, || water.molar_mass()).unwrap(),
+            crate::units::with_catalog(&mine, || water.molar_mass()).unwrap(),
+        );
+        let zero = twice.0.sub(&twice.1).unwrap();
+        assert_eq!((zero.value.mean(), std_of(&zero)), (0.0, 0.0));
     }
 
     #[test]

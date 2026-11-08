@@ -2,10 +2,10 @@ use crate::uncertainty::{PropagationMode, set_propagation_mode};
 use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
 use crate::units::registry::{is_atomic_weight_edition_name, resolve_atomic_weight_edition, UnitRegistry};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
 
@@ -17,21 +17,68 @@ fn is_flag(field: &str) -> bool {
 /// Parses a `physure.conf` configuration string into a UnitRegistry and constants map.
 /// All dimension symbols (L, M, T, I, O, N, J, A, etc.), prefixes, units, aliases,
 /// and physical constants are extracted 100% dynamically from the configuration file.
+///
+/// This is the **lenient** reading, the one the `physure.conf` of the working directory gets: a line the parser
+/// cannot read is skipped, as it always was, and the rest of the text is applied. Nothing is dropped in
+/// silence, though: every problem is reported on stderr, once per process for each distinct message. It is
+/// untrusted text: a section that would edit a shipped edition of the atomic weights is a problem and is
+/// ignored. Use [`extend_registry`] for the definitions of a unit system, which refuses a text with a problem.
 pub fn parse_physure_conf(
     conf_str: &str,
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,
 ) {
-    // A line the parser cannot read is skipped, as it always was: this is the lenient reading of
-    // the catalog and of the `physure.conf` of the working directory.
-    parse_conf(conf_str, registry, constants, true, &mut Vec::new());
+    report_lenient(&read_leniently(conf_str, registry, constants, false));
+}
+
+/// Reads the embedded catalog into `registry`. It alone may define the shipped editions of the atomic weights
+/// (`[AtomicWeights:standard-2024]`, ...): no text of a user can, see [`extend_registry`]. Lenient like
+/// [`parse_physure_conf`], and it applies the `[Settings]` of the catalog.
+pub fn load_embedded_catalog(registry: &mut UnitRegistry, constants: &mut HashMap<String, String>) {
+    report_lenient(&read_leniently(DEFAULT_PHYSURE_CONF, registry, constants, true));
+}
+
+/// The lenient reading, returning the problems it found instead of reporting them.
+fn read_leniently(
+    conf_str: &str,
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    trusted: bool,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    parse_conf(conf_str, registry, constants, Reading { apply_settings: true, trusted }, &mut problems);
+    problems
+}
+
+/// The problems of a lenient reading that have not been reported yet, as the lines to print: each distinct
+/// problem once for each `seen`. The working-directory conf is read again on every call that needs the catalog,
+/// and the same bad line must not fill the screen every time.
+fn new_lenient_reports(problems: &[String], seen: &mut HashSet<String>) -> Vec<String> {
+    problems
+        .iter()
+        .filter(|problem| seen.insert((*problem).clone()))
+        .map(|problem| format!("physure.conf: {problem}; the line is ignored"))
+        .collect()
+}
+
+/// Prints on stderr the problems of a lenient reading, once per process for each distinct message.
+fn report_lenient(problems: &[String]) {
+    if problems.is_empty() {
+        return;
+    }
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let mut seen = SEEN.get_or_init(Mutex::default).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    for line in new_lenient_reports(problems, &mut seen) {
+        eprintln!("{line}");
+    }
 }
 
 /// Adds the units, prefixes, constants and categories of `conf_str` to `registry`, all or nothing:
 /// a line the parser cannot read is a problem, and if there is one the registry and the constants
 /// are left as they were and every problem is returned. `[Settings]` is not read: the settings of a
-/// conf are process-wide and a registry does not own them. This is the reading to use for the
-/// definitions a unit system is made of.
+/// conf are process-wide and a registry does not own them. This is the **strict** reading, to use for the
+/// definitions a unit system is made of. It is untrusted text: it cannot define or edit a shipped edition of
+/// the atomic weights, nor use a name reserved for one.
 pub fn extend_registry(
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,
@@ -39,7 +86,7 @@ pub fn extend_registry(
 ) -> Result<(), Vec<String>> {
     let backup = (registry.clone(), constants.clone());
     let mut problems = Vec::new();
-    parse_conf(conf_str, registry, constants, false, &mut problems);
+    parse_conf(conf_str, registry, constants, Reading { apply_settings: false, trusted: false }, &mut problems);
     if problems.is_empty() {
         return Ok(());
     }
@@ -47,13 +94,50 @@ pub fn extend_registry(
     Err(problems)
 }
 
+/// What a reading of a text may do.
+#[derive(Clone, Copy)]
+struct Reading {
+    /// Apply `[Settings]` and `[Compatibility]` rows, which are process-wide.
+    apply_settings: bool,
+    /// The text is the embedded catalog, which alone may define the shipped editions of the atomic weights.
+    trusted: bool,
+}
+
+/// The sections that a conf has, spelt as they must be. A header that is one of these but for case or for
+/// whitespace is a problem, not an unknown section: see [`misspelt_section`].
+const SECTION_NAMES: [&str; 9] =
+    ["Settings", "Dimensions", "Prefixes", "Units", "Constants", "Categories", "Compatibility", "Chemistry", "AtomicWeights"];
+
+/// The right spelling of `header` (the text between the brackets) when it is a near miss of a known section:
+/// the same name once trimmed and compared without regard to case, but not spelt exactly so. `None` for the right
+/// spelling and for a name that is not close to any section (a system conf may have sections of its own).
+fn misspelt_section(header: &str) -> Option<String> {
+    let trimmed = header.trim();
+    let right = match trimmed.split_once(':') {
+        Some((name, edition)) if name.trim().eq_ignore_ascii_case("AtomicWeights") => {
+            format!("AtomicWeights:{}", edition.trim())
+        }
+        Some(_) => return None,
+        None => SECTION_NAMES.iter().find(|name| name.eq_ignore_ascii_case(trimmed))?.to_string(),
+    };
+    (right != header).then_some(right)
+}
+
+/// The editions that this library ships are frozen (`docs/atomic_weights.md`, section 6), and the names that start
+/// like them are kept for the editions a later release may ship: a table of a user called `standard-2026` would
+/// be merged with the shipped one on the day a release adds it.
+fn is_reserved_edition_name(edition: &str) -> bool {
+    edition.starts_with("standard-") || edition.starts_with("abridged-")
+}
+
 fn parse_conf(
     conf_str: &str,
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,
-    apply_settings: bool,
+    reading: Reading,
     problems: &mut Vec<String>,
 ) {
+    let Reading { apply_settings, trusted } = reading;
     let mut current_section = "";
     let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
@@ -71,9 +155,26 @@ fn parse_conf(
 
         if line.starts_with('[') && line.ends_with(']') {
             current_section = &line[1..line.len() - 1];
+            if let Some(right) = misspelt_section(current_section) {
+                // an unknown section is ignored without a word: the choice or the weights in this one would
+                // silently fall back to the defaults
+                problems.push(format!(
+                    "[{current_section}]: not a section name; the section is spelt [{right}] (names are case-sensitive and take no spaces)"
+                ));
+                current_section = "";
+                continue;
+            }
             has_compatibility |= current_section == "Compatibility";
             if let Some(edition) = current_section.strip_prefix("AtomicWeights:") {
-                if is_atomic_weight_edition_name(edition) && resolve_atomic_weight_edition(edition) != edition {
+                if !trusted && is_reserved_edition_name(edition) {
+                    // one problem for the section, whose lines are not read
+                    problems.push(if registry.atomic_weight_tables.contains_key(edition) {
+                        format!("[{current_section}]: '{edition}' is a shipped edition and is frozen; a text of yours cannot edit it, define a table under a name of your own")
+                    } else {
+                        format!("[{current_section}]: names that start with `standard-` or `abridged-` are reserved for the editions of this library, present and future; choose another name for your table")
+                    });
+                    current_section = "";
+                } else if is_atomic_weight_edition_name(edition) && resolve_atomic_weight_edition(edition) != edition {
                     // a table called like an alias could never be selected: the alias would shadow it
                     problems.push(format!(
                         "[{current_section}]: '{edition}' is an alias of '{}' and cannot name a table; choose another name",
@@ -342,7 +443,12 @@ fn read_weight_and_number(text: &str) -> Option<(f64, f64)> {
 fn read_weight_interval(text: &str) -> Option<(f64, f64)> {
     let (low, high) = text.strip_suffix(']')?.split_once(',')?;
     let (low, high): (f64, f64) = (low.trim().parse().ok()?, high.trim().parse().ok()?);
-    (low.is_finite() && high.is_finite() && 0.0 < low && low < high).then(|| ((low + high) / 2.0, (high - low) / 12f64.sqrt()))
+    // `low / 2 + high / 2`, not `(low + high) / 2`: the sum of two finite numbers can overflow when their mean does not
+    let midpoint = low / 2.0 + high / 2.0;
+    let std = (high - low) / 12f64.sqrt();
+    // a width that is not zero but whose standard uncertainty underflows to it would be an exact weight
+    (low.is_finite() && high.is_finite() && 0.0 < low && low < high && midpoint.is_finite() && std.is_finite() && std > 0.0)
+        .then_some((midpoint, std))
 }
 
 /// One line of `[Categories]`: `name = [unit, unit, ...]`.
@@ -729,13 +835,19 @@ fn register_aliases(
     }
 }
 
+/// The problems the lenient reading finds in the embedded catalog: none, or the catalog has a line it cannot read.
+#[cfg(test)]
+pub(crate) fn embedded_catalog_problems() -> Vec<String> {
+    read_leniently(DEFAULT_PHYSURE_CONF, &mut UnitRegistry::new(), &mut HashMap::new(), true)
+}
+
 /// The embedded catalog, parsed once per process.
 fn embedded_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
     static EMBEDDED: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
     EMBEDDED.get_or_init(|| {
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
-        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+        load_embedded_catalog(&mut reg, &mut constants);
         (reg, constants)
     })
 }
@@ -862,7 +974,7 @@ mod tests {
         let mut constants = HashMap::new();
         // Start from the mode that is NOT the default, so only the conf line can bring `Dimensionless` back.
         set_angle_mode(AngleMode::Dimension);
-        parse_physure_conf(DEFAULT_PHYSURE_CONF, &mut reg, &mut constants);
+        load_embedded_catalog(&mut reg, &mut constants);
         assert_eq!(angle_mode(), AngleMode::Dimensionless);
     }
 
@@ -907,6 +1019,62 @@ mod tests {
         );
         assert_eq!(crate::settings::max_pipeline_steps(), 42);
         crate::settings::set_max_pipeline_steps(original);
+    }
+
+    #[test]
+    fn the_embedded_catalog_has_no_line_the_lenient_reading_would_drop() {
+        let problems = embedded_catalog_problems();
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// The problems of the lenient reading of `text` over the embedded catalog.
+    fn lenient_problems(text: &str) -> (UnitRegistry, Vec<String>) {
+        let (mut registry, mut constants) = build_registry_with("").unwrap();
+        let problems = read_leniently(text, &mut registry, &mut constants, false);
+        (registry, problems)
+    }
+
+    #[test]
+    fn the_lenient_reading_finds_the_problems_of_a_bad_atomic_weight_or_chemistry_line_and_applies_the_rest() {
+        let (registry, problems) = lenient_problems(
+            "[Chemistry]\natomic_weights = Bad Name\n[AtomicWeights]\nFe = abc, 0.1\nCo = 59.0, 0.2\n[chemistry]\nx = 1\n",
+        );
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains("Bad Name")), "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains("Fe = abc, 0.1")), "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains("[Chemistry]")), "{problems:?}");
+        // the bad lines changed nothing, the good one was applied, as it always was
+        assert_eq!(registry.atomic_weight_selection, "standard");
+        assert_eq!(registry.atomic_weights.get("Fe"), None);
+        assert_eq!(registry.atomic_weights.get("Co"), Some(&(59.0, 0.2 / 3f64.sqrt())));
+    }
+
+    #[test]
+    fn the_lenient_reading_ignores_a_section_that_edits_a_shipped_edition() {
+        let (registry, problems) = lenient_problems("[AtomicWeights:standard-2024]\nH = 1.0, 0.1\n");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(registry.atomic_weight_tables["standard-2024"]["H"].0, (1.00784 + 1.00811) / 2.0);
+    }
+
+    #[test]
+    fn a_problem_is_reported_once_for_each_set_of_seen_messages() {
+        let mut seen = HashSet::new();
+        let problems = vec!["Fe = abc, 0.1: bad".to_string(), "[chemistry]: bad".to_string(), "Fe = abc, 0.1: bad".to_string()];
+        // the same message twice in one reading is one report
+        let first = new_lenient_reports(&problems, &mut seen);
+        assert_eq!(
+            first,
+            vec![
+                "physure.conf: Fe = abc, 0.1: bad; the line is ignored".to_string(),
+                "physure.conf: [chemistry]: bad; the line is ignored".to_string(),
+            ]
+        );
+        // the file is read again on the next call: nothing new, nothing printed
+        assert!(new_lenient_reports(&problems, &mut seen).is_empty());
+        // a message that was not seen before is reported, once
+        let more = vec!["Fe = abc, 0.1: bad".to_string(), "Co = x: worse".to_string()];
+        assert_eq!(new_lenient_reports(&more, &mut seen), vec!["physure.conf: Co = x: worse; the line is ignored".to_string()]);
+        assert!(new_lenient_reports(&[], &mut seen).is_empty());
     }
 
     #[test]
@@ -972,7 +1140,9 @@ mod tests {
         settle_catalog_settings();
         let _restore = crate::units::angle_mode::RestoreProcessState::capture();
         // Start from "none", so only the rows of the embedded conf can bring both back.
-        assert_eq!(grants_after(DEFAULT_PHYSURE_CONF, (false, false)), (true, true));
+        crate::units::angle_mode::set_marker_grants(false, false);
+        load_embedded_catalog(&mut UnitRegistry::new(), &mut HashMap::new());
+        assert_eq!(marker_grants(), (true, true));
     }
 
     #[test]

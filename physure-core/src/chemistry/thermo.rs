@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn the_gas_constant_is_read_from_the_catalog_in_scope() {
-        let (mut registry, _) = crate::units::conf::build_registry_from_conf();
+        let (mut registry, _) = crate::units::conf::build_registry_with("").unwrap();
         registry.constants_meta.get_mut("molar_gas_constant").unwrap().value = "8.0 J/(mol*K)".into();
         let scoped = crate::units::with_catalog(&registry, || gas_constant().unwrap());
         assert!(close(scoped.value.mean(), 8.0));

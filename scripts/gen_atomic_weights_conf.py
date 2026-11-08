@@ -51,6 +51,8 @@ FROZEN = """\
 # numbers, and a library upgrade must not change them. A new CIAAW release is a NEW edition (for example
 # standard-2026) added next to this one; only the alias in [Chemistry] moves, in a release whose CHANGELOG
 # says so. The test physure-core/tests/atomic_weights_ciaaw.rs fails if a number of this section changes.
+# The names standard-* and abridged-* are reserved for the editions of this library: a text of a user
+# (a conf of your own, a unit system) that has such a section is a problem, so it cannot edit this one.
 """
 
 STANDARD_HEADER = """\
@@ -143,17 +145,23 @@ DEFINITIONS_HEADER = """\
 # your own or in the definitions of a unit system) overrides or adds an element for WHICHEVER table is
 # selected by [Chemistry] atomic_weights (a shipped edition or a table of your own), whatever order the
 # lines and that selection are given in. It wins over the selected table and over nothing else. A later
-# definition of the same symbol replaces an earlier one. A bad line refuses the whole text and nothing is
-# applied.
+# definition of the same symbol replaces an earlier one. A bad line is a problem. A text read strictly (the
+# definitions of a unit system, extend_registry) is refused as a whole and nothing of it is applied; the
+# physure.conf of the working directory is read leniently: each problem is reported on stderr as
+# `physure.conf: <problem>; the line is ignored` (once per process) and the rest of the file applies.
 #
 # The grammar is that of the tables:
 #   Sym = value, U               U is a half-width, stored as the standard uncertainty U / sqrt(3)
 #   Sym = [a, b]                 an interval: its midpoint, and (b - a) / sqrt(12)
 #   Sym = value, u, standard     u already is a standard uncertainty and is stored as given
-# For example (as comments here; write them without the leading `# ` in your own conf):
-#   # Fe = 56.0, 0.5                               an element, with the half-width of its interval
-#   # H = [1.00784, 1.00811]                       an interval
-#   # D = 2.01410177812, 0.00000000012, standard   an isotope with its own standard uncertainty
+# For example (as comments here; write the lines without the leading `# ` in your own conf, and keep any
+# comment on a line of its own: a line is not cut at a `#`, so one with a trailing comment is a bad line):
+#   an element, with the half-width of its interval:
+#   # Fe = 56.0, 0.5
+#   an interval:
+#   # H = [1.00784, 1.00811]
+#   an isotope with its own standard uncertainty:
+#   # D = 2.01410177812, 0.00000000012, standard
 #
 # More: docs/atomic_weights.md.
 """
@@ -171,7 +179,10 @@ CHEMISTRY_HEADER = """\
 # and the edition. If the selected edition is defined by no section, every use of the atomic weights fails
 # with an error that names it. Your definitions in [AtomicWeights] apply with any selection.
 # An edition name is lower-case ASCII letters, digits and `-`, `_`, `.`, starts with a letter and has at
-# most 64 characters. Any other key or value is refused. The last selection wins. The choice belongs to the
+# most 64 characters, and must not start with `standard-` or `abridged-` when it names a table of your own
+# (those are reserved for the editions of this library). Any other key or value is a problem (refused as a
+# whole when the text is read strictly, reported on stderr and ignored in the working-directory physure.conf).
+# The last selection wins. The choice belongs to the
 # registry, like the definitions, not to the process-wide [Settings]; it is checked when the weights are
 # used, so the choice and the table may come from different texts in any order.
 # The table in use is reported by chemistry::atomic_weight_edition() (UnitRegistry::atomic_weight_edition()).

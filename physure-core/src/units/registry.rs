@@ -116,6 +116,11 @@ pub struct UnitRegistry {
 /// result pins the name. Every release that moves an alias says so in the CHANGELOG.
 const ATOMIC_WEIGHT_ALIASES: [(&str, &str); 2] = [("standard", "standard-2024"), ("abridged", "abridged-2024")];
 
+/// FNV-1a, 64 bits (offset basis `0xcbf29ce484222325`, prime `0x100000001b3`).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3))
+}
+
 /// The edition that `name` stands for: the edition an alias resolves to in this release, or `name` itself.
 pub fn resolve_atomic_weight_edition(name: &str) -> &str {
     ATOMIC_WEIGHT_ALIASES.iter().find(|(alias, _)| *alias == name).map_or(name, |(_, edition)| edition)
@@ -176,15 +181,34 @@ impl UnitRegistry {
         (!self.atomic_weight_tables.contains_key(edition)).then_some(edition)
     }
 
-    /// Which table produced the atomic weights, for a report to quote: the resolved edition (`standard-2024`),
-    /// followed by ` + N definitions` when you defined any (`standard-2024 + 2 definitions`; "1 definitions" is
-    /// written as is, there is no pluralisation).
+    /// Which table produced the atomic weights, for a report to quote:
+    ///
+    /// - the resolved edition (`standard-2024`; an alias is reported as the edition it stood for), followed by
+    ///   ` (undefined)` when no text defines that table (every use of the weights is then an error);
+    /// - followed by ` + N definitions (fnv1a:<hash>)` when you defined any, e.g.
+    ///   `standard-2024 + 2 definitions (fnv1a:3fccc6fb20553b8a)` ("1 definitions" is written as is, there is no
+    ///   pluralisation). The hash is the FNV-1a 64-bit hash of the canonical text of the definitions, one
+    ///   `Sym=<weight bits>,<standard uncertainty bits>;` entry per symbol in symbol order, the bits being the
+    ///   IEEE-754 binary64 pattern as 16 lower-case hex digits (the format that fingerprints the shipped editions in
+    ///   `tests/atomic_weights_ciaaw.rs`). Two different sets of definitions give different reports; the same set
+    ///   gives the same one however it was written.
+    ///
+    /// A table of your own is identified by its name, which is yours to keep unique.
     pub fn atomic_weight_edition(&self) -> String {
-        let edition = self.selected_atomic_weight_edition();
-        match self.atomic_weights.len() {
-            0 => edition.to_string(),
-            n => format!("{edition} + {n} definitions"),
+        let mut report = self.selected_atomic_weight_edition().to_string();
+        if self.selected_atomic_weight_table_missing().is_some() {
+            report.push_str(" (undefined)");
         }
+        if !self.atomic_weights.is_empty() {
+            let mut definitions: Vec<_> = self.atomic_weights.iter().collect();
+            definitions.sort_by_key(|(symbol, _)| *symbol);
+            let canonical: String = definitions
+                .iter()
+                .map(|(symbol, (weight, std))| format!("{symbol}={:016x},{:016x};", weight.to_bits(), std.to_bits()))
+                .collect();
+            report.push_str(&format!(" + {} definitions (fnv1a:{:016x})", definitions.len(), fnv1a64(canonical.as_bytes())));
+        }
+        report
     }
 
     pub fn get_unit_latex(&self, name: &str) -> Option<&str> {

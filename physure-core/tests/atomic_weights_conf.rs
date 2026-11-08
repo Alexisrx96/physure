@@ -10,11 +10,19 @@
 //! Which table is read, how definitions combine with it and how editions are named is in
 //! `atomic_weights_editions.rs`; the embedded data are held to the published tables in `atomic_weights_ciaaw.rs`.
 
-use physure_core::units::conf::{build_registry_from_conf, extend_registry};
+use physure_core::units::conf::{build_registry_with, extend_registry};
 use physure_core::units::UnitRegistry;
+use std::collections::HashMap;
 
-const SECTIONS: [&str; 4] =
-    ["AtomicWeights", "AtomicWeights:standard-2024", "AtomicWeights:abridged-2024", "AtomicWeights:acme-1"];
+/// The shipped catalog and nothing else: a `physure.conf` in the working directory must not change what these
+/// tests assert about the shipped editions.
+fn embedded_catalog() -> (UnitRegistry, HashMap<String, String>) {
+    build_registry_with("").unwrap()
+}
+
+/// The sections a text can fill. The shipped editions are not among them: user text cannot edit those (see
+/// `atomic_weights_editions.rs`), and the embedded data are held to the published tables in `atomic_weights_ciaaw.rs`.
+const SECTIONS: [&str; 3] = ["AtomicWeights", "AtomicWeights:acme-1", "AtomicWeights:acme-2"];
 
 /// The entry `symbol` of the table that the section `[section]` fills.
 fn entry(registry: &UnitRegistry, section: &str, symbol: &str) -> Option<(f64, f64)> {
@@ -27,7 +35,7 @@ fn entry(registry: &UnitRegistry, section: &str, symbol: &str) -> Option<(f64, f
 
 #[test]
 fn the_standard_edition_has_all_118_elements_as_ciaaw_prints_them() {
-    let (registry, _) = build_registry_from_conf();
+    let (registry, _) = embedded_catalog();
     let standard = &registry.atomic_weight_tables["standard-2024"];
     // an interval: H = [1.00784, 1.00811] and Pb = [206.14, 207.94] (CIAAW 2024, as printed)
     assert_eq!(standard["H"], ((1.00784 + 1.00811) / 2.0, (1.00811 - 1.00784) / 12f64.sqrt()));
@@ -42,7 +50,7 @@ fn the_standard_edition_has_all_118_elements_as_ciaaw_prints_them() {
 
 #[test]
 fn the_abridged_edition_has_the_values_and_the_plus_minus_as_ciaaw_prints_them() {
-    let (registry, _) = build_registry_from_conf();
+    let (registry, _) = embedded_catalog();
     let abridged = &registry.atomic_weight_tables["abridged-2024"];
     // H 1.0080 +- 0.0002, Na 22.990 +- 0.001, Pb 207.2 +- 1.1, Tc a mass number
     assert_eq!(abridged["H"], (1.0080, 0.0002 / 3f64.sqrt()));
@@ -60,7 +68,7 @@ fn the_third_field_says_whether_the_number_is_a_half_width_or_a_standard_uncerta
             ("X = 2.0, 0.3, standard", 0.3),
             ("X = 2.0, 0.3 , standard ", 0.3),
         ] {
-            let (mut registry, mut constants) = build_registry_from_conf();
+            let (mut registry, mut constants) = embedded_catalog();
             extend_registry(&mut registry, &mut constants, &format!("[{section}]\n{line}\n")).unwrap();
             assert_eq!(entry(&registry, section, "X"), Some((2.0, expected)), "{section} {line:?}");
         }
@@ -70,16 +78,15 @@ fn the_third_field_says_whether_the_number_is_a_half_width_or_a_standard_uncerta
 #[test]
 fn each_section_fills_its_own_table_and_no_other() {
     for section in SECTIONS {
-        let (mut registry, mut constants) = build_registry_from_conf();
+        let (mut registry, mut constants) = embedded_catalog();
         let before = registry.clone();
         extend_registry(&mut registry, &mut constants, &format!("[{section}]\nX = 2.0, 0.3\n")).unwrap();
         for other in SECTIONS {
             assert_eq!(entry(&registry, other, "X").is_some(), other == section, "{section} / {other}");
         }
-        // the shipped tables are exactly as they were, but for a symbol added to the one that was named
+        // the shipped tables are exactly as they were
         for edition in ["standard-2024", "abridged-2024"] {
-            let added = usize::from(section == format!("AtomicWeights:{edition}"));
-            assert_eq!(registry.atomic_weight_tables[edition].len(), before.atomic_weight_tables[edition].len() + added);
+            assert_eq!(registry.atomic_weight_tables[edition], before.atomic_weight_tables[edition]);
         }
         assert_eq!(registry.atomic_weights.len(), usize::from(section == "AtomicWeights"));
     }
@@ -103,7 +110,7 @@ fn a_line_that_does_not_read_is_reported_and_nothing_is_applied() {
             "X = 2.0, 0.3, standard, extra",
             "X = 2.0, 0.3,",             // an empty third field
         ] {
-            let (mut registry, mut constants) = build_registry_from_conf();
+            let (mut registry, mut constants) = embedded_catalog();
             let before = registry.clone();
             let text = format!("[{section}]\nNa = 23.0, 0.1\n{bad}\n");
             let problems = extend_registry(&mut registry, &mut constants, &text).unwrap_err();
@@ -119,7 +126,7 @@ fn an_interval_is_its_midpoint_with_the_standard_uncertainty_of_a_uniform_distri
     // IUPAC: u = (b - a) / sqrt(12), the same as the half-width (b - a) / 2 divided by sqrt(3).
     for section in SECTIONS {
         for line in ["X = [1.0, 3.0]", "X =[1.0,3.0]", "X = [ 1.0 , 3.0 ]  "] {
-            let (mut registry, mut constants) = build_registry_from_conf();
+            let (mut registry, mut constants) = embedded_catalog();
             extend_registry(&mut registry, &mut constants, &format!("[{section}]\n{line}\n")).unwrap();
             assert_eq!(entry(&registry, section, "X"), Some((2.0, 2.0 / 12f64.sqrt())), "{section} {line:?}");
         }
@@ -141,7 +148,7 @@ fn an_interval_takes_no_third_field_and_no_other_form() {
             "X = [1.0, inf]",
             "X = [a, b]",
         ] {
-            let (mut registry, mut constants) = build_registry_from_conf();
+            let (mut registry, mut constants) = embedded_catalog();
             let before = registry.clone();
             let text = format!("[{section}]\nNa = 23.0, 0.1\n{bad}\n");
             let problems = extend_registry(&mut registry, &mut constants, &text).unwrap_err();
@@ -149,5 +156,26 @@ fn an_interval_takes_no_third_field_and_no_other_form() {
             assert!(problems[0].contains(bad), "{bad:?} not named in {problems:?}");
             assert_eq!(registry, before, "{section} {bad:?} left a trace");
         }
+    }
+}
+
+#[test]
+fn an_interval_is_not_lost_to_overflow_and_an_uncertainty_is_not_lost_to_underflow() {
+    for section in SECTIONS {
+        // (a + b) / 2 overflows to infinity for [1e308, 1.7e308]; a / 2 + b / 2 = 1.35e308 does not
+        let (mut registry, mut constants) = embedded_catalog();
+        extend_registry(&mut registry, &mut constants, &format!("[{section}]\nX = [1e308, 1.7e308]\n")).unwrap();
+        let (weight, std) = entry(&registry, section, "X").unwrap();
+        assert!(weight.is_finite() && std.is_finite(), "{section}: ({weight}, {std})");
+        assert!((weight - 1.35e308).abs() <= 1e-12 * 1.35e308, "{section}: {weight}");
+
+        // a non-zero width whose standard uncertainty underflows to 0 would be an exact weight: a lie
+        let bad = "X = [5e-324, 1e-323]";
+        let (mut registry, mut constants) = embedded_catalog();
+        let before = registry.clone();
+        let problems = extend_registry(&mut registry, &mut constants, &format!("[{section}]\n{bad}\n")).unwrap_err();
+        assert_eq!(problems.len(), 1, "{section} {bad:?}: {problems:?}");
+        assert!(problems[0].contains(bad), "{bad:?} not named in {problems:?}");
+        assert_eq!(registry, before);
     }
 }

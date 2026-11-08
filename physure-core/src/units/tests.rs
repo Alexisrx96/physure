@@ -822,10 +822,10 @@ fn a_later_text_starts_from_the_base_units_of_the_first() {
 /// nothing of a refused text is kept, and the embedded catalog has no line the parser refuses.
 #[test]
 fn extending_a_registry_is_all_or_nothing_and_the_catalog_has_no_unreadable_line() {
-    use std::collections::HashMap;
-    let (mut catalog, mut catalog_constants) = (UnitRegistry::new(), HashMap::new());
-    let outcome = conf::extend_registry(&mut catalog, &mut catalog_constants, conf::DEFAULT_PHYSURE_CONF);
-    assert!(outcome.is_ok(), "{:?}", outcome.err());
+    // (not by `extend_registry`: the catalog defines the shipped editions of the atomic weights, which a text of a
+    // user cannot)
+    let problems = conf::embedded_catalog_problems();
+    assert!(problems.is_empty(), "{problems:?}");
 
     let (mut reg, mut constants) = conf::build_registry_from_conf();
     let before = reg.clone();
