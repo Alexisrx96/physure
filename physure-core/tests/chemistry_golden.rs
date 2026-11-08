@@ -38,9 +38,9 @@ fn every_reaction_is_balanced_or_refused_as_in_python() {
             "ERROR" => assert!(Reaction::from_string(equation).is_err(), "{equation:?} should be refused"),
             reversible => {
                 let r = Reaction::from_string(equation).unwrap_or_else(|e| panic!("{equation:?}: {e}"));
-                assert_eq!(r.reversible, reversible == "1", "{equation}");
-                assert_eq!(r.reactant_coeffs, numbers(row[2]), "{equation}");
-                assert_eq!(r.product_coeffs, numbers(row[3]), "{equation}");
+                assert_eq!(r.reversible(), reversible == "1", "{equation}");
+                assert_eq!(r.reactant_coeffs(), numbers(row[2]), "{equation}");
+                assert_eq!(r.product_coeffs(), numbers(row[3]), "{equation}");
             }
         }
         count += 1;

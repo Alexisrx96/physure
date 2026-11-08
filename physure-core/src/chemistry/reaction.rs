@@ -140,17 +140,39 @@ pub fn balance(reactants: &[Species], products: &[Species]) -> PhysureResult<(Ve
 /// A balanced chemical reaction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reaction {
-    pub reactants: Vec<Species>,
-    pub products: Vec<Species>,
-    pub reactant_coeffs: Vec<i64>,
-    pub product_coeffs: Vec<i64>,
-    pub reversible: bool,
+    reactants: Vec<Species>,
+    products: Vec<Species>,
+    reactant_coeffs: Vec<i64>,
+    product_coeffs: Vec<i64>,
+    reversible: bool,
 }
 
 impl Reaction {
     pub fn new(reactants: Vec<Species>, products: Vec<Species>, reversible: bool) -> PhysureResult<Self> {
         let (reactant_coeffs, product_coeffs) = balance(&reactants, &products)?;
         Ok(Reaction { reactants, products, reactant_coeffs, product_coeffs, reversible })
+    }
+
+    pub fn reactants(&self) -> &[Species] {
+        &self.reactants
+    }
+
+    pub fn products(&self) -> &[Species] {
+        &self.products
+    }
+
+    /// The whole coefficients of the reactants, in the order of [`Reaction::reactants`].
+    pub fn reactant_coeffs(&self) -> &[i64] {
+        &self.reactant_coeffs
+    }
+
+    /// The whole coefficients of the products, in the order of [`Reaction::products`].
+    pub fn product_coeffs(&self) -> &[i64] {
+        &self.product_coeffs
+    }
+
+    pub fn reversible(&self) -> bool {
+        self.reversible
     }
 
     /// Reads `"2 H2 + O2 -> 2 H2O"`. Coefficients that are written are re-derived. The
@@ -196,7 +218,7 @@ impl fmt::Display for Reaction {
                 if *c != 1 {
                     write!(f, "{c} ")?;
                 }
-                write!(f, "{}", s.formula)?;
+                write!(f, "{}", s.formula())?;
             }
             Ok(())
         }
@@ -212,7 +234,7 @@ mod tests {
 
     fn coeffs(equation: &str) -> (Vec<i64>, Vec<i64>) {
         let r = Reaction::from_string(equation).unwrap();
-        (r.reactant_coeffs, r.product_coeffs)
+        (r.reactant_coeffs().to_vec(), r.product_coeffs().to_vec())
     }
 
     #[test]
@@ -244,8 +266,8 @@ mod tests {
     fn every_separator_is_read_and_the_reversible_ones_are_flagged() {
         for (arrow, reversible) in [("->", false), ("=", false), ("→", false), ("<=>", true), ("⇌", true)] {
             let r = Reaction::from_string(&format!("N2 + 3 H2 {arrow} 2 NH3")).unwrap();
-            assert_eq!(r.reversible, reversible, "{arrow}");
-            assert_eq!((r.reactant_coeffs.clone(), r.product_coeffs.clone()), (vec![1, 3], vec![2]), "{arrow}");
+            assert_eq!(r.reversible(), reversible, "{arrow}");
+            assert_eq!((r.reactant_coeffs(), r.product_coeffs()), (&[1, 3][..], &[2][..]), "{arrow}");
         }
     }
 

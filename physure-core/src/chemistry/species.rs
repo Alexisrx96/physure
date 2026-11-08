@@ -23,14 +23,18 @@ fn element_source(symbol: &str) -> u32 {
 /// A compound or an element, read from a formula.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Species {
-    /// The formula as it was written (`"H₂O"` stays `"H₂O"`).
-    pub formula: String,
+    formula: String,
     composition: Composition,
 }
 
 impl Species {
     pub fn new(formula: &str) -> PhysureResult<Self> {
         Ok(Species { formula: formula.to_string(), composition: parse_formula(formula)? })
+    }
+
+    /// The formula as it was written (`"H₂O"` stays `"H₂O"`).
+    pub fn formula(&self) -> &str {
+        &self.formula
     }
 
     /// Atoms by element symbol.
@@ -115,7 +119,7 @@ mod tests {
     #[test]
     fn a_species_keeps_the_formula_it_was_given() {
         let s = Species::new("H₂O").unwrap();
-        assert_eq!(s.formula, "H₂O");
+        assert_eq!(s.formula(), "H₂O");
         assert_eq!(s.composition()["H"], 2);
     }
 
