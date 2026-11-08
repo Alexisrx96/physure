@@ -5,14 +5,16 @@ repository root:
 
     PYTHONUTF8=1 physure-python/.venv/Scripts/python.exe scripts/gen_chemistry_golden.py
 
-The molar masses are the weights of the `[AtomicWeights]` section of physure.conf (CIAAW) combined
-by the Python formula parser: the weights are read from the conf and the formulas are parsed by
-`physure.ext.chemistry`, so neither comes from the Rust code under test. The second column of the
-conf is the half-width CIAAW publishes; it is read as a uniform distribution, so the standard
-uncertainty is half-width / sqrt(3) unless the line ends in `, standard` (then the number is taken
-as given). The rule is written out again here, not imported from the core. The reactions file still
-freezes what `physure.ext.chemistry` answered before the core took it over. The core's
-`tests/chemistry_golden.rs` holds the Rust port to both. Formulas and equations on which the two
+The molar masses are the weights of the `[AtomicWeights]` section of physure.conf (the CIAAW
+Standard Atomic Weights 2024) combined by the Python formula parser: the weights are read from the
+conf and the formulas are parsed by `physure.ext.chemistry`, so neither comes from the Rust code
+under test. The reading rules of the conf are written out again here, not imported from the core
+(and are independent of scripts/gen_atomic_weights_conf.py, which writes the section): the second
+column of `Sym = weight, U` is the half-width CIAAW publishes, read as a uniform distribution, so
+the standard uncertainty is U / sqrt(3) unless the line ends in `, standard` (then the number is
+taken as given); `Sym = [a, b]` is an interval, with weight (a + b) / 2 and standard uncertainty
+(b - a) / sqrt(12). The reactions file still freezes what `physure.ext.chemistry` answered before
+the core took it over. The core's `tests/chemistry_golden.rs` holds the Rust port to both. Formulas and equations on which the two
 are meant to differ (hydrates, a zero count) are deliberately not in the lists.
 """
 
@@ -65,8 +67,9 @@ REFUSED = [
 def atomic_weights() -> dict[str, tuple[float, float]]:
     """symbol -> (weight, standard uncertainty) from the [AtomicWeights] section of physure.conf.
 
-    `symbol = weight, half-width` gives half-width / sqrt(3) (uniform distribution over the CIAAW
-    interval); `symbol = weight, u, standard` gives u.
+    `symbol = weight, U` gives U / sqrt(3) (uniform distribution over the CIAAW interval
+    weight +- U); `symbol = weight, u, standard` gives u; `symbol = [a, b]` gives the midpoint
+    and (b - a) / sqrt(12).
     """
     weights: dict[str, tuple[float, float]] = {}
     section = None
@@ -77,11 +80,17 @@ def atomic_weights() -> dict[str, tuple[float, float]]:
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1]
         elif section == "AtomicWeights":
-            symbol, rest = line.split("=", 1)
+            symbol, rest = (part.strip() for part in line.split("=", 1))
+            if rest.startswith("["):
+                assert rest.endswith("]"), line
+                low, high = (float(x) for x in rest[1:-1].split(","))
+                assert 0 < low < high, line
+                weights[symbol] = ((low + high) / 2, (high - low) / math.sqrt(12))
+                continue
             weight, number, *kind = (field.strip() for field in rest.split(","))
             assert kind in ([], ["interval"], ["standard"]), line
             std = float(number) if kind == ["standard"] else float(number) / math.sqrt(3)
-            weights[symbol.strip()] = (float(weight), std)
+            weights[symbol] = (float(weight), std)
     return weights
 
 
@@ -123,7 +132,7 @@ def write(name: str, header: str, rows: list[str]) -> None:
 if __name__ == "__main__":
     write(
         "chemistry_molar_mass.tsv",
-        "formula, molar mass (g/mol), standard uncertainty (CIAAW half-width / sqrt(3), combined per element in quadrature); the CIAAW weights of physure.conf combined by the formula parser of physure.ext.chemistry, by scripts/gen_chemistry_golden.py",
+        "formula, molar mass (g/mol), standard uncertainty (CIAAW half-width / sqrt(3), or (b - a) / sqrt(12) for an interval, combined per element in quadrature); the CIAAW Standard Atomic Weights 2024 of physure.conf combined by the formula parser of physure.ext.chemistry, by scripts/gen_chemistry_golden.py",
         molar_mass_rows(),
     )
     write(

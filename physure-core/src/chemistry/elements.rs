@@ -1,5 +1,6 @@
-//! Standard atomic weights, read from the `[AtomicWeights]` section of `physure.conf` (CIAAW abridged
-//! 2024 by default; a conf of your own or a unit system can replace or add an element).
+//! Standard atomic weights, read from the `[AtomicWeights]` section of `physure.conf` (the CIAAW Standard
+//! Atomic Weights 2024, intervals kept as intervals; a conf of your own or a unit system can replace or add an
+//! element). See `docs/atomic_weights.md`.
 
 /// `(weight in g/mol, standard uncertainty)` of an element by symbol, from the catalog in scope.
 pub fn atomic_weight(symbol: &str) -> Option<(f64, f64)> {
@@ -13,7 +14,9 @@ mod tests {
 
     #[test]
     fn known_weights() {
-        assert_eq!(atomic_weight("H"), Some((1.008, 0.0002 / 3f64.sqrt())));
+        // H is the interval [1.00784, 1.00811]: midpoint, and (b - a) / sqrt(12) (IUPAC)
+        assert_eq!(atomic_weight("H"), Some(((1.00784 + 1.00811) / 2.0, (1.00811 - 1.00784) / 12f64.sqrt())));
+        // Fe is 55.845(2): half-width 0.002, standard uncertainty 0.002 / sqrt(3)
         assert_eq!(atomic_weight("Fe"), Some((55.845, 0.002 / 3f64.sqrt())));
         assert_eq!(atomic_weight("Og"), Some((294.0, 0.0)));
     }

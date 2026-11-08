@@ -234,42 +234,62 @@ fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMa
     });
 }
 
-/// One line of `[AtomicWeights]`: `symbol = weight, half-width [, standard]`, in g/mol.
+/// One line of `[AtomicWeights]`, in g/mol. Two forms:
 ///
-/// By default the second number is the half-width of the interval CIAAW publishes (its "+-"), read as a uniform
-/// distribution, whose standard uncertainty is `half-width / sqrt(3)` (IUPAC, "Interpretation and use of standard
-/// atomic weights"); that is what the registry stores. A third field `standard` says the number already is a
-/// standard uncertainty (it is stored as given); `interval` spells out the default. A weight is positive and
-/// finite and the number is finite and not negative; anything else is a problem, because a molar mass built from
-/// it would be a confident wrong answer.
+/// - `symbol = weight, half-width [, standard]`: by default the second number is the half-width of the interval
+///   CIAAW publishes (its "+-"), read as a uniform distribution, whose standard uncertainty is
+///   `half-width / sqrt(3)` (IUPAC, "Interpretation and use of standard atomic weights"); that is what the registry
+///   stores. A third field `standard` says the number already is a standard uncertainty (it is stored as given);
+///   `interval` spells out the default.
+/// - `symbol = [a, b]`: an interval with no single value (CIAAW prints these for elements whose composition varies in
+///   nature). The weight is the midpoint `(a + b) / 2` and the standard uncertainty is `(b - a) / sqrt(12)`, the
+///   same rule with the half-width `(b - a) / 2`. It takes no third field.
+///
+/// A weight is positive and finite and the number is finite and not negative (`0 < a < b` for an interval);
+/// anything else is a problem, because a molar mass built from it would be a confident wrong answer.
 fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
     let parsed = (|| {
         let (symbol, rest) = line.split_once('=')?;
-        let (weight, rest) = rest.split_once(',')?;
-        let (number, kind) = rest.split_once(',').map_or((rest, "interval"), |(number, kind)| (number, kind.trim()));
         let symbol = symbol.trim();
         let mut chars = symbol.chars();
         let is_symbol = chars.next().is_some_and(|c| c.is_ascii_uppercase())
             && symbol.len() <= 3
             && chars.all(|c| c.is_ascii_lowercase());
-        let weight: f64 = weight.trim().parse().ok()?;
-        let number: f64 = number.trim().parse().ok()?;
-        let std = match kind {
-            "interval" => number / 3f64.sqrt(),
-            "standard" => number,
-            _ => return None,
+        let (weight, std) = match rest.trim().strip_prefix('[') {
+            Some(interval) => read_weight_interval(interval)?,
+            None => read_weight_and_number(rest)?,
         };
-        (is_symbol && weight.is_finite() && weight > 0.0 && number.is_finite() && number >= 0.0)
-            .then(|| (symbol.to_string(), (weight, std)))
+        is_symbol.then(|| (symbol.to_string(), (weight, std)))
     })();
     match parsed {
         Some((symbol, value)) => {
             registry.atomic_weights.insert(symbol, value);
         }
         None => problems.push(format!(
-            "{line}: expected `symbol = weight, half-width` (or `, standard` after a standard uncertainty) with a positive weight and a non-negative number"
+            "{line}: expected `symbol = weight, half-width` (or `, standard` after a standard uncertainty) or `symbol = [a, b]`, with a positive weight and a non-negative number"
         )),
     }
+}
+
+/// `weight, number [, interval|standard]` of an `[AtomicWeights]` line: the weight and its standard uncertainty.
+fn read_weight_and_number(text: &str) -> Option<(f64, f64)> {
+    let (weight, rest) = text.split_once(',')?;
+    let (number, kind) = rest.split_once(',').map_or((rest, "interval"), |(number, kind)| (number, kind.trim()));
+    let weight: f64 = weight.trim().parse().ok()?;
+    let number: f64 = number.trim().parse().ok()?;
+    let std = match kind {
+        "interval" => number / 3f64.sqrt(),
+        "standard" => number,
+        _ => return None,
+    };
+    (weight.is_finite() && weight > 0.0 && number.is_finite() && number >= 0.0).then_some((weight, std))
+}
+
+/// `a, b]` (what follows the `[`) of an `[AtomicWeights]` line: the midpoint and `(b - a) / sqrt(12)`.
+fn read_weight_interval(text: &str) -> Option<(f64, f64)> {
+    let (low, high) = text.strip_suffix(']')?.split_once(',')?;
+    let (low, high): (f64, f64) = (low.trim().parse().ok()?, high.trim().parse().ok()?);
+    (low.is_finite() && high.is_finite() && 0.0 < low && low < high).then(|| ((low + high) / 2.0, (high - low) / 12f64.sqrt()))
 }
 
 /// One line of `[Categories]`: `name = [unit, unit, ...]`.

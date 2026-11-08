@@ -98,37 +98,62 @@ mod tests {
         (a - b).abs() <= 1e-9 * b.abs().max(1.0)
     }
 
+    // The CIAAW Standard Atomic Weights 2024 used below, written down from the table
+    // (tests/golden/ciaaw_standard_atomic_weights_2024.tsv), never read back from the code under test.
+    // An interval [a, b] is its midpoint, with standard uncertainty (b - a) / sqrt(12); a value x(n) is x,
+    // with standard uncertainty (n units of the last digit) / sqrt(3).
+    const H: f64 = (1.00784 + 1.00811) / 2.0; // [1.00784, 1.00811]
+    const C: f64 = (12.0096 + 12.0116) / 2.0; // [12.0096, 12.0116]
+    const N: f64 = (14.00643 + 14.00728) / 2.0; // [14.00643, 14.00728]
+    const O: f64 = (15.99903 + 15.99977) / 2.0; // [15.99903, 15.99977]
+    const S: f64 = (32.059 + 32.076) / 2.0; // [32.059, 32.076]
+    const CA: f64 = 40.078; // 40.078(4)
+    const CU: f64 = 63.546; // 63.546(3)
+
+    fn u_h() -> f64 {
+        (1.00811 - 1.00784) / 12f64.sqrt()
+    }
+
+    fn u_c() -> f64 {
+        (12.0116 - 12.0096) / 12f64.sqrt()
+    }
+
+    fn u_o() -> f64 {
+        (15.99977 - 15.99903) / 12f64.sqrt()
+    }
+
     #[test]
     fn water_is_18_015_with_its_atoms_uncertainties_in_quadrature() {
         let (mass, std) = Species::new("H2O").unwrap().molar_mass_parts().unwrap();
-        assert!(close(mass, 2.0 * 1.008 + 15.999));
-        // half-widths 0.0002 (H) and 0.001 (O) as standard uncertainties (/ sqrt(3)): sqrt((2 * 0.0002 / sqrt(3))^2 + (0.001 / sqrt(3))^2)
-        assert!(close(std, ((2.0 * 0.0002 / 3f64.sqrt()).powi(2) + (0.001 / 3f64.sqrt()).powi(2)).sqrt()));
+        assert!(close(mass, 2.0 * H + O));
+        // H and O are intervals: u(H) = 0.00027 / sqrt(12), u(O) = 0.00074 / sqrt(12); sqrt((2 u(H))^2 + u(O)^2)
+        assert!(close(std, ((2.0 * u_h()).powi(2) + u_o().powi(2)).sqrt()));
     }
 
     #[test]
     fn the_molar_mass_uncertainty_is_the_iupac_quadrature_of_the_standard_uncertainties() {
         // IUPAC, "Interpretation and use of standard atomic weights": u^2(Mr) = sum over elements of
-        // nu_E^2 u^2(Ar(E)), with u = half-width / sqrt(3) for the CIAAW interval (H 0.0002, O 0.001).
+        // nu_E^2 u^2(Ar(E)), with u = (b - a) / sqrt(12) for the CIAAW intervals (H [1.00784, 1.00811], O [15.99903, 15.99977]).
         let (_, std) = Species::new("H2O").unwrap().molar_mass_parts().unwrap();
-        let expected = ((2.0 * 0.0002 / 3f64.sqrt()).powi(2) + (0.001 / 3f64.sqrt()).powi(2)).sqrt();
+        let expected = ((2.0 * (1.00811 - 1.00784) / 12f64.sqrt()).powi(2) + ((15.99977 - 15.99903) / 12f64.sqrt()).powi(2)).sqrt();
         assert!((std - expected).abs() <= 1e-12 * expected, "{std} vs {expected}");
     }
 
     #[test]
     fn calcium_nitrate_and_copper_sulfate_pentahydrate() {
         let (mass, _) = Species::new("Ca(NO3)2").unwrap().molar_mass_parts().unwrap();
-        assert!(close(mass, 40.078 + 2.0 * 14.007 + 6.0 * 15.999));
+        assert!(close(mass, CA + 2.0 * N + 6.0 * O));
         let (mass, _) = Species::new("CuSO4·5H2O").unwrap().molar_mass_parts().unwrap();
-        assert!(close(mass, 63.546 + 32.06 + 9.0 * 15.999 + 10.0 * 1.008));
+        assert!(close(mass, CU + S + 9.0 * O + 10.0 * H));
     }
 
     #[test]
     fn the_molar_mass_is_a_quantity_in_g_per_mol() {
         let q = Species::new("CO2").unwrap().molar_mass().unwrap();
-        assert!(close(q.value.mean(), 12.011 + 2.0 * 15.999));
-        assert!(close(q.value.std_dev(), ((0.002 / 3f64.sqrt()).powi(2) + (2.0 * 0.001 / 3f64.sqrt()).powi(2)).sqrt()));
-        assert!(close(q.to("kg/mol").unwrap().value.mean(), 0.044009));
+        assert!(close(q.value.mean(), C + 2.0 * O));
+        assert!(close(q.value.std_dev(), (u_c().powi(2) + (2.0 * u_o()).powi(2)).sqrt()));
+        // 12.0106 + 2 * 15.9994 = 44.0094 g/mol
+        assert!(close(q.to("kg/mol").unwrap().value.mean(), 0.0440094));
     }
 
     #[test]
@@ -148,8 +173,8 @@ mod tests {
         let co2 = Species::new("CO2").unwrap();
         let mass = Quantity::with_uncertainty(50.0, 0.1, "g").unwrap();
         let n = mass_to_moles(&mass, &co2).unwrap();
-        let m_co2 = 12.011 + 2.0 * 15.999;
-        let u_m = ((0.002 / 3f64.sqrt()).powi(2) + (2.0 * 0.001 / 3f64.sqrt()).powi(2)).sqrt();
+        let m_co2 = C + 2.0 * O;
+        let u_m = (u_c().powi(2) + (2.0 * u_o()).powi(2)).sqrt();
         let expected = 50.0 / m_co2;
         let rel = ((0.1_f64 / 50.0).powi(2) + (u_m / m_co2).powi(2)).sqrt();
         assert!(close(n.value.mean(), expected));
@@ -162,7 +187,7 @@ mod tests {
         let co2 = Species::new("CO2").unwrap();
         let kilo = Quantity::new(0.05, "kg").unwrap();
         let n = mass_to_moles(&kilo, &co2).unwrap();
-        assert!(close(n.value.mean(), 50.0 / (12.011 + 2.0 * 15.999)));
+        assert!(close(n.value.mean(), 50.0 / (C + 2.0 * O)));
     }
 
     #[test]
@@ -177,7 +202,7 @@ mod tests {
         let water = Species::new("H2O").unwrap();
         let n = Quantity::with_uncertainty(2.0, 0.01, "mol").unwrap();
         let mass = moles_to_mass(&n, &water).unwrap();
-        let m = 2.0 * 1.008 + 15.999;
+        let m = 2.0 * H + O;
         assert!(close(mass.value.mean(), 2.0 * m));
         assert!(close(mass.to("kg").unwrap().value.mean(), 2.0 * m / 1000.0));
         let (_, u_m) = water.molar_mass_parts().unwrap();
@@ -193,7 +218,7 @@ mod tests {
         let h2 = Species::new("H2").unwrap();
         assert_eq!(crate::units::with_catalog(&registry, || h2.molar_mass_parts()).unwrap(), (4.0, 0.0));
         let (mass, std) = h2.molar_mass_parts().unwrap();
-        assert!(close(mass, 2.0 * 1.008) && close(std, 2.0 * 0.0002 / 3f64.sqrt()), "outside the scope it is the default");
+        assert!(close(mass, 2.0 * H) && close(std, 2.0 * u_h()), "outside the scope it is the default");
     }
 
     #[test]
@@ -247,7 +272,7 @@ mod tests {
         let co2 = Species::new("CO2").unwrap();
         let mass = Quantity::new_scalar(50.0, 0.1, Quantity::new(1.0, "g").unwrap().unit, Some("monte_carlo"), Some(500));
         let n = mass_to_moles(&mass, &co2).unwrap();
-        assert!((n.value.mean() - 50.0 / (12.011 + 2.0 * 15.999)).abs() < 0.01);
+        assert!((n.value.mean() - 50.0 / (C + 2.0 * O)).abs() < 0.01);
         let rel = relative(&n);
         assert!(rel > 0.001 && rel < 0.004, "relative uncertainty {rel}");
     }
