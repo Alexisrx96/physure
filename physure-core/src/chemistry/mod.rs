@@ -5,9 +5,11 @@
 
 pub mod elements;
 
+pub use elements::atomic_weight;
+
 pub mod formula;
 
-pub use formula::{parse_formula, Composition};
+pub use formula::{parse_formula, subscripts_to_ascii, Composition};
 
 pub mod species;
 
@@ -15,7 +17,7 @@ pub use species::{mass_to_moles, moles_to_mass, Species};
 
 pub mod reaction;
 
-pub use reaction::Reaction;
+pub use reaction::{balance, Reaction};
 
 pub mod thermo;
 
