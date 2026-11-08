@@ -14,12 +14,13 @@ This document serves as the **single source of truth** for tracking project-wide
 |---|---|---|---|---|
 | **1. Core Physics & Unit Engine** | ✅ Complete | 100% | `physure-core/src/`, `physure-python/physure/domain/measurement/` | Base units, dimensions, quantities, JIT/AOT |
 | **2. Uncertainty & Covariance Engine** | ✅ Complete | 95% | `physure-core/src/uncertainty/`, `physure-python/physure/domain/uncertainty/` | GUM covariance, Monte Carlo, affine arithmetic |
-| **3. Chemistry & Reaction Tracking** | 🚧 Python ✅ / Rust+PHS Planned | 50% | [Chemistry Roadmap](docs/chemistry_roadmap.md) | `physure.ext.chemistry` → `physure_core::chemistry` + PHS builtins |
+| **3. Chemistry & Reaction Tracking** | 🚧 Python ✅ / Rust core ✅ / PHS + bindings Planned | 60% | [Chemistry Roadmap](docs/chemistry_roadmap.md) | `physure.ext.chemistry` → `physure_core::chemistry` + PHS builtins |
 | **4. Symbolic Math & CAS Engine** | 🚧 Phase 1 Done / Phase 2–4 In Progress | 35% | [Symbolic Math Roadmap](docs/symbolic_math_roadmap.md) | `physure_core::cas`, Gröbner, Risch, ODEs, SAT |
 | **5. Diagramming Engine (`physure.diagrams`)**| 📋 Planned | 10% | [Diagramming Engine Roadmap](docs/diagrams_roadmap.md) | Free-body diagrams, vectors, circuits, TikZ/SVG |
 | **6. Scientific Companion & Metrology** | 🚧 In Progress | 40% | [Scientific Companion Roadmap](docs/scientific_roadmap.md) | Buckingham $\pi$, IAPWS-IF97, EKF, Polars/Xarray |
 | **7. Metrological Rigor & Physical Reality Gaps**| 🚧 In Progress | 17% | [Scientific Gaps & Rigor](docs/scientific_gaps_and_rigor.md) | Welch-Satterthwaite, DAEs, Real EOS, Intervals |
 | **8. PHS Language Readiness (LAB-READY)** | ✅ Complete | 100% | [Language Readiness Roadmap](docs/language_readiness_roadmap.md) | `physure-script` loops/concurrency, `physure-cli` debugger, `DebugHook` |
+| **9. Reproducibility & Audited Use (`phs conf`)** | 📋 Designed (spec approved) | 5% | [Design spec](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md) | Frozen configuration, engine pin, witnesses, `phs conf freeze/diff/update` |
 
 ---
 
@@ -50,6 +51,9 @@ For detailed architectural designs, mathematical specifications, API proposals, 
 7. 🧵 **[PHS Language Readiness Roadmap](docs/language_readiness_roadmap.md)**
    * `for`/`while` loops, `rayon`-backed data-parallelism and `parallel_map`, and an interpreter `DebugHook` powering a `phs debug` CLI debugger (DAP adapter staged as a stretch goal) — the path to the LAB-READY milestone.
 
+8. 🔒 **[`phs conf`: freezing the whole configuration](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md)**
+   * For audited settings: the data (conf sections, unit systems, constants), the engine (pinned by version, commit, build and binary hash) and the environment are frozen into a sealed `physure.frozen.conf` with a hash-chained history; `phs conf freeze / diff / update / seal / verify` change it only deliberately. Design approved 2026-11-07; Phase 1 (core) is next.
+
 ---
 
 ## 🏁 Consolidated Master Milestones
@@ -57,8 +61,8 @@ For detailed architectural designs, mathematical specifications, API proposals, 
 ```mermaid
 timeline
     title Physure Master Development Milestones
-    Done : Rust Core Engine : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression : PHS LAB-READY (loops, concurrency, debugger, incremental LSP, compiled exports, decorators) : Rust-Owned Unit Algebra (A1) : GUM Welch-Satterthwaite : Angle Mode
-    Now : Rust Core Chemistry Module (physure_core::chemistry) : PHS DSL Chemistry Builtins : Buckingham Pi Nullspace Solver
+    Done : Rust Core Engine : Rust Core Chemistry Module (formulas, molar mass, balancing, thermo) : Frozen Atomic-Weight Editions (CIAAW 2024) : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression : PHS LAB-READY (loops, concurrency, debugger, incremental LSP, compiled exports, decorators) : Rust-Owned Unit Algebra (A1) : GUM Welch-Satterthwaite : Angle Mode
+    Now : PHS DSL Chemistry Builtins : Python Delegates to the Core Chemistry : phs conf (Freezing the Whole Configuration, Phase 1: core) : Buckingham Pi Nullspace Solver
     Next : CAS Exact-Arithmetic Placement (S0) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Risch Integration Engine : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Real Gas EOS
     Later : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
 ```
@@ -103,6 +107,14 @@ timeline
 * [ ] **Phase 3**: Electrical circuit schematics, 2D field line tracing, thermodynamic $P-V$ work integrals.
 * [ ] **Phase 4**: Chemistry reaction profiles, VSEPR geometries, and electrochemical cells.
 * [ ] **Phase 5**: LaTeX TikZ exporter and terminal ASCII renderer.
+
+### Subsystem 6: Reproducibility & Audited Use (5% 📋)
+* [x] **Frozen atomic-weight editions**: named, immutable CIAAW editions with a fingerprint test, tables of your own, and the edition report (`atomic_weight_edition()`).
+* [ ] **Phase 1 — core**: SHA-256, canonical form, frozen-file model with hash-chained history, resolution (`--conf`, `PHYSURE_CONF`, discovery, `PHYSURE_REQUIRE_FROZEN`), sealed loading, engine identity and policies.
+* [ ] **Phase 2 — CLI**: `phs conf` `status`, `show`, `freeze`, `verify`, `diff`, `update`, `seal`, `history`.
+* [ ] **Phase 3 — witnesses**: built-in reference calculations and user scripts, `verify --run`.
+* [ ] **Phase 4 — data migration**: code-resident numbers (currency rates, Monte Carlo defaults, Python chemistry tables) move into the catalog; a public table of what is and is not frozen.
+* [ ] **Phase 5 — bindings**: Python, WebAssembly and Java honour the frozen file; `phs upgrade` hint.
 
 ---
 
