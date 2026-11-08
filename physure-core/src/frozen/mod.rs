@@ -11,4 +11,7 @@ pub use model::{FrozenError, FrozenFile, FrozenResult, HistoryEntry, Pairs, Sour
 pub mod seal;
 pub use seal::{EntryInput, FrozenParts, Problem};
 pub mod engine;
-pub use engine::{check, freezable, Difference, EngineIdentity, EngineMismatch, EnginePolicy};
+pub use engine::{
+    check, engine_pairs, environment_pairs, freezable, read_engine, sha256_of_file, Difference, EngineBlock, EngineIdentity,
+    EngineMismatch, EnginePolicy,
+};

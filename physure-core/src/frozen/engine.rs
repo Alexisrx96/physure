@@ -7,9 +7,14 @@
 //! therefore not pinned: `overflow-checks`, `lto`, `codegen-units`, the versions of dependencies when `physure`
 //! is built inside someone else's workspace, and every dynamically linked library.
 
+use std::fs::File;
+use std::io::Read;
+use std::path::Path;
 use std::str::FromStr;
 
-use super::model::{FrozenError, FrozenResult};
+use super::canonical::is_sha256_hex;
+use super::model::{FrozenError, FrozenResult, Pairs};
+use super::sha256::{to_hex, Sha256};
 
 /// What an identity says when it cannot name a commit.
 pub const UNKNOWN: &str = "unknown";
@@ -230,6 +235,107 @@ pub fn freezable(identity: &EngineIdentity, policy: EnginePolicy) -> Result<(), 
         ));
     }
     Ok(())
+}
+
+/// A decoded `[Engine]` block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineBlock {
+    pub identity: EngineIdentity,
+    pub policy: EnginePolicy,
+    /// The SHA-256 of the file that contains the engine, if recorded. Required by `binary`, informational under
+    /// `build`.
+    pub binary_sha256: Option<String>,
+}
+
+/// The `[Engine]` block for `identity` and `policy`, with the hash of the engine's file if given. Refuses an
+/// invalid identity, a policy that cannot be recorded for it (`freezable`) and `binary` without a hash.
+pub fn engine_pairs(identity: &EngineIdentity, policy: EnginePolicy, binary_sha256: Option<&str>) -> FrozenResult<Pairs> {
+    identity.validate()?;
+    freezable(identity, policy).map_err(FrozenError)?;
+    match (policy, binary_sha256) {
+        (EnginePolicy::Binary, None) => return Err(FrozenError("the policy binary needs the binary_sha256 of the engine's file".into())),
+        (_, Some(hash)) if !is_sha256_hex(hash) => {
+            return Err(FrozenError(format!("binary_sha256 is not a SHA-256 in lowercase hexadecimal: {hash:?}")))
+        }
+        _ => {}
+    }
+    let mut items = vec![
+        ("version".to_string(), identity.version.clone()),
+        ("commit".to_string(), identity.commit.clone()),
+        ("profile".to_string(), identity.profile.clone()),
+        ("target".to_string(), identity.target.clone()),
+        ("features".to_string(), identity.features.clone()),
+        ("rustc".to_string(), identity.rustc.clone()),
+        ("flags".to_string(), identity.flags.clone()),
+        ("policy".to_string(), policy.as_str().to_string()),
+    ];
+    if let Some(hash) = binary_sha256 {
+        items.push(("binary_sha256".to_string(), hash.to_string()));
+    }
+    Pairs::from_vec(items)
+}
+
+/// Reads an `[Engine]` block back. Strict: the eight keys are required, `binary_sha256` is optional and must be a
+/// SHA-256, every value is validated, and **any other key is an error**: an unknown key in the block that sets the
+/// policy would be a knob nobody can see.
+pub fn read_engine(pairs: &Pairs) -> FrozenResult<EngineBlock> {
+    const KNOWN: [&str; 9] = ["version", "commit", "profile", "target", "features", "rustc", "flags", "policy", "binary_sha256"];
+    if let Some((key, _)) = pairs.iter().find(|(k, _)| !KNOWN.contains(k)) {
+        return Err(FrozenError(format!("[Engine] has an unknown key {key}; the keys are {}", KNOWN.join(", "))));
+    }
+    let need = |key: &str| -> FrozenResult<String> {
+        pairs.get(key).map(str::to_string).ok_or_else(|| FrozenError(format!("[Engine] has no {key}")))
+    };
+    let identity = EngineIdentity {
+        version: need("version")?,
+        commit: need("commit")?,
+        profile: need("profile")?,
+        target: need("target")?,
+        features: need("features")?,
+        rustc: need("rustc")?,
+        flags: need("flags")?,
+    };
+    identity.validate().map_err(|e| FrozenError(format!("[Engine] {e}")))?;
+    let policy: EnginePolicy = need("policy")?.parse().map_err(|e: String| FrozenError(format!("[Engine] {e}")))?;
+    let binary_sha256 = match pairs.get("binary_sha256") {
+        None => None,
+        Some(hash) if is_sha256_hex(hash) => Some(hash.to_string()),
+        Some(hash) => return Err(FrozenError(format!("[Engine] binary_sha256 is not a SHA-256 in lowercase hexadecimal: {hash:?}"))),
+    };
+    Ok(EngineBlock { identity, policy, binary_sha256 })
+}
+
+/// What can be said about the machine, for the `[Environment]` block. Informational: outside the seal, and no
+/// behaviour may ever depend on it.
+pub fn environment_pairs() -> Pairs {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    Pairs::from_vec(vec![
+        ("os".to_string(), std::env::consts::OS.to_string()),
+        ("arch".to_string(), std::env::consts::ARCH.to_string()),
+        ("family".to_string(), std::env::consts::FAMILY.to_string()),
+        ("endian".to_string(), if cfg!(target_endian = "little") { "little" } else { "big" }.to_string()),
+        ("pointer_width".to_string(), usize::BITS.to_string()),
+        ("cpus".to_string(), cpus.to_string()),
+    ])
+    .expect("the environment record is valid by construction")
+}
+
+/// The SHA-256 of a file, read in blocks. Hash **the file that contains the engine**: for the CLI that is
+/// `std::env::current_exe()`, for a Python extension module it is the module (not the interpreter), for the Java
+/// library the library. The core deliberately has no "hash my own executable" convenience, because in a binding
+/// that would pin the interpreter and let a swapped module pass.
+pub fn sha256_of_file(path: &Path) -> std::io::Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut block = [0u8; 65_536];
+    loop {
+        let read = file.read(&mut block)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&block[..read]);
+    }
+    Ok(to_hex(&hasher.finish()))
 }
 
 #[cfg(test)]
@@ -483,5 +589,92 @@ mod tests {
         for p in [EnginePolicy::Binary, EnginePolicy::Build, EnginePolicy::Release, EnginePolicy::Record] {
             assert!(freezable(&identity(HEAD), p).is_ok());
         }
+    }
+
+    use crate::frozen::model::Pairs;
+
+    #[test]
+    fn the_engine_block_round_trips() {
+        let a = identity(HEAD);
+        let hash = "a".repeat(64);
+        let pairs = engine_pairs(&a, EnginePolicy::Binary, Some(&hash)).unwrap();
+        assert_eq!((pairs.get("policy"), pairs.get("commit")), (Some("binary"), Some(HEAD)));
+        let block = read_engine(&pairs).unwrap();
+        assert_eq!((block.identity, block.policy, block.binary_sha256), (a.clone(), EnginePolicy::Binary, Some(hash)));
+        let without = engine_pairs(&a, EnginePolicy::Build, None).unwrap();
+        assert_eq!(without.get("binary_sha256"), None);
+        assert_eq!(read_engine(&without).unwrap().binary_sha256, None);
+    }
+
+    #[test]
+    fn building_a_block_that_could_never_pass_is_refused() {
+        let a = identity(HEAD);
+        assert!(engine_pairs(&a, EnginePolicy::Binary, None).unwrap_err().to_string().contains("binary_sha256"));
+        assert!(engine_pairs(&a, EnginePolicy::Binary, Some("not a hash")).is_err());
+        assert!(engine_pairs(&identity(UNKNOWN), EnginePolicy::Build, None).unwrap_err().to_string().contains("commit"));
+        assert!(engine_pairs(&identity(UNKNOWN), EnginePolicy::Release, None).is_ok());
+        let mut bad = identity(HEAD);
+        bad.target = "two\nlines".into();
+        assert!(engine_pairs(&bad, EnginePolicy::Build, None).is_err());
+        bad.target = "x86_64-pc-windows-msvc".into();
+        bad.commit = "Unknown".into();
+        assert!(engine_pairs(&bad, EnginePolicy::Release, None).is_err());
+    }
+
+    fn rebuilt(pairs: &Pairs, edit: impl Fn(Vec<(String, String)>) -> Vec<(String, String)>) -> Pairs {
+        Pairs::from_vec(edit(pairs.as_slice().to_vec())).unwrap()
+    }
+
+    #[test]
+    fn the_engine_block_is_read_strictly() {
+        let good = engine_pairs(&identity(HEAD), EnginePolicy::Build, None).unwrap();
+        for key in ["version", "commit", "profile", "target", "features", "rustc", "flags", "policy"] {
+            let missing = rebuilt(&good, |v| v.into_iter().filter(|(k, _)| k != key).collect());
+            let err = read_engine(&missing).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}: {err}");
+        }
+        // an unknown key is an invisible knob
+        let extra = rebuilt(&good, |mut v| { v.push(("enforce".into(), "never".into())); v });
+        assert!(read_engine(&extra).unwrap_err().to_string().contains("enforce"));
+        // a policy that does not exist
+        let bad_policy = rebuilt(&good, |v| v.into_iter().map(|(k, x)| if k == "policy" { (k, "exact".into()) } else { (k, x) }).collect());
+        assert!(read_engine(&bad_policy).unwrap_err().to_string().contains("exact"));
+        // a hash that is not a hash
+        let bad_hash = rebuilt(&good, |mut v| { v.push(("binary_sha256".into(), "xyz".into())); v });
+        assert!(read_engine(&bad_hash).unwrap_err().to_string().contains("binary_sha256"));
+        // every spelling of an unknown commit that is not exactly `unknown` is refused
+        for spelling in ["", "Unknown", "UNKNOWN", "main"] {
+            let block = rebuilt(&good, |v| v.into_iter().map(|(k, x)| if k == "commit" { (k, spelling.into()) } else { (k, x) }).collect());
+            assert!(read_engine(&block).is_err(), "commit {spelling:?}");
+        }
+        // unsorted or duplicated features are refused
+        for features in ["b,a", "a,a"] {
+            let block = rebuilt(&good, |v| v.into_iter().map(|(k, x)| if k == "features" { (k, features.into()) } else { (k, x) }).collect());
+            assert!(read_engine(&block).is_err(), "features {features:?}");
+        }
+    }
+
+    #[test]
+    fn the_environment_record_is_complete_and_valid() {
+        let env = environment_pairs();
+        for key in ["os", "arch", "family", "endian", "pointer_width", "cpus"] {
+            assert!(env.get(key).is_some(), "{key}");
+        }
+        assert!(["little", "big"].contains(&env.get("endian").unwrap()));
+        assert!(env.get("pointer_width").unwrap().parse::<u32>().is_ok());
+        assert!(env.get("cpus").unwrap().parse::<usize>().unwrap() >= 1);
+    }
+
+    #[test]
+    fn hashing_a_file_agrees_with_hashing_its_bytes() {
+        let path = std::env::current_exe().unwrap();
+        let direct = crate::frozen::sha256::sha256_hex(&std::fs::read(&path).unwrap());
+        assert_eq!(sha256_of_file(&path).unwrap(), direct);
+        assert!(crate::frozen::canonical::is_sha256_hex(&direct));
+    }
+
+    #[test]
+    fn hashing_a_missing_file_is_an_error() {
+        assert!(sha256_of_file(std::path::Path::new("definitely/not/here.bin")).is_err());
     }
 }
