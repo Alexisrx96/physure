@@ -6,3 +6,5 @@
 pub mod sha256;
 pub mod canonical;
 pub mod time;
+pub mod model;
+pub use model::{FrozenError, FrozenFile, FrozenResult, HistoryEntry, Source, WitnessScript};
