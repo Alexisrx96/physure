@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 use super::canonical::{canonical_pairs, content_sha256, exact_sha256, source_sha256};
-use super::engine::read_engine;
+use super::engine::{read_engine, recordable, EngineBlock};
 use super::model::{FrozenError, FrozenFile, FrozenResult, HistoryEntry, Pairs, Source, WitnessScript, FORMAT_VERSION};
 use super::sha256::sha256_hex;
 use super::time::is_rfc3339_utc;
@@ -14,7 +14,8 @@ pub struct EntryInput<'a> {
     pub time: &'a str,
     /// `freeze`, `update` or `seal`.
     pub action: &'a str,
-    /// The running engine, short form (`0.3.1+9f2c1ab`).
+    /// The engine acting, short form (`0.3.1+9f2c1ab`): informational text recorded as given, not checked. What the
+    /// file pins is derived by the library from the `[Engine]` block (`policy`, `pinned`, `engine_sha256`).
     pub engine: &'a str,
     /// `user@host`: informational, not authenticated.
     pub actor: &'a str,
@@ -89,7 +90,10 @@ pub enum Problem {
     /// The last history entry does not record the current `[Engine]` block: the block was changed without a
     /// reseal, or the entry's `engine_sha256` was altered. `expected` is the hash of the block as it is now.
     HistoryEngine { expected: String, found: String },
-    /// The `[Engine]` block cannot be read (`read_engine`): a missing or unknown key, or an invalid value.
+    /// The last history entry's `policy` or `pinned` (`field`) is not what the current `[Engine]` block says.
+    HistoryPin { field: String, expected: String, found: String },
+    /// The `[Engine]` block cannot be read (`read_engine`: a missing or unknown key, or an invalid value), or could
+    /// not have been recorded (`build`/`binary` without a known commit, `binary` without a hash).
     Engine { message: String },
     Seal { expected: String, found: String },
 }
@@ -163,8 +167,12 @@ impl fmt::Display for Problem {
                 f,
                 "the last history entry does not record the current [Engine] block (changed without a reseal, or the entry was altered): expected engine_sha256 {expected}, found {found}"
             ),
+            Problem::HistoryPin { field, expected, found } => write!(
+                f,
+                "the last history entry does not record what the current [Engine] block pins: expected {field} {expected}, found {found}"
+            ),
             Problem::Engine { message } => {
-                write!(f, "the [Engine] block cannot be read: expected the eight keys of a valid engine block, found: {message}")
+                write!(f, "the [Engine] block cannot be read or could not have been recorded: expected a valid engine block whose policy can be checked, found: {message}")
             }
             Problem::Seal { expected, found } => write!(
                 f,
@@ -175,12 +183,13 @@ impl fmt::Display for Problem {
 }
 
 /// The text an entry's hash is computed over (spec §5.3): labelled lines in a fixed order, every value one line.
-/// `engine_sha256` sits right after `engine`, so a change of the engine block is a change of the log.
+/// `engine_sha256`, `policy` and `pinned` sit right after `engine`, so a change of the engine block, and of what
+/// it pins, is a change of the log.
 fn entry_sha256(entry: &HistoryEntry) -> String {
     let text = format!(
-        "n={}\ntime={}\naction={}\nengine={}\nengine_sha256={}\nactor={}\nreason={}\nold_content_sha256={}\nnew_content_sha256={}\ndiff={}\nprev_entry_sha256={}",
-        entry.n, entry.time, entry.action, entry.engine, entry.engine_sha256, entry.actor, entry.reason,
-        entry.old_content_sha256, entry.new_content_sha256, entry.diff, entry.prev_entry_sha256
+        "n={}\ntime={}\naction={}\nengine={}\nengine_sha256={}\npolicy={}\npinned={}\nactor={}\nreason={}\nold_content_sha256={}\nnew_content_sha256={}\ndiff={}\nprev_entry_sha256={}",
+        entry.n, entry.time, entry.action, entry.engine, entry.engine_sha256, entry.policy, entry.pinned, entry.actor,
+        entry.reason, entry.old_content_sha256, entry.new_content_sha256, entry.diff, entry.prev_entry_sha256
     );
     sha256_hex(text.as_bytes())
 }
@@ -288,12 +297,19 @@ impl FrozenFile {
         let old = std::mem::take(&mut self.content_sha256);
         self.content_sha256 = self.computed_content_sha256();
         let prev = self.history.last().map(|e| e.entry_sha256.clone()).unwrap_or_default();
+        // derived from the block, never from the caller; an unreadable block leaves them empty, and `verify`
+        // (which `new` and `reseal` run) refuses the result
+        let (policy, pinned) = read_engine(&self.engine)
+            .map(|block| (block.policy.as_str().to_string(), block.identity.short()))
+            .unwrap_or_default();
         let mut entry = HistoryEntry {
             n: self.history.len() as u32 + 1,
             time: input.time.to_string(),
             action: input.action.to_string(),
             engine: input.engine.to_string(),
             engine_sha256: engine_sha256(&self.engine),
+            policy,
+            pinned,
             actor: input.actor.to_string(),
             reason: input.reason.to_string(),
             old_content_sha256: old,
@@ -344,9 +360,19 @@ impl FrozenFile {
             problems.push(Problem::Format { found: self.format });
         }
         problems.extend(self.framing_problems().into_iter().map(|found| Problem::Framing { found }));
-        if let Err(e) = read_engine(&self.engine) {
-            problems.push(Problem::Engine { message: e.0 });
-        }
+        // readable, and something that could have been recorded (a policy that can be checked)
+        let block = read_engine(&self.engine).and_then(|block| {
+            recordable(&block.identity, block.policy, block.binary_sha256.as_deref())
+                .map(|()| block)
+                .map_err(|e| FrozenError(format!("[Engine] {e}")))
+        });
+        let block: Option<EngineBlock> = match block {
+            Ok(block) => Some(block),
+            Err(e) => {
+                problems.push(Problem::Engine { message: e.0 });
+                None
+            }
+        };
         self.structure_problems(&mut problems);
         for (i, source) in self.sources.iter().enumerate() {
             let computed = source_sha256(&source.text);
@@ -421,6 +447,15 @@ impl FrozenFile {
         let engine = engine_sha256(&self.engine);
         if last.engine_sha256 != engine {
             problems.push(Problem::HistoryEngine { expected: engine, found: last.engine_sha256.clone() });
+        }
+        if let Some(block) = &block {
+            for (field, expected, found) in
+                [("policy", block.policy.as_str().to_string(), &last.policy), ("pinned", block.identity.short(), &last.pinned)]
+            {
+                if *found != expected {
+                    problems.push(Problem::HistoryPin { field: field.into(), expected, found: found.clone() });
+                }
+            }
         }
         let seal = seal_sha256(self, &content, &last.entry_sha256);
         if seal != self.seal_sha256 {
@@ -672,6 +707,7 @@ mod tests {
             Problem::Created { expected: "a".into(), found: "b".into() },
             Problem::HistoryTip { expected: "a".into(), found: "b".into() },
             Problem::HistoryEngine { expected: "a".into(), found: "b".into() },
+            Problem::HistoryPin { field: "policy".into(), expected: "build".into(), found: "record".into() },
             Problem::Engine { message: "[Engine] has no commit".into() },
             Problem::Seal { expected: "a".into(), found: "b".into() },
         ];
@@ -925,8 +961,8 @@ mod tests {
     }
 
     /// The seal of one small file, computed by hand outside Rust (Python's hashlib) from the seal text written in
-    /// the spec §4.1 and the entry text of §5.3 (with `engine_sha256` right after `engine`). If this fails, the
-    /// code and the spec disagree.
+    /// the spec §4.1 and the entry text of §5.3 (with `engine_sha256`, `policy` and `pinned` right after
+    /// `engine`). If this fails, the code and the spec disagree.
     #[test]
     fn the_seal_matches_an_independent_computation() {
         let file = FrozenFile::new(
@@ -956,8 +992,8 @@ mod tests {
 
     const INDEPENDENT_CONTENT: &str = "9c0d6a0d38b9562d9227f69c582e48040958a2417745956a6cfc9f5150ca77b7";
     const INDEPENDENT_ENGINE: &str = "a3727508d1f58d898990018132fa83fcb072dcb8e4a25e38c5a776a8572177b6";
-    const INDEPENDENT_ENTRY: &str = "baeda19c3d6aa850f052a90e45debc5e7c69b3f27f28f1cb714591ef7cfb3dbc";
-    const INDEPENDENT_SEAL: &str = "d66e5943b87d5ce93342ac9730f93be7fad6ff521afda1347b48a804b0833403";
+    const INDEPENDENT_ENTRY: &str = "5d3ce7e958d3ad893dcf0d5175e0f66a65cbe862c5d5eafc37364a1f6b762690";
+    const INDEPENDENT_SEAL: &str = "9fad9250d221770925eb42f8a3c337681d79319edb1f95502f7bc59e4ae03ced";
 
     // ---- Phase 1b, Task 5: the history records the engine block; verify reads it ----
 
@@ -998,10 +1034,13 @@ mod tests {
         rechain(&mut hidden);
         assert_eq!(
             hidden.verify(),
-            vec![Problem::HistoryEngine {
-                expected: block_sha256(&engine_block(EnginePolicy::Record)),
-                found: block_sha256(&engine_block(EnginePolicy::Build)),
-            }]
+            vec![
+                Problem::HistoryEngine {
+                    expected: block_sha256(&engine_block(EnginePolicy::Record)),
+                    found: block_sha256(&engine_block(EnginePolicy::Build)),
+                },
+                Problem::HistoryPin { field: "policy".into(), expected: "record".into(), found: "build".into() },
+            ]
         );
     }
 
@@ -1030,7 +1069,13 @@ mod tests {
         assert!(has(&file, |p| matches!(p, Problem::Seal { .. })), "{:?}", problems(&file));
         // the same, by someone who recomputes every hash and the seal but leaves the log alone: the log betrays it
         rechain(&mut file);
-        assert_eq!(file.verify(), vec![Problem::HistoryEngine { expected: current, found: recorded }]);
+        assert_eq!(
+            file.verify(),
+            vec![
+                Problem::HistoryEngine { expected: current, found: recorded },
+                Problem::HistoryPin { field: "policy".into(), expected: "record".into(), found: "release".into() },
+            ]
+        );
 
         // the other way: the last entry's engine_sha256 forged in the text
         let original = fresh();
@@ -1083,6 +1128,138 @@ mod tests {
         let mut file = fresh();
         file.engine = Pairs::from_vec(knob).unwrap();
         assert!(has(&file, |p| matches!(p, Problem::Engine { message } if message.contains("enforce"))));
+    }
+
+    // ---- Phase 1b, Task 8: the block must be recordable; the log names the policy and the pinned engine ----
+
+    /// A block `engine_pairs` would refuse, written by hand: `commit` and `policy` replaced in a valid block.
+    fn raw_block(commit: &str, policy: &str) -> Pairs {
+        let base = engine_block(EnginePolicy::Release);
+        Pairs::from_vec(
+            base.as_slice()
+                .iter()
+                .map(|(k, v)| match k.as_str() {
+                    "commit" => (k.clone(), commit.to_string()),
+                    "policy" => (k.clone(), policy.to_string()),
+                    _ => (k.clone(), v.clone()),
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_block_that_could_not_have_been_recorded_is_a_problem() {
+        let unknown_build = raw_block("unknown", "build");
+        let unknown_binary = raw_block("unknown", "binary");
+        let binary_without_hash = raw_block("0123456789abcdef0123456789abcdef01234567", "binary");
+        for (what, block, needle) in [
+            ("build with an unknown commit", &unknown_build, "commit"),
+            ("binary with an unknown commit", &unknown_binary, "commit"),
+            ("binary without a hash", &binary_without_hash, "binary_sha256"),
+        ] {
+            // readable, so only the new rule can refuse it
+            assert!(read_engine(block).is_ok(), "{what}");
+            let made = FrozenFile::new(
+                "2026-11-07T14:03:11Z",
+                FrozenParts {
+                    engine: block.clone(),
+                    sources: vec![Source::new("embedded", "").unwrap(), Source::new("overrides", "").unwrap()],
+                    ..FrozenParts::default()
+                },
+                input("freeze", "r", "2026-11-07T14:03:11Z"),
+            );
+            assert!(made.is_err(), "{what}: made");
+            let mut sealed = fresh();
+            sealed.set_engine(block.clone());
+            assert!(sealed.reseal(input("seal", "routine", "2026-11-08T09:00:00Z")).is_err(), "{what}: resealed");
+            assert_eq!(sealed.history.len(), 1);
+            // written by hand with every hash recomputed: verify still reports it, and only it
+            let mut forged = fresh();
+            forged.engine = block.clone();
+            forged.history[0].engine_sha256 = block_sha256(block);
+            forged.history[0].policy = block.get("policy").unwrap().to_string();
+            forged.history[0].pinned = read_engine(block).unwrap().identity.short();
+            rechain(&mut forged);
+            let p = forged.verify();
+            assert_eq!(p.len(), 1, "{what}: {p:?}");
+            assert!(matches!(&p[0], Problem::Engine { message } if message.contains(needle)), "{what}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn each_entry_records_the_policy_and_the_pinned_engine_of_its_block() {
+        let mut file = fresh_with(engine_block(EnginePolicy::Build));
+        // weakened with an innocuous reason and diff, and a made-up acting engine
+        file.set_engine(engine_block(EnginePolicy::Record));
+        file.reseal(EntryInput {
+            time: "2026-11-08T09:00:00Z",
+            action: "seal",
+            engine: "9.9.9+ffffffffffff",
+            actor: "a@h",
+            reason: "routine reseal",
+            diff: "no changes",
+        })
+        .unwrap();
+        assert!(problems(&file).is_empty(), "{:?}", problems(&file));
+        let (first, second) = (&file.history()[0], &file.history()[1]);
+        assert_eq!((first.policy(), first.pinned()), ("build", "0.3.1+0123456789ab"));
+        assert_eq!((second.policy(), second.pinned()), ("record", "0.3.1+0123456789ab"));
+        assert_eq!(second.engine(), "9.9.9+ffffffffffff", "the acting engine stays what the caller wrote");
+        // rendered right after engine_sha256, and parsed back
+        let text = file.render().unwrap();
+        let expected = format!("engine_sha256 = {}\npolicy = record\npinned = 0.3.1+0123456789ab\nactor = a@h\n", second.engine_sha256());
+        assert!(text.contains(&expected), "{text}");
+        assert_eq!(FrozenFile::parse(&text).unwrap(), file);
+        // inside the entry hash: editing either in the text breaks that entry
+        for (from, to) in [
+            ("policy = record\npinned", "policy = build\npinned"),
+            ("pinned = 0.3.1+0123456789ab\nactor = a@h", "pinned = 0.3.1+fedcba987654\nactor = a@h"),
+        ] {
+            let edited = FrozenFile::parse(&text.replacen(from, to, 1)).unwrap();
+            assert!(has(&edited, |p| matches!(p, Problem::HistoryEntryHash { n: 2, .. })), "{to}: {:?}", problems(&edited));
+        }
+        // the block decides what the entry says: a rewritten entry with every hash recomputed is still caught
+        let mut moved = file.clone();
+        moved.history[1].policy = "build".into();
+        rechain(&mut moved);
+        assert_eq!(moved.verify(), vec![Problem::HistoryPin { field: "policy".into(), expected: "record".into(), found: "build".into() }]);
+        let mut moved = file.clone();
+        moved.history[1].pinned = "0.3.1+fedcba987654".into();
+        rechain(&mut moved);
+        assert_eq!(
+            moved.verify(),
+            vec![Problem::HistoryPin { field: "pinned".into(), expected: "0.3.1+0123456789ab".into(), found: "0.3.1+fedcba987654".into() }]
+        );
+    }
+
+    #[test]
+    fn the_policy_and_pinned_fields_are_parsed_strictly() {
+        let text = two_entries().render().unwrap();
+        // edits inside [History.2] only ([Engine] has a `policy` line of its own)
+        let at = text.find("[History.2]").unwrap();
+        let (head, entry) = text.split_at(at);
+        let edited = |from: &str, to: &str| format!("{head}{}", entry.replacen(from, to, 1));
+        for key in ["policy", "pinned"] {
+            let line = entry.lines().find(|l| l.starts_with(&format!("{key} = "))).unwrap().to_string() + "\n";
+            let message = FrozenFile::parse(&edited(&line, "")).unwrap_err().to_string();
+            assert!(message.starts_with("line ") && message.contains(&format!("[History.2] has no {key}")), "{message}");
+            let message = FrozenFile::parse(&edited(&line, &format!("{key} =\n"))).unwrap_err().to_string();
+            assert!(message.starts_with("line ") && message.contains(&format!("[History.2] {key}")), "{message}");
+        }
+        let message = FrozenFile::parse(&edited("policy = release", "policy = exact")).unwrap_err().to_string();
+        assert!(message.starts_with("line ") && message.contains("exact"), "{message}");
+        // the same shapes, built in memory, cannot be rendered
+        for (key, value) in [("policy", ""), ("policy", "exact"), ("pinned", "")] {
+            let mut file = two_entries();
+            if key == "policy" {
+                file.history[1].policy = value.into();
+            } else {
+                file.history[1].pinned = value.into();
+            }
+            assert!(file.render().unwrap_err().to_string().contains(key), "{key} = {value:?}");
+            assert!(has(&file, |p| matches!(p, Problem::Framing { found } if found.contains(key))), "{key} = {value:?}");
+        }
     }
 
     #[test]

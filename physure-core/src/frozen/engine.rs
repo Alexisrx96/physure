@@ -6,6 +6,14 @@
 //! field; `build` guards against accidents, not against a malicious builder. Not visible to a build script and
 //! therefore not pinned: `overflow-checks`, `lto`, `codegen-units`, the versions of dependencies when `physure`
 //! is built inside someone else's workspace, and every dynamically linked library.
+//!
+//! **Scope of `commit`:** the commit and the dirty check cover **physure-core** only (this crate and the two
+//! workspace manifests). The code that evaluates also includes `physure-script` (the PHS interpreter),
+//! `physure-cli` and the bindings; an edit there is not detected by this crate's build script, which does not even
+//! rerun when they change. `build` therefore pins the core's source revision, not the whole evaluating engine; only
+//! `binary` pins the artefact. Inside a git repository (the crate or an ancestor has a `.git`) the commit comes from
+//! git alone, and only when git can read the repository and the crate sits at its root; otherwise it is `unknown`.
+//! `PHYSURE_BUILD_COMMIT` is used only when the crate is outside any repository.
 
 use std::fs::File;
 use std::io::Read;
@@ -16,8 +24,15 @@ use super::canonical::is_sha256_hex;
 use super::model::{FrozenError, FrozenResult, Pairs};
 use super::sha256::{to_hex, Sha256};
 
+// The build script's commit rule, compiled into the library too so that both use one `is_commit` and one
+// `UNKNOWN` (and so that the rule's unit tests run with the library's).
+#[allow(dead_code)]
+#[path = "../../build_support/commit.rs"]
+mod commit_rules;
+use commit_rules::is_commit;
+
 /// What an identity says when it cannot name a commit.
-pub const UNKNOWN: &str = "unknown";
+pub const UNKNOWN: &str = commit_rules::UNKNOWN;
 
 /// The named features of this crate and whether each is enabled. `default` is a bundle and is not listed. Keep in
 /// step with `[features]` of `Cargo.toml` (a test checks it).
@@ -43,9 +58,14 @@ fn is_word(text: &str, extra: &[char]) -> bool {
     !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
 }
 
+/// One non-empty line without padding: no control character at all (tab, NUL, escape, the C1 controls, CR, LF) and
+/// no Unicode line or paragraph separator, so the value reads and compares the same everywhere it is shown.
 fn one_line(what: &str, text: &str) -> FrozenResult<()> {
-    if text.is_empty() || text != text.trim() || text.contains('\n') || text.contains('\r') {
-        return Err(FrozenError(format!("the engine's {what} must be one non-empty line without padding: {text:?}")));
+    let breaks = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+    if text.is_empty() || text != text.trim() || text.chars().any(breaks) {
+        return Err(FrozenError(format!(
+            "the engine's {what} must be one non-empty line without padding or control characters: {text:?}"
+        )));
     }
     Ok(())
 }
@@ -71,7 +91,7 @@ impl EngineIdentity {
         if !is_word(&self.version, &['.', '+', '-']) {
             return bad("version", &self.version);
         }
-        if self.commit != UNKNOWN && !(matches!(self.commit.len(), 40 | 64) && self.commit.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+        if self.commit != UNKNOWN && !is_commit(&self.commit) {
             return bad("commit (40 or 64 lowercase hexadecimal characters, or unknown)", &self.commit);
         }
         if !self.profile.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') || self.profile.is_empty() {
@@ -94,7 +114,8 @@ impl EngineIdentity {
 
     /// `version+commit` (twelve characters of the commit, or `unknown`), the form the history records.
     pub fn short(&self) -> String {
-        let commit = if self.commit == UNKNOWN { UNKNOWN } else { &self.commit[..12.min(self.commit.len())] };
+        // `get` and not slicing: a hand-built identity may hold anything, and this must not panic
+        let commit = self.commit.get(..12).unwrap_or(&self.commit);
         format!("{}+{}", self.version, commit)
     }
 }
@@ -164,6 +185,8 @@ impl std::fmt::Display for EngineMismatch {
     }
 }
 
+impl std::error::Error for EngineMismatch {}
+
 fn same(differences: &mut Vec<Difference>, field: &'static str, recorded: &str, running: &str) {
     if recorded != running {
         differences.push(Difference { field, recorded: recorded.to_string(), running: running.to_string() });
@@ -230,7 +253,7 @@ pub fn check(
 pub fn freezable(identity: &EngineIdentity, policy: EnginePolicy) -> Result<(), String> {
     if matches!(policy, EnginePolicy::Build | EnginePolicy::Binary) && identity.commit == UNKNOWN {
         return Err(format!(
-            "this build does not know its commit (build it from a clean git checkout, or set PHYSURE_BUILD_COMMIT to the full hash when git is not available), so the policy {} cannot be recorded; use release or record",
+            "this build does not know its commit (build it from a clean git checkout that git can read, or, outside any git repository, set PHYSURE_BUILD_COMMIT to the full hash), so the policy {} cannot be recorded; use release or record",
             policy.as_str()
         ));
     }
@@ -247,18 +270,32 @@ pub struct EngineBlock {
     pub binary_sha256: Option<String>,
 }
 
-/// The `[Engine]` block for `identity` and `policy`, with the hash of the engine's file if given. Refuses an
-/// invalid identity, a policy that cannot be recorded for it (`freezable`) and `binary` without a hash.
-pub fn engine_pairs(identity: &EngineIdentity, policy: EnginePolicy, binary_sha256: Option<&str>) -> FrozenResult<Pairs> {
+impl EngineBlock {
+    /// [`check`] of the running engine against this block, under its policy and with its recorded hash.
+    pub fn check(&self, running: &EngineIdentity, running_binary: impl FnOnce() -> std::io::Result<String>) -> Result<(), EngineMismatch> {
+        check(&self.identity, self.binary_sha256.as_deref(), self.policy, running, running_binary)
+    }
+}
+
+/// Whether a block with these values could have been recorded: the identity is valid, the policy is
+/// [`freezable`] for it, `binary` has a hash, and a hash is a SHA-256. [`engine_pairs`] refuses to build such a
+/// block and `FrozenFile::verify` reports one written by hand, so a file can never pin what it cannot check.
+pub(crate) fn recordable(identity: &EngineIdentity, policy: EnginePolicy, binary_sha256: Option<&str>) -> FrozenResult<()> {
     identity.validate()?;
     freezable(identity, policy).map_err(FrozenError)?;
     match (policy, binary_sha256) {
-        (EnginePolicy::Binary, None) => return Err(FrozenError("the policy binary needs the binary_sha256 of the engine's file".into())),
+        (EnginePolicy::Binary, None) => Err(FrozenError("the policy binary needs the binary_sha256 of the engine's file".into())),
         (_, Some(hash)) if !is_sha256_hex(hash) => {
-            return Err(FrozenError(format!("binary_sha256 is not a SHA-256 in lowercase hexadecimal: {hash:?}")))
+            Err(FrozenError(format!("binary_sha256 is not a SHA-256 in lowercase hexadecimal: {hash:?}")))
         }
-        _ => {}
+        _ => Ok(()),
     }
+}
+
+/// The `[Engine]` block for `identity` and `policy`, with the hash of the engine's file if given. Refuses an
+/// invalid identity, a policy that cannot be recorded for it (`freezable`) and `binary` without a hash.
+pub fn engine_pairs(identity: &EngineIdentity, policy: EnginePolicy, binary_sha256: Option<&str>) -> FrozenResult<Pairs> {
+    recordable(identity, policy, binary_sha256)?;
     let mut items = vec![
         ("version".to_string(), identity.version.clone()),
         ("commit".to_string(), identity.commit.clone()),
@@ -338,9 +375,10 @@ pub fn sha256_of_file(path: &Path) -> std::io::Result<String> {
     Ok(to_hex(&hasher.finish()))
 }
 
+// The build script's way of asking git, so that the test of the running identity asks exactly the same.
 #[cfg(test)]
-#[path = "../../build_support/commit.rs"]
-mod commit_rules;
+#[path = "../../build_support/git.rs"]
+mod git_facts;
 
 #[cfg(test)]
 mod tests {
@@ -374,21 +412,28 @@ mod tests {
         assert!(now.target.contains('-'), "a target triple: {}", now.target);
         assert!(now.rustc.starts_with("rustc "), "{}", now.rustc);
         assert!(now.flags.starts_with("opt-level="), "{}", now.flags);
-        // the commit must be what git says at test time, or `unknown` if the tree is dirty or git cannot say
-        let git = |args: &[&str]| {
-            std::process::Command::new("git").arg("-C").arg(env!("CARGO_MANIFEST_DIR")).args(args).output().ok()
-                .filter(|o| o.status.success()).and_then(|o| String::from_utf8(o.stdout).ok()).map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+        // The commit must be what the build's rule gives for the tree as it is now, with the inputs gathered by the
+        // very code build.rs uses (`build_support/git.rs`). No weaker fallback: a stale or false commit fails here,
+        // inside a git hook too.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let facts = git_facts::facts(manifest);
+        let variable = std::env::var("PHYSURE_BUILD_COMMIT").ok();
+        let inputs = commit_rules::Inputs {
+            env: variable.as_deref(),
+            git_head: facts.head.as_deref(),
+            dirty: facts.dirty,
+            in_repository: facts.in_repository,
         };
-        let top = git(&["rev-parse", "--show-toplevel"]).and_then(|t| std::path::PathBuf::from(t).canonicalize().ok());
-        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.canonicalize().ok());
-        if top.is_some() && top == parent && std::env::var_os("PHYSURE_BUILD_COMMIT").is_none() {
-            let dirty = git(&["status", "--porcelain", "--untracked-files=no", "--", ".", "../Cargo.toml", "../Cargo.lock"]).is_some();
-            let head = git(&["rev-parse", "HEAD"]).unwrap();
-            assert_eq!(now.commit, if dirty { UNKNOWN.to_string() } else { head }, "stale or false commit");
-        } else {
-            assert!(now.commit == UNKNOWN || commit_rules::is_commit(&now.commit), "{}", now.commit);
-        }
+        let expected = commit_rules::decide(&inputs).commit;
+        let hook = match std::env::var_os("GIT_DIR") {
+            Some(dir) => format!(" (GIT_DIR={dir:?} is set, as inside a git hook; git was asked without it, as build.rs does)"),
+            None => String::new(),
+        };
+        assert_eq!(
+            now.commit, expected,
+            "stale or false commit: head {:?}, dirty {}, in a repository {}{hook}",
+            facts.head, facts.dirty, facts.in_repository
+        );
     }
 
     #[test]
@@ -443,6 +488,51 @@ mod tests {
         let mut empty_features = identity(HEAD);
         empty_features.features = String::new();
         empty_features.validate().unwrap();
+    }
+
+    #[test]
+    fn rustc_and_flags_refuse_every_control_character_and_the_unicode_line_separators() {
+        for bad in ["\t", "\u{0}", "\u{1b}", "\u{7f}", "\u{85}", "\u{2028}", "\u{2029}", "\u{b}", "\u{c}"] {
+            let mut i = identity(HEAD);
+            i.rustc = format!("rustc{bad}1.97.1");
+            assert!(i.validate().is_err(), "rustc with {bad:?}");
+            let mut i = identity(HEAD);
+            i.flags = format!("opt-level=3{bad};x");
+            assert!(i.validate().is_err(), "flags with {bad:?}");
+        }
+        let mut i = identity(HEAD);
+        i.rustc = "rustc 1.97.1-nightly (a b c 2026-07-14) é".into();
+        i.validate().unwrap();
+    }
+
+    #[test]
+    fn the_short_form_never_panics_on_a_hand_built_identity() {
+        let mut i = identity(HEAD);
+        // byte 12 falls inside a two-byte character
+        i.commit = format!("a{}", "é".repeat(20));
+        assert!(i.validate().is_err());
+        let short = std::panic::catch_unwind(|| i.short());
+        assert!(short.is_ok(), "short() panicked");
+        let mut i = identity(HEAD);
+        i.commit = "abc".into();
+        assert_eq!(i.short(), "0.3.1+abc");
+    }
+
+    #[test]
+    fn a_mismatch_is_an_error_and_a_block_checks_itself() {
+        let a = identity(HEAD);
+        let mut b = a.clone();
+        b.profile = "debug".into();
+        let mismatch = run_check(&a, None, EnginePolicy::Build, &b, Ok("x")).unwrap_err();
+        let as_error: &dyn std::error::Error = &mismatch;
+        assert!(as_error.to_string().contains("profile"));
+        let block = read_engine(&engine_pairs(&a, EnginePolicy::Build, None).unwrap()).unwrap();
+        assert!(block.check(&a, || panic!("hashed under build")).is_ok());
+        assert_eq!(fields(&block.check(&b, || panic!("hashed under build")).unwrap_err()), ["profile"]);
+        let hash = "a".repeat(64);
+        let pinned = read_engine(&engine_pairs(&a, EnginePolicy::Binary, Some(&hash)).unwrap()).unwrap();
+        assert!(pinned.check(&b, || Ok(hash.clone())).is_ok());
+        assert_eq!(fields(&pinned.check(&a, || Ok("b".repeat(64))).unwrap_err()), ["binary_sha256"]);
     }
 
     #[test]

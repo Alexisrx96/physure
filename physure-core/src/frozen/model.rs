@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::canonical::{exact_sha256, is_sha256_hex, source_sha256};
+use super::engine::EnginePolicy;
 use super::time::is_rfc3339_utc;
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -195,6 +196,8 @@ pub struct HistoryEntry {
     pub(crate) action: String,
     pub(crate) engine: String,
     pub(crate) engine_sha256: String,
+    pub(crate) policy: String,
+    pub(crate) pinned: String,
     pub(crate) actor: String,
     pub(crate) reason: String,
     pub(crate) old_content_sha256: String,
@@ -214,11 +217,22 @@ impl HistoryEntry {
     pub fn action(&self) -> &str {
         &self.action
     }
+    /// The engine that made this entry, as the caller wrote it (`EntryInput::engine`): informational text, not
+    /// derived by the library. What the file pins is [`policy`](Self::policy) and [`pinned`](Self::pinned).
     pub fn engine(&self) -> &str {
         &self.engine
     }
     pub fn engine_sha256(&self) -> &str {
         &self.engine_sha256
+    }
+    /// The policy of the `[Engine]` block this entry sealed, derived by the library from the block.
+    pub fn policy(&self) -> &str {
+        &self.policy
+    }
+    /// The engine the `[Engine]` block of this entry pins, short form (`version+commit`, twelve characters of the
+    /// commit), derived by the library from the block.
+    pub fn pinned(&self) -> &str {
+        &self.pinned
     }
     pub fn actor(&self) -> &str {
         &self.actor
@@ -242,11 +256,23 @@ impl HistoryEntry {
         &self.entry_sha256
     }
 
-    fn values(&self) -> [&String; 11] {
+    fn values(&self) -> [&String; 13] {
         [
-            &self.time, &self.action, &self.engine, &self.engine_sha256, &self.actor, &self.reason,
+            &self.time, &self.action, &self.engine, &self.engine_sha256, &self.policy, &self.pinned, &self.actor, &self.reason,
             &self.old_content_sha256, &self.new_content_sha256, &self.diff, &self.prev_entry_sha256, &self.entry_sha256,
         ]
+    }
+
+    /// `policy` names a policy and `pinned` is not empty (both are derived from the engine block; `verify` checks
+    /// that the last entry agrees with the current block). The error names the field.
+    fn pin_shape(&self) -> Result<(), (&'static str, String)> {
+        if let Err(e) = self.policy.parse::<EnginePolicy>() {
+            return Err(("policy", format!("policy: {e}")));
+        }
+        if self.pinned.is_empty() {
+            return Err(("pinned", "pinned is empty: expected the pinned engine, like 0.3.1+0123456789ab".into()));
+        }
+        Ok(())
     }
 
     /// The fields that must be a SHA-256, and whether each may be empty (only in the first entry, where there is no
@@ -279,8 +305,8 @@ pub struct FrozenFile {
     pub(crate) witness_scripts: Vec<WitnessScript>,
 }
 
-const HISTORY_FIELDS: [&str; 11] = [
-    "time", "action", "engine", "engine_sha256", "actor", "reason", "old_content_sha256", "new_content_sha256",
+const HISTORY_FIELDS: [&str; 13] = [
+    "time", "action", "engine", "engine_sha256", "policy", "pinned", "actor", "reason", "old_content_sha256", "new_content_sha256",
     "diff", "prev_entry_sha256", "entry_sha256",
 ];
 
@@ -393,6 +419,9 @@ impl FrozenFile {
                 if !(value.is_empty() && may_be_empty) && !is_sha256_hex(value) {
                     note(err(format!("[History.{n}] {key} is not a SHA-256 in lowercase hexadecimal: {value:?}")));
                 }
+            }
+            if let Err((_, e)) = entry.pin_shape() {
+                note(err(format!("[History.{n}] {e}")));
             }
         }
         for (index, source) in self.sources.iter().enumerate() {
@@ -617,6 +646,8 @@ fn read_entry(n: u32, header_line: usize, mut fields: Vec<(String, String, usize
         action: take("action")?,
         engine: take("engine")?,
         engine_sha256: take("engine_sha256")?,
+        policy: take("policy")?,
+        pinned: take("pinned")?,
         actor: take("actor")?,
         reason: take("reason")?,
         old_content_sha256: take("old_content_sha256")?,
@@ -635,6 +666,9 @@ fn read_entry(n: u32, header_line: usize, mut fields: Vec<(String, String, usize
         if !(value.is_empty() && may_be_empty) && !is_sha256_hex(value) {
             return err(format!("line {}: [History.{n}] {key} is not a SHA-256 in lowercase hexadecimal: {value:?}", lines[key]));
         }
+    }
+    if let Err((key, e)) = entry.pin_shape() {
+        return err(format!("line {}: [History.{n}] {e}", lines[key]));
     }
     Ok(entry)
 }
@@ -729,6 +763,8 @@ mod tests {
             action: "freeze".into(),
             engine: "0.3.1+9f2c1ab".into(),
             engine_sha256: h('7'),
+            policy: "build".into(),
+            pinned: "0.3.1+0123456789ab".into(),
             actor: "irvin@host".into(),
             reason: "initial freeze".into(),
             old_content_sha256: String::new(),

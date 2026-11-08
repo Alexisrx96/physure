@@ -76,3 +76,26 @@ fn the_policy_is_part_of_what_the_seal_protects_and_of_what_the_log_records() {
     assert_ne!(a.seal_sha256(), b.seal_sha256());
     assert_ne!(a.history()[0].engine_sha256(), b.history()[0].engine_sha256());
 }
+
+#[test]
+fn weakening_the_policy_with_an_innocuous_reason_shows_in_the_log_as_policy_and_pinned() {
+    let mut f = file(&known(), EnginePolicy::Build);
+    f.set_engine(engine_pairs(&known(), EnginePolicy::Record, None).unwrap());
+    f.reseal(EntryInput { time: "2026-11-08T11:00:00Z", action: "seal", engine: "9.9.9+ffffffffffff", actor: "a@h", reason: "routine reseal", diff: "no changes" })
+        .unwrap();
+    assert!(f.verify().is_empty());
+    let pinned = known().short();
+    let log: Vec<(&str, &str)> = f.history().iter().map(|e| (e.policy(), e.pinned())).collect();
+    assert_eq!(log, [("build", pinned.as_str()), ("record", pinned.as_str())]);
+    // a block that can never be checked (build with no commit) cannot be sealed, however it is written
+    let mut unknown = known();
+    unknown.commit = UNKNOWN.into();
+    let mut forged: Vec<(String, String)> = engine_pairs(&unknown, EnginePolicy::Release, None).unwrap().as_slice().to_vec();
+    for (key, value) in &mut forged {
+        if key == "policy" {
+            *value = "build".into();
+        }
+    }
+    f.set_engine(Pairs::from_vec(forged).unwrap());
+    assert!(f.reseal(EntryInput { time: "2026-11-08T12:00:00Z", action: "seal", engine: "e", actor: "a@h", reason: "r", diff: "d" }).is_err());
+}
