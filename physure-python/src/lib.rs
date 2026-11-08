@@ -315,6 +315,12 @@ fn value_error(e: PhysureError) -> PyErr {
 }
 
 /// The lines of a conf that the core could not read, one per line of the message.
+/// The configuration in force (a frozen `physure.frozen.conf`, `PHYSURE_CONF`, ...) cannot be used: an ordinary
+/// exception, never a panic.
+fn configuration_error(e: ::physure_core::frozen::ActiveError) -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+}
+
 fn conf_problems(problems: Vec<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(problems.join("\n"))
 }
@@ -382,10 +388,12 @@ impl PyUnitRegistry {
         self.0.prefixes.clone()
     }
 
+    /// The catalog in force: a frozen configuration's when one is in force, otherwise the embedded catalog plus the
+    /// working directory's `physure.conf`. RuntimeError when the configuration in force cannot be used.
     #[staticmethod]
-    fn from_conf() -> Self {
-        let (reg, _constants) = ::physure_core::units::conf::build_registry_from_conf();
-        PyUnitRegistry(reg)
+    fn from_conf() -> PyResult<Self> {
+        let (reg, _constants) = ::physure_core::units::conf::try_build_registry_from_conf().map_err(configuration_error)?;
+        Ok(PyUnitRegistry(reg))
     }
 
     /// The catalog plus extra conf text (the text of a system file, or units of the user's).
@@ -1900,16 +1908,19 @@ fn register_quantity_factory(factory: PyObject) {
     *QUANTITY_FACTORY.lock().unwrap() = Some(factory);
 }
 
+/// RuntimeError while a frozen configuration is in force: the `UnitSystem` built from this text would be the library's
+/// catalog, not the frozen one (the Python binding honours frozen configurations from Phase 5).
 #[pyfunction]
-fn default_conf() -> &'static str {
-    ::physure_core::units::conf::DEFAULT_PHYSURE_CONF
+fn default_conf() -> PyResult<&'static str> {
+    ::physure_core::frozen::refuse_unwired("Python").map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok(::physure_core::units::conf::DEFAULT_PHYSURE_CONF)
 }
 
 /// What the core says about a unit expression of the default catalog: its dimension (by
 /// dimension symbol), kind, linearity, alias and simplified form.
 #[pyfunction]
 fn unit_facts<'py>(py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
-    let (registry, _) = ::physure_core::units::conf::build_registry_from_conf();
+    let (registry, _) = ::physure_core::units::conf::try_build_registry_from_conf().map_err(configuration_error)?;
     facts_dict(py, &registry, expression)
 }
 

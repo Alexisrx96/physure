@@ -21,21 +21,26 @@ struct RegistryHandle {
 
 /// The embedded catalog and its constants, parsed once per process: parsing it is the expensive part of
 /// a call, and a registry of its own only needs a copy.
-fn default_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
+///
+/// An error while a frozen configuration is in force: this binding builds its registries from the library's own
+/// catalog and honours frozen configurations from Phase 5, so until then it refuses rather than mixing two
+/// configurations in one process. Checked on every call: the configuration in force can change.
+fn default_catalog() -> Result<&'static (UnitRegistry, HashMap<String, String>), String> {
     static DEFAULT: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
-    DEFAULT.get_or_init(|| {
+    physure_core::frozen::refuse_unwired("Java")?;
+    Ok(DEFAULT.get_or_init(|| {
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
         physure_core::units::conf::load_embedded_catalog(&mut reg, &mut constants);
         (reg, constants)
-    })
+    }))
 }
 
 /// A new registry over the embedded catalog extended by `custom` conf text, as the raw handle Java keeps.
 /// The text is read strictly: a line that cannot be read is an error naming it, and not a definition quietly
 /// left out (and the `[Settings]` of a conf, which are process-wide, are not the registry's to change).
 fn new_handle(custom: Option<&str>) -> Result<jlong, String> {
-    let (mut registry, mut constants) = default_catalog().clone();
+    let (mut registry, mut constants) = default_catalog()?.clone();
     if let Some(text) = custom {
         physure_core::units::conf::extend_registry(&mut registry, &mut constants, text)
             .map_err(|problems| format!("Invalid unit definitions: {}", problems.join("; ")))?;
@@ -61,13 +66,19 @@ fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
     unsafe { &mut (*(handle as *mut RegistryHandle)).interpreter }
 }
 
-/// The registry of `handle`; 0 (the static quantity operations, which carry no registry) is the embedded catalog.
-fn get_registry(handle: jlong) -> &'static UnitRegistry {
+/// The registry of `handle`; 0 (the static quantity operations, which carry no registry) is the embedded catalog,
+/// an error while a frozen configuration is in force (see [`default_catalog`]).
+fn get_registry(handle: jlong) -> Result<&'static UnitRegistry, String> {
     if handle == 0 {
-        &default_catalog().0
+        Ok(&default_catalog()?.0)
     } else {
-        unsafe { &(*(handle as *const RegistryHandle)).registry }
+        Ok(unsafe { &(*(handle as *const RegistryHandle)).registry })
     }
+}
+
+/// [`get_registry`], or a pending `PhysureException` and `None`.
+fn registry_or_throw(env: &mut JNIEnv, handle: jlong) -> Option<&'static UnitRegistry> {
+    get_registry(handle).map_err(|message| throw_physure_exception(env, &message)).ok()
 }
 
 /// The sources of the uncertainty that a Java `Quantity` holds: `(id, contribution)` pairs, which the core
@@ -90,7 +101,7 @@ fn get_rust_quantity(
     let unit_jstr: JString = env.get_field(java_q, "unit", "Ljava/lang/String;")?.l()?.into();
     let unit_str: String = env.get_string(&unit_jstr)?.into();
     
-    let reg = get_registry(0);
+    let Some(reg) = registry_or_throw(env, 0) else { return Err(jni::errors::Error::JavaException) };
     let _r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
@@ -275,10 +286,17 @@ pub extern "system" fn Java_com_physure_NativeEngine_newSourceId(_env: JNIEnv, _
 
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_initRegistry(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    new_handle(None).unwrap_or(0)
+    // an error is an exception, never 0 without a word: 0 is the handle of the embedded catalog
+    match new_handle(None) {
+        Ok(handle) => handle,
+        Err(message) => {
+            throw_physure_exception(&mut env, &message);
+            0
+        }
+    }
 }
 
 #[no_mangle]
@@ -370,7 +388,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitPowers<'local>(
 /// power is an error, because truncating it to its numerator would be a wrong answer), `Double` values
 /// (numerator over denominator, as the WASM binding returns them) when it is true.
 fn unit_exponent_map<'local>(mut env: JNIEnv<'local>, registry_handle: jlong, expr: JString<'local>, exact: bool) -> jobject {
-    let reg = get_registry(registry_handle);
+    let Some(reg) = registry_or_throw(&mut env, registry_handle) else { return std::ptr::null_mut() };
     match exponent_map(&mut env, reg, &expr, exact) {
         Ok(map) => map.into_raw(),
         Err(failure) => {
@@ -446,7 +464,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitScale(
     registry_handle: jlong,
     expr: JString,
 ) -> jdouble {
-    let reg = get_registry(registry_handle);
+    let Some(reg) = registry_or_throw(&mut env, registry_handle) else { return 0.0 };
     let expr_str: String = match env.get_string(&expr) {
         Ok(s) => s.into(),
         Err(e) => {
@@ -470,7 +488,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getCategories<'local>(
     _class: JClass,
     registry_handle: jlong,
 ) -> jobject {
-    let reg = get_registry(registry_handle);
+    let Some(reg) = registry_or_throw(&mut env, registry_handle) else { return std::ptr::null_mut() };
 
     let map_class = match env.find_class("java/util/HashMap") {
         Ok(c) => c,
@@ -520,13 +538,14 @@ pub extern "system" fn Java_com_physure_NativeEngine_getCategories<'local>(
 
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_evaluateExpression<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     class: JClass,
     interpreter_handle: jlong,
     expr: JString<'local>,
 ) -> jstring {
+    let Some(registry) = registry_or_throw(&mut env, interpreter_handle) else { return std::ptr::null_mut() };
     // the registry's own catalog is what the parser and the interpreter read unit text against while it runs
-    physure_core::units::with_catalog(get_registry(interpreter_handle), || {
+    physure_core::units::with_catalog(registry, || {
         evaluate_expression(env, class, interpreter_handle, expr)
     })
 }
@@ -580,13 +599,14 @@ fn assigned_value(interpreter: &PhsInterpreter, stmt: &physure_script::Statement
 /// quantity rebuilt from it would carry the rounding.
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantity<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     class: JClass,
     interpreter_handle: jlong,
     expr: JString<'local>,
 ) -> jobject {
+    let Some(registry) = registry_or_throw(&mut env, interpreter_handle) else { return std::ptr::null_mut() };
     // the registry's own catalog is what the parser and the interpreter read unit text against while it runs
-    physure_core::units::with_catalog(get_registry(interpreter_handle), || {
+    physure_core::units::with_catalog(registry, || {
         evaluate_quantity(env, class, interpreter_handle, expr)
     })
 }
@@ -622,7 +642,8 @@ pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantityWith<'local
     values: JObjectArray<'local>,
 ) -> jobject {
     let Ok(bindings) = bindings(&mut env, &names, &values) else { return std::ptr::null_mut() };
-    let result = physure_core::units::with_catalog(get_registry(interpreter_handle), || {
+    let Some(registry) = registry_or_throw(&mut env, interpreter_handle) else { return std::ptr::null_mut() };
+    let result = physure_core::units::with_catalog(registry, || {
         source_text(&mut env, &expr).and_then(|source| {
             let program = parse_phs(&source).map_err(|e| format!("Syntax error: {}", e))?;
             let value = get_interpreter(interpreter_handle).run_program_with(&program, bindings).map_err(|e| e.to_string())?;
@@ -815,7 +836,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let reg = get_registry(0);
+    let Some(reg) = registry_or_throw(&mut env, 0) else { return std::ptr::null_mut() };
     let r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
@@ -915,5 +936,27 @@ pub extern "system" fn Java_com_physure_NativeEngine_getFunctionParams<'local>(
     } else {
         throw_physure_exception(&mut env, &format!("Function '{}' not found in interpreter context", name_str));
         std::ptr::null_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded catalog is what this binding reads, so it refuses while a frozen configuration is in force or
+    /// required (here: required and missing, which needs no file), and serves it again once nothing is.
+    #[test]
+    fn the_embedded_catalog_is_refused_while_a_frozen_configuration_is_required() {
+        assert!(std::env::var_os("PHYSURE_REQUIRE_FROZEN").is_none() && std::env::var_os("PHYSURE_CONF").is_none());
+        assert!(get_registry(0).is_ok());
+        std::env::set_var("PHYSURE_REQUIRE_FROZEN", "1");
+        let refused = (default_catalog().err(), new_handle(None).err(), get_registry(0).err());
+        std::env::remove_var("PHYSURE_REQUIRE_FROZEN");
+        let (catalog, handle, registry) = refused;
+        for message in [catalog, handle, registry] {
+            let message = message.expect("refused");
+            assert!(message.contains("PHYSURE_REQUIRE_FROZEN") && message.contains("Java"), "{message}");
+        }
+        assert!(get_registry(0).is_ok());
     }
 }
