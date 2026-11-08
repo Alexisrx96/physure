@@ -11,6 +11,13 @@ pub fn is_commit(text: &str) -> bool {
     matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// Whether the output of `git ls-files -v` shows a tracked file whose changes `git status` would not report:
+/// a lowercase tag marks `assume-unchanged` (`h`) and `S` marks `skip-worktree`. A build that uses such a file
+/// cannot say that its tree is clean, so it must not claim a commit.
+pub fn hides_changes(ls_files_v: &str) -> bool {
+    ls_files_v.lines().any(|line| line.chars().next().is_some_and(|tag| tag.is_ascii_lowercase() || tag == 'S'))
+}
+
 /// Everything the decision depends on.
 pub struct Inputs<'a> {
     /// `PHYSURE_BUILD_COMMIT` as set in the environment of the build, if it is set.
@@ -116,6 +123,18 @@ mod tests {
         assert_eq!((d.commit.as_str(), d.warning), (B, None));
         let d = decide(&inputs(None, None, false));
         assert_eq!((d.commit.as_str(), d.warning), (UNKNOWN, None));
+    }
+
+    #[test]
+    fn files_whose_changes_git_status_cannot_see_are_found() {
+        // `git ls-files -v`: `H` is an ordinary tracked file, `h` is assume-unchanged, `S` is skip-worktree
+        assert!(!hides_changes(""));
+        assert!(!hides_changes("H src/lib.rs\nH Cargo.toml\n"));
+        assert!(hides_changes("H src/lib.rs\nh src/quantity.rs\n"));
+        assert!(hides_changes("S src/lib.rs\n"));
+        assert!(hides_changes("H a\nH b\nh c"));
+        // other uppercase tags (unmerged, removed, modified) are reported by `git status`, so they are not hidden
+        assert!(!hides_changes("M src/lib.rs\nR src/old.rs\nC src/x.rs\nK src/y.rs\n"));
     }
 
     #[test]

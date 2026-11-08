@@ -96,8 +96,12 @@ fn git_dirty(manifest: &Path) -> bool {
             args.push(extra);
         }
     }
+    // `git status` does not report a tracked file marked assume-unchanged or skip-worktree: ask for those too
+    let mut listing = vec!["ls-files", "-v", "--", "."];
+    listing.extend(args.iter().skip(5).copied());
+    let hidden = git(manifest, &listing).is_some_and(|out| commit_rules::hides_changes(&out));
     // when git cannot say, assume the worst
-    git(manifest, &args).is_some() || git(manifest, &["rev-parse", "--git-dir"]).is_none()
+    hidden || git(manifest, &args).is_some() || git(manifest, &["rev-parse", "--git-dir"]).is_none()
 }
 
 fn rustc_version() -> String {
