@@ -18,7 +18,7 @@ pub(crate) fn with_catalog_in_scope<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R 
     })
 }
 
-pub use elements::atomic_weight;
+pub use elements::{atomic_weight, atomic_weight_edition};
 
 pub mod formula;
 

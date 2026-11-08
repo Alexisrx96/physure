@@ -1,21 +1,36 @@
-"""Writes the [AtomicWeights] section of physure-core/src/units/physure.conf from the CIAAW table.
+"""Writes the atomic-weight block of physure-core/src/units/physure.conf from the two CIAAW tables.
 
 Run from the repository root (standard library only):
 
     python scripts/gen_atomic_weights_conf.py
 
-The input is tests/golden/ciaaw_standard_atomic_weights_2024.tsv, the transcription of the CIAAW
-Standard Atomic Weights 2024 as printed at https://ciaaw.org/atomic-weights.htm. The script prints the
-whole section and replaces the section in physure.conf in place: from the line after `[AtomicWeights]`
-to the line before the next `[...]` header, keeping the line endings of the file and every other byte.
+The inputs are the transcriptions, as printed, of the two tables CIAAW publishes:
+
+  tests/golden/ciaaw_standard_atomic_weights_2024.tsv   https://ciaaw.org/atomic-weights.htm
+  tests/golden/ciaaw_abridged_atomic_weights_2024.tsv   https://ciaaw.org/abridged-atomic-weights.htm
+
+The script prints the whole block and replaces it in physure.conf in place: from the first
+`[AtomicWeights...]` header line to the line before `[Categories]`, keeping the line endings of the file
+and every other byte. The block is four sections, in this order:
+
+  [AtomicWeights:standard-2024]  the edition `standard-2024` (generated from the standard TSV; frozen)
+  [AtomicWeights:abridged-2024]  the edition `abridged-2024` (generated from the abridged TSV; frozen)
+  [AtomicWeights]                your definitions: empty here, comments only
+  [Chemistry]                    `atomic_weights = standard`, the table that is read (an alias of standard-2024)
+
+A published edition is frozen: when CIAAW publishes a new table, add a NEW edition (a new constant pair
+below, a new TSV, a new fingerprint test) and leave these two alone. The fingerprint tests of
+physure-core/tests/atomic_weights_ciaaw.rs fail if either shipped edition changes by one bit.
+
 Running it twice changes nothing. Decimal is used for the numbers so that the conf holds exactly the
 digits CIAAW printed, with no float formatting artifacts.
 
-How a TSV row becomes a conf line (the rules are explained in docs/atomic_weights.md):
+How a row becomes a conf line (the rules are explained in docs/atomic_weights.md):
 
-  22.989 769 28(2)       ->  Na = 22.98976928, 0.00000002   the value, and U = 2 units of the last digit
-  [1.007 84, 1.008 11]   ->  H = [1.00784, 1.00811]         an interval, kept as an interval
-  -  (mass number 98)    ->  Tc = 98, 0                      no standard atomic weight: mass number, u = 0
+  standard  22.989 769 28(2)       ->  Na = 22.98976928, 0.00000002   the value, and U = 2 units of the last digit
+  standard  [1.007 84, 1.008 11]   ->  H = [1.00784, 1.00811]         an interval, kept as an interval
+  abridged  22.990  0.001          ->  Na = 22.990, 0.001             the value and the "+-", as printed
+  either    -  (mass number 98)    ->  Tc = 98, 0                      no standard atomic weight: mass number, u = 0
 """
 
 from __future__ import annotations
@@ -25,13 +40,26 @@ from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TSV = ROOT / "tests" / "golden" / "ciaaw_standard_atomic_weights_2024.tsv"
+STANDARD_TSV = ROOT / "tests" / "golden" / "ciaaw_standard_atomic_weights_2024.tsv"
+ABRIDGED_TSV = ROOT / "tests" / "golden" / "ciaaw_abridged_atomic_weights_2024.tsv"
 CONF = ROOT / "physure-core" / "src" / "units" / "physure.conf"
-SECTION = "[AtomicWeights]"
+FIRST_HEADER = "[AtomicWeights"  # the block starts at the first header with this prefix
+NEXT_SECTION = "[Categories]"  # ... and ends on the line before this one
 
-HEADER = """\
-# Standard atomic weights, in g/mol. A later definition of a symbol (a system file or a conf of your own)
-# replaces this one; the chemistry module reads its weights from here.
+FROZEN = """\
+# FROZEN. A released edition is never edited: a plant may have validated its calculations against these
+# numbers, and a library upgrade must not change them. A new CIAAW release is a NEW edition (for example
+# standard-2026) added next to this one; only the alias in [Chemistry] moves, in a release whose CHANGELOG
+# says so. The test physure-core/tests/atomic_weights_ciaaw.rs fails if a number of this section changes.
+"""
+
+STANDARD_HEADER = """\
+# EDITION standard-2024: the CIAAW Standard Atomic Weights 2024, in g/mol, with the intervals kept as
+# intervals. The table the chemistry module reads by default: [Chemistry] atomic_weights = standard (at the
+# end of this block) is an alias that points here in this release.
+#
+""" + FROZEN + """\
+# A definition of yours goes in [AtomicWeights], where it wins over whichever table is selected.
 #
 # DATA. CIAAW, Standard Atomic Weights 2024 (https://ciaaw.org/atomic-weights.htm): the table of the
 # "Atomic Weights 2021" report (Prohaska et al., Pure Appl. Chem. 94, 573-600 (2022),
@@ -40,7 +68,7 @@ HEADER = """\
 # transcription of that table: edit the TSV and run the script, never this section by hand. The test
 # physure-core/tests/atomic_weights_ciaaw.rs holds this section to the TSV.
 #
-# THE FORMS OF A LINE.
+# THE FORMS OF A LINE. (The same grammar is read in every [AtomicWeights...] section.)
 #   Sym = value, U
 #       CIAAW prints value(n); U is n units of the last digit printed (22.989 769 28(2) is
 #       Na = 22.98976928, 0.00000002). U is the half-width of the interval in which the atomic weight of
@@ -59,16 +87,17 @@ HEADER = """\
 #       with its own u: D = 2.01410177812, 0.00000000012, standard. No line of this section uses it.
 #   (Sym = value, U, interval spells out the first form.)
 #
-# THE ABRIDGED TABLE IS NOT USED. The "+-" of the CIAAW abridged table is "a conservative value ... a
-# simplified measure of the reliability of the abridged values" and, for the weights quoted to more than
-# five significant digits, only the place value of the last rounded digit; for the interval elements its
-# single value "does not correspond necessarily to the midpoints of the intervals" (Prohaska et al. 2022,
-# section 7, rules i-iii of the abridged table). Using it as a half-width would put a rounding
-# convention where the Commission's evaluation should be.
+# WHY THIS TABLE IS THE DEFAULT AND THE ABRIDGED ONE IS AN OPTION. The "+-" of the CIAAW abridged table
+# is "a conservative value ... a simplified measure of the reliability of the abridged values" and, for
+# the weights quoted to more than five significant digits, only the place value of the last rounded
+# digit; for the interval elements its single value "does not correspond necessarily to the midpoints of
+# the intervals" (Prohaska et al. 2022, section 7, rules i-iii of the abridged table). Using it as a
+# half-width puts a rounding convention where the Commission's evaluation should be, so it is not the
+# default. It is the next section (abridged-2024), and [Chemistry] atomic_weights = abridged selects it.
 #
 # NO STANDARD ATOMIC WEIGHT. For Tc, Pm, Po-Ac and Np-Og (34 elements) CIAAW prints a dash. They carry the
 # mass number of a long-lived isotope and an uncertainty of 0: that is a convention of this file, not a
-# CIAAW value. Replace it with the mass of the isotope you mean.
+# CIAAW value. Define the mass of the isotope you mean in [AtomicWeights].
 #
 # MOLAR MASSES. The uncertainty of a molar mass combines per element, u^2(Mr) = sum over the elements of
 # nu_E^2 u^2(Ar(E)): an element contributes its stoichiometric coefficient times its standard
@@ -78,13 +107,84 @@ HEADER = """\
 # More: docs/atomic_weights.md.
 """
 
+ABRIDGED_HEADER = """\
+# EDITION abridged-2024: the CIAAW abridged standard atomic weights 2024, in g/mol. An OPTION, read only
+# when [Chemistry] atomic_weights = abridged (an alias that points here in this release) or
+# abridged-2024 selects it.
+#
+""" + FROZEN + """\
+# A definition of yours goes in [AtomicWeights], where it wins over whichever table is selected.
+#
+# DATA. CIAAW, Abridged Standard Atomic Weights 2024 (https://ciaaw.org/abridged-atomic-weights.htm),
+# based on the "Atomic Weights 2021" report (Prohaska et al., Pure Appl. Chem. 94, 573-600 (2022),
+# doi:10.1515/pac-2019-0603) with the 2024 revisions of Gd, Lu and Zr; the Commission recommends that
+# standard atomic weights are best abridged to five digits. This section is GENERATED by
+# scripts/gen_atomic_weights_conf.py from tests/golden/ciaaw_abridged_atomic_weights_2024.tsv, the
+# transcription of that table: edit the TSV and run the script, never this section by hand. The test
+# physure-core/tests/atomic_weights_ciaaw.rs holds this section to the TSV.
+#
+# THE "+-". Each line is `Sym = value, U` as the page prints it, with the same grammar and the same
+# reading as the second column of [AtomicWeights:standard-2024]: U is the half-width of an interval, and
+# the registry stores the standard uncertainty U / sqrt(3) of a uniform distribution over it. For this
+# table the "+-" is, in the words of the Commission, "a conservative value ... a simplified measure of
+# the reliability of the abridged values" (Prohaska et al. 2022, section 7, rules i-iii of the abridged
+# table), so the standard uncertainty derived from it is conservative as well (Na: a half-width of 0.001
+# here, 0.00000002 in standard-2024): the difference is the conservatism of the abridged "+-", not a
+# better measurement. That is why standard-2024 is the default.
+#
+# NO ABRIDGED ATOMIC WEIGHT. CIAAW prints a dash for the same 34 elements as in the standard table. They
+# carry the same mass numbers and an uncertainty of 0, a convention of this file and not a CIAAW value.
+#
+# More: docs/atomic_weights.md (section "Choosing the table").
+"""
+
+DEFINITIONS_HEADER = """\
+# YOUR DEFINITIONS of atomic weights, in g/mol. Empty here. A line in this section (in a physure.conf of
+# your own or in the definitions of a unit system) overrides or adds an element for WHICHEVER table is
+# selected by [Chemistry] atomic_weights (a shipped edition or a table of your own), whatever order the
+# lines and that selection are given in. It wins over the selected table and over nothing else. A later
+# definition of the same symbol replaces an earlier one. A bad line refuses the whole text and nothing is
+# applied.
+#
+# The grammar is that of the tables:
+#   Sym = value, U               U is a half-width, stored as the standard uncertainty U / sqrt(3)
+#   Sym = [a, b]                 an interval: its midpoint, and (b - a) / sqrt(12)
+#   Sym = value, u, standard     u already is a standard uncertainty and is stored as given
+# For example (as comments here; write them without the leading `# ` in your own conf):
+#   # Fe = 56.0, 0.5                               an element, with the half-width of its interval
+#   # H = [1.00784, 1.00811]                       an interval
+#   # D = 2.01410177812, 0.00000000012, standard   an isotope with its own standard uncertainty
+#
+# More: docs/atomic_weights.md.
+"""
+
+CHEMISTRY_HEADER = """\
+# Which table of atomic weights the chemistry module reads: an edition name or an alias.
+#   atomic_weights = standard        alias: the newest standard edition this release ships (standard-2024)
+#   atomic_weights = abridged        alias: the newest abridged edition this release ships (abridged-2024)
+#   atomic_weights = standard-2024   an edition by name; abridged-2024 likewise
+#   atomic_weights = acme-2026-03    a complete table of your own, defined in [AtomicWeights:acme-2026-03]
+# An alias moves when a release ships a newer edition, and the CHANGELOG of that release says so; an edition
+# name never changes meaning. Whoever must reproduce a result exactly (a validated calculation, an audit)
+# pins a name in the conf of its own: `atomic_weights = standard-2024`. A table of your own is complete:
+# nothing is taken from the shipped tables for it, and a missing element is an error that names the element
+# and the edition. If the selected edition is defined by no section, every use of the atomic weights fails
+# with an error that names it. Your definitions in [AtomicWeights] apply with any selection.
+# An edition name is lower-case ASCII letters, digits and `-`, `_`, `.`, starts with a letter and has at
+# most 64 characters. Any other key or value is refused. The last selection wins. The choice belongs to the
+# registry, like the definitions, not to the process-wide [Settings]; it is checked when the weights are
+# used, so the choice and the table may come from different texts in any order.
+# The table in use is reported by chemistry::atomic_weight_edition() (UnitRegistry::atomic_weight_edition()).
+atomic_weights = standard
+"""
+
 
 def fields_of(line: str) -> list[str]:
     return line.rstrip("\n").split("\t")
 
 
 def conf_line(row: list[str]) -> str:
-    """One TSV row -> one `Sym = ...` conf line."""
+    """One standard TSV row -> one `Sym = ...` conf line."""
     symbol, shown = row[1], row[2]
     if shown == "-":
         # columns: Z, symbol, "-", footnotes (empty), mass number
@@ -102,38 +202,53 @@ def conf_line(row: list[str]) -> str:
     return f"{symbol} = {Decimal(value)}, {half_width:f}"
 
 
-def rows() -> list[list[str]]:
+def abridged_line(row: list[str]) -> str:
+    """One abridged TSV row -> one conf line: the value and the "+-" exactly as printed."""
+    symbol, value, plus_minus = row[1], row[2], row[3]
+    if value == "-":
+        # columns: Z, symbol, "-", "-", footnotes (empty), mass number
+        return f"{symbol} = {int(row[5])}, 0"
+    return f"{symbol} = {Decimal(value):f}, {Decimal(plus_minus):f}"
+
+
+def read_rows(tsv: Path) -> list[list[str]]:
     lines = [
         x
-        for x in TSV.read_text(encoding="utf-8").splitlines()
+        for x in tsv.read_text(encoding="utf-8").splitlines()
         if x and not x.startswith("#")
     ]
-    return [fields_of(x) for x in lines]
-
-
-def section_body() -> str:
-    """Everything after the `[AtomicWeights]` header line: the comment, 118 rows, a blank line."""
-    data = rows()
+    data = [fields_of(x) for x in lines]
     if len(data) != 118:
-        raise ValueError(f"expected 118 elements, found {len(data)}")
-    return HEADER + "\n".join(conf_line(r) for r in data) + "\n\n"
+        raise ValueError(f"{tsv.name}: expected 118 elements, found {len(data)}")
+    return data
 
 
-def replace_section(conf: bytes, body: str) -> bytes:
+def block() -> str:
+    """The four sections, each followed by a blank line."""
+    standard = "\n".join(conf_line(r) for r in read_rows(STANDARD_TSV))
+    abridged = "\n".join(abridged_line(r) for r in read_rows(ABRIDGED_TSV))
+    return (
+        f"[AtomicWeights:standard-2024]\n{STANDARD_HEADER}{standard}\n\n"
+        f"[AtomicWeights:abridged-2024]\n{ABRIDGED_HEADER}{abridged}\n\n"
+        f"[AtomicWeights]\n{DEFINITIONS_HEADER}\n"
+        f"[Chemistry]\n{CHEMISTRY_HEADER}\n"
+    )
+
+
+def replace_block(conf: bytes, new_block: str) -> bytes:
     text = conf.decode("utf-8")
     eol = "\r\n" if "\r\n" in text else "\n"
     lines = text.split(eol)
-    start = lines.index(SECTION)
-    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("["))
-    new_lines = body.split("\n")[
-        :-1
-    ]  # body ends with "\n\n": the last split item is empty
-    return eol.join(lines[: start + 1] + new_lines + lines[end:]).encode("utf-8")
+    start = next(i for i, x in enumerate(lines) if x.startswith(FIRST_HEADER))
+    end = lines.index(NEXT_SECTION)
+    # new_block ends with "\n": the last split item is empty
+    return eol.join(lines[:start] + new_block.split("\n")[:-1] + lines[end:]).encode(
+        "utf-8"
+    )
 
 
 if __name__ == "__main__":
-    body = section_body()
+    new_block = block()
     sys.stdout.reconfigure(encoding="utf-8")
-    print(SECTION)
-    print(body, end="")
-    CONF.write_bytes(replace_section(CONF.read_bytes(), body))
+    print(new_block, end="")
+    CONF.write_bytes(replace_block(CONF.read_bytes(), new_block))

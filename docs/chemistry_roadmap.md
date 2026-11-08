@@ -217,14 +217,14 @@ print(f"Rate constant: {k}") # 0.72 s^-1
 
 **Goal**: Port the core chemistry data structures and algorithms to Rust for performance, cross-language availability, and native PHS integration.
 
-> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, there is no periodic table in Rust: the atomic weights are the `[AtomicWeights]` section of `physure.conf` (the full CIAAW Standard Atomic Weights 2024, with the intervals kept as intervals; see [Standard atomic weights and their uncertainty](atomic_weights.md)), read into the registry like the constants and units, so a conf or a unit system can override an element, and the balancer uses `num-rational`'s `Rational64` with every operation checked, so an overflow is an error and never a wrapped number. `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
+> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, there is no periodic table in Rust: the atomic weights are named, frozen editions in `physure.conf` (`[AtomicWeights:standard-2024]`, the full CIAAW Standard Atomic Weights 2024 with the intervals kept as intervals, the default; and `[AtomicWeights:abridged-2024]`, the CIAAW abridged table, as an option; see [Standard atomic weights and their uncertainty](atomic_weights.md)), read into the registry like the constants and units, so a conf or a unit system can select a table, override an element on top of whichever table is selected, or carry a complete table of its own, and the balancer uses `num-rational`'s `Rational64` with every operation checked, so an overflow is an error and never a wrapped number. `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
 
 #### 5.1. Module Structure (`physure-core/src/chemistry/`)
 
 ```
 physure-core/src/chemistry/
 ├── mod.rs              # pub mod declarations
-├── elements.rs         # atomic_weight(symbol), read from [AtomicWeights] of the catalog in scope
+├── elements.rs         # atomic_weight(symbol), atomic_weight_edition(): the selected table of the catalog in scope
 ├── formula.rs          # Recursive descent formula parser
 ├── species.rs          # Species struct with molar_mass() -> Quantity
 ├── reaction.rs         # Reaction balancing (exact Fraction RREF)
@@ -232,19 +232,22 @@ physure-core/src/chemistry/
 └── thermo.rs           # Arrhenius, Clausius-Clapeyron, Gibbs, standard data
 ```
 
-#### 5.2. Periodic table in the conf (`[AtomicWeights]` of `physure.conf`) ✅
+#### 5.2. Periodic table in the conf (`[AtomicWeights:<edition>]` of `physure.conf`) ✅
 
-The weights are data, not code: one row per element, in g/mol, in the same file as the constants and units. A row is `symbol = weight, half-width [, standard]` or, for the 14 elements CIAAW gives as an interval, `symbol = [a, b]`. The section is generated from the table as CIAAW prints it (`scripts/gen_atomic_weights_conf.py`); [Standard atomic weights and their uncertainty](atomic_weights.md) documents the data, the model, the checks and the limits.
+The weights are data, not code: one row per element, in g/mol, in the same file as the constants and units. A row is `symbol = weight, half-width [, standard]` or, for the 14 elements CIAAW gives as an interval, `symbol = [a, b]`. A table is a section `[AtomicWeights:<edition>]`; two are shipped and frozen (`standard-2024`, `abridged-2024`), generated from the tables as CIAAW prints them (`scripts/gen_atomic_weights_conf.py`). `[Chemistry] atomic_weights = <edition or alias>` selects the table (the aliases `standard` and `abridged` move to the newest shipped edition; a pinned name never changes meaning), and `[AtomicWeights]` (no suffix) holds your definitions, which win over whichever table is selected and over nothing else; [Standard atomic weights and their uncertainty](atomic_weights.md) documents the data, the model, the checks and the limits.
 
 ```ini
-[AtomicWeights]
+[AtomicWeights:standard-2024]
 H = [1.00784, 1.00811]
 Fe = 55.845, 0.002
+
+[Chemistry]
+atomic_weights = standard
 ```
 
-`elements::atomic_weight` looks the symbol up in the catalog in scope. The section is read strictly (a bad row refuses the whole text) and a later definition replaces an earlier one, so adding an isotope such as `D = 2.01410177812, 0.00000000012, standard` in a conf of your own is enough for `D2O` to parse.
+`elements::atomic_weight` looks the symbol up in the catalog in scope: your definitions first, then the selected table, with no fallback to another table. The sections are read strictly (a bad row refuses the whole text) and a later definition replaces an earlier one, so adding an isotope such as `D = 2.01410177812, 0.00000000012, standard` to `[AtomicWeights]` in a conf of your own is enough for `D2O` to parse under any edition. `atomic_weight_edition()` returns the table that produced a result, for a report to quote; the audited-use policy (frozen editions, pinning a name, a complete table of your own) is in section 6 of [Standard atomic weights and their uncertainty](atomic_weights.md).
 
-**Rationale**: the default is the current IUPAC standard (the CIAAW Standard Atomic Weights 2024, not the abridged table: its "±" is a rounding convention and its single value for an interval element is not the midpoint, Prohaska et al. 2022, §7) and nobody has to rebuild the core to use another table. Elements with no standard atomic weight carry a mass number with an uncertainty of 0, a convention of the file. The second column is the uncertainty CIAAW prints, the half-width of the interval in which the atomic weight of normal materials lies (a decisional uncertainty, not a GUM expanded uncertainty); it is read as a uniform distribution and stored as the standard uncertainty `half-width / √3`, and an interval `[a, b]` as its midpoint with standard uncertainty `(b - a) / √12`, as IUPAC recommends (Prohaska et al. 2022, §6-7; van der Veen et al., [DOI: 10.1515/pac-2017-1002](https://doi.org/10.1515/pac-2017-1002); Possolo et al. 2018, [DOI: 10.1515/pac-2016-0402](https://doi.org/10.1515/pac-2016-0402)). A third field `, standard` marks a number that already is a standard uncertainty. The uncertainty of a molar mass combines per element, `u² = Σ ν_E² u²(Ar(E))`.
+**Rationale**: the default is the current IUPAC standard (the CIAAW Standard Atomic Weights 2024, not the abridged table: its "±" is a rounding convention and its single value for an interval element is not the midpoint, Prohaska et al. 2022, §7; the abridged table is nevertheless shipped as the option `abridged-2024`) and nobody has to rebuild the core to use another table or to keep a validated one. Elements with no standard atomic weight carry a mass number with an uncertainty of 0, a convention of the file. The second column is the uncertainty CIAAW prints, the half-width of the interval in which the atomic weight of normal materials lies (a decisional uncertainty, not a GUM expanded uncertainty); it is read as a uniform distribution and stored as the standard uncertainty `half-width / √3`, and an interval `[a, b]` as its midpoint with standard uncertainty `(b - a) / √12`, as IUPAC recommends (Prohaska et al. 2022, §6-7; van der Veen et al., [DOI: 10.1515/pac-2017-1002](https://doi.org/10.1515/pac-2017-1002); Possolo et al. 2018, [DOI: 10.1515/pac-2016-0402](https://doi.org/10.1515/pac-2016-0402)). A third field `, standard` marks a number that already is a standard uncertainty. The uncertainty of a molar mass combines per element, `u² = Σ ν_E² u²(Ar(E))`.
 
 > 📄 **Reference**: Prohaska, T. et al. "Standard atomic weights of the elements 2021 (IUPAC Technical Report)." *Pure and Applied Chemistry* 94.5 (2022): 573-600. [DOI: 10.1515/pac-2019-0603](https://doi.org/10.1515/pac-2019-0603)
 

@@ -1,7 +1,7 @@
 use crate::uncertainty::{PropagationMode, set_propagation_mode};
 use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
-use crate::units::registry::UnitRegistry;
+use crate::units::registry::{is_atomic_weight_edition_name, resolve_atomic_weight_edition, UnitRegistry};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -72,6 +72,25 @@ fn parse_conf(
         if line.starts_with('[') && line.ends_with(']') {
             current_section = &line[1..line.len() - 1];
             has_compatibility |= current_section == "Compatibility";
+            if let Some(edition) = current_section.strip_prefix("AtomicWeights:") {
+                if is_atomic_weight_edition_name(edition) && resolve_atomic_weight_edition(edition) != edition {
+                    // a table called like an alias could never be selected: the alias would shadow it
+                    problems.push(format!(
+                        "[{current_section}]: '{edition}' is an alias of '{}' and cannot name a table; choose another name",
+                        resolve_atomic_weight_edition(edition)
+                    ));
+                    current_section = "";
+                } else if is_atomic_weight_edition_name(edition) {
+                    // the table exists as soon as its section does, even before its first line
+                    registry.atomic_weight_tables.entry(edition.to_string()).or_default();
+                } else {
+                    problems.push(format!(
+                        "[{current_section}]: {EDITION_NAME_RULE}, not '{edition}'"
+                    ));
+                    // one problem for the section, not one per line of it
+                    current_section = "";
+                }
+            }
             continue;
         }
 
@@ -83,7 +102,12 @@ fn parse_conf(
                 declare_base_unit(line, registry, &mut dim_to_base);
             }
             "Constants" => read_constant(line, registry, constants),
-            "AtomicWeights" => read_atomic_weight(line, registry, problems),
+            "AtomicWeights" => read_atomic_weight(line, &mut registry.atomic_weights, problems),
+            "Chemistry" => read_chemistry(line, registry, problems),
+            table if table.starts_with("AtomicWeights:") => {
+                let edition = &table["AtomicWeights:".len()..];
+                read_atomic_weight(line, registry.atomic_weight_tables.entry(edition.to_string()).or_default(), problems);
+            }
             "Categories" => read_category(line, registry),
             "Compatibility" => {
                 read_compatibility_line(line, &mut periodic_names, &mut saw_periodic, &mut compatibility_rows)
@@ -234,7 +258,9 @@ fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMa
     });
 }
 
-/// One line of `[AtomicWeights]`, in g/mol. Two forms:
+/// One line of an atomic-weight section, in g/mol, stored in `table`. `[AtomicWeights]` (your definitions,
+/// applied on top of whichever table is selected) and every `[AtomicWeights:<edition>]` (a table: the shipped
+/// `standard-2024` and `abridged-2024`, or one of your own) share this grammar. Two forms:
 ///
 /// - `symbol = weight, half-width [, standard]`: by default the second number is the half-width of the interval
 ///   CIAAW publishes (its "+-"), read as a uniform distribution, whose standard uncertainty is
@@ -247,7 +273,7 @@ fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMa
 ///
 /// A weight is positive and finite and the number is finite and not negative (`0 < a < b` for an interval);
 /// anything else is a problem, because a molar mass built from it would be a confident wrong answer.
-fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
+fn read_atomic_weight(line: &str, table: &mut HashMap<String, (f64, f64)>, problems: &mut Vec<String>) {
     let parsed = (|| {
         let (symbol, rest) = line.split_once('=')?;
         let symbol = symbol.trim();
@@ -263,7 +289,7 @@ fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Ve
     })();
     match parsed {
         Some((symbol, value)) => {
-            registry.atomic_weights.insert(symbol, value);
+            table.insert(symbol, value);
         }
         None => problems.push(format!(
             "{line}: expected `symbol = weight, half-width` (or `, standard` after a standard uncertainty) or `symbol = [a, b]`, with a positive weight and a non-negative number"
@@ -271,7 +297,34 @@ fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Ve
     }
 }
 
-/// `weight, number [, interval|standard]` of an `[AtomicWeights]` line: the weight and its standard uncertainty.
+const EDITION_NAME_RULE: &str =
+    "an edition name is lower-case ASCII letters, digits and `-`, `_`, `.`, starts with a letter and has at most 64 characters";
+
+/// One line of `[Chemistry]`: `atomic_weights = <edition or alias>`, the table the chemistry module reads
+/// (`standard` and `abridged` are aliases of the newest shipped editions, see
+/// [`resolve_atomic_weight_edition`](crate::units::resolve_atomic_weight_edition)). The choice belongs to the
+/// registry, like the definitions, and is not a process-wide `[Settings]` entry. It is checked against the tables
+/// when it is used, not here, so the choice and the table may come from different texts in any order. Any other
+/// key, or an empty or ill-formed value, is a problem.
+fn read_chemistry(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
+    let reading = match line.split_once('=') {
+        Some((key, value)) if key.trim() == "atomic_weights" => {
+            let value = value.trim();
+            if is_atomic_weight_edition_name(value) {
+                Ok(value.to_string())
+            } else {
+                Err(format!("'{value}' is not an edition name: {EDITION_NAME_RULE}"))
+            }
+        }
+        _ => Err("the only key of [Chemistry] is `atomic_weights = <edition or alias>`".to_string()),
+    };
+    match reading {
+        Ok(selection) => registry.atomic_weight_selection = selection,
+        Err(why) => problems.push(format!("{line}: {why}")),
+    }
+}
+
+/// `weight, number [, interval|standard]` of an atomic-weight line: the weight and its standard uncertainty.
 fn read_weight_and_number(text: &str) -> Option<(f64, f64)> {
     let (weight, rest) = text.split_once(',')?;
     let (number, kind) = rest.split_once(',').map_or((rest, "interval"), |(number, kind)| (number, kind.trim()));
@@ -285,7 +338,7 @@ fn read_weight_and_number(text: &str) -> Option<(f64, f64)> {
     (weight.is_finite() && weight > 0.0 && number.is_finite() && number >= 0.0).then_some((weight, std))
 }
 
-/// `a, b]` (what follows the `[`) of an `[AtomicWeights]` line: the midpoint and `(b - a) / sqrt(12)`.
+/// `a, b]` (what follows the `[`) of an atomic-weight line: the midpoint and `(b - a) / sqrt(12)`.
 fn read_weight_interval(text: &str) -> Option<(f64, f64)> {
     let (low, high) = text.strip_suffix(']')?.split_once(',')?;
     let (low, high): (f64, f64) = (low.trim().parse().ok()?, high.trim().parse().ok()?);

@@ -44,11 +44,15 @@ impl Species {
     /// For each element: `(symbol, count * weight, count * standard uncertainty)`, from the catalog in scope.
     fn terms(&self) -> PhysureResult<Vec<(String, f64, f64)>> {
         super::with_catalog_in_scope(|registry| {
+            super::elements::check_table_is_defined(registry)?;
             self.composition
                 .iter()
                 .map(|(element, &count)| {
-                    let (weight, std) = registry.atomic_weights.get(element).copied().ok_or_else(|| {
-                        PhysureError::DomainError(format!("no atomic weight for {element:?} in the catalog"))
+                    let (weight, std) = registry.atomic_weight(element).ok_or_else(|| {
+                        PhysureError::DomainError(format!(
+                            "no atomic weight for '{element}' in edition '{}'",
+                            registry.selected_atomic_weight_edition()
+                        ))
                     })?;
                     Ok((element.clone(), f64::from(count) * weight, f64::from(count) * std))
                 })
@@ -221,16 +225,91 @@ mod tests {
         assert!(close(mass, 2.0 * H) && close(std, 2.0 * u_h()), "outside the scope it is the default");
     }
 
+    /// The embedded catalog with `texts` applied in order.
+    fn catalog_with(texts: &[&str]) -> crate::units::UnitRegistry {
+        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        let (mut registry, mut constants) = build_registry_from_conf();
+        for text in texts {
+            extend_registry(&mut registry, &mut constants, text).unwrap();
+        }
+        registry
+    }
+
+    #[test]
+    fn the_abridged_edition_is_used_when_it_is_selected_and_only_inside_that_scope() {
+        let registry = catalog_with(&["[Chemistry]\natomic_weights = abridged-2024\n"]);
+        let water = Species::new("H2O").unwrap();
+        let (mass, std) = crate::units::with_catalog(&registry, || water.molar_mass_parts()).unwrap();
+        // abridged-2024: H 1.0080 +- 0.0002, O 15.999 +- 0.001, each +- read as a half-width, u = (+-) / sqrt(3);
+        // IUPAC (van der Veen et al.): u^2(Mr) = sum over the elements of nu_E^2 u^2(Ar(E))
+        let expected_mass = 2.0 * 1.0080 + 15.999;
+        assert!((mass - expected_mass).abs() <= 1e-12 * expected_mass, "{mass}");
+        let expected = ((2.0 * 0.0002 / 3f64.sqrt()).powi(2) + (0.001 / 3f64.sqrt()).powi(2)).sqrt();
+        assert!((std - expected).abs() <= 1e-12 * expected, "{std} vs {expected}");
+        // outside the scope it is standard-2024: 2 * 1.007975 + 15.9994
+        let (mass, _) = water.molar_mass_parts().unwrap();
+        assert!(close(mass, 2.0 * 1.007975 + 15.9994), "{mass}");
+        // the quantity reads the same table
+        let q = crate::units::with_catalog(&registry, || water.molar_mass()).unwrap();
+        assert!(close(q.value.mean(), 2.0 * 1.0080 + 15.999));
+        // and a report can say which table it was
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "abridged-2024");
+        assert_eq!(crate::chemistry::atomic_weight_edition(), "standard-2024");
+    }
+
+    #[test]
+    fn a_definition_of_yours_wins_under_every_edition() {
+        let h2 = Species::new("H2").unwrap();
+        for selection in ["standard", "standard-2024", "abridged", "abridged-2024"] {
+            let text = format!("[AtomicWeights]\nH = 2.0, 0\n[Chemistry]\natomic_weights = {selection}\n");
+            let registry = catalog_with(&[&text]);
+            assert_eq!(crate::units::with_catalog(&registry, || h2.molar_mass_parts()).unwrap(), (4.0, 0.0), "{selection}");
+        }
+    }
+
+    #[test]
+    fn a_table_of_your_own_has_no_fallback_and_the_error_names_the_element_and_the_edition() {
+        let registry = catalog_with(&[
+            "[AtomicWeights:acme-2026-03]\nH = 1.00794, 0.00007\nO = 15.9994, 0.0003\n[Chemistry]\natomic_weights = acme-2026-03\n",
+        ]);
+        let water = crate::units::with_catalog(&registry, || Species::new("H2O")).unwrap();
+        let (mass, _) = crate::units::with_catalog(&registry, || water.molar_mass_parts()).unwrap();
+        assert!(close(mass, 2.0 * 1.00794 + 15.9994), "{mass}");
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "acme-2026-03");
+        // Na is in neither of the tables of this edition: nothing is taken from the shipped ones
+        let err = crate::units::with_catalog(&registry, || Species::new("NaCl")).unwrap_err();
+        assert!(matches!(err, PhysureError::ParseError(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("'Na'") && text.contains("acme-2026-03"), "{text}");
+        // the same species, outside the scope, is read from standard-2024
+        assert!(Species::new("NaCl").is_ok());
+    }
+
+    #[test]
+    fn an_undefined_selected_edition_fails_every_use_naming_it() {
+        let registry = catalog_with(&["[Chemistry]\natomic_weights = nope-1\n"]);
+        let err = crate::units::with_catalog(&registry, || Species::new("H2O")).unwrap_err();
+        assert!(matches!(err, PhysureError::DomainError(_)), "{err:?}");
+        assert!(err.to_string().contains("nope-1"), "{err}");
+        // a species made outside the scope and used inside it fails the same way
+        let water = Species::new("H2O").unwrap();
+        let (parts, quantity) = crate::units::with_catalog(&registry, || (water.molar_mass_parts(), water.molar_mass()));
+        assert!(parts.unwrap_err().to_string().contains("nope-1"));
+        assert!(quantity.unwrap_err().to_string().contains("nope-1"));
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "nope-1");
+    }
+
     #[test]
     fn an_element_the_catalog_lacks_is_an_error_naming_it() {
         use crate::units::conf::build_registry_from_conf;
         let zirconia = Species::new("ZrO2").unwrap();
         let (mut registry, _) = build_registry_from_conf();
-        registry.atomic_weights.remove("Zr");
+        registry.atomic_weight_tables.get_mut("standard-2024").unwrap().remove("Zr");
         let (parts, quantity) =
             crate::units::with_catalog(&registry, || (zirconia.molar_mass_parts(), zirconia.molar_mass()));
-        assert!(parts.unwrap_err().to_string().contains("Zr"));
-        assert!(quantity.unwrap_err().to_string().contains("Zr"));
+        let parts = parts.unwrap_err().to_string();
+        assert!(parts.contains("'Zr'") && parts.contains("standard-2024"), "{parts}");
+        assert!(quantity.unwrap_err().to_string().contains("'Zr'"));
     }
 
     fn relative(q: &Quantity) -> f64 {

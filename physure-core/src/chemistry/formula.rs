@@ -4,9 +4,10 @@
 //! a species in a medium; they are refused by name, because dropping them would give a wrong
 //! composition and so a wrong molar mass.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::error::{PhysureError, PhysureResult};
+use crate::units::UnitRegistry;
 
 /// Element symbol to the number of its atoms. Ordered by symbol.
 pub type Composition = BTreeMap<String, u32>;
@@ -46,7 +47,7 @@ fn add(into: &mut Composition, element: String, n: u32, formula: &str) -> Physur
 }
 
 /// One part of a formula, without a hydrate dot: element symbols, counts and parentheses.
-fn parse_group(part: &str, formula: &str, weights: &HashMap<String, (f64, f64)>) -> PhysureResult<Composition> {
+fn parse_group(part: &str, formula: &str, registry: &UnitRegistry) -> PhysureResult<Composition> {
     if part.is_empty() {
         return Err(bad(formula, "nothing between the separators"));
     }
@@ -85,8 +86,11 @@ fn parse_group(part: &str, formula: &str, weights: &HashMap<String, (f64, f64)>)
                     i += 1;
                 }
                 let symbol = &part[start..i];
-                if !weights.contains_key(symbol) {
-                    return Err(bad(formula, &format!("unknown element {symbol:?}")));
+                if registry.atomic_weight(symbol).is_none() {
+                    return Err(bad(
+                        formula,
+                        &format!("unknown element '{symbol}' in edition '{}'", registry.selected_atomic_weight_edition()),
+                    ));
                 }
                 let (n, next) = read_count(bytes, i, formula)?;
                 i = next;
@@ -114,6 +118,7 @@ pub fn parse_formula(formula: &str) -> PhysureResult<Composition> {
     }
     // the catalog is resolved once, not once per element
     super::with_catalog_in_scope(|registry| {
+        super::elements::check_table_is_defined(registry)?;
         let mut total = Composition::new();
         for (index, part) in text.split(['·', '*']).enumerate() {
             let digits = part.bytes().take_while(u8::is_ascii_digit).count();
@@ -121,7 +126,7 @@ pub fn parse_formula(formula: &str) -> PhysureResult<Composition> {
                 return Err(bad(formula, "a formula cannot start with a number"));
             }
             let (times, _) = read_count(part.as_bytes(), 0, formula)?;
-            for (element, n) in parse_group(&part[digits..], formula, &registry.atomic_weights)? {
+            for (element, n) in parse_group(&part[digits..], formula, registry)? {
                 let n = n.checked_mul(times).ok_or_else(|| bad(formula, "a count is too large"))?;
                 add(&mut total, element, n, formula)?;
             }
@@ -196,16 +201,59 @@ mod tests {
     #[test]
     fn an_element_of_the_catalog_in_scope_is_known_and_one_it_lacks_is_not() {
         use crate::units::conf::{build_registry_from_conf, extend_registry};
-        assert!(message("D2O").contains("\"D\""), "refused by default");
+        assert!(message("D2O").contains("'D'"), "refused by default");
         let (mut registry, mut constants) = build_registry_from_conf();
-        extend_registry(&mut registry, &mut constants, "[AtomicWeights]
-D = 2.01410177812, 0.00000000012, standard
-").unwrap();
+        extend_registry(&mut registry, &mut constants, "[AtomicWeights]\nD = 2.01410177812, 0.00000000012, standard\n")
+            .unwrap();
         let heavy = crate::units::with_catalog(&registry, || parse_formula("D2O")).unwrap();
         assert_eq!(heavy, comp(&[("D", 2), ("O", 1)]));
-        registry.atomic_weights.remove("O");
+        registry.atomic_weight_tables.get_mut("standard-2024").unwrap().remove("O");
         let err = crate::units::with_catalog(&registry, || parse_formula("H2O")).unwrap_err();
-        assert!(err.to_string().contains("\"O\""), "{err}");
+        let text = err.to_string();
+        assert!(text.contains("'O'") && text.contains("standard-2024"), "{text}");
+    }
+
+    #[test]
+    fn a_definition_of_an_element_is_known_under_every_edition() {
+        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        for selection in ["standard", "standard-2024", "abridged", "abridged-2024"] {
+            let (mut registry, mut constants) = build_registry_from_conf();
+            let text = format!(
+                "[Chemistry]\natomic_weights = {selection}\n[AtomicWeights]\nD = 2.01410177812, 0.00000000012, standard\n"
+            );
+            extend_registry(&mut registry, &mut constants, &text).unwrap();
+            let heavy = crate::units::with_catalog(&registry, || parse_formula("D2O")).unwrap();
+            assert_eq!(heavy, comp(&[("D", 2), ("O", 1)]), "{selection}");
+        }
+    }
+
+    #[test]
+    fn the_element_is_checked_against_the_selected_edition_and_the_error_names_both() {
+        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        let (mut registry, mut constants) = build_registry_from_conf();
+        extend_registry(
+            &mut registry,
+            &mut constants,
+            "[AtomicWeights:acme-2026-03]\nH = 1.00794, 0.00007\nO = 15.9994, 0.0003\n[Chemistry]\natomic_weights = acme-2026-03\n",
+        )
+        .unwrap();
+        assert!(crate::units::with_catalog(&registry, || parse_formula("H2O")).is_ok());
+        let err = crate::units::with_catalog(&registry, || parse_formula("NaCl")).unwrap_err();
+        assert!(matches!(err, PhysureError::ParseError(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("'Na'") && text.contains("acme-2026-03"), "{text}");
+    }
+
+    #[test]
+    fn an_edition_that_is_not_defined_fails_before_any_element_is_looked_at() {
+        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        let (mut registry, mut constants) = build_registry_from_conf();
+        extend_registry(&mut registry, &mut constants, "[Chemistry]\natomic_weights = nope-1\n").unwrap();
+        for formula in ["H2O", "Xx3", "NaCl"] {
+            let err = crate::units::with_catalog(&registry, || parse_formula(formula)).unwrap_err();
+            assert!(matches!(err, PhysureError::DomainError(_)), "{formula}: {err:?}");
+            assert!(err.to_string().contains("nope-1"), "{formula}: {err}");
+        }
     }
 
     #[test]

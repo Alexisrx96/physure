@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use num_rational::Rational64;
 use crate::error::{PhysureError, PhysureResult};
 use crate::units::exact::ExactScale;
@@ -98,8 +98,35 @@ pub struct UnitRegistry {
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
-    /// Standard atomic weights from `[AtomicWeights]`: symbol to `(weight in g/mol, standard uncertainty)`.
+    /// Your definitions from `[AtomicWeights]` (no suffix): symbol to `(weight in g/mol, standard uncertainty)`.
+    /// Empty in the shipped catalog. They are read first, whichever table is selected, so a definition of yours
+    /// never depends on a selection made elsewhere (see [`UnitRegistry::atomic_weight`]).
     pub atomic_weights: HashMap<String, (f64, f64)>,
+    /// The tables of atomic weights by edition, from the sections `[AtomicWeights:<edition>]`, same units. The
+    /// shipped file defines `standard-2024` and `abridged-2024`; any text can define a complete table of its own.
+    pub atomic_weight_tables: BTreeMap<String, HashMap<String, (f64, f64)>>,
+    /// What `[Chemistry] atomic_weights` selected, as written: an edition or an alias (`standard`, `abridged`).
+    /// It is resolved, and checked against the tables, when it is used, so the choice and the table may come from
+    /// different texts in any order.
+    pub atomic_weight_selection: String,
+}
+
+/// An alias of `[Chemistry] atomic_weights` and the edition it stands for in this release. **An alias moves when a
+/// release ships a newer edition of its kind; an edition name never changes meaning.** Whoever must reproduce a
+/// result pins the name. Every release that moves an alias says so in the CHANGELOG.
+const ATOMIC_WEIGHT_ALIASES: [(&str, &str); 2] = [("standard", "standard-2024"), ("abridged", "abridged-2024")];
+
+/// The edition that `name` stands for: the edition an alias resolves to in this release, or `name` itself.
+pub fn resolve_atomic_weight_edition(name: &str) -> &str {
+    ATOMIC_WEIGHT_ALIASES.iter().find(|(alias, _)| *alias == name).map_or(name, |(_, edition)| edition)
+}
+
+/// Whether `name` can name an edition: lower-case ASCII letters, digits and `-`, `_`, `.`, starting with a
+/// letter, at most 64 characters.
+pub fn is_atomic_weight_edition_name(name: &str) -> bool {
+    name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
 }
 
 impl UnitRegistry {
@@ -121,6 +148,42 @@ impl UnitRegistry {
             categories: HashMap::new(),
             constants_meta: HashMap::new(),
             atomic_weights: HashMap::new(),
+            atomic_weight_tables: BTreeMap::new(),
+            atomic_weight_selection: "standard".to_string(),
+        }
+    }
+
+    /// The edition that `[Chemistry] atomic_weights` selects, with an alias resolved (`standard` is
+    /// `standard-2024`). It may name a table that no text has defined: see
+    /// [`UnitRegistry::selected_atomic_weight_table_missing`].
+    pub fn selected_atomic_weight_edition(&self) -> &str {
+        resolve_atomic_weight_edition(&self.atomic_weight_selection)
+    }
+
+    /// `(weight in g/mol, standard uncertainty)` of an element: your definitions first, then the selected
+    /// edition, and nothing else. There is no fallback to any other table.
+    pub fn atomic_weight(&self, symbol: &str) -> Option<(f64, f64)> {
+        self.atomic_weights
+            .get(symbol)
+            .or_else(|| self.atomic_weight_tables.get(self.selected_atomic_weight_edition())?.get(symbol))
+            .copied()
+    }
+
+    /// The selected edition when no text has defined its table: every use of the weights is then an error that
+    /// names it. `None` when the table exists.
+    pub fn selected_atomic_weight_table_missing(&self) -> Option<&str> {
+        let edition = self.selected_atomic_weight_edition();
+        (!self.atomic_weight_tables.contains_key(edition)).then_some(edition)
+    }
+
+    /// Which table produced the atomic weights, for a report to quote: the resolved edition (`standard-2024`),
+    /// followed by ` + N definitions` when you defined any (`standard-2024 + 2 definitions`; "1 definitions" is
+    /// written as is, there is no pluralisation).
+    pub fn atomic_weight_edition(&self) -> String {
+        let edition = self.selected_atomic_weight_edition();
+        match self.atomic_weights.len() {
+            0 => edition.to_string(),
+            n => format!("{edition} + {n} definitions"),
         }
     }
 

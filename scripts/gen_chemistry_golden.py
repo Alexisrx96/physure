@@ -5,11 +5,12 @@ repository root:
 
     PYTHONUTF8=1 physure-python/.venv/Scripts/python.exe scripts/gen_chemistry_golden.py
 
-The molar masses are the weights of the `[AtomicWeights]` section of physure.conf (the CIAAW
-Standard Atomic Weights 2024) combined by the Python formula parser: the weights are read from the
+The molar masses are the atomic weights physure.conf selects (`[Chemistry] atomic_weights`, the alias
+`standard`, that is the edition `standard-2024` = the CIAAW Standard Atomic Weights 2024, with the definitions
+of `[AtomicWeights]` on top, none in the shipped file) combined by the Python formula parser: the weights are read from the
 conf and the formulas are parsed by `physure.ext.chemistry`, so neither comes from the Rust code
 under test. The reading rules of the conf are written out again here, not imported from the core
-(and are independent of scripts/gen_atomic_weights_conf.py, which writes the section): the second
+(and are independent of scripts/gen_atomic_weights_conf.py, which writes the sections): the second
 column of `Sym = weight, U` is the half-width CIAAW publishes, read as a uniform distribution, so
 the standard uncertainty is U / sqrt(3) unless the line ends in `, standard` (then the number is
 taken as given); `Sym = [a, b]` is an interval, with weight (a + b) / 2 and standard uncertainty
@@ -64,14 +65,35 @@ REFUSED = [
 ]
 
 
-def atomic_weights() -> dict[str, tuple[float, float]]:
-    """symbol -> (weight, standard uncertainty) from the [AtomicWeights] section of physure.conf.
+ALIASES = {"standard": "standard-2024", "abridged": "abridged-2024"}  # what physure.conf documents
 
-    `symbol = weight, U` gives U / sqrt(3) (uniform distribution over the CIAAW interval
-    weight +- U); `symbol = weight, u, standard` gives u; `symbol = [a, b]` gives the midpoint
-    and (b - a) / sqrt(12).
+
+def read_line(line: str) -> tuple[str, tuple[float, float]]:
+    """`Sym = weight, U [, standard]` or `Sym = [a, b]` -> (symbol, (weight, standard uncertainty))."""
+    symbol, rest = (part.strip() for part in line.split("=", 1))
+    if rest.startswith("["):
+        assert rest.endswith("]"), line
+        low, high = (float(x) for x in rest[1:-1].split(","))
+        assert 0 < low < high, line
+        return symbol, ((low + high) / 2, (high - low) / math.sqrt(12))
+    weight, number, *kind = (field.strip() for field in rest.split(","))
+    assert kind in ([], ["interval"], ["standard"]), line
+    std = float(number) if kind == ["standard"] else float(number) / math.sqrt(3)
+    return symbol, (float(weight), std)
+
+
+def atomic_weights() -> dict[str, tuple[float, float]]:
+    """symbol -> (weight, standard uncertainty) of the table physure.conf selects.
+
+    `[Chemistry] atomic_weights` names an edition or an alias (`standard` is `standard-2024`); the
+    table is the section `[AtomicWeights:<edition>]`, and the lines of `[AtomicWeights]` (the
+    definitions of the user, none in the shipped file) are applied on top of it. A line
+    `symbol = weight, U` gives U / sqrt(3) (uniform distribution over the CIAAW interval weight +- U);
+    `symbol = weight, u, standard` gives u; `symbol = [a, b]` gives the midpoint and (b - a) / sqrt(12).
     """
-    weights: dict[str, tuple[float, float]] = {}
+    tables: dict[str, dict[str, tuple[float, float]]] = {}
+    definitions: dict[str, tuple[float, float]] = {}
+    selection = "standard"
     section = None
     for raw in CONF.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -79,19 +101,19 @@ def atomic_weights() -> dict[str, tuple[float, float]]:
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1]
+            if section.startswith("AtomicWeights:"):
+                tables.setdefault(section.removeprefix("AtomicWeights:"), {})
         elif section == "AtomicWeights":
-            symbol, rest = (part.strip() for part in line.split("=", 1))
-            if rest.startswith("["):
-                assert rest.endswith("]"), line
-                low, high = (float(x) for x in rest[1:-1].split(","))
-                assert 0 < low < high, line
-                weights[symbol] = ((low + high) / 2, (high - low) / math.sqrt(12))
-                continue
-            weight, number, *kind = (field.strip() for field in rest.split(","))
-            assert kind in ([], ["interval"], ["standard"]), line
-            std = float(number) if kind == ["standard"] else float(number) / math.sqrt(3)
-            weights[symbol] = (float(weight), std)
-    return weights
+            symbol, value = read_line(line)
+            definitions[symbol] = value
+        elif section is not None and section.startswith("AtomicWeights:"):
+            symbol, value = read_line(line)
+            tables[section.removeprefix("AtomicWeights:")][symbol] = value
+        elif section == "Chemistry":
+            key, value = (part.strip() for part in line.split("=", 1))
+            assert key == "atomic_weights", line
+            selection = value
+    return {**tables[ALIASES.get(selection, selection)], **definitions}
 
 
 def molar_mass_rows() -> list[str]:
