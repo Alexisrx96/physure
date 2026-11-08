@@ -4,7 +4,7 @@
 # Columns: Z, symbol, abridged standard atomic weight as printed (trailing zeros kept), the +- as printed (CIAAW calls it a conservative
 # simplified measure of reliability: Prohaska et al. 2022, section 7; `-` = the page prints a dash, no value), footnote letters as printed,
 # and mass_number: NOT a CIAAW value, the convention of physure.conf for an element with no standard atomic weight (same as the standard table).
-# The Rust test tests/atomic_weights_ciaaw.rs holds the [AtomicWeights:abridged] section of physure.conf to this file.
+# The Rust test tests/atomic_weights_ciaaw.rs holds the [AtomicWeights:abridged-2024] section of physure.conf to this file.
 1	H	1.0080	0.0002	m	
 2	He	4.0026	0.0001	g r	
 3	Li	6.94	0.06	m	
