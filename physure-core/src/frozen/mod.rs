@@ -8,3 +8,5 @@ pub mod canonical;
 pub mod time;
 pub mod model;
 pub use model::{FrozenError, FrozenFile, FrozenResult, HistoryEntry, Source, WitnessScript};
+pub mod seal;
+pub use seal::{EntryInput, Problem};
