@@ -6,9 +6,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use crate::chemistry::elements::atomic_weight;
 use crate::chemistry::formula::{parse_formula, Composition};
-use crate::error::PhysureResult;
+use crate::error::{PhysureError, PhysureResult};
 use crate::quantity::Quantity;
 use crate::uncertainty::new_source_id;
 
@@ -42,16 +41,28 @@ impl Species {
         &self.composition
     }
 
-    /// `(molar mass in g/mol, its standard uncertainty)`.
-    pub fn molar_mass_parts(&self) -> (f64, f64) {
-        let (mut mass, mut variance) = (0.0, 0.0);
-        for (element, &count) in &self.composition {
-            // the composition is only built by `parse_formula`, which checks every symbol
-            let (weight, std) = atomic_weight(element).expect("a parsed element has a weight");
-            mass += f64::from(count) * weight;
-            variance += (f64::from(count) * std).powi(2);
-        }
-        (mass, variance.sqrt())
+    /// For each element: `(symbol, count * weight, count * standard uncertainty)`, from the catalog in scope.
+    fn terms(&self) -> PhysureResult<Vec<(String, f64, f64)>> {
+        super::with_catalog_in_scope(|registry| {
+            self.composition
+                .iter()
+                .map(|(element, &count)| {
+                    let (weight, std) = registry.atomic_weights.get(element).copied().ok_or_else(|| {
+                        PhysureError::DomainError(format!("no atomic weight for {element:?} in the catalog"))
+                    })?;
+                    Ok((element.clone(), f64::from(count) * weight, f64::from(count) * std))
+                })
+                .collect()
+        })
+    }
+
+    /// `(molar mass in g/mol, its standard uncertainty)`, with the atomic weights of the catalog in
+    /// scope. An element the catalog has no weight for is an error.
+    pub fn molar_mass_parts(&self) -> PhysureResult<(f64, f64)> {
+        let terms = self.terms()?;
+        let mass = terms.iter().map(|(_, weight, _)| weight).sum();
+        let variance: f64 = terms.iter().map(|(_, _, std)| std * std).sum();
+        Ok((mass, variance.sqrt()))
     }
 
     /// The molar mass as a quantity in g/mol, with its uncertainty.
@@ -61,14 +72,9 @@ impl Species {
     /// The quantity is Gaussian whatever the global propagation mode is: it carries sources.
     pub fn molar_mass(&self) -> PhysureResult<Quantity> {
         let unit = Quantity::new(1.0, "g/mol")?.unit;
-        let mut mass = 0.0;
-        let mut sources = Vec::with_capacity(self.composition.len());
-        for (element, &count) in &self.composition {
-            // the composition is only built by `parse_formula`, which checks every symbol
-            let (weight, std) = atomic_weight(element).expect("a parsed element has a weight");
-            mass += f64::from(count) * weight;
-            sources.push((element_source(element), f64::from(count) * std));
-        }
+        let terms = self.terms()?;
+        let mass = terms.iter().map(|(_, weight, _)| weight).sum();
+        let sources = terms.iter().map(|(element, _, std)| (element_source(element), *std)).collect();
         Ok(Quantity::from_sources(mass, sources, unit))
     }
 }
@@ -94,7 +100,7 @@ mod tests {
 
     #[test]
     fn water_is_18_015_with_its_atoms_uncertainties_in_quadrature() {
-        let (mass, std) = Species::new("H2O").unwrap().molar_mass_parts();
+        let (mass, std) = Species::new("H2O").unwrap().molar_mass_parts().unwrap();
         assert!(close(mass, 2.0 * 1.008 + 15.999));
         // sqrt((2 * 0.0002)^2 + 0.001^2)
         assert!(close(std, (0.0004_f64.powi(2) + 0.001_f64.powi(2)).sqrt()));
@@ -102,9 +108,9 @@ mod tests {
 
     #[test]
     fn calcium_nitrate_and_copper_sulfate_pentahydrate() {
-        let (mass, _) = Species::new("Ca(NO3)2").unwrap().molar_mass_parts();
+        let (mass, _) = Species::new("Ca(NO3)2").unwrap().molar_mass_parts().unwrap();
         assert!(close(mass, 40.078 + 2.0 * 14.007 + 6.0 * 15.999));
-        let (mass, _) = Species::new("CuSO4·5H2O").unwrap().molar_mass_parts();
+        let (mass, _) = Species::new("CuSO4·5H2O").unwrap().molar_mass_parts().unwrap();
         assert!(close(mass, 63.546 + 32.06 + 9.0 * 15.999 + 10.0 * 1.008));
     }
 
@@ -112,7 +118,7 @@ mod tests {
     fn the_molar_mass_is_a_quantity_in_g_per_mol() {
         let q = Species::new("CO2").unwrap().molar_mass().unwrap();
         assert!(close(q.value.mean(), 12.011 + 2.0 * 15.999));
-        assert!(close(q.value.std_dev(), (0.001_f64.powi(2) + 0.002_f64.powi(2)).sqrt()));
+        assert!(close(q.value.std_dev(), (0.002_f64.powi(2) + 0.002_f64.powi(2)).sqrt()));
         assert!(close(q.to("kg/mol").unwrap().value.mean(), 0.044009));
     }
 
@@ -134,7 +140,7 @@ mod tests {
         let mass = Quantity::with_uncertainty(50.0, 0.1, "g").unwrap();
         let n = mass_to_moles(&mass, &co2).unwrap();
         let m_co2 = 12.011 + 2.0 * 15.999;
-        let u_m = (0.001_f64.powi(2) + 0.002_f64.powi(2)).sqrt();
+        let u_m = (0.002_f64.powi(2) + 0.002_f64.powi(2)).sqrt();
         let expected = 50.0 / m_co2;
         let rel = ((0.1_f64 / 50.0).powi(2) + (u_m / m_co2).powi(2)).sqrt();
         assert!(close(n.value.mean(), expected));
@@ -165,9 +171,32 @@ mod tests {
         let m = 2.0 * 1.008 + 15.999;
         assert!(close(mass.value.mean(), 2.0 * m));
         assert!(close(mass.to("kg").unwrap().value.mean(), 2.0 * m / 1000.0));
-        let (_, u_m) = water.molar_mass_parts();
+        let (_, u_m) = water.molar_mass_parts().unwrap();
         let rel = ((0.01_f64 / 2.0).powi(2) + (u_m / m).powi(2)).sqrt();
         assert!(close(mass.value.std_dev(), 2.0 * m * rel));
+    }
+
+    #[test]
+    fn the_molar_mass_uses_the_weights_of_the_catalog_in_scope() {
+        use crate::units::conf::build_registry_from_conf;
+        let (mut registry, _) = build_registry_from_conf();
+        registry.atomic_weights.insert("H".into(), (2.0, 0.0));
+        let h2 = Species::new("H2").unwrap();
+        assert_eq!(crate::units::with_catalog(&registry, || h2.molar_mass_parts()).unwrap(), (4.0, 0.0));
+        let (mass, std) = h2.molar_mass_parts().unwrap();
+        assert!(close(mass, 2.0 * 1.008) && close(std, 2.0 * 0.0002), "outside the scope it is the default");
+    }
+
+    #[test]
+    fn an_element_the_catalog_lacks_is_an_error_naming_it() {
+        use crate::units::conf::build_registry_from_conf;
+        let zirconia = Species::new("ZrO2").unwrap();
+        let (mut registry, _) = build_registry_from_conf();
+        registry.atomic_weights.remove("Zr");
+        let (parts, quantity) =
+            crate::units::with_catalog(&registry, || (zirconia.molar_mass_parts(), zirconia.molar_mass()));
+        assert!(parts.unwrap_err().to_string().contains("Zr"));
+        assert!(quantity.unwrap_err().to_string().contains("Zr"));
     }
 
     fn relative(q: &Quantity) -> f64 {
@@ -196,8 +225,8 @@ mod tests {
         let octane = Species::new("C8H18").unwrap().molar_mass().unwrap();
         let eight = Quantity::new(8.0, "").unwrap();
         let diff = octane.sub(&a.mul(&eight).unwrap()).unwrap();
-        let (_, u_h) = Species::new("H18").unwrap().molar_mass_parts();
-        let (_, u_o) = Species::new("O16").unwrap().molar_mass_parts();
+        let (_, u_h) = Species::new("H18").unwrap().molar_mass_parts().unwrap();
+        let (_, u_o) = Species::new("O16").unwrap().molar_mass_parts().unwrap();
         assert!(close(diff.value.std_dev(), (u_h * u_h + u_o * u_o).sqrt()));
     }
 

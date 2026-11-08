@@ -5,6 +5,19 @@
 
 pub mod elements;
 
+use crate::units::{conf::with_conf_registry, with_current_catalog, UnitRegistry};
+
+/// Runs `f` against the catalog in scope, or against the embedded one plus the working directory's conf.
+///
+/// Every reader of the catalog goes through this, so the catalog is resolved once per operation:
+/// `with_conf_registry` builds a merged registry on every call when a local `physure.conf` exists.
+pub(crate) fn with_catalog_in_scope<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
+    with_current_catalog(|scoped| match scoped {
+        Some(registry) => f(registry),
+        None => with_conf_registry(f),
+    })
+}
+
 pub use elements::atomic_weight;
 
 pub mod formula;

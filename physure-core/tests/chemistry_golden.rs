@@ -20,7 +20,7 @@ fn every_molar_mass_is_reproduced() {
     let mut count = 0;
     for row in rows(MOLAR_MASS) {
         let (formula, mass, std): (&str, f64, f64) = (row[0], row[1].parse().unwrap(), row[2].parse().unwrap());
-        let (got_mass, got_std) = Species::new(formula).unwrap().molar_mass_parts();
+        let (got_mass, got_std) = Species::new(formula).unwrap().molar_mass_parts().unwrap();
         // the atoms are summed in a different order, so the last bits may differ
         assert!((got_mass - mass).abs() <= 1e-12 * mass.abs().max(1.0), "{formula}: {got_mass} vs {mass}");
         assert!((got_std - std).abs() <= 1e-12 * std.abs().max(1e-12), "{formula}: {got_std} vs {std}");

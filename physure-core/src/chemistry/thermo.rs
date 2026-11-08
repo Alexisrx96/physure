@@ -10,8 +10,8 @@
 
 use crate::error::{PhysureError, PhysureResult};
 use crate::quantity::Quantity;
-use crate::units::conf::with_conf_registry;
-use crate::units::{with_current_catalog, RationalUnit, UnitRegistry};
+use crate::chemistry::with_catalog_in_scope;
+use crate::units::{RationalUnit, UnitRegistry};
 
 fn read_gas_constant(registry: &UnitRegistry) -> PhysureResult<Quantity> {
     let missing = || PhysureError::Generic("the catalog defines no molar_gas_constant".into());
@@ -25,10 +25,7 @@ fn read_gas_constant(registry: &UnitRegistry) -> PhysureResult<Quantity> {
 
 /// The molar gas constant `R` of the catalog in scope, in J/(mol·K).
 pub fn gas_constant() -> PhysureResult<Quantity> {
-    with_current_catalog(|scoped| match scoped {
-        Some(registry) => read_gas_constant(registry),
-        None => with_conf_registry(read_gas_constant),
-    })
+    with_catalog_in_scope(read_gas_constant)
 }
 
 fn gas_or(r: Option<&Quantity>) -> PhysureResult<Quantity> {

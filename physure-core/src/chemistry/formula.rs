@@ -4,9 +4,8 @@
 //! a species in a medium; they are refused by name, because dropping them would give a wrong
 //! composition and so a wrong molar mass.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use crate::chemistry::elements::atomic_weight;
 use crate::error::{PhysureError, PhysureResult};
 
 /// Element symbol to the number of its atoms. Ordered by symbol.
@@ -47,7 +46,7 @@ fn add(into: &mut Composition, element: String, n: u32, formula: &str) -> Physur
 }
 
 /// One part of a formula, without a hydrate dot: element symbols, counts and parentheses.
-fn parse_group(part: &str, formula: &str) -> PhysureResult<Composition> {
+fn parse_group(part: &str, formula: &str, weights: &HashMap<String, (f64, f64)>) -> PhysureResult<Composition> {
     if part.is_empty() {
         return Err(bad(formula, "nothing between the separators"));
     }
@@ -86,7 +85,7 @@ fn parse_group(part: &str, formula: &str) -> PhysureResult<Composition> {
                     i += 1;
                 }
                 let symbol = &part[start..i];
-                if atomic_weight(symbol).is_none() {
+                if !weights.contains_key(symbol) {
                     return Err(bad(formula, &format!("unknown element {symbol:?}")));
                 }
                 let (n, next) = read_count(bytes, i, formula)?;
@@ -113,19 +112,22 @@ pub fn parse_formula(formula: &str) -> PhysureResult<Composition> {
             return Err(bad(formula, &format!("the aggregation state {state} is not supported")));
         }
     }
-    let mut total = Composition::new();
-    for (index, part) in text.split(['·', '*']).enumerate() {
-        let digits = part.bytes().take_while(u8::is_ascii_digit).count();
-        if digits > 0 && index == 0 {
-            return Err(bad(formula, "a formula cannot start with a number"));
+    // the catalog is resolved once, not once per element
+    super::with_catalog_in_scope(|registry| {
+        let mut total = Composition::new();
+        for (index, part) in text.split(['·', '*']).enumerate() {
+            let digits = part.bytes().take_while(u8::is_ascii_digit).count();
+            if digits > 0 && index == 0 {
+                return Err(bad(formula, "a formula cannot start with a number"));
+            }
+            let (times, _) = read_count(part.as_bytes(), 0, formula)?;
+            for (element, n) in parse_group(&part[digits..], formula, &registry.atomic_weights)? {
+                let n = n.checked_mul(times).ok_or_else(|| bad(formula, "a count is too large"))?;
+                add(&mut total, element, n, formula)?;
+            }
         }
-        let (times, _) = read_count(part.as_bytes(), 0, formula)?;
-        for (element, n) in parse_group(&part[digits..], formula)? {
-            let n = n.checked_mul(times).ok_or_else(|| bad(formula, "a count is too large"))?;
-            add(&mut total, element, n, formula)?;
-        }
-    }
-    Ok(total)
+        Ok(total)
+    })
 }
 
 #[cfg(test)]
@@ -189,6 +191,21 @@ mod tests {
         assert!(message("SO4^2-").contains("'^'"));
         assert!(message("NaCl(aq)").contains("(aq)"));
         assert!(message("H2O(l)").contains("(l)"));
+    }
+
+    #[test]
+    fn an_element_of_the_catalog_in_scope_is_known_and_one_it_lacks_is_not() {
+        use crate::units::conf::{build_registry_from_conf, extend_registry};
+        assert!(message("D2O").contains("\"D\""), "refused by default");
+        let (mut registry, mut constants) = build_registry_from_conf();
+        extend_registry(&mut registry, &mut constants, "[AtomicWeights]
+D = 2.01410177812, 0.00000000012
+").unwrap();
+        let heavy = crate::units::with_catalog(&registry, || parse_formula("D2O")).unwrap();
+        assert_eq!(heavy, comp(&[("D", 2), ("O", 1)]));
+        registry.atomic_weights.remove("O");
+        let err = crate::units::with_catalog(&registry, || parse_formula("H2O")).unwrap_err();
+        assert!(err.to_string().contains("\"O\""), "{err}");
     }
 
     #[test]
