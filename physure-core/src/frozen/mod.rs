@@ -4,3 +4,4 @@
 //! environment and no file, and it never touches the unit registry.
 
 pub mod sha256;
+pub mod canonical;
