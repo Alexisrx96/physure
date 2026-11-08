@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod chemistry;
+pub mod frozen;
 pub mod units;
 pub mod uncertainty;
 pub mod quantity;
