@@ -10,3 +10,8 @@ pub mod model;
 pub use model::{FrozenError, FrozenFile, FrozenResult, HistoryEntry, Pairs, Source, WitnessScript};
 pub mod seal;
 pub use seal::{EntryInput, FrozenParts, Problem};
+
+// Temporary hook (Task 1): moved into `engine.rs` by Task 2.
+#[cfg(test)]
+#[path = "../../build_support/commit.rs"]
+mod commit_rules;
