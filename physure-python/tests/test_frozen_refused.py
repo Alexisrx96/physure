@@ -19,7 +19,9 @@ import pytest
 
 def run(code: str, cwd, **env: str) -> subprocess.CompletedProcess:
     environment = {
-        k: v for k, v in os.environ.items() if k not in ("PHYSURE_CONF", "PHYSURE_REQUIRE_FROZEN")
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("PHYSURE_CONF", "PHYSURE_REQUIRE_FROZEN")
     }
     environment.update(env)
     return subprocess.run(
@@ -32,8 +34,16 @@ def run(code: str, cwd, **env: str) -> subprocess.CompletedProcess:
     )
 
 
+# The extension is loaded on its own: `import physure._core` would run the package's `__init__`, which builds the
+# unit registry at import time and so raises before any single function could be probed.
 PROBE = """
-    import physure._core as core
+    import importlib.machinery, importlib.util, pathlib
+    package = pathlib.Path(importlib.util.find_spec("physure").submodule_search_locations[0])
+    suffixes = importlib.machinery.EXTENSION_SUFFIXES
+    path = next(package / ("_core" + s) for s in suffixes if (package / ("_core" + s)).is_file())
+    loader = importlib.machinery.ExtensionFileLoader("physure._core", str(path))
+    core = importlib.util.module_from_spec(importlib.util.spec_from_loader("physure._core", loader))
+    loader.exec_module(core)
     for name, call in [
         ("default_conf", core.default_conf),
         ("from_conf", core.UnitRegistry.from_conf),
@@ -56,11 +66,19 @@ def directory(tmp_path):
 def test_without_a_frozen_configuration_nothing_changes(directory):
     result = run(PROBE, directory)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.split("\n")[:3] == ["default_conf ok", "from_conf ok", "unit_facts ok"]
+    assert result.stdout.split("\n")[:3] == [
+        "default_conf ok",
+        "from_conf ok",
+        "unit_facts ok",
+    ]
 
 
-def test_a_frozen_file_in_force_is_refused_with_an_ordinary_exception(directory):
-    (directory / "physure.frozen.conf").write_text("not a frozen configuration", encoding="utf-8")
+def test_a_frozen_file_in_force_is_refused_with_an_ordinary_exception(
+    directory,
+):
+    (directory / "physure.frozen.conf").write_text(
+        "not a frozen configuration", encoding="utf-8"
+    )
     result = run(PROBE, directory)
     assert result.returncode == 0, result.stderr
     assert "PanicException" not in result.stderr
@@ -82,7 +100,9 @@ def test_a_required_frozen_file_that_is_missing_is_refused(directory):
 
 
 def test_importing_physure_under_a_frozen_file_raises_runtime_error(directory):
-    (directory / "physure.frozen.conf").write_text("not a frozen configuration", encoding="utf-8")
+    (directory / "physure.frozen.conf").write_text(
+        "not a frozen configuration", encoding="utf-8"
+    )
     code = """
         try:
             import physure
@@ -94,4 +114,6 @@ def test_importing_physure_under_a_frozen_file_raises_runtime_error(directory):
     """
     result = run(code, directory)
     assert "PanicException" not in result.stderr
-    assert result.stdout.strip() == "RuntimeError True", result.stdout + result.stderr
+    assert result.stdout.strip() == "RuntimeError True", (
+        result.stdout + result.stderr
+    )
