@@ -234,21 +234,32 @@ fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMa
     });
 }
 
-/// One line of `[AtomicWeights]`: `symbol = weight, standard uncertainty`, both in g/mol. A weight is
-/// positive and finite and an uncertainty is finite and not negative; anything else is a problem, because
-/// a molar mass built from it would be a confident wrong answer.
+/// One line of `[AtomicWeights]`: `symbol = weight, half-width [, standard]`, in g/mol.
+///
+/// By default the second number is the half-width of the interval CIAAW publishes (its "+-"), read as a uniform
+/// distribution, whose standard uncertainty is `half-width / sqrt(3)` (IUPAC, "Interpretation and use of standard
+/// atomic weights"); that is what the registry stores. A third field `standard` says the number already is a
+/// standard uncertainty (it is stored as given); `interval` spells out the default. A weight is positive and
+/// finite and the number is finite and not negative; anything else is a problem, because a molar mass built from
+/// it would be a confident wrong answer.
 fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
     let parsed = (|| {
         let (symbol, rest) = line.split_once('=')?;
-        let (weight, std) = rest.split_once(',')?;
+        let (weight, rest) = rest.split_once(',')?;
+        let (number, kind) = rest.split_once(',').map_or((rest, "interval"), |(number, kind)| (number, kind.trim()));
         let symbol = symbol.trim();
         let mut chars = symbol.chars();
         let is_symbol = chars.next().is_some_and(|c| c.is_ascii_uppercase())
             && symbol.len() <= 3
             && chars.all(|c| c.is_ascii_lowercase());
         let weight: f64 = weight.trim().parse().ok()?;
-        let std: f64 = std.trim().parse().ok()?;
-        (is_symbol && weight.is_finite() && weight > 0.0 && std.is_finite() && std >= 0.0)
+        let number: f64 = number.trim().parse().ok()?;
+        let std = match kind {
+            "interval" => number / 3f64.sqrt(),
+            "standard" => number,
+            _ => return None,
+        };
+        (is_symbol && weight.is_finite() && weight > 0.0 && number.is_finite() && number >= 0.0)
             .then(|| (symbol.to_string(), (weight, std)))
     })();
     match parsed {
@@ -256,7 +267,7 @@ fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Ve
             registry.atomic_weights.insert(symbol, value);
         }
         None => problems.push(format!(
-            "{line}: expected `symbol = weight, standard uncertainty` with a positive weight and a non-negative uncertainty"
+            "{line}: expected `symbol = weight, half-width` (or `, standard` after a standard uncertainty) with a positive weight and a non-negative number"
         )),
     }
 }

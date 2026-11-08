@@ -26,11 +26,13 @@ meter    = 1.0, L, [m, meter, metro, metros]
 # [Constants] — name = value unit_expression
 avogadro_constant = 6.022141e+23 mol^-1
 
-# [AtomicWeights] — symbol = weight, standard uncertainty (g/mol; CIAAW abridged 2024)
+# [AtomicWeights] — symbol = weight, half-width [, standard] (g/mol; CIAAW abridged 2024).
+# The second column is CIAAW's "±" (an interval half-width), stored as the standard
+# uncertainty half-width / sqrt(3); `, standard` marks a number that already is one.
 Fe = 55.845, 0.002
 # A later definition of a symbol replaces the earlier one, and a new symbol is added, so a
 # conf of your own can add an isotope for the chemistry module:
-D = 2.01410177812, 0.00000000012
+D = 2.01410177812, 0.00000000012, standard
 ```
 
 ## Mandatory steps, in order

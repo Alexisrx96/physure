@@ -7,7 +7,10 @@ repository root:
 
 The molar masses are the weights of the `[AtomicWeights]` section of physure.conf (CIAAW) combined
 by the Python formula parser: the weights are read from the conf and the formulas are parsed by
-`physure.ext.chemistry`, so neither comes from the Rust code under test. The reactions file still
+`physure.ext.chemistry`, so neither comes from the Rust code under test. The second column of the
+conf is the half-width CIAAW publishes; it is read as a uniform distribution, so the standard
+uncertainty is half-width / sqrt(3) unless the line ends in `, standard` (then the number is taken
+as given). The rule is written out again here, not imported from the core. The reactions file still
 freezes what `physure.ext.chemistry` answered before the core took it over. The core's
 `tests/chemistry_golden.rs` holds the Rust port to both. Formulas and equations on which the two
 are meant to differ (hydrates, a zero count) are deliberately not in the lists.
@@ -15,6 +18,7 @@ are meant to differ (hydrates, a zero count) are deliberately not in the lists.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from physure.ext.chemistry.reaction import Reaction
@@ -59,7 +63,11 @@ REFUSED = [
 
 
 def atomic_weights() -> dict[str, tuple[float, float]]:
-    """symbol -> (weight, standard uncertainty) from the [AtomicWeights] section of physure.conf."""
+    """symbol -> (weight, standard uncertainty) from the [AtomicWeights] section of physure.conf.
+
+    `symbol = weight, half-width` gives half-width / sqrt(3) (uniform distribution over the CIAAW
+    interval); `symbol = weight, u, standard` gives u.
+    """
     weights: dict[str, tuple[float, float]] = {}
     section = None
     for raw in CONF.read_text(encoding="utf-8").splitlines():
@@ -70,8 +78,10 @@ def atomic_weights() -> dict[str, tuple[float, float]]:
             section = line[1:-1]
         elif section == "AtomicWeights":
             symbol, rest = line.split("=", 1)
-            weight, std = rest.split(",", 1)
-            weights[symbol.strip()] = (float(weight), float(std))
+            weight, number, *kind = (field.strip() for field in rest.split(","))
+            assert kind in ([], ["interval"], ["standard"]), line
+            std = float(number) if kind == ["standard"] else float(number) / math.sqrt(3)
+            weights[symbol.strip()] = (float(weight), std)
     return weights
 
 
@@ -113,7 +123,7 @@ def write(name: str, header: str, rows: list[str]) -> None:
 if __name__ == "__main__":
     write(
         "chemistry_molar_mass.tsv",
-        "formula, molar mass (g/mol), standard uncertainty; the CIAAW weights of physure.conf combined by the formula parser of physure.ext.chemistry, by scripts/gen_chemistry_golden.py",
+        "formula, molar mass (g/mol), standard uncertainty (CIAAW half-width / sqrt(3), combined per element in quadrature); the CIAAW weights of physure.conf combined by the formula parser of physure.ext.chemistry, by scripts/gen_chemistry_golden.py",
         molar_mass_rows(),
     )
     write(

@@ -102,8 +102,17 @@ mod tests {
     fn water_is_18_015_with_its_atoms_uncertainties_in_quadrature() {
         let (mass, std) = Species::new("H2O").unwrap().molar_mass_parts().unwrap();
         assert!(close(mass, 2.0 * 1.008 + 15.999));
-        // sqrt((2 * 0.0002)^2 + 0.001^2)
-        assert!(close(std, (0.0004_f64.powi(2) + 0.001_f64.powi(2)).sqrt()));
+        // half-widths 0.0002 (H) and 0.001 (O) as standard uncertainties (/ sqrt(3)): sqrt((2 * 0.0002 / sqrt(3))^2 + (0.001 / sqrt(3))^2)
+        assert!(close(std, ((2.0 * 0.0002 / 3f64.sqrt()).powi(2) + (0.001 / 3f64.sqrt()).powi(2)).sqrt()));
+    }
+
+    #[test]
+    fn the_molar_mass_uncertainty_is_the_iupac_quadrature_of_the_standard_uncertainties() {
+        // IUPAC, "Interpretation and use of standard atomic weights": u^2(Mr) = sum over elements of
+        // nu_E^2 u^2(Ar(E)), with u = half-width / sqrt(3) for the CIAAW interval (H 0.0002, O 0.001).
+        let (_, std) = Species::new("H2O").unwrap().molar_mass_parts().unwrap();
+        let expected = ((2.0 * 0.0002 / 3f64.sqrt()).powi(2) + (0.001 / 3f64.sqrt()).powi(2)).sqrt();
+        assert!((std - expected).abs() <= 1e-12 * expected, "{std} vs {expected}");
     }
 
     #[test]
@@ -118,7 +127,7 @@ mod tests {
     fn the_molar_mass_is_a_quantity_in_g_per_mol() {
         let q = Species::new("CO2").unwrap().molar_mass().unwrap();
         assert!(close(q.value.mean(), 12.011 + 2.0 * 15.999));
-        assert!(close(q.value.std_dev(), (0.002_f64.powi(2) + 0.002_f64.powi(2)).sqrt()));
+        assert!(close(q.value.std_dev(), ((0.002 / 3f64.sqrt()).powi(2) + (2.0 * 0.001 / 3f64.sqrt()).powi(2)).sqrt()));
         assert!(close(q.to("kg/mol").unwrap().value.mean(), 0.044009));
     }
 
@@ -140,7 +149,7 @@ mod tests {
         let mass = Quantity::with_uncertainty(50.0, 0.1, "g").unwrap();
         let n = mass_to_moles(&mass, &co2).unwrap();
         let m_co2 = 12.011 + 2.0 * 15.999;
-        let u_m = (0.002_f64.powi(2) + 0.002_f64.powi(2)).sqrt();
+        let u_m = ((0.002 / 3f64.sqrt()).powi(2) + (2.0 * 0.001 / 3f64.sqrt()).powi(2)).sqrt();
         let expected = 50.0 / m_co2;
         let rel = ((0.1_f64 / 50.0).powi(2) + (u_m / m_co2).powi(2)).sqrt();
         assert!(close(n.value.mean(), expected));
@@ -184,7 +193,7 @@ mod tests {
         let h2 = Species::new("H2").unwrap();
         assert_eq!(crate::units::with_catalog(&registry, || h2.molar_mass_parts()).unwrap(), (4.0, 0.0));
         let (mass, std) = h2.molar_mass_parts().unwrap();
-        assert!(close(mass, 2.0 * 1.008) && close(std, 2.0 * 0.0002), "outside the scope it is the default");
+        assert!(close(mass, 2.0 * 1.008) && close(std, 2.0 * 0.0002 / 3f64.sqrt()), "outside the scope it is the default");
     }
 
     #[test]

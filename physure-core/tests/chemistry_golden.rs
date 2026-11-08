@@ -1,6 +1,6 @@
 //! The core against `tests/golden/chemistry_*.tsv`, written by `scripts/gen_chemistry_golden.py`:
 //! the molar masses of 118 elements and 20 compounds, computed from the `[AtomicWeights]` of
-//! `physure.conf` and the Python formula parser, and what `physure.ext.chemistry` answered for the
+//! `physure.conf` (the CIAAW half-width divided by sqrt(3) as standard uncertainty) and the Python formula parser, and what `physure.ext.chemistry` answered for the
 //! coefficients of 13 reactions (and which equations it refused).
 
 use physure_core::chemistry::{Reaction, Species};

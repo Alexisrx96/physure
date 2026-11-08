@@ -13,8 +13,8 @@ mod tests {
 
     #[test]
     fn known_weights() {
-        assert_eq!(atomic_weight("H"), Some((1.008, 0.0002)));
-        assert_eq!(atomic_weight("Fe"), Some((55.845, 0.002)));
+        assert_eq!(atomic_weight("H"), Some((1.008, 0.0002 / 3f64.sqrt())));
+        assert_eq!(atomic_weight("Fe"), Some((55.845, 0.002 / 3f64.sqrt())));
         assert_eq!(atomic_weight("Og"), Some((294.0, 0.0)));
     }
 
@@ -29,7 +29,7 @@ mod tests {
     fn an_element_of_the_catalog_in_scope_is_found_and_only_there() {
         let (mut registry, mut constants) = build_registry_from_conf();
         extend_registry(&mut registry, &mut constants, "[AtomicWeights]
-D = 2.01410177812, 0.00000000012
+D = 2.01410177812, 0.00000000012, standard
 ").unwrap();
         let inside = crate::units::with_catalog(&registry, || atomic_weight("D"));
         assert_eq!(inside, Some((2.01410177812, 0.00000000012)));

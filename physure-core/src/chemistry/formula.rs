@@ -199,7 +199,7 @@ mod tests {
         assert!(message("D2O").contains("\"D\""), "refused by default");
         let (mut registry, mut constants) = build_registry_from_conf();
         extend_registry(&mut registry, &mut constants, "[AtomicWeights]
-D = 2.01410177812, 0.00000000012
+D = 2.01410177812, 0.00000000012, standard
 ").unwrap();
         let heavy = crate::units::with_catalog(&registry, || parse_formula("D2O")).unwrap();
         assert_eq!(heavy, comp(&[("D", 2), ("O", 1)]));
