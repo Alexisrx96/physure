@@ -18,6 +18,14 @@ pub fn source_sha256(text: &str) -> String {
     sha256_hex(canonical_text(text).as_bytes())
 }
 
+/// `exact_sha256`: the SHA-256 of a witness script, byte-exact after CRLF becomes LF and trailing newlines are
+/// removed, with no other change. Never the conf canonical form: in PHS `;` ends a statement, indentation is
+/// significant and a string may span lines.
+pub fn exact_sha256(text: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    sha256_hex(text.trim_end_matches('\n').as_bytes())
+}
+
 /// `content_sha256`: the SHA-256 over, for each `(origin, source_sha256)` in order, `origin\n` + `source_sha256\n`.
 pub fn content_sha256(sources: &[(String, String)]) -> String {
     let mut hasher = Sha256::new();
@@ -83,6 +91,14 @@ mod tests {
         assert_eq!(canonical_pairs(&a), "a=1\nb=2");
         assert_eq!(canonical_pairs(&a), canonical_pairs(&b));
         assert_eq!(canonical_pairs(&[]), "");
+    }
+
+    #[test]
+    fn the_exact_hash_keeps_everything_but_line_endings_and_trailing_newlines() {
+        assert_eq!(exact_sha256(""), sha256_hex(b""));
+        assert_eq!(exact_sha256("a\r\nb\n\n"), sha256_hex(b"a\nb"));
+        assert_ne!(exact_sha256(" a"), exact_sha256("a"));
+        assert_ne!(exact_sha256("# c\na"), exact_sha256("a"));
     }
 
     #[test]

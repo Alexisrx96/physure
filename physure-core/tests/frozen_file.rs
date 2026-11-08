@@ -1,25 +1,28 @@
 //! The frozen-file layer through its public API only.
 
-use physure_core::frozen::model::{FrozenFile, Source, WitnessScript};
-use physure_core::frozen::seal::EntryInput;
+use physure_core::frozen::canonical::exact_sha256;
 use physure_core::frozen::sha256::sha256_hex;
 use physure_core::frozen::time::rfc3339_from_unix;
+use physure_core::frozen::{EntryInput, FrozenFile, FrozenParts, Pairs, Source, WitnessScript};
 
 fn entry<'a>(action: &'a str, reason: &'a str, time: &'a str) -> EntryInput<'a> {
     EntryInput { time, action, engine: "0.0.0+test", actor: "ci@host", reason, diff: "n/a" }
 }
 
 fn file() -> FrozenFile {
+    let created = rfc3339_from_unix(1_700_000_000).unwrap();
     FrozenFile::new(
-        &rfc3339_from_unix(1_700_000_000),
-        vec![("version".into(), "0.0.0".into())],
-        vec![],
-        vec![],
-        vec![
-            Source::new("embedded", "[Constants]\nmolar_gas_constant = 8.31446261815324 J*mol^-1*K^-1").unwrap(),
-            Source::new("overrides", "").unwrap(),
-        ],
-        vec![WitnessScript::new("w", "1 m => ft").unwrap()],
+        &created,
+        FrozenParts {
+            engine: Pairs::new(&[("version", "0.0.0")]).unwrap(),
+            environment: Pairs::default(),
+            witnesses: Pairs::new(&[("user.w", "0")]).unwrap(),
+            sources: vec![
+                Source::new("embedded", "[Constants]\nmolar_gas_constant = 8.31446261815324 J*mol^-1*K^-1").unwrap(),
+                Source::new("overrides", "").unwrap(),
+            ],
+            witness_scripts: vec![WitnessScript::new("w", "1 m => ft").unwrap()],
+        },
         entry("freeze", "initial", "2023-11-14T22:13:20Z"),
     )
     .unwrap()
@@ -56,4 +59,32 @@ fn the_seal_does_not_depend_on_the_environment_block_nor_on_comments() {
     assert!(FrozenFile::parse(&with_env).unwrap().verify().is_empty());
     let with_comment = text.replace("[Constants]\n", "[Constants]\n# a comment\n");
     assert!(FrozenFile::parse(&with_comment).unwrap().verify().is_empty());
+}
+
+#[test]
+fn a_witness_script_edited_together_with_its_marker_hash_still_breaks_the_seal() {
+    let text = file().render().unwrap();
+    let edited = text.replace("1 m => ft", "1 m => yd").replace(&exact_sha256("1 m => ft"), &exact_sha256("1 m => yd"));
+    assert!(FrozenFile::parse(&edited).unwrap().verify().iter().any(|p| p.to_string().contains("seal")));
+}
+
+#[test]
+fn the_public_api_reads_the_file_and_reseals_it() {
+    let mut f = file();
+    let sealed = f.seal_sha256().to_string();
+    assert_eq!(f.format(), 1);
+    assert_eq!(f.created(), "2023-11-14T22:13:20Z");
+    assert_eq!(f.engine().get("version"), Some("0.0.0"));
+    assert!(f.environment().is_empty());
+    assert_eq!(f.witnesses().len(), 1);
+    assert_eq!(f.sources()[0].origin(), "embedded");
+    assert_eq!(f.witness_scripts()[0].sha256(), exact_sha256("1 m => ft"));
+    assert_eq!(f.history()[0].new_content_sha256(), f.content_sha256());
+    f.set_source_text(1, "[Constants]\nmolar_gas_constant = 8.314 J*mol^-1*K^-1").unwrap();
+    assert!(!f.verify().is_empty(), "a change is visible until the file is resealed");
+    f.reseal(entry("seal", "rounded R for the lab", "2023-11-15T08:00:00Z")).unwrap();
+    assert!(f.verify().is_empty());
+    assert_ne!(f.seal_sha256(), sealed);
+    assert_eq!(f.history()[1].action(), "seal");
+    assert_eq!(FrozenFile::parse(&f.render().unwrap()).unwrap(), f);
 }
