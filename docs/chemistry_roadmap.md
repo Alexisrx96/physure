@@ -217,14 +217,14 @@ print(f"Rate constant: {k}") # 0.72 s^-1
 
 **Goal**: Port the core chemistry data structures and algorithms to Rust for performance, cross-language availability, and native PHS integration.
 
-> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, the periodic table is a sorted table searched by binary search (no `phf`) and the balancer uses `num-rational`'s `Rational64` with every operation checked, so an overflow is an error and never a wrapped number. `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
+> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, there is no periodic table in Rust: the atomic weights are the `[AtomicWeights]` section of `physure.conf` (CIAAW abridged 2024), read into the registry like the constants and units, so a conf or a unit system can override an element, and the balancer uses `num-rational`'s `Rational64` with every operation checked, so an overflow is an error and never a wrapped number. `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
 
 #### 5.1. Module Structure (`physure-core/src/chemistry/`)
 
 ```
 physure-core/src/chemistry/
 ├── mod.rs              # pub mod declarations
-├── elements.rs         # IUPAC periodic table (compile-time phf::Map)
+├── elements.rs         # atomic_weight(symbol), read from [AtomicWeights] of the catalog in scope
 ├── formula.rs          # Recursive descent formula parser
 ├── species.rs          # Species struct with molar_mass() -> Quantity
 ├── reaction.rs         # Reaction balancing (exact Fraction RREF)
@@ -232,31 +232,21 @@ physure-core/src/chemistry/
 └── thermo.rs           # Arrhenius, Clausius-Clapeyron, Gibbs, standard data
 ```
 
-#### 5.2. Periodic Table in Rust (`elements.rs`) ✅
+#### 5.2. Periodic table in the conf (`[AtomicWeights]` of `physure.conf`) ✅
 
-A compile-time perfect hash map using [`phf`](https://crates.io/crates/phf) (build-dependency only, no runtime cost):
+The weights are data, not code: one row per element, `symbol = weight, standard uncertainty` in g/mol, in the same file as the constants and units.
 
-```rust
-use phf::phf_map;
-
-/// IUPAC 2021 standard atomic weights: (mass_g_per_mol, abs_uncertainty).
-pub static ATOMIC_WEIGHTS: phf::Map<&'static str, (f64, f64)> = phf_map! {
-    "H"  => (1.008, 0.0002),
-    "He" => (4.002602, 0.000002),
-    "Li" => (6.94, 0.02),
-    "C"  => (12.011, 0.001),
-    "N"  => (14.007, 0.001),
-    "O"  => (15.999, 0.001),
-    "Na" => (22.98976928, 0.00000002),
-    "Fe" => (55.845, 0.002),
-    "Cu" => (63.546, 0.003),
-    // ... full 118 elements
-};
+```ini
+[AtomicWeights]
+H = 1.0080, 0.0002
+Fe = 55.845, 0.002
 ```
 
-**Rationale**: `phf::Map` generates a perfect hash at compile time ($O(1)$ lookup, zero allocation), matching the Python `dict` semantics but with zero runtime overhead. This is the standard approach in Rust chemistry libraries ([`mendeleev`](https://crates.io/crates/mendeleev)).
+`elements::atomic_weight` looks the symbol up in the catalog in scope. The section is read strictly (a bad row refuses the whole text) and a later definition replaces an earlier one, so adding an isotope such as `D = 2.01410177812, 0.00000000012` in a conf of your own is enough for `D2O` to parse.
 
-> 📄 **Reference**: Meija, J. et al. "Atomic weights of the elements 2013 (IUPAC Technical Report)." *Pure and Applied Chemistry* 88.3 (2016): 265-291. [DOI: 10.1515/pac-2015-0305](https://doi.org/10.1515/pac-2015-0305)
+**Rationale**: the default is the current IUPAC standard (CIAAW abridged 2024, five significant figures) and nobody has to rebuild the core to use another table. Elements with no standard atomic weight carry a mass number with an uncertainty of 0, a convention of the file. The "±" CIAAW prints is taken as a standard uncertainty (k = 1); CIAAW's page does not say which it is.
+
+> 📄 **Reference**: Prohaska, T. et al. "Standard atomic weights of the elements 2021 (IUPAC Technical Report)." *Pure and Applied Chemistry* 94.5 (2022): 573-600. [DOI: 10.1515/pac-2019-0603](https://doi.org/10.1515/pac-2019-0603)
 
 #### 5.3. Formula Parser in Rust (`formula.rs`) ✅
 

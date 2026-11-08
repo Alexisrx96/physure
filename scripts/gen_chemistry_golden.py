@@ -1,12 +1,16 @@
-"""Writes tests/golden/chemistry_*.tsv from the Python chemistry package.
+"""Writes tests/golden/chemistry_*.tsv.
 
-Run with an environment that has physure installed (the main checkout's venv works):
+Run with an environment that has physure installed (the main checkout's venv works), from the
+repository root:
 
-    physure-python/.venv/Scripts/python.exe scripts/gen_chemistry_golden.py
+    PYTHONUTF8=1 physure-python/.venv/Scripts/python.exe scripts/gen_chemistry_golden.py
 
-The files freeze what `physure.ext.chemistry` answered before the core took it over; the core's
-`tests/chemistry_golden.rs` holds the Rust port to them. Formulas and equations on which the
-two are meant to differ (hydrates, a zero count) are deliberately not in the lists.
+The molar masses are the weights of the `[AtomicWeights]` section of physure.conf (CIAAW) combined
+by the Python formula parser: the weights are read from the conf and the formulas are parsed by
+`physure.ext.chemistry`, so neither comes from the Rust code under test. The reactions file still
+freezes what `physure.ext.chemistry` answered before the core took it over. The core's
+`tests/chemistry_golden.rs` holds the Rust port to both. Formulas and equations on which the two
+are meant to differ (hydrates, a zero count) are deliberately not in the lists.
 """
 
 from __future__ import annotations
@@ -14,9 +18,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from physure.ext.chemistry.reaction import Reaction
-from physure.ext.chemistry.species import ATOMIC_WEIGHTS, Species
+from physure.ext.chemistry.species import parse_formula
 
-GOLDEN = Path(__file__).resolve().parent.parent / "tests" / "golden"
+ROOT = Path(__file__).resolve().parent.parent
+GOLDEN = ROOT / "tests" / "golden"
+CONF = ROOT / "physure-core" / "src" / "units" / "physure.conf"
 
 COMPOUNDS = [
     "H2O", "H₂O", "CO2", "C6H12O6", "C₆H₁₂O₆", "Ca(NO3)2", "NaCl", "Mg3(Fe(CN)6)2",
@@ -52,11 +58,33 @@ REFUSED = [
 ]
 
 
+def atomic_weights() -> dict[str, tuple[float, float]]:
+    """symbol -> (weight, standard uncertainty) from the [AtomicWeights] section of physure.conf."""
+    weights: dict[str, tuple[float, float]] = {}
+    section = None
+    for raw in CONF.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1]
+        elif section == "AtomicWeights":
+            symbol, rest = line.split("=", 1)
+            weight, std = rest.split(",", 1)
+            weights[symbol.strip()] = (float(weight), float(std))
+    return weights
+
+
 def molar_mass_rows() -> list[str]:
+    weights = atomic_weights()
     rows = []
-    for formula in [*sorted(ATOMIC_WEIGHTS), *COMPOUNDS]:
-        q = Species(formula).molar_mass
-        rows.append(f"{formula}\t{q.magnitude!r}\t{q.uncertainty!r}")
+    for formula in [*weights, *COMPOUNDS]:
+        mass = variance = 0.0
+        for element, count in parse_formula(formula).items():
+            weight, std = weights[element]
+            mass += count * weight
+            variance += (count * std) ** 2
+        rows.append(f"{formula}\t{mass!r}\t{variance**0.5!r}")
     return rows
 
 
@@ -85,7 +113,7 @@ def write(name: str, header: str, rows: list[str]) -> None:
 if __name__ == "__main__":
     write(
         "chemistry_molar_mass.tsv",
-        "formula, molar mass (g/mol), standard uncertainty; from physure.ext.chemistry by scripts/gen_chemistry_golden.py",
+        "formula, molar mass (g/mol), standard uncertainty; the CIAAW weights of physure.conf combined by the formula parser of physure.ext.chemistry, by scripts/gen_chemistry_golden.py",
         molar_mass_rows(),
     )
     write(

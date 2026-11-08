@@ -6,7 +6,8 @@ description: Add a unit, constant, prefix, or dimension to physure's .conf catal
 # Adding a unit or constant
 
 All catalog entries live in `physure-core/src/units/physure.conf`
-(sections `[Dimensions]`, `[Prefixes]`, `[Units]`, `[Constants]`) — this is
+(sections `[Dimensions]`, `[Prefixes]`, `[Units]`, `[Constants]`,
+`[AtomicWeights]`) — this is
 the **only** file to hand-edit. There is no separate `systems/` directory on
 the Rust side; SI vs. imperial base-unit selection is hardcoded in
 `physure-core/src/units/registry.rs` (`build_default_si` /
@@ -24,6 +25,12 @@ meter    = 1.0, L, [m, meter, metro, metros]
 
 # [Constants] — name = value unit_expression
 avogadro_constant = 6.022141e+23 mol^-1
+
+# [AtomicWeights] — symbol = weight, standard uncertainty (g/mol; CIAAW abridged 2024)
+Fe = 55.845, 0.002
+# A later definition of a symbol replaces the earlier one, and a new symbol is added, so a
+# conf of your own can add an isotope for the chemistry module:
+D = 2.01410177812, 0.00000000012
 ```
 
 ## Mandatory steps, in order
