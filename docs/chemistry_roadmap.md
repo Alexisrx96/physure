@@ -217,7 +217,7 @@ print(f"Rate constant: {k}") # 0.72 s^-1
 
 **Goal**: Port the core chemistry data structures and algorithms to Rust for performance, cross-language availability, and native PHS integration.
 
-> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, the periodic table is a sorted table searched by binary search (no `phf`) and the balancer uses its own checked rational arithmetic (no `num-rational`). `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
+> **Status:** the Rust core part of this phase is done (5.2, 5.3 and 5.5 below; `Species` and the kinetics/thermodynamics helpers are in the core too). As built, the periodic table is a sorted table searched by binary search (no `phf`) and the balancer uses `num-rational`'s `Rational64` with every operation checked, so an overflow is an error and never a wrapped number. `stoichiometry.rs` (limiting reactant) is not ported. **5.6 (PyO3 bindings) is not done**: Python and PHS do not use the core module yet.
 
 #### 5.1. Module Structure (`physure-core/src/chemistry/`)
 
