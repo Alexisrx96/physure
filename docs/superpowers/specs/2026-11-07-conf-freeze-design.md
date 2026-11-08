@@ -58,17 +58,22 @@ seal_sha256 = …
 
 [Engine]
 version = 0.3.1
-commit = 9f2c1ab
+commit = 9f2c1ab3d4e5f60718293a4b5c6d7e8f9a0b1c2d
 profile = release
 target = x86_64-pc-windows-msvc
 features = html-viewer
+rustc = rustc 1.97.1 (8bab26f4f 2026-07-14)
+flags = opt-level=3;debug-assertions=off;panic=unwind;rustflags=<sha256>;target-features=<sha256>
 binary_sha256 = …
 policy = build
 
 [Environment]
 os = windows
 arch = x86_64
-rayon_threads = 16
+family = windows
+endian = little
+pointer_width = 64
+cpus = 16
 
 [Witness]
 builtin.conversion.m_to_ft = <bits>
@@ -77,7 +82,8 @@ user.validation.1 = <sha256>
 [History.1]
 time = 2026-11-07T14:03:11Z
 action = freeze
-engine = 0.3.1+9f2c1ab
+engine = 0.3.1+9f2c1ab3d4e5
+engine_sha256 = …
 actor = irvin@host
 reason = initial freeze
 old_content_sha256 =
@@ -101,6 +107,8 @@ entry_sha256 = …
 * **Structure rules** (refused by the constructor, reported by the verifier, refused by the parser where they are syntactic): source 1 has origin `embedded` and source 2 has origin `overrides`, both always present; origins are unique; witness script names are unique; `[Witness]` has a key `user.<name>` for every script `<name>` and no `user.*` key without a script; `created` equals the time of the first history entry; the first entry is a `freeze` with empty `old_content_sha256` and `prev_entry_sha256`, every later entry is an `update` or a `seal` whose `old_content_sha256` is the previous entry's `new_content_sha256`; every reason is 1 to 500 characters. A section opened twice, a key repeated in a section, a number that is not written canonically (digits only, no sign, no leading zero) and a line starting with `@@ ` inside a block that is not that block's end marker are parse errors that name the line.
 * Line endings are normalised to LF on write; reading accepts CRLF. A bare carriage return (one not followed by a line feed) is refused, in the file and in a source or script given to the library. Empty lines at the end of a block are not part of its text.
 * The header sections follow the strict grammar of the conf (no inline comments; a bad line is an error). `policy` is one of `binary`, `build`, `release`, `record` (§7); from Python `[Environment]` also has `python`, `numpy` and `torch`.
+* **`[Engine]` is read strictly** (`frozen::engine::read_engine`): the keys `version`, `commit`, `profile`, `target`, `features`, `rustc`, `flags` and `policy` are required, `binary_sha256` is optional, and **any other key is an error** (an unknown key in the block that sets the policy would be a knob nobody can see). Every value is validated: `version` non-empty `[0-9A-Za-z.+-]`; `commit` exactly 40 or 64 lowercase hexadecimal characters or the literal `unknown`; `profile` `[a-z0-9_-]+`; `target` `[A-Za-z0-9_.-]+`; `features` empty or sorted, unique, comma-separated `[a-z0-9-]+` names; `rustc` and `flags` one non-empty line without padding; `binary_sha256` a lowercase SHA-256. `verify` reads the block: a sealed file whose block cannot be read is a discrepancy, and such a file can be neither made nor resealed.
+* `[Environment]` records `os`, `arch`, `family`, `endian`, `pointer_width` and `cpus` (`frozen::engine::environment_pairs`). It is informational, outside the seal, and no behaviour may ever depend on it.
 
 ### 4.1 Canonical form and hashes
 
@@ -108,7 +116,7 @@ entry_sha256 = …
 * `source_sha256` = SHA-256 of the canonical text.
 * `content_sha256` = SHA-256 of, for each source in order, `origin\n` + `source_sha256\n`.
 * **Witness scripts are hashed byte-exact**, never with the canonical form above (in PHS `;` ends a statement, indentation is significant and a string may span lines): `exact_sha256(text)` = SHA-256 of the script text after CRLF becomes LF and trailing newlines are removed, with no other change.
-* `engine_sha256` and `witnesses_sha256` = SHA-256 of the canonical text of the block: its `key=value` lines sorted and joined with `\n` (keys are unique names without `=`, values are one line).
+* `engine_sha256` and `witnesses_sha256` = SHA-256 of the canonical text of the block: its `key=value` lines sorted and joined with `\n` (keys are unique names without `=`, values are one line). The same `engine_sha256` is recorded in every history entry, for the block as it was at that entry (§5.3).
 * `scripts_sha256` = SHA-256 of, for each witness script in file order, `<name>\n` + `exact_sha256(script)\n` (the empty string when there is none).
 * `seal_sha256` = SHA-256 of exactly this text, each line ending with `\n`:
 
@@ -153,11 +161,13 @@ An upgrade of the library therefore cannot change a value: the sources do not co
 Every `freeze`, `update` and `seal` appends one entry; entries are chained:
 
 ```
-n | utc time | action (freeze|update|seal) | engine version+commit | actor | reason
+n | utc time | action (freeze|update|seal) | engine version+commit | engine_sha256 | actor | reason
   | old content_sha256 | new content_sha256 | diff summary (counts per section) | previous entry sha256
 ```
 
-and the entry's own SHA-256 is recorded with it. Deleting, reordering or editing an entry breaks the chain. `actor` is `$USER`/`$USERNAME` and the host name; it is **informational, not authenticated**.
+and the entry's own SHA-256 is recorded with it: `entry_sha256` = SHA-256 of `n=<n>\ntime=<time>\naction=<action>\nengine=<engine>\nengine_sha256=<engine_sha256>\nactor=<actor>\nreason=<reason>\nold_content_sha256=<…>\nnew_content_sha256=<…>\ndiff=<diff>\nprev_entry_sha256=<…>` (every value one line, no final newline). Deleting, reordering or editing an entry breaks the chain.
+
+`engine` is the short form (`version+` twelve characters of the commit) of the engine that performed the action, free text; `engine_sha256` is the SHA-256 of the canonical `[Engine]` block (§4.1) at the moment of the entry, computed by the library, never given by the caller. A change of the engine block, weakening the policy included, therefore shows in the log mechanically as a different `engine_sha256` between consecutive entries, whatever the free-text `diff` says. `verify` requires the last entry's `engine_sha256` to equal the hash of the current block: a block changed without a reseal is reported, and so is a file from which the entry that changed the block was removed even when every other hash and the seal were recomputed. `actor` is `$USER`/`$USERNAME` and the host name; it is **informational, not authenticated**.
 
 ### 5.4 Commands
 
@@ -180,23 +190,36 @@ There is no `unfreeze`: deleting the file does it, and with `PHYSURE_REQUIRE_FRO
 
 ## 6. Where it lives
 
-* Core (`physure-core/src/frozen/`: `sha256`, `canonical`, `model`, `seal`, `time` in Phase 1a; resolution, sealed loading and the engine identity in 1b/1c): file model, canonical form, hashes, verification, resolution, sealed loading, the entry listing, the engine identity. Every surface that builds a registry (`build_registry_from_conf`, `with_conf_registry`, PHS, the CLI, the language server, the Rust API) goes through the resolution, so they cannot disagree about what is in force.
-* Build metadata: a `build.rs` in the core exports the commit, profile, target and features that the engine block needs. A build outside a git checkout records `commit = unknown`, and a policy of `build` or stricter then refuses to freeze with it.
+* Core (`physure-core/src/frozen/`: `sha256`, `canonical`, `model`, `seal`, `time` in Phase 1a; `engine`, the engine identity and its policies, in 1b; resolution and sealed loading in 1c): file model, canonical form, hashes, verification, resolution, sealed loading, the entry listing, the engine identity. Every surface that builds a registry (`build_registry_from_conf`, `with_conf_registry`, PHS, the CLI, the language server, the Rust API) goes through the resolution, so they cannot disagree about what is in force.
+* Build metadata: `physure-core/build.rs` **always** emits the commit, profile, target, compiler (`rustc -V`) and build flags under internal names (`PHYSURE_ENGINE_*`) that the library reads with `env!`; the library never reads a variable a user can set, so a value the build script rejected cannot reach the binary. `features` is computed in the code: the sorted named features of `physure-core` that are enabled, without `default`. `flags` is `opt-level=<n>;debug-assertions=<on|off>;panic=<unwind|abort>;rustflags=<sha256 of CARGO_ENCODED_RUSTFLAGS>;target-features=<sha256 of CARGO_CFG_TARGET_FEATURE>`.
+* **The commit rule** (a pure function, `build_support/commit.rs`, unit-tested; a commit is exactly 40 or 64 lowercase hexadecimal characters, or the literal `unknown`; a false commit is worse than none, so every doubt gives `unknown`). The variable `PHYSURE_BUILD_COMMIT` is an input of the build only. (1) The variable is set but is not a full lowercase hash: `unknown`, with a cargo warning. (2) Git can answer (the crate sits directly at the root of the repository and `git rev-parse HEAD` succeeds) and tracked files this build uses (the crate and the workspace `Cargo.toml` and `Cargo.lock`) have uncommitted changes: `unknown`, with a warning — **build from a clean checkout**. (3) Git can answer and the tree is clean: the commit is `HEAD`; if the variable is also set and differs, `unknown` with a warning. (4) Git cannot answer (a crates.io tarball, a copy vendored inside another repository, no git): a valid variable is used, otherwise `unknown`. The build script watches only paths that exist (found with `git rev-parse --git-path`), so a git worktree does not rebuild the crate on every invocation.
+* A build whose commit is `unknown` cannot record the policy `build` or `binary` (§7).
 * CLI (`physure-cli/src/conf.rs`): the eight commands over the core API.
 * Python, WebAssembly and Java call the same resolution (Phase 5). Python reads its configuration with `configparser`, adds system files and its own working-directory file, so wiring it is its own task.
 
 ## 7. Engine pinning
 
-`[Engine] policy` — set by `freeze --engine-policy`, default `build`, changed only through `update`/`seal` (so it is in the history):
+`[Engine] policy` — set by `freeze --engine-policy`, default `build`, changed only through `update`/`seal` (so it is in the history: each entry's `engine_sha256` covers the policy, §5.3):
 
 | Policy | The running engine must have |
 |---|---|
-| `binary` | the same executable (SHA-256) |
-| `build` (default) | the same version, commit, profile, target and features |
+| `binary` | the same file that contains the engine (SHA-256 of `binary_sha256`) |
+| `build` (default) | the same version, commit, profile, target, features, compiler (`rustc`) and build flags (`flags`) |
 | `release` | the same version |
 | `record` | nothing (the identity is recorded, never enforced) |
 
 A mismatch is an error (exit 3) **when evaluating**. `status`, `verify` and `diff` accept `--allow-engine-mismatch` so that a different build can still inspect the file. There is no override for evaluating: to run on another engine, `update` (which records the change, with its reason, in the history).
+
+The comparison (`frozen::engine::check`) reports every field that differs, and every doubt is a difference:
+
+* **`unknown` never equals anything**, not even another `unknown`: under `build`, a recorded or running commit that is `unknown` is a mismatch.
+* `binary` and `build` cannot be **recorded** for an identity whose commit is `unknown` (`freezable`, enforced when the block is built by `engine_pairs`). This is a design choice: a binary hash alone does not tell an auditor which source it came from. `release` and `record` can always be recorded.
+* `binary` needs a recorded `binary_sha256`; without one it is a mismatch, and the running file is hashed only under `binary` and only when a hash is recorded. `binary` attests **the file at its path at check time**, not the image in memory (on Windows a running executable can be renamed and replaced). The caller must hash the file that contains this engine: for the CLI the executable, for a Python extension module the module (not the interpreter), for the Java library the library. The core deliberately has no "hash my own executable" convenience, which in a binding would pin the interpreter.
+* Under `build`, a recorded `binary_sha256` is informational and ignored.
+
+**Trust boundary.** Whoever controls the build environment (the variable `PHYSURE_BUILD_COMMIT`, `PATH`, `RUSTFLAGS`, the toolchain) controls every field of the identity. `build` protects against accidents, not against a malicious builder; `binary` is the only policy whose evidence is the artefact itself.
+
+**What the policies do not prove.** Not visible to a build script and therefore not pinned by `build`: `overflow-checks`, `lto`, `codegen-units`; the versions of the dependencies when `physure` is built inside someone else's workspace (their `Cargo.lock` decides); dynamically linked libraries (libm, the C runtime, the interpreter, numpy, torch). A dirty tree is detected only for **tracked** files of this crate and the workspace manifests. `release` accepts development builds that share a release's version number (between releases the version is not bumped). A copy of the crate placed directly under the root of another repository reports that repository's commit. The witnesses (§8) are how a difference in what is not pinned is detected.
 
 ## 8. Witnesses
 
@@ -212,6 +235,7 @@ A witness is a reference calculation whose result is stored bit for bit and reco
 * `actor` in the history is informational.
 * Environment differences are warnings, not errors: bit-for-bit reproducibility across machines is not promised, and the witnesses are how a difference is detected.
 * What is frozen is data; algorithms are identified, pinned and witnessed, not preserved. To reproduce a result years later, keep the binary named by `[Engine]`.
+* The engine pin has the limits of §7, to be stated in the audit documentation: the identity is only as trustworthy as the build environment that produced it (`build` protects against accidents, not a malicious builder; `binary` is the only policy whose evidence is the artefact); `overflow-checks`, `lto`, `codegen-units`, a consumer's lockfile and dynamically linked libraries are not pinned; a dirty tree is detected only for tracked files of the crate; `release` accepts development builds sharing a version number; `binary` attests the file at its path when checked.
 * The coverage table (`docs/conf_coverage.md`) is part of the guarantee: it says what is and is not frozen.
 
 ## 10. Testing
@@ -252,3 +276,12 @@ Cryptographic signing; `diff --impact "H2O,CO2"` (numeric effect of a change on 
   3. The value of a `user.<name>` witness key is not tied to anything until witnesses are evaluated (**Phase 3**).
   4. `[Environment]` and header comments are outside the seal and must never drive behaviour in any later phase (a rule for reviewers of Phases 1b–5).
   5. `FrozenFile::verify` takes no expected seal: whoever does not hold the externally recorded seal can rewrite the whole file consistently. The comparison with the recorded seal is `phs conf verify --expect` (**Phase 2**), and it is what makes the guarantee meaningful.
+* **Residual risks left by Phase 1b** (the engine identity; each one has an owner):
+  1. Hashing a 30–100 MB executable or module with the in-house SHA-256 on every load would break the ~0.5 s first-use budget: the hash must be cached per process. **Phase 1c.**
+  2. Which file to hash per binding (CLI `current_exe`, the Python extension module, the Java library), given that the core has no convenience for it. **Phase 5.**
+  3. A language-server build without `html-viewer` has a different `features` string and will refuse a file frozen with `build` by another binding: document it, or choose `release`. **Phases 2 and 5.**
+  4. The build inputs §7 lists as not pinned (`overflow-checks`, `lto`, `codegen-units`, a consumer's lockfile, dynamic libraries). **Documentation, Phase 2.**
+  5. `release` accepts development builds that share a release's version number. **Phase 2 documentation, or a development-version rule.**
+  6. `physure-cli/build.rs` names `../.git/...` paths that do not exist in a worktree, so the CLI and everything depending on it recompile on every invocation. **A separate small fix** (use `git rev-parse --git-path`, as `physure-core/build.rs` does).
+  7. A copy of the crate placed at `<their repo>/physure-core` reports their commit (it does identify that tree, but an auditor will not find it in physure's history). **Documentation.**
+  8. The dirty check uses `git status`, which does not see changes to tracked files marked `assume-unchanged` or `skip-worktree` (measured): such a build claims `HEAD` while compiling other code. **A small fix to `build.rs`** (treat any such flag on a file of the crate, from `git ls-files -v`, as dirty), or documentation.
