@@ -154,7 +154,7 @@ There is no `unfreeze`: deleting the file does it, and with `PHYSURE_REQUIRE_FRO
 
 ## 6. Where it lives
 
-* Core (`physure-core/src/units/frozen.rs` and `sha256.rs`): file model, canonical form, hashes, verification, resolution, sealed loading, the entry listing, the engine identity. Every surface that builds a registry (`build_registry_from_conf`, `with_conf_registry`, PHS, the CLI, the language server, the Rust API) goes through the resolution, so they cannot disagree about what is in force.
+* Core (`physure-core/src/frozen/`: `sha256`, `canonical`, `model`, `seal`, `time` in Phase 1a; resolution, sealed loading and the engine identity in 1b/1c): file model, canonical form, hashes, verification, resolution, sealed loading, the entry listing, the engine identity. Every surface that builds a registry (`build_registry_from_conf`, `with_conf_registry`, PHS, the CLI, the language server, the Rust API) goes through the resolution, so they cannot disagree about what is in force.
 * Build metadata: a `build.rs` in the core exports the commit, profile, target and features that the engine block needs. A build outside a git checkout records `commit = unknown`, and a policy of `build` or stricter then refuses to freeze with it.
 * CLI (`physure-cli/src/conf.rs`): the eight commands over the core API.
 * Python, WebAssembly and Java call the same resolution (Phase 5). Python reads its configuration with `configparser`, adds system files and its own working-directory file, so wiring it is its own task.
