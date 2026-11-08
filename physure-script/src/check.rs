@@ -54,10 +54,11 @@ pub struct Diagnostic {
 /// embedded one, plus a `physure.conf` in the working directory, unless a `units::with_catalog` scope is set).
 pub fn check_source(code: &str) -> PhysureResult<Vec<Diagnostic>> {
     let program = crate::parser::parse_phs(code)?;
-    Ok(physure_core::units::with_current_catalog(|scoped| match scoped {
-        Some(registry) => check_program(&program, registry),
-        None => check_program(&program, &physure_core::units::conf::build_registry_from_conf().0),
-    }))
+    physure_core::units::with_current_catalog(|scoped| match scoped {
+        Some(registry) => Ok(check_program(&program, registry)),
+        None => physure_core::units::conf::try_with_conf_registry(|registry| check_program(&program, registry))
+            .map_err(|e| physure_core::error::PhysureError::Generic(e.to_string())),
+    })
 }
 
 /// Checks a parsed program against `registry`.

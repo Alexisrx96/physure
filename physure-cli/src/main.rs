@@ -795,10 +795,25 @@ fn run_statements(
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    refuse_an_unusable_configuration();
     if run_flag_command(&args) || run_subcommand(&args) || handle_transpile(&args) {
         return;
     }
     run_script(&args);
+}
+
+/// Before anything runs: the configuration in force (a frozen `physure.frozen.conf`, `PHYSURE_CONF`, ...) must be
+/// usable, or the program stops with its message on stderr and an exit code that says what kind of problem it is:
+/// 1 for the integrity of the file, 2 for resolution, 3 for the engine. Without this the first computation would
+/// refuse in the middle of the run. The engine file of the policy `binary` is this executable.
+fn refuse_an_unusable_configuration() {
+    if let Ok(exe) = env::current_exe() {
+        physure_core::frozen::set_engine_file(Some(exe));
+    }
+    if let Err(e) = physure_core::frozen::ensure_valid() {
+        eprintln!("phs: refusing to run: {e}");
+        process::exit(e.exit_code());
+    }
 }
 
 /// Runs the script (or snippet) named by the first argument and shows the result the way the flags ask.

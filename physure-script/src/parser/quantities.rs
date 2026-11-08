@@ -1,4 +1,3 @@
-use std::sync::OnceLock;
 use physure_core::error::{PhysureError, PhysureResult};
 use physure_core::UnitRegistry;
 use crate::ast::*;
@@ -6,23 +5,24 @@ use pest::Parser;
 use super::{Rule, PhsParser};
 use super::expressions::parse_expr;
 
-fn unit_registry() -> &'static UnitRegistry {
-    static REGISTRY: OnceLock<UnitRegistry> = OnceLock::new();
-    REGISTRY.get_or_init(|| physure_core::units::conf::build_registry_from_conf().0)
-}
-
 /// The catalog that a word after a number is judged a unit by: the one of the innermost
 /// `physure_core::units::with_catalog` scope on this thread (a binding evaluating for a registry built from a
-/// custom conf), and the embedded one when there is none.
-fn with_unit_catalog<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
-    physure_core::units::with_current_catalog(|scoped| f(scoped.unwrap_or_else(|| unit_registry())))
+/// custom conf), and otherwise the configuration in force (a frozen one, or the embedded catalog plus the working
+/// directory's conf), read on every use: a cached copy would never see a frozen configuration, nor a change of
+/// it. An error when the configuration in force cannot be used.
+fn with_unit_catalog<R>(f: impl FnOnce(&UnitRegistry) -> R) -> PhysureResult<R> {
+    physure_core::units::with_current_catalog(|scoped| match scoped {
+        Some(registry) => Ok(f(registry)),
+        None => physure_core::units::conf::try_with_conf_registry(f).map_err(|e| PhysureError::Generic(e.to_string())),
+    })
 }
 
 /// True if `name` resolves to a registered unit. Used to tell a unit symbol apart from an
 /// unbound variable when checking that a keyword call to an equation supplies every unknown:
-/// in `"y = x * 2.0 m"` the `m` is metres, not a variable the caller forgot to pass.
+/// in `"y = x * 2.0 m"` the `m` is metres, not a variable the caller forgot to pass. False when the
+/// configuration in force cannot be used: nothing is a unit then, and reading the unit itself is the error.
 pub(crate) fn is_known_unit_symbol(name: &str) -> bool {
-    with_unit_catalog(|registry| registry.get_unit(name).is_some())
+    with_unit_catalog(|registry| registry.get_unit(name).is_some()).unwrap_or(false)
 }
 
 /// True if a `unit_term` pair (e.g. "kg", "r ^ 2", "m2", "a0", "Å") names a registered
@@ -283,7 +283,7 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
                 collect_uncertainty_halves(inner, &mut halves, &mut is_sigma, &mut dof)?;
             }
             Rule::unit_expr => {
-                let (u, leftover) = with_unit_catalog(|registry| split_unit_expr(inner, registry));
+                let (u, leftover) = with_unit_catalog(|registry| split_unit_expr(inner, registry))?;
                 unit = u;
                 unit_leftover = leftover;
             }

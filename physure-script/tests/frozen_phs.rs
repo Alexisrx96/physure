@@ -1,0 +1,104 @@
+//! PHS under a frozen configuration: the parser judges a word after a number a unit by the catalog in force, read
+//! on every use (it was cached once per process, so a frozen file was never seen by it), and a frozen file that
+//! cannot be used is an ordinary error, not a panic.
+//!
+//! These tests change the current directory and the cache of the configuration in force: they serialise on one
+//! lock and put everything back when they end.
+
+use physure_core::frozen::active::{reset_cache, ENV_CONF, ENV_REQUIRE, FROZEN_FILE_NAME};
+use physure_core::frozen::{engine_pairs, EngineIdentity, EnginePolicy, EntryInput, FrozenFile, FrozenParts, Source};
+use physure_core::units::conf::DEFAULT_PHYSURE_CONF;
+use physure_script::interpreter::eval_phs;
+use physure_script::value::PhsValue;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard};
+
+static LOCK: Mutex<()> = Mutex::new(());
+
+/// A temporary current directory; the previous one and the cache are restored on drop.
+struct Dir {
+    path: PathBuf,
+    previous: PathBuf,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Dir {
+    fn new(name: &str) -> Dir {
+        let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for variable in [ENV_CONF, ENV_REQUIRE] {
+            assert!(std::env::var_os(variable).is_none(), "{variable} is set in the environment of the tests: unset it");
+        }
+        let path = std::env::temp_dir().join(format!("physure_phs_frozen_{}_{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&path).unwrap();
+        reset_cache();
+        Dir { path, previous, _lock: lock }
+    }
+}
+
+impl Drop for Dir {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.previous);
+        reset_cache();
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+/// A valid frozen file: the embedded catalog, and `overrides` as source 2.
+fn frozen(overrides: &str) -> String {
+    FrozenFile::new(
+        "2026-11-08T10:00:00Z",
+        FrozenParts {
+            engine: engine_pairs(&EngineIdentity::current(), EnginePolicy::Release, None).unwrap(),
+            sources: vec![Source::new("embedded", DEFAULT_PHYSURE_CONF).unwrap(), Source::new("overrides", overrides).unwrap()],
+            ..FrozenParts::default()
+        },
+        EntryInput { time: "2026-11-08T10:00:00Z", action: "freeze", engine: "test", actor: "t@h", reason: "test", diff: "d" },
+    )
+    .unwrap()
+    .render()
+    .unwrap()
+}
+
+fn metres(source: &str) -> Option<f64> {
+    match eval_phs(source).ok()?.into_iter().last() {
+        Some(PhsValue::Quantity(q)) => Some(q.to("m").ok()?.value.mean()),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_unit_of_the_frozen_file_is_a_unit_for_phs_and_without_it_is_not() {
+    let dir = Dir::new("sentinel");
+    // first without the file, as a long-running process would have read the catalog before
+    assert_eq!(metres("3 m"), Some(3.0));
+    assert_eq!(metres("3 zz_unit"), None, "zz_unit is not a unit of the library");
+    assert_eq!(metres("zz_unit"), None, "a free name that is not a unit");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Units]\nzz_unit = 2.0, L, [zz_unit]\n")).unwrap();
+    reset_cache();
+    assert_eq!(metres("3 zz_unit"), Some(6.0), "the frozen file's unit");
+    assert_eq!(metres("3 zz_unit + 1 m"), Some(7.0));
+    // the parser's own judgement of what is a unit (a unit chain, a free name) reads the catalog in force too
+    assert_eq!(metres("(3 zz_unit / s) * 1 s"), Some(6.0), "the unit chain `zz_unit / s`");
+    assert_eq!(metres("zz_unit"), Some(2.0), "a free name that is a unit of the frozen file");
+    fs::remove_file(dir.path.join(FROZEN_FILE_NAME)).unwrap();
+    reset_cache();
+    assert_eq!(metres("3 zz_unit"), None);
+    assert_eq!(metres("zz_unit"), None);
+}
+
+#[test]
+fn a_broken_frozen_file_is_an_error_of_phs_not_a_panic() {
+    let dir = Dir::new("broken");
+    let text = frozen("").replacen("avogadro_constant = 6.02214076e+23", "avogadro_constant = 6.02214077e+23", 1);
+    fs::write(dir.path.join(FROZEN_FILE_NAME), text).unwrap();
+    reset_cache();
+    let outcome = std::panic::catch_unwind(|| eval_phs("3 m + 1 m"));
+    let error = outcome.expect("evaluating panicked").unwrap_err();
+    assert!(error.to_string().contains(FROZEN_FILE_NAME), "{error}");
+    let checked = std::panic::catch_unwind(|| physure_script::check_source("x = 3 m"));
+    assert!(checked.expect("checking panicked").is_err());
+}

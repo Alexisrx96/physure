@@ -5,6 +5,7 @@
 use crate::ast::Statement;
 use crate::check::{check_program, Severity};
 use crate::{run_sandboxed, Limits, PhsInterpreter, PhsValue};
+use physure_core::units::conf::try_with_conf_registry;
 use physure_core::units::{formula_text, with_current_catalog, UnitKind, UnitRegistry};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -89,8 +90,14 @@ fn evaluate_in(interp: &PhsInterpreter, source: &str) -> Report {
     };
     with_current_catalog(|scoped| match scoped {
         Some(registry) => run_program(interp, &program, registry),
-        None => run_program(interp, &program, &physure_core::units::conf::build_registry_from_conf().0),
+        None => try_with_conf_registry(|registry| run_program(interp, &program, registry))
+            .unwrap_or_else(|e| configuration_report(e.to_string())),
     })
+}
+
+/// The report of a program that did not run because the configuration in force (a frozen one) cannot be used.
+fn configuration_report(message: String) -> Report {
+    Report { ok: false, results: Vec::new(), diagnostics: vec![Finding { line: 0, severity: "error", code: "configuration".into(), message }] }
 }
 
 fn syntax_report(message: String) -> Report {
@@ -232,10 +239,10 @@ pub fn convert(value: f64, from: &str, to: &str) -> Result<Value, String> {
     check_unit_len(to)?;
     let converted = physure_core::quantity::Quantity::new(value, from).and_then(|quantity| quantity.to(to)).map_err(|error| error.to_string())?;
     let value = PhsValue::Quantity(converted);
-    Ok(with_current_catalog(|scoped| match scoped {
-        Some(registry) => render(&value, registry),
-        None => render(&value, &physure_core::units::conf::build_registry_from_conf().0),
-    }))
+    with_current_catalog(|scoped| match scoped {
+        Some(registry) => Ok(render(&value, registry)),
+        None => try_with_conf_registry(|registry| render(&value, registry)).map_err(|e| e.to_string()),
+    })
 }
 
 /// What the core knows of a unit: its dimension, whether it is an absolute temperature scale, its shortest name.
@@ -243,7 +250,7 @@ pub fn describe_unit(symbol: &str) -> Result<UnitDescription, String> {
     check_unit_len(symbol)?;
     with_current_catalog(|scoped| match scoped {
         Some(registry) => describe(registry, symbol),
-        None => describe(&physure_core::units::conf::build_registry_from_conf().0, symbol),
+        None => try_with_conf_registry(|registry| describe(registry, symbol)).map_err(|e| e.to_string())?,
     })
 }
 

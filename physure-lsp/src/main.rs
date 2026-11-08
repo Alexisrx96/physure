@@ -23,6 +23,10 @@ impl LanguageServer for Backend {
         if let Some(locale) = params.locale {
             *self.locale.write().unwrap() = locale;
         }
+        // Resolved and loaded here, before any document: a frozen configuration that cannot be used is said once
+        // when the client is ready (`initialized`), and as a diagnostic on every document; the server keeps running
+        // (a crash would only make the client restart it in a loop).
+        let _ = physure_core::frozen::ensure_valid();
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -48,6 +52,12 @@ impl LanguageServer for Backend {
                 version: Some("0.2.1".to_string()),
             }),
         })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        if let Some(message) = configuration_problem() {
+            self.client.show_message(MessageType::ERROR, message).await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -161,6 +171,10 @@ impl LanguageServer for Backend {
 
 impl Backend {
     async fn on_change(&self, uri: Url, text: String) {
+        if let Some(message) = configuration_problem() {
+            self.client.publish_diagnostics(uri, vec![configuration_diagnostic(message)], None).await;
+            return;
+        }
         // Take ownership of any previous state before the panic guard: on a panic the
         // closure's argument is dropped along with the unwind, which correctly leaves no
         // entry behind (next edit falls back to a full bootstrap run, the same graceful
@@ -202,6 +216,25 @@ impl Backend {
         };
 
         self.client.publish_diagnostics(uri, diagnostics, None).await;
+    }
+}
+
+/// Why the configuration in force (a frozen `physure.frozen.conf`, `PHYSURE_CONF`, ...) cannot be used, if it cannot:
+/// nothing is analysed against another catalog then.
+fn configuration_problem() -> Option<String> {
+    physure_core::frozen::ensure_valid()
+        .err()
+        .map(|e| format!("physure: the configuration in force cannot be used, nothing is analysed: {e}"))
+}
+
+/// One error at the top of a document that says why it is not analysed.
+fn configuration_diagnostic(message: String) -> Diagnostic {
+    Diagnostic {
+        range: Range { start: Position { line: 0, character: 0 }, end: Position { line: 0, character: 1 } },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("physure-lsp".to_string()),
+        message,
+        ..Default::default()
     }
 }
 
@@ -313,7 +346,10 @@ fn unit_completions() -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
     // 3. Physical Units & Aliases dynamically loaded from UnitRegistry
-    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
+    // no unit is offered when the configuration in force cannot be used (the diagnostics say why)
+    let Ok((registry, _)) = physure_core::units::conf::try_build_registry_from_conf() else {
+        return items;
+    };
     let mut seen = std::collections::HashSet::new();
 
     // 3a. Primary Base Units
