@@ -46,7 +46,8 @@ fn read_leniently(
     trusted: bool,
 ) -> Vec<String> {
     let mut problems = Vec::new();
-    parse_conf(conf_str, registry, constants, Reading { apply_settings: true, trusted }, &mut problems);
+    let reading = Reading { settings: SettingsMode::Apply, trusted, strict_sections: false };
+    parse_conf(conf_str, registry, constants, reading, &mut ProcessSettings::default(), &mut problems);
     problems
 }
 
@@ -86,7 +87,8 @@ pub fn extend_registry(
 ) -> Result<(), Vec<String>> {
     let backup = (registry.clone(), constants.clone());
     let mut problems = Vec::new();
-    parse_conf(conf_str, registry, constants, Reading { apply_settings: false, trusted: false }, &mut problems);
+    let reading = Reading { settings: SettingsMode::Skip, trusted: false, strict_sections: false };
+    parse_conf(conf_str, registry, constants, reading, &mut ProcessSettings::default(), &mut problems);
     if problems.is_empty() {
         return Ok(());
     }
@@ -94,13 +96,200 @@ pub fn extend_registry(
     Err(problems)
 }
 
+/// Replays one source of a frozen file (spec §5.2) into `registry`, `constants` and `collected`, all or nothing.
+///
+/// Stricter than [`extend_registry`]: besides every problem that one finds, a `[Settings]` line that does not read
+/// (an unknown key, a bad value, no `=`), a `[Compatibility]` row that does not read, a section name that is not one
+/// of a conf, a line before the first section (a byte-order mark included), a line without `=` in any section, and a
+/// `[Constants]` value that is not a number followed by a unit this registry reads, are all problems: the lenient
+/// reader drops each of them, and a frozen catalog must not lose anything in silence. `trusted` is for the
+/// `embedded` source only (it alone may define the shipped atomic-weight editions).
+///
+/// **Nothing process-wide is changed**: the `[Settings]` and `[Compatibility]` of the text are parsed, validated and
+/// added to `collected`, for whoever activates the catalog to apply ([`ProcessSettings::apply`]). On a problem,
+/// `registry`, `constants` and `collected` are left exactly as they were and every problem is returned.
+#[allow(dead_code)] // until `frozen::load` uses it (Task 3)
+pub(crate) fn replay_source(
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    collected: &mut ProcessSettings,
+    text: &str,
+    trusted: bool,
+) -> Result<(), Vec<String>> {
+    // one reading into copies, kept only when it is clean: the reading is deterministic, so a second (real) run
+    // would build the same thing
+    let (mut next_registry, mut next_constants, mut next_collected) = (registry.clone(), constants.clone(), collected.clone());
+    let mut problems = Vec::new();
+    let reading = Reading { settings: SettingsMode::Collect, trusted, strict_sections: true };
+    parse_conf(text, &mut next_registry, &mut next_constants, reading, &mut next_collected, &mut problems);
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    *registry = next_registry;
+    *constants = next_constants;
+    *collected = next_collected;
+    Ok(())
+}
+
+/// What a reading does with `[Settings]` and the rows of `[Compatibility]`, which are process-wide.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsMode {
+    /// Not read at all (the definitions of a unit system: a registry does not own process-wide settings).
+    Skip,
+    /// Applied as they are read; a value that does not read is reported on stderr and ignored (the lenient readers).
+    Apply,
+    /// Parsed, validated (a problem otherwise) and collected, never applied (a frozen replay).
+    Collect,
+}
+
 /// What a reading of a text may do.
 #[derive(Clone, Copy)]
 struct Reading {
-    /// Apply `[Settings]` and `[Compatibility]` rows, which are process-wide.
-    apply_settings: bool,
+    settings: SettingsMode,
     /// The text is the embedded catalog, which alone may define the shipped editions of the atomic weights.
     trusted: bool,
+    /// What the lenient reading drops in silence is a problem: unknown sections, lines outside a section or without
+    /// `=`, and constants that are not quantities. For a frozen replay.
+    strict_sections: bool,
+}
+
+/// The keys of `[Settings]` that the core does not use (other bindings read them). A frozen replay accepts them
+/// as written; any other unknown key is a problem.
+pub const CORE_UNUSED_SETTINGS: [&str; 6] =
+    ["default_output", "auto_simplify", "default_system", "readable_representation", "verbose", "mkml_recursion_limit"];
+
+/// One line of `[Settings]`, read and checked, not applied.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Setting {
+    PropagationMode(PropagationMode),
+    AngleMode(AngleMode),
+    ParallelThreshold(usize),
+    MaxLoopIterations(usize),
+    MaxPipelineSteps(usize),
+    /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
+    Ignored { key: String, value: String },
+}
+
+impl Setting {
+    /// Sets the process-wide value this setting names.
+    pub(crate) fn apply(&self) {
+        match self {
+            Setting::PropagationMode(mode) => {
+                set_propagation_mode(*mode);
+            }
+            Setting::AngleMode(mode) => {
+                set_angle_mode(*mode);
+            }
+            Setting::ParallelThreshold(n) => {
+                crate::settings::set_parallel_threshold(*n);
+            }
+            Setting::MaxLoopIterations(n) => {
+                crate::settings::set_max_loop_iterations(*n);
+            }
+            Setting::MaxPipelineSteps(n) => {
+                crate::settings::set_max_pipeline_steps(*n);
+            }
+            Setting::Ignored { .. } => {}
+        }
+    }
+}
+
+/// The process-wide part of the texts a frozen replay read: their `[Settings]` lines in order (a later one wins when
+/// applied) and the rows of the last `[Compatibility]` section that replaces the grants (`None`: no section did; a
+/// section with only a `periodic` line keeps the rows, as in the lenient reading).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ProcessSettings {
+    pub settings: Vec<Setting>,
+    pub compatibility: Option<Vec<String>>,
+}
+
+impl ProcessSettings {
+    /// Applies every setting in order, then the compatibility rows if a section gave them. The rows were validated
+    /// when they were collected. Only the activation of a frozen catalog calls it (Phase 1c, Task 5).
+    #[allow(dead_code)] // until the activation in `frozen::active` uses it
+    pub(crate) fn apply(&self) {
+        for setting in &self.settings {
+            setting.apply();
+        }
+        if let Some(rows) = &self.compatibility {
+            apply_compatibility(rows);
+        }
+    }
+}
+
+/// Why a `[Settings]` line does not read.
+enum SettingIssue {
+    NotKeyValue,
+    Unknown(String),
+    /// A value that does not read; `keeping` says what the lenient reading keeps instead.
+    Bad { why: String, keeping: &'static str },
+}
+
+fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
+    let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) else {
+        return Err(SettingIssue::NotKeyValue);
+    };
+    let count = |raw: &str| {
+        raw.parse::<usize>().map_err(|_| SettingIssue::Bad { why: format!("invalid {key} '{raw}'"), keeping: "default" })
+    };
+    match key {
+        "propagation_mode" => raw
+            .parse::<PropagationMode>()
+            .map(Setting::PropagationMode)
+            .map_err(|why| SettingIssue::Bad { why, keeping: "correlated" }),
+        "angle_mode" => raw
+            .parse::<AngleMode>()
+            .map(Setting::AngleMode)
+            .map_err(|why| SettingIssue::Bad { why, keeping: "the angle mode in force" }),
+        "parallel_threshold" => count(raw).map(Setting::ParallelThreshold),
+        "max_loop_iterations" => count(raw).map(Setting::MaxLoopIterations),
+        "max_pipeline_steps" => count(raw).map(Setting::MaxPipelineSteps),
+        _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
+        _ => Err(SettingIssue::Unknown(key.to_string())),
+    }
+}
+
+/// One line of `[Settings]` (`key = value`) as a [`Setting`], or why it does not read.
+pub fn parse_setting(line: &str) -> Result<Setting, String> {
+    read_setting(line).map_err(|issue| match issue {
+        SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
+        SettingIssue::Unknown(key) => format!(
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations and max_pipeline_steps, and accepts {} for other bindings",
+            CORE_UNUSED_SETTINGS.join(", ")
+        ),
+        SettingIssue::Bad { why, .. } => why,
+    })
+}
+
+/// One line of `[Settings]` as the lenient readers take it: applied if it reads; a bad value is reported on stderr
+/// and the value in force stays; an unknown key or a line without `=` is ignored.
+fn apply_setting_leniently(line: &str) {
+    match read_setting(line) {
+        Ok(setting) => setting.apply(),
+        // A conf is read before there is anywhere to report to, and a value it names is not worth refusing to start
+        // over. Saying so on stderr beats falling back with nothing on screen: that is the wrong answer that looks
+        // right.
+        Err(SettingIssue::Bad { why, keeping }) => eprintln!("physure.conf: {why}; keeping {keeping}"),
+        Err(SettingIssue::NotKeyValue | SettingIssue::Unknown(_)) => {}
+    }
+}
+
+/// Why the value of a `[Constants]` line is not a quantity this registry can read: a finite number, then (after
+/// whitespace) a unit expression, or nothing for a plain number. `None` when it is one.
+fn constant_problem(expr: &str, registry: &UnitRegistry) -> Option<String> {
+    let (number, unit) = match expr.split_once(char::is_whitespace) {
+        Some((number, unit)) => (number, unit.trim()),
+        None => (expr, ""),
+    };
+    if !number.parse::<f64>().is_ok_and(f64::is_finite) {
+        return Some(format!("the value of a constant is a finite number and a unit, not '{expr}'"));
+    }
+    if unit.is_empty() {
+        return None;
+    }
+    crate::units::parser::Parser::parse_expression_with_registry(unit, registry)
+        .err()
+        .map(|e| format!("the unit '{unit}' of the constant cannot be read: {e}"))
 }
 
 /// The sections that a conf has, spelt as they must be. A header that is one of these but for case or for
@@ -135,12 +324,16 @@ fn parse_conf(
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,
     reading: Reading,
+    collected: &mut ProcessSettings,
     problems: &mut Vec<String>,
 ) {
-    let Reading { apply_settings, trusted } = reading;
+    let Reading { settings, trusted, strict_sections } = reading;
     let mut current_section = "";
+    // a section header has been seen (a line before the first one belongs to no section)
+    let mut opened = false;
     let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
+    let mut constant_lines: Vec<(&str, String)> = Vec::new();
     let mut periodic_names: Vec<String> = Vec::new();
     let mut saw_periodic = false;
     let mut compatibility_rows: Vec<String> = Vec::new();
@@ -154,7 +347,16 @@ fn parse_conf(
         }
 
         if line.starts_with('[') && line.ends_with(']') {
+            opened = true;
             current_section = &line[1..line.len() - 1];
+            if strict_sections && !is_conf_section(current_section) && misspelt_section(current_section).is_none() {
+                problems.push(format!(
+                    "[{current_section}]: not a section of a conf; the sections are [{}] and [AtomicWeights:<edition>]",
+                    SECTION_NAMES.join("], [")
+                ));
+                current_section = "";
+                continue;
+            }
             if let Some(right) = misspelt_section(current_section) {
                 // an unknown section is ignored without a word: the choice or the weights in this one would
                 // silently fall back to the defaults
@@ -195,14 +397,43 @@ fn parse_conf(
             continue;
         }
 
+        if strict_sections {
+            if !opened {
+                let what = if line.starts_with('\u{FEFF}') { " (it starts with a byte-order mark)" } else { "" };
+                problems.push(format!("{line}: a line before the first section{what}; every line belongs to a [section]"));
+                continue;
+            }
+            if !current_section.is_empty() && !line.contains('=') {
+                problems.push(format!("{line}: expected `key = value` in [{current_section}]"));
+                continue;
+            }
+        }
+
         match current_section {
-            "Settings" if apply_settings => apply_setting(line),
+            "Settings" => match settings {
+                SettingsMode::Skip => {}
+                SettingsMode::Apply => apply_setting_leniently(line),
+                SettingsMode::Collect => match parse_setting(line) {
+                    Ok(setting) => collected.settings.push(setting),
+                    Err(why) => problems.push(format!("{line}: {why}")),
+                },
+            },
             "Prefixes" => read_prefix(line, registry, problems),
             "Units" => {
                 unit_lines.push(line);
                 declare_base_unit(line, registry, &mut dim_to_base);
             }
-            "Constants" => read_constant(line, registry, constants),
+            "Constants" => {
+                if let Some(name) = read_constant(line, registry, constants) {
+                    if strict_sections {
+                        if name.is_empty() {
+                            problems.push(format!("{line}: a constant has a name"));
+                        } else {
+                            constant_lines.push((line, constants[&name].clone()));
+                        }
+                    }
+                }
+            }
             "AtomicWeights" => read_atomic_weight(line, &mut registry.atomic_weights, problems),
             "Chemistry" => read_chemistry(line, registry, problems),
             table if table.starts_with("AtomicWeights:") => {
@@ -211,6 +442,11 @@ fn parse_conf(
             }
             "Categories" => read_category(line, registry),
             "Compatibility" => {
+                if settings == SettingsMode::Collect && !line.split_once('=').is_some_and(|(key, _)| key.trim() == "periodic") {
+                    if let Err(why) = read_compatibility_row(line) {
+                        problems.push(why);
+                    }
+                }
                 read_compatibility_line(line, &mut periodic_names, &mut saw_periodic, &mut compatibility_rows)
             }
             _ => {}
@@ -228,56 +464,28 @@ fn parse_conf(
 
     mark_periodic(registry, &periodic_names, problems);
 
+    // the constants of this text, once its units are registered
+    for (line, expr) in constant_lines {
+        if let Some(why) = constant_problem(&expr, registry) {
+            problems.push(format!("{line}: {why}"));
+        }
+    }
+
     // A section replaces the rows when it has rows, or has no `periodic` line at all (an empty section is an explicit
     // "none"). A section that only has a `periodic` line, even an empty one, leaves them alone: a project that adds a
     // unit of its own must not lose the grants.
-    if apply_settings && has_compatibility && (!compatibility_rows.is_empty() || !saw_periodic) {
-        apply_compatibility(&compatibility_rows);
+    if has_compatibility && (!compatibility_rows.is_empty() || !saw_periodic) {
+        match settings {
+            SettingsMode::Skip => {}
+            SettingsMode::Apply => apply_compatibility(&compatibility_rows),
+            SettingsMode::Collect => collected.compatibility = Some(compatibility_rows),
+        }
     }
 }
 
-/// One line of `[Settings]`. A value that does not read is reported on stderr and the default stays.
-fn apply_setting(line: &str) {
-    let Some((key, raw)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) else {
-        return;
-    };
-    match key {
-        "propagation_mode" => match raw.parse::<PropagationMode>() {
-            Ok(mode) => {
-                set_propagation_mode(mode);
-            }
-            // A conf is read before there is anywhere to report to, and the mode
-            // it names is not worth refusing to start over. Saying so on stderr
-            // beats falling back to correlated with nothing on screen: that is
-            // the wrong answer that looks right.
-            Err(why) => eprintln!("physure.conf: {why}; keeping correlated"),
-        },
-        "angle_mode" => match raw.parse::<AngleMode>() {
-            Ok(mode) => {
-                set_angle_mode(mode);
-            }
-            // Same reasoning as `propagation_mode`: a conf is read before there is anywhere to report to, and the
-            // mode it names is not worth refusing to start over.
-            Err(why) => eprintln!("physure.conf: {why}; keeping the angle mode in force"),
-        },
-        "parallel_threshold" => apply_count_setting(key, raw, |n| {
-            crate::settings::set_parallel_threshold(n);
-        }),
-        "max_loop_iterations" => apply_count_setting(key, raw, |n| {
-            crate::settings::set_max_loop_iterations(n);
-        }),
-        "max_pipeline_steps" => apply_count_setting(key, raw, |n| {
-            crate::settings::set_max_pipeline_steps(n);
-        }),
-        _ => {}
-    }
-}
-
-fn apply_count_setting(key: &str, raw: &str, set: impl FnOnce(usize)) {
-    match raw.parse::<usize>() {
-        Ok(n) => set(n),
-        Err(_) => eprintln!("physure.conf: invalid {key} '{raw}'; keeping default"),
-    }
+/// Whether `header` (the text between the brackets) names a section of a conf, spelt exactly.
+fn is_conf_section(header: &str) -> bool {
+    SECTION_NAMES.contains(&header) || header.starts_with("AtomicWeights:")
 }
 
 /// One line of `[Prefixes]`: `name = symbol, factor`.
@@ -341,11 +549,9 @@ fn declare_base_unit(line: &str, registry: &mut UnitRegistry, dim_to_base: &mut 
     }
 }
 
-/// One line of `[Constants]`: `name = expression, description, latex`.
-fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMap<String, String>) {
-    let Some((name, val_part)) = line.split_once('=') else {
-        return;
-    };
+/// One line of `[Constants]`: `name = expression, description, latex`. The name it defined, if the line has `=`.
+fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMap<String, String>) -> Option<String> {
+    let (name, val_part) = line.split_once('=')?;
     let name = name.trim();
     let parts: Vec<&str> = val_part.split(',').map(|s| s.trim()).collect();
     let expr = parts[0];
@@ -357,6 +563,7 @@ fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMa
         description: desc,
         latex_symbol: latex,
     });
+    Some(name.to_string())
 }
 
 /// One line of an atomic-weight section, in g/mol, stored in `table`. `[AtomicWeights]` (your definitions,
@@ -1259,6 +1466,238 @@ mod tests {
         assert!(row_error("radian, plain = add").contains("not supported yet"));
         assert!(row_error("radian, steradian = convert").contains("pairs a marker unit with `plain`"));
         assert!(row_error("metre, plain = convert").contains("not a marker unit"));
+    }
+
+    // ---- Phase 1c, Task 2 (amended by Task 9, E15 and E16): strict replay of a frozen source ----
+
+    /// Replays `text` into empty registries; the result and what was collected.
+    fn replay(text: &str, trusted: bool) -> (Result<(), Vec<String>>, UnitRegistry, HashMap<String, String>, ProcessSettings) {
+        let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        let result = replay_source(&mut registry, &mut constants, &mut collected, text, trusted);
+        (result, registry, constants, collected)
+    }
+
+    /// The readable process-wide settings, to show that a replay changed none of them.
+    fn process_settings_now() -> (usize, usize, usize, PropagationMode, AngleMode, (bool, bool)) {
+        (
+            crate::settings::parallel_threshold(),
+            crate::settings::max_loop_iterations(),
+            crate::settings::max_pipeline_steps(),
+            crate::uncertainty::mode::propagation_mode(),
+            crate::units::angle_mode::angle_mode(),
+            marker_grants(),
+        )
+    }
+
+    #[test]
+    fn a_clean_text_is_replayed_and_its_settings_are_collected_not_applied() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let before = process_settings_now();
+        let (result, registry, constants, collected) = replay(
+            "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\nverbose = true\n[Units]\nzz_len = 1.0, L, [zzl]\n[Constants]\nzz_const = 2 zzl\n[Compatibility]\nradian, plain = convert\n",
+            false,
+        );
+        result.unwrap();
+        assert_eq!(constants["zz_const"], "2 zzl");
+        assert_eq!(registry.constants_meta["zz_const"].value, "2 zzl");
+        assert!(registry.knows("zzl"));
+        assert_eq!(
+            collected.settings,
+            vec![
+                Setting::ParallelThreshold(12345),
+                Setting::AngleMode(AngleMode::Dimension),
+                Setting::Ignored { key: "verbose".into(), value: "true".into() },
+            ]
+        );
+        assert_eq!(collected.compatibility, Some(vec!["radian, plain = convert".to_string()]));
+        assert_eq!(process_settings_now(), before, "a replay never changes process-wide state");
+    }
+
+    #[test]
+    fn a_text_with_a_problem_changes_nothing_not_even_what_was_collected() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let before = process_settings_now();
+        let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        replay_source(&mut registry, &mut constants, &mut collected, "[Settings]\nmax_pipeline_steps = 7\n[Constants]\na = 1 m\n", true).unwrap();
+        let snapshot = (registry.clone(), constants.clone(), collected.clone());
+        let problems = replay_source(
+            &mut registry,
+            &mut constants,
+            &mut collected,
+            "[Settings]\nparallel_threshold = 54321\n[Constants]\nb = 2 m\n[AtomicWeights]\nFe = abc, 0.1\n",
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("Fe = abc, 0.1"), "{problems:?}");
+        assert_eq!((registry, constants, collected), snapshot);
+        assert_eq!(process_settings_now(), before);
+    }
+
+    #[test]
+    fn trusted_replay_may_define_a_shipped_edition_and_untrusted_may_not() {
+        let text = "[AtomicWeights:standard-2024]\nH = 1.0, 0\n";
+        let (result, registry, _, _) = replay(text, true);
+        result.unwrap();
+        assert_eq!(registry.atomic_weight_tables["standard-2024"]["H"], (1.0, 0.0));
+        let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        replay_source(&mut registry, &mut constants, &mut collected, text, true).unwrap();
+        let problems = replay_source(&mut registry, &mut constants, &mut collected, text, false).unwrap_err();
+        assert!(problems.iter().any(|p| p.contains("frozen")), "{problems:?}");
+    }
+
+    #[test]
+    fn the_embedded_catalog_replays_strictly() {
+        let (result, registry, constants, collected) = replay(DEFAULT_PHYSURE_CONF, true);
+        result.unwrap();
+        assert!(registry.knows("m") && registry.knows("Hz"));
+        assert!(constants.contains_key("molar_gas_constant"));
+        assert!(collected.settings.contains(&Setting::PropagationMode(PropagationMode::Correlated)));
+        assert!(collected.compatibility.is_some());
+        // the strict replay builds what the lenient reading of the library builds
+        let mut lenient = UnitRegistry::new();
+        let mut lenient_constants = HashMap::new();
+        let problems = {
+            let mut problems = Vec::new();
+            let reading = Reading { settings: SettingsMode::Skip, trusted: true, strict_sections: false };
+            parse_conf(DEFAULT_PHYSURE_CONF, &mut lenient, &mut lenient_constants, reading, &mut ProcessSettings::default(), &mut problems);
+            problems
+        };
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(registry == lenient, "the strict replay and the lenient reading build different registries");
+        assert_eq!(constants, lenient_constants);
+    }
+
+    /// The same text, reformatted every way the canonical form ignores (spec §4.1).
+    fn reformatted(text: &str) -> String {
+        let mut out = String::from("\u{20}\r\n# a comment that is not in the original\r\n; another\r\n\r\n");
+        for (i, line) in text.lines().enumerate() {
+            out.push_str(&format!("  \t{line}\t  \r\n"));
+            if i % 7 == 0 {
+                out.push_str("\r\n   # inserted\r\n\t; inserted\r\n");
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn two_texts_with_the_same_canonical_form_build_the_same_registry() {
+        // closes residual risk 1 of spec §13: the core's reader and the canonical form agree
+        let original = DEFAULT_PHYSURE_CONF;
+        let other = reformatted(original);
+        assert_ne!(original, other);
+        assert_eq!(crate::frozen::canonical::canonical_text(original), crate::frozen::canonical::canonical_text(&other));
+        let (a, registry_a, constants_a, collected_a) = replay(original, true);
+        let (b, registry_b, constants_b, collected_b) = replay(&other, true);
+        a.unwrap();
+        b.unwrap();
+        assert!(registry_a == registry_b, "the same canonical text built two registries");
+        assert_eq!(constants_a, constants_b);
+        assert_eq!(collected_a, collected_b);
+        // and an override text
+        let overrides = "[Settings]\nparallel_threshold = 77\n[Units]\nzz = 3.0, L, [zzu]\n[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\n[Chemistry]\natomic_weights = abridged\n";
+        let (mut ra, mut ca, mut sa) = (registry_a.clone(), constants_a.clone(), collected_a.clone());
+        let (mut rb, mut cb, mut sb) = (registry_a, constants_a, collected_a);
+        replay_source(&mut ra, &mut ca, &mut sa, overrides, false).unwrap();
+        replay_source(&mut rb, &mut cb, &mut sb, &reformatted(overrides), false).unwrap();
+        assert!(ra == rb);
+        assert_eq!((ca, sa), (cb, sb));
+    }
+
+    fn frozen_problems(text: &str) -> Vec<String> {
+        // over the embedded catalog, as an overrides block is
+        let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        replay_source(&mut registry, &mut constants, &mut collected, DEFAULT_PHYSURE_CONF, true).unwrap();
+        match replay_source(&mut registry, &mut constants, &mut collected, text, false) {
+            Ok(()) => Vec::new(),
+            Err(problems) => problems,
+        }
+    }
+
+    #[test]
+    fn a_frozen_replay_refuses_what_the_lenient_reader_would_ignore() {
+        for (text, needle) in [
+            ("[Settings]\npropagation_mode = corelated\n", "corelated"),
+            ("[Settings]\nangle_mod = dimension\n", "angle_mod"),
+            ("[Settings]\nangle_mode = degrees\n", "degrees"),
+            ("[Settings]\nparallel_threshold = -5\n", "-5"),
+            ("[Settings]\nmax_loop_iterations = many\n", "many"),
+            ("[Settings]\nmax_pipeline_steps =\n", "max_pipeline_steps"),
+            ("[Settings]\nno equals sign here\n", "no equals sign here"),
+            ("[Compatibility]\nradian, plain = add\n", "radian, plain = add"),
+            ("[Compatibility]\nthis line has no equals sign\n", "this line has no equals sign"),
+            ("[Constant]\nmolar_gas_constant = 8.0 J/mol/K\n", "[Constant]"),
+            ("[Unitz]\nx = 1.0, L\n", "[Unitz]"),
+            ("[]\nx = 1\n", "[]"),
+            ("[Constants]\nzz = this is not a quantity at all\n", "zz = this is not a quantity at all"),
+            ("[Constants]\nzz = 1 nosuchunit\n", "nosuchunit"),
+            ("[Constants]\nzz = inf m\n", "zz = inf m"),
+            ("[Constants]\nzz\n", "zz"),
+            ("[Constants]\n= 1 m\n", "= 1 m"),
+            ("[Prefixes]\nnoequals\n", "noequals"),
+            ("[Categories]\nwhatever\n", "whatever"),
+            ("[Dimensions]\nwhatever\n", "whatever"),
+            ("zz_unit = 1.0, L\n[Units]\n", "zz_unit = 1.0, L"),
+            ("\u{FEFF}[Settings]\nparallel_threshold = 5\n", "[Settings]"),
+        ] {
+            let problems = frozen_problems(text);
+            assert!(!problems.is_empty(), "accepted: {text:?}");
+            assert!(problems.iter().any(|p| p.contains(needle)), "{text:?}: {needle:?} not in {problems:?}");
+            // the same text read for a unit system (not frozen) is not the place of these rules
+            let _ = extend_registry(&mut UnitRegistry::new(), &mut HashMap::new(), text);
+        }
+    }
+
+    #[test]
+    fn a_frozen_replay_accepts_the_keys_the_core_does_not_use() {
+        for key in CORE_UNUSED_SETTINGS {
+            let text = format!("[Settings]\n{key} = anything\n");
+            assert!(frozen_problems(&text).is_empty(), "{key}: {:?}", frozen_problems(&text));
+        }
+        assert!(frozen_problems("[Settings]\nparallel_threshold = 0\npropagation_mode = monte_carlo\nangle_mode = dimensionless\n").is_empty());
+        assert!(frozen_problems("[Constants]\nzz = -1.5 1\nyy = 2\nxx = 3.0e-3 J*mol^-1*K^-1, a description, x\n").is_empty());
+        assert!(frozen_problems("[Compatibility]\nperiodic = hertz\nsr, plain = convert\n").is_empty());
+        assert!(frozen_problems("# only a comment\n\n").is_empty());
+    }
+
+    #[test]
+    fn a_setting_is_parsed_once_and_applied_from_its_value() {
+        assert_eq!(parse_setting("propagation_mode = unscented"), Ok(Setting::PropagationMode(PropagationMode::Unscented)));
+        assert_eq!(parse_setting(" angle_mode =  dimension "), Ok(Setting::AngleMode(AngleMode::Dimension)));
+        assert_eq!(parse_setting("parallel_threshold = 3"), Ok(Setting::ParallelThreshold(3)));
+        assert_eq!(parse_setting("max_loop_iterations = 4"), Ok(Setting::MaxLoopIterations(4)));
+        assert_eq!(parse_setting("max_pipeline_steps = 5"), Ok(Setting::MaxPipelineSteps(5)));
+        assert_eq!(parse_setting("mkml_recursion_limit = 100"), Ok(Setting::Ignored { key: "mkml_recursion_limit".into(), value: "100".into() }));
+        for bad in ["nokey", "frobnicate = 1", "parallel_threshold = 1.5", " = 3"] {
+            assert!(parse_setting(bad).is_err(), "{bad:?}");
+        }
+        for bad in ["propagation_mode = corelated", "angle_mode = degrees", "max_loop_iterations = -1"] {
+            assert!(parse_setting(bad).unwrap_err().contains(bad.split('=').nth(1).unwrap().trim()), "{bad:?}");
+        }
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let original = crate::settings::max_pipeline_steps();
+        Setting::MaxPipelineSteps(9).apply();
+        assert_eq!(crate::settings::max_pipeline_steps(), 9);
+        crate::settings::set_max_pipeline_steps(original);
+        let collected = ProcessSettings { settings: vec![], compatibility: Some(vec!["steradian, plain = convert".into()]) };
+        crate::units::angle_mode::set_marker_grants(true, true);
+        collected.apply();
+        assert_eq!(marker_grants(), (false, true));
+    }
+
+    #[test]
+    fn a_later_compatibility_section_replaces_an_earlier_one_and_a_periodic_only_one_does_not() {
+        let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        replay_source(&mut registry, &mut constants, &mut collected, DEFAULT_PHYSURE_CONF, true).unwrap();
+        let shipped = collected.compatibility.clone();
+        replay_source(&mut registry, &mut constants, &mut collected, "[Compatibility]\nperiodic = hertz\n", false).unwrap();
+        assert_eq!(collected.compatibility, shipped);
+        replay_source(&mut registry, &mut constants, &mut collected, "[Compatibility]\n", false).unwrap();
+        assert_eq!(collected.compatibility, Some(vec![]));
     }
 
     #[test]
