@@ -8,3 +8,7 @@ pub mod elements;
 pub mod formula;
 
 pub use formula::{parse_formula, Composition};
+
+pub mod species;
+
+pub use species::Species;
