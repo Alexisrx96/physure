@@ -98,7 +98,7 @@ fn split_unit_expr(pair: pest::iterators::Pair<Rule>, registry: &UnitRegistry) -
         // invalid child's own span start, so a parenthesized group's "(" — which lies in
         // `gap`, before the child's span — stays attached to the remainder text instead
         // of being dropped (e.g. "kg / (r^2)" must give back "(r^2)", not "r^2)").
-        let op_offset = gap.find(|c| c == '*' || c == '/').map(|i| i + 1).unwrap_or(0);
+        let op_offset = gap.find(['*', '/']).map(|i| i + 1).unwrap_or(0);
         let remainder = base_str[consumed_end_rel + op_offset..].trim().to_string();
         let unit = if consumed_end_rel == 0 {
             None

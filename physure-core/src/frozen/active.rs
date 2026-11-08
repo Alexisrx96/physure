@@ -12,7 +12,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use super::load::{FileStamp, FrozenCatalog, LoadError, LoadOptions};
+use super::load::{FileStamp, FrozenCatalog, LoadError};
 
 pub const FROZEN_FILE_NAME: &str = "physure.frozen.conf";
 pub const ENV_CONF: &str = "PHYSURE_CONF";
@@ -327,6 +327,7 @@ struct Key {
 }
 
 /// The outcome of loading one file, kept with the stamp of what was read.
+#[cfg_attr(all(target_family = "wasm", target_os = "unknown"), allow(dead_code))] // no file system there: never loaded
 struct Loaded {
     path: PathBuf,
     why: Why,
@@ -355,8 +356,10 @@ thread_local! {
 }
 
 /// Sets [`LOADING`] for its lifetime, also on unwind.
+#[cfg_attr(all(target_family = "wasm", target_os = "unknown"), allow(dead_code))] // no file system there: never loaded
 struct LoadingGuard;
 
+#[cfg_attr(all(target_family = "wasm", target_os = "unknown"), allow(dead_code))] // no file system there: never loaded
 impl LoadingGuard {
     fn new() -> LoadingGuard {
         LOADING.with(|loading| loading.set(true));
@@ -375,6 +378,7 @@ fn state() -> std::sync::MutexGuard<'static, State> {
 }
 
 /// The stamp of `path` now, `None` if it cannot be examined.
+#[cfg_attr(all(target_family = "wasm", target_os = "unknown"), allow(dead_code))] // no file system there: never loaded
 fn stamp_of(path: &Path) -> Option<FileStamp> {
     std::fs::metadata(path).ok().map(|metadata| FileStamp::of(&metadata))
 }
@@ -465,7 +469,7 @@ fn resolve_and_load(state: &mut State, key: Key) -> Result<Option<Arc<Active>>, 
     if !reusable {
         let _loading = LoadingGuard::new();
         state.loads += 1;
-        let loaded = match super::load::load_file(&path, LoadOptions::default()) {
+        let loaded = match super::load::load_file(&path, super::load::LoadOptions::default()) {
             Ok(catalog) => {
                 let stamp = Some(catalog.stamp);
                 // activation: the complete set of the file over the compiled defaults, in one step under the lock
@@ -514,14 +518,16 @@ pub fn load_count() -> u64 {
 
 /// For a binding that does not honour frozen configurations yet (Phase 5 wires them): `Ok(())` when none is in
 /// force, otherwise an error that says what to do. The binding must refuse rather than read the library's own
-/// catalog, which would mix two configurations in one process without a word.
+/// catalog, which would mix two configurations in one process without a word. It goes through the cached
+/// [`active`] (Java calls it on every static operation): a valid frozen file, a broken one, a required one that is
+/// missing and a changed resolution after an activation are all refusals.
 pub fn refuse_unwired(binding: &str) -> Result<(), String> {
     let later = format!("the {binding} binding honours frozen configurations from Phase 5");
     let what_to_do = "unset PHYSURE_CONF and PHYSURE_REQUIRE_FROZEN and move or remove the file, or use the CLI";
-    let in_force = match resolve_process() {
-        Ok(Resolution::Frozen { path, .. }) => Some(path),
-        Ok(Resolution::Unfrozen) => state().activated.clone(),
-        Err(e) => return Err(format!("{e}; {later}")),
+    let in_force = match active() {
+        Ok(Some(active)) => Some(active.path.clone()),
+        Ok(None) => None,
+        Err(e) => return Err(format!("{e}; {later}: {what_to_do}")),
     };
     match in_force {
         None => Ok(()),

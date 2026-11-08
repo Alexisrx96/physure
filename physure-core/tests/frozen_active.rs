@@ -459,8 +459,13 @@ fn the_resolution_is_sticky_once_a_frozen_file_was_activated() {
     // and to another frozen file: refused too
     let other = env.write("other.conf", &frozen_text("8.0", "zz_other", ""));
     std::env::set_var(ENV_CONF, &other);
-    assert_eq!(active().unwrap_err(), ActiveError::ResolutionChanged { was: path, now: Some(other) });
+    assert_eq!(active().unwrap_err(), ActiveError::ResolutionChanged { was: path.clone(), now: Some(other) });
     std::env::remove_var(ENV_CONF);
+    // and the file in force goes away: refused, the file's settings are not left on the unfrozen catalog
+    assert!(active().is_ok());
+    fs::remove_file(&path).unwrap();
+    assert_eq!(active().unwrap_err(), ActiveError::ResolutionChanged { was: path.clone(), now: None });
+    assert!(Quantity::new(1.0, "m").is_err());
     let _ = fs::remove_dir_all(other_dir);
 }
 
@@ -483,6 +488,10 @@ fn unwired_bindings_are_refused_while_a_frozen_file_is_in_force() {
     refuse_unwired("Java").unwrap();
     // refused as soon as a file resolves, valid or not
     let path = env.write(FROZEN_FILE_NAME, "not even a frozen file");
+    // discovery runs once per set of inputs: a file made later in the same directory is seen after a reset, by the
+    // bindings exactly when it is seen by the core (one cache), so the two never disagree
+    assert!(refuse_unwired("Java").is_ok());
+    reset();
     let message = refuse_unwired("Java").unwrap_err();
     assert!(message.contains(&path.display().to_string()) && message.contains("Java") && message.contains("Phase 5"), "{message}");
 }
