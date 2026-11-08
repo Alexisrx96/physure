@@ -4,3 +4,7 @@
 //! files in `tests/golden/chemistry_*.tsv` hold the two to the same answers.
 
 pub mod elements;
+
+pub mod formula;
+
+pub use formula::{parse_formula, Composition};
