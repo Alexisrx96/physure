@@ -5,16 +5,18 @@
 
 pub mod elements;
 
-use crate::units::{conf::with_conf_registry, with_current_catalog, UnitRegistry};
+use crate::error::{PhysureError, PhysureResult};
+use crate::units::{conf::try_with_conf_registry, with_current_catalog, UnitRegistry};
 
-/// Runs `f` against the catalog in scope, or against the embedded one plus the working directory's conf.
+/// Runs `f` against the catalog in scope, or against the configuration in force (a frozen one, or the embedded
+/// catalog plus the working directory's conf); an error when the configuration in force cannot be used.
 ///
 /// Every reader of the catalog goes through this, so the catalog is resolved once per operation:
 /// `with_conf_registry` builds a merged registry on every call when a local `physure.conf` exists.
-pub(crate) fn with_catalog_in_scope<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
+pub(crate) fn try_with_catalog_in_scope<R>(f: impl FnOnce(&UnitRegistry) -> R) -> PhysureResult<R> {
     with_current_catalog(|scoped| match scoped {
-        Some(registry) => f(registry),
-        None => with_conf_registry(f),
+        Some(registry) => Ok(f(registry)),
+        None => try_with_conf_registry(f).map_err(|e| PhysureError::Generic(e.to_string())),
     })
 }
 

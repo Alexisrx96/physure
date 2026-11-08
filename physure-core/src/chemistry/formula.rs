@@ -117,7 +117,7 @@ pub fn parse_formula(formula: &str) -> PhysureResult<Composition> {
         }
     }
     // the catalog is resolved once, not once per element
-    super::with_catalog_in_scope(|registry| {
+    super::try_with_catalog_in_scope(|registry| {
         super::elements::check_table_is_defined(registry)?;
         let mut total = Composition::new();
         for (index, part) in text.split(['·', '*']).enumerate() {
@@ -132,7 +132,7 @@ pub fn parse_formula(formula: &str) -> PhysureResult<Composition> {
             }
         }
         Ok(total)
-    })
+    })?
 }
 
 #[cfg(test)]

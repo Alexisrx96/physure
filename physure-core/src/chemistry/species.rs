@@ -57,7 +57,7 @@ impl Species {
 
     /// The elements of the formula with their data, from the catalog in scope.
     fn terms(&self) -> PhysureResult<Vec<Term>> {
-        super::with_catalog_in_scope(|registry| {
+        super::try_with_catalog_in_scope(|registry| {
             super::elements::check_table_is_defined(registry)?;
             self.composition
                 .iter()
@@ -71,7 +71,7 @@ impl Species {
                     Ok(Term { symbol: element.clone(), count: f64::from(count), weight, standard_uncertainty: std })
                 })
                 .collect()
-        })
+        })?
     }
 
     /// `(molar mass in g/mol, its standard uncertainty)`, with the atomic weights of the catalog in
@@ -272,8 +272,8 @@ mod tests {
         let q = crate::units::with_catalog(&registry, || water.molar_mass()).unwrap();
         assert!(close(q.value.mean(), 2.0 * 1.0080 + 15.999));
         // and a report can say which table it was
-        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "abridged-2024");
-        assert_eq!(crate::chemistry::atomic_weight_edition(), "standard-2024");
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition).unwrap(), "abridged-2024");
+        assert_eq!(crate::chemistry::atomic_weight_edition().unwrap(), "standard-2024");
     }
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
         let water = crate::units::with_catalog(&registry, || Species::new("H2O")).unwrap();
         let (mass, _) = crate::units::with_catalog(&registry, || water.molar_mass_parts()).unwrap();
         assert!(close(mass, 2.0 * 1.00794 + 15.9994), "{mass}");
-        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "acme-2026-03");
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition).unwrap(), "acme-2026-03");
         // Na is in neither of the tables of this edition: nothing is taken from the shipped ones
         let err = crate::units::with_catalog(&registry, || Species::new("NaCl")).unwrap_err();
         assert!(matches!(err, PhysureError::ParseError(_)), "{err:?}");
@@ -315,7 +315,7 @@ mod tests {
         let (parts, quantity) = crate::units::with_catalog(&registry, || (water.molar_mass_parts(), water.molar_mass()));
         assert!(parts.unwrap_err().to_string().contains("nope-1"));
         assert!(quantity.unwrap_err().to_string().contains("nope-1"));
-        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition), "nope-1 (undefined)");
+        assert_eq!(crate::units::with_catalog(&registry, crate::chemistry::atomic_weight_edition).unwrap(), "nope-1 (undefined)");
     }
 
     #[test]

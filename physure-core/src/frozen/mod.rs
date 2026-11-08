@@ -18,5 +18,9 @@ pub use engine::{
     EngineMismatch, EnginePolicy,
 };
 pub mod active;
+pub use active::{
+    active, ensure_valid, refuse_unwired, reset_cache, set_engine_file, set_explicit_conf, Active, ActiveError, Resolution,
+    ResolveError, Why,
+};
 pub mod load;
 pub use load::{load_file, FileStamp, FrozenCatalog, LoadError, LoadOptions, MAX_FILE_BYTES};

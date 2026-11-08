@@ -10,7 +10,9 @@
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+use super::load::{FileStamp, FrozenCatalog, LoadError, LoadOptions};
 
 pub const FROZEN_FILE_NAME: &str = "physure.frozen.conf";
 pub const ENV_CONF: &str = "PHYSURE_CONF";
@@ -222,15 +224,19 @@ fn env_text(name: &'static str) -> Result<Option<String>, ResolveError> {
 static EXPLICIT: Mutex<Option<PathBuf>> = Mutex::new(None);
 static ENGINE_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
 
-/// The host says which frozen file is in force (the CLI's `--conf`). `None` clears it.
+/// The host says which frozen file is in force (the CLI's `--conf`). `None` clears it. The cache is forgotten
+/// ([`reset_cache`]): the next [`active`] resolves and loads again.
 pub fn set_explicit_conf(path: Option<PathBuf>) {
     *EXPLICIT.lock().unwrap_or_else(|e| e.into_inner()) = path;
+    reset_cache();
 }
 
 /// The host says which file contains the engine, for the policy `binary` (the CLI: its own executable; Python:
-/// the extension module; Java: the library). Without it a file pinned with `binary` cannot be loaded.
+/// the extension module; Java: the library). Without it a file pinned with `binary` cannot be loaded. The cache is
+/// forgotten ([`reset_cache`]).
 pub fn set_engine_file(path: Option<PathBuf>) {
     *ENGINE_FILE.lock().unwrap_or_else(|e| e.into_inner()) = path;
+    reset_cache();
 }
 
 /// The explicit path the host set, if any.
@@ -241,6 +247,289 @@ pub fn explicit_conf() -> Option<PathBuf> {
 /// The engine file the host named, if any.
 pub fn engine_file() -> Option<PathBuf> {
     ENGINE_FILE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+// ---- the configuration in force, cached (Task 5 and Task 9 D/E of the Phase 1c plan) ----
+
+/// Why the configuration in force cannot be used. Every message says what to do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActiveError {
+    /// Resolution failed (a missing explicit file, `PHYSURE_REQUIRE_FROZEN=1` without a file, ...).
+    Resolve(ResolveError),
+    /// The frozen file in force does not load (its message names the file).
+    Load(LoadError),
+    /// A frozen configuration was activated in this process and the resolution now gives another file, or none:
+    /// one process, one configuration, until [`reset_cache`].
+    ResolutionChanged { was: PathBuf, now: Option<PathBuf> },
+    /// The catalog was asked for while this thread was loading a frozen file (a defect: loading reads no catalog).
+    Reentrant,
+}
+
+impl ActiveError {
+    /// The exit code a program reports this error with: 1 for the integrity of the file (it does not read,
+    /// verify or replay), 2 for resolution, 3 for the engine.
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            ActiveError::Resolve(_) | ActiveError::ResolutionChanged { .. } => 2,
+            ActiveError::Load(LoadError::Engine { .. }) => 3,
+            ActiveError::Load(_) | ActiveError::Reentrant => 1,
+        }
+    }
+}
+
+impl fmt::Display for ActiveError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ActiveError::Resolve(e) => e.fmt(f),
+            ActiveError::Load(e) => e.fmt(f),
+            ActiveError::ResolutionChanged { was, now } => {
+                let now = match now {
+                    Some(path) => path.display().to_string(),
+                    None => "no frozen configuration".to_string(),
+                };
+                write!(
+                    f,
+                    "the frozen configuration {} was activated in this process and the configuration in force is now {now} (the current directory or the environment changed); one process uses one configuration: restart the program",
+                    was.display()
+                )
+            }
+            ActiveError::Reentrant => {
+                write!(f, "the catalog was asked for while a frozen configuration was being loaded on the same thread")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ActiveError {}
+
+impl From<ResolveError> for ActiveError {
+    fn from(e: ResolveError) -> Self {
+        ActiveError::Resolve(e)
+    }
+}
+
+/// A frozen configuration in force: where it is, why it is in force, and its verified catalog.
+#[derive(Debug)]
+pub struct Active {
+    pub path: PathBuf,
+    pub why: Why,
+    pub catalog: FrozenCatalog,
+}
+
+/// The inputs of resolution, as this process has them now: the cache key.
+#[derive(Clone, PartialEq, Eq)]
+struct Key {
+    explicit: Option<PathBuf>,
+    conf_var: Option<String>,
+    require_var: Option<String>,
+    /// The error text when the current directory cannot be read.
+    cwd: Result<PathBuf, String>,
+}
+
+/// The outcome of loading one file, kept with the stamp of what was read.
+struct Loaded {
+    path: PathBuf,
+    why: Why,
+    /// `None` when the file could not even be examined: never reused.
+    stamp: Option<FileStamp>,
+    outcome: Result<Arc<Active>, ActiveError>,
+}
+
+#[derive(Default)]
+struct State {
+    /// The key the resolution below was made with. Resolution errors are not kept.
+    key: Option<Key>,
+    resolution: Option<Resolution>,
+    loaded: Option<Loaded>,
+    /// The frozen file whose catalog was activated (its settings applied), if any: sticky until [`reset_cache`].
+    activated: Option<PathBuf>,
+    loads: u64,
+}
+
+static STATE: Mutex<State> =
+    Mutex::new(State { key: None, resolution: None, loaded: None, activated: None, loads: 0 });
+
+thread_local! {
+    /// This thread is loading a frozen file while holding the cache: a nested `active()` would deadlock on it.
+    static LOADING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets [`LOADING`] for its lifetime, also on unwind.
+struct LoadingGuard;
+
+impl LoadingGuard {
+    fn new() -> LoadingGuard {
+        LOADING.with(|loading| loading.set(true));
+        LoadingGuard
+    }
+}
+
+impl Drop for LoadingGuard {
+    fn drop(&mut self) {
+        LOADING.with(|loading| loading.set(false));
+    }
+}
+
+fn state() -> std::sync::MutexGuard<'static, State> {
+    STATE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The stamp of `path` now, `None` if it cannot be examined.
+fn stamp_of(path: &Path) -> Option<FileStamp> {
+    std::fs::metadata(path).ok().map(|metadata| FileStamp::of(&metadata))
+}
+
+/// The frozen configuration in force, if any; `Ok(None)` is the unfrozen behaviour.
+///
+/// The outcome is cached per process under the inputs of resolution (the explicit path, `PHYSURE_CONF`,
+/// `PHYSURE_REQUIRE_FROZEN` and the current directory): discovery runs once per set of inputs, and each call
+/// checks only the stamp (length, modification time) of the file in force, so an edited file is loaded again. A
+/// resolution error is not cached; a load error is, under the stamp of the file that was read.
+///
+/// Loading a file **activates** it: the process-wide settings are put back to their compiled defaults and the
+/// file's `[Settings]` and `[Compatibility]` are applied, in one step under the cache lock. From then on the
+/// resolution is sticky: if it later gives another file or none (the current directory changed), the result is
+/// [`ActiveError::ResolutionChanged`] until [`reset_cache`]. Where there is no file system
+/// (`wasm32-unknown-unknown`) the result is always `Ok(None)`.
+///
+/// The lock is never held while a caller's code runs: the hooks of `units::conf` clone the `Arc` out and release it.
+pub fn active() -> Result<Option<Arc<Active>>, ActiveError> {
+    #[cfg(all(target_family = "wasm", target_os = "unknown"))]
+    {
+        Ok(None)
+    }
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+    {
+        if LOADING.with(std::cell::Cell::get) {
+            return Err(ActiveError::Reentrant);
+        }
+        let key = Key {
+            explicit: explicit_conf(),
+            conf_var: env_text(ENV_CONF)?,
+            require_var: env_text(ENV_REQUIRE)?,
+            cwd: std::env::current_dir().map_err(|e| e.to_string()),
+        };
+        let mut state = state();
+        if state.key.as_ref() == Some(&key) {
+            match &state.resolution {
+                Some(Resolution::Unfrozen) => return Ok(None),
+                Some(Resolution::Frozen { path, .. }) => {
+                    if let Some(loaded) = &state.loaded {
+                        if loaded.path == *path && loaded.stamp.is_some() && loaded.stamp == stamp_of(path) {
+                            return loaded.outcome.clone().map(Some);
+                        }
+                    }
+                }
+                None => {}
+            }
+        }
+        resolve_and_load(&mut state, key)
+    }
+}
+
+/// The slow path of [`active`]: resolve, apply the sticky rule, load (or reuse what was loaded) and activate.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn resolve_and_load(state: &mut State, key: Key) -> Result<Option<Arc<Active>>, ActiveError> {
+    state.key = None;
+    state.resolution = None;
+    let cwd_error;
+    let cwd = match &key.cwd {
+        Ok(cwd) => Ok(cwd.as_path()),
+        Err(message) => {
+            cwd_error = io::Error::other(message.clone());
+            Err(&cwd_error)
+        }
+    };
+    let resolution = resolve_with_cwd(cwd, key.explicit.as_deref(), key.conf_var.as_deref(), key.require_var.as_deref())?;
+    let (path, why) = match &resolution {
+        Resolution::Unfrozen => {
+            if let Some(was) = &state.activated {
+                return Err(ActiveError::ResolutionChanged { was: was.clone(), now: None });
+            }
+            state.key = Some(key);
+            state.resolution = Some(resolution);
+            return Ok(None);
+        }
+        Resolution::Frozen { path, why } => (path.clone(), why.clone()),
+    };
+    if let Some(was) = &state.activated {
+        if *was != path {
+            return Err(ActiveError::ResolutionChanged { was: was.clone(), now: Some(path) });
+        }
+    }
+    let stamp = stamp_of(&path);
+    let reusable = state
+        .loaded
+        .as_ref()
+        .is_some_and(|loaded| loaded.path == path && loaded.why == why && loaded.stamp.is_some() && loaded.stamp == stamp);
+    if !reusable {
+        let _loading = LoadingGuard::new();
+        state.loads += 1;
+        let loaded = match super::load::load_file(&path, LoadOptions::default()) {
+            Ok(catalog) => {
+                let stamp = Some(catalog.stamp);
+                // activation: the complete set of the file over the compiled defaults, in one step under the lock
+                crate::settings::reset_to_defaults();
+                catalog.apply_process_settings();
+                state.activated = Some(path.clone());
+                let active = Active { path: path.clone(), why: why.clone(), catalog };
+                Loaded { path, why, stamp, outcome: Ok(Arc::new(active)) }
+            }
+            Err(e) => Loaded { path, why, stamp, outcome: Err(ActiveError::Load(e)) },
+        };
+        state.loaded = Some(loaded);
+    }
+    state.key = Some(key);
+    state.resolution = Some(resolution);
+    state.loaded.as_ref().map_or(Ok(None), |loaded| loaded.outcome.clone().map(Some))
+}
+
+/// For programs: resolves and loads the configuration in force now, so that a problem is an ordinary error at
+/// start-up (with [`ActiveError::exit_code`]) instead of a refusal in the middle of a computation. It also
+/// activates a frozen configuration early (applies its settings).
+pub fn ensure_valid() -> Result<(), ActiveError> {
+    active().map(|_| ())
+}
+
+/// Forgets the cache: the next [`active`] resolves and loads again. If a frozen configuration had been activated,
+/// the process-wide settings go back to what the unfrozen catalog gives them (the compiled defaults, then the
+/// embedded catalog's `[Settings]` and `[Compatibility]`), so the settings of a file no longer in force do not stay.
+pub fn reset_cache() {
+    let mut state = state();
+    let was_activated = state.activated.take().is_some();
+    state.key = None;
+    state.resolution = None;
+    state.loaded = None;
+    if was_activated {
+        crate::settings::reset_to_defaults();
+        crate::units::conf::apply_embedded_settings();
+    }
+}
+
+/// How many times this process loaded a frozen file through [`active`] (for the tests of the cache).
+#[doc(hidden)]
+pub fn load_count() -> u64 {
+    state().loads
+}
+
+/// For a binding that does not honour frozen configurations yet (Phase 5 wires them): `Ok(())` when none is in
+/// force, otherwise an error that says what to do. The binding must refuse rather than read the library's own
+/// catalog, which would mix two configurations in one process without a word.
+pub fn refuse_unwired(binding: &str) -> Result<(), String> {
+    let later = format!("the {binding} binding honours frozen configurations from Phase 5");
+    let what_to_do = "unset PHYSURE_CONF and PHYSURE_REQUIRE_FROZEN and move or remove the file, or use the CLI";
+    let in_force = match resolve_process() {
+        Ok(Resolution::Frozen { path, .. }) => Some(path),
+        Ok(Resolution::Unfrozen) => state().activated.clone(),
+        Err(e) => return Err(format!("{e}; {later}")),
+    };
+    match in_force {
+        None => Ok(()),
+        Some(path) => Err(format!(
+            "a frozen configuration is in force ({}); {later}: {what_to_do}",
+            path.display()
+        )),
+    }
 }
 
 #[cfg(test)]

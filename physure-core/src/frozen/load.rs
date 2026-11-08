@@ -74,7 +74,6 @@ impl FrozenCatalog {
 
     /// Applies the settings and compatibility rows of the sources to the process: what activating the catalog does,
     /// and nothing else may (Task 9, E15).
-    #[allow(dead_code)] // until the activation in `frozen::active` uses it
     pub(crate) fn apply_process_settings(&self) {
         self.process_settings().apply();
     }
@@ -179,6 +178,17 @@ pub(crate) fn load_with_engine_file(
         replay_source(&mut registry, &mut constants, &mut collected, source.text(), trusted).map_err(|problems| {
             LoadError::Replay { path: path.to_path_buf(), source: source.origin().to_string(), problems }
         })?;
+    }
+    // with no fallback from one table to another, a selected edition that no source defines would fail every use
+    // of the weights later, one element at a time: the file is refused now instead
+    if let Some(edition) = registry.selected_atomic_weight_table_missing() {
+        return Err(LoadError::Replay {
+            path: path.to_path_buf(),
+            source: "the sources together".to_string(),
+            problems: vec![format!(
+                "[Chemistry] atomic_weights selects the edition '{edition}' but no [AtomicWeights:{edition}] section of any source defines it"
+            )],
+        });
     }
     let ProcessSettings { settings, compatibility } = collected;
     Ok(FrozenCatalog { registry, constants, settings, compatibility, file, engine, stamp })
@@ -488,6 +498,17 @@ mod tests {
         crate::units::conf::replay_source(&mut registry, &mut constants, &mut collected, DEFAULT_PHYSURE_CONF, true).unwrap();
         assert_eq!(registry.constants_meta["molar_gas_constant"].value, "8.31446261815324 J*mol^-1*K^-1");
         assert!(!constants.contains_key("zz_sentinel"));
+    }
+
+    #[test]
+    fn a_selected_edition_that_no_source_defines_is_refused() {
+        let dir = Dir::new();
+        let e = load(&write_file(&dir, &standard("[Chemistry]\natomic_weights = acme-2026-03"))).unwrap_err();
+        let LoadError::Replay { problems, .. } = &e else { panic!("{e:?}") };
+        assert!(problems.iter().any(|p| p.contains("acme-2026-03")), "{problems:?}");
+        // defined by a later source than the one that selects it: fine; an alias of a shipped edition: fine
+        load(&write_file(&dir, &standard("[Chemistry]\natomic_weights = acme-2026-03\n[AtomicWeights:acme-2026-03]\nH = 1.0, 0"))).unwrap();
+        load(&write_file(&dir, &standard("[Chemistry]\natomic_weights = abridged"))).unwrap();
     }
 
     #[test]

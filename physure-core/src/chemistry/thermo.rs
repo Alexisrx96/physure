@@ -10,7 +10,7 @@
 
 use crate::error::{PhysureError, PhysureResult};
 use crate::quantity::Quantity;
-use crate::chemistry::with_catalog_in_scope;
+use crate::chemistry::try_with_catalog_in_scope;
 use crate::units::{RationalUnit, UnitRegistry};
 
 fn read_gas_constant(registry: &UnitRegistry) -> PhysureResult<Quantity> {
@@ -25,7 +25,7 @@ fn read_gas_constant(registry: &UnitRegistry) -> PhysureResult<Quantity> {
 
 /// The molar gas constant `R` of the catalog in scope, in J/(mol·K).
 pub fn gas_constant() -> PhysureResult<Quantity> {
-    with_catalog_in_scope(read_gas_constant)
+    try_with_catalog_in_scope(read_gas_constant)?
 }
 
 fn gas_or(r: Option<&Quantity>) -> PhysureResult<Quantity> {

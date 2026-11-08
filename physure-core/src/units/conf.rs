@@ -205,7 +205,6 @@ pub struct ProcessSettings {
 impl ProcessSettings {
     /// Applies every setting in order, then the compatibility rows if a section gave them. The rows were validated
     /// when they were collected. Only the activation of a frozen catalog calls it (Phase 1c, Task 5).
-    #[allow(dead_code)] // until the activation in `frozen::active` uses it
     pub(crate) fn apply(&self) {
         for setting in &self.settings {
             setting.apply();
@@ -1118,50 +1117,112 @@ fn embedded_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
     })
 }
 
+/// The `[Settings]` and `[Compatibility]` of the embedded catalog, applied again: what [`frozen::active::reset_cache`]
+/// does after a frozen configuration was in force, so its settings do not stay on the unfrozen catalog. The
+/// caller resets the settings to their compiled defaults first.
+///
+/// [`frozen::active::reset_cache`]: crate::frozen::active::reset_cache
+pub(crate) fn apply_embedded_settings() {
+    static EMBEDDED_SETTINGS: OnceLock<Option<ProcessSettings>> = OnceLock::new();
+    let collected = EMBEDDED_SETTINGS.get_or_init(|| {
+        let mut collected = ProcessSettings::default();
+        replay_source(&mut UnitRegistry::new(), &mut HashMap::new(), &mut collected, DEFAULT_PHYSURE_CONF, true)
+            .ok()
+            .map(|()| collected)
+    });
+    match collected {
+        Some(collected) => collected.apply(),
+        // the embedded catalog does not replay strictly: read it as the unfrozen catalog is read, applying as it goes
+        None => {
+            read_leniently(DEFAULT_PHYSURE_CONF, &mut UnitRegistry::new(), &mut HashMap::new(), true);
+        }
+    }
+}
+
+/// The message of the panic that the two infallible functions below keep as a backstop: programs call
+/// `frozen::ensure_valid()` at start-up, and the fallible `try_` variants return the error instead.
+fn refuse_to_run(e: &crate::frozen::active::ActiveError) -> ! {
+    panic!("physure: refusing to run: {e} (see `phs conf status`)")
+}
+
 /// The embedded catalog plus `extra`, the text of a system file or of a user conf, read strictly
 /// (`extend_registry`) after it, so that a later definition wins. The `physure.conf` of the working
 /// directory is not read: the caller decides what a system is made of. A line the parser cannot
 /// read is an error that lists every such line, and `[Settings]` is not applied.
+///
+/// When a frozen configuration is in force (`frozen::active`), the catalog is the frozen one, and a non-empty
+/// `extra` is refused: extra definitions belong in the overrides block of the frozen file. When the configuration
+/// in force cannot be used, the error says why; there is no fallback to the embedded catalog.
 pub fn build_registry_with(extra: &str) -> Result<(UnitRegistry, HashMap<String, String>), Vec<String>> {
-    let (mut reg, mut constants) = embedded_catalog().clone();
+    let (mut reg, mut constants) = match crate::frozen::active::active() {
+        Err(e) => return Err(vec![format!("physure: refusing to run: {e}")]),
+        Ok(Some(_)) if !extra.is_empty() => {
+            return Err(vec![
+                "a frozen configuration is in force: extra definitions belong in the overrides block of the frozen file (phs conf seal)"
+                    .to_string(),
+            ])
+        }
+        Ok(Some(active)) => (active.catalog.registry.clone(), active.catalog.constants.clone()),
+        Ok(None) => embedded_catalog().clone(),
+    };
     extend_registry(&mut reg, &mut constants, extra)?;
     Ok((reg, constants))
 }
 
-/// Builds a UnitRegistry and constants map from master `physure.conf` + CWD user override `physure.conf`.
+/// The catalog that unit text is read against when nothing says otherwise, as a registry of its own, or why the
+/// configuration in force cannot be used: the frozen catalog when a frozen configuration is in force (the working
+/// directory's `physure.conf` is then not read), otherwise the embedded catalog plus the `physure.conf` of the
+/// working directory.
+pub fn try_build_registry_from_conf() -> Result<(UnitRegistry, HashMap<String, String>), crate::frozen::active::ActiveError> {
+    match crate::frozen::active::active()? {
+        Some(active) => Ok((active.catalog.registry.clone(), active.catalog.constants.clone())),
+        None => Ok(unfrozen_registry_from_conf()),
+    }
+}
+
+/// [`try_build_registry_from_conf`] for callers that cannot return an error: it **panics** when the configuration
+/// in force cannot be used (a backstop; programs call `frozen::ensure_valid()` first).
+pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
+    try_build_registry_from_conf().unwrap_or_else(|e| refuse_to_run(&e))
+}
+
+/// The unfrozen catalog: the embedded one plus the `physure.conf` of the working directory, if any.
 ///
 /// The embedded catalog is parsed once per process and every call gets a copy: parsing it is most
 /// of the cost of turning a unit string into a unit, and it applied the `[Settings]` of the
 /// catalog again on every call, undoing any setting that had been changed since.
-pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
-    // 1. Load embedded default master physure.conf
+fn unfrozen_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
     let (mut reg, mut constants) = embedded_catalog().clone();
-
-    // 2. Load user override physure.conf in CWD if present
     let local_conf = Path::new("physure.conf");
     if local_conf.is_file() {
         if let Ok(content) = fs::read_to_string(local_conf) {
             parse_physure_conf(&content, &mut reg, &mut constants);
         }
     }
-
     (reg, constants)
 }
 
-/// Runs `f` against the catalog that unit text is read against when nothing says otherwise: the embedded
-/// catalog plus the `physure.conf` of the working directory, if there is one.
+/// Runs `f` against the catalog that unit text is read against when nothing says otherwise, or says why the
+/// configuration in force cannot be used. With a frozen configuration in force, `f` gets its catalog by
+/// reference; otherwise the embedded catalog plus the `physure.conf` of the working directory, if there is one.
 ///
-/// It is looked for on every call, so a file that appears, changes or goes away is seen. Without one,
-/// `f` gets the embedded catalog itself, by reference: no copy is made, which is what turning a unit
-/// string into a unit costs most when the catalog is copied first. With one, the merged registry is built
-/// as `build_registry_from_conf` builds it.
-pub fn with_conf_registry<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
-    if Path::new("physure.conf").is_file() {
-        let (registry, _) = build_registry_from_conf();
-        f(&registry)
-    } else {
-        f(&embedded_catalog().0)
+/// The working-directory conf is looked for on every call, so a file that appears, changes or goes away is seen.
+/// Without one, `f` gets the embedded catalog itself, by reference: no copy is made, which is what turning a unit
+/// string into a unit costs most when the catalog is copied first. With one, the merged registry is built as
+/// [`build_registry_from_conf`] builds it. `f` runs after the cache of the configuration in force is released, so
+/// it may read the catalog again.
+pub fn try_with_conf_registry<R>(f: impl FnOnce(&UnitRegistry) -> R) -> Result<R, crate::frozen::active::ActiveError> {
+    match crate::frozen::active::active()? {
+        Some(active) => Ok(f(&active.catalog.registry)),
+        None if Path::new("physure.conf").is_file() => Ok(f(&unfrozen_registry_from_conf().0)),
+        None => Ok(f(&embedded_catalog().0)),
     }
+}
+
+/// [`try_with_conf_registry`] for callers that cannot return an error: it **panics** when the configuration in
+/// force cannot be used (a backstop; programs call `frozen::ensure_valid()` first).
+pub fn with_conf_registry<R>(f: impl FnOnce(&UnitRegistry) -> R) -> R {
+    try_with_conf_registry(f).unwrap_or_else(|e| refuse_to_run(&e))
 }
 
 fn normalize_dimension_symbols(expr: &str, dim_to_base: &HashMap<String, String>) -> String {

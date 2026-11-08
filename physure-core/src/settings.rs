@@ -146,6 +146,19 @@ impl Drop for MaxPipelineStepsGuard {
     }
 }
 
+/// Puts every process-wide setting a conf can change back to the value compiled into the library: the three
+/// ceilings above, the propagation mode, the angle mode and the `[Compatibility]` grants. Activating a frozen
+/// configuration calls it before applying the file's settings, so a setting the file does not mention takes its
+/// compiled default and never a value some earlier reading left behind. Thread-local overrides are not touched.
+pub(crate) fn reset_to_defaults() {
+    set_parallel_threshold(DEFAULT_PARALLEL_THRESHOLD);
+    set_max_loop_iterations(DEFAULT_MAX_LOOP_ITERATIONS);
+    set_max_pipeline_steps(DEFAULT_MAX_PIPELINE_STEPS);
+    crate::uncertainty::set_propagation_mode(crate::uncertainty::PropagationMode::default());
+    crate::units::angle_mode::set_angle_mode(crate::units::angle_mode::AngleMode::default());
+    crate::units::angle_mode::set_marker_grants(true, true);
+}
+
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
