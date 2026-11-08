@@ -96,6 +96,9 @@ pub enum Problem {
     /// not have been recorded (`build`/`binary` without a known commit, `binary` without a hash).
     Engine { message: String },
     Seal { expected: String, found: String },
+    /// History entry `n` is earlier than the entry before it, or, for the first, than `created` (`previous`). The
+    /// history is chronological; equal times are allowed.
+    HistoryTime { n: u32, previous: String, found: String },
 }
 
 fn shown(hash: &str) -> &str {
@@ -177,6 +180,10 @@ impl fmt::Display for Problem {
             Problem::Seal { expected, found } => write!(
                 f,
                 "the seal does not match the format, creation time, content, engine, witnesses, scripts and history: expected {expected}, found {found}"
+            ),
+            Problem::HistoryTime { n, previous, found } => write!(
+                f,
+                "History.{n} is earlier than the entry before it (or than created, for the first): expected a time at or after {previous}, found {found}"
             ),
         }
     }
@@ -401,7 +408,13 @@ impl FrozenFile {
         }
         let mut previous = String::new();
         let mut previous_content = String::new();
+        // fixed-width RFC 3339 UTC times compare as text exactly as they compare as times
+        let mut previous_time = &self.created;
         for (position, entry) in self.history.iter().enumerate() {
+            if is_rfc3339_utc(previous_time) && is_rfc3339_utc(&entry.time) && entry.time < *previous_time {
+                problems.push(Problem::HistoryTime { n: entry.n, previous: previous_time.clone(), found: entry.time.clone() });
+            }
+            previous_time = &entry.time;
             if entry.n as usize != position + 1 {
                 problems.push(Problem::HistoryNumber { position: position + 1, found: entry.n });
             }
@@ -462,6 +475,42 @@ impl FrozenFile {
             problems.push(Problem::Seal { expected: self.seal_sha256.clone(), found: seal });
         }
         problems
+    }
+
+    /// Whether the file is exactly as it was last sealed except for the text of source 2, the overrides block, whose
+    /// canonical form changed: what `seal` may accept (Task 9, F19). A rule on the list of problems alone is not
+    /// enough (an edit of source 1 with its marker recomputed, or a source appended with a correct marker, give the
+    /// same problems as an edit of the overrides), so this proves it positively. True exactly when:
+    ///
+    /// * `verify` reports nothing but the stale marker of source 2, the content hash and the seal (so the history
+    ///   chain, the structure, every other marker and the engine block are intact);
+    /// * the seal recomputed over the **stored** content hash equals the stored seal (format, `created`, engine,
+    ///   witnesses, scripts, the stored content hash and the whole history are as sealed);
+    /// * the content hash recomputed from every source's text, except source 2 whose **stored marker** is used,
+    ///   equals the stored content hash (every other source, the count, order and origins of the sources, and the
+    ///   marker of source 2 are as sealed);
+    /// * the canonical text of source 2 no longer matches its marker.
+    pub fn only_the_overrides_changed(&self) -> bool {
+        let allowed = |p: &Problem| matches!(p, Problem::SourceHash { index: 2, .. } | Problem::ContentHash { .. } | Problem::Seal { .. });
+        if !self.verify().iter().all(allowed) {
+            return false;
+        }
+        let (Some(last), Some(overrides)) = (self.history.last(), self.sources.get(1)) else {
+            return false;
+        };
+        if seal_sha256(self, &self.content_sha256, &last.entry_sha256) != self.seal_sha256 {
+            return false;
+        }
+        let hashes: Vec<(String, String)> = self
+            .sources
+            .iter()
+            .enumerate()
+            .map(|(index, s)| (s.origin.clone(), if index == 1 { s.sha256.clone() } else { source_sha256(&s.text) }))
+            .collect();
+        if content_sha256(&hashes) != self.content_sha256 {
+            return false;
+        }
+        source_sha256(&overrides.text) != overrides.sha256
     }
 }
 
@@ -710,6 +759,7 @@ mod tests {
             Problem::HistoryPin { field: "policy".into(), expected: "build".into(), found: "record".into() },
             Problem::Engine { message: "[Engine] has no commit".into() },
             Problem::Seal { expected: "a".into(), found: "b".into() },
+            Problem::HistoryTime { n: 2, previous: "b".into(), found: "a".into() },
         ];
         for problem in all {
             let text = problem.to_string();
@@ -1260,6 +1310,120 @@ mod tests {
             assert!(file.render().unwrap_err().to_string().contains(key), "{key} = {value:?}");
             assert!(has(&file, |p| matches!(p, Problem::Framing { found } if found.contains(key))), "{key} = {value:?}");
         }
+    }
+
+    // ---- Phase 1c, Task 4: the history is chronological (residual risk 2 of spec §13) ----
+
+    #[test]
+    fn an_entry_earlier_than_the_previous_one_is_a_problem() {
+        let mut file = two_entries();
+        let (t1, t2) = (file.history[0].time.clone(), file.history[1].time.clone());
+        assert!(t1 < t2);
+        file.history[0].time = t2.clone();
+        file.history[1].time = t1.clone();
+        file.created = t2.clone();
+        // every hash, link and the seal recomputed: only the time rule can catch it
+        rechain(&mut file);
+        assert_eq!(file.verify(), vec![Problem::HistoryTime { n: 2, previous: t2, found: t1 }]);
+    }
+
+    #[test]
+    fn an_entry_earlier_than_created_is_a_problem() {
+        let mut file = fresh();
+        file.created = "2026-11-07T14:03:12Z".into();
+        rechain(&mut file);
+        let p = file.verify();
+        assert!(
+            p.contains(&Problem::HistoryTime { n: 1, previous: "2026-11-07T14:03:12Z".into(), found: "2026-11-07T14:03:11Z".into() }),
+            "{p:?}"
+        );
+    }
+
+    #[test]
+    fn equal_times_are_allowed_and_a_reseal_cannot_go_back_in_time() {
+        let mut file = fresh();
+        file.set_source_text(1, "kg = 5").unwrap();
+        file.reseal(input("seal", "same second", "2026-11-07T14:03:11Z")).unwrap();
+        assert!(problems(&file).is_empty(), "{:?}", problems(&file));
+        let mut file = fresh();
+        file.set_source_text(1, "kg = 5").unwrap();
+        let message = file.reseal(input("seal", "back", "2026-11-07T14:03:10Z")).unwrap_err().to_string();
+        assert!(message.contains("History.2") && message.contains("earlier"), "{message}");
+        assert_eq!(file.history.len(), 1);
+    }
+
+    // ---- Phase 1c, Task 9 F19: `seal` proves positively that only the overrides changed ----
+
+    fn overrides_edited() -> String {
+        fresh().render().unwrap().replace("# mine\n", "# mine\nzz = 1.0, L\n")
+    }
+
+    fn only_overrides(text: &str) -> bool {
+        FrozenFile::parse(text).unwrap().only_the_overrides_changed()
+    }
+
+    #[test]
+    fn an_edit_of_the_overrides_alone_is_recognised() {
+        assert!(only_overrides(&overrides_edited()));
+        // the environment is outside the seal
+        assert!(only_overrides(&overrides_edited().replace("os = windows", "os = linux")));
+        // and it is exactly what verify would complain about
+        let file = FrozenFile::parse(&overrides_edited()).unwrap();
+        assert!(file.verify().iter().all(|p| matches!(p, Problem::SourceHash { index: 2, .. } | Problem::ContentHash { .. } | Problem::Seal { .. })));
+    }
+
+    #[test]
+    fn a_clean_file_or_an_edit_of_comments_is_not_an_edit_of_the_overrides() {
+        let text = fresh().render().unwrap();
+        assert!(!only_overrides(&text));
+        let comments = text.replace("# mine\n", "# mine, reworded\n   \n; more\n");
+        assert!(FrozenFile::parse(&comments).unwrap().verify().is_empty());
+        assert!(!only_overrides(&comments));
+    }
+
+    #[test]
+    fn an_edit_of_anything_else_is_not_an_edit_of_the_overrides() {
+        let base = overrides_edited();
+        let original = fresh();
+        let s1 = original.sources[0].sha256.clone();
+        let s2 = original.sources[1].sha256.clone();
+        let new_s1 = source_sha256("[Units]\nm = 1\nkg = 3");
+        let new_s2 = source_sha256("# mine\nzz = 1.0, L");
+        let extra = format!("@@ source 3 origin=evil sha256={}\nkg = 9\n@@ end source 3\n", source_sha256("kg = 9"));
+        let at = base.find("@@ witness").unwrap();
+        let appended = format!("{}{extra}{}", &base[..at], &base[at..]);
+        let content = original.content_sha256.clone();
+        let cases: Vec<(&str, String)> = vec![
+            // the measured unsound cases of the review: [ContentHash, Seal] and [Seal] only
+            ("source 1 edited with its marker recomputed", base.replace("kg = 2", "kg = 3").replace(&s1, &new_s1)),
+            ("a third source appended with a correct marker", appended),
+            ("a [Witness] value", base.replace("3ff0000000000000", "3ff0000000000001")),
+            ("a witness script", base.replace("1 m => ft", "1 m => yd")),
+            ("a history field", base.replace("reason = initial freeze", "reason = something else")),
+            ("the engine block", base.replace("version = 0.3.1", "version = 0.3.2")),
+            ("the stored content hash", base.replace(&format!("content_sha256 = {content}"), &format!("content_sha256 = {}", "0".repeat(64)))),
+            ("the marker of the overrides", base.replace(&s2, &new_s2)),
+            ("created", base.replace("created = 2026-11-07T14:03:11Z", "created = 2026-11-07T14:03:12Z")),
+            ("source 1 edited without its marker", base.replace("kg = 2", "kg = 3")),
+        ];
+        for (what, text) in cases {
+            assert_ne!(text, base, "{what}: the edit did not apply");
+            assert!(!only_overrides(&text), "{what}");
+        }
+        // the witness block deleted together with its key
+        let cut = base.find("@@ witness").unwrap();
+        let deleted = base[..cut].replace("user.validation.1 = 1a2b\n", "");
+        assert!(!only_overrides(&deleted), "witness deleted");
+        // a history entry rewritten with every hash and the seal recomputed
+        let mut forged = FrozenFile::parse(&base).unwrap();
+        forged.history[0].reason = "rewritten".into();
+        rechain(&mut forged);
+        assert!(!forged.only_the_overrides_changed(), "history rechained");
+        // a resealed file whose overrides were then edited again: still recognised
+        let mut resealed = FrozenFile::parse(&base).unwrap();
+        resealed.reseal(input("seal", "accepted", "2026-11-08T09:00:00Z")).unwrap();
+        let again = resealed.render().unwrap().replace("zz = 1.0, L\n", "zz = 2.0, L\n");
+        assert!(only_overrides(&again));
     }
 
     #[test]
