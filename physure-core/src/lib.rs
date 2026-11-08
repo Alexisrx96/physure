@@ -1,6 +1,7 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 pub mod error;
+pub mod chemistry;
 pub mod units;
 pub mod uncertainty;
 pub mod quantity;
