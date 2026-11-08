@@ -1,0 +1,22 @@
+# equation, reversible, reactant coefficients, product coefficients (ERROR when refused); by scripts/gen_chemistry_golden.py
+H2 + O2 -> H2O	0	2,1	2
+C8H18 + O2 -> CO2 + H2O	0	2,25	16,18
+Fe2O3 + C -> Fe + CO2	0	2,3	4,3
+2 H2 + 5 O2 -> 9 H2O	0	2,1	2
+N2 + 3 H2 ⇌ 2 NH3	1	1,3	2
+N2 + H2 <=> NH3	1	1,3	2
+N2 + H2 = NH3	0	1,3	2
+N2 + H2 → NH3	0	1,3	2
+C₂H₆ + O₂ -> CO₂ + H₂O	0	2,7	4,6
+Al + HCl -> AlCl3 + H2	0	2,6	2,3
+KMnO4 + HCl -> KCl + MnCl2 + H2O + Cl2	0	2,16	2,2,8,5
+C6H12O6 + O2 -> CO2 + H2O	0	1,6	6,6
+Ca(OH)2 + H3PO4 -> Ca3(PO4)2 + H2O	0	3,2	1,6
+H2 + O2 -> H2O + H2O2	ERROR		
+H2 -> O2	ERROR		
+H2 + H2O -> O2	ERROR		
+H2 + O2	ERROR		
+H2 -> O2 -> H2O	ERROR		
+H2 + -> H2O	ERROR		
+H2 + Xx -> H2	ERROR		
+H2O) -> H2	ERROR		
