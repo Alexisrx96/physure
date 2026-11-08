@@ -1039,6 +1039,8 @@ enum Block {
 
 ### Task 5: Construction, verification and re-sealing
 
+> **Superseded in part by Task 8:** the seal text, the hash of witness scripts and the signature of `FrozenFile::new` below are the original ones and are unsound; implement the seal, `exact_sha256`, the structure rules and the API of Task 8 instead.
+
 **Files:** Create `physure-core/src/frozen/seal.rs`; `mod.rs` gets `pub mod seal;` and `pub use seal::{EntryInput, Problem};`.
 
 Definitions (spec §4.1, §5.3):

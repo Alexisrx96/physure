@@ -74,8 +74,17 @@ rayon_threads = 16
 builtin.conversion.m_to_ft = <bits>
 user.validation.1 = <sha256>
 
-[History]
-1 = <entry, §5.3>
+[History.1]
+time = 2026-11-07T14:03:11Z
+action = freeze
+engine = 0.3.1+9f2c1ab
+actor = irvin@host
+reason = initial freeze
+old_content_sha256 =
+new_content_sha256 = …
+diff = …
+prev_entry_sha256 =
+entry_sha256 = …
 
 @@ source 1 origin=embedded sha256=…
 …the embedded catalog text…
@@ -83,21 +92,38 @@ user.validation.1 = <sha256>
 @@ source 2 origin=overrides sha256=…
 # Your overrides: same grammar as physure.conf. After editing, run `phs conf seal`.
 @@ end source 2
-@@ witness user.validation.1 sha256=…
+@@ witness validation.1 sha256=…
 …script text…
 @@ end witness
 ```
 
 * `source 2` is **always** the overrides block and is the one meant to be edited by hand. When `freeze` finds an existing `physure.conf`, its text becomes the content of `source 2`; when there is none, the block is created empty with a comment stating the grammar. Further sources (system files) follow it and are added by the bindings that use them (Phase 5).
-* Line endings are normalised to LF on write; reading accepts CRLF.
+* **Structure rules** (refused by the constructor, reported by the verifier, refused by the parser where they are syntactic): source 1 has origin `embedded` and source 2 has origin `overrides`, both always present; origins are unique; witness script names are unique; `[Witness]` has a key `user.<name>` for every script `<name>` and no `user.*` key without a script; `created` equals the time of the first history entry; the first entry is a `freeze` with empty `old_content_sha256` and `prev_entry_sha256`, every later entry is an `update` or a `seal` whose `old_content_sha256` is the previous entry's `new_content_sha256`; every reason is 1 to 500 characters. A section opened twice, a key repeated in a section, a number that is not written canonically (digits only, no sign, no leading zero) and a line starting with `@@ ` inside a block that is not that block's end marker are parse errors that name the line.
+* Line endings are normalised to LF on write; reading accepts CRLF. A bare carriage return (one not followed by a line feed) is refused, in the file and in a source or script given to the library. Empty lines at the end of a block are not part of its text.
 * The header sections follow the strict grammar of the conf (no inline comments; a bad line is an error). `policy` is one of `binary`, `build`, `release`, `record` (§7); from Python `[Environment]` also has `python`, `numpy` and `torch`.
 
 ### 4.1 Canonical form and hashes
 
-* The **canonical text** of a source: lines trimmed at both ends, blank lines and lines starting with `#` or `;` dropped, joined with `\n`. Reformatting and comments do not change it; one digit does.
+* The **canonical text** of a source: lines trimmed at both ends, blank lines and lines starting with `#` or `;` dropped, joined with `\n`. Reformatting and comments do not change it; one digit does. This form is sound only because it is **defined by the core's reader** (`physure-core/src/units/conf.rs`, which trims every line and skips `#`/`;` lines in every section): two texts with the same canonical text are read identically by it. Sources are therefore replayed through the core reader only. Python's `configparser` reads an indented line as the continuation of the previous value, so two texts the seal treats as equal could mean different things to it: Phase 5 must not use it to replay a frozen source.
 * `source_sha256` = SHA-256 of the canonical text.
 * `content_sha256` = SHA-256 of, for each source in order, `origin\n` + `source_sha256\n`.
-* `seal_sha256` = SHA-256 of `"physure-frozen-v1\n"` + `content_sha256` + the canonical `[Engine]` block + the canonical `[Witness]` block + the hash of the last history entry. Any edit of data, engine, witnesses or history breaks the seal. `[Environment]` is informational and outside the seal.
+* **Witness scripts are hashed byte-exact**, never with the canonical form above (in PHS `;` ends a statement, indentation is significant and a string may span lines): `exact_sha256(text)` = SHA-256 of the script text after CRLF becomes LF and trailing newlines are removed, with no other change.
+* `engine_sha256` and `witnesses_sha256` = SHA-256 of the canonical text of the block: its `key=value` lines sorted and joined with `\n` (keys are unique names without `=`, values are one line).
+* `scripts_sha256` = SHA-256 of, for each witness script in file order, `<name>\n` + `exact_sha256(script)\n` (the empty string when there is none).
+* `seal_sha256` = SHA-256 of exactly this text, each line ending with `\n`:
+
+  ```
+  physure-frozen-seal-1
+  format:<format>
+  created:<created>
+  content:<content_sha256 recomputed from the source texts>
+  engine:<engine_sha256>
+  witnesses:<witnesses_sha256>
+  scripts:<scripts_sha256>
+  history:<entry_sha256 of the last history entry>
+  ```
+
+  Every part is a labelled fixed-length hash or a one-line scalar, so no pair, script or boundary can move from one part to another. The history is covered through its last entry: each entry's hash covers the previous entry's hash (§5.3). What is outside the seal is listed in §9.
 * SHA-256 is implemented in the core (about 80 lines) and checked against the NIST test vectors: the core keeps its policy of no new dependencies.
 
 ## 5. Behaviour
@@ -182,6 +208,7 @@ A witness is a reference calculation whose result is stored bit for bit and reco
 ## 9. Security model and limits (to be stated in the user documentation)
 
 * A hash detects that a file changed; it does **not** show who wrote it: whoever edits the file can recompute the seal. For authenticity, record the seal outside the file (`freeze` prints it; `verify --expect` compares). Cryptographic signing with a key is a possible later improvement and is out of scope.
+* **What is outside the seal**, exactly: the `[Environment]` block, and formatting that carries no data: comment and blank lines and the whitespace around keys and values in the header, the order of the keys in a header section and of the sections, empty lines between and at the end of blocks, line endings, and in a source whatever its canonical form drops (comment lines, blank lines, indentation and trailing whitespace, §4.1). Nothing else: the format, `created`, the content of every source and its origin and position, `[Engine]`, `[Witness]`, every witness script byte for byte with its name and position, and every history entry are sealed.
 * `actor` in the history is informational.
 * Environment differences are warnings, not errors: bit-for-bit reproducibility across machines is not promised, and the witnesses are how a difference is detected.
 * What is frozen is data; algorithms are identified, pinned and witnessed, not preserved. To reproduce a result years later, keep the binary named by `[Engine]`.
