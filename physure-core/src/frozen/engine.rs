@@ -1,0 +1,254 @@
+//! The identity of the running engine and the policies that pin it (spec §6, §7).
+//!
+//! An identity can be wrong in only one direction here: it can fail to prove that two builds are the same. It
+//! never claims they are when it cannot tell, so every doubt is a mismatch. **Trust boundary:** whoever controls
+//! the build environment (the variable `PHYSURE_BUILD_COMMIT`, `PATH`, `RUSTFLAGS`, the toolchain) controls every
+//! field; `build` guards against accidents, not against a malicious builder. Not visible to a build script and
+//! therefore not pinned: `overflow-checks`, `lto`, `codegen-units`, the versions of dependencies when `physure`
+//! is built inside someone else's workspace, and every dynamically linked library.
+
+use std::str::FromStr;
+
+use super::model::{FrozenError, FrozenResult};
+
+/// What an identity says when it cannot name a commit.
+pub const UNKNOWN: &str = "unknown";
+
+/// The named features of this crate and whether each is enabled. `default` is a bundle and is not listed. Keep in
+/// step with `[features]` of `Cargo.toml` (a test checks it).
+const FEATURES: [(&str, bool); 1] = [("html-viewer", cfg!(feature = "html-viewer"))];
+
+/// Which build of the engine this is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineIdentity {
+    pub version: String,
+    /// 40 or 64 lowercase hexadecimal characters, or `unknown`.
+    pub commit: String,
+    pub profile: String,
+    pub target: String,
+    /// Sorted, comma-separated named features, without `default`.
+    pub features: String,
+    /// The first line of `rustc -V` of the compiler that built it.
+    pub rustc: String,
+    /// `opt-level=…;debug-assertions=…;panic=…;rustflags=<sha256>;target-features=<sha256>`.
+    pub flags: String,
+}
+
+fn is_word(text: &str, extra: &[char]) -> bool {
+    !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+}
+
+fn one_line(what: &str, text: &str) -> FrozenResult<()> {
+    if text.is_empty() || text != text.trim() || text.contains('\n') || text.contains('\r') {
+        return Err(FrozenError(format!("the engine's {what} must be one non-empty line without padding: {text:?}")));
+    }
+    Ok(())
+}
+
+impl EngineIdentity {
+    /// The identity of the engine that is running. All values come from the build script, which always sets them.
+    pub fn current() -> EngineIdentity {
+        let features: Vec<&str> = FEATURES.iter().filter(|(_, on)| *on).map(|(name, _)| *name).collect();
+        EngineIdentity {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            commit: env!("PHYSURE_ENGINE_COMMIT").to_string(),
+            profile: env!("PHYSURE_ENGINE_PROFILE").to_string(),
+            target: env!("PHYSURE_ENGINE_TARGET").to_string(),
+            features: features.join(","),
+            rustc: env!("PHYSURE_ENGINE_RUSTC").to_string(),
+            flags: env!("PHYSURE_ENGINE_FLAGS").to_string(),
+        }
+    }
+
+    /// Refuses a value that could make two different builds look alike or that cannot be stored on one line.
+    pub fn validate(&self) -> FrozenResult<()> {
+        let bad = |what: &str, value: &str| -> FrozenResult<()> { Err(FrozenError(format!("invalid engine {what}: {value:?}"))) };
+        if !is_word(&self.version, &['.', '+', '-']) {
+            return bad("version", &self.version);
+        }
+        if self.commit != UNKNOWN && !(matches!(self.commit.len(), 40 | 64) && self.commit.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))) {
+            return bad("commit (40 or 64 lowercase hexadecimal characters, or unknown)", &self.commit);
+        }
+        if !self.profile.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-') || self.profile.is_empty() {
+            return bad("profile", &self.profile);
+        }
+        if !is_word(&self.target, &['_', '.', '-']) {
+            return bad("target", &self.target);
+        }
+        if !self.features.is_empty() {
+            let names: Vec<&str> = self.features.split(',').collect();
+            let well_formed = names.iter().all(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+            let sorted_unique = names.windows(2).all(|w| w[0] < w[1]);
+            if !well_formed || !sorted_unique {
+                return bad("features (sorted, unique, lowercase names)", &self.features);
+            }
+        }
+        one_line("rustc", &self.rustc)?;
+        one_line("flags", &self.flags)
+    }
+
+    /// `version+commit` (twelve characters of the commit, or `unknown`), the form the history records.
+    pub fn short(&self) -> String {
+        let commit = if self.commit == UNKNOWN { UNKNOWN } else { &self.commit[..12.min(self.commit.len())] };
+        format!("{}+{}", self.version, commit)
+    }
+}
+
+/// How strictly a frozen file pins the engine (spec §7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EnginePolicy {
+    /// The same executable file (SHA-256) — the only policy whose evidence is the artefact itself.
+    Binary,
+    /// The same version, commit, profile, target, features, compiler and build flags.
+    #[default]
+    Build,
+    /// The same version string. (Development builds between releases keep the last release's number, so this
+    /// accepts unreleased code.)
+    Release,
+    /// Nothing is enforced; the identity is only recorded.
+    Record,
+}
+
+impl EnginePolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EnginePolicy::Binary => "binary",
+            EnginePolicy::Build => "build",
+            EnginePolicy::Release => "release",
+            EnginePolicy::Record => "record",
+        }
+    }
+}
+
+impl FromStr for EnginePolicy {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        match text {
+            "binary" => Ok(EnginePolicy::Binary),
+            "build" => Ok(EnginePolicy::Build),
+            "release" => Ok(EnginePolicy::Release),
+            "record" => Ok(EnginePolicy::Record),
+            other => Err(format!("unknown engine policy {other:?}: use binary, build, release or record")),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "../../build_support/commit.rs"]
+mod commit_rules;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn identity(commit: &str) -> EngineIdentity {
+        EngineIdentity {
+            version: "0.3.1".into(),
+            commit: commit.into(),
+            profile: "release".into(),
+            target: "x86_64-pc-windows-msvc".into(),
+            features: "html-viewer".into(),
+            rustc: "rustc 1.97.1 (8bab26f4f 2026-07-14)".into(),
+            flags: "opt-level=3;debug-assertions=off;panic=unwind;rustflags=00;target-features=00".into(),
+        }
+    }
+
+    #[test]
+    fn the_unknown_constant_is_the_one_of_the_build_rule() {
+        assert_eq!(UNKNOWN, commit_rules::UNKNOWN);
+    }
+
+    #[test]
+    fn the_running_identity_is_valid_and_its_commit_is_head_when_the_tree_is_clean() {
+        let now = EngineIdentity::current();
+        now.validate().unwrap();
+        assert_eq!(now.version, env!("CARGO_PKG_VERSION"));
+        assert!(["debug", "release"].contains(&now.profile.as_str()), "{}", now.profile);
+        assert!(now.target.contains('-'), "a target triple: {}", now.target);
+        assert!(now.rustc.starts_with("rustc "), "{}", now.rustc);
+        assert!(now.flags.starts_with("opt-level="), "{}", now.flags);
+        // the commit must be what git says at test time, or `unknown` if the tree is dirty or git cannot say
+        let git = |args: &[&str]| {
+            std::process::Command::new("git").arg("-C").arg(env!("CARGO_MANIFEST_DIR")).args(args).output().ok()
+                .filter(|o| o.status.success()).and_then(|o| String::from_utf8(o.stdout).ok()).map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        let top = git(&["rev-parse", "--show-toplevel"]).and_then(|t| std::path::PathBuf::from(t).canonicalize().ok());
+        let parent = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(|p| p.canonicalize().ok());
+        if top.is_some() && top == parent && std::env::var_os("PHYSURE_BUILD_COMMIT").is_none() {
+            let dirty = git(&["status", "--porcelain", "--untracked-files=no", "--", ".", "../Cargo.toml", "../Cargo.lock"]).is_some();
+            let head = git(&["rev-parse", "HEAD"]).unwrap();
+            assert_eq!(now.commit, if dirty { UNKNOWN.to_string() } else { head }, "stale or false commit");
+        } else {
+            assert!(now.commit == UNKNOWN || commit_rules::is_commit(&now.commit), "{}", now.commit);
+        }
+    }
+
+    #[test]
+    fn features_are_the_named_ones_without_default_and_match_cargo_toml() {
+        let manifest = include_str!("../../Cargo.toml");
+        let section = manifest.split("\n[features]").nth(1).expect("[features]").split("\n[").next().unwrap();
+        let mut declared: Vec<&str> = section
+            .lines()
+            .filter_map(|l| l.split_once('=').map(|(k, _)| k.trim()))
+            .filter(|k| !k.is_empty() && !k.starts_with('#') && *k != "default")
+            .collect();
+        declared.sort_unstable();
+        let mut known: Vec<&str> = FEATURES.iter().map(|(name, _)| *name).collect();
+        known.sort_unstable();
+        assert_eq!(known, declared, "a feature was added to Cargo.toml: add it to FEATURES in engine.rs");
+        assert!(!EngineIdentity::current().features.split(',').any(|f| f == "default"));
+    }
+
+    #[test]
+    fn the_short_form_uses_twelve_characters_of_the_commit() {
+        assert_eq!(identity(HEAD).short(), "0.3.1+0123456789ab");
+        assert_eq!(identity(UNKNOWN).short(), "0.3.1+unknown");
+    }
+
+    #[test]
+    fn validation_refuses_what_could_make_two_builds_look_alike() {
+        identity(HEAD).validate().unwrap();
+        identity(UNKNOWN).validate().unwrap();
+        let bad_commits = ["", "Unknown", "UNKNOWN", " unknown", "main", "HEAD", "release", "0123456", "ABCDEF0123456789ABCDEF0123456789ABCDEF01"];
+        for commit in bad_commits {
+            assert!(identity(commit).validate().is_err(), "commit {commit:?}");
+        }
+        let edits: [(&str, fn(&mut EngineIdentity)); 12] = [
+            ("empty version", |i| i.version = String::new()),
+            ("version with space", |i| i.version = "0.3 1".into()),
+            ("profile upper case", |i| i.profile = "Release".into()),
+            ("empty target", |i| i.target = String::new()),
+            ("target with space", |i| i.target = "a b".into()),
+            ("features unsorted", |i| i.features = "b,a".into()),
+            ("features duplicated", |i| i.features = "a,a".into()),
+            ("features with empty name", |i| i.features = "a,,b".into()),
+            ("features upper case", |i| i.features = "Html".into()),
+            ("two lines in rustc", |i| i.rustc = "a\nb".into()),
+            ("padded flags", |i| i.flags = " x".into()),
+            ("empty rustc", |i| i.rustc = String::new()),
+        ];
+        for (what, edit) in edits {
+            let mut i = identity(HEAD);
+            edit(&mut i);
+            assert!(i.validate().is_err(), "{what}");
+        }
+        let mut empty_features = identity(HEAD);
+        empty_features.features = String::new();
+        empty_features.validate().unwrap();
+    }
+
+    #[test]
+    fn policies_round_trip_and_refuse_anything_else() {
+        for p in [EnginePolicy::Binary, EnginePolicy::Build, EnginePolicy::Release, EnginePolicy::Record] {
+            assert_eq!(p.as_str().parse::<EnginePolicy>().unwrap(), p);
+        }
+        for bad in ["", "Build", "exact", "build ", "none"] {
+            assert!(bad.parse::<EnginePolicy>().is_err(), "{bad:?}");
+        }
+        assert_eq!(EnginePolicy::default(), EnginePolicy::Build);
+    }
+}
