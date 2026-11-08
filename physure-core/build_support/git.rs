@@ -14,8 +14,11 @@ use super::commit_rules;
 /// `git status` is a clean tree, a failed one is a doubt.
 pub fn output(dir: &Path, args: &[&str], input: Option<&str>) -> Option<String> {
     let mut command = Command::new("git");
-    command.arg("-C").arg(dir).args(args).stdout(Stdio::piped()).stderr(Stdio::null());
+    // replace refs (`git replace`, or the namespace `GIT_REPLACE_REF_BASE` names) let `HEAD` name one commit while
+    // every other command reads another commit's tree: they are ignored, by the option and by the variable
+    command.arg("--no-replace-objects").arg("-C").arg(dir).args(args).stdout(Stdio::piped()).stderr(Stdio::null());
     command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() });
+    command.env("GIT_NO_REPLACE_OBJECTS", "1");
     // a hook, a wrapper or a CI step may point git somewhere else
     for name in commit_rules::GIT_ENV_CLEARED {
         command.env_remove(name);
@@ -57,8 +60,10 @@ pub fn facts(manifest: &Path) -> Facts {
     let Some(top) = root(manifest) else {
         return Facts { head: None, dirty: false, in_repository };
     };
-    let head = answer(manifest, &["rev-parse", "HEAD"]);
-    let dirty = head.is_some() && dirty(manifest, &top);
+    // `HEAD^{commit}`: a `HEAD` written by hand can hold a tag's id, which is not a commit. Peeled, it names the
+    // commit whose tree is compared below, which is exactly what the build can prove; the tag's id never is.
+    let head = answer(manifest, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+    let dirty = head.as_deref().is_some_and(|commit| dirty(manifest, &top, commit));
     Facts { head, dirty, in_repository }
 }
 
@@ -69,30 +74,46 @@ fn root(manifest: &Path) -> Option<PathBuf> {
     (top == manifest.parent()?.canonicalize().ok()?).then_some(top)
 }
 
-/// Whether the tracked files this build uses (the crate and the workspace manifests) may differ from `HEAD`:
-/// `git status`, the files whose changes it hides (`ls-files -v`), and a comparison of every byte with `HEAD`
-/// (`git status` trusts the size and modification time it cached). When git cannot say, the answer is dirty.
-fn dirty(manifest: &Path, top: &Path) -> bool {
-    let mut paths = vec![manifest.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned())];
-    for extra in ["Cargo.toml", "Cargo.lock"] {
-        if top.join(extra).exists() {
-            paths.push(extra.to_string());
-        }
-    }
-    let with = |command: &[&'static str]| -> Vec<String> {
-        command.iter().map(|word| word.to_string()).chain(paths.iter().cloned()).collect()
+/// The workspace manifests cargo reads next to the crate.
+const WORKSPACE_FILES: [&str; 2] = ["Cargo.toml", "Cargo.lock"];
+
+/// Whether the files this build uses (the crate and the workspace manifests) may differ from `commit`, the peeled
+/// `HEAD`: `git status`, the files whose changes it hides (`ls-files -v`), a workspace manifest that exists but is
+/// not in the commit, an attribute that lets git hash other bytes than the compiler reads (a filter), and a
+/// comparison of every byte with the commit (`git status` trusts the size and modification time it cached). When
+/// git cannot say, the answer is dirty.
+fn dirty(manifest: &Path, top: &Path, commit: &str) -> bool {
+    let crate_dir = manifest.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    // the manifests are named even when they do not exist: a tracked one that was deleted shows in `git status`
+    let paths: Vec<&str> = [crate_dir.as_str()].into_iter().chain(WORKSPACE_FILES).collect();
+    let run = |command: &[&str]| -> Option<String> {
+        let args: Vec<&str> = command.iter().copied().chain(paths.iter().copied()).collect();
+        output(top, &args, None)
     };
-    let run = |args: Vec<String>| output(top, &args.iter().map(String::as_str).collect::<Vec<_>>(), None);
-    let status = run(with(&["status", "--porcelain", "--untracked-files=no", "--"]));
-    let listing = run(with(&["ls-files", "-v", "--"]));
+    let status = run(&["status", "--porcelain", "--untracked-files=no", "--"]);
+    let listing = run(&["ls-files", "-v", "--"]);
     if commit_rules::is_dirty(status.as_deref(), listing.as_deref()) {
         return true;
     }
-    let Some(tree) = run(with(&["ls-tree", "-r", "-z", "HEAD", "--"])) else {
+    let Some(tree) = run(&["ls-tree", "-r", "-z", commit, "--"]) else {
         return true;
     };
-    let names: String = tree.split('\0').filter_map(|entry| entry.split_once('\t')).map(|(_, path)| format!("{path}\n")).collect();
-    match output(top, &["hash-object", "--stdin-paths"], Some(&names)) {
+    let Some(names) = commit_rules::tree_paths(&tree) else {
+        return true;
+    };
+    // cargo reads a workspace manifest that exists whether git tracks it or not
+    if WORKSPACE_FILES.iter().any(|file| top.join(file).exists() && !names.contains(file)) {
+        return true;
+    }
+    let listed: String = names.iter().map(|name| format!("{name}\0")).collect();
+    let mut check_attr = vec!["check-attr", "-z", "--stdin"];
+    check_attr.extend(commit_rules::CONTENT_ATTRIBUTES);
+    match output(top, &check_attr, Some(&listed)) {
+        Some(attributes) if !commit_rules::attributes_change_content(&attributes, names.len()) => {}
+        _ => return true,
+    }
+    let lines: String = names.iter().map(|name| format!("{name}\n")).collect();
+    match output(top, &["hash-object", "--stdin-paths"], Some(&lines)) {
         Some(hashes) => commit_rules::contents_differ(&tree, &hashes),
         None => true,
     }

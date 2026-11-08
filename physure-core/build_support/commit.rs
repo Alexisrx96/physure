@@ -18,10 +18,14 @@ pub fn hides_changes(ls_files_v: &str) -> bool {
     ls_files_v.lines().any(|line| line.chars().next().is_some_and(|tag| tag.is_ascii_lowercase() || tag == 'S'))
 }
 
-/// Environment variables that can point git at another repository, another index or another configuration, or
-/// stop it from finding the repository at all. The build script removes them from every git command it runs (a
-/// hook, a wrapper or a CI step may set them), and the test of the running identity does the same.
-pub const GIT_ENV_CLEARED: [&str; 13] = [
+/// Environment variables that can point git at another repository, another index, another configuration, other
+/// objects (replace refs) or other attributes, or stop it from finding the repository at all. The build script
+/// removes them from every git command it runs (a hook, a wrapper or a CI step may set them), and the test of the
+/// running identity does the same. `GIT_REPLACE_REF_BASE` names a namespace of replace refs: with it, `HEAD` can
+/// name one commit while every command reads another's tree. `GIT_ATTR_SOURCE` (git 2.40) reads `.gitattributes`
+/// from any tree, so a filter can apply that the working tree does not show; `GIT_ATTR_NOSYSTEM` drops the system
+/// attributes. Removing a variable an older git does not know is harmless.
+pub const GIT_ENV_CLEARED: [&str; 16] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",
@@ -35,7 +39,45 @@ pub const GIT_ENV_CLEARED: [&str; 13] = [
     "GIT_NAMESPACE",
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_ATTR_SOURCE",
+    "GIT_ATTR_NOSYSTEM",
 ];
+
+/// The paths of `git ls-tree -r -z` output, in order, to be written one per line to `git hash-object
+/// --stdin-paths`. `None` when a path would not reach git intact: that command splits on newlines, strips a
+/// trailing carriage return and C-unquotes a line that starts with `"`, so such a path could make git hash another
+/// file than the one listed. `None` is a doubt (dirty); so is an entry without a path.
+pub fn tree_paths(ls_tree_z: &str) -> Option<Vec<&str>> {
+    ls_tree_z
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.split_once('\t').map(|(_, path)| path))
+        .map(|path| path.filter(|p| !p.is_empty() && !p.contains(['\n', '\r']) && !p.starts_with('"')))
+        .collect()
+}
+
+/// The attributes that make the bytes git hashes differ from the bytes on disk in a way the compiler sees: a
+/// `filter` (clean/smudge, e.g. git-lfs), `ident` (`$Id$` expansion) and `working-tree-encoding`. `git status` and
+/// `git hash-object` apply them alike, so a filter can hide an edit from both (measured: a clean filter mapping
+/// `v = 9` back to `v = 2`). Only end-of-line conversion is left, which does not change what Rust compiles.
+pub const CONTENT_ATTRIBUTES: [&str; 3] = ["filter", "ident", "working-tree-encoding"];
+
+/// Whether the output of `git check-attr -z <CONTENT_ATTRIBUTES> --stdin` for `files` paths gives any of those
+/// attributes a value other than `unspecified` or `unset` (then the byte comparison cannot be trusted). An answer
+/// that does not hold exactly one `<path> NUL <attribute> NUL <value> NUL` record per file and attribute, in the
+/// order asked, is a doubt too.
+pub fn attributes_change_content(check_attr_z: &str, files: usize) -> bool {
+    let fields: Vec<&str> = check_attr_z.split('\0').collect();
+    // the output ends with a NUL, so splitting it leaves one empty field at the end
+    let Some((last, records)) = fields.split_last() else { return true };
+    if !last.is_empty() || records.len() != files * CONTENT_ATTRIBUTES.len() * 3 {
+        return true;
+    }
+    records.chunks(3).enumerate().any(|(i, record)| {
+        record[1] != CONTENT_ATTRIBUTES[i % CONTENT_ATTRIBUTES.len()] || !matches!(record[2], "unspecified" | "unset")
+    })
+}
 
 /// Whether the tracked files a build uses may differ from `HEAD`, from the output of `git status --porcelain`
 /// and of `git ls-files -v` over those files. `None` is a git command that **failed** (a corrupt index, a lock,
@@ -155,7 +197,8 @@ mod tests {
     fn the_git_variables_that_could_redirect_git_are_listed() {
         for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CEILING_DIRECTORIES", "GIT_CONFIG_PARAMETERS",
                      "GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM", "GIT_NAMESPACE",
-                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"] {
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE", "GIT_ATTR_SOURCE",
+                     "GIT_ATTR_NOSYSTEM"] {
             assert!(GIT_ENV_CLEARED.contains(&name), "{name}");
         }
     }
@@ -166,6 +209,8 @@ mod tests {
         const TWO: &str = "2222222222222222222222222222222222222222";
         let tree = format!("100644 blob {ONE}\tphysure-core/src/lib.rs\0100644 blob {TWO}\tCargo.toml\0");
         assert!(!contents_differ(&tree, &format!("{ONE}\n{TWO}\n")));
+        // the same object names in another order belong to other files
+        assert!(contents_differ(&tree, &format!("{TWO}\n{ONE}\n")));
         // one byte edited, size and modification time kept: the blob differs
         assert!(contents_differ(&tree, &format!("{ONE}\n{}\n", "3".repeat(40))));
         // a missing answer, a missing line or an extra line is a doubt
@@ -176,6 +221,47 @@ mod tests {
         assert!(contents_differ("", ""));
         assert!(contents_differ(&format!("160000 commit {ONE}\tvendor\0"), &format!("{ONE}\n")));
         assert!(contents_differ("garbage\0", &format!("{ONE}\n")));
+    }
+
+    #[test]
+    fn paths_that_cannot_cross_a_line_based_standard_input_intact_are_refused() {
+        const ONE: &str = "1111111111111111111111111111111111111111";
+        let tree = |paths: &[&str]| paths.iter().map(|p| format!("100644 blob {ONE}\t{p}\0")).collect::<String>();
+        assert_eq!(tree_paths(&tree(&["crate/src/lib.rs", "Cargo.toml"])), Some(vec!["crate/src/lib.rs", "Cargo.toml"]));
+        assert_eq!(tree_paths(&tree(&["a b/c d.rs"])), Some(vec!["a b/c d.rs"]));
+        assert_eq!(tree_paths(""), Some(vec![]));
+        // `git hash-object --stdin-paths` splits on newlines, strips a trailing CR and C-unquotes a leading quote
+        for bad in ["crate/src/a\nb.rs", "crate/src/a.rs\r", "crate/\rx", "\"crate/src/lib.rs\"", "\"q"] {
+            assert_eq!(tree_paths(&tree(&["Cargo.toml", bad])), None, "{bad:?}");
+        }
+        // an entry without a path is not a listing
+        assert_eq!(tree_paths(&format!("100644 blob {ONE}\0")), None);
+    }
+
+    #[test]
+    fn only_unset_or_unspecified_content_attributes_leave_the_bytes_comparable() {
+        let line = |path: &str, attr: &str, value: &str| format!("{path}\0{attr}\0{value}\0");
+        let all = |path: &str, values: [&str; 3]| -> String {
+            CONTENT_ATTRIBUTES.iter().zip(values).map(|(attr, value)| line(path, attr, value)).collect()
+        };
+        let clean = all("a.rs", ["unspecified", "unspecified", "unspecified"]) + &all("b.rs", ["unset", "unspecified", "unset"]);
+        assert!(!attributes_change_content(&clean, 2));
+        for value in ["set", "lfs", "lossy", "UTF-16", ""] {
+            for slot in 0..3 {
+                let mut values = ["unspecified"; 3];
+                values[slot] = value;
+                let text = all("a.rs", ["unspecified"; 3]) + &all("b.rs", values);
+                assert!(attributes_change_content(&text, 2), "{value:?} in slot {slot}");
+            }
+        }
+        // an answer that does not cover every file and attribute is no answer
+        assert!(attributes_change_content(&clean, 3));
+        assert!(attributes_change_content(&clean, 1));
+        assert!(attributes_change_content("", 1));
+        assert!(attributes_change_content("garbage", 0));
+        assert!(!attributes_change_content("", 0));
+        // an answer about another attribute is no answer
+        assert!(attributes_change_content(&line("a.rs", "text", "unset").repeat(3), 1));
     }
 
     #[test]
