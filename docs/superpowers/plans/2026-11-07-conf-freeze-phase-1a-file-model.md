@@ -1583,6 +1583,79 @@ fn the_seal_does_not_depend_on_the_environment_block_nor_on_comments() {
 
 ---
 
+### Task 8: Corrections from the independent review (soundness of the seal, API shape)
+
+An independent review of Tasks 1–7 (opus, 2026-11-08) found real flaws, **all originating in this plan and in the spec, not in the implementation**. Each finding was demonstrated with a concrete input in a throwaway crate. This task fixes them. The principle that decides every case below: *a change of a frozen configuration must not be able to go unnoticed, even by someone who holds the externally recorded seal*, and *the spec's sentence "any edit breaks the seal" must be literally true except for the two things it says are outside it (`[Environment]` and header comments)*.
+
+**What the review found, and the decision for each**
+
+| # | Finding (demonstrated) | Decision |
+|---|---|---|
+| C1 | Witness scripts are in no hash that reaches the seal: editing a script and its marker hash, or deleting or adding a `@@ witness` block, leaves `verify() == []` and the same seal. | Scripts are part of the seal (below). |
+| C2 | Scripts were hashed with the **conf** canonical form, which drops `;` lines and trims indentation; in PHS `;` ends a statement, indentation is significant and a string may span lines. Two different scripts hash equal. | Scripts are hashed **byte-exact** after LF normalisation (below), never with `canonical_text`. |
+| I1 | The seal joined `engine` and `witnesses` with no labels or lengths: engine `[a=1]` + witnesses `[b=2, c=3]` sealed identically to engine `[a=1, b=2]` + witnesses `[c=3]`. | Every part is hashed separately and labelled in the seal (below). |
+| I2 | `created` is covered by nothing. | `created` is in the seal, and `verify` requires `created == history[0].time`. |
+| I3 | A repeated `[Freeze]` key (or a section opened twice) is accepted and the last wins, so a human reading the file sees a different seal than the tool uses. | Parse refuses a repeated key and a section opened twice. |
+| I4 | Origins are free-form and may repeat; nothing enforces source 1 = `embedded` (the one the trusted reader will take) and source 2 = `overrides`. A second `embedded` seals and verifies. | Enforced structurally (below). |
+| I5 | The canonical form is only sound for the **core's conf reader** (`conf.rs` trims every line and skips `#`/`;` lines in every section). Python's `configparser` treats an indented line as a continuation. | Documented as a rule in the spec: sources are replayed through the core reader only. |
+| P2-I1 | All fields pub; `new` takes three `Vec<(String,String)>` in a row (swappable); `render`/`verify` do not re-check names or framing. | Private-to-the-crate fields with public getters, validated constructors, a `Pairs` newtype and a `FrozenParts` struct (below). |
+| P2-I2 | The witness-script test only catches a stale marker hash; nothing tests moving a pair, changing `created`, deleting a witness block. | The tests listed below, each of which must fail on the old code. |
+| M1–M8 | missing `verify` sanity checks; `+1`/`01` accepted as numbers; `@@ ` line accepted by `parse` inside a block; quadratic duplicate check; validator accepts `2026-02-31`; `rfc3339_from_unix` writes a 5-digit year past 9999; some parse errors carry no line number; a lone `\r` does not round-trip. | Fixed individually (below). |
+
+**The new seal (replaces §4.1's formula; spec updated in Step 8).** `seal_sha256` is the SHA-256 of exactly this text (each line ends with `\n`):
+
+```
+physure-frozen-seal-1
+format:<format>
+created:<created>
+content:<content_sha256 recomputed from the source texts>
+engine:<sha256 hex of canonical_pairs(engine)>
+witnesses:<sha256 hex of canonical_pairs(witnesses)>
+scripts:<sha256 hex of the scripts text>
+history:<entry_sha256 of the last history entry>
+```
+
+where the *scripts text* is, for each witness script **in file order**, `<name>\n<exact_sha256>\n` concatenated (empty when there are none), and `exact_sha256(text)` is the SHA-256 of the script text **after** CRLF→LF normalisation and removal of trailing newlines, with no other change (new function `canonical::exact_sha256`). Every part is a fixed-length hash or a labelled scalar, so no boundary can move. `WitnessScript::sha256` becomes `exact_sha256`; `Source::sha256` stays `source_sha256` (conf canonical form). Bare `\r` that survives CRLF normalisation in a source or script is **refused** (`normalise_text` errors: "a bare carriage return is not allowed").
+
+**Structure rules** (enforced by `FrozenFile::new` as errors, by `verify` as `Problem`s, and by `parse` as errors where they are syntactic):
+- source 1 has origin `embedded`, source 2 has origin `overrides`, origins are unique, and `overrides` is always present;
+- witness script names are unique, and `[Witness]` has a key `user.<name>` for every script and no `user.*` key without a script (new `Problem::WitnessKeys`);
+- `created == history[0].time`; `history[0].action == "freeze"`, `old_content_sha256` and `prev_entry_sha256` of the first entry are empty; every later entry has action `update` or `seal`, `old_content_sha256` equal to the previous entry's `new_content_sha256`, and `reason` of 1–500 characters; `reseal` refuses action `freeze`.
+
+**API shape.**
+- `FrozenFile`, `Source`, `WitnessScript`, `HistoryEntry` fields become `pub(crate)`; add public getters (`format()`, `created()`, `content_sha256()`, `seal_sha256()`, `engine()`, `environment()`, `witnesses()`, `history()`, `sources()`, `witness_scripts()`; `origin()`, `text()`, `sha256()` on sources and scripts). Unit tests inside the crate keep using the fields to build tampered files; the integration test and every external caller use the public API and text.
+- `pub struct Pairs(Vec<(String, String)>)`: `Pairs::new(&[(&str, &str)])` and `Pairs::from_vec(Vec<(String,String)>)` validate that keys are names, are unique, and values are one line and trimmed; `iter()`, `get(key) -> Option<&str>`, `len()`, `is_empty()`, `as_slice()`. `engine`, `environment` and `witnesses` are `Pairs`.
+- `pub struct FrozenParts { pub engine: Pairs, pub environment: Pairs, pub witnesses: Pairs, pub sources: Vec<Source>, pub witness_scripts: Vec<WitnessScript> }` and `FrozenFile::new(created: &str, parts: FrozenParts, first: EntryInput<'_>) -> FrozenResult<FrozenFile>` (so three pair lists can no longer be swapped by position).
+- Validated mutators, none of which reseals (the file is unsealed until `reseal`): `set_source_text(index, &str)`, `set_engine(Pairs)`, `set_environment(Pairs)`, `set_witnesses(Pairs)`, `set_witness_scripts(Vec<WitnessScript>)`.
+- `render()` and `verify()` re-check names and framing, so a hand-built file cannot render to something `parse` rejects.
+
+**Minor fixes.** Numbers in `[History.N]`, `format` and `@@ source N` are canonical (digits only, no `+`, no leading zero except `0` itself); a line starting with `@@ ` inside a block that is not exactly that block's end marker is a parse error; duplicate-key detection uses a `HashSet`; every parse error names its line (including duplicate keys and `read_entry` errors); `is_rfc3339_utc` checks the real number of days of the month (leap years) and requires year ≥ 1970 and seconds ≤ 59 (leap second 60 is not accepted); `rfc3339_from_unix` returns `Option<String>`, `None` past `9999-12-31T23:59:59Z`.
+
+**Tests that must be added (each must FAIL against the Task 1–7 code; show the failing assertion before the fix).**
+1. `moving_a_pair_between_engine_and_witnesses_changes_the_seal`: engine `[a=1]` / witnesses `[b=2, c=3]` versus engine `[a=1, b=2]` / witnesses `[c=3]` (witness keys `user.*` excluded from this test, use plain keys) give different seals.
+2. `editing_a_witness_script_and_its_marker_hash_is_detected`: edit the script text in the rendered file **and** recompute the marker's `sha256=` (use `canonical::exact_sha256`) → `verify()` non-empty (seal).
+3. `deleting_or_adding_a_witness_block_is_detected`.
+4. `witness_scripts_are_hashed_byte_exact`: `"x = 1 m\n; y = 2 m"` and `"x = 1 m\n; y = 3 m"` hash differently; an indented body and the same body dedented hash differently; the same text with CRLF and LF hashes equally.
+5. `created_is_sealed_and_must_equal_the_first_entry_time`.
+6. `a_repeated_freeze_key_or_section_is_refused_by_the_parser` (also a repeated `[Engine]` section).
+7. `origins_are_enforced`: a second `embedded`; source 1 not `embedded`; source 2 not `overrides`; a repeated origin; a repeated witness name → `FrozenFile::new` errors, and the same file reached by parsing text gives a `verify` problem.
+8. `witness_keys_and_scripts_must_agree` (`user.<name>` ⇄ script, both directions).
+9. `the_history_must_be_continuous_and_start_with_a_freeze` (hand-built entries: wrong first action, broken old/new continuity, bad later action, reason of 0 or 501 characters).
+10. `non_canonical_numbers_are_refused` (`[History.+1]`, `@@ source +1`, `format = +01`, `[History.01]`).
+11. `a_line_starting_with_the_marker_inside_a_block_is_refused_by_the_parser`.
+12. `a_bare_carriage_return_is_refused`.
+13. Time: `2026-02-31T00:00:00Z`, `2026-04-31T00:00:00Z`, `0000-01-01T00:00:00Z`, `2026-06-30T23:59:60Z` rejected; `2024-02-29T00:00:00Z` accepted; `rfc3339_from_unix(253_402_300_799)` is `Some("9999-12-31T23:59:59Z")` and `253_402_300_800` is `None`; `what_it_writes_it_accepts` still holds for every `Some`.
+14. API: `FrozenParts` construction cannot swap; `Pairs::new` refuses a duplicate key, a multi-line value, a padded value, a bad key.
+15. Update `editing_a_witness_script_is_detected` and `the_header_is_strict` to the new rules; keep every existing tamper test green (they exercise the fields directly).
+
+**Spec and documentation corrections (Step 8).**
+- `docs/superpowers/specs/2026-11-07-conf-freeze-design.md`: §4's example shows `[History.1]` sections with their labelled fields (not `[History]\n1 = <entry>`); §4.1 gets the new seal text above and states that witness scripts are hashed byte-exact while sources use the conf canonical form, **defined by the core's reader in `conf.rs`** (trims every line, skips `#`/`;` lines in every section), so sources must be replayed through the core reader only (Python's `configparser` reads an indented line as a continuation: Phase 5 must not use it to replay a frozen source); §4 states the structure rules (source 1 `embedded`, source 2 `overrides`, unique origins and witness names, `user.<name>` ⇄ script); §9 lists exactly what is outside the seal: `[Environment]`, header comments and blank lines; nothing else.
+- CHANGELOG entry (keep its CRLF): describe the seal and the checks as they are now, say which two things are outside the seal, do not say "round-trip exactly" unless it is true (it is, once a bare `\r` is refused), and name the witness scripts as covered.
+- `ROADMAP.md` and `docs/ROADMAP.md`: keep "Phase 1a done"; it is now true. Change nothing else.
+- This plan: Task 5's description of the seal text is superseded by Task 8; add one line at the top of Task 5 saying so, so nobody implements the old formula.
+
+**Step 9: gates and commit.** `cargo test -p physure --no-fail-fast` all green; clippy shows nothing from `src/frozen/` or `tests/frozen_file.rs`; `cargo llvm-cov -p physure --summary-only` every `frozen/*.rs` ≥ 90 %; `mkdocs build --strict` passes (output outside the repo, delete `.cache/`). Two commits: `fix(core): the frozen-file seal covers witness scripts, created and every block unambiguously; scripts hashed byte-exact` (code and tests) and `docs: the seal as it really is, the structure rules, and what is outside the seal` (spec, changelog, plan note).
+
 ## Self-review
 
 - **Spec coverage (§4, §4.1, §5.3, §10):** the file format and framing (Task 4), canonical form and the three hashes (Task 2), the seal over data, engine, witnesses and last entry (Task 5), the history chain with tamper detection by deletion, reordering and editing (Task 5 tests), SHA-256 against the NIST vectors (Task 1), comments and whitespace not changing the hash while one digit does (Tasks 2 and 6), canonical-independent environment block (Task 6). Not here by design: engine identity, resolution, sealed loading, entry listing, the `freeze`/`update` operations over the real catalog (1b/1c).
