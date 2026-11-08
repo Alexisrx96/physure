@@ -98,6 +98,8 @@ pub struct UnitRegistry {
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
+    /// Standard atomic weights from `[AtomicWeights]`: symbol to `(weight in g/mol, standard uncertainty)`.
+    pub atomic_weights: HashMap<String, (f64, f64)>,
 }
 
 impl UnitRegistry {
@@ -118,6 +120,7 @@ impl UnitRegistry {
             unit_meta: HashMap::new(),
             categories: HashMap::new(),
             constants_meta: HashMap::new(),
+            atomic_weights: HashMap::new(),
         }
     }
 

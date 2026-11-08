@@ -83,6 +83,7 @@ fn parse_conf(
                 declare_base_unit(line, registry, &mut dim_to_base);
             }
             "Constants" => read_constant(line, registry, constants),
+            "AtomicWeights" => read_atomic_weight(line, registry, problems),
             "Categories" => read_category(line, registry),
             "Compatibility" => {
                 read_compatibility_line(line, &mut periodic_names, &mut saw_periodic, &mut compatibility_rows)
@@ -231,6 +232,33 @@ fn read_constant(line: &str, registry: &mut UnitRegistry, constants: &mut HashMa
         description: desc,
         latex_symbol: latex,
     });
+}
+
+/// One line of `[AtomicWeights]`: `symbol = weight, standard uncertainty`, both in g/mol. A weight is
+/// positive and finite and an uncertainty is finite and not negative; anything else is a problem, because
+/// a molar mass built from it would be a confident wrong answer.
+fn read_atomic_weight(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
+    let parsed = (|| {
+        let (symbol, rest) = line.split_once('=')?;
+        let (weight, std) = rest.split_once(',')?;
+        let symbol = symbol.trim();
+        let mut chars = symbol.chars();
+        let is_symbol = chars.next().is_some_and(|c| c.is_ascii_uppercase())
+            && symbol.len() <= 3
+            && chars.all(|c| c.is_ascii_lowercase());
+        let weight: f64 = weight.trim().parse().ok()?;
+        let std: f64 = std.trim().parse().ok()?;
+        (is_symbol && weight.is_finite() && weight > 0.0 && std.is_finite() && std >= 0.0)
+            .then(|| (symbol.to_string(), (weight, std)))
+    })();
+    match parsed {
+        Some((symbol, value)) => {
+            registry.atomic_weights.insert(symbol, value);
+        }
+        None => problems.push(format!(
+            "{line}: expected `symbol = weight, standard uncertainty` with a positive weight and a non-negative uncertainty"
+        )),
+    }
 }
 
 /// One line of `[Categories]`: `name = [unit, unit, ...]`.
