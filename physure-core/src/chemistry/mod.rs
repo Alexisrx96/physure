@@ -16,3 +16,7 @@ pub use species::{mass_to_moles, moles_to_mass, Species};
 pub mod reaction;
 
 pub use reaction::Reaction;
+
+pub mod thermo;
+
+pub use thermo::{arrhenius, clausius_clapeyron, gas_constant, gibbs_free_energy};
