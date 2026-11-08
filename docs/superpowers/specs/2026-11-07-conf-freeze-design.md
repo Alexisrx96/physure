@@ -246,3 +246,9 @@ Cryptographic signing; `diff --impact "H2O,CO2"` (numeric effect of a change on 
 * `[Settings]` are process-wide in the core: a frozen file applies them at first use, like the working-directory conf does today.
 * A binary hash for a Python wheel means the extension module file; its definition is settled in Phase 5.
 * The size of Phase 4 is unknown until its audit finds how many code-resident numbers exist; it must not block Phases 1–3.
+* **Residual risks left by the independent review of Phase 1a** (each one has an owner phase; none is open silently):
+  1. The soundness of the source hash depends on `physure-core/src/units/conf.rs` staying line-oriented (trim every line, skip `#`/`;` lines, no continuation lines). Nothing ties the two together today. **Phase 1c adds a test** that source texts with the same canonical form build the same registry, and any change to the conf grammar must update the canonical form in the same commit.
+  2. History times are not checked to be non-decreasing, nor at or after `created`. **Phase 1c** adds the check to `verify`.
+  3. The value of a `user.<name>` witness key is not tied to anything until witnesses are evaluated (**Phase 3**).
+  4. `[Environment]` and header comments are outside the seal and must never drive behaviour in any later phase (a rule for reviewers of Phases 1b–5).
+  5. `FrozenFile::verify` takes no expected seal: whoever does not hold the externally recorded seal can rewrite the whole file consistently. The comparison with the recorded seal is `phs conf verify --expect` (**Phase 2**), and it is what makes the guarantee meaningful.
