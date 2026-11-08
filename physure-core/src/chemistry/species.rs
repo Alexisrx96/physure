@@ -45,6 +45,17 @@ impl Species {
     }
 }
 
+/// A mass as an amount of substance. The molar mass is measured too, and its uncertainty is in
+/// the result. A quantity that is not a mass is a unit mismatch.
+pub fn mass_to_moles(mass: &Quantity, species: &Species) -> PhysureResult<Quantity> {
+    mass.to("g")?.div(&species.molar_mass()?)?.to("mol")
+}
+
+/// An amount of substance as a mass in grams, with the uncertainty of the molar mass in it.
+pub fn moles_to_mass(moles: &Quantity, species: &Species) -> PhysureResult<Quantity> {
+    moles.to("mol")?.mul(&species.molar_mass()?)?.to("g")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +98,47 @@ mod tests {
     #[test]
     fn a_bad_formula_is_an_error() {
         assert!(Species::new("H2O)").is_err());
+    }
+
+    #[test]
+    fn fifty_grams_of_co2_with_both_uncertainties() {
+        let co2 = Species::new("CO2").unwrap();
+        let mass = Quantity::with_uncertainty(50.0, 0.1, "g").unwrap();
+        let n = mass_to_moles(&mass, &co2).unwrap();
+        let m_co2 = 12.011 + 2.0 * 15.999;
+        let u_m = (0.001_f64.powi(2) + 0.002_f64.powi(2)).sqrt();
+        let expected = 50.0 / m_co2;
+        let rel = ((0.1_f64 / 50.0).powi(2) + (u_m / m_co2).powi(2)).sqrt();
+        assert!(close(n.value.mean(), expected));
+        assert!(close(n.value.std_dev(), expected * rel));
+        assert!(close(n.to("mol").unwrap().value.mean(), expected));
+    }
+
+    #[test]
+    fn other_mass_units_are_converted() {
+        let co2 = Species::new("CO2").unwrap();
+        let kilo = Quantity::new(0.05, "kg").unwrap();
+        let n = mass_to_moles(&kilo, &co2).unwrap();
+        assert!(close(n.value.mean(), 50.0 / (12.011 + 2.0 * 15.999)));
+    }
+
+    #[test]
+    fn a_quantity_that_is_not_a_mass_is_refused() {
+        let co2 = Species::new("CO2").unwrap();
+        assert!(mass_to_moles(&Quantity::new(1.0, "s").unwrap(), &co2).is_err());
+        assert!(moles_to_mass(&Quantity::new(1.0, "g").unwrap(), &co2).is_err());
+    }
+
+    #[test]
+    fn moles_and_back() {
+        let water = Species::new("H2O").unwrap();
+        let n = Quantity::with_uncertainty(2.0, 0.01, "mol").unwrap();
+        let mass = moles_to_mass(&n, &water).unwrap();
+        let m = 2.0 * 1.008 + 15.999;
+        assert!(close(mass.value.mean(), 2.0 * m));
+        assert!(close(mass.to("kg").unwrap().value.mean(), 2.0 * m / 1000.0));
+        let (_, u_m) = water.molar_mass_parts();
+        let rel = ((0.01_f64 / 2.0).powi(2) + (u_m / m).powi(2)).sqrt();
+        assert!(close(mass.value.std_dev(), 2.0 * m * rel));
     }
 }
