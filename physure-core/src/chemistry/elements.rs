@@ -1,4 +1,8 @@
-//! Standard atomic weights, IUPAC 2021: symbol, weight in g/mol, absolute uncertainty.
+//! Standard atomic weights: symbol, weight in g/mol, absolute uncertainty.
+//!
+//! The values are the IUPAC 2013 standard atomic weights (Meija et al. 2016), as the Python
+//! package they were ported from has them, not the 2021 table (aluminium is 26.9815385 here,
+//! 26.9815384 in 2021). Updating to 2021 is a deliberate follow-up that would change results.
 //!
 //! An element with no stable isotope has the mass of its longest-lived known isotope and an
 //! uncertainty of 0.0. The table was generated from `ATOMIC_WEIGHTS` in
