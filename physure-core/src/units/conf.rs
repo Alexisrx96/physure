@@ -108,7 +108,6 @@ pub fn extend_registry(
 /// **Nothing process-wide is changed**: the `[Settings]` and `[Compatibility]` of the text are parsed, validated and
 /// added to `collected`, for whoever activates the catalog to apply ([`ProcessSettings::apply`]). On a problem,
 /// `registry`, `constants` and `collected` are left exactly as they were and every problem is returned.
-#[allow(dead_code)] // until `frozen::load` uses it (Task 3)
 pub(crate) fn replay_source(
     registry: &mut UnitRegistry,
     constants: &mut HashMap<String, String>,

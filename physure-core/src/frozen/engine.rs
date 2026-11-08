@@ -362,11 +362,15 @@ pub fn environment_pairs() -> Pairs {
 /// library the library. The core deliberately has no "hash my own executable" convenience, because in a binding
 /// that would pin the interpreter and let a swapped module pass.
 pub fn sha256_of_file(path: &Path) -> std::io::Result<String> {
-    let mut file = File::open(path)?;
+    sha256_of_reader(File::open(path)?)
+}
+
+/// The SHA-256 of everything `reader` yields, read in blocks.
+pub(crate) fn sha256_of_reader(mut reader: impl Read) -> std::io::Result<String> {
     let mut hasher = Sha256::new();
     let mut block = [0u8; 65_536];
     loop {
-        let read = file.read(&mut block)?;
+        let read = reader.read(&mut block)?;
         if read == 0 {
             break;
         }

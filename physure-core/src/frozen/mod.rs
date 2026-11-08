@@ -18,3 +18,5 @@ pub use engine::{
     EngineMismatch, EnginePolicy,
 };
 pub mod active;
+pub mod load;
+pub use load::{load_file, FileStamp, FrozenCatalog, LoadError, LoadOptions, MAX_FILE_BYTES};
