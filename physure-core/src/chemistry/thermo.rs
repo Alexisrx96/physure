@@ -195,4 +195,76 @@ mod tests {
         // quadrature sum of the core reports 0; what matters is that it is not NaN)
         assert!(k.value.std_dev().is_finite());
     }
+
+    #[test]
+    fn arrhenius_keeps_the_uncertainty_of_the_temperature() {
+        let a = Quantity::new(1e13, "s^-1").unwrap();
+        let ea = Quantity::new(75.0, "kJ/mol").unwrap();
+        let t = Quantity::with_uncertainty(298.15, 0.5, "K").unwrap();
+        let k = arrhenius(&a, &ea, &t, None).unwrap();
+        // dk/k = Ea / (R T^2) * dT
+        let rel = 75_000.0 / (R * 298.15 * 298.15) * 0.5;
+        assert!(close(k.value.std_dev() / k.value.mean(), rel));
+    }
+
+    #[test]
+    fn arrhenius_keeps_the_uncertainty_of_a_given_gas_constant() {
+        let a = Quantity::new(1e13, "s^-1").unwrap();
+        let ea = Quantity::new(75.0, "kJ/mol").unwrap();
+        let t = Quantity::new(298.15, "K").unwrap();
+        let r = Quantity::with_uncertainty(8.3, 0.01, "J/(mol*K)").unwrap();
+        let k = arrhenius(&a, &ea, &t, Some(&r)).unwrap();
+        // dk/k = (Ea / (R T)) * dR / R
+        let rel = 75_000.0 / (8.3 * 298.15) * 0.01 / 8.3;
+        assert!(close(k.value.std_dev() / k.value.mean(), rel));
+    }
+
+    #[test]
+    fn arrhenius_takes_an_absolute_temperature_in_celsius() {
+        let a = Quantity::new(1e13, "s^-1").unwrap();
+        let ea = Quantity::new(75.0, "kJ/mol").unwrap();
+        let kelvin = arrhenius(&a, &ea, &Quantity::new(298.15, "K").unwrap(), None).unwrap();
+        let celsius = arrhenius(&a, &ea, &Quantity::new(25.0, "degC").unwrap(), None).unwrap();
+        assert!(close(celsius.to("s^-1").unwrap().value.mean(), kelvin.to("s^-1").unwrap().value.mean()));
+    }
+
+    #[test]
+    fn clausius_clapeyron_keeps_the_uncertainty_of_the_enthalpy() {
+        let dh = Quantity::with_uncertainty(40.7, 0.4, "kJ/mol").unwrap();
+        let t1 = Quantity::new(373.15, "K").unwrap();
+        let t2 = Quantity::new(363.15, "K").unwrap();
+        let p1 = Quantity::new(101.325, "kPa").unwrap();
+        let p2 = clausius_clapeyron(&dh, &t1, &p1, &t2, None).unwrap();
+        // dP/P = (dH / R) (1/T1 - 1/T2) * (u_dH / dH)
+        let rel = (40_700.0 / R) * (1.0 / 373.15 - 1.0 / 363.15) * (0.4 / 40.7);
+        assert!(p2.value.std_dev() > 0.0);
+        let got = p2.value.std_dev() / p2.value.mean();
+        assert!((got - rel.abs()).abs() <= 1e-6 * rel.abs(), "{got} vs {rel}");
+    }
+
+    #[test]
+    fn the_gas_constant_is_read_from_the_catalog_in_scope() {
+        let (mut registry, _) = crate::units::conf::build_registry_from_conf();
+        registry.constants_meta.get_mut("molar_gas_constant").unwrap().value = "8.0 J/(mol*K)".into();
+        let scoped = crate::units::with_catalog(&registry, || gas_constant().unwrap());
+        assert!(close(scoped.value.mean(), 8.0));
+        assert!(close(gas_constant().unwrap().value.mean(), R));
+    }
+
+    fn constant(value: &str) -> UnitRegistry {
+        let mut registry = UnitRegistry::new();
+        registry.constants_meta.insert(
+            "molar_gas_constant".into(),
+            crate::units::registry::ConstantMetadata { value: value.into(), description: None, latex_symbol: None },
+        );
+        registry
+    }
+
+    #[test]
+    fn a_catalog_without_a_usable_gas_constant_is_an_error() {
+        let message = |registry: &UnitRegistry| read_gas_constant(registry).unwrap_err().to_string();
+        assert!(message(&UnitRegistry::new()).contains("no molar_gas_constant"));
+        assert!(read_gas_constant(&constant("8.314")).is_err(), "a value with no unit");
+        assert!(message(&constant("eight J/(mol*K)")).contains("not a number"));
+    }
 }

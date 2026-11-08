@@ -314,4 +314,12 @@ mod tests {
         assert_eq!(lcm_checked(4, 6).unwrap(), 12);
         assert_eq!(gcd(12, 18), 6);
     }
+
+    #[test]
+    fn rref_reports_an_overflow_instead_of_wrapping() {
+        let big = Rational64::from_integer(i64::MAX);
+        let one = Rational64::from_integer(1);
+        let err = rref(vec![vec![big, one], vec![one, big]]).unwrap_err();
+        assert!(err.to_string().contains("64-bit"), "{err}");
+    }
 }
