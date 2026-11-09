@@ -10,10 +10,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::load::FrozenCatalog;
-use crate::units::conf::{replay_source, ProcessSettings, DEFAULT_PHYSURE_CONF};
+use crate::units::conf::{replay_source, EffectiveSettings, ProcessSettings, DEFAULT_PHYSURE_CONF};
+use crate::units::registry::{ConstantMetadata, UnitMetadata};
 use crate::units::UnitRegistry;
 
-/// One thing a catalog says: a `kind` (`unit_facts`, `constant`, `setting`, ...), the `name` it is about and its
+/// One thing a catalog says (to be compared between catalogs built by **the same engine**: a unit's value includes
+/// its `id`, a hash that Rust does not promise to keep across releases, so entries are not a file format): a `kind` (`unit_facts`, `constant`, `setting`, ...), the `name` it is about and its
 /// `value`, exact (floating-point numbers as Rust prints them, which round-trips).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Entry {
@@ -121,18 +123,19 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         push(&mut out, "no_prefix", name, "");
     }
     for (name, meta) in unit_meta {
-        push(&mut out, "unit_meta", name, format!("{:?} {:?} {:?}", meta.category, meta.latex_symbol, meta.description));
+        let UnitMetadata { category, latex_symbol, description } = meta;
+        push(&mut out, "unit_meta", name, format!("{category:?} {latex_symbol:?} {description:?}"));
     }
     for (category, members) in categories {
-        let mut members = members.clone();
-        members.sort();
+        // in the order the catalog lists them: `get_category_units` hands it out as it is
         push(&mut out, "category", category, format!("{members:?}"));
     }
     for (name, value) in constants {
         push(&mut out, "constant", name, value);
     }
     for (name, meta) in constants_meta {
-        push(&mut out, "constant_meta", name, format!("{} {:?} {:?}", meta.value, meta.description, meta.latex_symbol));
+        let ConstantMetadata { value, description, latex_symbol } = meta;
+        push(&mut out, "constant_meta", name, format!("{value} {description:?} {latex_symbol:?}"));
     }
     for (symbol, weight) in atomic_weights {
         push(&mut out, "atomic_weight", symbol, format!("{weight:?}"));
@@ -144,15 +147,24 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         push(&mut out, "atomic_weight_edition", edition, table.len().to_string());
     }
     push(&mut out, "atomic_weight_selection", "atomic_weights", atomic_weight_selection);
-    let s = settings.effective();
-    push(&mut out, "setting", "propagation_mode", s.propagation_mode.name());
-    push(&mut out, "setting", "angle_mode", s.angle_mode.name());
-    push(&mut out, "setting", "parallel_threshold", s.parallel_threshold.to_string());
-    push(&mut out, "setting", "max_loop_iterations", s.max_loop_iterations.to_string());
-    push(&mut out, "setting", "max_pipeline_steps", s.max_pipeline_steps.to_string());
-    push(&mut out, "setting", "radian_plain", s.radian_grant.to_string());
-    push(&mut out, "setting", "steradian_plain", s.steradian_grant.to_string());
-    for (key, value) in &s.ignored {
+    let EffectiveSettings {
+        propagation_mode,
+        angle_mode,
+        parallel_threshold,
+        max_loop_iterations,
+        max_pipeline_steps,
+        radian_grant,
+        steradian_grant,
+        ignored,
+    } = settings.effective();
+    push(&mut out, "setting", "propagation_mode", propagation_mode.name());
+    push(&mut out, "setting", "angle_mode", angle_mode.name());
+    push(&mut out, "setting", "parallel_threshold", parallel_threshold.to_string());
+    push(&mut out, "setting", "max_loop_iterations", max_loop_iterations.to_string());
+    push(&mut out, "setting", "max_pipeline_steps", max_pipeline_steps.to_string());
+    push(&mut out, "setting", "radian_plain", radian_grant.to_string());
+    push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
+    for (key, value) in &ignored {
         push(&mut out, "setting_ignored", key, value);
     }
     out.sort();
@@ -176,22 +188,29 @@ pub fn embedded_entries() -> Result<Vec<Entry>, Vec<String>> {
 
 /// What differs between two sorted entry lists (from [`entries`]): in order of kind and name.
 pub fn diff(old: &[Entry], new: &[Entry]) -> Vec<Change> {
-    let key = |e: &Entry| (e.kind, e.name.clone());
-    let old_by: BTreeMap<_, _> = old.iter().map(|e| (key(e), e)).collect();
-    let new_by: BTreeMap<_, _> = new.iter().map(|e| (key(e), e)).collect();
+    // a key listed twice keeps every value (joined), so that nothing is dropped from a hand-built list
+    fn group(entries: &[Entry]) -> BTreeMap<(&'static str, String), Vec<&str>> {
+        let mut by: BTreeMap<(&'static str, String), Vec<&str>> = BTreeMap::new();
+        for e in entries {
+            by.entry((e.kind, e.name.clone())).or_default().push(&e.value);
+        }
+        by
+    }
+    let (old_by, new_by) = (group(old), group(new));
+    let entry = |k: &(&'static str, String), values: &[&str]| Entry { kind: k.0, name: k.1.clone(), value: values.join(" | ") };
     let mut changes = Vec::new();
     for (k, was) in &old_by {
         match new_by.get(k) {
-            None => changes.push(Change::Removed((*was).clone())),
-            Some(now) if now.value != was.value => {
-                changes.push(Change::Changed { kind: k.0, name: k.1.clone(), old: was.value.clone(), new: now.value.clone() })
+            None => changes.push(Change::Removed(entry(k, was))),
+            Some(now) if now != was => {
+                changes.push(Change::Changed { kind: k.0, name: k.1.clone(), old: was.join(" | "), new: now.join(" | ") })
             }
             Some(_) => {}
         }
     }
     for (k, now) in &new_by {
         if !old_by.contains_key(k) {
-            changes.push(Change::Added((*now).clone()));
+            changes.push(Change::Added(entry(k, now)));
         }
     }
     changes.sort_by(|a, b| (a.kind(), a.name()).cmp(&(b.kind(), b.name())));
@@ -305,6 +324,25 @@ mod tests {
         let later_wins = ProcessSettings { settings: vec![Setting::MaxPipelineSteps(5), Setting::MaxPipelineSteps(6)], ..settings };
         let e = entries(&registry, &constants, &later_wins);
         assert!(e.iter().any(|x| x.kind == "setting" && x.name == "max_pipeline_steps" && x.value == "6"));
+    }
+
+    #[test]
+    fn the_order_of_a_category_counts_and_a_repeated_key_is_not_dropped() {
+        let build = |text: &str| {
+            let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+            replay_source(&mut registry, &mut constants, &mut collected, DEFAULT_PHYSURE_CONF, true).unwrap();
+            replay_source(&mut registry, &mut constants, &mut collected, text, false).unwrap();
+            entries(&registry, &constants, &collected)
+        };
+        let (a, b) = (build("[Categories]
+zzcat = [m, s, kg]
+"), build("[Categories]
+zzcat = [kg, s, m]
+"));
+        assert!(diff(&a, &b).iter().any(|c| c.kind() == "category" && c.name() == "zzcat"));
+        let e = |value: &str| Entry { kind: "unit", name: "m".into(), value: value.into() };
+        let seen = diff(&[e("1"), e("2")], &[e("2")]);
+        assert_eq!(seen, vec![Change::Changed { kind: "unit", name: "m".into(), old: "1 | 2".into(), new: "2".into() }]);
     }
 
     #[test]
