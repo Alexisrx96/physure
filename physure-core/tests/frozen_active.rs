@@ -11,8 +11,8 @@ use physure_core::frozen::{
 };
 use physure_core::quantity::Quantity;
 use physure_core::units::conf::{
-    build_registry_from_conf, build_registry_with, load_embedded_catalog, try_build_registry_from_conf, try_with_conf_registry,
-    with_conf_registry, DEFAULT_PHYSURE_CONF,
+    build_registry_from_conf, build_registry_with, load_embedded_catalog, local_conf_builds, try_build_registry_from_conf,
+    try_with_conf_registry, with_conf_registry, DEFAULT_PHYSURE_CONF,
 };
 use physure_core::units::parser::Parser;
 use physure_core::UnitRegistry;
@@ -548,6 +548,72 @@ fn concurrent_first_use_loads_once() {
     let all: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
     assert_eq!(load_count() - before, 1, "exactly one load");
     assert!(all.iter().all(|a| Arc::ptr_eq(a, &all[0])), "every thread got the same catalog");
+}
+
+/// The unfrozen catalog merged with the working directory's `physure.conf` is built once per version of the file,
+/// not on every call; a change, a new file, a removed one and another directory are all seen on the next call.
+#[test]
+fn the_working_directory_conf_is_read_once_per_change() {
+    let env = Env::new();
+    let knows = |name: &str| with_conf_registry(|r| r.knows(name));
+    env.write("physure.conf", "[Units]\nzz_cached = 2.0, L, [zz_cached]\n");
+    let before = local_conf_builds();
+    for _ in 0..50 {
+        assert!(knows("zz_cached"));
+        assert!(Quantity::new(1.0, "zz_cached").is_ok());
+    }
+    assert!(build_registry_from_conf().0.knows("zz_cached"));
+    assert_eq!(local_conf_builds() - before, 1, "one build for many calls with an unchanged file");
+    // the same length, written at once: equal length and possibly an equal modification time, still seen
+    env.write("physure.conf", "[Units]\nzz_cachee = 2.0, L, [zz_cachee]\n");
+    assert!(knows("zz_cachee") && !knows("zz_cached"), "a same-length edit made right away is seen");
+    // another length
+    env.write("physure.conf", "[Units]\nzz_longer_name = 2.0, L, [zz_longer_name]\n");
+    assert!(knows("zz_longer_name") && !knows("zz_cachee"));
+    assert_eq!(local_conf_builds() - before, 3);
+    // another directory with its own file, then one without
+    let other = elsewhere(&env);
+    fs::write(other.join("physure.conf"), "[Units]\nzz_other_dir = 2.0, L, [zz_other_dir]\n").unwrap();
+    std::env::set_current_dir(&other).unwrap();
+    assert!(knows("zz_other_dir") && !knows("zz_longer_name"));
+    fs::remove_file(other.join("physure.conf")).unwrap();
+    assert!(!knows("zz_other_dir") && knows("m"), "a removed file is seen at once");
+    std::env::set_current_dir(&env.dir).unwrap();
+    assert!(knows("zz_longer_name"));
+    let _ = fs::remove_dir_all(other);
+}
+
+/// A file whose modification time is well in the past is trusted on its stamp alone; an edit that changes the stamp
+/// is seen, and the text is compared again only while the modification time is recent.
+#[test]
+fn an_old_working_directory_conf_is_trusted_on_its_stamp() {
+    let env = Env::new();
+    let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let write_old = |text: &str, when: std::time::SystemTime| {
+        let path = env.write("physure.conf", text);
+        fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+    };
+    write_old("[Units]\nzz_old_one = 2.0, L, [zz_old_one]\n", old);
+    let before = local_conf_builds();
+    for _ in 0..20 {
+        assert!(with_conf_registry(|r| r.knows("zz_old_one")));
+    }
+    assert_eq!(local_conf_builds() - before, 1);
+    // the same length and another old time: the stamp differs, so it is seen
+    write_old("[Units]\nzz_old_two = 2.0, L, [zz_old_two]\n", old - Duration::from_secs(60));
+    assert!(with_conf_registry(|r| r.knows("zz_old_two")));
+    assert_eq!(local_conf_builds() - before, 2);
+    // the limit, stated: an edit with the length and an old modification time restored by hand is not seen
+    write_old("[Units]\nzz_old_six = 2.0, L, [zz_old_six]\n", old - Duration::from_secs(60));
+    assert!(with_conf_registry(|r| r.knows("zz_old_two")), "the stamp alone is trusted for an old file");
+    physure_core::frozen::reset_cache();
+    assert!(with_conf_registry(|r| r.knows("zz_old_six")), "reset_cache forgets it");
+    // a recent modification time is not trusted alone: the very same stamp with another text is seen
+    let recent = std::time::SystemTime::now();
+    write_old("[Units]\nzz_new_one = 2.0, L, [zz_new_one]\n", recent);
+    assert!(with_conf_registry(|r| r.knows("zz_new_one")));
+    write_old("[Units]\nzz_new_two = 2.0, L, [zz_new_two]\n", recent);
+    assert!(with_conf_registry(|r| r.knows("zz_new_two")), "an equal stamp within the window is compared by text");
 }
 
 /// The cost of one call of `with_conf_registry`, unfrozen and frozen. Run with

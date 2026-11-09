@@ -2,10 +2,13 @@ use crate::uncertainty::{PropagationMode, set_propagation_mode};
 use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
 use crate::units::registry::{is_atomic_weight_edition_name, resolve_atomic_weight_edition, UnitRegistry};
+use crate::frozen::load::FileStamp;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
 
@@ -1176,7 +1179,10 @@ pub fn build_registry_with(extra: &str) -> Result<(UnitRegistry, HashMap<String,
 pub fn try_build_registry_from_conf() -> Result<(UnitRegistry, HashMap<String, String>), crate::frozen::active::ActiveError> {
     match crate::frozen::active::active()? {
         Some(active) => Ok((active.catalog.registry.clone(), active.catalog.constants.clone())),
-        None => Ok(unfrozen_registry_from_conf()),
+        None => Ok(match local_catalog() {
+            Some(local) => local.catalog.as_ref().clone(),
+            None => embedded_catalog().clone(),
+        }),
     }
 }
 
@@ -1186,36 +1192,114 @@ pub fn build_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
     try_build_registry_from_conf().unwrap_or_else(|e| refuse_to_run(&e))
 }
 
-/// The unfrozen catalog: the embedded one plus the `physure.conf` of the working directory, if any.
+/// The embedded catalog merged with one version of the working directory's `physure.conf`, as cached in the state of
+/// `frozen::active` (one cache, forgotten with the others by `reset_cache`).
+#[derive(Debug)]
+pub(crate) struct LocalCatalog {
+    /// The absolute path of the file (the working directory joined with `physure.conf`).
+    pub(crate) path: PathBuf,
+    /// The length and modification time of the file, from the handle the text was read through.
+    pub(crate) stamp: FileStamp,
+    /// The text the catalog was built from.
+    text: String,
+    /// When the text was read (taken before the file was opened).
+    read_at: SystemTime,
+    pub(crate) catalog: Arc<(UnitRegistry, HashMap<String, String>)>,
+}
+
+/// How recent a modification time must be for a stamp not to be trusted alone. A file system records modification
+/// times with a granularity (two seconds on FAT, a clock tick on others): an edit of the same length made within it of
+/// the previous write can keep the same stamp. Two seconds covers the coarsest one.
+const RACY_WINDOW: Duration = Duration::from_secs(2);
+
+impl LocalCatalog {
+    /// Whether the stamp alone proves the text is still the one read: it was read at least [`RACY_WINDOW`] after
+    /// the modification time it has, so any later write gets another one (git's "racy clean" rule). A file whose
+    /// platform reports no modification time never qualifies.
+    fn stamp_suffices(&self) -> bool {
+        self.stamp.modified.is_some_and(|modified| self.read_at.duration_since(modified).is_ok_and(|age| age >= RACY_WINDOW))
+    }
+}
+
+/// The working directory's `physure.conf` merged with the embedded catalog, or `None` when there is no such file
+/// (or it cannot be read as text: then the embedded catalog alone, as always).
 ///
-/// The embedded catalog is parsed once per process and every call gets a copy: parsing it is most
-/// of the cost of turning a unit string into a unit, and it applied the `[Settings]` of the
-/// catalog again on every call, undoing any setting that had been changed since.
-fn unfrozen_registry_from_conf() -> (UnitRegistry, HashMap<String, String>) {
-    let (mut reg, mut constants) = embedded_catalog().clone();
-    let local_conf = Path::new("physure.conf");
-    if local_conf.is_file() {
-        if let Ok(content) = fs::read_to_string(local_conf) {
-            parse_physure_conf(&content, &mut reg, &mut constants);
+/// Cached by (absolute path, length, modification time): a call costs one `stat` of the file when its stamp is the
+/// one cached and the text was read well after the file was last modified. While the modification time is recent
+/// ([`RACY_WINDOW`] before the reading), the text is read again on each call and compared, so a quick edit of the
+/// same length is not missed. A changed file is read and merged again, which also applies its `[Settings]` and
+/// `[Compatibility]` again (the lenient reading applies them as it goes) and reports each of its problems once per
+/// process. A file edited with its length and an old modification time restored by hand (`touch -d`) is not seen
+/// until either changes, the current directory changes or `frozen::active::reset_cache()` is called.
+fn local_catalog() -> Option<Arc<LocalCatalog>> {
+    let path = std::env::current_dir().ok()?.join("physure.conf");
+    let metadata = fs::metadata(&path).ok().filter(fs::Metadata::is_file)?;
+    let stamp = FileStamp::of(&metadata);
+    if let Some(cached) = crate::frozen::active::cached_local_catalog() {
+        if cached.path == path && cached.stamp == stamp {
+            if cached.stamp_suffices() {
+                return Some(cached);
+            }
+            let read_at = SystemTime::now();
+            if let Some((text, stamp)) = read_local_conf(&path) {
+                if text == cached.text && stamp == cached.stamp {
+                    let confirmed =
+                        Arc::new(LocalCatalog { path, stamp, text, read_at, catalog: Arc::clone(&cached.catalog) });
+                    crate::frozen::active::store_local_catalog(Arc::clone(&confirmed));
+                    return Some(confirmed);
+                }
+            }
         }
     }
-    (reg, constants)
+    build_local_catalog(path)
+}
+
+/// The text of the file and the stamp of the handle it was read through; `None` if it cannot be read as text.
+fn read_local_conf(path: &Path) -> Option<(String, FileStamp)> {
+    let mut file = fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok().filter(fs::Metadata::is_file)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    Some((text, FileStamp::of(&metadata)))
+}
+
+/// Reads the file, merges it with the embedded catalog and caches the result.
+fn build_local_catalog(path: PathBuf) -> Option<Arc<LocalCatalog>> {
+    let read_at = SystemTime::now();
+    let (text, stamp) = read_local_conf(&path)?;
+    let (mut reg, mut constants) = embedded_catalog().clone();
+    LOCAL_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    parse_physure_conf(&text, &mut reg, &mut constants);
+    let local = Arc::new(LocalCatalog { path, stamp, text, read_at, catalog: Arc::new((reg, constants)) });
+    crate::frozen::active::store_local_catalog(Arc::clone(&local));
+    Some(local)
+}
+
+static LOCAL_BUILDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times this process built the catalog merged with the working directory's `physure.conf` (for the tests
+/// of its cache).
+#[doc(hidden)]
+pub fn local_conf_builds() -> u64 {
+    LOCAL_BUILDS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Runs `f` against the catalog that unit text is read against when nothing says otherwise, or says why the
 /// configuration in force cannot be used. With a frozen configuration in force, `f` gets its catalog by
 /// reference; otherwise the embedded catalog plus the `physure.conf` of the working directory, if there is one.
 ///
-/// The working-directory conf is looked for on every call, so a file that appears, changes or goes away is seen.
-/// Without one, `f` gets the embedded catalog itself, by reference: no copy is made, which is what turning a unit
-/// string into a unit costs most when the catalog is copied first. With one, the merged registry is built as
-/// [`build_registry_from_conf`] builds it. `f` runs after the cache of the configuration in force is released, so
-/// it may read the catalog again.
+/// The working-directory conf is looked for on every call (one `stat`), so a file that appears, changes or goes
+/// away is seen. Without one, `f` gets the embedded catalog itself, by reference: no copy is made, which is what
+/// turning a unit string into a unit costs most when the catalog is copied first. With one, `f` gets the merged
+/// registry by reference, built once per version of the file and cached (see `local_catalog`). `f` runs after every
+/// cache lock is released, so it may read the catalog again.
 pub fn try_with_conf_registry<R>(f: impl FnOnce(&UnitRegistry) -> R) -> Result<R, crate::frozen::active::ActiveError> {
     match crate::frozen::active::active()? {
         Some(active) => Ok(f(&active.catalog.registry)),
-        None if Path::new("physure.conf").is_file() => Ok(f(&unfrozen_registry_from_conf().0)),
-        None => Ok(f(&embedded_catalog().0)),
+        None => match local_catalog() {
+            Some(local) => Ok(f(&local.catalog.0)),
+            None => Ok(f(&embedded_catalog().0)),
+        },
     }
 }
 

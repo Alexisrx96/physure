@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use super::load::{FileStamp, FrozenCatalog, LoadError};
+use crate::units::conf::LocalCatalog;
 
 pub const FROZEN_FILE_NAME: &str = "physure.frozen.conf";
 pub const ENV_CONF: &str = "PHYSURE_CONF";
@@ -345,10 +346,12 @@ struct State {
     /// The frozen file whose catalog was activated (its settings applied), if any: sticky until [`reset_cache`].
     activated: Option<PathBuf>,
     loads: u64,
+    /// The unfrozen catalog merged with the working directory's `physure.conf` (built by `units::conf`).
+    local: Option<Arc<LocalCatalog>>,
 }
 
 static STATE: Mutex<State> =
-    Mutex::new(State { key: None, resolution: None, loaded: None, activated: None, loads: 0 });
+    Mutex::new(State { key: None, resolution: None, loaded: None, activated: None, loads: 0, local: None });
 
 thread_local! {
     /// This thread is loading a frozen file while holding the cache: a nested `active()` would deadlock on it.
@@ -495,7 +498,8 @@ pub fn ensure_valid() -> Result<(), ActiveError> {
     active().map(|_| ())
 }
 
-/// Forgets the cache: the next [`active`] resolves and loads again. If a frozen configuration had been activated,
+/// Forgets the cache: the next [`active`] resolves and loads again, and the next use of the unfrozen catalog reads
+/// the working directory's `physure.conf` again (which applies its settings again). If a frozen configuration had been activated,
 /// the process-wide settings go back to what the unfrozen catalog gives them (the compiled defaults, then the
 /// embedded catalog's `[Settings]` and `[Compatibility]`), so the settings of a file no longer in force do not stay.
 pub fn reset_cache() {
@@ -504,10 +508,22 @@ pub fn reset_cache() {
     state.key = None;
     state.resolution = None;
     state.loaded = None;
+    state.local = None;
     if was_activated {
         crate::settings::reset_to_defaults();
         crate::units::conf::apply_embedded_settings();
     }
+}
+
+/// The cached merge of the unfrozen catalog with the working directory's `physure.conf`, if any. The lock is held
+/// only to clone the `Arc` out.
+pub(crate) fn cached_local_catalog() -> Option<Arc<LocalCatalog>> {
+    state().local.clone()
+}
+
+/// Caches a merge of the unfrozen catalog with the working directory's `physure.conf` (it replaces the one before).
+pub(crate) fn store_local_catalog(local: Arc<LocalCatalog>) {
+    state().local = Some(local);
 }
 
 /// How many times this process loaded a frozen file through [`active`] (for the tests of the cache).
