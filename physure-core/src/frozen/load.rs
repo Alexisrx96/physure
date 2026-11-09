@@ -172,31 +172,41 @@ pub(crate) fn load_with_engine_file(
             .check(&EngineIdentity::current(), || engine_file_hash(engine_file))
             .map_err(|mismatch| LoadError::Engine { path: path.to_path_buf(), mismatch })?;
     }
-    let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
-    for (index, source) in file.sources().iter().enumerate() {
-        // `verify` made source 1 the embedded one; the check is repeated here because trust is at stake
-        let trusted = index == 0 && source.origin() == "embedded";
-        replay_source(&mut registry, &mut constants, &mut collected, source.text(), trusted).map_err(|problems| {
-            LoadError::Replay { path: path.to_path_buf(), source: source.origin().to_string(), problems }
-        })?;
-    }
-    // with no fallback from one table to another, a selected edition that no source defines would fail every use
-    // of the weights later, one element at a time: the file is refused now instead
-    if let Some(edition) = registry.selected_atomic_weight_table_missing() {
-        return Err(LoadError::Replay {
-            path: path.to_path_buf(),
-            source: "the sources together".to_string(),
-            problems: vec![format!(
-                "[Chemistry] atomic_weights selects the edition '{edition}' but no [AtomicWeights:{edition}] section of any source defines it"
-            )],
-        });
-    }
+    let (registry, constants, collected) = replay_file(&file)
+        .map_err(|(source, problems)| LoadError::Replay { path: path.to_path_buf(), source, problems })?;
     let ProcessSettings { settings, compatibility } = collected;
     Ok(FrozenCatalog { registry, constants, settings, compatibility, file, engine, stamp })
 }
 
+/// What a replay of the sources produced.
+pub(crate) type Replayed = (UnitRegistry, HashMap<String, String>, ProcessSettings);
+
+/// Replays every source of `file` in order, strictly, into an empty registry: source 1 (`embedded`) with the trusted
+/// reader, every other source untrusted. On a problem, the origin of the source (or "the sources together") and its
+/// problems. Changes no process-wide state. Loading and the operations of `ops` use this one replay.
+pub(crate) fn replay_file(file: &FrozenFile) -> Result<Replayed, (String, Vec<String>)> {
+    let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+    for (index, source) in file.sources().iter().enumerate() {
+        // `verify` made source 1 the embedded one; the check is repeated here because trust is at stake
+        let trusted = index == 0 && source.origin() == "embedded";
+        replay_source(&mut registry, &mut constants, &mut collected, source.text(), trusted)
+            .map_err(|problems| (source.origin().to_string(), problems))?;
+    }
+    // with no fallback from one table to another, a selected edition that no source defines would fail every use
+    // of the weights later, one element at a time: the file is refused now instead
+    if let Some(edition) = registry.selected_atomic_weight_table_missing() {
+        return Err((
+            "the sources together".to_string(),
+            vec![format!(
+                "[Chemistry] atomic_weights selects the edition '{edition}' but no [AtomicWeights:{edition}] section of any source defines it"
+            )],
+        ));
+    }
+    Ok((registry, constants, collected))
+}
+
 /// The text of the file and its stamp, both from one open handle; never more than [`MAX_FILE_BYTES`] are read.
-fn read_bounded(path: &Path) -> Result<(String, FileStamp), LoadError> {
+pub(crate) fn read_bounded(path: &Path) -> Result<(String, FileStamp), LoadError> {
     let io_error = |e: io::Error| LoadError::Io { path: path.to_path_buf(), message: e.to_string() };
     let file = File::open(path).map_err(io_error)?;
     let metadata = file.metadata().map_err(io_error)?;
