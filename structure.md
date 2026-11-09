@@ -30,7 +30,7 @@ subgraph group_core["physure-core — pure Rust physics engine<br/>(crate physur
   node_serialization["serialization.rs + covariance/arrow.rs<br/>Arrow interchange<br/>[serialization.rs]"]
   node_linalgplot["linalg.rs · plotting.rs<br/>matrix helpers, plot data prep"]
   node_chemistry["chemistry/<br/>elements (IUPAC 2013 weights), formula parser, Species + molar mass,<br/>exact-rational reaction balancing, arrhenius / clausius_clapeyron / gibbs<br/>[chemistry/mod.rs]"]
-  node_frozen["frozen/<br/>data layer of a sealed frozen configuration: SHA-256 (no dependency), canonical form,<br/>strict file model, hash-chained history, seal and verifier (pure: no clock, env or I/O),<br/>engine.rs: the engine identity (from build.rs + build_support/commit.rs, git.rs) and its four pinning policies,<br/>active.rs: which frozen file is in force (resolution, per-process cache, activation, ensure_valid),<br/>load.rs: sealed loading (verify, engine check, strict replay), ops.rs: freeze / update / seal and the atomic writer<br/>[frozen/mod.rs]"]
+  node_frozen["frozen/<br/>data layer of a sealed frozen configuration: SHA-256 (no dependency), canonical form,<br/>strict file model, hash-chained history, seal and verifier, entry listing and semantic diff (pure: no clock, env or I/O),<br/>engine.rs: the engine identity (from build.rs + build_support/commit.rs, git.rs) and its four pinning policies,<br/>active.rs: which frozen file is in force (resolution, per-process cache, activation, ensure_valid),<br/>load.rs: sealed loading (verify, engine check, strict replay), ops.rs: freeze / update / seal and the atomic writer<br/>[frozen/mod.rs]"]
 end
 
 subgraph group_script["physure-script — PhysureScript (PHS) language engine<br/>depends on physure-core"]

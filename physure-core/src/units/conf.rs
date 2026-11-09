@@ -3,7 +3,7 @@ use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
 use crate::units::registry::{is_atomic_weight_edition_name, resolve_atomic_weight_edition, UnitRegistry};
 use crate::frozen::load::FileStamp;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -196,6 +196,21 @@ impl Setting {
     }
 }
 
+/// The process-wide settings a conf gives, one value each (see [`ProcessSettings::effective`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectiveSettings {
+    pub propagation_mode: PropagationMode,
+    pub angle_mode: AngleMode,
+    pub parallel_threshold: usize,
+    pub max_loop_iterations: usize,
+    pub max_pipeline_steps: usize,
+    /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
+    pub radian_grant: bool,
+    pub steradian_grant: bool,
+    /// The keys the core accepts for other bindings and does not use, as last written.
+    pub ignored: BTreeMap<String, String>,
+}
+
 /// The process-wide part of the texts a frozen replay read: their `[Settings]` lines in order (a later one wins when
 /// applied) and the rows of the last `[Compatibility]` section that replaces the grants (`None`: no section did; a
 /// section with only a `periodic` line keeps the rows, as in the lenient reading).
@@ -206,32 +221,49 @@ pub struct ProcessSettings {
 }
 
 impl ProcessSettings {
-    /// Makes the process-wide values those of this file alone: each setting takes its last value in the file, or the
-    /// compiled default if the file does not give it, and is stored once. Unlike `reset_to_defaults` followed by
-    /// [`ProcessSettings::apply`], no reader on another thread can see a default in between.
-    pub(crate) fn activate(&self) {
+    /// The value of every process-wide setting this file gives: each takes its last value in the file, or the compiled
+    /// default if the file does not give it.
+    pub fn effective(&self) -> EffectiveSettings {
         use crate::settings::{DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_PARALLEL_THRESHOLD};
-        let mut propagation = PropagationMode::default();
-        let mut angle = AngleMode::default();
-        let (mut threshold, mut loops, mut steps) =
-            (DEFAULT_PARALLEL_THRESHOLD, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS);
+        let mut effective = EffectiveSettings {
+            propagation_mode: PropagationMode::default(),
+            angle_mode: AngleMode::default(),
+            parallel_threshold: DEFAULT_PARALLEL_THRESHOLD,
+            max_loop_iterations: DEFAULT_MAX_LOOP_ITERATIONS,
+            max_pipeline_steps: DEFAULT_MAX_PIPELINE_STEPS,
+            radian_grant: true,
+            steradian_grant: true,
+            ignored: BTreeMap::new(),
+        };
         for setting in &self.settings {
             match setting {
-                Setting::PropagationMode(mode) => propagation = *mode,
-                Setting::AngleMode(mode) => angle = *mode,
-                Setting::ParallelThreshold(n) => threshold = *n,
-                Setting::MaxLoopIterations(n) => loops = *n,
-                Setting::MaxPipelineSteps(n) => steps = *n,
-                Setting::Ignored { .. } => {}
+                Setting::PropagationMode(mode) => effective.propagation_mode = *mode,
+                Setting::AngleMode(mode) => effective.angle_mode = *mode,
+                Setting::ParallelThreshold(n) => effective.parallel_threshold = *n,
+                Setting::MaxLoopIterations(n) => effective.max_loop_iterations = *n,
+                Setting::MaxPipelineSteps(n) => effective.max_pipeline_steps = *n,
+                Setting::Ignored { key, value } => {
+                    effective.ignored.insert(key.clone(), value.clone());
+                }
             }
         }
-        let (radian, steradian) = self.compatibility.as_deref().map_or((true, true), compatibility_grants);
-        set_propagation_mode(propagation);
-        set_angle_mode(angle);
-        crate::settings::set_parallel_threshold(threshold);
-        crate::settings::set_max_loop_iterations(loops);
-        crate::settings::set_max_pipeline_steps(steps);
-        crate::units::angle_mode::set_marker_grants(radian, steradian);
+        if let Some(rows) = &self.compatibility {
+            (effective.radian_grant, effective.steradian_grant) = compatibility_grants(rows);
+        }
+        effective
+    }
+
+    /// Makes the process-wide values those of this file alone ([`ProcessSettings::effective`]), each stored once.
+    /// Unlike `reset_to_defaults` followed by [`ProcessSettings::apply`], no reader on another thread can see a
+    /// default in between.
+    pub(crate) fn activate(&self) {
+        let e = self.effective();
+        set_propagation_mode(e.propagation_mode);
+        set_angle_mode(e.angle_mode);
+        crate::settings::set_parallel_threshold(e.parallel_threshold);
+        crate::settings::set_max_loop_iterations(e.max_loop_iterations);
+        crate::settings::set_max_pipeline_steps(e.max_pipeline_steps);
+        crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
     /// Applies every setting in order, then the compatibility rows if a section gave them. The rows were validated

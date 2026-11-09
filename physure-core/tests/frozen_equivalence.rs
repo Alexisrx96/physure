@@ -235,3 +235,34 @@ fn update_after_a_simulated_upgrade_changes_exactly_what_the_summary_says() {
         assert!(changed.iter().any(|line| line.contains(name)), "{name} did not change");
     }
 }
+
+/// The semantic diff of a sealed catalog against the shipped one: nothing without overrides; with the fixture's
+/// overrides, exactly the kinds of things they touch, each named.
+#[test]
+fn the_entries_of_a_sealed_catalog_differ_from_the_shipped_ones_by_exactly_the_overrides() {
+    use physure_core::frozen::{diff, embedded_entries, summary, Change};
+    let env = Env::new();
+    freeze_and_activate(&env);
+    let shipped = embedded_entries().unwrap();
+    assert_eq!(active().unwrap().unwrap().catalog.entries(), shipped, "a sealed copy lists what the library ships");
+    let env2 = {
+        drop(env);
+        Env::new()
+    };
+    env2.write("physure.conf", OVERRIDES);
+    freeze_and_activate(&env2);
+    let changes = diff(&shipped, &active().unwrap().unwrap().catalog.entries());
+    let has = |kind: &str, name: &str| changes.iter().any(|c| c.kind() == kind && c.name() == name);
+    assert!(has("unit", "zz_eq") && has("unit", "zz_equivalence"), "{}", summary(&changes));
+    assert!(has("constant", "zz_eq_const") && has("constant", "molar_gas_constant"));
+    assert!(has("atomic_weight", "Fe") && has("atomic_weight_selection", "atomic_weights"));
+    let settings: Vec<_> = changes.iter().filter(|c| c.kind() == "setting").collect();
+    assert!(has("setting", "parallel_threshold") && has("setting", "angle_mode") && has("setting", "radian_plain"), "{settings:?}");
+    assert!(changes.iter().any(|c| matches!(c, Change::Changed { kind: "constant", name, .. } if name == "molar_gas_constant")));
+    let allowed = [
+        "base_dimension", "constant", "constant_meta", "dimension_base", "unit", "derived_unit", "unit_names", "alias", "atomic_weight",
+        "atomic_weight_selection", "setting", "category", "unit_meta",
+    ];
+    let unexpected: Vec<_> = changes.iter().filter(|c| !allowed.contains(&c.kind())).collect();
+    assert!(unexpected.is_empty(), "{unexpected:?}");
+}

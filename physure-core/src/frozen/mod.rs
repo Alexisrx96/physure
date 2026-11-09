@@ -28,3 +28,5 @@ pub mod ops;
 pub use ops::{
     actor_from_env, freeze, now_unix, plan_seal, plan_update, write_atomic, FreezeOptions, OpsError, SealPlan, UpdatePlan, EMPTY_OVERRIDES,
 };
+pub mod entries;
+pub use entries::{diff, embedded_entries, entries, summary, Change, Entry};
