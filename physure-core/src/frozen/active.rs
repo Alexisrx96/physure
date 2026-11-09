@@ -179,15 +179,23 @@ pub fn resolve_with_cwd(
     }
 }
 
-/// The nearest `physure.frozen.conf` that is a file, from `cwd` upwards. A directory with that name is passed over;
-/// a candidate that exists but cannot be examined is an error rather than "nothing found".
+/// The nearest `physure.frozen.conf` that is a file, from `cwd` upwards. Anything else with that name (a directory,
+/// a link whose target is missing, a file that cannot be examined) is an error rather than "nothing found": it
+/// might be the frozen file, and running unfrozen in its place would be silent.
 fn discover(cwd: &Path) -> Result<Option<PathBuf>, ResolveError> {
     for dir in cwd.ancestors() {
         let candidate = dir.join(FROZEN_FILE_NAME);
         match std::fs::metadata(&candidate) {
             Ok(meta) if meta.is_file() => return Ok(Some(candidate)),
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Ok(_) => {
+                return Err(ResolveError::Unreadable { path: candidate, message: "it is not a file".into() });
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // `metadata` follows links: an entry that exists but points nowhere is not "not found"
+                if std::fs::symlink_metadata(&candidate).is_ok() {
+                    return Err(ResolveError::Unreadable { path: candidate, message: "it is a link to something that does not exist".into() });
+                }
+            }
             Err(e) => return Err(ResolveError::Unreadable { path: candidate, message: e.to_string() }),
         }
     }
@@ -290,7 +298,7 @@ impl fmt::Display for ActiveError {
                 };
                 write!(
                     f,
-                    "the frozen configuration {} was activated in this process and the configuration in force is now {now} (the current directory or the environment changed); one process uses one configuration: restart the program",
+                    "the frozen configuration {} was activated in this process and the configuration in force is now {now} (the current directory or the environment changed); a process keeps the path it activated (the file itself is re-read when it changes): restart the program",
                     was.display()
                 )
             }
@@ -475,8 +483,8 @@ fn resolve_and_load(state: &mut State, key: Key) -> Result<Option<Arc<Active>>, 
         let loaded = match super::load::load_file(&path, super::load::LoadOptions::default()) {
             Ok(catalog) => {
                 let stamp = Some(catalog.stamp);
-                // activation: the complete set of the file over the compiled defaults, in one step under the lock
-                crate::settings::reset_to_defaults();
+                // activation: the complete set of the file over the compiled defaults, each value stored once (a reader
+                // on another thread never sees a default in between)
                 catalog.apply_process_settings();
                 state.activated = Some(path.clone());
                 let active = Active { path: path.clone(), why: why.clone(), catalog };
@@ -611,10 +619,26 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_with_the_name_is_not_a_frozen_file() {
+    fn a_directory_with_the_name_is_an_error_not_unfrozen() {
         let d = Dir::new();
         fs::create_dir_all(d.0.join(FROZEN_FILE_NAME)).unwrap();
-        assert_eq!(resolve(&inputs(None, None, None, &d.0)).unwrap(), Resolution::Unfrozen);
+        assert!(matches!(resolve(&inputs(None, None, None, &d.0)), Err(ResolveError::Unreadable { .. })));
+    }
+
+    #[test]
+    fn a_dangling_link_with_the_name_is_an_error_not_unfrozen() {
+        let d = Dir::new();
+        let link = d.0.join(FROZEN_FILE_NAME);
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(d.0.join("missing"), &link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(d.0.join("missing"), &link);
+        #[cfg(not(any(unix, windows)))]
+        let made: io::Result<()> = Err(io::Error::other("no links"));
+        if made.is_err() {
+            return; // creating links needs a privilege on some systems: nothing to test there
+        }
+        assert!(matches!(resolve(&inputs(None, None, None, &d.0)), Err(ResolveError::Unreadable { .. })));
     }
 
     #[test]

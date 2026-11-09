@@ -77,6 +77,10 @@ fn root(manifest: &Path) -> Option<PathBuf> {
 /// The workspace manifests cargo reads next to the crate.
 const WORKSPACE_FILES: [&str; 2] = ["Cargo.toml", "Cargo.lock"];
 
+/// The parts of the crate a build reads; `build.rs` watches these same paths, so the verdict is revisited when one of
+/// them changes.
+pub const CRATE_INPUTS: [&str; 4] = ["build.rs", "build_support", "src", "Cargo.toml"];
+
 /// Whether the files this build uses (the crate and the workspace manifests) may differ from `commit`, the peeled
 /// `HEAD`: `git status`, the files whose changes it hides (`ls-files -v`), a workspace manifest that exists but is
 /// not in the commit, an attribute that lets git hash other bytes than the compiler reads (a filter), and a
@@ -84,8 +88,11 @@ const WORKSPACE_FILES: [&str; 2] = ["Cargo.toml", "Cargo.lock"];
 /// git cannot say, the answer is dirty.
 fn dirty(manifest: &Path, top: &Path, commit: &str) -> bool {
     let crate_dir = manifest.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    // exactly what `build.rs` watches (`CRATE_INPUTS`): a change anywhere else (tests, benches, docs) would leave a
+    // verdict the build never revisits, since cargo reruns this script only when a watched path changes
+    let crate_paths: Vec<String> = CRATE_INPUTS.iter().map(|input| format!("{crate_dir}/{input}")).collect();
     // the manifests are named even when they do not exist: a tracked one that was deleted shows in `git status`
-    let paths: Vec<&str> = [crate_dir.as_str()].into_iter().chain(WORKSPACE_FILES).collect();
+    let paths: Vec<&str> = crate_paths.iter().map(String::as_str).chain(WORKSPACE_FILES).collect();
     let run = |command: &[&str]| -> Option<String> {
         let args: Vec<&str> = command.iter().copied().chain(paths.iter().copied()).collect();
         output(top, &args, None)

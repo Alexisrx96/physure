@@ -53,7 +53,7 @@ fn watch(manifest: &Path) {
     println!("cargo:rerun-if-env-changed=PHYSURE_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=RUSTC");
     println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
-    for local in ["build.rs", "build_support", "src", "Cargo.toml", "../Cargo.toml", "../Cargo.lock"] {
+    for local in git_facts::CRATE_INPUTS.iter().copied().chain(["../Cargo.toml", "../Cargo.lock"]) {
         if manifest.join(local).exists() {
             println!("cargo:rerun-if-changed={local}");
         }

@@ -3,7 +3,7 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const DEFAULT_PARALLEL_THRESHOLD: usize = 10_000;
+pub(crate) const DEFAULT_PARALLEL_THRESHOLD: usize = 10_000;
 static PARALLEL_THRESHOLD: AtomicUsize = AtomicUsize::new(DEFAULT_PARALLEL_THRESHOLD);
 
 thread_local! {
@@ -43,7 +43,7 @@ impl Drop for ThresholdGuard {
     }
 }
 
-const DEFAULT_MAX_LOOP_ITERATIONS: usize = 1_000_000;
+pub(crate) const DEFAULT_MAX_LOOP_ITERATIONS: usize = 1_000_000;
 static MAX_LOOP_ITERATIONS: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_LOOP_ITERATIONS);
 
 thread_local! {
@@ -97,7 +97,7 @@ impl Drop for MaxLoopIterationsGuard {
     }
 }
 
-const DEFAULT_MAX_PIPELINE_STEPS: usize = 1_000;
+pub(crate) const DEFAULT_MAX_PIPELINE_STEPS: usize = 1_000;
 static MAX_PIPELINE_STEPS: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_PIPELINE_STEPS);
 
 thread_local! {

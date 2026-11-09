@@ -72,11 +72,11 @@ impl FrozenCatalog {
         ProcessSettings { settings: self.settings.clone(), compatibility: self.compatibility.clone() }
     }
 
-    /// Applies the settings and compatibility rows of the sources to the process: what activating the catalog does,
-    /// and nothing else may (Task 9, E15).
+    /// Makes the settings and compatibility rows of the sources the process's alone, over the compiled defaults: what
+    /// activating the catalog does, and nothing else may (Task 9, E15).
     #[cfg_attr(all(target_family = "wasm", target_os = "unknown"), allow(dead_code))] // no file system there: never loaded
     pub(crate) fn apply_process_settings(&self) {
-        self.process_settings().apply();
+        self.process_settings().activate();
     }
 }
 

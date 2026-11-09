@@ -201,6 +201,19 @@ fn an_edit_of_a_skip_worktree_file_is_dirty() {
     repo.assert_dirty("skip-worktree");
 }
 
+/// Cargo reruns the build script only when a path it watches changes, so a change anywhere else must not make the
+/// verdict (which is not revisited when the change is undone) depend on it.
+#[test]
+fn a_change_outside_the_files_the_build_reads_is_not_dirt() {
+    let _serial = serial();
+    let repo = Repo::new("outside");
+    repo.write("crate/tests/t.rs", "// a test\n");
+    repo.commit("a test");
+    repo.write("crate/tests/t.rs", "// a test, edited\n");
+    assert!(!repo.facts().dirty);
+    assert_eq!(repo.claimed(), repo.head());
+}
+
 #[test]
 fn a_deleted_file_is_dirty() {
     let _serial = serial();

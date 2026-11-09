@@ -9,6 +9,9 @@ use super::time::is_rfc3339_utc;
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MAGIC: &str = "#physure-frozen 1";
+/// The most sources a file may have: a source is replayed over a copy of the registry, so the cost of loading grows
+/// with their number (about 0.2 ms each), and a file written to be slow must be refused rather than waited for.
+pub const MAX_SOURCES: usize = 256;
 
 /// Why a frozen file could not be built, rendered or parsed. The text names the offending line when there is one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -689,6 +692,9 @@ fn read_blocks(lines: &[&str], mut at: usize, file: &mut FrozenFile) -> FrozenRe
                 let Some(index) = canonical_number(n) else {
                     return err(format!("line {number}: bad source marker: the number is written with digits, no sign and no leading zero: {line}"));
                 };
+                if file.sources.len() >= MAX_SOURCES {
+                    return err(format!("line {number}: a frozen configuration has at most {MAX_SOURCES} sources (each one is replayed over a copy of the registry)"));
+                }
                 if index as usize != file.sources.len() + 1 {
                     return err(format!(
                         "line {number}: sources must be numbered 1, 2, 3, ...; expected {}, found {index}",
@@ -1012,6 +1018,16 @@ mod tests {
         assert_eq!(p.as_slice()[1].0, "b");
         assert!(Pairs::default().is_empty());
         assert_eq!(Pairs::from_vec(vec![("k".into(), "v".into())]).unwrap().get("k"), Some("v"));
+    }
+
+    #[test]
+    fn a_file_with_more_sources_than_the_limit_is_refused() {
+        let mut file = sample();
+        while file.sources.len() <= MAX_SOURCES {
+            file.sources.push(Source::new("extra", "m = 1").unwrap());
+        }
+        let message = FrozenFile::parse(&file.render().unwrap()).unwrap_err().to_string();
+        assert!(message.contains("at most 256 sources"), "{message}");
     }
 
     #[test]

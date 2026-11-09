@@ -206,6 +206,34 @@ pub struct ProcessSettings {
 }
 
 impl ProcessSettings {
+    /// Makes the process-wide values those of this file alone: each setting takes its last value in the file, or the
+    /// compiled default if the file does not give it, and is stored once. Unlike `reset_to_defaults` followed by
+    /// [`ProcessSettings::apply`], no reader on another thread can see a default in between.
+    pub(crate) fn activate(&self) {
+        use crate::settings::{DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_PARALLEL_THRESHOLD};
+        let mut propagation = PropagationMode::default();
+        let mut angle = AngleMode::default();
+        let (mut threshold, mut loops, mut steps) =
+            (DEFAULT_PARALLEL_THRESHOLD, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS);
+        for setting in &self.settings {
+            match setting {
+                Setting::PropagationMode(mode) => propagation = *mode,
+                Setting::AngleMode(mode) => angle = *mode,
+                Setting::ParallelThreshold(n) => threshold = *n,
+                Setting::MaxLoopIterations(n) => loops = *n,
+                Setting::MaxPipelineSteps(n) => steps = *n,
+                Setting::Ignored { .. } => {}
+            }
+        }
+        let (radian, steradian) = self.compatibility.as_deref().map_or((true, true), compatibility_grants);
+        set_propagation_mode(propagation);
+        set_angle_mode(angle);
+        crate::settings::set_parallel_threshold(threshold);
+        crate::settings::set_max_loop_iterations(loops);
+        crate::settings::set_max_pipeline_steps(steps);
+        crate::units::angle_mode::set_marker_grants(radian, steradian);
+    }
+
     /// Applies every setting in order, then the compatibility rows if a section gave them. The rows were validated
     /// when they were collected. Only the activation of a frozen catalog calls it (Phase 1c, Task 5).
     pub(crate) fn apply(&self) {
@@ -781,6 +809,13 @@ fn read_compatibility_row(row: &str) -> Result<Marker, String> {
 /// Replaces the process-wide grants by the rows of a `[Compatibility]` section. A row that cannot be read is
 /// reported on stderr and grants nothing.
 fn apply_compatibility(rows: &[String]) {
+    let (radian, steradian) = compatibility_grants(rows);
+    crate::units::angle_mode::set_marker_grants(radian, steradian);
+}
+
+/// The grants (radian, steradian) the rows of a `[Compatibility]` section give; a row that cannot be read is
+/// reported on stderr and grants nothing.
+fn compatibility_grants(rows: &[String]) -> (bool, bool) {
     let (mut radian, mut steradian) = (false, false);
     for row in rows {
         match read_compatibility_row(row) {
@@ -789,7 +824,7 @@ fn apply_compatibility(rows: &[String]) {
             Err(why) => eprintln!("physure.conf: {why}; the row is ignored"),
         }
     }
-    crate::units::angle_mode::set_marker_grants(radian, steradian);
+    (radian, steradian)
 }
 
 /// Flags the units that `[Compatibility] periodic` names, once they are registered. A name is any spelling of the
@@ -1904,6 +1939,28 @@ mod tests {
         crate::units::angle_mode::set_marker_grants(true, true);
         collected.apply();
         assert_eq!(marker_grants(), (false, true));
+    }
+
+    #[test]
+    fn activation_gives_the_file_alone_over_the_defaults_in_one_step() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let file = ProcessSettings {
+            settings: vec![Setting::ParallelThreshold(1), Setting::MaxPipelineSteps(5), Setting::ParallelThreshold(777)],
+            compatibility: Some(vec!["steradian, plain = convert".into()]),
+        };
+        // leftovers of some other file: all of them must go
+        crate::settings::set_max_loop_iterations(3);
+        crate::units::angle_mode::set_marker_grants(true, false);
+        file.activate();
+        assert_eq!(crate::settings::parallel_threshold(), 777);
+        assert_eq!(crate::settings::max_pipeline_steps(), 5);
+        assert_eq!(crate::settings::max_loop_iterations(), crate::settings::DEFAULT_MAX_LOOP_ITERATIONS);
+        assert_eq!(marker_grants(), (false, true));
+        ProcessSettings::default().activate();
+        assert_eq!(crate::settings::parallel_threshold(), crate::settings::DEFAULT_PARALLEL_THRESHOLD);
+        assert_eq!(marker_grants(), (true, true));
     }
 
     #[test]
