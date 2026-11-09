@@ -7,9 +7,10 @@ use std::collections::HashMap;
 
 /// Everything a catalog determines, as sorted lines, so two catalogs can be compared line by line and a difference
 /// names what differs: for every name the registry knows, the unit it stands for (scale, zero point, level, exact
-/// value, as `Debug`) and its facts (dimension, kind, linearity, alias, simplified form; the error text where there
-/// are none); the prefixes with their exact values and spelled-out names; the names of each unit, the base unit of
-/// each dimension, the recipes and the units that take no prefix; the metadata of units and constants; the constants;
+/// value, the `periodic` flag of `[Compatibility]`, as `Debug`) and its facts (dimension, kind, linearity, alias,
+/// simplified form; the error text where there are none); the prefixes with their exact values and spelled-out
+/// names; the names of each unit, the base unit of each dimension, the recipes with their names and the units that
+/// take no prefix; the metadata of units and constants; the constants;
 /// your atomic weights, every edition's table and the selection; the categories; and the process-wide settings that
 /// can be read (they are not part of a registry, so they describe the process at the moment of the call).
 pub fn describe(registry: &UnitRegistry, constants: &HashMap<String, String>) -> Vec<String> {
@@ -38,6 +39,9 @@ pub fn describe(registry: &UnitRegistry, constants: &HashMap<String, String>) ->
     }
     for name in &registry.recipes {
         lines.push(format!("recipe {name}"));
+    }
+    for (key, names) in &registry.recipe_aliases {
+        lines.push(format!("recipe names of {key:?} = {names:?}"));
     }
     for name in &registry.no_prefix {
         lines.push(format!("no prefix {name}"));
