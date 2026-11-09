@@ -20,7 +20,7 @@ This document serves as the **single source of truth** for tracking project-wide
 | **6. Scientific Companion & Metrology** | 🚧 In Progress | 40% | [Scientific Companion Roadmap](scientific_roadmap.md) | Buckingham $\pi$, IAPWS-IF97, EKF, Polars/Xarray |
 | **7. Metrological Rigor & Physical Reality Gaps**| 🚧 In Progress | 17% | [Scientific Gaps & Rigor](scientific_gaps_and_rigor.md) | Welch-Satterthwaite, DAEs, Real EOS, Intervals |
 | **8. PHS Language Readiness (LAB-READY)** | ✅ Complete | 100% | [Language Readiness Roadmap](language_readiness_roadmap.md) | `physure-script` loops/concurrency, `physure-cli` debugger, `DebugHook` |
-| **9. Reproducibility & Audited Use (`phs conf`)** | 🚧 Phases 1a (file model and seal) and 1b (engine identity) done; 1c/1d next | 15% | [Design spec](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md) | Frozen configuration, engine pin, witnesses, `phs conf freeze/diff/update` |
+| **9. Reproducibility & Audited Use (`phs conf`)** | 🚧 Phases 1a (file model and seal), 1b (engine identity) and 1c (resolution, sealed loading, freeze/update/seal operations) done; 1d next | 25% | [Design spec](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md) | Frozen configuration, engine pin, witnesses, `phs conf freeze/diff/update` |
 
 ---
 
@@ -54,7 +54,7 @@ For detailed architectural designs, mathematical specifications, API proposals, 
    * `for`/`while` loops, `rayon`-backed data-parallelism and `parallel_map`, and an interpreter `DebugHook` powering a `phs debug` CLI debugger (DAP adapter staged as a stretch goal) — the path to the LAB-READY milestone.
 
 8. 🔒 **[`phs conf`: freezing the whole configuration](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md)**
-   * For audited settings: the data (conf sections, unit systems, constants), the engine (pinned by version, commit, build and binary hash) and the environment are frozen into a sealed `physure.frozen.conf` with a hash-chained history; `phs conf freeze / diff / update / seal / verify` change it only deliberately. Design approved 2026-11-07; Phase 1a (file model and seal) and Phase 1b (engine identity and its pinning policies) are done; Phase 1c (resolution, sealed loading, the freeze/update/seal operations, the hash cache) is next, then 1d (the registry entry listing).
+   * For audited settings: the data (conf sections, unit systems, constants), the engine (pinned by version, commit, build and binary hash) and the environment are frozen into a sealed `physure.frozen.conf` with a hash-chained history; `phs conf freeze / diff / update / seal / verify` change it only deliberately. Design approved 2026-11-07; Phases 1a (file model and seal), 1b (engine identity and its pinning policies) and 1c (resolution, sealed loading that fails closed for every consumer, the freeze/update/seal operations) are done; 1d (the registry entry listing) is next, then the CLI (Phase 2); the Python and Java bindings refuse while a frozen file is in force until Phase 5 wires them.
 
 ---
 
@@ -64,7 +64,7 @@ For detailed architectural designs, mathematical specifications, API proposals, 
 timeline
     title Physure Master Development Milestones
     Done : Rust Core Engine : Rust Core Chemistry Module (formulas, molar mass, balancing, thermo) : Frozen Atomic-Weight Editions (CIAAW 2024) : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression : PHS LAB-READY (loops, concurrency, debugger, incremental LSP, compiled exports, decorators) : Rust-Owned Unit Algebra (A1) : GUM Welch-Satterthwaite : Angle Mode
-    Now : PHS DSL Chemistry Builtins : Python Delegates to the Core Chemistry : phs conf (Freezing the Whole Configuration, Phase 1b/1c: engine identity, resolution, sealed loading) : Buckingham Pi Nullspace Solver
+    Now : PHS DSL Chemistry Builtins : Python Delegates to the Core Chemistry : phs conf (Freezing the Whole Configuration, Phase 1d and the CLI: registry entry listing, phs conf commands) : Buckingham Pi Nullspace Solver
     Next : CAS Exact-Arithmetic Placement (S0) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Risch Integration Engine : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Real Gas EOS
     Later : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
 ```
@@ -112,7 +112,7 @@ timeline
 
 ### Subsystem 6: Reproducibility & Audited Use (15% 🚧)
 * [x] **Frozen atomic-weight editions**: named, immutable CIAAW editions with a fingerprint test, tables of your own, and the edition report (`atomic_weight_edition()`).
-* [ ] **Phase 1 — core**: **1a done** (`physure_core::frozen`: SHA-256, canonical form, frozen-file model, hash-chained history, seal and verifier); **1b done** (`physure_core::frozen::engine`: the engine identity from a `build.rs` with a tested commit rule, the four policies `binary`/`build`/`release`/`record`, the strict `[Engine]` block, the `[Environment]` record, and each history entry recording the engine block it sealed); **1c remains** (resolution: `--conf`, `PHYSURE_CONF`, discovery, `PHYSURE_REQUIRE_FROZEN`; sealed loading into a `UnitRegistry`; the freeze/update/seal operations over the real catalog; the per-process cache of the engine file's hash) and **1d** (the registry entry listing).
+* [ ] **Phase 1 — core**: **1a done** (`physure_core::frozen`: SHA-256, canonical form, frozen-file model, hash-chained history, seal and verifier); **1b done** (`physure_core::frozen::engine`: the engine identity from a `build.rs` with a tested commit rule, the four policies `binary`/`build`/`release`/`record`, the strict `[Engine]` block, the `[Environment]` record, and each history entry recording the engine block it sealed); **1c done** (`physure_core::frozen::{active, load, ops}`: resolution from the host's explicit path, `PHYSURE_CONF`, discovery and `PHYSURE_REQUIRE_FROZEN`; sealed loading that replays only the file's sources, strictly; the catalog hooks fail closed for the core, PHS, the CLI and the language server, `ensure_valid()` with exit codes 1/2/3, one configuration per process; the per-process caches; `freeze`, `plan_update`, `plan_seal` and `write_atomic`; Python and Java refuse until Phase 5); **1d remains** (the registry entry listing).
 * [ ] **Phase 2 — CLI**: `phs conf` `status`, `show`, `freeze`, `verify`, `diff`, `update`, `seal`, `history`.
 * [ ] **Phase 3 — witnesses**: built-in reference calculations and user scripts, `verify --run`.
 * [ ] **Phase 4 — data migration**: code-resident numbers (currency rates, Monte Carlo defaults, Python chemistry tables) move into the catalog; a public table of what is and is not frozen.
