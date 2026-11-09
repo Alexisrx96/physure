@@ -7,13 +7,12 @@
 //! therefore not pinned: `overflow-checks`, `lto`, `codegen-units`, the versions of dependencies when `physure`
 //! is built inside someone else's workspace, and every dynamically linked library.
 //!
-//! **Scope of `commit`:** the commit and the dirty check cover **physure-core** only (this crate and the two
-//! workspace manifests). The code that evaluates also includes `physure-script` (the PHS interpreter),
-//! `physure-cli` and the bindings; an edit there is not detected by this crate's build script, which does not even
-//! rerun when they change. `build` therefore pins the core's source revision, not the whole evaluating engine; only
-//! `binary` pins the artefact. Inside a git repository (the crate or an ancestor has a `.git`) the commit comes from
-//! git alone, and only when git can read the repository and the crate sits at its root; otherwise it is `unknown`.
-//! `PHYSURE_BUILD_COMMIT` is used only when the crate is outside any repository.
+//! **The `commit` is a claim, not a proof.** The release pipeline sets `PHYSURE_BUILD_COMMIT` to the commit it checked
+//! out and the build records it; without the variable the commit is `unknown`, which never equals anything. Nothing
+//! asks git: a build cannot prove that the files it compiles are those of a commit. It also covers **physure-core**
+//! at most, while the code that evaluates includes `physure-script`, `physure-cli` and the bindings. `build` therefore
+//! pins what the builder says about the core's source revision, not the whole evaluating engine; only `binary` pins
+//! the artefact.
 
 use std::fs::File;
 use std::io::Read;
@@ -253,7 +252,7 @@ pub fn check(
 pub fn freezable(identity: &EngineIdentity, policy: EnginePolicy) -> Result<(), String> {
     if matches!(policy, EnginePolicy::Build | EnginePolicy::Binary) && identity.commit == UNKNOWN {
         return Err(format!(
-            "this build does not know its commit (build it from a clean git checkout that git can read, or, outside any git repository, set PHYSURE_BUILD_COMMIT to the full hash), so the policy {} cannot be recorded; use release or record",
+            "this build does not name its commit (build it with PHYSURE_BUILD_COMMIT set to the full lowercase hash), so the policy {} cannot be recorded; use release or record",
             policy.as_str()
         ));
     }
@@ -379,11 +378,6 @@ pub(crate) fn sha256_of_reader(mut reader: impl Read) -> std::io::Result<String>
     Ok(to_hex(&hasher.finish()))
 }
 
-// The build script's way of asking git, so that the test of the running identity asks exactly the same.
-#[cfg(test)]
-#[path = "../../build_support/git.rs"]
-mod git_facts;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn the_running_identity_is_valid_and_its_commit_is_head_when_the_tree_is_clean() {
+    fn the_running_identity_is_valid_and_its_commit_is_what_the_variable_says() {
         let now = EngineIdentity::current();
         now.validate().unwrap();
         assert_eq!(now.version, env!("CARGO_PKG_VERSION"));
@@ -416,28 +410,9 @@ mod tests {
         assert!(now.target.contains('-'), "a target triple: {}", now.target);
         assert!(now.rustc.starts_with("rustc "), "{}", now.rustc);
         assert!(now.flags.starts_with("opt-level="), "{}", now.flags);
-        // The commit must be what the build's rule gives for the tree as it is now, with the inputs gathered by the
-        // very code build.rs uses (`build_support/git.rs`). No weaker fallback: a stale or false commit fails here,
-        // inside a git hook too.
-        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let facts = git_facts::facts(manifest);
+        // the commit is what the build's rule gives for the variable as it is now (the script reruns when it changes)
         let variable = std::env::var("PHYSURE_BUILD_COMMIT").ok();
-        let inputs = commit_rules::Inputs {
-            env: variable.as_deref(),
-            git_head: facts.head.as_deref(),
-            dirty: facts.dirty,
-            in_repository: facts.in_repository,
-        };
-        let expected = commit_rules::decide(&inputs).commit;
-        let hook = match std::env::var_os("GIT_DIR") {
-            Some(dir) => format!(" (GIT_DIR={dir:?} is set, as inside a git hook; git was asked without it, as build.rs does)"),
-            None => String::new(),
-        };
-        assert_eq!(
-            now.commit, expected,
-            "stale or false commit: head {:?}, dirty {}, in a repository {}{hook}",
-            facts.head, facts.dirty, facts.in_repository
-        );
+        assert_eq!(now.commit, commit_rules::decide(variable.as_deref()).commit);
     }
 
     #[test]

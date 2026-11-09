@@ -23,6 +23,10 @@ concurrency:
 permissions:
   contents: read
 
+# the engine identity (frozen configurations, spec section 7) names the commit the pipeline says it built
+env:
+  PHYSURE_BUILD_COMMIT: ${{ github.sha }}
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
