@@ -6,6 +6,7 @@ use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
 mod check;
 mod conf;
+mod conf_witness;
 mod config;
 mod debug;
 mod eval;

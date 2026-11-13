@@ -83,6 +83,73 @@ pub fn evaluate(source: &str, limits: Limits, seed: u64) -> Report {
     run_sandboxed(limits, move |interp| physure_core::uncertainty::with_seed(seed, || evaluate_in(&interp, &source)))
 }
 
+/// [`evaluate`] with the loop-iteration and pipeline-step ceilings fixed for this run, opened on the thread that
+/// evaluates (`settings::scoped_max_loop_iterations`, `settings::scoped_max_pipeline_steps`): the process-wide values,
+/// which an activated configuration file sets from its `[Settings]`, do not apply. For text that comes with a file
+/// received from elsewhere (a frozen file's witness scripts), whose settings must not raise its own bounds.
+pub fn evaluate_with_ceilings(source: &str, limits: Limits, seed: u64, max_loop_iterations: usize, max_pipeline_steps: usize) -> Report {
+    let source = source.to_string();
+    run_sandboxed(limits, move |interp| {
+        let _loops = physure_core::settings::scoped_max_loop_iterations(max_loop_iterations);
+        let _steps = physure_core::settings::scoped_max_pipeline_steps(max_pipeline_steps);
+        physure_core::uncertainty::with_seed(seed, || evaluate_in(&interp, &source))
+    })
+}
+
+/// The first line of [`canonical_witness`]: the version of the format.
+pub const WITNESS_FORMAT: &str = "phs-witness-1";
+
+/// The canonical result of a witness script (format `phs-witness-1`), whose SHA-256 a frozen file records: what the
+/// program computed, never how it was worded. One line per line of text, LF-terminated:
+///
+/// * `phs-witness-1`;
+/// * `ok true` or `ok false`;
+/// * per result item, in order: `item line=<n> name=<json> kind=<kind> value=<bits> uncertainty=<bits> unit=<json>
+///   dimension=<json>`, where `<bits>` is the IEEE-754 bit pattern as 16 lowercase hexadecimal digits (non-finite
+///   values included: they have bit patterns too) or `-` when absent, and `<json>` is a JSON string or `-`; a value
+///   that has no number (a boolean, a string, a function, ...) adds ` text=<json>` (what the interpreter prints,
+///   since nothing else says what it is); the elements of a vector follow as `element <depth> ...` lines in the same
+///   form;
+/// * per error finding, in order: `error <code>` (the code only: never the message, which may be reworded, and
+///   never a warning).
+pub fn canonical_witness(report: &Report) -> String {
+    let mut text = format!("{WITNESS_FORMAT}\nok {}\n", report.ok);
+    for item in &report.results {
+        let name = item.name.as_deref().map_or_else(|| "-".to_string(), json_string);
+        text.push_str(&format!("item line={} name={name} ", item.line));
+        canonical_value(&item.value, 0, &mut text);
+    }
+    for finding in report.diagnostics.iter().filter(|d| d.severity == "error") {
+        text.push_str(&format!("error {}\n", finding.code));
+    }
+    text
+}
+
+fn json_string(text: &str) -> String {
+    serde_json::to_string(text).unwrap_or_default()
+}
+
+fn canonical_value(value: &Value, depth: usize, text: &mut String) {
+    let bits = |x: Option<f64>| x.map_or_else(|| "-".to_string(), |x| format!("{:016x}", x.to_bits()));
+    let words = |x: &Option<String>| x.as_deref().map_or_else(|| "-".to_string(), json_string);
+    text.push_str(&format!(
+        "kind={} value={} uncertainty={} unit={} dimension={}",
+        value.kind,
+        bits(value.value),
+        bits(value.uncertainty),
+        words(&value.unit),
+        words(&value.dimension)
+    ));
+    if value.value.is_none() {
+        text.push_str(&format!(" text={}", json_string(&value.text)));
+    }
+    text.push('\n');
+    for element in value.items.iter().flatten() {
+        text.push_str(&format!("element {} ", depth + 1));
+        canonical_value(element, depth + 1, text);
+    }
+}
+
 fn evaluate_in(interp: &PhsInterpreter, source: &str) -> Report {
     let program = match crate::parser::parse_phs(source) {
         Ok(program) => program,
@@ -185,7 +252,8 @@ fn error(line: usize, code: &str, message: String) -> Finding {
 }
 
 fn classify(message: &str) -> &'static str {
-    if ["call depth limit", "stack limit", "time limit"].iter().any(|prefix| message.contains(prefix)) {
+    let ceilings = ["max_loop_iterations ceiling", "max_pipeline_steps ceiling"];
+    if ["call depth limit", "stack limit", "time limit"].iter().chain(&ceilings).any(|prefix| message.contains(prefix)) {
         "limit"
     } else if message.contains("forbidden:") {
         "forbidden"

@@ -160,3 +160,109 @@ fn convert_refuses_what_the_core_refuses_and_a_unit_that_is_too_long() {
     assert!(convert(1.0, &long, "m").unwrap_err().contains("too long"));
     assert!(describe_unit(&long).unwrap_err().contains("too long"));
 }
+
+
+// ---- the canonical result of a witness (conf freeze Phase 3, correction C6) ----
+
+use physure_script::report::{canonical_witness, evaluate_with_ceilings, Finding, Item, Value, WITNESS_FORMAT};
+
+fn quantity(value: f64, uncertainty: f64) -> Value {
+    Value {
+        kind: "quantity",
+        text: format!("{value} m"),
+        value: Some(value),
+        uncertainty: Some(uncertainty),
+        unit: Some("m".into()),
+        dimension: Some("L".into()),
+        items: None,
+    }
+}
+
+fn one_item(value: Value, diagnostics: Vec<Finding>) -> Report {
+    Report { ok: true, results: vec![Item { line: 1, name: Some("x".into()), value }], diagnostics }
+}
+
+fn finding(severity: &'static str, code: &str, message: &str) -> Finding {
+    Finding { line: 1, severity, code: code.into(), message: message.into() }
+}
+
+#[test]
+fn the_canonical_witness_names_its_format_and_every_part_of_a_result() {
+    let text = canonical_witness(&one_item(quantity(1.5, 0.25), vec![finding("error", "runtime", "boom")]));
+    assert_eq!(
+        text,
+        format!(
+            "{WITNESS_FORMAT}\nok true\nitem line=1 name=\"x\" kind=quantity value={:016x} uncertainty={:016x} unit=\"m\" dimension=\"L\"\nerror runtime\n",
+            1.5f64.to_bits(),
+            0.25f64.to_bits()
+        )
+    );
+    assert_eq!(WITNESS_FORMAT, "phs-witness-1");
+}
+
+#[test]
+fn the_canonical_witness_is_stable_under_message_text_and_warnings() {
+    let base = canonical_witness(&one_item(quantity(2.0, 0.0), vec![finding("error", "dimension-mismatch", "cannot add m and s")]));
+    let reworded = canonical_witness(&one_item(
+        quantity(2.0, 0.0),
+        vec![finding("error", "dimension-mismatch", "m and s do not add"), finding("warning", "unused", "x is never read")],
+    ));
+    assert_eq!(base, reworded);
+    // the printed text of a number is not part of it either (only its bits are)
+    let mut printed = quantity(2.0, 0.0);
+    printed.text = "2.000 m".into();
+    assert_eq!(canonical_witness(&one_item(printed, Vec::new())), canonical_witness(&one_item(quantity(2.0, 0.0), Vec::new())));
+    // a code is
+    let other_code = canonical_witness(&one_item(quantity(2.0, 0.0), vec![finding("error", "runtime", "cannot add m and s")]));
+    assert_ne!(base, other_code);
+}
+
+#[test]
+fn the_canonical_witness_changes_when_a_value_moves_by_one_ulp() {
+    let x = 0.1f64 + 0.2;
+    let next = f64::from_bits(x.to_bits() + 1);
+    let a = canonical_witness(&one_item(quantity(x, 0.01), Vec::new()));
+    assert_ne!(a, canonical_witness(&one_item(quantity(next, 0.01), Vec::new())));
+    assert_ne!(a, canonical_witness(&one_item(quantity(x, f64::from_bits(0.01f64.to_bits() + 1)), Vec::new())));
+    assert_ne!(canonical_witness(&one_item(quantity(0.0, 0.0), Vec::new())), canonical_witness(&one_item(quantity(-0.0, 0.0), Vec::new())));
+}
+
+#[test]
+fn non_finite_and_absent_values_are_explicit() {
+    let infinite = canonical_witness(&one_item(quantity(f64::INFINITY, 0.0), Vec::new()));
+    let negative = canonical_witness(&one_item(quantity(f64::NEG_INFINITY, 0.0), Vec::new()));
+    let nan = canonical_witness(&one_item(quantity(f64::NAN, 0.0), Vec::new()));
+    assert!(infinite.contains("value=7ff0000000000000"), "{infinite}");
+    assert!(negative.contains("value=fff0000000000000"), "{negative}");
+    assert!(nan.contains(&format!("value={:016x}", f64::NAN.to_bits())), "{nan}");
+    assert!(infinite != negative && infinite != nan && negative != nan);
+    // a value without a number says so, and what it is
+    let boolean = Value { kind: "bool", text: "true".into(), value: None, uncertainty: None, unit: None, dimension: None, items: None };
+    let text = canonical_witness(&Report { ok: true, results: vec![Item { line: 2, name: None, value: boolean }], diagnostics: Vec::new() });
+    assert!(text.contains("item line=2 name=- kind=bool value=- uncertainty=- unit=- dimension=- text=\"true\""), "{text}");
+}
+
+#[test]
+fn the_canonical_witness_of_a_real_run_has_its_vector_elements_and_strings() {
+    let report = run("v = vector(1 m, 2 m)\ns = \"two\nlines\"\nok_flag = 1 m < 2 m");
+    assert!(report.ok, "{:?}", report.diagnostics);
+    let text = canonical_witness(&report);
+    assert_eq!(text.lines().filter(|l| l.starts_with("element 1 kind=quantity")).count(), 2, "{text}");
+    assert!(text.contains(r#"text="\"two\nlines\"""#) || text.contains(r#"text="two\nlines""#), "{text}");
+    assert_eq!(text.lines().count(), 2 + 3 + 2, "{text}");
+    assert_eq!(canonical_witness(&run("v = vector(1 m, 2 m)\ns = \"two\nlines\"\nok_flag = 1 m < 2 m")), text, "deterministic");
+}
+
+#[test]
+fn the_fixed_ceilings_hold_whatever_the_process_wide_settings_say() {
+    let program = "x = for i in 0..5000 { i }";
+    let limits = || Limits::sandboxed(Duration::from_secs(60));
+    let before = physure_core::settings::set_max_loop_iterations(usize::MAX);
+    let refused = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 1_000, 1_000);
+    let allowed = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 10_000, 1_000);
+    physure_core::settings::set_max_loop_iterations(before);
+    assert!(!refused.ok);
+    assert_eq!(codes(&refused), [(1, "limit")], "{:?}", refused.diagnostics);
+    assert!(refused.diagnostics[0].message.contains("ceiling of 1000"), "{:?}", refused.diagnostics);
+    assert!(allowed.ok, "{:?}", allowed.diagnostics);
+}
