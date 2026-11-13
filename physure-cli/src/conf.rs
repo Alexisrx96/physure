@@ -57,6 +57,7 @@ FLAGS:
     --json                     One JSON document on stdout, with \"schema\": 1 and \"command\"
     --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
     --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
+                               (with --json they never ask: --json needs --yes to write)
     -h, --help                 This help
 
 EXIT CODES:
@@ -909,13 +910,23 @@ fn merge(into: &mut Value, extra: &Value) {
 }
 
 /// The end of `update` and `seal`: the preview is printed (text) or carried in the document (JSON), the person
-/// confirms, the file is written if it did not change since it was read, and the new seal is printed.
+/// confirms, the file is written if it did not change since it was read, and the new seal is printed. With `--json`
+/// the preview is printed only at the end, inside the document, so it never asks: without `--yes` it refuses (exit 2)
+/// with the preview in the document.
 fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Value), file: &FrozenFile, stamp: &FileStamp) -> Outcome {
     let (preview_text, preview_fields) = preview;
     if !args.json {
         say(&escape_controls(&preview_text));
     }
-    let written = confirm(args.yes, &format!("`phs conf {command}` rewrites {}", shown(path)))
+    let asked = if args.json && !args.yes {
+        Err(format!(
+            "with --json, `phs conf {command}` never asks (the preview is in this document, printed at the end): pass --yes to write {}; nothing written",
+            shown(path)
+        ))
+    } else {
+        confirm(args.yes, &format!("`phs conf {command}` rewrites {}", shown(path)))
+    };
+    let written = asked
         .map_err(|message| failure(command, 2, message))
         .and_then(|()| write_planned(command, path, file, stamp));
     if let Err(mut outcome) = written {

@@ -1160,6 +1160,30 @@ fn seal_under_an_engine_the_file_does_not_pin_is_exit_3_and_names_update() {
     assert_eq!(bytes(&dir), before, "nothing written");
 }
 
+/// Review finding 10: with --json the preview is inside the one document, printed at the end, so asking first would ask
+/// about something not yet shown: --json without --yes never asks; it refuses with the preview in the document.
+#[test]
+fn json_without_yes_never_asks_and_carries_the_preview() {
+    let dir = Dir::new("json_without_yes");
+    freeze_cli(&dir, &[]);
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    let before = bytes(&dir);
+    let output = dir.conf(&["seal", "--reason", "mine", "--json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let doc = json(&output);
+    let error = doc["error"].as_str().unwrap();
+    assert!(error.contains("--json") && error.contains("--yes") && error.contains("never asks"), "{doc}");
+    assert!(doc["data"].as_array().unwrap().iter().any(|c| c["name"] == "zz_unit"), "the preview: {doc}");
+    assert_eq!(doc["written"], Value::Bool(false));
+    assert!(!stderr(&output).contains("Proceed?"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before, "nothing written");
+    let other = Dir::new("json_without_yes_update");
+    other.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    let doc = json(&other.conf(&["update", "--reason", "adopt", "--json"]));
+    assert!(doc["error"].as_str().unwrap().contains("never asks"), "{doc}");
+    assert!(doc["engine"].as_array().unwrap().iter().any(|c| c["key"] == "version"), "{doc}");
+}
+
 #[test]
 fn seal_on_a_sound_file_is_exit_0_nothing_to_do() {
     let dir = Dir::new("seal_sound");
