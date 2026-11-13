@@ -328,6 +328,40 @@ fn conf_help_prints_the_commands() {
     }
 }
 
+/// Review finding 8: `--help --json` is one JSON document too.
+#[test]
+fn conf_help_json_is_a_document() {
+    let dir = Dir::new("help_json");
+    let output = dir.conf(&["--help", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!((doc["schema"].clone(), doc["command"].clone()), (Value::from(1), Value::from("conf")));
+    assert!(doc["help"].as_str().unwrap().contains("phs conf freeze"), "{doc}");
+}
+
+/// Review finding 8: a reader that stops early (`phs conf show | head`) is a normal end, never a panic (exit 101).
+#[test]
+fn a_reader_that_stops_early_is_not_a_panic() {
+    use std::process::Stdio;
+    let dir = Dir::new("broken_pipe");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_phs"))
+        .args(["conf", "show"])
+        .current_dir(&dir.0)
+        .env_remove("PHYSURE_CONF")
+        .env_remove("PHYSURE_REQUIRE_FROZEN")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("phs runs");
+    // the whole catalog is far larger than a pipe's buffer: closing the reader before reading anything makes the
+    // writer meet a broken pipe
+    drop(child.stdout.take());
+    let output = child.wait_with_output().expect("phs ends");
+    let err = stderr(&output);
+    assert!(!err.contains("panicked"), "{err}");
+    assert_eq!(output.status.code(), Some(0), "{err}");
+}
+
 /// C1: `conf` is dispatched before anything else looks at the arguments, so a word another command would claim
 /// (`help`, `doc`, `repl`, `daemon`, `-V`) never runs that command.
 #[test]

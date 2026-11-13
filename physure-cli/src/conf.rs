@@ -185,24 +185,41 @@ fn escape_controls(text: &str) -> String {
     escaped
 }
 
+/// Writes `text` to `out` and flushes it. A failure to write is not reported, since there is nowhere left to report
+/// it: above all a reader that stopped early (`phs conf show | head`, a broken pipe) is a normal end, never a panic,
+/// and the exit code stays the command's.
+fn emit(mut out: impl Write, text: &str) {
+    let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+}
+
+/// [`emit`] to stdout.
+fn say(text: &str) {
+    emit(std::io::stdout().lock(), text);
+}
+
+/// [`emit`] to stderr.
+fn say_error(text: &str) {
+    emit(std::io::stderr().lock(), text);
+}
+
 /// Runs `phs conf ...` (the whole argument list, `phs` and `conf` included), prints its outcome and exits.
 pub fn run_conf(args: &[String]) -> ! {
     let rest = args.get(2..).unwrap_or_default();
     let wants_json = rest.iter().any(|a| a == "--json");
     let outcome = match parse(rest) {
         Err(message) => failure("conf", 2, message),
-        Ok(parsed) if parsed.help => Outcome { text: HELP.to_string(), json: Value::Null, code: 0, error: false },
+        Ok(parsed) if parsed.help => Outcome { text: HELP.to_string(), json: document("conf", json!({ "help": HELP })), code: 0, error: false },
         Ok(parsed) => run(&parsed),
     };
     if wants_json && !outcome.json.is_null() {
-        println!("{}", serde_json::to_string_pretty(&outcome.json).unwrap_or_default());
+        say(&format!("{}\n", serde_json::to_string_pretty(&outcome.json).unwrap_or_default()));
         if outcome.error {
-            eprintln!("phs conf: {}", escape_controls(&outcome.text));
+            say_error(&format!("phs conf: {}\n", escape_controls(&outcome.text)));
         }
     } else if outcome.error {
-        eprintln!("phs conf: {}", escape_controls(&outcome.text));
+        say_error(&format!("phs conf: {}\n", escape_controls(&outcome.text)));
     } else {
-        print!("{}", escape_controls(&outcome.text));
+        say(&escape_controls(&outcome.text));
     }
     process::exit(outcome.code)
 }
@@ -582,7 +599,7 @@ fn show(args: &ConfArgs) -> Outcome {
     }
     if !args.json {
         for warning in &warnings {
-            eprintln!("phs conf: warning: {}", escape_controls(warning));
+            say_error(&format!("phs conf: warning: {}\n", escape_controls(warning)));
         }
     }
     let fields = json!({
@@ -863,8 +880,7 @@ fn confirm(yes: bool, what: &str) -> Result<(), String> {
         return Err(format!("{what}: refusing to proceed without a terminal to confirm on; pass --yes in scripts; nothing written"));
     }
     let _ = std::io::stdout().flush();
-    eprint!("{}. Proceed? [y/N] ", escape_controls(what));
-    let _ = std::io::stderr().flush();
+    say_error(&format!("{}. Proceed? [y/N] ", escape_controls(what)));
     let mut answer = String::new();
     stdin.read_line(&mut answer).map_err(|e| format!("{what}: the answer cannot be read ({e}); nothing written"))?;
     match answer.trim().to_ascii_lowercase().as_str() {
@@ -887,7 +903,7 @@ fn merge(into: &mut Value, extra: &Value) {
 fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Value), file: &FrozenFile, stamp: &FileStamp) -> Outcome {
     let (preview_text, preview_fields) = preview;
     if !args.json {
-        print!("{}", escape_controls(&preview_text));
+        say(&escape_controls(&preview_text));
     }
     let written = confirm(args.yes, &format!("`phs conf {command}` rewrites {}", shown(path)))
         .map_err(|message| failure(command, 2, message))
@@ -1088,6 +1104,25 @@ mod tests {
     fn control_characters_are_escaped_and_lines_kept() {
         assert_eq!(escape_controls("a\u{1b}[31mb\nc\td\u{7f}\u{9b}é"), "a\\x1b[31mb\nc\\x09d\\x7f\\u{9b}é");
         assert_eq!(escape_controls("plain\n"), "plain\n");
+    }
+
+    /// A writer whose reader went away.
+    struct Closed;
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+    }
+
+    #[test]
+    fn a_broken_pipe_is_not_a_panic() {
+        emit(Closed, "anything\n");
+        let mut written = Vec::new();
+        emit(&mut written, "text\n");
+        assert_eq!(written, b"text\n");
     }
 
     #[test]
