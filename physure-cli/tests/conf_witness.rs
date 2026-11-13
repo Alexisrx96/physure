@@ -1156,3 +1156,54 @@ fn accept_witness_changes_with_nothing_changed_warns_and_still_exits_0() {
     let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
     assert!(!stderr(&output).contains("nothing changed"), "{}", text(&output));
 }
+
+/// `dir`'s frozen file with `edit` applied to its `[Witness]` pairs, re-sealed at the time of the last entry.
+fn reseal_now(dir: &Dir, edit: impl FnOnce(&mut Vec<(String, String)>)) {
+    let mut file = dir.frozen();
+    let mut pairs = file.witnesses().as_slice().to_vec();
+    edit(&mut pairs);
+    file.set_witnesses(Pairs::from_vec(pairs).unwrap());
+    let time = file.history().last().unwrap().time().to_string();
+    file.reseal(EntryInput { time: &time, action: "seal", engine: "test", actor: "t@h", reason: "edited", diff: "d" }).unwrap();
+    assert!(file.verify().is_empty(), "{:?}", file.verify());
+    dir.write(FROZEN_FILE_NAME, &file.render().unwrap());
+}
+
+/// Under `binary` (or `build`), with the pinned engine the one running, the battery of this exact build is known:
+/// an honest file records every case of it, so a case it lacks was removed.
+#[test]
+fn under_a_pinned_identical_engine_a_battery_case_the_file_lacks_is_an_error_exit_1() {
+    let dir = Dir::new("review_new_binary");
+    let output = dir.conf(&["freeze", "--reason", "pinned", "--engine-policy", "binary"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(verify_run(&dir, &[]).status.code(), Some(0), "{}", text(&verify_run(&dir, &[])));
+    reseal_now(&dir, |pairs| pairs.retain(|(k, _)| k != FOOT));
+    let output = verify_run(&dir, &["--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["witnesses_ok"], Value::Bool(false), "{doc}");
+    let errors = doc["witnesses"]["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{doc}");
+    assert_eq!(errors[0]["key"], Value::from(FOOT));
+    let message = errors[0]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("the recorded battery lacks {FOOT}")) && message.contains("this exact build"), "{message}");
+    assert!(doc["witnesses"]["new"].as_array().unwrap().is_empty(), "{doc}");
+    assert!(stdout(&verify_run(&dir, &[])).contains(&format!("ERROR {FOOT}")));
+}
+
+/// Under `release` the same build is not pinned, so a case the file lacks stays informational (see
+/// `a_case_the_file_lacks_is_new_and_informational_exit_0`); and a file under `binary` that records no built-in
+/// witness at all (made before witnesses existed) is still recorded by `update` without the flag.
+#[test]
+fn under_binary_a_file_without_the_battery_is_still_migrated_by_update() {
+    let dir = Dir::new("review_new_binary_migrate");
+    assert_eq!(dir.conf(&["freeze", "--reason", "pinned", "--engine-policy", "binary"]).status.code(), Some(0));
+    reseal_now(&dir, |pairs| pairs.retain(|(k, _)| !k.starts_with("builtin.")));
+    let output = verify_run(&dir, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).contains("nothing is witnessed"), "{}", text(&output));
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(keys(&dir.frozen(), "builtin.").len() >= 38);
+    assert_eq!(verify_run(&dir, &[]).status.code(), Some(0), "{}", text(&verify_run(&dir, &[])));
+}

@@ -1035,7 +1035,8 @@ const NOTHING_WITNESSED: &str = "nothing is witnessed: expected the built-in bat
 /// configuration in place; a relative path is made absolute), the battery in id order and then the file's own scripts
 /// in file order (decision S2), compared bit for bit with what it records. Nothing is evaluated when the file does not
 /// verify (exit 1), pins another engine (exit 3), or records no built-in witness (exit 1, correction C5). Exit 0 when
-/// every recorded witness matches (new cases are informational), 1 otherwise.
+/// every recorded witness matches (new cases are informational, except a built-in case under a pinned identical
+/// engine: [`new_battery_cases_are_errors`]), 1 otherwise.
 fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (String, Value, i32) {
     let not_run = witnesses_not_run;
     let file = match (inspection.exit_code(), inspection.file.as_ref()) {
@@ -1052,7 +1053,10 @@ fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (Strin
         Err(e) => return not_run(format!("the file cannot be put in force to evaluate under it: {}", e.message), e.code),
     };
     let run = evaluated.value;
-    let compared = compare_witnesses(file.witnesses(), &run.rows);
+    let mut compared = compare_witnesses(file.witnesses(), &run.rows);
+    if exact_build_pinned(inspection) {
+        new_battery_cases_are_errors(&mut compared);
+    }
     let mut text = format!("witnesses: checked {builtin} built-in, {user} user, under {}\n", shown(path));
     let (rows_text, mut witnesses) = witness_rows(&compared, &run);
     text.push_str(&rows_text);
@@ -1066,6 +1070,27 @@ fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (Strin
     witnesses["checked"] = Value::from(file.witnesses().len());
     let fields = json!({ "witnesses": witnesses, "witnesses_ok": ok, "witness_warnings": evaluated.warnings });
     (text, fields, if ok { 0 } else { 1 })
+}
+
+/// Whether the file pins this exact build: its policy is `binary` or `build` and the running engine satisfies it.
+/// The battery of the build is then known, and every case of it is what the file recorded when it was made.
+fn exact_build_pinned(inspection: &Inspection) -> bool {
+    matches!(inspection.engine, Some(EngineState::Matches { policy: EnginePolicy::Binary | EnginePolicy::Build, .. }))
+}
+
+/// Under [`exact_build_pinned`], a built-in case the file does not record (a `New` row) means keys were removed from
+/// the file (it records some of the battery: one that records none is the migration case, refused earlier as
+/// nothing witnessed): an error, not information. Under `release` and `record` another build with other cases may be
+/// running, so a new case stays informational there.
+fn new_battery_cases_are_errors(compared: &mut WitnessReport) {
+    for row in &mut compared.rows {
+        if row.status == WitnessStatus::New && row.key.starts_with("builtin.") {
+            row.status = WitnessStatus::Error(format!(
+                "the recorded battery lacks {}: expected every case of this exact build (the file pins it under the policy binary or build), so a case was removed from the file",
+                row.key
+            ));
+        }
+    }
 }
 
 /// The rows of a witness comparison for people and as JSON (`match`, `differs`, `missing`, `new`, `errors`): the
@@ -1525,7 +1550,37 @@ fn seal(args: &ConfArgs) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use physure_core::frozen::{freeze, plan_seal};
+    use physure_core::frozen::{freeze, plan_seal, WitnessRow};
+
+    /// Review item 7: only `binary` and `build`, with the engine matching, pin the battery of this exact build.
+    #[test]
+    fn a_new_battery_case_is_an_error_only_under_a_pinned_identical_engine() {
+        let inspection = |engine: Option<EngineState>| Inspection {
+            path: PathBuf::from("x"),
+            unreadable: None,
+            file: None,
+            problems: Vec::new(),
+            engine,
+            environment: Vec::new(),
+            catalog: None,
+            atomic_weight_edition: None,
+        };
+        let matches = |policy| Some(EngineState::Matches { policy, pinned: "v".into() });
+        assert!(exact_build_pinned(&inspection(matches(EnginePolicy::Binary))));
+        assert!(exact_build_pinned(&inspection(matches(EnginePolicy::Build))));
+        assert!(!exact_build_pinned(&inspection(matches(EnginePolicy::Release))));
+        assert!(!exact_build_pinned(&inspection(matches(EnginePolicy::Record))));
+        assert!(!exact_build_pinned(&inspection(Some(EngineState::Differs { policy: EnginePolicy::Build, differences: Vec::new() }))));
+        assert!(!exact_build_pinned(&inspection(None)));
+        let row = |key: &str, status| WitnessRow { key: key.into(), status };
+        let mut compared = WitnessReport {
+            rows: vec![row("builtin.a", WitnessStatus::New), row("user.b", WitnessStatus::New), row("builtin.c", WitnessStatus::Match)],
+        };
+        new_battery_cases_are_errors(&mut compared);
+        assert!(matches!(&compared.rows[0].status, WitnessStatus::Error(m) if m.contains("the recorded battery lacks builtin.a")));
+        assert_eq!(compared.rows[1].status, WitnessStatus::New, "a user witness is the file's own");
+        assert_eq!(compared.rows[2].status, WitnessStatus::Match);
+    }
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
