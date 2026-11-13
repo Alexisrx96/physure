@@ -282,7 +282,7 @@ fn unknown_and_unbuilt_commands_are_exit_2() {
     let output = dir.conf(&["frobnicate"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     assert!(stderr(&output).contains("status") && stderr(&output).contains("verify"), "{}", text(&output));
-    for planned in ["diff", "update", "seal"] {
+    for planned in ["update", "seal"] {
         let output = dir.conf(&[planned]);
         assert_eq!(output.status.code(), Some(2), "{planned}: {}", text(&output));
         assert!(stderr(&output).contains("not available in this build"), "{planned}: {}", text(&output));
@@ -648,4 +648,138 @@ this is not a line
     let doc = json(&dir.conf(&["show", "constants", "--json"]));
     assert_eq!(doc["frozen"], Value::Bool(false));
     assert!(doc["warnings"].to_string().contains("this is not a line"), "{doc}");
+}
+
+// ---- Task 8: diff ----
+
+#[test]
+fn diff_of_a_fresh_freeze_is_identical_exit_0() {
+    let dir = Dir::new("diff_fresh");
+    freeze_cli(&dir, &[]);
+    let output = dir.conf(&["diff"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stdout(&output).contains("identical"), "{}", text(&output));
+    // --allow-engine-mismatch is accepted and changes nothing
+    assert_eq!(dir.conf(&["diff", "--allow-engine-mismatch"]).status.code(), Some(0));
+}
+
+#[test]
+fn diff_after_editing_physure_conf_exit_1_and_names_the_unit() {
+    let dir = Dir::new("diff_drift");
+    freeze_cli(&dir, &[]);
+    dir.write("physure.conf", "[Units]
+zz_unit = 2.0, L, [zz_unit]
+");
+    let output = dir.conf(&["diff"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(out.contains("+ zz_unit"), "{out}");
+    // the default compares with the working directory: an upgrade and a drifted physure.conf both show here
+    assert!(out.contains("library upgrade") && out.contains("physure.conf"), "{out}");
+    assert!(out.contains("unit +1 -0 ~0"), "the summary: {out}");
+}
+
+#[test]
+fn diff_two_files() {
+    let a = Dir::new("diff_a");
+    let b = Dir::new("diff_b");
+    freeze_cli(&a, &[]);
+    b.write("physure.conf", "[Constants]
+molar_gas_constant = 8.0 J*mol^-1*K^-1
+");
+    freeze_cli(&b, &[]);
+    let (fa, fb) = (a.path(FROZEN_FILE_NAME), b.path(FROZEN_FILE_NAME));
+    let output = a.conf(&["diff", fa.to_str().unwrap(), fb.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(out.contains("~ molar_gas_constant: 8.31446261815324 J*mol^-1*K^-1 -> 8.0 J*mol^-1*K^-1"), "{out}");
+    assert!(!out.contains("library upgrade"), "the note is for the default only: {out}");
+    assert_eq!(a.conf(&["diff", fa.to_str().unwrap(), fa.to_str().unwrap()]).status.code(), Some(0));
+    // one argument: that file against what this build gives unfrozen here; `unfrozen` names that side
+    assert_eq!(a.conf(&["diff", FROZEN_FILE_NAME]).status.code(), Some(0));
+    assert_eq!(a.conf(&["diff", "unfrozen", FROZEN_FILE_NAME]).status.code(), Some(0));
+    assert_eq!(a.conf(&["diff", fb.to_str().unwrap()]).status.code(), Some(1));
+}
+
+#[test]
+fn diff_without_a_frozen_file_is_exit_2() {
+    let dir = Dir::new("diff_none");
+    let output = dir.conf(&["diff"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(stderr(&output).contains("nothing to compare"), "{}", text(&output));
+    assert_eq!(dir.conf(&["diff", "a", "b", "c"]).status.code(), Some(2), "three arguments");
+}
+
+#[test]
+fn diff_of_a_file_that_does_not_verify_or_does_not_exist_is_exit_1() {
+    let dir = Dir::new("diff_broken");
+    freeze_cli(&dir, &[]);
+    dir.write(FROZEN_FILE_NAME, &dir.read(FROZEN_FILE_NAME).replacen(R_VALUE, "= 8.31446261815325", 1));
+    let output = dir.conf(&["diff", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["identical"], Value::Bool(false));
+    assert!(!doc["a_problems"].as_array().unwrap().is_empty(), "{doc}");
+    let output = dir.conf(&["diff", "missing.frozen.conf"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stderr(&output).contains("missing.frozen.conf"), "{}", text(&output));
+}
+
+#[test]
+fn diff_of_a_file_for_another_engine_lists_the_engine_and_stays_1() {
+    let dir = Dir::new("diff_engine");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    for extra in [&[][..], &["--allow-engine-mismatch"][..]] {
+        let mut args = vec!["diff", "--json"];
+        args.extend_from_slice(extra);
+        let output = dir.conf(&args);
+        assert_eq!(output.status.code(), Some(1), "{extra:?}: {}", text(&output));
+        let engine = json(&output)["engine"].as_array().unwrap().clone();
+        assert!(engine.iter().any(|c| c["key"] == "version" && c["old"] == "0.0.1"), "{engine:?}");
+    }
+}
+
+#[test]
+fn diff_json_schema_is_stable() {
+    let dir = Dir::new("diff_json");
+    freeze_cli(&dir, &[]);
+    dir.write("physure.conf", "[Units]
+zz_unit = 2.0, L, [zz_unit]
+[Constants]
+molar_gas_constant = 8.0 J*mol^-1*K^-1
+");
+    let output = dir.conf(&["diff", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    for key in ["schema", "command", "a", "b", "identical", "data", "engine", "environment", "summary", "warnings"] {
+        assert!(doc.get(key).is_some(), "{key}: {doc}");
+    }
+    assert_eq!((doc["schema"].clone(), doc["command"].clone()), (Value::from(1), Value::from("diff")));
+    assert_eq!(doc["identical"], Value::Bool(false));
+    let data = doc["data"].as_array().unwrap();
+    let mut keys: Vec<&str> = data[0].as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort();
+    assert_eq!(keys, vec!["change", "kind", "name", "new", "old"]);
+    let changed = data.iter().find(|c| c["name"] == "molar_gas_constant" && c["kind"] == "constant").expect("the constant");
+    assert_eq!((changed["change"].clone(), changed["old"].clone(), changed["new"].clone()),
+        ("changed".into(), "8.31446261815324 J*mol^-1*K^-1".into(), "8.0 J*mol^-1*K^-1".into()));
+    let added = data.iter().find(|c| c["name"] == "zz_unit" && c["kind"] == "unit_names").expect("the unit");
+    assert_eq!((added["change"].clone(), added["old"].clone()), ("added".into(), Value::Null));
+}
+
+#[test]
+fn diff_does_not_modify_anything() {
+    let dir = Dir::new("diff_readonly");
+    freeze_cli(&dir, &[]);
+    dir.write("physure.conf", "[Units]
+zz_unit = 2.0, L, [zz_unit]
+");
+    let (frozen, local) = (fs::read(dir.path(FROZEN_FILE_NAME)).unwrap(), fs::read(dir.path("physure.conf")).unwrap());
+    dir.conf(&["diff"]);
+    dir.conf(&["diff", "--json"]);
+    assert_eq!(fs::read(dir.path(FROZEN_FILE_NAME)).unwrap(), frozen);
+    assert_eq!(fs::read(dir.path("physure.conf")).unwrap(), local);
+    let mut names: Vec<String> = fs::read_dir(&dir.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, vec!["physure.conf".to_string(), FROZEN_FILE_NAME.to_string()]);
 }

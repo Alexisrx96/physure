@@ -13,16 +13,16 @@ use std::process;
 
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::{
-    active, actor_from_env, embedded_entries, ensure_valid, entries_with_origin, freeze, history_rows, inspect, now_unix, section_and_key,
-    select, set_engine_file, set_explicit_conf, unfrozen_entries, write_atomic, EngineIdentity, EnginePolicy, EngineState, Entry,
-    FieldChange, FreezeOptions, Inspection, OpsError, Resolution, Why,
+    active, actor_from_env, compare, embedded_entries, ensure_valid, entries_with_origin, freeze, history_rows, inspect, now_unix, section_and_key,
+    select, set_engine_file, set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, EngineIdentity,
+    EnginePolicy, EngineState, Entry, FieldChange, FreezeOptions, Inspection, OpsError, Resolution, Side, Why,
 };
 use serde_json::{json, Value};
 
 /// The commands this build has.
-const COMMANDS: [&str; 5] = ["status", "show", "history", "freeze", "verify"];
+const COMMANDS: [&str; 6] = ["status", "show", "diff", "history", "freeze", "verify"];
 /// The commands of the design that this build does not have yet: they refuse instead of doing something else.
-const PLANNED: [&str; 3] = ["diff", "update", "seal"];
+const PLANNED: [&str; 2] = ["update", "seal"];
 
 const HELP: &str = "\
 phs conf: the frozen configuration (physure.frozen.conf)
@@ -33,18 +33,24 @@ USAGE:
                                The configuration in force as `section.key = value`, sorted: all of it, one section
                                (`constants`) or one key (`constants.molar_gas_constant`); --origin adds the source of
                                each value. A unit's value includes an internal `id` (a hash of this build)
+    phs conf diff [A] [B] [--allow-engine-mismatch]
+                               What differs between two configurations: data by kind (+ added, - removed,
+                               ~ changed old -> new), then engine and environment, with counts. Default: the file in
+                               force against what this build gives unfrozen here (`unfrozen` names that side); one
+                               argument: that file against it. Exit 0 identical, 1 different or a file that does not
+                               verify, 2 nothing to compare
     phs conf history [FILE]    The history of the file in force (or FILE), problems first
     phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH]
                                Write physure.frozen.conf from what is in force now (default policy: build)
     phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
-    phs conf diff | update | seal
+    phs conf update | seal
                                Planned; not available in this build
 
 FLAGS:
     --conf PATH                The frozen file in force (not with freeze, which writes to --out)
     --json                     One JSON document on stdout, with \"schema\": 1 and \"command\"
-    --allow-engine-mismatch    status, verify: inspect a file pinned to another engine (the exit code stays 3)
+    --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
     -h, --help                 This help
 
 EXIT CODES:
@@ -182,6 +188,7 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
     match command {
         "status" => (&["--conf", "--json", "--allow-engine-mismatch"], 0),
         "show" => (&["--conf", "--json", "--origin"], 1),
+        "diff" => (&["--conf", "--json", "--allow-engine-mismatch"], 2),
         "history" => (&["--conf", "--json"], 1),
         "freeze" => (&["--json", "--reason", "--engine-policy", "--out"], 0),
         "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch"], 1),
@@ -237,6 +244,7 @@ fn run(args: &ConfArgs) -> Outcome {
     match command {
         "status" => status(args),
         "show" => show(args),
+        "diff" => diff_command(args),
         "history" => history(args),
         "freeze" => freeze_command(args),
         _ => verify(args),
@@ -552,6 +560,129 @@ fn unfrozen_listing() -> Result<(Vec<(Entry, String)>, Vec<String>), String> {
         })
         .collect();
     Ok((listed, warnings))
+}
+
+/// A value of a field as text shows it: a key present on one side only has nothing on the other.
+fn or_none(value: &str) -> &str {
+    if value.is_empty() {
+        "(none)"
+    } else {
+        value
+    }
+}
+
+/// The catalog differences, grouped by kind (`+` added, `-` removed, `~` changed `old -> new`), as text and JSON.
+fn changes_report(changes: &[Change]) -> (String, Value) {
+    let mut text = String::new();
+    let mut rows = Vec::with_capacity(changes.len());
+    let mut kind = "";
+    for change in changes {
+        if change.kind() != kind {
+            kind = change.kind();
+            text.push_str(&format!("  {kind}:\n"));
+        }
+        let (what, old, new) = match change {
+            Change::Added(entry) => {
+                text.push_str(&format!("    + {} = {}\n", entry.name, entry.value));
+                ("added", Value::Null, Value::from(entry.value.as_str()))
+            }
+            Change::Removed(entry) => {
+                text.push_str(&format!("    - {} = {}\n", entry.name, entry.value));
+                ("removed", Value::from(entry.value.as_str()), Value::Null)
+            }
+            Change::Changed { name, old, new, .. } => {
+                text.push_str(&format!("    ~ {name}: {old} -> {new}\n"));
+                ("changed", Value::from(old.as_str()), Value::from(new.as_str()))
+            }
+        };
+        rows.push(json!({ "change": what, "kind": change.kind(), "name": change.name(), "old": old, "new": new }));
+    }
+    (text, Value::Array(rows))
+}
+
+/// Field differences (`[Engine]`, `[Environment]`) as text lines.
+fn field_lines(changes: &[FieldChange]) -> String {
+    changes.iter().map(|c| format!("  {}: {} -> {}\n", c.key, or_none(&c.old), or_none(&c.new))).collect()
+}
+
+/// What `diff` says of a comparison: text, JSON fields, and the exit code (0 identical, 1 otherwise).
+fn comparison_report(comparison: &Comparison, default: bool) -> (String, Value, i32) {
+    let mut text = format!("a: {}\nb: {}\n", comparison.a, comparison.b);
+    if default {
+        text.push_str(
+            "note: b is what this build gives unfrozen in this directory, so the data below covers both what a library \
+             upgrade changes and any drift of this directory's physure.conf from the frozen overrides (the frozen file \
+             ignores physure.conf)\n",
+        );
+    }
+    for (side, problems) in [("a", &comparison.a_problems), ("b", &comparison.b_problems)] {
+        if !problems.is_empty() {
+            text.push_str(&format!("{side} does not verify, so its catalog was not compared:\n"));
+            for problem in problems {
+                text.push_str(&format!("  {problem}\n"));
+            }
+        }
+    }
+    let (data_text, data) = changes_report(&comparison.data);
+    let counts = summary(&comparison.data);
+    text.push_str(&format!("data differences ({}): {counts}\n{data_text}", comparison.data.len()));
+    text.push_str(&format!("engine differences ({}):\n{}", comparison.engine.len(), field_lines(&comparison.engine)));
+    text.push_str(&format!(
+        "environment differences ({}, informational):\n{}",
+        comparison.environment.len(),
+        field_lines(&comparison.environment)
+    ));
+    let identical = comparison.is_identical();
+    text.push_str(if identical { "identical\n" } else { "different\n" });
+    for warning in &comparison.warnings {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
+    let fields = json!({
+        "a": comparison.a,
+        "b": comparison.b,
+        "identical": identical,
+        "data": data,
+        "engine": changes_json(&comparison.engine),
+        "environment": changes_json(&comparison.environment),
+        "summary": counts,
+        "warnings": comparison.warnings,
+        "a_problems": comparison.a_problems,
+        "b_problems": comparison.b_problems,
+    });
+    (text, fields, if identical { 0 } else { 1 })
+}
+
+/// `phs conf diff [A] [B] [--allow-engine-mismatch]`. No engine is checked (the blocks are compared as written), so
+/// `--allow-engine-mismatch` changes nothing, the exit code included.
+fn diff_command(args: &ConfArgs) -> Outcome {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => return failure("diff", 2, format!("the current directory cannot be read: {e}")),
+    };
+    let unfrozen = || Side::Unfrozen { cwd: cwd.clone() };
+    let side = |arg: &str| if arg == "unfrozen" { unfrozen() } else { Side::File(PathBuf::from(arg)) };
+    let (a, b) = match args.positional.as_slice() {
+        [] => match in_force("diff") {
+            Err(outcome) => return outcome,
+            Ok(None) => {
+                return failure(
+                    "diff",
+                    2,
+                    "no frozen configuration in force: nothing to compare (name a FILE, or two: A B; `unfrozen` stands for what this build gives unfrozen here)",
+                )
+            }
+            Ok(Some((path, _))) => (Side::File(path), unfrozen()),
+        },
+        [one] => (side(one), unfrozen()),
+        [one, two, ..] => (side(one), side(two)),
+    };
+    match compare(&a, &b, engine_file().as_deref()) {
+        Ok(comparison) => {
+            let (text, fields, code) = comparison_report(&comparison, args.positional.is_empty());
+            report("diff", text, fields, code)
+        }
+        Err(message) => failure("diff", 1, message),
+    }
 }
 
 /// The exit code of a refused operation (decision S2 of the Phase 2 plan): what the operation will not do, or a
