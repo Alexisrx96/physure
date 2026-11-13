@@ -201,14 +201,30 @@ pub struct WitnessRun {
     pub stuck: bool,
 }
 
+/// Why the result of a user witness cannot be a reference result, if it cannot: it has an error finding (`freeze`
+/// refuses such a script, so an honest file never records one).
+pub fn unclean(report: &Report) -> Option<String> {
+    if !report.ok {
+        let first = report.diagnostics.iter().find(|d| d.severity == "error");
+        let finding = first.map_or_else(|| "an error finding".to_string(), |d| format!("line {}: {}: {}", d.line, d.code, d.message));
+        return Some(format!("the script does not evaluate cleanly: {finding}"));
+    }
+    None
+}
+
 /// The battery, then `scripts` (their normalised text, `WitnessScript::text`, decision C13) in order, each user
-/// witness bounded by `timeout`. Call it inside [`with_probe`] or [`with_configuration`].
+/// witness bounded by `timeout`. Call it inside [`with_probe`] or [`with_configuration`]. The row of a user witness
+/// whose result is [`unclean`] is that error, not its hash: `verify --run` reports it even when the hash matches,
+/// and `update` and `seal` never re-record it.
 pub fn evaluate_witnesses(scripts: &[WitnessScript], timeout: Duration) -> WitnessRun {
     let mut rows = run_battery();
     let named: Vec<(String, String)> = scripts.iter().map(|s| (s.name().to_string(), s.text().to_string())).collect();
     let (user, stuck) = run_scripts(&named, |text| attempt(text, timeout));
     for (name, result) in &user {
-        let row = result.as_ref().map(|r| WitnessValue::Hash(r.sha256.clone())).map_err(Clone::clone);
+        let row = match result {
+            Ok(result) => unclean(&result.report).map_or_else(|| Ok(WitnessValue::Hash(result.sha256.clone())), Err),
+            Err(e) => Err(e.clone()),
+        };
         rows.push((format!("user.{name}"), row));
     }
     WitnessRun { rows, user, stuck }

@@ -1155,8 +1155,9 @@ fn named(keys: &[String]) -> String {
 /// matches and nothing is new (the recorded witnesses are kept, byte for byte); `Ok(true)` re-record them all from the
 /// evaluation, which happens when the only differences are new cases (nothing validated changes: a file without the
 /// battery records it this way) or when every recorded witness that differs or is missing is covered by `accept`.
-/// Refused (exit 1, nothing written) when a witness could not be evaluated (a panic, a limit, not run) or when a
-/// change is not covered; misuse (exit 2) when `accept` names a key that neither differs nor is missing.
+/// Refused (exit 1, nothing written) when a witness could not be evaluated (a panic, a limit, not run, a user script
+/// whose result has an error finding: `conf_witness::unclean`), whatever `accept` says, or when a change is not
+/// covered; misuse (exit 2) when `accept` names a key that neither differs nor is missing.
 fn witness_policy(compared: &WitnessReport, accept: Option<&Accept>) -> Result<bool, WitnessRefusal> {
     let errors: Vec<String> = compared
         .rows

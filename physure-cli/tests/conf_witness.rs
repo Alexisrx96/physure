@@ -973,3 +973,54 @@ i = i * 1
     assert_eq!(doc["seal_matches"], Value::Bool(true), "{doc}");
     assert!(doc["witnesses"].is_object(), "{doc}");
 }
+
+/// The hash `freeze` would record for `text` if it accepted it, whatever the report says.
+fn hash_of_any_result(text: &str) -> String {
+    let report = evaluate_with_ceilings(text, Limits::sandboxed(Duration::from_secs(60)), DEFAULT_SEED, 1_000_000, 1_000);
+    sha256_hex(canonical_witness(&report).as_bytes())
+}
+
+/// The reviewer's recipe: a user witness that uses a unit of the overrides; the unit is renamed in the overrides,
+/// so the script no longer evaluates cleanly. Re-recording it would record a failure as the reference result.
+#[test]
+fn seal_refuses_to_rerecord_a_user_witness_that_no_longer_evaluates_cleanly_whatever_the_flag() {
+    let dir = Dir::new("review_unclean_seal");
+    dir.write("physure.conf", "[Units]\nzz_rod = 5.0, L, [zz_rod]\n");
+    dir.write("rods.phs", "x = 3 zz_rod\nx => m\n");
+    assert_eq!(dir.freeze(&["--witness", "rods.phs"]).status.code(), Some(0), "{}", text(&dir.freeze(&["--witness", "rods.phs"])));
+    let original = dir.read(FROZEN_FILE_NAME);
+    let edited = original.replacen("zz_rod = 5.0, L, [zz_rod]", "zz_pole = 5.0, L, [zz_pole]", 1);
+    assert_ne!(edited, original, "the override was found");
+    dir.write(FROZEN_FILE_NAME, &edited);
+    let before = bytes(&dir);
+    for flag in ["user.rods", "all"] {
+        let output = conf_in_own_temp(&dir, &["seal", "--reason", "rename", "--yes", "--accept-witness-changes", flag, "--json"]);
+        assert_eq!(output.status.code(), Some(1), "{flag}: {}", text(&output));
+        let doc = json(&output);
+        assert_eq!(doc["refused"], Value::from("witnesses"), "{flag}: {doc}");
+        assert_eq!(doc["written"], Value::Bool(false), "{flag}: {doc}");
+        let error = doc["error"].as_str().unwrap();
+        assert!(error.contains("user.rods") && error.contains("does not evaluate cleanly") && error.contains("line 1"), "{flag}: {error}");
+        assert_eq!(bytes(&dir), before, "{flag}: nothing written");
+    }
+}
+
+/// An honest file never records the hash of a result with errors (freeze refuses the script): a file that does is
+/// forged, and its witness is an error even though the hash matches.
+#[test]
+fn verify_run_reports_a_user_witness_that_does_not_evaluate_cleanly_as_an_error_even_when_its_hash_matches() {
+    let dir = Dir::new("review_unclean_verify");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let wrong = "x = 1 m\ny = x + 1 s";
+    add_user_witness(&dir, "wrong", wrong, &hash_of_any_result(wrong));
+    let output = verify_run(&dir, &["--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["witnesses_ok"], Value::Bool(false), "{doc}");
+    let errors = doc["witnesses"]["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{doc}");
+    assert_eq!(errors[0]["key"], Value::from("user.wrong"));
+    let message = errors[0]["message"].as_str().unwrap();
+    assert!(message.starts_with("the script does not evaluate cleanly: line 2"), "{message}");
+    assert!(doc["witnesses"]["differs"].as_array().unwrap().is_empty(), "the hash matches: {doc}");
+}
