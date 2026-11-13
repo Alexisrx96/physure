@@ -63,7 +63,7 @@ USAGE:
                                --run evaluates the witnesses again under FILE (the built-in battery, then the scripts
                                embedded in the file, in the sandbox, each bounded by N ms, default 60000) and compares
                                them bit for bit with what the file records; nothing runs when the file does not verify
-                               (exit 1) or pins another engine (exit 3)
+                               or its seal does not match --expect (exit 1), or when it pins another engine (exit 3)
 
 FLAGS:
     --conf PATH                The frozen file in force (not with freeze, which writes to --out, nor beside a FILE)
@@ -982,8 +982,10 @@ fn verify(args: &ConfArgs) -> Outcome {
     let mut code = inspection.exit_code();
     let (mut text, mut fields) = inspection_report(&inspection);
     fields["seal_matches"] = Value::Null;
+    let mut expect_mismatch = false;
     if let Some(expected) = &args.expect {
         let matches = inspection.seal_matches(expected);
+        expect_mismatch = !matches;
         fields["seal_matches"] = Value::Bool(matches);
         if matches {
             text.push_str("expected seal: matches
@@ -1001,7 +1003,12 @@ fn verify(args: &ConfArgs) -> Outcome {
     }
     if args.run {
         let timeout = args.timeout_ms.map_or(DEFAULT_TIMEOUT, Duration::from_millis);
-        let (run_text, run_fields, run_code) = verify_run(&path, &inspection, timeout);
+        // a file that is not the one expected is not one whose scripts are executed
+        let (run_text, run_fields, run_code) = if expect_mismatch {
+            witnesses_not_run("the seal does not match --expect".into(), 1)
+        } else {
+            verify_run(&path, &inspection, timeout)
+        };
         text.push_str(&run_text);
         merge(&mut fields, &run_fields);
         // a discrepancy found before (an --expect mismatch) stays; otherwise the witnesses decide
@@ -1010,6 +1017,12 @@ fn verify(args: &ConfArgs) -> Outcome {
         }
     }
     report("verify", text, fields, code)
+}
+
+/// What `verify --run` says when it evaluates nothing, and why: `witnesses` null, `witnesses_ok` false.
+fn witnesses_not_run(why: String, code: i32) -> (String, Value, i32) {
+    let text = format!("witnesses: not run: {why}; nothing was evaluated\n");
+    (text, json!({ "witnesses": Value::Null, "witnesses_ok": false, "witnesses_not_run": why }), code)
 }
 
 /// What `verify --run` says when C5 finds nothing to compare.
@@ -1022,10 +1035,7 @@ const NOTHING_WITNESSED: &str = "nothing is witnessed: expected the built-in bat
 /// verify (exit 1), pins another engine (exit 3), or records no built-in witness (exit 1, correction C5). Exit 0 when
 /// every recorded witness matches (new cases are informational), 1 otherwise.
 fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (String, Value, i32) {
-    let not_run = |why: String, code: i32| {
-        let text = format!("witnesses: not run: {why}; nothing was evaluated\n");
-        (text, json!({ "witnesses": Value::Null, "witnesses_ok": false, "witnesses_not_run": why }), code)
-    };
+    let not_run = witnesses_not_run;
     let file = match (inspection.exit_code(), inspection.file.as_ref()) {
         (3, _) => return not_run("the engine differs from the one the file pins (a result under an engine the file does not pin proves nothing)".into(), 3),
         (0, Some(file)) => file,

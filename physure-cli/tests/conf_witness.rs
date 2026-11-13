@@ -939,3 +939,37 @@ fn verify_run_of_a_file_whose_script_is_too_deep_reports_it_and_is_no_crash() {
     let doc = json(&output);
     assert_eq!(doc["witnesses_ok"], Value::Bool(false), "{doc}");
 }
+
+/// A seal that does not match `--expect` says the file is not the one expected: its scripts are not executed.
+#[test]
+fn verify_run_with_an_expect_that_does_not_match_evaluates_nothing_exit_1() {
+    let dir = Dir::new("review_expect");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let forever = "i = 0
+while i < 1 {
+j = 0
+while j < 9999 {
+j = j + 1
+}
+i = i * 1
+}";
+    add_user_witness(&dir, "forever", forever, &"e".repeat(64));
+    let other = "0".repeat(64);
+    let started = Instant::now();
+    let output = verify_run(&dir, &["--expect", &other, "--timeout-ms", "20000", "--json"]);
+    assert!(started.elapsed() < Duration::from_secs(15), "the script was run: {:?}", started.elapsed());
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["seal_matches"], Value::Bool(false), "{doc}");
+    assert_eq!(doc["witnesses"], Value::Null, "{doc}");
+    assert_eq!(doc["witnesses_ok"], Value::Bool(false), "{doc}");
+    assert!(doc["witnesses_not_run"].as_str().unwrap().contains("the seal does not match --expect"), "{doc}");
+    let output = verify_run(&dir, &["--expect", &other]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).contains("witnesses: not run: the seal does not match --expect; nothing was evaluated"), "{}", text(&output));
+    // the matching seal runs them
+    let seal = dir.frozen().seal_sha256().to_string();
+    let doc = json(&verify_run(&dir, &["--expect", &seal, "--timeout-ms", "300", "--json"]));
+    assert_eq!(doc["seal_matches"], Value::Bool(true), "{doc}");
+    assert!(doc["witnesses"].is_object(), "{doc}");
+}
