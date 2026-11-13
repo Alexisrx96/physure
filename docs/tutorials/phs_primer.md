@@ -140,8 +140,15 @@ without anyone having to re-run anything to trust it. The report *is* the audit 
 ## 6. Booleans, `not`/`and`/`or`, and assertions
 
 Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `≈`) return a real boolean, `True` or `False`.
-There is no implicit truthiness: a quantity, a number, or a string is never treated as a
-condition on its own.
+They compare what the quantities stand for, in any units: `1 km == 1000 m` is true, and `==`
+means "equal up to a relative 1e-12 of the larger", so `1 pm == 2 pm` is false. A relative
+bound never accepts a difference against an exact zero (`cos(90 deg) == 0` is false): compare
+`abs(x)` with an explicit tolerance in the unit of `x` instead. `≈` uses the relative tolerance
+`approx_rel_tol` of `physure.conf` (default `1e-3`), and `approx(a, b, rel)` names its own.
+Comparing different dimensions, or values that have no comparison (a vector, a string and a
+quantity), is an error, never `False`. A number or a quantity used as a condition is false only
+when it is exactly zero; a temperature point, a level or NaN is not a condition. Comparison
+binds tighter than `+`, so parenthesise a sum: `(a + b) == c`.
 
 ```phs
 pressure > 0 Pa
@@ -165,7 +172,7 @@ compare directly:
 ```phs
 assert(power > 0 kW)
 assert(pressure >= minimum_pressure, "V-PUMP-004: pressure is below the operating range")
-assert(actual, expected)          # existing form: dimensional + magnitude tolerance check
+assert(actual, expected)          # existing form: the same test as actual == expected
 exact_assert(actual, expected)    # existing form: exact unit and magnitude match
 ```
 

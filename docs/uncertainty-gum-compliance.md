@@ -78,7 +78,7 @@ Physure does not retain which conversion was applied. Two quantities with the sa
 
 ### `sigma` does not declare the metrological type
 
-The form `target +/- k sigma` creates a `SigmaBound` intended for comparisons. It does not declare that the second number is the quantity's standard deviation. Its implementation is in [`physure-script/src/interpreter/expressions.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs) and [`physure-script/src/builtins/core.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/builtins/core.rs).
+The form `target +/- k sigma` creates a `SigmaBound` intended for comparisons. It does not declare that the second number is the quantity's standard deviation: the target is exact, and `k` is a coverage multiple. `x == t +/- k sigma` takes `d = x − t` through the core's subtraction and is true when `|d| <= k · u(d)`, so the uncertainty counted is the measured operand's; an `x` without an uncertainty is an error (it used to borrow a default of 0.05 in its own unit). Its implementation is in [`physure-script/src/interpreter/expressions.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/interpreter/expressions.rs) and [`physure-script/src/builtins/core.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/builtins/core.rs).
 
 ## 4. Implemented law of propagation
 

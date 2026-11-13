@@ -132,7 +132,9 @@ x / 4 s
   changed anywhere else breaks the seal.
 
 A frozen file's `[Settings]` and `[Compatibility]` are applied when it comes into force, over the
-library's compiled defaults: a setting the file does not mention takes its compiled default.
+library's compiled defaults: a setting the file does not mention takes its compiled default. One of them
+changes answers rather than limits: `approx_rel_tol` (default `1e-3`) is the relative tolerance of PHS `≈`
+and of `approx(a, b)`, so a witness script that uses `≈` depends on it.
 
 ## 4. The commands
 

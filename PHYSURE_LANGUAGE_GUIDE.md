@@ -35,6 +35,16 @@ lux = (100 cd) / (2 m)^2 => lx                 # 25 lx
 
 A sum or a comparison never reads an angle as 1: `2 rad + 1` and `2 m*rad + 1 m` are errors, and the way is to convert first, `(2 rad => unity) + 1`. A rate of angle is not a frequency (they differ by 2π), so `10 rad/s => Hz` is an error; divide by the angle of a cycle instead, `(10 rad/s) / (6.283185307179586 rad) => Hz`. `angle_mode = dimension` in `physure.conf` makes the angle a dimension like any other.
 
+#### Comparisons
+
+`==` compares what two quantities stand for, whatever units they are written in: `1 km == 1000 m` and `0.01 degC == 273.16 K` are true in either order. Two values are equal when they agree within a relative 1e-12 of the larger (the rounding of a conversion or of ordinary arithmetic): `1 pm == 2 pm` is false and `(0.1 m + 0.2 m) == 0.3 m` is true. A relative bound never accepts a difference against an exact zero, so `cos(90 deg) == 0` is false: write `abs(cos(90 deg)) < 1e-12`, or `abs(x) < 1e-9 m` with the unit of `x`. Near the bound `==` is not transitive. `inf == inf` is true and NaN equals nothing. `!=` is exactly `not (a == b)`.
+
+`a ≈ b` is `|a − b| <= rel · max(|a|, |b|)` with `rel` from `[Settings] approx_rel_tol` in `physure.conf` (default `1e-3`); `approx(a, b, rel)` names the tolerance (`approx(x, y, 1 %)`). `≈` with exactly one operand zero is an error: no relative tolerance says how close to zero is close.
+
+`x == t +/- k sigma` asks whether the measured `x` lies within `k` of its own standard uncertainties of the exact target `t`: `(9.81 +/- 0.01) m/s^2 == 9.80 m/s^2 +/- 2 sigma` is true. An `x` with no uncertainty is an error; use `==`.
+
+Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. A comparison binds tighter than `+` and `-`: parenthesise a sum, `(0.1 m + 0.2 m) == 0.3 m`. A number or a quantity used as a condition (`if`, `while`) is false only when it is exactly zero; a temperature point (`0 degC`), a level (`20 dB`) or NaN is not a condition.
+
 ### 1.2 Function Definitions & Docstrings
 Functions can be defined with or without the optional `fn` keyword. Unit constraints on parameters are checked automatically.
 
