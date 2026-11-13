@@ -365,6 +365,8 @@ broken link of the chain are marked `[unverified]`. A row says when the `[Engine
 previous entry (`the [Engine] block changed`) and how the policy or the pinned identity changed (`pin:
 policy: release -> record`). It says *that* the block changed, not which field: a moved `binary_sha256`
 or a changed profile, target, features, compiler or flags shows only as `the [Engine] block changed`.
+To see the fields, keep a copy of the file before each `update` and compare it with
+`phs conf diff COPY physure.frozen.conf`, whose engine section lists every `[Engine]` pair that differs.
 
 ```console
 $ phs conf history
