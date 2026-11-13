@@ -178,9 +178,10 @@ fn an_antiderivative_left_as_an_integral_does_not_hang() {
         Limits::sandboxed(Duration::from_secs(30)),
         DEFAULT_SEED,
     );
-    let item = report.results.last().unwrap_or_else(|| panic!("no value: {:?}", report.diagnostics));
-    let value: f64 = item.value.text.parse().unwrap_or_else(|_| panic!("{:?}", item.value.text));
-    assert!((value - 2.0 / 3.0).abs() < 1e-4, "{value}");
+    // answered within the deadline: by the interim rule's refusal (it has no error estimate good enough for the
+    // endpoint behaviour of sqrt), not by a wait
+    let message = &report.diagnostics.last().unwrap_or_else(|| panic!("{:?}", report.results)).message;
+    assert!(message.starts_with("integral: ") && !message.contains("time limit"), "{message}");
 }
 
 #[test]
@@ -207,4 +208,54 @@ fn the_integrand_sees_the_scope_of_the_call_in_phs_eval_and_in_a_function() {
     assert_eq!(item.value.text, "6.0");
     // a parameter of a function is a variable of the integrand
     assert_close(number("f(k) = integral(\"k*x\", \"x\", 0, 2)\nf(5)"), 10.0, 1e-12, "k*x with k = 5");
+}
+
+// ---- Task 2a-ii: the closed form is confirmed; one mapping for infinite ends ----
+
+#[test]
+fn a_closed_form_that_jumps_inside_the_interval_is_refused() {
+    // before: -2.0, a negative answer for a positive integrand whose integral diverges
+    assert!(refused(r#"integral("x^(-2)", "x", -1, 1)"#).starts_with("integral: "));
+    // before: -0.1425 (tan(3) - tan(0), across the pole of sec^2 at pi/2)
+    assert!(refused(r#"integral("sec(x)^2", "x", 0, 3)"#).starts_with("integral: "));
+    assert!(refused(r#"integral("1/cos(x)^2", "x", 0, 3)"#).contains("did not converge"));
+    // before: did not stop (the deadlock), and once unblocked -1.99 across the pole of tan at pi/2
+    assert!(refused(r#"integral("tan(x)", "x", 0, 3)"#).starts_with("integral: "));
+    // the symbolic engine reads `x < 0.5` as `x` and integrates it to x^2/2 (0.5 here); the integrand is a Bool
+    assert!(refused(r#"integral("x < 0.5", "x", 0, 1)"#).contains("Bool"));
+}
+
+#[test]
+fn a_confirmed_closed_form_keeps_its_exact_digits() {
+    assert_eq!(number(r#"integral("x^2", "x", 0, 3)"#), 9.0);
+    assert_eq!(number(r#"integral("x", "x", 0, 2)"#), 2.0);
+    // reversed bounds change the sign
+    assert_eq!(number(r#"integral("x^2", "x", 3, 0)"#), -9.0);
+    // an empty interval is zero, with the unit of the integral
+    assert_eq!(number(r#"integral("x^2", "x", 1, 1)"#), 0.0);
+    assert_eq!(in_unit(&quantity(r#"integral("x", "x", 1 m, 1 m)"#), "m^2"), (0.0, 0.0));
+}
+
+#[test]
+fn an_infinite_end_and_a_finite_non_zero_end() {
+    let e_inv = (-1.0f64).exp();
+    // before: 0.6065 = exp(-0.5), the mapping's inverse did not match the substitution
+    assert_close(number(r#"integral("exp(-x)", "x", 1, "inf")"#), e_inv, 1e-9, "exp(-x) over [1, inf)");
+    // before: 1.999998
+    assert_close(number(r#"integral("1/x^2", "x", 1, "inf")"#), 1.0, 1e-9, "1/x^2 over [1, inf)");
+    assert_close(number(r#"integral("1/x^2", "x", "-inf", -1)"#), 1.0, 1e-9, "1/x^2 over (-inf, -1]");
+    assert_close(number(r#"integral("exp(x)", "x", "-inf", 2)"#), 2.0f64.exp(), 1e-9, "exp(x) over (-inf, 2]");
+    assert_close(number(r#"integral("exp(-x)", "x", "inf", 1)"#), -e_inv, 1e-9, "reversed");
+    let pi = std::f64::consts::PI;
+    assert_close(number(r#"integral("exp(-x^2)", "x", "-inf", "inf")"#), pi.sqrt(), 1e-9, "the Gaussian integral");
+    assert_close(number(r#"integral("1/(1+x^2)", "x", "-inf", "inf")"#), pi, 1e-9, "the Lorentzian");
+    // with a unit: a decaying velocity over all later times
+    let distance = quantity("v = 3 m/s\nintegral(\"v*exp(-t/(2 s))\", \"t\", 0 s, \"inf\")");
+    assert_close(in_unit(&distance, "m").0, 6.0, 1e-9, "3 m/s decaying in 2 s");
+}
+
+#[test]
+fn an_integral_that_does_not_converge_at_infinity_is_refused() {
+    assert!(refused(r#"integral("1/x", "x", 1, "inf")"#).starts_with("integral: "));
+    assert!(refused(r#"integral("sin(x)", "x", 0, "inf")"#).starts_with("integral: "));
 }

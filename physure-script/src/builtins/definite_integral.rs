@@ -296,11 +296,31 @@ impl Integrand<'_> {
     }
 }
 
-/// A quadrature: the value, and the coefficient `c_i` of each evaluation in the order they were made, so that the
-/// value is `sum c_i f(x_i)`.
+/// A quadrature: the value, its error estimate, `L1 = sum |c_i f(x_i)|` (the scale the error is judged against), whether
+/// it converged, and the coefficient `c_i` of each evaluation in the order they were made, so that the value is
+/// `sum c_i f(x_i)`.
 struct Quadrature {
     value: f64,
+    error: f64,
+    l1: f64,
+    converged: bool,
     coefficients: Vec<f64>,
+}
+
+impl Quadrature {
+    fn evaluations(&self) -> usize {
+        self.coefficients.len()
+    }
+
+    /// The sum of two pieces of one integral.
+    fn plus(mut self, other: Quadrature) -> Quadrature {
+        self.value += other.value;
+        self.error += other.error;
+        self.l1 += other.l1;
+        self.converged &= other.converged;
+        self.coefficients.extend(other.coefficients);
+        self
+    }
 }
 
 /// Composite three-point Gauss-Legendre quadrature over `panels` equal panels of `[a, b]` (exact for a polynomial of
@@ -311,61 +331,85 @@ fn gauss_legendre(f: &mut dyn FnMut(f64) -> PhysureResult<f64>, a: f64, b: f64, 
     // the nodes mid, mid +- half_h * sqrt(3/5) carry the weights 8/9, 5/9, 5/9 (of the panel's half length)
     let offset = half_h * 0.774_596_669_241_483_4;
     let (outer, centre) = (half_h * 5.0 / 9.0, half_h * 8.0 / 9.0);
-    let mut sum = 0.0;
+    let (mut sum, mut l1) = (0.0, 0.0);
     let mut coefficients = Vec::with_capacity(3 * panels);
     for i in 0..panels {
         let mid = a + (i as f64 + 0.5) * h;
         for (x, c) in [(mid - offset, outer), (mid, centre), (mid + offset, outer)] {
-            sum += c * f(x)?;
+            let term = c * f(x)?;
+            sum += term;
+            l1 += term.abs();
             coefficients.push(c);
         }
     }
-    Ok(Quadrature { value: sum, coefficients })
+    Ok(Quadrature { value: sum, error: f64::INFINITY, l1, converged: false, coefficients })
 }
 
-/// The integral over the whole interval (finite, or with an infinite end), with `f(x)` sampled through `integrand`.
-/// `jacobians` receives the factor `dx/dt` of each evaluation, so the coefficient of the sample `f(x_i)` is
-/// `c_i * jacobian_i`.
-fn numeric(integrand: &mut Integrand, a: f64, b: f64, jacobians: &mut Vec<f64>) -> PhysureResult<Quadrature> {
-    if a.is_finite() && b.is_finite() {
-        let mut f = |x: f64| {
-            jacobians.push(1.0);
-            integrand.sample(x)
-        };
-        return gauss_legendre(&mut f, a, b, 100);
-    }
-    // x = t / (1 - t^2) maps (-1, 1) onto the real line
-    let to_unit_interval = |x: f64| {
-        if x == f64::NEG_INFINITY {
-            -1.0 + 1e-6
-        } else if x == f64::INFINITY {
-            1.0 - 1e-6
-        } else {
-            x / (1.0 + (1.0 + x * x).sqrt())
+/// The rule every piece of the interval is integrated with: Gauss-Legendre on 100 and on 200 panels, the difference
+/// being the error estimate (the answer is the finer one, and the coarser samples count with coefficient 0).
+fn rule(f: &mut dyn FnMut(f64) -> PhysureResult<f64>, a: f64, b: f64) -> PhysureResult<Quadrature> {
+    let coarse = gauss_legendre(f, a, b, 100)?;
+    let fine = gauss_legendre(f, a, b, 200)?;
+    let error = (fine.value - coarse.value).abs();
+    let converged = error <= 1e-10 * fine.value.abs().max(fine.l1);
+    let mut coefficients = vec![0.0; coarse.evaluations()];
+    coefficients.extend(fine.coefficients);
+    Ok(Quadrature { value: fine.value, error, l1: fine.l1, converged, coefficients })
+}
+
+/// The integral over `[a, b]` (`a < b`; either end may be infinite), with `f(x)` sampled through `integrand`.
+/// `divisors` receives for each evaluation the `u` by whose square the sample was divided (1 on a finite interval),
+/// so the coefficient of the sample `f(x_i)` itself is `c_i / u_i / u_i`.
+fn numeric(integrand: &mut Integrand, a: f64, b: f64, divisors: &mut Vec<f64>) -> PhysureResult<Quadrature> {
+    match (a.is_finite(), b.is_finite()) {
+        (true, true) => {
+            let mut f = |x: f64| {
+                divisors.push(1.0);
+                integrand.sample(x)
+            };
+            rule(&mut f, a, b)
         }
-    };
-    let mut f = |t: f64| -> PhysureResult<f64> {
-        let x = t / (1.0 - t * t);
-        let dxdt = (1.0 + t * t) / ((1.0 - t * t) * (1.0 - t * t));
-        jacobians.push(dxdt);
-        Ok(integrand.sample(x)? * dxdt)
-    };
-    gauss_legendre(&mut f, to_unit_interval(a), to_unit_interval(b), 100)
+        (true, false) => half_line(integrand, a, 1.0, divisors),
+        (false, true) => half_line(integrand, b, -1.0, divisors),
+        (false, false) => Ok(half_line(integrand, 0.0, -1.0, divisors)?.plus(half_line(integrand, 0.0, 1.0, divisors)?)),
+    }
 }
 
-/// The antiderivative of the integrand as an expression the interpreter can evaluate; `None` when the symbolic
-/// engine has none (it leaves `integral(...)` in place, or refuses).
-fn antiderivative(inlined: &str, var: &str) -> Option<Expr> {
+/// The integral from `c` to infinity (`direction` +1) or from minus infinity to `c` (`direction` -1), by the one
+/// substitution used for every infinite end:
+///
+/// ```text
+/// x = c + direction * (1 - u) / u,   u in (0, 1],   dx/du = -direction / u^2
+/// ```
+///
+/// `u = 1` is `x = c` and `u -> 0` is the infinite end. For direction +1,
+/// `int_c^inf f(x) dx = int_1^0 f(x(u)) (-1/u^2) du = int_0^1 f(x(u)) / u^2 du`; for direction -1, `x` runs from -inf
+/// (u -> 0) to `c` (u = 1) with `dx/du = 1/u^2`, so `int_-inf^c f(x) dx = int_0^1 f(x(u)) / u^2 du` as well. The
+/// infinite end is `u = 0`, which the rule reaches as `0 + dist` with full precision. The sample is divided by `u`
+/// twice, not by `u * u`, so that `u^2` underflowing cannot turn a vanishing `f` into `0 / 0`. The doubly infinite
+/// interval is the two half lines from 0.
+fn half_line(integrand: &mut Integrand, c: f64, direction: f64, divisors: &mut Vec<f64>) -> PhysureResult<Quadrature> {
+    let mut f = |u: f64| -> PhysureResult<f64> {
+        let x = c + direction * ((1.0 - u) / u);
+        divisors.push(u);
+        Ok(integrand.sample(x)? / u / u)
+    };
+    rule(&mut f, 0.0, 1.0)
+}
+
+/// The antiderivative of the integrand as an expression the interpreter can evaluate, and its text; `None` when the
+/// symbolic engine has none (it leaves `integral(...)` in place, or refuses).
+fn antiderivative(inlined: &str, var: &str) -> Option<(Expr, String)> {
     let node = crate::symbolic::SymbolicParser::parse_str(inlined).ok()?;
     let text = node.integrate_node(var).ok()?.simplify().to_string();
     if text.contains("integral(") {
         return None;
     }
-    parse_expression(&text, "antiderivative").ok()
+    Some((parse_expression(&text, "antiderivative").ok()?, text))
 }
 
-/// `F(b) - F(a)` with the core's arithmetic, `None` when `F` cannot be evaluated at an end or is not finite there.
-fn closed_form(antiderivative: &Expr, integrand: &Integrand, lower: &Quantity, upper: &Quantity) -> Option<Quantity> {
+/// `F(a)` and `F(b)` with the core's arithmetic, `None` when `F` cannot be evaluated at an end or is not finite there.
+fn closed_form(antiderivative: &Expr, integrand: &Integrand, lower: &Quantity, upper: &Quantity) -> Option<(Quantity, Quantity)> {
     let at = |end: &Quantity| -> Option<Quantity> {
         let mut env = integrand.env.clone();
         let value = match &integrand.var_unit {
@@ -381,14 +425,16 @@ fn closed_form(antiderivative: &Expr, integrand: &Integrand, lower: &Quantity, u
         };
         q.value.mean().is_finite().then_some(q)
     };
-    at(upper)?.sub(&at(lower)?).ok()
+    Some((at(lower)?, at(upper)?))
 }
 
 /// `sum c_i f(x_i)` with the core's arithmetic, so the samples' uncertainties and correlations propagate.
 fn weighted_sum(samples: &[Quantity], coefficients: impl Iterator<Item = f64>, unit: &RationalUnit) -> PhysureResult<Quantity> {
     let mut total = Quantity::new_scalar(0.0, 0.0, unit.clone(), None, None);
     for (sample, c) in samples.iter().zip(coefficients) {
-        total = total.add(&sample.mul(&plain(c))?)?;
+        if c != 0.0 {
+            total = total.add(&sample.mul(&plain(c))?)?;
+        }
     }
     Ok(total)
 }
@@ -399,6 +445,14 @@ fn answer(q: Quantity, units_involved: bool) -> PhsValue {
         PhsValue::Number(q.value.mean())
     } else {
         PhsValue::Quantity(q)
+    }
+}
+
+/// How an end is written in a message.
+fn end_text(end: f64, unit: &Option<RationalUnit>) -> String {
+    match unit {
+        Some(unit) if end.is_finite() => format!("{end} {}", unit.__repr__()),
+        _ => format!("{end}"),
     }
 }
 
@@ -421,35 +475,128 @@ pub(crate) fn definite_integral(
     let mut integrand =
         Integrand { interpreter, expr, env, var: var.to_string(), var_unit, unit: None, samples: Vec::new(), uncertain: false };
 
-    if let (End::Finite(lo), End::Finite(hi)) = (&lower, &upper) {
-        if let Some(f) = antiderivative(&inlined, var) {
-            if let Some(value) = closed_form(&f, &integrand, lo, hi) {
-                let units_involved = integrand.var_unit.is_some() || !value.unit.is_plain_number();
-                return Ok(answer(value, units_involved));
-            }
-        }
-    }
-
     let mean = |end: &End| match end {
         End::Finite(q) => q.value.mean(),
         End::Infinite(sign) => *sign,
     };
     let (a, b) = (mean(&lower), mean(&upper));
-    let mut jacobians = Vec::new();
-    let quadrature = numeric(&mut integrand, a, b, &mut jacobians)?;
+    if a == b {
+        // an empty interval: zero, in the unit the integral has
+        let unit = integrand.value_at(a)?.unit;
+        let mut zero = Quantity::new_scalar(0.0, 0.0, unit, None, None);
+        if let Some(var_unit) = &integrand.var_unit {
+            zero = zero.mul(&Quantity::new_scalar(1.0, 0.0, var_unit.clone(), None, None))?;
+        }
+        return finish(zero, &integrand);
+    }
+    // the rule integrates from the smaller end to the larger one
+    let (from, to, orientation) = if a < b { (a, b, 1.0) } else { (b, a, -1.0) };
+    let mut divisors = Vec::new();
+    let quadrature = numeric(&mut integrand, from, to, &mut divisors);
+    let interval = format!("[{}, {}]", end_text(a, &integrand.var_unit), end_text(b, &integrand.var_unit));
+
+    if let (End::Finite(lo), End::Finite(hi)) = (&lower, &upper) {
+        if let Some((f, f_text)) = antiderivative(&inlined, var) {
+            if let Some((f_lo, f_hi)) = closed_form(&f, &integrand, lo, hi) {
+                let quadrature = quadrature.map_err(|e| {
+                    refusal(format!("the antiderivative {f_text} cannot be confirmed on {interval}: {}", strip(&e)))
+                })?;
+                return confirmed_closed_form(f_lo, f_hi, &f_text, orientation, &quadrature, &integrand, &interval);
+            }
+        }
+    }
+
+    let quadrature = quadrature?;
+    if !quadrature.converged {
+        return Err(not_converged(&quadrature, &interval));
+    }
     let unit = integrand.unit.clone().unwrap_or_else(RationalUnit::dimensionless);
     let mut total = if integrand.uncertain {
-        let coefficients = quadrature.coefficients.iter().zip(&jacobians).map(|(c, j)| c * j);
+        let coefficients = quadrature.coefficients.iter().zip(&divisors).map(|(c, u)| orientation * c / u / u);
         weighted_sum(&integrand.samples, coefficients, &unit)?
     } else {
-        Quantity::new_scalar(quadrature.value, 0.0, unit.clone(), None, None)
+        Quantity::new_scalar(orientation * quadrature.value, 0.0, unit, None, None)
     };
     if let Some(var_unit) = &integrand.var_unit {
         total = total.mul(&Quantity::new_scalar(1.0, 0.0, var_unit.clone(), None, None))?;
     }
     total = with_bound_uncertainty(total, &mut integrand, &lower, &upper)?;
-    let units_involved = integrand.var_unit.is_some() || !unit.is_plain_number();
-    Ok(answer(total, units_involved))
+    finish(total, &integrand)
+}
+
+/// The text of an error of this module without its `integral: ` prefix, to nest it in another one.
+fn strip(error: &PhysureError) -> String {
+    let text = error.to_string();
+    text.strip_prefix("integral: ").map(str::to_string).unwrap_or(text)
+}
+
+fn not_converged(quadrature: &Quadrature, interval: &str) -> PhysureError {
+    refusal(format!(
+        "the quadrature did not converge on {interval}: estimate {}, error estimate {:e} after {} evaluations; the \
+         integrand may have a singularity inside the interval or at a non-zero end, a jump, a kink or a fast \
+         oscillation there (split the interval at that point), or decay too slowly towards an infinite end; give a \
+         closed form if there is one",
+        quadrature.value,
+        quadrature.error,
+        quadrature.evaluations()
+    ))
+}
+
+/// The answer as a plain number or a quantity (see [`answer`]).
+fn finish(total: Quantity, integrand: &Integrand) -> PhysureResult<PhsValue> {
+    let unit_carried = integrand.unit.as_ref().is_some_and(|u| !u.is_plain_number());
+    Ok(answer(total, integrand.var_unit.is_some() || unit_carried))
+}
+
+/// `F(b) - F(a)`, accepted only when the quadrature converged and agrees with it: an antiderivative that is not
+/// continuous on the interval (a pole of the integrand inside it, a branch of `ln` or `atan` jumping) gives a
+/// confident wrong difference, which the quadrature (it only samples the integrand) does not share. The two agree
+/// when they differ by at most `1e-8` of the largest of `|F(b) - F(a)|`, the estimate and its `L1`, plus the
+/// rounding of the difference itself (`64 eps (|F(a)| + |F(b)|)`, so a large antiderivative's cancellation is not
+/// mistaken for a discontinuity).
+fn confirmed_closed_form(
+    f_lo: Quantity,
+    f_hi: Quantity,
+    f_text: &str,
+    orientation: f64,
+    quadrature: &Quadrature,
+    integrand: &Integrand,
+    interval: &str,
+) -> PhysureResult<PhsValue> {
+    if !quadrature.converged {
+        return Err(refusal(format!(
+            "the antiderivative {f_text} cannot be confirmed: {}",
+            strip(&not_converged(quadrature, interval))
+        )));
+    }
+    let closed = f_hi.sub(&f_lo)?;
+    let unit = integrand.unit.clone().unwrap_or_else(RationalUnit::dimensionless);
+    let result_unit = match &integrand.var_unit {
+        Some(var_unit) => plain(1.0).with_unit(unit).mul(&Quantity::new_scalar(1.0, 0.0, var_unit.clone(), None, None))?.unit,
+        None => unit,
+    };
+    let in_result_unit = |q: &Quantity| -> PhysureResult<f64> {
+        if !q.unit.same_dimensions(&result_unit) {
+            return Err(refusal(format!(
+                "the antiderivative {f_text} has the unit {}, the integral {}",
+                q.unit.__repr__(),
+                result_unit.__repr__()
+            )));
+        }
+        Ok(q.convert_to(&result_unit)?.value.mean())
+    };
+    let (s, s_lo, s_hi) = (in_result_unit(&closed)?, in_result_unit(&f_lo)?, in_result_unit(&f_hi)?);
+    let n = orientation * quadrature.value;
+    let tolerance = 1e-8 * s.abs().max(n.abs()).max(quadrature.l1) + 64.0 * f64::EPSILON * (s_lo.abs() + s_hi.abs());
+    if (s - n).abs() > tolerance {
+        return Err(refusal(format!(
+            "the antiderivative {f_text} gives {s} on {interval} but the quadrature gives {n} (error estimate {:e}): \
+             the integrand or its antiderivative is not continuous on the interval (a pole or a jump inside); split \
+             the interval there",
+            quadrature.error
+        )));
+    }
+    finish(closed, integrand)
 }
 
 /// Adds `f(b) (b - mean b) - f(a) (a - mean a)` for the uncertain bounds: the first-order change of the integral
