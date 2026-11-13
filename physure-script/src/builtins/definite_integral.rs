@@ -23,9 +23,11 @@
 use std::collections::HashMap;
 
 use physure_core::error::{PhysureError, PhysureResult};
+use physure_core::quantity::format_float;
 use physure_core::{Quantity, RationalUnit};
 
 use super::preprocess_symbolic_expression;
+use super::quadrature::{tanh_sinh, Quadrature, Tail};
 use crate::ast::Expr;
 use crate::interpreter::PhsInterpreter;
 use crate::value::PhsValue;
@@ -123,8 +125,9 @@ fn parse_expression(text: &str, role: &str) -> PhysureResult<Expr> {
     }
 }
 
-/// One end of the interval.
+/// One end of the interval (two of them exist per call, so the size of the `Finite` variant does not matter).
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
 enum End {
     Finite(Quantity),
     /// `+inf` or `-inf`.
@@ -233,8 +236,8 @@ impl Integrand<'_> {
 
     fn describe(&self, x: f64) -> String {
         match &self.var_unit {
-            Some(unit) => format!("{} = {x} {}", self.var, unit.__repr__()),
-            None => format!("{} = {x}", self.var),
+            Some(unit) => format!("{} = {} {}", self.var, format_float(x), unit.__repr__()),
+            None => format!("{} = {}", self.var, format_float(x)),
         }
     }
 
@@ -296,67 +299,6 @@ impl Integrand<'_> {
     }
 }
 
-/// A quadrature: the value, its error estimate, `L1 = sum |c_i f(x_i)|` (the scale the error is judged against), whether
-/// it converged, and the coefficient `c_i` of each evaluation in the order they were made, so that the value is
-/// `sum c_i f(x_i)`.
-struct Quadrature {
-    value: f64,
-    error: f64,
-    l1: f64,
-    converged: bool,
-    coefficients: Vec<f64>,
-}
-
-impl Quadrature {
-    fn evaluations(&self) -> usize {
-        self.coefficients.len()
-    }
-
-    /// The sum of two pieces of one integral.
-    fn plus(mut self, other: Quadrature) -> Quadrature {
-        self.value += other.value;
-        self.error += other.error;
-        self.l1 += other.l1;
-        self.converged &= other.converged;
-        self.coefficients.extend(other.coefficients);
-        self
-    }
-}
-
-/// Composite three-point Gauss-Legendre quadrature over `panels` equal panels of `[a, b]` (exact for a polynomial of
-/// degree 5 or less on each panel).
-fn gauss_legendre(f: &mut dyn FnMut(f64) -> PhysureResult<f64>, a: f64, b: f64, panels: usize) -> PhysureResult<Quadrature> {
-    let h = (b - a) / panels as f64;
-    let half_h = 0.5 * h;
-    // the nodes mid, mid +- half_h * sqrt(3/5) carry the weights 8/9, 5/9, 5/9 (of the panel's half length)
-    let offset = half_h * 0.774_596_669_241_483_4;
-    let (outer, centre) = (half_h * 5.0 / 9.0, half_h * 8.0 / 9.0);
-    let (mut sum, mut l1) = (0.0, 0.0);
-    let mut coefficients = Vec::with_capacity(3 * panels);
-    for i in 0..panels {
-        let mid = a + (i as f64 + 0.5) * h;
-        for (x, c) in [(mid - offset, outer), (mid, centre), (mid + offset, outer)] {
-            let term = c * f(x)?;
-            sum += term;
-            l1 += term.abs();
-            coefficients.push(c);
-        }
-    }
-    Ok(Quadrature { value: sum, error: f64::INFINITY, l1, converged: false, coefficients })
-}
-
-/// The rule every piece of the interval is integrated with: Gauss-Legendre on 100 and on 200 panels, the difference
-/// being the error estimate (the answer is the finer one, and the coarser samples count with coefficient 0).
-fn rule(f: &mut dyn FnMut(f64) -> PhysureResult<f64>, a: f64, b: f64) -> PhysureResult<Quadrature> {
-    let coarse = gauss_legendre(f, a, b, 100)?;
-    let fine = gauss_legendre(f, a, b, 200)?;
-    let error = (fine.value - coarse.value).abs();
-    let converged = error <= 1e-10 * fine.value.abs().max(fine.l1);
-    let mut coefficients = vec![0.0; coarse.evaluations()];
-    coefficients.extend(fine.coefficients);
-    Ok(Quadrature { value: fine.value, error, l1: fine.l1, converged, coefficients })
-}
-
 /// The integral over `[a, b]` (`a < b`; either end may be infinite), with `f(x)` sampled through `integrand`.
 /// `divisors` receives for each evaluation the `u` by whose square the sample was divided (1 on a finite interval),
 /// so the coefficient of the sample `f(x_i)` itself is `c_i / u_i / u_i`.
@@ -367,7 +309,7 @@ fn numeric(integrand: &mut Integrand, a: f64, b: f64, divisors: &mut Vec<f64>) -
                 divisors.push(1.0);
                 integrand.sample(x)
             };
-            rule(&mut f, a, b)
+            tanh_sinh(&mut f, a, b, (Tail::Underflow, Tail::Underflow))
         }
         (true, false) => half_line(integrand, a, 1.0, divisors),
         (false, true) => half_line(integrand, b, -1.0, divisors),
@@ -392,9 +334,19 @@ fn half_line(integrand: &mut Integrand, c: f64, direction: f64, divisors: &mut V
     let mut f = |u: f64| -> PhysureResult<f64> {
         let x = c + direction * ((1.0 - u) / u);
         divisors.push(u);
-        Ok(integrand.sample(x)? / u / u)
+        let g = integrand.sample(x)? / u / u;
+        if !g.is_finite() {
+            return Err(refusal(format!(
+                "the integrand times the substitution's dx/du = 1/u^2 is not finite at {} (u = {}): it does not \
+                 decay fast enough towards the infinite end",
+                integrand.describe(x),
+                format_float(u)
+            )));
+        }
+        Ok(g)
     };
-    rule(&mut f, 0.0, 1.0)
+    // u = 0 stands for the infinite end: that tail may stop where the terms are negligible (see `Tail::Negligible`)
+    tanh_sinh(&mut f, 0.0, 1.0, (Tail::Negligible, Tail::Underflow))
 }
 
 /// The antiderivative of the integrand as an expression the interpreter can evaluate, and its text; `None` when the
@@ -432,9 +384,14 @@ fn closed_form(antiderivative: &Expr, integrand: &Integrand, lower: &Quantity, u
 fn weighted_sum(samples: &[Quantity], coefficients: impl Iterator<Item = f64>, unit: &RationalUnit) -> PhysureResult<Quantity> {
     let mut total = Quantity::new_scalar(0.0, 0.0, unit.clone(), None, None);
     for (sample, c) in samples.iter().zip(coefficients) {
-        if c != 0.0 {
-            total = total.add(&sample.mul(&plain(c))?)?;
+        // an exact zero contributes nothing, also where `c / u / u` overflowed next to an infinite end
+        if c == 0.0 || (sample.value.mean() == 0.0 && sample.value.std_dev() == 0.0) {
+            continue;
         }
+        if !c.is_finite() {
+            return Err(refusal(format!("the weight of a sample is not finite ({c}) next to an infinite end")));
+        }
+        total = total.add(&sample.mul(&plain(c))?)?;
     }
     Ok(total)
 }
@@ -451,8 +408,8 @@ fn answer(q: Quantity, units_involved: bool) -> PhsValue {
 /// How an end is written in a message.
 fn end_text(end: f64, unit: &Option<RationalUnit>) -> String {
     match unit {
-        Some(unit) if end.is_finite() => format!("{end} {}", unit.__repr__()),
-        _ => format!("{end}"),
+        Some(unit) if end.is_finite() => format!("{} {}", format_float(end), unit.__repr__()),
+        _ => format_float(end),
     }
 }
 
@@ -532,13 +489,14 @@ fn strip(error: &PhysureError) -> String {
 
 fn not_converged(quadrature: &Quadrature, interval: &str) -> PhysureError {
     refusal(format!(
-        "the quadrature did not converge on {interval}: estimate {}, error estimate {:e} after {} evaluations; the \
-         integrand may have a singularity inside the interval or at a non-zero end, a jump, a kink or a fast \
+        "the tanh-sinh quadrature did not converge on {interval}: estimate {}, error estimate {:e} after {} \
+         evaluations (level {}); the integrand may have a singularity inside the interval or at a non-zero end, a jump, a kink or a fast \
          oscillation there (split the interval at that point), or decay too slowly towards an infinite end; give a \
          closed form if there is one",
         quadrature.value,
         quadrature.error,
-        quadrature.evaluations()
+        quadrature.evaluations(),
+        quadrature.level
     ))
 }
 

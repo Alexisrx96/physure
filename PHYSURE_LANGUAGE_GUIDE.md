@@ -109,9 +109,22 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 | `calc` | `solve(eq, target)` | Symbolic equation solver | `solve(P == F / A, F)` |
 | `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv(0.5 * m * v^2, v)` |
 | `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |
+| `calc` | `integral(expr, var, a, b)` | Definite integral (closed form confirmed numerically, or tanh-sinh quadrature with an error estimate) | `integral("v", "t", 0 s, 1 h)` |
 | `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |
 | `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient(presion_vec, pos_vec)` |
 | `array` | `trapz(y, x)` | Numerical integration (area) | `trapz(fuerza_vec, pos_vec)` |
+
+#### Definite integrals
+
+`integral(expr, var, a, b)` (after `use integral from calc`) is the definite integral of `expr` over `var` from `a` to `b`; `integral(expr, var)` is the symbolic antiderivative.
+
+- **Bounds**: a number, a quantity, `"inf"` or `"-inf"`, or a name or an expression written as text (`pi`, `"pi/2"`, `"bohr_radius"`, a variable of the program). A name that resolves to nothing is an error, never 0. A quantity bound makes `var` a quantity of that unit; the other bound must have the same dimension, or be a plain `0` or an infinity. A temperature point or a level is not a bound.
+- **Names**: the integrand sees the program's variables (and a function's parameters). A free name resolves to a variable, a unit, `pi` or a constant of the catalog; any other name is an error.
+- **Result**: a quantity in (unit of `expr`) times (unit of `var`) whenever a unit or an uncertainty is involved, otherwise a number. With `v = 3 m/s`, `integral("v", "t", 0 s, 1 h)` is `10800 m`.
+- **Uncertainty** propagates, from the program's uncertain variables and from uncertain bounds, and the result stays correlated with them.
+- **Method**: the closed form `F(b) - F(a)` when the symbolic engine has an antiderivative *and* the quadrature confirms it, so a closed form that jumps across a pole is refused (`integral("x^(-2)", "x", -1, 1)` is an error, not -2). Otherwise tanh-sinh quadrature with an error estimate: accepted when two successive levels agree within a relative 1e-12 of max(|I|, the integral of |f|), from level 4 on, with at most 20000 samples per piece. An infinite end is mapped by x = c ± (1 - u)/u.
+- **Refused, not guessed**: a singularity at a non-zero end (`1/sqrt(1-x)` on [0, 1]: substitute so that it sits at 0), a jump or a kink inside the interval (split the interval there), `sin(1/x)` next to 0, an integrand that decays too slowly towards an infinite end. An integrand that cannot be evaluated, or is not finite, at a sample is an error.
+- **Known failure mode**: a peak much narrower than the spacing of the first levels' samples is never sampled, and every level agrees on a wrong value: a Gaussian of width 1e-4 at x = 0.3 on [0, 1] integrates to a confident 0. Split the interval around a known peak.
 
 ---
 

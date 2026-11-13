@@ -86,7 +86,7 @@ fn the_integrand_sees_the_variables_of_the_program() {
     assert_close(in_unit(&metres, "m").0, 6.0, 1e-12, "v*x with v in m");
     // the numerical path sees them too
     let gaussian = number("k = 2\nintegral(\"k*exp(-x^2)\", \"x\", 0, 1)");
-    assert_close(gaussian, 2.0 * GAUSSIAN_0_1, 1e-9, "k*exp(-x^2)");
+    assert_close(gaussian, 2.0 * GAUSSIAN_0_1, 1e-12, "k*exp(-x^2)");
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn the_unit_of_the_answer_is_the_integrands_times_the_variables() {
     assert_close(in_unit(&hour, "m").0, 10_800.0, 1e-12, "3 m/s over 1 h");
     // and the numerical path keeps it too
     let numeric = quantity("v = 3 m/s\nintegral(\"v*exp(-(t/(1 s))^2)\", \"t\", 0 s, 1 s)");
-    assert_close(in_unit(&numeric, "m").0, 3.0 * GAUSSIAN_0_1, 1e-9, "a decaying velocity");
+    assert_close(in_unit(&numeric, "m").0, 3.0 * GAUSSIAN_0_1, 1e-12, "a decaying velocity");
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn an_uncertain_integrand_propagates_its_uncertainty() {
     // numerical: v * GAUSSIAN_0_1 s
     let numeric = quantity("v = (3 +/- 0.1) m/s\nintegral(\"v*exp(-(t/(1 s))^2)\", \"t\", 0 s, 1 s)");
     let (mean, u) = in_unit(&numeric, "m");
-    assert_close(mean, 3.0 * GAUSSIAN_0_1, 1e-9, "mean");
+    assert_close(mean, 3.0 * GAUSSIAN_0_1, 1e-12, "mean");
     assert_close(u, 0.1 * GAUSSIAN_0_1, 1e-9, "uncertainty");
     // and the answer stays correlated with v: subtracting v times the same factor leaves no uncertainty
     let residual = quantity(
@@ -153,7 +153,7 @@ fn an_uncertain_integrand_propagates_its_uncertainty() {
 fn an_uncertain_bound_propagates_its_uncertainty() {
     // d/db of the integral is f(b): u = f(1) * 0.01 = exp(-1) * 0.01
     let numeric = quantity(r#"integral("exp(-x^2)", "x", 0, 1 +/- 0.01)"#);
-    assert_close(numeric.value.mean(), GAUSSIAN_0_1, 1e-9, "mean");
+    assert_close(numeric.value.mean(), GAUSSIAN_0_1, 1e-12, "mean");
     assert_close(numeric.value.std_dev(), (-1.0f64).exp() * 0.01, 1e-9, "uncertainty");
     // closed form: v * T, u = 3 m/s * 0.1 s
     let symbolic = quantity("v = 3 m/s\nT = (2 +/- 0.1) s\nintegral(\"v\", \"t\", 0 s, T)");
@@ -178,10 +178,9 @@ fn an_antiderivative_left_as_an_integral_does_not_hang() {
         Limits::sandboxed(Duration::from_secs(30)),
         DEFAULT_SEED,
     );
-    // answered within the deadline: by the interim rule's refusal (it has no error estimate good enough for the
-    // endpoint behaviour of sqrt), not by a wait
-    let message = &report.diagnostics.last().unwrap_or_else(|| panic!("{:?}", report.results)).message;
-    assert!(message.starts_with("integral: ") && !message.contains("time limit"), "{message}");
+    let item = report.results.last().unwrap_or_else(|| panic!("no value: {:?}", report.diagnostics));
+    let value: f64 = item.value.text.parse().unwrap_or_else(|_| panic!("{:?}", item.value.text));
+    assert!((value - 2.0 / 3.0).abs() < 1e-14, "{value}");
 }
 
 #[test]
@@ -215,7 +214,8 @@ fn the_integrand_sees_the_scope_of_the_call_in_phs_eval_and_in_a_function() {
 #[test]
 fn a_closed_form_that_jumps_inside_the_interval_is_refused() {
     // before: -2.0, a negative answer for a positive integrand whose integral diverges
-    assert!(refused(r#"integral("x^(-2)", "x", -1, 1)"#).starts_with("integral: "));
+    // the midpoint 0 is a node of the quadrature, where x^-2 is not finite
+    assert!(refused(r#"integral("x^(-2)", "x", -1, 1)"#).contains("not finite at x = 0"));
     // before: -0.1425 (tan(3) - tan(0), across the pole of sec^2 at pi/2)
     assert!(refused(r#"integral("sec(x)^2", "x", 0, 3)"#).starts_with("integral: "));
     assert!(refused(r#"integral("1/cos(x)^2", "x", 0, 3)"#).contains("did not converge"));
@@ -240,22 +240,89 @@ fn a_confirmed_closed_form_keeps_its_exact_digits() {
 fn an_infinite_end_and_a_finite_non_zero_end() {
     let e_inv = (-1.0f64).exp();
     // before: 0.6065 = exp(-0.5), the mapping's inverse did not match the substitution
-    assert_close(number(r#"integral("exp(-x)", "x", 1, "inf")"#), e_inv, 1e-9, "exp(-x) over [1, inf)");
+    assert_close(number(r#"integral("exp(-x)", "x", 1, "inf")"#), e_inv, 1e-12, "exp(-x) over [1, inf)");
     // before: 1.999998
-    assert_close(number(r#"integral("1/x^2", "x", 1, "inf")"#), 1.0, 1e-9, "1/x^2 over [1, inf)");
-    assert_close(number(r#"integral("1/x^2", "x", "-inf", -1)"#), 1.0, 1e-9, "1/x^2 over (-inf, -1]");
-    assert_close(number(r#"integral("exp(x)", "x", "-inf", 2)"#), 2.0f64.exp(), 1e-9, "exp(x) over (-inf, 2]");
-    assert_close(number(r#"integral("exp(-x)", "x", "inf", 1)"#), -e_inv, 1e-9, "reversed");
+    assert_close(number(r#"integral("1/x^2", "x", 1, "inf")"#), 1.0, 1e-12, "1/x^2 over [1, inf)");
+    assert_close(number(r#"integral("1/x^2", "x", "-inf", -1)"#), 1.0, 1e-12, "1/x^2 over (-inf, -1]");
+    assert_close(number(r#"integral("exp(x)", "x", "-inf", 2)"#), 2.0f64.exp(), 1e-12, "exp(x) over (-inf, 2]");
+    assert_close(number(r#"integral("exp(-x)", "x", "inf", 1)"#), -e_inv, 1e-12, "reversed");
     let pi = std::f64::consts::PI;
-    assert_close(number(r#"integral("exp(-x^2)", "x", "-inf", "inf")"#), pi.sqrt(), 1e-9, "the Gaussian integral");
-    assert_close(number(r#"integral("1/(1+x^2)", "x", "-inf", "inf")"#), pi, 1e-9, "the Lorentzian");
+    assert_close(number(r#"integral("exp(-x^2)", "x", "-inf", "inf")"#), pi.sqrt(), 1e-12, "the Gaussian integral");
+    assert_close(number(r#"integral("1/(1+x^2)", "x", "-inf", "inf")"#), pi, 1e-12, "the Lorentzian");
     // with a unit: a decaying velocity over all later times
     let distance = quantity("v = 3 m/s\nintegral(\"v*exp(-t/(2 s))\", \"t\", 0 s, \"inf\")");
-    assert_close(in_unit(&distance, "m").0, 6.0, 1e-9, "3 m/s decaying in 2 s");
+    assert_close(in_unit(&distance, "m").0, 6.0, 1e-12, "3 m/s decaying in 2 s");
 }
 
 #[test]
 fn an_integral_that_does_not_converge_at_infinity_is_refused() {
     assert!(refused(r#"integral("1/x", "x", 1, "inf")"#).starts_with("integral: "));
     assert!(refused(r#"integral("sin(x)", "x", 0, "inf")"#).starts_with("integral: "));
+}
+
+// ---- Task 2b: tanh-sinh, closed forms written in the test ----
+
+#[test]
+fn integrable_singularities_and_smooth_integrands_reach_full_precision() {
+    // 1/sqrt(x) has no antiderivative in the symbolic engine: numerical. before: 1.97508560641784
+    assert_close(number(r#"integral("1/sqrt(x)", "x", 0, 1)"#), 2.0, 1e-12, "x^-1/2");
+    // ln x: the antiderivative x ln x - x is not finite at 0, so numerical. before: -0.999476660223709
+    assert_close(number(r#"integral("ln(x)", "x", 0, 1)"#), -1.0, 1e-12, "ln x");
+    // x^-0.9: the closed form 10 x^0.1 (as 10.000000000000002 x^0.09999999999999998), confirmed numerically
+    assert_close(number(r#"integral("x^(-0.9)", "x", 0, 1)"#), 10.0, 1e-12, "x^-0.9");
+    // sqrt(pi)/2 erf(1): no antiderivative here
+    assert_close(number(r#"integral("exp(-x^2)", "x", 0, 1)"#), GAUSSIAN_0_1, 1e-12, "exp(-x^2)");
+    assert_close(number(r#"integral("sin(x)", "x", 0, pi)"#), 2.0, 1e-12, "sin");
+    assert_close(number(r#"integral("sqrt(x)", "x", 0, 1)"#), 2.0 / 3.0, 1e-12, "sqrt");
+}
+
+#[test]
+fn a_tiny_integral_is_judged_relative_to_its_own_size() {
+    // 1e-18/3: an absolute floor of 1e-15 would have accepted any estimate, even level 1's
+    assert_close(number(r#"integral("x^2", "x", 0, 1e-6)"#), 1e-18 / 3.0, 1e-12, "x^2 over [0, 1e-6]");
+    // the same through the quadrature alone (no antiderivative for this spelling of x^2)
+    assert_close(number(r#"integral("x^2*exp(0*sin(1/(x+1)))", "x", 0, 1e-6)"#), 1e-18 / 3.0, 1e-12, "numerically");
+}
+
+#[test]
+fn an_oscillating_integral_smaller_than_its_l1_is_not_refused() {
+    // (1 - cos 1000) / 1000; the L1 of the samples is about 0.64, the integral 4.4e-4
+    let expected = (1.0 - 1000f64.cos()) / 1000.0;
+    assert_close(number(r#"integral("sin(1000*x)", "x", 0, 1)"#), expected, 1e-9, "sin(1000 x)");
+}
+
+#[test]
+fn what_the_quadrature_cannot_resolve_is_refused() {
+    // a singularity at a non-zero end (stalls at 1.99999998, 7.7e-9 from 2)
+    assert!(refused(r#"integral("1/sqrt(1-x)", "x", 0, 1)"#).contains("did not converge"));
+    // the closed form 10 (x - 1)^0.1 is right, but the quadrature stalls at 9.74 next to x = 1 and cannot confirm it
+    assert!(refused(r#"integral("(x-1)^(-0.9)", "x", 1, 2)"#).contains("cannot be confirmed"));
+    // a jump at 0.3, a kink at 1/3, sin(1/x) next to 0
+    assert!(refused(r#"integral("floor(x + 0.7)", "x", 0, 1)"#).contains("did not converge"));
+    assert!(refused(r#"integral("abs(x - 1/3)", "x", 0, 1)"#).contains("did not converge"));
+    assert!(refused(r#"integral("sin(1/x)", "x", 0, 1)"#).starts_with("integral: "));
+}
+
+#[test]
+fn a_refusal_comes_well_within_the_sandbox_deadline() {
+    // the cap is 20000 samples: a refusal must not be a time-out of the 5 s deadline `phs eval` uses
+    let started = std::time::Instant::now();
+    let report = evaluate(
+        "use * from calc\nintegral(\"abs(x - 1/3)\", \"x\", 0, 1)",
+        Limits::sandboxed(Duration::from_secs(5)),
+        DEFAULT_SEED,
+    );
+    let message = &report.diagnostics.last().unwrap_or_else(|| panic!("{:?}", report.results)).message;
+    assert!(message.contains("did not converge"), "{message}");
+    assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn an_infinite_end_with_a_growing_factor_and_an_uncertain_integrand() {
+    // x^2 exp(-x) over [0, inf) is 2! = 2; far out x^2 overflows while exp(-x) is 0, which the tail never reaches
+    assert_close(number(r#"integral("x^2*exp(-x)", "x", 0, "inf")"#), 2.0, 1e-12, "x^2 exp(-x)");
+    // k exp(-x) over [0, inf) is k: 2 +/- 0.1
+    let q = quantity("k = 2 +/- 0.1\nintegral(\"k*exp(-x)\", \"x\", 0, \"inf\")");
+    assert_close(q.value.mean(), 2.0, 1e-12, "mean");
+    assert_close(q.value.std_dev(), 0.1, 1e-12, "uncertainty");
 }
