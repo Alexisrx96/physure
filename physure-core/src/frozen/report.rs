@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use super::engine::{environment_pairs, read_engine, EngineIdentity, EnginePolicy};
 use super::entries::{diff, entries, summary, Change, Entry};
 use super::load::{engine_file_hash, read_bounded, replay_file, LoadError};
-use super::model::{FrozenFile, Pairs};
+use super::model::{FrozenFile, HistoryEntry, Pairs};
+use super::seal::Problem;
 use crate::units::conf::{read_leniently_collected, replay_source, ProcessSettings, DEFAULT_PHYSURE_CONF};
 use crate::units::UnitRegistry;
 
@@ -352,6 +353,95 @@ pub fn unfrozen_entries(cwd: &Path) -> Result<(Vec<Entry>, Vec<String>), String>
         }
     }
     Ok((lenient, warnings))
+}
+
+/// The entries of the catalog a file's sources build, from memory (the replay of `load`): what `phs conf update` and
+/// `seal` show the difference of, between a plan's `old` and its `file`, without reading the file again. Replays the
+/// file as it is: the caller decides whether a file that does not verify may be replayed. `Err` is the origin of the
+/// source that does not replay (or "the sources together") and its problems.
+pub fn catalog_entries(file: &FrozenFile) -> Result<Vec<Entry>, (String, Vec<String>)> {
+    replay_file(file).map(|(registry, constants, collected)| entries(&registry, &constants, &collected))
+}
+
+/// One entry of a file's history, as `phs conf history` shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryRow {
+    pub n: u32,
+    pub time: String,
+    pub action: String,
+    pub actor: String,
+    pub reason: String,
+    /// The engine that acted (informational, as recorded).
+    pub engine: String,
+    /// The policy and the pinned engine of the `[Engine]` block this entry sealed.
+    pub policy: String,
+    pub pinned: String,
+    pub diff: String,
+    /// `engine_sha256` differs from the previous entry's (the first entry: false). Residual risk 1b-12 of §13: a moved
+    /// `binary_sha256` or a changed profile/target/features/rustc/flags shows only as this, since the history keeps the
+    /// hash of the block, not the block.
+    pub engine_block_changed: bool,
+    /// `policy` or `pinned` differs from the previous entry's, in words (`policy: release -> record`, then
+    /// `pinned: a -> b`, joined by `; `), else empty.
+    pub pin_change: String,
+    /// The file's own checks do not vouch for this row: it is at or after the first entry whose chain link fails
+    /// (its number, its link to the previous entry, its own hash, its action, its continuity, its reason, its time),
+    /// or the stored seal does not cover the stored parts (then every row). The row shows what the file says.
+    pub unverified: bool,
+}
+
+/// The first history entry (by number) whose link of the chain fails, if any.
+fn first_broken_link(file: &FrozenFile) -> Option<u32> {
+    file.verify()
+        .iter()
+        .filter_map(|problem| match problem {
+            Problem::HistoryNumber { position, .. } => u32::try_from(*position).ok(),
+            Problem::HistoryPrev { n, .. }
+            | Problem::HistoryEntryHash { n, .. }
+            | Problem::HistoryAction { n, .. }
+            | Problem::HistoryContinuity { n, .. }
+            | Problem::HistoryReason { n, .. }
+            | Problem::HistoryTime { n, .. } => Some(*n),
+            _ => None,
+        })
+        .min()
+}
+
+/// The history of `file` as rows, oldest first, whether the file verifies or not (see [`HistoryRow::unverified`]).
+pub fn history_rows(file: &FrozenFile) -> Vec<HistoryRow> {
+    let sealed = file.seal_covers_the_stored_parts();
+    let broken = first_broken_link(file);
+    let mut rows = Vec::with_capacity(file.history().len());
+    let mut previous: Option<&HistoryEntry> = None;
+    for (position, entry) in file.history().iter().enumerate() {
+        let mut pin_change = Vec::new();
+        if let Some(before) = previous {
+            for (what, old, new) in [("policy", before.policy(), entry.policy()), ("pinned", before.pinned(), entry.pinned())] {
+                if old != new {
+                    pin_change.push(format!("{what}: {old} -> {new}"));
+                }
+            }
+        }
+        // by position, which a misnumbered entry cannot move; the numbers of the problems are the entries' own, and a
+        // misnumbered entry is reported at its position too, so the first broken link is never placed too late
+        let n = u32::try_from(position + 1).unwrap_or(u32::MAX);
+        rows.push(HistoryRow {
+            n: entry.n(),
+            time: entry.time().to_string(),
+            action: entry.action().to_string(),
+            actor: entry.actor().to_string(),
+            reason: entry.reason().to_string(),
+            engine: entry.engine().to_string(),
+            policy: entry.policy().to_string(),
+            pinned: entry.pinned().to_string(),
+            diff: entry.diff().to_string(),
+            engine_block_changed: previous.is_some_and(|before| before.engine_sha256() != entry.engine_sha256()),
+            pin_change: pin_change.join("; "),
+            unverified: !sealed || broken.is_some_and(|first| n >= first),
+        });
+        previous = Some(entry);
+    }
+    rows
 }
 
 #[cfg(test)]

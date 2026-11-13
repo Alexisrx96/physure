@@ -31,6 +31,9 @@ pub use ops::{
 pub mod entries;
 pub use entries::{diff, embedded_entries, entries, summary, Change, Entry};
 pub mod report;
-pub use report::{compare, inspect, unfrozen_entries, Comparison, EngineState, FieldChange, Inspection, Side, UNFROZEN_LABEL};
+pub use report::{
+    catalog_entries, compare, history_rows, inspect, unfrozen_entries, Comparison, EngineState, FieldChange, HistoryRow, Inspection, Side,
+    UNFROZEN_LABEL,
+};
 pub mod origin;
 pub use origin::{entries_with_origin, section_and_key, select, Origin};

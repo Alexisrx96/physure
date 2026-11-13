@@ -5,9 +5,9 @@
 //! directory, and every report function takes paths.
 
 use physure_core::frozen::origin::{entries_with_origin, section_and_key, select, Origin};
-use physure_core::frozen::report::{compare, inspect, unfrozen_entries, EngineState, Side};
+use physure_core::frozen::report::{catalog_entries, compare, history_rows, inspect, unfrozen_entries, EngineState, Side};
 use physure_core::frozen::{
-    engine_pairs, freeze, write_atomic, EngineIdentity, EnginePolicy, Entry, EntryInput, FreezeOptions, FrozenFile, FrozenParts,
+    diff, engine_pairs, freeze, plan_seal, plan_update, write_atomic, Change, EngineIdentity, FileStamp, EnginePolicy, Entry, EntryInput, FreezeOptions, FrozenFile, FrozenParts,
     Source,
 };
 use physure_core::units::conf::DEFAULT_PHYSURE_CONF;
@@ -478,4 +478,115 @@ parallel_threshold = 4242
     fs::write(dir.path("physure.conf"), [0xff, 0xfe, 0x00]).unwrap();
     let e = unfrozen_entries(&dir.0).unwrap_err();
     assert!(e.contains("physure.conf"), "{e}");
+}
+
+// ---- Task 4: history rows, and what the plans carry -----------------------------------------------------------------
+
+/// A file frozen with an older embedded text (molar_gas_constant = 8.0), written to `dir`; its path.
+fn older_file(dir: &Dir) -> PathBuf {
+    let r = "molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1";
+    let older = file_of(&[("embedded", &DEFAULT_PHYSURE_CONF.replacen(r, "molar_gas_constant = 8.0 J*mol^-1*K^-1", 1)), ("overrides", "")]);
+    dir.write("physure.frozen.conf", &older.render().unwrap())
+}
+
+#[test]
+fn history_rows_say_what_each_entry_did_and_what_changed_in_the_pin() {
+    let dir = Dir::new();
+    let path = older_file(&dir);
+    let rows = history_rows(&read(&path));
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].n, rows[0].action.as_str(), rows[0].engine_block_changed, rows[0].pin_change.as_str()), (1, "freeze", false, ""));
+    assert!(!rows[0].unverified);
+    let plan = plan_update(&path, "new library", Some(EnginePolicy::Record), None, T0, "t@h").unwrap().unwrap();
+    write_atomic(&path, &plan.file.render().unwrap(), true).unwrap();
+    let rows = history_rows(&read(&path));
+    assert_eq!(rows.len(), 2);
+    let row = &rows[1];
+    assert_eq!((row.n, row.action.as_str(), row.reason.as_str(), row.actor.as_str()), (2, "update", "new library", "t@h"));
+    assert_eq!(row.time, T0_TEXT);
+    assert_eq!(row.policy, "record");
+    assert_eq!(row.pinned, EngineIdentity::current().short());
+    assert_eq!(row.engine, EngineIdentity::current().short());
+    assert_eq!(row.diff, plan.summary);
+    assert!(row.engine_block_changed, "the policy is part of the block");
+    assert_eq!(row.pin_change, "policy: release -> record");
+    assert!(rows.iter().all(|r| !r.unverified));
+}
+
+#[test]
+fn rows_from_the_first_broken_link_on_are_unverified() {
+    let dir = Dir::new();
+    let path = older_file(&dir);
+    for (reason, policy) in [("second", EnginePolicy::Record), ("third", EnginePolicy::Release)] {
+        let plan = plan_update(&path, reason, Some(policy), None, T0, "t@h").unwrap().unwrap();
+        write_atomic(&path, &plan.file.render().unwrap(), true).unwrap();
+    }
+    let text = fs::read_to_string(&path).unwrap();
+    assert_eq!(history_rows(&read(&path)).iter().filter(|r| r.unverified).count(), 0);
+    // the reason of entry 2 rewritten: its own hash breaks, and nothing after it can be trusted
+    let tampered = text.replacen("reason = second", "reason = forged", 1);
+    assert_ne!(tampered, text);
+    fs::write(&path, &tampered).unwrap();
+    let rows = history_rows(&read(&path));
+    assert_eq!(rows.iter().map(|r| r.unverified).collect::<Vec<_>>(), vec![false, true, true]);
+    assert_eq!(rows[1].reason, "forged", "the row shows what the file says");
+    assert_eq!(inspect(&path, None).exit_code(), 1);
+    // a seal that does not cover the stored parts (the engine block changed without a reseal): no row is vouched for
+    fs::write(&path, &text).unwrap();
+    let mut file = read(&path);
+    file.set_engine(engine_pairs(&other_identity(), EnginePolicy::Record, None).unwrap());
+    fs::write(&path, file.render().unwrap()).unwrap();
+    assert!(history_rows(&read(&path)).iter().all(|r| r.unverified));
+    // a hand edit of the overrides leaves the seal over the stored parts intact: the history still holds
+    let other = Dir::new();
+    let path = freeze_in(&other, None);
+    repin(&path, &other_identity(), EnginePolicy::Release, "another engine");
+    let text = fs::read_to_string(&path).unwrap();
+    let edited = text.replacen(physure_core::frozen::EMPTY_OVERRIDES.trim_end(), "[Constants]
+zz_c = 3 m", 1);
+    assert_ne!(edited, text);
+    fs::write(&path, edited).unwrap();
+    assert!(!inspect(&path, None).problems.is_empty());
+    let rows = history_rows(&read(&path));
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| !r.unverified));
+}
+
+#[test]
+fn an_update_plan_carries_the_file_it_read_and_its_stamp() {
+    let dir = Dir::new();
+    let path = older_file(&dir);
+    let original = read(&path);
+    let stamp = FileStamp::of(&fs::metadata(&path).unwrap());
+    let plan = plan_update(&path, "new library", None, None, T0, "t@h").unwrap().unwrap();
+    assert_eq!(plan.old, original);
+    assert_eq!(plan.stamp, stamp);
+    // what update shows is computed from memory: the difference the plan makes
+    let changes = diff(&catalog_entries(&plan.old).unwrap(), &catalog_entries(&plan.file).unwrap());
+    assert!(changes.iter().any(|c| matches!(c, Change::Changed { kind: "constant", name, .. } if name == "molar_gas_constant")), "{changes:?}");
+}
+
+#[test]
+fn a_seal_plan_carries_the_edited_file_and_its_stamp() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, None);
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replacen(physure_core::frozen::EMPTY_OVERRIDES.trim_end(), "[Constants]
+zz_c = 3 m", 1)).unwrap();
+    let edited = read(&path);
+    let stamp = FileStamp::of(&fs::metadata(&path).unwrap());
+    let plan = plan_seal(&path, "my constant", T0, "t@h").unwrap().unwrap();
+    assert_eq!(plan.old, edited);
+    assert!(!plan.old.verify().is_empty(), "the file as read, not yet sealed");
+    assert_eq!(plan.stamp, stamp);
+    assert!(plan.file.verify().is_empty());
+}
+
+#[test]
+fn catalog_entries_name_a_source_that_does_not_replay() {
+    let file = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", "[AtomicWeights]
+Fe = abc, 0.1")]);
+    let (source, problems) = catalog_entries(&file).unwrap_err();
+    assert_eq!(source, "overrides");
+    assert!(!problems.is_empty());
 }

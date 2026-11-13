@@ -477,6 +477,13 @@ impl FrozenFile {
         problems
     }
 
+    /// Whether the stored seal is the seal of the parts **as stored** (format, `created`, the stored content hash, the
+    /// engine block, the witnesses, the scripts and the last history entry's hash): the seal still vouches for the
+    /// history, even if a source was edited since. False with no history.
+    pub(crate) fn seal_covers_the_stored_parts(&self) -> bool {
+        self.history.last().is_some_and(|last| seal_sha256(self, &self.content_sha256, &last.entry_sha256) == self.seal_sha256)
+    }
+
     /// Whether the file is exactly as it was last sealed except for the text of source 2, the overrides block, whose
     /// canonical form changed: what `seal` may accept (Task 9, F19). A rule on the list of problems alone is not
     /// enough (an edit of source 1 with its marker recomputed, or a source appended with a correct marker, give the
@@ -495,10 +502,10 @@ impl FrozenFile {
         if !self.verify().iter().all(allowed) {
             return false;
         }
-        let (Some(last), Some(overrides)) = (self.history.last(), self.sources.get(1)) else {
+        let Some(overrides) = self.sources.get(1) else {
             return false;
         };
-        if seal_sha256(self, &self.content_sha256, &last.entry_sha256) != self.seal_sha256 {
+        if !self.seal_covers_the_stored_parts() {
             return false;
         }
         let hashes: Vec<(String, String)> = self

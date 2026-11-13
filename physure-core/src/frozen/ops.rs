@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::active::{resolve, Inputs, Resolution, ResolveError, ENV_CONF, FROZEN_FILE_NAME};
 use super::canonical::{canonical_pairs, canonical_text, source_sha256};
 use super::engine::{engine_pairs, environment_pairs, freezable, read_engine, EngineIdentity, EnginePolicy};
-use super::load::{engine_file_hash, read_bounded, replay_file, LoadError};
+use super::load::{engine_file_hash, read_bounded, replay_file, FileStamp, LoadError};
 use super::model::{FrozenError, FrozenFile, Pairs, Source};
 use super::seal::{EntryInput, FrozenParts};
 use super::time::rfc3339_from_unix;
@@ -194,6 +194,12 @@ pub fn freeze(options: &FreezeOptions<'_>) -> Result<(FrozenFile, PathBuf), OpsE
 pub struct UpdatePlan {
     pub file: FrozenFile,
     pub summary: String,
+    /// The file as it was read and verified, so the difference the plan makes can be shown from memory, without
+    /// reading the file a second time.
+    pub old: FrozenFile,
+    /// The stamp of the file, from the handle `old` was read through: the CLI compares it with the file's just before
+    /// writing and refuses when the file changed since (residual risk 1c-14).
+    pub stamp: FileStamp,
 }
 
 /// A planned seal of a hand edit of the overrides.
@@ -201,12 +207,18 @@ pub struct UpdatePlan {
 pub struct SealPlan {
     pub file: FrozenFile,
     pub summary: String,
+    /// The file as it was read (with the edit, so it does not verify).
+    pub old: FrozenFile,
+    /// The stamp of the file, from the handle `old` was read through (see [`UpdatePlan::stamp`]).
+    pub stamp: FileStamp,
 }
 
-/// Reads and parses a frozen file (bounded, as loading reads it).
-fn read_frozen(path: &Path) -> Result<FrozenFile, OpsError> {
-    let (text, _) = read_bounded(path).map_err(OpsError::Load)?;
-    FrozenFile::parse(&text).map_err(|e| OpsError::Load(LoadError::NotFrozen { path: path.to_path_buf(), message: e.0 }))
+/// Reads and parses a frozen file (bounded, as loading reads it), with the stamp of the handle it was read through.
+fn read_frozen(path: &Path) -> Result<(FrozenFile, FileStamp), OpsError> {
+    let (text, stamp) = read_bounded(path).map_err(OpsError::Load)?;
+    let file = FrozenFile::parse(&text)
+        .map_err(|e| OpsError::Load(LoadError::NotFrozen { path: path.to_path_buf(), message: e.0 }))?;
+    Ok((file, stamp))
 }
 
 fn listed(problems: &[super::seal::Problem]) -> String {
@@ -244,7 +256,8 @@ pub fn plan_update(
     time_unix: u64,
     actor: &str,
 ) -> Result<Option<UpdatePlan>, OpsError> {
-    let mut file = read_frozen(path)?;
+    let (mut file, stamp) = read_frozen(path)?;
+    let old = file.clone();
     let problems = file.verify();
     if !problems.is_empty() {
         return Err(OpsError::Refused(format!(
@@ -278,7 +291,7 @@ pub fn plan_update(
     let short = EngineIdentity::current().short();
     file.reseal(EntryInput { time: &time, action: "update", engine: &short, actor, reason, diff: &summary })?;
     validate(&file)?;
-    Ok(Some(UpdatePlan { file, summary }))
+    Ok(Some(UpdatePlan { file, summary, old, stamp }))
 }
 
 /// Accepts a hand edit of the overrides block (source 2) of the frozen file at `path`, and nothing else. `Ok(None)`
@@ -289,11 +302,12 @@ pub fn plan_update(
 /// engine block, the witnesses or the history are all refused, with what `verify` found). The edited overrides must
 /// replay strictly.
 pub fn plan_seal(path: &Path, reason: &str, time_unix: u64, actor: &str) -> Result<Option<SealPlan>, OpsError> {
-    let mut file = read_frozen(path)?;
+    let (mut file, stamp) = read_frozen(path)?;
     let problems = file.verify();
     if problems.is_empty() {
         return Ok(None);
     }
+    let as_read = file.clone();
     if !file.only_the_overrides_changed() {
         return Err(OpsError::Refused(format!(
             "{}: seal accepts a hand edit of the overrides block only (expected every other part as last sealed), found: {}",
@@ -308,7 +322,7 @@ pub fn plan_seal(path: &Path, reason: &str, time_unix: u64, actor: &str) -> Resu
     let short = EngineIdentity::current().short();
     file.reseal(EntryInput { time: &time, action: "seal", engine: &short, actor, reason, diff: &summary })?;
     validate(&file)?;
-    Ok(Some(SealPlan { file, summary }))
+    Ok(Some(SealPlan { file, summary, old: as_read, stamp }))
 }
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
