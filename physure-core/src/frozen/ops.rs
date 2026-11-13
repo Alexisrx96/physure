@@ -289,7 +289,7 @@ pub fn write_atomic(path: &Path, text: &str, replace: bool) -> Result<(), OpsErr
     drop(file);
     written.map_err(io_error(&temporary.path))?;
     if replace {
-        fs::rename(&temporary.path, path).map_err(io_error(path))?;
+        rename_with_retry(&temporary.path, path).map_err(io_error(path))?;
         temporary.kept = true;
         return Ok(());
     }
@@ -305,6 +305,32 @@ pub fn write_atomic(path: &Path, text: &str, replace: bool) -> Result<(), OpsErr
             Ok(())
         }
     }
+}
+
+/// How many times a rename is retried, and the first wait (doubled each time: 25, 50, 100, 200, 400 ms).
+const RENAME_RETRIES: u32 = 5;
+const RENAME_FIRST_WAIT_MS: u64 = 25;
+
+/// `fs::rename` that waits out a transient refusal. On Windows a virus scanner, an indexer or an editor can hold the
+/// file open for a moment without delete sharing, and the rename then fails with "access denied" (error 5) or a
+/// sharing violation (error 32) although nothing is wrong; it succeeds a few milliseconds later. Only those errors
+/// are retried, a bounded number of times: any other error, and the same error after the last wait, is returned.
+fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
+    let mut wait = RENAME_FIRST_WAIT_MS;
+    for _ in 0..RENAME_RETRIES {
+        match fs::rename(from, to) {
+            Err(e) if transient_rename_error(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                wait *= 2;
+            }
+            other => return other,
+        }
+    }
+    fs::rename(from, to)
+}
+
+fn transient_rename_error(e: &io::Error) -> bool {
+    cfg!(windows) && (e.kind() == io::ErrorKind::PermissionDenied || matches!(e.raw_os_error(), Some(5 | 32)))
 }
 
 /// `user@host` for the history, from `USER` or `USERNAME` and `HOSTNAME` or `COMPUTERNAME` (`unknown` for a part
@@ -620,6 +646,33 @@ mod tests {
             let e = plan_seal(&path, "x", T0, "t@h").unwrap_err();
             assert!(matches!(&e, OpsError::Refused(m) if m.contains("overrides block only")), "{what}: {e:?}");
         }
+    }
+
+    /// A scanner or an indexer holding the target open without delete sharing makes the rename fail for a moment
+    /// (Windows error 5 or 32); the write waits it out, and gives up with an error, and no temporary file, if the
+    /// hold lasts.
+    #[cfg(windows)]
+    #[test]
+    fn write_atomic_waits_out_a_transient_hold_on_the_target_and_gives_up_on_a_lasting_one() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = Dir::new();
+        let path = dir.0.join("held.conf");
+        fs::write(&path, "old").unwrap();
+        let hold = fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            drop(hold);
+        });
+        write_atomic(&path, "new", true).expect("the hold ended within the retries");
+        releaser.join().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        // a hold that outlasts every retry is an error, the old content stays, and no temporary file is left
+        let hold = fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert!(matches!(write_atomic(&path, "newer", true), Err(OpsError::Io { .. })));
+        drop(hold);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        let leftovers: Vec<_> = fs::read_dir(&dir.0).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("held.conf")], "{leftovers:?}");
     }
 
     #[test]
