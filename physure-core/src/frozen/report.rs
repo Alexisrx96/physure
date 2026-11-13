@@ -42,6 +42,9 @@ pub struct Inspection {
     /// The text could not be read or parsed (size limit, I/O, not UTF-8, not a frozen file): the message. Everything
     /// below is then empty.
     pub unreadable: Option<String>,
+    /// The SHA-256 (lowercase hex) of the bytes read, when they were read: what everything below was computed from. A
+    /// caller that opens the file again by its path (to put it in force) checks that it still has these bytes.
+    pub read_sha256: Option<String>,
     pub file: Option<FrozenFile>,
     /// `FrozenFile::verify()`, one problem per string. Empty: the seal and the chain hold.
     pub problems: Vec<String>,
@@ -65,6 +68,7 @@ pub fn inspect(path: &Path, engine_file: Option<&Path>) -> Inspection {
     let mut inspection = Inspection {
         path: path.to_path_buf(),
         unreadable: None,
+        read_sha256: None,
         file: None,
         problems: Vec::new(),
         engine: None,
@@ -73,6 +77,7 @@ pub fn inspect(path: &Path, engine_file: Option<&Path>) -> Inspection {
         atomic_weight_edition: None,
     };
     let parsed = read_bounded(path).and_then(|(text, _)| {
+        inspection.read_sha256 = Some(super::sha256::sha256_hex(text.as_bytes()));
         FrozenFile::parse(&text).map_err(|e| LoadError::NotFrozen { path: path.to_path_buf(), message: e.0 })
     });
     let file = match parsed {
@@ -521,6 +526,7 @@ mod tests {
         let empty = Inspection {
             path: PathBuf::from("x"),
             unreadable: None,
+            read_sha256: None,
             file: None,
             problems: Vec::new(),
             engine: None,

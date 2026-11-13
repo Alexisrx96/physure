@@ -1048,11 +1048,23 @@ fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (Strin
     if builtin == 0 {
         return not_run(NOTHING_WITNESSED.into(), 1);
     }
-    let evaluated = match with_configuration(path, || evaluate_witnesses(file.witness_scripts(), timeout)) {
+    let Some(read_sha256) = inspection.read_sha256.as_deref() else {
+        return not_run("the file does not verify".into(), 1);
+    };
+    let evaluated = match with_configuration(path, || {
+        evaluate_if_unchanged(path, read_sha256, || evaluate_witnesses(file.witness_scripts(), timeout))
+    }) {
         Ok(evaluated) => evaluated,
         Err(e) => return not_run(format!("the file cannot be put in force to evaluate under it: {}", e.message), e.code),
     };
-    let run = evaluated.value;
+    let run = match evaluated.value {
+        Ok(run) => run,
+        Err(FILE_CHANGED_DURING) => {
+            let text = format!("witnesses: discarded: {FILE_CHANGED_DURING}\n");
+            return (text, json!({ "witnesses": Value::Null, "witnesses_ok": false, "witnesses_not_run": FILE_CHANGED_DURING }), 1);
+        }
+        Err(changed) => return not_run(changed.to_string(), 1),
+    };
     let mut compared = compare_witnesses(file.witnesses(), &run.rows);
     if exact_build_pinned(inspection) {
         new_battery_cases_are_errors(&mut compared);
@@ -1070,6 +1082,29 @@ fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (Strin
     witnesses["checked"] = Value::from(file.witnesses().len());
     let fields = json!({ "witnesses": witnesses, "witnesses_ok": ok, "witness_warnings": evaluated.warnings });
     (text, fields, if ok { 0 } else { 1 })
+}
+
+/// Why [`evaluate_if_unchanged`] evaluated nothing.
+const FILE_CHANGED_BEFORE: &str = "the file changed while it was being verified";
+/// Why [`evaluate_if_unchanged`] discarded what it evaluated.
+const FILE_CHANGED_DURING: &str =
+    "the file changed while its witnesses were being evaluated, so their results are discarded; run the command again";
+
+/// Runs `evaluate` (the witnesses, under the file at `path` put in force by its path) only while the file has the
+/// bytes whose SHA-256 is `read_sha256`, the bytes `inspect` read and verified: `with_configuration` opens it again,
+/// and an edit in between (the same length, the modification time put back: no stamp sees it) would be evaluated as
+/// if it were the file that verified. Checked just before (nothing is evaluated) and again just after (the
+/// configuration in force reloads a file whose stamp changes, so the results of an evaluation the file changed under
+/// are discarded).
+fn evaluate_if_unchanged<R>(path: &Path, read_sha256: &str, evaluate: impl FnOnce() -> R) -> Result<R, &'static str> {
+    if !bytes_unchanged_since(path, read_sha256) {
+        return Err(FILE_CHANGED_BEFORE);
+    }
+    let value = evaluate();
+    if !bytes_unchanged_since(path, read_sha256) {
+        return Err(FILE_CHANGED_DURING);
+    }
+    Ok(value)
 }
 
 /// Whether the file pins this exact build: its policy is `binary` or `build` and the running engine satisfies it.
@@ -1558,6 +1593,7 @@ mod tests {
         let inspection = |engine: Option<EngineState>| Inspection {
             path: PathBuf::from("x"),
             unreadable: None,
+            read_sha256: None,
             file: None,
             problems: Vec::new(),
             engine,
@@ -1699,6 +1735,49 @@ mod tests {
             assert!(refused.text.contains("changed since it was read") && refused.text.contains("SHA-256"), "{command}: {}", refused.text);
             assert_eq!(std::fs::read_to_string(path).unwrap(), other, "{command}: not overwritten");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review item 8: `verify --run` puts the file in force by its path after `inspect` read it; an edit in between
+    /// (the same length, the modification time put back, so no stamp sees it) must not be evaluated as if it were the
+    /// file that verified, nor one made while the witnesses run.
+    #[test]
+    fn the_witnesses_are_evaluated_only_while_the_file_is_the_one_inspect_read() {
+        let dir = std::env::temp_dir().join(format!("physure_cli_toctou_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = FreezeOptions {
+            cwd: &dir,
+            out: None,
+            reason: "first",
+            policy: EnginePolicy::Release,
+            engine_file: None,
+            time_unix: now_unix(),
+            actor: "t@h",
+        };
+        let (file, path) = freeze(&options).unwrap();
+        write_atomic(&path, &file.render().unwrap(), false).unwrap();
+        let inspection = inspect(&path, None);
+        let read = inspection.read_sha256.clone().expect("inspect keeps the hash of the bytes it read");
+        assert_eq!(read, physure_core::frozen::sha256::sha256_hex(&std::fs::read(&path).unwrap()));
+        // unchanged: evaluated
+        assert_eq!(evaluate_if_unchanged(&path, &read, || 7), Ok(7));
+        // a same-length edit the stamp is blind to, before the evaluation: nothing evaluated
+        let original = std::fs::read_to_string(&path).unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let blind_edit = |text: &str| {
+            std::fs::write(&path, text).unwrap();
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(modified).unwrap();
+        };
+        let edited = original.replacen("first", "fir5t", 1);
+        assert_eq!(edited.len(), original.len());
+        blind_edit(&edited);
+        let mut ran = false;
+        assert_eq!(evaluate_if_unchanged(&path, &read, || ran = true), Err(FILE_CHANGED_BEFORE));
+        assert!(!ran, "nothing was evaluated");
+        // an edit while the witnesses run: their results are discarded
+        blind_edit(&original);
+        assert_eq!(evaluate_if_unchanged(&path, &read, || blind_edit(&edited)), Err(FILE_CHANGED_DURING));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
