@@ -102,3 +102,26 @@ fn a_broken_frozen_file_is_an_error_of_phs_not_a_panic() {
     let checked = std::panic::catch_unwind(|| physure_script::check_source("x = 3 m"));
     assert!(checked.expect("checking panicked").is_err());
 }
+
+fn holds(source: &str) -> bool {
+    match eval_phs(source).unwrap_or_else(|e| panic!("{source}: {e}")).into_iter().last() {
+        Some(PhsValue::Bool(b)) => b,
+        other => panic!("{source}: {other:?}"),
+    }
+}
+
+#[test]
+fn approx_uses_the_tolerance_of_the_frozen_file_and_the_library_one_without_it() {
+    let dir = Dir::new("approx");
+    assert!(holds("1 km ≈ 1.0009 km"), "the library's approx_rel_tol is 1e-3");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\napprox_rel_tol = 1e-6\n")).unwrap();
+    reset_cache();
+    assert!(!holds("1 km ≈ 1.0009 km"), "the frozen file's approx_rel_tol is 1e-6");
+    assert!(holds("1 km ≈ 1.0000009 km"));
+    assert!(holds("approx(1 km, 1.0009 km, 1e-3)"), "a tolerance given in the call wins");
+    assert!(!holds("approx(1 km, 1.0009 km)"));
+    fs::remove_file(dir.path.join(FROZEN_FILE_NAME)).unwrap();
+    reset_cache();
+    assert!(holds("1 km ≈ 1.0009 km"), "the library's tolerance is back");
+    assert_eq!(physure_core::settings::approx_rel_tol(), 1e-3);
+}

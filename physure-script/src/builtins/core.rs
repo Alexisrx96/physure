@@ -24,51 +24,20 @@ fn describe_arg(v: Option<&PhsValue>) -> &'static str {
     }
 }
 
-/// The `==`/`!=` Bool branch. `Some(Ok(...))` when at least one side is `Bool` (a matching
-/// pair compares directly; a mismatched pair is a type error naming both types); `None` when
-/// neither side is `Bool`, so the caller falls through to the existing Quantity/sigma-bound
-/// handling unchanged.
-fn bool_equality(args: &[PhsValue], symbol: &str, want_equal: bool) -> Option<PhysureResult<Option<PhsValue>>> {
-    let l_is_bool = matches!(args.first(), Some(PhsValue::Bool(_)));
-    let r_is_bool = matches!(args.get(1), Some(PhsValue::Bool(_)));
-    if !l_is_bool && !r_is_bool {
-        return None;
-    }
-    if let (Some(PhsValue::Bool(l)), Some(PhsValue::Bool(r))) = (args.first(), args.get(1)) {
-        return Some(Ok(Some(boolean((l == r) == want_equal))));
-    }
-    Some(Err(PhysureError::Generic(format!(
+/// A comparison of operand types it has no meaning for is a type error naming both: answering `false` let
+/// `vector(1, 2) == vector(1, 2)`, `1 m != "a"` and `1 m < 20 m +/- 1 sigma` slip through a condition as answers.
+fn cannot_compare(args: &[PhsValue], symbol: &str) -> PhysureError {
+    PhysureError::Generic(format!(
         "cannot compare {} and {} with {}",
         describe_arg(args.first()),
         describe_arg(args.get(1)),
         symbol,
-    ))))
+    ))
 }
 
-/// Two quantities reduced to a pair of numbers that can be compared directly.
-///
-/// Comparing the raw magnitudes makes `1 km == 1000 m` false and `1 km > 999 m` false
-/// as well — the scale factor has to be folded in first, exactly as `add` already does.
-/// Different dimensions are an error rather than `false`: `5 m > 2 s` has no answer, and
-/// answering `false` lets it slip through a conditional as if it did.
-/// A dimensionless zero is comparable with anything: `x > 0` is how a sign test is
-/// written, and zero is the one magnitude that reads the same in every unit.
-fn comparable(l: &physure_core::Quantity, r: &physure_core::Quantity) -> PhysureResult<(f64, f64)> {
-    let dimensionless_zero =
-        |q: &physure_core::Quantity| q.unit.dimensions.is_empty() && q.value.mean() == 0.0;
-    if !l.unit.same_dimensions(&r.unit) && !dimensionless_zero(l) && !dimensionless_zero(r) {
-        return Err(PhysureError::UnitMismatch {
-            expected: l.unit.__repr__(),
-            actual: r.unit.__repr__(),
-        });
-    }
-    Ok((l.canonical_magnitude(), r.canonical_magnitude()))
-}
-
-/// Applies `pred` to the two operands once both are on a common scale. Strings only
-/// support equality, so they collapse to "equal" / "not equal" rather than an ordering.
-fn compare(args: &[PhsValue], pred: impl Fn(f64, f64) -> bool) -> PhysureResult<Option<PhsValue>> {
-    let as_quantity = |v: &PhsValue| match v {
+/// A number or a quantity as a quantity (a number is a dimensionless one); `None` for any other value.
+fn as_quantity(v: &PhsValue) -> Option<physure_core::Quantity> {
+    match v {
         PhsValue::Quantity(q) => Some(q.clone()),
         PhsValue::Number(n) => Some(physure_core::Quantity::new_scalar(
             *n,
@@ -78,20 +47,90 @@ fn compare(args: &[PhsValue], pred: impl Fn(f64, f64) -> bool) -> PhysureResult<
             None,
         )),
         _ => None,
-    };
-    match (args.first(), args.get(1)) {
-        (Some(PhsValue::String(l)), Some(PhsValue::String(r))) => {
-            Ok(Some(boolean(pred(0.0, if l == r { 0.0 } else { 1.0 }))))
-        }
-        (Some(l), Some(r)) => match (as_quantity(l), as_quantity(r)) {
-            (Some(l), Some(r)) => {
-                let (l, r) = comparable(&l, &r)?;
-                Ok(Some(boolean(pred(l, r))))
-            }
-            _ => Ok(Some(boolean(false))),
-        },
-        _ => Ok(Some(boolean(false))),
     }
+}
+
+/// The two operands of a comparison, both numbers or quantities, or a type error.
+fn quantities(args: &[PhsValue], symbol: &str) -> PhysureResult<(physure_core::Quantity, physure_core::Quantity)> {
+    match (args.first().and_then(as_quantity), args.get(1).and_then(as_quantity)) {
+        (Some(l), Some(r)) if args.len() == 2 => Ok((l, r)),
+        _ => Err(cannot_compare(args, symbol)),
+    }
+}
+
+/// `<`, `>`, `<=`, `>=` on two numbers or quantities, by their canonical magnitudes
+/// (`Quantity::comparable_magnitudes`: `1 km > 999 m`, different dimensions an error). Nothing else has an order:
+/// two strings compared their equality as `0 < 1`, which made `"b" < "a"` true.
+fn order(args: &[PhsValue], symbol: &str, pred: impl Fn(f64, f64) -> bool) -> PhysureResult<Option<PhsValue>> {
+    let (l, r) = quantities(args, symbol)?;
+    let (a, b) = l.comparable_magnitudes(&r)?;
+    Ok(Some(boolean(pred(a, b))))
+}
+
+/// PHS `==`, the one definition `!=` negates:
+/// * two numbers or quantities: `Quantity::phs_eq` (canonical magnitudes within a relative 1e-12);
+/// * a number or quantity and a `t +/- k sigma` bound, in either order: [`within_sigma`];
+/// * two booleans, or two strings: whether they are the same;
+/// * any other pair (vectors and matrices included, whose `==` the language does not define): a type error.
+fn phs_equal(args: &[PhsValue], symbol: &str) -> PhysureResult<bool> {
+    match (args.first(), args.get(1)) {
+        _ if args.len() != 2 => Err(cannot_compare(args, symbol)),
+        (Some(PhsValue::Bool(l)), Some(PhsValue::Bool(r))) => Ok(l == r),
+        (Some(PhsValue::String(l)), Some(PhsValue::String(r))) => Ok(l == r),
+        (Some(PhsValue::SigmaBound(target, k)), Some(measured)) | (Some(measured), Some(PhsValue::SigmaBound(target, k))) => {
+            match as_quantity(measured) {
+                Some(measured) => within_sigma(&measured, target, *k),
+                None => Err(cannot_compare(args, symbol)),
+            }
+        }
+        _ => {
+            let (l, r) = quantities(args, symbol)?;
+            l.phs_eq(&r)
+        }
+    }
+}
+
+/// `x == t +/- k sigma`: does the measured `x` lie within `k` of its standard uncertainties of the exact target
+/// `t`? The difference `d = x - t` is taken by the core (units made consistent, a temperature point or a level read
+/// as the core reads them), and the answer is `|mean(d)| <= k * u(d)`, so it is the same in every unit.
+///
+/// An exact `x` has no sigma to count in, and is an error: the old default of `0.05` (in whatever unit the left
+/// operand had) made `10.0 mm == 10.04 mm +/- 1 sigma` true by a margin of 0.05 mm, or 0.05 m.
+fn within_sigma(measured: &physure_core::Quantity, target: &physure_core::Quantity, k: f64) -> PhysureResult<bool> {
+    if !(k.is_finite() && k >= 0.0) {
+        return Err(PhysureError::Generic(format!("a +/- k sigma comparison needs a finite k >= 0, not {k}")));
+    }
+    let d = measured.sub(target)?;
+    let u = d.value.std_dev();
+    if u == 0.0 {
+        return Err(PhysureError::Generic(
+            "a ± sigma comparison needs a measured left operand with an uncertainty; use == for exact values".into(),
+        ));
+    }
+    Ok(d.value.mean().abs() <= k * u)
+}
+
+/// PHS `≈` with the catalog's `[Settings] approx_rel_tol`, and `approx(a, b, rel)` with its own: relative on the
+/// canonical magnitudes (`Quantity::phs_approx`). Only numbers and quantities are approximately equal.
+fn approximately(args: &[PhsValue], rel: f64, symbol: &str) -> PhysureResult<Option<PhsValue>> {
+    let (l, r) = quantities(args, symbol)?;
+    Ok(Some(boolean(l.phs_approx(&r, rel)?)))
+}
+
+/// `approx(a, b)` with the catalog's tolerance, or `approx(a, b, rel)` with `rel` a plain number (`0.5`, `50 %`).
+fn approx_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    const USAGE: &str = "approx expects (a, b) or (a, b, rel): two numbers or quantities and a plain relative tolerance";
+    let rel = match args.get(2) {
+        None => physure_core::settings::approx_rel_tol(),
+        Some(v) => match as_quantity(v) {
+            Some(q) if q.unit.dimensions.is_empty() && !q.unit.is_logarithmic() && args.len() == 3 => q.canonical_magnitude(),
+            _ => return Err(PhysureError::Generic(USAGE.into())),
+        },
+    };
+    if args.len() < 2 {
+        return Err(PhysureError::Generic(USAGE.into()));
+    }
+    approximately(&args[..2], rel, "approx")
 }
 
 fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
@@ -174,13 +213,15 @@ pub fn eval_core_builtin(
         // `assert(left == right)`, not `exact_assert(left == right)`. This omission is
         // deliberate, not an oversight; do not add a symmetrical Bool arm.
         "exact_assert" => exact_assert_builtin(args),
-        "op_>" | "op_gt" => compare(args, |l, r| l > r),
-        "op_<" | "op_lt" => compare(args, |l, r| l < r),
-        "op_>=" | "op_gte" => compare(args, |l, r| l >= r),
-        "op_<=" | "op_lte" => compare(args, |l, r| l <= r),
-        "op_==" | "op_eq" => equality(args),
-        "op_!=" | "op_neq" => not_equal(args),
-        "op_≈" | "op_approx" => compare(args, |l, r| (l - r).abs() < 1e-3),
+        "op_>" | "op_gt" => order(args, ">", |l, r| l > r),
+        "op_<" | "op_lt" => order(args, "<", |l, r| l < r),
+        "op_>=" | "op_gte" => order(args, ">=", |l, r| l >= r),
+        "op_<=" | "op_lte" => order(args, "<=", |l, r| l <= r),
+        "op_==" | "op_eq" => Ok(Some(boolean(phs_equal(args, "==")?))),
+        // exactly the negation of `==`, the sigma form included
+        "op_!=" | "op_neq" => Ok(Some(boolean(!phs_equal(args, "!=")?))),
+        "op_≈" | "op_approx" => approximately(args, physure_core::settings::approx_rel_tol(), "≈"),
+        "approx" => approx_builtin(args),
         "ternary" | "if_then_else" => ternary(args),
         "uncertainty" | "sigma" => uncertainty_builtin(args),
         "dof" | "coverage_factor" | "expanded" | "from_samples" => crate::builtins::dof::eval_dof_builtin(name, args),
@@ -250,19 +291,15 @@ fn exact_assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     }
 }
 
-fn not_equal(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
-    if let Some(res) = bool_equality(args, "!=", false) {
-        return res;
-    }
-    compare(args, |l, r| (l - r).abs() >= 1e-9)
-}
-
 fn ternary(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
     // for anything else) instead of the shared `is_truthy` -- fine while every
     // comparison built a dimensionless Quantity, wrong the moment one builds a real
     // `PhsValue::Bool` instead.
-    let cond_true = args.first().is_some_and(crate::interpreter::helpers::is_truthy);
+    let cond_true = match args.first() {
+        Some(cond) => crate::interpreter::helpers::is_truthy(cond)?,
+        None => false,
+    };
     if cond_true {
         Ok(args.get(1).cloned())
     } else {
@@ -367,23 +404,6 @@ fn bool_assertion(cond: bool, message: &str) -> PhysureResult<Option<PhsValue>> 
     } else {
         Err(PhysureError::AssertionFailed { kind: "assert", message: message.to_string() })
     }
-}
-
-fn equality(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
-    if let Some(res) = bool_equality(args, "==", true) {
-        return res;
-    }
-    // `x == 5.0 +/- 0.2` asks whether x lies within k sigma of the target, so it
-    // is a tolerance test rather than an ordinary comparison.
-    if let (Some(PhsValue::Quantity(l)), Some(PhsValue::SigmaBound(target_q, k_sigma)))
-    | (Some(PhsValue::SigmaBound(target_q, k_sigma)), Some(PhsValue::Quantity(l))) =
-        (args.first(), args.get(1))
-    {
-        let unc = if l.value.std_dev() > 0.0 { l.value.std_dev() } else { 0.05 };
-        let (a, b) = comparable(l, target_q)?;
-        return Ok(Some(boolean((a - b).abs() <= k_sigma * unc)));
-    }
-    compare(args, |l, r| (l - r).abs() < 1e-9)
 }
 
 /// `min` and `max`: the argument with the smallest (or, with `want_greater`, largest) base-SI magnitude, as it

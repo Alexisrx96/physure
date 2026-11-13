@@ -253,6 +253,7 @@ fn builtin_completions() -> Vec<CompletionItem> {
         ("exp", "exp(x)", "Exponential e^x"),
         ("log", "log(x)", "Natural logarithm"),
         ("ln", "ln(x)", "Natural logarithm (alias)"),
+        ("approx", "approx(a, b, rel?)", "Relative approximate equality |a − b| <= rel·max(|a|, |b|); rel defaults to [Settings] approx_rel_tol (1e-3)"),
         ("solve", "solve(equation, target)", "Solve an equation symbolically — requires `use solve from calc`"),
         ("deriv", "deriv(expression, variable)", "Symbolic derivative — requires `use deriv from calc`"),
         ("diff", "diff(expression, variable)", "Symbolic derivative (alias) — requires `use diff from calc`"),

@@ -82,7 +82,9 @@ fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsVa
     } else {
         UnitParser::parse_expression(clean_unit_str)?
     };
-    let q = Quantity::new_scalar(node.magnitude, node.uncertainty.unwrap_or(0.0), unit, None, None);
+    // In `t +/- k sigma` the number after `+/-` is k, not an uncertainty of the target: the target is exact.
+    let sigma = if node.is_sigma { 0.0 } else { node.uncertainty.unwrap_or(0.0) };
+    let q = Quantity::new_scalar(node.magnitude, sigma, unit, None, None);
     let q = match node.dof {
         Some(nu) => q.with_dof(nu)?,
         None => q,
@@ -585,7 +587,7 @@ impl PhsInterpreter {
                 Statement::GuardReturn { cond, value } => {
                     self.debug_checkpoint(line, &local_env)?;
                     let cond_val = self.eval_expr(cond, &local_env)?;
-                    if is_truthy(&cond_val) {
+                    if is_truthy(&cond_val)? {
                         last_val = self.eval_expr(value, &local_env)?;
                         break;
                     }
@@ -613,7 +615,7 @@ impl PhsInterpreter {
         for dec in &func.decorators {
             if dec.name == "requires" {
                 let cond = &dec.args[0];
-                if !is_truthy(&self.eval_expr(cond, local_env)?) {
+                if !is_truthy(&self.eval_expr(cond, local_env)?)? {
                     let message = self.eval_expr(&dec.args[1], local_env)?.to_string();
                     return Err(PhysureError::ContractViolation { decorator: "requires".to_string(), message });
                 }
@@ -637,7 +639,7 @@ impl PhsInterpreter {
         for dec in &func.decorators {
             if dec.name == "ensures" {
                 let cond = &dec.args[0];
-                if !is_truthy(&self.eval_expr(cond, &result_env)?) {
+                if !is_truthy(&self.eval_expr(cond, &result_env)?)? {
                     let message = self.eval_expr(&dec.args[1], &result_env)?.to_string();
                     return Err(PhysureError::ContractViolation { decorator: "ensures".to_string(), message });
                 }

@@ -627,8 +627,11 @@ use physure_core::units::parser::Parser as UnitParser;
     #[test]
     fn a_false_sigma_bound_comparison_reaches_bool_assert_and_fails() {
         let mut interp = PhsInterpreter::default();
-        let err = interp.eval_str("assert(5.0 == 1.0 +/- 0.1 sigma)").unwrap_err();
+        // the measured side carries the sigma the bound counts in: an exact `5.0` is an error of its own now
+        let err = interp.eval_str("assert((5.0 +/- 0.2) == 1.0 +/- 0.1 sigma)").unwrap_err();
         assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+        let err = interp.eval_str("assert(5.0 == 1.0 +/- 0.1 sigma)").unwrap_err();
+        assert!(err.to_string().contains("uncertainty"), "{err}");
     }
 
     #[test]

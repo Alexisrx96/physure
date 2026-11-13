@@ -89,8 +89,12 @@ impl PythonTranspiler {
                 let a_code = self.generate_expr(actual)?;
                 let b_code = self.generate_expr(expected)?;
                 if kind == "assert" {
+                    // The interpreter's `assert(a, b)` is `Quantity::phs_eq`: relative EQ_REL (1e-12), no absolute
+                    // floor (the old `1e-12` absolute passed `assert(1 fm, 1000 fm)`). Known gap: Python's
+                    // `approx_eq` compares in the left operand's unit, not on canonical magnitudes, so two
+                    // temperature points can still disagree with the interpreter (a binding difference, Phase 5).
                     format!(
-                        "if not ({a}).approx_eq({b}, 1e-9, 1e-12): raise AssertionError(\"assert failed: {{}} != {{}}\".format({a}, {b}))\n",
+                        "if not ({a}).approx_eq({b}, 1e-12, 0.0): raise AssertionError(\"assert failed: {{}} != {{}}\".format({a}, {b}))\n",
                         a = a_code, b = b_code
                     )
                 } else {
@@ -372,6 +376,7 @@ mod tests {
         assert!(code.contains("raise AssertionError"), "expected AssertionError:\n{code}");
         assert!(!code.contains("\nassert "), "must not emit a removable `assert` statement:\n{code}");
         assert!(code.contains(".approx_eq("), "expected approx_eq call:\n{code}");
+        assert!(code.contains(", 1e-12, 0.0)"), "the interpreter's relative 1e-12 and no absolute floor:\n{code}");
     }
 
     #[test]

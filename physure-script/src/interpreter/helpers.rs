@@ -65,13 +65,29 @@ pub(crate) fn make_range(l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsV
     ))
 }
 
-pub(crate) fn is_truthy(val: &PhsValue) -> bool {
+/// Whether a value used as a condition (`if`, `while`, a ternary, `@requires`) holds. A boolean is itself; a
+/// number or a quantity is false only when its magnitude is exactly zero, in any unit (`abs(x) > 1e-15` on the raw
+/// mean made `if 1e-16 m` false and let `while x { x = x - 0.1 }` stop on rounding debris).
+///
+/// A temperature point or a level is not a condition: whether it is "zero" depends on the scale it is written in
+/// (`0 degC` was false and `273.15 K` true). Nor is NaN, which has no truth to give. Those are errors.
+pub(crate) fn is_truthy(val: &PhsValue) -> PhysureResult<bool> {
+    let number = |n: f64, what: &str| {
+        if n.is_nan() {
+            Err(PhysureError::Generic(format!("{what} NaN is not a condition: compare it explicitly")))
+        } else {
+            Ok(n != 0.0)
+        }
+    };
     match val {
-        PhsValue::Quantity(q) => q.value.mean().abs() > 1e-15,
-        PhsValue::Number(n) => n.abs() > 1e-15,
-        PhsValue::Bool(b) => *b,
-        PhsValue::String(s) => s == "true" || s == "True" || s == "1",
-        _ => false,
+        PhsValue::Quantity(q) if q.unit.is_affine() || q.unit.is_logarithmic() => Err(PhysureError::Generic(format!(
+            "{q} is not a condition: whether a temperature point or a level is zero depends on its scale; compare it explicitly"
+        ))),
+        PhsValue::Quantity(q) => number(q.value.mean(), "a quantity of"),
+        PhsValue::Number(n) => number(*n, "the number"),
+        PhsValue::Bool(b) => Ok(*b),
+        PhsValue::String(s) => Ok(s == "true" || s == "True" || s == "1"),
+        _ => Ok(false),
     }
 }
 
