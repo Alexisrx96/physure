@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use physure_core::error::{PhysureError, PhysureResult};
 use crate::value::PhsValue;
 use crate::interpreter::PhsInterpreter;
@@ -90,7 +92,20 @@ pub(crate) fn parse_differential_integrand(s: &str) -> Option<(String, String)> 
     None
 }
 
+/// A calc builtin that sees `interpreter.env` (the unit tests call the builtins this way).
+#[cfg(test)]
 pub(crate) fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    eval_calc_builtin_in(name, args, interpreter, &interpreter.env)
+}
+
+/// A calc builtin called where the program's variables are `env` (the scope of the call, which a statement of
+/// `phs eval` or a function body does not share with `interpreter.env`).
+pub(crate) fn eval_calc_builtin_in(
+    name: &str,
+    args: &[PhsValue],
+    interpreter: &PhsInterpreter,
+    env: &HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
     match name {
         "deriv" | "derivative" | "diff" => deriv(args, interpreter),
         "grad" | "gradient" => grad(args, interpreter),
@@ -99,7 +114,7 @@ pub(crate) fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &Phs
         "laplacian" => laplacian(args, interpreter),
         "series" | "taylor" => series(args, interpreter),
         "simplify" | "expand" => simplify(args, interpreter),
-        "integral" | "integrate" => integral(args, interpreter),
+        "integral" | "integrate" => integral(args, interpreter, env),
         "limit" | "lim" => limit(args, interpreter),
         "solve" => solve(args, interpreter),
         "substitute" | "sub" => substitute(args),
@@ -344,16 +359,14 @@ fn integral_request(args: &[PhsValue]) -> PhysureResult<(String, String)> {
     Ok((e, clean_diff_var(raw_v).to_string()))
 }
 
-fn integral(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn integral(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() || args.len() > 4 {
         return Err(generic_error("integral expects (expression_string, variable_string) or (expression_string, variable_string, a, b)"));
     }
     let (expr_str, var_str) = integral_request(args)?;
 
     if args.len() == 4 {
-        let (a, b) = (bound_value(&args[2]), bound_value(&args[3]));
-        let res_val = eval_definite_integral(&expr_str, &var_str, a, b, interpreter)?;
-        return Ok(Some(PhsValue::Number(res_val)));
+        return super::definite_integral::definite_integral(&expr_str, &var_str, &args[2], &args[3], interpreter, env).map(Some);
     }
 
     let node = parse_inlined(&expr_str, interpreter)?;
@@ -541,101 +554,4 @@ fn extract_string_list(val: &PhsValue) -> PhysureResult<Vec<String>> {
         PhsValue::String(s) => Ok(s.split(',').map(|item| item.trim().to_string()).collect()),
         _ => Err(PhysureError::Generic("Expected vector or comma-separated string list".into())),
     }
-}
-
-fn eval_definite_integral(expr_str: &str, var_str: &str, a: f64, b: f64, interpreter: &PhsInterpreter) -> PhysureResult<f64> {
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
-    let program = crate::parser::parse_phs(&inlined)?;
-    let expr = match program.statements.first() {
-        Some(crate::ast::Statement::Expr(e)) => e.clone(),
-        Some(crate::ast::Statement::Assignment(node)) => node.value.clone(),
-        _ => return Err(PhysureError::Generic("Failed to parse integrand expression".into())),
-    };
-
-    // Try Symbolic First
-    if !a.is_infinite() && !b.is_infinite() {
-        if let Some(value) = symbolic_definite_integral(&inlined, var_str, a, b, interpreter) {
-            return Ok(value);
-        }
-    }
-
-    let mut local_env = interpreter.env.clone();
-    let mut eval_at = |x: f64| -> f64 {
-        local_env.insert(var_str.to_string(), PhsValue::Number(x));
-        match interpreter.eval_expr(&expr, &local_env) {
-            Ok(PhsValue::Number(n)) => n,
-            Ok(PhsValue::Quantity(q)) => q.value.mean(),
-            _ => 0.0,
-        }
-    };
-
-    if a.is_infinite() || b.is_infinite() {
-        return Ok(improper_integral(&mut eval_at, a, b));
-    }
-    Ok(quad_gauss_legendre(&mut eval_at, a, b, 100))
-}
-
-/// The antiderivative evaluated at both ends, when the integrand has one the interpreter can evaluate there.
-fn symbolic_definite_integral(inlined: &str, var_str: &str, a: f64, b: f64, interpreter: &PhsInterpreter) -> Option<f64> {
-    let node = crate::symbolic::SymbolicParser::parse_str(inlined).ok()?;
-    let int_node = node.integrate_node(var_str).ok()?;
-    let int_prog = crate::parser::parse_phs(&int_node.simplify().to_string()).ok()?;
-    let Some(crate::ast::Statement::Expr(int_expr)) = int_prog.statements.first() else {
-        return None;
-    };
-    let value_at = |x: f64| -> Option<f64> {
-        let mut env = interpreter.env.clone();
-        env.insert(var_str.to_string(), PhsValue::Number(x));
-        match interpreter.eval_expr(int_expr, &env).ok()? {
-            PhsValue::Number(n) => Some(n),
-            PhsValue::Quantity(q) => Some(q.value.mean()),
-            _ => None,
-        }
-    };
-    Some(value_at(b)? - value_at(a)?)
-}
-
-/// Where an end of an improper integral lands on (-1, 1) under `x = t / (1 - t^2)`.
-fn to_unit_interval(x: f64) -> f64 {
-    if x == f64::NEG_INFINITY {
-        -1.0 + 1e-6
-    } else if x == f64::INFINITY {
-        1.0 - 1e-6
-    } else {
-        x / (1.0 + (1.0 + x * x).sqrt())
-    }
-}
-
-/// An integral with an infinite end, by the substitution `x = t / (1 - t^2)` onto the finite interval (-1, 1).
-fn improper_integral(eval_at: &mut impl FnMut(f64) -> f64, a: f64, b: f64) -> f64 {
-    let mut transform_eval = |t: f64| -> f64 {
-        if t.abs() >= 1.0 - 1e-7 {
-            return 0.0;
-        }
-        let x = t / (1.0 - t * t);
-        let dxdt = (1.0 + t * t) / ((1.0 - t * t) * (1.0 - t * t));
-        let fx = eval_at(x);
-        if fx.is_nan() || fx.is_infinite() {
-            0.0
-        } else {
-            fx * dxdt
-        }
-    };
-    quad_gauss_legendre(&mut transform_eval, to_unit_interval(a), to_unit_interval(b), 100)
-}
-
-/// Composite three-point Gauss-Legendre quadrature over `steps` equal panels of `[a, b]` (exact for a polynomial of
-/// degree 5 or less on each panel).
-fn quad_gauss_legendre<F>(mut f: F, a: f64, b: f64, steps: usize) -> f64
-where F: FnMut(f64) -> f64 {
-    let h = (b - a) / steps as f64;
-    let half_h = 0.5 * h;
-    // the nodes mid, mid +- half_h * sqrt(3/5) carry the weights 8/9, 5/9, 5/9 (of the panel's length)
-    let offset = half_h * 0.774_596_669_241_483_4;
-    let mut sum = 0.0;
-    for i in 0..steps {
-        let mid = a + (i as f64 + 0.5) * h;
-        sum += half_h * (5.0 * (f(mid - offset) + f(mid + offset)) + 8.0 * f(mid)) / 9.0;
-    }
-    sum
 }

@@ -2,6 +2,7 @@ pub mod core;
 pub mod dof;
 pub mod array;
 pub mod calc;
+mod definite_integral;
 pub mod plot;
 pub use core::eval_core_builtin;
 
@@ -27,7 +28,7 @@ pub fn eval_domain_builtin_with_kwargs(
     env: &std::collections::HashMap<String, PhsValue>,
 ) -> PhysureResult<Option<PhsValue>> {
     match domain {
-        "calc" => calc::eval_calc_builtin(name, args, interpreter),
+        "calc" => calc::eval_calc_builtin_in(name, args, interpreter, env),
         "plot" => plot::eval_plot_builtin_with_kwargs(name, args, kwargs, interpreter, env),
         "array" => array::eval_array_builtin(name, args, interpreter),
         _ => Ok(None),
@@ -40,8 +41,7 @@ pub fn eval_domain_builtin(
     args: &[PhsValue],
     interpreter: &PhsInterpreter,
 ) -> PhysureResult<Option<PhsValue>> {
-    let empty_env = std::collections::HashMap::new();
-    eval_domain_builtin_with_kwargs(domain, name, args, &[], interpreter, &empty_env)
+    eval_domain_builtin_with_kwargs(domain, name, args, &[], interpreter, &interpreter.env)
 }
 
 /// Renders a value under a Python-style `.<digits><kind>` spec (`x:.2f`, `x:.3e`). A

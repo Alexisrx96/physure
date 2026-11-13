@@ -415,7 +415,11 @@ impl PhsInterpreter {
             return Ok(val);
         }
 
-        if let Some((domain, canonical)) = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned() {
+        // The guard must be dropped before the builtin runs: in an `if let` scrutinee it would live to the end of the
+        // block, and a builtin that evaluates an expression calling another domain builtin (`integral` evaluating the
+        // antiderivative `integral(sqrt(x), x)`) would wait on this same lock forever.
+        let unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned();
+        if let Some((domain, canonical)) = unlocked {
             if let Some(val) = crate::builtins::eval_domain_builtin_with_kwargs(domain, &canonical, &arg_vals, kwarg_vals, self, env)? {
                 return Ok(val);
             }
