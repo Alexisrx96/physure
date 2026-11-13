@@ -30,3 +30,5 @@ pub use ops::{
 };
 pub mod entries;
 pub use entries::{diff, embedded_entries, entries, summary, Change, Entry};
+pub mod report;
+pub use report::{inspect, EngineState, FieldChange, Inspection};
