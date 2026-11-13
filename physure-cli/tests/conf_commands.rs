@@ -141,6 +141,31 @@ fn status_without_a_file_says_unfrozen_exit_0() {
     assert!(stdout(&output).contains("physure.conf") && stdout(&output).contains("overlay"), "{}", text(&output));
 }
 
+/// Review finding 5: unfrozen, `status` reads the working-directory `physure.conf` as the runtime does and says what
+/// the runtime ignores: the whole file when it is not text, a line it skips, a strict reading that refuses it.
+#[test]
+fn status_unfrozen_warns_about_a_physure_conf_the_runtime_ignores() {
+    let dir = Dir::new("status_unfrozen_warnings");
+    fs::write(dir.path("physure.conf"), [0xff, 0xfe, b'[', b'U', 0x00, 0x80]).unwrap();
+    let output = dir.conf(&["status"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(!out.contains("overlay"), "{out}");
+    assert!(out.contains("warning") && out.contains("UTF-8") && out.contains("embedded catalog"), "{out}");
+    let doc = json(&dir.conf(&["status", "--json"]));
+    assert!(doc["warnings"].to_string().contains("UTF-8"), "{doc}");
+    // a line the runtime skips and the strict reading of `phs conf freeze` refuses
+    dir.write("physure.conf", "[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\nthis is not a line\n");
+    let output = dir.conf(&["status"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(out.contains("overlay") && out.contains("warning") && out.contains("this is not a line"), "{out}");
+    assert!(out.contains("strict reading"), "{out}");
+    let doc = json(&dir.conf(&["status", "--json"]));
+    let warnings = doc["warnings"].to_string();
+    assert!(warnings.contains("this is not a line") && warnings.contains("strict reading"), "{doc}");
+}
+
 #[test]
 fn status_of_a_sound_file_exit_0_prints_seal_and_edition() {
     let dir = Dir::new("status_sound");

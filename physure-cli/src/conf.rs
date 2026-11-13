@@ -383,15 +383,7 @@ fn status(args: &ConfArgs) -> Outcome {
     let local = cwd.as_ref().map(|cwd| cwd.join("physure.conf")).filter(|p| p.is_file());
     let (path, why) = match in_force("status") {
         Err(outcome) => return outcome,
-        Ok(None) => {
-            let mut text = "no frozen configuration in force: the embedded catalog".to_string();
-            match &local {
-                Some(local) => text.push_str(&format!(", with {} read as an overlay of it\n", shown(local))),
-                None => text.push_str(" (no physure.conf here)\n"),
-            }
-            let fields = json!({ "frozen": false, "physure_conf": local.as_deref().map(shown), "warnings": [] });
-            return report("status", text, fields, 0);
-        }
+        Ok(None) => return status_unfrozen(cwd.as_deref(), local.as_deref()),
         Ok(Some(found)) => found,
     };
     let inspection = inspect(&path, engine_file().as_deref());
@@ -415,6 +407,33 @@ fn status(args: &ConfArgs) -> Outcome {
     fields["why"] = Value::from(why_text(&why));
     fields["warnings"] = json!(warnings);
     report("status", text, fields, code)
+}
+
+/// `phs conf status` with no frozen file in force: the embedded catalog, and the working directory's `physure.conf`
+/// read as the runtime reads it ([`unfrozen_entries`]), with what that reading warns about. A file the runtime ignores
+/// as a whole (not UTF-8 text) is said to be ignored, never "read as an overlay". The exit code stays 0: the runtime
+/// works, with the embedded catalog.
+fn status_unfrozen(cwd: Option<&Path>, local: Option<&Path>) -> Outcome {
+    let mut text = "no frozen configuration in force: the embedded catalog".to_string();
+    let mut warnings = Vec::new();
+    match (cwd, local) {
+        (Some(cwd), Some(local)) => match unfrozen_entries(cwd) {
+            Ok((_, found)) => {
+                text.push_str(&format!(", with {} read as an overlay of it\n", shown(local)));
+                warnings = found;
+            }
+            Err(message) => {
+                text.push_str(&format!(" alone ({} is not used)\n", shown(local)));
+                warnings.push(message);
+            }
+        },
+        _ => text.push_str(" (no physure.conf here)\n"),
+    }
+    for warning in &warnings {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
+    let fields = json!({ "frozen": false, "physure_conf": local.map(shown), "warnings": warnings });
+    report("status", text, fields, 0)
 }
 
 /// The file a command acts on: the positional FILE, or the file in force (exit 2 when there is none).
