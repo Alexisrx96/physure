@@ -357,13 +357,31 @@ mod tests {
         engine_pairs, now_unix, prepare_freeze, EngineIdentity, EnginePolicy, EntryInput, FreezeOptions, FrozenParts, Source,
     };
     use physure_core::units::conf::DEFAULT_PHYSURE_CONF;
-    use std::sync::Mutex;
 
-    /// The tests that change the configuration of the process take turns.
-    static CONFIGURATION: Mutex<()> = Mutex::new(());
+    /// The variable that tells a child test process which test it runs alone.
+    const ISOLATED: &str = "PHYSURE_CLI_ISOLATED_TEST";
 
-    fn lock() -> std::sync::MutexGuard<'static, ()> {
-        CONFIGURATION.lock().unwrap_or_else(|e| e.into_inner())
+    /// Whether the test `name` (of this module) is to run its body here. A test that changes the configuration of
+    /// the whole process (the explicit configuration, the engine file) cannot share a process with the other tests
+    /// of this binary, which read the catalog in parallel (they saw the probe as the configuration in force, or its
+    /// path after it was deleted): it runs again in a child process of this test binary that runs only that test.
+    /// In the parent this asserts that the child passed and returns `false`; in the child it returns `true`.
+    fn in_own_process(name: &str) -> bool {
+        if std::env::var(ISOLATED).as_deref() == Ok(name) {
+            return true;
+        }
+        let filter = format!("conf_witness::tests::{name}");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([filter.as_str(), "--exact", "--test-threads=1", "--nocapture"])
+            .env(ISOLATED, name)
+            .env_remove("PHYSURE_CONF")
+            .env_remove("PHYSURE_REQUIRE_FROZEN")
+            .output()
+            .unwrap();
+        let (out, err) = (String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        assert!(output.status.success(), "{name} in its own process:\n{out}{err}");
+        assert!(out.contains("1 passed"), "{name} did not run in its own process:\n{out}{err}");
+        false
     }
 
     struct Dir(PathBuf);
@@ -501,7 +519,9 @@ mod tests {
 
     #[test]
     fn the_probe_is_in_force_while_f_runs_and_never_remains() {
-        let _turn = lock();
+        if !in_own_process("the_probe_is_in_force_while_f_runs_and_never_remains") {
+            return;
+        }
         let dir = Dir::new("probe_success");
         std::fs::write(dir.0.join("physure.conf"), "[Constants]\nzz_probe_constant = 3 m\n").unwrap();
         let probe = probe_of(&dir);
@@ -524,7 +544,9 @@ mod tests {
 
     #[test]
     fn a_probe_that_does_not_load_is_not_evaluated_and_never_remains() {
-        let _turn = lock();
+        if !in_own_process("a_probe_that_does_not_load_is_not_evaluated_and_never_remains") {
+            return;
+        }
         let identity = EngineIdentity { version: "0.0.1".into(), ..EngineIdentity::current() };
         let other = FrozenFile::new(
             "2026-11-08T10:00:00Z",
@@ -547,7 +569,9 @@ mod tests {
 
     #[test]
     fn a_panic_under_the_probe_restores_the_previous_configuration_and_deletes_the_probe() {
-        let _turn = lock();
+        if !in_own_process("a_panic_under_the_probe_restores_the_previous_configuration_and_deletes_the_probe") {
+            return;
+        }
         let dir = Dir::new("probe_panic");
         let probe = probe_of(&dir);
         // a previous explicit configuration that is not "none": a real frozen file elsewhere
@@ -566,7 +590,9 @@ mod tests {
 
     #[test]
     fn with_configuration_uses_the_file_in_place() {
-        let _turn = lock();
+        if !in_own_process("with_configuration_uses_the_file_in_place") {
+            return;
+        }
         let dir = Dir::new("configuration_in_place");
         let probe = probe_of(&dir);
         let file = dir.0.join("in-place.frozen.conf");

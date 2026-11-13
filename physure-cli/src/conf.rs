@@ -372,7 +372,7 @@ fn run(args: &ConfArgs) -> Outcome {
         set_explicit_conf(Some(path.clone()));
     }
     match command {
-        "status" => status(args),
+        "status" => status(),
         "show" => show(args),
         "diff" => diff_command(args),
         "history" => history(args),
@@ -514,7 +514,7 @@ fn engine_file() -> Option<PathBuf> {
 }
 
 /// `phs conf` / `phs conf status`.
-fn status(args: &ConfArgs) -> Outcome {
+fn status() -> Outcome {
     let cwd = std::env::current_dir().ok();
     let local = cwd.as_ref().map(|cwd| cwd.join("physure.conf")).filter(|p| p.is_file());
     let (path, why) = match in_force("status") {
