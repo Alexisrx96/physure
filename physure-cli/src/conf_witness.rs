@@ -320,12 +320,37 @@ fn probe_name() -> String {
     format!("{PROBE_PREFIX}{}-{:016x}.frozen.conf", std::process::id(), hasher.finish())
 }
 
+/// How old a probe file left in the temporary directory must be before [`remove_stale_probes`] deletes it: no
+/// command runs that long, so it belongs to a process that ended without deleting it (one killed, or aborted).
+pub const STALE_PROBE_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Deletes the probe files in `dir` (names starting with [`PROBE_PREFIX`] and ending in `.frozen.conf`) last modified
+/// more than [`STALE_PROBE_AGE`] before `now`. Nothing else is touched, and every error is ignored: this is tidying up
+/// after a process that could not, never a step a command depends on.
+pub fn remove_stale_probes(dir: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with(PROBE_PREFIX) || !name.ends_with(".frozen.conf") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else { continue };
+        let old = metadata.modified().ok().and_then(|modified| now.duration_since(modified).ok()).is_some_and(|age| age > STALE_PROBE_AGE);
+        if metadata.is_file() && old {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Runs `f` with `probe` (a draft's sealed throwaway copy, `Draft::probe` / `FreezeDraft::probe`) as the explicit
 /// configuration: it is written to a new file in `std::env::temp_dir()` (`create_new`, a random name starting with
-/// [`PROBE_PREFIX`]), loaded as [`with_configuration`] loads a file, and deleted on every path.
+/// [`PROBE_PREFIX`]), loaded as [`with_configuration`] loads a file, and deleted on every path. Probe files more than a
+/// day old, left by a process that ended without deleting its own, are deleted first ([`remove_stale_probes`]).
 pub fn with_probe<R>(probe: &FrozenFile, f: impl FnOnce() -> R) -> Result<Evaluated<R>, ProbeError> {
     let text = probe.render().map_err(|e| ProbeError { code: 1, message: format!("the probe file does not render: {e}") })?;
     let dir = std::env::temp_dir();
+    remove_stale_probes(&dir, std::time::SystemTime::now());
     let mut tries = 0;
     let (path, mut file) = loop {
         let path = dir.join(probe_name());
@@ -586,6 +611,33 @@ mod tests {
         assert_eq!(restored, Some(previous), "the previous explicit configuration is back");
         assert_eq!(engine_file(), engine_before);
         assert!(probes_left().is_empty(), "{:?}", probes_left());
+    }
+
+    #[test]
+    fn stale_probe_files_are_deleted_and_nothing_else_is() {
+        let dir = Dir::new("stale_probes");
+        let now = std::time::SystemTime::now();
+        let aged = |name: &str, age: Duration| {
+            let path = dir.0.join(name);
+            std::fs::write(&path, "x").unwrap();
+            File::options().write(true).open(&path).unwrap().set_modified(now - age).unwrap();
+            path
+        };
+        let day = STALE_PROBE_AGE;
+        let stale = aged(&format!("{PROBE_PREFIX}1-00000000000000aa.frozen.conf"), day + Duration::from_secs(3600));
+        let fresh = aged(&format!("{PROBE_PREFIX}2-00000000000000bb.frozen.conf"), Duration::from_secs(60));
+        let almost = aged(&format!("{PROBE_PREFIX}3-00000000000000cc.frozen.conf"), day - Duration::from_secs(3600));
+        let other_suffix = aged(&format!("{PROBE_PREFIX}4.txt"), day * 3);
+        let other_prefix = aged("physure.frozen.conf", day * 3);
+        let folder = dir.0.join(format!("{PROBE_PREFIX}5.frozen.conf"));
+        std::fs::create_dir(&folder).unwrap();
+        remove_stale_probes(&dir.0, now);
+        assert!(!stale.exists(), "a probe more than a day old is deleted");
+        for kept in [&fresh, &almost, &other_suffix, &other_prefix, &folder] {
+            assert!(kept.exists(), "{kept:?} is kept");
+        }
+        // a directory that cannot be read is no error
+        remove_stale_probes(&dir.0.join("missing"), now);
     }
 
     #[test]

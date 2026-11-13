@@ -61,7 +61,7 @@ fn brackets_in_strings_and_comments_are_text() {
 
 #[test]
 fn brackets_that_close_do_not_add_up() {
-    // many groups side by side are not nested
-    let flat = (0..500).map(|_| "(1)").collect::<Vec<_>>().join(" + ");
+    // many groups side by side are not nested (a hundred: a longer sum is a chain past MAX_EXPRESSION_DEPTH)
+    let flat = (0..100).map(|_| "(1)").collect::<Vec<_>>().join(" + ");
     parse_phs(&format!("x = {flat}")).unwrap();
 }

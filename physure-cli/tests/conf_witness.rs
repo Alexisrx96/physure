@@ -909,3 +909,33 @@ fn accept_witness_changes_is_a_value_flag_of_update_and_seal_only() {
     }
     assert!(!dir.path(FROZEN_FILE_NAME).exists());
 }
+
+// ---- review fixes ----
+
+/// The reviewer's script: a flat chain of 200,000 terms (400 KB) parses to a tree as deep as the chain is long, and
+/// used to end `freeze --witness` and `verify --run` in a stack overflow (no JSON, a probe file left behind).
+fn long_chain() -> String {
+    format!("x = 1{}\n", "+1".repeat(200_000))
+}
+
+#[test]
+fn a_witness_with_a_chain_too_deep_to_evaluate_is_refused_by_freeze_and_is_no_crash() {
+    let dir = Dir::new("review_chain_freeze");
+    dir.write("plus.phs", &long_chain());
+    let output = conf_in_own_temp(&dir, &["freeze", "--reason", "r", "--engine-policy", "release", "--witness", "plus.phs", "--json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", &text(&output)[..text(&output).len().min(2000)]);
+    let doc = json(&output);
+    assert!(doc["error"].as_str().unwrap().contains("expression too deeply nested"), "{doc}");
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
+}
+
+#[test]
+fn verify_run_of_a_file_whose_script_is_too_deep_reports_it_and_is_no_crash() {
+    let dir = Dir::new("review_chain_verify");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    add_user_witness(&dir, "plus", &long_chain(), &"d".repeat(64));
+    let output = verify_run(&dir, &["--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", &text(&output)[..text(&output).len().min(2000)]);
+    let doc = json(&output);
+    assert_eq!(doc["witnesses_ok"], Value::Bool(false), "{doc}");
+}

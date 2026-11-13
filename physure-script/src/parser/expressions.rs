@@ -3,6 +3,77 @@ use crate::ast::*;
 use super::Rule;
 use super::quantities::parse_quantity;
 
+/// The deepest expression tree the parser builds; a leaf is one level, and so is every operator of a chain:
+/// `1 + 1 + 1` is `(1 + 1) + 1`, three levels. A flat chain is no nesting of brackets, but the checker, the
+/// evaluator, `Clone` and `Drop` all recurse over the tree it makes, and a stack overflow ends the whole process
+/// (200,000 terms ended `phs conf verify --run`).
+///
+/// Measured in a debug build on a 1 MiB stack (a Windows main thread), the most expensive pass that has no stack
+/// check of its own is the static checker: 349 levels of `not` or of method calls (about 3 KB a level; `Clone` and
+/// `Drop` hold about 1,050, the parser about 490). 128 leaves a factor of 2.7. The evaluator costs more (16 to 30 KB
+/// a level in a debug build, 3 to 11 KB in release): a sandboxed run checks its own stack budget and stops with a
+/// `stack limit` error, which is what keeps it safe, not this bound. A formula written by hand is far below it (a sum
+/// of a hundred terms is about a hundred levels).
+pub const MAX_EXPRESSION_DEPTH: usize = 128;
+
+fn too_deep() -> PhysureError {
+    PhysureError::Generic(format!(
+        "Parse error: expression too deeply nested: at most {MAX_EXPRESSION_DEPTH} levels (every operator of a chain \
+         such as `a + b + c` is one more level; split it into named parts)"
+    ))
+}
+
+/// Depth of `expr`, counted without recursion and without walking past `MAX_EXPRESSION_DEPTH + 1`.
+fn expr_depth(expr: &Expr) -> usize {
+    let mut deepest = 0;
+    let mut pending = vec![(expr, 1usize)];
+    while let Some((node, depth)) = pending.pop() {
+        deepest = deepest.max(depth);
+        if depth > MAX_EXPRESSION_DEPTH {
+            break;
+        }
+        match node {
+            Expr::BinaryOp { left, right, .. } => pending.extend([(&**left, depth + 1), (&**right, depth + 1)]),
+            Expr::FunctionCall { args, kwargs, .. } => {
+                pending.extend(args.iter().map(|arg| (arg, depth + 1)));
+                pending.extend(kwargs.iter().map(|(_, arg)| (arg, depth + 1)));
+            }
+            Expr::ForExpr { iterable, body, .. } => pending.extend([(&**iterable, depth + 1), (&**body, depth + 1)]),
+            Expr::Quantity(_) | Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => {}
+        }
+    }
+    deepest
+}
+
+/// `expr`, or the error when its tree is deeper than `MAX_EXPRESSION_DEPTH`. Every tier that builds a chain calls
+/// it on its result, so a tier always starts from operands within the bound, and its own loop stops after
+/// `MAX_EXPRESSION_DEPTH` operators (see [`count_operator`]): the tree an error drops is never more than twice
+/// the bound deep.
+fn bounded(expr: Expr) -> PhysureResult<Expr> {
+    if expr_depth(&expr) > MAX_EXPRESSION_DEPTH {
+        return Err(too_deep());
+    }
+    Ok(expr)
+}
+
+/// Counts one more operator of a chain, refusing the one that makes the chain alone deeper than the bound.
+fn count_operator(count: &mut usize) -> PhysureResult<()> {
+    *count += 1;
+    if *count >= MAX_EXPRESSION_DEPTH {
+        return Err(too_deep());
+    }
+    Ok(())
+}
+
+/// `expr` after a chain of `operators`: unchanged (already bounded) when there were none.
+fn bounded_chain(expr: Expr, operators: usize) -> PhysureResult<Expr> {
+    if operators == 0 {
+        Ok(expr)
+    } else {
+        bounded(expr)
+    }
+}
+
 pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = match inner.next() {
@@ -44,7 +115,7 @@ pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
             }
         };
     }
-    Ok(result)
+    bounded(result)
 }
 
 /// The loosest tier: the one optional `..` and the format spec that closes the expression.
@@ -77,15 +148,17 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         };
     }
 
-    Ok(left)
+    bounded(left)
 }
 
 fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
     let mut left = parse_comp_expr(first)?;
+    let mut operators = 0;
 
     while let Some(op_pair) = inner.next() {
+        count_operator(&mut operators)?;
         let op = match op_pair.as_rule() {
             Rule::op_add => BinaryOp::Add,
             Rule::op_sub => BinaryOp::Sub,
@@ -113,15 +186,17 @@ fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         };
     }
 
-    Ok(left)
+    bounded_chain(left, operators)
 }
 
 fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
     let mut left = parse_term(first)?;
+    let mut operators = 0;
     
     while let Some(op_pair) = inner.next() {
+        count_operator(&mut operators)?;
         if op_pair.as_rule() == Rule::op_compare {
             let right_pair = inner.next().unwrap();
             let right = parse_term(right_pair)?;
@@ -141,7 +216,7 @@ fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         }
     }
     
-    Ok(left)
+    bounded_chain(left, operators)
 }
 
 fn parse_bool_lit(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -156,7 +231,7 @@ fn parse_not_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut base_pair = None;
     for p in pair.into_inner() {
         if p.as_rule() == Rule::_not_kw {
-            not_count += 1;
+            count_operator(&mut not_count)?;
         } else {
             base_pair = Some(p);
         }
@@ -167,33 +242,37 @@ fn parse_not_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     for _ in 0..not_count {
         result = Expr::FunctionCall { name: "op_not".to_string(), args: vec![result], kwargs: Vec::new() };
     }
-    Ok(result)
+    bounded_chain(result, not_count)
 }
 
 fn parse_and_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
     let mut left = parse_not_expr(first)?;
+    let mut operators = 0;
     while inner.next().is_some() {
+        count_operator(&mut operators)?;
         // The consumed pair is `_and_kw`; `and_expr = { not_expr ~ (_nl ~ _and_kw ~ _nl ~
         // not_expr)* }` guarantees a `not_expr` immediately follows it.
         let right = parse_not_expr(inner.next().unwrap())?;
         left = Expr::FunctionCall { name: "op_and".to_string(), args: vec![left, right], kwargs: Vec::new() };
     }
-    Ok(left)
+    bounded_chain(left, operators)
 }
 
 fn parse_or_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
     let mut left = parse_and_expr(first)?;
+    let mut operators = 0;
     while inner.next().is_some() {
+        count_operator(&mut operators)?;
         // The consumed pair is `_or_kw`; `or_expr = { and_expr ~ (_nl ~ _or_kw ~ _nl ~
         // and_expr)* }` guarantees an `and_expr` immediately follows it.
         let right = parse_and_expr(inner.next().unwrap())?;
         left = Expr::FunctionCall { name: "op_or".to_string(), args: vec![left, right], kwargs: Vec::new() };
     }
-    Ok(left)
+    bounded_chain(left, operators)
 }
 
 /// `Some(name)` when `expr` is nothing but a bare name — used by `parse_term` to track
@@ -216,8 +295,10 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     // Only used to catch two bare identifiers landing next to each other via implicit
     // multiplication (`x y`, or `y z` in `x * y z`); see the `Rule::factor` arm below.
     let mut prev_bare_identifier = as_bare_identifier(&left);
+    let mut operators = 0;
 
     while let Some(next_pair) = inner.next() {
+        count_operator(&mut operators)?;
         match next_pair.as_rule() {
             Rule::op_mul => {
                 let right_pair = inner.next().unwrap();
@@ -267,7 +348,7 @@ multiply them, or add whatever operator belongs between them."
             _ => return Err(PhysureError::Generic(format!("Unexpected rule in term: {:?}", next_pair.as_rule()))),
         }
     }
-    Ok(left)
+    bounded_chain(left, operators)
 }
 
 fn parse_factor(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -372,6 +453,9 @@ fn parse_where_expr(pair: pest::iterators::Pair<Rule>, body: Expr) -> PhysureRes
             .next()
             .ok_or_else(|| PhysureError::Generic(format!("`where {}` is missing its value", name)))?;
         bindings.push((name, parse_base_expr(value_pair)?));
+        if bindings.len() >= MAX_EXPRESSION_DEPTH {
+            return Err(too_deep());
+        }
     }
     Ok(bindings.into_iter().rev().fold(body, |acc, (name, value)| Expr::FunctionCall {
         name: "let".to_string(),
@@ -480,9 +564,11 @@ fn parse_method_args(
 fn parse_method_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let mut current_expr = parse_primary_pair(inner.next().unwrap())?;
+    let mut operators = 0;
 
     while let Some(method_item) = inner.next() {
         if method_item.as_rule() == Rule::identifier {
+            count_operator(&mut operators)?;
             let mut args = vec![current_expr];
             let mut kwargs = Vec::new();
             parse_method_args(&mut inner, &mut args, &mut kwargs)?;
@@ -490,6 +576,6 @@ fn parse_method_call(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         }
     }
 
-    Ok(current_expr)
+    bounded_chain(current_expr, operators)
 }
 
