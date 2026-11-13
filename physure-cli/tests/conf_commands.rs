@@ -855,12 +855,17 @@ fn update_with_nothing_new_says_so_exit_0() {
 #[test]
 fn update_without_yes_and_no_terminal_is_exit_2_and_writes_nothing() {
     let dir = Dir::new("update_no_terminal");
-    dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    // source 1 as an older library shipped it: one constant with another value (sealed so, so the file verifies)
+    let r = "molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1";
+    assert!(DEFAULT_PHYSURE_CONF.contains(r), "the test's anchor is gone");
+    let older = DEFAULT_PHYSURE_CONF.replacen(r, "molar_gas_constant = 8.0 J*mol^-1*K^-1", 1);
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine_with(&older, ""));
     let before = bytes(&dir);
     let output = dir.conf(&["update", "--reason", "adopt this build"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
-    // what it would write is shown first: the engine pairs that differ
+    // what it would write is shown first: the data the update changes, and the engine pairs that differ
     let out = stdout(&output);
+    assert!(out.contains("~ molar_gas_constant: 8.0 J*mol^-1*K^-1 -> 8.31446261815324 J*mol^-1*K^-1"), "{out}");
     assert!(out.contains("version: 0.0.1 -> "), "{out}");
     assert!(stderr(&output).contains("--yes") && stderr(&output).contains("terminal"), "{}", text(&output));
     assert_eq!(bytes(&dir), before, "nothing written");
@@ -871,6 +876,11 @@ fn update_without_yes_and_no_terminal_is_exit_2_and_writes_nothing() {
     assert_eq!(doc["command"], Value::from("update"));
     assert!(doc["error"].as_str().unwrap().contains("--yes"), "{doc}");
     assert!(doc["engine"].as_array().unwrap().iter().any(|c| c["key"] == "version"), "{doc}");
+    let data = doc["data"].as_array().unwrap_or_else(|| panic!("{doc}"));
+    assert!(
+        data.iter().any(|c| c["name"] == "molar_gas_constant" && c["old"] == "8.0 J*mol^-1*K^-1" && c["new"] == "8.31446261815324 J*mol^-1*K^-1"),
+        "{doc}"
+    );
     assert_eq!(bytes(&dir), before, "nothing written");
 }
 
