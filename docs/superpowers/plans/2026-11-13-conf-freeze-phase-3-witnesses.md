@@ -12,6 +12,50 @@
 
 ---
 
+## Corrections from the adversarial review of this plan (they OVERRIDE anything below that disagrees)
+
+The review measured or read each of these against the code. Each is a requirement.
+
+**C1 — `freeze` evaluates under the planned file, not under the unfrozen catalog (measured: with `PHYSURE_REQUIRE_FROZEN=1` and no frozen file every battery case errors, so the first file could never be made).** The same *probe* mechanism serves `freeze`, `update` and `seal`: build the new file without witnesses, seal a throwaway copy, load it as the explicit configuration (the explicit path wins over `PHYSURE_REQUIRE_FROZEN`), evaluate, then finish the real file with the witnesses. The `AlreadyFrozen`/`WouldOverwrite` checks of `ops::freeze` run **before** anything is evaluated.
+
+**C2 — one read, one history entry (the "call `plan_*` twice" design reintroduces "preview differs from what is written").** Split `ops` into: `prepare_freeze/prepare_update/prepare_seal(...) -> Draft { old, next (unsealed), stamp, entry facts }`; `Draft::probe() -> FrozenFile` (sealed throwaway copy, used only to evaluate); `Draft::finish(witness_rows, drift_summary) -> Plan` (sets `[Witness]`, then a **single** `reseal` whose diff line already holds the witness part). `plan_update`/`plan_seal`/`freeze` stay as thin wrappers that finish with the *recorded* witnesses unchanged (Phase 2 behaviour, still tested). Tests: the probe and the final file have identical sources, settings and engine and differ only in `[Witness]` and the last entry; the history gains exactly one entry; `seal` runs the witness step only after its engine check (otherwise the probe fails to load, exit 3, in the middle of the preview).
+
+**C3 — `verify --run` executes code from a file someone sent you; bound it.** Activation applies the file's `[Settings]` process-wide, including `max_loop_iterations` (the ceiling that stops an untrusted size from exhausting memory), `max_pipeline_steps` and `parallel_threshold`. Therefore: witnesses run with **fixed ceilings opened inside the evaluating thread** (`scoped_max_loop_iterations`, `scoped_max_pipeline_steps` with documented constants), never the file's values; a documented default wall-clock timeout (60 s) and `verify --run --timeout-ms N`; a timeout or limit is `WitnessStatus::Error("limit: ...")`, distinct from `Differs`; every script runs under `catch_unwind` (`run_sandboxed` re-raises panics) and a panic is that witness's `Error`; after one watchdog timeout the remaining scripts are reported `Error("not run: an earlier script did not stop")` and the process exits after reporting (the stuck thread cannot be killed). There is no memory cap: record that as a residual in §13 (owner Phase 5) and say in the guide that `--run` executes the embedded scripts and what bounds them.
+
+**C4 — the propagation mode is a process global, not "read through the catalog" (measured: `set_propagation_mode(MonteCarlo)` before the first catalog touch is overwritten by the embedded `[Settings]`, and the "Monte Carlo" result came out exactly first-order).** Every `unc.*` case pins its mode with `uncertainty::scoped(mode)` (thread-local), never the global setter; `unc.montecarlo_seed_1` asserts it really sampled (not equal to the analytic first-order value) and that the same seed gives the same bits. Decision 3's sentence about settings is corrected: cases read units, constants and atomic weights through the hooked catalog and **pin** every setting they depend on; the guide lists which cases read process settings.
+
+**C5 — `verify --run` must not pass vacuously.** A file whose `[Witness]` records no `builtin.*` key (every Phase 2 file) makes `verify --run` exit 1 with "nothing is witnessed: expected the built-in battery; re-freeze, or run `phs conf update --accept-witness-changes all`". JSON carries `"checked"`; on success the text says what was checked ("38 built-in, 2 user").
+
+**C6 — user witnesses use a versioned canonical result.** In `physure-script` (so the CLI and later bindings share it): `report::canonical_witness(&Report) -> String`, format `phs-witness-1`: per result item `line`, `name`, `kind`, the bit patterns of value and uncertainty, the unit text and dimension, plus `ok` and the diagnostics' **codes** only (never message text or warnings); the hash is the SHA-256 of that text. On a mismatch print the running canonical text so a person can compare it with a copy kept outside; state in the guide that a user-witness difference shows only *that* it changed.
+
+**C7 — the audit trail of an accepted change.** The history `diff` line names the changed and missing keys (the first 10, then `+N more`) and the first 12 hex digits of the SHA-256 of the old `[Witness]` block (the block is hashed canonically by the core). The preview shows recorded vs running per key (numbers: both bit patterns, decimals, ulps). The flag is `--accept-witness-changes all|KEY[,KEY...]`: the command refuses (exit 1) when something changed that was not named; `all` is explicit. The guide tells users to keep the previous file (a copy is the only record of the old values).
+
+**C8 — the CLI parser.** `--witness` becomes a repeatable value flag (every other flag stays single); add `--witness`, `--run`, `--timeout-ms`, `--accept-witness-changes` to `shape()`, `VALUE_FLAGS`, `SWITCHES`, HELP; tests for repetition and misuse.
+
+**C9 — GUM H.1.** Two ids, `unc.gum_h1_uc` and `unc.gum_h1_nu_eff`, built from the six-contribution linear budget used by `physure-core/tests/expanded_uncertainty.rs` (lines ~125-170); the engine cannot express the product terms of the Guide's model. References already in the repo: u_c = 31.66386517 nm (Guide: 32), nu_eff = 16.7518953 (Guide: 16.7), k95 = 2.1199053 (Guide: 2.12), k99 = 2.9207816 (Guide: 2.92). G.4.1's nu_eff = 19.0 is covered by `tests/effective_dof.rs`; add it as `unc.welch_satterthwaite_g41` against 19.0 within the Guide's rounding.
+
+**C10 — ids that name things which do not exist.** `units.knot_to_ms` becomes `units.nmi_per_h_to_ms` (`nmi/h`; the catalog has no knot); the constant is `speed_of_light_in_vacuum`. The rest (`pH`, `cal_th`, `atm`, `eV`, `kWh`, `psi`, `dB`, `degF`/`degC`, `molar_gas_constant`, `boltzmann_constant`, `planck_constant`, `avogadro_constant`, `elementary_charge`, the chemistry functions `arrhenius`, `clausius_clapeyron`, `gibbs_free_energy`, `gas_constant`, `mass_to_moles`, `Reaction::from_string`/`balance`) exist: use the real names.
+
+**C11 — dropped items.** Phase 2 residual 6 (the compare-and-swap compares only length and mtime) is owned by "the next change to update/seal": this phase builds it — `unchanged_since` also compares the SHA-256 of the bytes re-read just before the write with the SHA-256 of the bytes the plan read (the Draft keeps it). Task 8 also fixes spec §5.2 (line ~165) and §7 (line ~226), which still mention `--allow-engine-mismatch`.
+
+**C12 — testability.** Add `pub fn run_cases(cases: &[Case]) -> Vec<(String, Result<WitnessValue, String>)>`; `run_battery()` calls it with `battery()`; tests inject their own list through it (an integration test cannot see `cfg(test)` items).
+
+**C13 — the script that is evaluated is the normalised text.** `WitnessScript::new` turns CRLF into LF and trims trailing newlines; `freeze` evaluates `WitnessScript::new(name, raw)?.text()` and nothing else (test with a CRLF script holding a multi-line string literal).
+
+**Decisions for the suspected points:**
+- **S2** One fixed evaluation order everywhere: the battery in id order, then user scripts in file order, in `freeze`, `verify --run`, `update` and `seal`.
+- **S3/S4** The guide states plainly that Monte Carlo bits move with dependency bumps (`rand`'s `StdRng` and `rand_distr` are not reproducible across versions) and that platform libm differences (msvc vs glibc: `exp`, `ln`, `pow`) can make `verify --run` exit 1 on another OS for the same release: one frozen file validated on two OSes needs a frozen file per OS.
+- **S5** A witness refusal of `update`/`seal` exits **1** (spec §5.4: 1 = witness mismatch), JSON `"refused": "witnesses"`.
+- **S6** A case that legitimately errors under a configuration (e.g. a user's atomic-weight table without Ca) does not block `freeze`: it is recorded as `WitnessValue::Failed(<first line of the error>)` (`failed=<text>`), and `verify --run` compares it like any value. Only a *panic* or a *limit* is an `Error` that refuses `freeze`.
+- **S7** The probe file lives in `std::env::temp_dir()` with `create_new` and a random suffix (not a sibling); the previous explicit configuration is restored and `reset_cache` called on every path (a `Drop` guard).
+- **S8** `verify` gains a structural `Problem::WitnessEntry` for any `[Witness]` key that is not `builtin.<id>` or `user.<name>`, and for any value `witness::parse_value` refuses.
+- **S9** `update` that has nothing to do under `release`/`record` never reaches the drift rule; the guide says `verify --run` is the check.
+- **S10** The value format: `text=` and `failed=` and `sha256:` are prefixes of the **whole** value (not "in the unit position"); the stored mean of a `Number` is `Quantity::display_parts()`'s magnitude (it folds the scale of anonymous compound units); the canonical balancing text is `<reactants> -> <products>` with integer coefficients, species in the order of the input, single spaces.
+
+**Task order after these corrections** (renumbering of Part A/B): A1 values/format/report/`Problem::WitnessEntry`; A2 battery framework + `run_cases` + units/constants cases; A3 uncertainty and statistics cases; A4 chemistry cases; A5 the `Draft` restructuring of `ops` (freeze/update/seal) with the single-reseal and byte-hash CAS; B1 `canonical_witness` (script crate) + the sandboxed runner (`conf_witness.rs`: fixed ceilings, timeout, panic catch, cascade rule); B2 `freeze --witness` and the probe for freeze; B3 `verify --run`; B4 `update`/`seal` drift with `--accept-witness-changes`; B5 removal of `--allow-engine-mismatch` + spec §5.2/§7; B6 docs.
+
+---
+
 ## Decisions fixed by this plan
 
 1. **What a witness records.**
