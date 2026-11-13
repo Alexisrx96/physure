@@ -9,6 +9,10 @@
 //! evaluating calls [`reset_cache`](super::active::reset_cache) itself). The acting engine written to the history
 //! is always the running one (`EngineIdentity::current().short()`), never given by the caller; actor and time are
 //! inputs ([`actor_from_env`] and [`now_unix`] read them for the CLI).
+//!
+//! Each operation is two steps (module `draft`, Phase 3): `prepare_*` reads the file once and returns a draft whose
+//! probe the host evaluates witnesses under, and `finish` seals once with the witnesses. [`freeze`], [`plan_update`]
+//! and [`plan_seal`] are both steps with the recorded witnesses kept.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -19,13 +23,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::active::{resolve, Inputs, Resolution, ResolveError, ENV_CONF, FROZEN_FILE_NAME};
-use super::canonical::{canonical_pairs, canonical_text, source_sha256};
+use super::canonical::{canonical_text, source_sha256};
 use super::engine::{engine_pairs, environment_pairs, freezable, read_engine, EngineIdentity, EnginePolicy};
 use super::load::{engine_file_hash, read_bounded, replay_file, FileStamp, LoadError};
 use super::model::{FrozenError, FrozenFile, Pairs, Source};
 use super::seal::{EntryInput, FrozenParts};
 use super::time::rfc3339_from_unix;
 use crate::units::conf::DEFAULT_PHYSURE_CONF;
+
+mod draft;
+pub use draft::{
+    bytes_unchanged_since, prepare_freeze, prepare_seal, prepare_update, rerecord, Draft, FreezeDraft, Plan, Rerecorded, WitnessDrift,
+    DRIFT_NAMES,
+};
 
 /// The text of a new overrides block when the working directory has no `physure.conf`.
 pub const EMPTY_OVERRIDES: &str =
@@ -133,6 +143,13 @@ fn time_text(time_unix: u64) -> Result<String, OpsError> {
 /// Proves that `file` is what a reader will get back: it renders, parses to the same file, verifies, and every
 /// source replays strictly (all that loading does but the engine check, which depends on the build that loads).
 fn validate(file: &FrozenFile) -> Result<(), OpsError> {
+    validate_text(file)?;
+    replay_file(file).map(|_| ()).map_err(|(source, problems)| OpsError::Conf { source, problems })
+}
+
+/// The part of [`validate`] that does not replay: it renders, parses to the same file and verifies. Enough for a file
+/// whose sources are those of a file [`validate`] already proved (only `[Witness]` and the history differ).
+fn validate_text(file: &FrozenFile) -> Result<(), OpsError> {
     let text = file.render()?;
     let parsed = FrozenFile::parse(&text)?;
     if parsed != *file {
@@ -142,7 +159,7 @@ fn validate(file: &FrozenFile) -> Result<(), OpsError> {
     if !problems.is_empty() {
         return Err(OpsError::Frozen(FrozenError(problems.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))));
     }
-    replay_file(&parsed).map(|_| ()).map_err(|(source, problems)| OpsError::Conf { source, problems })
+    Ok(())
 }
 
 fn canonical_line_count(text: &str) -> usize {
@@ -158,67 +175,23 @@ fn canonical_line_count(text: &str) -> usize {
 /// the output exists, when the policy cannot be recorded by this build, and when `physure.conf` does not replay
 /// strictly (it would never load: every problem is listed).
 pub fn freeze(options: &FreezeOptions<'_>) -> Result<(FrozenFile, PathBuf), OpsError> {
-    let conf_var = match std::env::var(ENV_CONF) {
-        Ok(value) => Some(value),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => return Err(OpsError::Resolve(ResolveError::NotUnicode(ENV_CONF))),
-    };
-    let inputs = Inputs { explicit: None, conf_var: conf_var.as_deref(), require_var: None, cwd: options.cwd };
-    if let Resolution::Frozen { path, .. } = resolve(&inputs).map_err(OpsError::Resolve)? {
-        return Err(OpsError::AlreadyFrozen(path));
-    }
-    let out = options.cwd.join(options.out.clone().unwrap_or_else(|| PathBuf::from(FROZEN_FILE_NAME)));
-    if out.exists() {
-        return Err(OpsError::WouldOverwrite(out));
-    }
-    let local = options.cwd.join("physure.conf");
-    let overrides = if local.is_file() { fs::read_to_string(&local).map_err(io_error(&local))? } else { EMPTY_OVERRIDES.to_string() };
-    let engine = running_engine(options.policy, options.engine_file)?;
-    let time = time_text(options.time_unix)?;
-    let sources = vec![Source::new("embedded", DEFAULT_PHYSURE_CONF)?, Source::new("overrides", &overrides)?];
-    // the overrides are checked before the file is made, so the problems name the user's own text
-    let (embedded_lines, overrides_lines) = (canonical_line_count(DEFAULT_PHYSURE_CONF), canonical_line_count(&overrides));
-    let diff = format!("embedded {embedded_lines} lines; overrides {overrides_lines} lines");
-    let short = EngineIdentity::current().short();
-    let file = FrozenFile::new(
-        &time,
-        FrozenParts { engine, environment: environment_pairs(), sources, ..FrozenParts::default() },
-        EntryInput { time: &time, action: "freeze", engine: &short, actor: options.actor, reason: options.reason, diff: &diff },
-    )?;
-    validate(&file)?;
-    Ok((file, out))
+    prepare_freeze(options)?.finish(&[], Vec::new())
 }
 
-/// A planned change of a frozen file: the new file and a one-line summary of what changed (the history's `diff`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct UpdatePlan {
-    pub file: FrozenFile,
-    pub summary: String,
-    /// The file as it was read and verified, so the difference the plan makes can be shown from memory, without
-    /// reading the file a second time.
-    pub old: FrozenFile,
-    /// The stamp of the file, from the handle `old` was read through: the CLI compares it with the file's just before
-    /// writing and refuses when the file changed since (residual risk 1c-14).
-    pub stamp: FileStamp,
-}
+/// A planned update: see [`Plan`].
+pub type UpdatePlan = Plan;
 
-/// A planned seal of a hand edit of the overrides.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SealPlan {
-    pub file: FrozenFile,
-    pub summary: String,
-    /// The file as it was read (with the edit, so it does not verify).
-    pub old: FrozenFile,
-    /// The stamp of the file, from the handle `old` was read through (see [`UpdatePlan::stamp`]).
-    pub stamp: FileStamp,
-}
+/// A planned seal of a hand edit of the overrides: see [`Plan`] (its `old` is the file as read, with the edit, so it
+/// does not verify).
+pub type SealPlan = Plan;
 
-/// Reads and parses a frozen file (bounded, as loading reads it), with the stamp of the handle it was read through.
-fn read_frozen(path: &Path) -> Result<(FrozenFile, FileStamp), OpsError> {
+/// Reads and parses a frozen file (bounded, as loading reads it), with the stamp of the handle it was read through
+/// and the SHA-256 (lowercase hex) of the bytes read.
+fn read_frozen(path: &Path) -> Result<(FrozenFile, FileStamp, String), OpsError> {
     let (text, stamp) = read_bounded(path).map_err(OpsError::Load)?;
     let file = FrozenFile::parse(&text)
         .map_err(|e| OpsError::Load(LoadError::NotFrozen { path: path.to_path_buf(), message: e.0 }))?;
-    Ok((file, stamp))
+    Ok((file, stamp, super::sha256::sha256_hex(text.as_bytes())))
 }
 
 fn listed(problems: &[super::seal::Problem]) -> String {
@@ -256,42 +229,7 @@ pub fn plan_update(
     time_unix: u64,
     actor: &str,
 ) -> Result<Option<UpdatePlan>, OpsError> {
-    let (mut file, stamp) = read_frozen(path)?;
-    let old = file.clone();
-    let problems = file.verify();
-    if !problems.is_empty() {
-        return Err(OpsError::Refused(format!(
-            "{}: the file was modified (expected it to verify): seal it or restore it first: {}",
-            path.display(),
-            listed(&problems)
-        )));
-    }
-    // verify read the block; not assumed
-    let old_block = read_engine(file.engine())?;
-    let new_policy = policy.unwrap_or(old_block.policy);
-    let new_engine = running_engine(new_policy, engine_file)?;
-    let old_embedded = file.sources()[0].text().to_string();
-    let catalog_changed = source_sha256(&old_embedded) != source_sha256(DEFAULT_PHYSURE_CONF);
-    let engine_changed = canonical_pairs(file.engine().as_slice()) != canonical_pairs(new_engine.as_slice());
-    if !catalog_changed && !engine_changed {
-        return Ok(None);
-    }
-    if catalog_changed {
-        file.set_source_text(0, DEFAULT_PHYSURE_CONF)?;
-    }
-    file.set_engine(new_engine);
-    let (added, removed) = line_changes(&old_embedded, DEFAULT_PHYSURE_CONF);
-    let summary = format!(
-        "embedded: +{added} -{removed} canonical lines; engine: {}; policy: {} -> {}",
-        if engine_changed { "changed" } else { "unchanged" },
-        old_block.policy.as_str(),
-        new_policy.as_str()
-    );
-    let time = time_text(time_unix)?;
-    let short = EngineIdentity::current().short();
-    file.reseal(EntryInput { time: &time, action: "update", engine: &short, actor, reason, diff: &summary })?;
-    validate(&file)?;
-    Ok(Some(UpdatePlan { file, summary, old, stamp }))
+    prepare_update(path, reason, policy, engine_file, time_unix, actor)?.map(|draft| draft.finish(None)).transpose()
 }
 
 /// Accepts a hand edit of the overrides block (source 2) of the frozen file at `path`, and nothing else. `Ok(None)`
@@ -302,27 +240,7 @@ pub fn plan_update(
 /// engine block, the witnesses or the history are all refused, with what `verify` found). The edited overrides must
 /// replay strictly.
 pub fn plan_seal(path: &Path, reason: &str, time_unix: u64, actor: &str) -> Result<Option<SealPlan>, OpsError> {
-    let (mut file, stamp) = read_frozen(path)?;
-    let problems = file.verify();
-    if problems.is_empty() {
-        return Ok(None);
-    }
-    let as_read = file.clone();
-    if !file.only_the_overrides_changed() {
-        return Err(OpsError::Refused(format!(
-            "{}: seal accepts a hand edit of the overrides block only (expected every other part as last sealed), found: {}",
-            path.display(),
-            listed(&problems)
-        )));
-    }
-    let overrides = &file.sources()[1];
-    let (old, new) = (overrides.sha256().to_string(), source_sha256(overrides.text()));
-    let summary = format!("overrides edited by hand: {} -> {}", &old[..12.min(old.len())], &new[..12]);
-    let time = time_text(time_unix)?;
-    let short = EngineIdentity::current().short();
-    file.reseal(EntryInput { time: &time, action: "seal", engine: &short, actor, reason, diff: &summary })?;
-    validate(&file)?;
-    Ok(Some(SealPlan { file, summary, old: as_read, stamp }))
+    prepare_seal(path, reason, time_unix, actor)?.map(|draft| draft.finish(None)).transpose()
 }
 
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
@@ -411,22 +329,22 @@ mod tests {
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
-    struct Dir(PathBuf);
+    pub(super) struct Dir(pub(super) PathBuf);
     impl Dir {
-        fn new() -> Dir {
+        pub(super) fn new() -> Dir {
             let n = COUNTER.fetch_add(1, Ordering::SeqCst);
             let path = std::env::temp_dir().join(format!("physure_ops_{}_{n}", std::process::id()));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).unwrap();
             Dir(path.canonicalize().unwrap())
         }
-        fn write(&self, name: &str, text: &str) -> PathBuf {
+        pub(super) fn write(&self, name: &str, text: &str) -> PathBuf {
             let path = self.0.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, text).unwrap();
             path
         }
-        fn names(&self) -> Vec<String> {
+        pub(super) fn names(&self) -> Vec<String> {
             let mut names: Vec<String> =
                 fs::read_dir(&self.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
             names.sort();
@@ -440,14 +358,14 @@ mod tests {
     }
 
     /// 2026-11-08T10:00:00Z
-    const T0: u64 = 1_794_132_000;
+    pub(super) const T0: u64 = 1_794_132_000;
 
-    fn options(dir: &Dir, policy: EnginePolicy) -> FreezeOptions<'_> {
+    pub(super) fn options(dir: &Dir, policy: EnginePolicy) -> FreezeOptions<'_> {
         FreezeOptions { cwd: &dir.0, out: None, reason: "first freeze", policy, engine_file: None, time_unix: T0, actor: "t@h" }
     }
 
     /// Freezes `dir` under `release` and writes the file; its path.
-    fn frozen_in(dir: &Dir) -> PathBuf {
+    pub(super) fn frozen_in(dir: &Dir) -> PathBuf {
         let (file, out) = freeze(&options(dir, EnginePolicy::Release)).unwrap();
         write_atomic(&out, &file.render().unwrap(), false).unwrap();
         out
@@ -557,14 +475,14 @@ mod tests {
     }
 
     /// The embedded catalog as an older library would have shipped it: one constant missing, one changed.
-    fn older_embedded() -> String {
+    pub(super) fn older_embedded() -> String {
         let r = "molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1";
         let h = "planck_constant_in_ev_s = 4.135667662e-15 eV*s";
         assert!(DEFAULT_PHYSURE_CONF.contains(r) && DEFAULT_PHYSURE_CONF.contains(h), "the test's anchors are gone");
         DEFAULT_PHYSURE_CONF.replacen(r, "molar_gas_constant = 8.314 J*mol^-1*K^-1", 1).replacen(h, "", 1)
     }
 
-    fn fake_identity() -> EngineIdentity {
+    pub(super) fn fake_identity() -> EngineIdentity {
         EngineIdentity { version: "0.0.1".into(), commit: "0123456789abcdef0123456789abcdef01234567".into(), ..EngineIdentity::current() }
     }
 

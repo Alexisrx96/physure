@@ -26,7 +26,9 @@ pub mod load;
 pub use load::{load_file, FileStamp, FrozenCatalog, LoadError, LoadOptions, MAX_FILE_BYTES};
 pub mod ops;
 pub use ops::{
-    actor_from_env, freeze, now_unix, plan_seal, plan_update, write_atomic, FreezeOptions, OpsError, SealPlan, UpdatePlan, EMPTY_OVERRIDES,
+    actor_from_env, bytes_unchanged_since, freeze, now_unix, plan_seal, plan_update, prepare_freeze, prepare_seal, prepare_update,
+    rerecord, write_atomic, Draft, FreezeDraft, FreezeOptions, OpsError, Plan, Rerecorded, SealPlan, UpdatePlan, WitnessDrift,
+    DRIFT_NAMES, EMPTY_OVERRIDES,
 };
 pub mod entries;
 pub use entries::{diff, embedded_entries, entries, summary, Change, Entry};
