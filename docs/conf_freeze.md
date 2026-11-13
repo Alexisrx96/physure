@@ -136,10 +136,15 @@ The exit codes are the same for all of them:
 | --- | --- |
 | `0` | ok (identical, for `diff`; nothing to do, for `update` and `seal`) |
 | `1` | a discrepancy: a modified or unreadable file, a broken seal or chain, an `--expect` mismatch, differences (`diff`), sources that do not replay, a file changed while the command was asking |
-| `2` | misuse (an unknown command or flag, a missing `--reason`, a malformed `--expect`), a missing required frozen file or a `--conf`/`PHYSURE_CONF` that names no file, a refused operation, a declined confirmation, no terminal and no `--yes`, nothing to compare |
-| `3` | the engine differs from the one the file pins, and that is the only discrepancy |
+| `2` | misuse (an unknown command or flag, a missing `--reason` or one with a control character, a malformed `--expect`, a FILE and `--conf` together), a missing required frozen file or a `--conf`/`PHYSURE_CONF` that names no file, a refused operation, a declined confirmation, no terminal and no `--yes`, `--json` without `--yes` (`update`, `seal`), nothing to compare |
+| `3` | the engine differs from the one the file pins, and that is the only discrepancy (and `seal` of a file pinned to another engine) |
 
-Misuse is decided before any file is read.
+Misuse is decided before any file is read. A FILE and `--conf` together (`verify A --conf B`) are misuse:
+which file the command acts on would be ambiguous.
+
+Text output escapes every control character but the line feed (an escape character prints as `\x1b`), so
+a file received from elsewhere cannot rewrite your terminal through its history, values or problems. The
+JSON documents carry the strings as they are (JSON escapes them).
 
 ### 4.1 `phs conf` / `phs conf status`
 
@@ -161,7 +166,12 @@ warning: /srv/lab/physure.conf is ignored: the frozen file is in force; to adopt
 ```
 
 With nothing frozen it says `no frozen configuration in force: the embedded catalog`, and whether a
-`physure.conf` is read as an overlay of it. Exit: `0` sound or unfrozen; `1` the file does not read, does
+`physure.conf` is read as an overlay of it, with what that reading warns about, as the runtime reads it: a
+line it skips, a strict reading (what `freeze` records) that refuses the file or builds another catalog. A
+`physure.conf` that is not UTF-8 text is ignored by the runtime, and `status` says it is not used. The
+engine of a file that does not verify is not checked (`engine: not checked (the file does not verify)`;
+in JSON `engine` is `null` and `engine_matches` `false`): a block the seal no longer vouches for could
+otherwise read as matching. Exit: `0` sound or unfrozen; `1` the file does not read, does
 not verify, its `[Engine]` block does not read, or its sources do not replay; `3` only the engine
 differs; `2` a resolution error (`PHYSURE_REQUIRE_FROZEN=1` with no file, a `--conf` that names no file).
 `--allow-engine-mismatch` is accepted and adds a warning; it never changes the exit code (3 stays 3).
@@ -214,8 +224,12 @@ $ phs conf freeze --reason "initial validation"
 phs conf: the engine cannot be recorded: this build does not name its commit (build it with PHYSURE_BUILD_COMMIT set to the full lowercase hash), so the policy build cannot be recorded; use release or record (with the CLI: --engine-policy release or record)
 ```
 
-Exit: `0` written; `2` a frozen file already in force or at the target, a missing `--reason`, `--conf`
-given, a policy that cannot be recorded; `1` a `physure.conf` that does not read strictly, an I/O error.
+A reason is one line of 1 to 500 characters without control characters (no escape sequences, tabs,
+newlines or carriage returns): `freeze`, `update` and `seal` refuse anything else with exit 2 before reading
+any file.
+
+Exit: `0` written; `2` a frozen file already in force or at the target, a missing `--reason` or one with a
+control character, `--conf` given, a policy that cannot be recorded; `1` a `physure.conf` that does not read strictly, an I/O error.
 
 ### 4.4 `phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]`
 
@@ -244,12 +258,12 @@ verification: the file does not verify (modified since the last seal):
   source 2 (overrides) was modified: expected 619a3b4b..., found fd308bca...
   the content hash does not match the sources: expected a1b2c48e..., found ab330ed6...
   the seal does not match the format, creation time, content, engine, witnesses, scripts and history: expected b1844aad..., found 02d800c2...
-engine: matches (policy release, pinned 0.3.0+unknown)
+engine: not checked (the file does not verify)
 catalog: not replayed (the file does not verify)
 ```
 
 Exit: as `status` (`0`, `1`, `3`); `1` an `--expect` mismatch, or a FILE that does not exist; `2` an
-`--expect` that is not 64 hexadecimal characters, or no FILE and no file in force.
+`--expect` that is not 64 hexadecimal characters, no FILE and no file in force, or a FILE and `--conf`.
 `--allow-engine-mismatch` adds a warning and never changes the exit code.
 
 ### 4.5 `phs conf diff [A] [B] [--allow-engine-mismatch]`
@@ -286,7 +300,11 @@ No engine is checked (the blocks are compared as written), so `--allow-engine-mi
 A file side that does not verify is reported and its catalog is not compared; that is never "identical".
 `diff` never writes anything.
 
-Exit: `0` identical; `1` different, a file side that does not verify or cannot be read, a `physure.conf`
+**The environment is informational here too**: its differences are listed (`environment differences (n,
+informational)`), but two configurations that differ only there are identical (exit 0); the JSON document
+says so separately with `environment_identical`.
+
+Exit: `0` identical (whatever the environment); `1` different in data or engine, a file side that does not verify or cannot be read, a `physure.conf`
 that cannot be read; `2` no argument and no frozen file in force ("nothing to compare"), or a resolution
 error.
 
@@ -309,7 +327,10 @@ also the only way to run a file on another engine: there is no override for eval
 ### 4.7 `phs conf seal --reason TEXT [--yes]`
 
 Accepts a hand edit of the overrides block (source 2). An edit of any other part is refused (exit 2) with
-what `verify` found. `seal` shows:
+what `verify` found. A file pinned to another engine is refused too (exit 3, `1` if its `[Engine]` block
+does not read), since sealing would record the edit under an engine the file says is not its own: run
+`phs conf update` first, the only way onto another engine. `update` takes the file as last sealed, so set
+the edit aside, update, then edit again and seal. `seal` shows:
 
 1. the full canonical text of the overrides as they will be sealed, and
 2. **what they contribute to the catalog**: the entry difference between the catalog the sources build
@@ -347,16 +368,24 @@ changes, keep a copy of the file as it was last sealed and give it to `phs conf 
   or `yes` proceeds. Declining writes nothing (exit 2).
 * Without `--yes` and without a terminal on stdin (a pipe, a CI job), they refuse with exit 2 instead of
   reading piped input. Scripts pass `--yes`.
-* With `--json` the preview is part of the JSON document, which is printed only at the end, after the
-  question: use `--json` together with `--yes`.
+* With `--json` the preview is part of the JSON document, which is printed only at the end, so they never
+  ask: `--json` needs `--yes` to write. Without `--yes` they refuse with exit 2, the preview inside the
+  document (`"written": false`).
 * **A file that changes while the prompt waits is not overwritten.** The command remembers the length and
   modification time of the file as it read it; just before writing it checks them again and, if either
   moved, refuses with exit 1 (`changed since it was read ... nothing written: run the command again`).
-  Nothing is written, and the edit made by someone else is kept.
+  Nothing is written, and the edit made by someone else is kept. Its limits: it compares length and
+  modification time, not content, so on file systems with a coarse modification time (FAT and exFAT keep
+  two seconds; some network shares) an edit of the same length made within that interval is not seen and
+  is overwritten; and a short window remains between the check and the write.
+* **A `physure.frozen.conf` that is a symbolic link is replaced by a regular file** when `update` or `seal`
+  writes it (they write a temporary file and rename it over the path); the link's target keeps the old
+  content. Point `--conf` or `PHYSURE_CONF` at the real file instead of a link.
 
 Exit for both: `0` written, or nothing to do; `2` no file in force, a missing `--reason`, a refused plan
-(for example an edit outside the overrides), a declined confirmation, no terminal and no `--yes`; `1` the
-file changed while asking, a file that does not read, an I/O error (nothing written).
+(for example an edit outside the overrides), a declined confirmation, no terminal and no `--yes`, `--json`
+without `--yes`; `3` (`seal`) the file pins another engine; `1` the file changed while asking, a file that
+does not read, an I/O error (nothing written).
 
 ### 4.9 `phs conf history [FILE]`
 
@@ -393,14 +422,15 @@ stderr). The fields of each command:
 | --- | --- |
 | `status` | `frozen`; unfrozen: `physure_conf` (the overlay's path or `null`), `warnings`; frozen: `why` (`--conf`, `PHYSURE_CONF`, `discovery`), `warnings` and the inspection fields below |
 | `verify` | the inspection fields, and `seal_matches` (`true`/`false` with `--expect`, else `null`) |
-| inspection fields | `path`, `seal`, `created`, `history_entries`, `verified`, `problems` (strings), `engine`, `engine_matches`, `catalog_problems`, `atomic_weight_edition`, `environment` (`[{key, old, new}]`, old = recorded, new = here), `sources` (`[{origin, sha256}]`); a file that cannot be read has only `path`, `unreadable` (the message), `verified: false`, `engine_matches: false` |
+| inspection fields | `path`, `seal`, `created`, `history_entries`, `verified`, `problems` (strings), `engine` (`null` when the file does not verify), `engine_matches`, `catalog_problems`, `atomic_weight_edition`, `environment` (`[{key, old, new}]`, old = recorded, new = here), `sources` (`[{origin, sha256}]`); a file that cannot be read has only `path`, `unreadable` (the message), `verified: false`, `engine_matches: false` |
 | `engine` | `null`, `{"state": "matches", "policy", "pinned"}`, `{"state": "differs", "policy", "differences": [strings]}` or `{"state": "unreadable", "message"}` |
 | `show` | `frozen`, `path` (the frozen file or `null`), `selector`, `entries` (`[{section, key, kind, value}]`, plus `origin` with `--origin`), `warnings` |
 | `freeze` | `path`, `seal`, `engine` (the short identity), `policy`, `sources` |
-| `diff` | `a`, `b` (labels), `identical`, `data` (`[{change, kind, name, old, new}]`, `change` one of `added`, `removed`, `changed`; `old` or `new` is `null` on the side that lacks the entry), `engine` and `environment` (`[{key, old, new}]`), `summary`, `warnings`, `a_problems`, `b_problems` |
+| `diff` | `a`, `b` (labels), `identical` (data and engine; the environment is not part of it), `environment_identical`, `data` (`[{change, kind, name, old, new}]`, `change` one of `added`, `removed`, `changed`; `old` or `new` is `null` on the side that lacks the entry), `engine` and `environment` (`[{key, old, new}]`), `summary`, `warnings`, `a_problems`, `b_problems` |
 | `update` | `path`, `written`, `nothing_to_do`, and when there is a plan: `summary`, `data` (as in `diff`, or `null` with `data_problem`), `engine`, and `seal` once written |
 | `seal` | `path`, `written`, `nothing_to_do`, and when there is a plan: `summary`, `overrides` (the canonical text), `data` (what the overrides contribute, or `null` with `data_problem`), and `seal` once written |
 | `history` | `path`, `problems`, `rows` (`[{n, time, action, actor, reason, engine, policy, pinned, diff, engine_block_changed, pin_change, unverified}]`); a file that cannot be read has `unreadable` and empty `rows` |
+| `conf` (`phs conf --help --json`) | `help` (the usage text) |
 
 For example:
 
@@ -424,6 +454,7 @@ $ phs conf diff ../sealed-v1.conf physure.frozen.conf --json
   ],
   "engine": [],
   "environment": [],
+  "environment_identical": true,
   "exit_code": 1,
   "identical": false,
   "schema": 1,
@@ -445,8 +476,8 @@ is set by `freeze --engine-policy` and changed only by `update` (so the change i
 | `record` | nothing (the identity is recorded, never enforced) |
 
 A mismatch is an error (exit 3) **when evaluating**: `phs eval` and every other command refuse to run.
-`status`, `verify` and `diff` still inspect the file. To run on another engine, `update`, which records
-the change and its reason.
+`status`, `verify` and `diff` still inspect the file; `seal` refuses it (exit 3). To run on another engine,
+`update`, which records the change and its reason.
 
 * `unknown` never equals anything, not even another `unknown`: under `build`, a commit that is `unknown`
   on either side is a mismatch.
@@ -487,7 +518,8 @@ State these limits in your audit documentation.
   profiles, which report themselves as `debug` or `release`.
 * **What is frozen is data**; algorithms are identified, pinned and (from Phase 3) witnessed, not preserved.
   To reproduce a result years later, keep the binary that `[Engine]` names.
-* **Environment differences are warnings**: bit-for-bit reproducibility across machines is not promised.
+* **Environment differences are warnings**, never a discrepancy (not for `status`, `verify` or `diff`):
+  bit-for-bit reproducibility across machines is not promised.
 * **Not frozen yet** (Phase 4 moves each into the catalog): the exchange rates of `physure.ext.currency`
   (literals in Python), the default number of Monte Carlo samples (a literal in the core), the unit systems
   `imperial.conf` and `international.conf` (read by Python only), and the Python chemistry tables
@@ -541,5 +573,5 @@ and with `PHYSURE_REQUIRE_FROZEN=1` that fails closed.
 The implementation: the commands are in
 [`physure-cli/src/conf.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/conf.rs#L28), and
 everything they decide is in the core, for example
-[`inspect`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/report.rs#L62) and
-[`compare`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/report.rs#L296).
+[`inspect`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/report.rs#L64) and
+[`compare`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/report.rs#L300).
