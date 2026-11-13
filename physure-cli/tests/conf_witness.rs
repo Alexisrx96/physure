@@ -1119,3 +1119,40 @@ fn update_refuses_a_witness_that_could_not_be_evaluated_whatever_the_flag() {
     }
     refuses_unevaluable(&dir, &["update", "--reason", "adopt", "--yes", "--json"]);
 }
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// The flag acknowledges changes: when there is none it would be silently ignored, so it says so (exit 0 still).
+#[test]
+fn accept_witness_changes_with_nothing_changed_warns_and_still_exits_0() {
+    let dir = Dir::new("review_unused_flag");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    // nothing to update, nothing to seal: nothing is evaluated
+    for args in [
+        &["update", "--reason", "r", "--yes", "--accept-witness-changes", "all", "--json"][..],
+        &["seal", "--reason", "r", "--yes", "--accept-witness-changes", "builtin.a,builtin.b", "--json"][..],
+    ] {
+        let output = conf_in_own_temp(&dir, args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {}", text(&output));
+        let doc = json(&output);
+        assert_eq!(doc["nothing_to_do"], Value::Bool(true), "{args:?}: {doc}");
+        let warnings = doc["warnings"].as_array().unwrap_or_else(|| panic!("{args:?}: {doc}"));
+        assert!(warnings.iter().any(|w| w.as_str().unwrap().contains("but nothing changed")), "{args:?}: {doc}");
+        assert!(stderr(&output).contains("warning") && stderr(&output).contains("but nothing changed"), "{args:?}: {}", stderr(&output));
+    }
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "r", "--yes", "--accept-witness-changes", "builtin.a,builtin.b"]);
+    assert!(stderr(&output).contains("names 2 key(s) but nothing changed"), "{}", text(&output));
+    // a seal whose witnesses all match: written, the flag had nothing to accept
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "mine", "--yes", "--accept-witness-changes", "all", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["written"], Value::Bool(true), "{doc}");
+    assert!(doc["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().contains("but nothing changed")), "{doc}");
+    assert!(stderr(&output).contains("but nothing changed"), "{}", stderr(&output));
+    // without the flag: no such warning
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
+    assert!(!stderr(&output).contains("nothing changed"), "{}", text(&output));
+}

@@ -75,8 +75,9 @@ FLAGS:
     --accept-witness-changes all|KEY[,KEY...]
                                update, seal: re-record the recorded witnesses that differ or are missing under the
                                file to be written; without it such a change refuses (exit 1), and a KEY that did not
-                               change is misuse (exit 2). New cases (a file without the battery: all of it) are
-                               recorded without it. Keep a copy of the file: it is the only record of the old values
+                               change is misuse (exit 2); when nothing changed it warns that it had no effect. New
+                               cases (a file without the battery: all of it) are recorded without it. Keep a copy of
+                               the file: it is the only record of the old values
     --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
                                (with --json they never ask: --json needs --yes to write)
     -h, --help                 This help
@@ -1143,6 +1144,23 @@ struct WitnessRefusal {
     witnesses: bool,
 }
 
+/// When `--accept-witness-changes` was given and nothing changed (nothing to do, or every recorded witness matches):
+/// the flag is not silently ignored. The warning goes to stderr now and into `fields["warnings"]`; the exit code
+/// stays the command's.
+fn warn_unused_accept(accept: Option<&Accept>, fields: &mut Value) {
+    let what = match accept {
+        None => return,
+        Some(Accept::All) => "all keys".to_string(),
+        Some(Accept::Keys(keys)) => format!("{} key(s)", keys.len()),
+    };
+    let warning = format!("--accept-witness-changes: the flag names {what} but nothing changed; it had no effect");
+    say_error(&format!("phs conf: warning: {}\n", escape_controls(&warning)));
+    match fields.get_mut("warnings").and_then(Value::as_array_mut) {
+        Some(warnings) => warnings.push(Value::from(warning)),
+        None => fields["warnings"] = json!([warning]),
+    }
+}
+
 /// `keys`, the first [`DRIFT_NAMES`] of them, then `+N more`.
 fn named(keys: &[String]) -> String {
     let mut text = keys.iter().take(DRIFT_NAMES).map(String::as_str).collect::<Vec<_>>().join(", ");
@@ -1254,9 +1272,14 @@ fn witness_plan(command: &str, args: &ConfArgs, draft: &Draft, text: &mut String
         }
         Ok(false) => {
             text.push_str("witnesses: every recorded witness matches; they are kept as recorded\n");
+            warn_unused_accept(args.accept.as_ref(), fields);
             draft.finish(None).map_err(ops_failure)
         }
         Ok(true) => {
+            if !compared.rows.iter().any(|row| matches!(row.status, WitnessStatus::Differs { .. } | WitnessStatus::Missing)) {
+                // only new cases: recorded without the flag
+                warn_unused_accept(args.accept.as_ref(), fields);
+            }
             let rerecorded = rerecord(draft.old.witnesses(), &run.rows).map_err(ops_failure)?;
             text.push_str(&format!("witnesses: re-recorded from this evaluation ({})\n", rerecorded.drift.line()));
             fields["witnesses_rerecorded"] = Value::Bool(true);
@@ -1399,7 +1422,9 @@ fn update(args: &ConfArgs) -> Outcome {
         Ok(Some(draft)) => draft,
         Ok(None) => {
             let text = format!("{}: nothing to update: the embedded catalog and the engine are this build's, and the built-in witnesses are recorded\n", shown(&path));
-            return report("update", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
+            let mut fields = json!({ "path": shown(&path), "written": false, "nothing_to_do": true });
+            warn_unused_accept(args.accept.as_ref(), &mut fields);
+            return report("update", text, fields, 0);
         }
         Err(e) => return failure("update", ops_code(&e), e.to_string()),
     };
@@ -1442,7 +1467,9 @@ fn seal(args: &ConfArgs) -> Outcome {
         Ok(Some(draft)) => draft,
         Ok(None) => {
             let text = format!("{}: nothing to seal: the file already verifies\n", shown(&path));
-            return report("seal", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
+            let mut fields = json!({ "path": shown(&path), "written": false, "nothing_to_do": true });
+            warn_unused_accept(args.accept.as_ref(), &mut fields);
+            return report("seal", text, fields, 0);
         }
         Err(e) => return failure("seal", ops_code(&e), e.to_string()),
     };
