@@ -3,12 +3,16 @@
 //! [`entries`](super::entries): nothing is written, no process-wide state changes, and nothing in a file's content can
 //! make them panic (every problem becomes data). The CLI only renders these values and picks the exit code they give.
 
+use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::engine::{environment_pairs, read_engine, EngineIdentity, EnginePolicy};
-use super::entries::{entries, Entry};
+use super::entries::{diff, entries, summary, Change, Entry};
 use super::load::{engine_file_hash, read_bounded, replay_file, LoadError};
 use super::model::{FrozenFile, Pairs};
+use crate::units::conf::{read_leniently_collected, replay_source, ProcessSettings, DEFAULT_PHYSURE_CONF};
+use crate::units::UnitRegistry;
 
 /// How the file's engine pin compares with the running build.
 #[derive(Debug, Clone, PartialEq)]
@@ -114,19 +118,7 @@ fn engine_state(block: &Pairs, engine_file: Option<&Path>) -> EngineState {
 
 /// The keys whose values differ between `old` and `new`: the keys of `old` in its order, then those of `new` only.
 pub(crate) fn pair_changes(old: &Pairs, new: &Pairs) -> Vec<FieldChange> {
-    let mut changes = Vec::new();
-    for (key, value) in old.iter() {
-        let other = new.get(key).unwrap_or("");
-        if value != other {
-            changes.push(FieldChange { key: key.to_string(), old: value.to_string(), new: other.to_string() });
-        }
-    }
-    for (key, value) in new.iter() {
-        if old.get(key).is_none() {
-            changes.push(FieldChange { key: key.to_string(), old: String::new(), new: value.to_string() });
-        }
-    }
-    changes
+    changes_of(old.as_slice(), new.as_slice())
 }
 
 impl Inspection {
@@ -154,6 +146,212 @@ impl Inspection {
             && self.problems.is_empty()
             && self.file.as_ref().is_some_and(|file| file.seal_sha256().eq_ignore_ascii_case(expected))
     }
+}
+
+/// One side of a comparison.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Side {
+    /// A frozen file on disk. It need not verify; if it does not, its problems are reported and its sources are not
+    /// replayed (so the comparison has no data for it and is never identical).
+    File(PathBuf),
+    /// What the running build gives *unfrozen* in `cwd`: the embedded catalog plus `cwd/physure.conf` if any, read
+    /// as the runtime reads it ([`unfrozen_entries`]: leniently, with warnings). The engine is the running build.
+    Unfrozen { cwd: PathBuf },
+}
+
+/// The label of the unfrozen side.
+pub const UNFROZEN_LABEL: &str = "the installed build, unfrozen";
+
+/// The semantic difference of two sides: their catalogs, their engines and their environments.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Comparison {
+    /// The path of a file side, or [`UNFROZEN_LABEL`].
+    pub a: String,
+    pub b: String,
+    /// The difference of the catalogs ([`diff`](super::entries::diff), old = a, new = b). Empty when a file side does
+    /// not verify (it is not replayed).
+    pub data: Vec<Change>,
+    /// The `[Engine]` pairs that differ, in the key order of side a (then b). With an unfrozen side only the identity
+    /// fields of `EngineIdentity::current()` are compared (version, commit, profile, target, features, rustc, flags):
+    /// the running build has no policy and is not hashed.
+    pub engine: Vec<FieldChange>,
+    /// The `[Environment]` pairs that differ (the running machine's for an unfrozen side). Informational.
+    pub environment: Vec<FieldChange>,
+    /// Why side a (a file) cannot be trusted: its verification problems, or that its sources do not replay. Always
+    /// empty for an unfrozen side.
+    pub a_problems: Vec<String>,
+    pub b_problems: Vec<String>,
+    /// What the reading of an unfrozen side's `physure.conf` warns about (lines the runtime ignores, a strict reading
+    /// that would refuse the file or give another catalog).
+    pub warnings: Vec<String>,
+}
+
+impl Comparison {
+    /// No difference in data, engine or environment, and both file sides verify and replay.
+    pub fn is_identical(&self) -> bool {
+        self.data.is_empty()
+            && self.engine.is_empty()
+            && self.environment.is_empty()
+            && self.a_problems.is_empty()
+            && self.b_problems.is_empty()
+    }
+}
+
+/// A side, read.
+struct SideRead {
+    label: String,
+    /// `None` when a file side was not replayed.
+    entries: Option<Vec<Entry>>,
+    /// `None` for the unfrozen side: the running build.
+    engine: Option<Pairs>,
+    environment: Pairs,
+    problems: Vec<String>,
+    warnings: Vec<String>,
+}
+
+fn read_side(side: &Side) -> Result<SideRead, String> {
+    match side {
+        Side::File(path) => {
+            let (text, _) = read_bounded(path).map_err(|e| e.to_string())?;
+            let file = FrozenFile::parse(&text)
+                .map_err(|e| LoadError::NotFrozen { path: path.clone(), message: e.0 }.to_string())?;
+            let mut problems: Vec<String> = file.verify().iter().map(ToString::to_string).collect();
+            let mut entries_of_file = None;
+            if problems.is_empty() {
+                match replay_file(&file) {
+                    Ok((registry, constants, collected)) => entries_of_file = Some(entries(&registry, &constants, &collected)),
+                    Err((origin, found)) => problems.extend(found.iter().map(|p| format!("source {origin} does not replay: {p}"))),
+                }
+            }
+            Ok(SideRead {
+                label: path.display().to_string(),
+                entries: entries_of_file,
+                engine: Some(file.engine().clone()),
+                environment: file.environment().clone(),
+                problems,
+                warnings: Vec::new(),
+            })
+        }
+        Side::Unfrozen { cwd } => {
+            let (found, warnings) = unfrozen_entries(cwd)?;
+            Ok(SideRead {
+                label: UNFROZEN_LABEL.to_string(),
+                entries: Some(found),
+                engine: None,
+                environment: environment_pairs(),
+                problems: Vec::new(),
+                warnings,
+            })
+        }
+    }
+}
+
+/// The identity fields of an engine block, which is all the running build has.
+const IDENTITY_KEYS: [&str; 7] = ["version", "commit", "profile", "target", "features", "rustc", "flags"];
+
+/// The identity of the running build as pairs.
+fn running_identity() -> Vec<(String, String)> {
+    let EngineIdentity { version, commit, profile, target, features, rustc, flags } = EngineIdentity::current();
+    IDENTITY_KEYS.iter().map(|k| k.to_string()).zip([version, commit, profile, target, features, rustc, flags]).collect()
+}
+
+/// The `[Engine]` differences of two sides (see [`Comparison::engine`]).
+fn engine_changes(a: Option<&Pairs>, b: Option<&Pairs>) -> Vec<FieldChange> {
+    let identity_only = |pairs: &Pairs| -> Vec<(String, String)> {
+        pairs.iter().filter(|(k, _)| IDENTITY_KEYS.contains(k)).map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    };
+    let (old, new) = match (a, b) {
+        (Some(a), Some(b)) => (a.as_slice().to_vec(), b.as_slice().to_vec()),
+        (Some(a), None) => (identity_only(a), running_identity()),
+        (None, Some(b)) => (running_identity(), identity_only(b)),
+        (None, None) => return Vec::new(),
+    };
+    changes_of(&old, &new)
+}
+
+/// [`pair_changes`] over plain lists.
+fn changes_of(old: &[(String, String)], new: &[(String, String)]) -> Vec<FieldChange> {
+    let get = |pairs: &[(String, String)], key: &str| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    let mut changes = Vec::new();
+    for (key, value) in old {
+        let other = get(new, key).unwrap_or_default();
+        if *value != other {
+            changes.push(FieldChange { key: key.clone(), old: value.clone(), new: other });
+        }
+    }
+    for (key, value) in new {
+        if get(old, key).is_none() {
+            changes.push(FieldChange { key: key.clone(), old: String::new(), new: value.clone() });
+        }
+    }
+    changes
+}
+
+/// The semantic difference of two sides (`phs conf diff`): catalogs, engines, environments. `Err` only when a side
+/// cannot be read at all (a file that is missing, too large, not UTF-8 or not a frozen file; a `physure.conf` that is
+/// not text); a file that does not verify is reported in the comparison. The engine file is not needed: no engine
+/// check is made, the blocks are compared as written (kept in the signature for the CLI's symmetry with `inspect`).
+pub fn compare(a: &Side, b: &Side, _engine_file: Option<&Path>) -> Result<Comparison, String> {
+    let (a, b) = (read_side(a)?, read_side(b)?);
+    let data = match (&a.entries, &b.entries) {
+        (Some(old), Some(new)) => diff(old, new),
+        _ => Vec::new(),
+    };
+    let engine = engine_changes(a.engine.as_ref(), b.engine.as_ref());
+    let environment = pair_changes(&a.environment, &b.environment);
+    let mut warnings = a.warnings;
+    for warning in b.warnings {
+        // the same directory on both sides warns once
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+    Ok(Comparison { a: a.label, b: b.label, data, engine, environment, a_problems: a.problems, b_problems: b.problems, warnings })
+}
+
+/// The catalog the running build gives *unfrozen* in `cwd`, as the runtime builds it: the embedded catalog, then
+/// `cwd/physure.conf` if it is a file, both read leniently (a line that does not read is skipped), with the settings
+/// collected, never applied. The warnings: each line the runtime ignores, and, when the strict reading that `phs conf
+/// freeze` uses would refuse the file or build another catalog, that too. `Err` names a `physure.conf` that exists but
+/// cannot be read as text (the runtime would silently use the embedded catalog alone).
+pub fn unfrozen_entries(cwd: &Path) -> Result<(Vec<Entry>, Vec<String>), String> {
+    let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+    let mut warnings: Vec<String> =
+        read_leniently_collected(DEFAULT_PHYSURE_CONF, &mut registry, &mut constants, &mut collected, true)
+            .into_iter()
+            .map(|p| format!("the embedded catalog: {p}; the line is ignored"))
+            .collect();
+    let path = cwd.join("physure.conf");
+    if !path.is_file() {
+        return Ok((entries(&registry, &constants, &collected), warnings));
+    }
+    let shown = path.display();
+    let text = fs::read_to_string(&path).map_err(|e| {
+        format!("{shown}: expected a readable UTF-8 text, found: {e} (the runtime ignores such a file and uses the embedded catalog)")
+    })?;
+    let lenient_problems = read_leniently_collected(&text, &mut registry, &mut constants, &mut collected, false);
+    warnings.extend(lenient_problems.iter().map(|p| format!("{shown}: {p}; the line is ignored")));
+    let lenient = entries(&registry, &constants, &collected);
+    let (mut strict_registry, mut strict_constants, mut strict_collected) =
+        (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+    let strict = replay_source(&mut strict_registry, &mut strict_constants, &mut strict_collected, DEFAULT_PHYSURE_CONF, true)
+        .and_then(|()| replay_source(&mut strict_registry, &mut strict_constants, &mut strict_collected, &text, false));
+    match strict {
+        Err(problems) => warnings.push(format!(
+            "{shown}: the strict reading (what `phs conf freeze` records) refuses it: {}",
+            problems.join("; ")
+        )),
+        Ok(()) => {
+            let changes = diff(&lenient, &entries(&strict_registry, &strict_constants, &strict_collected));
+            if !changes.is_empty() {
+                warnings.push(format!(
+                    "{shown}: the strict reading (what `phs conf freeze` records) builds another catalog: {}",
+                    summary(&changes)
+                ));
+            }
+        }
+    }
+    Ok((lenient, warnings))
 }
 
 #[cfg(test)]

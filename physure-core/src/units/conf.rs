@@ -54,6 +54,23 @@ fn read_leniently(
     problems
 }
 
+/// The lenient reading, as the runtime reads the working directory's `physure.conf` (a line it cannot read is skipped
+/// and the rest applies), except that `[Settings]` and `[Compatibility]` are collected into `collected` instead of
+/// applied: **no process-wide state changes**. Returns the problems, i.e. the lines the runtime ignores. For the
+/// reports of `phs conf` (`frozen::report::unfrozen_entries`).
+pub(crate) fn read_leniently_collected(
+    conf_str: &str,
+    registry: &mut UnitRegistry,
+    constants: &mut HashMap<String, String>,
+    collected: &mut ProcessSettings,
+    trusted: bool,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let reading = Reading { settings: SettingsMode::Collect, trusted, strict_sections: false };
+    parse_conf(conf_str, registry, constants, reading, collected, &mut problems);
+    problems
+}
+
 /// The problems of a lenient reading that have not been reported yet, as the lines to print: each distinct
 /// problem once for each `seen`. The working-directory conf is read again on every call that needs the catalog,
 /// and the same bad line must not fill the screen every time.

@@ -5,7 +5,7 @@
 //! directory, and every report function takes paths.
 
 use physure_core::frozen::origin::{entries_with_origin, section_and_key, select, Origin};
-use physure_core::frozen::report::{inspect, EngineState};
+use physure_core::frozen::report::{compare, inspect, unfrozen_entries, EngineState, Side};
 use physure_core::frozen::{
     engine_pairs, freeze, write_atomic, EngineIdentity, EnginePolicy, Entry, EntryInput, FreezeOptions, FrozenFile, FrozenParts,
     Source,
@@ -354,4 +354,128 @@ fn select_takes_a_section_a_key_or_a_key_prefix() {
     assert!(select(&entries, "constants.molar").is_empty(), "a key is matched whole, not by its first letters");
     let table = select(&entries, "atomic_weights.standard-2024");
     assert!(table.len() > 50 && table.iter().all(|(e, _)| e.name.starts_with("standard-2024")), "{}", table.len());
+}
+
+// ---- Task 3: compare ---------------------------------------------------------------------------------------------
+
+fn unfrozen(dir: &Dir) -> Side {
+    Side::Unfrozen { cwd: dir.0.clone() }
+}
+
+#[test]
+fn a_file_and_the_unfrozen_directory_it_was_frozen_from_are_identical() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, Some(OVERRIDES));
+    let comparison = compare(&Side::File(path.clone()), &unfrozen(&dir), None).unwrap();
+    assert!(comparison.is_identical(), "{:?} {:?} {:?}", &comparison.data[..comparison.data.len().min(3)], comparison.engine, comparison.environment);
+    assert_eq!(comparison.a, path.display().to_string());
+    assert_eq!(comparison.b, "the installed build, unfrozen");
+    assert!(comparison.warnings.is_empty(), "{:?}", comparison.warnings);
+    // and the other way round, and the unfrozen side against itself
+    assert!(compare(&unfrozen(&dir), &Side::File(path), None).unwrap().is_identical());
+    assert!(compare(&unfrozen(&dir), &unfrozen(&dir), None).unwrap().is_identical());
+}
+
+#[test]
+fn an_edited_physure_conf_is_a_data_difference_naming_the_unit() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, Some(OVERRIDES));
+    dir.write("physure.conf", &format!("{OVERRIDES}zz_new = 4.0, L
+"));
+    let comparison = compare(&Side::File(path), &unfrozen(&dir), None).unwrap();
+    assert!(!comparison.is_identical());
+    assert!(comparison.data.iter().any(|c| matches!(c, physure_core::frozen::Change::Added(e) if e.name == "zz_new")), "{:?}", comparison.data);
+    assert!(comparison.engine.is_empty() && comparison.environment.is_empty());
+}
+
+#[test]
+fn a_file_frozen_under_another_embedded_text_differs_in_that_constant_only_in_data() {
+    let dir = Dir::new();
+    let r = "molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1";
+    assert!(DEFAULT_PHYSURE_CONF.contains(r), "the test's anchor is gone");
+    let doctored = file_of(&[("embedded", &DEFAULT_PHYSURE_CONF.replacen(r, "molar_gas_constant = 8.0 J*mol^-1*K^-1", 1)), ("overrides", "")]);
+    let path = dir.write("old.frozen.conf", &doctored.render().unwrap());
+    let empty = Dir::new();
+    let comparison = compare(&Side::File(path), &unfrozen(&empty), None).unwrap();
+    assert!(comparison.engine.is_empty(), "the same build, policy and hash left out: {:?}", comparison.engine);
+    let changed = comparison.data.iter().find(|c| c.kind() == "constant" && c.name() == "molar_gas_constant").expect("the constant");
+    assert!(matches!(changed, physure_core::frozen::Change::Changed { old, new, .. } if old.starts_with("8.0 ") && new.starts_with("8.314")), "{changed:?}");
+    assert!(comparison.data.iter().all(|c| c.name() == "molar_gas_constant"), "{:?}", comparison.data);
+}
+
+#[test]
+fn two_files_with_different_engines_list_the_keys_that_differ() {
+    let dir = Dir::new();
+    let a = freeze_in(&dir, None);
+    let b = dir.path("b.frozen.conf");
+    fs::copy(&a, &b).unwrap();
+    repin(&b, &other_identity(), EnginePolicy::Record, "relaxed");
+    let comparison = compare(&Side::File(a), &Side::File(b), None).unwrap();
+    let keys: Vec<&str> = comparison.engine.iter().map(|c| c.key.as_str()).collect();
+    assert!(keys.contains(&"version") && keys.contains(&"policy"), "{keys:?}");
+    let version = comparison.engine.iter().find(|c| c.key == "version").unwrap();
+    assert_eq!((version.old.as_str(), version.new.as_str()), (EngineIdentity::current().version.as_str(), "0.0.1"));
+    assert!(comparison.data.is_empty());
+    assert!(!comparison.is_identical());
+}
+
+#[test]
+fn a_file_side_that_does_not_verify_is_not_replayed_and_never_identical() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, None);
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replacen(R_VALUE, "= not a number", 1)).unwrap();
+    let comparison = compare(&Side::File(path.clone()), &unfrozen(&dir), None).unwrap();
+    assert!(!comparison.a_problems.is_empty() && comparison.b_problems.is_empty());
+    assert!(comparison.data.is_empty(), "a file that does not verify was replayed");
+    assert!(!comparison.is_identical());
+    let reversed = compare(&unfrozen(&dir), &Side::File(path), None).unwrap();
+    assert!(!reversed.b_problems.is_empty() && !reversed.is_identical());
+    // a file that cannot be read at all is an error naming it
+    let e = compare(&Side::File(dir.path("none.frozen.conf")), &unfrozen(&dir), None).unwrap_err();
+    assert!(e.contains("none.frozen.conf"), "{e}");
+}
+
+#[test]
+fn a_physure_conf_the_runtime_reads_past_is_compared_as_the_runtime_reads_it_with_warnings() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, Some(OVERRIDES));
+    // a line the lenient reader skips: the runtime ignores it, so the catalog is that of the overrides
+    dir.write("physure.conf", &format!("{OVERRIDES}this is not a line of a conf
+"));
+    let comparison = compare(&Side::File(path), &unfrozen(&dir), None).unwrap();
+    assert!(comparison.data.is_empty(), "{:?}", comparison.data);
+    assert!(comparison.warnings.iter().any(|w| w.contains("physure.conf") && w.contains("this is not a line")), "{:?}", comparison.warnings);
+    assert!(comparison.warnings.iter().any(|w| w.contains("strict")), "the strict reading refuses it: {:?}", comparison.warnings);
+}
+
+#[test]
+fn unfrozen_entries_read_the_directory_as_the_runtime_does() {
+    let dir = Dir::new();
+    let (plain, warnings) = unfrozen_entries(&dir.0).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(plain, physure_core::frozen::embedded_entries().unwrap(), "no physure.conf: the embedded catalog");
+    dir.write("physure.conf", OVERRIDES);
+    let (with, warnings) = unfrozen_entries(&dir.0).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(with.iter().any(|e| e.kind == "constant" && e.name == "molar_gas_constant" && e.value.starts_with("8.0 ")));
+    // a misspelt section: the runtime drops it with a message, the strict reading refuses the file
+    dir.write("physure.conf", "[Constant]
+zz = 1 m
+");
+    let (dropped, warnings) = unfrozen_entries(&dir.0).unwrap();
+    assert_eq!(dropped, plain);
+    assert!(warnings.iter().any(|w| w.contains("[Constant]")), "{warnings:?}");
+    // a [Settings] line is collected, never applied to the process
+    let before = physure_core::settings::parallel_threshold();
+    dir.write("physure.conf", "[Settings]
+parallel_threshold = 4242
+");
+    let (set, _) = unfrozen_entries(&dir.0).unwrap();
+    assert!(set.iter().any(|e| e.kind == "setting" && e.name == "parallel_threshold" && e.value == "4242"));
+    assert_eq!(physure_core::settings::parallel_threshold(), before, "a report applied a setting");
+    // a file that is not text is an error naming it
+    fs::write(dir.path("physure.conf"), [0xff, 0xfe, 0x00]).unwrap();
+    let e = unfrozen_entries(&dir.0).unwrap_err();
+    assert!(e.contains("physure.conf"), "{e}");
 }
