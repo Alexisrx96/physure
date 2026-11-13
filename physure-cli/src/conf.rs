@@ -209,7 +209,7 @@ pub fn run_conf(args: &[String]) -> ! {
     let wants_json = rest.iter().any(|a| a == "--json");
     let outcome = match parse(rest) {
         Err(message) => failure("conf", 2, message),
-        Ok(parsed) if parsed.help => Outcome { text: HELP.to_string(), json: document("conf", json!({ "help": HELP })), code: 0, error: false },
+        Ok(parsed) if parsed.help => Outcome { text: HELP.to_string(), json: document("conf", json!({ "help": HELP, "exit_code": 0 })), code: 0, error: false },
         Ok(parsed) => run(&parsed),
     };
     if wants_json && !outcome.json.is_null() {

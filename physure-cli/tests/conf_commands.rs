@@ -337,6 +337,7 @@ fn conf_help_json_is_a_document() {
     let doc = json(&output);
     assert_eq!((doc["schema"].clone(), doc["command"].clone()), (Value::from(1), Value::from("conf")));
     assert!(doc["help"].as_str().unwrap().contains("phs conf freeze"), "{doc}");
+    assert_eq!(doc["exit_code"], Value::from(0), "every document has exit_code");
 }
 
 /// Review finding 8: a reader that stops early (`phs conf show | head`) is a normal end, never a panic (exit 101).
