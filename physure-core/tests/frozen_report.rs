@@ -4,10 +4,13 @@
 //! No test here changes the current directory, the environment or the configuration in force: `freeze` is given its
 //! directory, and every report function takes paths.
 
+use physure_core::frozen::origin::{entries_with_origin, section_and_key, select, Origin};
 use physure_core::frozen::report::{inspect, EngineState};
 use physure_core::frozen::{
-    engine_pairs, freeze, write_atomic, EngineIdentity, EnginePolicy, EntryInput, FreezeOptions, FrozenFile,
+    engine_pairs, freeze, write_atomic, EngineIdentity, EnginePolicy, Entry, EntryInput, FreezeOptions, FrozenFile, FrozenParts,
+    Source,
 };
+use physure_core::units::conf::DEFAULT_PHYSURE_CONF;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -239,4 +242,116 @@ fn seal_matches_is_false_once_a_source_was_edited() {
     assert_eq!(read(&path).seal_sha256(), seal, "the stored seal is the original one");
     assert!(!inspection.seal_matches(&seal));
     assert_eq!(inspection.exit_code(), 1);
+}
+
+// ---- Task 2: entries with their origin, and section.key names --------------------------------------------------
+
+const OVERRIDES: &str = "[Constants]
+molar_gas_constant = 8.0 J*mol^-1*K^-1
+[Units]
+zz = 2.5, L
+";
+
+/// A sound file made in memory from these sources, pinned to the running engine under `release`.
+fn file_of(sources: &[(&str, &str)]) -> FrozenFile {
+    FrozenFile::new(
+        T0_TEXT,
+        FrozenParts {
+            engine: engine_pairs(&EngineIdentity::current(), EnginePolicy::Release, None).unwrap(),
+            sources: sources.iter().map(|(origin, text)| Source::new(origin, text).unwrap()).collect(),
+            ..FrozenParts::default()
+        },
+        EntryInput { time: T0_TEXT, action: "freeze", engine: "test", actor: "t@h", reason: "test", diff: "d" },
+    )
+    .unwrap()
+}
+
+fn origin_of<'a>(entries: &'a [(Entry, Origin)], kind: &str, name: &str) -> &'a Origin {
+    &entries.iter().find(|(e, _)| e.kind == kind && e.name == name).unwrap_or_else(|| panic!("no {kind} {name}")).1
+}
+
+#[test]
+fn each_entry_has_the_origin_of_the_last_source_that_set_it() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, Some(OVERRIDES));
+    let entries = entries_with_origin(&read(&path)).unwrap();
+    assert_eq!(origin_of(&entries, "constant", "molar_gas_constant").to_string(), "overrides");
+    assert_eq!(origin_of(&entries, "constant", "avogadro_constant").to_string(), "embedded");
+    assert_eq!(origin_of(&entries, "base_unit", "kg").to_string(), "embedded");
+    assert_eq!(origin_of(&entries, "unit", "zz").to_string(), "overrides");
+    // a third source that redefines zz
+    let third = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", OVERRIDES), ("extra", "[Units]
+zz = 3.5, L
+")]);
+    let entries = entries_with_origin(&third).unwrap();
+    assert_eq!(*origin_of(&entries, "unit", "zz"), Origin { source: "extra".into(), restated_by: None });
+    assert_eq!(origin_of(&entries, "constant", "molar_gas_constant").to_string(), "overrides");
+    // the entries are those of the catalog, in its order
+    let catalog = physure_core::frozen::load_file(&path, physure_core::frozen::LoadOptions { check_engine: false }).unwrap();
+    let plain: Vec<Entry> = entries_with_origin(&read(&path)).unwrap().into_iter().map(|(e, _)| e).collect();
+    assert_eq!(plain, catalog.entries());
+}
+
+#[test]
+fn a_value_restated_by_a_later_source_keeps_its_first_origin_and_says_so() {
+    let file = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", "[Constants]
+speed_of_light_in_vacuum = 299792458.0 m*s^-1
+")]);
+    let entries = entries_with_origin(&file).unwrap();
+    let origin = origin_of(&entries, "constant", "speed_of_light_in_vacuum");
+    assert_eq!(*origin, Origin { source: "embedded".into(), restated_by: Some("overrides".into()) });
+    assert_eq!(origin.to_string(), "embedded (restated by overrides)");
+    assert_eq!(origin_of(&entries, "constant", "avogadro_constant").restated_by, None, "not mentioned by the overrides");
+}
+
+#[test]
+fn a_source_that_does_not_replay_is_an_error_naming_it() {
+    let file = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", "")]);
+    let mut text = file.render().unwrap();
+    text = text.replace("[AtomicWeights:standard-2024]", "[AtomicWeights:standard-2024]
+Zz = abc, 0.1");
+    // made by hand, so it no longer verifies; entries_with_origin only replays, it does not judge the seal
+    let edited = FrozenFile::parse(&text).unwrap();
+    let (source, problems) = entries_with_origin(&edited).unwrap_err();
+    assert_eq!(source, "embedded");
+    assert!(problems.iter().any(|p| p.contains("Zz = abc")), "{problems:?}");
+}
+
+#[test]
+fn sections_and_keys_name_what_show_selects() {
+    let entry = |kind: &'static str, name: &str| Entry { kind, name: name.into(), value: String::new() };
+    let named = |kind, name| {
+        let (section, key) = section_and_key(&entry(kind, name));
+        format!("{section}.{key}")
+    };
+    assert_eq!(named("constant", "molar_gas_constant"), "constants.molar_gas_constant");
+    assert_eq!(named("unit", "m"), "units.m");
+    assert_eq!(named("base_unit", "kg"), "units.kg");
+    assert_eq!(named("derived_unit", "N"), "units.N");
+    assert_eq!(named("atomic_weight_table", "standard-2024/H"), "atomic_weights.standard-2024/H");
+    assert_eq!(named("atomic_weight_selection", "atomic_weights"), "atomic_weights.atomic_weights");
+    assert_eq!(named("setting", "angle_mode"), "settings.angle_mode");
+    assert_eq!(named("setting_ignored", "locale"), "settings.locale");
+    assert_eq!(named("category", "length"), "categories.length");
+    assert_eq!(named("prefix", "k"), "prefix.k");
+    assert_eq!(named("constant_meta", "c"), "constant_meta.c");
+}
+
+#[test]
+fn select_takes_a_section_a_key_or_a_key_prefix() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, Some(OVERRIDES));
+    let entries = entries_with_origin(&read(&path)).unwrap();
+    assert_eq!(select(&entries, "").len(), entries.len());
+    let constants = select(&entries, "constants");
+    assert!(constants.len() > 100, "{}", constants.len());
+    assert!(constants.iter().all(|(e, _)| e.kind == "constant"));
+    assert_eq!(constants.len(), entries.iter().filter(|(e, _)| e.kind == "constant").count(), "every constant");
+    let one = select(&entries, "constants.molar_gas_constant");
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].0.value, "8.0 J*mol^-1*K^-1");
+    assert!(select(&entries, "nonsense").is_empty());
+    assert!(select(&entries, "constants.molar").is_empty(), "a key is matched whole, not by its first letters");
+    let table = select(&entries, "atomic_weights.standard-2024");
+    assert!(table.len() > 50 && table.iter().all(|(e, _)| e.name.starts_with("standard-2024")), "{}", table.len());
 }

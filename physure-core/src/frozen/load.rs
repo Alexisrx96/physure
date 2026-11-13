@@ -185,12 +185,24 @@ pub(crate) type Replayed = (UnitRegistry, HashMap<String, String>, ProcessSettin
 /// reader, every other source untrusted. On a problem, the origin of the source (or "the sources together") and its
 /// problems. Changes no process-wide state. Loading and the operations of `ops` use this one replay.
 pub(crate) fn replay_file(file: &FrozenFile) -> Result<Replayed, (String, Vec<String>)> {
+    replay_file_with(file, |_, _, _, _| {})
+}
+
+/// [`replay_file`], calling `after_each(index, registry, constants, collected)` once each source has replayed, with the
+/// catalog the sources `0..=index` build (`phs conf show --origin` tells from it which source set each entry). The
+/// trust rule and the check of the selected edition are those of [`replay_file`]: there is one replay. On an error
+/// the callback has seen only the sources before the failing one, and its results are to be discarded.
+pub(crate) fn replay_file_with(
+    file: &FrozenFile,
+    mut after_each: impl FnMut(usize, &UnitRegistry, &HashMap<String, String>, &ProcessSettings),
+) -> Result<Replayed, (String, Vec<String>)> {
     let (mut registry, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
     for (index, source) in file.sources().iter().enumerate() {
         // `verify` made source 1 the embedded one; the check is repeated here because trust is at stake
         let trusted = index == 0 && source.origin() == "embedded";
         replay_source(&mut registry, &mut constants, &mut collected, source.text(), trusted)
             .map_err(|problems| (source.origin().to_string(), problems))?;
+        after_each(index, &registry, &constants, &collected);
     }
     // with no fallback from one table to another, a selected edition that no source defines would fail every use
     // of the weights later, one element at a time: the file is refused now instead
