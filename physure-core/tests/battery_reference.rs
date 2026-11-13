@@ -323,7 +323,11 @@ fn changing_an_override_changes_the_dependent_witness() {
         assert_ne!(value_of(&frozen, "const.molar_gas_constant"), value_of(&unfrozen, "const.molar_gas_constant"));
         let changed: Vec<&String> =
             frozen.iter().zip(&unfrozen).filter(|(a, b)| a != b).map(|((key, _), _)| key).collect();
-        assert_eq!(changed, ["builtin.const.molar_gas_constant"], "only the witness that depends on R changed");
+        assert_eq!(
+            changed,
+            ["builtin.chem.arrhenius", "builtin.chem.clausius_clapeyron_water", "builtin.const.molar_gas_constant"],
+            "only the witnesses that depend on R changed"
+        );
     }
     assert_eq!(run_battery(), unfrozen, "the process is restored");
 }
@@ -533,4 +537,218 @@ fn unpinned_gaussian_arithmetic() -> Vec<WitnessValue> {
     let a = Quantity::with_uncertainty(2.0, 0.1, "m").unwrap();
     let b = Quantity::with_uncertainty(3.0, 0.2, "s").unwrap();
     vec![show(sum), show(a.mul(&b).unwrap()), show(a.pow(3.0).unwrap())]
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Chemistry cases (Phase 3, task A4).
+// ---------------------------------------------------------------------------------------------------------------
+
+const CIAAW_STANDARD_2024: &str = include_str!("../../tests/golden/ciaaw_standard_atomic_weights_2024.tsv");
+
+/// `(weight, standard uncertainty)` of `symbol` from the CIAAW page as transcribed (the default edition,
+/// `standard-2024`), with the conversion of `docs/atomic_weights.md` section 3: an interval `[a, b]` is its
+/// midpoint with `(b - a) / sqrt(12)`; `x(n)` is `x` with the half-width `n` in its last digits, `U / sqrt(3)`.
+fn ciaaw(symbol: &str) -> (f64, f64) {
+    let line = CIAAW_STANDARD_2024
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .find(|l| l.split('\t').nth(1) == Some(symbol))
+        .unwrap_or_else(|| panic!("no {symbol} in the CIAAW table"));
+    let printed: String = line.split('\t').nth(2).unwrap().chars().filter(|c| *c != ' ').collect();
+    if let Some(interval) = printed.strip_prefix('[').and_then(|p| p.strip_suffix(']')) {
+        let (a, b) = interval.split_once(',').unwrap();
+        let (a, b): (f64, f64) = (a.parse().unwrap(), b.parse().unwrap());
+        ((a + b) / 2.0, (b - a) / 12f64.sqrt())
+    } else {
+        let (value, rest) = printed.split_once('(').unwrap();
+        let digits = value.split_once('.').map_or(0, |(_, d)| d.len());
+        let half_width: f64 = format!("{}e-{digits}", rest.trim_end_matches(')')).parse().unwrap();
+        (value.parse().unwrap(), half_width / 3f64.sqrt())
+    }
+}
+
+/// `(M, u(M))` of a composition by hand: `sum n_i A_i` and `sqrt(sum (n_i u_i)²)`.
+fn by_hand(composition: &[(&str, f64)]) -> (f64, f64) {
+    let mass = composition.iter().map(|(e, n)| n * ciaaw(e).0).sum();
+    let variance: f64 = composition.iter().map(|(e, n)| (n * ciaaw(e).1).powi(2)).sum();
+    (mass, variance.sqrt())
+}
+
+const MOLAR_MASSES: &[(&str, &[(&str, f64)])] = &[
+    ("chem.molar_mass_h2o", &[("H", 2.0), ("O", 1.0)]),
+    ("chem.molar_mass_glucose", &[("C", 6.0), ("H", 12.0), ("O", 6.0)]),
+    ("chem.molar_mass_calcium_hydroxide", &[("Ca", 1.0), ("O", 2.0), ("H", 2.0)]),
+    ("chem.molar_mass_iron_sulfate", &[("Fe", 1.0), ("S", 1.0), ("O", 4.0)]),
+];
+
+#[test]
+fn every_molar_mass_case_is_the_sum_of_the_standard_weights() {
+    let _lock = lock();
+    let mut failures = Vec::new();
+    for (id, composition) in MOLAR_MASSES {
+        let (mass, u, unit) = mean_of(&run_one(id));
+        let (reference, reference_u) = by_hand(composition);
+        within_ulps(id, "M", mass, reference, 4, &mut failures);
+        within_ulps(id, "u(M)", u, reference_u, 4, &mut failures);
+        if unit != "g/mol" {
+            failures.push(format!("{id}: unit {unit:?}"));
+        }
+    }
+    // the values chemists know (CIAAW 2024, conventional): water 18.015, glucose 180.16, Ca(OH)2 74.09, FeSO4 151.90
+    for (id, known) in [
+        ("chem.molar_mass_h2o", 18.015),
+        ("chem.molar_mass_glucose", 180.156),
+        ("chem.molar_mass_calcium_hydroxide", 74.092),
+        ("chem.molar_mass_iron_sulfate", 151.90),
+    ] {
+        let mass = mean_of(&run_one(id)).0;
+        if ((mass - known) / known).abs() > 1e-4 {
+            failures.push(format!("{id}: {mass} is not about {known}"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// `chem.mass_to_moles_nacl`: 100 g of NaCl is `100 / M` mol with `u = 100 u(M) / M²`.
+#[test]
+fn the_amount_of_nacl_is_the_mass_over_the_molar_mass() {
+    let _lock = lock();
+    let (moles, u, unit) = mean_of(&run_one("chem.mass_to_moles_nacl"));
+    let (m, um) = by_hand(&[("Na", 1.0), ("Cl", 1.0)]);
+    let mut failures = Vec::new();
+    within_ulps("chem.mass_to_moles_nacl", "n", moles, 100.0 / m, 4, &mut failures);
+    within_ulps("chem.mass_to_moles_nacl", "u(n)", u, 100.0 * um / (m * m), 4, &mut failures);
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(unit, "mol");
+    assert!((moles - 1.7112).abs() < 1e-3, "100 g of NaCl is about 1.711 mol: {moles}");
+}
+
+/// Balancing against the textbook coefficients: C3H8 + 5 O2 -> 3 CO2 + 4 H2O (combustion of propane) and
+/// Fe2O3 + 3 CO -> 2 Fe + 3 CO2 (the blast furnace). The canonical text writes every coefficient, 1 included.
+#[test]
+fn the_balancing_cases_give_the_textbook_coefficients() {
+    let _lock = lock();
+    assert_eq!(run_one("chem.balance_propane_combustion"), WitnessValue::Text("1 C3H8 + 5 O2 -> 3 CO2 + 4 H2O".into()));
+    assert_eq!(run_one("chem.balance_iron_oxide_reduction"), WitnessValue::Text("1 Fe2O3 + 3 CO -> 2 Fe + 3 CO2".into()));
+}
+
+fn relative(id: &str, found: f64, reference: f64, tolerance: f64) {
+    assert!(((found - reference) / reference).abs() <= tolerance, "{id}: {found:e} vs {reference:e}");
+}
+
+/// Arrhenius (k = A exp(-Ea / RT)), Clausius-Clapeyron (P2 = P1 exp(-(dH/R)(1/T2 - 1/T1))) and Gibbs
+/// (dG = dH - T dS) evaluated here with the catalog's R (CODATA 2022, exact). The exponentials amplify a relative
+/// rounding by the size of their argument (about 30 and 0.9), hence 1e-13; Gibbs is one subtraction, 1e-14.
+#[test]
+fn the_thermodynamic_cases_match_their_closed_forms() {
+    let _lock = lock();
+    let r: f64 = 8.314_462_618_153_24;
+    let (k, u, unit) = mean_of(&run_one("chem.arrhenius"));
+    relative("chem.arrhenius", k, 1e13 * (-75_000.0 / (r * 298.15)).exp(), 1e-13);
+    assert_eq!((u, unit.as_str()), (0.0, "s^-1"));
+    assert!((k - 0.73).abs() < 0.005, "{k}");
+
+    let (p2, u, unit) = mean_of(&run_one("chem.clausius_clapeyron_water"));
+    relative("chem.clausius_clapeyron_water", p2, 101.325 * (-(40_700.0 / r) * (1.0 / 363.15 - 1.0 / 373.15)).exp(), 1e-13);
+    assert_eq!((u, unit.as_str()), (0.0, "kPa"));
+    assert!(p2 > 69.5 && p2 < 71.5, "about 70 kPa at 90 degC: {p2}");
+
+    let (g, u, unit) = mean_of(&run_one("chem.gibbs_298"));
+    relative("chem.gibbs_298", g, -285.8 + 298.15 * 163.2 / 1000.0, 1e-14);
+    assert_eq!((u, unit.as_str()), (0.0, "kJ/mol"));
+    assert!((g + 237.1).abs() < 0.05, "the Gibbs energy of formation of liquid water, -237.1 kJ/mol: {g}");
+}
+
+/// The battery under a frozen file made from `conf` (the working directory's `physure.conf` at freeze time), with
+/// the process restored afterwards.
+fn battery_under_frozen(conf: &str) -> Vec<(String, Result<WitnessValue, String>)> {
+    let env = Env::new();
+    fs::write(env.dir.join("physure.conf"), conf).unwrap();
+    let options = FreezeOptions {
+        cwd: &env.dir,
+        out: None,
+        reason: "battery test",
+        policy: EnginePolicy::Release,
+        engine_file: None,
+        time_unix: 1_794_132_000,
+        actor: "t@h",
+    };
+    let (file, out) = freeze(&options).unwrap();
+    write_atomic(&out, &file.render().unwrap(), false).unwrap();
+    fs::remove_file(env.dir.join("physure.conf")).unwrap();
+    reset_cache();
+    ensure_valid().unwrap();
+    assert!(active().unwrap().is_some(), "the frozen file is in force");
+    run_battery()
+}
+
+fn changed_keys(a: &[(String, Result<WitnessValue, String>)], b: &[(String, Result<WitnessValue, String>)]) -> Vec<String> {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).filter(|(x, y)| x != y).map(|((key, _), _)| key.clone()).collect()
+}
+
+#[test]
+fn a_user_atomic_weight_changes_the_molar_masses_that_use_it_and_only_those() {
+    let _lock = lock();
+    let unfrozen = run_battery();
+    // O = 16.5 with the half-width 0.03, stored as 0.03 / sqrt(3) (docs/atomic_weights.md 5.4)
+    let frozen = battery_under_frozen("[AtomicWeights]\nO = 16.5, 0.03\n");
+    let (h, uh) = ciaaw("H");
+    let (water, u, _) = mean_of(&value_of(&frozen, "chem.molar_mass_h2o"));
+    let mut failures = Vec::new();
+    within_ulps("chem.molar_mass_h2o", "M", water, 2.0 * h + 16.5, 4, &mut failures);
+    within_ulps("chem.molar_mass_h2o", "u(M)", u, ((2.0 * uh).powi(2) + (0.03 / 3f64.sqrt()).powi(2)).sqrt(), 4, &mut failures);
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(
+        changed_keys(&frozen, &unfrozen),
+        [
+            "builtin.chem.molar_mass_calcium_hydroxide",
+            "builtin.chem.molar_mass_glucose",
+            "builtin.chem.molar_mass_h2o",
+            "builtin.chem.molar_mass_iron_sulfate",
+        ],
+        "every case with oxygen changed, NaCl and the rest did not"
+    );
+    assert_eq!(run_battery(), unfrozen, "the process is restored");
+}
+
+#[test]
+fn a_user_table_without_calcium_records_a_failure_and_does_not_panic() {
+    let _lock = lock();
+    let unfrozen = run_battery();
+    let frozen = battery_under_frozen("[Chemistry]\natomic_weights = mine\n[AtomicWeights:mine]\nH = 1.008, 0\nO = 15.999, 0\n");
+    match value_of(&frozen, "chem.molar_mass_calcium_hydroxide") {
+        WitnessValue::Failed(message) => assert!(message.contains("'Ca'") && message.contains("mine"), "{message}"),
+        other => panic!("not a recorded failure: {other:?}"),
+    }
+    assert_eq!(value_of(&frozen, "chem.molar_mass_h2o"), WitnessValue::number(2.0 * 1.008 + 15.999, 0.0, "g/mol"));
+    assert!(matches!(value_of(&frozen, "chem.mass_to_moles_nacl"), WitnessValue::Failed(_)));
+    // a failure is a value: every row is Ok, nothing is an error row
+    assert!(frozen.iter().all(|(_, value)| value.is_ok()), "{frozen:?}");
+    assert_eq!(run_battery(), unfrozen, "the process is restored");
+}
+
+/// The ids of the chemistry task.
+const CHEMISTRY_IDS: &[&str] = &[
+    "chem.arrhenius",
+    "chem.balance_iron_oxide_reduction",
+    "chem.balance_propane_combustion",
+    "chem.clausius_clapeyron_water",
+    "chem.gibbs_298",
+    "chem.mass_to_moles_nacl",
+    "chem.molar_mass_calcium_hydroxide",
+    "chem.molar_mass_glucose",
+    "chem.molar_mass_h2o",
+    "chem.molar_mass_iron_sulfate",
+];
+
+#[test]
+fn the_battery_has_its_size_and_every_released_id() {
+    let _lock = lock();
+    let ids: BTreeSet<&str> = battery().iter().map(|c| c.id).collect();
+    for id in STABLE_IDS.iter().chain(CHEMISTRY_IDS) {
+        assert!(ids.contains(id), "{id}");
+    }
+    assert!(battery().len() >= 38, "{}", battery().len());
+    assert_eq!(battery().len(), STABLE_IDS.len() + CHEMISTRY_IDS.len(), "every case is listed here: {ids:#?}");
 }

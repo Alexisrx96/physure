@@ -35,6 +35,7 @@
 //! When the configuration in force cannot be used at all (a broken frozen file), [`run_cases`] evaluates nothing and
 //! every case is an error naming why.
 
+pub mod chemistry;
 pub mod uncertainty;
 pub mod units;
 
@@ -80,6 +81,7 @@ pub(crate) fn case(id: &'static str, run: fn() -> CaseResult) -> Case {
 pub fn battery() -> Vec<Case> {
     let mut cases = units::cases();
     cases.extend(uncertainty::cases());
+    cases.extend(chemistry::cases());
     cases.sort_by_key(|case| case.id);
     cases
 }
