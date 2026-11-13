@@ -45,7 +45,7 @@ fn print_help() {
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
     println!("    phs conf [status]        The frozen configuration in force (physure.frozen.conf); phs conf --help");
-    println!("    phs conf freeze --reason TEXT | verify [FILE] [--expect SEAL] | history");
+    println!("    phs conf show [KEY] | diff [A] [B] | freeze | verify [FILE] | update | seal | history");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");

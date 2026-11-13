@@ -277,15 +277,13 @@ fn unknown_flag_is_exit_2_and_names_the_flags() {
 }
 
 #[test]
-fn unknown_and_unbuilt_commands_are_exit_2() {
+fn unknown_commands_are_exit_2_and_name_the_commands() {
     let dir = Dir::new("unknown_command");
     let output = dir.conf(&["frobnicate"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
-    assert!(stderr(&output).contains("status") && stderr(&output).contains("verify"), "{}", text(&output));
-    for planned in ["update", "seal"] {
-        let output = dir.conf(&[planned]);
-        assert_eq!(output.status.code(), Some(2), "{planned}: {}", text(&output));
-        assert!(stderr(&output).contains("not available in this build"), "{planned}: {}", text(&output));
+    let err = stderr(&output);
+    for command in ["status", "show", "diff", "update", "seal", "history", "freeze", "verify"] {
+        assert!(err.contains(command), "{command}: {err}");
     }
 }
 
@@ -782,4 +780,168 @@ zz_unit = 2.0, L, [zz_unit]
     let mut names: Vec<String> = fs::read_dir(&dir.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     assert_eq!(names, vec!["physure.conf".to_string(), FROZEN_FILE_NAME.to_string()]);
+}
+
+// ---- Task 9: update and seal ----
+
+/// The file's bytes, to prove nothing was written.
+fn bytes(dir: &Dir) -> Vec<u8> {
+    fs::read(dir.path(FROZEN_FILE_NAME)).unwrap()
+}
+
+#[test]
+fn update_and_seal_without_reason_exit_2() {
+    let dir = Dir::new("update_no_reason");
+    freeze_cli(&dir, &[]);
+    let before = bytes(&dir);
+    for command in ["update", "seal"] {
+        for args in [&[command, "--yes"][..], &[command, "--reason", " ", "--yes"][..]] {
+            let output = dir.conf(args);
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
+            assert!(stderr(&output).contains("--reason"), "{args:?}: {}", text(&output));
+        }
+    }
+    assert_eq!(bytes(&dir), before);
+    // nothing in force: nothing to update or seal
+    let empty = Dir::new("update_none");
+    for command in ["update", "seal"] {
+        let output = empty.conf(&[command, "--reason", "r", "--yes"]);
+        assert_eq!(output.status.code(), Some(2), "{command}: {}", text(&output));
+    }
+}
+
+#[test]
+fn update_with_nothing_new_says_so_exit_0() {
+    let dir = Dir::new("update_nothing");
+    freeze_cli(&dir, &[]);
+    let before = bytes(&dir);
+    let output = dir.conf(&["update", "--reason", "nothing"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stdout(&output).contains("nothing to update"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before);
+}
+
+#[test]
+fn update_without_yes_and_no_terminal_is_exit_2_and_writes_nothing() {
+    let dir = Dir::new("update_no_terminal");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    let before = bytes(&dir);
+    let output = dir.conf(&["update", "--reason", "adopt this build"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    // what it would write is shown first: the engine pairs that differ
+    let out = stdout(&output);
+    assert!(out.contains("version: 0.0.1 -> "), "{out}");
+    assert!(stderr(&output).contains("--yes") && stderr(&output).contains("terminal"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before, "nothing written");
+    // --json: one clean document on stdout, the refusal in it
+    let output = dir.conf(&["update", "--reason", "adopt this build", "--json"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["command"], Value::from("update"));
+    assert!(doc["error"].as_str().unwrap().contains("--yes"), "{doc}");
+    assert!(doc["engine"].as_array().unwrap().iter().any(|c| c["key"] == "version"), "{doc}");
+    assert_eq!(bytes(&dir), before, "nothing written");
+}
+
+#[test]
+fn update_with_yes_writes_records_and_verifies() {
+    let dir = Dir::new("update_yes");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    let output = dir.conf(&["update", "--reason", "adopt this build", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let file = FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap();
+    let out = stdout(&output);
+    assert!(out.contains(file.seal_sha256()) && out.contains("record this seal outside this directory"), "{out}");
+    assert_eq!(file.engine().get("version"), Some(EngineIdentity::current().version.as_str()));
+    assert_eq!(file.engine().get("policy"), Some("release"), "the file's policy is kept");
+    let verified = dir.conf(&["verify"]);
+    assert_eq!(verified.status.code(), Some(0), "{}", text(&verified));
+    let rows = json(&dir.conf(&["history", "--json"]))["rows"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows[1]["action"].clone(), rows[1]["reason"].clone()), (Value::from("update"), Value::from("adopt this build")));
+    // and now there is nothing to update
+    let again = dir.conf(&["update", "--reason", "again", "--yes"]);
+    assert!(again.status.success() && stdout(&again).contains("nothing to update"), "{}", text(&again));
+}
+
+#[test]
+fn update_of_a_modified_file_is_refused_exit_2() {
+    let dir = Dir::new("update_modified");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine().replace("[Constants]", "[Constants]\nzz_c = 3 m"));
+    let before = bytes(&dir);
+    let output = dir.conf(&["update", "--reason", "x", "--yes"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(stderr(&output).contains("seal it or restore it"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before);
+}
+
+/// The frozen file of `dir` with its overrides (source 2) replaced by `overrides`.
+fn edit_overrides(dir: &Dir, overrides: &str) {
+    let edited = dir.read(FROZEN_FILE_NAME).replace(EMPTY_OVERRIDES.trim_end(), overrides);
+    dir.write(FROZEN_FILE_NAME, &edited);
+}
+
+#[test]
+fn seal_after_editing_overrides() {
+    let dir = Dir::new("seal_edit");
+    freeze_cli(&dir, &[]);
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]\n# my unit");
+    assert_eq!(dir.conf(&["verify"]).status.code(), Some(1));
+    // without --yes and no terminal: shown, refused, nothing written
+    let before = bytes(&dir);
+    let output = dir.conf(&["seal", "--reason", "my unit"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(bytes(&dir), before);
+    let output = dir.conf(&["seal", "--reason", "my unit", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let out = stdout(&output);
+    // (a) the canonical text of the new overrides (no comment), (b) what they contribute
+    assert!(out.contains("zz_unit = 2.0, L, [zz_unit]") && !out.contains("# my unit"), "{out}");
+    assert!(out.contains("+ zz_unit"), "{out}");
+    let file = FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap();
+    assert!(out.contains(file.seal_sha256()) && out.contains("record this seal"), "{out}");
+    assert_eq!(dir.conf(&["verify"]).status.code(), Some(0));
+    let rows = json(&dir.conf(&["history", "--json"]))["rows"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1]["action"], Value::from("seal"));
+    let output = dir.phs(&["3 zz_unit => m"], &[]);
+    assert!(output.status.success() && stdout(&output).contains('6'), "{}", text(&output));
+}
+
+#[test]
+fn seal_json_carries_the_overrides_and_their_contribution() {
+    let dir = Dir::new("seal_json");
+    freeze_cli(&dir, &[]);
+    edit_overrides(&dir, "[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1");
+    let output = dir.conf(&["seal", "--reason", "r", "--yes", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["command"], Value::from("seal"));
+    assert_eq!(doc["overrides"], Value::from("[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1"));
+    let data = doc["data"].as_array().unwrap();
+    assert!(data.iter().any(|c| c["change"] == "changed" && c["name"] == "molar_gas_constant" && c["new"] == "8.0 J*mol^-1*K^-1"), "{doc}");
+    assert_eq!(doc["seal"].as_str().unwrap(), FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap().seal_sha256());
+}
+
+#[test]
+fn seal_refuses_an_edit_of_source_1_exit_2() {
+    let dir = Dir::new("seal_source_1");
+    freeze_cli(&dir, &[]);
+    dir.write(FROZEN_FILE_NAME, &dir.read(FROZEN_FILE_NAME).replacen(R_VALUE, "= 8.31446261815325", 1));
+    let before = bytes(&dir);
+    let output = dir.conf(&["seal", "--reason", "x", "--yes"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(stderr(&output).contains("overrides block only"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before);
+}
+
+#[test]
+fn seal_on_a_sound_file_is_exit_0_nothing_to_do() {
+    let dir = Dir::new("seal_sound");
+    freeze_cli(&dir, &[]);
+    let before = bytes(&dir);
+    let output = dir.conf(&["seal", "--reason", "x"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stdout(&output).contains("already verifies"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before);
 }

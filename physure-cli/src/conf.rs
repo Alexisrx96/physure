@@ -8,21 +8,22 @@
 //! force: these commands exist to look at a file that may be broken or pinned to another engine.
 
 use std::collections::BTreeSet;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
 use physure_core::frozen::active::resolve_process;
+use physure_core::frozen::canonical::canonical_text;
 use physure_core::frozen::{
-    active, actor_from_env, compare, embedded_entries, ensure_valid, entries_with_origin, freeze, history_rows, inspect, now_unix, section_and_key,
-    select, set_engine_file, set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, EngineIdentity,
-    EnginePolicy, EngineState, Entry, FieldChange, FreezeOptions, Inspection, OpsError, Resolution, Side, Why,
+    active, actor_from_env, catalog_entries, compare, diff, embedded_entries, ensure_valid, entries_with_origin, freeze, history_rows,
+    inspect, now_unix, overrides_contribution, pair_changes, plan_seal, plan_update, section_and_key, select, set_engine_file,
+    set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, EngineIdentity, EnginePolicy, EngineState, Entry,
+    FieldChange, FileStamp, FreezeOptions, FrozenFile, Inspection, OpsError, Resolution, Side, Why,
 };
 use serde_json::{json, Value};
 
-/// The commands this build has.
-const COMMANDS: [&str; 6] = ["status", "show", "diff", "history", "freeze", "verify"];
-/// The commands of the design that this build does not have yet: they refuse instead of doing something else.
-const PLANNED: [&str; 2] = ["update", "seal"];
+/// The commands of `phs conf`.
+const COMMANDS: [&str; 8] = ["status", "show", "diff", "update", "seal", "history", "freeze", "verify"];
 
 const HELP: &str = "\
 phs conf: the frozen configuration (physure.frozen.conf)
@@ -39,23 +40,30 @@ USAGE:
                                force against what this build gives unfrozen here (`unfrozen` names that side); one
                                argument: that file against it. Exit 0 identical, 1 different or a file that does not
                                verify, 2 nothing to compare
+    phs conf update --reason TEXT [--engine-policy binary|build|release|record] [--yes]
+                               Adopt what this build brings (its embedded catalog, its engine) into the file in
+                               force, keeping the overrides; shows what changes, asks, writes atomically
+    phs conf seal --reason TEXT [--yes]
+                               Accept a hand edit of the overrides block (source 2) of the file in force: shows the
+                               new overrides and what they contribute, asks, re-seals
     phs conf history [FILE]    The history of the file in force (or FILE), problems first
     phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH]
                                Write physure.frozen.conf from what is in force now (default policy: build)
     phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
-    phs conf update | seal
-                               Planned; not available in this build
 
 FLAGS:
     --conf PATH                The frozen file in force (not with freeze, which writes to --out)
     --json                     One JSON document on stdout, with \"schema\": 1 and \"command\"
     --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
+    --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
     -h, --help                 This help
 
 EXIT CODES:
-    0 ok    1 a discrepancy (modified file, broken seal, --expect mismatch)
-    2 misuse, a missing required frozen file, a refused operation    3 the engine differs from the pinned one
+    0 ok (identical, for diff; nothing to do, for update and seal)
+    1 a discrepancy (modified file, broken seal, --expect mismatch, differences, a file changed while asking)
+    2 misuse, a missing required frozen file, a refused or declined operation, nothing to compare
+    3 the engine differs from the pinned one
 ";
 
 /// The arguments of `phs conf`, after the word `conf`.
@@ -192,21 +200,16 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
         "history" => (&["--conf", "--json"], 1),
         "freeze" => (&["--json", "--reason", "--engine-policy", "--out"], 0),
         "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch"], 1),
+        "update" => (&["--conf", "--json", "--reason", "--engine-policy", "--yes"], 0),
+        "seal" => (&["--conf", "--json", "--reason", "--yes"], 0),
         _ => (&[], 0),
     }
 }
 
 fn run(args: &ConfArgs) -> Outcome {
     let command = args.command.as_str();
-    if PLANNED.contains(&command) {
-        return failure(command, 2, format!("`phs conf {command}` is not available in this build; the commands are: {}", COMMANDS.join(", ")));
-    }
     if !COMMANDS.contains(&command) {
-        return failure(
-            "conf",
-            2,
-            format!("unknown command {command:?}; the commands are: {} (planned: {})", COMMANDS.join(", "), PLANNED.join(", ")),
-        );
+        return failure("conf", 2, format!("unknown command {command:?}; the commands are: {}", COMMANDS.join(", ")));
     }
     if command == "freeze" && args.conf.is_some() {
         return failure(
@@ -227,8 +230,8 @@ fn run(args: &ConfArgs) -> Outcome {
         );
     }
     // what is decided without reading anything: misuse comes before any file is read
-    if command == "freeze" && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
-        return failure(command, 2, "`phs conf freeze` needs --reason \"...\" (not empty): the history records why");
+    if ["freeze", "update", "seal"].contains(&command) && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
+        return failure(command, 2, format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
     }
     if let Some(expected) = &args.expect {
         if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -247,6 +250,8 @@ fn run(args: &ConfArgs) -> Outcome {
         "diff" => diff_command(args),
         "history" => history(args),
         "freeze" => freeze_command(args),
+        "update" => update(args),
+        "seal" => seal(args),
         _ => verify(args),
     }
 }
@@ -474,6 +479,9 @@ fn history(args: &ConfArgs) -> Outcome {
     report("history", text, fields, code)
 }
 
+/// Catalog entries, each with the origin it is shown with.
+type Listing = Vec<(Entry, String)>;
+
 /// The sections a `show` of the catalog groups several kinds under: the kind is shown with the key there.
 const POOLED_SECTIONS: [&str; 3] = ["units", "atomic_weights", "settings"];
 
@@ -484,7 +492,7 @@ fn show(args: &ConfArgs) -> Outcome {
         return failure("show", e.exit_code(), e.to_string());
     }
     let selector = args.positional.first().map_or("", String::as_str);
-    let (listed, warnings, path): (Vec<(Entry, String)>, Vec<String>, Option<PathBuf>) = match active() {
+    let (listed, warnings, path): (Listing, Vec<String>, Option<PathBuf>) = match active() {
         Err(e) => return failure("show", e.exit_code(), e.to_string()),
         Ok(Some(active)) => match entries_with_origin(&active.catalog.file) {
             Ok(found) => (found.into_iter().map(|(entry, origin)| (entry, origin.to_string())).collect(), Vec::new(), Some(active.path.clone())),
@@ -547,7 +555,7 @@ fn show(args: &ConfArgs) -> Outcome {
 
 /// The unfrozen catalog of the working directory as the runtime builds it, each entry with its origin: `embedded`
 /// when the shipped catalog has it with that value, `physure.conf` otherwise; and the warnings of that reading.
-fn unfrozen_listing() -> Result<(Vec<(Entry, String)>, Vec<String>), String> {
+fn unfrozen_listing() -> Result<(Listing, Vec<String>), String> {
     let cwd = std::env::current_dir().map_err(|e| format!("the current directory cannot be read: {e}"))?;
     let (found, warnings) = unfrozen_entries(&cwd)?;
     let shipped = embedded_entries().map_err(|problems| format!("the embedded catalog does not replay: {}", problems.join("; ")))?;
@@ -770,6 +778,183 @@ fn verify(args: &ConfArgs) -> Outcome {
     report("verify", text, fields, code)
 }
 
+/// Residual risk 1c-14 of the spec: the file must be as the plan read it. Its length and modification time now are
+/// compared with `stamp` (from the handle the plan read it through); `Err` when either moved, or when the file cannot
+/// be examined.
+fn unchanged_since(path: &Path, stamp: &FileStamp) -> Result<(), String> {
+    let now = std::fs::metadata(path).map(|metadata| FileStamp::of(&metadata)).map_err(|e| {
+        format!("{}: cannot be examined before writing ({e}); nothing written", shown(path))
+    })?;
+    if now == *stamp {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: changed since it was read (expected length {} and modification time {:?}, found {} and {:?}); nothing written: run the command again",
+            shown(path),
+            stamp.len,
+            stamp.modified,
+            now.len,
+            now.modified
+        ))
+    }
+}
+
+/// Writes a planned file in place of the one at `path`, atomically, only if that file is unchanged since the plan
+/// read it ([`unchanged_since`]). A refusal is exit 1: the file moved under the command (a discrepancy).
+fn write_planned(command: &str, path: &Path, file: &FrozenFile, stamp: &FileStamp) -> Result<(), Outcome> {
+    let text = file.render().map_err(|e| failure(command, 1, format!("the planned file does not render: {e}; nothing written")))?;
+    unchanged_since(path, stamp).map_err(|message| failure(command, 1, message))?;
+    write_atomic(path, &text, true).map_err(|e| failure(command, ops_code(&e), format!("{e}; nothing written")))
+}
+
+/// Decision 7 of the Phase 2 plan: `--yes` never asks; otherwise the question goes to stderr (stdout stays the
+/// report, or the one JSON document) and only `y` or `yes` on a terminal proceeds. Without a terminal it refuses
+/// rather than read piped input. `Err` is why nothing is written (exit 2).
+fn confirm(yes: bool, what: &str) -> Result<(), String> {
+    if yes {
+        return Ok(());
+    }
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        return Err(format!("{what}: refusing to proceed without a terminal to confirm on; pass --yes in scripts; nothing written"));
+    }
+    let _ = std::io::stdout().flush();
+    eprint!("{what}. Proceed? [y/N] ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    stdin.read_line(&mut answer).map_err(|e| format!("{what}: the answer cannot be read ({e}); nothing written"))?;
+    match answer.trim().to_ascii_lowercase().as_str() {
+        "y" | "yes" => Ok(()),
+        _ => Err(format!("{what}: declined; nothing written")),
+    }
+}
+
+/// Merges the members of `extra` into the object `into`.
+fn merge(into: &mut Value, extra: &Value) {
+    if let (Some(into), Some(extra)) = (into.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            into.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+/// The end of `update` and `seal`: the preview is printed (text) or carried in the document (JSON), the person
+/// confirms, the file is written if it did not change since it was read, and the new seal is printed.
+fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Value), file: &FrozenFile, stamp: &FileStamp) -> Outcome {
+    let (preview_text, preview_fields) = preview;
+    if !args.json {
+        print!("{preview_text}");
+    }
+    let written = confirm(args.yes, &format!("`phs conf {command}` rewrites {}", shown(path)))
+        .map_err(|message| failure(command, 2, message))
+        .and_then(|()| write_planned(command, path, file, stamp));
+    if let Err(mut outcome) = written {
+        merge(&mut outcome.json, &preview_fields);
+        outcome.json["written"] = Value::Bool(false);
+        return outcome;
+    }
+    let seal = file.seal_sha256();
+    let text = format!(
+        "wrote {}\nseal: {seal}\n  record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it\n",
+        shown(path)
+    );
+    let mut fields = json!({ "path": shown(path), "seal": seal, "written": true });
+    merge(&mut fields, &preview_fields);
+    report(command, text, fields, 0)
+}
+
+/// The catalog entries of a file, or why they cannot be shown.
+fn shown_entries(file: &FrozenFile, which: &str) -> Result<Vec<Entry>, String> {
+    catalog_entries(file).map_err(|(source, problems)| {
+        format!("the catalog of {which} does not replay with this build (source {source}: {}), so its data cannot be compared", problems.join("; "))
+    })
+}
+
+/// `phs conf update --reason R [--engine-policy P] [--yes]`: the file in force adopts this build's embedded catalog
+/// and engine (the overrides are kept). What is shown is the plan's own difference, from memory: the catalog of the
+/// file as read against the catalog of the file to write, and the `[Engine]` pairs that differ.
+fn update(args: &ConfArgs) -> Outcome {
+    let path = match target("update", args) {
+        Ok(path) => path,
+        Err(outcome) => return outcome,
+    };
+    let reason = args.reason.as_deref().unwrap_or_default().trim();
+    let actor = actor_from_env(|name| std::env::var(name).ok());
+    let plan = match plan_update(&path, reason, args.policy, engine_file().as_deref(), now_unix(), &actor) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => {
+            let text = format!("{}: nothing to update: the embedded catalog and the engine are this build's\n", shown(&path));
+            return report("update", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
+        }
+        Err(e) => return failure("update", ops_code(&e), e.to_string()),
+    };
+    let mut text = format!("update: {}\nsummary: {}\n", shown(&path), plan.summary);
+    let mut fields = json!({ "summary": plan.summary, "nothing_to_do": false });
+    match shown_entries(&plan.old, "the file as it is").and_then(|old| Ok((old, shown_entries(&plan.file, "the updated file")?))) {
+        Ok((old, new)) => {
+            let changes = diff(&old, &new);
+            let (changes_text, data) = changes_report(&changes);
+            text.push_str(&format!("data differences ({}): {}\n{changes_text}", changes.len(), summary(&changes)));
+            fields["data"] = data;
+        }
+        Err(message) => {
+            text.push_str(&format!("data differences: not shown: {message}\n"));
+            fields["data"] = Value::Null;
+            fields["data_problem"] = Value::from(message);
+        }
+    }
+    let engine = pair_changes(plan.old.engine(), plan.file.engine());
+    text.push_str(&format!("engine differences ({}):\n{}", engine.len(), field_lines(&engine)));
+    fields["engine"] = changes_json(&engine);
+    apply_plan("update", args, &path, (text, fields), &plan.file, &plan.stamp)
+}
+
+/// `phs conf seal --reason R [--yes]`: accepts a hand edit of the overrides of the file in force. The file keeps only
+/// the marker of the overrides it last sealed, not their text, so what is shown is (a) the canonical text of the
+/// overrides as they will be sealed and (b) what they contribute to the catalog (sources without them against with
+/// them); a copy of the previously sealed file can be compared with `phs conf diff`.
+fn seal(args: &ConfArgs) -> Outcome {
+    let path = match target("seal", args) {
+        Ok(path) => path,
+        Err(outcome) => return outcome,
+    };
+    let reason = args.reason.as_deref().unwrap_or_default().trim();
+    let actor = actor_from_env(|name| std::env::var(name).ok());
+    let plan = match plan_seal(&path, reason, now_unix(), &actor) {
+        Ok(Some(plan)) => plan,
+        Ok(None) => {
+            let text = format!("{}: nothing to seal: the file already verifies\n", shown(&path));
+            return report("seal", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
+        }
+        Err(e) => return failure("seal", ops_code(&e), e.to_string()),
+    };
+    let overrides = canonical_text(plan.file.sources()[1].text());
+    let mut text = format!("seal: {}\nsummary: {}\nthe overrides (source 2) as they will be sealed, canonical:\n", shown(&path), plan.summary);
+    for line in overrides.lines() {
+        text.push_str(&format!("  | {line}\n"));
+    }
+    let mut fields = json!({ "summary": plan.summary, "overrides": overrides, "nothing_to_do": false });
+    match overrides_contribution(&plan.file) {
+        Ok(changes) => {
+            let (changes_text, data) = changes_report(&changes);
+            text.push_str(&format!(
+                "what the overrides contribute to the catalog ({}): {}\n{changes_text}",
+                changes.len(),
+                summary(&changes)
+            ));
+            fields["data"] = data;
+        }
+        Err((source, problems)) => {
+            // the plan was validated, so this is not expected; said, not hidden
+            let message = format!("source {source} does not replay: {}", problems.join("; "));
+            text.push_str(&format!("what the overrides contribute: not shown: {message}\n"));
+            fields["data"] = Value::Null;
+            fields["data_problem"] = Value::from(message);
+        }
+    }
+    apply_plan("seal", args, &path, (text, fields), &plan.file, &plan.stamp)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,6 +974,56 @@ mod tests {
         assert_eq!(parse(&[]).unwrap().command, "status");
         // a value that looks like a word another command claims is a value
         assert_eq!(parse(&args(&["freeze", "--reason", "help"])).unwrap().reason.as_deref(), Some("help"));
+    }
+
+    /// Residual risk 1c-14: a file changed between the plan and the write is not overwritten.
+    #[test]
+    fn a_file_changed_since_the_plan_read_it_is_not_written() {
+        use std::time::Duration;
+        let dir = std::env::temp_dir().join(format!("physure_cli_cas_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let options = FreezeOptions {
+            cwd: &dir,
+            out: None,
+            reason: "first",
+            policy: EnginePolicy::Release,
+            engine_file: None,
+            time_unix: now_unix(),
+            actor: "t@h",
+        };
+        let (file, path) = freeze(&options).unwrap();
+        write_atomic(&path, &file.render().unwrap(), false).unwrap();
+        let read = std::fs::read_to_string(&path).unwrap();
+        let edited = read.replace(physure_core::frozen::EMPTY_OVERRIDES.trim_end(), "[Constants]\nzz_c = 3 m");
+        std::fs::write(&path, &edited).unwrap();
+        let plan = plan_seal(&path, "mine", now_unix() + 1, "t@h").unwrap().unwrap();
+        // another writer appends to the file after the plan read it: a different length
+        std::fs::write(&path, format!("{edited}\n# someone else")).unwrap();
+        let refused = write_planned("seal", &path, &plan.file, &plan.stamp).expect_err("refused");
+        assert_eq!(refused.code, 1);
+        assert!(refused.text.contains("changed since it was read") && refused.text.contains("nothing written"), "{}", refused.text);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{edited}\n# someone else"), "not overwritten");
+        // the same length as read, but written later: the modification time moved
+        std::fs::write(&path, &edited).unwrap();
+        let later = plan.stamp.modified.unwrap() + Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+        assert!(unchanged_since(&path, &plan.stamp).unwrap_err().contains("changed since it was read"));
+        assert!(write_planned("seal", &path, &plan.file, &plan.stamp).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited, "not overwritten");
+        // as it was read: written
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(plan.stamp.modified.unwrap()).unwrap();
+        assert!(write_planned("seal", &path, &plan.file, &plan.stamp).is_ok());
+        assert!(FrozenFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap().verify().is_empty());
+        // a file that is gone cannot be examined
+        let missing = dir.join("missing.conf");
+        assert!(unchanged_since(&missing, &plan.stamp).unwrap_err().contains("cannot be examined"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn yes_never_asks() {
+        assert_eq!(confirm(true, "x"), Ok(()));
     }
 
     #[test]
