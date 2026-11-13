@@ -19,7 +19,8 @@ pub struct EntryInput<'a> {
     pub engine: &'a str,
     /// `user@host`: informational, not authenticated.
     pub actor: &'a str,
-    /// Why: 1 to 500 characters on one line.
+    /// Why: 1 to 500 characters on one line, without control characters (`char::is_control`: an escape sequence in a
+    /// reason would be sealed and later echoed to a terminal).
     pub reason: &'a str,
     /// A one-line summary of what changed.
     pub diff: &'a str,
@@ -57,6 +58,12 @@ impl EntryInput<'_> {
         let length = self.reason.chars().count();
         if length == 0 || length > MAX_REASON {
             return Err(FrozenError(format!("the reason must be 1 to {MAX_REASON} characters, found {length}")));
+        }
+        if let Some(control) = self.reason.chars().find(|c| c.is_control()) {
+            return Err(FrozenError(format!(
+                "the reason must not contain a control character, found {control:?} in {:?}",
+                self.reason
+            )));
         }
         for (what, value) in [("the reason", self.reason), ("the engine", self.engine), ("the actor", self.actor), ("the diff", self.diff)] {
             one_line(what, value)?;
@@ -723,6 +730,12 @@ mod tests {
             input("freeze", "r", "2026-11-08T09:00:00Z"),
         ] {
             assert!(file.reseal(bad).is_err());
+        }
+        assert_eq!(file, fresh(), "a refused reseal leaves the file as it was");
+        // review finding 6: a control character in a reason would be sealed and echoed raw to a terminal
+        for control in ["red \u{1b}[31m", "bell\u{7}", "tab\there", "nul\u{0}", "c1 \u{9b}2J", "del\u{7f}"] {
+            let message = file.reseal(input("update", control, "2026-11-08T09:00:00Z")).unwrap_err().to_string();
+            assert!(message.contains("control character"), "{control:?}: {message}");
         }
         assert_eq!(file, fresh(), "a refused reseal leaves the file as it was");
         assert!(file.reseal(input("update", &"x".repeat(501), "2026-11-08T09:00:00Z")).is_err());

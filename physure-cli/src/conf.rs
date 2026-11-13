@@ -169,6 +169,22 @@ fn report(command: &str, text: String, fields: Value, code: i32) -> Outcome {
     Outcome { text, json, code, error: false }
 }
 
+/// `text` with every control character but the line feed written as an escape (`\x1b`, `\x07`, `\u{9b}`): what is
+/// printed for people may hold strings from a file received from elsewhere (history, origins, values, problems), and
+/// a raw escape sequence there could rewrite the terminal. The JSON document needs no such care (JSON escapes them).
+fn escape_controls(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '\n' => escaped.push('\n'),
+            c if c.is_control() && u32::from(c) < 0x80 => escaped.push_str(&format!("\\x{:02x}", u32::from(c))),
+            c if c.is_control() => escaped.push_str(&c.escape_unicode().to_string()),
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
 /// Runs `phs conf ...` (the whole argument list, `phs` and `conf` included), prints its outcome and exits.
 pub fn run_conf(args: &[String]) -> ! {
     let rest = args.get(2..).unwrap_or_default();
@@ -181,12 +197,12 @@ pub fn run_conf(args: &[String]) -> ! {
     if wants_json && !outcome.json.is_null() {
         println!("{}", serde_json::to_string_pretty(&outcome.json).unwrap_or_default());
         if outcome.error {
-            eprintln!("phs conf: {}", outcome.text);
+            eprintln!("phs conf: {}", escape_controls(&outcome.text));
         }
     } else if outcome.error {
-        eprintln!("phs conf: {}", outcome.text);
+        eprintln!("phs conf: {}", escape_controls(&outcome.text));
     } else {
-        print!("{}", outcome.text);
+        print!("{}", escape_controls(&outcome.text));
     }
     process::exit(outcome.code)
 }
@@ -232,6 +248,13 @@ fn run(args: &ConfArgs) -> Outcome {
     // what is decided without reading anything: misuse comes before any file is read
     if ["freeze", "update", "seal"].contains(&command) && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
         return failure(command, 2, format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
+    }
+    if let Some(control) = args.reason.as_deref().and_then(|r| r.chars().find(|c| c.is_control())) {
+        return failure(
+            command,
+            2,
+            format!("--reason must be one line without control characters (the history records it), found the control character {control:?}"),
+        );
     }
     if let Some(expected) = &args.expect {
         if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -559,7 +582,7 @@ fn show(args: &ConfArgs) -> Outcome {
     }
     if !args.json {
         for warning in &warnings {
-            eprintln!("phs conf: warning: {warning}");
+            eprintln!("phs conf: warning: {}", escape_controls(warning));
         }
     }
     let fields = json!({
@@ -840,7 +863,7 @@ fn confirm(yes: bool, what: &str) -> Result<(), String> {
         return Err(format!("{what}: refusing to proceed without a terminal to confirm on; pass --yes in scripts; nothing written"));
     }
     let _ = std::io::stdout().flush();
-    eprint!("{what}. Proceed? [y/N] ");
+    eprint!("{}. Proceed? [y/N] ", escape_controls(what));
     let _ = std::io::stderr().flush();
     let mut answer = String::new();
     stdin.read_line(&mut answer).map_err(|e| format!("{what}: the answer cannot be read ({e}); nothing written"))?;
@@ -864,7 +887,7 @@ fn merge(into: &mut Value, extra: &Value) {
 fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Value), file: &FrozenFile, stamp: &FileStamp) -> Outcome {
     let (preview_text, preview_fields) = preview;
     if !args.json {
-        print!("{preview_text}");
+        print!("{}", escape_controls(&preview_text));
     }
     let written = confirm(args.yes, &format!("`phs conf {command}` rewrites {}", shown(path)))
         .map_err(|message| failure(command, 2, message))
@@ -1059,6 +1082,12 @@ mod tests {
         let missing = dir.join("missing.conf");
         assert!(unchanged_since(&missing, &plan.stamp).unwrap_err().contains("cannot be examined"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn control_characters_are_escaped_and_lines_kept() {
+        assert_eq!(escape_controls("a\u{1b}[31mb\nc\td\u{7f}\u{9b}é"), "a\\x1b[31mb\nc\\x09d\\x7f\\u{9b}é");
+        assert_eq!(escape_controls("plain\n"), "plain\n");
     }
 
     #[test]

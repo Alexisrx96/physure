@@ -423,6 +423,70 @@ fn freeze_without_reason_is_exit_2_before_reading_anything() {
     assert!(!dir.path(FROZEN_FILE_NAME).exists());
 }
 
+/// Review findings 6 and 7: a reason with a control character (an escape sequence, a newline, a carriage return) is
+/// misuse, refused before anything is read, by every command that records one.
+#[test]
+fn a_reason_with_a_control_character_is_exit_2_before_reading_anything() {
+    let dir = Dir::new("reason_control");
+    // a physure.conf that would be refused (exit 1) if it were read
+    dir.write("physure.conf", "[AtomicWeights]\nFe = abc, 0.1\n");
+    for reason in ["red \u{1b}[31m", "two\nlines", "carriage\rreturn", "tab\there"] {
+        for command in [&["freeze"][..], &["update", "--yes"][..], &["seal", "--yes"][..]] {
+            let mut args = command.to_vec();
+            args.extend_from_slice(&["--reason", reason]);
+            let output = dir.conf(&args);
+            assert_eq!(output.status.code(), Some(2), "{command:?} {reason:?}: {}", text(&output));
+            assert!(stderr(&output).contains("control character"), "{command:?} {reason:?}: {}", text(&output));
+            assert!(!text(&output).contains('\u{1b}'), "echoed raw: {}", text(&output));
+        }
+    }
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
+}
+
+/// Review finding 6: a file received from elsewhere cannot rewrite the terminal through what `phs conf` prints of it.
+#[test]
+fn control_characters_from_a_file_are_printed_escaped() {
+    let dir = Dir::new("history_escape");
+    // the actor is informational and only checked to be one line, so the core seals an escape in it
+    let file = FrozenFile::new(
+        "2026-11-08T10:00:00Z",
+        FrozenParts {
+            engine: engine_pairs(&EngineIdentity::current(), EnginePolicy::Release, None).unwrap(),
+            sources: vec![Source::new("embedded", DEFAULT_PHYSURE_CONF).unwrap(), Source::new("overrides", "").unwrap()],
+            ..FrozenParts::default()
+        },
+        EntryInput {
+            time: "2026-11-08T10:00:00Z",
+            action: "freeze",
+            engine: "e\u{1b}]0;title\u{7}",
+            actor: "t\u{1b}[2J@h",
+            reason: "test",
+            diff: "d\u{1b}[31m",
+        },
+    )
+    .unwrap();
+    dir.write(FROZEN_FILE_NAME, &file.render().unwrap());
+    for args in [&["history"][..], &["status"][..], &["verify"][..]] {
+        let output = dir.conf(args);
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {}", text(&output));
+        assert!(!text(&output).contains('\u{1b}') && !text(&output).contains('\u{7}'), "{args:?}: raw: {:?}", text(&output));
+    }
+    let out = stdout(&dir.conf(&["history"]));
+    assert!(out.contains(r"t\x1b[2J@h") && out.contains(r"e\x1b]0;title\x07") && out.contains(r"d\x1b[31m"), "{out}");
+    // JSON carries the text as it is, escaped by JSON itself
+    let rows = json(&dir.conf(&["history", "--json"]))["rows"].clone();
+    assert_eq!(rows[0]["actor"], Value::from("t\u{1b}[2J@h"));
+    // a reason edited by hand (the file no longer verifies; the row is unverified): escaped too
+    let edited = dir.read(FROZEN_FILE_NAME).replacen("reason = test", "reason = te\u{1b}[8mst", 1);
+    dir.write(FROZEN_FILE_NAME, &edited);
+    for args in [&["history"][..], &["status"][..], &["verify"][..], &["diff"][..]] {
+        let output = dir.conf(args);
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {}", text(&output));
+        assert!(!text(&output).contains('\u{1b}'), "{args:?}: raw: {:?}", text(&output));
+    }
+    assert!(stdout(&dir.conf(&["history"])).contains(r"te\x1b[8mst"));
+}
+
 #[test]
 fn freeze_with_conf_is_exit_2() {
     let dir = Dir::new("freeze_conf");
