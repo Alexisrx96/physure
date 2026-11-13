@@ -206,7 +206,24 @@ fn an_unreadable_engine_block_is_exit_1() {
     let text = fs::read_to_string(&path).unwrap();
     fs::write(&path, text.replacen("policy = release\n", "policy = release\nenforce = never\n", 1)).unwrap();
     let inspection = inspect(&path, None);
-    assert!(matches!(&inspection.engine, Some(EngineState::Unreadable(m)) if m.contains("enforce")), "{:?}", inspection.engine);
+    // the edit breaks the seal, so the block is not vouched for and its state is not reported (review finding 4)
+    assert!(!inspection.problems.is_empty());
+    assert_eq!(inspection.engine, None);
+    assert_eq!(inspection.exit_code(), 1);
+}
+
+/// Review finding 4: the engine state of a file that does not verify would describe a block nothing vouches for (an
+/// edit can make a tampered block "match" the running build), so it is not computed.
+#[test]
+fn the_engine_of_a_file_that_does_not_verify_is_not_checked() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, None);
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(&path, text.replacen("policy = release\n", "policy = record\n", 1)).unwrap();
+    assert!(matches!(engine_state(&read(&path), None), EngineState::Matches { policy: EnginePolicy::Record, .. }));
+    let inspection = inspect(&path, None);
+    assert!(!inspection.problems.is_empty(), "the block is sealed");
+    assert_eq!(inspection.engine, None);
     assert_eq!(inspection.exit_code(), 1);
 }
 

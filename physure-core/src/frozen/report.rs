@@ -45,6 +45,8 @@ pub struct Inspection {
     pub file: Option<FrozenFile>,
     /// `FrozenFile::verify()`, one problem per string. Empty: the seal and the chain hold.
     pub problems: Vec<String>,
+    /// The engine block against the running build ([`engine_state`]). `None` when the file is unreadable or **does not
+    /// verify**: a block the seal does not vouch for is not checked.
     pub engine: Option<EngineState>,
     /// `[Environment]` of the file (`old`) against `environment_pairs()` of this machine (`new`): informational, outside
     /// the seal, never part of the exit code.
@@ -81,9 +83,11 @@ pub fn inspect(path: &Path, engine_file: Option<&Path>) -> Inspection {
         }
     };
     inspection.problems = file.verify().iter().map(ToString::to_string).collect();
-    inspection.engine = Some(engine_state(&file, engine_file));
     inspection.environment = pair_changes(file.environment(), &environment_pairs());
+    // the engine block of a file that does not verify is vouched for by nothing: an edit can make it "match" this
+    // build, so its state is not computed (`engine` stays `None`)
     if inspection.problems.is_empty() {
+        inspection.engine = Some(engine_state(&file, engine_file));
         match replay_file(&file) {
             Ok((registry, constants, collected)) => {
                 inspection.atomic_weight_edition = Some(registry.atomic_weight_edition());

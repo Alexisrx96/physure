@@ -464,6 +464,27 @@ fn verify_names_the_modified_value() {
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
 }
 
+/// Review finding 4: an edited `[Engine]` block breaks the seal; its state against this build is not reported, so a
+/// tampered block can never read as "matches".
+#[test]
+fn verify_of_a_tampered_engine_block_does_not_report_the_engine_as_matching() {
+    let dir = Dir::new("verify_engine_tampered");
+    freeze_cli(&dir, &[]);
+    let frozen = dir.read(FROZEN_FILE_NAME);
+    let edited = frozen.replacen("policy = release", "policy = record", 1);
+    assert_ne!(edited, frozen, "the [Engine] block was not found");
+    dir.write(FROZEN_FILE_NAME, &edited);
+    let output = dir.conf(&["verify", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["verified"], Value::Bool(false));
+    assert_eq!(doc["engine_matches"], Value::Bool(false));
+    assert_eq!(doc["engine"], Value::Null);
+    let output = dir.conf(&["status"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).contains("engine: not checked (the file does not verify)"), "{}", text(&output));
+}
+
 #[test]
 fn verify_json_schema() {
     let dir = Dir::new("verify_json");

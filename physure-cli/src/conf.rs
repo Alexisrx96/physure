@@ -294,7 +294,7 @@ fn engine_json(engine: Option<&EngineState>) -> Value {
 
 fn engine_text(engine: Option<&EngineState>) -> String {
     match engine {
-        None => "engine: not read\n".to_string(),
+        None => "engine: not checked (the file does not verify)\n".to_string(),
         Some(EngineState::Unreadable(message)) => format!("engine: the [Engine] block does not read: {message}\n"),
         Some(EngineState::Matches { policy, pinned }) => format!("engine: matches (policy {}, pinned {pinned})\n", policy.as_str()),
         Some(EngineState::Differs { policy, differences }) => {
