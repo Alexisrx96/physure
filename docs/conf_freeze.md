@@ -2,7 +2,7 @@
 
 This guide is for sites where a calculation, once validated, must not change because the software was
 upgraded: factories, laboratories, anything under an audit. It says what a frozen configuration is, what
-the `phs conf` commands do (as built in Phase 2 of the
+the `phs conf` commands do (as built in Phases 2 and 3 of the
 [design](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md)),
 and, just as plainly, what a frozen configuration does **not** pin.
 
@@ -74,6 +74,12 @@ pointer_width = 64
 cpus = 12
 
 [Witness]
+builtin.chem.arrhenius = 3fe7365a4517c8e5:0000000000000000:s^-1
+builtin.chem.balance_propane_combustion = text=1 C3H8 + 5 O2 -> 3 CO2 + 4 H2O
+...
+builtin.units.foot_to_metre = 3fd381d7dbf487fd:0000000000000000:m
+...
+user.check = sha256:6109c6c0875ac66bf44c0313088b6a1693b0d5fa4efaa2eab87b131db707d575
 
 [History.1]
 time = 2026-11-13T04:59:07Z
@@ -86,7 +92,7 @@ actor = alice@lab-pc
 reason = initial validation
 old_content_sha256 =
 new_content_sha256 = a1b2c48e...
-diff = embedded 847 lines; overrides 2 lines
+diff = embedded 847 lines; overrides 2 lines; witnesses: 47 built-in, 1 user
 prev_entry_sha256 =
 entry_sha256 = 76202900...
 
@@ -97,6 +103,10 @@ entry_sha256 = 76202900...
 [Constants]
 molar_gas_constant = 8.0 J*mol^-1*K^-1
 @@ end source 2
+@@ witness check sha256=ceac0101...
+x = 2 m
+x / 4 s
+@@ end witness
 ```
 
 * **The sources are kept verbatim, separately and in order**, not merged: source 1 is the catalog the
@@ -107,7 +117,9 @@ molar_gas_constant = 8.0 J*mol^-1*K^-1
 * **Source 2 is the one block meant to be edited by hand.** After editing it, run `phs conf seal`.
 * **`[Engine]`** pins the engine that computes (section 5).
 * **`[Environment]`** records the machine. It is informational, outside the seal; differences are warnings.
-* **`[Witness]`** is empty: witnesses (reference calculations recomputed bit for bit) are Phase 3.
+* **`[Witness]`** records the witnesses (section 9): the built-in battery as `builtin.<id>` and each user
+  witness as `user.<name>`, whose script is kept after the sources in an `@@ witness NAME` block. Both are
+  inside the seal.
 * **The history** (`[History.n]`) has one entry per `freeze`, `update` and `seal`, each chained to the
   previous one by its hash: deleting, reordering or editing an entry breaks the chain. Each entry records
   the policy, the pinned identity and the hash of the `[Engine]` block as it was at that moment. `actor`
@@ -135,9 +147,9 @@ The exit codes are the same for all of them:
 | Code | Meaning |
 | --- | --- |
 | `0` | ok (identical, for `diff`; nothing to do, for `update` and `seal`) |
-| `1` | a discrepancy: a modified or unreadable file, a broken seal or chain, an `--expect` mismatch, differences (`diff`), sources that do not replay, a file changed while the command was asking |
-| `2` | misuse (an unknown command or flag, a missing `--reason` or one with a control character, a malformed `--expect`, a FILE and `--conf` together), a missing required frozen file or a `--conf`/`PHYSURE_CONF` that names no file, a refused operation, a declined confirmation, no terminal and no `--yes`, `--json` without `--yes` (`update`, `seal`), nothing to compare |
-| `3` | the engine differs from the one the file pins, and that is the only discrepancy (and `seal` of a file pinned to another engine) |
+| `1` | a discrepancy: a modified or unreadable file, a broken seal or chain, an `--expect` mismatch, differences (`diff`), sources that do not replay, a file changed while the command was asking; a witness that differs, is missing or could not be evaluated, a file that records no built-in witness (`verify --run`); a witness change `update` or `seal` was not told to accept |
+| `2` | misuse (an unknown command or flag, a missing `--reason` or one with a control character, a malformed `--expect`, a FILE and `--conf` together), a missing required frozen file or a `--conf`/`PHYSURE_CONF` that names no file, a refused operation, a declined confirmation, no terminal and no `--yes`, `--json` without `--yes` (`update`, `seal`), nothing to compare, a witness script `freeze` cannot read, name or evaluate cleanly, an `--accept-witness-changes` KEY that did not change |
+| `3` | the engine differs from the one the file pins, and that is the only discrepancy (and `seal` of a file pinned to another engine; `verify --run` then evaluates nothing) |
 
 Misuse is decided before any file is read. A FILE and `--conf` together (`verify A --conf B`) are misuse:
 which file the command acts on would be ambiguous.
@@ -149,7 +161,7 @@ JSON documents carry the strings as they are (JSON escapes them).
 ### 4.1 `phs conf` / `phs conf status`
 
 Which configuration is in force and why; whether it verifies; its seal, creation date, engine state,
-number of history entries and atomic-weight edition; and the warnings: an ignored `physure.conf`, a
+number of history entries, recorded witnesses (`builtin.*` and `user.*`) and atomic-weight edition; and the warnings: an ignored `physure.conf`, a
 missing required frozen file, environment differences.
 
 ```console
@@ -159,6 +171,7 @@ file: /srv/lab/physure.frozen.conf
 seal: b1844aad0461a8b15bae3505155eb2b2c3333c3421bb3fd72625aab8c3326658
 created: 2026-11-13T04:59:07Z
 history: 1 entries
+witnesses: 47 built-in, 1 user recorded
 verification: the seal, the hashes and the chain hold
 engine: matches (policy release, pinned 0.3.0+unknown)
 atomic-weight edition: standard-2024
@@ -201,18 +214,23 @@ Exit: `show` first requires the configuration in force to be usable, so a broken
 code (`1` integrity, `2` resolution, `3` engine); `2` a selector that matches nothing (the message lists the
 sections); `1` an unfrozen `physure.conf` that cannot be read as text.
 
-### 4.3 `phs conf freeze --reason TEXT [--engine-policy P] [--out PATH]`
+### 4.3 `phs conf freeze --reason TEXT [--engine-policy P] [--out PATH] [--witness FILE.phs]...`
 
 Writes `physure.frozen.conf` (in the working directory, or at `--out`) from what is in force now
 unfrozen: source 1 the embedded catalog, source 2 the working directory's `physure.conf` (or an empty
-overrides block). It refuses to overwrite an existing frozen file: that is `update` or `seal`.
+overrides block). It refuses to overwrite an existing frozen file: that is `update` or `seal`. It records
+the built-in witness battery and each `--witness` script (section 9), evaluated under the file it is about
+to write, never under the unfrozen catalog (so `freeze` works under `PHYSURE_REQUIRE_FROZEN=1` with no file
+yet). The refusals (a file already in force, an existing target, a policy, overrides that do not read) come
+before anything is evaluated.
 
 ```console
-$ phs conf freeze --reason "initial validation" --engine-policy release
+$ phs conf freeze --reason "initial validation" --engine-policy release --witness check.phs
 wrote /srv/lab/physure.frozen.conf
 seal: b1844aad0461a8b15bae3505155eb2b2c3333c3421bb3fd72625aab8c3326658
   record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it
 engine: 0.3.0+unknown (policy release)
+witnesses: 47 built-in, 1 user recorded
 ```
 
 Without `--engine-policy` the default is `build` when this `phs` names its commit and `binary` when it does
@@ -232,14 +250,18 @@ newlines or carriage returns): `freeze`, `update` and `seal` refuse anything els
 any file.
 
 Exit: `0` written; `2` a frozen file already in force or at the target, a missing `--reason` or one with a
-control character, `--conf` given, a policy that cannot be recorded; `1` a `physure.conf` that does not read strictly, an I/O error.
+control character, `--conf` given, a policy that cannot be recorded, a `--witness` script that cannot be read
+(missing, not UTF-8, over 1 MiB), whose name does not fit or is taken twice, or that does not evaluate cleanly
+(the findings are listed), a built-in case that could not be evaluated (a panic or a limit, naming the
+case); `1` a `physure.conf` that does not read strictly, an I/O error. Nothing is written on any refusal.
 
-### 4.4 `phs conf verify [FILE] [--expect SEAL]`
+### 4.4 `phs conf verify [FILE] [--expect SEAL] [--run [--timeout-ms N]]`
 
 Recomputes the hashes, the history chain and the seal of FILE (default: the file in force), checks the
 engine, replays the sources, and reports environment differences. With `--expect`, it also compares the
 file's seal with the one you recorded elsewhere: the comparison holds only when the file verifies
-**and** its seal equals SEAL (case does not matter).
+**and** its seal equals SEAL (case does not matter). With `--run`, it also evaluates the witnesses again
+under FILE and compares them bit for bit with what FILE records (section 9.4).
 
 ```console
 $ phs conf verify --expect b1844aad0461a8b15bae3505155eb2b2c3333c3421bb3fd72625aab8c3326658
@@ -266,7 +288,8 @@ catalog: not replayed (the file does not verify)
 ```
 
 Exit: as `status` (`0`, `1`, `3`); `1` an `--expect` mismatch, or a FILE that does not exist; `2` an
-`--expect` that is not 64 hexadecimal characters, no FILE and no file in force, or a FILE and `--conf`.
+`--expect` that is not 64 hexadecimal characters, no FILE and no file in force, or a FILE and `--conf`,
+`--timeout-ms` without `--run`. With `--run`: section 9.4.
 
 ### 4.5 `phs conf diff [A] [B]`
 
@@ -311,23 +334,29 @@ Exit: `0` identical (whatever the environment); `1` different in data or engine,
 that cannot be read; `2` no argument and no frozen file in force ("nothing to compare"), or a resolution
 error.
 
-### 4.6 `phs conf update --reason TEXT [--engine-policy P] [--yes]`
+### 4.6 `phs conf update --reason TEXT [--engine-policy P] [--accept-witness-changes all|KEY[,KEY...]] [--yes]`
 
 Adopts what the installed build brings (its embedded catalog as the new source 1, its engine in
 `[Engine]`) into the file in force, **keeping the overrides**. It shows the difference the update makes
 (the catalog of the file as it is against the catalog of the file it will write, and the `[Engine]` pairs
-that change), asks for confirmation, writes atomically (a temporary file and a rename) and appends an
-`update` entry to the history. If there is nothing new it says so and writes nothing:
+that change) and the witnesses as recorded against evaluated under the file it will write (section 9.5),
+asks for confirmation, writes atomically (a temporary file and a rename) and appends an `update` entry to
+the history. If there is nothing new it says so, evaluates nothing and writes nothing:
 
 ```console
 $ phs conf update --reason "adopt 0.3.1"
-/srv/lab/physure.frozen.conf: nothing to update: the embedded catalog and the engine are this build's
+/srv/lab/physure.frozen.conf: nothing to update: the embedded catalog and the engine are this build's, and the built-in witnesses are recorded
 ```
+
+A file that records no built-in witness (every file made before Phase 3) is never "nothing to update":
+`phs conf update --reason "record the witness battery"` records the battery, without
+`--accept-witness-changes` (every case is new, nothing validated changes), and its summary says
+`witnesses: battery not recorded`. This is how such a file gets the witnesses that `verify --run` needs.
 
 `--engine-policy` changes the policy at the same time; the change is recorded in the history. This is
 also the only way to run a file on another engine: there is no override for evaluating.
 
-### 4.7 `phs conf seal --reason TEXT [--yes]`
+### 4.7 `phs conf seal --reason TEXT [--accept-witness-changes all|KEY[,KEY...]] [--yes]`
 
 Accepts a hand edit of the overrides block (source 2). An edit of any other part is refused (exit 2) with
 what `verify` found. A file pinned to another engine is refused too (exit 3, `1` if its `[Engine]` block
@@ -337,10 +366,13 @@ the edit aside, update, then edit again and seal. `seal` shows:
 
 1. the full canonical text of the overrides as they will be sealed, and
 2. **what they contribute to the catalog**: the entry difference between the catalog the sources build
-   without the overrides and with them.
+   without the overrides and with them, and
+3. the witnesses as recorded against evaluated under the file it will write (section 9.5): an edit that
+   changes a validated result is refused (exit 1) until you accept it. The engine check comes first: a file
+   pinned to another engine is refused (exit 3) before anything is evaluated.
 
 ```console
-$ phs conf seal --reason "add the lab's speed of sound" --yes
+$ phs conf seal --reason "add the lab's speed of sound" --accept-witness-changes all --yes
 seal: /srv/lab/physure.frozen.conf
 summary: overrides edited by hand: 619a3b4b5d3f -> eab825c66f60
 the overrides (source 2) as they will be sealed, canonical:
@@ -354,10 +386,16 @@ what the overrides contribute to the catalog (4): constant +1 -0 ~1; constant_me
   constant_meta:
     + lab_speed_of_sound = 343 m/s None None
     ~ molar_gas_constant: 8.31446261815324 J*mol^-1*K^-1 None None -> 8.0 J*mol^-1*K^-1 None None
+witnesses: as recorded (47 built-in, 1 user) against evaluated under the file to be written:
+...
 wrote /srv/lab/physure.frozen.conf
 seal: 13a40b21d253887e12bea347e4efc910433c240665b5b058907e9f5a039b8c82
   record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it
+history: overrides edited by hand: 619a3b4b5d3f -> eab825c66f60; witnesses: 3 changed, 0 new, 0 missing; changed: builtin.chem.arrhenius, builtin.chem.clausius_clapeyron_water, builtin.const.molar_gas_constant; old [Witness] sha256 b658378c3ad1
 ```
+
+The `molar_gas_constant` edit changes three witnesses, so this run passed `--accept-witness-changes all`;
+section 9.5 shows the refusal without it.
 
 This is **not** a before/after of your edit: the file keeps only the hash of the overrides it last sealed,
 not their text, so the earlier overrides cannot be shown from the file alone. To see exactly what an edit
@@ -375,20 +413,21 @@ changes, keep a copy of the file as it was last sealed and give it to `phs conf 
   ask: `--json` needs `--yes` to write. Without `--yes` they refuse with exit 2, the preview inside the
   document (`"written": false`).
 * **A file that changes while the prompt waits is not overwritten.** The command remembers the length and
-  modification time of the file as it read it; just before writing it checks them again and, if either
-  moved, refuses with exit 1 (`changed since it was read ... nothing written: run the command again`).
-  Nothing is written, and the edit made by someone else is kept. Its limits: it compares length and
-  modification time, not content, so on file systems with a coarse modification time (FAT and exFAT keep
-  two seconds; some network shares) an edit of the same length made within that interval is not seen and
-  is overwritten; and a short window remains between the check and the write.
+  modification time of the file as it read it, and the SHA-256 of the bytes it read; just before writing it
+  takes all three again and, if any moved, refuses with exit 1 (`changed since it was read ... nothing
+  written: run the command again`). Nothing is written, and the edit made by someone else is kept. Because
+  the bytes are hashed, an edit of the same length that keeps the modification time (a coarse file system
+  such as FAT or exFAT, a time restored by hand) is seen too. Its limit: a short window remains between that
+  check and the rename, and an edit made in it is overwritten (there is no lock).
 * **A `physure.frozen.conf` that is a symbolic link is replaced by a regular file** when `update` or `seal`
   writes it (they write a temporary file and rename it over the path); the link's target keeps the old
   content. Point `--conf` or `PHYSURE_CONF` at the real file instead of a link.
 
 Exit for both: `0` written, or nothing to do; `2` no file in force, a missing `--reason`, a refused plan
 (for example an edit outside the overrides), a declined confirmation, no terminal and no `--yes`, `--json`
-without `--yes`; `3` (`seal`) the file pins another engine; `1` the file changed while asking, a file that
-does not read, an I/O error (nothing written).
+without `--yes`, an `--accept-witness-changes` KEY that did not change; `3` (`seal`) the file pins another
+engine; `1` the file changed while asking, a file that does not read, an I/O error, a witness that differs
+or is missing and was not accepted, a witness that could not be evaluated (nothing written).
 
 ### 4.9 `phs conf history [FILE]`
 
@@ -424,14 +463,14 @@ stderr). The fields of each command:
 | Command | Fields |
 | --- | --- |
 | `status` | `frozen`; unfrozen: `physure_conf` (the overlay's path or `null`), `warnings`; frozen: `why` (`--conf`, `PHYSURE_CONF`, `discovery`), `warnings` and the inspection fields below |
-| `verify` | the inspection fields, and `seal_matches` (`true`/`false` with `--expect`, else `null`) |
-| inspection fields | `path`, `seal`, `created`, `history_entries`, `verified`, `problems` (strings), `engine` (`null` when the file does not verify), `engine_matches`, `catalog_problems`, `atomic_weight_edition`, `environment` (`[{key, old, new}]`, old = recorded, new = here), `sources` (`[{origin, sha256}]`); a file that cannot be read has only `path`, `unreadable` (the message), `verified: false`, `engine_matches: false` |
+| `verify` | the inspection fields, and `seal_matches` (`true`/`false` with `--expect`, else `null`); with `--run`: `witnesses` (`{checked, match, differs, missing, new, errors}`, section 9.4, or `null` when nothing was evaluated), `witnesses_ok`, `witness_warnings`, and `witnesses_not_run` (why) when nothing was evaluated |
+| inspection fields | `path`, `seal`, `created`, `history_entries`, `witnesses_recorded` (`{builtin, user}`), `verified`, `problems` (strings), `engine` (`null` when the file does not verify), `engine_matches`, `catalog_problems`, `atomic_weight_edition`, `environment` (`[{key, old, new}]`, old = recorded, new = here), `sources` (`[{origin, sha256}]`); a file that cannot be read has only `path`, `unreadable` (the message), `verified: false`, `engine_matches: false` |
 | `engine` | `null`, `{"state": "matches", "policy", "pinned"}`, `{"state": "differs", "policy", "differences": [strings]}` or `{"state": "unreadable", "message"}` |
 | `show` | `frozen`, `path` (the frozen file or `null`), `selector`, `entries` (`[{section, key, kind, value}]`, plus `origin` with `--origin`), `warnings` |
-| `freeze` | `path`, `seal`, `engine` (the short identity), `policy`, `sources` |
+| `freeze` | `path`, `seal`, `engine` (the short identity), `policy`, `sources`, `witnesses` (`{builtin, user}`: how many were recorded), `warnings` |
 | `diff` | `a`, `b` (labels), `identical` (data and engine; the environment is not part of it), `environment_identical`, `data` (`[{change, kind, name, old, new}]`, `change` one of `added`, `removed`, `changed`; `old` or `new` is `null` on the side that lacks the entry), `engine` and `environment` (`[{key, old, new}]`), `summary`, `warnings`, `a_problems`, `b_problems` |
-| `update` | `path`, `written`, `nothing_to_do`, and when there is a plan: `summary`, `data` (as in `diff`, or `null` with `data_problem`), `engine`, and `seal` once written |
-| `seal` | `path`, `written`, `nothing_to_do`, and when there is a plan: `summary`, `overrides` (the canonical text), `data` (what the overrides contribute, or `null` with `data_problem`), and `seal` once written |
+| `update` | `path`, `written`, `nothing_to_do`, and when there is a plan: `summary`, `data` (as in `diff`, or `null` with `data_problem`), `engine`, `witnesses` (as for `verify --run`), `witnesses_rerecorded`, `witness_warnings`, `refused: "witnesses"` when the witness rule refused, and `seal` and `history_diff` once written |
+| `seal` | `path`, `written`, `nothing_to_do`, and when there is a plan: `summary`, `overrides` (the canonical text), `data` (what the overrides contribute, or `null` with `data_problem`), `witnesses`, `witnesses_rerecorded`, `witness_warnings`, `refused: "witnesses"` when the witness rule refused, and `seal` and `history_diff` once written |
 | `history` | `path`, `problems`, `rows` (`[{n, time, action, actor, reason, engine, policy, pinned, diff, engine_block_changed, pin_change, unverified}]`); a file that cannot be read has `unreadable` and empty `rows` |
 | `conf` (`phs conf --help --json`) | `help` (the usage text) |
 
@@ -520,10 +559,11 @@ State these limits in your audit documentation.
   torch); extra arguments given to the compiler after `--` in `cargo rustc`; `RUSTC_WRAPPER`; dependency
   overrides (`paths` and `[patch]` through `--config` or `~/.cargo`, source replacement, vendoring); custom
   profiles, which report themselves as `debug` or `release`.
-* **What is frozen is data**; algorithms are identified, pinned and (from Phase 3) witnessed, not preserved.
+* **What is frozen is data**; algorithms are identified, pinned and witnessed (section 9), not preserved.
   To reproduce a result years later, keep the binary that `[Engine]` names.
 * **Environment differences are warnings**, never a discrepancy (not for `status`, `verify` or `diff`):
-  bit-for-bit reproducibility across machines is not promised.
+  bit-for-bit reproducibility across machines is not promised. The witnesses are how the *consequence* of a
+  difference is seen: `verify --run` reports a result whose bits moved (section 9.6).
 * **Not frozen yet** (Phase 4 moves each into the catalog): the exchange rates of `physure.ext.currency`
   (literals in Python), the default number of Monte Carlo samples (a literal in the core), the unit systems
   `imperial.conf` and `international.conf` (read by Python only), and the Python chemistry tables
@@ -546,8 +586,9 @@ A single `phs` command reads the file in force afresh every time it runs. A proc
 ## 7. The workflow
 
 1. **Freeze** the configuration you validated:
-   `phs conf freeze --reason "validation VR-2026-14" --engine-policy build` (or `binary`/`release`/`record` on a build
-   without a commit). Record the printed seal in your quality system.
+   `phs conf freeze --reason "validation VR-2026-14" --engine-policy build --witness validation.phs` (or
+   `binary`/`release`/`record` on a build without a commit; `--witness` once per script of your own, or not at
+   all). Record the printed seal in your quality system, and run `phs conf verify --run`.
 2. **Change the overrides** only by editing source 2 of `physure.frozen.conf`; `phs conf verify` now says
    what changed (exit 1), and every other `phs` command refuses to run until the edit is sealed.
 3. **Seal** the edit: `phs conf seal --reason "..."`. Review the overrides and what they contribute,
@@ -558,7 +599,12 @@ A single `phs` command reads the file in force afresh every time it runs. A proc
    phs conf diff`. (Under every policy but `record`, a new version of `phs` refuses to evaluate with exit 3 until step 6: the pin no longer matches.)
 5. **Diff**: `phs conf diff` shows what the new version would change (data, engine, environment).
 6. **Update**, if and when your process approves it: `phs conf update --reason "adopt 0.3.1, change CR-77"`.
-   The overrides are kept, the history records the update, and the new seal is printed: record it.
+   The preview ends with the witnesses evaluated under the updated file: a validated result that would
+   change refuses until you review it, keep a copy of the file and pass `--accept-witness-changes`. The
+   overrides are kept, the history records the update, and the new seal is printed: record it.
+7. **Check** on every machine that evaluates: `phs conf verify --run`. It is also the check when there was
+   nothing to update (a build of the same version under `release` or `record`), since `update` then
+   evaluates nothing.
 
 `phs conf history` shows the whole trail at any time. There is no `unfreeze`: deleting the file does it,
 and with `PHYSURE_REQUIRE_FROZEN=1` that fails closed.
@@ -570,12 +616,270 @@ and with `PHYSURE_REQUIRE_FROZEN=1` that fails closed.
   file in force. They never silently use the unfrozen catalog.
 * **WebAssembly ignores frozen files**: it has no file system, environment or working directory, so its
   configuration is always the unfrozen one.
-* **Witnesses are Phase 3**: `freeze --witness FILE.phs` (reference calculations stored bit for bit) and
-  `verify --run` (recompute them under the frozen configuration) are not accepted yet; today they are an
-  unknown flag (exit 2).
+* **Witnesses run in `phs` only**: the bindings do not evaluate them (Phase 5).
+* **Next, Phase 4**: the table of what is and is not frozen (`docs/conf_coverage.md`) and the move of the
+  numbers that still live in code (section 6) into the catalog.
 
 The implementation: the commands are in
 [`physure-cli/src/conf.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/conf.rs#L28), and
 everything they decide is in the core, for example
 [`inspect`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/report.rs#L64) and
 [`compare`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/report.rs#L300).
+
+## 9. Witnesses
+
+A frozen file fixes the data and identifies the engine; **witnesses pin behaviour**. A witness is a
+calculation whose result `freeze` stores bit for bit in the sealed `[Witness]` block and that
+`phs conf verify --run` evaluates again under the file. They catch what the engine pin cannot see: the
+same release on another CPU or C library giving other last digits, a dependency bump the version string
+does not reflect, a change of code that the policy accepts (`release`, `record`), an override that moves a
+validated result.
+
+### 9.1 What is recorded, and how
+
+Each witness is one `[Witness]` pair. The key is `builtin.<id>` for a case of the built-in battery and
+`user.<name>` for a script of your own. The value has one of four forms, each prefix being the start of the
+**whole** value:
+
+| Value | What it is |
+| --- | --- |
+| `<mean>:<u>:<unit>` | A number: the IEEE-754 bit patterns of the mean and of the standard uncertainty, 16 lowercase hexadecimal digits each, then the unit text the interpreter prints (it may be empty, and it may hold `:`: the value is split at its first two colons). No uncertainty is `0000000000000000`. Example: `builtin.units.foot_to_metre = 3fd381d7dbf487fd:0000000000000000:m`. The mean is the magnitude as shown (`Quantity::display_parts`: the scale of an anonymous compound unit is folded in). |
+| `text=<one line>` | A result that is not a number: a balancing, `text=1 C3H8 + 5 O2 -> 3 CO2 + 4 H2O` (every coefficient an integer, 1 included, the species in the order of the input, single spaces). |
+| `failed=<one line>` | A case that legitimately returned an error under this configuration (an atomic-weight table of your own without Ca, a constant your overrides removed): the first line of the error. It is recorded and compared like any value, and it does not block `freeze`. |
+| `sha256:<64 hex>` | A user witness: the SHA-256 of its canonical result (section 9.3). Only `user.*` keys hold it. |
+
+`verify` checks the block's structure without evaluating anything: a key that is neither `builtin.<id>` nor
+`user.<name>`, or a value that does not read, is a problem (`the [Witness] entry ... is not a witness`,
+exit 1), and every `user.*` key must name a script of the file and every script a key.
+
+Everywhere (`freeze`, `verify --run`, `update`, `seal`) the witnesses are evaluated in one order: the
+battery in id order, then the user scripts in file order.
+
+### 9.2 The built-in battery
+
+This release has **47 cases**. **Ids are versioned**: a release may add cases, and it never changes what an
+id computes; a case a newer library adds is *new* for an older file, a case an older file records and the
+running build lacks is *missing*. Each case is checked in the test suite against a reference that does not
+come from the engine
+([`physure-core/tests/battery_reference.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/tests/battery_reference.rs#L1));
+the cases themselves are in
+[`physure-core/src/frozen/battery/`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/battery/mod.rs#L81).
+
+| Area | Ids (each prefixed `builtin.`) | The reference the tests use |
+| --- | --- | --- |
+| units (12) | `units.foot_to_metre`, `units.kmh_to_ms`, `units.degc_to_k_25`, `units.degf_to_degc_212`, `units.db_20_to_ratio`, `units.psi_to_pa`, `units.kwh_to_j`, `units.ev_to_j`, `units.atm_to_kpa`, `units.cal_th_to_j`, `units.nmi_per_h_to_ms`, `units.ph_7_to_ratio` | NIST SP 811 (2008), Appendix B.8 and B.9; the SI Brochure, 9th edition (2019); pH: IUPAC Gold Book |
+| constants (6) | `const.molar_gas_constant`, `const.boltzmann_constant`, `const.planck_constant`, `const.avogadro_constant`, `const.speed_of_light_in_vacuum`, `const.elementary_charge` | the SI Brochure, Table 1, and CODATA 2022 (exact since the 2019 SI) |
+| uncertainty (11) | `unc.sum_correlated`, `unc.sum_uncorrelated`, `unc.product_first_order`, `unc.quotient_first_order`, `unc.power_first_order`, `unc.montecarlo_seed_1`, `unc.unscented_square`, `unc.gum_h1_uc`, `unc.gum_h1_nu_eff`, `unc.expanded_k_p95`, `unc.welch_satterthwaite_g41` | first order: closed forms (GUM 5.1.2, 5.2.2); JCGM 100:2008 H.1, the end gauge (u_c 32 nm, nu_eff 16.7, k 2.12 at 95 %) and G.4.1 (nu_eff 19.0); Monte Carlo against the exact moments of the product within five standard errors (JCGM 101:2008, 7.2); unscented against the moments of `x^2` |
+| statistics (8) | `stat.t_p95_nu1`, `stat.t_p95_nu2`, `stat.t_p95_nu5`, `stat.t_p95_nu10`, `stat.t_p95_nu30`, `stat.t_p95_nu100`, `stat.t_p99_nu10`, `stat.t_p99_nu100` | the Student-t table of the NIST/SEMATECH e-Handbook of Statistical Methods, 1.3.6.7.2 (JCGM 100:2008, Table G.2), within 5e-5 relative |
+| chemistry (10) | `chem.molar_mass_h2o`, `chem.molar_mass_glucose`, `chem.molar_mass_calcium_hydroxide`, `chem.molar_mass_iron_sulfate`, `chem.mass_to_moles_nacl`, `chem.balance_propane_combustion`, `chem.balance_iron_oxide_reduction`, `chem.arrhenius`, `chem.clausius_clapeyron_water`, `chem.gibbs_298` | CIAAW 2024 standard atomic weights, summed by hand; the textbook coefficients; closed forms with the catalog's gas constant |
+
+**What the cases read.** Every case reads units, constants and atomic weights through the configuration it
+is evaluated under, never through a catalog of its own, so an override shows in the witnesses that depend on
+it:
+
+* every conversion reads both of its units from the catalog; every `const.*` case is the catalog's
+  `[Constants]` entry;
+* the gas constant `molar_gas_constant` is read by `const.molar_gas_constant`, `chem.arrhenius` and
+  `chem.clausius_clapeyron_water` (an edit of R changes these three, as the example of section 4.7 shows);
+* the atomic weights (the selected edition and your `[AtomicWeights]`) are read by the four molar masses and
+  `chem.mass_to_moles_nacl`; O by `h2o`, `glucose`, `calcium_hydroxide` and `iron_sulfate`; an element the
+  table lacks is a recorded `failed=`;
+* **settings:** the only one a case depends on is the propagation mode, and every `unc.*` case and every
+  `chem.*` case that combines uncertain quantities pins its own on its thread (`correlated`, or the mode it
+  is named after). The file's `[Settings]` (`propagation_mode`, `parallel_threshold`, the loop ceilings)
+  therefore do not reach the battery. The `units.*`, `const.*` and `stat.*` cases and the balancings read no
+  setting.
+
+**Determinism rules.** No clock, no environment, no threads whose scheduling could reorder a sum, a fixed
+seed wherever a generator is used (`unc.montecarlo_seed_1`: seed 1, 1000 samples, on the calling thread).
+Each case runs on its own under `catch_unwind`: a panic or a limit is that case's *error* (it refuses
+`freeze`, and `verify --run` exits 1), never an abort, and never confused with a difference.
+
+### 9.3 User witnesses
+
+`phs conf freeze --witness check.phs [--witness other.phs ...]` adds scripts of your own:
+
+* **The name is the file stem** (`check`): letters, digits and `_ . : / -` only, the rule of names in a
+  frozen file; another stem, or two scripts with the same stem, is refused (exit 2) before anything is
+  read. The file must be UTF-8 text of at most 1 MiB.
+* **The script is kept in the file**, sealed, in an `@@ witness check` block after the sources, normalised:
+  CRLF becomes LF and trailing newlines are trimmed. The normalised text is what is evaluated, at `freeze`
+  and ever after.
+* **It is evaluated like `phs eval`**, in the sandbox of section 9.4, with Monte Carlo seed 0, under the
+  file about to be written. It must evaluate without an error finding; otherwise `freeze` refuses (exit 2)
+  and lists the findings. Nothing is written.
+* **What is recorded is the hash of a canonical result**, the versioned text `phs-witness-1`
+  ([`canonical_witness`](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/report.rs#L115)):
+  `ok true|false`, then one line per result item with its line, name, kind, the bit patterns of its value
+  and uncertainty, its unit text and dimension, then the *code* of each error finding (never a message, which
+  may be reworded, and never a warning). `user.check = sha256:<the SHA-256 of that text>`.
+* **A difference shows only *that* the result changed.** The file keeps a hash, not the old result, so
+  `verify --run` prints the running canonical text and you compare it with a copy you kept elsewhere (save
+  the canonical text, or the frozen file, when you validate).
+
+Scripts are chosen at `freeze`; there is no command to add one to an existing file. `update` and `seal`
+keep them.
+
+### 9.4 `phs conf verify --run`
+
+`phs conf verify [FILE] --run [--timeout-ms N]` does everything `verify` does, then evaluates every witness
+again **under FILE** (FILE is made the configuration of this process for the run; a relative FILE is made
+absolute, so `verify --run ../line-2/physure.frozen.conf` evaluates under that file, not under what is in
+force here) and compares the results bit for bit with what FILE records:
+
+```console
+$ phs conf verify --run
+file: /srv/lab/physure.frozen.conf
+...
+verification: the seal, the hashes and the chain hold
+engine: matches (policy release, pinned 0.3.0+unknown)
+atomic-weight edition: standard-2024
+witnesses: checked 47 built-in, 1 user, under /srv/lab/physure.frozen.conf
+48 matched
+```
+
+The rows come grouped: `DIFFERS` (both bit patterns, both decimals and the distance in ulps, section 9.6;
+for a user witness both hashes and the running canonical text), `MISSING` (recorded, but this build has no
+such case), `NEW` (this build has a case the file does not record: informational, it comes with a newer
+library and is recorded by the next `update` or `seal`), `ERROR` (a panic, a limit, not run), then the count
+of matches.
+
+**Nothing is evaluated** when the file does not verify (exit 1), when it pins another engine (exit 3: a
+result under an engine the file does not pin proves nothing; `update` first) or when it records no
+`builtin.*` witness:
+
+```console
+witnesses: not run: nothing is witnessed: expected the built-in battery; re-freeze, or run `phs conf update --reason "..."`; nothing was evaluated
+```
+
+A file without the battery is refused rather than passed because there would be nothing to compare: every
+file made before Phase 3 has an empty `[Witness]`. `phs conf update --reason "..."` records the battery
+(section 4.6), with no other flag.
+
+| Exit | `verify --run` |
+| --- | --- |
+| `0` | every recorded witness matches (new cases are informational) |
+| `1` | a witness differs, is missing or could not be evaluated; the file records no built-in witness; the file does not verify; an `--expect` mismatch |
+| `2` | misuse (`--timeout-ms` without `--run`, or not a whole number of milliseconds above 0) |
+| `3` | the engine differs; nothing is evaluated |
+
+JSON (`--json`) adds `witnesses`: `checked` (how many the file records), `match` (a count), `differs`
+(`[{key, recorded, running, ulps, recorded_decimal, running_decimal}]` for a number, with
+`running_canonical` instead of the decimals for a user witness), `missing` and `new` (keys), `errors`
+(`[{key, message}]`); `witnesses_ok`; `witness_warnings` (a probe file that could not be removed, ...). When
+nothing was evaluated, `witnesses` is `null`, `witnesses_ok` is `false` and `witnesses_not_run` says why.
+
+**`--run` executes the scripts embedded in the file**, which may come from someone else. What bounds them:
+
+* the sandbox of the PHS interpreter: no file is read, no module is loaded from disk, no native plugin, one
+  thread, a bounded call depth, native stack and output;
+* the loop-iteration and pipeline-step ceilings are **fixed** at 1 000 000 and 1 000 (the compiled
+  defaults), opened on the evaluating thread: the file's `[Settings]`, which set the process-wide values when
+  it is activated, cannot raise them;
+* a wall-clock deadline per user script, 60 s by default (`--timeout-ms N`), and a watchdog 2 s after it for
+  an evaluation that does not stop by itself; after one that does not, the remaining scripts are reported
+  `not run: an earlier script did not stop` and the process ends after reporting (a thread cannot be
+  killed);
+* a panic is `ERROR user.<name>: panic: ...` and a limit `ERROR user.<name>: limit: ...`: errors (exit 1),
+  never differences.
+
+**There is no memory cap**: a script can allocate until the machine refuses. Run `--run` on a file from a
+source you do not trust inside a container or a session with a memory limit. The battery is the library's
+own code and is not bounded by `--timeout-ms`.
+
+### 9.5 Witnesses in `update` and `seal`
+
+Both end their preview with the witnesses **as recorded** against **evaluated under the file they would
+write** (a sealed throwaway copy of it, `phs-witness-probe-*` in the temporary directory, deleted on every
+path; the user scripts with the 60 s default deadline). Then the rule:
+
+* **Every recorded witness matches and nothing is new:** the witnesses are kept byte for byte; the history
+  line has no witness part.
+* **Only new cases:** they are recorded without any flag (nothing validated changes) and counted in the
+  history line. A file with no built-in witness is this case: every case is new.
+* **A recorded witness differs or is missing:** refused, **exit 1**, nothing written, JSON
+  `"refused": "witnesses"`, unless `--accept-witness-changes` covers every such key: `all`, or a
+  comma-separated list of keys (`builtin.<id>`, `user.<name>`). A listed key that did not change is misuse
+  (exit 2). With the acceptance, every witness is re-recorded from the evaluation.
+* **A witness could not be evaluated** (a panic, a limit): refused (exit 1) whatever the flag.
+
+```console
+$ phs conf seal --reason "lab value of R" --yes
+...
+witnesses: as recorded (47 built-in, 1 user) against evaluated under the file to be written:
+DIFFERS builtin.chem.arrhenius
+  recorded: mean 3fe7365a4517c8e5 (0.7253848409148104), uncertainty 0000000000000000 (0.0), unit "s^-1"
+  running:  mean 3fcc449f4e7e7426 (0.22084418614113693), uncertainty 0000000000000000 (0.0), unit "s^-1"
+  distance: 7584134697931967 ulps
+DIFFERS builtin.chem.clausius_clapeyron_water
+  ...
+DIFFERS builtin.const.molar_gas_constant
+  recorded: mean 4020a1013e8990be (8.31446261815324), uncertainty 0000000000000000 (0.0), unit "J*mol^-1*K^-1"
+  running:  mean 4020000000000000 (8.0), uncertainty 0000000000000000 (0.0), unit "J*mol^-1*K^-1"
+  distance: 177026716242110 ulps
+45 matched
+phs conf: 3 recorded witness(es) differ or are missing under the file to be written and were not accepted: builtin.chem.arrhenius, builtin.chem.clausius_clapeyron_water, builtin.const.molar_gas_constant; nothing written: review the differences above, keep a copy of this file (the only record of the old values) and pass --accept-witness-changes builtin.chem.arrhenius,builtin.chem.clausius_clapeyron_water,builtin.const.molar_gas_constant (or all) to re-record them
+```
+
+With the acceptance, the history `diff` line (and `history:`, and JSON `history_diff`) ends with the witness
+part:
+
+```text
+witnesses: N changed, M new, K missing; changed: KEY, ...; missing: KEY, ...; old [Witness] sha256 <12 hex>
+```
+
+The changed and the missing keys are named (the first 10 of each, then `+N more`), and the 12 hexadecimal
+digits are the start of the SHA-256 of the old `[Witness]` block, hashed canonically. They identify the old
+block; they do not hold its values. **Keep a copy of the file before accepting**: it is the only record of
+the old values (and `phs conf diff COPY physure.frozen.conf` compares the data).
+
+**When there is nothing to do, nothing is evaluated.** An `update` whose catalog and engine are this
+build's, in a file that records the battery, says `nothing to update` and never reaches this rule. Under
+`release` or `record`, a new build of the same version runs the file without any `update`: there,
+`verify --run` is the check. `seal` checks the engine before anything is evaluated (exit 3 for a file pinned
+to another engine).
+
+### 9.6 Bit for bit: ulps, platforms, dependencies
+
+**The comparison has no tolerance.** A difference prints both bit patterns, both decimal values and the
+distance in **ulps** (units in the last place): how many representable doubles lie between the two values.
+`1 ulp` is a last-bit difference (0.3048 and 0.30480000000000007), the mark of another C library or CPU; a
+distance of millions, as in the example above, is a changed formula or value. `not measurable in ulps` means
+the unit, a sign or a non-finite value differs.
+
+* **Platforms.** The C math library differs between targets (msvc on Windows, glibc on Linux: `exp`, `ln`,
+  `pow`), and can differ in the last bit. The same release can therefore make `verify --run` exit 1 on
+  another operating system. A configuration validated on two operating systems needs **one frozen file per
+  operating system**, each frozen (and its witnesses recorded) on its own.
+* **Dependencies.** `unc.montecarlo_seed_1` draws with `rand`'s `StdRng` and `rand_distr`'s normal
+  distribution, neither of which promises the same draws across versions: a dependency bump can move its
+  bits. Review it as any other difference and accept it with `--accept-witness-changes`.
+* **Environment differences stay warnings** (section 6); the witnesses are how their consequence, if any,
+  becomes visible.
+
+### 9.7 What witnesses do not prove
+
+* **They sample behaviour.** 47 calculations and your scripts pass or fail; a function that none of them
+  touches can change unseen. Passing is not a proof that the rest of the library is correct or unchanged.
+* **They compare the engine with itself over time**, not with the truth: the reference values are checked
+  in the test suite, not by `verify --run`.
+* **A user witness shows only that its result changed**, not what changed (section 9.3).
+* **They do not authenticate.** Whoever can edit the file can recompute the witnesses and the seal; the seal
+  recorded outside the directory (`verify --expect`) is what detects that.
+
+### 9.8 Other changes of Phase 3
+
+* **`phs eval` reports a breach of the loop or pipeline ceilings as code `limit`** (`max_loop_iterations
+  ceiling`, `max_pipeline_steps ceiling`), as it already did for the call depth, the stack and the time; it
+  was `runtime`, and the run ends at that statement as for every limit. A script that matched on the old
+  code must match `limit`.
+* **`--allow-engine-mismatch` is removed.** It was accepted by `status`, `verify` and `diff` and changed
+  nothing (inspection never needed it); they now refuse it as an unknown flag (exit 2).
+* **`update` and `seal` also compare the bytes before writing** (section 4.8).
+
+The implementation: the witness values and the comparison are
+[`physure-core/src/frozen/witness.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/witness.rs#L239),
+the draft, probe and single reseal of `freeze`, `update` and `seal`
+[`physure-core/src/frozen/ops/draft.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/ops/draft.rs#L96),
+and the sandboxed evaluation of the commands
+[`physure-cli/src/conf_witness.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/conf_witness.rs#L206).
