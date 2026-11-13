@@ -5,6 +5,7 @@ use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
 mod check;
+mod conf;
 mod config;
 mod debug;
 mod eval;
@@ -43,6 +44,8 @@ fn print_help() {
     println!("    phs serve [dir|file]     [--port 8080] [--host 127.0.0.1] [--token <secret>] Run Model REST Server");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
+    println!("    phs conf [status]        The frozen configuration in force (physure.frozen.conf); phs conf --help");
+    println!("    phs conf freeze --reason TEXT | verify [FILE] [--expect SEAL] | history");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
@@ -795,6 +798,11 @@ fn run_statements(
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    // `phs conf` first: its own arguments (`--reason help`, `show doc`) must never reach `run_flag_command`, and it
+    // exists to inspect a configuration the pre-command check would refuse (it sets the engine file itself).
+    if args.get(1).map(String::as_str) == Some("conf") {
+        conf::run_conf(&args);
+    }
     refuse_an_unusable_configuration();
     if run_flag_command(&args) || run_subcommand(&args) || handle_transpile(&args) {
         return;
