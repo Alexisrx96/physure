@@ -23,7 +23,7 @@ use physure_core::frozen::{
 };
 use serde_json::{json, Value};
 
-use crate::conf_witness::{evaluate_witnesses, read_script, with_configuration, with_probe, witness_name, WitnessRun, DEFAULT_TIMEOUT};
+use crate::conf_witness::{evaluate_witnesses, read_script, with_configuration, with_probe, witness_name, WitnessRun, DEFAULT_TIMEOUT, NO_RESULT};
 use physure_core::frozen::witness::compare as compare_witnesses;
 use physure_core::frozen::{parse_value, prepare_freeze, WitnessReport, WitnessScript, WitnessStatus, WitnessValue};
 use std::time::Duration;
@@ -900,6 +900,7 @@ fn freeze_command(args: &ConfArgs) -> Outcome {
                 "{name}: does not evaluate cleanly (a witness must have no error findings): {}",
                 findings_text(&result.report)
             )),
+            Ok(result) if result.report.results.is_empty() => Some(format!("{name}: {NO_RESULT}")),
             Ok(_) => None,
         })
         .collect();

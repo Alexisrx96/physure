@@ -974,6 +974,21 @@ i = i * 1
     assert!(doc["witnesses"].is_object(), "{doc}");
 }
 
+/// [`add_user_witness`], re-sealed at the time of the last entry (so `seal` and `update` can follow it).
+fn forge_user_witness(dir: &Dir, name: &str, text: &str, hash: &str) {
+    let mut file = dir.frozen();
+    let mut pairs = file.witnesses().as_slice().to_vec();
+    pairs.push((format!("user.{name}"), format!("sha256:{hash}")));
+    let mut scripts = file.witness_scripts().to_vec();
+    scripts.push(WitnessScript::new(name, text).unwrap());
+    file.set_witnesses(Pairs::from_vec(pairs).unwrap());
+    file.set_witness_scripts(scripts);
+    let time = file.history().last().unwrap().time().to_string();
+    file.reseal(EntryInput { time: &time, action: "seal", engine: "test", actor: "t@h", reason: "forged", diff: "d" }).unwrap();
+    assert!(file.verify().is_empty(), "{:?}", file.verify());
+    dir.write(FROZEN_FILE_NAME, &file.render().unwrap());
+}
+
 /// The hash `freeze` would record for `text` if it accepted it, whatever the report says.
 fn hash_of_any_result(text: &str) -> String {
     let report = evaluate_with_ceilings(text, Limits::sandboxed(Duration::from_secs(60)), DEFAULT_SEED, 1_000_000, 1_000);
@@ -1023,4 +1038,43 @@ fn verify_run_reports_a_user_witness_that_does_not_evaluate_cleanly_as_an_error_
     let message = errors[0]["message"].as_str().unwrap();
     assert!(message.starts_with("the script does not evaluate cleanly: line 2"), "{message}");
     assert!(doc["witnesses"]["differs"].as_array().unwrap().is_empty(), "the hash matches: {doc}");
+}
+
+/// An empty or comment-only script has the canonical result `phs-witness-1\nok true\n` and would match forever:
+/// it witnesses nothing.
+#[test]
+fn freeze_refuses_a_witness_that_produces_no_result_exit_2() {
+    let dir = Dir::new("review_vacuous_freeze");
+    dir.write("empty.phs", "");
+    dir.write("comments.phs", "# only a comment\n// and another\n\n");
+    dir.write("definitions.phs", "fn f(x) = 2 * x\n");
+    for script in ["empty.phs", "comments.phs", "definitions.phs"] {
+        let output = conf_in_own_temp(&dir, &["freeze", "--reason", "r", "--engine-policy", "release", "--witness", script, "--json"]);
+        assert_eq!(output.status.code(), Some(2), "{script}: {}", text(&output));
+        let error = json(&output)["error"].as_str().unwrap().to_string();
+        assert!(error.contains("a witness must produce at least one result"), "{script}: {error}");
+        assert!(!dir.path(FROZEN_FILE_NAME).exists(), "{script}: nothing written");
+    }
+}
+
+#[test]
+fn a_forged_witness_that_produces_no_result_is_an_error_for_verify_run_and_seal() {
+    let dir = Dir::new("review_vacuous_forged");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    forge_user_witness(&dir, "nothing", "# nothing here", &hash_of_any_result("# nothing here"));
+    let doc = json(&verify_run(&dir, &["--json"]));
+    assert_eq!(doc["exit_code"], Value::from(1), "{doc}");
+    let errors = doc["witnesses"]["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{doc}");
+    assert_eq!(errors[0]["key"], Value::from("user.nothing"));
+    assert!(errors[0]["message"].as_str().unwrap().contains("a witness must produce at least one result"), "{doc}");
+    // seal of an unrelated edit, with every change accepted: refused, nothing written
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    let before = bytes(&dir);
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "mine", "--yes", "--accept-witness-changes", "all", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["refused"], Value::from("witnesses"), "{doc}");
+    assert!(doc["error"].as_str().unwrap().contains("user.nothing"), "{doc}");
+    assert_eq!(bytes(&dir), before);
 }

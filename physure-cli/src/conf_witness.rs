@@ -201,13 +201,20 @@ pub struct WitnessRun {
     pub stuck: bool,
 }
 
-/// Why the result of a user witness cannot be a reference result, if it cannot: it has an error finding (`freeze`
-/// refuses such a script, so an honest file never records one).
+/// What [`unclean`] says of a script that produces no result.
+pub const NO_RESULT: &str = "a witness must produce at least one result (this script produces none: an empty, comment-only or definitions-only script witnesses nothing)";
+
+/// Why the result of a user witness cannot be a reference result, if it cannot: it has an error finding, or it has
+/// no result item at all (its canonical result would be `phs-witness-1\nok true\n` whatever the configuration, a
+/// match forever). `freeze` refuses both, so an honest file never records one.
 pub fn unclean(report: &Report) -> Option<String> {
     if !report.ok {
         let first = report.diagnostics.iter().find(|d| d.severity == "error");
         let finding = first.map_or_else(|| "an error finding".to_string(), |d| format!("line {}: {}: {}", d.line, d.code, d.message));
         return Some(format!("the script does not evaluate cleanly: {finding}"));
+    }
+    if report.results.is_empty() {
+        return Some(NO_RESULT.to_string());
     }
     None
 }
