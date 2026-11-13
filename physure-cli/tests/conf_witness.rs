@@ -1078,3 +1078,44 @@ fn a_forged_witness_that_produces_no_result_is_an_error_for_verify_run_and_seal(
     assert!(doc["error"].as_str().unwrap().contains("user.nothing"), "{doc}");
     assert_eq!(bytes(&dir), before);
 }
+
+/// A user witness that hits the fixed loop ceiling: a limit, so it cannot be evaluated under any file.
+const PAST_THE_CEILING: &str = "x = for i in 0..2000000 { i }";
+
+/// Asserts that `args` refuses because a witness could not be evaluated: exit 1, `"refused": "witnesses"`, the
+/// witness named, the file unchanged.
+fn refuses_unevaluable(dir: &Dir, args: &[&str]) {
+    let before = bytes(dir);
+    let output = conf_in_own_temp(dir, args);
+    assert_eq!(output.status.code(), Some(1), "{args:?}: {}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["refused"], Value::from("witnesses"), "{args:?}: {doc}");
+    assert_eq!(doc["written"], Value::Bool(false), "{args:?}: {doc}");
+    let error = doc["error"].as_str().unwrap();
+    assert!(error.contains("could not be evaluated") && error.contains("user.ceiling") && error.contains("limit: "), "{args:?}: {error}");
+    assert_eq!(bytes(dir), before, "{args:?}: nothing written");
+}
+
+#[test]
+fn seal_refuses_a_witness_that_could_not_be_evaluated_whatever_the_flag() {
+    let dir = Dir::new("review_unevaluable_seal");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    forge_user_witness(&dir, "ceiling", PAST_THE_CEILING, &"f".repeat(64));
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    for flag in ["all", "user.ceiling"] {
+        refuses_unevaluable(&dir, &["seal", "--reason", "mine", "--yes", "--accept-witness-changes", flag, "--json"]);
+    }
+    refuses_unevaluable(&dir, &["seal", "--reason", "mine", "--yes", "--json"]);
+}
+
+#[test]
+fn update_refuses_a_witness_that_could_not_be_evaluated_whatever_the_flag() {
+    let dir = Dir::new("review_unevaluable_update");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    forge_user_witness(&dir, "ceiling", PAST_THE_CEILING, &"f".repeat(64));
+    doctor_for_update(&dir, |_| {});
+    for flag in ["all", "user.ceiling"] {
+        refuses_unevaluable(&dir, &["update", "--reason", "adopt", "--yes", "--accept-witness-changes", flag, "--json"]);
+    }
+    refuses_unevaluable(&dir, &["update", "--reason", "adopt", "--yes", "--json"]);
+}
