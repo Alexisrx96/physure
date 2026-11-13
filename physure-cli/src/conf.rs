@@ -15,16 +15,17 @@ use std::process;
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::canonical::canonical_text;
 use physure_core::frozen::{
-    active, actor_from_env, catalog_entries, compare, diff, embedded_entries, engine_state, ensure_valid, entries_with_origin, history_rows,
-    inspect, now_unix, overrides_contribution, pair_changes, plan_seal, plan_update, section_and_key, select, set_engine_file,
-    set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, EngineIdentity, EnginePolicy, EngineState, Entry,
-    FieldChange, FileStamp, FreezeOptions, FrozenFile, Inspection, OpsError, Resolution, Side, Why,
+    active, actor_from_env, bytes_unchanged_since, catalog_entries, compare, diff, embedded_entries, engine_state, ensure_valid,
+    entries_with_origin, history_rows, inspect, now_unix, overrides_contribution, pair_changes, prepare_seal, prepare_update, rerecord,
+    section_and_key, select, set_engine_file, set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, Draft,
+    EngineIdentity, EnginePolicy, EngineState, Entry, FieldChange, FileStamp, FreezeOptions, FrozenFile, Inspection, OpsError, Plan,
+    Resolution, Side, Why, DRIFT_NAMES,
 };
 use serde_json::{json, Value};
 
-use crate::conf_witness::{evaluate_witnesses, read_script, with_configuration, with_probe, witness_name, DEFAULT_TIMEOUT};
+use crate::conf_witness::{evaluate_witnesses, read_script, with_configuration, with_probe, witness_name, WitnessRun, DEFAULT_TIMEOUT};
 use physure_core::frozen::witness::compare as compare_witnesses;
-use physure_core::frozen::{parse_value, prepare_freeze, WitnessScript, WitnessStatus, WitnessValue};
+use physure_core::frozen::{parse_value, prepare_freeze, WitnessReport, WitnessScript, WitnessStatus, WitnessValue};
 use std::time::Duration;
 
 /// The commands of `phs conf`.
@@ -45,12 +46,13 @@ USAGE:
                                force against what this build gives unfrozen here (`unfrozen` names that side); one
                                argument: that file against it. Exit 0 identical, 1 different or a file that does not
                                verify, 2 nothing to compare; the environment is listed, never a difference
-    phs conf update --reason TEXT [--engine-policy binary|build|release|record] [--yes]
+    phs conf update --reason TEXT [--engine-policy binary|build|release|record] [--accept-witness-changes all|KEY[,KEY...]] [--yes]
                                Adopt what this build brings (its embedded catalog, its engine) into the file in
-                               force, keeping the overrides; shows what changes, asks, writes atomically
-    phs conf seal --reason TEXT [--yes]
+                               force, keeping the overrides; shows what changes, the witnesses as recorded against
+                               the witnesses evaluated under the file to be written, asks, writes atomically
+    phs conf seal --reason TEXT [--accept-witness-changes all|KEY[,KEY...]] [--yes]
                                Accept a hand edit of the overrides block (source 2) of the file in force: shows the
-                               new overrides and what they contribute, asks, re-seals
+                               new overrides, what they contribute and the witnesses as for update, asks, re-seals
     phs conf history [FILE]    The history of the file in force (or FILE), problems first
     phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH] [--witness FILE.phs]...
                                Write physure.frozen.conf from what is in force now (default policy: build when this build names its
@@ -71,6 +73,11 @@ FLAGS:
                                repeatable, kept in the order given
     --run                      verify: evaluate the witnesses again (see verify)
     --timeout-ms N             verify --run: the wall-clock bound of each user witness script, in ms (default 60000)
+    --accept-witness-changes all|KEY[,KEY...]
+                               update, seal: re-record the recorded witnesses that differ or are missing under the
+                               file to be written; without it such a change refuses (exit 1), and a KEY that did not
+                               change is misuse (exit 2). New cases (a file without the battery: all of it) are
+                               recorded without it. Keep a copy of the file: it is the only record of the old values
     --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
                                (with --json they never ask: --json needs --yes to write)
     -h, --help                 This help
@@ -78,7 +85,8 @@ FLAGS:
 EXIT CODES:
     0 ok (identical, for diff; nothing to do, for update and seal)
     1 a discrepancy (modified file, broken seal, --expect mismatch, differences, a file changed while asking, a
-      witness that differs, is missing or could not be evaluated, a file that records no built-in witness)
+      witness that differs, is missing or could not be evaluated, a file that records no built-in witness, a
+      witness change update or seal was not told to accept)
     2 misuse, a missing required frozen file, a refused or declined operation, nothing to compare
     3 the engine differs from the pinned one
 ";
@@ -102,12 +110,51 @@ pub struct ConfArgs {
     pub witness: Vec<PathBuf>,
     pub run: bool,
     pub timeout_ms: Option<u64>,
+    /// `--accept-witness-changes all|KEY[,KEY...]`.
+    pub accept: Option<Accept>,
     pub help: bool,
     /// The flags given, in order, so each command can refuse the ones it does not take.
     given: Vec<&'static str>,
 }
 
-const VALUE_FLAGS: [&str; 7] = ["--conf", "--reason", "--engine-policy", "--out", "--expect", "--witness", "--timeout-ms"];
+/// Which recorded witnesses `update` and `seal` may re-record when they differ or are missing (correction C7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Accept {
+    /// `all`: every change, explicitly.
+    All,
+    /// These keys (`builtin.<id>`, `user.<name>`), each once, in the order given.
+    Keys(Vec<String>),
+}
+
+impl Accept {
+    fn parse(value: &str) -> Result<Accept, String> {
+        if value.trim() == "all" {
+            return Ok(Accept::All);
+        }
+        let mut keys: Vec<String> = Vec::new();
+        for key in value.split(',').map(str::trim) {
+            if key.is_empty() {
+                return Err(format!(
+                    "--accept-witness-changes takes all or a comma-separated list of witness keys (builtin.<id>, user.<name>), found {value:?}"
+                ));
+            }
+            if !keys.iter().any(|k| k == key) {
+                keys.push(key.to_string());
+            }
+        }
+        Ok(Accept::Keys(keys))
+    }
+
+    fn covers(&self, key: &str) -> bool {
+        match self {
+            Accept::All => true,
+            Accept::Keys(keys) => keys.iter().any(|k| k == key),
+        }
+    }
+}
+
+const VALUE_FLAGS: [&str; 8] =
+    ["--conf", "--reason", "--engine-policy", "--out", "--expect", "--witness", "--timeout-ms", "--accept-witness-changes"];
 const SWITCHES: [&str; 7] = ["--json", "--yes", "--origin", "--allow-engine-mismatch", "--run", "--help", "-h"];
 /// The one value flag that may be given more than once.
 const REPEATABLE: &str = "--witness";
@@ -140,6 +187,7 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 "--engine-policy" => parsed.policy = Some(value.parse()?),
                 "--out" => parsed.out = Some(PathBuf::from(value)),
                 "--witness" => parsed.witness.push(PathBuf::from(value)),
+                "--accept-witness-changes" => parsed.accept = Some(Accept::parse(value)?),
                 "--timeout-ms" => {
                     let ms = value.parse::<u64>().ok().filter(|ms| *ms > 0);
                     parsed.timeout_ms = Some(ms.ok_or_else(|| format!("--timeout-ms takes a whole number of milliseconds above 0, found {value:?}"))?);
@@ -262,8 +310,8 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
         "history" => (&["--conf", "--json"], 1),
         "freeze" => (&["--json", "--reason", "--engine-policy", "--out", "--witness"], 0),
         "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch", "--run", "--timeout-ms"], 1),
-        "update" => (&["--conf", "--json", "--reason", "--engine-policy", "--yes"], 0),
-        "seal" => (&["--conf", "--json", "--reason", "--yes"], 0),
+        "update" => (&["--conf", "--json", "--reason", "--engine-policy", "--accept-witness-changes", "--yes"], 0),
+        "seal" => (&["--conf", "--json", "--reason", "--accept-witness-changes", "--yes"], 0),
         _ => (&[], 0),
     }
 }
@@ -1002,13 +1050,33 @@ fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (Strin
     };
     let run = evaluated.value;
     let compared = compare_witnesses(file.witnesses(), &run.rows);
+    let mut text = format!("witnesses: checked {builtin} built-in, {user} user, under {}\n", shown(path));
+    let (rows_text, mut witnesses) = witness_rows(&compared, &run);
+    text.push_str(&rows_text);
+    if run.stuck {
+        text.push_str("note: a script did not stop and cannot be stopped; this process ends now\n");
+    }
+    for warning in &evaluated.warnings {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
+    let ok = compared.all_match();
+    witnesses["checked"] = Value::from(file.witnesses().len());
+    let fields = json!({ "witnesses": witnesses, "witnesses_ok": ok, "witness_warnings": evaluated.warnings });
+    (text, fields, if ok { 0 } else { 1 })
+}
+
+/// The rows of a witness comparison for people and as JSON (`match`, `differs`, `missing`, `new`, `errors`): the
+/// differing witnesses first (numbers with both bit patterns, both decimals and the distance in ulps; a user witness
+/// only that its result changed, with the running canonical text), then the missing, the new and the errors, then
+/// the count of matches. Shared by `verify --run`, `update` and `seal`.
+fn witness_rows(compared: &WitnessReport, run: &WitnessRun) -> (String, Value) {
     let (differ, new, missing, errors) = compared.counts();
     let matched = compared.rows.len() - differ - new - missing - errors;
     let canonical = |key: &str| {
         let name = key.strip_prefix("user.")?;
         run.user.iter().find(|(n, _)| n == name).and_then(|(_, r)| r.as_ref().ok()).map(|r| r.canonical.clone())
     };
-    let mut text = format!("witnesses: checked {builtin} built-in, {user} user, under {}\n", shown(path));
+    let mut text = String::new();
     let (mut differs, mut missing_keys, mut new_keys, mut error_rows) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for row in &compared.rows {
         if let WitnessStatus::Differs { recorded, running, ulps } = &row.status {
@@ -1059,55 +1127,174 @@ fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (Strin
         text.push_str(&format!("ERROR {key}: {message}\n"));
     }
     text.push_str(&format!("{matched} matched\n"));
+    let errors_json: Vec<Value> = error_rows.iter().map(|(key, message)| json!({ "key": key, "message": message })).collect();
+    let fields = json!({ "match": matched, "differs": differs, "missing": missing_keys, "new": new_keys, "errors": errors_json });
+    (text, fields)
+}
+
+/// Why `update` or `seal` does not record the witnesses it evaluated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WitnessRefusal {
+    code: i32,
+    message: String,
+    /// A refusal of the witness rule itself (JSON `"refused": "witnesses"`, decision S5), not a misuse of the flag.
+    witnesses: bool,
+}
+
+/// `keys`, the first [`DRIFT_NAMES`] of them, then `+N more`.
+fn named(keys: &[String]) -> String {
+    let mut text = keys.iter().take(DRIFT_NAMES).map(String::as_str).collect::<Vec<_>>().join(", ");
+    if keys.len() > DRIFT_NAMES {
+        text.push_str(&format!(" +{} more", keys.len() - DRIFT_NAMES));
+    }
+    text
+}
+
+/// The witness rule of `update` and `seal` (decision 6 with corrections C7 and S5): `Ok(false)` every recorded witness
+/// matches and nothing is new (the recorded witnesses are kept, byte for byte); `Ok(true)` re-record them all from the
+/// evaluation, which happens when the only differences are new cases (nothing validated changes: a file without the
+/// battery records it this way) or when every recorded witness that differs or is missing is covered by `accept`.
+/// Refused (exit 1, nothing written) when a witness could not be evaluated (a panic, a limit, not run) or when a
+/// change is not covered; misuse (exit 2) when `accept` names a key that neither differs nor is missing.
+fn witness_policy(compared: &WitnessReport, accept: Option<&Accept>) -> Result<bool, WitnessRefusal> {
+    let errors: Vec<String> = compared
+        .rows
+        .iter()
+        .filter_map(|row| match &row.status {
+            WitnessStatus::Error(message) => Some(format!("{}: {message}", row.key)),
+            _ => None,
+        })
+        .collect();
+    if !errors.is_empty() {
+        return Err(WitnessRefusal {
+            code: 1,
+            message: format!(
+                "{} witness(es) could not be evaluated under the file to be written (expected a value for each), so nothing can be recorded: {}; nothing written",
+                errors.len(),
+                errors.join("; ")
+            ),
+            witnesses: true,
+        });
+    }
+    let changed: Vec<String> = compared
+        .rows
+        .iter()
+        .filter(|row| matches!(row.status, WitnessStatus::Differs { .. } | WitnessStatus::Missing))
+        .map(|row| row.key.clone())
+        .collect();
+    if let Some(Accept::Keys(keys)) = accept {
+        if let Some(unchanged) = keys.iter().find(|key| !changed.contains(key)) {
+            let what = if changed.is_empty() { "nothing".to_string() } else { named(&changed) };
+            return Err(WitnessRefusal {
+                code: 2,
+                message: format!(
+                    "--accept-witness-changes names {unchanged}, which did not change (expected only keys that differ or are missing); what changed: {what}; nothing written"
+                ),
+                witnesses: false,
+            });
+        }
+    }
+    let uncovered: Vec<String> = changed.iter().filter(|key| !accept.is_some_and(|a| a.covers(key))).cloned().collect();
+    if !uncovered.is_empty() {
+        return Err(WitnessRefusal {
+            code: 1,
+            message: format!(
+                "{} recorded witness(es) differ or are missing under the file to be written and were not accepted: {}; nothing written: review the differences above, keep a copy of this file (the only record of the old values) and pass --accept-witness-changes {} (or all) to re-record them",
+                uncovered.len(),
+                named(&uncovered),
+                uncovered.join(",")
+            ),
+            witnesses: true,
+        });
+    }
+    Ok(!changed.is_empty() || compared.rows.iter().any(|row| row.status == WitnessStatus::New))
+}
+
+/// The witness step of `update` and `seal`, after the rest of the preview: the witnesses evaluated under the draft's
+/// probe (the file to be written; the probe never remains), compared with what the file records, the comparison
+/// added to the preview, and the plan the rule allows ([`witness_policy`]). `Err` is why nothing is written.
+fn witness_plan(command: &str, args: &ConfArgs, draft: &Draft, text: &mut String, fields: &mut Value) -> Result<Plan, Outcome> {
+    fields["witnesses_rerecorded"] = Value::Bool(false);
+    let evaluated = with_probe(draft.probe(), || evaluate_witnesses(draft.old.witness_scripts(), DEFAULT_TIMEOUT)).map_err(|e| {
+        failure(command, e.code, format!("the witnesses cannot be evaluated under the file to be written: {}; nothing written", e.message))
+    })?;
+    let run = evaluated.value;
+    let compared = compare_witnesses(draft.old.witnesses(), &run.rows);
+    let (builtin, user) = recorded_counts(&draft.old);
+    text.push_str(&format!(
+        "witnesses: as recorded ({builtin} built-in, {user} user) against evaluated under the file to be written:\n"
+    ));
+    if builtin == 0 {
+        text.push_str(
+            "  the file records no built-in witness: every case of the battery is new and is recorded without --accept-witness-changes (nothing validated is being changed)\n",
+        );
+    }
+    let (rows_text, mut witnesses) = witness_rows(&compared, &run);
+    text.push_str(&rows_text);
     if run.stuck {
         text.push_str("note: a script did not stop and cannot be stopped; this process ends now\n");
     }
     for warning in &evaluated.warnings {
         text.push_str(&format!("warning: {warning}\n"));
     }
-    let ok = compared.all_match();
-    let errors_json: Vec<Value> = error_rows.iter().map(|(key, message)| json!({ "key": key, "message": message })).collect();
-    let fields = json!({
-        "witnesses": {
-            "checked": file.witnesses().len(),
-            "match": matched,
-            "differs": differs,
-            "missing": missing_keys,
-            "new": new_keys,
-            "errors": errors_json,
-        },
-        "witnesses_ok": ok,
-        "witness_warnings": evaluated.warnings,
-    });
-    (text, fields, if ok { 0 } else { 1 })
+    witnesses["checked"] = Value::from(draft.old.witnesses().len());
+    fields["witnesses"] = witnesses;
+    fields["witness_warnings"] = json!(evaluated.warnings);
+    let ops_failure = |e: OpsError| failure(command, ops_code(&e), format!("{e}; nothing written"));
+    match witness_policy(&compared, args.accept.as_ref()) {
+        Err(refusal) => {
+            let mut outcome = failure(command, refusal.code, refusal.message);
+            if refusal.witnesses {
+                outcome.json["refused"] = Value::from("witnesses");
+            }
+            Err(outcome)
+        }
+        Ok(false) => {
+            text.push_str("witnesses: every recorded witness matches; they are kept as recorded\n");
+            draft.finish(None).map_err(ops_failure)
+        }
+        Ok(true) => {
+            let rerecorded = rerecord(draft.old.witnesses(), &run.rows).map_err(ops_failure)?;
+            text.push_str(&format!("witnesses: re-recorded from this evaluation ({})\n", rerecorded.drift.line()));
+            fields["witnesses_rerecorded"] = Value::Bool(true);
+            draft.finish(Some(&rerecorded)).map_err(ops_failure)
+        }
+    }
 }
 
-/// Residual risk 1c-14 of the spec: the file must be as the plan read it. Its length and modification time now are
-/// compared with `stamp` (from the handle the plan read it through); `Err` when either moved, or when the file cannot
-/// be examined.
-fn unchanged_since(path: &Path, stamp: &FileStamp) -> Result<(), String> {
+/// Residual risk 1c-14 and correction C11: the file must be as the plan read it. Its length and modification time now
+/// are compared with `stamp` (from the handle the plan read it through), and the SHA-256 of its bytes now with
+/// `sha256`, the hash of the bytes the plan parsed (an edit of the same length that keeps the modification time is
+/// seen); `Err` when anything moved, or when the file cannot be examined.
+fn unchanged_since(path: &Path, stamp: &FileStamp, sha256: &str) -> Result<(), String> {
     let now = std::fs::metadata(path).map(|metadata| FileStamp::of(&metadata)).map_err(|e| {
         format!("{}: cannot be examined before writing ({e}); nothing written", shown(path))
     })?;
-    if now == *stamp {
-        Ok(())
-    } else {
-        Err(format!(
+    if now != *stamp {
+        return Err(format!(
             "{}: changed since it was read (expected length {} and modification time {:?}, found {} and {:?}); nothing written: run the command again",
             shown(path),
             stamp.len,
             stamp.modified,
             now.len,
             now.modified
-        ))
+        ));
     }
+    if !bytes_unchanged_since(path, sha256) {
+        return Err(format!(
+            "{}: changed since it was read, or cannot be read again (the same length and modification time, but expected the bytes whose SHA-256 is {sha256}); nothing written: run the command again",
+            shown(path)
+        ));
+    }
+    Ok(())
 }
 
 /// Writes a planned file in place of the one at `path`, atomically, only if that file is unchanged since the plan
-/// read it ([`unchanged_since`]). A refusal is exit 1: the file moved under the command (a discrepancy).
-fn write_planned(command: &str, path: &Path, file: &FrozenFile, stamp: &FileStamp) -> Result<(), Outcome> {
-    let text = file.render().map_err(|e| failure(command, 1, format!("the planned file does not render: {e}; nothing written")))?;
-    unchanged_since(path, stamp).map_err(|message| failure(command, 1, message))?;
+/// read it ([`unchanged_since`] with the plan's stamp and the hash of the bytes it read; `--yes` never skips it). A
+/// refusal is exit 1: the file moved under the command (a discrepancy).
+fn write_planned(command: &str, path: &Path, plan: &Plan) -> Result<(), Outcome> {
+    let text = plan.file.render().map_err(|e| failure(command, 1, format!("the planned file does not render: {e}; nothing written")))?;
+    unchanged_since(path, &plan.stamp, &plan.read_sha256).map_err(|message| failure(command, 1, message))?;
     write_atomic(path, &text, true).map_err(|e| failure(command, ops_code(&e), format!("{e}; nothing written")))
 }
 
@@ -1141,15 +1328,24 @@ fn merge(into: &mut Value, extra: &Value) {
     }
 }
 
-/// The end of `update` and `seal`: the preview is printed (text) or carried in the document (JSON), the person
-/// confirms, the file is written if it did not change since it was read, and the new seal is printed. With `--json`
-/// the preview is printed only at the end, inside the document, so it never asks: without `--yes` it refuses (exit 2)
-/// with the preview in the document.
-fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Value), file: &FrozenFile, stamp: &FileStamp) -> Outcome {
+/// The end of `update` and `seal`, after the witness step: the preview is printed (text) or carried in the document
+/// (JSON); a refusal of the witness step (`plan` is `Err`) ends there, before asking; otherwise the person confirms,
+/// the file is written if it did not change since it was read, and the new seal and the history line are printed.
+/// With `--json` the preview is printed only at the end, inside the document, so it never asks: without `--yes` it
+/// refuses (exit 2) with the preview in the document.
+fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Value), plan: Result<Plan, Outcome>) -> Outcome {
     let (preview_text, preview_fields) = preview;
     if !args.json {
         say(&escape_controls(&preview_text));
     }
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(mut outcome) => {
+            merge(&mut outcome.json, &preview_fields);
+            outcome.json["written"] = Value::Bool(false);
+            return outcome;
+        }
+    };
     let asked = if args.json && !args.yes {
         Err(format!(
             "with --json, `phs conf {command}` never asks (the preview is in this document, printed at the end): pass --yes to write {}; nothing written",
@@ -1160,18 +1356,19 @@ fn apply_plan(command: &str, args: &ConfArgs, path: &Path, preview: (String, Val
     };
     let written = asked
         .map_err(|message| failure(command, 2, message))
-        .and_then(|()| write_planned(command, path, file, stamp));
+        .and_then(|()| write_planned(command, path, &plan));
     if let Err(mut outcome) = written {
         merge(&mut outcome.json, &preview_fields);
         outcome.json["written"] = Value::Bool(false);
         return outcome;
     }
-    let seal = file.seal_sha256();
+    let seal = plan.file.seal_sha256();
     let text = format!(
-        "wrote {}\nseal: {seal}\n  record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it\n",
-        shown(path)
+        "wrote {}\nseal: {seal}\n  record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it\nhistory: {}\n",
+        shown(path),
+        plan.summary
     );
-    let mut fields = json!({ "path": shown(path), "seal": seal, "written": true });
+    let mut fields = json!({ "path": shown(path), "seal": seal, "written": true, "history_diff": plan.summary });
     merge(&mut fields, &preview_fields);
     report(command, text, fields, 0)
 }
@@ -1183,9 +1380,10 @@ fn shown_entries(file: &FrozenFile, which: &str) -> Result<Vec<Entry>, String> {
     })
 }
 
-/// `phs conf update --reason R [--engine-policy P] [--yes]`: the file in force adopts this build's embedded catalog
-/// and engine (the overrides are kept). What is shown is the plan's own difference, from memory: the catalog of the
-/// file as read against the catalog of the file to write, and the `[Engine]` pairs that differ.
+/// `phs conf update --reason R [--engine-policy P] [--accept-witness-changes ...] [--yes]`: the file in force adopts
+/// this build's embedded catalog and engine (the overrides are kept). What is shown is the plan's own difference, from
+/// memory: the catalog of the file as read against the catalog of the file to write, the `[Engine]` pairs that differ,
+/// and the witnesses as recorded against evaluated under the file to write ([`witness_plan`]).
 fn update(args: &ConfArgs) -> Outcome {
     let path = match target("update", args) {
         Ok(path) => path,
@@ -1193,17 +1391,20 @@ fn update(args: &ConfArgs) -> Outcome {
     };
     let reason = args.reason.as_deref().unwrap_or_default().trim();
     let actor = actor_from_env(|name| std::env::var(name).ok());
-    let plan = match plan_update(&path, reason, args.policy, engine_file().as_deref(), now_unix(), &actor) {
-        Ok(Some(plan)) => plan,
+    // nothing to do: the witnesses are not evaluated (decision S9; `verify --run` is the check)
+    let draft = match prepare_update(&path, reason, args.policy, engine_file().as_deref(), now_unix(), &actor) {
+        Ok(Some(draft)) => draft,
         Ok(None) => {
             let text = format!("{}: nothing to update: the embedded catalog and the engine are this build's\n", shown(&path));
             return report("update", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
         }
         Err(e) => return failure("update", ops_code(&e), e.to_string()),
     };
-    let mut text = format!("update: {}\nsummary: {}\n", shown(&path), plan.summary);
-    let mut fields = json!({ "summary": plan.summary, "nothing_to_do": false });
-    match shown_entries(&plan.old, "the file as it is").and_then(|old| Ok((old, shown_entries(&plan.file, "the updated file")?))) {
+    // the probe has the sources and the engine of the file to be written: the data and engine differences are its
+    let next = draft.probe();
+    let mut text = format!("update: {}\nsummary: {}\n", shown(&path), draft.summary);
+    let mut fields = json!({ "summary": draft.summary, "nothing_to_do": false });
+    match shown_entries(&draft.old, "the file as it is").and_then(|old| Ok((old, shown_entries(next, "the updated file")?))) {
         Ok((old, new)) => {
             let changes = diff(&old, &new);
             let (changes_text, data) = changes_report(&changes);
@@ -1216,13 +1417,14 @@ fn update(args: &ConfArgs) -> Outcome {
             fields["data_problem"] = Value::from(message);
         }
     }
-    let engine = pair_changes(plan.old.engine(), plan.file.engine());
+    let engine = pair_changes(draft.old.engine(), next.engine());
     text.push_str(&format!("engine differences ({}):\n{}", engine.len(), field_lines(&engine)));
     fields["engine"] = changes_json(&engine);
-    apply_plan("update", args, &path, (text, fields), &plan.file, &plan.stamp)
+    let plan = witness_plan("update", args, &draft, &mut text, &mut fields);
+    apply_plan("update", args, &path, (text, fields), plan)
 }
 
-/// `phs conf seal --reason R [--yes]`: accepts a hand edit of the overrides of the file in force. The file keeps only
+/// `phs conf seal --reason R [--accept-witness-changes ...] [--yes]`: accepts a hand edit of the overrides of the file in force. The file keeps only
 /// the marker of the overrides it last sealed, not their text, so what is shown is (a) the canonical text of the
 /// overrides as they will be sealed and (b) what they contribute to the catalog (sources without them against with
 /// them); a copy of the previously sealed file can be compared with `phs conf diff`.
@@ -1233,17 +1435,18 @@ fn seal(args: &ConfArgs) -> Outcome {
     };
     let reason = args.reason.as_deref().unwrap_or_default().trim();
     let actor = actor_from_env(|name| std::env::var(name).ok());
-    let plan = match plan_seal(&path, reason, now_unix(), &actor) {
-        Ok(Some(plan)) => plan,
+    let draft = match prepare_seal(&path, reason, now_unix(), &actor) {
+        Ok(Some(draft)) => draft,
         Ok(None) => {
             let text = format!("{}: nothing to seal: the file already verifies\n", shown(&path));
             return report("seal", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
         }
         Err(e) => return failure("seal", ops_code(&e), e.to_string()),
     };
-    // the plan proved that only source 2 changed, so the engine block is the sealed one: a seal re-records it under
-    // this build, which must be the engine it pins (the only way onto another engine is `update`, spec §7)
-    let refused = match engine_state(&plan.old, engine_file().as_deref()) {
+    // the draft exists only after the proof that only source 2 changed, so the engine block is the sealed one: a seal
+    // re-records it under this build, which must be the engine it pins (the only way onto another engine is `update`,
+    // spec §7). Checked before anything is evaluated: the probe has the same block and would not load (exit 3).
+    let refused = match engine_state(&draft.old, engine_file().as_deref()) {
         EngineState::Matches { .. } => None,
         EngineState::Differs { differences, .. } => Some((3, format!("the engine differs: {}", differences.join("; ")))),
         EngineState::Unreadable(message) => Some((1, format!("the [Engine] block does not read: {message}"))),
@@ -1260,13 +1463,14 @@ fn seal(args: &ConfArgs) -> Outcome {
         outcome.json["written"] = Value::Bool(false);
         return outcome;
     }
-    let overrides = canonical_text(plan.file.sources()[1].text());
-    let mut text = format!("seal: {}\nsummary: {}\nthe overrides (source 2) as they will be sealed, canonical:\n", shown(&path), plan.summary);
+    let next = draft.probe();
+    let overrides = canonical_text(next.sources()[1].text());
+    let mut text = format!("seal: {}\nsummary: {}\nthe overrides (source 2) as they will be sealed, canonical:\n", shown(&path), draft.summary);
     for line in overrides.lines() {
         text.push_str(&format!("  | {line}\n"));
     }
-    let mut fields = json!({ "summary": plan.summary, "overrides": overrides, "nothing_to_do": false });
-    match overrides_contribution(&plan.file) {
+    let mut fields = json!({ "summary": draft.summary, "overrides": overrides, "nothing_to_do": false });
+    match overrides_contribution(next) {
         Ok(changes) => {
             let (changes_text, data) = changes_report(&changes);
             text.push_str(&format!(
@@ -1284,13 +1488,14 @@ fn seal(args: &ConfArgs) -> Outcome {
             fields["data_problem"] = Value::from(message);
         }
     }
-    apply_plan("seal", args, &path, (text, fields), &plan.file, &plan.stamp)
+    let plan = witness_plan("seal", args, &draft, &mut text, &mut fields);
+    apply_plan("seal", args, &path, (text, fields), plan)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use physure_core::frozen::freeze;
+    use physure_core::frozen::{freeze, plan_seal};
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -1333,7 +1538,7 @@ mod tests {
         let plan = plan_seal(&path, "mine", now_unix() + 1, "t@h").unwrap().unwrap();
         // another writer appends to the file after the plan read it: a different length
         std::fs::write(&path, format!("{edited}\n# someone else")).unwrap();
-        let refused = write_planned("seal", &path, &plan.file, &plan.stamp).expect_err("refused");
+        let refused = write_planned("seal", &path, &plan).expect_err("refused");
         assert_eq!(refused.code, 1);
         assert!(refused.text.contains("changed since it was read") && refused.text.contains("nothing written"), "{}", refused.text);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), format!("{edited}\n# someone else"), "not overwritten");
@@ -1341,16 +1546,74 @@ mod tests {
         std::fs::write(&path, &edited).unwrap();
         let later = plan.stamp.modified.unwrap() + Duration::from_secs(5);
         std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
-        assert!(unchanged_since(&path, &plan.stamp).unwrap_err().contains("changed since it was read"));
-        assert!(write_planned("seal", &path, &plan.file, &plan.stamp).is_err());
+        assert!(unchanged_since(&path, &plan.stamp, &plan.read_sha256).unwrap_err().contains("changed since it was read"));
+        assert!(write_planned("seal", &path, &plan).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), edited, "not overwritten");
         // as it was read: written
         std::fs::File::options().write(true).open(&path).unwrap().set_modified(plan.stamp.modified.unwrap()).unwrap();
-        assert!(write_planned("seal", &path, &plan.file, &plan.stamp).is_ok());
+        if let Err(e) = write_planned("seal", &path, &plan) {
+            panic!("the planned write was refused: {}", e.text);
+        }
         assert!(FrozenFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap().verify().is_empty());
         // a file that is gone cannot be examined
         let missing = dir.join("missing.conf");
-        assert!(unchanged_since(&missing, &plan.stamp).unwrap_err().contains("cannot be examined"));
+        assert!(unchanged_since(&missing, &plan.stamp, &plan.read_sha256).unwrap_err().contains("cannot be examined"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Correction C11: an edit of the same length that keeps the modification time is seen by the hash of the bytes,
+    /// for `seal` and for `update`.
+    #[test]
+    fn a_same_length_edit_that_keeps_the_modification_time_is_not_written() {
+        use physure_core::frozen::{engine_pairs, plan_update, EntryInput, FrozenParts, Source};
+        let dir = std::env::temp_dir().join(format!("physure_cli_cas_bytes_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // seal: a hand edit of the overrides
+        let options = FreezeOptions {
+            cwd: &dir,
+            out: None,
+            reason: "first",
+            policy: EnginePolicy::Release,
+            engine_file: None,
+            time_unix: now_unix(),
+            actor: "t@h",
+        };
+        let (file, path) = freeze(&options).unwrap();
+        write_atomic(&path, &file.render().unwrap(), false).unwrap();
+        let edited = std::fs::read_to_string(&path).unwrap().replace(physure_core::frozen::EMPTY_OVERRIDES.trim_end(), "[Constants]\nzz_c = 3 m");
+        std::fs::write(&path, &edited).unwrap();
+        let seal_plan = plan_seal(&path, "mine", now_unix() + 1, "t@h").unwrap().unwrap();
+        // update: a file for another engine
+        let identity = EngineIdentity { version: "0.0.1".into(), ..EngineIdentity::current() };
+        let other = FrozenFile::new(
+            "2026-11-08T10:00:00Z",
+            FrozenParts {
+                engine: engine_pairs(&identity, EnginePolicy::Release, None).unwrap(),
+                sources: vec![
+                    Source::new("embedded", physure_core::units::conf::DEFAULT_PHYSURE_CONF).unwrap(),
+                    Source::new("overrides", "[Constants]\nzz_c = 3 m").unwrap(),
+                ],
+                ..FrozenParts::default()
+            },
+            EntryInput { time: "2026-11-08T10:00:00Z", action: "freeze", engine: "test", actor: "t@h", reason: "test", diff: "d" },
+        )
+        .unwrap();
+        let update_path = dir.join("other.frozen.conf");
+        std::fs::write(&update_path, other.render().unwrap()).unwrap();
+        let update_plan = plan_update(&update_path, "adopt", None, None, now_unix() + 1, "t@h").unwrap().unwrap();
+        for (command, path, plan) in [("seal", &path, &seal_plan), ("update", &update_path, &update_plan)] {
+            let read = std::fs::read_to_string(path).unwrap();
+            let other = read.replacen("zz_c = 3 m", "zz_c = 4 m", 1);
+            assert_eq!(other.len(), read.len(), "{command}");
+            std::fs::write(path, &other).unwrap();
+            std::fs::File::options().write(true).open(path).unwrap().set_modified(plan.stamp.modified.unwrap()).unwrap();
+            assert_eq!(FileStamp::of(&std::fs::metadata(path).unwrap()), plan.stamp, "{command}: the stamp is blind to it");
+            let refused = write_planned(command, path, plan).expect_err("refused");
+            assert_eq!(refused.code, 1, "{command}");
+            assert!(refused.text.contains("changed since it was read") && refused.text.contains("SHA-256"), "{command}: {}", refused.text);
+            assert_eq!(std::fs::read_to_string(path).unwrap(), other, "{command}: not overwritten");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1129,10 +1129,12 @@ fn seal_json_carries_the_overrides_and_their_contribution() {
     let dir = Dir::new("seal_json");
     freeze_cli(&dir, &[]);
     edit_overrides(&dir, "[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1");
-    let output = dir.conf(&["seal", "--reason", "r", "--yes", "--json"]);
+    // the battery records const.molar_gas_constant, so this seal changes a witness and must say it accepts that
+    let output = dir.conf(&["seal", "--reason", "r", "--yes", "--json", "--accept-witness-changes", "all"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output));
     let doc = json(&output);
     assert_eq!(doc["command"], Value::from("seal"));
+    assert_eq!(doc["witnesses_rerecorded"], Value::Bool(true));
     assert_eq!(doc["overrides"], Value::from("[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1"));
     let data = doc["data"].as_array().unwrap();
     assert!(data.iter().any(|c| c["change"] == "changed" && c["name"] == "molar_gas_constant" && c["new"] == "8.0 J*mol^-1*K^-1"), "{doc}");

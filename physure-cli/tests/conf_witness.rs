@@ -538,3 +538,333 @@ fn the_file_s_settings_do_not_raise_the_witness_ceiling() {
     let message = errors[0]["message"].as_str().unwrap();
     assert!(message.starts_with("limit: ") && message.contains("max_loop_iterations ceiling of 1000000"), "{message}");
 }
+
+// ---- B4: update and seal refuse silent witness changes ----
+
+/// `phs conf <args>` with a temporary directory of its own (`TMP`, `TEMP`, `TMPDIR`), so the probe files of this run
+/// can be counted; asserts that none remains, whatever the command did.
+fn conf_in_own_temp(dir: &Dir, args: &[&str]) -> Output {
+    let temp = dir.path("own-temp");
+    fs::create_dir_all(&temp).unwrap();
+    let temp_text = temp.to_str().unwrap().to_string();
+    let mut all = vec!["conf"];
+    all.extend_from_slice(args);
+    let output = dir.phs(&all, &[("TMP", &temp_text), ("TEMP", &temp_text), ("TMPDIR", &temp_text)]);
+    let left: Vec<String> = fs::read_dir(&temp)
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with("phs-witness-probe-"))
+        .collect();
+    assert!(left.is_empty(), "{args:?}: probe files left behind: {left:?}\n{}", text(&output));
+    output
+}
+
+/// The frozen file of `dir` pinned to engine 0.0.1 (so `update` has something to do), with `edit` applied to its
+/// `[Witness]` pairs, re-sealed with the core API.
+fn doctor_for_update(dir: &Dir, edit: impl FnOnce(&mut Vec<(String, String)>)) {
+    let mut file = dir.frozen();
+    let identity = EngineIdentity { version: "0.0.1".into(), ..EngineIdentity::current() };
+    file.set_engine(engine_pairs(&identity, EnginePolicy::Release, None).unwrap());
+    let mut pairs = file.witnesses().as_slice().to_vec();
+    edit(&mut pairs);
+    file.set_witnesses(Pairs::from_vec(pairs).unwrap());
+    let time = file.history().last().unwrap().time().to_string();
+    file.reseal(EntryInput { time: &time, action: "update", engine: "0.0.1", actor: "t@h", reason: "older", diff: "d" })
+        .unwrap();
+    assert!(file.verify().is_empty(), "{:?}", file.verify());
+    dir.write(FROZEN_FILE_NAME, &file.render().unwrap());
+}
+
+/// `value` with the mean one ulp further.
+fn nudged(value: &str) -> String {
+    let WitnessValue::Number { mean, uncertainty, unit } = parse_value(value).unwrap() else { panic!("{value}") };
+    physure_core::frozen::format_value(&WitnessValue::Number { mean: mean + 1, uncertainty, unit })
+}
+
+/// Nudges the recorded value of each of `keys` by one ulp.
+fn nudge(pairs: &mut [(String, String)], keys: &[&str]) {
+    for key in keys {
+        let pair = pairs.iter_mut().find(|(k, _)| k == key).unwrap_or_else(|| panic!("{key} is recorded"));
+        pair.1 = nudged(&pair.1);
+    }
+}
+
+const FOOT: &str = "builtin.units.foot_to_metre";
+const KMH: &str = "builtin.units.kmh_to_ms";
+
+fn bytes(dir: &Dir) -> Vec<u8> {
+    fs::read(dir.path(FROZEN_FILE_NAME)).unwrap()
+}
+
+/// The `diff` of the last history entry of the frozen file of `dir`.
+fn last_diff(dir: &Dir) -> String {
+    dir.frozen().history().last().unwrap().diff().to_string()
+}
+
+#[test]
+fn update_refuses_a_changed_witness_without_the_flag_exit_1_and_writes_nothing() {
+    let dir = Dir::new("drift_refused");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let recorded = dir.frozen().witnesses().get(FOOT).unwrap().to_string();
+    doctor_for_update(&dir, |pairs| nudge(pairs, &[FOOT]));
+    let doctored = dir.frozen().witnesses().get(FOOT).unwrap().to_string();
+    let before = bytes(&dir);
+    for extra in [&["--yes"][..], &[][..]] {
+        let mut args = vec!["update", "--reason", "adopt"];
+        args.extend_from_slice(extra);
+        let output = conf_in_own_temp(&dir, &args);
+        assert_eq!(output.status.code(), Some(1), "{extra:?}: {}", text(&output));
+        let all = text(&output);
+        assert!(all.contains(FOOT) && all.contains("--accept-witness-changes"), "{all}");
+        // both values, as bit patterns, and the distance
+        assert!(all.contains(&recorded[..16]) && all.contains(&doctored[..16]), "{all}");
+        assert!(all.contains("1 ulp"), "{all}");
+        assert_eq!(bytes(&dir), before, "nothing written");
+    }
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "adopt", "--yes", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["refused"], Value::from("witnesses"), "{doc}");
+    assert_eq!(doc["written"], Value::Bool(false));
+    assert_eq!(doc["witnesses_rerecorded"], Value::Bool(false));
+    let differs = doc["witnesses"]["differs"].as_array().unwrap();
+    assert_eq!(differs.len(), 1, "{doc}");
+    assert_eq!(differs[0]["key"], Value::from(FOOT));
+    assert_eq!(differs[0]["recorded"], Value::from(doctored.as_str()));
+    assert_eq!(differs[0]["running"], Value::from(recorded.as_str()));
+    assert_eq!(differs[0]["ulps"], Value::from(1));
+    assert!(doc["error"].as_str().unwrap().contains("--accept-witness-changes"), "{doc}");
+    assert!(doc["engine"].as_array().unwrap().iter().any(|c| c["key"] == "version"), "the rest of the preview: {doc}");
+    assert_eq!(bytes(&dir), before, "nothing written");
+}
+
+#[test]
+fn update_with_accept_all_rerecords_and_verify_run_passes() {
+    let dir = Dir::new("drift_all");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let recorded = dir.frozen().witnesses().clone();
+    doctor_for_update(&dir, |pairs| nudge(pairs, &[FOOT]));
+    let old_block = dir.frozen().witnesses().clone();
+    let entries = dir.frozen().history().len();
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "adopt", "--yes", "--accept-witness-changes", "all", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["written"], Value::Bool(true));
+    assert_eq!(doc["witnesses_rerecorded"], Value::Bool(true));
+    assert_eq!(doc["witnesses"]["differs"][0]["key"], Value::from(FOOT), "{doc}");
+    let file = dir.frozen();
+    assert_eq!(file.witnesses(), &recorded, "re-recorded from the evaluation");
+    assert_eq!(file.history().len(), entries + 1, "one entry");
+    let diff = last_diff(&dir);
+    let old_hash = sha256_hex(physure_core::frozen::canonical::canonical_pairs(old_block.as_slice()).as_bytes());
+    assert!(
+        diff.ends_with(&format!("; witnesses: 1 changed, 0 new, 0 missing; changed: {FOOT}; old [Witness] sha256 {}", &old_hash[..12])),
+        "{diff}"
+    );
+    assert_eq!(doc["history_diff"], Value::from(diff.as_str()));
+    let verified = verify_run(&dir, &[]);
+    assert_eq!(verified.status.code(), Some(0), "{}", text(&verified));
+    let history = dir.conf(&["history"]);
+    assert!(stdout(&history).contains("witnesses: 1 changed, 0 new, 0 missing") && stdout(&history).contains(FOOT), "{}", text(&history));
+    // the text form prints the history line it wrote
+    let again = Dir::new("drift_all_text");
+    assert_eq!(again.freeze(&[]).status.code(), Some(0));
+    doctor_for_update(&again, |pairs| nudge(pairs, &[FOOT]));
+    let output = conf_in_own_temp(&again, &["update", "--reason", "adopt", "--yes", "--accept-witness-changes", "all"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stdout(&output).contains(&last_diff(&again)), "{}", text(&output));
+}
+
+#[test]
+fn update_with_the_exact_keys_rerecords_and_a_key_that_did_not_change_is_misuse() {
+    let dir = Dir::new("drift_keys");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    doctor_for_update(&dir, |pairs| nudge(pairs, &[FOOT, KMH]));
+    let before = bytes(&dir);
+    // a key that did not change: misuse, exit 2, naming what did change
+    let wrong = format!("{FOOT},builtin.units.psi_to_pa");
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes", "--accept-witness-changes", &wrong]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let all = text(&output);
+    assert!(all.contains("builtin.units.psi_to_pa") && all.contains(FOOT) && all.contains(KMH), "{all}");
+    assert_eq!(bytes(&dir), before);
+    // a list that does not cover everything that changed: exit 1, naming what was not accepted
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes", "--accept-witness-changes", FOOT, "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["refused"], Value::from("witnesses"));
+    assert!(doc["error"].as_str().unwrap().contains(KMH), "{doc}");
+    assert_eq!(bytes(&dir), before);
+    // the exact list (any order, spaces allowed): written
+    let exact = format!("{KMH}, {FOOT}");
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes", "--accept-witness-changes", &exact]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(last_diff(&dir).contains("witnesses: 2 changed, 0 new, 0 missing"), "{}", last_diff(&dir));
+    assert_eq!(verify_run(&dir, &[]).status.code(), Some(0));
+}
+
+#[test]
+fn a_missing_witness_must_be_accepted_too() {
+    let dir = Dir::new("drift_missing");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    doctor_for_update(&dir, |pairs| pairs.push(("builtin.zz_removed".into(), "3ff0000000000000:0000000000000000:m".into())));
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("builtin.zz_removed"), "{}", text(&output));
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes", "--accept-witness-changes", "builtin.zz_removed"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(dir.frozen().witnesses().get("builtin.zz_removed").is_none());
+    assert!(last_diff(&dir).contains("0 changed, 0 new, 1 missing; missing: builtin.zz_removed"), "{}", last_diff(&dir));
+}
+
+#[test]
+fn an_update_that_changes_no_witness_needs_no_flag_and_keeps_them() {
+    let dir = Dir::new("drift_none");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    doctor_for_update(&dir, |_| {});
+    let recorded = dir.frozen().witnesses().clone();
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["witnesses_rerecorded"], Value::Bool(false));
+    assert_eq!(dir.frozen().witnesses(), &recorded);
+    assert!(!last_diff(&dir).contains("witnesses:"), "finish(None): the Phase 2 diff line: {}", last_diff(&dir));
+    // nothing to do: nothing is evaluated (decision S9), the flag changes nothing
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes", "--accept-witness-changes", "all", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["nothing_to_do"], Value::Bool(true));
+    assert!(doc.get("witnesses").is_none(), "{doc}");
+}
+
+#[test]
+fn a_new_battery_case_is_recorded_without_the_flag_and_counted() {
+    let dir = Dir::new("drift_new");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let value = dir.frozen().witnesses().get(FOOT).unwrap().to_string();
+    doctor_for_update(&dir, |pairs| pairs.retain(|(k, _)| k != FOOT));
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(dir.frozen().witnesses().get(FOOT), Some(value.as_str()));
+    assert!(last_diff(&dir).contains("witnesses: 0 changed, 1 new, 0 missing"), "{}", last_diff(&dir));
+}
+
+/// A frozen file for engine 0.0.1 with an empty `[Witness]` (as Phase 2 made them) and these overrides.
+fn file_for_another_engine_without_witnesses(overrides: &str) -> String {
+    let identity = EngineIdentity { version: "0.0.1".into(), ..EngineIdentity::current() };
+    FrozenFile::new(
+        "2026-11-08T10:00:00Z",
+        FrozenParts {
+            engine: engine_pairs(&identity, EnginePolicy::Release, None).unwrap(),
+            sources: vec![Source::new("embedded", DEFAULT_PHYSURE_CONF).unwrap(), Source::new("overrides", overrides).unwrap()],
+            ..FrozenParts::default()
+        },
+        EntryInput { time: "2026-11-08T10:00:00Z", action: "freeze", engine: "test", actor: "t@h", reason: "test", diff: "d" },
+    )
+    .unwrap()
+    .render()
+    .unwrap()
+}
+
+/// The decision for a file that records no built-in witness (every Phase 2 file): every case of the battery is new,
+/// nothing validated changes, so it is recorded without the flag, and the preview says so.
+#[test]
+fn a_file_without_the_battery_records_it_on_update_without_the_flag() {
+    let dir = Dir::new("drift_phase2");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine_without_witnesses(""));
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "adopt", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(stdout(&output).contains("records no built-in witness"), "{}", text(&output));
+    let builtin = keys(&dir.frozen(), "builtin.");
+    assert!(builtin.len() >= 38, "{builtin:?}");
+    assert!(last_diff(&dir).contains(&format!("witnesses: 0 changed, {} new, 0 missing", builtin.len())), "{}", last_diff(&dir));
+    assert_eq!(verify_run(&dir, &[]).status.code(), Some(0));
+}
+
+/// The frozen file of `dir` with its overrides (source 2) replaced by `overrides`, by hand (not sealed).
+fn edit_overrides(dir: &Dir, overrides: &str) {
+    let original = dir.read(FROZEN_FILE_NAME);
+    let edited = original.replace(physure_core::frozen::EMPTY_OVERRIDES.trim_end(), overrides);
+    assert_ne!(edited, original, "the overrides block was found");
+    dir.write(FROZEN_FILE_NAME, &edited);
+}
+
+#[test]
+fn seal_of_an_override_a_witness_depends_on_needs_the_flag() {
+    let dir = Dir::new("drift_seal");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    edit_overrides(&dir, "[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1");
+    let before = bytes(&dir);
+    let key = "builtin.const.molar_gas_constant";
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "mine", "--yes", "--json"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["refused"], Value::from("witnesses"), "{doc}");
+    assert!(doc["witnesses"]["differs"].as_array().unwrap().iter().any(|d| d["key"] == key), "{doc}");
+    assert_eq!(bytes(&dir), before, "nothing written");
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "mine", "--yes", "--accept-witness-changes", "all"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let recorded = parse_value(dir.frozen().witnesses().get(key).unwrap()).unwrap();
+    let WitnessValue::Number { mean, .. } = recorded else { panic!("{recorded:?}") };
+    assert_eq!(f64::from_bits(mean), 8.0, "the new value is recorded");
+    assert_eq!(dir.frozen().history().len(), 2);
+    let diff = last_diff(&dir);
+    assert!(diff.starts_with("overrides edited by hand: ") && diff.contains(key), "{diff}");
+    let verified = verify_run(&dir, &[]);
+    assert_eq!(verified.status.code(), Some(0), "{}", text(&verified));
+}
+
+#[test]
+fn seal_of_an_override_no_witness_depends_on_keeps_them() {
+    let dir = Dir::new("drift_seal_none");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let recorded = dir.frozen().witnesses().clone();
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "mine", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(dir.frozen().witnesses(), &recorded);
+    assert!(!last_diff(&dir).contains("witnesses:"), "{}", last_diff(&dir));
+    // declined (no terminal, no --yes): exit 2, nothing written, no probe left
+    let original = dir.read(FROZEN_FILE_NAME);
+    let edited = original.replacen("zz_unit = 2.0, L, [zz_unit]", "zz_unit = 3.0, L, [zz_unit]", 1);
+    assert_ne!(edited, original);
+    dir.write(FROZEN_FILE_NAME, &edited);
+    let before = bytes(&dir);
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "mine"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(bytes(&dir), before);
+}
+
+/// The engine of the file as read is checked before anything is evaluated (a probe of it would not load).
+#[test]
+fn seal_under_another_engine_is_exit_3_before_any_evaluation() {
+    let dir = Dir::new("drift_seal_engine");
+    let sealed = file_for_another_engine_without_witnesses("[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    dir.write(FROZEN_FILE_NAME, &sealed.replacen("zz_unit = 2.0", "zz_unit = 3.0", 1));
+    let before = bytes(&dir);
+    let output = conf_in_own_temp(&dir, &["seal", "--reason", "x", "--yes", "--accept-witness-changes", "all", "--json"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let doc = json(&output);
+    assert!(doc["error"].as_str().unwrap().contains("phs conf update"), "{doc}");
+    assert!(doc.get("witnesses").is_none(), "nothing was evaluated: {doc}");
+    assert_eq!(bytes(&dir), before);
+}
+
+#[test]
+fn accept_witness_changes_is_a_value_flag_of_update_and_seal_only() {
+    let dir = Dir::new("drift_flag_misuse");
+    for args in [
+        &["update", "--reason", "r", "--accept-witness-changes"][..],
+        &["update", "--reason", "r", "--accept-witness-changes", "--yes"][..],
+        &["update", "--reason", "r", "--accept-witness-changes", "a,,b"][..],
+        &["update", "--reason", "r", "--accept-witness-changes", "all", "--accept-witness-changes", "all"][..],
+        &["verify", "--accept-witness-changes", "all"][..],
+        &["freeze", "--reason", "r", "--accept-witness-changes", "all"][..],
+        &["status", "--accept-witness-changes", "all"][..],
+    ] {
+        let output = dir.conf(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
+        assert!(text(&output).contains("--accept-witness-changes"), "{args:?}: {}", text(&output));
+    }
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
+}
