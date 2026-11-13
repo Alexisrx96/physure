@@ -707,7 +707,9 @@ Each case runs on its own under `catch_unwind`: a panic or a limit is that case'
   and ever after.
 * **It is evaluated like `phs eval`**, in the sandbox of section 9.4, with Monte Carlo seed 0, under the
   file about to be written. It must evaluate without an error finding; otherwise `freeze` refuses (exit 2)
-  and lists the findings. Nothing is written.
+  and lists the findings. It must also **produce at least one result**: an empty, comment-only or
+  definitions-only script has the same canonical result under every configuration and would match forever,
+  so `freeze` refuses it too (exit 2, `a witness must produce at least one result`). Nothing is written.
 * **What is recorded is the hash of a canonical result**, the versioned text `phs-witness-1`
   ([`canonical_witness`](https://github.com/Alexisrx96/physure/blob/main/physure-script/src/report.rs#L115)):
   `ok true|false`, then one line per result item with its line, name, kind, the bit patterns of its value
@@ -741,12 +743,21 @@ witnesses: checked 47 built-in, 1 user, under /srv/lab/physure.frozen.conf
 The rows come grouped: `DIFFERS` (both bit patterns, both decimals and the distance in ulps, section 9.6;
 for a user witness both hashes and the running canonical text), `MISSING` (recorded, but this build has no
 such case), `NEW` (this build has a case the file does not record: informational, it comes with a newer
-library and is recorded by the next `update` or `seal`), `ERROR` (a panic, a limit, not run), then the count
-of matches.
+library and is recorded by the next `update` or `seal`), `ERROR` (a panic, a limit, not run, or a user
+script that does not evaluate cleanly or produces no result, section 9.3: an honest file never records one,
+so it is an error even when its hash matches), then the count of matches.
 
-**Nothing is evaluated** when the file does not verify (exit 1), when it pins another engine (exit 3: a
-result under an engine the file does not pin proves nothing; `update` first) or when it records no
-`builtin.*` witness:
+**A new built-in case is an error under a pinned identical engine.** When the file's policy is `binary` or
+`build` and the running engine is the pinned one, the battery of that exact build is known and the file
+recorded every case of it at `freeze`: a `NEW` built-in row means a key was removed from the file, and it is
+`ERROR builtin.<id>: the recorded battery lacks builtin.<id>: expected every case of this exact build ...`
+(exit 1). Under `release` and `record` another build of the version may be running, so `NEW` stays
+informational there. A file that records no built-in witness at all is the migration case below.
+
+**Nothing is evaluated** when the file does not verify (exit 1), when its seal does not match `--expect`
+(exit 1: a file that is not the one expected is not one whose scripts are executed; `witnesses: not run: the
+seal does not match --expect; nothing was evaluated`), when it pins another engine (exit 3: a result under an
+engine the file does not pin proves nothing; `update` first) or when it records no `builtin.*` witness:
 
 ```console
 witnesses: not run: nothing is witnessed: expected the built-in battery; re-freeze, or run `phs conf update --reason "..."`; nothing was evaluated
@@ -756,10 +767,17 @@ A file without the battery is refused rather than passed because there would be 
 file made before Phase 3 has an empty `[Witness]`. `phs conf update --reason "..."` records the battery
 (section 4.6), with no other flag.
 
+**The file evaluated is the file verified.** `--run` puts the file in force by its path after reading it to
+verify it, so it hashes the bytes it verified and checks that the file still has them just before evaluating
+(`witnesses: not run: the file changed while it was being verified; nothing was evaluated`, exit 1) and
+again just after (`witnesses: discarded: the file changed while its witnesses were being evaluated ...`,
+exit 1): an edit in between, even one of the same length with the modification time put back, is never
+evaluated as if it were the file that verified.
+
 | Exit | `verify --run` |
 | --- | --- |
-| `0` | every recorded witness matches (new cases are informational) |
-| `1` | a witness differs, is missing or could not be evaluated; the file records no built-in witness; the file does not verify; an `--expect` mismatch |
+| `0` | every recorded witness matches (new cases are informational, except a built-in case under `binary` or `build` with the engine matching) |
+| `1` | a witness differs, is missing or could not be evaluated; a user script that does not evaluate cleanly or produces no result; a built-in case the file lacks under a pinned identical engine; the file records no built-in witness; the file does not verify; an `--expect` mismatch (nothing is evaluated); the file changed while it was verified |
 | `2` | misuse (`--timeout-ms` without `--run`, or not a whole number of milliseconds above 0) |
 | `3` | the engine differs; nothing is evaluated |
 
@@ -781,17 +799,27 @@ nothing was evaluated, `witnesses` is `null`, `witnesses_ok` is `false` and `wit
   `not run: an earlier script did not stop` and the process ends after reporting (a thread cannot be
   killed);
 * a panic is `ERROR user.<name>: panic: ...` and a limit `ERROR user.<name>: limit: ...`: errors (exit 1),
-  never differences.
+  never differences;
+* **the parser bounds how deep a script nests**, so no script can end the process in a stack overflow
+  while it is read, checked, evaluated or dropped: an expression tree is at most 128 levels deep (every
+  operator of a chain such as `a + b + c` is a level: a sum of 200 000 terms is refused, not a crash), and
+  brackets, `if` expressions chained without brackets and function bodies nested by indentation at most 64
+  levels together. A script past either bound is a syntax error (`expression too deeply nested: at most
+  128 levels`, `... nested more than 64 levels deep`), which `freeze` refuses and `verify --run` reports.
 
-**There is no memory cap**: a script can allocate until the machine refuses. Run `--run` on a file from a
-source you do not trust inside a container or a session with a memory limit. The battery is the library's
-own code and is not bounded by `--timeout-ms`.
+**There is no memory cap**: a script can allocate until the machine refuses (a vector of millions of
+elements, a string doubled in a loop), and nothing isolates the evaluation from the process that runs it
+(the scripts run on a thread of the `phs` process, not in a process of their own). Run `--run` on a file
+from a source you do not trust inside a container or a session with a memory limit. The battery is the
+library's own code and is not bounded by `--timeout-ms`.
 
 ### 9.5 Witnesses in `update` and `seal`
 
 Both end their preview with the witnesses **as recorded** against **evaluated under the file they would
 write** (a sealed throwaway copy of it, `phs-witness-probe-*` in the temporary directory, deleted on every
-path; the user scripts with the 60 s default deadline). Then the rule:
+path; the user scripts with the 60 s default deadline). A probe file more than a day old, left by a process
+that was killed before it could delete its own, is deleted the next time `phs conf` makes a probe (nothing
+else in the temporary directory is touched). Then the rule:
 
 * **Every recorded witness matches and nothing is new:** the witnesses are kept byte for byte; the history
   line has no witness part.
@@ -801,7 +829,13 @@ path; the user scripts with the 60 s default deadline). Then the rule:
   `"refused": "witnesses"`, unless `--accept-witness-changes` covers every such key: `all`, or a
   comma-separated list of keys (`builtin.<id>`, `user.<name>`). A listed key that did not change is misuse
   (exit 2). With the acceptance, every witness is re-recorded from the evaluation.
-* **A witness could not be evaluated** (a panic, a limit): refused (exit 1) whatever the flag.
+* **A witness could not be evaluated** (a panic, a limit), or **a user script does not evaluate cleanly or
+  produces no result** under the file to be written (an override it used was renamed): refused (exit 1,
+  JSON `"refused": "witnesses"`) whatever the flag, naming the script and its first finding. Re-recording it
+  would make a failure the reference result; fix the script or the overrides first.
+* **The flag with nothing to accept** (nothing to do, every recorded witness matches, only new cases) is
+  not silently ignored: a warning on stderr and in JSON `warnings` says `the flag names N key(s) but nothing
+  changed; it had no effect` (exit 0).
 
 ```console
 $ phs conf seal --reason "lab value of R" --yes
