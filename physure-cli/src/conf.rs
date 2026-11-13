@@ -12,14 +12,15 @@ use std::process;
 
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::{
-    history_rows, inspect, set_engine_file, set_explicit_conf, EnginePolicy, EngineState, FieldChange, Inspection, Resolution, Why,
+    actor_from_env, freeze, history_rows, inspect, now_unix, set_engine_file, set_explicit_conf, write_atomic, EngineIdentity,
+    EnginePolicy, EngineState, FieldChange, FreezeOptions, Inspection, OpsError, Resolution, Why,
 };
 use serde_json::{json, Value};
 
 /// The commands this build has.
-const COMMANDS: [&str; 2] = ["status", "history"];
+const COMMANDS: [&str; 4] = ["status", "history", "freeze", "verify"];
 /// The commands of the design that this build does not have yet: they refuse instead of doing something else.
-const PLANNED: [&str; 6] = ["freeze", "verify", "show", "diff", "update", "seal"];
+const PLANNED: [&str; 4] = ["show", "diff", "update", "seal"];
 
 const HELP: &str = "\
 phs conf: the frozen configuration (physure.frozen.conf)
@@ -175,6 +176,8 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
     match command {
         "status" => (&["--conf", "--json", "--allow-engine-mismatch"], 0),
         "history" => (&["--conf", "--json"], 1),
+        "freeze" => (&["--json", "--reason", "--engine-policy", "--out"], 0),
+        "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch"], 1),
         _ => (&[], 0),
     }
 }
@@ -191,6 +194,13 @@ fn run(args: &ConfArgs) -> Outcome {
             format!("unknown command {command:?}; the commands are: {} (planned: {})", COMMANDS.join(", "), PLANNED.join(", ")),
         );
     }
+    if command == "freeze" && args.conf.is_some() {
+        return failure(
+            command,
+            2,
+            "`phs conf freeze` does not take --conf: it makes a new file from what is in force unfrozen; name where it goes with --out",
+        );
+    }
     let (flags, positional) = shape(command);
     if let Some(flag) = args.given.iter().find(|f| !flags.contains(f)) {
         return failure(command, 2, format!("`phs conf {command}` does not take {flag}; it takes: {}", flags.join(", ")));
@@ -202,6 +212,15 @@ fn run(args: &ConfArgs) -> Outcome {
             format!("`phs conf {command}` takes at most {positional} argument(s), found: {}", args.positional.join(" ")),
         );
     }
+    // what is decided without reading anything: misuse comes before any file is read
+    if command == "freeze" && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
+        return failure(command, 2, "`phs conf freeze` needs --reason \"...\" (not empty): the history records why");
+    }
+    if let Some(expected) = &args.expect {
+        if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return failure(command, 2, format!("--expect takes a seal: 64 hexadecimal characters, found {expected:?}"));
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         set_engine_file(Some(exe));
     }
@@ -210,7 +229,9 @@ fn run(args: &ConfArgs) -> Outcome {
     }
     match command {
         "status" => status(args),
-        _ => history(args),
+        "history" => history(args),
+        "freeze" => freeze_command(args),
+        _ => verify(args),
     }
 }
 
@@ -435,6 +456,91 @@ fn history(args: &ConfArgs) -> Outcome {
     }
     let fields = json!({ "path": shown(&path), "problems": inspection.problems, "rows": json_rows });
     report("history", text, fields, code)
+}
+
+/// The exit code of a refused operation (decision S2 of the Phase 2 plan): what the operation will not do, or a
+/// resolution problem, is 2; a file or a text that does not read, verify or replay is a discrepancy, 1.
+fn ops_code(error: &OpsError) -> i32 {
+    match error {
+        OpsError::AlreadyFrozen(_) | OpsError::WouldOverwrite(_) | OpsError::Refused(_) | OpsError::Engine(_) | OpsError::Resolve(_) => 2,
+        OpsError::Conf { .. } | OpsError::Load(_) | OpsError::Io { .. } | OpsError::Frozen(_) => 1,
+    }
+}
+
+/// `phs conf freeze --reason R [--engine-policy P] [--out PATH]`.
+fn freeze_command(args: &ConfArgs) -> Outcome {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => return failure("freeze", 2, format!("the current directory cannot be read: {e}")),
+    };
+    let exe = engine_file();
+    let policy = args.policy.unwrap_or_default();
+    let actor = actor_from_env(|name| std::env::var(name).ok());
+    let options = FreezeOptions {
+        cwd: &cwd,
+        out: args.out.clone(),
+        reason: args.reason.as_deref().unwrap_or_default().trim(),
+        policy,
+        engine_file: exe.as_deref(),
+        time_unix: now_unix(),
+        actor: &actor,
+    };
+    let written = freeze(&options).and_then(|(file, path)| {
+        write_atomic(&path, &file.render()?, false)?;
+        Ok((file, path))
+    });
+    let (file, path) = match written {
+        Ok(done) => done,
+        Err(e) => return failure("freeze", ops_code(&e), e.to_string()),
+    };
+    let engine = EngineIdentity::current().short();
+    let seal = file.seal_sha256().to_string();
+    let text = format!(
+        "wrote {}
+seal: {seal}
+  record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it
+engine: {engine} (policy {})
+",
+        shown(&path),
+        policy.as_str()
+    );
+    let sources: Vec<Value> = file.sources().iter().map(|s| json!({ "origin": s.origin(), "sha256": s.sha256() })).collect();
+    let fields = json!({ "path": shown(&path), "seal": seal, "engine": engine, "policy": policy.as_str(), "sources": sources });
+    report("freeze", text, fields, 0)
+}
+
+/// `phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]`.
+fn verify(args: &ConfArgs) -> Outcome {
+    let path = match target("verify", args) {
+        Ok(path) => path,
+        Err(outcome) => return outcome,
+    };
+    let inspection = inspect(&path, engine_file().as_deref());
+    let mut code = inspection.exit_code();
+    let (mut text, mut fields) = inspection_report(&inspection);
+    fields["seal_matches"] = Value::Null;
+    if let Some(expected) = &args.expect {
+        let matches = inspection.seal_matches(expected);
+        fields["seal_matches"] = Value::Bool(matches);
+        if matches {
+            text.push_str("expected seal: matches
+");
+        } else {
+            code = 1;
+            let why = if inspection.unreadable.is_some() || !inspection.problems.is_empty() {
+                " (the file does not verify, so its stored seal vouches for nothing)"
+            } else {
+                ""
+            };
+            text.push_str(&format!("expected seal: the seal does not match --expect {expected}{why}
+"));
+        }
+    }
+    if args.allow_engine_mismatch && code == 3 {
+        text.push_str("warning: --allow-engine-mismatch: inspected under another engine; the exit code still says so (3)
+");
+    }
+    report("verify", text, fields, code)
 }
 
 #[cfg(test)]

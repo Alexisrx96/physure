@@ -315,3 +315,219 @@ fn conf_is_dispatched_before_every_other_command() {
     dir.write(FROZEN_FILE_NAME, "garbage");
     assert_eq!(dir.phs(&["--version"], &[]).status.code(), Some(1));
 }
+
+// ---- Task 6: freeze and verify ----
+
+/// `phs conf freeze --reason R --engine-policy release` plus `extra`.
+fn freeze_cli(dir: &Dir, extra: &[&str]) -> Output {
+    let mut args = vec!["freeze", "--reason", "first freeze", "--engine-policy", "release"];
+    args.extend_from_slice(extra);
+    dir.conf(&args)
+}
+
+#[test]
+fn freeze_with_no_physure_conf_writes_a_file_that_verifies() {
+    let dir = Dir::new("freeze_plain");
+    let output = freeze_cli(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let file = FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap();
+    assert!(file.verify().is_empty());
+    assert_eq!(file.engine().get("policy"), Some("release"));
+    assert_eq!(file.history()[0].reason(), "first freeze");
+    let out = stdout(&output);
+    assert!(out.contains(FROZEN_FILE_NAME) && out.contains("record this seal outside this directory"), "{out}");
+    assert!(out.contains("release"), "{out}");
+    let verified = dir.conf(&["verify"]);
+    assert_eq!(verified.status.code(), Some(0), "{}", text(&verified));
+    // --out writes elsewhere, relative to the working directory
+    let other = Dir::new("freeze_out");
+    let output = freeze_cli(&other, &["--out", "audit.frozen.conf", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!((doc["schema"].clone(), doc["command"].clone()), (Value::from(1), Value::from("freeze")));
+    assert!(doc["path"].as_str().unwrap().ends_with("audit.frozen.conf"));
+    assert_eq!(doc["seal"].as_str().unwrap().len(), 64);
+    assert_eq!(doc["policy"], Value::from("release"));
+    assert!(other.path("audit.frozen.conf").is_file() && !other.path(FROZEN_FILE_NAME).exists());
+}
+
+#[test]
+fn freeze_reason_help_freezes_and_prints_no_help() {
+    let dir = Dir::new("freeze_help_reason");
+    let output = dir.conf(&["freeze", "--reason", "help", "--engine-policy", "release"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(!stdout(&output).contains("USAGE"), "{}", text(&output));
+    assert_eq!(FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap().history()[0].reason(), "help");
+}
+
+#[test]
+fn freeze_twice_is_exit_2_and_names_update() {
+    let dir = Dir::new("freeze_twice");
+    freeze_cli(&dir, &[]);
+    let before = dir.read(FROZEN_FILE_NAME);
+    let output = freeze_cli(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(stderr(&output).contains("phs conf update"), "{}", text(&output));
+    assert_eq!(dir.read(FROZEN_FILE_NAME), before);
+    // an output that exists is not overwritten
+    let other = Dir::new("freeze_taken");
+    other.write("taken.conf", "x");
+    let output = freeze_cli(&other, &["--out", "taken.conf"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert_eq!(other.read("taken.conf"), "x");
+}
+
+#[test]
+fn freeze_without_reason_is_exit_2_before_reading_anything() {
+    let dir = Dir::new("freeze_no_reason");
+    // a physure.conf that would be refused (exit 1) if it were read
+    dir.write("physure.conf", "[AtomicWeights]\nFe = abc, 0.1\n");
+    for args in [&["freeze", "--engine-policy", "release"][..], &["freeze", "--reason", "  ", "--engine-policy", "release"][..]] {
+        let output = dir.conf(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
+        assert!(stderr(&output).contains("--reason"), "{}", text(&output));
+    }
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
+    // with a reason the file is read, and a physure.conf that would never load is a discrepancy: exit 1
+    let output = freeze_cli(&dir, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stderr(&output).contains("Fe = abc"), "{}", text(&output));
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
+}
+
+#[test]
+fn freeze_with_conf_is_exit_2() {
+    let dir = Dir::new("freeze_conf");
+    let output = freeze_cli(&dir, &["--conf", "x.conf"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(stderr(&output).contains("--out"), "{}", text(&output));
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
+}
+
+#[test]
+fn freeze_prints_the_seal_that_verify_expects() {
+    let dir = Dir::new("freeze_seal");
+    let seal = seal_in(&stdout(&freeze_cli(&dir, &[])));
+    assert_eq!(seal, FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap().seal_sha256());
+    let output = dir.conf(&["verify", "--expect", &seal.to_uppercase()]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let last = if seal.ends_with('0') { "1" } else { "0" };
+    let wrong = format!("{}{last}", &seal[..63]);
+    let output = dir.conf(&["verify", "--expect", &wrong]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).contains("does not match"), "{}", text(&output));
+}
+
+#[test]
+fn freeze_build_policy_on_a_build_without_a_commit_is_exit_2_and_mentions_release() {
+    let dir = Dir::new("freeze_build");
+    let output = dir.conf(&["freeze", "--reason", "default policy"]);
+    if EngineIdentity::current().commit == physure_core::frozen::engine::UNKNOWN {
+        assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+        assert!(stderr(&output).contains("--engine-policy release"), "{}", text(&output));
+        assert!(!dir.path(FROZEN_FILE_NAME).exists());
+    } else {
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+        assert_eq!(FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap().engine().get("policy"), Some("build"));
+    }
+}
+
+#[test]
+fn freeze_with_overrides_keeps_physure_conf_as_source_2() {
+    let dir = Dir::new("freeze_overrides");
+    let local = "[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\n[Units]\nzz_unit = 2.0, L, [zz_unit]\n";
+    dir.write("physure.conf", local);
+    let output = freeze_cli(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let file = FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap();
+    assert_eq!((file.sources()[1].origin(), file.sources()[1].text()), ("overrides", local.trim_end()));
+    // the frozen file is now the catalog of phs
+    let output = dir.phs(&["3 zz_unit => m"], &[]);
+    assert!(output.status.success() && stdout(&output).contains('6'), "{}", text(&output));
+}
+
+#[test]
+fn verify_names_the_modified_value() {
+    let dir = Dir::new("verify_modified");
+    freeze_cli(&dir, &[]);
+    dir.write(FROZEN_FILE_NAME, &dir.read(FROZEN_FILE_NAME).replacen(R_VALUE, "= 8.31446261815325", 1));
+    let output = dir.conf(&["verify"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).contains("source 1") && stdout(&output).contains("does not verify"), "{}", text(&output));
+    // the same file by name, from elsewhere
+    let elsewhere = Dir::new("verify_elsewhere");
+    let path = dir.path(FROZEN_FILE_NAME);
+    let output = elsewhere.conf(&["verify", path.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+}
+
+#[test]
+fn verify_json_schema() {
+    let dir = Dir::new("verify_json");
+    let seal = seal_in(&stdout(&freeze_cli(&dir, &[])));
+    let output = dir.conf(&["verify", "--json", "--expect", &seal]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!((doc["schema"].clone(), doc["command"].clone()), (Value::from(1), Value::from("verify")));
+    assert_eq!(doc["seal"], Value::from(seal.as_str()));
+    assert_eq!(doc["verified"], Value::Bool(true));
+    assert_eq!(doc["engine_matches"], Value::Bool(true));
+    assert_eq!(doc["seal_matches"], Value::Bool(true));
+    assert_eq!(doc["exit_code"], Value::from(0));
+    assert!(doc["problems"].as_array().unwrap().is_empty());
+    let sources = doc["sources"].as_array().unwrap();
+    assert_eq!((sources[0]["origin"].clone(), sources[1]["origin"].clone()), (Value::from("embedded"), Value::from("overrides")));
+    // without --expect there is no seal_matches to report
+    assert_eq!(json(&dir.conf(&["verify", "--json"]))["seal_matches"], Value::Null);
+}
+
+/// C4: a hand edit keeps the stored seal, so the seal alone must not vouch for it.
+#[test]
+fn verify_expect_after_editing_a_source_is_a_mismatch() {
+    let dir = Dir::new("verify_expect_edit");
+    let seal = seal_in(&stdout(&freeze_cli(&dir, &[])));
+    let edited = dir.read(FROZEN_FILE_NAME).replace(EMPTY_OVERRIDES.trim_end(), "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    dir.write(FROZEN_FILE_NAME, &edited);
+    let output = dir.conf(&["verify", "--json", "--expect", &seal]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert_eq!(json(&output)["seal_matches"], Value::Bool(false));
+}
+
+#[test]
+fn verify_expect_that_is_not_64_hex_is_exit_2() {
+    let dir = Dir::new("verify_expect_bad");
+    freeze_cli(&dir, &[]);
+    let (non_hex, short) = ("g".repeat(64), "a".repeat(63));
+    for bad in ["abc", non_hex.as_str(), short.as_str()] {
+        let output = dir.conf(&["verify", "--expect", bad]);
+        assert_eq!(output.status.code(), Some(2), "{bad}: {}", text(&output));
+        assert!(stderr(&output).contains("64"), "{}", text(&output));
+    }
+}
+
+#[test]
+fn verify_of_a_missing_file_is_1_and_without_a_file_in_force_is_2() {
+    let dir = Dir::new("verify_missing");
+    let output = dir.conf(&["verify", "missing.frozen.conf"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(text(&output).contains("missing.frozen.conf"), "{}", text(&output));
+    let output = dir.conf(&["verify"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let output = dir.conf(&["verify", "--conf", "missing.frozen.conf"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+}
+
+#[test]
+fn verify_of_a_file_for_another_engine_stays_3_with_allow_engine_mismatch() {
+    let dir = Dir::new("verify_engine");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    for extra in [&[][..], &["--allow-engine-mismatch"][..]] {
+        let mut args = vec!["verify", "--json"];
+        args.extend_from_slice(extra);
+        let output = dir.conf(&args);
+        assert_eq!(output.status.code(), Some(3), "{extra:?}: {}", text(&output));
+        let doc = json(&output);
+        assert_eq!(doc["engine_matches"], Value::Bool(false));
+        assert_eq!(doc["verified"], Value::Bool(true));
+    }
+}
