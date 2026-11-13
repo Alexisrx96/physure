@@ -155,6 +155,7 @@ fn interpret(attempt: Attempt, timeout: Duration) -> (Result<WitnessResult, Stri
 /// One user witness, evaluated in the sandbox (see the module documentation) under the configuration in force:
 /// `Err` is a limit (`limit: ...`) or a panic (`panic: ...`), never a difference. A finding that is not a limit is
 /// part of the result (`report.ok` is false): `freeze` refuses such a script, `verify --run` compares its hash.
+#[allow(dead_code)] // the one-script form; the commands evaluate through `evaluate_witnesses`
 pub fn evaluate_user_witness(text: &str, timeout: Duration) -> Result<WitnessResult, String> {
     attempt(text, timeout).0
 }
@@ -198,13 +199,6 @@ pub struct WitnessRun {
     pub user: Vec<(String, Result<WitnessResult, String>)>,
     /// A script did not stop and its thread is still running: the process must end after reporting.
     pub stuck: bool,
-}
-
-impl WitnessRun {
-    /// The built-in rows.
-    pub fn builtin_count(&self) -> usize {
-        self.rows.iter().filter(|(key, _)| key.starts_with("builtin.")).count()
-    }
 }
 
 /// The battery, then `scripts` (their normalised text, `WitnessScript::text`, decision C13) in order, each user

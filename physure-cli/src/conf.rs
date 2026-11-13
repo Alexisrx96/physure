@@ -22,8 +22,10 @@ use physure_core::frozen::{
 };
 use serde_json::{json, Value};
 
-use crate::conf_witness::{evaluate_witnesses, read_script, with_probe, witness_name, DEFAULT_TIMEOUT};
-use physure_core::frozen::{prepare_freeze, WitnessScript};
+use crate::conf_witness::{evaluate_witnesses, read_script, with_configuration, with_probe, witness_name, DEFAULT_TIMEOUT};
+use physure_core::frozen::witness::compare as compare_witnesses;
+use physure_core::frozen::{parse_value, prepare_freeze, WitnessScript, WitnessStatus, WitnessValue};
+use std::time::Duration;
 
 /// The commands of `phs conf`.
 const COMMANDS: [&str; 8] = ["status", "show", "diff", "update", "seal", "history", "freeze", "verify"];
@@ -54,8 +56,12 @@ USAGE:
                                Write physure.frozen.conf from what is in force now (default policy: build when this build names its
                                commit, otherwise binary), with the built-in witness battery and each --witness script
                                (named after its file stem) evaluated under the new file and recorded
-    phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]
-                               Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
+    phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch] [--run [--timeout-ms N]]
+                               Check the seal, the hashes, the chain and the engine; compare the seal with SEAL;
+                               --run evaluates the witnesses again under FILE (the built-in battery, then the scripts
+                               embedded in the file, in the sandbox, each bounded by N ms, default 60000) and compares
+                               them bit for bit with what the file records; nothing runs when the file does not verify
+                               (exit 1) or pins another engine (exit 3)
 
 FLAGS:
     --conf PATH                The frozen file in force (not with freeze, which writes to --out, nor beside a FILE)
@@ -63,13 +69,16 @@ FLAGS:
     --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
     --witness FILE.phs         freeze: a user witness script (UTF-8, at most 1 MiB, must evaluate without errors);
                                repeatable, kept in the order given
+    --run                      verify: evaluate the witnesses again (see verify)
+    --timeout-ms N             verify --run: the wall-clock bound of each user witness script, in ms (default 60000)
     --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
                                (with --json they never ask: --json needs --yes to write)
     -h, --help                 This help
 
 EXIT CODES:
     0 ok (identical, for diff; nothing to do, for update and seal)
-    1 a discrepancy (modified file, broken seal, --expect mismatch, differences, a file changed while asking)
+    1 a discrepancy (modified file, broken seal, --expect mismatch, differences, a file changed while asking, a
+      witness that differs, is missing or could not be evaluated, a file that records no built-in witness)
     2 misuse, a missing required frozen file, a refused or declined operation, nothing to compare
     3 the engine differs from the pinned one
 ";
@@ -952,7 +961,125 @@ fn verify(args: &ConfArgs) -> Outcome {
         text.push_str("warning: --allow-engine-mismatch: inspected under another engine; the exit code still says so (3)
 ");
     }
+    if args.run {
+        let timeout = args.timeout_ms.map_or(DEFAULT_TIMEOUT, Duration::from_millis);
+        let (run_text, run_fields, run_code) = verify_run(&path, &inspection, timeout);
+        text.push_str(&run_text);
+        merge(&mut fields, &run_fields);
+        // a discrepancy found before (an --expect mismatch) stays; otherwise the witnesses decide
+        if code == 0 {
+            code = run_code;
+        }
+    }
     report("verify", text, fields, code)
+}
+
+/// What `verify --run` says when C5 finds nothing to compare.
+const NOTHING_WITNESSED: &str = "nothing is witnessed: expected the built-in battery; re-freeze, or run `phs conf update --accept-witness-changes all`";
+
+/// `verify --run`: the witnesses of the file at `path` evaluated under that file (it is made the explicit
+/// configuration in place; a relative path is made absolute), the battery in id order and then the file's own scripts
+/// in file order (decision S2), compared bit for bit with what it records. Nothing is evaluated when the file does not
+/// verify (exit 1), pins another engine (exit 3), or records no built-in witness (exit 1, correction C5). Exit 0 when
+/// every recorded witness matches (new cases are informational), 1 otherwise.
+fn verify_run(path: &Path, inspection: &Inspection, timeout: Duration) -> (String, Value, i32) {
+    let not_run = |why: String, code: i32| {
+        let text = format!("witnesses: not run: {why}; nothing was evaluated\n");
+        (text, json!({ "witnesses": Value::Null, "witnesses_ok": false, "witnesses_not_run": why }), code)
+    };
+    let file = match (inspection.exit_code(), inspection.file.as_ref()) {
+        (3, _) => return not_run("the engine differs from the one the file pins (a result under an engine the file does not pin proves nothing)".into(), 3),
+        (0, Some(file)) => file,
+        (code, _) => return not_run("the file does not verify".into(), code.max(1)),
+    };
+    let (builtin, user) = recorded_counts(file);
+    if builtin == 0 {
+        return not_run(NOTHING_WITNESSED.into(), 1);
+    }
+    let evaluated = match with_configuration(path, || evaluate_witnesses(file.witness_scripts(), timeout)) {
+        Ok(evaluated) => evaluated,
+        Err(e) => return not_run(format!("the file cannot be put in force to evaluate under it: {}", e.message), e.code),
+    };
+    let run = evaluated.value;
+    let compared = compare_witnesses(file.witnesses(), &run.rows);
+    let (differ, new, missing, errors) = compared.counts();
+    let matched = compared.rows.len() - differ - new - missing - errors;
+    let canonical = |key: &str| {
+        let name = key.strip_prefix("user.")?;
+        run.user.iter().find(|(n, _)| n == name).and_then(|(_, r)| r.as_ref().ok()).map(|r| r.canonical.clone())
+    };
+    let mut text = format!("witnesses: checked {builtin} built-in, {user} user, under {}\n", shown(path));
+    let (mut differs, mut missing_keys, mut new_keys, mut error_rows) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for row in &compared.rows {
+        if let WitnessStatus::Differs { recorded, running, ulps } = &row.status {
+            let mut entry = json!({ "key": row.key, "recorded": recorded, "running": running, "ulps": ulps });
+            text.push_str(&format!("DIFFERS {}\n", row.key));
+            match (parse_value(recorded), parse_value(running)) {
+                (Ok(WitnessValue::Number { mean: m1, uncertainty: u1, unit: a }), Ok(WitnessValue::Number { mean: m2, uncertainty: u2, unit: b })) => {
+                    let decimal = |bits: u64| format!("{:?}", f64::from_bits(bits));
+                    text.push_str(&format!("  recorded: mean {m1:016x} ({}), uncertainty {u1:016x} ({}), unit {a:?}\n", decimal(m1), decimal(u1)));
+                    text.push_str(&format!("  running:  mean {m2:016x} ({}), uncertainty {u2:016x} ({}), unit {b:?}\n", decimal(m2), decimal(u2)));
+                    match ulps {
+                        Some(1) => text.push_str("  distance: 1 ulp\n"),
+                        Some(n) => text.push_str(&format!("  distance: {n} ulps\n")),
+                        None => text.push_str("  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)\n"),
+                    }
+                    entry["recorded_decimal"] = json!({ "mean": decimal(m1), "uncertainty": decimal(u1) });
+                    entry["running_decimal"] = json!({ "mean": decimal(m2), "uncertainty": decimal(u2) });
+                }
+                _ if row.key.starts_with("user.") => {
+                    text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n"));
+                    text.push_str("  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):\n");
+                    let running_text = canonical(&row.key).unwrap_or_default();
+                    for line in running_text.lines() {
+                        text.push_str(&format!("  | {line}\n"));
+                    }
+                    entry["running_canonical"] = Value::from(running_text);
+                }
+                _ => text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n")),
+            }
+            differs.push(entry);
+        }
+    }
+    for row in &compared.rows {
+        match &row.status {
+            WitnessStatus::Missing => {
+                text.push_str(&format!("MISSING {}: recorded, but this build has no such witness\n", row.key));
+                missing_keys.push(row.key.clone());
+            }
+            WitnessStatus::New => new_keys.push(row.key.clone()),
+            WitnessStatus::Error(message) => error_rows.push((row.key.clone(), message.clone())),
+            _ => {}
+        }
+    }
+    for key in &new_keys {
+        text.push_str(&format!("NEW {key}: this build has it and the file does not record it (informational)\n"));
+    }
+    for (key, message) in &error_rows {
+        text.push_str(&format!("ERROR {key}: {message}\n"));
+    }
+    text.push_str(&format!("{matched} matched\n"));
+    if run.stuck {
+        text.push_str("note: a script did not stop and cannot be stopped; this process ends now\n");
+    }
+    for warning in &evaluated.warnings {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
+    let ok = compared.all_match();
+    let errors_json: Vec<Value> = error_rows.iter().map(|(key, message)| json!({ "key": key, "message": message })).collect();
+    let fields = json!({
+        "witnesses": {
+            "checked": file.witnesses().len(),
+            "match": matched,
+            "differs": differs,
+            "missing": missing_keys,
+            "new": new_keys,
+            "errors": errors_json,
+        },
+        "witnesses_ok": ok,
+        "witness_warnings": evaluated.warnings,
+    });
+    (text, fields, if ok { 0 } else { 1 })
 }
 
 /// Residual risk 1c-14 of the spec: the file must be as the plan read it. Its length and modification time now are
