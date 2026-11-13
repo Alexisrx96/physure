@@ -112,7 +112,7 @@ fn io_error(path: &Path) -> impl Fn(io::Error) -> OpsError + '_ {
 fn running_engine(policy: EnginePolicy, engine_file: Option<&Path>) -> Result<Pairs, OpsError> {
     let identity = EngineIdentity::current();
     freezable(&identity, policy)
-        .map_err(|e| OpsError::Engine(format!("{e} (with the CLI: --engine-policy release or record)")))?;
+        .map_err(|e| OpsError::Engine(format!("{e} (with the CLI: --engine-policy binary, release or record)")))?;
     let hash = match policy {
         EnginePolicy::Binary => {
             let path = engine_file.ok_or_else(|| {
@@ -538,22 +538,20 @@ mod tests {
     }
 
     #[test]
-    fn freeze_with_binary_needs_the_engine_file_and_a_known_commit() {
+    fn freeze_with_binary_needs_the_engine_file_but_not_a_known_commit() {
         let dir = Dir::new();
         let engine_file = dir.write("engine.bin", "the engine");
         let without = freeze(&options(&dir, EnginePolicy::Binary)).unwrap_err().to_string();
+        assert!(without.contains("needs the file that contains the engine"), "{without}");
         let with_file = FreezeOptions { engine_file: Some(&engine_file), ..options(&dir, EnginePolicy::Binary) };
+        let (file, _) = freeze(&with_file).unwrap();
+        assert_eq!(file.engine().get("binary_sha256"), Some(sha256_of_file(&engine_file).unwrap().as_str()));
+        assert_eq!(file.engine().get("policy"), Some("binary"));
+        // only `build` needs the build to name its commit, and the CLI flag is named in the refusal
         let build = freeze(&options(&dir, EnginePolicy::Build));
         if EngineIdentity::current().commit == crate::frozen::engine::UNKNOWN {
-            // a build from a dirty tree: neither policy can be recorded, and the CLI flag is named
-            assert!(without.contains("--engine-policy release or record"), "{without}");
-            assert!(freeze(&with_file).unwrap_err().to_string().contains("--engine-policy release or record"));
-            assert!(build.unwrap_err().to_string().contains("--engine-policy release or record"));
+            assert!(build.unwrap_err().to_string().contains("--engine-policy binary, release or record"));
         } else {
-            assert!(without.contains("needs the file that contains the engine"), "{without}");
-            let (file, _) = freeze(&with_file).unwrap();
-            assert_eq!(file.engine().get("binary_sha256"), Some(sha256_of_file(&engine_file).unwrap().as_str()));
-            assert_eq!(file.engine().get("policy"), Some("binary"));
             build.unwrap();
         }
     }

@@ -214,14 +214,16 @@ seal: b1844aad0461a8b15bae3505155eb2b2c3333c3421bb3fd72625aab8c3326658
 engine: 0.3.0+unknown (policy release)
 ```
 
-The default policy is `build`. **A build that does not name its commit cannot record `build` or
-`binary`**: the commit comes from the variable `PHYSURE_BUILD_COMMIT` when `phs` is compiled (the release
-workflows set it), and without it the commit is `unknown`. Such a `phs` refuses with exit 2 and says that
-`--engine-policy release` or `record` is available:
+Without `--engine-policy` the default is `build` when this `phs` names its commit and `binary` when it does
+not (the strongest policy that needs no commit: it pins the hash of the executable). The commit comes from
+the variable `PHYSURE_BUILD_COMMIT` when `phs` is compiled (the release workflows set it); without it the
+commit is `unknown`. **Only `build` needs a known commit**, because it compares the commit and `unknown`
+equals nothing: a file frozen that way would be refused by the very build that made it. Asking for `build` on
+a build without a commit refuses with exit 2 and names the other policies:
 
 ```console
-$ phs conf freeze --reason "initial validation"
-phs conf: the engine cannot be recorded: this build does not name its commit (build it with PHYSURE_BUILD_COMMIT set to the full lowercase hash), so the policy build cannot be recorded; use release or record (with the CLI: --engine-policy release or record)
+$ phs conf freeze --reason "initial validation" --engine-policy build
+phs conf: the engine cannot be recorded: this build does not name its commit (build it with PHYSURE_BUILD_COMMIT set to the full lowercase hash), so the policy build cannot be recorded; use binary, release or record (with the CLI: --engine-policy binary, release or record)
 ```
 
 A reason is one line of 1 to 500 characters without control characters (no escape sequences, tabs,
@@ -481,7 +483,8 @@ A mismatch is an error (exit 3) **when evaluating**: `phs eval` and every other 
 
 * `unknown` never equals anything, not even another `unknown`: under `build`, a commit that is `unknown`
   on either side is a mismatch.
-* `build` and `binary` cannot be **recorded** by a build whose commit is `unknown` (section 4.3). The
+* `build` cannot be **recorded** by a build whose commit is `unknown` (section 4.3); `binary`, `release` and
+  `record` can. The
   commit is the builder's claim: the variable `PHYSURE_BUILD_COMMIT` at build time, a full lowercase hash
   of 40 or 64 hexadecimal characters; anything else gives `unknown`. Git is not consulted.
 * `binary` attests **the file at its path when it is checked**, not the image in memory. Under `build`, a
@@ -542,7 +545,7 @@ A single `phs` command reads the file in force afresh every time it runs. A proc
 ## 7. The workflow
 
 1. **Freeze** the configuration you validated:
-   `phs conf freeze --reason "validation VR-2026-14" --engine-policy build` (or `release`/`record` on a build
+   `phs conf freeze --reason "validation VR-2026-14" --engine-policy build` (or `binary`/`release`/`record` on a build
    without a commit). Record the printed seal in your quality system.
 2. **Change the overrides** only by editing source 2 of `physure.frozen.conf`; `phs conf verify` now says
    what changed (exit 1), and every other `phs` command refuses to run until the edit is sealed.

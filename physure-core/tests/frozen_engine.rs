@@ -47,9 +47,10 @@ fn the_running_engine_can_always_be_recorded_under_release_and_record() {
         let parsed = FrozenFile::parse(&file(&now, policy).render().unwrap()).unwrap();
         assert!(parsed.verify().is_empty());
     }
-    // build and binary are recorded only if the running build knows its commit
+    // build is recorded only if the running build knows its commit; binary needs no commit
     let build = engine_pairs(&now, EnginePolicy::Build, None);
     assert_eq!(build.is_ok(), now.commit != UNKNOWN);
+    assert!(engine_pairs(&now, EnginePolicy::Binary, Some(&"0".repeat(64))).is_ok());
 }
 
 #[test]

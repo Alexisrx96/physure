@@ -1221,11 +1221,11 @@ mod tests {
     #[test]
     fn a_block_that_could_not_have_been_recorded_is_a_problem() {
         let unknown_build = raw_block("unknown", "build");
-        let unknown_binary = raw_block("unknown", "binary");
         let binary_without_hash = raw_block("0123456789abcdef0123456789abcdef01234567", "binary");
         for (what, block, needle) in [
             ("build with an unknown commit", &unknown_build, "commit"),
-            ("binary with an unknown commit", &unknown_binary, "commit"),
+            // `binary` needs no commit (2026-11-13): an unknown one without a hash is refused for the hash only
+            ("binary with an unknown commit and no hash", &raw_block("unknown", "binary"), "binary_sha256"),
             ("binary without a hash", &binary_without_hash, "binary_sha256"),
         ] {
             // readable, so only the new rule can refuse it

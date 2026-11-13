@@ -546,17 +546,27 @@ fn freeze_prints_the_seal_that_verify_expects() {
 }
 
 #[test]
-fn freeze_build_policy_on_a_build_without_a_commit_is_exit_2_and_mentions_release() {
-    let dir = Dir::new("freeze_build");
+fn freeze_without_a_policy_picks_build_with_a_commit_and_binary_without_and_the_file_verifies() {
+    let dir = Dir::new("freeze_default");
     let output = dir.conf(&["freeze", "--reason", "default policy"]);
-    if EngineIdentity::current().commit == physure_core::frozen::engine::UNKNOWN {
-        assert_eq!(output.status.code(), Some(2), "{}", text(&output));
-        assert!(stderr(&output).contains("--engine-policy release"), "{}", text(&output));
-        assert!(!dir.path(FROZEN_FILE_NAME).exists());
-    } else {
-        assert_eq!(output.status.code(), Some(0), "{}", text(&output));
-        assert_eq!(FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap().engine().get("policy"), Some("build"));
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let expected = if EngineIdentity::current().commit == physure_core::frozen::engine::UNKNOWN { "binary" } else { "build" };
+    assert_eq!(FrozenFile::parse(&dir.read(FROZEN_FILE_NAME)).unwrap().engine().get("policy"), Some(expected));
+    let verified = dir.conf(&["verify"]);
+    assert_eq!(verified.status.code(), Some(0), "{}", text(&verified));
+    assert!(text(&verified).contains(&format!("policy {expected}")), "{}", text(&verified));
+}
+
+#[test]
+fn freeze_build_policy_on_a_build_without_a_commit_is_exit_2_and_names_the_other_policies() {
+    if EngineIdentity::current().commit != physure_core::frozen::engine::UNKNOWN {
+        return; // a build that names its commit can freeze under build
     }
+    let dir = Dir::new("freeze_build");
+    let output = dir.conf(&["freeze", "--reason", "explicit build", "--engine-policy", "build"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    assert!(stderr(&output).contains("--engine-policy binary, release or record"), "{}", text(&output));
+    assert!(!dir.path(FROZEN_FILE_NAME).exists());
 }
 
 #[test]

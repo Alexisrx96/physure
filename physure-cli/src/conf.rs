@@ -48,7 +48,8 @@ USAGE:
                                new overrides and what they contribute, asks, re-seals
     phs conf history [FILE]    The history of the file in force (or FILE), problems first
     phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH]
-                               Write physure.frozen.conf from what is in force now (default policy: build)
+                               Write physure.frozen.conf from what is in force now (default policy: build when this build names its
+                               commit, otherwise binary)
     phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
 
@@ -781,7 +782,7 @@ fn freeze_command(args: &ConfArgs) -> Outcome {
         Err(e) => return failure("freeze", 2, format!("the current directory cannot be read: {e}")),
     };
     let exe = engine_file();
-    let policy = args.policy.unwrap_or_default();
+    let policy = args.policy.unwrap_or_else(|| physure_core::frozen::EnginePolicy::recommended_for(&physure_core::frozen::EngineIdentity::current()));
     let actor = actor_from_env(|name| std::env::var(name).ok());
     let options = FreezeOptions {
         cwd: &cwd,

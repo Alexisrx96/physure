@@ -246,17 +246,30 @@ pub fn check(
     }
 }
 
-/// Whether a frozen file may be made with this identity under `policy`: `build` and `binary` name a source
-/// revision (a binary hash alone does not tell an auditor which source it came from), so they need a known
-/// commit. `release` and `record` do not.
+/// Whether a frozen file may be made with this identity under `policy`: only `build` needs a known commit, because
+/// it compares the commit and an unknown commit equals nothing (a file frozen so would be refused by the very build
+/// that made it). `binary` compares the hash of the executable, `release` the version and `record` nothing, so none
+/// of them needs a commit; the commit is recorded as the builder declared it, `unknown` included.
 pub fn freezable(identity: &EngineIdentity, policy: EnginePolicy) -> Result<(), String> {
-    if matches!(policy, EnginePolicy::Build | EnginePolicy::Binary) && identity.commit == UNKNOWN {
+    if policy == EnginePolicy::Build && identity.commit == UNKNOWN {
         return Err(format!(
-            "this build does not name its commit (build it with PHYSURE_BUILD_COMMIT set to the full lowercase hash), so the policy {} cannot be recorded; use release or record",
+            "this build does not name its commit (build it with PHYSURE_BUILD_COMMIT set to the full lowercase hash), so the policy {} cannot be recorded; use binary, release or record",
             policy.as_str()
         ));
     }
     Ok(())
+}
+
+impl EnginePolicy {
+    /// The policy a freeze uses when none is asked for: `build` when this build names its commit, otherwise
+    /// `binary` (the strongest policy that does not need one: the hash of the executable).
+    pub fn recommended_for(identity: &EngineIdentity) -> EnginePolicy {
+        if identity.commit == UNKNOWN {
+            EnginePolicy::Binary
+        } else {
+            EnginePolicy::Build
+        }
+    }
 }
 
 /// A decoded `[Engine]` block.
@@ -649,10 +662,20 @@ mod tests {
     }
 
     #[test]
-    fn freezing_needs_a_known_commit_for_build_and_binary_only() {
+    fn the_default_policy_is_build_with_a_known_commit_and_binary_without() {
+        assert_eq!(EnginePolicy::recommended_for(&identity(HEAD)), EnginePolicy::Build);
+        assert_eq!(EnginePolicy::recommended_for(&identity(UNKNOWN)), EnginePolicy::Binary);
+        for commit in [HEAD, UNKNOWN] {
+            assert!(freezable(&identity(commit), EnginePolicy::recommended_for(&identity(commit))).is_ok());
+        }
+    }
+
+    #[test]
+    fn freezing_needs_a_known_commit_for_build_only() {
         let unknown = identity(UNKNOWN);
-        assert!(freezable(&unknown, EnginePolicy::Build).unwrap_err().contains("commit"));
-        assert!(freezable(&unknown, EnginePolicy::Binary).unwrap_err().contains("commit"));
+        let refused = freezable(&unknown, EnginePolicy::Build).unwrap_err();
+        assert!(refused.contains("commit") && refused.contains("binary, release or record"), "{refused}");
+        assert!(freezable(&unknown, EnginePolicy::Binary).is_ok());
         assert!(freezable(&unknown, EnginePolicy::Release).is_ok());
         assert!(freezable(&unknown, EnginePolicy::Record).is_ok());
         for p in [EnginePolicy::Binary, EnginePolicy::Build, EnginePolicy::Release, EnginePolicy::Record] {
@@ -682,6 +705,8 @@ mod tests {
         assert!(engine_pairs(&a, EnginePolicy::Binary, Some("not a hash")).is_err());
         assert!(engine_pairs(&identity(UNKNOWN), EnginePolicy::Build, None).unwrap_err().to_string().contains("commit"));
         assert!(engine_pairs(&identity(UNKNOWN), EnginePolicy::Release, None).is_ok());
+        let hash = "0".repeat(64);
+        assert!(engine_pairs(&identity(UNKNOWN), EnginePolicy::Binary, Some(&hash)).is_ok(), "binary needs no commit");
         let mut bad = identity(HEAD);
         bad.target = "two\nlines".into();
         assert!(engine_pairs(&bad, EnginePolicy::Build, None).is_err());
