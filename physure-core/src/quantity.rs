@@ -25,10 +25,34 @@ impl std::fmt::Debug for Quantity {
     }
 }
 
+/// Exact equality: the same unit (an alias is the same unit) and the same bits of the mean. It does not convert
+/// and has no tolerance, so it stays an equivalence relation and `assert_eq!` sees the unit an engine returned.
+/// The uncertainty is not compared (it never was). The PHS meaning of `==` is [`Quantity::phs_eq`].
+///
+/// It used an absolute `1e-9` on the mean, in whatever unit the operands carried: `1 pm` equalled `2 pm` while
+/// `1 nm` did not equal `2 nm` (audit B10).
 impl PartialEq for Quantity {
     fn eq(&self, other: &Self) -> bool {
-        self.unit == other.unit && (self.value.mean() - other.value.mean()).abs() < 1e-9
+        self.unit == other.unit && self.value.mean().to_bits() == other.value.mean().to_bits()
     }
+}
+
+/// The relative bound of PHS `==` ([`Quantity::phs_eq`]): two canonical magnitudes are equal when they differ by at
+/// most this fraction of the larger. It absorbs the rounding of a conversion and of ordinary arithmetic
+/// (`1000 * 0.1` and `100` are 63 ulps apart) and still separates physically different values.
+pub const EQ_REL: f64 = 1e-12;
+
+/// `a` and `b` are within `rel` of the larger, by the rule PHS comparisons share: exactly equal values are equal
+/// (`-0.0 == 0.0`), a non-finite operand compares by IEEE (`inf == inf`, NaN equals nothing; the relative formula
+/// would make `inf` equal to every finite value), otherwise `|a - b| <= rel * max(|a|, |b|)`.
+fn within_relative(a: f64, b: f64, rel: f64) -> bool {
+    if a == b {
+        return true;
+    }
+    if !a.is_finite() || !b.is_finite() {
+        return false;
+    }
+    (a - b).abs() <= rel * a.abs().max(b.abs())
 }
 
 /// `n` written as a fraction, when one applies: `1.5` is `3/2`, or `1 1/2` with `mixed`.
@@ -540,26 +564,71 @@ impl Quantity {
         diff <= tol
     }
 
-    /// Backing implementation for PHS's `assert(actual, expected)` builtin: passes when the
-    /// two quantities have compatible dimensions and their magnitudes agree once converted
-    /// to a common scale, within a fixed tolerance chosen to catch real bugs while
-    /// tolerating floating-point drift across languages.
-    pub fn phs_assert(&self, other: &Quantity) -> PhysureResult<()> {
-        const REL_TOL: f64 = 1e-9;
-        const ABS_TOL: f64 = 1e-12;
-        if self.approx_eq(other, REL_TOL, ABS_TOL) {
-            return Ok(());
+    /// The canonical magnitudes of two quantities that a comparison may set side by side: absolute kelvin for a
+    /// temperature point, the plain ratio for a level, base SI otherwise. They are not converted to either operand's
+    /// unit: converting K to degC cancels, so `0.01 degC == 273.16 K` and its mirror disagreed.
+    ///
+    /// Different dimensions are an error rather than `false`: `5 m > 2 s` has no answer. A dimensionless zero in a
+    /// linear unit compares with anything linear (`x > 0` is how a sign test is written, and zero reads the same in
+    /// every linear unit), but not with a temperature point: `0` is not `0 degC`, and reading it as `0 K` made
+    /// `-10 degC > 0` true.
+    pub fn comparable_magnitudes(&self, other: &Quantity) -> PhysureResult<(f64, f64)> {
+        let linear = |q: &Quantity| !q.unit.is_affine() && !q.unit.is_logarithmic();
+        let plain_zero = |q: &Quantity| q.unit.dimensions.is_empty() && linear(q) && q.value.mean() == 0.0;
+        let zero_exception = (plain_zero(self) && linear(other)) || (plain_zero(other) && linear(self));
+        if !self.unit.same_dimensions(&other.unit) && !zero_exception {
+            return Err(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
         }
-        if !self.unit.same_dimensions(&other.unit) {
-            return Err(PhysureError::AssertionFailed {
+        Ok((self.canonical_magnitude(), other.canonical_magnitude()))
+    }
+
+    /// PHS equality, the one definition the interpreter, `assert(a, b)` and the bindings share: the canonical
+    /// magnitudes ([`Quantity::comparable_magnitudes`]) agree within [`EQ_REL`] of the larger. Symmetric and
+    /// independent of the units the operands are written in; the uncertainty is not compared (a `±` comparison is
+    /// written `x == t ± k sigma`).
+    ///
+    /// Consequences of any tolerance, documented rather than hidden: `==` is not transitive, and a relative bound
+    /// never accepts a difference against an exact zero (`cos(90 deg) == 0` is false: compare `abs(x)` with an
+    /// explicit tolerance instead).
+    pub fn phs_eq(&self, other: &Quantity) -> PhysureResult<bool> {
+        let (a, b) = self.comparable_magnitudes(other)?;
+        Ok(within_relative(a, b, EQ_REL))
+    }
+
+    /// PHS `≈` with the relative tolerance `rel`: `|a - b| <= rel * max(|a|, |b|)` on the canonical magnitudes, the
+    /// gate and the non-finite rule of [`Quantity::phs_eq`]. There is no absolute floor (it would depend on the
+    /// unit). Both zero is true; exactly one zero is an error, since no relative tolerance can say how close to zero
+    /// is close. `rel` must be finite and in `(0, 1)`.
+    pub fn phs_approx(&self, other: &Quantity, rel: f64) -> PhysureResult<bool> {
+        if !(rel.is_finite() && rel > 0.0 && rel < 1.0) {
+            return Err(PhysureError::Generic(format!(
+                "a relative tolerance is a finite number between 0 and 1 (exclusive), not {rel}"
+            )));
+        }
+        let (a, b) = self.comparable_magnitudes(other)?;
+        if (a == 0.0) != (b == 0.0) {
+            return Err(PhysureError::Generic(
+                "`≈` against zero has no relative meaning: compare abs(x) with an explicit tolerance".into(),
+            ));
+        }
+        Ok(within_relative(a, b, rel))
+    }
+
+    /// Backing implementation for PHS's `assert(actual, expected)` builtin: passes when the two quantities are equal
+    /// by [`Quantity::phs_eq`], so `assert(a, b)` and `assert(a == b)` cannot disagree. It used its own tolerances
+    /// (relative 1e-9 or absolute 1e-12 in base SI), which passed `assert(1 fm, 1000 fm)` (audit B11).
+    pub fn phs_assert(&self, other: &Quantity) -> PhysureResult<()> {
+        match self.phs_eq(other) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(PhysureError::AssertionFailed {
+                kind: "assert",
+                message: format!("{} != {}", self, other),
+            }),
+            Err(_) => Err(PhysureError::AssertionFailed {
                 kind: "assert",
                 message: format!("{} and {} have incompatible dimensions", self, other),
-            });
+            }),
         }
-        Err(PhysureError::AssertionFailed {
-            kind: "assert",
-            message: format!("{} != {}", self, other),
-        })
     }
 
     /// Backing implementation for PHS's `exact_assert(actual, expected)` builtin: passes
