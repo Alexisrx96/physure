@@ -15,7 +15,7 @@ use std::process;
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::canonical::canonical_text;
 use physure_core::frozen::{
-    active, actor_from_env, catalog_entries, compare, diff, embedded_entries, ensure_valid, entries_with_origin, freeze, history_rows,
+    active, actor_from_env, catalog_entries, compare, diff, embedded_entries, engine_state, ensure_valid, entries_with_origin, freeze, history_rows,
     inspect, now_unix, overrides_contribution, pair_changes, plan_seal, plan_update, section_and_key, select, set_engine_file,
     set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, EngineIdentity, EnginePolicy, EngineState, Entry,
     FieldChange, FileStamp, FreezeOptions, FrozenFile, Inspection, OpsError, Resolution, Side, Why,
@@ -928,6 +928,25 @@ fn seal(args: &ConfArgs) -> Outcome {
         }
         Err(e) => return failure("seal", ops_code(&e), e.to_string()),
     };
+    // the plan proved that only source 2 changed, so the engine block is the sealed one: a seal re-records it under
+    // this build, which must be the engine it pins (the only way onto another engine is `update`, spec §7)
+    let refused = match engine_state(&plan.old, engine_file().as_deref()) {
+        EngineState::Matches { .. } => None,
+        EngineState::Differs { differences, .. } => Some((3, format!("the engine differs: {}", differences.join("; ")))),
+        EngineState::Unreadable(message) => Some((1, format!("the [Engine] block does not read: {message}"))),
+    };
+    if let Some((code, why)) = refused {
+        let mut outcome = failure(
+            "seal",
+            code,
+            format!(
+                "{}: the pinned engine is not this build ({why}); run `phs conf update` first, the only way onto another engine (it takes the file as last sealed: set your edit of the overrides aside, update, then edit again and seal); nothing written",
+                shown(&path)
+            ),
+        );
+        outcome.json["written"] = Value::Bool(false);
+        return outcome;
+    }
     let overrides = canonical_text(plan.file.sources()[1].text());
     let mut text = format!("seal: {}\nsummary: {}\nthe overrides (source 2) as they will be sealed, canonical:\n", shown(&path), plan.summary);
     for line in overrides.lines() {

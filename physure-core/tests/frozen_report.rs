@@ -6,7 +6,7 @@
 
 use physure_core::frozen::origin::{entries_with_origin, section_and_key, select, Origin};
 use physure_core::frozen::report::{
-    catalog_entries, compare, history_rows, inspect, overrides_contribution, pair_changes, unfrozen_entries, EngineState, Side,
+    catalog_entries, compare, engine_state, history_rows, inspect, overrides_contribution, pair_changes, unfrozen_entries, EngineState, Side,
 };
 use physure_core::frozen::{
     diff, engine_pairs, freeze, plan_seal, plan_update, write_atomic, Change, EngineIdentity, FileStamp, EnginePolicy, Entry, EntryInput, FreezeOptions, FrozenFile, FrozenParts,
@@ -147,6 +147,21 @@ fn an_engine_of_another_build_is_exit_3_only() {
     assert!(differences.iter().any(|d| d.starts_with("version") && d.contains("0.0.1")), "{differences:?}");
     assert!(matches!(inspection.catalog, Some(Ok(_))), "a sound file is replayed whatever its engine");
     assert_eq!(inspection.exit_code(), 3);
+}
+
+/// `engine_state` is the engine part of `inspect` on its own, for a file already read (what `phs conf seal` checks
+/// after its plan proved the engine block is the sealed one).
+#[test]
+fn engine_state_of_a_file_matches_differs_or_does_not_read() {
+    let dir = Dir::new();
+    let path = freeze_in(&dir, None);
+    assert!(matches!(engine_state(&read(&path), None), EngineState::Matches { policy: EnginePolicy::Release, .. }));
+    repin(&path, &other_identity(), EnginePolicy::Release, "another engine");
+    let EngineState::Differs { differences, .. } = engine_state(&read(&path), None) else { panic!("differs") };
+    assert!(differences.iter().any(|d| d.starts_with("version") && d.contains("0.0.1")), "{differences:?}");
+    let text = fs::read_to_string(&path).unwrap().replacen("policy = release\n", "policy = release\nenforce = never\n", 1);
+    let unreadable = FrozenFile::parse(&text).unwrap();
+    assert!(matches!(engine_state(&unreadable, None), EngineState::Unreadable(m) if m.contains("enforce")));
 }
 
 #[test]

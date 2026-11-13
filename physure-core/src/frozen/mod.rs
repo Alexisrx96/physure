@@ -32,7 +32,7 @@ pub mod entries;
 pub use entries::{diff, embedded_entries, entries, summary, Change, Entry};
 pub mod report;
 pub use report::{
-    catalog_entries, compare, history_rows, inspect, overrides_contribution, pair_changes, unfrozen_entries, Comparison, EngineState, FieldChange, HistoryRow, Inspection, Side,
+    catalog_entries, compare, engine_state, history_rows, inspect, overrides_contribution, pair_changes, unfrozen_entries, Comparison, EngineState, FieldChange, HistoryRow, Inspection, Side,
     UNFROZEN_LABEL,
 };
 pub mod origin;

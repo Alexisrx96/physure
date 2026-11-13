@@ -96,12 +96,17 @@ fn json(output: &Output) -> Value {
 
 /// A frozen file pinned (policy `release`) to a version that is not the running one.
 fn file_for_another_engine() -> String {
+    file_for_another_engine_with(DEFAULT_PHYSURE_CONF, "")
+}
+
+/// [`file_for_another_engine`] with these sources 1 and 2.
+fn file_for_another_engine_with(embedded: &str, overrides: &str) -> String {
     let identity = EngineIdentity { version: "0.0.1".into(), ..EngineIdentity::current() };
     FrozenFile::new(
         "2026-11-08T10:00:00Z",
         FrozenParts {
             engine: engine_pairs(&identity, EnginePolicy::Release, None).unwrap(),
-            sources: vec![Source::new("embedded", DEFAULT_PHYSURE_CONF).unwrap(), Source::new("overrides", "").unwrap()],
+            sources: vec![Source::new("embedded", embedded).unwrap(), Source::new("overrides", overrides).unwrap()],
             ..FrozenParts::default()
         },
         EntryInput { time: "2026-11-08T10:00:00Z", action: "freeze", engine: "test", actor: "t@h", reason: "test", diff: "d" },
@@ -933,6 +938,26 @@ fn seal_refuses_an_edit_of_source_1_exit_2() {
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     assert!(stderr(&output).contains("overrides block only"), "{}", text(&output));
     assert_eq!(bytes(&dir), before);
+}
+
+/// Review finding 1: a hand edit of the overrides of a file pinned to another engine is not sealed under this one;
+/// the only way onto another engine is `update` (spec §7).
+#[test]
+fn seal_under_an_engine_the_file_does_not_pin_is_exit_3_and_names_update() {
+    let dir = Dir::new("seal_other_engine");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine_with(DEFAULT_PHYSURE_CONF, EMPTY_OVERRIDES));
+    edit_overrides(&dir, "[Units]\nzz_unit = 2.0, L, [zz_unit]");
+    let before = bytes(&dir);
+    let output = dir.conf(&["seal", "--reason", "x", "--yes"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert!(stderr(&output).contains("phs conf update") && stderr(&output).contains("0.0.1"), "{}", text(&output));
+    assert_eq!(bytes(&dir), before, "nothing written");
+    let output = dir.conf(&["seal", "--reason", "x", "--yes", "--json"]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let doc = json(&output);
+    assert!(doc["error"].as_str().unwrap().contains("phs conf update"), "{doc}");
+    assert_eq!(doc["written"], Value::Bool(false));
+    assert_eq!(bytes(&dir), before, "nothing written");
 }
 
 #[test]

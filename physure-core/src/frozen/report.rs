@@ -81,7 +81,7 @@ pub fn inspect(path: &Path, engine_file: Option<&Path>) -> Inspection {
         }
     };
     inspection.problems = file.verify().iter().map(ToString::to_string).collect();
-    inspection.engine = Some(engine_state(file.engine(), engine_file));
+    inspection.engine = Some(engine_state(&file, engine_file));
     inspection.environment = pair_changes(file.environment(), &environment_pairs());
     if inspection.problems.is_empty() {
         match replay_file(&file) {
@@ -98,9 +98,11 @@ pub fn inspect(path: &Path, engine_file: Option<&Path>) -> Inspection {
     inspection
 }
 
-/// The state of the engine block against the running build.
-fn engine_state(block: &Pairs, engine_file: Option<&Path>) -> EngineState {
-    let block = match read_engine(block) {
+/// The state of the `[Engine]` block of `file` against the running build: the engine part of [`inspect`], for a file
+/// already read. It says nothing about whether the block is the one the file sealed: the caller knows that (the file
+/// verifies, or `plan_seal` proved that only the overrides changed). `engine_file` is as for [`inspect`].
+pub fn engine_state(file: &FrozenFile, engine_file: Option<&Path>) -> EngineState {
+    let block = match read_engine(file.engine()) {
         Ok(block) => block,
         Err(e) => return EngineState::Unreadable(e.0),
     };
