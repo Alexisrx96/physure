@@ -472,7 +472,8 @@ fn a_file_without_the_battery_is_exit_1_nothing_is_witnessed() {
     let output = verify_run(&dir, &[]);
     assert_eq!(output.status.code(), Some(1), "{}", text(&output));
     let out = stdout(&output);
-    assert!(out.contains("nothing is witnessed") && out.contains("phs conf update --accept-witness-changes all"), "{out}");
+    assert!(out.contains("nothing is witnessed") && out.contains("phs conf update --reason"), "{out}");
+    assert!(!out.contains("--accept-witness-changes"), "recording the battery needs no acceptance: {out}");
     let doc = json(&verify_run(&dir, &["--json"]));
     assert_eq!(doc["witnesses_ok"], Value::Bool(false));
 }
@@ -779,6 +780,46 @@ fn a_file_without_the_battery_records_it_on_update_without_the_flag() {
     assert!(builtin.len() >= 38, "{builtin:?}");
     assert!(last_diff(&dir).contains(&format!("witnesses: 0 changed, {} new, 0 missing", builtin.len())), "{}", last_diff(&dir));
     assert_eq!(verify_run(&dir, &[]).status.code(), Some(0));
+}
+
+/// `update` is the migration path of a file made before witnesses existed: with the catalog and the engine this
+/// build's, a file without the battery is not "nothing to update"; `update --reason r` (no flag) records the battery,
+/// as the hint of `verify --run` says, and `verify --run` passes afterwards.
+#[test]
+fn update_records_the_battery_of_a_current_file_without_it_and_the_hint_of_verify_run_works() {
+    let dir = Dir::new("migrate_current");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    // strip the built-in witnesses and re-seal with the core API, at the time of the last entry (so `update` can follow)
+    let mut file = dir.frozen();
+    let kept: Vec<(String, String)> = file.witnesses().iter().filter(|(k, _)| !k.starts_with("builtin.")).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    file.set_witnesses(Pairs::from_vec(kept).unwrap());
+    let time = file.history().last().unwrap().time().to_string();
+    file.reseal(EntryInput { time: &time, action: "seal", engine: "test", actor: "t@h", reason: "as Phase 2 made it", diff: "d" }).unwrap();
+    assert!(file.verify().is_empty(), "{:?}", file.verify());
+    dir.write(FROZEN_FILE_NAME, &file.render().unwrap());
+    assert!(keys(&dir.frozen(), "builtin.").is_empty());
+    let entries = dir.frozen().history().len();
+    let output = verify_run(&dir, &[]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stdout(&output).contains("run `phs conf update --reason \"...\"`"), "{}", text(&output));
+    let output = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert!(!stdout(&output).contains("nothing to update"), "{}", text(&output));
+    assert!(stdout(&output).contains("witnesses: battery not recorded"), "{}", text(&output));
+    let builtin = keys(&dir.frozen(), "builtin.");
+    assert!(builtin.len() >= 38, "{builtin:?}");
+    assert_eq!(dir.frozen().history().len(), entries + 1, "one entry");
+    let output = verify_run(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let history = dir.conf(&["history"]);
+    assert!(history.status.success(), "{}", text(&history));
+    let out = stdout(&history);
+    let line = out.lines().rev().find(|line| line.contains("update")).unwrap_or_else(|| panic!("{out}"));
+    assert!(out.contains(&format!("{} new", builtin.len())), "{out}");
+    assert!(line.contains("update"), "{line}");
+    // and now, with the battery recorded, there is nothing to update
+    let again = conf_in_own_temp(&dir, &["update", "--reason", "r", "--yes"]);
+    assert!(again.status.success() && stdout(&again).contains("nothing to update"), "{}", text(&again));
 }
 
 /// The frozen file of `dir` with its overrides (source 2) replaced by `overrides`, by hand (not sealed).

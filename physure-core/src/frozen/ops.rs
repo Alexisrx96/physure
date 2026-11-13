@@ -216,7 +216,8 @@ fn line_changes(old: &str, new: &str) -> (usize, usize) {
 /// Adopts what the running build brings into the verified frozen file at `path`: source 1 becomes the library's
 /// embedded catalog and the engine block the running build, under `policy` or, when `None`, the file's own policy.
 /// The overrides and every further source are kept. `Ok(None)` when nothing differs (same canonical catalog, same
-/// engine block). **Writes nothing.**
+/// engine block): this one step keeps the recorded witnesses, so a draft that would only record the battery
+/// ([`Draft::only_witnesses`]) is nothing to do here. **Writes nothing.**
 ///
 /// Refused when the file does not verify (a modified file must be sealed or restored first: an update must never
 /// carry an unreviewed edit into a new seal), when the policy cannot be recorded, and when the result does not
@@ -229,7 +230,10 @@ pub fn plan_update(
     time_unix: u64,
     actor: &str,
 ) -> Result<Option<UpdatePlan>, OpsError> {
-    prepare_update(path, reason, policy, engine_file, time_unix, actor)?.map(|draft| draft.finish(None)).transpose()
+    prepare_update(path, reason, policy, engine_file, time_unix, actor)?
+        .filter(|draft| !draft.only_witnesses)
+        .map(|draft| draft.finish(None))
+        .transpose()
 }
 
 /// Accepts a hand edit of the overrides block (source 2) of the frozen file at `path`, and nothing else. `Ok(None)`

@@ -17,7 +17,8 @@
 //!   throwaway file, set it as the explicit configuration, reset the cache, evaluate the battery and the user scripts
 //!   (`WitnessScript::new(name, raw)?.text()`, decision C13), restore the configuration; [`FreezeDraft::finish`] with
 //!   the rows and the scripts (an `Err` row refuses, naming the case); write the file (`write_atomic`, no replace).
-//! * **update:** [`prepare_update`] (`None`: nothing to do, the witnesses are not consulted, decision S9); evaluate
+//! * **update:** [`prepare_update`] (`None`: nothing to do, the witnesses are not consulted, decision S9; a file
+//!   that records no built-in witness always has something to do, [`Draft::only_witnesses`]); evaluate
 //!   under [`Draft::probe`] as for freeze; `witness::compare(draft.old.witnesses(), &rows)`; the host's policy
 //!   (`--accept-witness-changes`) decides; [`Draft::finish`] with `None` when nothing is re-recorded or with
 //!   `Some(&rerecord(draft.old.witnesses(), &rows)?)`; before writing, check both the stamp (`FileStamp`) and
@@ -253,6 +254,9 @@ pub struct Draft {
     pub read_sha256: String,
     /// The history `diff` line without the witness part.
     pub summary: String,
+    /// An update whose catalog and engine are unchanged: the draft exists only because the file records no
+    /// `builtin.*` witness (a file made before witnesses existed), so what it has to do is record the battery.
+    pub only_witnesses: bool,
     next: FrozenFile,
     probe: FrozenFile,
     action: &'static str,
@@ -318,6 +322,7 @@ impl Draft {
             stamp,
             read_sha256,
             summary,
+            only_witnesses: false,
             probe: next.clone(),
             next,
             action,
@@ -334,7 +339,11 @@ impl Draft {
     }
 }
 
-/// The first step of [`plan_update`]; `Ok(None)` when there is nothing to update.
+/// The first step of [`plan_update`]; `Ok(None)` when there is nothing to update: the canonical catalog and the
+/// engine block are this build's **and** the file records at least one `builtin.*` witness. A file that records no
+/// built-in witness (made before witnesses existed) has something to do even then: record the battery; its draft is
+/// [`Draft::only_witnesses`] and its summary ends with `witnesses: battery not recorded` (`update` is the migration
+/// path of such a file; every case is new, so the host records them without an acceptance).
 pub fn prepare_update(
     path: &Path,
     reason: &str,
@@ -360,7 +369,9 @@ pub fn prepare_update(
     let old_embedded = file.sources()[0].text().to_string();
     let catalog_changed = source_sha256(&old_embedded) != source_sha256(DEFAULT_PHYSURE_CONF);
     let engine_changed = canonical_pairs(file.engine().as_slice()) != canonical_pairs(new_engine.as_slice());
-    if !catalog_changed && !engine_changed {
+    let battery_recorded = file.witnesses().iter().any(|(key, _)| key.starts_with("builtin."));
+    let only_witnesses = !catalog_changed && !engine_changed;
+    if only_witnesses && battery_recorded {
         return Ok(None);
     }
     if catalog_changed {
@@ -368,13 +379,18 @@ pub fn prepare_update(
     }
     file.set_engine(new_engine);
     let (added, removed) = line_changes(&old_embedded, DEFAULT_PHYSURE_CONF);
-    let summary = format!(
+    let mut summary = format!(
         "embedded: +{added} -{removed} canonical lines; engine: {}; policy: {} -> {}",
         if engine_changed { "changed" } else { "unchanged" },
         old_block.policy.as_str(),
         new_policy.as_str()
     );
-    Draft::new("update", (old, stamp, read_sha256), file, summary, (time_unix, actor, reason)).map(Some)
+    if only_witnesses {
+        summary.push_str("; witnesses: battery not recorded");
+    }
+    let mut draft = Draft::new("update", (old, stamp, read_sha256), file, summary, (time_unix, actor, reason))?;
+    draft.only_witnesses = only_witnesses;
+    Ok(Some(draft))
 }
 
 /// The first step of [`plan_seal`]; `Ok(None)` when the file verifies. A draft exists only after the proof that
@@ -609,6 +625,42 @@ mod tests {
         other.write("taken.conf", "x");
         let taken = FreezeOptions { out: Some(PathBuf::from("taken.conf")), ..options(&other, EnginePolicy::Release) };
         assert_eq!(prepare_freeze(&taken).unwrap_err(), OpsError::WouldOverwrite(other.0.join("taken.conf")));
+    }
+
+    /// `update` is the migration path of a file made before witnesses existed: with the catalog and the engine
+    /// unchanged, a file that records no `builtin.*` witness still has something to do (record the battery); one that
+    /// records a built-in witness has nothing to do. The one-step `plan_update` keeps the recorded witnesses, so for
+    /// it a battery-less file with nothing else to adopt is still nothing to do.
+    #[test]
+    fn update_of_a_current_file_without_the_battery_is_a_draft_and_with_it_is_nothing() {
+        let dir = Dir::new();
+        let path = frozen_in(&dir);
+        let draft = prepare_update(&path, "record the battery", None, None, T0, "t@h").unwrap().expect("the battery is not recorded");
+        assert!(draft.only_witnesses);
+        assert_eq!(draft.summary, "embedded: +0 -0 canonical lines; engine: unchanged; policy: release -> release; witnesses: battery not recorded");
+        assert_eq!(draft.probe().sources(), draft.old.sources());
+        assert_eq!(draft.probe().engine(), draft.old.engine());
+        let running = rows(&[("builtin.a", Ok(num(1.0)))]);
+        let plan = draft.finish(Some(&rerecord(draft.old.witnesses(), &running).unwrap())).unwrap();
+        assert!(plan.summary.contains("witnesses: battery not recorded; witnesses: 0 changed, 1 new, 0 missing"), "{}", plan.summary);
+        assert_eq!(plan_update(&path, "nothing", None, None, T0, "t@h").unwrap(), None, "plan_update keeps the witnesses: nothing to do");
+        // a user witness alone is not the battery
+        let mut file = FrozenFile::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        file.set_witnesses(Pairs::new(&[("user.mine", &format!("sha256:{}", "ab".repeat(32)))]).unwrap());
+        file.set_witness_scripts(vec![WitnessScript::new("mine", "x = 1 m").unwrap()]);
+        file.reseal(EntryInput { time: "2026-11-08T10:00:00Z", action: "seal", engine: "t", actor: "t@h", reason: "r", diff: "d" }).unwrap();
+        fs::write(&path, file.render().unwrap()).unwrap();
+        assert!(prepare_update(&path, "x", None, None, T0, "t@h").unwrap().is_some_and(|d| d.only_witnesses));
+        // the file records a built-in witness: nothing to do, the witnesses are not consulted (decision S9)
+        let mut file = FrozenFile::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        file.set_witnesses(Pairs::new(&[("builtin.a", &format_value(&num(1.0)))]).unwrap());
+        file.set_witness_scripts(Vec::new());
+        file.reseal(EntryInput { time: "2026-11-08T10:00:00Z", action: "seal", engine: "t", actor: "t@h", reason: "r", diff: "d" }).unwrap();
+        fs::write(&path, file.render().unwrap()).unwrap();
+        assert_eq!(prepare_update(&path, "nothing", None, None, T0, "t@h").unwrap(), None);
+        // a policy change with the battery recorded is a draft for the engine, not for the witnesses
+        let relaxed = prepare_update(&path, "relax", Some(EnginePolicy::Record), None, T0, "t@h").unwrap().unwrap();
+        assert!(!relaxed.only_witnesses && !relaxed.summary.contains("battery"), "{}", relaxed.summary);
     }
 
     #[test]

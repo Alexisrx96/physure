@@ -1013,7 +1013,8 @@ fn verify(args: &ConfArgs) -> Outcome {
 }
 
 /// What `verify --run` says when C5 finds nothing to compare.
-const NOTHING_WITNESSED: &str = "nothing is witnessed: expected the built-in battery; re-freeze, or run `phs conf update --accept-witness-changes all`";
+/// `update` records the battery of such a file without an acceptance (every case is new, nothing validated changes).
+const NOTHING_WITNESSED: &str = "nothing is witnessed: expected the built-in battery; re-freeze, or run `phs conf update --reason \"...\"`";
 
 /// `verify --run`: the witnesses of the file at `path` evaluated under that file (it is made the explicit
 /// configuration in place; a relative path is made absolute), the battery in id order and then the file's own scripts
@@ -1385,7 +1386,7 @@ fn update(args: &ConfArgs) -> Outcome {
     let draft = match prepare_update(&path, reason, args.policy, engine_file().as_deref(), now_unix(), &actor) {
         Ok(Some(draft)) => draft,
         Ok(None) => {
-            let text = format!("{}: nothing to update: the embedded catalog and the engine are this build's\n", shown(&path));
+            let text = format!("{}: nothing to update: the embedded catalog and the engine are this build's, and the built-in witnesses are recorded\n", shown(&path));
             return report("update", text, json!({ "path": shown(&path), "written": false, "nothing_to_do": true }), 0);
         }
         Err(e) => return failure("update", ops_code(&e), e.to_string()),
