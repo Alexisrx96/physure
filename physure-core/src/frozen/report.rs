@@ -191,12 +191,10 @@ pub struct Comparison {
 }
 
 impl Comparison {
-    /// No difference in data, engine or environment, and both file sides verify and replay.
+    /// No difference in data or engine, and both file sides verify and replay. The environment is not part of it: it
+    /// is outside the seal and informational everywhere ([`Comparison::environment`] still lists it).
     pub fn is_identical(&self) -> bool {
-        self.data.is_empty()
-            && self.engine.is_empty()
-            && self.environment.is_empty()
-            && self.a_problems.is_empty()
+        self.data.is_empty() && self.engine.is_empty() && self.a_problems.is_empty()
             && self.b_problems.is_empty()
     }
 }

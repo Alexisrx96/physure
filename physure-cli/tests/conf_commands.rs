@@ -704,6 +704,32 @@ molar_gas_constant = 8.0 J*mol^-1*K^-1
     assert_eq!(a.conf(&["diff", fb.to_str().unwrap()]).status.code(), Some(1));
 }
 
+/// Review finding 2: `[Environment]` is outside the seal and informational everywhere, so it is listed but does not
+/// make two configurations different.
+#[test]
+fn diff_of_files_that_differ_only_in_the_environment_is_exit_0() {
+    let dir = Dir::new("diff_environment");
+    freeze_cli(&dir, &[]);
+    let frozen = dir.read(FROZEN_FILE_NAME);
+    let cpus = FrozenFile::parse(&frozen).unwrap().environment().get("cpus").unwrap().to_string();
+    let edited = frozen.replacen(&format!("cpus = {cpus}"), "cpus = 99999", 1);
+    assert_ne!(edited, frozen, "the [Environment] block was not found");
+    dir.write("other.frozen.conf", &edited);
+    let output = dir.conf(&["diff", FROZEN_FILE_NAME, "other.frozen.conf"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(out.contains("cpus") && out.contains("informational") && out.contains("identical"), "{out}");
+    let output = dir.conf(&["diff", FROZEN_FILE_NAME, "other.frozen.conf", "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!(doc["identical"], Value::Bool(true));
+    assert_eq!(doc["environment_identical"], Value::Bool(false));
+    assert!(doc["environment"].as_array().unwrap().iter().any(|c| c["key"] == "cpus"), "{doc}");
+    // the default compares with this machine: an edited environment alone is not a difference either
+    dir.write(FROZEN_FILE_NAME, &edited);
+    assert_eq!(dir.conf(&["diff"]).status.code(), Some(0));
+}
+
 #[test]
 fn diff_without_a_frozen_file_is_exit_2() {
     let dir = Dir::new("diff_none");

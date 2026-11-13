@@ -39,7 +39,7 @@ USAGE:
                                ~ changed old -> new), then engine and environment, with counts. Default: the file in
                                force against what this build gives unfrozen here (`unfrozen` names that side); one
                                argument: that file against it. Exit 0 identical, 1 different or a file that does not
-                               verify, 2 nothing to compare
+                               verify, 2 nothing to compare; the environment is listed, never a difference
     phs conf update --reason TEXT [--engine-policy binary|build|release|record] [--yes]
                                Adopt what this build brings (its embedded catalog, its engine) into the file in
                                force, keeping the overrides; shows what changes, asks, writes atomically
@@ -613,7 +613,8 @@ fn field_lines(changes: &[FieldChange]) -> String {
     changes.iter().map(|c| format!("  {}: {} -> {}\n", c.key, or_none(&c.old), or_none(&c.new))).collect()
 }
 
-/// What `diff` says of a comparison: text, JSON fields, and the exit code (0 identical, 1 otherwise).
+/// What `diff` says of a comparison: text, JSON fields, and the exit code (0 identical, 1 otherwise). The environment
+/// is listed but never makes two sides different (it is outside the seal, informational everywhere).
 fn comparison_report(comparison: &Comparison, default: bool) -> (String, Value, i32) {
     let mut text = format!("a: {}\nb: {}\n", comparison.a, comparison.b);
     if default {
@@ -652,6 +653,7 @@ fn comparison_report(comparison: &Comparison, default: bool) -> (String, Value, 
         "data": data,
         "engine": changes_json(&comparison.engine),
         "environment": changes_json(&comparison.environment),
+        "environment_identical": comparison.environment.is_empty(),
         "summary": counts,
         "warnings": comparison.warnings,
         "a_problems": comparison.a_problems,

@@ -420,6 +420,19 @@ fn a_file_frozen_under_another_embedded_text_differs_in_that_constant_only_in_da
     assert!(comparison.data.iter().all(|c| c.name() == "molar_gas_constant"), "{:?}", comparison.data);
 }
 
+/// `[Environment]` is outside the seal and informational: listed, never a difference that makes two sides unequal.
+#[test]
+fn two_files_that_differ_only_in_the_environment_are_identical() {
+    let dir = Dir::new();
+    let a = freeze_in(&dir, None);
+    let text = fs::read_to_string(&a).unwrap();
+    let cpus = read(&a).environment().get("cpus").unwrap().to_string();
+    let b = dir.write("b.frozen.conf", &text.replacen(&format!("cpus = {cpus}\n"), "cpus = 99999\n", 1));
+    let comparison = compare(&Side::File(a), &Side::File(b), None).unwrap();
+    assert!(comparison.environment.iter().any(|c| c.key == "cpus" && c.new == "99999"), "{:?}", comparison.environment);
+    assert!(comparison.is_identical(), "the environment alone is not a difference");
+}
+
 #[test]
 fn two_files_with_different_engines_list_the_keys_that_differ() {
     let dir = Dir::new();
