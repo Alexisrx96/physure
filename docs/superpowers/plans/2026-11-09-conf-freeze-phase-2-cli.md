@@ -12,6 +12,46 @@
 
 ---
 
+## Corrections from the adversarial review of this plan (they OVERRIDE anything below that disagrees)
+
+The review (measured and read against the code) found these. Each is a requirement.
+
+**C1 — dispatch first (measured: `phs conf freeze --reason help` printed help and exited 0).** `main()` runs `run_flag_command` before `run_subcommand`, and that function matches `help`, `doc`, `repl`, `daemon`, `-V`, `-d`... anywhere in the arguments. In `main`, *before* `refuse_an_unusable_configuration` and `run_flag_command`: `if args.get(1).map(String::as_str) == Some("conf") { conf::run_conf(&args) }` (never returns). `conf.rs` handles its own `--help`. Tests: `conf freeze --reason help`, `conf show doc`, `conf repl`, `conf daemon`, `conf -V` each do the `conf` action or exit 2 and never run another command. Every other command keeps the pre-command check.
+
+**C2 — `update` shows what it writes.** `plan_update` keeps the overrides, so the prompt must not show the working directory's `physure.conf`. `UpdatePlan` and `SealPlan` gain `old: FrozenFile` (the file as parsed and verified) and `stamp: FileStamp` (from the same read). The difference shown by `update` is `diff(entries(replay_file(&plan.old)), entries(replay_file(&plan.file)))` plus the differing `[Engine]` pairs, computed from memory only: nothing is read twice.
+
+**C3 — what `seal` shows.** The file keeps only the old source-2 marker, so a before/after of the overrides is impossible from the file alone. `seal` shows (a) the full canonical text of the new source 2, and (b) the entry difference between the catalog of sources 1..n without source 2 and with it (what the overrides contribute now). The spec §5.4 wording ("the diff against the last sealed state") is amended to say this. An optional `--against COPY` is not built (YAGNI; a copy of the previously sealed file can be given to `phs conf diff`).
+
+**C4 — `verify --expect`.** `Inspection::seal_matches(expected)` is true only when `problems.is_empty()` **and** the stored seal equals `expected` (case-insensitive). An `--expect` that is not 64 hex characters is misuse (exit 2), a mismatch is exit 1. Test: edit source 2, `--expect <original seal>` gives `"seal_matches": false` and exit 1.
+
+**C5 — `history`** prints the verification problems first and exits with `inspect().exit_code()` (not 0 for "parses"); rows after the first broken link are marked `unverified`.
+
+**C6 — residual risks Phase 2 owns, decided:** 1c-14 is **built**: `UpdatePlan`/`SealPlan` carry the stamp; before `write_atomic` the CLI re-stats the file and refuses with exit 1 ("changed since it was read; nothing written") if length or modification time moved. 1c-15 is closed by reasoning (a single-shot `phs` re-reads on every run; the language server is Phase 5). 1b-3, 1b-4, 1b-5, 1c-2, 1c-10 are documentation items: each is listed by name in Task 10 and closed in §13. 1b-10 (CLI identity) is reassigned to Phase 5 and 1b-11 is decided: the build script covers physure-core only and says so (§7), no change. 1b-12 is only **partially** closed: `engine_block_changed` says that the block changed, not which field (the log keeps only `engine_sha256`).
+
+**C7 — the flag is `--engine-policy`** (the core's refusal text and spec §7 name it), not `--policy`; `update` accepts it too.
+
+**C8 — one replay.** The per-source origins are computed inside `load.rs` (`replay_file_with(file, |index, registry, constants, collected| ...)`, `replay_file` calls it with a no-op), so the trust rule (source 1 trusted only as `embedded`) and the missing-edition check stay in one place. `origin.rs` does not call `replay_source` itself.
+
+**C9 — no replay of a file that does not verify.** `inspect` replays only when `problems` is empty; otherwise `catalog = None` ("not replayed: the file does not verify"). `compare` carries each file side's problems; `diff` exits 1 when a file side does not verify (never "identical").
+
+**C10 — names:** `read_bounded` and `replay_file` are in `load.rs` (`pub(crate)`). The binary hash closure is `|| engine_file_hash(engine_file)` (load.rs; cached; gives the "host did not say" error for `None`), not `sha256_of_file(Option)`.
+
+**Decisions for the underspecified points:**
+- **S1** The Unfrozen side's engine is compared field by field from `EngineIdentity::current()` (version, commit, profile, target, features, rustc, flags); `policy` and `binary_sha256` are left out of that side (`engine_pairs` fails for `build` on a build with an unknown commit).
+- **S2** Exit codes per case: `OpsError::{AlreadyFrozen, WouldOverwrite, Refused, Engine, Resolve}` = 2; `OpsError::{Conf, Load, Io, Frozen}` = 1; `verify FILE` of a missing file = 1; `--conf FILE` that does not exist = 2 (resolution).
+- **S3** `--allow-engine-mismatch` (accepted by `status`, `verify` and `diff`, as the spec says) only lets a different build *inspect*; it never changes the exit code (3 stays 3) and the JSON always carries `"engine_matches"`.
+- **S4** `update` and `freeze` always pass `engine_file = current_exe`.
+- **S5** Unfrozen `show` and `diff` read `physure.conf` through `try_build_registry_from_conf()` (what the runtime does) and print a warning when the strict reading of it would differ or fail. `report::unfrozen_entries(cwd) -> Result<(Vec<Entry>, Vec<String>), String>` (entries, warnings) is part of Task 3's API.
+- **S6** `show` calls `set_engine_file(current_exe)` and then `ensure_valid()`.
+- **S7** `--conf` with `freeze` is misuse (exit 2): `freeze` writes to `--out`.
+- **S8** `--origin` shows `embedded (restated by overrides)` when a later source sets the same value.
+- **S9** The confirmation prompt goes to stderr, so `--json` output on stdout stays clean.
+- **S10** A failed replace (Windows sharing violation) is an I/O error, exit 1, nothing written. JSON paths use `to_string_lossy`.
+- **S11** Tests that depend on the build naming a commit branch on `EngineIdentity::current().commit == UNKNOWN`.
+- **S12** The guide says that after `freeze -> edit source 2 -> seal`, the working directory's `physure.conf` is stale and the default `diff` reports drift until it is updated.
+
+---
+
 ## Decisions fixed by this plan
 
 1. **Exit codes (all `phs conf` commands):** `0` ok (identical, for `diff`); `1` a discrepancy (broken seal, modified file, differences, `--expect` mismatch, a catalog that does not replay); `2` misuse, a required frozen file that is missing, a refused operation (`AlreadyFrozen`, `WouldOverwrite`, `Refused`, a declined confirmation, no terminal and no `--yes`); `3` the engine differs from the one the file pins. When several apply the most specific wins in the order 3 (only when the *only* discrepancy is the engine), then 1, then 2 for misuse (misuse is decided before any file is read).
