@@ -7,32 +7,38 @@
 //! `phs conf` before anything else looks at the arguments and before the pre-command check of the configuration in
 //! force: these commands exist to look at a file that may be broken or pinned to another engine.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process;
 
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::{
-    actor_from_env, freeze, history_rows, inspect, now_unix, set_engine_file, set_explicit_conf, write_atomic, EngineIdentity,
-    EnginePolicy, EngineState, FieldChange, FreezeOptions, Inspection, OpsError, Resolution, Why,
+    active, actor_from_env, embedded_entries, ensure_valid, entries_with_origin, freeze, history_rows, inspect, now_unix, section_and_key,
+    select, set_engine_file, set_explicit_conf, unfrozen_entries, write_atomic, EngineIdentity, EnginePolicy, EngineState, Entry,
+    FieldChange, FreezeOptions, Inspection, OpsError, Resolution, Why,
 };
 use serde_json::{json, Value};
 
 /// The commands this build has.
-const COMMANDS: [&str; 4] = ["status", "history", "freeze", "verify"];
+const COMMANDS: [&str; 5] = ["status", "show", "history", "freeze", "verify"];
 /// The commands of the design that this build does not have yet: they refuse instead of doing something else.
-const PLANNED: [&str; 4] = ["show", "diff", "update", "seal"];
+const PLANNED: [&str; 3] = ["diff", "update", "seal"];
 
 const HELP: &str = "\
 phs conf: the frozen configuration (physure.frozen.conf)
 
 USAGE:
     phs conf [status]          Which configuration is in force and why; seal, engine, history, warnings
+    phs conf show [SELECTOR] [--origin]
+                               The configuration in force as `section.key = value`, sorted: all of it, one section
+                               (`constants`) or one key (`constants.molar_gas_constant`); --origin adds the source of
+                               each value. A unit's value includes an internal `id` (a hash of this build)
     phs conf history [FILE]    The history of the file in force (or FILE), problems first
     phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH]
                                Write physure.frozen.conf from what is in force now (default policy: build)
     phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
-    phs conf show | diff | update | seal
+    phs conf diff | update | seal
                                Planned; not available in this build
 
 FLAGS:
@@ -175,6 +181,7 @@ pub fn run_conf(args: &[String]) -> ! {
 fn shape(command: &str) -> (&'static [&'static str], usize) {
     match command {
         "status" => (&["--conf", "--json", "--allow-engine-mismatch"], 0),
+        "show" => (&["--conf", "--json", "--origin"], 1),
         "history" => (&["--conf", "--json"], 1),
         "freeze" => (&["--json", "--reason", "--engine-policy", "--out"], 0),
         "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch"], 1),
@@ -229,6 +236,7 @@ fn run(args: &ConfArgs) -> Outcome {
     }
     match command {
         "status" => status(args),
+        "show" => show(args),
         "history" => history(args),
         "freeze" => freeze_command(args),
         _ => verify(args),
@@ -456,6 +464,94 @@ fn history(args: &ConfArgs) -> Outcome {
     }
     let fields = json!({ "path": shown(&path), "problems": inspection.problems, "rows": json_rows });
     report("history", text, fields, code)
+}
+
+/// The sections a `show` of the catalog groups several kinds under: the kind is shown with the key there.
+const POOLED_SECTIONS: [&str; 3] = ["units", "atomic_weights", "settings"];
+
+/// `phs conf show [SELECTOR] [--origin]`: the catalog in force. Unlike the other commands it needs the configuration
+/// in force to be usable (decision 2 of the Phase 2 plan), so a broken file is its exit code (1, 2 or 3).
+fn show(args: &ConfArgs) -> Outcome {
+    if let Err(e) = ensure_valid() {
+        return failure("show", e.exit_code(), e.to_string());
+    }
+    let selector = args.positional.first().map_or("", String::as_str);
+    let (listed, warnings, path): (Vec<(Entry, String)>, Vec<String>, Option<PathBuf>) = match active() {
+        Err(e) => return failure("show", e.exit_code(), e.to_string()),
+        Ok(Some(active)) => match entries_with_origin(&active.catalog.file) {
+            Ok(found) => (found.into_iter().map(|(entry, origin)| (entry, origin.to_string())).collect(), Vec::new(), Some(active.path.clone())),
+            Err((source, problems)) => {
+                return failure("show", 1, format!("{}: source {source} does not replay: {}", shown(&active.path), problems.join("; ")))
+            }
+        },
+        Ok(None) => match unfrozen_listing() {
+            Ok((found, warnings)) => (found, warnings, None),
+            Err(message) => return failure("show", 1, message),
+        },
+    };
+    let chosen = select(&listed, selector);
+    if chosen.is_empty() {
+        let sections: BTreeSet<String> = listed.iter().map(|(entry, _)| section_and_key(entry).0).collect();
+        return failure(
+            "show",
+            2,
+            format!(
+                "no section or key {selector:?}: expected a section, a `section.key` or a key prefix; the sections are: {}",
+                sections.into_iter().collect::<Vec<_>>().join(", ")
+            ),
+        );
+    }
+    let mut rows: Vec<(String, String, &str, &str, &str)> = chosen
+        .iter()
+        .map(|(entry, origin)| {
+            let (section, key) = section_and_key(entry);
+            (section, key, entry.kind, entry.value.as_str(), origin.as_str())
+        })
+        .collect();
+    rows.sort();
+    let mut text = String::new();
+    let mut json_rows = Vec::with_capacity(rows.len());
+    for (section, key, kind, value, origin) in &rows {
+        let kind_shown = if POOLED_SECTIONS.contains(&section.as_str()) { format!(" ({kind})") } else { String::new() };
+        let origin_shown = if args.origin { format!("  [{origin}]") } else { String::new() };
+        text.push_str(&format!("{section}.{key}{kind_shown} = {value}{origin_shown}
+"));
+        let mut row = json!({ "section": section, "key": key, "kind": kind, "value": value });
+        if args.origin {
+            row["origin"] = Value::from(*origin);
+        }
+        json_rows.push(row);
+    }
+    if !args.json {
+        for warning in &warnings {
+            eprintln!("phs conf: warning: {warning}");
+        }
+    }
+    let fields = json!({
+        "frozen": path.is_some(),
+        "path": path.as_deref().map(shown),
+        "selector": selector,
+        "entries": json_rows,
+        "warnings": warnings,
+    });
+    report("show", text, fields, 0)
+}
+
+/// The unfrozen catalog of the working directory as the runtime builds it, each entry with its origin: `embedded`
+/// when the shipped catalog has it with that value, `physure.conf` otherwise; and the warnings of that reading.
+fn unfrozen_listing() -> Result<(Vec<(Entry, String)>, Vec<String>), String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("the current directory cannot be read: {e}"))?;
+    let (found, warnings) = unfrozen_entries(&cwd)?;
+    let shipped = embedded_entries().map_err(|problems| format!("the embedded catalog does not replay: {}", problems.join("; ")))?;
+    let shipped: BTreeSet<Entry> = shipped.into_iter().collect();
+    let listed = found
+        .into_iter()
+        .map(|entry| {
+            let origin = if shipped.contains(&entry) { "embedded" } else { "physure.conf" };
+            (entry, origin.to_string())
+        })
+        .collect();
+    Ok((listed, warnings))
 }
 
 /// The exit code of a refused operation (decision S2 of the Phase 2 plan): what the operation will not do, or a

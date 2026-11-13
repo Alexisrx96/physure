@@ -282,7 +282,7 @@ fn unknown_and_unbuilt_commands_are_exit_2() {
     let output = dir.conf(&["frobnicate"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
     assert!(stderr(&output).contains("status") && stderr(&output).contains("verify"), "{}", text(&output));
-    for planned in ["show", "diff", "update", "seal"] {
+    for planned in ["diff", "update", "seal"] {
         let output = dir.conf(&[planned]);
         assert_eq!(output.status.code(), Some(2), "{planned}: {}", text(&output));
         assert!(stderr(&output).contains("not available in this build"), "{planned}: {}", text(&output));
@@ -530,4 +530,122 @@ fn verify_of_a_file_for_another_engine_stays_3_with_allow_engine_mismatch() {
         assert_eq!(doc["engine_matches"], Value::Bool(false));
         assert_eq!(doc["verified"], Value::Bool(true));
     }
+}
+
+// ---- Task 7: show ----
+
+/// The non-empty lines of stdout.
+fn lines(output: &Output) -> Vec<String> {
+    stdout(output).lines().filter(|l| !l.trim().is_empty()).map(str::to_string).collect()
+}
+
+#[test]
+fn show_constants_lists_only_constants() {
+    let dir = Dir::new("show_constants");
+    freeze_cli(&dir, &[]);
+    let output = dir.conf(&["show", "constants"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let shown = lines(&output);
+    assert!(shown.len() > 10, "{shown:?}");
+    assert!(shown.iter().all(|l| l.starts_with("constants.")), "{shown:?}");
+    assert!(shown.iter().any(|l| l.starts_with("constants.molar_gas_constant = 8.31446261815324")), "{shown:?}");
+    let mut sorted = shown.clone();
+    sorted.sort();
+    assert_eq!(shown, sorted, "sorted");
+    // the whole catalog has the other sections too
+    let all = stdout(&dir.conf(&["show"]));
+    assert!(all.contains("
+units.m ") && all.contains("
+settings.angle_mode "), "the whole catalog");
+}
+
+#[test]
+fn show_one_key() {
+    let dir = Dir::new("show_key");
+    freeze_cli(&dir, &[]);
+    let output = dir.conf(&["show", "constants.molar_gas_constant"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(lines(&output), vec!["constants.molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1".to_string()]);
+}
+
+#[test]
+fn show_origin_marks_overrides() {
+    let dir = Dir::new("show_origin");
+    dir.write(
+        "physure.conf",
+        "[Constants]
+molar_gas_constant = 8.0 J*mol^-1*K^-1
+speed_of_light_in_vacuum = 299792458.0 m*s^-1
+",
+    );
+    freeze_cli(&dir, &[]);
+    let output = dir.conf(&["show", "constants", "--origin"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let shown = lines(&output);
+    let line = |key: &str| shown.iter().find(|l| l.starts_with(&format!("constants.{key} "))).unwrap_or_else(|| panic!("{key}: {shown:?}")).clone();
+    assert!(line("molar_gas_constant").ends_with("[overrides]"), "{shown:?}");
+    assert!(line("avogadro_constant").ends_with("[embedded]"), "{shown:?}");
+    assert!(line("speed_of_light_in_vacuum").ends_with("[embedded (restated by overrides)]"), "{shown:?}");
+}
+
+#[test]
+fn show_unknown_selector_is_exit_2() {
+    let dir = Dir::new("show_unknown");
+    freeze_cli(&dir, &[]);
+    let output = dir.conf(&["show", "nonsense"]);
+    assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+    let err = stderr(&output);
+    assert!(err.contains("nonsense") && err.contains("constants") && err.contains("units") && err.contains("settings"), "{err}");
+    assert_eq!(dir.conf(&["show", "constants.nonsense"]).status.code(), Some(2));
+}
+
+#[test]
+fn show_json() {
+    let dir = Dir::new("show_json");
+    freeze_cli(&dir, &[]);
+    let output = dir.conf(&["show", "constants.molar_gas_constant", "--json", "--origin"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let doc = json(&output);
+    assert_eq!((doc["schema"].clone(), doc["command"].clone()), (Value::from(1), Value::from("show")));
+    assert_eq!(doc["frozen"], Value::Bool(true));
+    let entries = doc["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!((entry["section"].clone(), entry["key"].clone(), entry["kind"].clone()), ("constants".into(), "molar_gas_constant".into(), "constant".into()));
+    assert_eq!(entry["value"], Value::from("8.31446261815324 J*mol^-1*K^-1"));
+    assert_eq!(entry["origin"], Value::from("embedded"));
+}
+
+#[test]
+fn show_with_a_broken_file_is_exit_1() {
+    let dir = Dir::new("show_broken");
+    freeze_cli(&dir, &[]);
+    dir.write(FROZEN_FILE_NAME, &dir.read(FROZEN_FILE_NAME).replacen(R_VALUE, "= 8.31446261815325", 1));
+    let output = dir.conf(&["show", "constants"]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(stderr(&output).contains(FROZEN_FILE_NAME) && stdout(&output).is_empty(), "{}", text(&output));
+    // a file for another engine is not the configuration in force either: 3
+    let other = Dir::new("show_engine");
+    other.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    assert_eq!(other.conf(&["show", "constants"]).status.code(), Some(3));
+}
+
+#[test]
+fn show_unfrozen_reads_physure_conf_as_the_runtime_does() {
+    let dir = Dir::new("show_unfrozen");
+    let output = dir.conf(&["show", "constants.molar_gas_constant", "--origin"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(lines(&output), vec!["constants.molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1  [embedded]".to_string()]);
+    // a physure.conf: its values, with their origin; a line the runtime skips is a warning
+    dir.write("physure.conf", "[Constants]
+molar_gas_constant = 8.0 J*mol^-1*K^-1
+this is not a line
+");
+    let output = dir.conf(&["show", "constants.molar_gas_constant", "--origin"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(lines(&output), vec!["constants.molar_gas_constant = 8.0 J*mol^-1*K^-1  [physure.conf]".to_string()]);
+    assert!(stderr(&output).contains("warning") && stderr(&output).contains("this is not a line"), "{}", text(&output));
+    let doc = json(&dir.conf(&["show", "constants", "--json"]));
+    assert_eq!(doc["frozen"], Value::Bool(false));
+    assert!(doc["warnings"].to_string().contains("this is not a line"), "{doc}");
 }

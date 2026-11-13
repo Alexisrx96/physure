@@ -5,7 +5,9 @@
 //! directory, and every report function takes paths.
 
 use physure_core::frozen::origin::{entries_with_origin, section_and_key, select, Origin};
-use physure_core::frozen::report::{catalog_entries, compare, history_rows, inspect, unfrozen_entries, EngineState, Side};
+use physure_core::frozen::report::{
+    catalog_entries, compare, history_rows, inspect, overrides_contribution, pair_changes, unfrozen_entries, EngineState, Side,
+};
 use physure_core::frozen::{
     diff, engine_pairs, freeze, plan_seal, plan_update, write_atomic, Change, EngineIdentity, FileStamp, EnginePolicy, Entry, EntryInput, FreezeOptions, FrozenFile, FrozenParts,
     Source,
@@ -589,4 +591,49 @@ Fe = abc, 0.1")]);
     let (source, problems) = catalog_entries(&file).unwrap_err();
     assert_eq!(source, "overrides");
     assert!(!problems.is_empty());
+}
+
+// ---- Tasks 9: what update and seal show, from memory ------------------------------------------------------------------
+
+#[test]
+fn what_update_shows_includes_the_engine_pairs_that_differ() {
+    let dir = Dir::new();
+    let path = older_file(&dir);
+    repin(&path, &other_identity(), EnginePolicy::Release, "another engine");
+    let plan = plan_update(&path, "adopt", None, None, T0, "t@h").unwrap().unwrap();
+    let engine = pair_changes(plan.old.engine(), plan.file.engine());
+    let version = EngineIdentity::current().version;
+    assert!(engine.iter().any(|c| c.key == "version" && c.old == "0.0.1" && c.new == version), "{engine:?}");
+    assert!(!engine.iter().any(|c| c.key == "policy"), "the policy is kept: {engine:?}");
+    assert!(pair_changes(plan.file.engine(), plan.file.engine()).is_empty());
+}
+
+#[test]
+fn the_overrides_contribution_is_what_source_2_changes_over_source_1() {
+    let file = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", OVERRIDES)]);
+    let changes = overrides_contribution(&file).unwrap();
+    assert!(
+        changes.iter().any(|c| matches!(c, Change::Changed { kind: "constant", name, old, new }
+            if name == "molar_gas_constant" && old.starts_with("8.31446261815324") && new.starts_with("8.0 "))),
+        "{changes:?}"
+    );
+    assert!(changes.iter().any(|c| matches!(c, Change::Added(e) if e.kind == "unit" && e.name == "zz")), "{changes:?}");
+    // the same as two separate builds, without and with the overrides
+    let plain = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", "")]);
+    assert_eq!(changes, diff(&catalog_entries(&plain).unwrap(), &catalog_entries(&file).unwrap()));
+    // empty overrides, or overrides that only restate a shipped value, contribute nothing
+    assert!(overrides_contribution(&plain).unwrap().is_empty());
+    let restating = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", "[Constants]
+speed_of_light_in_vacuum = 299792458.0 m*s^-1
+")]);
+    assert!(overrides_contribution(&restating).unwrap().is_empty());
+    // a later source is not attributed to the overrides
+    let third = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", OVERRIDES), ("extra", "[Units]
+zz_extra = 1.0, L
+")]);
+    assert_eq!(overrides_contribution(&third).unwrap(), changes);
+    // overrides that do not replay: the error names them
+    let bad = file_of(&[("embedded", DEFAULT_PHYSURE_CONF), ("overrides", "[AtomicWeights]
+Fe = abc, 0.1")]);
+    assert_eq!(overrides_contribution(&bad).unwrap_err().0, "overrides");
 }

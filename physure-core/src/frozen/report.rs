@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::engine::{environment_pairs, read_engine, EngineIdentity, EnginePolicy};
 use super::entries::{diff, entries, summary, Change, Entry};
-use super::load::{engine_file_hash, read_bounded, replay_file, LoadError};
+use super::load::{engine_file_hash, read_bounded, replay_file, replay_file_with, LoadError};
 use super::model::{FrozenFile, HistoryEntry, Pairs};
 use super::seal::Problem;
 use crate::units::conf::{read_leniently_collected, replay_source, ProcessSettings, DEFAULT_PHYSURE_CONF};
@@ -118,7 +118,8 @@ fn engine_state(block: &Pairs, engine_file: Option<&Path>) -> EngineState {
 }
 
 /// The keys whose values differ between `old` and `new`: the keys of `old` in its order, then those of `new` only.
-pub(crate) fn pair_changes(old: &Pairs, new: &Pairs) -> Vec<FieldChange> {
+/// `phs conf update` shows the `[Engine]` pairs a plan changes with it (`plan.old.engine()` against `plan.file.engine()`).
+pub fn pair_changes(old: &Pairs, new: &Pairs) -> Vec<FieldChange> {
     changes_of(old.as_slice(), new.as_slice())
 }
 
@@ -363,6 +364,29 @@ pub fn catalog_entries(file: &FrozenFile) -> Result<Vec<Entry>, (String, Vec<Str
     replay_file(file).map(|(registry, constants, collected)| entries(&registry, &constants, &collected))
 }
 
+/// What the overrides (source 2) contribute to the catalog, from one replay of the file: the difference of the
+/// catalog the sources build without them and with them (old = without), which is what `phs conf seal` shows. The
+/// file keeps only the marker of the last sealed overrides, not their text, so a before/after of a hand edit cannot
+/// be made from the file alone; what the edited overrides contribute now can.
+///
+/// Taken between the catalog after source 1 and after source 2 of the one replay, so for the files `phs conf freeze`
+/// makes (two sources) it is exactly that difference; a further source (none is made today) is not attributed to the
+/// overrides, and its redefinition of an entry the overrides set is not reflected. Replays the file as it is (the
+/// caller decides whether it may be replayed); `Err` is the origin of the source that does not replay (or "the
+/// sources together") and its problems, as for [`catalog_entries`].
+pub fn overrides_contribution(file: &FrozenFile) -> Result<Vec<Change>, (String, Vec<String>)> {
+    if file.sources().len() < 2 {
+        return Err(("overrides".to_string(), vec!["the file has no source 2 (overrides)".to_string()]));
+    }
+    let (mut without, mut with) = (Vec::new(), Vec::new());
+    replay_file_with(file, |index, registry, constants, collected| match index {
+        0 => without = entries(registry, constants, collected),
+        1 => with = entries(registry, constants, collected),
+        _ => {}
+    })?;
+    Ok(diff(&without, &with))
+}
+
 /// One entry of a file's history, as `phs conf history` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRow {
@@ -462,6 +486,31 @@ mod tests {
             vec![change("cpus", "4", "8"), change("gone", "x", ""), change("added", "", "y")]
         );
         assert!(pair_changes(&old, &old).is_empty());
+    }
+
+    #[test]
+    fn a_file_without_overrides_has_no_contribution_to_show() {
+        use crate::frozen::engine::engine_pairs;
+        use crate::frozen::model::Source;
+        use crate::frozen::seal::{EntryInput, FrozenParts};
+        let mut file = FrozenFile::new(
+            "2026-11-08T10:00:00Z",
+            FrozenParts {
+                engine: engine_pairs(&EngineIdentity::current(), EnginePolicy::Release, None).unwrap(),
+                sources: vec![
+                    Source::new("embedded", crate::units::conf::DEFAULT_PHYSURE_CONF).unwrap(),
+                    Source::new("overrides", "").unwrap(),
+                ],
+                ..FrozenParts::default()
+            },
+            EntryInput { time: "2026-11-08T10:00:00Z", action: "freeze", engine: "t", actor: "t@h", reason: "t", diff: "d" },
+        )
+        .unwrap();
+        assert!(overrides_contribution(&file).unwrap().is_empty());
+        file.sources.truncate(1);
+        let (source, problems) = overrides_contribution(&file).unwrap_err();
+        assert_eq!(source, "overrides");
+        assert!(problems[0].contains("no source 2"), "{problems:?}");
     }
 
     #[test]
