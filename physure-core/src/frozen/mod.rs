@@ -35,5 +35,9 @@ pub use report::{
     catalog_entries, compare, engine_state, history_rows, inspect, overrides_contribution, pair_changes, unfrozen_entries, Comparison, EngineState, FieldChange, HistoryRow, Inspection, Side,
     UNFROZEN_LABEL,
 };
+pub mod witness;
+pub use witness::{
+    check_entry, format_value, parse_value, ulp_distance, WitnessReport, WitnessRow, WitnessStatus, WitnessValue,
+};
 pub mod origin;
 pub use origin::{entries_with_origin, section_and_key, select, Origin};

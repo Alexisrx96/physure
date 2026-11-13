@@ -683,7 +683,7 @@ mod tests {
         let mut engine = sealed.clone();
         engine.set_engine(engine_pairs(&EngineIdentity::current(), EnginePolicy::Record, None).unwrap());
         let mut witnessed = sealed.clone();
-        witnessed.set_witnesses(Pairs::new(&[("builtin.x", "1")]).unwrap());
+        witnessed.set_witnesses(Pairs::new(&[("builtin.x", "3ff0000000000000:0000000000000000:")]).unwrap());
         let cases: Vec<(&str, String)> = vec![
             ("source 1 edited with its marker recomputed", add_unit(&base).replace(&s1, &source_sha256(&edited_embedded))),
             ("a source appended with a correct marker", appended.render().unwrap()),

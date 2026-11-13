@@ -32,7 +32,7 @@ fn file() -> FrozenFile {
         FrozenParts {
             engine: engine(),
             environment: Pairs::default(),
-            witnesses: Pairs::new(&[("user.w", "0")]).unwrap(),
+            witnesses: Pairs::new(&[("user.w", "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")]).unwrap(),
             sources: vec![
                 Source::new("embedded", "[Constants]\nmolar_gas_constant = 8.31446261815324 J*mol^-1*K^-1").unwrap(),
                 Source::new("overrides", "").unwrap(),

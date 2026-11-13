@@ -83,6 +83,9 @@ pub enum Problem {
     RepeatedOrigin { origin: String },
     RepeatedWitness { name: String },
     WitnessKeys { expected: Vec<String>, found: Vec<String> },
+    /// A `[Witness]` pair that is not a witness entry (`witness::check_entry`): the key is not `builtin.<id>` or
+    /// `user.<name>`, or the value does not read as a witness value of that kind. `found` says which.
+    WitnessEntry { key: String, found: String },
     SourceHash { index: usize, origin: String, expected: String, found: String },
     ContentHash { expected: String, found: String },
     WitnessScriptHash { name: String, expected: String, found: String },
@@ -136,6 +139,10 @@ impl fmt::Display for Problem {
                 "the user.* keys of [Witness] must name the witness scripts, one each: expected [{}], found [{}]",
                 expected.join(", "),
                 found.join(", ")
+            ),
+            Problem::WitnessEntry { key, found } => write!(
+                f,
+                "the [Witness] entry {key} is not a witness: expected a key builtin.<id> or user.<name> with a witness value (<mean>:<uncertainty>:<unit>, text=, failed= or, for user.*, sha256:), found: {found}"
             ),
             Problem::SourceHash { index, origin, expected, found } => {
                 write!(f, "source {index} ({origin}) was modified: expected {expected}, found {found}")
@@ -365,6 +372,11 @@ impl FrozenFile {
         if expected != found {
             problems.push(Problem::WitnessKeys { expected, found });
         }
+        for (key, value) in self.witnesses.iter() {
+            if let Err(found) = super::witness::check_entry(key, value) {
+                problems.push(Problem::WitnessEntry { key: key.to_string(), found });
+            }
+        }
     }
 
     /// Everything that is wrong with the file, not only the first thing. Empty means the file is intact.
@@ -535,6 +547,9 @@ mod tests {
     use crate::frozen::engine::{engine_pairs, EngineIdentity, EnginePolicy};
     use crate::frozen::model::{FrozenFile, Source, WitnessScript};
 
+    /// A well-formed `user.*` witness value (Phase 3: a user witness records `sha256:<hex>`).
+    const USER_HASH: &str = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     fn pairs(items: &[(&str, &str)]) -> Pairs {
         Pairs::new(items).unwrap()
     }
@@ -576,7 +591,7 @@ mod tests {
             FrozenParts {
                 engine,
                 environment: pairs(&[("os", "windows")]),
-                witnesses: pairs(&[("builtin.conversion", "3ff0000000000000"), ("user.validation.1", "1a2b")]),
+                witnesses: pairs(&[("builtin.conversion", "3ff0000000000000:0000000000000000:m"), ("user.validation.1", USER_HASH)]),
                 sources: vec![Source::new("embedded", "[Units]\nm = 1\nkg = 2").unwrap(), Source::new("overrides", "# mine\n").unwrap()],
                 witness_scripts: vec![WitnessScript::new("validation.1", "1 m => ft").unwrap()],
             },
@@ -764,6 +779,7 @@ mod tests {
             Problem::RepeatedOrigin { origin: "x".into() },
             Problem::RepeatedWitness { name: "w".into() },
             Problem::WitnessKeys { expected: vec!["user.a".into()], found: vec![] },
+            Problem::WitnessEntry { key: "k".into(), found: "f".into() },
             Problem::SourceHash { index: 1, origin: "o".into(), expected: "a".into(), found: "b".into() },
             Problem::ContentHash { expected: "a".into(), found: "b".into() },
             Problem::WitnessScriptHash { name: "w".into(), expected: "a".into(), found: "b".into() },
@@ -837,7 +853,7 @@ mod tests {
         let p = problems(&FrozenFile::parse(&text[..cut]).unwrap());
         assert!(p.iter().any(|m| m.contains("seal")), "deleted: {p:?}");
         // deleting the block and its key together still breaks the seal
-        let both = text[..cut].replace("user.validation.1 = 1a2b\n", "");
+        let both = text[..cut].replace(&format!("user.validation.1 = {USER_HASH}\n"), "");
         let p = problems(&FrozenFile::parse(&both).unwrap());
         assert!(p.iter().any(|m| m.contains("seal")), "deleted with its key: {p:?}");
         let added = format!("{text}@@ witness extra sha256={}\n2 m => ft\n@@ end witness\n", exact_sha256("2 m => ft"));
@@ -880,7 +896,7 @@ mod tests {
                     engine: engine(),
                     sources: origins.iter().map(|o| Source::new(o, "m = 1").unwrap()).collect(),
                     witness_scripts: scripts.iter().map(|n| WitnessScript::new(n, "1 m").unwrap()).collect(),
-                    witnesses: Pairs::from_vec(scripts.iter().map(|n| (format!("user.{n}"), "x".to_string())).collect())
+                    witnesses: Pairs::from_vec(scripts.iter().map(|n| (format!("user.{n}"), USER_HASH.to_string())).collect())
                         .unwrap_or_default(),
                     ..FrozenParts::default()
                 },
@@ -921,7 +937,7 @@ mod tests {
     fn witness_keys_and_scripts_must_agree() {
         let text = fresh().render().unwrap();
         // a script without its key
-        let p = problems(&FrozenFile::parse(&text.replace("user.validation.1 = 1a2b\n", "")).unwrap());
+        let p = problems(&FrozenFile::parse(&text.replace(&format!("user.validation.1 = {USER_HASH}\n"), "")).unwrap());
         assert!(p.iter().any(|m| m.contains("expected [user.validation.1], found []")), "{p:?}");
         // a key without its script
         let cut = text.find("@@ witness").unwrap();
@@ -937,7 +953,7 @@ mod tests {
                 engine: engine(),
                 sources: vec![Source::new("embedded", "").unwrap(), Source::new("overrides", "").unwrap()],
                 witness_scripts: vec![WitnessScript::new("a", "1 m").unwrap()],
-                witnesses: pairs(&[("builtin.x", "1")]),
+                witnesses: pairs(&[("builtin.x", "3ff0000000000000:0000000000000000:")]),
                 ..FrozenParts::default()
             },
             input("freeze", "r", "2026-11-07T14:03:11Z"),
@@ -948,7 +964,7 @@ mod tests {
         file.set_witness_scripts(vec![WitnessScript::new("validation.1", "1 m => ft").unwrap(), WitnessScript::new("b", "2 m").unwrap()]);
         assert!(file.reseal(input("seal", "r", "2026-11-08T09:00:00Z")).is_err());
         let mut keys = file.witnesses().as_slice().to_vec();
-        keys.push(("user.b".into(), "ff".into()));
+        keys.push(("user.b".into(), USER_HASH.into()));
         file.set_witnesses(Pairs::from_vec(keys).unwrap());
         file.reseal(input("seal", "added b", "2026-11-08T09:00:00Z")).unwrap();
         assert!(problems(&file).is_empty());
@@ -1040,7 +1056,7 @@ mod tests {
             FrozenParts {
                 engine: engine(),
                 environment: pairs(&[("os", "windows")]),
-                witnesses: pairs(&[("user.v1", "abc")]),
+                witnesses: pairs(&[("user.v1", USER_HASH)]),
                 sources: vec![Source::new("embedded", "[Units]\nm = 1").unwrap(), Source::new("overrides", "").unwrap()],
                 witness_scripts: vec![WitnessScript::new("v1", "x = 1 m\nx => ft").unwrap()],
             },
@@ -1063,7 +1079,9 @@ mod tests {
     const INDEPENDENT_CONTENT: &str = "9c0d6a0d38b9562d9227f69c582e48040958a2417745956a6cfc9f5150ca77b7";
     const INDEPENDENT_ENGINE: &str = "a3727508d1f58d898990018132fa83fcb072dcb8e4a25e38c5a776a8572177b6";
     const INDEPENDENT_ENTRY: &str = "5d3ce7e958d3ad893dcf0d5175e0f66a65cbe862c5d5eafc37364a1f6b762690";
-    const INDEPENDENT_SEAL: &str = "9fad9250d221770925eb42f8a3c337681d79319edb1f95502f7bc59e4ae03ced";
+    // recomputed in Phase 3 with Python's hashlib (the witness value became `sha256:<hex>`, see `USER_HASH`); the
+    // same script reproduced the previous value 9fad9250...ae03ced for `user.v1 = abc` first
+    const INDEPENDENT_SEAL: &str = "033407bc094d1478238b119cc9990ba5e2f7e29370a3de6e003413f237fe7eec";
 
     // ---- Phase 1b, Task 5: the history records the engine block; verify reads it ----
 
@@ -1432,7 +1450,7 @@ mod tests {
         }
         // the witness block deleted together with its key
         let cut = base.find("@@ witness").unwrap();
-        let deleted = base[..cut].replace("user.validation.1 = 1a2b\n", "");
+        let deleted = base[..cut].replace(&format!("user.validation.1 = {USER_HASH}\n"), "");
         assert!(!only_overrides(&deleted), "witness deleted");
         // a history entry rewritten with every hash and the seal recomputed
         let mut forged = FrozenFile::parse(&base).unwrap();
