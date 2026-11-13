@@ -39,5 +39,7 @@ pub mod witness;
 pub use witness::{
     check_entry, format_value, parse_value, ulp_distance, WitnessReport, WitnessRow, WitnessStatus, WitnessValue,
 };
+pub mod battery;
+pub use battery::{battery, run_battery, run_cases, Case, CaseError, CaseResult};
 pub mod origin;
 pub use origin::{entries_with_origin, section_and_key, select, Origin};
