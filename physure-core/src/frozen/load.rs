@@ -24,7 +24,7 @@ use crate::units::UnitRegistry;
 pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// How to load. Evaluation always checks the engine; `check_engine: false` is for inspecting a file from another
-/// build (`phs conf status`/`verify`/`diff --allow-engine-mismatch`), never for evaluating with it.
+/// build (`phs conf status`/`verify`/`diff`), never for evaluating with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoadOptions {
     pub check_engine: bool,

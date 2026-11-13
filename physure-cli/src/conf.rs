@@ -40,7 +40,7 @@ USAGE:
                                The configuration in force as `section.key = value`, sorted: all of it, one section
                                (`constants`) or one key (`constants.molar_gas_constant`); --origin adds the source of
                                each value. A unit's value includes an internal `id` (a hash of this build)
-    phs conf diff [A] [B] [--allow-engine-mismatch]
+    phs conf diff [A] [B]
                                What differs between two configurations: data by kind (+ added, - removed,
                                ~ changed old -> new), then engine and environment, with counts. Default: the file in
                                force against what this build gives unfrozen here (`unfrozen` names that side); one
@@ -58,7 +58,7 @@ USAGE:
                                Write physure.frozen.conf from what is in force now (default policy: build when this build names its
                                commit, otherwise binary), with the built-in witness battery and each --witness script
                                (named after its file stem) evaluated under the new file and recorded
-    phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch] [--run [--timeout-ms N]]
+    phs conf verify [FILE] [--expect SEAL] [--run [--timeout-ms N]]
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL;
                                --run evaluates the witnesses again under FILE (the built-in battery, then the scripts
                                embedded in the file, in the sandbox, each bounded by N ms, default 60000) and compares
@@ -68,7 +68,6 @@ USAGE:
 FLAGS:
     --conf PATH                The frozen file in force (not with freeze, which writes to --out, nor beside a FILE)
     --json                     One JSON document on stdout, with \"schema\": 1 and \"command\"
-    --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
     --witness FILE.phs         freeze: a user witness script (UTF-8, at most 1 MiB, must evaluate without errors);
                                repeatable, kept in the order given
     --run                      verify: evaluate the witnesses again (see verify)
@@ -105,7 +104,6 @@ pub struct ConfArgs {
     pub expect: Option<String>,
     pub yes: bool,
     pub origin: bool,
-    pub allow_engine_mismatch: bool,
     /// `--witness FILE` (repeatable), in the order given.
     pub witness: Vec<PathBuf>,
     pub run: bool,
@@ -155,7 +153,7 @@ impl Accept {
 
 const VALUE_FLAGS: [&str; 8] =
     ["--conf", "--reason", "--engine-policy", "--out", "--expect", "--witness", "--timeout-ms", "--accept-witness-changes"];
-const SWITCHES: [&str; 7] = ["--json", "--yes", "--origin", "--allow-engine-mismatch", "--run", "--help", "-h"];
+const SWITCHES: [&str; 6] = ["--json", "--yes", "--origin", "--run", "--help", "-h"];
 /// The one value flag that may be given more than once.
 const REPEATABLE: &str = "--witness";
 
@@ -200,7 +198,6 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 "--json" => parsed.json = true,
                 "--yes" => parsed.yes = true,
                 "--origin" => parsed.origin = true,
-                "--allow-engine-mismatch" => parsed.allow_engine_mismatch = true,
                 "--run" => parsed.run = true,
                 _ => parsed.help = true,
             }
@@ -304,12 +301,12 @@ pub fn run_conf(args: &[String]) -> ! {
 /// The flags and the number of positional arguments each command takes.
 fn shape(command: &str) -> (&'static [&'static str], usize) {
     match command {
-        "status" => (&["--conf", "--json", "--allow-engine-mismatch"], 0),
+        "status" => (&["--conf", "--json"], 0),
         "show" => (&["--conf", "--json", "--origin"], 1),
-        "diff" => (&["--conf", "--json", "--allow-engine-mismatch"], 2),
+        "diff" => (&["--conf", "--json"], 2),
         "history" => (&["--conf", "--json"], 1),
         "freeze" => (&["--json", "--reason", "--engine-policy", "--out", "--witness"], 0),
-        "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch", "--run", "--timeout-ms"], 1),
+        "verify" => (&["--conf", "--json", "--expect", "--run", "--timeout-ms"], 1),
         "update" => (&["--conf", "--json", "--reason", "--engine-policy", "--accept-witness-changes", "--yes"], 0),
         "seal" => (&["--conf", "--json", "--reason", "--accept-witness-changes", "--yes"], 0),
         _ => (&[], 0),
@@ -535,9 +532,6 @@ fn status(args: &ConfArgs) -> Outcome {
             "{} is ignored: the frozen file is in force; to adopt an edit, change the overrides of the frozen file and run `phs conf seal`",
             shown(local)
         ));
-    }
-    if args.allow_engine_mismatch && code == 3 {
-        warnings.push("--allow-engine-mismatch: inspected under another engine; the exit code still says so (3)".to_string());
     }
     for warning in &warnings {
         text.push_str(&format!("warning: {warning}\n"));
@@ -820,8 +814,8 @@ fn comparison_report(comparison: &Comparison, default: bool) -> (String, Value, 
     (text, fields, if identical { 0 } else { 1 })
 }
 
-/// `phs conf diff [A] [B] [--allow-engine-mismatch]`. No engine is checked (the blocks are compared as written), so
-/// `--allow-engine-mismatch` changes nothing, the exit code included.
+/// `phs conf diff [A] [B]`. No engine is checked: the `[Engine]` blocks are compared as written, so a file pinned to
+/// another engine can be compared under any build.
 fn diff_command(args: &ConfArgs) -> Outcome {
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
@@ -978,7 +972,7 @@ fn findings_text(report: &physure_script::report::Report) -> String {
         .join("; ")
 }
 
-/// `phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]`.
+/// `phs conf verify [FILE] [--expect SEAL] [--run [--timeout-ms N]]`.
 fn verify(args: &ConfArgs) -> Outcome {
     let path = match target("verify", args) {
         Ok(path) => path,
@@ -1004,10 +998,6 @@ fn verify(args: &ConfArgs) -> Outcome {
             text.push_str(&format!("expected seal: the seal does not match --expect {expected}{why}
 "));
         }
-    }
-    if args.allow_engine_mismatch && code == 3 {
-        text.push_str("warning: --allow-engine-mismatch: inspected under another engine; the exit code still says so (3)
-");
     }
     if args.run {
         let timeout = args.timeout_ms.map_or(DEFAULT_TIMEOUT, Duration::from_millis);

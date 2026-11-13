@@ -196,8 +196,8 @@ fn status_of_a_file_for_another_engine_exit_3() {
     let output = dir.conf(&["status"]);
     assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     assert!(stdout(&output).contains("0.0.1"), "{}", text(&output));
-    // --allow-engine-mismatch lets it be inspected; it never changes the exit code
-    let output = dir.conf(&["status", "--allow-engine-mismatch", "--json"]);
+    // it is inspected all the same; the exit code says the engine differs
+    let output = dir.conf(&["status", "--json"]);
     assert_eq!(output.status.code(), Some(3), "{}", text(&output));
     assert_eq!(json(&output)["engine_matches"], Value::Bool(false));
 }
@@ -304,6 +304,19 @@ fn unknown_flag_is_exit_2_and_names_the_flags() {
     // a flag without its value
     let output = dir.conf(&["status", "--conf"]);
     assert_eq!(output.status.code(), Some(2), "{}", text(&output));
+}
+
+/// Phase 2 residual 4, closed in Phase 3: `--allow-engine-mismatch` never changed anything and is gone.
+#[test]
+fn allow_engine_mismatch_is_an_unknown_flag_exit_2() {
+    let dir = Dir::new("allow_engine_mismatch");
+    dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
+    for command in ["status", "verify", "diff"] {
+        let output = dir.conf(&[command, "--allow-engine-mismatch"]);
+        assert_eq!(output.status.code(), Some(2), "{command}: {}", text(&output));
+        let err = stderr(&output);
+        assert!(err.contains("unknown flag --allow-engine-mismatch") && err.contains("--json") && err.contains("--conf"), "{command}: {err}");
+    }
 }
 
 #[test]
@@ -696,10 +709,10 @@ fn verify_of_a_missing_file_is_1_and_without_a_file_in_force_is_2() {
 }
 
 #[test]
-fn verify_of_a_file_for_another_engine_stays_3_with_allow_engine_mismatch() {
+fn verify_of_a_file_for_another_engine_is_3() {
     let dir = Dir::new("verify_engine");
     dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
-    for extra in [&[][..], &["--allow-engine-mismatch"][..]] {
+    for extra in [&[][..], &["--conf", FROZEN_FILE_NAME][..]] {
         let mut args = vec!["verify", "--json"];
         args.extend_from_slice(extra);
         let output = dir.conf(&args);
@@ -837,8 +850,6 @@ fn diff_of_a_fresh_freeze_is_identical_exit_0() {
     let output = dir.conf(&["diff"]);
     assert_eq!(output.status.code(), Some(0), "{}", text(&output));
     assert!(stdout(&output).contains("identical"), "{}", text(&output));
-    // --allow-engine-mismatch is accepted and changes nothing
-    assert_eq!(dir.conf(&["diff", "--allow-engine-mismatch"]).status.code(), Some(0));
 }
 
 #[test]
@@ -933,7 +944,7 @@ fn diff_of_a_file_that_does_not_verify_or_does_not_exist_is_exit_1() {
 fn diff_of_a_file_for_another_engine_lists_the_engine_and_stays_1() {
     let dir = Dir::new("diff_engine");
     dir.write(FROZEN_FILE_NAME, &file_for_another_engine());
-    for extra in [&[][..], &["--allow-engine-mismatch"][..]] {
+    for extra in [&[][..], &["--conf", FROZEN_FILE_NAME][..]] {
         let mut args = vec!["diff", "--json"];
         args.extend_from_slice(extra);
         let output = dir.conf(&args);

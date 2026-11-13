@@ -174,7 +174,8 @@ in JSON `engine` is `null` and `engine_matches` `false`): a block the seal no lo
 otherwise read as matching. Exit: `0` sound or unfrozen; `1` the file does not read, does
 not verify, its `[Engine]` block does not read, or its sources do not replay; `3` only the engine
 differs; `2` a resolution error (`PHYSURE_REQUIRE_FROZEN=1` with no file, a `--conf` that names no file).
-`--allow-engine-mismatch` is accepted and adds a warning; it never changes the exit code (3 stays 3).
+A file pinned to another engine is inspected all the same (inspection never runs the engine check); the exit code
+says so (3).
 
 ### 4.2 `phs conf show [SELECTOR] [--origin]`
 
@@ -233,7 +234,7 @@ any file.
 Exit: `0` written; `2` a frozen file already in force or at the target, a missing `--reason` or one with a
 control character, `--conf` given, a policy that cannot be recorded; `1` a `physure.conf` that does not read strictly, an I/O error.
 
-### 4.4 `phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]`
+### 4.4 `phs conf verify [FILE] [--expect SEAL]`
 
 Recomputes the hashes, the history chain and the seal of FILE (default: the file in force), checks the
 engine, replays the sources, and reports environment differences. With `--expect`, it also compares the
@@ -266,9 +267,8 @@ catalog: not replayed (the file does not verify)
 
 Exit: as `status` (`0`, `1`, `3`); `1` an `--expect` mismatch, or a FILE that does not exist; `2` an
 `--expect` that is not 64 hexadecimal characters, no FILE and no file in force, or a FILE and `--conf`.
-`--allow-engine-mismatch` adds a warning and never changes the exit code.
 
-### 4.5 `phs conf diff [A] [B] [--allow-engine-mismatch]`
+### 4.5 `phs conf diff [A] [B]`
 
 The semantic difference of two configurations: data entries by kind (`+` added, `-` removed, `~` changed
 `old -> new`), then the `[Engine]` and `[Environment]` differences, with counts.
@@ -298,7 +298,8 @@ changes and any drift of this directory's `physure.conf` from the frozen overrid
 reports the overrides you sealed as differences until you copy them into `physure.conf` too (or compare two
 files explicitly).
 
-No engine is checked (the blocks are compared as written), so `--allow-engine-mismatch` changes nothing.
+No engine is checked (the blocks are compared as written), so a file pinned to another engine can be compared under
+any build.
 A file side that does not verify is reported and its catalog is not compared; that is never "identical".
 `diff` never writes anything.
 
