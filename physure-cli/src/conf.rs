@@ -15,12 +15,15 @@ use std::process;
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::canonical::canonical_text;
 use physure_core::frozen::{
-    active, actor_from_env, catalog_entries, compare, diff, embedded_entries, engine_state, ensure_valid, entries_with_origin, freeze, history_rows,
+    active, actor_from_env, catalog_entries, compare, diff, embedded_entries, engine_state, ensure_valid, entries_with_origin, history_rows,
     inspect, now_unix, overrides_contribution, pair_changes, plan_seal, plan_update, section_and_key, select, set_engine_file,
     set_explicit_conf, summary, unfrozen_entries, write_atomic, Change, Comparison, EngineIdentity, EnginePolicy, EngineState, Entry,
     FieldChange, FileStamp, FreezeOptions, FrozenFile, Inspection, OpsError, Resolution, Side, Why,
 };
 use serde_json::{json, Value};
+
+use crate::conf_witness::{evaluate_witnesses, read_script, with_probe, witness_name, DEFAULT_TIMEOUT};
+use physure_core::frozen::{prepare_freeze, WitnessScript};
 
 /// The commands of `phs conf`.
 const COMMANDS: [&str; 8] = ["status", "show", "diff", "update", "seal", "history", "freeze", "verify"];
@@ -47,9 +50,10 @@ USAGE:
                                Accept a hand edit of the overrides block (source 2) of the file in force: shows the
                                new overrides and what they contribute, asks, re-seals
     phs conf history [FILE]    The history of the file in force (or FILE), problems first
-    phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH]
+    phs conf freeze --reason TEXT [--engine-policy binary|build|release|record] [--out PATH] [--witness FILE.phs]...
                                Write physure.frozen.conf from what is in force now (default policy: build when this build names its
-                               commit, otherwise binary)
+                               commit, otherwise binary), with the built-in witness battery and each --witness script
+                               (named after its file stem) evaluated under the new file and recorded
     phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
 
@@ -57,6 +61,8 @@ FLAGS:
     --conf PATH                The frozen file in force (not with freeze, which writes to --out, nor beside a FILE)
     --json                     One JSON document on stdout, with \"schema\": 1 and \"command\"
     --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
+    --witness FILE.phs         freeze: a user witness script (UTF-8, at most 1 MiB, must evaluate without errors);
+                               repeatable, kept in the order given
     --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
                                (with --json they never ask: --json needs --yes to write)
     -h, --help                 This help
@@ -83,13 +89,19 @@ pub struct ConfArgs {
     pub yes: bool,
     pub origin: bool,
     pub allow_engine_mismatch: bool,
+    /// `--witness FILE` (repeatable), in the order given.
+    pub witness: Vec<PathBuf>,
+    pub run: bool,
+    pub timeout_ms: Option<u64>,
     pub help: bool,
     /// The flags given, in order, so each command can refuse the ones it does not take.
     given: Vec<&'static str>,
 }
 
-const VALUE_FLAGS: [&str; 5] = ["--conf", "--reason", "--engine-policy", "--out", "--expect"];
-const SWITCHES: [&str; 6] = ["--json", "--yes", "--origin", "--allow-engine-mismatch", "--help", "-h"];
+const VALUE_FLAGS: [&str; 7] = ["--conf", "--reason", "--engine-policy", "--out", "--expect", "--witness", "--timeout-ms"];
+const SWITCHES: [&str; 7] = ["--json", "--yes", "--origin", "--allow-engine-mismatch", "--run", "--help", "-h"];
+/// The one value flag that may be given more than once.
+const REPEATABLE: &str = "--witness";
 
 fn accepted_flags() -> String {
     let mut all: Vec<&str> = VALUE_FLAGS.to_vec();
@@ -109,8 +121,8 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 .next()
                 .filter(|value| !value.starts_with("--"))
                 .ok_or_else(|| format!("{flag} expects a value, found none"))?;
-            if parsed.given.contains(&flag) {
-                return Err(format!("{flag} is given twice; expected it once"));
+            if parsed.given.contains(&flag) && flag != REPEATABLE {
+                return Err(format!("{flag} is given twice; expected it once (only {REPEATABLE} may be repeated)"));
             }
             parsed.given.push(flag);
             match flag {
@@ -118,6 +130,11 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 "--reason" => parsed.reason = Some(value.clone()),
                 "--engine-policy" => parsed.policy = Some(value.parse()?),
                 "--out" => parsed.out = Some(PathBuf::from(value)),
+                "--witness" => parsed.witness.push(PathBuf::from(value)),
+                "--timeout-ms" => {
+                    let ms = value.parse::<u64>().ok().filter(|ms| *ms > 0);
+                    parsed.timeout_ms = Some(ms.ok_or_else(|| format!("--timeout-ms takes a whole number of milliseconds above 0, found {value:?}"))?);
+                }
                 _ => parsed.expect = Some(value.clone()),
             }
         } else if let Some(&switch) = SWITCHES.iter().find(|s| **s == arg) {
@@ -127,6 +144,7 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 "--yes" => parsed.yes = true,
                 "--origin" => parsed.origin = true,
                 "--allow-engine-mismatch" => parsed.allow_engine_mismatch = true,
+                "--run" => parsed.run = true,
                 _ => parsed.help = true,
             }
         } else if arg.starts_with('-') {
@@ -233,8 +251,8 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
         "show" => (&["--conf", "--json", "--origin"], 1),
         "diff" => (&["--conf", "--json", "--allow-engine-mismatch"], 2),
         "history" => (&["--conf", "--json"], 1),
-        "freeze" => (&["--json", "--reason", "--engine-policy", "--out"], 0),
-        "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch"], 1),
+        "freeze" => (&["--json", "--reason", "--engine-policy", "--out", "--witness"], 0),
+        "verify" => (&["--conf", "--json", "--expect", "--allow-engine-mismatch", "--run", "--timeout-ms"], 1),
         "update" => (&["--conf", "--json", "--reason", "--engine-policy", "--yes"], 0),
         "seal" => (&["--conf", "--json", "--reason", "--yes"], 0),
         _ => (&[], 0),
@@ -284,6 +302,9 @@ fn run(args: &ConfArgs) -> Outcome {
             2,
             format!("--reason must be one line without control characters (the history records it), found the control character {control:?}"),
         );
+    }
+    if args.timeout_ms.is_some() && !args.run {
+        return failure(command, 2, "--timeout-ms bounds the witnesses of --run: give it with --run");
     }
     if let Some(expected) = &args.expect {
         if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -372,6 +393,8 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
     let created = file.map(|f| f.created().to_string()).unwrap_or_default();
     let history = file.map_or(0, |f| f.history().len());
     text.push_str(&format!("seal: {seal}\ncreated: {created}\nhistory: {history} entries\n"));
+    let (builtin, user) = file.map_or((0, 0), recorded_counts);
+    text.push_str(&format!("witnesses: {builtin} built-in, {user} user recorded\n"));
     if inspection.problems.is_empty() {
         text.push_str("verification: the seal, the hashes and the chain hold\n");
     } else {
@@ -415,6 +438,7 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
         "engine_matches": matches!(inspection.engine, Some(EngineState::Matches { .. })),
         "catalog_problems": catalog_problems,
         "atomic_weight_edition": inspection.atomic_weight_edition,
+        "witnesses_recorded": { "builtin": builtin, "user": user },
         "environment": changes_json(&inspection.environment),
         "sources": file.map_or_else(Vec::new, |f| f
             .sources()
@@ -423,6 +447,12 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
             .collect::<Vec<_>>()),
     });
     (text, fields)
+}
+
+/// The `builtin.*` and `user.*` keys a file records in `[Witness]`.
+fn recorded_counts(file: &FrozenFile) -> (usize, usize) {
+    let count = |prefix: &str| file.witnesses().iter().filter(|(key, _)| key.starts_with(prefix)).count();
+    (count("builtin."), count("user."))
 }
 
 fn engine_file() -> Option<PathBuf> {
@@ -793,14 +823,47 @@ fn freeze_command(args: &ConfArgs) -> Outcome {
         time_unix: now_unix(),
         actor: &actor,
     };
-    let written = freeze(&options).and_then(|(file, path)| {
+    // misuse first: the scripts read, named and normalised before any configuration is read
+    let scripts = match witness_scripts(&args.witness) {
+        Ok(scripts) => scripts,
+        Err(message) => return failure("freeze", 2, format!("{message}; nothing written")),
+    };
+    // AlreadyFrozen, WouldOverwrite, the policy and the overrides, before anything is evaluated (correction C1)
+    let draft = match prepare_freeze(&options) {
+        Ok(draft) => draft,
+        Err(e) => return failure("freeze", ops_code(&e), e.to_string()),
+    };
+    // the witnesses are evaluated under the file about to be written: its probe, as the explicit configuration
+    let (run, warnings) = match with_probe(draft.probe(), || evaluate_witnesses(&scripts, DEFAULT_TIMEOUT)) {
+        Ok(evaluated) => (evaluated.value, evaluated.warnings),
+        Err(e) => {
+            return failure("freeze", e.code, format!("the witnesses cannot be evaluated under the file to be written: {}; nothing written", e.message))
+        }
+    };
+    let refused: Vec<String> = run
+        .user
+        .iter()
+        .filter_map(|(name, result)| match result {
+            Err(e) => Some(format!("{name}: {e}")),
+            Ok(result) if !result.report.ok => Some(format!(
+                "{name}: does not evaluate cleanly (a witness must have no error findings): {}",
+                findings_text(&result.report)
+            )),
+            Ok(_) => None,
+        })
+        .collect();
+    if !refused.is_empty() {
+        return failure("freeze", 2, format!("witness script(s) refused: {}; nothing written", refused.join("; ")));
+    }
+    let written = draft.finish(&run.rows, scripts).and_then(|(file, path)| {
         write_atomic(&path, &file.render()?, false)?;
         Ok((file, path))
     });
     let (file, path) = match written {
         Ok(done) => done,
-        Err(e) => return failure("freeze", ops_code(&e), e.to_string()),
+        Err(e) => return failure("freeze", ops_code(&e), format!("{e}; nothing written")),
     };
+    let (builtin, user) = recorded_counts(&file);
     let engine = EngineIdentity::current().short();
     let seal = file.seal_sha256().to_string();
     let text = format!(
@@ -812,9 +875,50 @@ engine: {engine} (policy {})
         shown(&path),
         policy.as_str()
     );
+    let mut text = format!("{text}witnesses: {builtin} built-in, {user} user recorded\n");
+    for warning in &warnings {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
     let sources: Vec<Value> = file.sources().iter().map(|s| json!({ "origin": s.origin(), "sha256": s.sha256() })).collect();
-    let fields = json!({ "path": shown(&path), "seal": seal, "engine": engine, "policy": policy.as_str(), "sources": sources });
+    let fields = json!({
+        "path": shown(&path),
+        "seal": seal,
+        "engine": engine,
+        "policy": policy.as_str(),
+        "sources": sources,
+        "witnesses": { "builtin": builtin, "user": user },
+        "warnings": warnings,
+    });
     report("freeze", text, fields, 0)
+}
+
+/// The `--witness` scripts: each read (UTF-8, at most 1 MiB), named after its file stem, unique, and normalised as
+/// the file keeps it (`WitnessScript::new`, whose text is what is evaluated: decision C13). `Err` is misuse (exit 2).
+fn witness_scripts(paths: &[PathBuf]) -> Result<Vec<WitnessScript>, String> {
+    let mut scripts: Vec<WitnessScript> = Vec::with_capacity(paths.len());
+    for path in paths {
+        let name = witness_name(path)?;
+        if scripts.iter().any(|s| s.name() == name) {
+            return Err(format!(
+                "two witness scripts are named {name:?} (a witness is named after its file stem): expected each name once, rename one"
+            ));
+        }
+        let raw = read_script(path)?;
+        let script = WitnessScript::new(&name, &raw).map_err(|e| format!("{}: cannot be kept in a frozen file: {e}", shown(path)))?;
+        scripts.push(script);
+    }
+    Ok(scripts)
+}
+
+/// The error findings of a report, one after the other: `line N: code: message`.
+fn findings_text(report: &physure_script::report::Report) -> String {
+    report
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == "error")
+        .map(|d| format!("line {}: {}: {}", d.line, d.code, d.message))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// `phs conf verify [FILE] [--expect SEAL] [--allow-engine-mismatch]`.
@@ -1059,6 +1163,7 @@ fn seal(args: &ConfArgs) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use physure_core::frozen::freeze;
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -1159,5 +1264,28 @@ mod tests {
         assert!(parse(&args(&["status", "--conf", "--json"])).unwrap_err().contains("expects a value"));
         assert!(parse(&args(&["--out", "a", "--out", "b"])).unwrap_err().contains("twice"));
         assert!(parse(&args(&["--engine-policy", "strict"])).unwrap_err().contains("binary, build, release or record"));
+    }
+
+    #[test]
+    fn only_witness_may_be_repeated_and_the_verify_flags_are_read() {
+        let parsed = parse(&args(&["freeze", "--witness", "a.phs", "--reason", "r", "--witness", "b.phs"])).unwrap();
+        assert_eq!(parsed.witness, vec![PathBuf::from("a.phs"), PathBuf::from("b.phs")]);
+        assert_eq!(parsed.given.iter().filter(|f| **f == "--witness").count(), 2);
+        assert!(parse(&args(&["freeze", "--witness"])).unwrap_err().contains("expects a value"));
+        assert!(parse(&args(&["freeze", "--witness", "--json"])).unwrap_err().contains("expects a value"));
+        for twice in [&["--reason", "a", "--reason", "b"][..], &["--timeout-ms", "5", "--timeout-ms", "6"][..]] {
+            let e = parse(&args(twice)).unwrap_err();
+            assert!(e.contains("twice") && e.contains("only --witness"), "{e}");
+        }
+        let parsed = parse(&args(&["verify", "f.conf", "--run", "--timeout-ms", "250"])).unwrap();
+        assert!(parsed.run);
+        assert_eq!(parsed.timeout_ms, Some(250));
+        for bad in ["0", "-1", "soon", "1.5"] {
+            assert!(parse(&args(&["verify", "--timeout-ms", bad])).is_err(), "{bad}");
+        }
+        assert!(accepted_flags().contains("--witness") && accepted_flags().contains("--run") && accepted_flags().contains("--timeout-ms"));
+        assert!(shape("freeze").0.contains(&"--witness") && !shape("verify").0.contains(&"--witness"));
+        assert!(shape("verify").0.contains(&"--run") && shape("verify").0.contains(&"--timeout-ms"));
+        assert!(!shape("status").0.contains(&"--run"));
     }
 }
