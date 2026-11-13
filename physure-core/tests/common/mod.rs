@@ -80,6 +80,7 @@ pub fn settings_lines() -> Vec<String> {
         format!("setting parallel_threshold = {}", physure_core::settings::parallel_threshold()),
         format!("setting max_loop_iterations = {}", physure_core::settings::max_loop_iterations()),
         format!("setting max_pipeline_steps = {}", physure_core::settings::max_pipeline_steps()),
+        format!("setting approx_rel_tol = {:?}", physure_core::settings::approx_rel_tol()),
         format!("setting propagation_mode = {}", physure_core::uncertainty::propagation_mode().name()),
         format!("setting angle_mode = {}", physure_core::units::angle_mode::angle_mode().name()),
         format!("setting radian plain = {}", physure_core::units::angle_mode::marker_converts_to_plain("rad")),
@@ -92,6 +93,7 @@ pub fn set_sentinel_settings() {
     physure_core::settings::set_parallel_threshold(777);
     physure_core::settings::set_max_loop_iterations(778);
     physure_core::settings::set_max_pipeline_steps(779);
+    physure_core::settings::set_approx_rel_tol(0.125);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Unscented);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimension);
     physure_core::units::angle_mode::set_marker_grants(false, false);
@@ -102,6 +104,7 @@ pub fn set_compiled_defaults() {
     physure_core::settings::set_parallel_threshold(10_000);
     physure_core::settings::set_max_loop_iterations(1_000_000);
     physure_core::settings::set_max_pipeline_steps(1_000);
+    physure_core::settings::set_approx_rel_tol(1e-3);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Correlated);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimensionless);
     physure_core::units::angle_mode::set_marker_grants(true, true);

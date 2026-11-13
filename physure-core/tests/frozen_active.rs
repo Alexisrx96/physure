@@ -367,18 +367,20 @@ fn set_sentinel_settings() {
     physure_core::settings::set_parallel_threshold(777);
     physure_core::settings::set_max_loop_iterations(778);
     physure_core::settings::set_max_pipeline_steps(779);
+    physure_core::settings::set_approx_rel_tol(0.125);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Unscented);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimension);
     physure_core::units::angle_mode::set_marker_grants(false, false);
 }
 
-type Settings = (usize, usize, usize, &'static str, &'static str, bool, bool);
+type Settings = (usize, usize, usize, f64, &'static str, &'static str, bool, bool);
 
 fn settings_now() -> Settings {
     (
         physure_core::settings::parallel_threshold(),
         physure_core::settings::max_loop_iterations(),
         physure_core::settings::max_pipeline_steps(),
+        physure_core::settings::approx_rel_tol(),
         physure_core::uncertainty::propagation_mode().name(),
         physure_core::units::angle_mode::angle_mode().name(),
         physure_core::units::angle_mode::marker_converts_to_plain("rad"),
@@ -386,9 +388,9 @@ fn settings_now() -> Settings {
     )
 }
 
-const SENTINELS: Settings = (777, 778, 779, "unscented", "dimension", false, false);
+const SENTINELS: Settings = (777, 778, 779, 0.125, "unscented", "dimension", false, false);
 /// What the embedded catalog sets (and the compiled defaults are).
-const LIBRARY_SETTINGS: Settings = (10_000, 1_000_000, 1_000, "correlated", "dimensionless", true, true);
+const LIBRARY_SETTINGS: Settings = (10_000, 1_000_000, 1_000, 1e-3, "correlated", "dimensionless", true, true);
 
 /// The embedded catalog without its `max_pipeline_steps` line, so that the setting is one the file does not mention.
 fn embedded_without_pipeline_steps() -> String {
@@ -401,6 +403,7 @@ fn restore_library_settings() {
     physure_core::settings::set_parallel_threshold(10_000);
     physure_core::settings::set_max_loop_iterations(1_000_000);
     physure_core::settings::set_max_pipeline_steps(1_000);
+    physure_core::settings::set_approx_rel_tol(1e-3);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Correlated);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimensionless);
     physure_core::units::angle_mode::set_marker_grants(true, true);
@@ -411,12 +414,12 @@ fn settings_of_the_frozen_file_are_applied_at_activation_and_a_failed_load_appli
     let env = Env::new();
     assert!(active().unwrap().is_none());
     set_sentinel_settings();
-    let overrides = "[Settings]\nparallel_threshold = 4242\nangle_mode = dimension\n[Compatibility]\nsteradian, plain = convert\n";
+    let overrides = "[Settings]\nparallel_threshold = 4242\nangle_mode = dimension\napprox_rel_tol = 1e-6\n[Compatibility]\nsteradian, plain = convert\n";
     env.write(FROZEN_FILE_NAME, &frozen_with(release_engine(), &embedded_without_pipeline_steps(), overrides));
     reset();
     ensure_valid().unwrap();
     // the file's values, and the compiled default for the one it does not mention (never the sentinel)
-    assert_eq!(settings_now(), (4242, 1_000_000, 1_000, "correlated", "dimension", false, true));
+    assert_eq!(settings_now(), (4242, 1_000_000, 1_000, 1e-6, "correlated", "dimension", false, true));
     // a failed load applies nothing
     reset();
     set_sentinel_settings();
@@ -455,7 +458,7 @@ fn the_resolution_is_sticky_once_a_frozen_file_was_activated() {
     set_sentinel_settings();
     std::env::set_current_dir(&env.dir).unwrap();
     ensure_valid().unwrap();
-    assert_eq!(settings_now(), (4242, 1_000_000, 1_000, "correlated", "dimensionless", true, true));
+    assert_eq!(settings_now(), (4242, 1_000_000, 1_000, 1e-3, "correlated", "dimensionless", true, true));
     // and to another frozen file: refused too
     let other = env.write("other.conf", &frozen_text("8.0", "zz_other", ""));
     std::env::set_var(ENV_CONF, &other);

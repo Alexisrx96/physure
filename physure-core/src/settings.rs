@@ -1,7 +1,7 @@
 //! Process-wide settings read from `physure.conf`.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 pub(crate) const DEFAULT_PARALLEL_THRESHOLD: usize = 10_000;
 static PARALLEL_THRESHOLD: AtomicUsize = AtomicUsize::new(DEFAULT_PARALLEL_THRESHOLD);
@@ -146,14 +146,33 @@ impl Drop for MaxPipelineStepsGuard {
     }
 }
 
+/// The relative tolerance of PHS `≈` when none is given (`approx(a, b)`), from `physure.conf`'s
+/// `[Settings] approx_rel_tol`: `a ≈ b` is `|a - b| <= approx_rel_tol * max(|a|, |b|)` on the canonical magnitudes.
+pub(crate) const DEFAULT_APPROX_REL_TOL: f64 = 1e-3;
+/// The bits of an `f64`: there is no atomic float, and the bits round-trip exactly.
+static APPROX_REL_TOL: AtomicU64 = AtomicU64::new(0x3F50_624D_D2F1_A9FC);
+
+/// The relative tolerance PHS `≈` uses (see [`DEFAULT_APPROX_REL_TOL`]). Process-wide, read the same way by every
+/// thread (rayon workers included), like the other settings; there is no thread-local override.
+pub fn approx_rel_tol() -> f64 {
+    f64::from_bits(APPROX_REL_TOL.load(Ordering::Relaxed))
+}
+
+/// Sets the process-wide `≈` tolerance, returning the one it replaced. The conf readers validate it (finite, in
+/// `(0, 1)`); a value outside that range makes every `≈` an error rather than a guess.
+pub fn set_approx_rel_tol(rel: f64) -> f64 {
+    f64::from_bits(APPROX_REL_TOL.swap(rel.to_bits(), Ordering::Relaxed))
+}
+
 /// Puts every process-wide setting a conf can change back to the value compiled into the library: the three
-/// ceilings above, the propagation mode, the angle mode and the `[Compatibility]` grants. Activating a frozen
+/// ceilings above, the `≈` tolerance, the propagation mode, the angle mode and the `[Compatibility]` grants. Activating a frozen
 /// configuration calls it before applying the file's settings, so a setting the file does not mention takes its
 /// compiled default and never a value some earlier reading left behind. Thread-local overrides are not touched.
 pub(crate) fn reset_to_defaults() {
     set_parallel_threshold(DEFAULT_PARALLEL_THRESHOLD);
     set_max_loop_iterations(DEFAULT_MAX_LOOP_ITERATIONS);
     set_max_pipeline_steps(DEFAULT_MAX_PIPELINE_STEPS);
+    set_approx_rel_tol(DEFAULT_APPROX_REL_TOL);
     crate::uncertainty::set_propagation_mode(crate::uncertainty::PropagationMode::default());
     crate::units::angle_mode::set_angle_mode(crate::units::angle_mode::AngleMode::default());
     crate::units::angle_mode::set_marker_grants(true, true);
@@ -223,6 +242,36 @@ mod tests {
         assert_eq!(max_pipeline_steps(), 7);
         let previous = set_max_pipeline_steps(original);
         assert_eq!(previous, 7);
+    }
+
+    #[test]
+    fn the_stored_default_is_the_default() {
+        assert_eq!(f64::from_bits(0x3F50_624D_D2F1_A9FC), DEFAULT_APPROX_REL_TOL);
+    }
+
+    #[test]
+    fn set_approx_rel_tol_returns_previous_and_updates() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = set_approx_rel_tol(1e-6);
+        assert_eq!(approx_rel_tol(), 1e-6);
+        assert_eq!(set_approx_rel_tol(original), 1e-6);
+        assert_eq!(DEFAULT_APPROX_REL_TOL, 1e-3);
+    }
+
+    #[test]
+    fn reset_to_defaults_restores_approx_rel_tol() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let (threshold, iterations, steps) = (parallel_threshold(), max_loop_iterations(), max_pipeline_steps());
+        let mode = crate::uncertainty::mode::propagation_mode();
+        let original = set_approx_rel_tol(0.25);
+        reset_to_defaults();
+        assert_eq!(approx_rel_tol(), DEFAULT_APPROX_REL_TOL);
+        set_approx_rel_tol(original);
+        set_parallel_threshold(threshold);
+        set_max_loop_iterations(iterations);
+        set_max_pipeline_steps(steps);
+        crate::uncertainty::set_propagation_mode(mode);
     }
 
     #[test]

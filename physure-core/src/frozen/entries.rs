@@ -153,6 +153,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         parallel_threshold,
         max_loop_iterations,
         max_pipeline_steps,
+        approx_rel_tol,
         radian_grant,
         steradian_grant,
         ignored,
@@ -162,6 +163,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "parallel_threshold", parallel_threshold.to_string());
     push(&mut out, "setting", "max_loop_iterations", max_loop_iterations.to_string());
     push(&mut out, "setting", "max_pipeline_steps", max_pipeline_steps.to_string());
+    push(&mut out, "setting", "approx_rel_tol", format!("{approx_rel_tol:?}"));
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -313,6 +315,20 @@ mod tests {
         ignored.settings.push(Setting::Ignored { key: "locale".into(), value: "x".into() });
         let seen = diff(&entries(&registry, &constants, &settings), &entries(&registry, &constants, &ignored));
         assert!(seen.iter().any(|c| c.kind() == "setting_ignored"), "{seen:?}");
+    }
+
+    #[test]
+    fn approx_rel_tol_is_an_entry_and_a_change_of_it_is_seen() {
+        let (registry, constants, settings) = shipped();
+        let e = entries(&registry, &constants, &settings);
+        assert!(e.iter().any(|x| x.kind == "setting" && x.name == "approx_rel_tol" && x.value == "0.001"), "{e:?}");
+        let mut tighter = settings.clone();
+        tighter.settings.push(Setting::ApproxRelTol(1e-6));
+        let seen = diff(&e, &entries(&registry, &constants, &tighter));
+        assert!(seen.iter().any(|c| c.kind() == "setting" && c.name() == "approx_rel_tol"), "{seen:?}");
+        let default = ProcessSettings::default();
+        let explicit = ProcessSettings { settings: vec![Setting::ApproxRelTol(crate::settings::DEFAULT_APPROX_REL_TOL)], compatibility: None };
+        assert_eq!(entries(&registry, &constants, &default), entries(&registry, &constants, &explicit));
     }
 
     #[test]

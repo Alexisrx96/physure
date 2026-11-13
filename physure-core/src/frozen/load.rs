@@ -476,6 +476,7 @@ mod tests {
                 crate::settings::parallel_threshold(),
                 crate::settings::max_loop_iterations(),
                 crate::settings::max_pipeline_steps(),
+                crate::settings::approx_rel_tol().to_bits(),
                 crate::uncertainty::mode::propagation_mode(),
                 crate::units::angle_mode::angle_mode(),
                 crate::units::angle_mode::marker_converts_to_plain("rad"),
@@ -484,7 +485,7 @@ mod tests {
         };
         let before = now();
         let dir = Dir::new();
-        let settings = "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\npropagation_mode = unscented\nmax_loop_iterations = 3\nmax_pipeline_steps = 4\n[Compatibility]\n";
+        let settings = "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\npropagation_mode = unscented\nmax_loop_iterations = 3\nmax_pipeline_steps = 4\napprox_rel_tol = 1e-6\n[Compatibility]\n";
         let catalog = load(&write_file(&dir, &standard(settings))).unwrap();
         assert_eq!(now(), before, "a successful load applied something");
         assert!(catalog.settings.ends_with(&[
@@ -493,6 +494,7 @@ mod tests {
             Setting::PropagationMode(crate::uncertainty::PropagationMode::Unscented),
             Setting::MaxLoopIterations(3),
             Setting::MaxPipelineSteps(4),
+            Setting::ApproxRelTol(1e-6),
         ]));
         assert_eq!(catalog.compatibility, Some(vec![]), "the overrides' empty section replaces the rows");
         let failing = standard(&format!("{settings}[AtomicWeights]\nFe = abc, 0.1"));

@@ -185,6 +185,8 @@ pub enum Setting {
     ParallelThreshold(usize),
     MaxLoopIterations(usize),
     MaxPipelineSteps(usize),
+    /// The relative tolerance of PHS `≈`: finite and in `(0, 1)`.
+    ApproxRelTol(f64),
     /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
     Ignored { key: String, value: String },
 }
@@ -208,6 +210,9 @@ impl Setting {
             Setting::MaxPipelineSteps(n) => {
                 crate::settings::set_max_pipeline_steps(*n);
             }
+            Setting::ApproxRelTol(rel) => {
+                crate::settings::set_approx_rel_tol(*rel);
+            }
             Setting::Ignored { .. } => {}
         }
     }
@@ -221,6 +226,7 @@ pub struct EffectiveSettings {
     pub parallel_threshold: usize,
     pub max_loop_iterations: usize,
     pub max_pipeline_steps: usize,
+    pub approx_rel_tol: f64,
     /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
     pub radian_grant: bool,
     pub steradian_grant: bool,
@@ -241,13 +247,16 @@ impl ProcessSettings {
     /// The value of every process-wide setting this file gives: each takes its last value in the file, or the compiled
     /// default if the file does not give it.
     pub fn effective(&self) -> EffectiveSettings {
-        use crate::settings::{DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_PARALLEL_THRESHOLD};
+        use crate::settings::{
+            DEFAULT_APPROX_REL_TOL, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_PARALLEL_THRESHOLD,
+        };
         let mut effective = EffectiveSettings {
             propagation_mode: PropagationMode::default(),
             angle_mode: AngleMode::default(),
             parallel_threshold: DEFAULT_PARALLEL_THRESHOLD,
             max_loop_iterations: DEFAULT_MAX_LOOP_ITERATIONS,
             max_pipeline_steps: DEFAULT_MAX_PIPELINE_STEPS,
+            approx_rel_tol: DEFAULT_APPROX_REL_TOL,
             radian_grant: true,
             steradian_grant: true,
             ignored: BTreeMap::new(),
@@ -259,6 +268,7 @@ impl ProcessSettings {
                 Setting::ParallelThreshold(n) => effective.parallel_threshold = *n,
                 Setting::MaxLoopIterations(n) => effective.max_loop_iterations = *n,
                 Setting::MaxPipelineSteps(n) => effective.max_pipeline_steps = *n,
+                Setting::ApproxRelTol(rel) => effective.approx_rel_tol = *rel,
                 Setting::Ignored { key, value } => {
                     effective.ignored.insert(key.clone(), value.clone());
                 }
@@ -280,6 +290,7 @@ impl ProcessSettings {
         crate::settings::set_parallel_threshold(e.parallel_threshold);
         crate::settings::set_max_loop_iterations(e.max_loop_iterations);
         crate::settings::set_max_pipeline_steps(e.max_pipeline_steps);
+        crate::settings::set_approx_rel_tol(e.approx_rel_tol);
         crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
@@ -322,6 +333,13 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
         "parallel_threshold" => count(raw).map(Setting::ParallelThreshold),
         "max_loop_iterations" => count(raw).map(Setting::MaxLoopIterations),
         "max_pipeline_steps" => count(raw).map(Setting::MaxPipelineSteps),
+        "approx_rel_tol" => match raw.parse::<f64>() {
+            Ok(rel) if rel.is_finite() && rel > 0.0 && rel < 1.0 => Ok(Setting::ApproxRelTol(rel)),
+            _ => Err(SettingIssue::Bad {
+                why: format!("invalid approx_rel_tol '{raw}': a finite number between 0 and 1 (exclusive)"),
+                keeping: "the tolerance in force",
+            }),
+        },
         _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
         _ => Err(SettingIssue::Unknown(key.to_string())),
     }
@@ -332,7 +350,7 @@ pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
         SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations and max_pipeline_steps, and accepts {} for other bindings",
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps and approx_rel_tol, and accepts {} for other bindings",
             CORE_UNUSED_SETTINGS.join(", ")
         ),
         SettingIssue::Bad { why, .. } => why,
@@ -1766,11 +1784,12 @@ mod tests {
     }
 
     /// The readable process-wide settings, to show that a replay changed none of them.
-    fn process_settings_now() -> (usize, usize, usize, PropagationMode, AngleMode, (bool, bool)) {
+    fn process_settings_now() -> (usize, usize, usize, u64, PropagationMode, AngleMode, (bool, bool)) {
         (
             crate::settings::parallel_threshold(),
             crate::settings::max_loop_iterations(),
             crate::settings::max_pipeline_steps(),
+            crate::settings::approx_rel_tol().to_bits(),
             crate::uncertainty::mode::propagation_mode(),
             crate::units::angle_mode::angle_mode(),
             marker_grants(),
@@ -1843,6 +1862,7 @@ mod tests {
         assert!(registry.knows("m") && registry.knows("Hz"));
         assert!(constants.contains_key("molar_gas_constant"));
         assert!(collected.settings.contains(&Setting::PropagationMode(PropagationMode::Correlated)));
+        assert!(collected.settings.contains(&Setting::ApproxRelTol(crate::settings::DEFAULT_APPROX_REL_TOL)));
         assert!(collected.compatibility.is_some());
         // the strict replay builds what the lenient reading of the library builds
         let mut lenient = UnitRegistry::new();
@@ -1913,6 +1933,11 @@ mod tests {
             ("[Settings]\nparallel_threshold = -5\n", "-5"),
             ("[Settings]\nmax_loop_iterations = many\n", "many"),
             ("[Settings]\nmax_pipeline_steps =\n", "max_pipeline_steps"),
+            ("[Settings]\napprox_rel_tol = 0\n", "approx_rel_tol"),
+            ("[Settings]\napprox_rel_tol = -1e-3\n", "-1e-3"),
+            ("[Settings]\napprox_rel_tol = nan\n", "nan"),
+            ("[Settings]\napprox_rel_tol = abc\n", "abc"),
+            ("[Settings]\napprox_rel_tol = 1\n", "approx_rel_tol"),
             ("[Settings]\nno equals sign here\n", "no equals sign here"),
             ("[Compatibility]\nradian, plain = add\n", "radian, plain = add"),
             ("[Compatibility]\nthis line has no equals sign\n", "this line has no equals sign"),
@@ -2010,6 +2035,45 @@ mod tests {
         ProcessSettings::default().activate();
         assert_eq!(crate::settings::parallel_threshold(), crate::settings::DEFAULT_PARALLEL_THRESHOLD);
         assert_eq!(marker_grants(), (true, true));
+    }
+
+    #[test]
+    fn approx_rel_tol_is_a_finite_fraction_between_zero_and_one() {
+        assert_eq!(parse_setting("approx_rel_tol = 1e-6"), Ok(Setting::ApproxRelTol(1e-6)));
+        assert_eq!(parse_setting("approx_rel_tol = 0.5"), Ok(Setting::ApproxRelTol(0.5)));
+        for bad in ["0", "-0.0", "-1e-3", "nan", "NaN", "inf", "-inf", "1", "1.0", "2", "abc", ""] {
+            let why = parse_setting(&format!("approx_rel_tol = {bad}")).unwrap_err();
+            assert!(why.contains("approx_rel_tol") && why.contains(&format!("'{bad}'")), "{bad:?}: {why}");
+        }
+        assert!(parse_setting("frobnicate = 1").unwrap_err().contains("approx_rel_tol"), "the list of keys names it");
+    }
+
+    #[test]
+    fn the_lenient_reader_applies_a_good_approx_rel_tol_and_keeps_the_one_in_force_for_a_bad_one() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let original = crate::settings::set_approx_rel_tol(2e-3);
+        let (mut reg, mut constants) = (UnitRegistry::new(), HashMap::new());
+        for bad in ["0", "-1", "nan", "inf", "abc", "1"] {
+            parse_physure_conf(&format!("[Settings]\napprox_rel_tol = {bad}\n"), &mut reg, &mut constants);
+            assert_eq!(crate::settings::approx_rel_tol(), 2e-3, "{bad:?} replaced the value in force");
+        }
+        parse_physure_conf("[Settings]\napprox_rel_tol = 1e-5\n", &mut reg, &mut constants);
+        assert_eq!(crate::settings::approx_rel_tol(), 1e-5);
+        crate::settings::set_approx_rel_tol(original);
+    }
+
+    #[test]
+    fn activation_sets_approx_rel_tol_from_the_file_or_its_default() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let original = crate::settings::approx_rel_tol();
+        ProcessSettings { settings: vec![Setting::ApproxRelTol(1e-6)], compatibility: None }.activate();
+        assert_eq!(crate::settings::approx_rel_tol(), 1e-6);
+        ProcessSettings::default().activate();
+        assert_eq!(crate::settings::approx_rel_tol(), crate::settings::DEFAULT_APPROX_REL_TOL);
+        crate::settings::set_approx_rel_tol(original);
     }
 
     #[test]
