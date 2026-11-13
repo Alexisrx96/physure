@@ -4,7 +4,7 @@
 //! the configuration in force); each constant is the catalog's `[Constants]` entry as the configuration in force
 //! states it, so an override of a unit or a constant shows in its witness. None reads a process setting.
 
-use super::{Case, CaseError, CaseResult};
+use super::{case, Case, CaseError, CaseResult};
 use crate::frozen::witness::WitnessValue;
 use crate::quantity::Quantity;
 
@@ -34,10 +34,6 @@ fn read_constant(name: &str) -> CaseResult {
 }
 
 pub(super) fn cases() -> Vec<Case> {
-    fn case(id: &'static str, run: fn() -> CaseResult) -> Case {
-        let area = id.split('.').next().unwrap_or(id);
-        Case { id, area, run }
-    }
     vec![
         case("units.foot_to_metre", || convert(1.0, "ft", "m")),
         case("units.kmh_to_ms", || convert(1.0, "km/h", "m/s")),

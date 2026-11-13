@@ -35,6 +35,7 @@
 //! When the configuration in force cannot be used at all (a broken frozen file), [`run_cases`] evaluates nothing and
 //! every case is an error naming why.
 
+pub mod uncertainty;
 pub mod units;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -69,9 +70,16 @@ pub struct Case {
     pub run: fn() -> CaseResult,
 }
 
+/// A case whose area is the part of `id` before its first `.`.
+pub(crate) fn case(id: &'static str, run: fn() -> CaseResult) -> Case {
+    let area = id.split('.').next().unwrap_or(id);
+    Case { id, area, run }
+}
+
 /// Every built-in case, in id order.
 pub fn battery() -> Vec<Case> {
     let mut cases = units::cases();
+    cases.extend(uncertainty::cases());
     cases.sort_by_key(|case| case.id);
     cases
 }
