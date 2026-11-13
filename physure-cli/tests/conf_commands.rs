@@ -608,6 +608,26 @@ fn verify_of_a_tampered_engine_block_does_not_report_the_engine_as_matching() {
     assert!(stdout(&output).contains("engine: not checked (the file does not verify)"), "{}", text(&output));
 }
 
+/// Review finding 9: a FILE and --conf name two files; neither is silently ignored.
+#[test]
+fn a_file_and_conf_together_are_exit_2() {
+    let dir = Dir::new("file_and_conf");
+    freeze_cli(&dir, &[]);
+    for args in [
+        &["verify", FROZEN_FILE_NAME, "--conf", "other.conf"][..],
+        &["history", FROZEN_FILE_NAME, "--conf", "other.conf"][..],
+        &["diff", FROZEN_FILE_NAME, "--conf", "other.conf"][..],
+        &["diff", "unfrozen", "--conf", FROZEN_FILE_NAME][..],
+    ] {
+        let output = dir.conf(args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {}", text(&output));
+        assert!(stderr(&output).contains("--conf") && stderr(&output).contains("ambiguous"), "{args:?}: {}", text(&output));
+    }
+    // a selector of show is not a file: --conf names the file in force there
+    let output = dir.conf(&["show", "constants.molar_gas_constant", "--conf", FROZEN_FILE_NAME]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+}
+
 #[test]
 fn verify_json_schema() {
     let dir = Dir::new("verify_json");

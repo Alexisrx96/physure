@@ -53,7 +53,7 @@ USAGE:
                                Check the seal, the hashes, the chain and the engine; compare the seal with SEAL
 
 FLAGS:
-    --conf PATH                The frozen file in force (not with freeze, which writes to --out)
+    --conf PATH                The frozen file in force (not with freeze, which writes to --out, nor beside a FILE)
     --json                     One JSON document on stdout, with \"schema\": 1 and \"command\"
     --allow-engine-mismatch    status, verify, diff: inspect a file pinned to another engine (the exit code stays 3)
     --yes                      update, seal: do not ask; without it they ask on a terminal and refuse without one
@@ -263,6 +263,16 @@ fn run(args: &ConfArgs) -> Outcome {
         );
     }
     // what is decided without reading anything: misuse comes before any file is read
+    if args.conf.is_some() && !args.positional.is_empty() && ["verify", "history", "diff"].contains(&command) {
+        return failure(
+            command,
+            2,
+            format!(
+                "`phs conf {command}` was given both a FILE ({}) and --conf: which one it acts on would be ambiguous; give one",
+                args.positional.join(" ")
+            ),
+        );
+    }
     if ["freeze", "update", "seal"].contains(&command) && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
         return failure(command, 2, format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
     }
