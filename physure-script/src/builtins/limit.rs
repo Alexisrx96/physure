@@ -550,9 +550,9 @@ pub(crate) fn limit(
                      the point itself): an extrapolated limit has no derivative with respect to its point to propagate the uncertainty with"
                 )));
             }
-            match starts.as_slice() {
-                &[(direction, h)] => one_sided(&mut function, mean, direction, h),
-                &[(_, left), (_, right)] => two_sided(&mut function, mean, left, right),
+            match *starts.as_slice() {
+                [(direction, h)] => one_sided(&mut function, mean, direction, h),
+                [(_, left), (_, right)] => two_sided(&mut function, mean, left, right),
                 _ => unreachable!("one or two sides are approached"),
             }
         }
