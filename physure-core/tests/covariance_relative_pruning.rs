@@ -193,3 +193,26 @@ fn scaled_case(scale: f64) -> Case {
         u_y: (0..2).map(|i| y[i][i].sqrt()).collect(),
     }
 }
+
+/// An input that appears twice in one operation (`x + x`) contributes through both of its Jacobians to the
+/// covariance of the result with every other variable: `cov(x + x, x) = 2 var(x)`, so `(x + x) - x` has the
+/// uncertainty of `x`. Found while measuring B14: the store used only the first Jacobian of a repeated input, and
+/// the Python array `(x + x) - x` came out with `sqrt(3) u`, `(x + x) - 2 x` with `2 u` instead of `0`.
+#[test]
+fn a_repeated_input_contributes_every_jacobian_to_the_cross_covariance() {
+    let u = 1e-3;
+    let mut s = store();
+    s.register_diagonal_slice(0, &[u * u, u * u]);
+    let j = identity(2);
+    let minus_j: Vec<f64> = j.iter().map(|v| -v).collect();
+    s.propagate_slices(1, vec![0, 0], vec![(&j, &[2, 2]), (&j, &[2, 2])]);
+    let cross = block(&s, 1, 0).expect("cov(x + x, x)");
+    for i in 0..2 {
+        assert_eq!(cross[i][i], 2.0 * u * u, "cov(x + x, x), component {i}");
+    }
+    s.propagate_slices(2, vec![1, 0], vec![(&j, &[2, 2]), (&minus_j, &[2, 2])]);
+    let var = block(&s, 2, 2).expect("var((x + x) - x)");
+    for i in 0..2 {
+        assert_rel(var[i][i].sqrt(), u, &format!("(x + x) - x, component {i}"));
+    }
+}
