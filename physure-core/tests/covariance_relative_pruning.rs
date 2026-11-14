@@ -61,7 +61,7 @@ fn x_plus_x_has_twice_the_uncertainty_for_every_u_in_every_unit() {
             s.propagate_slices(2, vec![0, 0], vec![(&j, &[2, 2]), (&j, &[2, 2])]);
             let var = block(&s, 2, 2).unwrap_or_else(|| panic!("u = {u_in_m} m in {unit}: no variance stored"));
             for (i, row) in var.iter().enumerate() {
-                assert_rel(row[i].sqrt(), 2.0 * u, &format!("u = {u_in_m} m in {unit}, component {i}"));
+                assert_eq!(row[i].sqrt(), 2.0 * u, "u = {u_in_m} m in {unit}, component {i}");
             }
         }
     }
