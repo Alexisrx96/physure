@@ -9,7 +9,8 @@
 //!
 //! **Soundness.** An error is reported only when the interpreter is certain to refuse the operation: both
 //! sides are known quantities and their dimensions differ, a unit is not in the catalog, a name is
-//! neither a variable nor a unit and meets a quantity. A value the pass cannot type (an argument of a
+//! neither a variable, a constant nor a unit and meets a quantity, a name of `pi`, `π` or a constant of the catalog
+//! is bound (`crate::globals`). A value the pass cannot type (an argument of a
 //! function it has not seen, a vector, an imported name) is `Unknown` and silences every check that depends
 //! on it. The one report that is a warning, not an error, is `min` or `max` of different dimensions, which
 //! the interpreter accepts (it compares base-unit magnitudes) and which is never what was meant.
@@ -45,7 +46,7 @@ pub struct Diagnostic {
     pub line: usize,
     pub severity: Severity,
     /// A short stable name: `dimension-mismatch`, `unknown-unit`, `unknown-name`, `bad-argument`,
-    /// `bad-exponent`, `temperature-points`, `mixed-extremum`.
+    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`.
     pub code: &'static str,
     pub message: String,
 }
@@ -64,6 +65,7 @@ pub fn check_source(code: &str) -> PhysureResult<Vec<Diagnostic>> {
 /// Checks a parsed program against `registry`.
 pub fn check_program(program: &Program, registry: &UnitRegistry) -> Vec<Diagnostic> {
     let mut checker = Checker::new(registry);
+    checker.refuse_global_bindings(program);
     checker.prepare(&program.statements);
     let mut env = Env::new();
     checker.block(&program.statements, &program.lines, &mut env, 0);
@@ -254,6 +256,47 @@ impl<'a> Checker<'a> {
         }
     }
 
+    // ---- global identifiers
+
+    /// A binding of `pi`, `π` or a constant of the catalog anywhere in a statement (function bodies included) is an
+    /// error, as the interpreter says before the statement runs (`crate::globals`). Reported at the line of the
+    /// top-level statement that holds it.
+    fn refuse_global_bindings(&mut self, program: &Program) {
+        for (index, statement) in program.statements.iter().enumerate() {
+            self.line = program.lines.get(index).copied().unwrap_or(0);
+            let mut bound = Vec::new();
+            crate::globals::bindings_of(statement, &mut bound);
+            for (name, what) in bound {
+                if crate::globals::is_global_in(&name, self.registry) {
+                    let value = self.registry.constants_meta.get(&name).map(|meta| meta.value.clone());
+                    let message = crate::globals::shadowing_error(&name, &what, value.as_deref());
+                    self.report(Severity::Error, "constant-shadowing", message);
+                }
+            }
+        }
+        self.line = 0;
+    }
+
+    /// The type of the global identifier `name` (`pi`, `π` or a constant of the catalog), `None` when it is not one.
+    fn global(&mut self, name: &str) -> Option<Ty> {
+        if crate::globals::PI_NAMES.contains(&name) {
+            return Some(Ty::Qty(Dim { constant: Some(std::f64::consts::PI), ..Dim::dimensionless() }));
+        }
+        let value = self.registry.constants_meta.get(name)?.value.clone();
+        // the interpreter reads it with `constant_quantity`; one that does not read is its error, not a type
+        if physure_core::units::conf::constant_quantity(&value, self.registry).is_err() {
+            return Some(Ty::Unknown);
+        }
+        let unit = value.trim().split_once(char::is_whitespace).map_or("", |(_, unit)| unit.trim());
+        if unit.is_empty() {
+            return Some(Ty::Qty(Dim::dimensionless()));
+        }
+        Some(match self.registry.facts(unit) {
+            Ok(facts) => Ty::Qty(dim_of(&facts)),
+            Err(_) => Ty::Unknown,
+        })
+    }
+
     // ---- reporting
 
     fn report(&mut self, severity: Severity, code: &'static str, message: String) {
@@ -419,6 +462,11 @@ impl<'a> Checker<'a> {
         if self.funcs.contains_key(name) {
             return Ty::Unknown;
         }
+        // `pi` and the constants of the catalog come before units, and a binding of one is an error (reported
+        // apart), so no later binding can make it something else
+        if let Some(ty) = self.global(name) {
+            return ty;
+        }
         // bound somewhere (a later assignment, an import, a parameter of another function): it may be
         // bound by the time this runs, and a binding beats a unit
         if self.assigned.contains(name) || self.dynamic_names {
@@ -476,7 +524,7 @@ impl<'a> Checker<'a> {
         self.report(
             Severity::Error,
             "unknown-name",
-            format!("'{name}' is neither a variable nor a unit, and meets a quantity here"),
+            format!("'{name}' is neither a variable, a constant nor a unit, and meets a quantity here"),
         );
     }
 

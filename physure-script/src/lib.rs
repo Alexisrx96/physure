@@ -14,6 +14,7 @@ pub mod value;
 pub mod symbolic;
 pub mod builtins;
 pub mod check;
+pub mod globals;
 pub mod limits;
 pub mod plugin;
 pub mod report;

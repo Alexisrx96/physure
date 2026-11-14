@@ -100,7 +100,17 @@ fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsVa
 /// Algebra (e.g. multiplying both sides) can move the unknown to either side of the equation, so try whichever
 /// side is fully bound by the supplied kwargs rather than assuming it's the RHS.
 fn solved_side<'a>(name: &str, lhs: &'a Node, rhs: &'a Node, local_env: &HashMap<String, PhsValue>) -> PhysureResult<&'a Node> {
-    let unbound = |s: &&String| !local_env.contains_key(*s);
+    // a global identifier (`pi`, a constant of the catalog) has its value: it is not an argument the call is missing
+    let mut free = std::collections::HashSet::new();
+    lhs.free_symbols(&mut free);
+    rhs.free_symbols(&mut free);
+    let mut globals = std::collections::HashSet::new();
+    for symbol in free.iter().filter(|s| !local_env.contains_key(*s)) {
+        if crate::globals::is_global(symbol)? {
+            globals.insert(symbol.clone());
+        }
+    }
+    let unbound = |s: &&String| !local_env.contains_key(*s) && !globals.contains(*s);
     let mut rhs_free = std::collections::HashSet::new();
     rhs.free_symbols(&mut rhs_free);
     let rhs_missing: Vec<&String> = rhs_free.iter().filter(unbound).collect();
@@ -198,18 +208,22 @@ impl PhsInterpreter {
             // `v = 3 m/s` in scope, `deriv("0.5*m*v^2", "v")` used to receive the quantity
             // instead of the name. `{v}` folds a value in explicitly.
             Expr::Str(text) => Ok(PhsValue::String(interpolate(text, self, env))),
-            Expr::Identifier(name) => Ok(self.eval_identifier(name, env)),
+            Expr::Identifier(name) => self.eval_identifier(name, env),
             Expr::BinaryOp { op, left, right } => self.eval_binary_expr(*op, left, right, env),
             Expr::FunctionCall { name, args, kwargs } => self.eval_call(name, args, kwargs, env),
             Expr::ForExpr { var, iterable, body } => self.eval_for(var, iterable, body, env),
         }
     }
 
-    fn eval_identifier(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhsValue {
-        if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
+    /// A bare name, in the one resolution order of PHS (`crate::globals`): a binding in `env` (lexical, variable,
+    /// user function), then `pi`/`π` and the constants of the catalog in force, then a unit, else the name as text.
+    fn eval_identifier(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        Ok(if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
             PhsValue::String(eval_template_string(name, self, env))
         } else if let Some(val) = env.get(name) {
             val.clone()
+        } else if let Some(global) = crate::globals::global_value(name)? {
+            global
         } else if let Some(unit) = unit_symbol_as_quantity(name) {
             // The symbolic layer has no notion of units: it parses `2.0 J / (gram * K)`
             // into plain algebra over the symbols J, gram and K. Re-evaluating such a
@@ -219,7 +233,7 @@ impl PhsInterpreter {
             PhsValue::Quantity(unit)
         } else {
             PhsValue::String(name.to_string())
-        }
+        })
     }
 
     fn eval_binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
@@ -297,6 +311,7 @@ impl PhsInterpreter {
         }
         let mut local_env = env.clone();
         for (kwarg_name, kwarg_expr) in kwargs {
+            crate::globals::refuse_binding(kwarg_name, &format!("an argument of the equation `{name}`"))?;
             let val = self.eval_expr(kwarg_expr, env)?;
             local_env.insert(kwarg_name.clone(), val);
         }

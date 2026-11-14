@@ -60,6 +60,7 @@ impl PhsInterpreter {
         let mut last = PhsValue::None;
         for (i, stmt) in program.statements.iter().enumerate() {
             let line = program.lines.get(i).copied().unwrap_or(0);
+            crate::globals::refuse_global_bindings(stmt)?;
             last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
         }
         self.env = env;
@@ -201,6 +202,10 @@ impl PhsInterpreter {
     /// sources of their uncertainty: writing them as source text would make a new measurement of each, and
     /// `f(x, x)` would no longer see one.
     pub fn run_program_with(&self, program: &Program, bindings: Vec<(String, PhsValue)>) -> PhysureResult<PhsValue> {
+        // `pi` and the catalog's constants are global: a host cannot rebind them either
+        for (name, _) in &bindings {
+            crate::globals::refuse_binding(name, "a value given by the host")?;
+        }
         let mut env = self.env.clone();
         env.extend(bindings);
         let mut last = PhsValue::None;
@@ -212,6 +217,8 @@ impl PhsInterpreter {
 
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
+        // once per statement before it runs, function bodies and loops included (see `globals`)
+        crate::globals::refuse_global_bindings(stmt)?;
         self.eval_statement_with_env_at(stmt, env, 0)
     }
 
@@ -333,6 +340,11 @@ impl PhsInterpreter {
 
         match &node.specifier {
             ImportSpecifier::Wildcard => {
+                // what a module defines is known only now: a name of it that is a global identifier is refused
+                let what = format!("a name imported from `{}`", node.path);
+                for name in export.symbols.keys().chain(export.functions.keys()) {
+                    crate::globals::refuse_binding(name, &what)?;
+                }
                 for (name, expr) in &export.symbols {
                     let val = self.eval_expr(expr, env)?;
                     env.insert(name.clone(), val);
