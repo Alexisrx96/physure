@@ -74,12 +74,14 @@ pub fn check_program(program: &Program, registry: &UnitRegistry) -> Vec<Diagnost
 
 // ---- dimensions
 
-/// A dimension by dimension symbol (`L`, `M`, `T`, `A`...), whether it is an absolute temperature, and the
-/// value when it is a dimensionless literal (an exponent is read from it).
+/// A dimension by dimension symbol (`L`, `M`, `T`, `A`...), whether it is an absolute temperature, whether it is a
+/// level (`dB`, `pH`: a logarithmic unit), and the value when it is a dimensionless literal (an exponent is read from
+/// it).
 #[derive(Clone, Debug, PartialEq, Default)]
 struct Dim {
     exps: BTreeMap<String, Rational64>,
     point: bool,
+    level: bool,
     constant: Option<f64>,
 }
 
@@ -107,17 +109,34 @@ impl Dim {
             *entry += *power * Rational64::from_integer(sign);
         }
         exps.retain(|_, power| *power != Rational64::from_integer(0));
-        Dim { exps, point: false, constant: None }
+        Dim { exps, ..Dim::default() }
     }
 
     fn pow(&self, power: Rational64) -> Dim {
         let exps = self.exps.iter().map(|(symbol, p)| (symbol.clone(), *p * power)).collect();
-        Dim { exps, point: false, constant: None }
+        Dim { exps, ..Dim::default() }
     }
 
     /// Dimensionless, or an angle: what `sin`, `cos`, `tan`, `exp`, `ln` and `log` take.
     fn is_plain_or_angle(&self) -> bool {
         self.exps.is_empty() || (self.exps.len() == 1 && self.exps.get("A") == Some(&Rational64::from_integer(1)))
+    }
+
+    /// Dimensionless and not a level: a plain number, or a ratio in a unit (`%`, `unity`). What compares with a
+    /// plain number.
+    fn is_ratio(&self) -> bool {
+        self.exps.is_empty() && !self.level
+    }
+
+    /// What a comparison message calls it: a level or an absolute temperature by what it is, anything else by its
+    /// dimension.
+    fn described(&self) -> String {
+        match (self.level, self.point) {
+            (true, _) if self.exps.is_empty() => "a level".to_string(),
+            (true, _) => format!("a level of {}", self.text()),
+            (_, true) => "an absolute temperature".to_string(),
+            _ => self.text(),
+        }
     }
 
     fn text(&self) -> String {
@@ -146,7 +165,7 @@ impl Ty {
     fn key(&self) -> String {
         match self {
             Ty::Unknown => "?".to_string(),
-            Ty::Qty(dim) => format!("{}{}", dim.text(), if dim.point { "@" } else { "" }),
+            Ty::Qty(dim) => format!("{}{}{}", dim.text(), if dim.point { "@" } else { "" }, if dim.level { "~" } else { "" }),
             Ty::Bool => "bool".to_string(),
             Ty::Symbol(name) => format!("sym:{name}"),
         }
@@ -555,7 +574,8 @@ impl<'a> Checker<'a> {
             (Some(x), Some(y), _) => Some(x - y),
             _ => None,
         };
-        Ty::Qty(Dim { exps: a.exps.clone(), point, constant })
+        // the sum of two levels is a level (of the summed ratios), as the core reads it
+        Ty::Qty(Dim { exps: a.exps.clone(), point, level: a.level && b.level, constant })
     }
 
     /// Whether the result of a sum or difference is an absolute temperature; `None` (after reporting) when the
@@ -589,6 +609,14 @@ impl<'a> Checker<'a> {
         let is_sign = |d: &Dim| d.exps.is_empty() && matches!(d.constant, Some(c) if c.abs() == 1.0);
         if (a.point && is_sign(b)) || (b.point && is_sign(a) && op == BinaryOp::Mul) {
             return Ty::Qty(Dim { constant: None, ..(if a.point { a } else { b }).clone() });
+        }
+        // A level times a plain number, or over one, stays a level in the core (`5 dB * 2`, `2 * 5 dB`, and `-5 dB`,
+        // which the parser reads as `-1 * 5 dB`), even where its display loses the unit (`-5 dB` prints `-5.0`).
+        if a.level && b.is_ratio() {
+            return Ty::Qty(Dim { constant: None, ..a.clone() });
+        }
+        if b.level && a.is_ratio() && op == BinaryOp::Mul {
+            return Ty::Qty(Dim { constant: None, ..b.clone() });
         }
         if (a.point && b.exps.is_empty()) || (b.point && a.exps.is_empty()) {
             self.report(
@@ -793,10 +821,32 @@ impl<'a> Checker<'a> {
         Ty::Qty(Dim { constant: None, ..dims[0].clone() })
     }
 
+    /// The rule of `Quantity::comparable_magnitudes`: different dimensions have no comparison, so a zero needs a
+    /// unit (`x > 0 m`) and an angle is not a plain number; a level and a dimensionless value that is not one have
+    /// none either (`20 dB == 100`); a plain number compares with a ratio (`50 % == 0.5`).
     fn comparison(&mut self, args: &[Ty]) -> Ty {
         if let [Ty::Qty(a), Ty::Qty(b)] = args {
-            if !a.same_dimension(b) {
-                self.report(Severity::Error, "dimension-mismatch", format!("cannot compare {} with {}", a.text(), b.text()));
+            let (with, plain) = if b.is_ratio() && !a.is_ratio() { (a, b) } else { (b, a) };
+            let message = if plain.is_ratio() && !with.is_ratio() && plain.constant == Some(0.0) {
+                Some(format!(
+                    "cannot compare {} with the plain number 0: a zero needs a unit, write it with one (`x > 0 m`; for \
+                     a temperature point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB \
+                     is a ratio of 1)",
+                    with.described()
+                ))
+            } else if plain.is_ratio() && with.level && with.exps.is_empty() {
+                Some(format!(
+                    "cannot compare a level with {}: write the level with its unit (`x > 20 dB`) or compare the \
+                     ratio explicitly (`(x => unity) > 100`)",
+                    if plain.constant.is_some() { "a plain number".to_string() } else { "a dimensionless value".to_string() }
+                ))
+            } else if !a.same_dimension(b) {
+                Some(format!("cannot compare {} with {}", a.described(), b.described()))
+            } else {
+                None
+            };
+            if let Some(message) = message {
+                self.report(Severity::Error, "dimension-mismatch", message);
             }
         }
         Ty::Bool
@@ -811,7 +861,8 @@ fn dim_of(facts: &physure_core::units::UnitFacts) -> Dim {
         .map(|(symbol, (n, d))| (symbol.clone(), Rational64::new(*n, *d)))
         .filter(|(_, power)| *power != Rational64::from_integer(0))
         .collect();
-    Dim { exps, point: facts.kind == UnitKind::Point, constant: None }
+    let point = facts.kind == UnitKind::Point;
+    Dim { exps, point, level: !facts.is_linear && !point, constant: None }
 }
 
 /// What several branches agree on, or `Unknown`.

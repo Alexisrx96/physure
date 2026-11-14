@@ -69,10 +69,10 @@ fn equality_is_relative_on_canonical_magnitudes() {
         ("273.16 K == 0.01 degC", true),
         ("20 degC == 68 degF", true),
         ("20 degC == 20 K", false),
-        ("20 dB == 100", true),
+        ("(20 dB => unity) == 100", true),
         ("-0.0 == 0.0", true),
         ("0 m == 0 km", true),
-        ("1 m > 0", true),
+        ("1 m > 0 m", true),
         ("1 pm != 2 pm", true),
         ("1 km != 1000 m", false),
         ("0.01 degC != 273.16 K", false),
@@ -269,12 +269,16 @@ fn temperatures_and_levels_compare_by_what_they_stand_for_in_either_order() {
             assert!(!truth(&format!("{o} == {x}")), "{o} == {x}");
         }
     }
+    // a level compares with a level; with a plain number only once it is read as its ratio (`20 dB == 100` has no
+    // answer: a ratio, a power ratio or 100 dB?)
     for level in [-20.0, 0.0, 3.0, 20.0, 60.0] {
         let ratio: f64 = 10f64.powf(level / 10.0);
         let (l, r) = (lit(level, "dB"), format!("{ratio:?}"));
-        assert!(truth(&format!("{l} == {r}")), "{l} == {r}");
-        assert!(truth(&format!("{r} == {l}")), "{r} == {l}");
+        assert!(truth(&format!("({l} => unity) == {r}")), "({l} => unity) == {r}");
+        assert!(truth(&format!("{r} == ({l} => unity)")), "{r} == ({l} => unity)");
         let off = format!("{:?}", ratio * (1.0 + 1e-9));
-        assert!(!truth(&format!("{l} == {off}")), "{l} == {off}");
+        assert!(!truth(&format!("({l} => unity) == {off}")), "({l} => unity) == {off}");
+        assert!(refused(&format!("{l} == {r}")).contains("write the level with its unit"), "{l} == {r}");
+        assert!(truth(&format!("{l} == {l}")), "{l} == {l}");
     }
 }

@@ -58,13 +58,13 @@ fn quantities(args: &[PhsValue], symbol: &str) -> PhysureResult<(physure_core::Q
     }
 }
 
-/// `<`, `>`, `<=`, `>=` on two numbers or quantities, by their canonical magnitudes
-/// (`Quantity::comparable_magnitudes`: `1 km > 999 m`, different dimensions an error). Nothing else has an order:
-/// two strings compared their equality as `0 < 1`, which made `"b" < "a"` true.
-fn order(args: &[PhsValue], symbol: &str, pred: impl Fn(f64, f64) -> bool) -> PhysureResult<Option<PhsValue>> {
+/// `<`, `>`, `<=`, `>=` on two numbers or quantities: `Quantity::phs_compare`, by their canonical magnitudes
+/// (`1 km > 999 m`), different dimensions an error, a zero written without a unit an error (`x > 0 m`), a level
+/// against a plain number an error (`Quantity::comparable_magnitudes`). Transpiled code calls the same method.
+/// Nothing else has an order: two strings compared their equality as `0 < 1`, which made `"b" < "a"` true.
+fn order(args: &[PhsValue], symbol: &str) -> PhysureResult<Option<PhsValue>> {
     let (l, r) = quantities(args, symbol)?;
-    let (a, b) = l.comparable_magnitudes(&r)?;
-    Ok(Some(boolean(pred(a, b))))
+    Ok(Some(boolean(l.phs_compare(&r, symbol)?)))
 }
 
 /// PHS `==`, the one definition `!=` negates:
@@ -213,10 +213,10 @@ pub fn eval_core_builtin(
         // `assert(left == right)`, not `exact_assert(left == right)`. This omission is
         // deliberate, not an oversight; do not add a symmetrical Bool arm.
         "exact_assert" => exact_assert_builtin(args),
-        "op_>" | "op_gt" => order(args, ">", |l, r| l > r),
-        "op_<" | "op_lt" => order(args, "<", |l, r| l < r),
-        "op_>=" | "op_gte" => order(args, ">=", |l, r| l >= r),
-        "op_<=" | "op_lte" => order(args, "<=", |l, r| l <= r),
+        "op_>" | "op_gt" => order(args, ">"),
+        "op_<" | "op_lt" => order(args, "<"),
+        "op_>=" | "op_gte" => order(args, ">="),
+        "op_<=" | "op_lte" => order(args, "<="),
         "op_==" | "op_eq" => Ok(Some(boolean(phs_equal(args, "==")?))),
         // exactly the negation of `==`, the sigma form included
         "op_!=" | "op_neq" => Ok(Some(boolean(!phs_equal(args, "!=")?))),

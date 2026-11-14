@@ -91,6 +91,16 @@ pub fn format_fraction(n: f64, mixed: bool) -> Option<String> {
     Some(format!("{} {}/{}", whole, (numer % denom).abs(), denom))
 }
 
+/// A number as an error message quotes it: an integer without a decimal point (`0`, `100`), anything else as
+/// [`format_float`] writes it.
+fn short_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format_float(n)
+    }
+}
+
 pub fn format_float(n: f64) -> String {
     if n == 0.0 {
         return "0.0".to_string();
@@ -583,18 +593,88 @@ impl Quantity {
     /// temperature point, the plain ratio for a level, base SI otherwise. They are not converted to either operand's
     /// unit: converting K to degC cancels, so `0.01 degC == 273.16 K` and its mirror disagreed.
     ///
-    /// Different dimensions are an error rather than `false`: `5 m > 2 s` has no answer. A dimensionless zero in a
-    /// linear unit compares with anything linear (`x > 0` is how a sign test is written, and zero reads the same in
-    /// every linear unit), but not with a temperature point: `0` is not `0 degC`, and reading it as `0 K` made
-    /// `-10 degC > 0` true.
+    /// The rule, the one every comparison of PHS and of the bindings goes through:
+    /// * different dimensions are an error rather than `false`: `5 m > 2 s` has no answer;
+    /// * **a zero needs a unit**: a plain `0` has no dimension, so `x > 0` with `x` in metres is the error above. Zeros
+    ///   of different scales are different values (0 degC is 273.15 K, 0 dB is a ratio of 1), and only the unit says
+    ///   which one is meant: `x > 0 m`. An angle is a dimension here in every angle mode (`1 rad > 0` is an error);
+    /// * **a level** (`dB`, `pH`, ...) and a dimensionless value that is not a level have no comparison: whether `100`
+    ///   is a ratio, a power ratio or 100 dB is a convention nothing written states. Two levels compare by the ratios
+    ///   they stand for, and a level with a dimension compares with a linear quantity of that dimension;
+    /// * a dimensionless quantity that is not a level, in any unit (a plain number, `unity`, `%`, `ppm`), compares with
+    ///   plain numbers by its ratio: `50 % == 0.5`, `1 % > 0`.
     pub fn comparable_magnitudes(&self, other: &Quantity) -> PhysureResult<(f64, f64)> {
-        let linear = |q: &Quantity| !q.unit.is_affine() && !q.unit.is_logarithmic();
-        let plain_zero = |q: &Quantity| q.unit.dimensions.is_empty() && linear(q) && q.value.mean() == 0.0;
-        let zero_exception = (plain_zero(self) && linear(other)) || (plain_zero(other) && linear(self));
-        if !self.unit.same_dimensions(&other.unit) && !zero_exception {
-            return Err(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
+        if let Some(message) = self.incomparability(other) {
+            return Err(message);
         }
         Ok((self.canonical_magnitude(), other.canonical_magnitude()))
+    }
+
+    /// Why `self` and `other` have no comparison ([`Quantity::comparable_magnitudes`]), `None` when they have one.
+    fn incomparability(&self, other: &Quantity) -> Option<PhysureError> {
+        let ratio = |q: &Quantity| q.unit.dimensions.is_empty() && !q.unit.is_logarithmic();
+        let level = |q: &Quantity| q.unit.is_logarithmic() && q.unit.dimensions.is_empty();
+        // `with` is the operand that carries the unit, `plain` the one written without
+        let (with, plain) = if ratio(other) && !ratio(self) { (self, other) } else { (other, self) };
+        if ratio(plain) && !ratio(with) {
+            let zero = plain.value.mean() == 0.0;
+            // a level that has lost its name to an arithmetic step still says what it is
+            let named = with.unit.__repr__();
+            let unit = if named.is_empty() { "<its unit>".to_string() } else { named.clone() };
+            let with_text = if named.is_empty() && with.unit.is_logarithmic() { format!("the level {with}") } else { format!("{with}") };
+            let plain_text = if plain.unit.is_plain_number() {
+                format!("the plain number {}", short_number(plain.value.mean()))
+            } else {
+                format!("{plain}")
+            };
+            if zero {
+                return Some(PhysureError::Generic(format!(
+                    "cannot compare {with_text} with {plain_text}: a zero needs a unit, write `x > 0 {unit}` (for a temperature \
+                     point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB is a ratio of 1)"
+                )));
+            }
+            if level(with) {
+                return Some(PhysureError::Generic(format!(
+                    "cannot compare {with_text} with {plain_text}: write the level with its unit (`x > {} {unit}`) or \
+                     compare the ratio explicitly (`(x => unity) > {}`)",
+                    short_number(with.value.mean()),
+                    short_number(plain.canonical_magnitude())
+                )));
+            }
+            if !with.unit.same_dimensions(&plain.unit) {
+                return Some(PhysureError::Generic(format!(
+                    "cannot compare {with_text} with {plain_text}: a number compared with a quantity needs a unit, write `x > {} {unit}`",
+                    short_number(plain.value.mean())
+                )));
+            }
+        }
+        if !self.unit.same_dimensions(&other.unit) {
+            return Some(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
+        }
+        None
+    }
+
+    /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],
+    /// `!=` its negation, the order is that of the canonical magnitudes; operands without a comparison are an error
+    /// ([`Quantity::comparable_magnitudes`]). This is what transpiled code calls, so that it answers what the
+    /// interpreter answers.
+    pub fn phs_compare(&self, other: &Quantity, op: &str) -> PhysureResult<bool> {
+        match op {
+            "==" => self.phs_eq(other),
+            "!=" | "≠" => self.phs_eq(other).map(|equal| !equal),
+            "<" | ">" | "<=" | ">=" | "≤" | "≥" => {
+                let (a, b) = self.comparable_magnitudes(other)?;
+                Ok(match op {
+                    "<" => a < b,
+                    ">" => a > b,
+                    "<=" | "≤" => a <= b,
+                    _ => a >= b,
+                })
+            }
+            other => Err(PhysureError::Generic(format!(
+                "unknown comparison operator '{other}': expected one of <, >, <=, >=, ==, !="
+            ))),
+        }
     }
 
     /// PHS equality, the one definition the interpreter, `assert(a, b)` and the bindings share: the canonical
@@ -639,10 +719,12 @@ impl Quantity {
                 kind: "assert",
                 message: format!("{} != {}", self, other),
             }),
-            Err(_) => Err(PhysureError::AssertionFailed {
+            Err(PhysureError::UnitMismatch { .. }) => Err(PhysureError::AssertionFailed {
                 kind: "assert",
                 message: format!("{} and {} have incompatible dimensions", self, other),
             }),
+            // a plain number against a quantity, or a level against a ratio: the comparison says why
+            Err(reason) => Err(PhysureError::AssertionFailed { kind: "assert", message: reason.to_string() }),
         }
     }
 

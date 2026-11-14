@@ -50,7 +50,8 @@ fn phs_eq_reads_a_temperature_point_and_a_level_by_what_they_stand_for() {
     assert!(eq(&q(273.16, "K"), &q(0.01, "degC")));
     assert!(eq(&q(20.0, "degC"), &q(68.0, "degF")));
     assert!(!eq(&q(20.0, "degC"), &q(20.0, "K")));
-    assert!(eq(&q(20.0, "dB"), &q(100.0, "")));
+    assert!(eq(&q(20.0, "dB"), &q(20.0, "dB")));
+    assert!(!eq(&q(20.0, "dB"), &q(10.0, "dB")));
 }
 
 #[test]
@@ -68,13 +69,71 @@ fn phs_eq_on_non_finite_and_zero_operands_follows_ieee() {
 }
 
 #[test]
-fn phs_eq_refuses_different_dimensions_but_a_dimensionless_zero_compares_with_a_linear_unit() {
+fn phs_eq_refuses_different_dimensions_and_a_zero_needs_a_unit() {
     assert!(q(5.0, "m").phs_eq(&q(5.0, "s")).is_err());
-    assert!(!eq(&q(5.0, "m"), &q(0.0, "")));
-    assert!(eq(&q(0.0, "m"), &q(0.0, "")));
-    // zero reads the same in every linear unit, not on an interval scale: 0 degC is not 0 K
-    assert!(q(-10.0, "degC").phs_eq(&q(0.0, "")).is_err());
-    assert!(q(0.0, "").phs_eq(&q(0.0, "degF")).is_err());
+    // zeros of different scales are different values: only the unit says which one is meant
+    for unit in ["m", "km", "m/s", "degC", "degF", "K", "rad", "deg", "sr"] {
+        let error = q(1.0, unit).phs_eq(&q(0.0, "")).unwrap_err().to_string();
+        assert!(error.contains("a zero needs a unit"), "{unit}: {error}");
+        assert!(error.contains(&format!("`x > 0 {}`", q(1.0, unit).unit.__repr__())), "{unit}: {error}");
+        assert!(q(0.0, "").phs_eq(&q(0.0, unit)).is_err(), "0 == 0 {unit}");
+    }
+    let error = q(1.0, "m").phs_eq(&q(0.0, "")).unwrap_err().to_string();
+    assert_eq!(
+        error,
+        "cannot compare 1.0 m with the plain number 0: a zero needs a unit, write `x > 0 m` (for a temperature point \
+         or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB is a ratio of 1)"
+    );
+    let error = q(1.0, "m").phs_eq(&q(5.0, "")).unwrap_err().to_string();
+    assert!(error.contains("the plain number 5") && error.contains("`x > 5 m`"), "{error}");
+    assert!(eq(&q(0.0, "m"), &q(0.0, "km")));
+}
+
+#[test]
+fn a_level_and_a_dimensionless_value_that_is_not_one_have_no_comparison() {
+    for (level, plain) in [(20.0, 100.0), (0.0, 0.0), (-5.0, 0.0), (5.0, 1.0)] {
+        assert!(q(level, "dB").phs_eq(&q(plain, "")).is_err(), "{level} dB == {plain}");
+        assert!(q(plain, "").phs_compare(&q(level, "dB"), "<").is_err(), "{plain} < {level} dB");
+    }
+    let error = q(20.0, "dB").phs_eq(&q(100.0, "")).unwrap_err().to_string();
+    assert!(error.starts_with("cannot compare 20.0 dB with the plain number 100: write the level with its unit"), "{error}");
+    assert!(error.contains("compare the ratio explicitly"), "{error}");
+    assert!(q(20.0, "dB").phs_eq(&q(50.0, "%")).is_err(), "a percentage is a ratio, not a level");
+    assert!(q(20.0, "dB").phs_eq(&q(100.0, "unity")).is_err());
+    // two levels compare by the ratios they stand for
+    assert!(q(20.0, "dB").phs_compare(&q(10.0, "dB"), ">").unwrap());
+}
+
+#[test]
+fn a_dimensionless_ratio_compares_with_plain_numbers() {
+    assert!(eq(&q(50.0, "%"), &q(0.5, "")));
+    assert!(q(1.0, "%").phs_compare(&q(0.0, ""), ">").unwrap());
+    assert!(q(1.0, "unity").phs_compare(&q(0.0, ""), ">").unwrap());
+    assert!(eq(&q(3.0, "ppm"), &q(3e-6, "")));
+}
+
+#[test]
+fn an_angle_is_not_a_plain_number_in_either_angle_mode() {
+    use physure_core::units::angle_mode::{scoped, AngleMode};
+    for mode in [AngleMode::Dimensionless, AngleMode::Dimension] {
+        let _mode = scoped(mode);
+        assert!(q(1.0, "rad").phs_compare(&q(0.0, ""), ">").is_err(), "{mode:?}");
+        assert!(q(30.0, "deg").phs_compare(&q(0.0, ""), ">").is_err(), "{mode:?}");
+        assert!(q(1.0, "rad").phs_compare(&q(0.5, ""), ">").is_err(), "{mode:?}");
+        assert!(q(30.0, "deg").phs_compare(&q(0.0, "deg"), ">").unwrap(), "{mode:?}");
+    }
+}
+
+#[test]
+fn phs_compare_is_the_interpreter_s_comparison() {
+    let (a, b) = (q(1.0, "km"), q(999.0, "m"));
+    for (op, expected) in [(">", true), ("<", false), (">=", true), ("<=", false), ("==", false), ("!=", true), ("≥", true), ("≤", false), ("≠", true)] {
+        assert_eq!(a.phs_compare(&b, op).unwrap(), expected, "1 km {op} 999 m");
+    }
+    assert!(q(1.0, "km").phs_compare(&q(1000.0, "m"), "==").unwrap());
+    assert!(q(1.0, "m").phs_compare(&q(1.0, "s"), "<").is_err());
+    assert!(q(1.0, "m").phs_compare(&q(0.0, ""), ">").is_err());
+    assert!(a.phs_compare(&b, "<>").is_err());
 }
 
 #[test]
@@ -87,6 +146,8 @@ fn assert_uses_phs_eq() {
     assert!(msg.contains("!="), "{msg}");
     let msg = q(1.0, "m").phs_assert(&q(1.0, "s")).unwrap_err().to_string();
     assert!(msg.contains("incompatible dimensions"), "{msg}");
+    let msg = q(1.0, "m").phs_assert(&q(0.0, "")).unwrap_err().to_string();
+    assert!(msg.contains("a zero needs a unit"), "{msg}");
 }
 
 #[test]

@@ -18,7 +18,7 @@
 (2 rad) + 1	error Unit mismatch: expected 'rad', got ''
 1 + (2 rad)	error Unit mismatch: expected '', got 'rad'
 (5 deg) + (50 %)	error Unit mismatch: expected 'deg', got '%'
-(1 rad) == 1	error Unit mismatch: expected 'rad', got ''
+(1 rad) == 1	error cannot compare 1.0 rad with the plain number 1: a number compared with a quantity needs a unit, write `x > 1 rad`
 (2 m*rad) + (1 m)	error Unit mismatch: expected 'm*rad', got 'm'
 (25 kg*m^2*rad^2/s^2) - (25 J)	error Unit mismatch: expected 'kg*m^2*rad^2/s^2', got 'J'
 (1 rad)^2 + (1 rad)	error Unit mismatch: expected 'rad^2', got 'rad'

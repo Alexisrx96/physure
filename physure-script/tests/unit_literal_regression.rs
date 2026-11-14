@@ -224,9 +224,11 @@ fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
     assert!(truth("999.0 m < 1.0 km"));
     assert!(!truth("1.0 km != 1000.0 m"));
 
-    // A sign test against a bare zero stays legal: zero reads the same in every unit.
-    assert!(truth("2.0 m > 0"));
-    assert!(!truth("0.0 m > 0"));
+    // A sign test writes its zero with a unit: zeros of different scales are different values, so a bare `0`
+    // against a length is a dimension mismatch like any other plain number.
+    assert!(truth("2.0 m > 0 m"));
+    assert!(!truth("0.0 m > 0 m"));
+    assert!(eval_phs("2.0 m > 0").is_err(), "a zero needs a unit");
 
     // Comparing across dimensions has no answer, and answering `false` would let it
     // pass silently through a conditional.
