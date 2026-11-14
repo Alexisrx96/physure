@@ -43,7 +43,36 @@ A sum or a comparison never reads an angle as 1: `2 rad + 1` and `2 m*rad + 1 m`
 
 `x == t +/- k sigma` asks whether the measured `x` lies within `k` of its own standard uncertainties of the exact target `t`: `(9.81 +/- 0.01) m/s^2 == 9.80 m/s^2 +/- 2 sigma` is true. An `x` with no uncertainty is an error; use `==`.
 
-Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. Arithmetic and conversion bind tighter than a comparison, so `0.1 m + 0.2 m == 0.3 m` is true and `x => km < 5 km` converts, then compares (see the operator table below). A number or a quantity used as a condition (`if`, `while`) is false only when it is exactly zero; a temperature point (`0 degC`), a level (`20 dB`) or NaN is not a condition.
+Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. Arithmetic and conversion bind tighter than a comparison, so `0.1 m + 0.2 m == 0.3 m` is true and `x => km < 5 km` converts, then compares (see the operator table below).
+
+**A zero needs a unit.** A plain number has no dimension, so it compares only with a dimensionless value: `x > 0` with `x` in metres is an error, as `x > 5` is. Zeros of different scales are different values (0 degC is 273.15 K, 0 degF is 255.37 K, 0 dB is a ratio of 1), and only the unit says which one is meant. `==`, `!=`, `<`, `<=`, `>`, `>=`, `≈`, `approx`, `assert(a, b)`, `phs check` and transpiled code all follow the same rule, and its error texts say what to write:
+
+| Comparison | Answer | Write instead |
+| :--- | :--- | :--- |
+| `x > 0` with `x = 2 m` | error: "cannot compare 2.0 m with the plain number 0: a zero needs a unit, write `x > 0 m` (for a temperature point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB is a ratio of 1)" | `x > 0 m` |
+| `x > 5` with `x = 2 m` | error: "... a number compared with a quantity needs a unit, write `x > 5 m`" | `x > 5 m` |
+| `t > 0` with `t = 20 degC` | error: the zero message | `t > 0 degC` (or `t > 273.15 K`, the same point) |
+| `30 deg > 0`, `1 rad > 0.5` | error: an angle is a dimension in a comparison, in either angle mode | `30 deg > 0 deg`, `1 rad > 0.5 rad` |
+| `20 dB == 100` | error: "cannot compare 20.0 dB with the plain number 100: write the level with its unit (`x > 20 dB`) or compare the ratio explicitly (`(x => unity) > 100`)": whether 100 is a ratio, a power ratio or 100 dB is written nowhere | `20 dB > 10 dB`; `(20 dB => unity) == 100` is true |
+| `5 dB > 0`, `0 dB == 0` | error: the zero message | `5 dB > 0 dB` |
+| `50 % == 0.5`, `1 % > 0`, `3 ppm == 3e-6`, `(2 m / 1 m) > 1` | true: a dimensionless ratio in any unit (not a level) compares with plain numbers by its ratio | |
+
+A test against zero with a tolerance writes the tolerance in the unit of `x`: `abs(x) < 1e-9 m`.
+
+#### Conditions
+
+A condition is a Bool: `True`, `False`, a comparison, or `and`, `or`, `not` of those. This holds wherever PHS reads one: `if c then a else b`, `c ? a : b`, `while c { ... }`, `if c then return v`, `@requires(c, "...")`, `@ensures(c, "...")`, a conditional breakpoint of `phs debug`, the operands of `and`, `or` and `not`, and `assert(c)`. Anything else is an error that names what it got, after "the condition of `if` needs a Bool (True or False), got" (the place changes: `while`, `? :`, `@requires`, "the left side of `and`"...):
+
+| The condition is | The error says | Write instead |
+| :--- | :--- | :--- |
+| a number, `if n` with `n = 3` | a Number (3.0): a number is not a condition; compare it, e.g. `x != 0` | `if n != 0` |
+| a quantity, `if x` with `x = 2 m` | a Quantity (2.0 m): a quantity is not a condition; compare it, e.g. `x != 0 m` | `if x != 0 m` |
+| the text `"true"` or `"false"` | a String ("true"): text is not a condition; the Bool literals are True and False | `if True` |
+| other text, `if s` with `s = "on"` | a String ("on"): text is not a condition; compare it, e.g. `s == "on"` | `if s == "on"` |
+| a name with no value, `while true` | `true` has no value; the Bool literals are True and False | `while True` |
+| a vector, a range, a function, None, a sigma bound, an equation, a matrix, a plot | a Vector: a Vector is not a condition (and so on) | the comparison that is meant |
+
+A number is not a condition because "zero is false" is a convention the reader cannot see, and the zero of a quantity depends on its unit (above).
 
 #### Operator precedence
 

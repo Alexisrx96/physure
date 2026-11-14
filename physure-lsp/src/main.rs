@@ -301,7 +301,7 @@ fn keyword_completions() -> Vec<CompletionItem> {
     // 2. Control Keywords
     let keywords = vec![
         ("where", "expr where var = value", "Local binding, `a * b where a = 2 m, b = 3 m`"),
-        ("if", "if cond then expr1 else expr2", "Conditional expression"),
+        ("if", "if cond then expr1 else expr2", "Conditional expression; cond is a Bool"),
         ("then", "then expr1", "Conditional then branch"),
         ("else", "else expr2", "Conditional else branch"),
         ("use", "use name from <domain|module>", "Import name(s) from a domain (calc/plot/array), .phs module, or plugin/ext file"),
@@ -759,7 +759,7 @@ fn lookup_hover_doc(word: &str, locale: &str) -> Option<String> {
         "laplacian" => Some("**Built-in Function**: `laplacian(expr, vars)`\n\nComputes symbolic Laplacian.\n\n**Domain**: `calc` (requires `use laplacian from calc`).".to_string()),
         "simplify" => Some("**Built-in Function**: `simplify(expr)`\n\nSimplifies symbolic expression.\n\n**Domain**: `calc` (requires `use simplify from calc`).".to_string()),
         "expand" => Some("**Built-in Function**: `expand(expr)`\n\nExpands algebraic products in expression.\n\n**Domain**: `calc` (requires `use expand from calc`).".to_string()),
-        "if" => Some("**PHS Keyword**: `if`\n\nConditional expression construct: `if cond then expr1 else expr2`".to_string()),
+        "if" => Some("**PHS Keyword**: `if`\n\nConditional expression construct: `if cond then expr1 else expr2`. `cond` is a Bool (`True`, `False`, a comparison): a number, a quantity or text is an error (write `x != 0 m`).".to_string()),
         "then" => Some("**PHS Keyword**: `then`\n\nConditional then-branch.".to_string()),
         "else" => Some("**PHS Keyword**: `else`\n\nConditional else-branch.".to_string()),
         "where" => Some("**PHS Keyword**: `where`\n\nLocal binding clause: `expr where name = value[, name2 = value2]`. A later binding can use an earlier one.".to_string()),

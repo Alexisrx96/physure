@@ -157,8 +157,11 @@ bound never accepts a difference against an exact zero (`cos(90 deg) == 0` is fa
 `abs(x)` with an explicit tolerance in the unit of `x` instead. `≈` uses the relative tolerance
 `approx_rel_tol` of `physure.conf` (default `1e-3`), and `approx(a, b, rel)` names its own.
 Comparing different dimensions, or values that have no comparison (a vector, a string and a
-quantity), is an error, never `False`. A number or a quantity used as a condition is false only
-when it is exactly zero; a temperature point, a level or NaN is not a condition. Arithmetic
+quantity), is an error, never `False`, and a zero needs a unit: `x > 0` with `x` in metres is
+an error, write `x > 0 m` (0 degC and 0 K are different zeros); a level compares with a level,
+`20 dB > 10 dB`, never with a plain number (`20 dB == 100` is an error). A condition (`if`,
+`while`, `? :`, `@requires`) is a Bool: a number or a quantity is not one (write `x != 0 m`), and
+neither is text (`"true"` is not `True`; lowercase `true` is a name with no value). Arithmetic
 binds tighter than comparison, as in mathematics: `a + b == c` is `(a + b) == c`, and
 `x => km < 5 km` converts, then compares. One comparison per expression: write `a < b < c` as
 `a < b and b < c`. A `+` or `-` cannot follow `=> unit`: write `(x => km) - 5 m`.
