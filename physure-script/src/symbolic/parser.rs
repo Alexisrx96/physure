@@ -9,6 +9,12 @@ pub struct SymbolicParser {
 
 impl SymbolicParser {
     pub fn parse_str(input: &str) -> PhysureResult<Node> {
+        Ok(Self::parse_tree(input)?.simplify())
+    }
+
+    /// The tree `input` is read as, before [`Node::simplify`] folds it: the shape the precedence rules give (what
+    /// `tests/precedence.rs` compares with a reference parser).
+    pub fn parse_tree(input: &str) -> PhysureResult<Node> {
         let trimmed = input.trim();
         let clean_input = if (trimmed.starts_with('"') && trimmed.ends_with('"'))
             || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() > 1 && !trimmed[1..trimmed.len() - 1].contains('\''))
@@ -20,8 +26,7 @@ impl SymbolicParser {
         let lexer = PhsLexer::new(clean_input);
         let tokens = lexer.tokenize()?;
         let mut parser = SymbolicParser { tokens, pos: 0 };
-        let node = parser.parse_equality()?;
-        Ok(node.simplify())
+        parser.parse_equality()
     }
 
     /// Parses `input` as `lhs = rhs` without collapsing to `Sub`, for coercing a
@@ -103,17 +108,17 @@ impl SymbolicParser {
     }
 
     fn parse_product(&mut self) -> PhysureResult<Node> {
-        let mut left = self.parse_power()?;
+        let mut left = self.parse_unary()?;
         while let Some(step) = self.peek().map(product_step) {
             match step {
                 ProductStep::Mul => {
                     self.next();
-                    let right = self.parse_power()?;
+                    let right = self.parse_unary()?;
                     left = Node::Mul(vec![left, right]);
                 }
                 ProductStep::Div => {
                     self.next();
-                    let right = self.parse_power()?;
+                    let right = self.parse_unary()?;
                     left = Node::Div(Box::new(left), Box::new(right));
                 }
                 ProductStep::Implicit => {
@@ -130,21 +135,8 @@ impl SymbolicParser {
         Ok(left)
     }
 
-    fn parse_power(&mut self) -> PhysureResult<Node> {
-        let mut left = self.parse_unary()?;
-        while self.peek().is_some_and(|t| t.value == "^" || t.value == "**") {
-            self.next();
-            let mut right = self.parse_power()?;
-            // a number exponent followed by a name takes the name along
-            if matches!(right, Node::Number(_)) && self.peek().is_some_and(|next_t| matches!(next_t.kind, TokenKind::Ident(_))) {
-                let factor = self.parse_power()?;
-                right = Node::Mul(vec![right, factor]);
-            }
-            left = Node::Pow(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
+    /// A sign binds looser than `^`, as in PHS and in mathematics: `-x^2` is `-(x^2)`. It bound tighter, so
+    /// `deriv("-x^2", "x")` answered `2 * x` and `integral("-x^2", "x", 0, 1)` disagreed with its own quadrature.
     fn parse_unary(&mut self) -> PhysureResult<Node> {
         if let Some(t) = self.peek() {
             if t.value == "-" {
@@ -155,6 +147,49 @@ impl SymbolicParser {
             if t.value == "+" {
                 self.next();
                 return self.parse_unary();
+            }
+        }
+        self.parse_power()
+    }
+
+    /// `base ^ exponent` (or `**`), where the base is an atom and the exponent an atom with an optional sign
+    /// (`e^-x`). A power of a power is refused as PHS refuses it: `x^2^3` reads as `x^(2^3)` by the mathematical
+    /// convention and as `(x^2)^3` left to right, and it used to mean the first here and be an error in PHS.
+    fn parse_power(&mut self) -> PhysureResult<Node> {
+        let base = self.parse_atom()?;
+        if !self.at_power() {
+            return Ok(base);
+        }
+        self.next();
+        let mut exponent = self.parse_exponent()?;
+        // a number exponent followed by a name takes the name along (`e^2x` is `e^(2 x)`)
+        if matches!(exponent, Node::Number(_)) && self.peek().is_some_and(|next_t| matches!(next_t.kind, TokenKind::Ident(_))) {
+            let factor = self.parse_power()?;
+            exponent = Node::Mul(vec![exponent, factor]);
+        }
+        if self.at_power() {
+            return Err(PhysureError::Generic(
+                "a power of a power needs parentheses: write `(a^b)^c` or `a^(b^c)`".to_string(),
+            ));
+        }
+        Ok(Node::Pow(Box::new(base), Box::new(exponent)))
+    }
+
+    fn at_power(&self) -> bool {
+        self.peek().is_some_and(|t| t.value == "^" || t.value == "**")
+    }
+
+    /// An exponent: an atom, with a sign of its own if it has one.
+    fn parse_exponent(&mut self) -> PhysureResult<Node> {
+        if let Some(t) = self.peek() {
+            if t.value == "-" {
+                self.next();
+                let operand = self.parse_exponent()?;
+                return Ok(Node::Mul(vec![Node::Number(-1.0), operand]));
+            }
+            if t.value == "+" {
+                self.next();
+                return self.parse_exponent();
             }
         }
         self.parse_atom()
