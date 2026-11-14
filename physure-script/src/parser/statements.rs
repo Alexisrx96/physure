@@ -21,6 +21,25 @@ pub(crate) fn parse_statement(pair: pest::iterators::Pair<Rule>) -> PhysureResul
     }
 }
 
+/// Refuses `next` when it starts on the line of the statement that ends at `previous_end` with no `;` between them.
+///
+/// The grammar lets a statement begin wherever the one before it cannot go on, so `1 m => km 2` (the unit after
+/// `=>` ends at `km`) was the two statements `1 m => km` and `2` and answered `2.0`, and `a not b` was `a` and
+/// `not b`. Nothing written on purpose looks like that: two statements on one line say so with a `;`.
+pub(crate) fn refuse_unseparated(previous_end: Option<usize>, next: &pest::iterators::Pair<Rule>) -> PhysureResult<()> {
+    let Some(previous_end) = previous_end else { return Ok(()) };
+    let start = next.as_span().start();
+    if next.get_input()[previous_end..start].contains([';', '\n', '\r']) {
+        return Ok(());
+    }
+    let (line, col) = next.line_col();
+    let text: String = next.as_str().chars().take(40).collect();
+    Err(PhysureError::Generic(format!(
+        "Parse error:  --> {line}:{col}\nexpected a newline or `;` before `{text}`: the statement before it ends \
+         there, and two statements on one line need a `;` between them"
+    )))
+}
+
 fn parse_while_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statement> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
@@ -32,8 +51,11 @@ fn parse_while_stmt(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statemen
     let cond = parse_expr(cond_pair)?;
     let mut body = Vec::new();
     let mut body_lines = Vec::new();
+    let mut previous_end = None;
     for stmt_pair in inner {
         if stmt_pair.as_rule() == Rule::stmt {
+            refuse_unseparated(previous_end, &stmt_pair)?;
+            previous_end = Some(stmt_pair.as_span().end());
             body_lines.push(stmt_pair.line_col().0);
             body.push(parse_statement(stmt_pair)?);
         }

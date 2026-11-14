@@ -201,8 +201,11 @@ pub fn parse_phs(code: &str) -> PhysureResult<Program> {
     let mut statements = Vec::new();
     let mut lines = Vec::new();
     let mut statement_pos = Vec::new();
+    let mut previous_end = None;
     for pair in pairs {
         if pair.as_rule() == Rule::stmt {
+            statements::refuse_unseparated(previous_end, &pair)?;
+            previous_end = Some(pair.as_span().end());
             let (line, col) = pair.line_col();
             let inner = pair.into_inner().next().unwrap();
             statements.push(statements::parse_statement(inner)?);
@@ -223,8 +226,11 @@ pub fn parse_phs_with_lines(code: &str) -> PhysureResult<Vec<(usize, Statement)>
 
     let mut statements = Vec::new();
     let mut statement_pos = Vec::new();
+    let mut previous_end = None;
     for pair in pairs {
         if pair.as_rule() == Rule::stmt {
+            statements::refuse_unseparated(previous_end, &pair)?;
+            previous_end = Some(pair.as_span().end());
             let (line, col) = pair.line_col();
             let inner = pair.into_inner().next().unwrap();
             statements.push((line - 1, statements::parse_statement(inner)?));

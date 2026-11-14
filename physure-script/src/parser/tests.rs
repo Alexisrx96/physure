@@ -549,3 +549,57 @@ use super::*;
         assert!(parse_phs("f(True)").is_ok());
         assert!(parse_phs("f(a and b)").is_ok());
     }
+
+    /// Two statements on one line need a `;` between them. Without one, `1 m => km 2` was the two statements
+    /// `1 m => km` and `2` and answered `2.0`: whatever follows a unit after `=>` started a statement of its own.
+    #[test]
+    fn two_statements_on_one_line_without_a_separator_are_a_parse_error() {
+        for glued in [
+            "1 m => km 2",
+            "x = 2 m => km 3",
+            "f(x) = x => km 2",
+            "5 m => km \"t\"",
+            "x = 1 m => km [1, 2]",
+            "1 m => km (2)",
+            "2 m => km for i in 0..2 { i }",
+            "1 m => km if True then 1 else 2",
+            "a not b",
+            "x = 0\nwhile x < 3 {\n  x = x + 1\n  x => km 2\n}",
+        ] {
+            let message = parse_phs(glued).map(|_| ()).expect_err(glued).to_string();
+            assert!(message.contains("expected a newline or `;`"), "{glued:?}: {message}");
+            let lines = parse_phs_with_lines(glued).map(|_| ()).expect_err(glued).to_string();
+            assert_eq!(lines, message, "{glued:?}");
+        }
+        // the message points at the statement that has no separator before it
+        let message = parse_phs("y = 1\n1 m => km 2").map(|_| ()).unwrap_err().to_string();
+        assert!(message.contains("--> 2:11"), "{message}");
+    }
+
+    #[test]
+    fn statements_separated_by_a_newline_or_a_semicolon_still_parse() {
+        for separated in [
+            "1 m => km; 2",
+            "1 m => km\n2",
+            "1 m => km # a comment\n2",
+            "1 m => km // a comment\n2",
+            "a = 1; b = 2; a + b",
+            "1 m => km -2",
+            "fn f(x) = x * 2; f(3)",
+            "fn f(x) =\n  a = x\n  a\nf(2)",
+            "f(x) = x => km\nf(1 m)",
+            "@requires(x > 0, \"positive\")\nfn f(x) = x\nf(1)",
+            "/// doubles\nfn f(x) = 2 * x\nf(1)",
+            "c = True\nc ? 1 : 2",
+            "y = x * 2 where x = 3",
+            "y = x * 2 where x = 3, z = 4",
+            "x = 1\nwhile x < 3 { x = x + 1 }",
+            "x = 1\nwhile x < 3 {\n  x = x + 1\n  y = 2\n}",
+            "x = if True then 1 m else 2 m",
+            "fn g(x) =\n  if x < 0 then return 0\n  x\ng(1)",
+            "\n\n1 m\n\n;;2 m;\n",
+        ] {
+            parse_phs(separated).unwrap_or_else(|e| panic!("{separated:?}: {e}"));
+            parse_phs_with_lines(separated).unwrap_or_else(|e| panic!("{separated:?}: {e}"));
+        }
+    }
