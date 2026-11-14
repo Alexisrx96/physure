@@ -130,12 +130,14 @@ impl CovarianceStore {
         acc: &mut HashMap<VariableID, CsMat<f64>>,
     ) {
         if ext_id == out_id { return; }
-        let Some(idx_i) = input_ids.iter().position(|&x| x == input_id) else { return; };
         let block_key = if transpose { (ext_id, input_id) } else { (input_id, ext_id) };
         let Some(sigma) = self.blocks.get(&block_key) else { return; };
         let sigma_owned = if transpose { sigma.transpose_view().to_csr() } else { sigma.clone() };
-        let term = &js[idx_i] * &sigma_owned;
-        acc.entry(ext_id).and_modify(|a| *a = &*a + &term).or_insert(term);
+        // an input that appears more than once (`x + x`) contributes through each of its Jacobians
+        for idx_i in input_ids.iter().enumerate().filter(|&(_, &x)| x == input_id).map(|(i, _)| i) {
+            let term = &js[idx_i] * &sigma_owned;
+            acc.entry(ext_id).and_modify(|a| *a = &*a + &term).or_insert(term);
+        }
     }
 
     fn accumulate_cross_covs(
