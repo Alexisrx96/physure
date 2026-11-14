@@ -582,6 +582,13 @@ mod pascal_case_tests {
     }
 }
 
+/// Both operands of a comparison are Bools the generator can see (literals, comparisons, logical operators): the
+/// target's own `==`/`!=` compares them. Anything else goes through the core's comparison.
+pub(crate) fn both_definitely_bool(l: &Expr, r: &Expr) -> bool {
+    let none = HashSet::new();
+    is_definitely_bool(l, &none) && is_definitely_bool(r, &none)
+}
+
 /// Recognizes the `FunctionCall { name: "op_<", .. }` shape the parser desugars relational
 /// operators into (see `ast.rs`'s note on `op_>` et al.), and returns the operands with the
 /// symbol a target language's own `<`/`>`/`==`/... spells. Every `while`/`if` condition a PHS

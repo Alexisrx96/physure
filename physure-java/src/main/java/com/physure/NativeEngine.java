@@ -138,6 +138,8 @@ public class NativeEngine {
     /** {@code {mean, uncertainty}} as text, rounded by the Guide's rule. */
     static native String[] gumRound(double mean, double uncertainty);
     public static native void assertQuantities(Quantity a, Quantity b);
+    /** PHS {@code a op b} for {@code op} one of {@code < > <= >= == !=}, by the core's rule; throws when they have no comparison. */
+    public static native boolean compareQuantities(Quantity a, Quantity b, String op);
     public static native void assertExactQuantities(Quantity a, Quantity b);
     public static native String[] getFunctionParams(long registryHandle, String funcName);
 }

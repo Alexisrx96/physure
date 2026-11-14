@@ -364,4 +364,19 @@ class QuantityStrictTest {
         assertNotEquals(q(1, "m"), "1 m");
         assertEquals(q(Double.NaN, "m"), q(Double.NaN, "m"));
     }
+
+    // ---- the comparison of PHS, which transpiled code calls
+
+    @Test
+    void phsCompareIsTheInterpretersComparison() {
+        assertTrue(q(1.0, "km").phsCompare(q(999.0, "m"), ">"));
+        assertTrue(q(1.0, "km").phsCompare(q(1000.0, "m"), "=="));
+        assertFalse(q(1.0, "km").phsCompare(q(1000.0, "m"), "!="));
+        assertTrue(q(0.01, "degC").phsCompare(q(273.16, "K"), "=="));
+        PhysureException zero = assertThrows(PhysureException.class, () -> q(1.0, "m").phsCompare(Quantity.of(0.0), ">"));
+        assertTrue(zero.getMessage().contains("a zero needs a unit"), zero.getMessage());
+        PhysureException level = assertThrows(PhysureException.class, () -> q(20.0, "dB").phsCompare(Quantity.of(100.0), "=="));
+        assertTrue(level.getMessage().contains("write the level with its unit"), level.getMessage());
+        assertThrows(PhysureException.class, () -> q(1.0, "m").phsCompare(q(1.0, "s"), "<"));
+    }
 }

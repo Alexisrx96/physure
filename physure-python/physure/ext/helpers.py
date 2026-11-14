@@ -41,6 +41,40 @@ def approx_eq(
         return False
 
 
+def _core_quantity(x: Any) -> Any:
+    """The Rust core's quantity for a number or a Quantity, its unit read by the registry."""
+    from physure._core import Quantity as _CoreQuantity
+    from physure.domain.measurement.units import get_default_system
+
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        x = Q_(float(x), "")
+    unit = get_default_system().core_registry.expand(x.unit)
+    return _CoreQuantity(float(x.magnitude), unit)
+
+
+def phs_compare(a: Any, op: str, b: Any) -> bool:
+    """PHS `a op b` (`op` one of `<`, `>`, `<=`, `>=`, `==`, `!=`), as the interpreter answers it.
+
+    Two numbers or quantities are compared by the Rust core (`Quantity::phs_compare`):
+    canonical magnitudes, `==` within the relative tolerance of PHS, and a `ValueError` when
+    they have no comparison (different dimensions, a zero written without a unit, a level
+    against a plain number). Two Bools or two strings compare with `==` and `!=` only; any
+    other pair is a `TypeError`. This is what PHS transpiled to Python calls.
+    """
+    for kind in (bool, str):
+        if isinstance(a, kind) or isinstance(b, kind):
+            if (
+                isinstance(a, kind)
+                and isinstance(b, kind)
+                and op in ("==", "!=")
+            ):
+                return (a == b) == (op == "==")
+            raise TypeError(
+                f"cannot compare {type(a).__name__} and {type(b).__name__} with {op}"
+            )
+    return bool(_core_quantity(a).phs_compare(_core_quantity(b), op))
+
+
 def dof(x: Any) -> float:
     """Effective degrees of freedom of a measurement (`inf` for a number or an exact quantity)."""
     return float(getattr(x, "dof", math.inf))

@@ -725,6 +725,13 @@ impl PyQuantity {
         Ok(PyQuantity(new_q))
     }
 
+    /// PHS `self op other` for `op` one of `<`, `>`, `<=`, `>=`, `==`, `!=`: the core's comparison
+    /// (`Quantity::phs_compare`). A `ValueError` (`UnitMismatchError` for different dimensions) when they have none:
+    /// a zero written without a unit, a level against a plain number.
+    fn phs_compare(&self, other: &PyQuantity, op: &str) -> PyResult<bool> {
+        self.0.phs_compare(&other.0, op).map_err(value_error)
+    }
+
     #[pyo3(signature = (other, rel_tol = 0.1, abs_tol = 1e-5))]
     fn approx_eq(&self, other: &PyQuantity, rel_tol: f64, abs_tol: f64) -> bool {
         self.0.approx_eq(&other.0, rel_tol, abs_tol)

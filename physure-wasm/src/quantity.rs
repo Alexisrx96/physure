@@ -108,6 +108,14 @@ impl Quantity {
         self.inner.to(unit).map(Quantity::from_core).map_err(to_js_error)
     }
 
+    /// PHS `<`, `>`, `<=`, `>=`, `==`, `!=` (`op`) by the core's rule (`Quantity::phs_compare`): canonical
+    /// magnitudes, an error for different dimensions, a zero without a unit, or a level against a plain number.
+    /// What JavaScript and TypeScript transpiled from PHS call, so that they answer what the interpreter answers.
+    #[wasm_bindgen(js_name = phsCompare)]
+    pub fn phs_compare(&self, other: &Quantity, op: &str) -> Result<bool, JsValue> {
+        self.inner.phs_compare(&other.inner, op).map_err(to_js_error)
+    }
+
     #[wasm_bindgen(js_name = physAssert)]
     pub fn phs_assert(&self, other: &Quantity) -> Result<(), JsValue> {
         self.inner.phs_assert(&other.inner).map_err(to_js_error)
@@ -210,6 +218,18 @@ mod tests {
         let err = a.phs_assert(&b).unwrap_err();
         let js_error = err.dyn_into::<js_sys::Error>().expect("should be a JS Error");
         assert!(String::from(js_error.message()).contains("assert failed"));
+    }
+
+    #[wasm_bindgen_test]
+    fn phs_compare_is_the_interpreter_s_comparison() {
+        let km = Quantity::new(1.0, "km").unwrap();
+        assert!(km.phs_compare(&Quantity::new(999.0, "m").unwrap(), ">").unwrap());
+        assert!(km.phs_compare(&Quantity::new(1000.0, "m").unwrap(), "==").unwrap());
+        for (left, right) in [((1.0, "m"), (0.0, "")), ((20.0, "dB"), (100.0, "")), ((1.0, "m"), (1.0, "s"))] {
+            let err = Quantity::new(left.0, left.1).unwrap().phs_compare(&Quantity::new(right.0, right.1).unwrap(), ">");
+            let js_error = err.unwrap_err().dyn_into::<js_sys::Error>().expect("should be a JS Error");
+            assert!(String::from(js_error.message()).contains("compare") || String::from(js_error.message()).contains("mismatch"));
+        }
     }
 
     #[wasm_bindgen_test]

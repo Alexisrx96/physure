@@ -332,6 +332,16 @@ public class Quantity {
     }
 
     /**
+     * PHS's {@code this op other} for {@code op} one of {@code < > <= >= == !=}: the core's comparison (canonical
+     * magnitudes, {@code ==} within the relative tolerance of PHS). Throws {@link PhysureException} when the two have
+     * no comparison: different dimensions, a zero written without a unit ({@code x > 0} for a length), a level
+     * against a plain number. Transpiled PHS calls this, so it answers what the interpreter answers.
+     */
+    public boolean phsCompare(Quantity other, String op) {
+        return NativeEngine.compareQuantities(this, Objects.requireNonNull(other, OTHER), Objects.requireNonNull(op, "op"));
+    }
+
+    /**
      * PHS's {@code assert(actual, expected)}: passes when both quantities have compatible
      * dimensions and their magnitudes agree after unit conversion, within a fixed
      * tolerance. Throws {@link PhysureException} on failure — delegates to the same

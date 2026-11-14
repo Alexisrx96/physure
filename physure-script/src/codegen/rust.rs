@@ -243,7 +243,12 @@ impl RustTranspiler {
         if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
             let l_str = self.generate_expr(l)?;
             let r_str = self.generate_expr(r)?;
-            return Ok(format!("({}.canonical_magnitude() {} {}.canonical_magnitude())", l_str, op_sym, r_str));
+            if super::both_definitely_bool(l, r) {
+                return Ok(format!("({} {} {})", l_str, op_sym, r_str));
+            }
+            // the core's comparison, the interpreter's: different dimensions, a zero without a unit and a level
+            // against a plain number stop the program instead of comparing magnitudes that mean different things
+            return Ok(format!("(&({})).phs_compare(&({}), \"{}\").unwrap_or_else(|e| panic!(\"{{e}}\"))", l_str, r_str, op_sym));
         }
         if let Some(logical) = super::as_logical_op(expr) {
             return super::c_logical_expr(logical, |e| self.generate_expr(e));

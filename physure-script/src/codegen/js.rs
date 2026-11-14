@@ -206,7 +206,17 @@ impl JsTranspiler {
         if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
             let l_str = self.generate_expr(l)?;
             let r_str = self.generate_expr(r)?;
-            return Ok(format!("({}.getValue() {} {}.getValue())", l_str, op_sym, r_str));
+            if super::both_definitely_bool(l, r) {
+                let js_op = match op_sym {
+                    "==" => "===",
+                    "!=" => "!==",
+                    other => other,
+                };
+                return Ok(format!("({} {} {})", l_str, js_op, r_str));
+            }
+            // `phsCompare` is the core's comparison (the WASM `Quantity`), so the answer is the interpreter's;
+            // `getValue()` was not a method of it, and compared display values in different units
+            return Ok(format!("{}.phsCompare({}, \"{}\")", l_str, r_str, op_sym));
         }
         if let Some(logical) = super::as_logical_op(expr) {
             return super::c_logical_expr(logical, |e| self.generate_expr(e));

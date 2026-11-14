@@ -885,6 +885,31 @@ pub extern "system" fn Java_com_physure_NativeEngine_assertQuantities<'local>(
     }
 }
 
+/// `NativeEngine.compareQuantities(a, b, op)`: the core's `Quantity::phs_compare`, the comparison of PHS. A pair with
+/// no comparison throws a `PhysureException` with the core's reason (and the return value is then ignored).
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_compareQuantities<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q1_obj: JObject<'local>,
+    q2_obj: JObject<'local>,
+    op: JString<'local>,
+) -> jni::sys::jboolean {
+    let Ok(q1) = get_rust_quantity(&mut env, &q1_obj) else { return 0 };
+    let Ok(q2) = get_rust_quantity(&mut env, &q2_obj) else { return 0 };
+    let op: String = match env.get_string(&op) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    match q1.phs_compare(&q2, &op) {
+        Ok(answer) => u8::from(answer),
+        Err(e) => {
+            throw_physure_exception(&mut env, &format!("{}", e));
+            0
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_assertExactQuantities<'local>(
     mut env: JNIEnv<'local>,
