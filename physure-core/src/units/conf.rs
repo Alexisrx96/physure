@@ -373,19 +373,72 @@ fn apply_setting_leniently(line: &str) {
 /// Why the value of a `[Constants]` line is not a quantity this registry can read: a finite number, then (after
 /// whitespace) a unit expression, or nothing for a plain number. `None` when it is one.
 fn constant_problem(expr: &str, registry: &UnitRegistry) -> Option<String> {
+    constant_quantity(expr, registry).err()
+}
+
+/// The quantity the value of a `[Constants]` line stands for, read against `registry`: a finite number, then (after
+/// whitespace) a unit expression of the registry, or nothing for a plain number. Every reader of a constant (PHS, the
+/// strict replay of a frozen file) goes through this one reading.
+///
+/// A constant carries no uncertainty: the grammar of `[Constants]` has none, so a value written with `+/-` or `±` is
+/// refused with that reason, never read without its uncertainty.
+pub fn constant_quantity(expr: &str, registry: &UnitRegistry) -> Result<crate::quantity::Quantity, String> {
+    let expr = expr.trim();
+    if expr.contains("+/-") || expr.contains('±') {
+        return Err(format!(
+            "the value of a constant is a number and a unit, not '{expr}': a constant of the catalog carries no \
+             uncertainty (`name = number unit`), and one written with it is not supported"
+        ));
+    }
     let (number, unit) = match expr.split_once(char::is_whitespace) {
         Some((number, unit)) => (number, unit.trim()),
         None => (expr, ""),
     };
-    if !number.parse::<f64>().is_ok_and(f64::is_finite) {
-        return Some(format!("the value of a constant is a finite number and a unit, not '{expr}'"));
+    let number = match number.parse::<f64>() {
+        Ok(number) if number.is_finite() => number,
+        _ => return Err(format!("the value of a constant is a finite number and a unit, not '{expr}'")),
+    };
+    let unit = if unit.is_empty() {
+        RationalUnit::dimensionless()
+    } else {
+        crate::units::parser::Parser::parse_expression_with_registry(unit, registry)
+            .map_err(|e| format!("the unit '{unit}' of the constant cannot be read: {e}"))?
+    };
+    Ok(crate::quantity::Quantity::new_scalar(number, 0.0, unit, None, None))
+}
+
+/// Why the constant `name` of `registry` and the unit of the same name do not carry one value, if the registry holds
+/// both (a name such as `bohr_radius` or `electron_volt` is a unit and a constant of the catalog). `None` when the
+/// name is not both, or they agree (to a relative 1e-12, the rounding of a scale computed from exact factors).
+/// `2 bohr_radius` reads the unit and `2 * bohr_radius` the constant: two values would make them diverge.
+pub fn unit_constant_disagreement(name: &str, registry: &UnitRegistry) -> Option<String> {
+    let meta = registry.constants_meta.get(name)?;
+    let unit = registry.get_unit(name)?;
+    let disagree = |why: String| {
+        Some(format!(
+            "'{name}' is a unit and a constant of the catalog with different values ({why}); a name defined as both \
+             must carry the same value, or `2 {name}` and `2 * {name}` would differ"
+        ))
+    };
+    let constant = match constant_quantity(&meta.value, registry) {
+        Ok(constant) => constant,
+        // the constant is unreadable: that is its own problem, reported where it is read
+        Err(_) => return None,
+    };
+    if unit.is_affine() || unit.is_logarithmic() {
+        return disagree(format!("the unit is a point or a level, the constant is {}", meta.value));
     }
-    if unit.is_empty() {
-        return None;
+    // both are read against the registry, so both are expanded to its base units with their exact scales
+    if !unit.convertible_to(&constant.unit) {
+        return disagree(format!("the unit and the constant {} have different dimensions", meta.value));
     }
-    crate::units::parser::Parser::parse_expression_with_registry(unit, registry)
-        .err()
-        .map(|e| format!("the unit '{unit}' of the constant cannot be read: {e}"))
+    let factor = unit.ratio_to(&constant.unit);
+    let value = constant.value.mean();
+    if (factor - value).abs() <= 1e-12 * value.abs() {
+        None
+    } else {
+        disagree(format!("one {name} is {factor:e} {}, the constant is {}", constant.unit.__repr__(), meta.value))
+    }
 }
 
 /// The sections that a conf has, spelt as they must be. A header that is one of these but for case or for
@@ -432,6 +485,8 @@ fn parse_conf(
     let mut dim_to_base: HashMap<String, String> = registry.dimension_base.clone();
     let mut unit_lines: Vec<&str> = Vec::new();
     let mut constant_lines: Vec<(&str, String)> = Vec::new();
+    // the names this text defines in `[Constants]`
+    let mut text_constants: Vec<String> = Vec::new();
     let mut periodic_names: Vec<String> = Vec::new();
     let mut saw_periodic = false;
     let mut compatibility_rows: Vec<String> = Vec::new();
@@ -527,6 +582,7 @@ fn parse_conf(
             }
             "Constants" => {
                 if let Some(name) = read_constant(line, registry, constants) {
+                    text_constants.push(name.clone());
                     if strict_sections {
                         if name.is_empty() {
                             problems.push(format!("{line}: a constant has a name"));
@@ -557,6 +613,14 @@ fn parse_conf(
 
     register_fallback_bases(registry, &mut dim_to_base);
 
+    // the names to check for a unit and a constant of different values: every constant when this text defines units
+    // (one of them may be a constant's name, or an alias of one), else the constants this text defines
+    let mut clash_candidates: Vec<String> = if unit_lines.is_empty() {
+        text_constants
+    } else {
+        registry.constants_meta.keys().cloned().collect()
+    };
+
     // Pass 2: Parse and register all units using the dynamic dimension map
     for line in unit_lines {
         if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
@@ -574,6 +638,18 @@ fn parse_conf(
     for (line, expr) in constant_lines {
         if let Some(why) = constant_problem(&expr, registry) {
             problems.push(format!("{line}: {why}"));
+        }
+    }
+
+    // A name that is a unit and a constant carries one value. A strict reading refuses the text; a lenient one drops
+    // the constant, so the name reads as the unit wherever it is written.
+    clash_candidates.sort();
+    clash_candidates.dedup();
+    for name in clash_candidates {
+        if let Some(why) = unit_constant_disagreement(&name, registry) {
+            problems.push(why);
+            registry.constants_meta.remove(&name);
+            constants.remove(&name);
         }
     }
 
@@ -1981,6 +2057,14 @@ mod tests {
             ("[Units]\nzzq = 2.0, L\nzzq = 3.0, L\n", "zzq"),
             ("[Constants]\nzc = 1 m\n[Constants]\nzc = 2 m\n", "zc"),
             ("[Prefixes]\nzzp = Q, 1000\nzzp = R, 10\n", "zzp"),
+            // a constant carries no uncertainty: one written with it is refused, never read without it
+            ("[Constants]\nzc = 1 +/- 0.1 m\n", "uncertainty"),
+            ("[Constants]\nzc = 1 ± 0.1 m\n", "uncertainty"),
+            // a name that is a unit and a constant must carry one value: overriding either side alone is refused
+            ("[Constants]\nbohr_radius = 6e-11 m\n", "bohr_radius"),
+            ("[Constants]\nelectron_volt = 1.6e-19 J\n", "electron_volt"),
+            ("[Constants]\nplanck_mass = 2.176434e-08 m\n", "different dimensions"),
+            ("[Units]\nbohr = 6e-11, L, m, [a0, bohr, bohr_radius]\n", "bohr_radius"),
         ] {
             let problems = frozen_problems(text);
             assert!(!problems.is_empty(), "accepted: {text:?}");
@@ -2003,6 +2087,49 @@ mod tests {
         // a recipe, the base unit named after its dimension, flags, a zero point and a level are all read
         let units = "[Units]\nzza = 2.0, L, m, [zza]\nzzb = 1.0, M*L*T^-2, kg*m/s^2, noprefix, [zzb]\nzzc = 1.0, 10.0, O, [zzc]\nzzd = Log, 10, 1.0, 1, noprefix, [zzd]\nzze = 1.0, A, own_kind, [zze]\n";
         assert!(frozen_problems(units).is_empty(), "{:?}", frozen_problems(units));
+        // a unit and a constant of one name may both be overridden, to one value
+        let both = "[Units]\nbohr = 6e-11, L, m, [a0, bohr, bohr_radius]\n[Constants]\nbohr_radius = 6e-11 m\n";
+        assert!(frozen_problems(both).is_empty(), "{:?}", frozen_problems(both));
+    }
+
+    /// The names of the shipped catalog that are a unit and a constant (measured 2026-11-14: 7 of the 411 constants),
+    /// each with one value, so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) agree.
+    #[test]
+    fn every_name_of_the_shipped_catalog_that_is_a_unit_and_a_constant_carries_one_value() {
+        let (registry, _) = embedded_catalog();
+        let mut both: Vec<&String> = registry.constants_meta.keys().filter(|name| registry.get_unit(name).is_some()).collect();
+        both.sort();
+        assert_eq!(
+            both,
+            ["bohr_radius", "electron_mass", "electron_volt", "planck_length", "planck_mass", "planck_temperature", "planck_time"],
+            "a new name that is both: check that its unit and its constant agree"
+        );
+        for name in registry.constants_meta.keys() {
+            assert_eq!(unit_constant_disagreement(name, registry), None, "{name}");
+        }
+        assert_eq!(registry.constants_meta.len(), 411, "the count the clash list was measured against");
+    }
+
+    #[test]
+    fn a_lenient_reading_drops_a_constant_that_disagrees_with_its_unit_and_says_so() {
+        let (mut registry, mut constants) = embedded_catalog().clone();
+        let problems = read_leniently("[Constants]\nbohr_radius = 6e-11 m\nzz_ok = 2 m\n", &mut registry, &mut constants, false);
+        assert!(problems.iter().any(|p| p.contains("bohr_radius")), "{problems:?}");
+        assert!(!registry.constants_meta.contains_key("bohr_radius") && !constants.contains_key("bohr_radius"));
+        assert!(registry.get_unit("bohr_radius").is_some(), "the name reads as the unit");
+        assert_eq!(registry.constants_meta["zz_ok"].value, "2 m", "the rest of the text applies");
+    }
+
+    #[test]
+    fn a_constant_is_read_as_a_number_and_a_unit_of_the_registry() {
+        let (registry, _) = embedded_catalog();
+        let r = constant_quantity("8.31446261815324 J*mol^-1*K^-1", registry).unwrap();
+        assert_eq!(r.value.mean(), 8.31446261815324);
+        assert_eq!(r.value.std_dev(), 0.0);
+        assert_eq!(constant_quantity("2", registry).unwrap().unit, RationalUnit::dimensionless());
+        for bad in ["", "abc m", "inf m", "1 nosuchunit", "1 +/- 0.1 m", "1 ± 0.1 m"] {
+            assert!(constant_quantity(bad, registry).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

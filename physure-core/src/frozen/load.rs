@@ -467,6 +467,21 @@ mod tests {
     }
 
     #[test]
+    fn an_override_that_gives_a_unit_and_a_constant_of_one_name_two_values_does_not_replay() {
+        // `bohr_radius` is a unit and a constant: `2 bohr_radius` reads one, `2 * bohr_radius` the other
+        let dir = Dir::new();
+        for overrides in ["[Constants]\nbohr_radius = 6e-11 m", "[Units]\nbohr = 6e-11, L, m, [a0, bohr, bohr_radius]"] {
+            let e = load(&write_file(&dir, &standard(overrides))).unwrap_err();
+            let LoadError::Replay { source, problems, .. } = &e else { panic!("{e:?}") };
+            assert_eq!(source, "overrides");
+            assert!(problems.iter().any(|p| p.contains("'bohr_radius' is a unit and a constant")), "{problems:?}");
+        }
+        // both sides overridden to one value replay
+        let both = "[Units]\nbohr = 6e-11, L, m, [a0, bohr, bohr_radius]\n[Constants]\nbohr_radius = 6e-11 m";
+        load(&write_file(&dir, &standard(both))).unwrap();
+    }
+
+    #[test]
     fn loading_changes_no_process_wide_state() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = crate::units::conf::build_registry_from_conf();
