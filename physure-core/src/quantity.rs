@@ -258,18 +258,33 @@ impl Quantity {
     /// having to read it. An exact value stays Gaussian whatever the setting says: there is
     /// no distribution to sample or to place sigma points on, and drawing a thousand
     /// identical samples for every plain number in a script is a cost with nothing behind it.
+    ///
+    /// **Panics** when `samples` is `Some(n)` with `n < 2` and the backend is Monte Carlo (see
+    /// [`MonteCarloBackend::from_stats`]); a sample count that comes from a user goes through
+    /// [`Quantity::try_new_scalar`], which returns the error instead.
     pub fn new_scalar(mean: f64, std_dev: f64, unit: RationalUnit, mode: Option<&str>, samples: Option<usize>) -> Self {
+        Self::try_new_scalar(mean, std_dev, unit, mode, samples).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Quantity::new_scalar`], refusing a Monte Carlo sample count below 2 with an error.
+    pub fn try_new_scalar(
+        mean: f64,
+        std_dev: f64,
+        unit: RationalUnit,
+        mode: Option<&str>,
+        samples: Option<usize>,
+    ) -> PhysureResult<Self> {
         let resolved = match mode {
             Some(named) => named,
             None if std_dev == 0.0 => "gaussian",
             None => crate::uncertainty::propagation_mode().name(),
         };
         let value = match resolved {
-            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))?),
             "unscented"   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
             _             => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
         };
-        Quantity { value, unit }
+        Ok(Quantity { value, unit })
     }
 
     pub fn from_backend(backend: Box<dyn UncertaintyBackend>, unit: RationalUnit) -> Self {

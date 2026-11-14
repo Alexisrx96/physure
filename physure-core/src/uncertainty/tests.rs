@@ -235,8 +235,8 @@ fn test_monte_carlo_self_multiplication_is_correlated() {
 /// moments — and must not panic on an ndarray shape mismatch.
 #[test]
 fn test_monte_carlo_mismatched_sample_counts_resample() {
-    let short = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(1.0, 0.1, 32));
-    let long = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.2, 4096));
+    let short = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(1.0, 0.1, 32).unwrap());
+    let long = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.2, 4096).unwrap());
     let sum = long
         .propagate_add(&short)
         .expect("mismatched lengths resample");
@@ -388,7 +388,7 @@ fn asymmetric_arithmetic_now_propagates_instead_of_refusing() {
     let x = UncertaintyValue::Moments(MomentsBackend::measured(12.3, 0.4, 0.5).unwrap());
     let y = UncertaintyValue::Moments(MomentsBackend::measured(1.0, 0.3, 0.6).unwrap());
     let g = UncertaintyValue::Gaussian(GaussianBackend::new(1.0, 0.3));
-    let mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.3, 1000));
+    let mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(2.0, 0.3, 1000).unwrap());
     let u = UncertaintyValue::Unscented(UnscentedBackend::new_scalar(2.0, 0.3));
 
     for foreign in [&g, &mc, &u] {
@@ -693,7 +693,7 @@ fn test_asymmetric_measurement_handling() {
     assert!(m.std_dev() > 1.0 && m.std_dev() < 2.0);
     
     let u = UncertaintyValue::Moments(m);
-    let u_mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(1.0, 0.1, 1000));
+    let u_mc = UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(1.0, 0.1, 1000).unwrap());
 
     // This assertion used to be `u.propagate_add(&u_mc).is_err()`, from when no arithmetic on a
     // moments value was implemented at all. It is now direction-dependent, and the direction is
@@ -718,7 +718,7 @@ fn test_asymmetric_measurement_handling() {
     // Checked on the backend directly, where the third moment is reachable.
     let backend_sum = MomentsBackend::measured(10.0, 1.0, 2.0)
         .unwrap()
-        .propagate_add(&MonteCarloBackend::from_stats(1.0, 0.1, 1000))
+        .propagate_add(&MonteCarloBackend::from_stats(1.0, 0.1, 1000).unwrap())
         .unwrap();
     assert_eq!(backend_sum.get_model_name(), "moments");
 

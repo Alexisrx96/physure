@@ -562,7 +562,8 @@ impl PyQuantity {
         if args.len() > 1 { unit = args.get_item(1)?.extract::<PyRationalUnit>().ok(); }
         if args.len() > 2 { std_dev_val = Some(args.get_item(2)?.unbind()); }
         if args.len() > 3 { mode = args.get_item(3)?.extract::<String>().ok(); }
-        if args.len() > 4 { samples = args.get_item(4)?.extract::<usize>().ok(); }
+        // a sample count that does not read as a non-negative integer is an error, not the default (audit B8)
+        if args.len() > 4 { samples = args.get_item(4)?.extract::<Option<usize>>()?; }
 
         // Keyword args override positionals
         if let Some(kw) = kwargs {
@@ -576,7 +577,7 @@ impl PyQuantity {
                 unit = v.extract::<PyRationalUnit>().ok();
             }
             if let Some(v) = kw.get_item("mode")? { mode = v.extract::<String>().ok(); }
-            if let Some(v) = kw.get_item("samples")? { samples = v.extract::<usize>().ok(); }
+            if let Some(v) = kw.get_item("samples")? { samples = v.extract::<Option<usize>>()?; }
         }
 
         let u = unit.ok_or_else(|| {
@@ -996,7 +997,10 @@ fn build_backend(
         let mean = mean_obj.bind(py).extract::<f64>()?;
         if let Ok(std_dev) = std_dev_obj.bind(py).extract::<f64>() {
             return Ok(match mode.as_deref() {
-                Some("monte_carlo") => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+                Some("monte_carlo") => UncertaintyValue::MonteCarlo(
+                    MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+                ),
                 Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
                 _                   => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
             });

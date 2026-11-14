@@ -46,13 +46,23 @@ pub struct MonteCarloBackend {
 }
 
 impl MonteCarloBackend {
-    pub fn from_stats(mean: f64, std_dev: f64, n_samples: usize) -> Self {
+    /// Draws `n_samples` values of a normal distribution with this mean and standard deviation.
+    ///
+    /// Refuses fewer than two samples: the standard uncertainty is the sample standard deviation (JCGM 101:2008
+    /// 7.6), which needs `M >= 2`. One sample would report a confident zero uncertainty and none a mean of `0.0`
+    /// (audit B8).
+    pub fn from_stats(mean: f64, std_dev: f64, n_samples: usize) -> PhysureResult<Self> {
+        if n_samples < 2 {
+            return Err(PhysureError::DomainError(format!(
+                "a Monte Carlo evaluation needs at least 2 samples to estimate a standard uncertainty, got {n_samples}"
+            )));
+        }
         let mut rng = next_rng();
         if std_dev == 0.0 {
-            return MonteCarloBackend { samples: Array1::from_elem(n_samples, mean) };
+            return Ok(MonteCarloBackend { samples: Array1::from_elem(n_samples, mean) });
         }
-        let dist = Normal::new(mean, std_dev).expect("Invalid normal distribution parameters");
-        MonteCarloBackend { samples: Array1::from_shape_fn(n_samples, |_| dist.sample(&mut rng)) }
+        let dist = Normal::new(mean, std_dev).map_err(|e| PhysureError::DomainError(e.to_string()))?;
+        Ok(MonteCarloBackend { samples: Array1::from_shape_fn(n_samples, |_| dist.sample(&mut rng)) })
     }
 
     /// Draws a fresh, independent sample array matching `other`'s moments.
@@ -84,7 +94,15 @@ impl MonteCarloBackend {
 // fixing them too would be dead code — fix `trait_def.rs` if the behaviour needs to change.
 impl UncertaintyBackend for MonteCarloBackend {
     fn mean(&self) -> f64 { self.samples.mean().unwrap_or(0.0) }
-    fn std_dev(&self) -> f64 { self.samples.std(0.0) }
+    /// The sample standard deviation, `sqrt(sum (x_r - mean)^2 / (M - 1))` (JCGM 101:2008 7.6, eqs. (13) and
+    /// (14)). [`MonteCarloBackend::from_stats`] refuses `M < 2`; an array built by hand with fewer samples has no
+    /// standard deviation to estimate and gives NaN, never a confident zero.
+    fn std_dev(&self) -> f64 {
+        if self.samples.len() < 2 {
+            return f64::NAN;
+        }
+        self.samples.std(1.0)
+    }
 
     fn propagate_add(&self, other: &dyn UncertaintyBackend) -> PhysureResult<Box<dyn UncertaintyBackend>> {
         let other_samples = self.ensure_samples(other)?;
@@ -130,7 +148,7 @@ mod tests {
 
     #[test]
     fn the_same_seed_gives_the_same_samples_and_another_seed_differs() {
-        let draw = |seed| with_seed(seed, || MonteCarloBackend::from_stats(10.0, 1.0, 64).samples.to_vec());
+        let draw = |seed| with_seed(seed, || MonteCarloBackend::from_stats(10.0, 1.0, 64).unwrap().samples.to_vec());
         assert_eq!(draw(7), draw(7));
         assert_ne!(draw(7), draw(8));
     }
@@ -139,7 +157,7 @@ mod tests {
     fn successive_draws_in_one_scope_differ_but_replay_exactly() {
         let two = |seed| {
             with_seed(seed, || {
-                (MonteCarloBackend::from_stats(0.0, 1.0, 8).samples.to_vec(), MonteCarloBackend::from_stats(0.0, 1.0, 8).samples.to_vec())
+                (MonteCarloBackend::from_stats(0.0, 1.0, 8).unwrap().samples.to_vec(), MonteCarloBackend::from_stats(0.0, 1.0, 8).unwrap().samples.to_vec())
             })
         };
         let (a, b) = two(3);
@@ -149,8 +167,8 @@ mod tests {
 
     #[test]
     fn resampling_an_operand_is_seeded_too() {
-        let other = MonteCarloBackend::from_stats(5.0, 0.5, 16);
-        let resample = |seed| with_seed(seed, || MonteCarloBackend::from_stats(1.0, 0.1, 16).ensure_samples(&other).unwrap().to_vec());
+        let other = MonteCarloBackend::from_stats(5.0, 0.5, 16).unwrap();
+        let resample = |seed| with_seed(seed, || MonteCarloBackend::from_stats(1.0, 0.1, 16).unwrap().ensure_samples(&other).unwrap().to_vec());
         assert_eq!(resample(11), resample(11));
         assert_ne!(resample(11), resample(12));
     }
@@ -170,7 +188,7 @@ mod tests {
     /// samples with `1 / (M - 1)`: derived independently of the backend.
     #[test]
     fn a_seeded_draw_replays_its_bits_and_its_uncertainty_is_the_sample_deviation_of_its_samples() {
-        let draw = || with_seed(1, || MonteCarloBackend::from_stats(6.0, 0.5, 1000));
+        let draw = || with_seed(1, || MonteCarloBackend::from_stats(6.0, 0.5, 1000).unwrap());
         let (a, b) = (draw(), draw());
         assert_eq!(a.mean().to_bits(), b.mean().to_bits());
         assert_eq!(a.std_dev().to_bits(), b.std_dev().to_bits());
@@ -182,11 +200,29 @@ mod tests {
         assert!((a.std_dev() - expected).abs() <= 1e-13 * expected, "{} vs {expected}", a.std_dev());
     }
 
+    /// Fewer than two samples cannot estimate a standard deviation: refused, where `M = 0` used to give a mean of
+    /// `0.0` and a NaN uncertainty and `M = 1` a confident zero uncertainty. Two samples are the least accepted.
+    #[test]
+    fn fewer_than_two_samples_are_refused() {
+        for m in [0, 1] {
+            let err = MonteCarloBackend::from_stats(5.0, 0.1, m).err().expect("refused");
+            assert!(matches!(err, PhysureError::DomainError(_)), "{err:?}");
+            assert!(err.to_string().contains("at least 2 samples"), "{err}");
+        }
+        assert_eq!(MonteCarloBackend::from_stats(5.0, 0.1, 2).unwrap().samples.len(), 2);
+        let built = crate::Quantity::try_new_scalar(5.0, 0.1, crate::RationalUnit::dimensionless(), Some("monte_carlo"), Some(1));
+        assert!(built.is_err());
+        let empty = MonteCarloBackend { samples: Array1::from_vec(vec![]) };
+        assert!(empty.std_dev().is_nan());
+        let one = MonteCarloBackend { samples: Array1::from_vec(vec![3.0]) };
+        assert!(one.std_dev().is_nan(), "one sample has no deviation to report, not a zero");
+    }
+
     #[test]
     fn outside_a_scope_nothing_is_seeded_and_a_scope_leaves_no_trace() {
         with_seed(1, || ());
-        let a = MonteCarloBackend::from_stats(0.0, 1.0, 64).samples.to_vec();
-        let b = MonteCarloBackend::from_stats(0.0, 1.0, 64).samples.to_vec();
+        let a = MonteCarloBackend::from_stats(0.0, 1.0, 64).unwrap().samples.to_vec();
+        let b = MonteCarloBackend::from_stats(0.0, 1.0, 64).unwrap().samples.to_vec();
         assert_ne!(a, b);
     }
 }

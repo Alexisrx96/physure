@@ -19,7 +19,8 @@ use physure_core::frozen::{
     active, battery, ensure_valid, freeze, reset_cache, run_battery, run_cases, set_engine_file, set_explicit_conf,
     write_atomic, Case, CaseError, CaseResult, EnginePolicy, FreezeOptions,
 };
-use physure_core::uncertainty::{propagation_mode, set_propagation_mode, PropagationMode};
+use physure_core::uncertainty::{propagation_mode, set_propagation_mode, with_seed, PropagationMode, UncertaintyValue};
+use physure_core::Quantity;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
@@ -472,6 +473,27 @@ fn the_monte_carlo_case_really_samples_and_replays_its_seed() {
     assert!((u - exact_u).abs() < 5.0 * exact_u / (2.0 * m).sqrt(), "{u}");
     assert_ne!(u, 0.5);
     assert_eq!(unit, "m * s");
+
+    // The uncertainty is the sample standard deviation of the 1000 products (JCGM 101:2008 7.6, `1 / (M - 1)`;
+    // audit B8), computed here from the same draws: `a` then `b`, 1000 each, under seed 1, paired elementwise.
+    // A file frozen before this fix (population deviation, `1 / M`) reports this witness as changed: intended.
+    let products = with_seed(1, || {
+        let unit = |u: &str| Quantity::new(1.0, u).unwrap().unit;
+        let a = Quantity::new_scalar(2.0, 0.1, unit("m"), Some("monte_carlo"), Some(1000));
+        let b = Quantity::new_scalar(3.0, 0.2, unit("s"), Some("monte_carlo"), Some(1000));
+        match (&a.value, &b.value) {
+            (UncertaintyValue::MonteCarlo(a), UncertaintyValue::MonteCarlo(b)) => (&a.samples * &b.samples).to_vec(),
+            _ => panic!("expected Monte Carlo inputs"),
+        }
+    });
+    assert_eq!(products.len(), 1000);
+    let sample_mean = products.iter().sum::<f64>() / m;
+    let sum_sq: f64 = products.iter().map(|p| (p - sample_mean) * (p - sample_mean)).sum();
+    let sample_u = (sum_sq / (m - 1.0)).sqrt();
+    assert!(((mean - sample_mean) / sample_mean).abs() < 1e-13, "{mean} vs {sample_mean}");
+    assert!(((u - sample_u) / sample_u).abs() < 1e-13, "{u} vs the sample deviation {sample_u}");
+    let population_u = (sum_sq / m).sqrt();
+    assert!((u - population_u).abs() > 1e-6, "{u}: the population deviation, 1 / M");
 }
 
 /// `unc.unscented_square`: `a²` for `a = 2.0 ± 0.1 m` through the sigma points of the unscented transform (Julier
