@@ -99,8 +99,11 @@ pub(crate) fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &Phs
 }
 
 /// The keyword arguments a calc builtin accepts; every other one is refused, never ignored.
-fn accepted_keywords(_name: &str) -> &'static [&'static str] {
-    &[]
+fn accepted_keywords(name: &str) -> &'static [&'static str] {
+    match name {
+        "limit" | "lim" => &["side"],
+        _ => &[],
+    }
 }
 
 /// An error for a keyword argument the builtin `name` does not take, or one given twice.
@@ -142,7 +145,7 @@ pub(crate) fn eval_calc_builtin_in(
         "series" | "taylor" => series(args, interpreter),
         "simplify" | "expand" => simplify(args, interpreter),
         "integral" | "integrate" => integral(args, interpreter, env),
-        "limit" | "lim" => limit(args, interpreter, env),
+        "limit" | "lim" => limit(args, kwargs, interpreter, env),
         "solve" => solve(args, interpreter),
         "substitute" | "sub" => substitute(args),
         "dsolve" => dsolve(args, interpreter),
@@ -387,13 +390,26 @@ fn integral(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<Strin
     Ok(Some(PhsValue::String(int_node.to_string())))
 }
 
-fn limit(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
-    if args.len() != 3 {
-        return Err(generic_error("limit expects (expression_string, variable_string, target_point)"));
+/// `limit(expr, var, point)` or `limit(expr, var, point, side)`, `side` also as the keyword `side=`.
+fn limit(
+    args: &[PhsValue],
+    kwargs: &[(String, PhsValue)],
+    interpreter: &PhsInterpreter,
+    env: &HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
+    if args.len() < 3 || args.len() > 4 {
+        return Err(generic_error(
+            "limit expects (expression_string, variable_string, point) or (expression_string, variable_string, point, side) with side \"+\" or \"-\"",
+        ));
     }
+    let keyword_side = kwargs.iter().find(|(k, _)| k == "side").map(|(_, v)| v);
+    let side = match (args.get(3), keyword_side) {
+        (Some(_), Some(_)) => return Err(generic_error("limit: the side is given twice, as the fourth argument and as `side=`")),
+        (positional, keyword) => positional.or(keyword),
+    };
     let expr_str = string_arg(args, 0, "limit expects expression string")?;
     let var_str = clean_diff_var(string_arg(args, 1, "limit expects variable string")?);
-    super::limit::limit(expr_str, var_str, &args[2], interpreter, env).map(Some)
+    super::limit::limit(expr_str, var_str, &args[2], side, interpreter, env).map(Some)
 }
 
 fn solve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {

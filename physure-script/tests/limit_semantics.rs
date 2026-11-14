@@ -111,11 +111,17 @@ fn a_discontinuous_builtin_is_read_from_both_sides() {
 }
 
 #[test]
-fn an_expression_defined_on_one_side_only_has_the_limit_within_its_domain() {
-    // sqrt and ln refuse negative arguments, so only the right side exists: the limit within the domain
-    assert_close(limit("sin(sqrt(x))/sqrt(x)", "0"), 1.0, 1e-12, "sin(sqrt x)/sqrt x at 0+");
+fn an_expression_defined_on_one_side_only_has_a_one_sided_limit() {
+    // sqrt and ln refuse negative arguments, so only the right side exists. Before one-sided limits (Task 4 of the
+    // language-semantics plan) the two-sided call answered with the limit within the domain (1 and 0); a two-sided
+    // limit now needs both sides, and the limit within the domain is asked for with side "+".
+    assert_close(number("limit(\"sin(sqrt(x))/sqrt(x)\", \"x\", 0, \"+\")"), 1.0, 1e-12, "sin(sqrt x)/sqrt x at 0+");
     // x ln x is not a power series in x; its samples fall geometrically to 0, which is what the limit is
-    assert_eq!(limit("x*ln(x)", "0"), 0.0);
+    assert_eq!(number("limit(\"x*ln(x)\", \"x\", 0, \"+\")"), 0.0);
+    for f in ["sin(sqrt(x))/sqrt(x)", "x*ln(x)"] {
+        let message = limit_refused(f, "0");
+        assert!(message.contains("x < 0.0") && message.contains("side \"+\""), "{f}: {message}");
+    }
 }
 
 // ---- (3) infinite points ----
@@ -162,9 +168,9 @@ fn sides_that_disagree_are_refused() {
 
 #[test]
 fn an_undefined_neighbourhood_is_refused() {
-    // before: 0.0 (an evaluation error read as 0)
+    // before: 0.0 (an evaluation error read as 0); undefined on both sides, and one side is no longer enough
     let message = limit_refused("sqrt(x)", "-1");
-    assert!(message.contains("undefined") || message.contains("cannot be evaluated"), "{message}");
+    assert!(message.contains("undefined on both sides"), "{message}");
 }
 
 #[test]

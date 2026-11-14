@@ -1,4 +1,5 @@
-//! The limit of PHS: `limit("f(x)", "x", p)`.
+//! The limit of PHS: `limit("f(x)", "x", p)`, and from one side `limit("f(x)", "x", p, "+")` (from the right,
+//! `x -> p+`) or `"-"` (from the left); the side may also be given as the keyword `side="+"`.
 //!
 //! The symbolic engine has no limit, so the answer is numeric, and it is given only with a converged error estimate;
 //! otherwise the call is refused (it never answers `0` or `inf` as a guess).
@@ -6,28 +7,36 @@
 //! - **Point.** A number, a quantity, `"inf"`/`"-inf"` (and their spellings), or a name or an expression written as
 //!   text (`pi`, `"pi/2"`, a variable, a constant of the catalog). A name that resolves to nothing is an error. A
 //!   quantity point makes the variable a quantity of that unit; a temperature point or a level is refused.
+//! - **Side.** Absent: the two-sided limit, which needs the expression defined on both sides (`sqrt(x)` and `x ln x`
+//!   at 0 are refused with the advice to give `side "+"`). `"+"` or `"-"`: only that side is sampled, and the
+//!   expression must be defined there. Any other side is an error, and so is a side at an infinite point (approached
+//!   from one side already).
 //! - **Names.** The expression is evaluated with the program's variables visible; a free name resolves to a variable,
 //!   `pi`, a constant of the catalog or a unit (the one order of PHS, `crate::globals`), and any other name is an
 //!   error (as for `integral`).
+//! - **First step.** Each side starts at `h0 = 1/8` (or more where the spacing of f64 next to `p` requires it); where
+//!   the expression is undefined there (a boundary of its domain or a pole closer than `h0`), the step is halved, up
+//!   to 20 times, until it is defined. A side undefined at every one of these steps is undefined next to the point.
 //! - **Continuity.** When the expression calls only functions that are continuous on their domain (`sin`, `cos`,
 //!   `tan`, `exp`, `ln`, `log`, `sqrt`, `min`, `max`, arithmetic, and `^` with an exponent that does not involve the
-//!   variable) and its value at `p` is defined and finite, the limit is that value, evaluated by the core (so an
-//!   uncertain point or uncertain variables propagate exactly). `floor`, `ceil`, `round`, `abs`, comparisons,
-//!   ternaries, `if`, user functions that were not inlined and other builtins are never trusted at the point itself.
-//! - **Extrapolation.** Otherwise `f` is sampled on each side at `p ± h0 2^-k` (`h0 = 1/8`, or more where the spacing
-//!   of f64 next to `p` requires it), `k = 0 .. 11`, and the samples are extrapolated to `h = 0` by Neville's
-//!   algorithm (a polynomial in `h`, Richardson extrapolation): the entry with the smallest difference to its
-//!   neighbours in the table is the estimate and that difference its error. A side is accepted when the error is
-//!   below `1e-9 max(|L|, max |f|)` at two successive levels (from the fourth on), the samples approach `L` and do
-//!   not diverge. Scale-relative, so a limit of 0 is accepted. The two sides must agree within the same tolerance,
-//!   and the answer is their mean. A side where the expression cannot be evaluated at any sample (outside the
-//!   domain of `sqrt` or `ln`) does not exist, and the limit is the one within the domain (`sqrt(x)` next to 0 is
-//!   read from the right).
+//!   variable), its value at `p` is defined and finite, and the first step of each side that is approached is defined,
+//!   the limit is that value, evaluated by the core (so an uncertain point or uncertain variables propagate exactly).
+//!   This holds for a one-sided limit too: `1/(x - 1e-9)` at 0 from the right is -1e9, its value at 0, where the
+//!   samples (from 1/8 down) would all lie past the pole. `floor`, `ceil`, `round`, `abs`, comparisons, ternaries,
+//!   `if`, user functions that were not inlined and other builtins are never trusted at the point itself, and neither
+//!   is a point outside the domain (the samples decide).
+//! - **Extrapolation.** Otherwise `f` is sampled on each approached side at `p ± h 2^-k` (`h` the first defined
+//!   step), `k = 0 .. 11`, and the samples are extrapolated to `h = 0` by Neville's algorithm (a polynomial in `h`,
+//!   Richardson extrapolation): the entry with the smallest difference to its neighbours in the table is the estimate
+//!   and that difference its error. A side is accepted when the error is below `1e-9 max(|L|, max |f|)` at two
+//!   successive levels (from the fourth on), the samples approach `L` and do not diverge. Scale-relative, so a limit
+//!   of 0 is accepted. For a two-sided limit the two sides must agree within the same tolerance, and the answer is
+//!   their mean. An expression undefined closer to the point than where it was defined is refused.
 //! - **Zero and infinity.** When the extrapolation does not settle, samples of one sign that fall geometrically
 //!   (each at most 3/4 of the previous, over the last five) give the limit 0 (`x ln x` at 0, `1/sqrt(x)` at
 //!   infinity); samples of one sign whose magnitude grows with non-decreasing increments over the last five (or
-//!   overflows) give a signed infinity, accepted only when both sides agree (`1/x^2` at 0 is `inf`, `1/x` at 0 is
-//!   refused).
+//!   overflows) give a signed infinity; a two-sided one only when both sides agree (`1/x^2` at 0 is `inf`, `1/x` at
+//!   0 is refused, and `inf` from the right).
 //! - **Infinite point.** `x = ±8 · 2^k`, `k = 0 .. 23`, extrapolated in `h = 1/|x|` the same way. The variable is a
 //!   plain number there.
 //! - **Rounding.** Two successive samples that are exactly equal after earlier ones differed mean rounding has
@@ -390,11 +399,72 @@ fn first_step(p: f64) -> f64 {
     h
 }
 
-/// `limit(expr, var, point)`, called where the program's variables are `scope`.
+/// How many times the first step of a side is halved, at most, while the expression is undefined there (a boundary
+/// of its domain, or a pole, closer to the point than the first step): `h0 / 2^20`, about 1.2e-7 next to 0.
+const MAX_SHRINK: i32 = 20;
+
+/// The direction from which a finite point is approached.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Approach {
+    Both,
+    /// `side = "+"`, `x -> p+`.
+    FromRight,
+    /// `side = "-"`, `x -> p-`.
+    FromLeft,
+}
+
+fn read_side(side: Option<&PhsValue>) -> PhysureResult<Approach> {
+    match side {
+        None => Ok(Approach::Both),
+        Some(PhsValue::String(s)) if s == "+" => Ok(Approach::FromRight),
+        Some(PhsValue::String(s)) if s == "-" => Ok(Approach::FromLeft),
+        Some(other) => {
+            let given = match other {
+                PhsValue::String(s) => format!("{s:?}"),
+                other => format!("{other} (a {})", other.type_name()),
+            };
+            Err(refusal(format!(
+                "the side must be \"+\" (from the right) or \"-\" (from the left), not {given}; leave it out for the two-sided limit"
+            )))
+        }
+    }
+}
+
+fn direction_name(direction: f64) -> &'static str {
+    if direction > 0.0 {
+        "from the right"
+    } else {
+        "from the left"
+    }
+}
+
+/// The first step on the side `direction` (+1 right, -1 left) of `p` at which the expression is defined: `h0`, or
+/// `h0` halved while the sample there is undefined (at most [`MAX_SHRINK`] times). `None` when the expression is
+/// undefined at every one of them; the last distance tried is returned with it.
+fn first_defined_step(function: &mut Function, p: f64, direction: f64, h0: f64) -> PhysureResult<Result<f64, f64>> {
+    let mut h = h0;
+    let mut tried = h0;
+    for _ in 0..=MAX_SHRINK {
+        let x = p + direction * h;
+        let distance = (x - p).abs();
+        if distance == 0.0 {
+            break;
+        }
+        tried = distance;
+        if function.sample(x)?.is_some() {
+            return Ok(Ok(h));
+        }
+        h /= 2.0;
+    }
+    Ok(Err(tried))
+}
+
+/// `limit(expr, var, point[, side])`, called where the program's variables are `scope`.
 pub(crate) fn limit(
     expr_str: &str,
     var: &str,
     point: &PhsValue,
+    side_argument: Option<&PhsValue>,
     interpreter: &PhsInterpreter,
     scope: &HashMap<String, PhsValue>,
 ) -> PhysureResult<PhsValue> {
@@ -404,6 +474,7 @@ pub(crate) fn limit(
     crate::globals::refuse_binding(var, "the variable of limit")?;
     bind_free_names(&expr, &mut env, &mut vec![var.to_string()], "expression", "limit")?;
     let point = read_point(point, interpreter, scope, 0)?;
+    let approach = read_side(side_argument)?;
     let var_unit = match &point {
         Point::Finite(q) if !q.unit.is_plain_number() => Some(q.unit.clone()),
         _ => None,
@@ -413,6 +484,12 @@ pub(crate) fn limit(
 
     match point {
         Point::Infinite(infinity) => {
+            if approach != Approach::Both {
+                let at = if infinity > 0.0 { "+inf" } else { "-inf" };
+                return Err(refusal(format!(
+                    "the point {at} is approached from one side only; leave out the side (\"+\" or \"-\" is for a finite point)"
+                )));
+            }
             let sign = infinity.signum();
             let approach = side(&mut function, INFINITE_LEVELS, |k| {
                 let distance = 8.0 * 2f64.powi(k as i32);
@@ -427,6 +504,29 @@ pub(crate) fn limit(
             }
         }
         Point::Finite(p) => {
+            let mean = p.value.mean();
+            let h0 = first_step(mean);
+            let directions: &[f64] = match approach {
+                Approach::Both => &[-1.0, 1.0],
+                Approach::FromRight => &[1.0],
+                Approach::FromLeft => &[-1.0],
+            };
+            // the first step of each side at which the expression is defined; a side where it is defined nowhere
+            // next to the point is an error, also for a two-sided limit (the limit within the domain is a one-sided one)
+            let mut starts: Vec<(f64, f64)> = Vec::new();
+            let mut undefined: Vec<(f64, f64)> = Vec::new();
+            for &direction in directions {
+                match first_defined_step(&mut function, mean, direction, h0)? {
+                    Ok(h) => starts.push((direction, h)),
+                    Err(closest) => undefined.push((direction, closest)),
+                }
+            }
+            if !undefined.is_empty() {
+                return Err(undefined_side(&function, mean, h0, approach, &undefined));
+            }
+            // the value at the point is the limit for an expression continuous on its domain, defined there and on
+            // each side that is approached (so `sqrt(x)` at 0 is not a two-sided limit, `1/(x - 1e-9)` at 0 from the
+            // right is its value at 0, not the samples past the pole)
             if trusted_at_point {
                 let at = match &function.var_unit {
                     Some(_) => PhsValue::Quantity(p.clone()),
@@ -450,32 +550,83 @@ pub(crate) fn limit(
                      the point itself): an extrapolated limit has no derivative with respect to its point to propagate the uncertainty with"
                 )));
             }
-            two_sided(&mut function, p.value.mean())
+            match starts.as_slice() {
+                &[(direction, h)] => one_sided(&mut function, mean, direction, h),
+                &[(_, left), (_, right)] => two_sided(&mut function, mean, left, right),
+                _ => unreachable!("one or two sides are approached"),
+            }
         }
     }
 }
 
-/// Both sides of a finite point, which must agree.
-fn two_sided(function: &mut Function, p: f64) -> PhysureResult<PhsValue> {
-    let h0 = first_step(p);
-    let step = |direction: f64| {
-        move |k: usize| {
-            let x = p + direction * h0 / 2f64.powi(k as i32);
-            (x, (x - p).abs())
+/// `x - p` or `p - x` written as the inequality `x < p` / `x > p` in the variable's unit.
+fn inequality(function: &Function, p: f64, direction: f64) -> String {
+    let relation = if direction > 0.0 { ">" } else { "<" };
+    match &function.var_unit {
+        Some(unit) => format!("{} {relation} {} {}", function.var, format_float(p), unit.__repr__()),
+        None => format!("{} {relation} {}", function.var, format_float(p)),
+    }
+}
+
+/// The error for the sides (`(direction, closest distance tried)`) where the expression is undefined at every step.
+fn undefined_side(function: &Function, p: f64, h0: f64, approach: Approach, undefined: &[(f64, f64)]) -> PhysureError {
+    let at = function.describe(p);
+    if undefined.len() == 2 {
+        return refusal(format!("the expression is undefined on both sides of {at}"));
+    }
+    let (direction, closest) = undefined[0];
+    let samples = format!(
+        "at every sample from {} to {}",
+        function.describe(p + direction * h0),
+        function.describe(p + direction * closest)
+    );
+    let missing = inequality(function, p, direction);
+    match approach {
+        Approach::Both => {
+            let other = if direction > 0.0 { "\"-\"" } else { "\"+\"" };
+            let other_name = direction_name(-direction);
+            refusal(format!(
+                "the expression is undefined for {missing} next to the point ({samples}), so the two-sided limit at {at} \
+                 does not exist; use side {other} for the limit {other_name}"
+            ))
         }
-    };
-    let right = side(function, FINITE_LEVELS, step(1.0))?;
-    let left = side(function, FINITE_LEVELS, step(-1.0))?;
+        _ => refusal(format!(
+            "the expression is undefined for {missing} ({samples}): there is no limit {} of {at}",
+            direction_name(direction)
+        )),
+    }
+}
+
+/// The samples of one side, from the first defined step `h` (halved at each level).
+fn sample_side(function: &mut Function, p: f64, direction: f64, h: f64) -> PhysureResult<Side> {
+    side(function, FINITE_LEVELS, |k| {
+        let x = p + direction * h / 2f64.powi(k as i32);
+        (x, (x - p).abs())
+    })
+}
+
+/// One side of a finite point.
+fn one_sided(function: &mut Function, p: f64, direction: f64, h: f64) -> PhysureResult<PhsValue> {
+    let approach = sample_side(function, p, direction, h)?;
+    let at = function.describe(p);
+    let name = direction_name(direction);
+    match approach {
+        Side::Converged { value, weighted, .. } => answer(value, &weighted, function),
+        Side::Infinite(infinity) => answer(infinity, &[], function),
+        Side::Unsettled { estimate, error, why } => Err(unsettled(&format!("{name} of {at}"), estimate, error, why)),
+        Side::Absent => Err(refusal(format!("the expression is undefined {name} of {at}"))),
+    }
+}
+
+/// Both sides of a finite point, which must agree; `left` and `right` are their first defined steps.
+fn two_sided(function: &mut Function, p: f64, left: f64, right: f64) -> PhysureResult<PhsValue> {
+    let right = sample_side(function, p, 1.0, right)?;
+    let left = sample_side(function, p, -1.0, left)?;
     let at = function.describe(p);
     match (left, right) {
-        (Side::Absent, Side::Absent) => Err(refusal(format!("the expression is undefined on both sides of {at}"))),
+        (Side::Absent, _) | (_, Side::Absent) => Err(refusal(format!("the expression is undefined next to {at}"))),
         (Side::Unsettled { estimate, error, why }, _) => Err(unsettled(&format!("from the left of {at}"), estimate, error, why)),
         (_, Side::Unsettled { estimate, error, why }) => Err(unsettled(&format!("from the right of {at}"), estimate, error, why)),
-        (Side::Absent, one) | (one, Side::Absent) => match one {
-            Side::Converged { value, weighted, .. } => answer(value, &weighted, function),
-            Side::Infinite(infinity) => answer(infinity, &[], function),
-            _ => unreachable!("absent and unsettled sides are handled above"),
-        },
         (Side::Converged { value: l, error: el, scale: sl, weighted: wl }, Side::Converged { value: r, error: er, scale: sr, weighted: wr }) => {
             if (l - r).abs() > TOLERANCE * l.abs().max(r.abs()).max(sl).max(sr) {
                 return Err(disagree(&at, &format_float(l), &format_float(r), el.max(er)));
