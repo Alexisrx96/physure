@@ -201,8 +201,9 @@ Prefer several small assertions with descriptive messages over one large compoun
 a boolean built from named domain predicates (`is_within_tolerance and is_powered`) reads
 better and fails with a clearer message than one long inline expression.
 
-A sigma-bound condition like `assert(result == reference +/- 2 sigma)` parses and runs in the
-interpreter, but its behavior is not yet identical across every transpile target (see
+A sigma-bound condition like `assert(result == 9.80 m/s^2 +/- 2 sigma)` runs in the
+interpreter (the bound follows a written target value; after a variable or a parenthesised
+expression it is an error, not a dropped bound), but its behavior is not yet identical across every transpile target (see
 `docs/uncertainty-gum-compliance.md`) — use `assert(actual, expected)` instead when the check
 needs to produce the same result in every generated language.
 

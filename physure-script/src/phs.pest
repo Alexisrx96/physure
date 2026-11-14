@@ -50,9 +50,14 @@ vector_literal  = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" ~ (_no_nl ~ _is_unit_sta
 
 _is_uncertainty = _{ &("+/-" | "±") }
 _no_nl = _{ !("\r" | "\n") }
+// A unit written after an uncertainty that already follows a unit, `1 m +/- 0.1 m`. Without
+// this rule the second `m` was an implicit multiplication and the result was silently m^2;
+// it is captured only so `parser.rs` can refuse it and say where the unit goes. A unit after
+// an uncertainty with no unit before it, `(a + b) +/- 0.1 m`, is the measurement's unit, as before.
+stray_unit = { _no_nl ~ _is_unit_start ~ unit_expr }
 quantity = {
-    ("(" ~ expr ~ (_is_uncertainty ~ uncertainty)? ~ ")" ~ (_no_nl ~ _is_unit_start ~ unit_expr)? ~ (_is_uncertainty ~ uncertainty)?)
-  | (number ~ (_is_uncertainty ~ uncertainty)? ~ (_no_nl ~ _is_unit_start ~ unit_expr)? ~ (_is_uncertainty ~ uncertainty)?)
+    ("(" ~ expr ~ (_is_uncertainty ~ uncertainty)? ~ ")" ~ ((_no_nl ~ _is_unit_start ~ unit_expr ~ (_is_uncertainty ~ uncertainty ~ stray_unit?)?) | (_is_uncertainty ~ uncertainty))?)
+  | (number ~ (_is_uncertainty ~ uncertainty)? ~ ((_no_nl ~ _is_unit_start ~ unit_expr ~ (_is_uncertainty ~ uncertainty ~ stray_unit?)?) | (_is_uncertainty ~ uncertainty))?)
 }
 
 // The Python-style `.2f`/`.3e` spec, plus the named specs: `base` quotes a quantity in the

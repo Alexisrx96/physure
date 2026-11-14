@@ -245,19 +245,55 @@ fn build_quantity(
         return Err(PhysureError::Generic("Missing magnitude in quantity".to_string()));
     };
     let Some(u) = unit else {
-        return Ok(mag_expr);
+        return Ok(match mag_expr {
+            // `(2 m) +/- 0.1`: `attaches_uncertainty` let it through, so it is this quantity's.
+            Expr::Quantity(mut q) if uncertainty.is_some() => {
+                q.uncertainty = uncertainty;
+                q.uncertainty_lower = uncertainty_lower;
+                q.is_sigma = is_sigma;
+                q.dof = dof;
+                Expr::Quantity(q)
+            }
+            other => other,
+        });
     };
     Ok(match mag_expr {
-        Expr::Quantity(mut q) => {
+        // `(2 m) s` is 2 m·s: a unit after a parenthesised quantity that has one multiplies it
+        // (it used to replace it, and `(2 m) s` was `2.0 s`).
+        Expr::Quantity(mut q) if q.unit.is_none() => {
             q.unit = Some(u);
-            q.is_sigma = is_sigma;
-            q.dof = dof.or(q.dof);
-            q.uncertainty = uncertainty.or(q.uncertainty);
-            q.uncertainty_lower = uncertainty_lower.or(q.uncertainty_lower);
+            if uncertainty.is_some() {
+                q.uncertainty = uncertainty;
+                q.uncertainty_lower = uncertainty_lower;
+                q.is_sigma = is_sigma;
+                q.dof = dof;
+            }
             Expr::Quantity(q)
         }
         other => Expr::BinaryOp { op: BinaryOp::Mul, left: Box::new(other), right: Box::new(Expr::Identifier(u)) },
     })
+}
+
+/// Whether an uncertainty written after the parenthesised `expr` (with a unit after the
+/// parentheses or not) can become the uncertainty of the value: only a literal number, or a
+/// literal quantity with no uncertainty of its own, with at most one unit between them. Anything
+/// else used to drop it without a word: `(x) +/- 0.1` was `x`, `(2 m) +/- 0.1` was `2.0 m`.
+fn attaches_uncertainty(expr: Option<&Expr>, unit_after: bool) -> bool {
+    match expr {
+        None => true,
+        Some(Expr::Quantity(q)) => q.uncertainty.is_none() && !(q.unit.is_some() && unit_after),
+        Some(_) => false,
+    }
+}
+
+/// `1 m +/- 0.1 m` read the second `m` as a multiplication and gave `1.00 ± 0.10 m^2`. The unit
+/// of a measurement is written once, after its uncertainty: the error shows that form.
+fn stray_unit_error(value: &str, parenthesised: bool, unit: &str, uncertainty: &str, stray: &str) -> PhysureError {
+    let value = if parenthesised { format!("({value})") } else { value.to_string() };
+    PhysureError::Generic(format!(
+        "`{value} {unit} {uncertainty} {stray}`: the uncertainty takes no unit of its own: write \
+         `{value} {uncertainty} {unit}`, with the unit once, after the uncertainty"
+    ))
 }
 
 pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -270,19 +306,39 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
     let mut dof = None;
     // (value, was written as a percentage), upper half first.
     let mut halves: Vec<(f64, bool)> = Vec::new();
+    // The source text of the value, the last uncertainty and the unit, for the message that
+    // refuses a unit written after an uncertainty (`1 m +/- 0.1 m`).
+    let mut written_value = "";
+    let mut written_uncertainty = "";
+    let mut written_unit = "";
 
+    let source = pair.as_str();
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::number => {
-                magnitude = Some(parse_magnitude(inner.as_str().trim())?);
+                written_value = inner.as_str().trim();
+                magnitude = Some(parse_magnitude(written_value)?);
             }
             Rule::expr => {
+                written_value = inner.as_str().trim();
                 magnitude_expr = Some(parse_expr(inner)?);
             }
             Rule::uncertainty => {
+                if !written_uncertainty.is_empty() {
+                    return Err(PhysureError::Generic(format!(
+                        "`{}`: a value has one uncertainty, and this one is given two (`{written_uncertainty}` and `{}`)",
+                        source.trim(),
+                        inner.as_str().trim()
+                    )));
+                }
+                written_uncertainty = inner.as_str().trim();
                 collect_uncertainty_halves(inner, &mut halves, &mut is_sigma, &mut dof)?;
             }
+            Rule::stray_unit => {
+                return Err(stray_unit_error(written_value, magnitude_expr.is_some(), written_unit, written_uncertainty, inner.as_str().trim()));
+            }
             Rule::unit_expr => {
+                written_unit = inner.as_str().trim();
                 let (u, leftover) = with_unit_catalog(|registry| split_unit_expr(inner, registry))?;
                 unit = u;
                 unit_leftover = leftover;
@@ -299,6 +355,23 @@ pub(crate) fn parse_quantity(pair: pest::iterators::Pair<Rule>) -> PhysureResult
     // matching note in `phs.pest`) is the whole change if the other order ever wins.
     let uncertainty = halves.first().map(|(v, _)| *v);
     let uncertainty_lower = halves.get(1).map(|(v, _)| *v);
+
+    if uncertainty.is_some() && !attaches_uncertainty(magnitude_expr.as_ref(), unit.is_some()) {
+        if is_sigma {
+            // `(x == t +/- 2 sigma)` compared `x == t` exactly and dropped the bound.
+            return Err(PhysureError::Generic(format!(
+                "`{}`: the bound `{written_uncertainty}` cannot follow the expression `{written_value}`: a `sigma` bound \
+                 is written after a literal target value, `x == 9.80 m/s^2 +/- 2 sigma`",
+                source.trim()
+            )));
+        }
+        return Err(PhysureError::Generic(format!(
+            "`{}`: the uncertainty `{written_uncertainty}` cannot be attached to the expression `{written_value}`, \
+             only to a written value (`(2 +/- 0.1) m`); to give a computed value an uncertainty, add a measured zero \
+             in its unit, like `({written_value}) + (0 {written_uncertainty}) m` for a length",
+            source.trim()
+        )));
+    }
 
     let quantity_expr = build_quantity(magnitude, magnitude_expr, unit, uncertainty, uncertainty_lower, is_sigma, dof)?;
 
