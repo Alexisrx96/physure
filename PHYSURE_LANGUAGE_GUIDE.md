@@ -110,6 +110,7 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 | `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv(0.5 * m * v^2, v)` |
 | `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |
 | `calc` | `integral(expr, var, a, b)` | Definite integral (closed form confirmed numerically, or tanh-sinh quadrature with an error estimate) | `integral("v", "t", 0 s, 1 h)` |
+| `calc` | `limit(expr, var, point)` | Limit (value at a point of continuity, or Richardson extrapolation from both sides with a convergence check) | `limit("sin(x)/x", "x", 0)` |
 | `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |
 | `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient(presion_vec, pos_vec)` |
 | `array` | `trapz(y, x)` | Numerical integration (area) | `trapz(fuerza_vec, pos_vec)` |
@@ -125,6 +126,19 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 - **Method**: the closed form `F(b) - F(a)` when the symbolic engine has an antiderivative *and* the quadrature confirms it, so a closed form that jumps across a pole is refused (`integral("x^(-2)", "x", -1, 1)` is an error, not -2). Otherwise tanh-sinh quadrature with an error estimate: accepted when two successive levels agree within a relative 1e-12 of max(|I|, the integral of |f|), from level 4 on, with at most 20000 samples per piece. An infinite end is mapped by x = c ± (1 - u)/u.
 - **Refused, not guessed**: a singularity at a non-zero end (`1/sqrt(1-x)` on [0, 1]: substitute so that it sits at 0), a jump or a kink inside the interval (split the interval there), `sin(1/x)` next to 0, an integrand that decays too slowly towards an infinite end. An integrand that cannot be evaluated, or is not finite, at a sample is an error.
 - **Known failure mode**: a peak much narrower than the spacing of the first levels' samples is never sampled, and every level agrees on a wrong value: a Gaussian of width 1e-4 at x = 0.3 on [0, 1] integrates to a confident 0. Split the interval around a known peak.
+
+#### Limits
+
+`limit(expr, var, point)` (after `use limit from calc`) is the limit of `expr` as `var` tends to `point`. The symbolic engine has no limit: the answer is numeric, and it is given only when it converged; otherwise the call is an error, never a guessed `0` or `inf`.
+
+- **Point**: a number, a quantity, `"inf"` or `"-inf"`, or a name or an expression written as text (`pi`, `"pi/2"`, a variable, a constant of the catalog). A name that resolves to nothing is an error. A quantity point makes `var` a quantity of that unit; a temperature point or a level is refused. Towards an infinite point `var` is a plain number.
+- **Names**: `expr` sees the program's variables (and a function's parameters), as the integrand of `integral` does; any other free name is an error.
+- **Continuous point**: when `expr` calls only `sin`, `cos`, `tan`, `exp`, `ln`, `log`, `sqrt`, `min`, `max` and arithmetic (no exponent involving `var`) and its value at the point is defined and finite, the limit is that value, with the units and the uncertainty the core gives it (`limit("2000000+x", "x", 1)` is `2000001`).
+- **Extrapolation**: otherwise (a removable singularity such as `sin(x)/x` at 0, or `floor`, `abs`, a comparison, a ternary in `expr`) the samples at `point ± h`, `h = 1/8, 1/16, ...` (12 steps), are extrapolated to `h = 0` (Richardson, by Neville's algorithm) separately on each side. A side is accepted when its error estimate is below `1e-9` of max(|L|, the largest sample) at two successive steps, so a limit of 0 works; the two sides must agree to the same tolerance. Measured: `(1-cos(x))/x^2` at 0 is 0.5 within 5e-11 (its samples cancel), `sin(x)/x` within 1e-15. A side where `expr` is undefined at every sample (outside the domain of `sqrt` or `ln`) does not count: `sin(sqrt(x))/sqrt(x)` at 0 is 1, read from the right.
+- **Infinite point**: `var = ±8, ±16, ±32, ...` (24 steps), extrapolated in `1/var`: `limit("1/x", "x", "inf")` is 0, `limit("(1+1/x)^x", "x", "inf")` is e.
+- **Zero and infinity**: samples of one sign falling geometrically give 0 (`x*ln(x)` at 0); samples of one sign growing with non-decreasing increments give `inf` or `-inf`, when both sides agree: `limit("1/x^2", "x", 0)` is `inf`, `limit("1/x", "x", 0)` is an error.
+- **Uncertainty** propagates: at a continuous point through the core, and an extrapolated limit is a weighted sum of samples formed with the core's arithmetic. An uncertain point where the limit must be extrapolated is refused.
+- **Refused, not guessed**: sides that disagree (`abs(x)/x` at 0, `floor(x)` at 1), a neighbourhood where `expr` is undefined (`sqrt(x)` at -1), oscillation (`sin(1/x)` at 0, `sin(x)` at `"inf"`), a change on a scale smaller than the smallest step (`(1-cos(1000*x))/x^2` at 0), and samples that rounding has made equal (`min(x, 100)` at `"inf"`).
 
 ---
 
