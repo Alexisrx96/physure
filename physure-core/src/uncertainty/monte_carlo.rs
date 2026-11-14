@@ -155,6 +155,33 @@ mod tests {
         assert_ne!(resample(11), resample(12));
     }
 
+    /// The standard uncertainty of a Monte Carlo result is the sample standard deviation, `1 / (M - 1)` (JCGM
+    /// 101:2008 7.6, eqs. (13) and (14)): for the samples 1, 2, 3, 4 the mean is 2.5, the squared deviations sum
+    /// to 5, and the uncertainty is `sqrt(5 / 3)`, not the population `sqrt(5 / 4)` (audit B8).
+    #[test]
+    fn the_standard_uncertainty_is_the_sample_standard_deviation() {
+        let mc = MonteCarloBackend { samples: Array1::from_vec(vec![1.0, 2.0, 3.0, 4.0]) };
+        assert_eq!(mc.mean(), 2.5);
+        let expected = (5.0_f64 / 3.0).sqrt();
+        assert!((mc.std_dev() - expected).abs() <= 2.0 * f64::EPSILON * expected, "{} vs {expected}", mc.std_dev());
+    }
+
+    /// A seeded draw replays to the same bits, and its standard uncertainty is the one computed here from its own
+    /// samples with `1 / (M - 1)`: derived independently of the backend.
+    #[test]
+    fn a_seeded_draw_replays_its_bits_and_its_uncertainty_is_the_sample_deviation_of_its_samples() {
+        let draw = || with_seed(1, || MonteCarloBackend::from_stats(6.0, 0.5, 1000));
+        let (a, b) = (draw(), draw());
+        assert_eq!(a.mean().to_bits(), b.mean().to_bits());
+        assert_eq!(a.std_dev().to_bits(), b.std_dev().to_bits());
+        let samples = a.samples.to_vec();
+        let m = samples.len() as f64;
+        let mean = samples.iter().sum::<f64>() / m;
+        let sum_sq: f64 = samples.iter().map(|x| (x - mean) * (x - mean)).sum();
+        let expected = (sum_sq / (m - 1.0)).sqrt();
+        assert!((a.std_dev() - expected).abs() <= 1e-13 * expected, "{} vs {expected}", a.std_dev());
+    }
+
     #[test]
     fn outside_a_scope_nothing_is_seeded_and_a_scope_leaves_no_trace() {
         with_seed(1, || ());
