@@ -420,3 +420,56 @@ fn a_conf_that_gives_a_unit_and_its_constant_two_values_keeps_the_unit() {
     dir.remove("physure.conf");
 }
 
+// ---- generated code: a constant is fixed at generation
+
+fn generated(source: &str, target: physure_script::Target) -> String {
+    physure_script::transpile(&parse_phs(source).unwrap(), target.clone()).unwrap_or_else(|e| panic!("{target:?}: {e}"))
+}
+
+#[test]
+fn every_target_writes_the_value_of_a_constant_fixed_at_generation_and_says_so() {
+    use physure_script::Target;
+    let _lock = lock();
+    let source = "rt = molar_gas_constant * 300 K\narea = pi * (2 m)^2";
+    for (target, comment, constant, pi) in [
+        (Target::Rust, "//", "Quantity::new(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity::new(3.141592653589793, \"\")"),
+        (Target::Python, "#", "Q_(8.31446261815324, \"J*mol^-1*K^-1\")", "Q_(3.141592653589793, \"\")"),
+        (Target::Java, "//", "Quantity.of(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity.of(3.141592653589793)"),
+        (Target::JavaScript, "//", "Quantity.of(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity.of(3.141592653589793)"),
+        (Target::TypeScript, "//", "Quantity.of(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity.of(3.141592653589793)"),
+    ] {
+        let code = generated(source, target.clone());
+        assert!(code.contains(constant), "{target:?}:\n{code}");
+        assert!(code.contains(pi), "{target:?}:\n{code}");
+        assert!(code.starts_with(&format!("{comment} Constants of the catalog, fixed when this file was generated")), "{target:?}:\n{code}");
+        assert!(code.contains(&format!("{comment}   molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1\n")), "{target:?}:\n{code}");
+        // the name itself appears only in the comment: no free identifier is left for the target to resolve
+        let body: Vec<&str> = code.lines().filter(|line| !line.trim_start().starts_with(comment)).collect();
+        assert!(body.iter().all(|line| !line.contains("molar_gas_constant") && !line.contains("pi *")), "{target:?}:\n{code}");
+        // pi alone is mathematics, not the catalog: no comment
+        let only_pi = generated("x = 2 * pi", target.clone());
+        assert!(!only_pi.contains("fixed when this file was generated"), "{target:?}:\n{only_pi}");
+        // a program that binds a constant is refused, with the interpreter's reason
+        let error = physure_script::transpile(&parse_phs("pi = 3").unwrap(), target.clone()).unwrap_err().to_string();
+        assert!(error.contains("`pi` is the constant"), "{target:?}: {error}");
+    }
+}
+
+#[test]
+fn generated_code_takes_the_value_of_the_catalog_in_force_when_it_is_generated() {
+    use physure_script::Target;
+    let _lock = lock();
+    let custom = registry_with("[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\n");
+    let code = with_catalog(&custom, || generated("molar_gas_constant * 1 K", Target::Rust));
+    assert!(code.contains("Quantity::new(8.0, \"J*mol^-1*K^-1\")") && code.contains("molar_gas_constant = 8.0 J*mol^-1*K^-1"), "{code}");
+}
+
+#[test]
+fn an_equation_with_a_constant_compiles_to_a_function_of_its_arguments_only() {
+    use physure_script::Target;
+    let _lock = lock();
+    let code = generated("eq = \"E = m * speed_of_light_in_vacuum^2\"\nx = eq(m=1 kg)", Target::Rust);
+    assert!(code.contains("fn eq(m: Quantity)"), "{code}");
+    assert!(code.contains("Quantity::new(299792458.0, \"m*s^-1\")") || code.contains("299792458"), "{code}");
+    assert!(!code.lines().filter(|l| !l.starts_with("//")).any(|l| l.contains("speed_of_light_in_vacuum")), "{code}");
+}

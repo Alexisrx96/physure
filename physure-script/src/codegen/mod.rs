@@ -42,31 +42,124 @@ pub enum Target {
 
 pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenError> {
     let program = &inline_bindings_program(program);
-    match target {
-        Target::Python => {
-            let compiled = compile_equations_to_functions(program)?;
-            python::PythonTranspiler.generate_program(&compiled)
+    // running the program here also refuses one that binds `pi` or a constant of the catalog, as PHS does
+    let compiled = compile_equations_to_functions(program)?;
+    let (compiled, fixed) = fix_global_constants(&compiled)?;
+    let (code, comment) = match target {
+        Target::Python => (python::PythonTranspiler.generate_program(&compiled)?, "#"),
+        Target::Rust => (rust::RustTranspiler.generate_program(&compiled)?, "//"),
+        Target::Java => (java::JavaTranspiler::default().generate_program(&compiled)?, "//"),
+        Target::JavaWithClass(name) => (java::JavaTranspiler::new(&name).generate_program(&compiled)?, "//"),
+        Target::JavaScript => (js::JsTranspiler::default().generate_program(&compiled)?, "//"),
+        Target::TypeScript => (js::JsTranspiler { typed: true }.generate_program(&compiled)?, "//"),
+    };
+    Ok(format!("{}{code}", fixed_constants_header(&fixed, comment)))
+}
+
+/// The constants a program uses, by name, with the catalog's text of their values.
+type Fixed = std::collections::BTreeMap<String, String>;
+
+/// Replaces every use of `pi`, `π` and the constants of the catalog in force with its value, in the unit the catalog
+/// gives it. A PHS program reads a constant from the catalog in force when it runs; the generated code cannot (no
+/// target reads a catalog), so the value is fixed when the code is generated, and [`fixed_constants_header`] says
+/// so in the file. No binding of these names reaches here (the program ran through the interpreter first, which
+/// refuses one), so every identifier with such a name is the constant.
+fn fix_global_constants(program: &Program) -> Result<(Program, Fixed), CodegenError> {
+    let mut fixed = Fixed::new();
+    let statements =
+        program.statements.iter().map(|statement| fix_in_statement(statement, &mut fixed)).collect::<Result<Vec<_>, _>>()?;
+    Ok((Program { statements, lines: program.lines.clone() }, fixed))
+}
+
+/// The comment that heads generated code using catalog constants: each value, and that it was fixed at generation.
+fn fixed_constants_header(fixed: &Fixed, comment: &str) -> String {
+    if fixed.is_empty() {
+        return String::new();
+    }
+    let mut header = format!(
+        "{comment} Constants of the catalog, fixed when this file was generated: the PHS program reads the catalog in\n\
+         {comment} force each time it runs, this code does not (a later override or frozen configuration does not reach it).\n"
+    );
+    for (name, value) in fixed {
+        header.push_str(&format!("{comment}   {name} = {value}\n"));
+    }
+    header.push('\n');
+    header
+}
+
+fn fix_in_statement(statement: &Statement, fixed: &mut Fixed) -> Result<Statement, CodegenError> {
+    Ok(match statement {
+        Statement::Assignment(node) => {
+            Statement::Assignment(AssignmentNode { value: fix_in_expr(&node.value, fixed)?, ..node.clone() })
         }
-        Target::Rust => {
-            let compiled = compile_equations_to_functions(program)?;
-            rust::RustTranspiler.generate_program(&compiled)
+        Statement::Expr(e) => Statement::Expr(fix_in_expr(e, fixed)?),
+        Statement::Return(e) => Statement::Return(fix_in_expr(e, fixed)?),
+        Statement::GuardReturn { cond, value } => {
+            Statement::GuardReturn { cond: fix_in_expr(cond, fixed)?, value: fix_in_expr(value, fixed)? }
         }
-        Target::Java => {
-            let compiled = compile_equations_to_functions(program)?;
-            java::JavaTranspiler::default().generate_program(&compiled)
+        Statement::FunctionDef(def) => {
+            let body_stmts = def.body_stmts.iter().map(|s| fix_in_statement(s, fixed)).collect::<Result<Vec<_>, _>>()?;
+            let mut decorators = def.decorators.clone();
+            for decorator in &mut decorators {
+                for arg in &mut decorator.args {
+                    *arg = fix_in_expr(arg, fixed)?;
+                }
+            }
+            Statement::FunctionDef(FunctionDefNode { body_stmts, decorators, ..def.clone() })
         }
-        Target::JavaWithClass(name) => {
-            let compiled = compile_equations_to_functions(program)?;
-            java::JavaTranspiler::new(&name).generate_program(&compiled)
+        Statement::While { cond, body, body_lines } => Statement::While {
+            cond: fix_in_expr(cond, fixed)?,
+            body: body.iter().map(|s| fix_in_statement(s, fixed)).collect::<Result<Vec<_>, _>>()?,
+            body_lines: body_lines.clone(),
+        },
+        other => other.clone(),
+    })
+}
+
+fn fix_in_expr(expr: &Expr, fixed: &mut Fixed) -> Result<Expr, CodegenError> {
+    Ok(match expr {
+        Expr::Identifier(name) => global_constant_literal(name, fixed)?.unwrap_or_else(|| expr.clone()),
+        Expr::BinaryOp { op, left, right } => Expr::BinaryOp {
+            op: *op,
+            left: Box::new(fix_in_expr(left, fixed)?),
+            right: Box::new(fix_in_expr(right, fixed)?),
+        },
+        Expr::FunctionCall { name, args, kwargs } => {
+            let args = args.iter().map(|a| fix_in_expr(a, fixed)).collect::<Result<Vec<_>, _>>()?;
+            let mut fixed_kwargs = Vec::with_capacity(kwargs.len());
+            for (key, value) in kwargs {
+                fixed_kwargs.push((key.clone(), fix_in_expr(value, fixed)?));
+            }
+            Expr::FunctionCall { name: name.clone(), args, kwargs: fixed_kwargs }
         }
-        Target::JavaScript => {
-            let compiled = compile_equations_to_functions(program)?;
-            js::JsTranspiler::default().generate_program(&compiled)
+        Expr::ForExpr { var, iterable, body } => Expr::ForExpr {
+            var: var.clone(),
+            iterable: Box::new(fix_in_expr(iterable, fixed)?),
+            body: Box::new(fix_in_expr(body, fixed)?),
+        },
+        Expr::Quantity(_) | Expr::Str(_) | Expr::Bool(_) => expr.clone(),
+    })
+}
+
+/// The literal of the global identifier `name` (`None` when it is not one): `pi` and `π` are the number π, a constant
+/// of the catalog its number in the unit the catalog writes it in (recorded in `fixed`). A constant the catalog in
+/// force cannot read (one written with an uncertainty) is refused with the reason.
+fn global_constant_literal(name: &str, fixed: &mut Fixed) -> Result<Option<Expr>, CodegenError> {
+    let literal = |magnitude: f64, unit: Option<String>| {
+        Expr::Quantity(QuantityNode { magnitude, uncertainty: None, uncertainty_lower: None, is_sigma: false, dof: None, unit })
+    };
+    let refusal = |e: physure_core::error::PhysureError| CodegenError::Generic(e.to_string());
+    match crate::globals::global_value(name).map_err(refusal)? {
+        None => Ok(None),
+        Some(PhsValue::Number(n)) => Ok(Some(literal(n, None))),
+        Some(PhsValue::Quantity(q)) => {
+            let text = crate::globals::constant_text(name).map_err(refusal)?.unwrap_or_default();
+            // the unit as the catalog writes it: every target's quantity constructor reads it with the core
+            let unit = text.split_once(char::is_whitespace).map(|(_, unit)| unit.trim().to_string()).filter(|u| !u.is_empty());
+            fixed.insert(name.to_string(), text);
+            Ok(Some(literal(q.value.mean(), unit)))
         }
-        Target::TypeScript => {
-            let compiled = compile_equations_to_functions(program)?;
-            js::JsTranspiler { typed: true }.generate_program(&compiled)
-        }
+        Some(other) => Err(CodegenError::Generic(format!("the constant {name} is {other}, which no target can write"))),
     }
 }
 
@@ -646,7 +739,11 @@ fn rewrite_equation_calls(
                 None => {
                     let mut rhs_free = HashSet::new();
                     rhs.free_symbols(&mut rhs_free);
-                    let chosen = if rhs_free.iter().all(|s| kwarg_set.contains(s.as_str())) { rhs } else { lhs };
+                    // `pi` and a constant of the catalog are not arguments: they have their values
+                    let given = |s: &String| {
+                        kwarg_set.contains(s.as_str()) || crate::globals::is_global(s).unwrap_or(false)
+                    };
+                    let chosen = if rhs_free.iter().all(given) { rhs } else { lhs };
                     functions.push(FunctionDefNode {
                         name: name.clone(),
                         params: kwarg_names.clone(),
