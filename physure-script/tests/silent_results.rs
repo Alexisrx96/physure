@@ -87,3 +87,38 @@ fn a_unit_after_a_parenthesised_quantity_multiplies_it() {
     assert_eq!(run("(2 m) s => m*s"), run("2 m * s => m*s"));
     assert_eq!(run("(2) m"), "2.0 m");
 }
+
+#[test]
+fn only_a_quantity_or_a_collection_of_them_converts_to_a_unit() {
+    // `(a < b) => km` was `True` and `"x" => km` was `x`: the `=> km` was ignored.
+    for (program, says) in [
+        ("a = 1 m\nb = 2 m\n(a < b) => km", "a Bool (True)"),
+        ("True => km", "a Bool (True) to `km`"),
+        ("\"x\" => km", "a String (x)"),
+        ("[True, 1 m] => cm", "a Bool (True)"),
+        ("f(x) = 2*x\nf => km", "a Function"),
+        ("x = 2 +/- 0.1 m\n(x == 2 m +/- 2 sigma) => km", "a Bool"),
+    ] {
+        let message = refused(program);
+        assert!(message.contains("cannot convert") && message.contains(says), "{program}: {message}");
+    }
+    let message = refused("unbound_name => km");
+    assert!(message.contains("`unbound_name` has no value"), "{message}");
+}
+
+#[test]
+fn quantities_numbers_and_their_collections_still_convert() {
+    for (program, expected) in [
+        ("[1, 2] m => cm", "[100.0 cm, 200.0 cm]"),
+        ("[[1 m, 2 m], [3 m, 4 m]] => cm", "[[100.0 cm, 200.0 cm], [300.0 cm, 400.0 cm]]"),
+        ("(0 m .. 100 m) => km", "0.0 km .. 0.1 km"),
+        ("0.5 => %", "50.0 %"),
+        ("sigma(1 +/- 0.1 m) => cm", "10.0 cm"),
+        ("10.04 mm +/- 2 sigma => cm", "1.004 cm ± 2.0σ"),
+    ] {
+        assert_eq!(run(program), expected, "{program}");
+    }
+    // a plain number is dimensionless: it converts to a ratio, not to a length
+    let message = refused("5 => km");
+    assert!(message.contains("km"), "{message}");
+}

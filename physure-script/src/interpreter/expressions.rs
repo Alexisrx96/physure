@@ -245,7 +245,13 @@ impl PhsInterpreter {
                 return Ok(l_val);
             }
             let parsed_unit = UnitParser::parse_expression(clean_target)?;
-            return self.convert_value_to_unit(l_val, &parsed_unit);
+            // a name with no value evaluates to its own text: say so, not "cannot convert a String"
+            if let (Expr::Identifier(name), PhsValue::String(text)) = (left, &l_val) {
+                if text == name && !env.contains_key(name) {
+                    return Err(PhysureError::Generic(format!("`{name}` has no value: there is nothing to convert to `{clean_target}`")));
+                }
+            }
+            return self.convert_value_to_unit(l_val, &parsed_unit, clean_target);
         }
         let r_val = self.eval_expr(right, env)?;
         self.eval_binary_op_vals(op, l_val, r_val)
@@ -737,13 +743,13 @@ impl PhsInterpreter {
         Ok(PhsValue::Quantity(converted))
     }
 
-    fn convert_value_to_unit(&self, val: PhsValue, unit: &RationalUnit) -> PhysureResult<PhsValue> {
+    fn convert_value_to_unit(&self, val: PhsValue, unit: &RationalUnit, target: &str) -> PhysureResult<PhsValue> {
         match val {
             PhsValue::Quantity(q) => Ok(PhsValue::Quantity(q.convert_to(unit)?)),
             PhsValue::Vector(vec) => {
                 let mut results = Vec::new();
                 for item in vec {
-                    results.push(self.convert_value_to_unit(item, unit)?);
+                    results.push(self.convert_value_to_unit(item, unit, target)?);
                 }
                 Ok(PhsValue::Vector(results))
             }
@@ -751,10 +757,38 @@ impl PhsInterpreter {
             // is `0 km .. 0.1 km`. Without this arm it fell to the catch-all below and came
             // back as the metres it went in as, with nothing said about the `=> km`.
             PhsValue::Range(start, end) => make_range(
-                self.convert_value_to_unit(*start, unit)?,
-                self.convert_value_to_unit(*end, unit)?,
+                self.convert_value_to_unit(*start, unit, target)?,
+                self.convert_value_to_unit(*end, unit, target)?,
             ),
-            other => Ok(other),
+            // A plain number is dimensionless, as a literal `5` is: `0.5 => %` is 50 %, `5 => km` is refused.
+            PhsValue::Number(n) => {
+                let q = Quantity::new_scalar(n, 0.0, RationalUnit::dimensionless(), None, None);
+                Ok(PhsValue::Quantity(q.convert_to(unit)?))
+            }
+            // `10.04 mm +/- 2 sigma => cm`: the target value converts, the bound in sigmas stays.
+            PhsValue::SigmaBound(q, k) => Ok(PhsValue::SigmaBound(q.convert_to(unit)?, k)),
+            PhsValue::Matrix(m) => {
+                let rows = m
+                    .data
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|q| q.convert_to(unit)).collect::<PhysureResult<Vec<_>>>())
+                    .collect::<PhysureResult<Vec<_>>>()?;
+                Ok(PhsValue::Matrix(physure_core::linalg::QuantityMatrix::new(rows)?))
+            }
+            // Everything else has no unit: `(a < b) => km` came back as `True` and `"x" => km`
+            // as `x`, with nothing said about the `=> km`.
+            other => {
+                let shown = match &other {
+                    PhsValue::Function(_) | PhsValue::Plot(_) => String::new(),
+                    value => format!(" ({value})"),
+                };
+                Err(PhysureError::Generic(format!(
+                    "cannot convert a {}{shown} to `{}`: only a quantity or a number, or a vector, matrix or range \
+                     of them, has a unit to convert",
+                    other.type_name(),
+                    target
+                )))
+            }
         }
     }
 
