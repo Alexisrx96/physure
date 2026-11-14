@@ -132,6 +132,7 @@ impl LanguageServer for Backend {
         items.extend(keyword_completions());
         items.extend(domain_completions());
         items.extend(unit_completions());
+        items.extend(constant_completions());
         items.extend(symbol_completions());
 
         Ok(Some(CompletionResponse::Array(items)))
@@ -148,6 +149,14 @@ impl LanguageServer for Backend {
 
             let locale = self.locale.read().unwrap().clone();
             if let Some(doc) = lookup_hover_doc(&word, &locale) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: doc,
+                    }),
+                    range: None,
+                }));
+            } else if let Some(doc) = constant_hover(&word) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -407,6 +416,63 @@ fn unit_completions() -> Vec<CompletionItem> {
     items
 }
 
+/// `pi` and the constants of the catalog in force: global names of PHS, read where they are used (an override or a
+/// frozen configuration changes them) and never rebound. None when the configuration in force cannot be used (the
+/// diagnostics say why).
+fn constant_completions() -> Vec<CompletionItem> {
+    let mut items = vec![CompletionItem {
+        label: "pi".to_string(),
+        kind: Some(CompletionItemKind::CONSTANT),
+        detail: Some("Constant • the number π = 3.141592653589793".to_string()),
+        documentation: Some(Documentation::String("The circle constant, also written `π`. A global name: it cannot be bound.".to_string())),
+        sort_text: Some("y_constant_pi".to_string()),
+        ..Default::default()
+    }];
+    let Ok(constants) = physure_core::units::conf::try_with_conf_registry(|registry| {
+        let mut all: Vec<(String, String, Option<String>)> = registry
+            .constants_meta
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.value.clone(), meta.description.clone()))
+            .collect();
+        all.sort();
+        all
+    }) else {
+        return items;
+    };
+    for (name, value, description) in constants {
+        let what = description.map(|d| format!("{d}. ")).unwrap_or_default();
+        items.push(CompletionItem {
+            label: name.clone(),
+            kind: Some(CompletionItemKind::CONSTANT),
+            detail: Some(format!("Constant of the catalog • {value}")),
+            documentation: Some(Documentation::String(format!(
+                "{what}`{name}` = {value}, from the catalog in force. A global name: it cannot be bound."
+            ))),
+            sort_text: Some(format!("y_constant_{name}")),
+            ..Default::default()
+        });
+    }
+    items
+}
+
+/// The hover of `pi`, `π` or a constant of the catalog in force.
+fn constant_hover(word: &str) -> Option<String> {
+    if physure_script::globals::PI_NAMES.contains(&word) {
+        return Some(format!(
+            "**Constant**: `{word}`\n\nThe number π = {}. A global name of PHS: it cannot be bound (`{word} = 3` is an error).",
+            std::f64::consts::PI
+        ));
+    }
+    let (value, description) = physure_core::units::conf::try_with_conf_registry(|registry| {
+        registry.constants_meta.get(word).map(|meta| (meta.value.clone(), meta.description.clone()))
+    })
+    .ok()??;
+    let what = description.map(|d| format!("{d}\n\n")).unwrap_or_default();
+    Some(format!(
+        "**Constant of the catalog**: `{word}` = {value}\n\n{what}Read from the catalog in force where it is used (an override or a frozen configuration changes it). A global name of PHS: it cannot be bound."
+    ))
+}
+
 /// Greek letters and mathematical symbols, by Unicode, name and LaTeX alias.
 fn symbol_completions() -> Vec<CompletionItem> {
     let mut items = Vec::new();
@@ -425,8 +491,7 @@ fn symbol_completions() -> Vec<CompletionItem> {
         ("Omega", "Ω", "Omega (-> Ω)", "Inserts Greek letter Omega (Ω)"),
         ("\\omega", "ω", "LaTeX \\omega (-> ω)", "Inserts Greek letter lowercase Omega (ω)"),
         ("\\Omega", "Ω", "LaTeX \\Omega (-> Ω)", "Inserts Greek letter capital Omega (Ω)"),
-        ("π", "π", "Pi", "Greek letter Pi (3.14159...)"),
-        ("pi", "π", "Pi (-> π)", "Inserts Greek letter Pi (π)"),
+        ("π", "π", "Pi", "Greek letter Pi: the number π (3.14159...), like `pi`"),
         ("\\pi", "π", "LaTeX \\pi (-> π)", "Inserts Greek letter Pi (π)"),
         ("θ", "θ", "Theta", "Greek letter Theta (Angle / Temperature)"),
         ("theta", "θ", "Theta (-> θ)", "Inserts Greek letter Theta (θ)"),
@@ -834,6 +899,29 @@ mod tests {
         assert!(lookup_hover_doc("W", "es").unwrap().contains("`kg·m²·s⁻³`"));
         // a keyword has one text for everybody
         assert_eq!(lookup_hover_doc("else", "es"), lookup_hover_doc("else", "en"));
+    }
+
+    #[test]
+    fn pi_and_the_catalog_constants_are_completed_and_hovered() {
+        let items = constant_completions();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for name in ["pi", "molar_gas_constant", "speed_of_light_in_vacuum", "bohr_radius"] {
+            assert!(labels.contains(&name), "{name}");
+        }
+        assert!(!labels.contains(&"e") && !labels.contains(&"c"), "only the catalog's own names");
+        let r = items.iter().find(|i| i.label == "molar_gas_constant").unwrap();
+        assert_eq!(r.kind, Some(CompletionItemKind::CONSTANT));
+        assert!(r.detail.as_deref().unwrap().contains("8.31446261815324 J*mol^-1*K^-1"), "{:?}", r.detail);
+        // `pi` is one completion, the constant (no longer also a "Greek letter" item that inserts π)
+        assert_eq!(builtin_and_symbol_labels().iter().filter(|l| **l == "pi").count(), 1);
+        let hover = constant_hover("molar_gas_constant").unwrap();
+        assert!(hover.contains("8.31446261815324 J*mol^-1*K^-1") && hover.contains("cannot be bound"), "{hover}");
+        assert!(constant_hover("π").unwrap().contains("3.141592653589793"));
+        assert_eq!(constant_hover("zz_not_a_constant"), None);
+    }
+
+    fn builtin_and_symbol_labels() -> Vec<String> {
+        constant_completions().into_iter().chain(symbol_completions()).map(|i| i.label).collect()
     }
 
     #[test]

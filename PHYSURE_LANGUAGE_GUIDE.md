@@ -93,6 +93,19 @@ use plot, plot3d, export3d from plot
 use linspace, gradient, trapz from array
 ```
 
+### 1.5 Names: variables, `pi` and the constants of the catalog
+A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is its own text.
+
+```phs
+area = pi * (2 m)^2                                   # 12.566 m^2
+rt = molar_gas_constant * 300 K => J/mol              # 2494.3 J/mol
+photon = planck_constant * speed_of_light_in_vacuum / (500 nm) => eV   # 2.48 eV
+```
+
+The constants are the `[Constants]` of the catalog in force, by their catalog names: the embedded catalog (411 CODATA values, with no uncertainties), a project's `physure.conf`, a frozen file, or the registry a binding evaluates for. An override or a frozen configuration changes them. Only the catalog's own names are constants: `e`, `c`, `k` and `R` are not (write `exp(1)`, `speed_of_light_in_vacuum`, `boltzmann_constant`, `molar_gas_constant`), and `h`, `g`, `G` are units (hour, gram, gauss). Seven names are a unit and a constant at once (`bohr_radius`, `electron_mass`, `electron_volt`, `planck_length`, `planck_mass`, `planck_temperature`, `planck_time`): the catalog gives both one value (a frozen file or a unit system where they differ is refused; a `physure.conf` where they differ loses the constant, with a message), so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) are the same length. A constant carries no uncertainty: a catalog line is `name = number unit`, and one written with `+/-` is an error when it is used.
+
+Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file.
+
 ---
 
 ## 2. 3D WebGL Surface Visualization & Mesh Export
@@ -141,7 +154,7 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 `integral(expr, var, a, b)` (after `use integral from calc`) is the definite integral of `expr` over `var` from `a` to `b`; `integral(expr, var)` is the symbolic antiderivative.
 
 - **Bounds**: a number, a quantity, `"inf"` or `"-inf"`, or a name or an expression written as text (`pi`, `"pi/2"`, `"bohr_radius"`, a variable of the program). A name that resolves to nothing is an error, never 0. A quantity bound makes `var` a quantity of that unit; the other bound must have the same dimension, or be a plain `0` or an infinity. A temperature point or a level is not a bound.
-- **Names**: the integrand sees the program's variables (and a function's parameters). A free name resolves to a variable, a unit, `pi` or a constant of the catalog; any other name is an error.
+- **Names**: the integrand sees the program's variables (and a function's parameters). A free name resolves as everywhere in PHS (section 1.5): a variable, `pi`, a constant of the catalog, a unit; any other name is an error.
 - **Result**: a quantity in (unit of `expr`) times (unit of `var`) whenever a unit or an uncertainty is involved, otherwise a number. With `v = 3 m/s`, `integral("v", "t", 0 s, 1 h)` is `10800 m`.
 - **Uncertainty** propagates, from the program's uncertain variables and from uncertain bounds, and the result stays correlated with them.
 - **Method**: the closed form `F(b) - F(a)` when the symbolic engine has an antiderivative *and* the quadrature confirms it, so a closed form that jumps across a pole is refused (`integral("x^(-2)", "x", -1, 1)` is an error, not -2). Otherwise tanh-sinh quadrature with an error estimate: accepted when two successive levels agree within a relative 1e-12 of max(|I|, the integral of |f|), from level 4 on, with at most 20000 samples per piece. An infinite end is mapped by x = c ± (1 - u)/u.

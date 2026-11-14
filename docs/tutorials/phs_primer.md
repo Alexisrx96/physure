@@ -114,6 +114,17 @@ to where it's used instead of buried earlier in the script:
 force                   = 19.62 ± 0.98 N
 ```
 
+`pi` (or `π`) and the constants of the catalog are names you can use anywhere, each with its unit:
+
+```phs
+circumference = 2 * pi * 0.5 m
+thermal_energy = boltzmann_constant * 300 K => meV
+```
+
+They are the catalog's own long names (`speed_of_light_in_vacuum`, `molar_gas_constant`; not `c` or
+`R`), read from the catalog in force, and no binding can reuse them: `pi = 3`, or `where pi = 3`,
+is an error. Section 1.5 of `PHYSURE_LANGUAGE_GUIDE.md` lists the rule in full.
+
 Every value computed so far can be interpolated straight into a string, for a one-line summary
 of the whole calculation:
 
