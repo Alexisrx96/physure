@@ -30,7 +30,7 @@ pub fn eval_domain_builtin_with_kwargs(
     env: &std::collections::HashMap<String, PhsValue>,
 ) -> PhysureResult<Option<PhsValue>> {
     match domain {
-        "calc" => calc::eval_calc_builtin_in(name, args, interpreter, env),
+        "calc" => calc::eval_calc_builtin_in(name, args, kwargs, interpreter, env),
         "plot" => plot::eval_plot_builtin_with_kwargs(name, args, kwargs, interpreter, env),
         "array" => array::eval_array_builtin(name, args, interpreter),
         _ => Ok(None),

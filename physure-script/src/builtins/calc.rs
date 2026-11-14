@@ -95,7 +95,32 @@ pub(crate) fn parse_differential_integrand(s: &str) -> Option<(String, String)> 
 /// A calc builtin that sees `interpreter.env` (the unit tests call the builtins this way).
 #[cfg(test)]
 pub(crate) fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
-    eval_calc_builtin_in(name, args, interpreter, &interpreter.env)
+    eval_calc_builtin_in(name, args, &[], interpreter, &interpreter.env)
+}
+
+/// The keyword arguments a calc builtin accepts; every other one is refused, never ignored.
+fn accepted_keywords(_name: &str) -> &'static [&'static str] {
+    &[]
+}
+
+/// An error for a keyword argument the builtin `name` does not take, or one given twice.
+fn refuse_unknown_keywords(name: &str, kwargs: &[(String, PhsValue)]) -> PhysureResult<()> {
+    let accepted = accepted_keywords(name);
+    for (i, (key, _)) in kwargs.iter().enumerate() {
+        if !accepted.contains(&key.as_str()) {
+            let takes = if accepted.is_empty() {
+                "it takes no keyword arguments: pass its arguments by position".to_string()
+            } else {
+                let names: Vec<String> = accepted.iter().map(|k| format!("`{k}`")).collect();
+                format!("its keyword arguments are {}", names.join(", "))
+            };
+            return Err(PhysureError::Generic(format!("{name}: unknown keyword argument `{key}`; {takes}")));
+        }
+        if kwargs[..i].iter().any(|(k, _)| k == key) {
+            return Err(PhysureError::Generic(format!("{name}: the keyword argument `{key}` is given twice")));
+        }
+    }
+    Ok(())
 }
 
 /// A calc builtin called where the program's variables are `env` (the scope of the call, which a statement of
@@ -103,9 +128,11 @@ pub(crate) fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &Phs
 pub(crate) fn eval_calc_builtin_in(
     name: &str,
     args: &[PhsValue],
+    kwargs: &[(String, PhsValue)],
     interpreter: &PhsInterpreter,
     env: &HashMap<String, PhsValue>,
 ) -> PhysureResult<Option<PhsValue>> {
+    refuse_unknown_keywords(name, kwargs)?;
     match name {
         "deriv" | "derivative" | "diff" => deriv(args, interpreter),
         "grad" | "gradient" => grad(args, interpreter),
