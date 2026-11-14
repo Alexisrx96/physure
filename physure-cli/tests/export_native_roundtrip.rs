@@ -11,11 +11,21 @@ fn kinetic_energy(m, v) = 0.5 * m * v^2
 export kinetic_energy as kinetic_energy
 "#;
 
+// The parameters carry their units: the shim binds a parameter without one as a plain number, and the core refuses
+// to compare a plain number with `0.0 kg` (that refusal is `REFUSED_SCRIPT`'s test).
 const CONTRACT_SCRIPT: &str = r#"
 @requires(m > 0.0 kg, "m must be positive")
-fn kinetic_energy(m, v) = 0.5 * m * v^2
+fn kinetic_energy(m: kg, v: m/s) = 0.5 * m * v^2
 
 export kinetic_energy as kinetic_energy
+"#;
+
+// `m` has no unit, so the shim binds it as a plain number and `m > 0.0 kg` is refused by the core.
+const REFUSED_SCRIPT: &str = r#"
+@requires(m > 0.0 kg, "m must be positive")
+fn mass(m) = m
+
+export mass as mass
 "#;
 
 #[test]
@@ -103,4 +113,45 @@ fn native_export_contract_violation_matches_interpreter() {
     )
     .is_err();
     assert!(interpreter_rejects, "interpreter should also reject the negative-mass call");
+}
+
+/// Before: the refused comparison panicked inside the `extern "C"` shim and aborted the calling process
+/// (`STATUS_STACK_BUFFER_OVERRUN` on Windows, "panic in a function that cannot unwind"). Now it is the shim's
+/// failure status, with the core's message as the last error, and the caller goes on.
+#[test]
+#[ignore]
+fn native_export_refused_comparison_returns_failure_instead_of_aborting() {
+    let dir = std::env::temp_dir().join("phs_export_roundtrip_refused");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let script_path = dir.join("mass.phs");
+    fs::write(&script_path, REFUSED_SCRIPT).unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_phs"))
+        .args(["export", script_path.to_str().unwrap(), "--fn", "mass", "--native", "-o"])
+        .arg(&dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let lib_ext = if cfg!(target_os = "windows") { "dll" } else if cfg!(target_os = "macos") { "dylib" } else { "so" };
+    let lib_path = dir.join(format!("mass.{}", lib_ext));
+
+    #[repr(C)]
+    struct MassResult {
+        value: f64,
+        ok: bool,
+    }
+
+    let (ok, error) = unsafe {
+        let lib = libloading::Library::new(&lib_path).unwrap();
+        let func: libloading::Symbol<unsafe extern "C" fn(f64) -> MassResult> = lib.get(b"mass").unwrap();
+        let last_error: libloading::Symbol<unsafe extern "C" fn() -> *const std::os::raw::c_char> =
+            lib.get(b"mass_last_error").unwrap();
+        let result = func(2.0);
+        let error = std::ffi::CStr::from_ptr(last_error()).to_string_lossy().into_owned();
+        (result.ok, error)
+    };
+    assert!(!ok, "a refused comparison is a failure");
+    assert!(error.contains("cannot compare"), "{error}");
 }
