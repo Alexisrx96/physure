@@ -1206,9 +1206,12 @@ fn register_aliases(
 }
 
 /// The problems the lenient reading finds in the embedded catalog: none, or the catalog has a line it cannot read.
+/// `[Settings]` and `[Compatibility]` are collected and checked, not applied: the tests that call it run in parallel
+/// with tests that set a process-wide setting and read it back.
 #[cfg(test)]
 pub(crate) fn embedded_catalog_problems() -> Vec<String> {
-    read_leniently(DEFAULT_PHYSURE_CONF, &mut UnitRegistry::new(), &mut HashMap::new(), true)
+    let mut collected = ProcessSettings::default();
+    read_leniently_collected(DEFAULT_PHYSURE_CONF, &mut UnitRegistry::new(), &mut HashMap::new(), &mut collected, true)
 }
 
 /// The embedded catalog, parsed once per process.
@@ -1538,6 +1541,20 @@ mod tests {
     fn the_embedded_catalog_has_no_line_the_lenient_reading_would_drop() {
         let problems = embedded_catalog_problems();
         assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    /// Listing the embedded catalog's problems changes no process-wide setting. It used to read the catalog the way
+    /// the runtime does, applying its `[Settings]` as it went, without `TEST_LOCK`: run in parallel with
+    /// `parses_max_pipeline_steps_from_settings_section` it could put `max_pipeline_steps` back to the catalog's
+    /// 1000 between that test's write of 42 and its read (an intermittent failure seen on this branch).
+    #[test]
+    fn listing_the_embedded_catalog_problems_changes_no_setting() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let original = crate::settings::set_max_pipeline_steps(42);
+        let _ = embedded_catalog_problems();
+        let after = crate::settings::set_max_pipeline_steps(original);
+        assert_eq!(after, 42);
     }
 
     /// The problems of the lenient reading of `text` over the embedded catalog.
