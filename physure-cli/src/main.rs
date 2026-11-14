@@ -533,7 +533,7 @@ fn generate_language_docs_md() -> String {
     md.push_str("| other text, `if s` with `s = \"on\"` | a String (\"on\"): text is not a condition; compare it, e.g. `s == \"on\"` | `if s == \"on\"` |\n");
     md.push_str("| a name with no value, `while true` | `true` has no value; the Bool literals are True and False | `while True` |\n");
     md.push_str("| a vector, a range, a function, None, a sigma bound, an equation, a matrix, a plot | a Vector: a Vector is not a condition (and so on) | the comparison that is meant |\n\n");
-    md.push_str("A number is not a condition because \"zero is false\" is a convention the reader cannot see, and the zero of a quantity depends on its unit (above).\n\n");
+    md.push_str("A number is not a condition because \"zero is false\" is a convention the reader cannot see, and the zero of a quantity depends on its unit (above). `phs check` reports the same error without running the program wherever it knows the type of the condition (a literal, a variable assigned one, a parameter with a unit, a name with no value); where it does not, the error comes when the line runs.\n\n");
 
     md.push_str("#### Operator precedence\n\n");
     md.push_str("Tightest first; the operators of one row bind equally and, where they repeat, from left to right.\n\n");

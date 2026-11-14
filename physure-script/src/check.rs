@@ -46,7 +46,7 @@ pub struct Diagnostic {
     pub line: usize,
     pub severity: Severity,
     /// A short stable name: `dimension-mismatch`, `unknown-unit`, `unknown-name`, `bad-argument`,
-    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`.
+    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`, `not-a-bool`.
     pub code: &'static str,
     pub message: String,
 }
@@ -156,6 +156,10 @@ enum Ty {
     /// A number or a quantity, with its dimension.
     Qty(Dim),
     Bool,
+    /// Text, with its content when it was written as a literal.
+    Text(Option<String>),
+    /// A vector literal `[...]` without a unit.
+    Vector,
     /// A bare word that is not bound, not imported and not a unit: the interpreter reads it as text, which
     /// fails the moment it meets a quantity.
     Symbol(String),
@@ -167,6 +171,8 @@ impl Ty {
             Ty::Unknown => "?".to_string(),
             Ty::Qty(dim) => format!("{}{}{}", dim.text(), if dim.point { "@" } else { "" }, if dim.level { "~" } else { "" }),
             Ty::Bool => "bool".to_string(),
+            Ty::Text(_) => "text".to_string(),
+            Ty::Vector => "vector".to_string(),
             Ty::Symbol(name) => format!("sym:{name}"),
         }
     }
@@ -374,7 +380,8 @@ impl<'a> Checker<'a> {
             }
             Statement::Return(e) => Some(self.expr(e, env, depth)),
             Statement::GuardReturn { cond, value } => {
-                self.expr(cond, env, depth);
+                let ty = self.expr(cond, env, depth);
+                self.condition(&ty, "the condition of `if ... then return`");
                 Some(self.expr(value, env, depth))
             }
             Statement::While { cond, body, body_lines } => {
@@ -396,7 +403,8 @@ impl<'a> Checker<'a> {
     }
 
     fn while_loop(&mut self, cond: &Expr, body: &[Statement], body_lines: &[usize], env: &mut Env, depth: usize) {
-        self.expr(cond, env, depth);
+        let ty = self.expr(cond, env, depth);
+        self.condition(&ty, "the condition of `while`");
         let mut inner = env.clone();
         self.block(body, body_lines, &mut inner, depth);
         // the body may or may not have run: what it assigned is no longer known
@@ -431,9 +439,57 @@ impl<'a> Checker<'a> {
             body_env.insert(name.clone(), ty.clone());
         }
         let outer_line = self.line;
+        // `@requires` sees the parameters, `@ensures` also `result`; both run where the function is called, and
+        // are reported at the line of the definition (or of the call, for a body checked for a call's dimensions)
+        let contracts: Vec<(&str, &Expr)> = func
+            .node
+            .decorators
+            .iter()
+            .filter(|d| d.name == "requires" || d.name == "ensures")
+            .filter_map(|d| d.args.first().map(|cond| (d.name.as_str(), cond)))
+            .collect();
+        for (name, cond) in contracts.iter().filter(|(name, _)| *name == "requires") {
+            let ty = self.expr(cond, &body_env, depth);
+            self.condition(&ty, &format!("the condition of `@{name}`"));
+        }
         let result = self.block(&func.node.body_stmts, &func.node.body_lines, &mut body_env, depth);
         self.line = outer_line;
+        if contracts.iter().any(|(name, _)| *name == "ensures") {
+            let mut result_env = body_env.clone();
+            result_env.insert("result".to_string(), result.clone());
+            for (name, cond) in contracts.iter().filter(|(name, _)| *name == "ensures") {
+                let ty = self.expr(cond, &result_env, depth);
+                self.condition(&ty, &format!("the condition of `@{name}`"));
+            }
+        }
         result
+    }
+
+    /// A condition (of `if`, `? :`, `while`, a guard, a contract, and the operands of `and`, `or`, `not`) whose type
+    /// is known and is not a Bool is the interpreter's type error (`helpers::not_a_bool`), in the same words. An
+    /// unknown type says nothing.
+    fn condition(&mut self, ty: &Ty, context: &str) {
+        use crate::interpreter::helpers::{not_a_bool_statically, KnownCondition};
+        let known = match ty {
+            Ty::Unknown | Ty::Bool => return,
+            Ty::Qty(dim) if dim.is_ratio() && !dim.point => KnownCondition::Number,
+            Ty::Qty(dim) => {
+                let unit = if dim.level || dim.point || dim.exps.is_empty() {
+                    None
+                } else {
+                    let dimension: Vec<(String, (i64, i64))> =
+                        dim.exps.iter().map(|(symbol, power)| (symbol.clone(), (*power.numer(), *power.denom()))).collect();
+                    self.registry.unit_of_dimension(&dimension).ok().map(|unit| unit.__repr__())
+                };
+                let described = if dim.level || dim.point { dim.described() } else { format!("of dimension {}", dim.text()) };
+                KnownCondition::Quantity { described, unit }
+            }
+            Ty::Text(text) => KnownCondition::Text(text.as_deref()),
+            Ty::Vector => KnownCondition::Vector,
+            Ty::Symbol(name) => KnownCondition::Unbound(name),
+        };
+        let message = not_a_bool_statically(context, known);
+        self.report(Severity::Error, "not-a-bool", message);
     }
 
     // ---- expressions
@@ -442,7 +498,7 @@ impl<'a> Checker<'a> {
         match expr {
             Expr::Quantity(node) => self.quantity(node),
             Expr::Bool(_) => Ty::Bool,
-            Expr::Str(_) => Ty::Unknown,
+            Expr::Str(text) => Ty::Text(Some(text.clone())),
             Expr::Identifier(name) => self.identifier(name, env),
             Expr::BinaryOp { op, left, right } => self.binary(*op, left, right, env, depth),
             Expr::FunctionCall { name, args, kwargs } => self.call(name, args, kwargs, env, depth),
@@ -509,6 +565,20 @@ impl<'a> Checker<'a> {
                 return from;
             }
             let Some(target) = self.unit_dim(clean) else { return Ty::Unknown };
+            // a Bool or text has no unit to convert: the interpreter refuses it (`convert_value_to_unit`)
+            let no_unit = match &from {
+                Ty::Bool => Some("a Bool"),
+                Ty::Text(_) => Some("a String"),
+                _ => None,
+            };
+            if let Some(kind) = no_unit {
+                self.report(
+                    Severity::Error,
+                    "bad-argument",
+                    format!("cannot convert {kind} to `{clean}`: only a quantity or a number, or a vector, matrix or range of them, has a unit to convert"),
+                );
+                return Ty::Unknown;
+            }
             // a name that is not a variable is text, and the interpreter hands text back unconverted
             if let Ty::Qty(dim) = &from {
                 let angle_only = physure_core::units::angle_mode::angle_mode()
@@ -668,6 +738,10 @@ impl<'a> Checker<'a> {
             }
         }
         let tys: Vec<Ty> = args.iter().map(|a| self.expr(a, env, depth)).collect();
+        // a vector literal (`[1, 2]` is the call `vector(1, 2)` of the parser)
+        if name == "vector" && kwargs.is_empty() && !env.contains_key(name) && !self.assigned.contains(name) && !self.funcs.contains_key(name) {
+            return Ty::Vector;
+        }
         for (_, value) in kwargs {
             self.expr(value, env, depth);
         }
@@ -777,11 +851,31 @@ impl<'a> Checker<'a> {
             "op_<" | "op_>" | "op_<=" | "op_>=" | "op_==" | "op_!=" | "op_\u{2260}" | "op_\u{2264}" | "op_\u{2265}" | "op_\u{2248}" | "op_approx" => {
                 self.comparison(args)
             }
-            "op_and" | "op_or" | "op_not" => Ty::Bool,
-            "ternary" | "if_then_else" => match args {
-                [_, then, otherwise] if then == otherwise => then.clone(),
-                _ => Ty::Unknown,
-            },
+            "op_and" | "op_or" => {
+                let word = if name == "op_and" { "and" } else { "or" };
+                if let Some(left) = args.first() {
+                    self.condition(left, &format!("the left side of `{word}`"));
+                }
+                if let Some(right) = args.get(1) {
+                    self.condition(right, &format!("the right side of `{word}`"));
+                }
+                Ty::Bool
+            }
+            "op_not" => {
+                if let Some(operand) = args.first() {
+                    self.condition(operand, "`not`");
+                }
+                Ty::Bool
+            }
+            "ternary" | "if_then_else" => {
+                if let Some(cond) = args.first() {
+                    self.condition(cond, if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" });
+                }
+                match args {
+                    [_, then, otherwise] if then == otherwise => then.clone(),
+                    _ => Ty::Unknown,
+                }
+            }
             _ => Ty::Unknown,
         }
     }
