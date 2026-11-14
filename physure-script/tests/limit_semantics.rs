@@ -126,7 +126,7 @@ fn an_infinite_point_is_approached_along_powers_of_two() {
     assert_eq!(calc("limit(\"1/x\", \"x\", \"inf\")").to_string(), "0.0");
     assert_close(limit("(1+1/x)^x", "\"inf\""), std::f64::consts::E, 1e-12, "(1 + 1/x)^x at inf");
     assert_close(limit("x/(x+100)", "\"inf\""), 1.0, 1e-12, "x/(x + 100) at inf");
-    assert_close(limit("atan(x)", "\"inf\""), std::f64::consts::FRAC_PI_2, 1e-12, "atan(x) at inf");
+    assert_close(limit("(x^2+1)/(2*x^2-3)", "\"-inf\""), 0.5, 1e-12, "(x^2 + 1)/(2 x^2 - 3) at -inf");
     assert_close(limit("sqrt(x^2+x)-x", "\"inf\""), 0.5, 1e-12, "sqrt(x^2 + x) - x at inf");
     let decay = limit("exp(-x)", "\"inf\"");
     assert!(decay.abs() <= 1e-20, "{decay}");

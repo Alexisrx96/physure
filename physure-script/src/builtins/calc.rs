@@ -115,7 +115,7 @@ pub(crate) fn eval_calc_builtin_in(
         "series" | "taylor" => series(args, interpreter),
         "simplify" | "expand" => simplify(args, interpreter),
         "integral" | "integrate" => integral(args, interpreter, env),
-        "limit" | "lim" => limit(args, interpreter),
+        "limit" | "lim" => limit(args, interpreter, env),
         "solve" => solve(args, interpreter),
         "substitute" | "sub" => substitute(args),
         "dsolve" => dsolve(args, interpreter),
@@ -177,20 +177,6 @@ fn string_arg<'a>(args: &'a [PhsValue], index: usize, message: &str) -> PhysureR
 fn parse_inlined(text: &str, interpreter: &PhsInterpreter) -> PhysureResult<crate::symbolic::Node> {
     let inlined = preprocess_symbolic_expression(text, interpreter);
     crate::symbolic::SymbolicParser::parse_str(&inlined)
-}
-
-/// A point or a bound: a number, a quantity, or a string such as `"inf"`; anything else reads as 0.
-fn bound_value(v: &PhsValue) -> f64 {
-    match v {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        PhsValue::String(s) => match s.trim() {
-            "inf" | "+inf" | "infinity" | "oo" | "∞" => f64::INFINITY,
-            "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
-            _ => 0.0,
-        },
-        _ => 0.0,
-    }
 }
 
 /// What `deriv` was asked: the expression, the variable, the order, and the dependent variable when the
@@ -374,50 +360,13 @@ fn integral(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<Strin
     Ok(Some(PhsValue::String(int_node.to_string())))
 }
 
-fn limit(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn limit(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 3 {
         return Err(generic_error("limit expects (expression_string, variable_string, target_point)"));
     }
     let expr_str = string_arg(args, 0, "limit expects expression string")?;
-    let var_str = string_arg(args, 1, "limit expects variable string")?;
-    let point_val = bound_value(&args[2]);
-
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
-    let probed = probe_limit(&inlined, var_str, point_val, interpreter);
-    Ok(Some(probed.unwrap_or(PhsValue::Number(0.0))))
-}
-
-/// The expression evaluated next to the point (or very far out, for an infinite one): a value that has grown
-/// huge is an infinity and one that has shrunk to nothing is 0. `None` when it cannot be evaluated there.
-fn probe_limit(inlined: &str, var_str: &str, point_val: f64, interpreter: &PhsInterpreter) -> Option<PhsValue> {
-    let program = crate::parser::parse_phs(inlined).ok()?;
-    let expr = match program.statements.first()? {
-        crate::ast::Statement::Expr(e) => e.clone(),
-        crate::ast::Statement::Assignment(node) => node.value.clone(),
-        _ => return Some(PhsValue::Number(0.0)),
-    };
-    let test_val = if point_val.is_infinite() {
-        if point_val.is_sign_positive() { 1e7 } else { -1e7 }
-    } else {
-        point_val + 1e-8
-    };
-    let mut local_env = interpreter.env.clone();
-    let q_val = physure_core::Quantity::new_scalar(test_val, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None);
-    local_env.insert(var_str.to_string(), PhsValue::Quantity(q_val));
-    let val = interpreter.eval_expr(&expr, &local_env).ok()?;
-    let num = match &val {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        _ => 0.0,
-    };
-    if num.abs() < 1e-5 {
-        return Some(PhsValue::Number(0.0));
-    }
-    if num.abs() > 1e6 {
-        let sign = if num.is_sign_positive() { f64::INFINITY } else { f64::NEG_INFINITY };
-        return Some(PhsValue::Number(sign));
-    }
-    Some(val)
+    let var_str = clean_diff_var(string_arg(args, 1, "limit expects variable string")?);
+    super::limit::limit(expr_str, var_str, &args[2], interpreter, env).map(Some)
 }
 
 fn solve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {

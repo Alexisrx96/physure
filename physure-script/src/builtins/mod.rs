@@ -3,6 +3,7 @@ pub mod dof;
 pub mod array;
 pub mod calc;
 mod definite_integral;
+mod limit;
 mod quadrature;
 pub mod plot;
 pub use core::eval_core_builtin;

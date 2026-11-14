@@ -59,37 +59,39 @@ pub(crate) fn catalog_constant(name: &str) -> PhysureResult<Option<Quantity>> {
 
 /// Binds in `env` the free names of `expr` that the interpreter would not resolve by itself: `pi` and the
 /// constants of the catalog. A name that is a variable of `env`, one of `bound` (the variable of integration), or a
-/// unit is left to the interpreter. Any other free name is an error naming it and `role` (what `expr` is).
+/// unit is left to the interpreter. Any other free name is an error of `builtin` naming it and `role` (what `expr`
+/// is).
 pub(crate) fn bind_free_names(
     expr: &Expr,
     env: &mut HashMap<String, PhsValue>,
     bound: &mut Vec<String>,
     role: &str,
+    builtin: &str,
 ) -> PhysureResult<()> {
     match expr {
-        Expr::Identifier(name) => bind_name(name, env, bound, role),
+        Expr::Identifier(name) => bind_name(name, env, bound, role, builtin),
         Expr::BinaryOp { left, right, .. } => {
-            bind_free_names(left, env, bound, role)?;
-            bind_free_names(right, env, bound, role)
+            bind_free_names(left, env, bound, role, builtin)?;
+            bind_free_names(right, env, bound, role, builtin)
         }
         Expr::FunctionCall { name, args, kwargs } => {
             // `let(name, value, body)` binds `name` in `body`
             if let ("let", [Expr::Identifier(local), value, body]) = (name.as_str(), args.as_slice()) {
-                bind_free_names(value, env, bound, role)?;
+                bind_free_names(value, env, bound, role, builtin)?;
                 bound.push(local.clone());
-                let result = bind_free_names(body, env, bound, role);
+                let result = bind_free_names(body, env, bound, role, builtin);
                 bound.pop();
                 return result;
             }
             for arg in args.iter().chain(kwargs.iter().map(|(_, e)| e)) {
-                bind_free_names(arg, env, bound, role)?;
+                bind_free_names(arg, env, bound, role, builtin)?;
             }
             Ok(())
         }
         Expr::ForExpr { var, iterable, body } => {
-            bind_free_names(iterable, env, bound, role)?;
+            bind_free_names(iterable, env, bound, role, builtin)?;
             bound.push(var.clone());
-            let result = bind_free_names(body, env, bound, role);
+            let result = bind_free_names(body, env, bound, role, builtin);
             bound.pop();
             result
         }
@@ -97,7 +99,7 @@ pub(crate) fn bind_free_names(
     }
 }
 
-fn bind_name(name: &str, env: &mut HashMap<String, PhsValue>, bound: &[String], role: &str) -> PhysureResult<()> {
+fn bind_name(name: &str, env: &mut HashMap<String, PhsValue>, bound: &[String], role: &str, builtin: &str) -> PhysureResult<()> {
     let template = name.starts_with('`') || (name.contains('{') && name.contains('}'));
     if template || bound.iter().any(|b| b == name) || env.contains_key(name) || crate::parser::is_known_unit_symbol(name) {
         return Ok(());
@@ -110,8 +112,9 @@ fn bind_name(name: &str, env: &mut HashMap<String, PhsValue>, bound: &[String], 
         env.insert(name.to_string(), PhsValue::Quantity(constant));
         return Ok(());
     }
-    Err(refusal(format!(
-        "the {role} uses '{name}', which is neither a variable of the program, a unit, pi nor a constant of the catalog"
+    Err(PhysureError::Generic(format!(
+        "{builtin}: the {role} uses '{name}', which is neither a variable of the program, a unit, pi nor a constant of \
+         the catalog"
     )))
 }
 
@@ -134,7 +137,7 @@ enum End {
     Infinite(f64),
 }
 
-fn is_infinity_text(s: &str) -> Option<f64> {
+pub(crate) fn is_infinity_text(s: &str) -> Option<f64> {
     match s.trim() {
         "inf" | "+inf" | "infinity" | "+infinity" | "oo" | "+oo" | "∞" | "+∞" => Some(f64::INFINITY),
         "-inf" | "-infinity" | "-oo" | "-∞" => Some(f64::NEG_INFINITY),
@@ -156,7 +159,7 @@ fn read_end(value: &PhsValue, interpreter: &PhsInterpreter, scope: &HashMap<Stri
             }
             let expr = parse_expression(s, "bound")?;
             let mut env = scope.clone();
-            bind_free_names(&expr, &mut env, &mut Vec::new(), "bound")?;
+            bind_free_names(&expr, &mut env, &mut Vec::new(), "bound", "integral")?;
             let resolved = interpreter.eval_expr(&expr, &env)?;
             read_end(&resolved, interpreter, scope, depth + 1)
         }
@@ -425,7 +428,7 @@ pub(crate) fn definite_integral(
     let inlined = preprocess_symbolic_expression(expr_str, interpreter);
     let expr = parse_expression(&inlined, "integrand")?;
     let mut env = scope.clone();
-    bind_free_names(&expr, &mut env, &mut vec![var.to_string()], "integrand")?;
+    bind_free_names(&expr, &mut env, &mut vec![var.to_string()], "integrand", "integral")?;
 
     let (lower, upper) = (read_end(lower, interpreter, scope, 0)?, read_end(upper, interpreter, scope, 0)?);
     let (var_unit, lower, upper) = variable_unit(lower, upper)?;
