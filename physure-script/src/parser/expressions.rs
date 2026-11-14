@@ -85,8 +85,9 @@ pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
         Rule::for_expr => parse_for_expr(first)?,
         Rule::or_expr => parse_or_expr(first)?,
         Rule::base_expr => parse_base_expr(first)?,
+        Rule::comp_expr => parse_comp_expr(first)?,
         Rule::conv_expr => parse_conv_expr(first)?,
-        _ => parse_comp_expr(first)?,
+        _ => parse_add_expr(first)?,
     };
     // A ternary tail and a `where` clause can both follow, in that order.
     for tail in inner {
@@ -122,7 +123,7 @@ pub(crate) fn parse_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Exp
 fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
-    let mut left = parse_conv_expr(first)?;
+    let mut left = parse_comp_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
         // The spec closes the expression — `a + b: .2f` formats the sum, not `b`.
@@ -140,7 +141,7 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         }
         // A missing endpoint is a grammar error, so `inner.next()` is the endpoint the
         // grammar already required rather than something that might not be there.
-        let right = parse_conv_expr(inner.next().unwrap())?;
+        let right = parse_comp_expr(inner.next().unwrap())?;
         left = Expr::BinaryOp {
             op: BinaryOp::Range,
             left: Box::new(left),
@@ -151,10 +152,10 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     bounded(left)
 }
 
-fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+/// `term ((+|-) term)*`, left-associative.
+fn parse_add_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
-    let first = inner.next().unwrap();
-    let mut left = parse_comp_expr(first)?;
+    let mut left = parse_term(inner.next().unwrap())?;
     let mut operators = 0;
 
     while let Some(op_pair) = inner.next() {
@@ -162,11 +163,32 @@ fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         let op = match op_pair.as_rule() {
             Rule::op_add => BinaryOp::Add,
             Rule::op_sub => BinaryOp::Sub,
-            Rule::op_convert => BinaryOp::Convert,
-            _ => return Err(PhysureError::Generic(format!("Unexpected op in conv_expr: {:?}", op_pair.as_rule()))),
+            other => return Err(PhysureError::Generic(format!("Unexpected op in add_expr: {other:?}"))),
         };
+        let right = parse_term(inner.next().unwrap())?;
+        left = Expr::BinaryOp { op, left: Box::new(left), right: Box::new(right) };
+    }
+
+    bounded_chain(left, operators)
+}
+
+/// `add_expr (=> unit)*`, left-associative: `a + b => km` converts the sum. A `+`/`-` after the last unit
+/// (`add_after_convert`) is refused with the parentheses to write.
+fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
+    let start = pair.as_span().start();
+    let mut inner = pair.into_inner();
+    let first = inner.next().unwrap();
+    let mut left = parse_add_expr(first)?;
+    let mut operators = 0;
+    let mut converted = String::new();
+
+    while let Some(op_pair) = inner.next() {
+        if op_pair.as_rule() == Rule::add_after_convert {
+            return Err(sum_after_conversion(&op_pair, start, &converted));
+        }
+        count_operator(&mut operators)?;
         let right_pair = inner.next().unwrap();
-        // `=>`'s target is a `unit_expr`, not a `comp_expr` (see phs.pest's `conv_expr`) --
+        // `=>`'s target is a `unit_expr`, not an expression (see phs.pest's `conv_expr`) --
         // every consumer of this side (the interpreter's `BinaryOp::Convert` arm, every
         // codegen target) reads it back through `expr_to_unit_string`, which flattens an
         // `Expr` to unit-chain text and only special-cases `Identifier`/`Quantity`/`BinaryOp`.
@@ -174,49 +196,52 @@ fn parse_conv_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
         // produce for a real unit chain anyway, and it sidesteps rebuilding `unit_expr`'s
         // internal `*`/`/` structure into an equivalent `Expr` tree for no benefit -- nothing
         // ever inspects this side's shape, only its flattened text.
-        let right = if op == BinaryOp::Convert {
-            Expr::Identifier(right_pair.as_str().trim().to_string())
-        } else {
-            parse_comp_expr(right_pair)?
-        };
+        converted = right_pair.as_str().trim().to_string();
         left = Expr::BinaryOp {
-            op,
+            op: BinaryOp::Convert,
             left: Box::new(left),
-            right: Box::new(right),
+            right: Box::new(Expr::Identifier(converted.clone())),
         };
     }
 
     bounded_chain(left, operators)
 }
 
+/// The error for `x => km - y`: the target of `=>` is a unit, so the `-` has no reading, and the one it had before
+/// the order was standard (`(x => km) - y`) is not what the order says. The message writes the parentheses.
+fn sum_after_conversion(tail: &pest::iterators::Pair<Rule>, start: usize, unit: &str) -> PhysureError {
+    let input = tail.get_input();
+    let converted = input[start..tail.as_span().start()].trim_end();
+    let rest = tail.as_str().trim();
+    let op = &rest[..1];
+    let operand = rest[1..].trim_start();
+    let (line, col) = tail.line_col();
+    PhysureError::Generic(format!(
+        "Parse error:  --> {line}:{col}\nafter `=> {unit}`, a `{op}` needs parentheses: write `({converted}) {op} {operand}` \
+         (the target of `=>` is a unit, and arithmetic binds tighter than the conversion)"
+    ))
+}
+
+/// `conv_expr (op conv_expr)?`: one comparison. A further comparison (`comparison_chain`) is refused.
 fn parse_comp_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut inner = pair.into_inner();
     let first = inner.next().unwrap();
-    let mut left = parse_term(first)?;
-    let mut operators = 0;
-    
-    while let Some(op_pair) = inner.next() {
-        count_operator(&mut operators)?;
-        if op_pair.as_rule() == Rule::op_compare {
-            let right_pair = inner.next().unwrap();
-            let right = parse_term(right_pair)?;
-            let cmp_op = op_pair.as_str().to_string();
-            left = Expr::FunctionCall {
-                name: format!("op_{}", cmp_op),
-                args: vec![left, right],
-                kwargs: Vec::new(),
-            };
-        } else {
-            let right = parse_term(op_pair)?;
-            left = Expr::BinaryOp {
-                op: BinaryOp::Mul,
-                left: Box::new(left),
-                right: Box::new(right),
-            };
-        }
+    let left = parse_conv_expr(first)?;
+    let Some(op_pair) = inner.next() else { return Ok(left) };
+    let right = parse_conv_expr(inner.next().unwrap())?;
+    if let Some(chain) = inner.next() {
+        let (line, col) = chain.line_col();
+        return Err(PhysureError::Generic(format!(
+            "Parse error:  --> {line}:{col}\na comparison chain has no meaning here: write `a < b and b < c` \
+             (`{}` compares the result of the comparison before it)",
+            chain.as_str().trim()
+        )));
     }
-    
-    bounded_chain(left, operators)
+    bounded(Expr::FunctionCall {
+        name: format!("op_{}", op_pair.as_str()),
+        args: vec![left, right],
+        kwargs: Vec::new(),
+    })
 }
 
 fn parse_bool_lit(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
@@ -406,6 +431,7 @@ fn parse_primary_pair(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> 
         Rule::base_expr => parse_base_expr(pair),
         Rule::conv_expr => parse_conv_expr(pair),
         Rule::comp_expr => parse_comp_expr(pair),
+        Rule::add_expr => parse_add_expr(pair),
         other => Err(PhysureError::Generic(format!("Unexpected rule in factor: {:?}", other))),
     }
 }

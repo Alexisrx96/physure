@@ -67,14 +67,22 @@ fn products_quotients_and_implicit_products_are_chains_too() {
 }
 
 #[test]
-fn comparisons_and_conversions_are_chains_too() {
-    for op in [" < 2", " => m"] {
-        let first = if op.contains("=>") { "1 m" } else { "1" };
-        parse_check_drop(chain(first, op, AT_LIMIT)).unwrap();
-        let error = parse_check_drop(chain(first, op, AT_LIMIT + 1)).unwrap_err();
-        assert!(too_deep(&error), "{op}: {error}");
-        let error = parse_check_drop(chain(first, op, 100_000)).unwrap_err();
-        assert!(too_deep(&error), "{op}: {}", &error[..error.len().min(300)]);
+fn conversions_are_chains_too() {
+    parse_check_drop(chain("1 m", " => m", AT_LIMIT)).unwrap();
+    let error = parse_check_drop(chain("1 m", " => m", AT_LIMIT + 1)).unwrap_err();
+    assert!(too_deep(&error), "{error}");
+    let error = parse_check_drop(chain("1 m", " => m", 100_000)).unwrap_err();
+    assert!(too_deep(&error), "{}", &error[..error.len().min(300)]);
+}
+
+/// A chain of comparisons is not an expression at all (`a < b < c` is a parse error, see `tests/precedence.rs`), at
+/// any length, and the grammar reads the chain by repetition, not recursion: no stack is spent per comparison.
+#[test]
+fn a_chain_of_comparisons_is_refused_at_any_length() {
+    parse_check_drop(chain("1", " < 2", 1)).unwrap();
+    for ops in [2, AT_LIMIT + 1, 100_000] {
+        let error = parse_check_drop(chain("1", " < 2", ops)).unwrap_err();
+        assert!(error.contains("a comparison chain has no meaning here"), "{ops}: {}", &error[..error.len().min(300)]);
     }
 }
 

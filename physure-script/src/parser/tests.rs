@@ -584,7 +584,7 @@ use super::*;
             "1 m => km # a comment\n2",
             "1 m => km // a comment\n2",
             "a = 1; b = 2; a + b",
-            "1 m => km -2",
+            "(1 m => km) -2",
             "fn f(x) = x * 2; f(3)",
             "fn f(x) =\n  a = x\n  a\nf(2)",
             "f(x) = x => km\nf(1 m)",

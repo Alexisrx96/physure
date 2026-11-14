@@ -120,19 +120,36 @@ _is_implicit_mul  = _{ _no_nl ~ !op_sub ~ !(WHITESPACE* ~ _is_delim) }
 _is_mul_div       = _{ &("*" | "/") }
 term              = { factor ~ ((_is_mul_div ~ (op_mul | op_div) ~ factor) | (_is_implicit_mul ~ factor))* }
 
-_is_compare = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
-_is_format  = _{ &(":" ~ format_spec) }
-comp_expr   = { term ~ (_is_compare ~ op_compare ~ term)* }
+// The standard order, tightest first: `^` and unary minus (`factor`), `*` `/` and implicit
+// multiplication (`term`), `+` `-` (`add_expr`), `=>` (`conv_expr`), comparison (`comp_expr`),
+// then `..` and the format spec (`base_expr`), `not`, `and`, `or`, ternary, `where`. So
+// `0.1 + 0.2 == 0.3` is `(0.1 + 0.2) == 0.3` and `x => km < 5 km` converts, then compares.
+_is_add_sub = _{ &("+" | "-") }
+add_expr    = { term ~ (_is_add_sub ~ (op_add | op_sub) ~ term)* }
 
 // `=>`'s right side is a unit, not an expression -- `unit_expr` already accepts `°`/`%`/`$`
 // (`_unit_char`, used for a quantity literal's own unit suffix and for parameter unit
 // annotations) where `identifier`'s `LETTER`-only alphabet cannot. The interpreter and every
 // codegen target only ever read this side through `expr_to_unit_string`, which turns any
-// `Expr` back into unit-chain text, so nothing downstream cares that this side is no longer
-// built out of `comp_expr`/`identifier` nodes.
-_is_add_sub = _{ &("+" | "-") }
-_is_convert = _{ &"=>" }
-conv_expr   = { comp_expr ~ ((_is_add_sub ~ (op_add | op_sub) ~ comp_expr) | (_is_convert ~ op_convert ~ unit_expr))* }
+// `Expr` back into unit-chain text, so nothing downstream cares that this side is not built
+// out of expression nodes.
+//
+// A `+` or `-` after the unit has no reading: the unit cannot take it (`x => km - 5 m` is not
+// `x => (km - 5 m)`), and `(x => km) - 5 m` is what the order above does *not* say. Before the
+// order was standard it was read that way; now `add_after_convert` takes the rest of the sum
+// so the parser can refuse it with the parentheses to write, instead of the statement ending
+// at the unit and the rest becoming a statement of its own. `+/-` is an uncertainty, not a sum.
+_is_convert       = _{ &"=>" }
+add_after_convert = { !uncertainty_op ~ (op_add | op_sub) ~ conv_expr }
+conv_expr         = { add_expr ~ ((_is_convert ~ op_convert ~ unit_expr)+ ~ (_is_add_sub ~ add_after_convert)?)? }
+
+// One comparison per expression. `a < b < c` read left to right compares a Bool with `c`
+// (`True == False == False` was True); it has no meaning here, so `comparison_chain` takes the
+// rest of the chain and the parser refuses it with the `and` to write.
+_is_compare      = _{ &("==" | "!=" | ">=" | "<=" | ">" | "<" | "≈") }
+_is_format       = _{ &(":" ~ format_spec) }
+comparison_chain = { (op_compare ~ conv_expr)+ }
+comp_expr        = { conv_expr ~ (_is_compare ~ op_compare ~ conv_expr ~ (_is_compare ~ comparison_chain)?)? }
 
 // `..` binds looser than everything else, so each endpoint is a whole expression of its
 // own: `0 m .. 100 m => km` converts the endpoint that was written next to `=>` and leaves
@@ -148,7 +165,7 @@ conv_expr   = { comp_expr ~ ((_is_add_sub ~ (op_add | op_sub) ~ comp_expr) | (_i
 // `0.1 + 0.2: base` a parse error and — worse — printed `25 m/s => km/h: base` as 25 m/s,
 // formatting the target and dropping the conversion without a word.
 _is_range   = _{ &".." }
-base_expr   = { conv_expr ~ (_is_range ~ op_range ~ conv_expr)? ~ (_is_format ~ op_format)? }
+base_expr   = { comp_expr ~ (_is_range ~ op_range ~ comp_expr)? ~ (_is_format ~ op_format)? }
 
 _not_kw  = @{ "not" ~ !(ASCII_ALPHANUMERIC | "_") }
 _and_kw  = @{ "and" ~ !(ASCII_ALPHANUMERIC | "_") }

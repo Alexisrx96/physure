@@ -3,8 +3,9 @@
 //! sides), the limit at an infinite point, the divergences it reports, and what it refuses.
 //!
 //! Every expected value is a closed form written here, never a copy of the engine's output. Where f64 cannot reach
-//! 1e-12 the bound is the measured accuracy of the method, said at the assertion. Sums are parenthesised wherever
-//! they meet a comparison (`op_compare` binds tighter than `+`, audit B26).
+//! 1e-12 the bound is the measured accuracy of the method, said at the assertion. Sums were written in parentheses
+//! wherever they meet a comparison while `op_compare` bound tighter than `+` (audit B26, since fixed: see
+//! `tests/precedence.rs`); the parentheses are harmless and stay.
 
 use physure_core::Quantity;
 use physure_script::interpreter::eval_phs;

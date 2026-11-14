@@ -2,8 +2,9 @@
 //! programs: what its bounds may be, which names the integrand sees, the unit and the uncertainty of the answer,
 //! and what it refuses.
 //!
-//! Every expected value is a closed form written here, never a copy of the engine's output. Sums are parenthesised
-//! wherever they meet a comparison (`op_compare` binds tighter than `+`, audit B26).
+//! Every expected value is a closed form written here, never a copy of the engine's output. Sums were written in
+//! parentheses wherever they meet a comparison while `op_compare` bound tighter than `+` (audit B26, since fixed:
+//! see `tests/precedence.rs`); the parentheses are harmless and stay.
 
 use physure_core::Quantity;
 use physure_script::interpreter::eval_phs;

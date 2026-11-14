@@ -7,8 +7,8 @@
 //! own standard uncertainties of the exact target `t`; any other pair of operand types is a type error; a
 //! condition is false only for an exact zero, and a temperature point, a level or NaN is not a condition.
 //!
-//! Sums are parenthesised: `op_compare` binds tighter than `+` in the grammar (`0.1 + 0.2 == 0.3` is a type error,
-//! audit B26), and this track does not change the grammar.
+//! Sums are parenthesised because, when these tests were written, `op_compare` bound tighter than `+` (audit B26);
+//! arithmetic now binds tighter than comparison (see `tests/precedence.rs`) and the parentheses are harmless.
 
 use physure_script::interpreter::eval_phs;
 use physure_script::report::{evaluate, Report, DEFAULT_SEED};
