@@ -252,6 +252,32 @@ use physure_core::units::parser::Parser as UnitParser;
     }
 
     #[test]
+    fn a_breakpoint_condition_that_is_not_a_bool_is_an_error() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+
+        struct Continue;
+        impl DebugHook for Continue {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                DebugAction::Continue
+            }
+        }
+        for (condition, says) in [("x", "got a Number (1.0)"), ("\"x\"", "got a String"), ("true", "`true` has no value")] {
+            let mut interp = PhsInterpreter::with_debug_hook(
+                std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+                std::sync::Arc::new(Continue),
+            );
+            let program = crate::parser::parse_phs("x = 1\ny = x\n").unwrap();
+            let crate::ast::Statement::Expr(cond) = crate::parser::parse_phs(condition).unwrap().statements.remove(0) else {
+                panic!("expected an expression")
+            };
+            interp.add_breakpoint(Breakpoint::Conditional(program.lines[1], cond));
+            let err = interp.run_statements_with_lines(&program).unwrap_err().to_string();
+            assert!(err.contains("the condition of a breakpoint") || err.contains("has no value"), "{condition}: {err}");
+            assert!(err.contains(says), "{condition}: {err}");
+        }
+    }
+
+    #[test]
     fn step_over_skips_statements_inside_a_deeper_nested_call() {
         use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
         use std::sync::{Arc, Mutex};
@@ -1162,15 +1188,26 @@ r3 = circuito_abierto(5 V, 2 A)
         let val = interp.get_var("i").unwrap();
         assert_eq!(val.to_string(), "5.0");
 
-        let infinite = crate::parser::parse_phs("i = 0\nwhile true { i = i + 1 }").unwrap();
-        assert!(interp.run_statements(&infinite).is_err());
+        // `while true` ran to the loop guard only because lowercase `true` is a name with no value, read as the
+        // text "true"; the Bool literal is `True`
+        let infinite = crate::parser::parse_phs("i = 0\nwhile True { i = i + 1 }").unwrap();
+        let err = interp.run_statements(&infinite).unwrap_err().to_string();
+        assert!(err.contains("did not converge"), "{err}");
+        let text = crate::parser::parse_phs("i = 0\nwhile true { i = i + 1 }").unwrap();
+        let err = interp.run_statements(&text).unwrap_err().to_string();
+        assert!(err.contains("`true` has no value"), "{err}");
     }
 
     #[test]
-    fn test_is_truthy_negative_numbers() {
+    fn a_loop_on_a_negative_counter_compares_it_explicitly() {
+        // `while i` with `i = -5` relied on "a number other than zero is true"; a number is not a condition
         let mut interp = PhsInterpreter::default();
-        let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i { count = count + 1\n i = i + 1 }").unwrap();
-        assert!(interp.run_statements(&stmts).is_ok());
+        let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i != 0 { count = count + 1\n i = i + 1 }").unwrap();
+        interp.run_statements(&stmts).unwrap();
+        assert_eq!(interp.get_var("count").unwrap().to_string(), "5.0");
+        let bare = crate::parser::parse_phs("i = -5\nwhile i { i = i + 1 }").unwrap();
+        let err = interp.run_statements(&bare).unwrap_err().to_string();
+        assert!(err.contains("the condition of `while` needs a Bool"), "{err}");
     }
 
     /// `Number ^ Number` with a negative base and a fractional exponent used to answer

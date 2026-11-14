@@ -65,7 +65,7 @@ impl fmt::Display for PhsValue {
 impl PhsValue {
     /// A short, human-readable name for this value's PHS type. Used by the strict-Bool
     /// logical operators and the `assert`/`exact_assert` dispatcher, neither of which may
-    /// fall back to `is_truthy` -- their errors need to say what type they actually got.
+    /// guess a truth -- their errors need to say what type they actually got.
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             PhsValue::None => "None",

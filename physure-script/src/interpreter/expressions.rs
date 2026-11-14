@@ -9,7 +9,7 @@ use crate::debug::StackFrame;
 use crate::symbolic::Node;
 use crate::value::PhsValue;
 use super::{PhsInterpreter, coerce_equation_string};
-use super::helpers::{is_truthy, make_range, strip_unit_comment};
+use super::helpers::{condition_of, make_range, strip_unit_comment};
 
 struct CallStackGuard {
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
@@ -325,9 +325,10 @@ impl PhsInterpreter {
 
     /// Short-circuit logical operators: language semantics, not an optimization,
     /// so they must run before the eager argument evaluation of an ordinary call rather than as
-    /// ordinary builtins. Strict Bool checking here (never `is_truthy`) is what
-    /// keeps `5 m and enabled` a type error instead of a silent truthiness test.
-    /// `None` when the call is not one of them.
+    /// ordinary builtins. Strict Bool checking here is what keeps `5 m and enabled` a type error instead
+    /// of a silent truthiness test. The conditional (`if ... then ... else`, `? :`) is taken here too, so
+    /// that a condition that is a name with no value is told so (both branches are still evaluated, as
+    /// they always were). `None` when the call is not one of them.
     fn eval_short_circuit(
         &self,
         name: &str,
@@ -341,39 +342,64 @@ impl PhsInterpreter {
         match (name, args) {
             ("op_not", [operand]) => Some(self.eval_not(operand, env)),
             ("op_and" | "op_or", [left, right]) => Some(self.eval_and_or(name == "op_and", left, right, env)),
+            ("ternary" | "if_then_else", [cond, then, otherwise]) if !env.contains_key(name) => {
+                let context = if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" };
+                Some(self.eval_conditional(cond, then, otherwise, env, context))
+            }
+            // `assert(true)`: a name with no value is told so, as in every condition
+            ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 && !env.contains_key("assert") => {
+                match self.eval_condition(&args[0], env, "`assert`") {
+                    Err(e) if e.to_string().starts_with(&format!("`{name}` has no value")) => Some(Err(e)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
 
+    /// The truth of the condition `expr` (only a Bool has one: [`condition_of`]). A name with no value
+    /// evaluates to its own text; as a condition it is told so, naming it: `while true` read the text "true".
+    pub(crate) fn eval_condition(&self, expr: &Expr, env: &HashMap<String, PhsValue>, context: &str) -> PhysureResult<bool> {
+        let value = self.eval_expr(expr, env)?;
+        if let (Expr::Identifier(name), PhsValue::String(text)) = (expr, &value) {
+            if text == name && !env.contains_key(name) {
+                return Err(PhysureError::Generic(format!(
+                    "`{name}` has no value; the Bool literals are True and False ({context} needs a Bool)"
+                )));
+            }
+        }
+        condition_of(&value, context)
+    }
+
+    /// `if c then a else b` and `c ? a : b`: both branches are evaluated (an error in either is reported), and
+    /// the Bool `c` chooses.
+    fn eval_conditional(
+        &self,
+        cond: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        env: &HashMap<String, PhsValue>,
+        context: &str,
+    ) -> PhysureResult<PhsValue> {
+        let holds = self.eval_condition(cond, env, context)?;
+        let then = self.eval_expr(then, env)?;
+        let otherwise = self.eval_expr(otherwise, env)?;
+        Ok(if holds { then } else { otherwise })
+    }
+
     fn eval_not(&self, operand: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
-        let operand = self.eval_expr(operand, env)?;
-        let PhsValue::Bool(b) = operand else {
-            return Err(PhysureError::Generic(format!(
-                "`not` expects a Bool operand, got {}", operand.type_name()
-            )));
-        };
-        Ok(PhsValue::Bool(!b))
+        Ok(PhsValue::Bool(!self.eval_condition(operand, env, "`not`")?))
     }
 
     fn eval_and_or(&self, is_and: bool, left: &Expr, right: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
-        let word = if is_and { "and" } else { "or" };
-        let left = self.eval_expr(left, env)?;
-        let PhsValue::Bool(left_b) = left else {
-            return Err(PhysureError::Generic(format!(
-                "`{}` expects Bool operands, left side was {}", word, left.type_name()
-            )));
-        };
+        let (left_side, right_side) =
+            if is_and { ("the left side of `and`", "the right side of `and`") } else { ("the left side of `or`", "the right side of `or`") };
+        let left_b = self.eval_condition(left, env, left_side)?;
         // `false and _` and `true or _` are decided by the left side alone
         if left_b != is_and {
             return Ok(PhsValue::Bool(left_b));
         }
-        let right = self.eval_expr(right, env)?;
-        let PhsValue::Bool(right_b) = right else {
-            return Err(PhysureError::Generic(format!(
-                "`{}` expects Bool operands, right side was {}", word, right.type_name()
-            )));
-        };
-        Ok(PhsValue::Bool(right_b))
+        Ok(PhsValue::Bool(self.eval_condition(right, env, right_side)?))
     }
 
     /// `f(g)` for a function `f` bound in `env` and a function value `g` is their composition `f_g`.
@@ -607,8 +633,7 @@ impl PhsInterpreter {
                 }
                 Statement::GuardReturn { cond, value } => {
                     self.debug_checkpoint(line, &local_env)?;
-                    let cond_val = self.eval_expr(cond, &local_env)?;
-                    if is_truthy(&cond_val)? {
+                    if self.eval_condition(cond, &local_env, "the condition of `if ... then return`")? {
                         last_val = self.eval_expr(value, &local_env)?;
                         break;
                     }
@@ -624,19 +649,14 @@ impl PhsInterpreter {
     }
 
     /// Evaluates every `@requires` condition against the already-bound parameters,
-    /// erroring on the first one that is not truthy. Conditions are ordinary `Expr`s —
-    /// a comparison like `m > 0.0` is a `FunctionCall { name: "op_>", .. }` under the
-    /// hood, so this needs no evaluator support beyond `eval_expr`/`is_truthy`.
-    ///
-    /// Note: conditions must evaluate to a numeric/`Quantity` truthy value (as produced by
-    /// comparison operators like `op_>`); a plugin-provided `PhsValue::Bool` is currently
-    /// always treated as falsy by `is_truthy`, so boolean-returning plugin predicates are
-    /// not yet safe to use directly as `@requires`/`@ensures` conditions.
+    /// erroring on the first one that is False. Conditions are ordinary `Expr`s —
+    /// a comparison like `m > 0 kg` is a `FunctionCall { name: "op_>", .. }` under the
+    /// hood — and, like every condition, must be a Bool (`eval_condition`).
     fn check_requires(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         for dec in &func.decorators {
             if dec.name == "requires" {
                 let cond = &dec.args[0];
-                if !is_truthy(&self.eval_expr(cond, local_env)?)? {
+                if !self.eval_condition(cond, local_env, "the condition of `@requires`")? {
                     let message = self.eval_expr(&dec.args[1], local_env)?.to_string();
                     return Err(PhysureError::ContractViolation { decorator: "requires".to_string(), message });
                 }
@@ -650,7 +670,7 @@ impl PhsInterpreter {
     /// function with a parameter literally named `result`, so this insert can never
     /// silently shadow a caller-visible binding.
     ///
-    /// See `check_requires`'s note on `PhsValue::Bool`.
+    /// Its conditions are Bools, as those of `check_requires` are.
     fn check_ensures(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>, result: &PhsValue) -> PhysureResult<()> {
         if !func.decorators.iter().any(|d| d.name == "ensures") {
             return Ok(());
@@ -660,7 +680,7 @@ impl PhsInterpreter {
         for dec in &func.decorators {
             if dec.name == "ensures" {
                 let cond = &dec.args[0];
-                if !is_truthy(&self.eval_expr(cond, &result_env)?)? {
+                if !self.eval_condition(cond, &result_env, "the condition of `@ensures`")? {
                     let message = self.eval_expr(&dec.args[1], &result_env)?.to_string();
                     return Err(PhysureError::ContractViolation { decorator: "ensures".to_string(), message });
                 }

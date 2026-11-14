@@ -65,30 +65,65 @@ pub(crate) fn make_range(l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsV
     ))
 }
 
-/// Whether a value used as a condition (`if`, `while`, a ternary, `@requires`) holds. A boolean is itself; a
-/// number or a quantity is false only when its magnitude is exactly zero, in any unit (`abs(x) > 1e-15` on the raw
-/// mean made `if 1e-16 m` false and let `while x { x = x - 0.1 }` stop on rounding debris).
+/// The truth of a condition (`if`, `while`, `? :`, `if ... then return`, `@requires`, `@ensures`, a conditional
+/// breakpoint) and of an operand of `and`, `or`, `not`, `assert`: only a Bool has one. A number or a quantity is not a
+/// condition (`x != 0 m`, `x != 0` say what is meant; "exactly zero is false" read a unit-dependent convention into
+/// it), nor is text (`"false"` is not `False`), nor anything else: each is a type error from [`not_a_bool`].
+pub(crate) fn condition_of(value: &PhsValue, context: &str) -> PhysureResult<bool> {
+    match value {
+        PhsValue::Bool(b) => Ok(*b),
+        other => Err(PhysureError::Generic(not_a_bool(context, other))),
+    }
+}
+
+/// The one table of what a condition or a logical operand that is not a Bool is told, by its type:
 ///
-/// A temperature point or a level is not a condition: whether it is "zero" depends on the scale it is written in
-/// (`0 degC` was false and `273.15 K` true). Nor is NaN, which has no truth to give. Those are errors.
-pub(crate) fn is_truthy(val: &PhsValue) -> PhysureResult<bool> {
-    let number = |n: f64, what: &str| {
-        if n.is_nan() {
-            Err(PhysureError::Generic(format!("{what} NaN is not a condition: compare it explicitly")))
+/// | value | message, after "`if` needs a Bool (True or False), got" |
+/// |---|---|
+/// | a number | a Number (1.0): a number is not a condition; compare it, e.g. `x != 0` |
+/// | a quantity | a Quantity (1.0 m): a quantity is not a condition; compare it, e.g. `x != 0 m` (in its own unit) |
+/// | the text "true" or "false" | a String ("true"): text is not a condition; the Bool literals are True and False |
+/// | other text | a String ("on"): text is not a condition; compare it, e.g. s == "on" |
+/// | anything else | a Vector: a Vector is not a condition (Matrix, Range, Function, Plot, Sigma, ...) |
+/// | None | None: None is not a condition |
+///
+/// An identifier with no value is told so by the interpreter before it gets here (it evaluates to its own name).
+pub(crate) fn not_a_bool(context: &str, value: &PhsValue) -> String {
+    let kind = value.type_name();
+    let article = if kind.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" };
+    let shown = |text: String| -> String {
+        if text.chars().count() > 40 {
+            format!("{}...", text.chars().take(40).collect::<String>())
         } else {
-            Ok(n != 0.0)
+            text
         }
     };
-    match val {
-        PhsValue::Quantity(q) if q.unit.is_affine() || q.unit.is_logarithmic() => Err(PhysureError::Generic(format!(
-            "{q} is not a condition: whether a temperature point or a level is zero depends on its scale; compare it explicitly"
-        ))),
-        PhsValue::Quantity(q) => number(q.value.mean(), "a quantity of"),
-        PhsValue::Number(n) => number(*n, "the number"),
-        PhsValue::Bool(b) => Ok(*b),
-        PhsValue::String(s) => Ok(s == "true" || s == "True" || s == "1"),
-        _ => Ok(false),
-    }
+    let what = match value {
+        PhsValue::Number(_) => format!(
+            "a Number ({}): a number is not a condition; compare it, e.g. `x != 0`",
+            shown(value.to_string())
+        ),
+        PhsValue::Quantity(q) if q.unit.is_plain_number() => format!(
+            "a Number ({}): a number is not a condition; compare it, e.g. `x != 0`",
+            shown(value.to_string())
+        ),
+        PhsValue::Quantity(q) => format!(
+            "a Quantity ({}): a quantity is not a condition; compare it, e.g. `x != 0 {}`",
+            shown(value.to_string()),
+            // a level that lost its name to an arithmetic step (`-5 dB`) still has a unit
+            Some(q.unit.__repr__()).filter(|unit| !unit.is_empty()).unwrap_or_else(|| "<its unit>".to_string())
+        ),
+        PhsValue::String(text) if text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false") => format!(
+            "a String (\"{text}\"): text is not a condition; the Bool literals are True and False"
+        ),
+        PhsValue::String(text) => {
+            let text = shown(text.clone());
+            format!("a String (\"{text}\"): text is not a condition; compare it, e.g. `s == \"{text}\"`")
+        }
+        PhsValue::None => "None: None is not a condition".to_string(),
+        _ => format!("{article} {kind}: {article} {kind} is not a condition"),
+    };
+    format!("{context} needs a Bool (True or False), got {what}")
 }
 
 

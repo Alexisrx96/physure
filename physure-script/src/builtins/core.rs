@@ -2,7 +2,7 @@ use physure_core::error::{PhysureError, PhysureResult};
 use crate::value::PhsValue;
 use crate::interpreter::PhsInterpreter;
 
-/// `PhsValue::Bool` already carries `Display` ("True"/"False"), an `is_truthy` arm, a
+/// `PhsValue::Bool` already carries `Display` ("True"/"False"), is what a condition must be, a
 /// debugger `Inspection` kind, plugin-ABI support and export serialization -- everything a
 /// comparison result needs was already built around it. The dimensionless-`Quantity`
 /// stand-in this used to build (magnitude 1.0/0.0) was also the one place out of step with
@@ -291,20 +291,14 @@ fn exact_assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     }
 }
 
+/// `ternary(c, a, b)` reached with its arguments already evaluated (the interpreter takes the written forms,
+/// `if c then a else b` and `c ? a : b`, itself): `c` must be a Bool, like every condition.
 fn ternary(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
-    // Was its own, narrower truthiness check (Quantity/Number only, silently `false`
-    // for anything else) instead of the shared `is_truthy` -- fine while every
-    // comparison built a dimensionless Quantity, wrong the moment one builds a real
-    // `PhsValue::Bool` instead.
-    let cond_true = match args.first() {
-        Some(cond) => crate::interpreter::helpers::is_truthy(cond)?,
-        None => false,
+    let [cond, then, otherwise] = args else {
+        return Err(PhysureError::Generic(format!("ternary expects (condition, then, else), got {} arguments", args.len())));
     };
-    if cond_true {
-        Ok(args.get(1).cloned())
-    } else {
-        Ok(args.get(2).cloned())
-    }
+    let holds = crate::interpreter::helpers::condition_of(cond, "the condition of `? :`")?;
+    Ok(Some(if holds { then.clone() } else { otherwise.clone() }))
 }
 
 /// The standard uncertainty as a quantity in the same unit, so it can be fed back
@@ -387,6 +381,11 @@ fn assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     match args {
         [PhsValue::Bool(cond)] => bool_assertion(*cond, "condition was False"),
         [PhsValue::Bool(cond), PhsValue::String(msg)] => bool_assertion(*cond, msg),
+        // one argument that is not a Bool is a condition that is not one, and is told what every condition is told
+        [cond] => Err(PhysureError::Generic(crate::interpreter::helpers::not_a_bool("`assert`", cond))),
+        [cond, PhsValue::String(_)] => {
+            Err(PhysureError::Generic(crate::interpreter::helpers::not_a_bool("`assert`", cond)))
+        }
         [PhsValue::Quantity(a), PhsValue::Quantity(b)] => {
             a.phs_assert(b)?;
             Ok(Some(PhsValue::None))

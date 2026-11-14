@@ -107,7 +107,7 @@ class RegistryStrictTest {
 
     @Test
     void aRunawayLoopStopsWithAnError() {
-        PhysureException e = assertThrows(PhysureException.class, () -> registry.evaluateRaw("while true { x = 1 }"));
+        PhysureException e = assertThrows(PhysureException.class, () -> registry.evaluateRaw("while True { x = 1 }"));
         assertTrue(e.getMessage().contains("did not converge"), e.getMessage());
     }
 

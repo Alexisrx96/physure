@@ -106,7 +106,7 @@ fn a_deadline_that_has_passed_refuses_the_first_statement() {
 #[test]
 fn slow_work_is_stopped_at_the_deadline() {
     // 10,000 iterations of a 150-deep recursion take seconds; the deadline is 100 ms
-    let source = format!("{}\nx = 0\nwhile true {{ x = down(150) }}", down(0).lines().take(3).collect::<Vec<_>>().join("\n"));
+    let source = format!("{}\nx = 0\nwhile True {{ x = down(150) }}", down(0).lines().take(3).collect::<Vec<_>>().join("\n"));
     let started = std::time::Instant::now();
     let error = run_sandboxed(Limits::sandboxed(Duration::from_millis(100)), move |interp| run(&interp, &source)).unwrap_err();
     assert!(error.contains("time limit"), "{error}");

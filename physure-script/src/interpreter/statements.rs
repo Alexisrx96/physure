@@ -5,7 +5,6 @@ use crate::ast::{Program, Statement};
 use crate::value::PhsValue;
 use crate::debug::{DebugAction, DebugContext};
 use super::{PhsInterpreter, ExternalFn};
-use super::helpers::is_truthy;
 
 /// Tracks what a `Step*`/`Pause` `DebugAction` committed the interpreter to doing next, so a
 /// later `debug_checkpoint` call can decide whether to fire the hook even when no `Breakpoint`
@@ -138,7 +137,7 @@ impl PhsInterpreter {
                     // `PhysureResult` with `?`, so a user with a broken breakpoint condition
                     // gets a real error message instead of a breakpoint that quietly never
                     // fires.
-                    *l == line && is_truthy(&self.eval_expr(cond, env)?)?
+                    *l == line && self.eval_condition(cond, env, "the condition of a breakpoint")?
                 }
                 // Fires on every statement inside the named function's innermost frame, not
                 // only its first statement -- see the doc comment on `Breakpoint::FunctionEntry`
@@ -242,8 +241,7 @@ impl PhsInterpreter {
             Statement::Export(_node) => Ok(PhsValue::None),
             Statement::Return(expr) => self.eval_expr(expr, env),
             Statement::GuardReturn { cond, value } => {
-                let cond_val = self.eval_expr(cond, env)?;
-                if is_truthy(&cond_val)? {
+                if self.eval_condition(cond, env, "the condition of `if ... then return`")? {
                     self.eval_expr(value, env)
                 } else {
                     Ok(PhsValue::None)
@@ -253,7 +251,7 @@ impl PhsInterpreter {
                 const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
-                while is_truthy(&self.eval_expr(cond, env)?)? {
+                while self.eval_condition(cond, env, "the condition of `while`")? {
                     self.check_budget()?;
                     if count >= DEFAULT_MAX_LOOP_ITERATIONS {
                         return Err(PhysureError::Generic(format!(

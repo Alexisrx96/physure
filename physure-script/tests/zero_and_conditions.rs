@@ -174,3 +174,116 @@ fn assert_and_approx_follow_the_same_rule() {
     assert!(eval_phs("assert(50 %, 0.5)").is_ok());
     assert!(eval_phs("assert(0 m, 0 km)").is_ok());
 }
+
+// ---- a condition is a Bool
+
+/// Every place PHS reads a condition (and the operands of `and`, `or`, `not`, `assert`), with `{c}` for the
+/// condition. Each is a complete program.
+const CONTEXTS: &[&str] = &[
+    "if {c} then 1 else 0",
+    "{c} ? 1 : 0",
+    "ternary({c}, 1, 0)",
+    "while {c} {\n  y = 1\n}",
+    "if {c} then return 1",
+    "fn g(x) =\n  if {c} then return 1\n  2\ng(0)",
+    "@requires({c}, \"must hold\")\nfn h(m) = m\nh(1)",
+    "@ensures({c}, \"must hold\")\nfn h(m) = m\nh(1)",
+    "{c} and True",
+    "True and {c}",
+    "{c} or False",
+    "False or {c}",
+    "not {c}",
+    "assert({c})",
+    "assert({c}, \"must hold\")",
+];
+
+/// `(condition, what the error must say)`: every one is refused in every context.
+const NOT_CONDITIONS: &[(&str, &str)] = &[
+    ("1", "got a Number (1.0): a number is not a condition; compare it, e.g. `x != 0`"),
+    ("0", "got a Number (0.0)"),
+    ("-5", "got a Number (-5.0)"),
+    ("1e-16", "got a Number"),
+    ("((1e308 * 10) - (1e308 * 10))", "got a Number (NaN"),
+    ("1 m", "got a Quantity (1.0 m): a quantity is not a condition; compare it, e.g. `x != 0 m`"),
+    ("0 m", "got a Quantity (0.0 m)"),
+    ("1e-16 km", "got a Quantity"),
+    ("-0.0 m", "got a Quantity"),
+    ("0 degC", "e.g. `x != 0 degC`"),
+    ("20 dB", "e.g. `x != 0 dB`"),
+    ("\"true\"", "got a String (\"true\"): text is not a condition; the Bool literals are True and False"),
+    ("\"false\"", "got a String (\"false\")"),
+    ("\"True\"", "got a String (\"True\")"),
+    ("\"\"", "got a String (\"\"): text is not a condition; compare it, e.g. `s == \"\"`"),
+    ("\"1\"", "got a String (\"1\")"),
+    ("vector(1, 2)", "got a Vector: a Vector is not a condition"),
+    ("(0 .. 3)", "got a Range: a Range is not a condition"),
+    ("(20 m +/- 1 sigma)", "got a SigmaBound: a SigmaBound is not a condition"),
+    ("true", "`true` has no value; the Bool literals are True and False"),
+    ("false", "`false` has no value; the Bool literals are True and False"),
+    ("n", "`n` has no value; the Bool literals are True and False"),
+];
+
+/// The value of the last statement, as text.
+fn last(source: &str) -> String {
+    match eval_phs(source) {
+        Ok(values) => values.last().map(|v| v.to_string()).unwrap_or_default(),
+        Err(e) => panic!("{source:?} failed: {e}"),
+    }
+}
+
+#[test]
+fn only_a_bool_is_a_condition_in_every_context() {
+    let mut wrong = Vec::new();
+    for context in CONTEXTS {
+        for (condition, says) in NOT_CONDITIONS {
+            let source = context.replace("{c}", condition);
+            match eval_phs(&source) {
+                Ok(values) => wrong.push(format!("{source:?} was answered: {:?}", values.last())),
+                Err(e) if !e.to_string().contains(says) => wrong.push(format!("{source:?}: {e}")),
+                Err(_) => {}
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_bool_is_a_condition_in_every_context() {
+    for context in CONTEXTS.iter().filter(|c| !c.starts_with("while")) {
+        for condition in ["True", "(1 < 2)", "(1 m > 0 m)", "(\"a\" == \"a\")", "(True and not False)"] {
+            let source = context.replace("{c}", condition);
+            eval_phs(&source).unwrap_or_else(|e| panic!("{source:?}: {e}"));
+        }
+    }
+    assert_eq!(last("if True then 1 else 0"), "1.0");
+    assert_eq!(last("if 1 m > 0 m then 1 else 0"), "1.0");
+    assert_eq!(last("if 2 < 1 then 1 else 0"), "0.0");
+    assert_eq!(last("(1 m != 0 m) ? \"nonzero\" : \"zero\""), "nonzero");
+    assert_eq!(last("x = 5\nwhile x != 0 {\n  x = x - 1\n}\nx"), "0.0");
+    assert_eq!(last("while False {\n  y = 1\n}\n2"), "2.0");
+}
+
+#[test]
+fn every_kind_of_value_that_is_not_a_bool_is_named() {
+    let refusal = |source: &str| eval_phs(source).expect_err(source).to_string();
+    assert!(refusal("f(x) = x\nif f then 1 else 0").contains("got a Function: a Function is not a condition"));
+    assert!(refusal("x = assert(True)\nif x then 1 else 0").contains("got None"));
+    assert!(refusal("use solve from calc\neq = solve(\"V = R * I\", \"R\")\nif eq then 1 else 0").contains("got an Equation"));
+    // `while true` read the text "true" and ran to the loop guard; `while "1"` did too
+    assert!(refusal("i = 0\nwhile true {\n  i = i + 1\n}").contains("`true` has no value"));
+    assert!(refusal("while \"1\" {\n  y = 1\n}").contains("got a String (\"1\")"));
+    // a name that is bound to text is text, not a name with no value
+    assert!(refusal("s = \"on\"\nif s then 1 else 0").contains("got a String (\"on\")"));
+}
+
+#[test]
+fn the_logical_operators_say_which_side_is_not_a_bool() {
+    let refusal = |source: &str| eval_phs(source).expect_err(source).to_string();
+    assert!(refusal("1 and True").starts_with("the left side of `and` needs a Bool (True or False), got a Number"));
+    assert!(refusal("True and 1 m").starts_with("the right side of `and` needs a Bool"));
+    assert!(refusal("False or \"a\"").starts_with("the right side of `or` needs a Bool"));
+    assert!(refusal("not 1").starts_with("`not` needs a Bool"));
+    // short-circuit: the right side of `False and _` is never read
+    assert_eq!(last("False and 1"), "False");
+    assert_eq!(last("True or \"a\""), "True");
+}

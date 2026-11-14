@@ -4,8 +4,8 @@
 //! The rules: `==` is `Quantity::phs_eq` (canonical magnitudes within a relative 1e-12, IEEE for non-finite values,
 //! different dimensions an error); `!=` is exactly `!(==)`; `≈` is relative with `[Settings] approx_rel_tol`, and
 //! `approx(a, b, rel)` names the tolerance; `x == t ± k sigma` asks whether the measured `x` lies within `k` of its
-//! own standard uncertainties of the exact target `t`; any other pair of operand types is a type error; a
-//! condition is false only for an exact zero, and a temperature point, a level or NaN is not a condition.
+//! own standard uncertainties of the exact target `t`; any other pair of operand types is a type error; only a
+//! Bool is a condition (`tests/zero_and_conditions.rs` has the whole table).
 //!
 //! Sums are parenthesised because, when these tests were written, `op_compare` bound tighter than `+` (audit B26);
 //! arithmetic now binds tighter than comparison (see `tests/precedence.rs`) and the parentheses are harmless.
@@ -184,26 +184,40 @@ fn operand_types_that_cannot_be_compared_are_a_type_error() {
 }
 
 #[test]
-fn a_condition_is_false_only_for_an_exact_zero() {
+fn a_condition_is_a_bool_and_a_number_is_compared_explicitly() {
+    // the truthiness probes of the previous rule ("false only for an exact zero"), each now a type error: a number
+    // or a quantity says nothing by itself, the comparison says what is meant
+    for source in [
+        "if 1e-16 m then 1 else 0",
+        "if 1e-16 km then 1 else 0",
+        "if 1e-16 then 1 else 0",
+        "if 0 m then 1 else 0",
+        "if -0.0 m then 1 else 0",
+        "if 0 then 1 else 0",
+        "if -5 then 1 else 0",
+        "if 273.15 K then 1 else 0",
+        "if 0 degC then 1 else 0",
+        "if 20 dB then 1 else 0",
+        "n = (1e308 * 10) - (1e308 * 10)\nif n then 1 else 0",
+    ] {
+        assert!(refused(source).contains("needs a Bool"), "{source}");
+    }
+    // a name with no value is told so
+    assert!(refused("if n then 1 else 0").contains("`n` has no value"));
     for (source, expected) in [
-        ("if 1e-16 m then 1 else 0", "1.0"),
-        ("if 1e-16 km then 1 else 0", "1.0"),
-        ("if 1e-16 then 1 else 0", "1.0"),
-        ("if 0 m then 1 else 0", "0.0"),
-        ("if 0 km then 1 else 0", "0.0"),
-        ("if -0.0 m then 1 else 0", "0.0"),
-        ("if 0 then 1 else 0", "0.0"),
-        ("if -5 then 1 else 0", "1.0"),
-        ("if 273.15 K then 1 else 0", "1.0"),
+        ("if 1e-16 m != 0 m then 1 else 0", "1.0"),
+        ("if 1e-16 km != 0 m then 1 else 0", "1.0"),
+        ("if 1e-16 != 0 then 1 else 0", "1.0"),
+        ("if -0.0 m != 0 m then 1 else 0", "0.0"),
+        ("if -5 != 0 then 1 else 0", "1.0"),
         ("if True then 1 else 0", "1.0"),
     ] {
         assert_eq!(value(source), expected, "{source}");
     }
-    for source in ["if 0 degC then 1 else 0", "if 20 dB then 1 else 0", "n = (1e308 * 10) - (1e308 * 10)\nif n then 1 else 0"] {
-        assert!(refused(source).contains("condition"), "{source}");
-    }
-    // stopped after 10 steps only because 1.39e-16 read as false; now it runs to the loop guard
-    let report = run("x = 1\nwhile x {\n  x = x - 0.1\n}");
+    // `while x` stopped after 10 steps only because 1.39e-16 read as false; it is a type error, and the loop that
+    // means "until x reaches zero" says so, and runs to the guard on the rounding debris
+    assert!(refused("x = 1\nwhile x {\n  x = x - 0.1\n}").contains("the condition of `while` needs a Bool"));
+    let report = run("x = 1\nwhile x != 0 {\n  x = x - 0.1\n}");
     let stopped = report.diagnostics.iter().any(|d| d.line == 2 && d.message.contains("did not converge"));
     assert!(stopped, "{:?}", report.diagnostics);
 }
