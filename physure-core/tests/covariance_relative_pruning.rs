@@ -76,8 +76,8 @@ fn a_small_jacobian_entry_is_kept() {
         let j = [factor, 0.0, 0.0, factor];
         s.propagate_slices(1, vec![0], vec![(&j, &[2, 2])]);
         let var = block(&s, 1, 1).expect("the output variance");
-        for i in 0..2 {
-            assert_rel(var[i][i].sqrt(), factor * 1e-3, &format!("x * {factor:e}, component {i}"));
+        for (i, row) in var.iter().enumerate() {
+            assert_rel(row[i].sqrt(), factor * 1e-3, &format!("x * {factor:e}, component {i}"));
         }
         // the exact zeros of the Jacobian are not stored: the output stays diagonal
         assert_eq!(stored_positions(&s, 1, 1), vec![(0, 0), (1, 1)]);
@@ -207,12 +207,12 @@ fn a_repeated_input_contributes_every_jacobian_to_the_cross_covariance() {
     let minus_j: Vec<f64> = j.iter().map(|v| -v).collect();
     s.propagate_slices(1, vec![0, 0], vec![(&j, &[2, 2]), (&j, &[2, 2])]);
     let cross = block(&s, 1, 0).expect("cov(x + x, x)");
-    for i in 0..2 {
-        assert_eq!(cross[i][i], 2.0 * u * u, "cov(x + x, x), component {i}");
+    for (i, row) in cross.iter().enumerate() {
+        assert_eq!(row[i], 2.0 * u * u, "cov(x + x, x), component {i}");
     }
     s.propagate_slices(2, vec![1, 0], vec![(&j, &[2, 2]), (&minus_j, &[2, 2])]);
     let var = block(&s, 2, 2).expect("var((x + x) - x)");
-    for i in 0..2 {
-        assert_rel(var[i][i].sqrt(), u, &format!("(x + x) - x, component {i}"));
+    for (i, row) in var.iter().enumerate() {
+        assert_rel(row[i].sqrt(), u, &format!("(x + x) - x, component {i}"));
     }
 }
