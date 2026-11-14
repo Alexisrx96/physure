@@ -43,7 +43,28 @@ A sum or a comparison never reads an angle as 1: `2 rad + 1` and `2 m*rad + 1 m`
 
 `x == t +/- k sigma` asks whether the measured `x` lies within `k` of its own standard uncertainties of the exact target `t`: `(9.81 +/- 0.01) m/s^2 == 9.80 m/s^2 +/- 2 sigma` is true. An `x` with no uncertainty is an error; use `==`.
 
-Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. A comparison binds tighter than `+` and `-`: parenthesise a sum, `(0.1 m + 0.2 m) == 0.3 m`. A number or a quantity used as a condition (`if`, `while`) is false only when it is exactly zero; a temperature point (`0 degC`), a level (`20 dB`) or NaN is not a condition.
+Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. Arithmetic and conversion bind tighter than a comparison, so `0.1 m + 0.2 m == 0.3 m` is true and `x => km < 5 km` converts, then compares (see the operator table below). A number or a quantity used as a condition (`if`, `while`) is false only when it is exactly zero; a temperature point (`0 degC`), a level (`20 dB`) or NaN is not a condition.
+
+#### Operator precedence
+
+Tightest first; the operators of one row bind equally and, where they repeat, from left to right.
+
+| Operators | Reading |
+| :--- | :--- |
+| `^`, unary `-` | `-2 ^ 2` is `-(2 ^ 2)`, -4; a power of a power needs parentheses: `(2 ^ 3) ^ 2` or `2 ^ (3 ^ 2)` |
+| `*`, `/`, implicit multiplication | `6 m / 2 * 3` is 9 m; `2 3 m` is 6 m |
+| `+`, `-` | `a - b + c` is `(a - b) + c` |
+| `=>` | converts everything to its left: `1 m + 2 m => cm` is 300 cm; the target is a unit |
+| `==`, `!=`, `<`, `<=`, `>`, `>=`, `≈` | one per expression: `0.1 + 0.2 == 0.3` is true |
+| `..` | one per expression; each endpoint is a whole expression: `0 m .. 10 m => km` is `0 m .. 0.01 km` |
+| `: spec` | formats the whole expression: `0.1 + 0.2: .3f` |
+| `not` | `not a + b > c` is `not ((a + b) > c)` |
+| `and` | |
+| `or` | |
+| `c ? a : b` | |
+| `where` | |
+
+Two forms are errors that say which parentheses to write. A `+` or `-` after `=> unit`: `x => km - 5 m` cannot subtract from the unit, and the standard order does not say `(x => km) - 5 m`, so write that. A chain of comparisons: `a < b < c` would compare the `True` or `False` of `a < b` with `c`, so write `a < b and b < c`. The strings the symbolic builtins read (`deriv`, `integral`, `limit`, ...) follow the same order: `deriv("-x^2", "x")` is `-2 * x`, and `x^2^3` needs parentheses there too; in them an exponent may carry its own sign (`e^-x`) and `**` is `^`.
 
 ### 1.2 Function Definitions & Docstrings
 Functions can be defined with or without the optional `fn` keyword. Unit constraints on parameters are checked automatically.

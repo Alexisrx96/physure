@@ -147,8 +147,10 @@ bound never accepts a difference against an exact zero (`cos(90 deg) == 0` is fa
 `approx_rel_tol` of `physure.conf` (default `1e-3`), and `approx(a, b, rel)` names its own.
 Comparing different dimensions, or values that have no comparison (a vector, a string and a
 quantity), is an error, never `False`. A number or a quantity used as a condition is false only
-when it is exactly zero; a temperature point, a level or NaN is not a condition. Comparison
-binds tighter than `+`, so parenthesise a sum: `(a + b) == c`.
+when it is exactly zero; a temperature point, a level or NaN is not a condition. Arithmetic
+binds tighter than comparison, as in mathematics: `a + b == c` is `(a + b) == c`, and
+`x => km < 5 km` converts, then compares. One comparison per expression: write `a < b < c` as
+`a < b and b < c`. A `+` or `-` cannot follow `=> unit`: write `(x => km) - 5 m`.
 
 ```phs
 pressure > 0 Pa

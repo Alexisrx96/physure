@@ -511,7 +511,25 @@ fn generate_language_docs_md() -> String {
     md.push_str("`==` compares what two quantities stand for, whatever units they are written in: `1 km == 1000 m` and `0.01 degC == 273.16 K` are true in either order. Two values are equal when they agree within a relative 1e-12 of the larger (the rounding of a conversion or of ordinary arithmetic): `1 pm == 2 pm` is false and `(0.1 m + 0.2 m) == 0.3 m` is true. A relative bound never accepts a difference against an exact zero, so `cos(90 deg) == 0` is false: write `abs(cos(90 deg)) < 1e-12`, or `abs(x) < 1e-9 m` with the unit of `x`. Near the bound `==` is not transitive. `inf == inf` is true and NaN equals nothing. `!=` is exactly `not (a == b)`.\n\n");
     md.push_str("`a ≈ b` is `|a − b| <= rel · max(|a|, |b|)` with `rel` from `[Settings] approx_rel_tol` in `physure.conf` (default `1e-3`); `approx(a, b, rel)` names the tolerance (`approx(x, y, 1 %)`). `≈` with exactly one operand zero is an error: no relative tolerance says how close to zero is close.\n\n");
     md.push_str("`x == t +/- k sigma` asks whether the measured `x` lies within `k` of its own standard uncertainties of the exact target `t`: `(9.81 +/- 0.01) m/s^2 == 9.80 m/s^2 +/- 2 sigma` is true. An `x` with no uncertainty is an error; use `==`.\n\n");
-    md.push_str("Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. A comparison binds tighter than `+` and `-`: parenthesise a sum, `(0.1 m + 0.2 m) == 0.3 m`. A number or a quantity used as a condition (`if`, `while`) is false only when it is exactly zero; a temperature point (`0 degC`), a level (`20 dB`) or NaN is not a condition.\n\n");
+    md.push_str("Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. Arithmetic and conversion bind tighter than a comparison, so `0.1 m + 0.2 m == 0.3 m` is true and `x => km < 5 km` converts, then compares (see the operator table below). A number or a quantity used as a condition (`if`, `while`) is false only when it is exactly zero; a temperature point (`0 degC`), a level (`20 dB`) or NaN is not a condition.\n\n");
+
+    md.push_str("#### Operator precedence\n\n");
+    md.push_str("Tightest first; the operators of one row bind equally and, where they repeat, from left to right.\n\n");
+    md.push_str("| Operators | Reading |\n");
+    md.push_str("| :--- | :--- |\n");
+    md.push_str("| `^`, unary `-` | `-2 ^ 2` is `-(2 ^ 2)`, -4; a power of a power needs parentheses: `(2 ^ 3) ^ 2` or `2 ^ (3 ^ 2)` |\n");
+    md.push_str("| `*`, `/`, implicit multiplication | `6 m / 2 * 3` is 9 m; `2 3 m` is 6 m |\n");
+    md.push_str("| `+`, `-` | `a - b + c` is `(a - b) + c` |\n");
+    md.push_str("| `=>` | converts everything to its left: `1 m + 2 m => cm` is 300 cm; the target is a unit |\n");
+    md.push_str("| `==`, `!=`, `<`, `<=`, `>`, `>=`, `≈` | one per expression: `0.1 + 0.2 == 0.3` is true |\n");
+    md.push_str("| `..` | one per expression; each endpoint is a whole expression: `0 m .. 10 m => km` is `0 m .. 0.01 km` |\n");
+    md.push_str("| `: spec` | formats the whole expression: `0.1 + 0.2: .3f` |\n");
+    md.push_str("| `not` | `not a + b > c` is `not ((a + b) > c)` |\n");
+    md.push_str("| `and` | |\n");
+    md.push_str("| `or` | |\n");
+    md.push_str("| `c ? a : b` | |\n");
+    md.push_str("| `where` | |\n\n");
+    md.push_str("Two forms are errors that say which parentheses to write. A `+` or `-` after `=> unit`: `x => km - 5 m` cannot subtract from the unit, and the standard order does not say `(x => km) - 5 m`, so write that. A chain of comparisons: `a < b < c` would compare the `True` or `False` of `a < b` with `c`, so write `a < b and b < c`. The strings the symbolic builtins read (`deriv`, `integral`, `limit`, ...) follow the same order: `deriv(\"-x^2\", \"x\")` is `-2 * x`, and `x^2^3` needs parentheses there too; in them an exponent may carry its own sign (`e^-x`) and `**` is `^`.\n\n");
 
     md.push_str("### 1.2 Function Definitions & Docstrings\n");
     md.push_str("Functions can be defined with or without the optional `fn` keyword. Unit constraints on parameters are checked automatically.\n\n");
