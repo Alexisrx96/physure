@@ -7,7 +7,8 @@
 //!   text (`pi`, `"pi/2"`, a variable, a constant of the catalog). A name that resolves to nothing is an error. A
 //!   quantity point makes the variable a quantity of that unit; a temperature point or a level is refused.
 //! - **Names.** The expression is evaluated with the program's variables visible; a free name resolves to a variable,
-//!   a unit, `pi` or a constant of the catalog, and any other name is an error (as for `integral`).
+//!   `pi`, a constant of the catalog or a unit (the one order of PHS, `crate::globals`), and any other name is an
+//!   error (as for `integral`).
 //! - **Continuity.** When the expression calls only functions that are continuous on their domain (`sin`, `cos`,
 //!   `tan`, `exp`, `ln`, `log`, `sqrt`, `min`, `max`, arithmetic, and `^` with an exponent that does not involve the
 //!   variable) and its value at `p` is defined and finite, the limit is that value, evaluated by the core (so an
@@ -400,6 +401,7 @@ pub(crate) fn limit(
     let inlined = preprocess_symbolic_expression(expr_str, interpreter);
     let expr = parse_expression(&inlined, "expression")?;
     let mut env = scope.clone();
+    crate::globals::refuse_binding(var, "the variable of limit")?;
     bind_free_names(&expr, &mut env, &mut vec![var.to_string()], "expression", "limit")?;
     let point = read_point(point, interpreter, scope, 0)?;
     let var_unit = match &point {

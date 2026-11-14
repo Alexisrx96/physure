@@ -314,6 +314,31 @@ fn a_value_given_by_the_host_cannot_be_named_like_a_constant() {
     assert_eq!(fine.to_string(), "3.0", "{fine:?}");
 }
 
+// ---- integral and limit resolve through the same order
+
+#[test]
+fn integral_and_limit_read_pi_and_the_constants_unquoted() {
+    let _lock = lock();
+    assert!(close(number("use * from calc\nintegral(\"sin(x)\", \"x\", 0, pi)"), 2.0));
+    assert!(close(number("use * from calc\nintegral(\"cos(x)\", \"x\", 0, pi/2)"), 1.0));
+    assert!(number("use * from calc\nlimit(\"sin(x)/x\", \"x\", pi)").abs() < 1e-15);
+    // a constant in the integrand is the catalog's (before: the unit `bohr_radius` came first there)
+    let q = quantity("use * from calc\nintegral(\"bohr_radius\", \"x\", 0, 2)");
+    assert_eq!(q.unit, catalog("bohr_radius").unit);
+    assert!(close(q.canonical_magnitude(), 2.0 * catalog("bohr_radius").canonical_magnitude()));
+    // a binding of the integrand or the variable named like a constant is refused there too
+    for program in [
+        "use * from calc\nintegral(\"sin(pi)\", \"pi\", 0, 1)",
+        "use * from calc\nlimit(\"x * a where a = 2, pi = 1\", \"x\", 1)",
+        "use * from calc\nintegral(\"x * a where pi = 3, a = 2\", \"x\", 0, 1)",
+    ] {
+        let message = refused(program);
+        assert!(message.contains("`pi` is the constant"), "{program:?}: {message}");
+    }
+    // a variable of the program still wins over a unit of the same name
+    assert!(close(number("use * from calc\nm = 2\nintegral(\"m * x\", \"x\", 0, 1)"), 1.0));
+}
+
 // ---- the catalog in force decides
 
 fn registry_with(conf: &str) -> UnitRegistry {

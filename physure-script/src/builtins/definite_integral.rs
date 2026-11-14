@@ -7,9 +7,9 @@
 //!   (below); one that resolves to nothing is an error, never 0. A quantity bound makes the variable a quantity of
 //!   that unit; the other bound must have the same dimension (a plain `0` is the same point in every unit). A
 //!   temperature point or a level is refused as a bound.
-//! - **Names.** The integrand is evaluated with the program's variables visible. A free name resolves, in order, to a
-//!   variable of the program, a unit, `pi` (`π`), or a constant of the catalog in force (with its unit); any other
-//!   free name is an error.
+//! - **Names.** The integrand is evaluated with the program's variables visible. A free name resolves in the one
+//!   order of PHS (`crate::globals`): a variable of the program, `pi` (`π`), a constant of the catalog in force (with
+//!   its unit), a unit; any other free name is an error.
 //! - **Unit.** The answer is a quantity in the integrand's unit times the variable's unit whenever either carries a
 //!   unit (or the answer carries an uncertainty), and a plain number otherwise.
 //! - **Uncertainty.** Propagated, never dropped. With a closed form the antiderivative is evaluated at the bounds by
@@ -41,26 +41,12 @@ fn plain(x: f64) -> Quantity {
     Quantity::new_scalar(x, 0.0, RationalUnit::dimensionless(), None, None)
 }
 
-/// The value of a constant of the catalog in force, with its unit; `None` if the catalog has no constant `name`.
-pub(crate) fn catalog_constant(name: &str) -> PhysureResult<Option<Quantity>> {
-    let lookup = |registry: &physure_core::UnitRegistry| registry.constants_meta.get(name).map(|c| c.value.clone());
-    let text = physure_core::units::with_current_catalog(|scoped| match scoped {
-        Some(registry) => Ok(lookup(registry)),
-        None => physure_core::units::conf::try_with_conf_registry(lookup).map_err(|e| PhysureError::Generic(e.to_string())),
-    })?;
-    let Some(text) = text else { return Ok(None) };
-    let text = text.trim();
-    let (number, unit) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
-    let number: f64 = number
-        .parse()
-        .map_err(|_| PhysureError::Generic(format!("the catalog constant {name} is not a number: {text:?}")))?;
-    Ok(Some(Quantity::new(number, unit.trim())?))
-}
-
-/// Binds in `env` the free names of `expr` that the interpreter would not resolve by itself: `pi` and the
-/// constants of the catalog. A name that is a variable of `env`, one of `bound` (the variable of integration), or a
-/// unit is left to the interpreter. Any other free name is an error of `builtin` naming it and `role` (what `expr`
-/// is).
+/// Checks that every free name of `expr` resolves, in the one resolution order of PHS (`crate::globals`): one of
+/// `bound` (the variable of integration, a `where` or `for` binding of `expr`) or a variable of `env`, then `pi`/`π`
+/// and the constants of the catalog in force, then a unit. A global identifier is bound in `env` once, so the samples
+/// of a quadrature do not read the catalog again; the value is the one the interpreter would read. A binding of
+/// `expr` named like a global identifier is refused, as everywhere in PHS. Any other free name is an error of
+/// `builtin` naming it and `role` (what `expr` is).
 pub(crate) fn bind_free_names(
     expr: &Expr,
     env: &mut HashMap<String, PhsValue>,
@@ -78,6 +64,7 @@ pub(crate) fn bind_free_names(
             // `let(name, value, body)` binds `name` in `body`
             if let ("let", [Expr::Identifier(local), value, body]) = (name.as_str(), args.as_slice()) {
                 bind_free_names(value, env, bound, role, builtin)?;
+                crate::globals::refuse_binding(local, &format!("a `where` binding of the {role} of {builtin}"))?;
                 bound.push(local.clone());
                 let result = bind_free_names(body, env, bound, role, builtin);
                 bound.pop();
@@ -90,6 +77,7 @@ pub(crate) fn bind_free_names(
         }
         Expr::ForExpr { var, iterable, body } => {
             bind_free_names(iterable, env, bound, role, builtin)?;
+            crate::globals::refuse_binding(var, &format!("a `for` variable of the {role} of {builtin}"))?;
             bound.push(var.clone());
             let result = bind_free_names(body, env, bound, role, builtin);
             bound.pop();
@@ -101,20 +89,19 @@ pub(crate) fn bind_free_names(
 
 fn bind_name(name: &str, env: &mut HashMap<String, PhsValue>, bound: &[String], role: &str, builtin: &str) -> PhysureResult<()> {
     let template = name.starts_with('`') || (name.contains('{') && name.contains('}'));
-    if template || bound.iter().any(|b| b == name) || env.contains_key(name) || crate::parser::is_known_unit_symbol(name) {
+    if template || bound.iter().any(|b| b == name) || env.contains_key(name) {
         return Ok(());
     }
-    if name == "pi" || name == "π" {
-        env.insert(name.to_string(), PhsValue::Number(std::f64::consts::PI));
+    if let Some(global) = crate::globals::global_value(name)? {
+        env.insert(name.to_string(), global);
         return Ok(());
     }
-    if let Some(constant) = catalog_constant(name)? {
-        env.insert(name.to_string(), PhsValue::Quantity(constant));
+    if crate::parser::is_known_unit_symbol(name) {
         return Ok(());
     }
     Err(PhysureError::Generic(format!(
-        "{builtin}: the {role} uses '{name}', which is neither a variable of the program, a unit, pi nor a constant of \
-         the catalog"
+        "{builtin}: the {role} uses '{name}', which is neither a variable of the program, pi, a constant of the \
+         catalog nor a unit"
     )))
 }
 
@@ -428,6 +415,7 @@ pub(crate) fn definite_integral(
     let inlined = preprocess_symbolic_expression(expr_str, interpreter);
     let expr = parse_expression(&inlined, "integrand")?;
     let mut env = scope.clone();
+    crate::globals::refuse_binding(var, "the variable of integral")?;
     bind_free_names(&expr, &mut env, &mut vec![var.to_string()], "integrand", "integral")?;
 
     let (lower, upper) = (read_end(lower, interpreter, scope, 0)?, read_end(upper, interpreter, scope, 0)?);
