@@ -18,13 +18,14 @@
 //!   the expression is undefined there (a boundary of its domain or a pole closer than `h0`), the step is halved, up
 //!   to 20 times, until it is defined. A side undefined at every one of these steps is undefined next to the point.
 //! - **Continuity.** When the expression calls only functions that are continuous on their domain (`sin`, `cos`,
-//!   `tan`, `exp`, `ln`, `log`, `sqrt`, `min`, `max`, arithmetic, and `^` with an exponent that does not involve the
-//!   variable), its value at `p` is defined and finite, and the first step of each side that is approached is defined,
-//!   the limit is that value, evaluated by the core (so an uncertain point or uncertain variables propagate exactly).
-//!   This holds for a one-sided limit too: `1/(x - 1e-9)` at 0 from the right is -1e9, its value at 0, where the
-//!   samples (from 1/8 down) would all lie past the pole. `floor`, `ceil`, `round`, `abs`, comparisons, ternaries,
-//!   `if`, user functions that were not inlined and other builtins are never trusted at the point itself, and neither
-//!   is a point outside the domain (the samples decide).
+//!   `tan`, `exp`, `ln`, `log`, `sqrt`, `abs`, `min`, `max`, arithmetic, and `^` with an exponent that does not involve
+//!   the variable), its value at `p` is defined and finite, and each side that is approached is defined at its first
+//!   step and at its closest sample (`h 2^-11` from `p`), the limit is that value, evaluated by the core (so an
+//!   uncertain point or uncertain variables propagate exactly). This holds for a one-sided limit too: `1/(x - 1e-9)`
+//!   at 0 from the right is -1e9, its value at 0, where the samples (from 1/8 down) would all lie past the pole.
+//!   `floor`, `ceil`, `round`, comparisons, ternaries, `if`, user functions that were not inlined and other builtins
+//!   are never trusted at the point itself, and neither is a point outside the domain (the samples decide). A gap in
+//!   the domain narrower than the closest sample is not seen: the value at an isolated point is then taken.
 //! - **Extrapolation.** Otherwise `f` is sampled on each approached side at `p ± h 2^-k` (`h` the first defined
 //!   step), `k = 0 .. 11`, and the samples are extrapolated to `h = 0` by Neville's algorithm (a polynomial in `h`,
 //!   Richardson extrapolation): the entry with the smallest difference to its neighbours in the table is the estimate
@@ -155,7 +156,9 @@ fn continuous(expr: &Expr, var: &str) -> bool {
         Expr::BinaryOp { op: BinaryOp::Pow, left, right } => continuous(left, var) && continuous(right, var) && !mentions(right, var),
         Expr::BinaryOp { left, right, .. } => continuous(left, var) && continuous(right, var),
         Expr::FunctionCall { name, args, kwargs } => {
-            matches!(name.as_str(), "sin" | "cos" | "tan" | "exp" | "ln" | "log" | "sqrt" | "min" | "max" | "let")
+            // `abs` is continuous everywhere. Out: `floor`, `ceil`, `round` (they jump), comparisons and `and`/`or`/
+            // `not` (Bool), `? :` and `if` (a choice), `uncertainty`/`sigma`, and anything not inlined.
+            matches!(name.as_str(), "sin" | "cos" | "tan" | "exp" | "ln" | "log" | "sqrt" | "abs" | "min" | "max" | "let")
                 && kwargs.is_empty()
                 && args.iter().all(|a| continuous(a, var))
         }
@@ -459,6 +462,19 @@ fn first_defined_step(function: &mut Function, p: f64, direction: f64, h0: f64) 
     Ok(Err(tried))
 }
 
+/// Whether the expression is defined at the closest sample of every approached side, `p ± h 2^-(FINITE_LEVELS - 1)`
+/// for the side's first defined step `h`. Two evaluations; a gap in the domain narrower than that sample (about
+/// `h / 2048` from the point) is not seen.
+fn defined_next_to(function: &mut Function, p: f64, starts: &[(f64, f64)]) -> PhysureResult<bool> {
+    for &(direction, h) in starts {
+        let x = p + direction * h * 2f64.powi(-(FINITE_LEVELS as i32 - 1));
+        if x != p && function.sample(x)?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// `limit(expr, var, point[, side])`, called where the program's variables are `scope`.
 pub(crate) fn limit(
     expr_str: &str,
@@ -527,7 +543,9 @@ pub(crate) fn limit(
             // the value at the point is the limit for an expression continuous on its domain, defined there and on
             // each side that is approached (so `sqrt(x)` at 0 is not a two-sided limit, `1/(x - 1e-9)` at 0 from the
             // right is its value at 0, not the samples past the pole)
-            if trusted_at_point {
+            // ... and defined at the closest sample of each of those sides too, so a point that is isolated from the
+            // rest of the domain (`sqrt(x^2 (x^2 - 1e-4))` at 0: defined at 0 and for |x| >= 0.01) is not taken
+            if trusted_at_point && defined_next_to(&mut function, mean, &starts)? {
                 let at = match &function.var_unit {
                     Some(_) => PhsValue::Quantity(p.clone()),
                     None if p.value.std_dev() == 0.0 => PhsValue::Number(p.value.mean()),

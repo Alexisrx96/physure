@@ -217,3 +217,39 @@ fn a_one_sided_limit_keeps_units_and_uncertainty() {
     // an uncertain point at a singularity is still refused
     assert!(refused("limit(\"(x^2-1)/(x-1)\", \"x\", 1 +/- 0.1, \"+\")").contains("uncertain"));
 }
+
+// ---- the continuous class (Task 5d) ----
+
+#[test]
+fn abs_is_continuous_so_its_value_at_the_point_is_the_limit() {
+    // before: inf (the samples from 1/8 down never come within 1e-9 of the poles at +-1e-9; the true limit is -1e9)
+    assert_close(number("limit(\"1/(abs(x)-1e-9)\", \"x\", 0)"), -1e9, 1e-12, "1/(|x| - 1e-9) at 0");
+    assert_close(limit("1/(abs(x)-1e-9)", "0", "+"), -1e9, 1e-12, "1/(|x| - 1e-9) at 0+");
+    assert_eq!(number("limit(\"abs(x)\", \"x\", 0)"), 0.0);
+    assert_eq!(number("limit(\"abs(x-1)\", \"x\", 1)"), 0.0);
+    // abs(x)/x is not defined at 0: the samples decide, and the sides still disagree
+    let message = limit_refused("abs(x)/x", "0", None);
+    assert!(message.contains("from the left") && message.contains("from the right"), "{message}");
+}
+
+#[test]
+fn the_step_functions_stay_outside_the_continuous_class() {
+    // their value at a jump is not the limit: floor(1) is 1, its limit from the left 0
+    for (f, p) in [("floor(x)", "1"), ("ceil(x)", "1"), ("round(x)", "0.5"), ("x < 1 ? 0 : 1", "1"), ("if x < 1 then 0 else 1", "1")] {
+        let message = limit_refused(f, p, None);
+        assert!(message.contains("does not exist"), "{f} at {p}: {message}");
+    }
+    assert_eq!(limit("floor(x)", "1", "-"), 0.0);
+    assert_eq!(limit("ceil(x)", "1", "+"), 2.0);
+}
+
+#[test]
+fn a_point_isolated_from_the_rest_of_the_domain_is_not_a_limit() {
+    // sqrt(x^2 (x^2 - 1e-4)) is 0 at 0 and defined for |x| >= 0.01 only: nothing approaches 0 within the domain.
+    // before: 0.0, the value at the point, because the first steps (1/8) were defined
+    for side in [None, Some("+"), Some("-")] {
+        let message = limit_refused("sqrt(x^2*(x^2-1e-4))", "0", side);
+        assert!(message.contains("undefined"), "{side:?}: {message}");
+    }
+    assert_close(number("limit(\"sqrt(x^2*(x^2-1e-4))\", \"x\", 1)"), (1.0f64 - 1e-4).sqrt(), 1e-12, "at 1");
+}
