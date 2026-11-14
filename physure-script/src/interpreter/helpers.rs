@@ -98,3 +98,47 @@ pub(crate) fn strip_unit_comment(text: &str) -> &str {
     text.split('#').next().unwrap().split("//").next().unwrap().trim()
 }
 
+/// The thread-local scopes of the thread that starts a parallel section (a long `for` expression, `parallel_map`),
+/// which every rayon task opens again: a worker is another thread and sees none of them. Without this, a program
+/// evaluated inside `with_catalog` (every WASM and Java evaluation) read the embedded catalog in a loop of
+/// `parallel_threshold` items or more, and a scoped angle mode, propagation mode or loop ceiling did not reach the
+/// body either.
+///
+/// Not carried: a `with_seed` scope (each task drawing the caller's sequence would make the draws of every item the
+/// same; a seeded evaluation is sequential, `Limits::sequential`), and the call depth and the stack floor of
+/// `limits`, which belong to each thread's own stack.
+#[derive(Clone, Copy)]
+pub(crate) struct CallerScopes<'a> {
+    catalog: Option<&'a physure_core::UnitRegistry>,
+    angle_mode: physure_core::AngleMode,
+    propagation_mode: physure_core::PropagationMode,
+    parallel_threshold: usize,
+    max_loop_iterations: usize,
+    max_pipeline_steps: usize,
+}
+
+impl CallerScopes<'_> {
+    /// Calls `f` with the scopes in force on this thread; they stay valid for as long as `f` runs.
+    pub(crate) fn capture<R>(f: impl FnOnce(CallerScopes<'_>) -> R) -> R {
+        physure_core::units::with_current_catalog(|catalog| {
+            f(CallerScopes {
+                catalog,
+                angle_mode: physure_core::angle_mode(),
+                propagation_mode: physure_core::propagation_mode(),
+                parallel_threshold: physure_core::settings::parallel_threshold(),
+                max_loop_iterations: physure_core::settings::max_loop_iterations(),
+                max_pipeline_steps: physure_core::settings::max_pipeline_steps(),
+            })
+        })
+    }
+
+    /// Runs `f` on this thread under the captured scopes.
+    pub(crate) fn run<R>(&self, f: impl FnOnce() -> R) -> R {
+        let _angle = physure_core::units::angle_mode::scoped(self.angle_mode);
+        let _propagation = physure_core::uncertainty::mode::scoped(self.propagation_mode);
+        let _threshold = physure_core::settings::scoped(self.parallel_threshold);
+        let _loops = physure_core::settings::scoped_max_loop_iterations(self.max_loop_iterations);
+        let _steps = physure_core::settings::scoped_max_pipeline_steps(self.max_pipeline_steps);
+        physure_core::units::with_scoped_catalog(self.catalog, f)
+    }
+}
