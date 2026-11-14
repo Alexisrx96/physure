@@ -536,7 +536,13 @@ impl<'a> Checker<'a> {
     }
 
     fn mul_div(&mut self, op: BinaryOp, a: &Dim, b: &Dim) -> Ty {
-        if (a.point && b.exps.is_empty()) || (b.point && a.exps.is_empty() && op == BinaryOp::Mul) {
+        // An exact sign mirrors an absolute temperature in its own scale, as the core does (`-10 degC`, which
+        // the parser reads as `-1 * 10 degC`, and `-t`); a point is never a divisor.
+        let is_sign = |d: &Dim| d.exps.is_empty() && matches!(d.constant, Some(c) if c.abs() == 1.0);
+        if (a.point && is_sign(b)) || (b.point && is_sign(a) && op == BinaryOp::Mul) {
+            return Ty::Qty(Dim { constant: None, ..(if a.point { a } else { b }).clone() });
+        }
+        if (a.point && b.exps.is_empty()) || (b.point && a.exps.is_empty()) {
             self.report(
                 Severity::Error,
                 "temperature-points",
