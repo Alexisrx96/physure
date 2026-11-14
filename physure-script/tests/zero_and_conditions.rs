@@ -159,8 +159,11 @@ fn a_level_against_a_plain_number_says_to_write_the_level_or_compare_the_ratio()
         "{why}"
     );
     assert!(runtime_error("0 dB == 0").contains("0 dB is a ratio of 1"));
-    // a negated level prints without its unit (a defect of its own) but is still a level
-    assert!(runtime_error("-5 dB > 0").contains("the level -5.0"));
+    // a negated level keeps its unit name (Task 5c; it printed `-5.0` and the message said "the level -5.0")
+    let why = runtime_error("-5 dB > 0");
+    assert!(why.starts_with("cannot compare -5.0 dB with the plain number 0: a zero needs a unit, write `x > 0 dB`"), "{why}");
+    let why = runtime_error("if -5 dB then 1 else 2");
+    assert!(why.contains("a Quantity (-5.0 dB)") && why.contains("`x != 0 dB`"), "{why}");
     let diagnostics = check_source("20 dB == 100").unwrap();
     assert!(diagnostics[0].message.contains("write the level with its unit"), "{diagnostics:?}");
 }

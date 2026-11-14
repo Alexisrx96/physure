@@ -122,3 +122,27 @@ fn quantities_numbers_and_their_collections_still_convert() {
     let message = refused("5 => km");
     assert!(message.contains("km"), "{message}");
 }
+
+#[test]
+fn a_level_keeps_its_unit_name_under_a_sign_or_a_plain_factor() {
+    // `-5 dB` printed `-5.0`, `2 * 5 dB` printed `10.0`: still a level, but the name was lost.
+    for (program, expected) in [
+        ("-5 dB", "-5.0 dB"),
+        ("2 * 5 dB", "10.0 dB"),
+        ("5 dB * 2", "10.0 dB"),
+        ("x = 5 dB\n-x", "-5.0 dB"),
+        ("-5 pH", "-5.0 pH"),
+        ("-(5 dB)", "-5.0 dB"),
+        ("0.5 * 4 dB", "2.0 dB"),
+        ("(5 dB)^1", "5.0 dB"),
+        ("abs(-5 dB)", "5.0 dB"),
+        ("(-5 +/- 1) dB", "-5.0 ± 1.0 dB"),
+        ("[1, 2] dB * -1", "[-1.0 dB, -2.0 dB]"),
+    ] {
+        assert_eq!(run(program), expected, "{program}");
+    }
+    // Levels add as the power ratios they stand for: 10 log10(10^(-0.5) + 10^(0.1)) dB.
+    let sum = run("-5 dB + 1 dB");
+    assert!(sum.starts_with("1.97322793708") && sum.ends_with(" dB"), "{sum}");
+    assert!(run("0 dB + 0 dB").starts_with("3.0102999566") && run("0 dB + 0 dB").ends_with(" dB"));
+}

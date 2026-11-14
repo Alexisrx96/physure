@@ -611,7 +611,7 @@ impl<'a> Checker<'a> {
             return Ty::Qty(Dim { constant: None, ..(if a.point { a } else { b }).clone() });
         }
         // A level times a plain number, or over one, stays a level in the core (`5 dB * 2`, `2 * 5 dB`, and `-5 dB`,
-        // which the parser reads as `-1 * 5 dB`), even where its display loses the unit (`-5 dB` prints `-5.0`).
+        // which the parser reads as `-1 * 5 dB`), and keeps its unit name (`-5 dB` prints `-5.0 dB`).
         if a.level && b.is_ratio() {
             return Ty::Qty(Dim { constant: None, ..a.clone() });
         }

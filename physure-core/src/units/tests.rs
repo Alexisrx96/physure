@@ -1062,3 +1062,19 @@ fn a_revoked_grant_stops_only_its_marker_reading_as_one() {
     // the strict comparison never reads the grants
     assert!(u("rad").convertible_to(&u("deg")));
 }
+
+#[test]
+fn a_level_times_a_plain_number_keeps_the_level_name_on_either_side() {
+    // `-1 * dB` took the plain number's (absent) name: `-5 dB` printed `-5.0`.
+    let (reg, _) = conf::build_registry_from_conf();
+    let plain = RationalUnit::dimensionless();
+    for name in ["dB", "pH"] {
+        let level = reg.get_unit(name).unwrap();
+        for product in [plain.mul(&level), level.mul(&plain), level.div(&plain), level.pow(Rational64::from_integer(1))] {
+            assert_eq!(product.__repr__(), name);
+            assert!(product.is_logarithmic());
+        }
+    }
+    // a product of two plain numbers is still unnamed
+    assert_eq!(plain.mul(&plain).__repr__(), "");
+}

@@ -449,7 +449,14 @@ impl RationalUnit {
     pub fn mul(&self, other: &Self) -> Self {
         let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, false);
         let id = Self::calculate_id(&new_dims);
-        let (display_name, periodic) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+        // A level times a plain number keeps the level's name with its `log` below. The level
+        // itself has a dimensionless scale of 1, so the plain-operand rule that follows took the
+        // plain number's name (none) for `-1 * dB`: `-5 dB` printed `-5.0` while still a level.
+        let (display_name, periodic) = if self.log.is_some() && other.is_plain_number() {
+            (self.display_name.clone(), self.periodic)
+        } else if other.log.is_some() && self.is_plain_number() {
+            (other.display_name.clone(), other.periodic)
+        } else if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
             (self.display_name.clone(), self.periodic)
         } else if self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9 {
             (other.display_name.clone(), other.periodic)
@@ -513,7 +520,9 @@ impl RationalUnit {
         let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
         let log = if exp_r == Rational64::from_integer(1) { self.log } else { None };
         let periodic = exp_r == Rational64::from_integer(1) && self.periodic;
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name: None, periodic }
+        // the first power is the unit itself: `(5 dB)^1` is still `5 dB`, by name too
+        let display_name = if exp_r == Rational64::from_integer(1) { self.display_name.clone() } else { None };
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.
