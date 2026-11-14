@@ -32,13 +32,24 @@ def _values(section):
     }
 
 
+def _section(text, name):
+    """The body of the section ``[name]``: up to the next section header.
+
+    The catalog carries sections after ``[Constants]`` whose lines are not
+    ``name = number`` (the atomic-weight tables hold intervals), so a section
+    ends at the next header, not at a fixed neighbour.
+    """
+    body = re.split(
+        rf"^\[{re.escape(name)}\]\s*$", text, maxsplit=1, flags=re.M
+    )[1]
+    return re.split(r"^\[", body, maxsplit=1, flags=re.M)[0]
+
+
 def test_every_constant_is_the_codata_2022_value_at_full_precision():
     spec = importlib.util.spec_from_file_location("generator", GENERATOR)
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
     generated = _values(generator.generate_constants_section())
-    stored = _values(
-        default_conf().split("[Constants]")[1].split("[Categories]")[0]
-    )
+    stored = _values(_section(default_conf(), "Constants"))
     assert len(stored) == len(generated) > 400
     assert stored == generated
