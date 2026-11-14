@@ -4,6 +4,9 @@
 **Scope:** every crate and language that can produce a number a user sees: `physure-core`, `physure-script`, `physure-cli`,
 `physure-lsp`, `physure-wasm`, `physure-java`, `physure-python` (Rust and the `physure/` package).
 **Spec:** `docs/superpowers/specs/2026-11-07-conf-freeze-design.md` §2, §3, §8, §11 (Phase 4), §13.
+**Status (2026-11-14, after the audit):** every flagged defect (B8, B10, B14, B16-B20, B22) and B11 are **fixed on branch fix/audit-defects**
+(plan `docs/superpowers/plans/2026-11-14-audit-defects.md`); the commits are named in §4. That track found further
+defects, listed in §11. The rest of this file is the audit as written; only the status cells and notes are new.
 
 **Method.** I ran a literal extractor over every non-test source file (Rust `#[cfg(test)] mod` and `tests.rs` excluded,
 Python `tests/` and doctests excluded) and then searched for `unwrap_or(`, `Default`, `const`, `env::var`, `rand`, `seed`,
@@ -45,6 +48,11 @@ Of the 25 B items, 9 are flagged as **defects** (B8, B10, B14, B16, B17, B18, B1
 or gives a wrong answer without an error, so a frozen file would freeze a wrong answer. They are not catalog material.
 They are listed so that whoever writes the Phase 4 plan can decide whether to fix them before freezing users' validations
 onto them.
+
+**Status:** all 9 are **fixed on branch fix/audit-defects**, and B11 with them (the same absolute tolerance as B10, not flagged here):
+**0 of the 25 B items is an open defect.** The class totals above do not change: a fixed item still lives in the
+engine. B17's tolerance became the `[Settings]` key `approx_rel_tol` (so it is also covered by the catalog, §9). The
+new findings of §11 (B26 and T1-T12) are not code-resident numbers and are not counted in this table.
 
 ### 1.2 Answer to the spec's list (§2)
 
@@ -99,15 +107,15 @@ onto them.
 
 | ID | file:line | Literal and meaning | Affects | Witness |
 |---|---|---|---|---|
-| B14 ⚠ | `physure-core/src/covariance/store.rs:44`, `:55`, `:189` | `1e-12`: covariance entries with an absolute value at or below it are not stored | Python numpy-array quantities (`vectorized_uncertainty.py:307-320`). Probe: `Q_(np.array([1.,2.]),'m',uncertainty=np.array([1e-7,1e-7]))`; `x + x` gives uncertainty `[0. 0.]`. With `u = 1e-5` the result is `[2e-05 2e-05]`. In `mm` with `u = 1e-5` it is kept. | no |
-| B16 ⚠ | `physure-script/src/builtins/core.rs:386` (`==`), `:257` (`!=`) | absolute `1e-9` on base-SI magnitudes | `1 pm == 2 pm` is True, and `1 nm == 2 nm` is False (probe). | no |
-| B19 ⚠ | `physure-script/src/builtins/calc.rs:387-389` (probe `±1e7`, `+1e-8`), `:400` (`< 1e-5` gives 0), `:403` (`> 1e6` gives ±inf) | Numeric limit heuristic | `limit("0.000001*x","x",1)` gives `0.0`. `limit("2000000 + x","x",1)` gives `inf`. `limit("1/(x - 1e-9)","x",0)` gives `inf` (true value −1e9). | no |
-| B20 ⚠ | `physure-script/src/builtins/calc.rs:575`, `:624` (100 panels), `:629-640` (3-point Gauss–Legendre, `0.7745966692414834`), `:601-612` (improper ends at `1 − 1e-6`, cut at `1 − 1e-7`); `:568` (an evaluation error becomes `0.0`) | Numeric quadrature with no error estimate, used when symbolic integration fails | `integral("1/sqrt(x)","x",0,1)` gives `1.97508560641784` (true value 2). `exp(-x^2)` over `[0, 1]` gives `0.7468241328124272` (correct). The integrand's unit and uncertainty are dropped (`q.value.mean()`). | no |
-| B17 ⚠ | `physure-script/src/builtins/core.rs:183` | `≈` is an absolute `1e-3` in base SI | `1 mm ≈ 1.9 mm` is True, and `1 km ≈ 1.0009 km` is False (probe). | no |
-| B18 ⚠ | `physure-script/src/builtins/core.rs:382` | `0.05`, the default u for an exact left operand in `x == t ± kσ`. It mixes `l.std_dev()` (own unit) with canonical magnitudes. | `10.0 mm == 10.04 mm +/- 1 sigma` is True (0.04 mm against 0.05 m). | no |
-| B10 ⚠ | `physure-core/src/quantity.rs:30` | `Quantity: PartialEq` uses an absolute `1e-9` | Rust API `==` (bindings use their own comparisons, §C6) | no |
-| B22 ⚠ | `physure-script/src/interpreter/helpers.rs:70-71` | truthiness `abs(x) > 1e-15` on the raw mean | `if 1e-16 m` is false, while `if 1e-16 km` is true | no |
-| B8 ⚠ | `physure-core/src/uncertainty/monte_carlo.rs:87` | `samples.std(0.0)`, population standard deviation | Every Monte Carlo u. JCGM 101 (7.6) uses `1/(M−1)`. | **yes** (`unc.montecarlo_seed_1`) |
+| B14 ⚠ **fixed on branch fix/audit-defects** (`6125152`; see also X6 and X7 in §11) | `physure-core/src/covariance/store.rs:44`, `:55`, `:189` | `1e-12`: covariance entries with an absolute value at or below it are not stored | Python numpy-array quantities (`vectorized_uncertainty.py:307-320`). Probe: `Q_(np.array([1.,2.]),'m',uncertainty=np.array([1e-7,1e-7]))`; `x + x` gives uncertainty `[0. 0.]`. With `u = 1e-5` the result is `[2e-05 2e-05]`. In `mm` with `u = 1e-5` it is kept. | no |
+| B16 ⚠ **fixed on branch fix/audit-defects** (`53a0ac0`, `abc60bb`) | `physure-script/src/builtins/core.rs:386` (`==`), `:257` (`!=`) | absolute `1e-9` on base-SI magnitudes | `1 pm == 2 pm` is True, and `1 nm == 2 nm` is False (probe). | no |
+| B19 ⚠ **fixed on branch fix/audit-defects** (`b69f22c`, `8c249df`) | `physure-script/src/builtins/calc.rs:387-389` (probe `±1e7`, `+1e-8`), `:400` (`< 1e-5` gives 0), `:403` (`> 1e6` gives ±inf) | Numeric limit heuristic | `limit("0.000001*x","x",1)` gives `0.0`. `limit("2000000 + x","x",1)` gives `inf`. `limit("1/(x - 1e-9)","x",0)` gives `inf` (true value −1e9). | no |
+| B20 ⚠ **fixed on branch fix/audit-defects** (`13e4eab`, `cef665e`, `e9462f1`) | `physure-script/src/builtins/calc.rs:575`, `:624` (100 panels), `:629-640` (3-point Gauss–Legendre, `0.7745966692414834`), `:601-612` (improper ends at `1 − 1e-6`, cut at `1 − 1e-7`); `:568` (an evaluation error becomes `0.0`) | Numeric quadrature with no error estimate, used when symbolic integration fails | `integral("1/sqrt(x)","x",0,1)` gives `1.97508560641784` (true value 2). `exp(-x^2)` over `[0, 1]` gives `0.7468241328124272` (correct). The integrand's unit and uncertainty are dropped (`q.value.mean()`). | no |
+| B17 ⚠ **fixed on branch fix/audit-defects** (`0e10eb9`, `abc60bb`) | `physure-script/src/builtins/core.rs:183` | `≈` is an absolute `1e-3` in base SI | `1 mm ≈ 1.9 mm` is True, and `1 km ≈ 1.0009 km` is False (probe). | no |
+| B18 ⚠ **fixed on branch fix/audit-defects** (`abc60bb`) | `physure-script/src/builtins/core.rs:382` | `0.05`, the default u for an exact left operand in `x == t ± kσ`. It mixes `l.std_dev()` (own unit) with canonical magnitudes. | `10.0 mm == 10.04 mm +/- 1 sigma` is True (0.04 mm against 0.05 m). | no |
+| B10 ⚠ **fixed on branch fix/audit-defects** (`53a0ac0`) | `physure-core/src/quantity.rs:30` | `Quantity: PartialEq` uses an absolute `1e-9` | Rust API `==` (bindings use their own comparisons, §C6) | no |
+| B22 ⚠ **fixed on branch fix/audit-defects** (`53a0ac0`, `abc60bb`) | `physure-script/src/interpreter/helpers.rs:70-71` | truthiness `abs(x) > 1e-15` on the raw mean | `if 1e-16 m` is false, while `if 1e-16 km` is true | no |
+| B8 ⚠ **fixed on branch fix/audit-defects** (`cb93ba2`) | `physure-core/src/uncertainty/monte_carlo.rs:87` | `samples.std(0.0)`, population standard deviation | Every Monte Carlo u. JCGM 101 (7.6) uses `1/(M−1)`. | **yes** (`unc.montecarlo_seed_1`; its value changes with the fix: `0.5112074131685965` → `0.5114632087378533`) |
 | B7 | `physure-core/src/uncertainty/monte_carlo.rs:32` | seed mixing `seed ^ n·0x9E3779B97F4A7C15`; `StdRng` (ChaCha12), `rand_distr::Normal` | Seeded Monte Carlo draws. They can move with a `rand` dependency bump (the battery documents this). | **yes** |
 | B6 | `physure-core/src/uncertainty/unscented.rs:40-46` | `n = 1`, `λ = 3 − n` (κ = 2, α = 1, β = 0), weights 2/3, 1/6, 1/6 | Unscented results | **yes** (`unc.unscented_square`) |
 | B5 | `physure-core/src/uncertainty/expanded.rs:40-46` | ν_eff truncated to an integer, at least 1 (GUM G.4.1) | `coverage_factor`, `expanded` | **yes** (`unc.expanded_k_p95`) |
@@ -115,7 +123,7 @@ onto them.
 | B2 | `physure-core/src/math/stats.rs:25-35`, `:41` | Lanczos coefficients (g = 7, n = 9) | ln Γ, and therefore every k_p | **yes** |
 | B3 | `physure-core/src/math/stats.rs:171-189` | Bracket doubling up to `1e300`; 200 bisections; stop at `1e-15·high` | Every k_p | **yes** |
 | B4 | `physure-core/src/math/stats.rs:21`, `:212-215` | `NORMAL_LIMIT = 1e6`: above it, the normal quantile plus the Cornish–Fisher term | k_p for ν > 10⁶ | **no** (the battery's largest ν is 100) |
-| B11 | `physure-core/src/quantity.rs:548-549` | `assert` tolerances `REL 1e-9`, `ABS 1e-12` | PHS `assert` pass or fail (WASM, Java and Python `phs_assert`) | no (a user witness can) |
+| B11 **fixed on branch fix/audit-defects** with B10 (`53a0ac0`; not flagged as a defect in this audit, but it is the same absolute tolerance: `assert(1 fm, 1000 fm)` passed) | `physure-core/src/quantity.rs:548-549` | `assert` tolerances `REL 1e-9`, `ABS 1e-12` | PHS `assert` pass or fail (WASM, Java and Python `phs_assert`) | no (a user witness can) |
 | B12 | `physure-core/src/quantity.rs:190`; `physure-core/src/units/rational.rs:338`, `:452`, `:454`, `:481` | `abs(scale − 1) < 1e-9` decides "plain number" and display-name inheritance | Which unit text is shown and whether a scale is folded into the value | indirect (`units.*`) |
 | B9 | `physure-core/src/uncertainty/shapes.rs:58`, `:60`, `:132`, `:172`, `:263` | `1/√(2π)`, maximum skewness 1.6406, `RATIO_MAX = 1e12`, slack of 4·ε | Asymmetric pairs ↔ moments | no |
 | B13 | `physure-core/src/units/exact.rs:29`, `:33` | `MAX_EXPONENT = 400`, `2^53`: where exact scales give up | Exact conversions | indirect (`units.*`) |
@@ -229,15 +237,16 @@ never enables `jax_enable_x64` (`backends/jax_backend.py:162`). These versions a
   25 elements, different uncertainty conventions, and a table label ("IUPAC 2021", with a 2013 reference) that matches
   neither shipped edition.
 * **S2. A silent drop of uncertainty** in the covariance store (B14). This violates invariant #1 of `CLAUDE.md`, and the
-  numpy probe shows it.
+  numpy probe shows it. *(Fixed on branch fix/audit-defects, `6125152`.)*
 * **S3. A code table disagrees with the catalog.** `si_prefix_for_scale` writes `µ`; the catalog's micro is `u` (A8).
 * **S4. The Monte Carlo standard deviation is the population form** (B8), although the doc cites JCGM 101, which uses
-  `M − 1`.
+  `M − 1`. *(Fixed on branch fix/audit-defects, `cb93ba2`.)*
 * **S5. Two loop ceilings.** `max_loop_iterations = 1000000` is configurable; the `while` cap of 10 000 is a hidden const
   in PHS (A9).
 * **S6. Defaults that differ between Python and the core:**
   * `p = 0.95` exists only in Python (A5);
-  * `approx_eq` defaults to `rel_tol = 0.1` in Python (`lib.rs:727`, `helpers.py:21`), against the core `assert`'s `1e-9`;
+  * `approx_eq` defaults to `rel_tol = 0.1` in Python (`lib.rs:727`, `helpers.py:21`), against the core `assert`'s `1e-9`
+    (since the defects track, the core's `assert(a, b)` is `phs_eq`, relative `1e-12`; the Python default is unchanged);
   * Python `__str__` does not round the uncertainty (C11);
   * Python finite differences, against analytic derivatives in the core (C5).
 * **S7. The unit-system files the spec names carry no result-affecting number**: only an inert `base_units`.
@@ -378,7 +387,8 @@ CHANGELOG entry. Test: the repr of an anonymous `1e-6` force unit equals the cat
   "Python chemistry: not frozen" until then.
 * **C2, C3.** These are removals (Phase 5).
 * **B16–B20, B22.** These are defects, not data. They need engine fixes (relative tolerances, an error estimate, refusal
-  instead of guessing). A key would freeze a wrong answer.
+  instead of guessing). A key would freeze a wrong answer. *(Fixed on branch fix/audit-defects with B8, B10, B11 and B14;
+  the only key the fixes added is `approx_rel_tol`, the relative tolerance of `≈`.)*
 
 ---
 
@@ -386,18 +396,19 @@ CHANGELOG entry. Test: the repr of an anonymous `1e-6` force unit equals the cat
 
 | Protection | Items |
 |---|---|
-| Engine pin **and** a battery witness | B1, B2, B3, B5, B6, B7, B8 (and A1 until M1) |
+| Engine pin **and** a battery witness | B1, B2, B3, B5, B6, B7, B8 (fixed; the witness value changed) (and A1 until M1) |
 | Engine pin, indirect witness (`units.*`, `const.*`) | B12, B13 |
-| Engine pin only, **no witness** | B4 (ν > 10⁶), B9 (asymmetric shapes), B10, B11, B15, B21, B23, B24 |
-| Engine pin only, no witness, **defect** | B14, B16, B17, B18, B19, B20, B22 |
-| Already covered by `[Settings]` | B25 |
+| Engine pin only, **no witness** | B4 (ν > 10⁶), B9 (asymmetric shapes), B10 (fixed), B11 (fixed), B14 (fixed), B15, B16 (fixed), B18 (fixed), B19 (fixed), B20 (fixed), B21, B22 (fixed), B23, B24 |
+| Engine pin only, no witness, **defect** | none open: B14, B16, B17, B18, B19, B20 and B22 are **fixed on branch fix/audit-defects** (§4) |
+| Already covered by `[Settings]` | B25; B17 (its tolerance is now `approx_rel_tol`, a frozen entry; the rule itself is engine) |
 
 Cheap witnesses that would close gaps:
 
 * `stat.t_p95_nu2e6` (B4);
 * `unc.asymmetric_sum` (B9 and A4);
 * PHS-level cases, as built-in user witnesses or a new `phs.*` family, for `==`, `≈`, `limit`, numeric `integral` and
-  `linspace` (B16–B21). The core battery cannot reach PHS builtins.
+  `linspace` (B16–B21). The core battery cannot reach PHS builtins. Now that these are fixed, such cases would pin the
+  corrected behaviour (the tests of the defects track pin it in the test suite, not in a frozen file).
 
 ---
 
@@ -419,7 +430,8 @@ Cheap witnesses that would close gaps:
 6. **Q6. Display as a result.** Do audited users treat printed text as the result? If so, M7 belongs in priority 1, and
    `phs-witness-1` could also record the display text.
 7. **Q7. Defects before freezing.** Fix B14 and B16–B20/B22 before Phase 4 ships? Freezing validations on top of them
-   would make every later fix an "unannounced alteration" for frozen users.
+   would make every later fix an "unannounced alteration" for frozen users. **Answered (2026-11-14):** fixed first, in
+   their own track, before Phase 4b; done on branch fix/audit-defects (§4, §11).
 8. **Q8. Inert settings.** Remove `default_output`, `auto_simplify`, `default_system`, `readable_representation`,
    `verbose`, `mkml_recursion_limit` and `[System] base_units`, or keep them and mark them inert in the coverage table?
 9. **Q9. Catalog constants without uncertainties, and the duplicate Bohr-magneton entries (S8).** Is that in scope for
@@ -428,3 +440,54 @@ Cheap witnesses that would close gaps:
     frozen file. Should `verify --run` or evaluation under a frozen file refuse them, or record their hashes?
 11. **Q11. Parallel loops and thread-local scopes (§6.4).** Should rayon workers re-open the seed, the propagation-mode
     scope and the catalog scope, as they re-open the angle mode?
+
+---
+
+## 11. Findings of the defects track
+
+Added on 2026-11-14 by the defects track (branch `fix/audit-defects`, plan
+`docs/superpowers/plans/2026-11-14-audit-defects.md`). Its adversarial review and its implementers probed beyond the
+audit's list. Every probe below was run with `phs eval -`: the "before" values on the `conf-freeze-3` debug build, the
+"after" values on the branch. The commit messages hold the full probe lists.
+
+### 11.1 Found and fixed on the branch
+
+| ID | What | Before | After | Commit |
+|---|---|---|---|---|
+| X1 | `call_by_name` held the lock of the unlocked builtins while a calc builtin ran, so a calc builtin that called another one waited forever | `integral("sqrt(x)","x",0,1)`, `integral("tan(x)","x",0,3)`, `integral("abs(x-1/3)","x",0,1)` did not stop | `0.666666666666667`, refused, refused | `13e4eab` |
+| X2 | `integral` bounds: an unknown name or `pi` read as `0`, and the unit of a quantity bound dropped | `integral("sin(x)","x",0,pi)` `0.0`; `integral("x","x","a",1)` `0.5`; `integral("x","x",0 m,2 m)` `2.0` | `2.0`; an error; `2 m^2` | `13e4eab` |
+| X3 | The integrand did not see the variables of the program | `v = 3; integral("v*x","x",0,2)` `0.0` | `6` | `13e4eab` |
+| X4 | The symbolic definite integral was returned without checking that the antiderivative is continuous on the interval; the symbolic engine read a comparison as its left side | `integral("x^(-2)","x",-1,1)` `-2.0`; `integral("sec(x)^2","x",0,3)` `-0.1425`; `integral("x < 0.5","x",0,1)` `0.5` | refused (a closed form is returned only when the quadrature confirms it) | `cef665e` |
+| X5 | The improper-interval mapping inverted `x = 2t/(1 − t²)` but integrated under `x = t/(1 − t²)` | `integral("exp(-x)","x",1,"inf")` `0.606530659712631`; `integral("1/x^2","x",1,"inf")` `1.99999799999899` | `0.36787944117144…`; `1.0` | `cef665e` |
+| X6 | An input that appears twice in one operation added only its first Jacobian to the cross covariance (`cov(x + x, x) = var(x)`) | Python arrays, `u = 1e-3 m`: `(x + x) - x` `1.73e-3`; `(x + x) - 2*x` `2e-3` | `1e-3`; `0` | `23cd3a1` |
+| X7 | B14 also dropped every Jacobian entry at or below `1e-12` | `x * 1e-13`, `u = 1e-3 m`: `[0, 0]` | `1e-16` | `6125152` |
+| X8 | Operand pairs that have no comparison answered `False`; strings were ordered | `vector(1,2) == vector(1,2)`, `1 m == "a"`, `1 m < 20 m +/- 1 sigma` `False`; `"b" < "a"` `True` | type errors naming both operand types | `abc60bb` |
+| X9 | The sigma-bound target literal carried `k` as its uncertainty | `y = 10.04 mm +/- 2 sigma` displayed `10 ± 2 mm ± 2.0σ` | `10.04 mm ± 2.0σ` | `abc60bb` |
+| X10 | The dimensionless-zero exception of comparisons applied to temperature points and levels | `-10 degC > 0` `True`; `5 m > 0 dB` `True` | unit-mismatch errors (`1 m > 0` is still `True`) | `53a0ac0` |
+| X11 | `limit` probed one side only, at `p + 1e-8`, read any failure, non-number or unknown point as `0`, did not see the call's scope, and dropped the unit and uncertainty of the point | `limit("abs(x)/x","x",0)` `1.0`; `limit("q*x","x",1)` `0.0`; `limit("x","x",2 m)` `2.00000001` | refused; refused; `2.0 m` | `b69f22c` |
+| X12 | The LSP hover called `limit` symbolic; there is no symbolic limit | "Computes symbolic limit" | says what the numeric method does | `8c249df` |
+| X13 | Monte Carlo accepted fewer than two samples, and Python replaced a bad `samples` by the default | `M = 0`: mean `0.0`, std NaN; `M = 1`: std `0.0`; Python `samples = -1` ran with 1000 | refused (`DomainError`; Python `ValueError`, `OverflowError` for `-1`) | `cb93ba2` |
+| X14 | The test helper `embedded_catalog_problems()` applied the embedded catalog's `[Settings]` to the process outside the settings lock, behind an intermittent failure of `parses_max_pipeline_steps_from_settings_section` | a locked test read back `1000` after writing `42` | the helper reads without applying | `3d9f905` |
+
+### 11.2 Open (not fixed on the branch)
+
+| ID | file:line | What | Probe (branch build) | Decision needed |
+|---|---|---|---|---|
+| B26 | `physure-script/src/phs.pest:125` (`comp_expr = { term ~ (_is_compare ~ op_compare ~ term)* }`), `:135` | **Comparison binds tighter than `+` and `-`.** `0.1 + 0.2 == 0.3` is parsed as `0.1 + (0.2 == 0.3)` | `0.1 + 0.2 == 0.3` and `0.1 m + 0.2 m == 0.3 m`: "Invalid operand types for binary operation" (before and after the track). Every test of the track parenthesises its sums; the guide says to. | Language semantics, for the owner. The grammar was **not** changed. |
+| T1 | `physure-script/src/check.rs:745`; `physure-script/src/report.rs:184` | The static checker flags a valid sign test as a dimension mismatch, and `phs eval` hides the runtime error of any line the checker flagged | `1 m > 0`: the runtime answers `True`, the checker reports "cannot compare L with dimensionless", so `phs eval` gives `ok: false`. On a flagged line the interpreter's own error is dropped ("say it once"), so a different runtime error there is never shown. | Teach the checker the dimensionless-zero exception (linear units only, as the runtime now does); report a runtime error whose text differs from the checker's. |
+| T2 | the symbolic engine (`physure-script/src/symbolic/`) | Comparisons are dropped silently by the symbolic engine | `integral("x < 0.5","x")` (indefinite) answers `x^2/2`. The definite form is now refused (X4) because the quadrature sees a Bool. | Refuse a comparison in symbolic input. |
+| T3 | `physure-script/src/builtins/mod.rs:88-112` (`preprocess_symbolic_expression`, `inline_call`) | Inlines only the **first** call of each user function, up to its first closing parenthesis, and does not substitute the arguments | read at file:line, not probed | Inline every call with its arguments, or refuse user functions in symbolic input. |
+| T4 | the runtime builtins | PHS has no runtime `sec`, `csc`, `cot` or `erf`, while the symbolic engine integrates them | `sec(1)`, `csc(1)`, `cot(1)`, `erf(1)`: "Undefined function". `integral("sec(x)^2","x",0,1)` is refused: "the antiderivative tan(x) cannot be confirmed … Undefined function 'sec'" (true value `tan 1`). | Add the four functions (core first). |
+| T5 | the interpreter's name lookup | An unbound name evaluates to a string of itself | `foo` gives `foo`; `pi` gives `pi`; `x = pi * 2` is flagged by the checker ("'pi' is neither a variable nor a unit"). Before the track `pressure > 0 Pa` answered `False` silently (now a type error, X8). | Whether an unbound name should be an error. |
+| T6 | `physure-script/src/interpreter/helpers.rs:89-90` | Truthiness of strings and other types is unchanged by B22: the strings `"true"`, `"True"` and `"1"` are true, every other string is false, and every other type (vector, matrix, function, ...) is false | `if "true" then 1 else 0` and `if "1" then 1 else 0` give `1.0` | Ask the owner: should a non-Bool, non-numeric condition be an error? |
+| T7 | `physure-core/src/covariance/store.rs:202-203` (`prune_weak_correlations`) | The B15 pruning reads a missing variance norm as `unwrap_or(1.0)`, an absolute value in whatever unit | read at file:line; pruning is off by default | Skip (or refuse) a block whose variances are unknown. |
+| T8 | `physure-core/src/covariance/store.rs` (`numpy_to_csr`) | Since X7 a Jacobian entry is dropped only when exactly zero, so a Jacobian full of rounding noise stays dense: a storage and time risk for large arrays, not a correctness one | not measured | Measure on a large array; if needed, a relative rule per row. |
+| T9 | `physure-core/src/quantity.rs:265`, `:270` | `Quantity::new_scalar` panics on a Monte Carlo sample count below 2 while `try_new_scalar` returns the error (84 callers kept the old signature; no caller passes a user's count) | read at file:line | Move callers that can receive a user's count to `try_new_scalar`. |
+| T10 | `physure-script/src/builtins/limit.rs` | `limit` is two-sided only; there is no syntax for a one-sided limit | `limit("1/x","x",0)` is refused because the sides disagree | Language syntax, for the owner. |
+| T11 | `physure-script/src/builtins/limit.rs:382-390` (`first_step`) | The extrapolation starts at `h = 1/8` **in the variable's unit**, so a borderline refusal can depend on the unit of the point | read at file:line; the accepted values in the test suite are unit-independent | Scale `h0` to the point's magnitude or prove the refusals unit-independent. |
+| T12 | `physure-script/src/builtins/definite_integral.rs`, `limit.rs` | `pi` and the catalog constants resolve as names only inside `integral` and `limit` texts and bounds; elsewhere PHS has no such identifiers (T5) | `integral("sin(x)","x",0,pi)` gives `2.0`, while `pi` alone gives the text `pi` | Question for the owner: make `pi` and the catalog constants global identifiers? |
+
+The binding disagreements the track recorded (Python `Quantity.__eq__` exact after conversion, `PyQuantity.__eq__` same
+unit and exact mean, `approx_eq` defaults `0.1` / `1e-5`, the Python code generator's `approx_eq` comparing in the left
+operand's unit, Java `approxEquals` absolute `1e-6`, the Java code generator's `==` as `.equals`, no comparison API in
+WASM, no `≈` mapping in the Rust code generator) are C6 items of §5, owned by Phase 5 and the binding-contract work.
