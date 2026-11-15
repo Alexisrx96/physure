@@ -2,14 +2,17 @@
 //! relations.
 //!
 //! Atomic weights come from the configuration in force (the selected edition and the user's `[AtomicWeights]`
-//! definitions), and the gas constant is its `molar_gas_constant`, so a changed table or constant shows in the
-//! witnesses that use it. An element the selected table does not have is a recorded failure (`failed=...`), not an
+//! definitions), the standard enthalpies and entropies likewise (`[Chemistry] thermochemistry` and the user's
+//! `[Thermochemistry]` definitions), and the gas constant is its `molar_gas_constant`, so a changed table or constant
+//! shows in the witnesses that use it. An element the selected table does not have is a recorded failure (`failed=...`), not an
 //! error. The cases that combine uncertain quantities run under a thread-local `correlated` propagation mode, so
 //! the process's `[Settings] propagation_mode` does not reach them; balancing reads no setting and no catalog.
 
 use super::units::witness_of;
 use super::{case, Case, CaseResult};
-use crate::chemistry::{arrhenius, clausius_clapeyron, gibbs_free_energy, mass_to_moles, Reaction, Species};
+use crate::chemistry::{
+    arrhenius, clausius_clapeyron, gibbs_free_energy, mass_to_moles, standard_enthalpy, standard_entropy, Reaction, Species,
+};
 use crate::frozen::witness::WitnessValue;
 use crate::quantity::Quantity;
 use crate::uncertainty::mode::scoped;
@@ -79,6 +82,23 @@ pub(super) fn cases() -> Vec<Case> {
                 let t = Quantity::new(298.15, "K")?;
                 let ds = Quantity::new(-163.2, "J/(mol*K)")?;
                 Ok(witness_of(&gibbs_free_energy(&dh, &t, &ds)?.to("kJ/mol")?))
+            })
+        }),
+        // the standard data of liquid water from the thermochemistry in force (`legacy-python-1` in the shipped
+        // catalog): dHf in kJ/mol, S in J/(mol K)
+        case("chem.dhf_h2o_l", || correlated(|| Ok(witness_of(&standard_enthalpy("H2O(l)")?)))),
+        case("chem.entropy_h2o_l", || correlated(|| Ok(witness_of(&standard_entropy("H2O(l)")?)))),
+        // H2(g) + 1/2 O2(g) -> H2O(l) at 298.15 K from the table's entries: dG = dH - T dS in kJ/mol (unlike
+        // chem.gibbs_298, whose dS is a literal of its own)
+        case("chem.gibbs_formation_h2o_l", || {
+            correlated(|| {
+                let half = Quantity::new(0.5, "")?;
+                let of_formation = |read: fn(&str) -> crate::PhysureResult<Quantity>| -> crate::PhysureResult<Quantity> {
+                    read("H2O(l)")?.sub(&read("H2(g)")?)?.sub(&half.mul(&read("O2(g)")?)?)
+                };
+                let t = Quantity::new(298.15, "K")?;
+                let dg = gibbs_free_energy(&of_formation(standard_enthalpy)?, &t, &of_formation(standard_entropy)?)?;
+                Ok(witness_of(&dg.to("kJ/mol")?))
             })
         }),
     ]

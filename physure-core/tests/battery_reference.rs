@@ -750,6 +750,51 @@ fn the_thermodynamic_cases_match_their_closed_forms() {
     assert!((g + 237.1).abs() < 0.05, "the Gibbs energy of formation of liquid water, -237.1 kJ/mol: {g}");
 }
 
+/// The thermochemistry cases read the edition in force (`legacy-python-1` under the shipped catalog, the numbers of
+/// the Python table): dHf and S of liquid water as the table gives them, and the Gibbs energy of formation of liquid
+/// water, H2(g) + 1/2 O2(g) -> H2O(l), from the table's entries: dS = 69.9 - 130.7 - 205.2 / 2 = -163.4 J/(mol K)
+/// (`chem.gibbs_298` keeps its own literal -163.2: an id is forever), dG = dH - T dS, one subtraction after a few
+/// exact-ish ones, hence 1e-14.
+#[test]
+fn the_thermochemistry_cases_read_the_table_in_force() {
+    let _lock = lock();
+    assert_eq!(run_one("chem.dhf_h2o_l"), WitnessValue::number(-285.8, 0.0, "kJ/mol"));
+    assert_eq!(run_one("chem.entropy_h2o_l"), WitnessValue::number(69.9, 0.0, "J/(mol*K)"));
+    let (g, u, unit) = mean_of(&run_one("chem.gibbs_formation_h2o_l"));
+    let ds = 69.9 - 130.7 - 0.5 * 205.2;
+    relative("chem.gibbs_formation_h2o_l", g, -285.8 - 298.15 * ds / 1000.0, 1e-14);
+    assert_eq!((u, unit.as_str()), (0.0, "kJ/mol"));
+    assert!((g + 237.08).abs() < 0.005, "-285.8 + 298.15 * 163.4 / 1000 = -237.08: {g}");
+    // not the literal of chem.gibbs_298
+    assert_ne!(run_one("chem.gibbs_formation_h2o_l"), run_one("chem.gibbs_298"));
+}
+
+/// A definition of a frozen file changes the thermochemistry witnesses that read it, and nothing else:
+/// `chem.gibbs_298` has its own literals.
+#[test]
+fn a_thermochemistry_definition_changes_the_cases_that_read_it_and_only_those() {
+    let _lock = lock();
+    let unfrozen = run_battery();
+    let frozen = battery_under_frozen("[Thermochemistry]\nH2O = -280.0, 70.5\n");
+    assert_eq!(value_of(&frozen, "chem.dhf_h2o_l"), WitnessValue::number(-280.0, 0.0, "kJ/mol"));
+    assert_eq!(value_of(&frozen, "chem.entropy_h2o_l"), WitnessValue::number(70.5, 0.0, "J/(mol*K)"));
+    assert_eq!(
+        changed_keys(&frozen, &unfrozen),
+        ["builtin.chem.dhf_h2o_l", "builtin.chem.entropy_h2o_l", "builtin.chem.gibbs_formation_h2o_l"],
+    );
+    // a table of the user without hydrogen: a recorded failure naming the edition, not an error row
+    let frozen = battery_under_frozen(
+        "[Chemistry]\nthermochemistry = mine-1\n[Thermochemistry:mine-1]\nH2O(l) = -285.83, 69.95\nO2(g) = 0, 205.152\n",
+    );
+    assert_eq!(value_of(&frozen, "chem.dhf_h2o_l"), WitnessValue::number(-285.83, 0.0, "kJ/mol"));
+    match value_of(&frozen, "chem.gibbs_formation_h2o_l") {
+        WitnessValue::Failed(message) => assert!(message.contains("H2(g)") && message.contains("mine-1"), "{message}"),
+        other => panic!("not a recorded failure: {other:?}"),
+    }
+    assert!(frozen.iter().all(|(_, value)| value.is_ok()), "{frozen:?}");
+    assert_eq!(run_battery(), unfrozen, "the process is restored");
+}
+
 /// The battery under a frozen file made from `conf` (the working directory's `physure.conf` at freeze time), with
 /// the process restored afterwards.
 fn battery_under_frozen(conf: &str) -> Vec<(String, Result<WitnessValue, String>)> {
@@ -825,7 +870,10 @@ const CHEMISTRY_IDS: &[&str] = &[
     "chem.balance_iron_oxide_reduction",
     "chem.balance_propane_combustion",
     "chem.clausius_clapeyron_water",
+    "chem.dhf_h2o_l",
+    "chem.entropy_h2o_l",
     "chem.gibbs_298",
+    "chem.gibbs_formation_h2o_l",
     "chem.mass_to_moles_nacl",
     "chem.molar_mass_calcium_hydroxide",
     "chem.molar_mass_glucose",

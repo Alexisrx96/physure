@@ -673,7 +673,7 @@ the cases themselves are in
 | constants (6) | `const.molar_gas_constant`, `const.boltzmann_constant`, `const.planck_constant`, `const.avogadro_constant`, `const.speed_of_light_in_vacuum`, `const.elementary_charge` | the SI Brochure, Table 1, and CODATA 2022 (exact since the 2019 SI) |
 | uncertainty (11) | `unc.sum_correlated`, `unc.sum_uncorrelated`, `unc.product_first_order`, `unc.quotient_first_order`, `unc.power_first_order`, `unc.montecarlo_seed_1`, `unc.unscented_square`, `unc.gum_h1_uc`, `unc.gum_h1_nu_eff`, `unc.expanded_k_p95`, `unc.welch_satterthwaite_g41` | first order: closed forms (GUM 5.1.2, 5.2.2); JCGM 100:2008 H.1, the end gauge (u_c 32 nm, nu_eff 16.7, k 2.12 at 95 %) and G.4.1 (nu_eff 19.0); Monte Carlo against the exact moments of the product within five standard errors (JCGM 101:2008, 7.2); unscented against the moments of `x^2` |
 | statistics (8) | `stat.t_p95_nu1`, `stat.t_p95_nu2`, `stat.t_p95_nu5`, `stat.t_p95_nu10`, `stat.t_p95_nu30`, `stat.t_p95_nu100`, `stat.t_p99_nu10`, `stat.t_p99_nu100` | the Student-t table of the NIST/SEMATECH e-Handbook of Statistical Methods, 1.3.6.7.2 (JCGM 100:2008, Table G.2), within 5e-5 relative |
-| chemistry (10) | `chem.molar_mass_h2o`, `chem.molar_mass_glucose`, `chem.molar_mass_calcium_hydroxide`, `chem.molar_mass_iron_sulfate`, `chem.mass_to_moles_nacl`, `chem.balance_propane_combustion`, `chem.balance_iron_oxide_reduction`, `chem.arrhenius`, `chem.clausius_clapeyron_water`, `chem.gibbs_298` | CIAAW 2024 standard atomic weights, summed by hand; the textbook coefficients; closed forms with the catalog's gas constant |
+| chemistry (13) | `chem.molar_mass_h2o`, `chem.molar_mass_glucose`, `chem.molar_mass_calcium_hydroxide`, `chem.molar_mass_iron_sulfate`, `chem.mass_to_moles_nacl`, `chem.balance_propane_combustion`, `chem.balance_iron_oxide_reduction`, `chem.arrhenius`, `chem.clausius_clapeyron_water`, `chem.gibbs_298`, `chem.dhf_h2o_l`, `chem.entropy_h2o_l`, `chem.gibbs_formation_h2o_l` | CIAAW 2024 standard atomic weights, summed by hand; the textbook coefficients; closed forms with the catalog's gas constant; the thermochemistry edition `legacy-python-1` and dG = dH - T dS of its entries |
 
 **What the cases read.** Every case reads units, constants and atomic weights through the configuration it
 is evaluated under, never through a catalog of its own, so an override shows in the witnesses that depend on
@@ -686,6 +686,11 @@ it:
 * the atomic weights (the selected edition and your `[AtomicWeights]`) are read by the four molar masses and
   `chem.mass_to_moles_nacl`; O by `h2o`, `glucose`, `calcium_hydroxide` and `iron_sulfate`; an element the
   table lacks is a recorded `failed=`;
+* the standard thermochemical data (the edition `[Chemistry] thermochemistry` selects and your
+  `[Thermochemistry]` definitions) are read by `chem.dhf_h2o_l`, `chem.entropy_h2o_l` and
+  `chem.gibbs_formation_h2o_l` (H2O(l), H2(g), O2(g)); a species the data lack is a recorded `failed=`.
+  `chem.gibbs_298` reads none: its dH and dS are literals of the case (and its dS, -163.2 J/(mol K), is not the
+  -163.4 of the table: an id is forever, so the case that reads the table is a new one);
 * **settings:** the only one a case depends on is the propagation mode, and every `unc.*` case and every
   `chem.*` case that combines uncertain quantities pins its own on its thread (`correlated`, or the mode it
   is named after). The file's `[Settings]` (`propagation_mode`, `parallel_threshold`, the loop ceilings)
