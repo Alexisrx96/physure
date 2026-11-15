@@ -190,6 +190,7 @@ pub(crate) struct CallerScopes<'a> {
     max_pipeline_steps: usize,
     monte_carlo_samples: usize,
     max_while_iterations: usize,
+    asymmetric_shape: physure_core::uncertainty::ShapeKind,
 }
 
 impl CallerScopes<'_> {
@@ -205,6 +206,7 @@ impl CallerScopes<'_> {
                 max_pipeline_steps: physure_core::settings::max_pipeline_steps(),
                 monte_carlo_samples: physure_core::settings::monte_carlo_samples(),
                 max_while_iterations: physure_core::settings::max_while_iterations(),
+                asymmetric_shape: physure_core::uncertainty::shapes::asymmetric_shape(),
             })
         })
     }
@@ -218,6 +220,30 @@ impl CallerScopes<'_> {
         let _steps = physure_core::settings::scoped_max_pipeline_steps(self.max_pipeline_steps);
         let _samples = physure_core::settings::scoped_monte_carlo_samples(self.monte_carlo_samples);
         let _while = physure_core::settings::scoped_max_while_iterations(self.max_while_iterations);
+        let _shape = physure_core::uncertainty::shapes::scoped_asymmetric_shape(self.asymmetric_shape);
         physure_core::units::with_scoped_catalog(self.catalog, f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CallerScopes;
+
+    /// A PHS program cannot build an asymmetric value yet, so the asymmetric shape is checked on the mechanism itself:
+    /// a scope opened on the caller's thread is in force inside `run` on another thread (a rayon worker).
+    #[test]
+    fn the_scoped_asymmetric_shape_is_carried_to_another_thread() {
+        use physure_core::uncertainty::shapes::{asymmetric_shape, scoped_asymmetric_shape};
+        use physure_core::uncertainty::ShapeKind;
+        let _fechner = scoped_asymmetric_shape(ShapeKind::Fechner);
+        let (inside, outside) = CallerScopes::capture(|scopes| {
+            std::thread::scope(|s| {
+                let inside = s.spawn(|| scopes.run(asymmetric_shape)).join().unwrap();
+                let outside = s.spawn(asymmetric_shape).join().unwrap();
+                (inside, outside)
+            })
+        });
+        assert_eq!(outside, ShapeKind::Dimidiated, "another thread does not see the scope by itself (not vacuous)");
+        assert_eq!(inside, ShapeKind::Fechner);
     }
 }

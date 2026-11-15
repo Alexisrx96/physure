@@ -19,7 +19,10 @@ use physure_core::frozen::{
     active, battery, ensure_valid, freeze, reset_cache, run_battery, run_cases, set_engine_file, set_explicit_conf,
     write_atomic, Case, CaseError, CaseResult, EnginePolicy, FreezeOptions,
 };
-use physure_core::uncertainty::{propagation_mode, set_propagation_mode, with_seed, PropagationMode, UncertaintyValue};
+use physure_core::uncertainty::shapes::set_asymmetric_shape;
+use physure_core::uncertainty::{
+    propagation_mode, set_propagation_mode, with_seed, MomentsBackend, PropagationMode, ShapeKind, UncertaintyValue,
+};
 use physure_core::Quantity;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -151,6 +154,7 @@ const STABLE_IDS: &[&str] = &[
     "stat.t_p95_nu5",
     "stat.t_p99_nu10",
     "stat.t_p99_nu100",
+    "unc.asymmetric_sum",
     "unc.expanded_k_p95",
     "unc.gum_h1_nu_eff",
     "unc.gum_h1_uc",
@@ -546,6 +550,32 @@ fn every_uncertainty_case_pins_its_mode_whatever_the_process_says() {
     set_propagation_mode(previous);
 }
 
+/// `unc.asymmetric_sum` computed here under whatever shape the process says.
+fn unpinned_asymmetric_sum() -> WitnessValue {
+    let m = Quantity::new(1.0, "m").unwrap().unit;
+    let x = Quantity::from_value(UncertaintyValue::Moments(MomentsBackend::measured(12.3, 0.4, 0.5).unwrap()), m.clone());
+    let y = Quantity::from_value(UncertaintyValue::Moments(MomentsBackend::measured(1.0, 0.4, 0.5).unwrap()), m);
+    let (mean, u, unit) = x.add(&y).unwrap().display_parts();
+    WitnessValue::number(mean, u, &unit)
+}
+
+/// `unc.asymmetric_sum`: `12.3 (+0.5 -0.4) m + 1.0 (+0.5 -0.4) m`, two independent dimidiated Gaussians (the
+/// equal-area reading of a pair, arXiv:2411.15499 §A). Each has mean `mode + (σ⁺ - σ⁻) / sqrt(2π)` and variance
+/// `(σ⁻² + σ⁺²) / 2 - (σ⁺ - σ⁻)² / (2π)`; the sum adds both.
+#[test]
+fn the_asymmetric_case_is_the_sum_of_two_dimidiated_gaussians() {
+    let _lock = lock();
+    let (mean, u, unit) = mean_of(&run_one("unc.asymmetric_sum"));
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let shift = 0.1 / two_pi.sqrt();
+    let variance = (0.16 + 0.25) / 2.0 - 0.01 / two_pi;
+    let mut failures = Vec::new();
+    within_ulps("unc.asymmetric_sum", "mean", mean, 13.3 + 2.0 * shift, 4, &mut failures);
+    within_ulps("unc.asymmetric_sum", "u", u, (2.0 * variance).sqrt(), 8, &mut failures);
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(unit, "m");
+}
+
 /// The Monte Carlo sample count of a measurement that names none, read here under whatever the process says.
 fn unpinned_sample_count() -> usize {
     let q = Quantity::new_scalar(2.0, 0.1, Quantity::new(1.0, "m").unwrap().unit, Some("monte_carlo"), None);
@@ -563,11 +593,15 @@ fn every_uncertainty_case_pins_the_phase_4b_settings_whatever_the_process_or_the
     let _lock = lock();
     let baseline = run_battery();
     let previous = physure_core::settings::set_monte_carlo_samples(7);
+    let previous_shape = set_asymmetric_shape(ShapeKind::Fechner);
     assert_eq!(unpinned_sample_count(), 7, "the process-wide count is in force (not vacuous)");
+    assert_ne!(unpinned_asymmetric_sum(), value_of(&baseline, "unc.asymmetric_sum"), "the process-wide shape is in force");
     assert_eq!(run_battery(), baseline, "under process-wide sentinels");
     physure_core::settings::set_monte_carlo_samples(previous);
+    set_asymmetric_shape(previous_shape);
     assert_eq!(unpinned_sample_count(), 1000);
-    let frozen = battery_under_frozen("[Settings]\nmonte_carlo_samples = 7\n");
+    assert_eq!(unpinned_asymmetric_sum(), value_of(&baseline, "unc.asymmetric_sum"));
+    let frozen = battery_under_frozen("[Settings]\nmonte_carlo_samples = 7\nasymmetric_shape = fechner\n");
     assert_eq!(changed_keys(&frozen, &baseline), Vec::<String>::new(), "a frozen file's settings changed a witness");
     assert_eq!(run_battery(), baseline, "the process is restored");
 }

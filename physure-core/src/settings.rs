@@ -250,7 +250,7 @@ impl Drop for MonteCarloSamplesGuard {
 }
 
 /// Puts every process-wide setting a conf can change back to the value compiled into the library: the three
-/// ceilings above, the `while` ceiling, the `≈` tolerance, the Monte Carlo sample count, the propagation mode, the angle mode and the
+/// ceilings above, the `while` ceiling, the `≈` tolerance, the Monte Carlo sample count, the asymmetric shape, the propagation mode, the angle mode and the
 /// `[Compatibility]` grants. Activating a frozen
 /// configuration calls it before applying the file's settings, so a setting the file does not mention takes its
 /// compiled default and never a value some earlier reading left behind. Thread-local overrides are not touched.
@@ -261,6 +261,7 @@ pub(crate) fn reset_to_defaults() {
     set_approx_rel_tol(DEFAULT_APPROX_REL_TOL);
     set_monte_carlo_samples(DEFAULT_MONTE_CARLO_SAMPLES);
     set_max_while_iterations(DEFAULT_MAX_WHILE_ITERATIONS);
+    crate::uncertainty::shapes::set_asymmetric_shape(crate::uncertainty::ShapeKind::DEFAULT);
     crate::uncertainty::set_propagation_mode(crate::uncertainty::PropagationMode::default());
     crate::units::angle_mode::set_angle_mode(crate::units::angle_mode::AngleMode::default());
     crate::units::angle_mode::set_marker_grants(true, true);

@@ -8,7 +8,8 @@
 //! first-order and the GUM cases, `uncorrelated` for `unc.sum_uncorrelated`, `monte_carlo` and `unscented` for the
 //! two cases named after them. The other uncertainty settings a frozen file can change are pinned the same way, at
 //! their compiled defaults, for every `unc.*` case: the Monte Carlo sample count (`monte_carlo_samples = 1000`, the
-//! count `unc.montecarlo_seed_1` always drew). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
+//! count `unc.montecarlo_seed_1` always drew) and the asymmetric shape (`asymmetric_shape = dimidiated`, the shape
+//! `unc.asymmetric_sum` is defined in). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
 //! hooked catalog like every other case.
 //!
 //! # Monte Carlo
@@ -27,13 +28,14 @@ use crate::frozen::witness::WitnessValue;
 use crate::math::stats::student_t_two_sided;
 use crate::quantity::Quantity;
 use crate::uncertainty::mode::scoped;
-use crate::uncertainty::{with_seed, PropagationMode};
+use crate::uncertainty::{with_seed, MomentsBackend, PropagationMode, UncertaintyValue};
 
 /// Runs `f` with the propagation mode `mode` on this thread only, and every other uncertainty setting at its
 /// compiled default (see the module documentation).
 fn under(mode: PropagationMode, f: impl FnOnce() -> CaseResult) -> CaseResult {
     let _mode = scoped(mode);
     let _samples = crate::settings::scoped_monte_carlo_samples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES);
+    let _shape = crate::uncertainty::shapes::scoped_asymmetric_shape(crate::uncertainty::ShapeKind::DEFAULT);
     f()
 }
 
@@ -78,6 +80,17 @@ fn end_gauge() -> Result<Quantity, CaseError> {
         });
     }
     Ok(length.expect("the budget is not empty"))
+}
+
+/// `12.3 (+0.5 -0.4) m + 1.0 (+0.5 -0.4) m`: two independent asymmetric measurements (moments propagation),
+/// under the pinned shape.
+fn asymmetric_sum() -> CaseResult {
+    let metre = Quantity::new(1.0, "m")?.unit;
+    let measured = |mode: f64| -> Result<Quantity, CaseError> {
+        let backend = MomentsBackend::measured(mode, 0.4, 0.5)?;
+        Ok(Quantity::from_value(UncertaintyValue::Moments(backend), metre.clone()))
+    };
+    Ok(witness_of(&measured(12.3)?.add(&measured(1.0)?)?))
 }
 
 /// A dimensionless number with no uncertainty.
@@ -139,6 +152,7 @@ pub(super) fn cases() -> Vec<Case> {
                 Ok(witness_of(&a.pow(2.0)?))
             })
         }),
+        case("unc.asymmetric_sum", || under(Correlated, asymmetric_sum)),
         case("unc.gum_h1_uc", || under(Correlated, || Ok(witness_of(&end_gauge()?)))),
         case("unc.gum_h1_nu_eff", || under(Correlated, || Ok(plain(end_gauge()?.effective_dof()?)))),
         case("unc.expanded_k_p95", || under(Correlated, || Ok(plain(end_gauge()?.coverage_factor(0.95)?)))),

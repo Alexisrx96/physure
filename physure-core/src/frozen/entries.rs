@@ -156,6 +156,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         approx_rel_tol,
         monte_carlo_samples,
         max_while_iterations,
+        asymmetric_shape,
         radian_grant,
         steradian_grant,
         ignored,
@@ -168,6 +169,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "approx_rel_tol", format!("{approx_rel_tol:?}"));
     push(&mut out, "setting", "monte_carlo_samples", monte_carlo_samples.to_string());
     push(&mut out, "setting", "max_while_iterations", max_while_iterations.to_string());
+    push(&mut out, "setting", "asymmetric_shape", asymmetric_shape.name());
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -366,6 +368,17 @@ mod tests {
             "10000",
             Setting::MaxWhileIterations(20_000),
             Setting::MaxWhileIterations(crate::settings::DEFAULT_MAX_WHILE_ITERATIONS),
+        );
+    }
+
+    #[test]
+    fn asymmetric_shape_is_an_entry_and_a_change_of_it_is_seen() {
+        use crate::uncertainty::ShapeKind;
+        assert_setting_entry(
+            "asymmetric_shape",
+            "dimidiated",
+            Setting::AsymmetricShape(ShapeKind::Fechner),
+            Setting::AsymmetricShape(ShapeKind::DEFAULT),
         );
     }
 

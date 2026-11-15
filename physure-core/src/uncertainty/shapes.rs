@@ -15,6 +15,9 @@
 
 use std::f64::consts::{FRAC_2_PI, PI};
 
+use std::cell::Cell;
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use super::moments::AsymmetricMoments;
 use crate::error::{PhysureError, PhysureResult};
 
@@ -294,9 +297,24 @@ pub enum ShapeKind {
 }
 
 impl ShapeKind {
-    /// The shape a bare `(σ⁻, σ⁺)` pair means when nothing has chosen one explicitly — the
-    /// equal-area dimidiated Gaussian, the reading most physicists intend by the notation.
+    /// The compiled default of `[Settings] asymmetric_shape` — the equal-area dimidiated Gaussian, the reading most
+    /// physicists intend by the notation. What a bare `(σ⁻, σ⁺)` pair means is [`asymmetric_shape`], which a conf
+    /// can change.
     pub const DEFAULT: ShapeKind = ShapeKind::Dimidiated;
+
+    const fn as_u8(self) -> u8 {
+        match self {
+            ShapeKind::Dimidiated => 0,
+            ShapeKind::Fechner => 1,
+        }
+    }
+
+    const fn from_u8(raw: u8) -> ShapeKind {
+        match raw {
+            1 => ShapeKind::Fechner,
+            _ => ShapeKind::Dimidiated,
+        }
+    }
 
     /// The strategy this variant names, as a `'static` reference to its zero-sized singleton.
     pub fn strategy(self) -> &'static dyn AsymmetryShape {
@@ -324,9 +342,66 @@ impl ShapeKind {
     }
 }
 
+static CONFIGURED_SHAPE: AtomicU8 = AtomicU8::new(ShapeKind::DEFAULT.as_u8());
+
+thread_local! {
+    static SHAPE_OVERRIDE: Cell<Option<ShapeKind>> = const { Cell::new(None) };
+}
+
+/// The shape a bare `(σ⁻, σ⁺)` pair means when nothing has chosen one explicitly, from `physure.conf`'s
+/// `[Settings] asymmetric_shape` (`dimidiated`, the compiled default [`ShapeKind::DEFAULT`], or `fechner`): what
+/// [`MomentsBackend::measured`](super::moments::MomentsBackend::measured), a symmetric value lifted into the moments
+/// world and the free functions of [`moments`](super::moments) use.
+///
+/// A [`scoped_asymmetric_shape`] override on this thread (if set) takes precedence; otherwise, the process-wide value
+/// from [`set_asymmetric_shape`] is returned.
+pub fn asymmetric_shape() -> ShapeKind {
+    SHAPE_OVERRIDE.with(Cell::get).unwrap_or_else(|| ShapeKind::from_u8(CONFIGURED_SHAPE.load(Ordering::Relaxed)))
+}
+
+/// Sets the process-wide shape, returning the one it replaced. This is what reading a `physure.conf` calls; for a
+/// temporary change, use [`scoped_asymmetric_shape`].
+pub fn set_asymmetric_shape(shape: ShapeKind) -> ShapeKind {
+    ShapeKind::from_u8(CONFIGURED_SHAPE.swap(shape.as_u8(), Ordering::Relaxed))
+}
+
+/// Overrides the shape on this thread until the returned guard is dropped.
+pub fn scoped_asymmetric_shape(shape: ShapeKind) -> ShapeGuard {
+    ShapeGuard(SHAPE_OVERRIDE.with(|slot| slot.replace(Some(shape))))
+}
+
+/// Restores the shape that was in force before its [`scoped_asymmetric_shape`] call, including on unwind.
+pub struct ShapeGuard(Option<ShapeKind>);
+
+impl Drop for ShapeGuard {
+    fn drop(&mut self) {
+        SHAPE_OVERRIDE.with(|slot| slot.set(self.0));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the thread-local guard is exercised here: a process-wide change of the shape would change the moments of
+    /// every other test of this crate that builds a default-shape value, without a lock (the process-wide setter is
+    /// tested in `tests/uncertainty_settings.rs`, a binary of its own).
+    #[test]
+    fn the_shape_in_force_is_the_compiled_default_and_a_scope_overrides_it_on_this_thread() {
+        assert_eq!(asymmetric_shape(), ShapeKind::DEFAULT);
+        {
+            let _fechner = scoped_asymmetric_shape(ShapeKind::Fechner);
+            assert_eq!(asymmetric_shape(), ShapeKind::Fechner);
+            {
+                let _back = scoped_asymmetric_shape(ShapeKind::Dimidiated);
+                assert_eq!(asymmetric_shape(), ShapeKind::Dimidiated);
+            }
+            assert_eq!(asymmetric_shape(), ShapeKind::Fechner);
+            let elsewhere = std::thread::spawn(asymmetric_shape).join().unwrap();
+            assert_eq!(elsewhere, ShapeKind::DEFAULT, "a scope is per thread");
+        }
+        assert_eq!(asymmetric_shape(), ShapeKind::DEFAULT);
+    }
 
     #[test]
     fn dimidiated_matches_reference_values() {
