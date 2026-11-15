@@ -187,12 +187,14 @@ atomic_weights = abridged-2024
   cannot be called `standard` or `abridged`: the alias would shadow it and it could never be selected, so the
   section is a problem.
 - **Names that start with `standard-` or `abridged-` are reserved** for the editions of this library, present
-  and future. A text of yours that has a section `[AtomicWeights:standard-2024]` or `[AtomicWeights:abridged-2024]`
+  and future (and so are names that start with `legacy-`, the prefix of the shipped thermochemistry edition: one
+  rule for every kind of edition, see [thermochemistry.md](thermochemistry.md)). A text of yours that has a section `[AtomicWeights:standard-2024]` or `[AtomicWeights:abridged-2024]`
   (a shipped edition is frozen), or one called `standard-2026` (a name a later release may ship, and a table of
   yours with that name would silently be merged with the shipped one), is a problem. Only the catalog embedded in
   the library defines them. *Selecting* such a name with `atomic_weights = ...` is allowed: it is checked when
   the weights are used.
-- `[Chemistry]` has one key. An unknown key, an empty value or an ill-formed one is a problem; the last
+- `[Chemistry]` has two keys: `atomic_weights` and `thermochemistry` (the edition of standard enthalpies and
+  entropies, [thermochemistry.md](thermochemistry.md)). An unknown key, an empty value or an ill-formed one is a problem; the last
   selection wins.
 - **A header that is a near miss is a problem too.** `[chemistry]`, `[Chemistry ]`, `[Atomicweights]` or
   `[ AtomicWeights ]` (the same name, trimmed and compared without regard to case, but not spelt exactly so)

@@ -62,6 +62,7 @@ nav:
       - torch.compile Integration: torch_compile_integration.md
       - Chemistry Integration Roadmap: chemistry_roadmap.md
       - Standard Atomic Weights: atomic_weights.md
+      - Standard Thermochemical Data: thermochemistry.md
       - Freezing the Configuration (phs conf): conf_freeze.md
       - Diagramming Engine Roadmap: diagrams_roadmap.md
       - Scientific Companion Roadmap: scientific_roadmap.md
