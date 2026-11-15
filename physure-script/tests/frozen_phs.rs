@@ -126,6 +126,31 @@ fn approx_uses_the_tolerance_of_the_frozen_file_and_the_library_one_without_it()
     assert_eq!(physure_core::settings::approx_rel_tol(), 1e-3);
 }
 
+fn number(source: &str) -> f64 {
+    match eval_phs(source).unwrap_or_else(|e| panic!("{source}: {e}")).into_iter().last() {
+        Some(PhsValue::Number(n)) => n,
+        other => panic!("{source}: {other:?}"),
+    }
+}
+
+/// `[Settings] default_dof` of a frozen file is the number of degrees of freedom of an uncertainty that declares
+/// none; one declared (`dof inf` included) keeps its own. Without the key, the normal factor, as before.
+#[test]
+fn an_undeclared_uncertainty_has_the_degrees_of_freedom_of_the_frozen_file() {
+    let dir = Dir::new("dof");
+    let k = |source: &str| number(&format!("{source}\ncoverage_factor(x, 0.95)"));
+    assert_eq!(k("x = 10.0 +/- 0.5 V"), 1.9599639845400558, "today's value");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\ndefault_dof = 50\n")).unwrap();
+    reset_cache();
+    assert_eq!(number("x = 10.0 +/- 0.5 V\ndof(x)"), 50.0);
+    assert_eq!(k("x = 10.0 +/- 0.5 V"), physure_core::math::stats::student_t_two_sided(0.95, 50.0).unwrap());
+    assert_eq!(k("x = 10.0 +/- 0.5 dof inf V"), 1.9599639845400558, "a declared infinity stays infinite");
+    assert_eq!(number("x = 10.0 +/- 0.5 dof 4 V\ndof(x)"), 4.0);
+    fs::remove_file(dir.path.join(FROZEN_FILE_NAME)).unwrap();
+    reset_cache();
+    assert_eq!(physure_core::uncertainty::dof::default_dof(), f64::INFINITY, "the library's default is back");
+}
+
 /// A `while` loop of 20 000 iterations: refused at the ceiling, or the count it reached.
 fn while_20000() -> Result<f64, String> {
     match eval_phs("i = 0\nwhile i < 20000 {\n  i = i + 1\n}\ni").map_err(|e| e.to_string())?.into_iter().last() {

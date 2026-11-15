@@ -193,6 +193,8 @@ pub enum Setting {
     MaxWhileIterations(usize),
     /// What a bare `(σ⁻, σ⁺)` pair means: `dimidiated` or `fechner`.
     AsymmetricShape(ShapeKind),
+    /// The degrees of freedom of an uncertainty that declares none: greater than zero, or `inf`.
+    DefaultDof(f64),
     /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
     Ignored { key: String, value: String },
 }
@@ -228,6 +230,9 @@ impl Setting {
             Setting::AsymmetricShape(shape) => {
                 crate::uncertainty::shapes::set_asymmetric_shape(*shape);
             }
+            Setting::DefaultDof(nu) => {
+                crate::uncertainty::dof::set_default_dof(*nu);
+            }
             Setting::Ignored { .. } => {}
         }
     }
@@ -245,6 +250,7 @@ pub struct EffectiveSettings {
     pub monte_carlo_samples: usize,
     pub max_while_iterations: usize,
     pub asymmetric_shape: ShapeKind,
+    pub default_dof: f64,
     /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
     pub radian_grant: bool,
     pub steradian_grant: bool,
@@ -279,6 +285,7 @@ impl ProcessSettings {
             monte_carlo_samples: DEFAULT_MONTE_CARLO_SAMPLES,
             max_while_iterations: DEFAULT_MAX_WHILE_ITERATIONS,
             asymmetric_shape: ShapeKind::DEFAULT,
+            default_dof: f64::INFINITY,
             radian_grant: true,
             steradian_grant: true,
             ignored: BTreeMap::new(),
@@ -294,6 +301,7 @@ impl ProcessSettings {
                 Setting::MonteCarloSamples(n) => effective.monte_carlo_samples = *n,
                 Setting::MaxWhileIterations(n) => effective.max_while_iterations = *n,
                 Setting::AsymmetricShape(shape) => effective.asymmetric_shape = *shape,
+                Setting::DefaultDof(nu) => effective.default_dof = *nu,
                 Setting::Ignored { key, value } => {
                     effective.ignored.insert(key.clone(), value.clone());
                 }
@@ -319,6 +327,7 @@ impl ProcessSettings {
         crate::settings::set_monte_carlo_samples(e.monte_carlo_samples);
         crate::settings::set_max_while_iterations(e.max_while_iterations);
         crate::uncertainty::shapes::set_asymmetric_shape(e.asymmetric_shape);
+        crate::uncertainty::dof::set_default_dof(e.default_dof);
         crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
@@ -395,6 +404,14 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
                 keeping: "the shape in force",
             }),
         },
+        // `inf` (also `infinity`, any case) as Rust reads it; NaN, zero, negatives and `-inf` are not degrees of freedom
+        "default_dof" => match raw.parse::<f64>() {
+            Ok(nu) if nu > 0.0 => Ok(Setting::DefaultDof(nu)),
+            _ => Err(SettingIssue::Bad {
+                why: format!("invalid default_dof '{raw}': a number greater than zero, or inf"),
+                keeping: "the default in force",
+            }),
+        },
         _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
         _ => Err(SettingIssue::Unknown(key.to_string())),
     }
@@ -405,7 +422,7 @@ pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
         SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations and asymmetric_shape, and accepts {} for other bindings",
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations, asymmetric_shape and default_dof, and accepts {} for other bindings",
             CORE_UNUSED_SETTINGS.join(", ")
         ),
         SettingIssue::Bad { why, .. } => why,
@@ -1932,7 +1949,7 @@ mod tests {
     }
 
     /// The readable process-wide settings, to show that a replay changed none of them.
-    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, ShapeKind, PropagationMode, AngleMode, (bool, bool)) {
+    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, ShapeKind, u64, PropagationMode, AngleMode, (bool, bool)) {
         (
             crate::settings::parallel_threshold(),
             crate::settings::max_loop_iterations(),
@@ -1941,6 +1958,7 @@ mod tests {
             crate::settings::monte_carlo_samples(),
             crate::settings::max_while_iterations(),
             crate::uncertainty::shapes::asymmetric_shape(),
+            crate::uncertainty::dof::default_dof().to_bits(),
             crate::uncertainty::mode::propagation_mode(),
             crate::units::angle_mode::angle_mode(),
             marker_grants(),
@@ -2017,6 +2035,7 @@ mod tests {
         assert!(collected.settings.contains(&Setting::MonteCarloSamples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES)));
         assert!(collected.settings.contains(&Setting::MaxWhileIterations(crate::settings::DEFAULT_MAX_WHILE_ITERATIONS)));
         assert!(collected.settings.contains(&Setting::AsymmetricShape(ShapeKind::DEFAULT)));
+        assert!(collected.settings.contains(&Setting::DefaultDof(f64::INFINITY)));
         assert!(collected.compatibility.is_some());
         // the strict replay builds what the lenient reading of the library builds
         let mut lenient = UnitRegistry::new();
@@ -2099,6 +2118,9 @@ mod tests {
             ("[Settings]\nmax_while_iterations = 0\n", "max_while_iterations"),
             ("[Settings]\nmax_while_iterations = abc\n", "abc"),
             ("[Settings]\nasymmetric_shape = foo\n", "foo"),
+            ("[Settings]\ndefault_dof = -1\n", "-1"),
+            ("[Settings]\ndefault_dof = 0\n", "default_dof"),
+            ("[Settings]\ndefault_dof = abc\n", "abc"),
             ("[Settings]\nno equals sign here\n", "no equals sign here"),
             ("[Compatibility]\nradian, plain = add\n", "radian, plain = add"),
             ("[Compatibility]\nthis line has no equals sign\n", "this line has no equals sign"),
@@ -2391,6 +2413,34 @@ mod tests {
         for bad in ["foo", "", "fechnerr"] {
             parse_physure_conf(&format!("[Settings]\nasymmetric_shape = {bad}\n"), &mut reg, &mut constants);
             assert_eq!(crate::uncertainty::shapes::asymmetric_shape(), ShapeKind::DEFAULT, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn default_dof_is_a_positive_number_or_infinity() {
+        assert_eq!(parse_setting("default_dof = inf"), Ok(Setting::DefaultDof(f64::INFINITY)));
+        assert_eq!(parse_setting("default_dof = 50"), Ok(Setting::DefaultDof(50.0)));
+        assert_eq!(parse_setting("default_dof = 2.5"), Ok(Setting::DefaultDof(2.5)));
+        for bad in ["0", "-1", "-0.0", "abc", "nan", "-inf", ""] {
+            let why = parse_setting(&format!("default_dof = {bad}")).unwrap_err();
+            assert!(why.contains("default_dof") && why.contains(&format!("'{bad}'")), "{bad:?}: {why}");
+        }
+        assert!(parse_setting("frobnicate = 1").unwrap_err().contains("default_dof"), "the list of keys names it");
+        let file = ProcessSettings { settings: vec![Setting::DefaultDof(50.0)], compatibility: None };
+        assert_eq!(file.effective().default_dof, 50.0);
+        assert_eq!(ProcessSettings::default().effective().default_dof, f64::INFINITY);
+    }
+
+    /// A bad value keeps the default in force (the compiled one). Applying a good one process-wide is tested in
+    /// `tests/uncertainty_settings.rs`: here it would change the degrees of freedom the other tests read.
+    #[test]
+    fn the_lenient_reader_keeps_the_default_dof_in_force_for_a_bad_one() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let (mut reg, mut constants) = (UnitRegistry::new(), HashMap::new());
+        for bad in ["0", "-1", "abc", "nan"] {
+            parse_physure_conf(&format!("[Settings]\ndefault_dof = {bad}\n"), &mut reg, &mut constants);
+            assert_eq!(crate::uncertainty::dof::default_dof(), f64::INFINITY, "{bad:?}");
         }
     }
 

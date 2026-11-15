@@ -9,7 +9,8 @@
 //! two cases named after them. The other uncertainty settings a frozen file can change are pinned the same way, at
 //! their compiled defaults, for every `unc.*` case: the Monte Carlo sample count (`monte_carlo_samples = 1000`, the
 //! count `unc.montecarlo_seed_1` always drew) and the asymmetric shape (`asymmetric_shape = dimidiated`, the shape
-//! `unc.asymmetric_sum` is defined in). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
+//! `unc.asymmetric_sum` is defined in) and the degrees of freedom of an undeclared source (`default_dof = inf`;
+//! every input of the GUM cases declares its own, so none reads it today). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
 //! hooked catalog like every other case.
 //!
 //! # Monte Carlo
@@ -36,6 +37,7 @@ fn under(mode: PropagationMode, f: impl FnOnce() -> CaseResult) -> CaseResult {
     let _mode = scoped(mode);
     let _samples = crate::settings::scoped_monte_carlo_samples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES);
     let _shape = crate::uncertainty::shapes::scoped_asymmetric_shape(crate::uncertainty::ShapeKind::DEFAULT);
+    let _dof = crate::uncertainty::dof::scoped_default_dof(f64::INFINITY);
     f()
 }
 

@@ -84,6 +84,7 @@ pub fn settings_lines() -> Vec<String> {
         format!("setting monte_carlo_samples = {}", physure_core::settings::monte_carlo_samples()),
         format!("setting max_while_iterations = {}", physure_core::settings::max_while_iterations()),
         format!("setting asymmetric_shape = {}", physure_core::uncertainty::shapes::asymmetric_shape().name()),
+        format!("setting default_dof = {:?}", physure_core::uncertainty::dof::default_dof()),
         format!("setting propagation_mode = {}", physure_core::uncertainty::propagation_mode().name()),
         format!("setting angle_mode = {}", physure_core::units::angle_mode::angle_mode().name()),
         format!("setting radian plain = {}", physure_core::units::angle_mode::marker_converts_to_plain("rad")),
@@ -100,6 +101,7 @@ pub fn set_sentinel_settings() {
     physure_core::settings::set_monte_carlo_samples(780);
     physure_core::settings::set_max_while_iterations(781);
     physure_core::uncertainty::shapes::set_asymmetric_shape(physure_core::uncertainty::ShapeKind::Fechner);
+    physure_core::uncertainty::dof::set_default_dof(782.0);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Unscented);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimension);
     physure_core::units::angle_mode::set_marker_grants(false, false);
@@ -114,6 +116,7 @@ pub fn set_compiled_defaults() {
     physure_core::settings::set_monte_carlo_samples(1_000);
     physure_core::settings::set_max_while_iterations(10_000);
     physure_core::uncertainty::shapes::set_asymmetric_shape(physure_core::uncertainty::ShapeKind::Dimidiated);
+    physure_core::uncertainty::dof::set_default_dof(f64::INFINITY);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Correlated);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimensionless);
     physure_core::units::angle_mode::set_marker_grants(true, true);

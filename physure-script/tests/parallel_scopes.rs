@@ -41,6 +41,23 @@ fn a_scoped_while_ceiling_reaches_a_parallel_loop() {
 }
 
 #[test]
+fn a_scoped_default_dof_reaches_a_parallel_loop() {
+    let _fifty = physure_core::uncertainty::dof::scoped_default_dof(50.0);
+    let dofs = || -> Vec<f64> {
+        items("v = for i in 0..16 { dof(10 +/- 1 m) }")
+            .into_iter()
+            .map(|item| match item {
+                PhsValue::Number(n) => n,
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    let (parallel, sequential) = both_ways(dofs);
+    assert_eq!(sequential, vec![50.0; 16]);
+    assert_eq!(parallel, vec![50.0; 16], "the caller's default must reach the rayon workers");
+}
+
+#[test]
 fn a_scoped_monte_carlo_sample_count_reaches_a_parallel_loop() {
     let _mode = mode::scoped(PropagationMode::MonteCarlo);
     let _samples = physure_core::settings::scoped_monte_carlo_samples(37);

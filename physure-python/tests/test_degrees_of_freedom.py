@@ -44,6 +44,15 @@ def test_with_dof_declares_on_the_measurement_and_is_idempotent():
     assert Q_(1.0, "m", uncertainty=0.1).with_dof(math.inf).dof == math.inf
 
 
+def test_a_declared_infinity_is_a_declaration_and_cannot_be_changed_after():
+    """Phase 4b: the core used to drop a declared infinity, so `with_dof(inf)` then `with_dof(5)` passed."""
+    q = Q_(1.0, "m", uncertainty=0.1).with_dof(math.inf)
+    assert q.with_dof(math.inf).dof == math.inf
+    with pytest.raises(ValueError, match="already has inf"):
+        q.with_dof(5)
+    assert q.dof == math.inf
+
+
 def test_with_dof_refuses_what_has_no_single_measurement_or_no_positive_number():
     two = Q_(1.0, "m", uncertainty=0.1) + Q_(2.0, "m", uncertainty=0.1)
     with pytest.raises(ValueError, match="combines 2 sources"):

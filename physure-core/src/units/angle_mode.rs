@@ -133,6 +133,7 @@ pub(crate) struct RestoreProcessState {
     monte_carlo_samples: usize,
     max_while_iterations: usize,
     asymmetric_shape: crate::uncertainty::ShapeKind,
+    default_dof: f64,
 }
 
 #[cfg(test)]
@@ -145,6 +146,7 @@ impl RestoreProcessState {
             monte_carlo_samples: crate::settings::monte_carlo_samples(),
             max_while_iterations: crate::settings::max_while_iterations(),
             asymmetric_shape: crate::uncertainty::shapes::asymmetric_shape(),
+            default_dof: crate::uncertainty::dof::default_dof(),
         }
     }
 }
@@ -157,6 +159,7 @@ impl Drop for RestoreProcessState {
         crate::settings::set_monte_carlo_samples(self.monte_carlo_samples);
         crate::settings::set_max_while_iterations(self.max_while_iterations);
         crate::uncertainty::shapes::set_asymmetric_shape(self.asymmetric_shape);
+        crate::uncertainty::dof::set_default_dof(self.default_dof);
     }
 }
 

@@ -175,7 +175,7 @@ pub(crate) fn strip_unit_comment(text: &str) -> &str {
 /// evaluated inside `with_catalog` (every WASM and Java evaluation) read the embedded catalog in a loop of
 /// `parallel_threshold` items or more, and a scoped angle mode, propagation mode or loop ceiling did not reach the
 /// body either. The same holds for the uncertainty settings a host or a witness pins on its thread (the Monte Carlo
-/// sample count, ...).
+/// sample count, the `while` ceiling, the asymmetric shape, the default degrees of freedom).
 ///
 /// Not carried: a `with_seed` scope (each task drawing the caller's sequence would make the draws of every item the
 /// same; a seeded evaluation is sequential, `Limits::sequential`), and the call depth and the stack floor of
@@ -191,6 +191,7 @@ pub(crate) struct CallerScopes<'a> {
     monte_carlo_samples: usize,
     max_while_iterations: usize,
     asymmetric_shape: physure_core::uncertainty::ShapeKind,
+    default_dof: f64,
 }
 
 impl CallerScopes<'_> {
@@ -207,6 +208,7 @@ impl CallerScopes<'_> {
                 monte_carlo_samples: physure_core::settings::monte_carlo_samples(),
                 max_while_iterations: physure_core::settings::max_while_iterations(),
                 asymmetric_shape: physure_core::uncertainty::shapes::asymmetric_shape(),
+                default_dof: physure_core::uncertainty::dof::default_dof(),
             })
         })
     }
@@ -221,6 +223,7 @@ impl CallerScopes<'_> {
         let _samples = physure_core::settings::scoped_monte_carlo_samples(self.monte_carlo_samples);
         let _while = physure_core::settings::scoped_max_while_iterations(self.max_while_iterations);
         let _shape = physure_core::uncertainty::shapes::scoped_asymmetric_shape(self.asymmetric_shape);
+        let _dof = physure_core::uncertainty::dof::scoped_default_dof(self.default_dof);
         physure_core::units::with_scoped_catalog(self.catalog, f)
     }
 }

@@ -157,6 +157,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         monte_carlo_samples,
         max_while_iterations,
         asymmetric_shape,
+        default_dof,
         radian_grant,
         steradian_grant,
         ignored,
@@ -170,6 +171,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "monte_carlo_samples", monte_carlo_samples.to_string());
     push(&mut out, "setting", "max_while_iterations", max_while_iterations.to_string());
     push(&mut out, "setting", "asymmetric_shape", asymmetric_shape.name());
+    push(&mut out, "setting", "default_dof", format!("{default_dof:?}"));
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -380,6 +382,11 @@ mod tests {
             Setting::AsymmetricShape(ShapeKind::Fechner),
             Setting::AsymmetricShape(ShapeKind::DEFAULT),
         );
+    }
+
+    #[test]
+    fn default_dof_is_an_entry_and_a_change_of_it_is_seen() {
+        assert_setting_entry("default_dof", "inf", Setting::DefaultDof(50.0), Setting::DefaultDof(f64::INFINITY));
     }
 
     #[test]

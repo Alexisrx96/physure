@@ -129,8 +129,9 @@ impl Quantity {
     }
 
     /// The effective degrees of freedom of this quantity's uncertainty by the Welch–Satterthwaite formula
-    /// (JCGM 100:2008 G.4.1): `+∞` when none of its sources has a finite number of them, and for an exact
-    /// quantity.
+    /// (JCGM 100:2008 G.4.1): a source that declared none counts with `[Settings] default_dof`
+    /// ([`super::dof::default_dof`], `+∞` unless configured); `+∞` when none of its sources has a finite
+    /// number of them, and for an exact quantity.
     ///
     /// # Errors
     /// A quantity that is not Gaussian.

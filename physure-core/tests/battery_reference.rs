@@ -594,14 +594,19 @@ fn every_uncertainty_case_pins_the_phase_4b_settings_whatever_the_process_or_the
     let baseline = run_battery();
     let previous = physure_core::settings::set_monte_carlo_samples(7);
     let previous_shape = set_asymmetric_shape(ShapeKind::Fechner);
+    let previous_dof = physure_core::uncertainty::dof::set_default_dof(3.0);
+    let undeclared = Quantity::with_uncertainty(1.0, 0.1, "m").unwrap();
+    assert_eq!(undeclared.effective_dof().unwrap(), 3.0, "the process-wide default is in force");
     assert_eq!(unpinned_sample_count(), 7, "the process-wide count is in force (not vacuous)");
     assert_ne!(unpinned_asymmetric_sum(), value_of(&baseline, "unc.asymmetric_sum"), "the process-wide shape is in force");
     assert_eq!(run_battery(), baseline, "under process-wide sentinels");
     physure_core::settings::set_monte_carlo_samples(previous);
     set_asymmetric_shape(previous_shape);
+    physure_core::uncertainty::dof::set_default_dof(previous_dof);
+    assert_eq!(undeclared.effective_dof().unwrap(), f64::INFINITY);
     assert_eq!(unpinned_sample_count(), 1000);
     assert_eq!(unpinned_asymmetric_sum(), value_of(&baseline, "unc.asymmetric_sum"));
-    let frozen = battery_under_frozen("[Settings]\nmonte_carlo_samples = 7\nasymmetric_shape = fechner\n");
+    let frozen = battery_under_frozen("[Settings]\nmonte_carlo_samples = 7\nasymmetric_shape = fechner\ndefault_dof = 3\n");
     assert_eq!(changed_keys(&frozen, &baseline), Vec::<String>::new(), "a frozen file's settings changed a witness");
     assert_eq!(run_battery(), baseline, "the process is restored");
 }

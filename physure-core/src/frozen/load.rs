@@ -495,6 +495,7 @@ mod tests {
                 crate::settings::monte_carlo_samples(),
                 crate::settings::max_while_iterations(),
                 crate::uncertainty::shapes::asymmetric_shape(),
+                crate::uncertainty::dof::default_dof().to_bits(),
                 crate::uncertainty::mode::propagation_mode(),
                 crate::units::angle_mode::angle_mode(),
                 crate::units::angle_mode::marker_converts_to_plain("rad"),
@@ -503,7 +504,7 @@ mod tests {
         };
         let before = now();
         let dir = Dir::new();
-        let settings = "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\npropagation_mode = unscented\nmax_loop_iterations = 3\nmax_pipeline_steps = 4\napprox_rel_tol = 1e-6\nmonte_carlo_samples = 77\nmax_while_iterations = 78\nasymmetric_shape = fechner\n[Compatibility]\n";
+        let settings = "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\npropagation_mode = unscented\nmax_loop_iterations = 3\nmax_pipeline_steps = 4\napprox_rel_tol = 1e-6\nmonte_carlo_samples = 77\nmax_while_iterations = 78\nasymmetric_shape = fechner\ndefault_dof = 50\n[Compatibility]\n";
         let catalog = load(&write_file(&dir, &standard(settings))).unwrap();
         assert_eq!(now(), before, "a successful load applied something");
         assert!(catalog.settings.ends_with(&[
@@ -516,6 +517,7 @@ mod tests {
             Setting::MonteCarloSamples(77),
             Setting::MaxWhileIterations(78),
             Setting::AsymmetricShape(crate::uncertainty::ShapeKind::Fechner),
+            Setting::DefaultDof(50.0),
         ]));
         assert_eq!(catalog.compatibility, Some(vec![]), "the overrides' empty section replaces the rows");
         let failing = standard(&format!("{settings}[AtomicWeights]\nFe = abc, 0.1"));
