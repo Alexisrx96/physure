@@ -59,7 +59,7 @@ fn interpolate(text: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsVal
 fn evaluate_span(expr_str: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> Option<String> {
     let prog = crate::parse_phs(expr_str).ok()?;
     let stmt = prog.statements.first()?;
-    interp.eval_statement_with_env(stmt, &mut env.clone()).ok().map(|val| val.to_string())
+    interp.eval_statement_in(stmt, &mut env.clone()).ok().map(|val| val.to_string())
 }
 
 fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {

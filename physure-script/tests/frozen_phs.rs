@@ -208,3 +208,40 @@ fn a_monte_carlo_literal_draws_the_sample_count_of_the_frozen_file() {
     reset_cache();
     assert_eq!(physure_core::settings::monte_carlo_samples(), 1000, "the library's count is back");
 }
+
+/// `y = (10 +/- 1 m)^2` evaluated as a program (a fresh interpreter, no explicit seed), as `(mean, uncertainty)`.
+fn unseeded_square() -> (f64, f64) {
+    match eval_phs("y = (10 +/- 1 m)^2").unwrap().into_iter().last() {
+        Some(PhsValue::Quantity(q)) => (q.value.mean(), q.value.std_dev()),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `[Settings] monte_carlo_seed` (conf freeze Phase 4b): a program run with no explicit seed draws the stream of the
+/// seed in force. The compiled default 0 gives the bits of `phs eval --seed 0` on every run (the same program used
+/// to give other samples on every run: three `phs file.phs` runs at 4c962e9 printed `x: base` as
+/// 10.0335345834355, 10.0427004576721 and 10.0354394418721); a frozen seed of 5 gives other samples, the same on
+/// every run; `random` differs run to run.
+#[test]
+fn a_program_run_draws_the_seed_of_the_frozen_file() {
+    let dir = Dir::new("seed");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\npropagation_mode = monte_carlo\n")).unwrap();
+    reset_cache();
+    let zero = unseeded_square();
+    assert_eq!(zero, (100.77165846524241, 20.343001315331314), "the default seed 0: the bits of phs eval --seed 0");
+    assert_eq!(unseeded_square(), zero, "the same program, the same samples");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_seed = 5\n")).unwrap();
+    reset_cache();
+    let five = unseeded_square();
+    assert_ne!(five, zero);
+    assert_eq!(unseeded_square(), five);
+    let explicit = physure_core::uncertainty::with_seed(5, unseeded_square);
+    assert_eq!(explicit, five, "the stream of seed 5");
+    assert_eq!(physure_core::uncertainty::with_seed(0, unseeded_square), zero, "an explicit seed wins over the file's");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_seed = random\n")).unwrap();
+    reset_cache();
+    assert_ne!(unseeded_square(), unseeded_square(), "random: every run differs");
+    fs::remove_file(dir.path.join(FROZEN_FILE_NAME)).unwrap();
+    reset_cache();
+    assert_eq!(physure_core::uncertainty::monte_carlo_seed(), physure_core::uncertainty::MonteCarloSeed::Fixed(0), "the library's seed is back");
+}

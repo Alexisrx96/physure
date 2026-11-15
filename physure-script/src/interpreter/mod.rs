@@ -53,6 +53,13 @@ pub struct PhsInterpreter {
     /// `add_breakpoint`, when a new breakpoint is actually added (copy-on-write).
     pub(crate) breakpoints: Arc<Mutex<Arc<Vec<crate::debug::Breakpoint>>>>,
     pub(crate) step_mode: Arc<Mutex<Option<StepMode>>>,
+    /// The Monte Carlo stream of this interpreter's evaluation unit: the whole life of the interpreter (one program
+    /// run, one REPL session, one LSP document between two full analyses, one WASM or Java handle). `None` until the
+    /// first statement runs, when it starts from the seed setting in force; every later statement continues it, so a
+    /// measurement made by a later call never gets the samples of an earlier one. Shared by clones (a derived
+    /// function draws from the stream of the interpreter it came from). An evaluation already inside a unit (an
+    /// explicit `with_seed`, `phs eval`, a `phs serve` request) uses that one instead and leaves this one alone.
+    pub(crate) stream: Arc<Mutex<Option<physure_core::uncertainty::EvaluationStream>>>,
 }
 
 impl Default for PhsInterpreter {
@@ -76,7 +83,35 @@ impl PhsInterpreter {
             call_stack: Arc::new(Mutex::new(Vec::new())),
             breakpoints: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             step_mode: Arc::new(Mutex::new(None)),
+            stream: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Where this interpreter's Monte Carlo stream stands (`None` before its first statement): see the `stream` field.
+    pub fn evaluation_stream(&self) -> Option<physure_core::uncertainty::EvaluationStream> {
+        *self.stream.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Runs `f` inside this interpreter's evaluation unit, unless a unit is already open on this thread (then `f`
+    /// continues that one). The lock is not held while `f` runs; the position `f` leaves is stored back, also on
+    /// unwind.
+    pub(crate) fn in_unit<R>(&self, f: impl FnOnce() -> R) -> R {
+        use physure_core::uncertainty::{in_evaluation_unit, EvaluationStream};
+        if in_evaluation_unit() {
+            return f();
+        }
+        struct WriteBack<'a> {
+            slot: &'a Mutex<Option<EvaluationStream>>,
+            stream: EvaluationStream,
+        }
+        impl Drop for WriteBack<'_> {
+            fn drop(&mut self) {
+                *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.stream);
+            }
+        }
+        let start = self.stream.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or_else(EvaluationStream::from_setting);
+        let mut unit = WriteBack { slot: &self.stream, stream: start };
+        unit.stream.run(f)
     }
 
     pub fn new_default() -> Self {

@@ -1,4 +1,4 @@
-use crate::uncertainty::{PropagationMode, ShapeKind, set_propagation_mode};
+use crate::uncertainty::{MonteCarloSeed, PropagationMode, ShapeKind, set_propagation_mode};
 use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
 use crate::units::registry::{is_atomic_weight_edition_name, resolve_atomic_weight_edition, UnitRegistry};
@@ -195,6 +195,8 @@ pub enum Setting {
     AsymmetricShape(ShapeKind),
     /// The degrees of freedom of an uncertainty that declares none: greater than zero, or `inf`.
     DefaultDof(f64),
+    /// The seed of the Monte Carlo streams: a whole number (`u64`) or `random`.
+    MonteCarloSeed(MonteCarloSeed),
     /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
     Ignored { key: String, value: String },
 }
@@ -233,6 +235,9 @@ impl Setting {
             Setting::DefaultDof(nu) => {
                 crate::uncertainty::dof::set_default_dof(*nu);
             }
+            Setting::MonteCarloSeed(seed) => {
+                crate::uncertainty::set_monte_carlo_seed(*seed);
+            }
             Setting::Ignored { .. } => {}
         }
     }
@@ -251,6 +256,7 @@ pub struct EffectiveSettings {
     pub max_while_iterations: usize,
     pub asymmetric_shape: ShapeKind,
     pub default_dof: f64,
+    pub monte_carlo_seed: MonteCarloSeed,
     /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
     pub radian_grant: bool,
     pub steradian_grant: bool,
@@ -286,6 +292,7 @@ impl ProcessSettings {
             max_while_iterations: DEFAULT_MAX_WHILE_ITERATIONS,
             asymmetric_shape: ShapeKind::DEFAULT,
             default_dof: f64::INFINITY,
+            monte_carlo_seed: MonteCarloSeed::DEFAULT,
             radian_grant: true,
             steradian_grant: true,
             ignored: BTreeMap::new(),
@@ -302,6 +309,7 @@ impl ProcessSettings {
                 Setting::MaxWhileIterations(n) => effective.max_while_iterations = *n,
                 Setting::AsymmetricShape(shape) => effective.asymmetric_shape = *shape,
                 Setting::DefaultDof(nu) => effective.default_dof = *nu,
+                Setting::MonteCarloSeed(seed) => effective.monte_carlo_seed = *seed,
                 Setting::Ignored { key, value } => {
                     effective.ignored.insert(key.clone(), value.clone());
                 }
@@ -328,6 +336,7 @@ impl ProcessSettings {
         crate::settings::set_max_while_iterations(e.max_while_iterations);
         crate::uncertainty::shapes::set_asymmetric_shape(e.asymmetric_shape);
         crate::uncertainty::dof::set_default_dof(e.default_dof);
+        crate::uncertainty::set_monte_carlo_seed(e.monte_carlo_seed);
         crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
@@ -412,6 +421,10 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
                 keeping: "the default in force",
             }),
         },
+        "monte_carlo_seed" => raw
+            .parse::<MonteCarloSeed>()
+            .map(Setting::MonteCarloSeed)
+            .map_err(|why| SettingIssue::Bad { why, keeping: "the seed in force" }),
         _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
         _ => Err(SettingIssue::Unknown(key.to_string())),
     }
@@ -422,7 +435,7 @@ pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
         SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations, asymmetric_shape and default_dof, and accepts {} for other bindings",
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations, asymmetric_shape, default_dof and monte_carlo_seed, and accepts {} for other bindings",
             CORE_UNUSED_SETTINGS.join(", ")
         ),
         SettingIssue::Bad { why, .. } => why,
@@ -1949,7 +1962,7 @@ mod tests {
     }
 
     /// The readable process-wide settings, to show that a replay changed none of them.
-    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, ShapeKind, u64, PropagationMode, AngleMode, (bool, bool)) {
+    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, ShapeKind, u64, MonteCarloSeed, PropagationMode, AngleMode, (bool, bool)) {
         (
             crate::settings::parallel_threshold(),
             crate::settings::max_loop_iterations(),
@@ -1959,6 +1972,7 @@ mod tests {
             crate::settings::max_while_iterations(),
             crate::uncertainty::shapes::asymmetric_shape(),
             crate::uncertainty::dof::default_dof().to_bits(),
+            crate::uncertainty::monte_carlo_seed(),
             crate::uncertainty::mode::propagation_mode(),
             crate::units::angle_mode::angle_mode(),
             marker_grants(),
@@ -2036,6 +2050,7 @@ mod tests {
         assert!(collected.settings.contains(&Setting::MaxWhileIterations(crate::settings::DEFAULT_MAX_WHILE_ITERATIONS)));
         assert!(collected.settings.contains(&Setting::AsymmetricShape(ShapeKind::DEFAULT)));
         assert!(collected.settings.contains(&Setting::DefaultDof(f64::INFINITY)));
+        assert!(collected.settings.contains(&Setting::MonteCarloSeed(MonteCarloSeed::DEFAULT)));
         assert!(collected.compatibility.is_some());
         // the strict replay builds what the lenient reading of the library builds
         let mut lenient = UnitRegistry::new();
@@ -2121,6 +2136,8 @@ mod tests {
             ("[Settings]\ndefault_dof = -1\n", "-1"),
             ("[Settings]\ndefault_dof = 0\n", "default_dof"),
             ("[Settings]\ndefault_dof = abc\n", "abc"),
+            ("[Settings]\nmonte_carlo_seed = -3\n", "-3"),
+            ("[Settings]\nmonte_carlo_seed = Random\n", "Random"),
             ("[Settings]\nno equals sign here\n", "no equals sign here"),
             ("[Compatibility]\nradian, plain = add\n", "radian, plain = add"),
             ("[Compatibility]\nthis line has no equals sign\n", "this line has no equals sign"),
@@ -2433,6 +2450,43 @@ mod tests {
 
     /// A bad value keeps the default in force (the compiled one). Applying a good one process-wide is tested in
     /// `tests/uncertainty_settings.rs`: here it would change the degrees of freedom the other tests read.
+    #[test]
+    fn monte_carlo_seed_is_a_whole_number_or_random() {
+        assert_eq!(parse_setting("monte_carlo_seed = 0"), Ok(Setting::MonteCarloSeed(MonteCarloSeed::Fixed(0))));
+        assert_eq!(parse_setting("monte_carlo_seed = 5"), Ok(Setting::MonteCarloSeed(MonteCarloSeed::Fixed(5))));
+        assert_eq!(
+            parse_setting("monte_carlo_seed = 18446744073709551615"),
+            Ok(Setting::MonteCarloSeed(MonteCarloSeed::Fixed(u64::MAX)))
+        );
+        assert_eq!(parse_setting("monte_carlo_seed = random"), Ok(Setting::MonteCarloSeed(MonteCarloSeed::Random)));
+        for bad in ["-3", "abc", "1.5", "Random", "18446744073709551616", "", "0x10"] {
+            let why = parse_setting(&format!("monte_carlo_seed = {bad}")).unwrap_err();
+            assert!(why.contains("monte_carlo_seed") && why.contains(&format!("'{bad}'")), "{bad:?}: {why}");
+        }
+        assert!(parse_setting("frobnicate = 1").unwrap_err().contains("monte_carlo_seed"), "the list of keys names it");
+        let file = ProcessSettings { settings: vec![Setting::MonteCarloSeed(MonteCarloSeed::Random)], compatibility: None };
+        assert_eq!(file.effective().monte_carlo_seed, MonteCarloSeed::Random);
+        assert_eq!(ProcessSettings::default().effective().monte_carlo_seed, MonteCarloSeed::Fixed(0));
+        assert_eq!((MonteCarloSeed::Fixed(7).name(), MonteCarloSeed::Random.name()), ("7".to_string(), "random".to_string()));
+    }
+
+    /// A bad value keeps the seed in force; a good one is applied process-wide (and put back by the guard).
+    #[test]
+    fn the_lenient_reader_applies_a_seed_and_keeps_the_one_in_force_for_a_bad_one() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        settle_catalog_settings();
+        let (mut reg, mut constants) = (UnitRegistry::new(), HashMap::new());
+        parse_physure_conf("[Settings]\nmonte_carlo_seed = 42\n", &mut reg, &mut constants);
+        assert_eq!(crate::uncertainty::monte_carlo_seed(), MonteCarloSeed::Fixed(42));
+        for bad in ["-3", "abc", "1.5"] {
+            parse_physure_conf(&format!("[Settings]\nmonte_carlo_seed = {bad}\n"), &mut reg, &mut constants);
+            assert_eq!(crate::uncertainty::monte_carlo_seed(), MonteCarloSeed::Fixed(42), "{bad:?}");
+        }
+        parse_physure_conf("[Settings]\nmonte_carlo_seed = random\n", &mut reg, &mut constants);
+        assert_eq!(crate::uncertainty::monte_carlo_seed(), MonteCarloSeed::Random);
+    }
+
     #[test]
     fn the_lenient_reader_keeps_the_default_dof_in_force_for_a_bad_one() {
         let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

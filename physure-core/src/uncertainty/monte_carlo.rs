@@ -1,37 +1,261 @@
+//! The Monte Carlo backend and where its random draws come from.
+//!
+//! # The seed policy (`[Settings] monte_carlo_seed`, conf freeze Phase 4b)
+//!
+//! Every draw (one [`MonteCarloBackend::from_stats`] or [`MonteCarloBackend::ensure_samples`] call) takes a fresh
+//! `StdRng` seeded from `seed ^ n * 0x9E3779B97F4A7C15`, where `n` counts the draws of its stream. Which stream a
+//! draw belongs to:
+//!
+//! * inside an **evaluation unit** (an [`EvaluationStream::run`] scope: one program run, one REPL session, one
+//!   `phs serve` request, one interpreter of a host, a [`with_seed`] scope), the unit's stream. It starts at the
+//!   setting's seed (or an explicit one) and advances with every draw, so two measurements of one program get
+//!   independent samples and the same program gives the same samples on every run;
+//! * outside any unit (Python's `Q_`, a rayon worker), the **stream of the thread**, created at the thread's first
+//!   draw from [`mix`]`(seed, k)` where `k` counts the threads of the process that drew so far: independent across
+//!   threads, reproducible for one thread doing the same operations in the same order, **not** reproducible across
+//!   threads (which thread is `k` depends on scheduling).
+//!
+//! `monte_carlo_seed = random` makes every unit and every thread stream draw from operating-system entropy (the
+//! behaviour before the setting existed). The setting is read when a unit starts or a thread stream is created: an
+//! activation of another configuration (or `frozen::reset_cache`) never restarts a live stream, so a long-running
+//! host (the LSP, a REPL) never hands a new measurement the samples of an older one.
+//!
+//! Two properties of the per-draw mixing that are kept because changing them would change every seeded bit:
+//! `seed s` draw `n + 1` equals `seed s ^ 0x9E3779B97F4A7C15` draw `n` (different seeds, shifted streams), and a
+//! draw of a zero standard deviation (which needs no random number) still advances the stream.
+
 use ndarray::Array1;
 use rand::prelude::*;
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use rand_distr::{Normal, Distribution};
 use crate::error::{PhysureError, PhysureResult};
 use super::trait_def::UncertaintyBackend;
 
-thread_local! {
-    /// `Some((seed, draws so far))` while a [`with_seed`] scope is open on this thread.
-    static SEEDED: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
+/// The odd constant of the per-draw mixing (`seed ^ n * GOLDEN`), the 64-bit golden ratio.
+const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
+
+/// What `[Settings] monte_carlo_seed` says: a fixed seed (the compiled default is 0) or operating-system entropy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonteCarloSeed {
+    Fixed(u64),
+    Random,
 }
 
-/// Runs `f` with every Monte Carlo draw on this thread taken from a generator derived from `seed`, so the same
-/// sequence of operations gives the same samples. Reproducible for single-threaded evaluation only: a draw made on
-/// another thread (a rayon worker) is not seeded.
-pub fn with_seed<R>(seed: u64, f: impl FnOnce() -> R) -> R {
-    struct Restore(Option<(u64, u64)>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            SEEDED.with(|s| s.set(self.0));
+impl MonteCarloSeed {
+    /// The compiled default: a fixed seed of 0, so an unseeded program gives the same answer on every run.
+    pub const DEFAULT: MonteCarloSeed = MonteCarloSeed::Fixed(0);
+
+    /// The text of the setting: the number, or `random`.
+    pub fn name(self) -> String {
+        match self {
+            MonteCarloSeed::Fixed(seed) => seed.to_string(),
+            MonteCarloSeed::Random => "random".to_string(),
         }
     }
-    let _restore = Restore(SEEDED.with(|s| s.replace(Some((seed, 0)))));
-    f()
 }
 
-/// The generator for the next draw: derived from the seed of the enclosing [`with_seed`] scope, or the thread's own.
-fn next_rng() -> StdRng {
-    SEEDED.with(|s| match s.get() {
-        Some((seed, n)) => {
-            s.set(Some((seed, n + 1)));
-            StdRng::seed_from_u64(seed ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+impl std::str::FromStr for MonteCarloSeed {
+    type Err = String;
+
+    /// A whole number from 0 to 2^64 - 1, or the word `random`.
+    fn from_str(raw: &str) -> Result<Self, String> {
+        match raw {
+            "random" => Ok(MonteCarloSeed::Random),
+            _ => raw
+                .parse::<u64>()
+                .map(MonteCarloSeed::Fixed)
+                .map_err(|_| format!("invalid monte_carlo_seed '{raw}': a whole number from 0 to {}, or random", u64::MAX)),
         }
-        None => StdRng::from_rng(thread_rng()).expect("thread_rng does not fail"),
+    }
+}
+
+static CONFIGURED_SEED: Mutex<MonteCarloSeed> = Mutex::new(MonteCarloSeed::DEFAULT);
+
+thread_local! {
+    static SEED_OVERRIDE: Cell<Option<MonteCarloSeed>> = const { Cell::new(None) };
+}
+
+/// The seed setting in force: a [`scoped_monte_carlo_seed`] override on this thread, or the process-wide value from
+/// [`set_monte_carlo_seed`].
+pub fn monte_carlo_seed() -> MonteCarloSeed {
+    SEED_OVERRIDE
+        .with(Cell::get)
+        .unwrap_or_else(|| *CONFIGURED_SEED.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Sets the process-wide seed setting, returning the one it replaced. Live streams are not restarted (see the module
+/// documentation): units started and thread streams created afterwards read it.
+pub fn set_monte_carlo_seed(seed: MonteCarloSeed) -> MonteCarloSeed {
+    std::mem::replace(&mut *CONFIGURED_SEED.lock().unwrap_or_else(|e| e.into_inner()), seed)
+}
+
+/// Overrides the seed setting on this thread until the returned guard is dropped.
+pub fn scoped_monte_carlo_seed(seed: MonteCarloSeed) -> MonteCarloSeedGuard {
+    MonteCarloSeedGuard(SEED_OVERRIDE.with(|slot| slot.replace(Some(seed))))
+}
+
+/// Restores the seed setting that was in force before its [`scoped_monte_carlo_seed`] call, including on unwind.
+pub struct MonteCarloSeedGuard(Option<MonteCarloSeed>);
+
+impl Drop for MonteCarloSeedGuard {
+    fn drop(&mut self) {
+        SEED_OVERRIDE.with(|slot| slot.set(self.0));
+    }
+}
+
+/// Where the next draws of a stream come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    /// `draws` draws taken so far from the stream of `seed`.
+    Seeded { seed: u64, draws: u64 },
+    /// Operating-system entropy, every draw.
+    Entropy,
+}
+
+impl Stream {
+    /// The generator of the next draw, and the stream after it.
+    fn draw(self) -> (StdRng, Stream) {
+        match self {
+            Stream::Seeded { seed, draws } => {
+                (StdRng::seed_from_u64(seed ^ draws.wrapping_mul(GOLDEN)), Stream::Seeded { seed, draws: draws + 1 })
+            }
+            Stream::Entropy => (StdRng::from_rng(thread_rng()).expect("thread_rng does not fail"), Stream::Entropy),
+        }
+    }
+}
+
+thread_local! {
+    /// The stream of the evaluation unit open on this thread, if one is.
+    static UNIT: Cell<Option<Stream>> = const { Cell::new(None) };
+    /// The thread's own stream (for draws outside any unit), created at its first draw.
+    static THREAD_STREAM: Cell<Option<Stream>> = const { Cell::new(None) };
+}
+
+/// How many threads of this process created their own stream so far: the `k` of [`mix`]`(seed, k)`.
+static THREADS_THAT_DREW: AtomicU64 = AtomicU64::new(0);
+
+/// `splitmix64`'s finaliser: a bijection of `u64` whose output bits each depend on every input bit.
+fn splitmix64(x: u64) -> u64 {
+    let mut z = x.wrapping_add(GOLDEN);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// The seed of the stream number `key` derived from `base`: `splitmix64(base ^ splitmix64(key))`. Non-linear, so
+/// unlike `base ^ key * c` it does not make one derived stream a shifted copy of another (the per-draw mixing is
+/// linear in the draw counter).
+pub fn mix(base: u64, key: u64) -> u64 {
+    splitmix64(base ^ splitmix64(key))
+}
+
+/// The stream a thread starts with at its first draw outside any unit, from the setting in force.
+fn new_thread_stream() -> Stream {
+    match monte_carlo_seed() {
+        MonteCarloSeed::Fixed(base) => Stream::Seeded { seed: mix(base, THREADS_THAT_DREW.fetch_add(1, Ordering::Relaxed)), draws: 0 },
+        MonteCarloSeed::Random => Stream::Entropy,
+    }
+}
+
+/// The random stream of one evaluation unit (see the module documentation): a position in a seeded stream, or
+/// entropy. A host that keeps an evaluation alive across calls (an interpreter of the LSP, a REPL session, a WASM or
+/// Java handle) keeps one of these with it and runs every call in it, so the calls continue one stream instead of
+/// each starting it again (which would give a new measurement the samples of an older one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvaluationStream(Stream);
+
+impl EvaluationStream {
+    /// The start of the stream of `seed`.
+    pub fn seeded(seed: u64) -> Self {
+        EvaluationStream(Stream::Seeded { seed, draws: 0 })
+    }
+
+    /// Operating-system entropy for every draw.
+    pub fn entropy() -> Self {
+        EvaluationStream(Stream::Entropy)
+    }
+
+    /// The start of the stream the seed setting in force names ([`monte_carlo_seed`]).
+    pub fn from_setting() -> Self {
+        match monte_carlo_seed() {
+            MonteCarloSeed::Fixed(seed) => Self::seeded(seed),
+            MonteCarloSeed::Random => Self::entropy(),
+        }
+    }
+
+    /// The seed, `None` for entropy.
+    pub fn seed(&self) -> Option<u64> {
+        match self.0 {
+            Stream::Seeded { seed, .. } => Some(seed),
+            Stream::Entropy => None,
+        }
+    }
+
+    /// How many draws were taken from this stream so far, `None` for entropy.
+    pub fn draws(&self) -> Option<u64> {
+        match self.0 {
+            Stream::Seeded { draws, .. } => Some(draws),
+            Stream::Entropy => None,
+        }
+    }
+
+    /// Runs `f` as an evaluation unit at this position: every draw `f` makes on this thread comes from this stream,
+    /// which then stands where `f` left it (also on unwind). A unit already open on this thread is replaced for the
+    /// duration and put back after.
+    pub fn run<R>(&mut self, f: impl FnOnce() -> R) -> R {
+        struct Scope<'a> {
+            stream: &'a mut EvaluationStream,
+            previous: Option<Stream>,
+        }
+        impl Drop for Scope<'_> {
+            fn drop(&mut self) {
+                if let Some(now) = UNIT.with(|unit| unit.replace(self.previous)) {
+                    self.stream.0 = now;
+                }
+            }
+        }
+        let previous = UNIT.with(|unit| unit.replace(Some(self.0)));
+        let _scope = Scope { stream: self, previous };
+        f()
+    }
+}
+
+/// Whether an evaluation unit is open on this thread.
+pub fn in_evaluation_unit() -> bool {
+    UNIT.with(|unit| unit.get().is_some())
+}
+
+/// Runs `f` with every Monte Carlo draw on this thread taken from the stream of `seed`, from its start, so the same
+/// sequence of operations gives the same samples (an explicit seed: `phs eval --seed`, the witnesses). Draws made on
+/// another thread (a rayon worker) are not part of it; PHS keeps a loop in `monte_carlo` mode on one thread.
+pub fn with_seed<R>(seed: u64, f: impl FnOnce() -> R) -> R {
+    EvaluationStream::seeded(seed).run(f)
+}
+
+/// Runs `f` as an evaluation unit of the seed setting in force ([`EvaluationStream::from_setting`]), unless a unit is
+/// already open on this thread: then `f` continues it (an explicit `--seed` of an enclosing scope wins, and nested
+/// evaluations do not restart the stream).
+pub fn with_evaluation_seed<R>(f: impl FnOnce() -> R) -> R {
+    if in_evaluation_unit() {
+        f()
+    } else {
+        EvaluationStream::from_setting().run(f)
+    }
+}
+
+/// The generator for the next draw: from the evaluation unit open on this thread, or else the thread's own stream.
+fn next_rng() -> StdRng {
+    if let Some(stream) = UNIT.with(Cell::get) {
+        let (rng, next) = stream.draw();
+        UNIT.with(|unit| unit.set(Some(next)));
+        return rng;
+    }
+    THREAD_STREAM.with(|slot| {
+        let (rng, next) = slot.get().unwrap_or_else(new_thread_stream).draw();
+        slot.set(Some(next));
+        rng
     })
 }
 
@@ -248,11 +472,150 @@ mod tests {
         assert_eq!(sample_count(&by_mode), 7, "a measurement made Monte Carlo by the propagation mode too");
     }
 
+    fn samples() -> Vec<f64> {
+        MonteCarloBackend::from_stats(0.0, 1.0, 64).unwrap().samples.to_vec()
+    }
+
+    /// Outside any unit a thread draws from its own stream, which advances (two measurements differ) and is not
+    /// disturbed by a unit opened and closed in between.
     #[test]
-    fn outside_a_scope_nothing_is_seeded_and_a_scope_leaves_no_trace() {
-        with_seed(1, || ());
-        let a = MonteCarloBackend::from_stats(0.0, 1.0, 64).unwrap().samples.to_vec();
-        let b = MonteCarloBackend::from_stats(0.0, 1.0, 64).unwrap().samples.to_vec();
-        assert_ne!(a, b);
+    fn outside_a_unit_the_thread_stream_advances_and_a_unit_leaves_no_trace() {
+        std::thread::spawn(|| {
+            let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+            let a = samples();
+            with_seed(1, samples);
+            let b = samples();
+            assert_ne!(a, b);
+            assert!(!in_evaluation_unit());
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// The stream of a thread is the stream of `mix(seed, k)` for the `k`-th thread of the process that drew: the
+    /// seed setting decides it, two threads never start from the same state (the reviewer measured that two threads
+    /// each starting the default stream at 0 draw identical samples), and `random` is entropy.
+    #[test]
+    fn two_threads_draw_from_different_streams_derived_from_the_setting() {
+        let first_two = |seed| {
+            std::thread::spawn(move || {
+                let _seed = scoped_monte_carlo_seed(seed);
+                (samples(), samples())
+            })
+            .join()
+            .unwrap()
+        };
+        let (a, b) = (first_two(MonteCarloSeed::Fixed(5)), first_two(MonteCarloSeed::Fixed(5)));
+        assert_ne!(a.0, b.0, "two threads under the same seed setting share no stream");
+        assert_ne!(a.0, a.1);
+        // each is the stream mix(5, k) for its own k, from its start
+        let derived = |samples: &(Vec<f64>, Vec<f64>)| {
+            (0..THREADS_THAT_DREW.load(Ordering::Relaxed)).find(|&k| with_seed(mix(5, k), || (self::samples(), self::samples())) == *samples)
+        };
+        let (ka, kb) = (derived(&a).expect("a derived stream"), derived(&b).expect("a derived stream"));
+        assert_ne!(ka, kb);
+        // never the stream of the seed itself, which a unit of the same seed draws (no correlation with a unit)
+        assert_ne!(a.0, with_seed(5, samples));
+        let (c, d) = (first_two(MonteCarloSeed::Random), first_two(MonteCarloSeed::Random));
+        assert_ne!(c.0, d.0);
+        assert!(derived(&c).is_none(), "random is entropy, not a derived stream");
+    }
+
+    #[test]
+    fn mix_is_not_a_shift_of_the_per_draw_mixing() {
+        // `base ^ k * GOLDEN` would make stream k + 1 the stream k shifted by one draw
+        let shifted = |seed| with_seed(seed, || (samples(), samples()));
+        assert_ne!(shifted(mix(0, 1)).0, shifted(mix(0, 0)).1);
+        // the documented property of the per-draw mixing itself, kept: seed G draw 0 is seed 0 draw 1
+        assert_eq!(shifted(GOLDEN).0, shifted(0).1);
+        assert_eq!(mix(0, 0), splitmix64(splitmix64(0)));
+        assert_ne!(mix(0, 0), mix(0, 1));
+    }
+
+    /// An evaluation unit of the setting in force is the stream of its seed from the start; nested units continue the
+    /// enclosing one (an explicit seed wins); `random` gives a different stream each time.
+    #[test]
+    fn a_unit_of_the_setting_is_the_stream_of_its_seed_and_does_not_restart_an_open_one() {
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(5));
+        assert_eq!(with_evaluation_seed(samples), with_seed(5, samples));
+        assert_eq!(with_evaluation_seed(samples), with_evaluation_seed(samples), "reproducible");
+        let nested = with_seed(3, || (samples(), with_evaluation_seed(samples)));
+        assert_eq!(nested, with_seed(3, || (samples(), samples())), "a nested unit continues the stream of --seed 3");
+        let _random = scoped_monte_carlo_seed(MonteCarloSeed::Random);
+        assert_ne!(with_evaluation_seed(samples), with_evaluation_seed(samples));
+        assert_eq!(EvaluationStream::from_setting(), EvaluationStream::entropy());
+        assert_eq!((EvaluationStream::entropy().seed(), EvaluationStream::entropy().draws()), (None, None));
+    }
+
+    /// A host that keeps one stream across calls (the LSP, a REPL, a WASM or Java handle) continues it: a measurement
+    /// of a later call never gets the samples of an earlier one, even when the configuration is read again in between
+    /// (an activation, `reset_cache`: the reviewer's LSP scenario, `x - y` exactly 0).
+    #[test]
+    fn a_kept_stream_continues_across_calls_and_a_new_reading_of_the_setting_does_not_restart_it() {
+        let mut stream = EvaluationStream::seeded(5);
+        let x = stream.run(samples);
+        assert_eq!(stream.draws(), Some(1));
+        crate::frozen::reset_cache();
+        let _again = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(5));
+        let y = stream.run(samples);
+        assert_ne!(x, y);
+        assert_eq!((x, y), with_seed(5, || (samples(), samples())), "one unit, two calls");
+        assert_eq!((stream.seed(), stream.draws()), (Some(5), Some(2)));
+        // and the thread stream likewise: a re-read setting does not restart it
+        std::thread::spawn(|| {
+            let first = {
+                let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(9));
+                samples()
+            };
+            crate::frozen::reset_cache();
+            let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(9));
+            assert_ne!(first, samples());
+        })
+        .join()
+        .unwrap();
+    }
+
+    /// A unit's position is kept when its closure unwinds, and the enclosing unit is put back.
+    #[test]
+    fn a_unit_is_closed_and_its_position_kept_on_unwind() {
+        let mut stream = EvaluationStream::seeded(2);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stream.run(|| {
+                samples();
+                panic!("inside a unit")
+            })
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(stream.draws(), Some(1));
+        assert!(!in_evaluation_unit());
+    }
+
+    #[test]
+    fn the_seed_setting_reads_a_number_or_random() {
+        assert_eq!("0".parse::<MonteCarloSeed>(), Ok(MonteCarloSeed::DEFAULT));
+        assert_eq!("random".parse::<MonteCarloSeed>(), Ok(MonteCarloSeed::Random));
+        assert!("-1".parse::<MonteCarloSeed>().unwrap_err().contains("'-1'"));
+        let baseline = monte_carlo_seed();
+        {
+            let _outer = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(1));
+            {
+                let _inner = scoped_monte_carlo_seed(MonteCarloSeed::Random);
+                assert_eq!(monte_carlo_seed(), MonteCarloSeed::Random);
+            }
+            assert_eq!(monte_carlo_seed(), MonteCarloSeed::Fixed(1));
+        }
+        assert_eq!(monte_carlo_seed(), baseline);
+    }
+
+    #[test]
+    fn set_monte_carlo_seed_returns_the_previous_and_reset_restores_the_default() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let original = set_monte_carlo_seed(MonteCarloSeed::Fixed(77));
+        assert_eq!(monte_carlo_seed(), MonteCarloSeed::Fixed(77));
+        assert_eq!(set_monte_carlo_seed(MonteCarloSeed::Random), MonteCarloSeed::Fixed(77));
+        crate::settings::reset_to_defaults();
+        assert_eq!(monte_carlo_seed(), MonteCarloSeed::DEFAULT);
+        set_monte_carlo_seed(original);
     }
 }

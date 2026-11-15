@@ -56,12 +56,15 @@ impl PhsInterpreter {
     /// have line-accurate debugging as a goal.
     pub fn run_statements_with_lines(&mut self, program: &Program) -> PhysureResult<PhsValue> {
         let mut env = self.env.clone();
-        let mut last = PhsValue::None;
-        for (i, stmt) in program.statements.iter().enumerate() {
-            let line = program.lines.get(i).copied().unwrap_or(0);
-            crate::globals::refuse_global_bindings(stmt)?;
-            last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
-        }
+        let last = self.in_unit(|| {
+            let mut last = PhsValue::None;
+            for (i, stmt) in program.statements.iter().enumerate() {
+                let line = program.lines.get(i).copied().unwrap_or(0);
+                crate::globals::refuse_global_bindings(stmt)?;
+                last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
+            }
+            Ok::<_, PhysureError>(last)
+        })?;
         self.env = env;
         Ok(last)
     }
@@ -214,7 +217,14 @@ impl PhsInterpreter {
         Ok(last)
     }
 
+    /// Runs one top-level statement in `env`, inside this interpreter's evaluation unit (see `in_unit`).
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        self.in_unit(|| self.eval_statement_in(stmt, env))
+    }
+
+    /// [`PhsInterpreter::eval_statement_with_env`] in whatever unit is open (a template string's `{expr}`, which may
+    /// run on a rayon worker, must not take the interpreter's stream).
+    pub(crate) fn eval_statement_in(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
         // once per statement before it runs, function bodies and loops included (see `globals`)
         crate::globals::refuse_global_bindings(stmt)?;

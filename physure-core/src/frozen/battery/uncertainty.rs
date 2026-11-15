@@ -10,7 +10,9 @@
 //! their compiled defaults, for every `unc.*` case: the Monte Carlo sample count (`monte_carlo_samples = 1000`, the
 //! count `unc.montecarlo_seed_1` always drew) and the asymmetric shape (`asymmetric_shape = dimidiated`, the shape
 //! `unc.asymmetric_sum` is defined in) and the degrees of freedom of an undeclared source (`default_dof = inf`;
-//! every input of the GUM cases declares its own, so none reads it today). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
+//! every input of the GUM cases declares its own, so none reads it today). The Monte Carlo seed setting
+//! (`monte_carlo_seed`) is not read by any case: the one case that draws opens its own `with_seed(1, ..)`, which no
+//! setting reaches (`random` included). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
 //! hooked catalog like every other case.
 //!
 //! # Monte Carlo

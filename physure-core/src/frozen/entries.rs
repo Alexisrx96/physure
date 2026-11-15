@@ -158,6 +158,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         max_while_iterations,
         asymmetric_shape,
         default_dof,
+        monte_carlo_seed,
         radian_grant,
         steradian_grant,
         ignored,
@@ -172,6 +173,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "max_while_iterations", max_while_iterations.to_string());
     push(&mut out, "setting", "asymmetric_shape", asymmetric_shape.name());
     push(&mut out, "setting", "default_dof", format!("{default_dof:?}"));
+    push(&mut out, "setting", "monte_carlo_seed", monte_carlo_seed.name());
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -382,6 +384,13 @@ mod tests {
             Setting::AsymmetricShape(ShapeKind::Fechner),
             Setting::AsymmetricShape(ShapeKind::DEFAULT),
         );
+    }
+
+    #[test]
+    fn monte_carlo_seed_is_an_entry_and_a_change_of_it_is_seen() {
+        use crate::uncertainty::MonteCarloSeed;
+        assert_setting_entry("monte_carlo_seed", "0", Setting::MonteCarloSeed(MonteCarloSeed::Fixed(5)), Setting::MonteCarloSeed(MonteCarloSeed::DEFAULT));
+        assert_setting_entry("monte_carlo_seed", "0", Setting::MonteCarloSeed(MonteCarloSeed::Random), Setting::MonteCarloSeed(MonteCarloSeed::Fixed(0)));
     }
 
     #[test]

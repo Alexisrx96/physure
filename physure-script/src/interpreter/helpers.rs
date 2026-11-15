@@ -175,11 +175,13 @@ pub(crate) fn strip_unit_comment(text: &str) -> &str {
 /// evaluated inside `with_catalog` (every WASM and Java evaluation) read the embedded catalog in a loop of
 /// `parallel_threshold` items or more, and a scoped angle mode, propagation mode or loop ceiling did not reach the
 /// body either. The same holds for the uncertainty settings a host or a witness pins on its thread (the Monte Carlo
-/// sample count, the `while` ceiling, the asymmetric shape, the default degrees of freedom).
+/// sample count, the `while` ceiling, the asymmetric shape, the default degrees of freedom, the seed setting a
+/// worker's own stream would start from).
 ///
-/// Not carried: a `with_seed` scope (each task drawing the caller's sequence would make the draws of every item the
-/// same; a seeded evaluation is sequential, `Limits::sequential`), and the call depth and the stack floor of
-/// `limits`, which belong to each thread's own stack.
+/// Not carried: the evaluation unit (the Monte Carlo stream) of the caller: each task drawing the caller's sequence
+/// would make the draws of every item the same. A loop in `monte_carlo` mode, the only mode that draws, stays on the
+/// caller's thread instead (`PhsInterpreter::runs_in_parallel`). Nor the call depth and the stack floor of `limits`,
+/// which belong to each thread's own stack.
 #[derive(Clone, Copy)]
 pub(crate) struct CallerScopes<'a> {
     catalog: Option<&'a physure_core::UnitRegistry>,
@@ -192,6 +194,7 @@ pub(crate) struct CallerScopes<'a> {
     max_while_iterations: usize,
     asymmetric_shape: physure_core::uncertainty::ShapeKind,
     default_dof: f64,
+    monte_carlo_seed: physure_core::uncertainty::MonteCarloSeed,
 }
 
 impl CallerScopes<'_> {
@@ -209,6 +212,7 @@ impl CallerScopes<'_> {
                 max_while_iterations: physure_core::settings::max_while_iterations(),
                 asymmetric_shape: physure_core::uncertainty::shapes::asymmetric_shape(),
                 default_dof: physure_core::uncertainty::dof::default_dof(),
+                monte_carlo_seed: physure_core::uncertainty::monte_carlo_seed(),
             })
         })
     }
@@ -224,6 +228,7 @@ impl CallerScopes<'_> {
         let _while = physure_core::settings::scoped_max_while_iterations(self.max_while_iterations);
         let _shape = physure_core::uncertainty::shapes::scoped_asymmetric_shape(self.asymmetric_shape);
         let _dof = physure_core::uncertainty::dof::scoped_default_dof(self.default_dof);
+        let _seed = physure_core::uncertainty::scoped_monte_carlo_seed(self.monte_carlo_seed);
         physure_core::units::with_scoped_catalog(self.catalog, f)
     }
 }
@@ -248,5 +253,24 @@ mod tests {
         });
         assert_eq!(outside, ShapeKind::Dimidiated, "another thread does not see the scope by itself (not vacuous)");
         assert_eq!(inside, ShapeKind::Fechner);
+    }
+
+    /// The seed setting a worker's own stream would start from is the caller's scoped one; the caller's evaluation
+    /// unit is not carried (a worker drawing the caller's stream would repeat its draws).
+    #[test]
+    fn the_scoped_seed_setting_is_carried_to_another_thread_but_not_the_unit() {
+        use physure_core::uncertainty::{in_evaluation_unit, monte_carlo_seed, scoped_monte_carlo_seed, with_seed, MonteCarloSeed};
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(12345));
+        let (inside, outside) = with_seed(1, || {
+            CallerScopes::capture(|scopes| {
+                std::thread::scope(|s| {
+                    let inside = s.spawn(|| scopes.run(|| (monte_carlo_seed(), in_evaluation_unit()))).join().unwrap();
+                    let outside = s.spawn(monte_carlo_seed).join().unwrap();
+                    (inside, outside)
+                })
+            })
+        });
+        assert_ne!(outside, MonteCarloSeed::Fixed(12345), "not vacuous");
+        assert_eq!(inside, (MonteCarloSeed::Fixed(12345), false));
     }
 }

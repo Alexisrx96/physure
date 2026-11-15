@@ -63,3 +63,28 @@ fn the_lenient_reader_applies_a_good_default_dof_and_keeps_the_one_in_force_for_
     read("[Settings]\ndefault_dof = inf\n");
     assert_eq!(undeclared.effective_dof(), f64::INFINITY);
 }
+
+/// `monte_carlo_seed` applied process-wide: a unit started afterwards draws the stream of the new seed, a new thread
+/// stream derives from it, and `random` is entropy; a live stream is not restarted.
+#[test]
+fn the_seed_setting_is_read_when_a_unit_starts_or_a_thread_stream_is_created() {
+    use physure_core::uncertainty::{monte_carlo_seed, set_monte_carlo_seed, with_evaluation_seed, with_seed, EvaluationStream, MonteCarloSeed};
+    use physure_core::MonteCarloBackend;
+    let _lock = lock();
+    let _ = physure_core::units::conf::build_registry_from_conf();
+    let samples = || MonteCarloBackend::from_stats(0.0, 1.0, 32).unwrap().samples.to_vec();
+    assert_eq!(monte_carlo_seed(), MonteCarloSeed::Fixed(0), "the compiled default");
+    assert_eq!(with_evaluation_seed(samples), with_seed(0, samples));
+    let mut live = EvaluationStream::from_setting();
+    let first = live.run(samples);
+    read("[Settings]\nmonte_carlo_seed = 5\n");
+    assert_eq!(monte_carlo_seed(), MonteCarloSeed::Fixed(5));
+    assert_eq!(with_evaluation_seed(samples), with_seed(5, samples), "a new unit reads the new seed");
+    assert_eq!(std::thread::spawn(monte_carlo_seed).join().unwrap(), MonteCarloSeed::Fixed(5), "process-wide");
+    assert_eq!((first, live.run(samples)), with_seed(0, || (samples(), samples())), "the live stream goes on from 0");
+    read("[Settings]\nmonte_carlo_seed = -3\n");
+    assert_eq!(monte_carlo_seed(), MonteCarloSeed::Fixed(5), "a bad value keeps the seed in force");
+    read("[Settings]\nmonte_carlo_seed = random\n");
+    assert_ne!(with_evaluation_seed(samples), with_evaluation_seed(samples));
+    set_monte_carlo_seed(MonteCarloSeed::DEFAULT);
+}
