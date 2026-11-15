@@ -25,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use super::active::{resolve, Inputs, Resolution, ResolveError, ENV_CONF, FROZEN_FILE_NAME};
 use super::canonical::{canonical_text, source_sha256};
 use super::engine::{engine_pairs, environment_pairs, freezable, read_engine, EngineIdentity, EnginePolicy};
-use super::load::{engine_file_hash, read_bounded, replay_file, FileStamp, LoadError};
+use super::load::{engine_file_hash, read_bounded, replay_file, retry_transient, FileStamp, LoadError};
 use super::model::{FrozenError, FrozenFile, Pairs, Source};
 use super::seal::{EntryInput, FrozenParts};
 use super::time::rfc3339_from_unix;
@@ -307,30 +307,10 @@ pub fn write_atomic(path: &Path, text: &str, replace: bool) -> Result<(), OpsErr
     }
 }
 
-/// How many times a rename is retried, and the first wait (doubled each time: 25, 50, 100, 200, 400 ms).
-const RENAME_RETRIES: u32 = 5;
-const RENAME_FIRST_WAIT_MS: u64 = 25;
-
-/// `fs::rename` that waits out a transient refusal. On Windows a virus scanner, an indexer or an editor can hold the
-/// file open for a moment without delete sharing, and the rename then fails with "access denied" (error 5) or a
-/// sharing violation (error 32) although nothing is wrong; it succeeds a few milliseconds later. Only those errors
-/// are retried, a bounded number of times: any other error, and the same error after the last wait, is returned.
+/// `fs::rename` that waits out a transient refusal: the target held open without delete sharing for a moment
+/// ([`retry_transient`]).
 fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
-    let mut wait = RENAME_FIRST_WAIT_MS;
-    for _ in 0..RENAME_RETRIES {
-        match fs::rename(from, to) {
-            Err(e) if transient_rename_error(&e) => {
-                std::thread::sleep(std::time::Duration::from_millis(wait));
-                wait *= 2;
-            }
-            other => return other,
-        }
-    }
-    fs::rename(from, to)
-}
-
-fn transient_rename_error(e: &io::Error) -> bool {
-    cfg!(windows) && (e.kind() == io::ErrorKind::PermissionDenied || matches!(e.raw_os_error(), Some(5 | 32)))
+    retry_transient(|| fs::rename(from, to))
 }
 
 /// `user@host` for the history, from `USER` or `USERNAME` and `HOSTNAME` or `COMPUTERNAME` (`unknown` for a part

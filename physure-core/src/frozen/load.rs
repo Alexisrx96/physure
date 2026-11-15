@@ -217,10 +217,39 @@ pub(crate) fn replay_file_with(
     Ok((registry, constants, collected))
 }
 
+/// How many times a transient refusal is retried, and the first wait (doubled each time: 25, 50, 100, 200, 400 ms).
+const TRANSIENT_RETRIES: u32 = 5;
+const TRANSIENT_FIRST_WAIT_MS: u64 = 25;
+
+/// `op` (an open, a rename) with a transient refusal waited out. On Windows a virus scanner, an indexer or an editor
+/// can hold a file just written open for a moment without sharing, and opening or replacing it then fails with
+/// "access denied" (error 5) or a sharing violation (error 32) although nothing is wrong; it succeeds a few
+/// milliseconds later. Only those errors are retried, a bounded number of times: any other error, and the same error
+/// after the last wait, is returned. Elsewhere nothing is retried.
+pub(crate) fn retry_transient<T>(mut op: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut wait = TRANSIENT_FIRST_WAIT_MS;
+    for _ in 0..TRANSIENT_RETRIES {
+        match op() {
+            Err(e) if transient_error(&e) => {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                wait *= 2;
+            }
+            other => return other,
+        }
+    }
+    op()
+}
+
+fn transient_error(e: &io::Error) -> bool {
+    cfg!(windows) && (e.kind() == io::ErrorKind::PermissionDenied || matches!(e.raw_os_error(), Some(5 | 32)))
+}
+
 /// The text of the file and its stamp, both from one open handle; never more than [`MAX_FILE_BYTES`] are read.
+/// Opening it waits out a transient hold ([`retry_transient`]).
 pub(crate) fn read_bounded(path: &Path) -> Result<(String, FileStamp), LoadError> {
     let io_error = |e: io::Error| LoadError::Io { path: path.to_path_buf(), message: e.to_string() };
-    let file = File::open(path).map_err(io_error)?;
+    // a directory is "access denied" on Windows too, and no wait changes that
+    let file = if path.is_dir() { File::open(path) } else { retry_transient(|| File::open(path)) }.map_err(io_error)?;
     let metadata = file.metadata().map_err(io_error)?;
     if !metadata.is_file() {
         return Err(LoadError::Io { path: path.to_path_buf(), message: "not a regular file".into() });
@@ -346,6 +375,32 @@ mod tests {
 
     fn load(path: &Path) -> Result<FrozenCatalog, LoadError> {
         load_file(path, LoadOptions::default())
+    }
+
+    /// A scanner or an indexer holding a file just written open without read sharing makes opening it fail for a
+    /// moment (Windows error 32, seen right after `write_atomic`); the read waits it out, and gives up with an I/O
+    /// error if the hold lasts.
+    #[cfg(windows)]
+    #[test]
+    fn read_bounded_waits_out_a_transient_hold_on_the_file_and_gives_up_on_a_lasting_one() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = Dir::new();
+        let path = dir.write("held.conf", "text");
+        let hold = fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            drop(hold);
+        });
+        let (text, _) = read_bounded(&path).expect("the hold ended within the retries");
+        releaser.join().unwrap();
+        assert_eq!(text, "text");
+        let hold = fs::OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert!(matches!(read_bounded(&path), Err(LoadError::Io { .. })));
+        drop(hold);
+        // a directory is not retried: it is refused at once
+        let started = std::time::Instant::now();
+        assert!(matches!(read_bounded(&dir.0), Err(LoadError::Io { .. })));
+        assert!(started.elapsed() < std::time::Duration::from_millis(200), "{:?}", started.elapsed());
     }
 
     #[test]
