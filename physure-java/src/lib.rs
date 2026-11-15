@@ -970,8 +970,13 @@ mod tests {
 
     /// The embedded catalog is what this binding reads, so it refuses while a frozen configuration is in force or
     /// required (here: required and missing, which needs no file), and serves it again once nothing is.
+    /// One test sets `PHYSURE_REQUIRE_FROZEN` for a moment and every handle is refused meanwhile: the tests that
+    /// make a handle and the one that sets the variable take turns.
+    static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn the_embedded_catalog_is_refused_while_a_frozen_configuration_is_required() {
+        let _alone = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
         assert!(std::env::var_os("PHYSURE_REQUIRE_FROZEN").is_none() && std::env::var_os("PHYSURE_CONF").is_none());
         assert!(get_registry(0).is_ok());
         std::env::set_var("PHYSURE_REQUIRE_FROZEN", "1");
@@ -983,5 +988,73 @@ mod tests {
             assert!(message.contains("PHYSURE_REQUIRE_FROZEN") && message.contains("Java"), "{message}");
         }
         assert!(get_registry(0).is_ok());
+    }
+
+    /// The Monte Carlo samples of the variable `name` of an interpreter.
+    fn samples_of(interpreter: &PhsInterpreter, name: &str) -> Vec<f64> {
+        match interpreter.get_var(name).map(|v| v.clone()) {
+            Some(PhsValue::Quantity(q)) => match &q.value {
+                physure_core::uncertainty::UncertaintyValue::MonteCarlo(mc) => mc.samples.to_vec(),
+                other => panic!("{name} is not Monte Carlo: {}", other.get_model_name()),
+            },
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    /// Runs `source` on a handle's interpreter the way `evaluateExpression` and `evaluateQuantity` do (statement by
+    /// statement, under the registry's catalog), without the JNI strings.
+    fn evaluate(handle: jlong, source: &str) {
+        let registry = get_registry(handle).unwrap();
+        physure_core::units::with_catalog(registry, || {
+            for statement in &parse_phs(source).unwrap().statements {
+                get_interpreter(handle).run_statement(statement).unwrap();
+            }
+        })
+    }
+
+    /// Frees a handle made by `new_handle` (what `destroyRegistry` does, without the JNI arguments).
+    fn free_handle(handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut RegistryHandle) });
+    }
+
+    /// The seed policy of this binding (conf freeze Phase 4b): a Java `UnitRegistry` (a handle) keeps its
+    /// interpreter, and with it one Monte Carlo stream of the seed setting, across `evaluate` calls. A measurement
+    /// made by a later call is independent of an earlier one the handle still holds (each call starting the stream
+    /// again would give `y` the samples of `x`, and `x - y` an uncertainty of exactly 0); a new handle starts the
+    /// stream again, so the same calls give the same samples. `evaluateQuantityWith` (by-value bindings, nothing kept)
+    /// draws from the same stream of the handle. The setting is the compiled default or the embedded catalog's until
+    /// Phase 5 (this binding refuses a frozen file); the mode and the seed are scoped on the test's thread.
+    #[test]
+    fn a_handle_continues_one_stream_of_the_seed_setting_across_its_calls() {
+        use physure_core::uncertainty::{mode::scoped, scoped_monte_carlo_seed, MonteCarloSeed, PropagationMode};
+        let _alone = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
+        let _mode = scoped(PropagationMode::MonteCarlo);
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+        let session = || {
+            let handle = new_handle(None).unwrap();
+            evaluate(handle, "x = 10 +/- 1 m");
+            evaluate(handle, "y = 10 +/- 1 m\nd = x - y");
+            let interpreter = get_interpreter(handle);
+            let samples = (samples_of(interpreter, "x"), samples_of(interpreter, "y"), samples_of(interpreter, "d"));
+            let program = parse_phs("10 +/- 1 m").unwrap();
+            let with = match interpreter.run_program_with(&program, Vec::new()).unwrap() {
+                PhsValue::Quantity(q) => (q.value.mean(), q.value.std_dev()),
+                other => panic!("{other:?}"),
+            };
+            free_handle(handle);
+            (samples, with)
+        };
+        let ((x, y, d), with) = session();
+        assert!(x != y, "a later call draws its own samples");
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let deviation = |v: &[f64]| (v.iter().map(|s| (s - mean(v)).powi(2)).sum::<f64>() / (v.len() - 1) as f64).sqrt();
+        let ratio = deviation(&d) / deviation(&x);
+        assert!((ratio - 2f64.sqrt()).abs() < 0.1, "u(x - y) / u(x) = {ratio}");
+        assert!(with.0 != mean(&x) && with.0 != mean(&y), "a by-value call does not redraw the handle's measurements");
+        assert_eq!(session(), ((x.clone(), y, d), with), "a new handle, the same calls, the same samples");
+        let _seven = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(7));
+        assert!(session().0 .0 != x, "the seed setting is read when the handle is made");
+        let _random = scoped_monte_carlo_seed(MonteCarloSeed::Random);
+        assert!(session().0 .0 != session().0 .0, "random: entropy");
     }
 }

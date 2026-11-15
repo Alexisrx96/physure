@@ -950,4 +950,32 @@ mod tests {
         assert!(diagnostics.is_empty());
         assert_eq!(state.interp.env.get("x").unwrap().to_string(), "2.0");
     }
+    /// `(mean, standard uncertainty)` of a quantity the document's environment holds.
+    fn uncertain(state: &DocState, name: &str) -> (f64, f64) {
+        match state.interp.env.get(name) {
+            Some(physure_script::PhsValue::Quantity(q)) => (q.value.mean(), q.value.std_dev()),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    /// The reviewer's LSP scenario (conf freeze Phase 4b): the document state keeps its interpreter across edits, and
+    /// with it its Monte Carlo stream. A measurement added by a later edit, after the configuration was read again
+    /// (`reset_cache`, a changed stamp of the frozen file), gets samples of its own: `x - y` is not exactly 0. A fresh
+    /// analysis (a first open) starts the stream of the seed again, so the same text gives the same values.
+    #[test]
+    fn a_measurement_added_by_a_later_edit_is_independent_of_the_earlier_ones() {
+        use physure_core::uncertainty::{mode::scoped, scoped_monte_carlo_seed, MonteCarloSeed, PropagationMode};
+        let _mode = scoped(PropagationMode::MonteCarlo);
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+        let (state, _) = run(None, "x = 10 +/- 1 m");
+        let x = uncertain(&state, "x");
+        physure_core::frozen::reset_cache();
+        let (state, diagnostics) = run(Some(state), "x = 10 +/- 1 m\ny = 10 +/- 1 m\nd = x - y");
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(uncertain(&state, "x"), x, "x is not run again");
+        let (_, ud) = uncertain(&state, "d");
+        assert!(ud != 0.0 && (ud / x.1 - 2f64.sqrt()).abs() < 0.1, "u(x - y) = {ud}, u(x) = {}", x.1);
+        let (fresh, _) = run(None, "x = 10 +/- 1 m");
+        assert_eq!(uncertain(&fresh, "x"), x, "a first open starts the stream of the seed again");
+    }
 }

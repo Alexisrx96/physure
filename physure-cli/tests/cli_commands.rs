@@ -90,6 +90,29 @@ fn the_repl_evaluates_each_line_and_reports_what_it_cannot() {
     assert!(errors.contains("Parse Error") && errors.contains("Error:"), "{errors}");
 }
 
+/// A REPL session is one evaluation unit (conf freeze Phase 4b): the Monte Carlo stream of the seed setting goes on
+/// from line to line, so a measurement typed later is independent of an earlier one (`x - y` keeps an uncertainty),
+/// and the same session gives the same values in every process (it differed on every run before the setting).
+#[test]
+fn a_repl_session_draws_one_stream_of_the_seed_setting() {
+    let dir = TempDir::new("repl_seed");
+    dir.write("physure.conf", "[Settings]\npropagation_mode = monte_carlo\n");
+    let session = "x = 10 +/- 1 m\ny = 10 +/- 1 m\nd = x - y\nd: base\nexit\n";
+    let first = stdout(&run_with_input(dir.path(), &["--repl"], session));
+    // `d: base` prints the full digits of `x - y`: an uncertainty of about sqrt(2), never the 0 of shared samples
+    let base = first.lines().filter(|l| l.contains("=> ")).nth(3).unwrap_or_else(|| panic!("{first}"));
+    let u: f64 = base
+        .split('\u{b1}')
+        .nth(1)
+        .and_then(|t| t.trim().trim_end_matches(" m").parse().ok())
+        .unwrap_or_else(|| panic!("{base}"));
+    assert!((u - 2f64.sqrt()).abs() < 0.15, "{base}");
+    assert_eq!(stdout(&run_with_input(dir.path(), &["--repl"], session)), first, "the same session, the same values");
+    dir.write("physure.conf", "[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_seed = random\n");
+    let random = stdout(&run_with_input(dir.path(), &["--repl"], session));
+    assert_ne!(stdout(&run_with_input(dir.path(), &["--repl"], session)), random);
+}
+
 #[test]
 fn the_repl_ends_at_the_end_of_its_input() {
     let dir = TempDir::new("repl_eof");
@@ -117,6 +140,38 @@ fn the_daemon_answers_each_request_with_its_values_and_diagnostics() {
     assert!(answers[1]["diagnostics"][0]["message"].as_str().unwrap().contains("Unit mismatch"));
     assert_eq!(answers[2]["diagnostics"][0]["line"], 0);
     assert!(answers[3]["results"][0]["output"].as_str().unwrap().starts_with("[PLOT_IMAGE:"), "{}", answers[3]);
+}
+
+/// Each daemon request is one evaluation unit (conf freeze Phase 4b): it starts the Monte Carlo stream of the seed
+/// setting, so the same source gives the same values in every request (an editor rendering a file twice shows the
+/// same numbers; they differed on every render before the setting), and two measurements in it are independent.
+#[test]
+fn every_daemon_request_starts_the_stream_of_the_seed_setting() {
+    let dir = TempDir::new("daemon_seed");
+    dir.write("physure.conf", "[Settings]\npropagation_mode = monte_carlo\n");
+    let request = |id: u32| {
+        serde_json::json!({"id": id, "source": "x = 10 +/- 1 m\ny = 10 +/- 1 m\nx: base\ny: base\nx - y: base"}).to_string()
+    };
+    let answers = |input: String| -> Vec<serde_json::Value> {
+        stdout(&run_with_input(dir.path(), &["--daemon"], &input)).lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    };
+    let two = answers(format!("{}\n{}\n", request(1), request(2)));
+    assert_eq!(two.len(), 2, "{two:?}");
+    let results = two[0]["results"].as_array().unwrap();
+    let outputs: Vec<&str> = results.iter().rev().take(3).rev().map(|r| r["output"].as_str().unwrap()).collect();
+    assert_eq!(outputs.len(), 3, "{}", two[0]);
+    assert_ne!(outputs[0], outputs[1], "two measurements, two sample sets");
+    let u: f64 = outputs[2]
+        .split('\u{b1}')
+        .nth(1)
+        .and_then(|t| t.trim().trim_end_matches(" m").parse().ok())
+        .unwrap_or_else(|| panic!("{}", outputs[2]));
+    assert!((u - 2f64.sqrt()).abs() < 0.15, "{}", outputs[2]);
+    assert_eq!(two[1]["results"], two[0]["results"], "the same request, the same values");
+    assert_eq!(answers(format!("{}\n", request(1)))[0]["results"], two[0]["results"], "and in another process");
+    dir.write("physure.conf", "[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_seed = random\n");
+    let random = answers(format!("{}\n{}\n", request(1), request(2)));
+    assert_ne!(random[0]["results"], random[1]["results"]);
 }
 
 #[test]

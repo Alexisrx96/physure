@@ -276,4 +276,49 @@ mod tests {
         assert!(reg.get_categories().is_err());
         assert!(reg.evaluate("1 + 1").is_err());
     }
+
+    /// The Monte Carlo samples of the variable `name` of the registry's interpreter.
+    fn samples_of(registry: &UnitRegistry, name: &str) -> Vec<f64> {
+        match registry.state.borrow().interpreter.get_var(name).map(|v| v.clone()) {
+            Some(PhsValue::Quantity(q)) => match &q.value {
+                physure_core::uncertainty::UncertaintyValue::MonteCarlo(mc) => mc.samples.to_vec(),
+                other => panic!("{name} is not Monte Carlo: {}", other.get_model_name()),
+            },
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    /// The seed policy of this binding (conf freeze Phase 4b): a `UnitRegistry` keeps its interpreter, and with it
+    /// one Monte Carlo stream of the seed setting, across `evaluate` calls. A measurement made by a later call is
+    /// independent of an earlier one the registry still holds (each call starting the stream again would give `y`
+    /// the samples of `x`, and `x - y` an uncertainty of exactly 0); a new registry starts the stream again, so the
+    /// same calls give the same samples. The setting is the compiled default or the embedded catalog's until Phase 5
+    /// (this binding reads no frozen file); the propagation mode and the seed are scoped on the test's thread.
+    #[test]
+    fn a_registry_continues_one_stream_of_the_seed_setting_across_its_calls() {
+        use physure_core::uncertainty::{mode::scoped, scoped_monte_carlo_seed, MonteCarloSeed, PropagationMode};
+        let _mode = scoped(PropagationMode::MonteCarlo);
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+        let session = || {
+            let registry = UnitRegistry::new();
+            assert!(registry.evaluate("x = 10 +/- 1 m").is_ok());
+            assert!(registry.evaluate("y = 10 +/- 1 m\nd = x - y").is_ok());
+            registry
+        };
+        let registry = session();
+        let (x, y, d) = (samples_of(&registry, "x"), samples_of(&registry, "y"), samples_of(&registry, "d"));
+        assert!(x != y, "a later call draws its own samples");
+        let deviation = |v: &[f64]| {
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            (v.iter().map(|s| (s - mean).powi(2)).sum::<f64>() / (v.len() - 1) as f64).sqrt()
+        };
+        let ratio = deviation(&d) / deviation(&x);
+        assert!((ratio - 2f64.sqrt()).abs() < 0.1, "u(x - y) / u(x) = {ratio}");
+        assert_eq!(samples_of(&session(), "x"), x, "a new registry, the same calls, the same samples");
+        assert_eq!(samples_of(&session(), "d"), d);
+        let _seven = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(7));
+        assert!(samples_of(&session(), "x") != x, "the seed setting is read when the registry is made");
+        let _random = scoped_monte_carlo_seed(MonteCarloSeed::Random);
+        assert!(samples_of(&session(), "x") != samples_of(&session(), "x"), "random: entropy");
+    }
 }
