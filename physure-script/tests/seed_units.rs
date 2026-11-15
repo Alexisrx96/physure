@@ -92,3 +92,85 @@ fn an_explicit_seed_wins_and_leaves_the_interpreter_stream_alone() {
     assert_eq!(interp.evaluation_stream(), None);
     assert_eq!(seeded, with_seed(3, || run("x = 10 +/- 1 m"))[0]);
 }
+
+/// The bits of every item of the vector `name`.
+fn items(interp: &PhsInterpreter, name: &str) -> Vec<(u64, u64)> {
+    match interp.get_var(name) {
+        Some(PhsValue::Vector(items)) => items.iter().map(parts).map(|(mean, u)| (mean.to_bits(), u.to_bits())).collect(),
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+/// The items of the vector `name`.
+fn values(interp: &PhsInterpreter, name: &str) -> Vec<PhsValue> {
+    match interp.get_var(name) {
+        Some(PhsValue::Vector(items)) => items.to_vec(),
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+/// Runs `program` on a new interpreter and returns it with the number of loops it handed to rayon workers.
+fn looped(program: &str) -> (PhsInterpreter, u64) {
+    let before = physure_script::interpreter::parallel_loops_started();
+    let mut interp = PhsInterpreter::default();
+    for statement in &parse_phs(program).unwrap().statements {
+        interp.run_statement(statement).unwrap();
+    }
+    (interp, physure_script::interpreter::parallel_loops_started() - before)
+}
+
+const LOOPS: &str = "r = for i in 1..301 { 10 +/- 1 m }\nfn f(x) = x + (0 +/- 1 m)\np = parallel_map(f, r)\n";
+
+/// A loop in `monte_carlo` mode stays on the caller's thread, whatever `parallel_threshold` says (conf freeze Phase
+/// 4b): its draws are the next ones of the unit's stream, in item order, so the values do not depend on the number
+/// of workers, their scheduling, or the threshold (a frozen setting). On workers each item drew from the stream of
+/// whichever thread ran it, and the unit's stream did not advance.
+#[test]
+fn a_monte_carlo_loop_stays_sequential_and_draws_the_stream_of_its_unit() {
+    let _mode = scoped(PropagationMode::MonteCarlo);
+    let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+    let run = |threshold: usize| {
+        let _threshold = physure_core::settings::scoped(threshold);
+        let (interp, parallel) = looped(LOOPS);
+        assert_eq!(parallel, 0, "threshold {threshold}: no loop of a Monte Carlo evaluation goes to workers");
+        assert!(!interp.runs_in_parallel());
+        // 300 measurements in the `for`, 300 more in `parallel_map`: all from the interpreter's stream
+        assert_eq!(interp.evaluation_stream().and_then(|s| s.draws()), Some(600), "threshold {threshold}");
+        (items(&interp, "r"), items(&interp, "p"))
+    };
+    let below = run(usize::MAX);
+    assert_eq!(run(0), below, "the values do not depend on parallel_threshold");
+    assert_eq!(run(0), below, "nor on the run");
+    let distinct: std::collections::HashSet<_> = below.0.iter().collect();
+    assert_eq!(distinct.len(), 300, "every item is a measurement of its own");
+    // the stream of seed 0, in item order: what `phs eval --seed 0` (always sequential) gives
+    let seeded = with_seed(0, || {
+        let _threshold = physure_core::settings::scoped(0);
+        let (interp, _) = looped(LOOPS);
+        (items(&interp, "r"), items(&interp, "p"))
+    });
+    assert_eq!(seeded, below);
+}
+
+/// A loop that cannot draw (any other propagation mode) still goes to the workers at `parallel_threshold` items,
+/// and gives the values of the sequential path: the default seed did not make every loop sequential.
+#[test]
+fn a_loop_outside_monte_carlo_mode_still_runs_on_the_workers() {
+    for mode in [PropagationMode::Correlated, PropagationMode::Uncorrelated] {
+        let _mode = scoped(mode);
+        let program = "fn f(x) = x * 2\np = parallel_map(f, vector(1, 2, 3))\nr = for i in 1..20001 { i * 3 + 1 }\n";
+        let parallel = {
+            let _threshold = physure_core::settings::scoped(10_000);
+            let (interp, parallel) = looped(program);
+            assert!(interp.runs_in_parallel(), "{mode:?}");
+            assert_eq!(parallel, 2, "{mode:?}: the `parallel_map` and the `for` (20000 items)");
+            values(&interp, "r")
+        };
+        let _threshold = physure_core::settings::scoped(usize::MAX);
+        let (interp, loops) = looped("r = for i in 1..20001 { i * 3 + 1 }\n");
+        assert_eq!(loops, 0, "below the threshold: the caller's thread");
+        assert_eq!(values(&interp, "r"), parallel, "{mode:?}");
+        assert_eq!(parallel.len(), 20000);
+        assert_eq!(parts(&parallel[19999]), (60001.0, 0.0));
+    }
+}

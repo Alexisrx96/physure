@@ -9,6 +9,22 @@ use std::collections::HashMap;
 use physure_core::error::{PhysureError, PhysureResult};
 use std::sync::{Arc, Mutex};
 
+thread_local! {
+    static PARALLEL_LOOPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `for` expressions and `parallel_map` calls the calling thread handed to rayon workers so far: what a
+/// test reads to know which path a loop took (the value of a loop is the same on both).
+#[doc(hidden)]
+pub fn parallel_loops_started() -> u64 {
+    PARALLEL_LOOPS.with(std::cell::Cell::get)
+}
+
+/// Counts one loop handed to rayon workers by this thread (see [`parallel_loops_started`]).
+pub(crate) fn count_parallel_loop() {
+    PARALLEL_LOOPS.with(|count| count.set(count.get() + 1));
+}
+
 /// A host-registered function callable from PHS source by name. Lets embedders
 /// (e.g. the PyO3 binding) expose functions without physure-script depending on them.
 pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
@@ -161,6 +177,25 @@ impl PhsInterpreter {
 
     pub(crate) fn debug_hook_is_set(&self) -> bool {
         self.debug_hook.is_some()
+    }
+
+    /// Whether a `for` expression or a `parallel_map` of this interpreter may hand its items to rayon workers.
+    ///
+    /// Not while the propagation mode in force is `monte_carlo`: that is the only mode in which a PHS program draws
+    /// random numbers (every measurement it makes takes the mode in force; `physure-script` has no generator of its
+    /// own), and the draws of a loop must be the next ones of the evaluation unit's stream, in item order. A worker
+    /// is outside the unit, so each item would draw from the stream of whichever thread ran it, and the values would
+    /// depend on the number of workers and on `parallel_threshold`. There are no derived per-item seeds (the review
+    /// of the Phase 4b plan measured that they collide and change today's seeded bits). In every other mode nothing
+    /// draws and the loop stays parallel. The mode is read on the calling thread; `CallerScopes` carries it to the
+    /// workers, so a loop nested in a parallel loop decides the same.
+    ///
+    /// Nor under a debug hook (a breakpoint inside one of N racing workers is not a debugging session) or in the
+    /// sandbox (`Limits::sequential`).
+    pub fn runs_in_parallel(&self) -> bool {
+        !self.debug_hook_is_set()
+            && !self.limits.sequential
+            && physure_core::propagation_mode() != physure_core::PropagationMode::MonteCarlo
     }
 
     /// Like `default()`, but resolves `import` paths relative to `base_dir`

@@ -501,8 +501,9 @@ impl PhsInterpreter {
         // Note: rayon's parallel collect stops scheduling new work on error but may
         // leave in-flight work on other threads to complete, so loop body side effects
         // (e.g. I/O in external functions) may partially execute even if evaluation fails.
-        if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() && !self.limits.sequential {
+        if items.len() >= physure_core::settings::parallel_threshold() && self.runs_in_parallel() {
             use rayon::prelude::*;
+            super::count_parallel_loop();
             // The scopes of this thread (the catalog, the angle mode, ...) are per thread and a rayon worker is
             // another thread: read them here and open them again inside each task.
             let results: Vec<PhsValue> = super::helpers::CallerScopes::capture(|scopes| {

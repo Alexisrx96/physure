@@ -364,12 +364,14 @@ fn parallel_map(
     // A breakpoint inside a rayon worker closure isn't a coherent debugging
     // experience -- pausing one of N racing threads while the rest continue -- so a
     // debug session forces this back to plain sequential `.map()` instead of silently
-    // ignoring any breakpoint set inside `func`.
-    if interpreter.debug_hook_is_set() || interpreter.limits.sequential {
+    // ignoring any breakpoint set inside `func`. The same holds in the sandbox and in `monte_carlo` mode, where
+    // the draws must be the next ones of the unit's stream (`PhsInterpreter::runs_in_parallel`).
+    if !interpreter.runs_in_parallel() {
         let results = vec.into_iter().enumerate().map(call).collect::<PhysureResult<Vec<PhsValue>>>()?;
         return Ok(Some(PhsValue::Vector(results)));
     }
     use rayon::prelude::*;
+    crate::interpreter::count_parallel_loop();
     // See `eval_for`: the scopes of the caller have to be opened again inside each task.
     let results = crate::interpreter::helpers::CallerScopes::capture(|scopes| {
         vec.into_par_iter().enumerate().map(|item| scopes.run(|| call(item))).collect::<PhysureResult<Vec<PhsValue>>>()

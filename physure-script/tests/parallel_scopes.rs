@@ -57,6 +57,9 @@ fn a_scoped_default_dof_reaches_a_parallel_loop() {
     assert_eq!(parallel, vec![50.0; 16], "the caller's default must reach the rayon workers");
 }
 
+/// Since conf freeze Phase 4b a loop in `monte_carlo` mode never goes to the workers (its draws are the next ones of
+/// the unit's stream, `PhsInterpreter::runs_in_parallel`), so the scoped count is read on the caller's thread at any
+/// threshold; the test keeps the count right on both settings of the threshold and proves no loop went parallel.
 #[test]
 fn a_scoped_monte_carlo_sample_count_reaches_a_parallel_loop() {
     let _mode = mode::scoped(PropagationMode::MonteCarlo);
@@ -73,7 +76,9 @@ fn a_scoped_monte_carlo_sample_count_reaches_a_parallel_loop() {
             })
             .collect()
     };
+    let before = physure_script::interpreter::parallel_loops_started();
     let (parallel, sequential) = both_ways(counts);
+    assert_eq!(physure_script::interpreter::parallel_loops_started(), before, "a Monte Carlo loop stays on this thread");
     assert_eq!(sequential, vec![37; 16]);
-    assert_eq!(parallel, vec![37; 16], "the caller's count must reach the rayon workers");
+    assert_eq!(parallel, vec![37; 16], "the caller's count at threshold 0");
 }

@@ -113,6 +113,33 @@ fn a_repl_session_draws_one_stream_of_the_seed_setting() {
     assert_ne!(stdout(&run_with_input(dir.path(), &["--repl"], session)), random);
 }
 
+/// A loop in `monte_carlo` mode stays on the thread of its evaluation unit (conf freeze Phase 4b), so its 20000
+/// measurements are the next 20000 draws of the stream of the seed, in item order: the same bits with one rayon
+/// worker and with eight, and on every run. (On the workers each item drew from the stream of whichever thread ran
+/// it: three runs gave three values of the digest below.) `trapz` over all the items is the digest: the display of
+/// a long vector shows three of them. `z`, drawn after the loops, goes on from where they left the stream.
+#[test]
+fn a_monte_carlo_loop_gives_the_same_bits_on_one_worker_and_on_eight() {
+    let dir = TempDir::new("mc_loop_threads");
+    dir.write("physure.conf", "[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_samples = 8\n");
+    dir.write(
+        "loop.phs",
+        "use * from array\nfn f(v) = v + (1 +/- 0.5 m)\np = parallel_map(f, vector(1 m, 2 m, 3 m, 4 m))\n\
+         q = for i in 1..2001 { 5 +/- 1 m }\ns = trapz(q, linspace(0, 1, 2000))\ns: base\n\
+         r = for i in 1..20001 { 10 +/- 1 m }\nt = trapz(r, linspace(0, 1, 20000))\nt: base\nz = 10 +/- 1 m\nz: base\n",
+    );
+    let run = |workers: &str| {
+        let output = phs().arg("loop.phs").current_dir(dir.path()).env("RAYON_NUM_THREADS", workers).output().unwrap();
+        assert!(output.status.success(), "{}{}", stdout(&output), stderr(&output));
+        stdout(&output)
+    };
+    let one = run("1");
+    assert!(one.contains("(20000 items)") && one.matches('\u{b1}').count() >= 10, "{one}");
+    assert_eq!(run("8"), one, "eight workers");
+    assert_eq!(run("8"), one, "and again");
+    assert_eq!(run("3"), one, "three workers");
+}
+
 #[test]
 fn the_repl_ends_at_the_end_of_its_input() {
     let dir = TempDir::new("repl_eof");
