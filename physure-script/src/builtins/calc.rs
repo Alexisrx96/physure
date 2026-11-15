@@ -137,20 +137,20 @@ pub(crate) fn eval_calc_builtin_in(
 ) -> PhysureResult<Option<PhsValue>> {
     refuse_unknown_keywords(name, kwargs)?;
     match name {
-        "deriv" | "derivative" | "diff" => deriv(args, interpreter),
-        "grad" | "gradient" => grad(args, interpreter),
-        "div" | "divergence" => divergence(args, interpreter),
-        "curl" => curl(args, interpreter),
-        "laplacian" => laplacian(args, interpreter),
-        "series" | "taylor" => series(args, interpreter),
-        "simplify" | "expand" => simplify(args, interpreter),
+        "deriv" | "derivative" | "diff" => deriv(args, interpreter, env),
+        "grad" | "gradient" => grad(args, interpreter, env),
+        "div" | "divergence" => divergence(args, interpreter, env),
+        "curl" => curl(args, interpreter, env),
+        "laplacian" => laplacian(args, interpreter, env),
+        "series" | "taylor" => series(args, interpreter, env),
+        "simplify" | "expand" => simplify(args, interpreter, env),
         "integral" | "integrate" => integral(args, interpreter, env),
         "limit" | "lim" => limit(args, kwargs, interpreter, env),
-        "solve" => solve(args, interpreter),
+        "solve" => solve(args, interpreter, env),
         "substitute" | "sub" => substitute(args),
-        "dsolve" => dsolve(args, interpreter),
-        "laplace" => laplace(args, interpreter),
-        "inv_laplace" | "inverse_laplace" => inv_laplace(args, interpreter),
+        "dsolve" => dsolve(args, interpreter, env),
+        "laplace" => laplace(args, interpreter, env),
+        "inv_laplace" | "inverse_laplace" => inv_laplace(args, interpreter, env),
         "sym_det" => {
             let mat_str = string_arg(args, 0, "sym_det expects a symbolic matrix string, e.g. sym_det(\"[[a, b], [c, d]]\")")?;
             let det_node = crate::symbolic::SymMatrix::parse_str(mat_str)?.det()?;
@@ -204,8 +204,8 @@ fn string_arg<'a>(args: &'a [PhsValue], index: usize, message: &str) -> PhysureR
 }
 
 /// The symbolic tree of an expression string, with the user's functions inlined.
-fn parse_inlined(text: &str, interpreter: &PhsInterpreter) -> PhysureResult<crate::symbolic::Node> {
-    let inlined = preprocess_symbolic_expression(text, interpreter);
+fn parse_inlined(text: &str, interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<crate::symbolic::Node> {
+    let inlined = preprocess_symbolic_expression(text, interpreter, env)?;
     crate::symbolic::SymbolicParser::parse_str(&inlined)
 }
 
@@ -231,13 +231,13 @@ fn deriv_request(args: &[PhsValue]) -> PhysureResult<(String, String, usize, Opt
     Ok((e, v, o, dep))
 }
 
-fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() || args.len() > 3 {
         return Err(generic_error("deriv expects 1, 2, or 3 arguments: deriv(expr, [var], [order])"));
     }
     let (expr_str, var_str, order, explicit_dep) = deriv_request(args)?;
 
-    let inlined = preprocess_symbolic_expression(&expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(&expr_str, interpreter, env)?;
     if let Some(idx) = inlined.find('=') {
         let lhs = crate::symbolic::SymbolicParser::parse_str(&inlined[..idx])?;
         let rhs = crate::symbolic::SymbolicParser::parse_str(&inlined[idx + 1..])?;
@@ -253,13 +253,13 @@ fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Optio
     Ok(Some(PhsValue::String(diff_node.to_string())))
 }
 
-fn grad(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn grad(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("grad expects (expression_string, variables_vector)"));
     }
     let expr_str = string_arg(args, 0, "grad expects expression string")?;
     let vars = extract_string_list(&args[1])?;
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     let mut grads = Vec::new();
     for v in vars {
         let d = node.diff_node(clean_diff_var(&v))?.simplify();
@@ -268,7 +268,7 @@ fn grad(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option
     Ok(Some(PhsValue::Vector(grads)))
 }
 
-fn divergence(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn divergence(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("div expects (vector_field, variables_vector)"));
     }
@@ -279,14 +279,14 @@ fn divergence(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<
     }
     let mut sum_nodes = Vec::new();
     for (f_str, v) in field_exprs.iter().zip(vars.iter()) {
-        let node = parse_inlined(f_str, interpreter)?;
+        let node = parse_inlined(f_str, interpreter, env)?;
         sum_nodes.push(node.diff_node(clean_diff_var(v))?.simplify());
     }
     let div_node = crate::symbolic::Node::Add(sum_nodes).simplify();
     Ok(Some(PhsValue::String(div_node.to_string())))
 }
 
-fn curl(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn curl(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("curl expects (3D_vector_field, 3D_variables_vector)"));
     }
@@ -296,9 +296,9 @@ fn curl(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option
         return Err(generic_error("curl requires 3D vector field and 3D variables"));
     }
     let (p, q, r) = (
-        parse_inlined(&field[0], interpreter)?,
-        parse_inlined(&field[1], interpreter)?,
-        parse_inlined(&field[2], interpreter)?,
+        parse_inlined(&field[0], interpreter, env)?,
+        parse_inlined(&field[1], interpreter, env)?,
+        parse_inlined(&field[2], interpreter, env)?,
     );
     let (x, y, z) = (clean_diff_var(&vars[0]), clean_diff_var(&vars[1]), clean_diff_var(&vars[2]));
 
@@ -313,13 +313,13 @@ fn curl(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option
     ])))
 }
 
-fn laplacian(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn laplacian(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("laplacian expects (expression_string, variables_vector)"));
     }
     let expr_str = string_arg(args, 0, "laplacian expects expression string")?;
     let vars = extract_string_list(&args[1])?;
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     let mut second_diffs = Vec::new();
     for v in vars {
         second_diffs.push(node.diff_node_n(clean_diff_var(&v), 2)?.simplify());
@@ -328,7 +328,7 @@ fn laplacian(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<O
     Ok(Some(PhsValue::String(lap_node.to_string())))
 }
 
-fn series(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn series(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 2 || args.len() > 4 {
         return Err(generic_error(
             "series expects (expression_string, variable_string, [about], [order]); `order` is the highest power kept, default 6",
@@ -349,16 +349,16 @@ fn series(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Opti
         Some(PhsValue::Quantity(q)) => q.value.mean() as usize,
         Some(_) => return Err(generic_error("series order must be a number")),
     };
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(node.series(&var, &about, order)?.to_string())))
 }
 
-fn simplify(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn simplify(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() {
         return Err(generic_error("simplify expects an expression string"));
     }
     let expr_str = string_arg(args, 0, "simplify expects expression string")?;
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(node.simplify().to_string())))
 }
 
@@ -385,7 +385,7 @@ fn integral(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<Strin
         return super::definite_integral::definite_integral(&expr_str, &var_str, &args[2], &args[3], interpreter, env).map(Some);
     }
 
-    let node = parse_inlined(&expr_str, interpreter)?;
+    let node = parse_inlined(&expr_str, interpreter, env)?;
     let int_node = node.integrate_node(&var_str)?.simplify();
     Ok(Some(PhsValue::String(int_node.to_string())))
 }
@@ -412,7 +412,7 @@ fn limit(
     super::limit::limit(expr_str, var_str, &args[2], side, interpreter, env).map(Some)
 }
 
-fn solve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn solve(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("solve expects equation string and target string"));
     }
@@ -421,7 +421,7 @@ fn solve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Optio
         _ => return Err(generic_error("solve expects target string")),
     };
     let node = match &args[0] {
-        PhsValue::String(eq_str) => parse_inlined(eq_str, interpreter)?,
+        PhsValue::String(eq_str) => parse_inlined(eq_str, interpreter, env)?,
         PhsValue::Equation(l, r) => crate::symbolic::Node::Sub(Box::new(l.clone()), Box::new(r.clone())),
         _ => return Err(generic_error("solve expects an equation string or a previously-solved equation")),
     };
@@ -483,36 +483,36 @@ fn substitute(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     }
 }
 
-fn dsolve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn dsolve(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 3 {
         return Err(generic_error("dsolve expects 3 arguments: dsolve(eq_str, dep_var, indep_var)"));
     }
     let eq_str = string_arg(args, 0, "dsolve expects equation string")?;
     let dep_var = string_arg(args, 1, "dsolve expects dependent variable string")?;
     let indep_var = string_arg(args, 2, "dsolve expects independent variable string")?;
-    let inlined = preprocess_symbolic_expression(eq_str, interpreter);
+    let inlined = preprocess_symbolic_expression(eq_str, interpreter, env)?;
     Ok(Some(PhsValue::String(crate::symbolic::dsolve_str(&inlined, dep_var, indep_var)?)))
 }
 
-fn laplace(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn laplace(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 3 {
         return Err(generic_error("laplace expects 3 arguments: laplace(expr_str, t_var, s_var)"));
     }
     let expr_str = string_arg(args, 0, "laplace expects expression string")?;
     let t_var = string_arg(args, 1, "laplace expects time variable string")?;
     let s_var = string_arg(args, 2, "laplace expects s variable string")?;
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(crate::symbolic::laplace_str(&inlined, t_var, s_var)?)))
 }
 
-fn inv_laplace(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn inv_laplace(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 3 {
         return Err(generic_error("inv_laplace expects 3 arguments: inv_laplace(expr_str, s_var, t_var)"));
     }
     let expr_str = string_arg(args, 0, "inv_laplace expects expression string")?;
     let s_var = string_arg(args, 1, "inv_laplace expects s variable string")?;
     let t_var = string_arg(args, 2, "inv_laplace expects time variable string")?;
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(crate::symbolic::inv_laplace_str(&inlined, s_var, t_var)?)))
 }
 

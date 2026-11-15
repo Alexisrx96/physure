@@ -3,10 +3,12 @@ pub mod dof;
 pub mod array;
 pub mod calc;
 mod definite_integral;
+mod inline;
 mod limit;
 mod quadrature;
 pub mod plot;
 pub use core::eval_core_builtin;
+pub(crate) use inline::preprocess_symbolic_expression;
 
 use physure_core::error::PhysureResult;
 use super::value::PhsValue;
@@ -44,87 +46,6 @@ pub fn eval_domain_builtin(
     interpreter: &PhsInterpreter,
 ) -> PhysureResult<Option<PhsValue>> {
     eval_domain_builtin_with_kwargs(domain, name, args, &[], interpreter, &interpreter.env)
-}
-
-/// Renders a value under a Python-style `.<digits><kind>` spec (`x:.2f`, `x:.3e`). A
-/// quantity keeps its unit — formatting is about how many digits to show, not about
-/// discarding the half of the measurement that says what the number means.
-fn expr_to_string(expr: &crate::ast::Expr) -> String {
-    match expr {
-        crate::ast::Expr::Quantity(q) => {
-            let u = q.unit.as_deref().unwrap_or("");
-            if u.is_empty() {
-                format!("{}", q.magnitude)
-            } else {
-                format!("{} {}", q.magnitude, u)
-            }
-        }
-        crate::ast::Expr::Str(s) | crate::ast::Expr::Identifier(s) => s.clone(),
-        crate::ast::Expr::Bool(b) => if *b { "True" } else { "False" }.to_string(),
-        crate::ast::Expr::BinaryOp { op, left, right } => {
-            let op_str = match op {
-                crate::ast::BinaryOp::Add => "+",
-                crate::ast::BinaryOp::Sub => "-",
-                crate::ast::BinaryOp::Mul => "*",
-                crate::ast::BinaryOp::Div => "/",
-                crate::ast::BinaryOp::Pow => "^",
-                crate::ast::BinaryOp::Convert => "=>",
-                crate::ast::BinaryOp::Range => "..",
-            };
-            format!("{} {} {}", expr_to_string(left), op_str, expr_to_string(right))
-        }
-        crate::ast::Expr::FunctionCall { name, args, .. } => {
-            let args_str: Vec<String> = args.iter().map(expr_to_string).collect();
-            format!("{}({})", name, args_str.join(", "))
-        }
-        crate::ast::Expr::ForExpr { var, iterable, body } => {
-            format!("for {} in {} {{ {} }}", var, expr_to_string(iterable), expr_to_string(body))
-        }
-    }
-}
-
-
-
-pub(crate) fn preprocess_symbolic_expression(expr_str: &str, interpreter: &PhsInterpreter) -> String {
-    let mut result = expr_str.trim().to_string();
-    // By name, and again while a body brings in a call of another function, so a function calling another is
-    // inlined whatever order the map of variables iterates in. Each function at most once: the inliner does not
-    // substitute arguments, so a second call of the same function is left for the symbolic engine to refuse.
-    let mut functions: Vec<(&String, &crate::ast::FunctionDefNode)> = interpreter
-        .env
-        .iter()
-        .filter_map(|(name, val)| if let PhsValue::Function(func) = val { Some((name, func)) } else { None })
-        .collect();
-    functions.sort_by(|a, b| a.0.cmp(b.0));
-    let mut progress = true;
-    while progress {
-        progress = false;
-        functions.retain(|(name, func)| {
-            let inlined = inline_call(&mut result, name, func);
-            progress |= inlined;
-            !inlined
-        });
-    }
-    result
-}
-
-/// Replaces the first call of `name` in `text` (as far as its first closing parenthesis) with the body of `func`.
-/// Whether there was one.
-fn inline_call(text: &mut String, name: &str, func: &crate::ast::FunctionDefNode) -> bool {
-    let fn_pattern = format!("{}(", name);
-    let Some(start) = text.find(&fn_pattern) else {
-        return false;
-    };
-    let body_expr = match func.body_stmts.last() {
-        Some(crate::ast::Statement::Expr(ref e)) => expr_to_string(e),
-        Some(crate::ast::Statement::Assignment(ref a)) => expr_to_string(&a.value),
-        _ => String::new(),
-    };
-    let Some(end) = text[start..].find(')') else {
-        return false;
-    };
-    text.replace_range(start..=start + end, &format!("({})", body_expr));
-    true
 }
 
 #[cfg(test)]

@@ -484,7 +484,7 @@ pub(crate) fn limit(
     interpreter: &PhsInterpreter,
     scope: &HashMap<String, PhsValue>,
 ) -> PhysureResult<PhsValue> {
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, scope)?;
     let expr = parse_expression(&inlined, "expression")?;
     let mut env = scope.clone();
     crate::globals::refuse_binding(var, "the variable of limit")?;

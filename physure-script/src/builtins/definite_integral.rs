@@ -412,7 +412,7 @@ pub(crate) fn definite_integral(
     interpreter: &PhsInterpreter,
     scope: &HashMap<String, PhsValue>,
 ) -> PhysureResult<PhsValue> {
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, scope)?;
     let expr = parse_expression(&inlined, "integrand")?;
     let mut env = scope.clone();
     crate::globals::refuse_binding(var, "the variable of integral")?;
