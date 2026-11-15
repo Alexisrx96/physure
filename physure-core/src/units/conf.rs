@@ -1,3 +1,4 @@
+use crate::settings::{DisplayRules, UncertaintyDigits, MAX_DISPLAY_DIGITS, MIN_DISPLAY_SCIENTIFIC_BELOW};
 use crate::uncertainty::{MonteCarloSeed, PropagationMode, ShapeKind, set_propagation_mode};
 use crate::units::angle_mode::{set_angle_mode, AngleMode};
 use crate::units::rational::RationalUnit;
@@ -197,6 +198,14 @@ pub enum Setting {
     DefaultDof(f64),
     /// The seed of the Monte Carlo streams: a whole number (`u64`) or `random`.
     MonteCarloSeed(MonteCarloSeed),
+    /// The significant digits of the decimal form of a printed number: from 1 to 17.
+    DisplaySignificantDigits(u32),
+    /// The magnitude below which a printed number is written in scientific notation: from 1e-6 to 1.
+    DisplayScientificBelow(f64),
+    /// The magnitude from which a printed number is written in scientific notation: finite, at least 1.
+    DisplayScientificFrom(f64),
+    /// The significant figures of a printed uncertainty: `gum` or from 1 to 17.
+    UncertaintyDigits(UncertaintyDigits),
     /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
     Ignored { key: String, value: String },
 }
@@ -238,6 +247,18 @@ impl Setting {
             Setting::MonteCarloSeed(seed) => {
                 crate::uncertainty::set_monte_carlo_seed(*seed);
             }
+            Setting::DisplaySignificantDigits(n) => {
+                crate::settings::set_display_significant_digits(*n);
+            }
+            Setting::DisplayScientificBelow(x) => {
+                crate::settings::set_display_scientific_below(*x);
+            }
+            Setting::DisplayScientificFrom(x) => {
+                crate::settings::set_display_scientific_from(*x);
+            }
+            Setting::UncertaintyDigits(digits) => {
+                crate::settings::set_uncertainty_digits(*digits);
+            }
             Setting::Ignored { .. } => {}
         }
     }
@@ -257,6 +278,9 @@ pub struct EffectiveSettings {
     pub asymmetric_shape: ShapeKind,
     pub default_dof: f64,
     pub monte_carlo_seed: MonteCarloSeed,
+    /// The four display settings (`display_significant_digits`, `display_scientific_below`, `display_scientific_from`,
+    /// `uncertainty_digits`).
+    pub display: DisplayRules,
     /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
     pub radian_grant: bool,
     pub steradian_grant: bool,
@@ -293,6 +317,7 @@ impl ProcessSettings {
             asymmetric_shape: ShapeKind::DEFAULT,
             default_dof: f64::INFINITY,
             monte_carlo_seed: MonteCarloSeed::DEFAULT,
+            display: DisplayRules::DEFAULT,
             radian_grant: true,
             steradian_grant: true,
             ignored: BTreeMap::new(),
@@ -310,6 +335,10 @@ impl ProcessSettings {
                 Setting::AsymmetricShape(shape) => effective.asymmetric_shape = *shape,
                 Setting::DefaultDof(nu) => effective.default_dof = *nu,
                 Setting::MonteCarloSeed(seed) => effective.monte_carlo_seed = *seed,
+                Setting::DisplaySignificantDigits(n) => effective.display.significant_digits = *n,
+                Setting::DisplayScientificBelow(x) => effective.display.scientific_below = *x,
+                Setting::DisplayScientificFrom(x) => effective.display.scientific_from = *x,
+                Setting::UncertaintyDigits(digits) => effective.display.uncertainty_digits = *digits,
                 Setting::Ignored { key, value } => {
                     effective.ignored.insert(key.clone(), value.clone());
                 }
@@ -337,6 +366,7 @@ impl ProcessSettings {
         crate::uncertainty::shapes::set_asymmetric_shape(e.asymmetric_shape);
         crate::uncertainty::dof::set_default_dof(e.default_dof);
         crate::uncertainty::set_monte_carlo_seed(e.monte_carlo_seed);
+        crate::settings::set_display_rules(e.display);
         crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
@@ -425,6 +455,31 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
             .parse::<MonteCarloSeed>()
             .map(Setting::MonteCarloSeed)
             .map_err(|why| SettingIssue::Bad { why, keeping: "the seed in force" }),
+        "display_significant_digits" => match raw.parse::<u32>() {
+            Ok(n) if (1..=MAX_DISPLAY_DIGITS).contains(&n) => Ok(Setting::DisplaySignificantDigits(n)),
+            _ => Err(SettingIssue::Bad {
+                why: format!("invalid display_significant_digits '{raw}': a whole number from 1 to {MAX_DISPLAY_DIGITS}"),
+                keeping: "the digits in force",
+            }),
+        },
+        "display_scientific_below" => match raw.parse::<f64>() {
+            Ok(x) if (MIN_DISPLAY_SCIENTIFIC_BELOW..=1.0).contains(&x) => Ok(Setting::DisplayScientificBelow(x)),
+            _ => Err(SettingIssue::Bad {
+                why: format!("invalid display_scientific_below '{raw}': a number from {MIN_DISPLAY_SCIENTIFIC_BELOW:e} to 1"),
+                keeping: "the threshold in force",
+            }),
+        },
+        "display_scientific_from" => match raw.parse::<f64>() {
+            Ok(x) if x.is_finite() && x >= 1.0 => Ok(Setting::DisplayScientificFrom(x)),
+            _ => Err(SettingIssue::Bad {
+                why: format!("invalid display_scientific_from '{raw}': a finite number of at least 1"),
+                keeping: "the threshold in force",
+            }),
+        },
+        "uncertainty_digits" => raw
+            .parse::<UncertaintyDigits>()
+            .map(Setting::UncertaintyDigits)
+            .map_err(|why| SettingIssue::Bad { why, keeping: "the rule in force" }),
         _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
         _ => Err(SettingIssue::Unknown(key.to_string())),
     }
@@ -435,7 +490,7 @@ pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
         SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations, asymmetric_shape, default_dof and monte_carlo_seed, and accepts {} for other bindings",
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations, asymmetric_shape, default_dof, monte_carlo_seed, display_significant_digits, display_scientific_below, display_scientific_from and uncertainty_digits, and accepts {} for other bindings",
             CORE_UNUSED_SETTINGS.join(", ")
         ),
         SettingIssue::Bad { why, .. } => why,
@@ -1962,7 +2017,7 @@ mod tests {
     }
 
     /// The readable process-wide settings, to show that a replay changed none of them.
-    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, ShapeKind, u64, MonteCarloSeed, PropagationMode, AngleMode, (bool, bool)) {
+    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, ShapeKind, u64, (MonteCarloSeed, DisplayRules), PropagationMode, AngleMode, (bool, bool)) {
         (
             crate::settings::parallel_threshold(),
             crate::settings::max_loop_iterations(),
@@ -1972,7 +2027,7 @@ mod tests {
             crate::settings::max_while_iterations(),
             crate::uncertainty::shapes::asymmetric_shape(),
             crate::uncertainty::dof::default_dof().to_bits(),
-            crate::uncertainty::monte_carlo_seed(),
+            (crate::uncertainty::monte_carlo_seed(), crate::settings::display_rules()),
             crate::uncertainty::mode::propagation_mode(),
             crate::units::angle_mode::angle_mode(),
             marker_grants(),
@@ -2051,6 +2106,10 @@ mod tests {
         assert!(collected.settings.contains(&Setting::AsymmetricShape(ShapeKind::DEFAULT)));
         assert!(collected.settings.contains(&Setting::DefaultDof(f64::INFINITY)));
         assert!(collected.settings.contains(&Setting::MonteCarloSeed(MonteCarloSeed::DEFAULT)));
+        assert_eq!(collected.effective().display, DisplayRules::DEFAULT, "the shipped catalog states the compiled display rules");
+        for key in ["display_significant_digits", "display_scientific_below", "display_scientific_from", "uncertainty_digits"] {
+            assert!(DEFAULT_PHYSURE_CONF.lines().any(|line| line.starts_with(&format!("{key} = "))), "{key} is in the shipped catalog");
+        }
         assert!(collected.compatibility.is_some());
         // the strict replay builds what the lenient reading of the library builds
         let mut lenient = UnitRegistry::new();
@@ -2136,6 +2195,14 @@ mod tests {
             ("[Settings]\ndefault_dof = -1\n", "-1"),
             ("[Settings]\ndefault_dof = 0\n", "default_dof"),
             ("[Settings]\ndefault_dof = abc\n", "abc"),
+            ("[Settings]\ndisplay_significant_digits = 0\n", "display_significant_digits"),
+            ("[Settings]\ndisplay_significant_digits = 18\n", "18"),
+            ("[Settings]\ndisplay_scientific_below = 1e-7\n", "1e-7"),
+            ("[Settings]\ndisplay_scientific_below = 2\n", "display_scientific_below"),
+            ("[Settings]\ndisplay_scientific_from = inf\n", "inf"),
+            ("[Settings]\ndisplay_scientific_from = 0.5\n", "display_scientific_from"),
+            ("[Settings]\nuncertainty_digits = GUM\n", "GUM"),
+            ("[Settings]\nuncertainty_digits = 0\n", "uncertainty_digits"),
             ("[Settings]\nmonte_carlo_seed = -3\n", "-3"),
             ("[Settings]\nmonte_carlo_seed = Random\n", "Random"),
             ("[Settings]\nno equals sign here\n", "no equals sign here"),
@@ -2431,6 +2498,49 @@ mod tests {
             parse_physure_conf(&format!("[Settings]\nasymmetric_shape = {bad}\n"), &mut reg, &mut constants);
             assert_eq!(crate::uncertainty::shapes::asymmetric_shape(), ShapeKind::DEFAULT, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_display_settings_read_their_ranges_and_nothing_else() {
+        assert_eq!(parse_setting("display_significant_digits = 1"), Ok(Setting::DisplaySignificantDigits(1)));
+        assert_eq!(parse_setting("display_significant_digits = 17"), Ok(Setting::DisplaySignificantDigits(17)));
+        assert_eq!(parse_setting("display_scientific_below = 1e-6"), Ok(Setting::DisplayScientificBelow(1e-6)));
+        assert_eq!(parse_setting("display_scientific_below = 1"), Ok(Setting::DisplayScientificBelow(1.0)));
+        assert_eq!(parse_setting("display_scientific_from = 1"), Ok(Setting::DisplayScientificFrom(1.0)));
+        assert_eq!(parse_setting("display_scientific_from = 1e300"), Ok(Setting::DisplayScientificFrom(1e300)));
+        assert_eq!(parse_setting("uncertainty_digits = gum"), Ok(Setting::UncertaintyDigits(UncertaintyDigits::Gum)));
+        assert_eq!(parse_setting("uncertainty_digits = 2"), Ok(Setting::UncertaintyDigits(UncertaintyDigits::Figures(2))));
+        for (key, bad) in [
+            ("display_significant_digits", ["0", "18", "-1", "1.5", "abc", "", "15e0", "nan"]),
+            ("display_scientific_below", ["0", "9e-7", "1.5", "-1e-4", "abc", "", "nan", "inf"]),
+            ("display_scientific_from", ["0", "0.99", "-1e16", "abc", "", "nan", "inf", "-inf"]),
+            ("uncertainty_digits", ["0", "18", "Gum", "GUM", "1.5", "", "-2", "two"]),
+        ] {
+            for bad in bad {
+                let why = parse_setting(&format!("{key} = {bad}")).unwrap_err();
+                assert!(why.contains(key) && why.contains(&format!("'{bad}'")), "{key} = {bad:?}: {why}");
+            }
+            assert!(parse_setting("frobnicate = 1").unwrap_err().contains(key), "the list of keys names {key}");
+        }
+        let file = ProcessSettings {
+            settings: vec![Setting::DisplaySignificantDigits(6), Setting::UncertaintyDigits(UncertaintyDigits::Figures(2))],
+            compatibility: None,
+        };
+        let expected = DisplayRules { significant_digits: 6, uncertainty_digits: UncertaintyDigits::Figures(2), ..DisplayRules::DEFAULT };
+        assert_eq!(file.effective().display, expected);
+        assert_eq!(ProcessSettings::default().effective().display, DisplayRules::DEFAULT);
+    }
+
+    /// Activation sets the display rules process-wide; this test only activates the compiled rules (a process-wide
+    /// change of them would change the text other tests of this crate assert: the other values are tested in
+    /// `tests/display_settings.rs`, a binary of its own).
+    #[test]
+    fn activation_restores_the_compiled_display_rules() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        ProcessSettings { settings: vec![Setting::DisplaySignificantDigits(15)], compatibility: None }.activate();
+        assert_eq!(*crate::settings::process_display_rules(), DisplayRules::DEFAULT);
     }
 
     #[test]

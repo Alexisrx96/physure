@@ -86,6 +86,7 @@ pub fn settings_lines() -> Vec<String> {
         format!("setting asymmetric_shape = {}", physure_core::uncertainty::shapes::asymmetric_shape().name()),
         format!("setting default_dof = {:?}", physure_core::uncertainty::dof::default_dof()),
         format!("setting monte_carlo_seed = {}", physure_core::uncertainty::monte_carlo_seed().name()),
+        format!("setting display = {:?}", physure_core::settings::display_rules()),
         format!("setting propagation_mode = {}", physure_core::uncertainty::propagation_mode().name()),
         format!("setting angle_mode = {}", physure_core::units::angle_mode::angle_mode().name()),
         format!("setting radian plain = {}", physure_core::units::angle_mode::marker_converts_to_plain("rad")),
@@ -104,6 +105,10 @@ pub fn set_sentinel_settings() {
     physure_core::uncertainty::shapes::set_asymmetric_shape(physure_core::uncertainty::ShapeKind::Fechner);
     physure_core::uncertainty::dof::set_default_dof(782.0);
     physure_core::uncertainty::set_monte_carlo_seed(physure_core::uncertainty::MonteCarloSeed::Fixed(783));
+    physure_core::settings::set_display_significant_digits(7);
+    physure_core::settings::set_display_scientific_below(0.00390625);
+    physure_core::settings::set_display_scientific_from(65536.0);
+    physure_core::settings::set_uncertainty_digits(physure_core::settings::UncertaintyDigits::Figures(3));
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Unscented);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimension);
     physure_core::units::angle_mode::set_marker_grants(false, false);
@@ -120,6 +125,7 @@ pub fn set_compiled_defaults() {
     physure_core::uncertainty::shapes::set_asymmetric_shape(physure_core::uncertainty::ShapeKind::Dimidiated);
     physure_core::uncertainty::dof::set_default_dof(f64::INFINITY);
     physure_core::uncertainty::set_monte_carlo_seed(physure_core::uncertainty::MonteCarloSeed::DEFAULT);
+    physure_core::settings::set_display_rules(physure_core::settings::DisplayRules::DEFAULT);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Correlated);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimensionless);
     physure_core::units::angle_mode::set_marker_grants(true, true);

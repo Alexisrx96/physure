@@ -82,3 +82,14 @@ fn a_scoped_monte_carlo_sample_count_reaches_a_parallel_loop() {
     assert_eq!(sequential, vec![37; 16]);
     assert_eq!(parallel, vec![37; 16], "the caller's count at threshold 0");
 }
+
+#[test]
+fn scoped_display_rules_reach_a_parallel_loop() {
+    let mut six = physure_core::settings::DisplayRules::DEFAULT;
+    six.significant_digits = 6;
+    let _six = physure_core::settings::scoped_display_rules(six);
+    let texts = || -> Vec<String> { items("v = for i in 0..16 { (1/3): base }").into_iter().map(|item| item.to_string()).collect() };
+    let (parallel, sequential) = both_ways(texts);
+    assert_eq!(sequential, vec!["0.333333".to_string(); 16]);
+    assert_eq!(parallel, vec!["0.333333".to_string(); 16], "the caller's display rules must reach the rayon workers");
+}

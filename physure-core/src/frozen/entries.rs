@@ -159,6 +159,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         asymmetric_shape,
         default_dof,
         monte_carlo_seed,
+        display: crate::settings::DisplayRules { significant_digits, scientific_below, scientific_from, uncertainty_digits },
         radian_grant,
         steradian_grant,
         ignored,
@@ -174,6 +175,10 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "asymmetric_shape", asymmetric_shape.name());
     push(&mut out, "setting", "default_dof", format!("{default_dof:?}"));
     push(&mut out, "setting", "monte_carlo_seed", monte_carlo_seed.name());
+    push(&mut out, "setting", "display_significant_digits", significant_digits.to_string());
+    push(&mut out, "setting", "display_scientific_below", format!("{scientific_below:?}"));
+    push(&mut out, "setting", "display_scientific_from", format!("{scientific_from:?}"));
+    push(&mut out, "setting", "uncertainty_digits", uncertainty_digits.to_string());
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -396,6 +401,20 @@ mod tests {
     #[test]
     fn default_dof_is_an_entry_and_a_change_of_it_is_seen() {
         assert_setting_entry("default_dof", "inf", Setting::DefaultDof(50.0), Setting::DefaultDof(f64::INFINITY));
+    }
+
+    #[test]
+    fn the_display_settings_are_entries_and_a_change_of_one_is_seen() {
+        use crate::settings::UncertaintyDigits;
+        assert_setting_entry("display_significant_digits", "15", Setting::DisplaySignificantDigits(6), Setting::DisplaySignificantDigits(15));
+        assert_setting_entry("display_scientific_below", "0.0001", Setting::DisplayScientificBelow(1e-3), Setting::DisplayScientificBelow(1e-4));
+        assert_setting_entry("display_scientific_from", "1e16", Setting::DisplayScientificFrom(1e6), Setting::DisplayScientificFrom(1e16));
+        assert_setting_entry(
+            "uncertainty_digits",
+            "gum",
+            Setting::UncertaintyDigits(UncertaintyDigits::Figures(2)),
+            Setting::UncertaintyDigits(UncertaintyDigits::Gum),
+        );
     }
 
     #[test]

@@ -373,6 +373,7 @@ fn set_sentinel_settings() {
     physure_core::uncertainty::shapes::set_asymmetric_shape(physure_core::uncertainty::ShapeKind::Fechner);
     physure_core::uncertainty::dof::set_default_dof(782.0);
     physure_core::uncertainty::set_monte_carlo_seed(physure_core::uncertainty::MonteCarloSeed::Fixed(783));
+    physure_core::settings::set_display_rules(SENTINEL_DISPLAY);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Unscented);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimension);
     physure_core::units::angle_mode::set_marker_grants(false, false);
@@ -390,6 +391,7 @@ struct Settings {
     asymmetric_shape: &'static str,
     default_dof: f64,
     monte_carlo_seed: physure_core::uncertainty::MonteCarloSeed,
+    display: physure_core::settings::DisplayRules,
     propagation_mode: &'static str,
     angle_mode: &'static str,
     radian_plain: bool,
@@ -407,6 +409,7 @@ fn settings_now() -> Settings {
         asymmetric_shape: physure_core::uncertainty::shapes::asymmetric_shape().name(),
         default_dof: physure_core::uncertainty::dof::default_dof(),
         monte_carlo_seed: physure_core::uncertainty::monte_carlo_seed(),
+        display: physure_core::settings::display_rules(),
         propagation_mode: physure_core::uncertainty::propagation_mode().name(),
         angle_mode: physure_core::units::angle_mode::angle_mode().name(),
         radian_plain: physure_core::units::angle_mode::marker_converts_to_plain("rad"),
@@ -424,10 +427,18 @@ const SENTINELS: Settings = Settings {
     asymmetric_shape: "fechner",
     default_dof: 782.0,
     monte_carlo_seed: physure_core::uncertainty::MonteCarloSeed::Fixed(783),
+    display: SENTINEL_DISPLAY,
     propagation_mode: "unscented",
     angle_mode: "dimension",
     radian_plain: false,
     steradian_plain: false,
+};
+/// Display rules no catalog uses.
+const SENTINEL_DISPLAY: physure_core::settings::DisplayRules = physure_core::settings::DisplayRules {
+    significant_digits: 7,
+    scientific_below: 0.00390625,
+    scientific_from: 65536.0,
+    uncertainty_digits: physure_core::settings::UncertaintyDigits::Figures(3),
 };
 /// What the embedded catalog sets (and the compiled defaults are).
 const LIBRARY_SETTINGS: Settings = Settings {
@@ -440,6 +451,7 @@ const LIBRARY_SETTINGS: Settings = Settings {
     asymmetric_shape: "dimidiated",
     default_dof: f64::INFINITY,
     monte_carlo_seed: physure_core::uncertainty::MonteCarloSeed::DEFAULT,
+    display: physure_core::settings::DisplayRules::DEFAULT,
     propagation_mode: "correlated",
     angle_mode: "dimensionless",
     radian_plain: true,
@@ -463,6 +475,7 @@ fn restore_library_settings() {
     physure_core::uncertainty::shapes::set_asymmetric_shape(physure_core::uncertainty::ShapeKind::Dimidiated);
     physure_core::uncertainty::dof::set_default_dof(f64::INFINITY);
     physure_core::uncertainty::set_monte_carlo_seed(physure_core::uncertainty::MonteCarloSeed::DEFAULT);
+    physure_core::settings::set_display_rules(physure_core::settings::DisplayRules::DEFAULT);
     physure_core::uncertainty::set_propagation_mode(physure_core::uncertainty::PropagationMode::Correlated);
     physure_core::units::angle_mode::set_angle_mode(physure_core::units::angle_mode::AngleMode::Dimensionless);
     physure_core::units::angle_mode::set_marker_grants(true, true);
@@ -473,7 +486,7 @@ fn settings_of_the_frozen_file_are_applied_at_activation_and_a_failed_load_appli
     let env = Env::new();
     assert!(active().unwrap().is_none());
     set_sentinel_settings();
-    let overrides = "[Settings]\nparallel_threshold = 4242\nangle_mode = dimension\napprox_rel_tol = 1e-6\nmonte_carlo_samples = 4000\nmax_while_iterations = 4001\nasymmetric_shape = fechner\ndefault_dof = 50\nmonte_carlo_seed = 5\n[Compatibility]\nsteradian, plain = convert\n";
+    let overrides = "[Settings]\nparallel_threshold = 4242\nangle_mode = dimension\napprox_rel_tol = 1e-6\nmonte_carlo_samples = 4000\nmax_while_iterations = 4001\nasymmetric_shape = fechner\ndefault_dof = 50\nmonte_carlo_seed = 5\ndisplay_significant_digits = 9\ndisplay_scientific_below = 0.001\nuncertainty_digits = 2\n[Compatibility]\nsteradian, plain = convert\n";
     env.write(FROZEN_FILE_NAME, &frozen_with(release_engine(), &embedded_without_pipeline_steps(), overrides));
     reset();
     ensure_valid().unwrap();
@@ -488,6 +501,12 @@ fn settings_of_the_frozen_file_are_applied_at_activation_and_a_failed_load_appli
             asymmetric_shape: "fechner",
             default_dof: 50.0,
             monte_carlo_seed: physure_core::uncertainty::MonteCarloSeed::Fixed(5),
+            display: physure_core::settings::DisplayRules {
+                significant_digits: 9,
+                scientific_below: 0.001,
+                uncertainty_digits: physure_core::settings::UncertaintyDigits::Figures(2),
+                ..physure_core::settings::DisplayRules::DEFAULT
+            },
             angle_mode: "dimension",
             radian_plain: false,
             ..LIBRARY_SETTINGS

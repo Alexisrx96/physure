@@ -176,7 +176,7 @@ pub(crate) fn strip_unit_comment(text: &str) -> &str {
 /// `parallel_threshold` items or more, and a scoped angle mode, propagation mode or loop ceiling did not reach the
 /// body either. The same holds for the uncertainty settings a host or a witness pins on its thread (the Monte Carlo
 /// sample count, the `while` ceiling, the asymmetric shape, the default degrees of freedom, the seed setting a
-/// worker's own stream would start from).
+/// worker's own stream would start from) and the display rules a witness pins (the text a loop body builds).
 ///
 /// Not carried: the evaluation unit (the Monte Carlo stream) of the caller: each task drawing the caller's sequence
 /// would make the draws of every item the same. A loop in `monte_carlo` mode, the only mode that draws, stays on the
@@ -195,6 +195,7 @@ pub(crate) struct CallerScopes<'a> {
     asymmetric_shape: physure_core::uncertainty::ShapeKind,
     default_dof: f64,
     monte_carlo_seed: physure_core::uncertainty::MonteCarloSeed,
+    display_rules: physure_core::settings::DisplayRules,
 }
 
 impl CallerScopes<'_> {
@@ -213,6 +214,7 @@ impl CallerScopes<'_> {
                 asymmetric_shape: physure_core::uncertainty::shapes::asymmetric_shape(),
                 default_dof: physure_core::uncertainty::dof::default_dof(),
                 monte_carlo_seed: physure_core::uncertainty::monte_carlo_seed(),
+                display_rules: physure_core::settings::display_rules(),
             })
         })
     }
@@ -229,6 +231,7 @@ impl CallerScopes<'_> {
         let _shape = physure_core::uncertainty::shapes::scoped_asymmetric_shape(self.asymmetric_shape);
         let _dof = physure_core::uncertainty::dof::scoped_default_dof(self.default_dof);
         let _seed = physure_core::uncertainty::scoped_monte_carlo_seed(self.monte_carlo_seed);
+        let _display = physure_core::settings::scoped_display_rules(self.display_rules);
         physure_core::units::with_scoped_catalog(self.catalog, f)
     }
 }

@@ -101,22 +101,32 @@ fn short_number(n: f64) -> String {
     }
 }
 
+/// `n` as the display rules in force write it ([`crate::settings::DisplayRules`], `[Settings]
+/// display_significant_digits`, `display_scientific_below` and `display_scientific_from`): scientific notation outside
+/// the decimal range, the shortest round-trip decimal or its rounding to the significant digits otherwise.
 pub fn format_float(n: f64) -> String {
+    format_float_with(n, &crate::settings::display_rules())
+}
+
+/// [`format_float`] under the given rules, so that a caller formatting several numbers reads the rules once.
+fn format_float_with(n: f64, rules: &crate::settings::DisplayRules) -> String {
     if n == 0.0 {
         return "0.0".to_string();
     }
     let abs_n = n.abs();
-    if abs_n < 1e-4 || abs_n >= 1e16 {
+    if rules.is_scientific(n) {
         format!("{:e}", n)
     } else {
         // `{}` prints the shortest string that round-trips the f64, which is honest but
         // unreadable once a conversion has left rounding debris: 25 m/s => km/h comes out
         // as 89.99999999999999. An f64 carries 15 decimal digits exactly and the debris
-        // always lands past them, so round to 15 significant digits and keep the result
-        // only when it is genuinely shorter.
+        // always lands past them, so round to `display_significant_digits` (15 by default)
+        // significant digits, at most 17 decimal places, and keep the result only when it
+        // is genuinely shorter.
+        let digits = rules.significant_digits as i32;
         let s = {
             let exact = format!("{}", n);
-            let rounded = format!("{:.*}", (15 - (abs_n.log10().floor() as i32 + 1)).clamp(0, 17) as usize, n);
+            let rounded = format!("{:.*}", (digits - (abs_n.log10().floor() as i32 + 1)).clamp(0, 17) as usize, n);
             let trimmed = if rounded.contains('.') {
                 rounded.trim_end_matches('0').trim_end_matches('.').to_string()
             } else {
@@ -163,26 +173,28 @@ fn leading_digit(x: f64) -> i64 {
     (x.abs() / 10f64.powi(magnitude_exponent(x))).round() as i64
 }
 
-/// GUM-style correlated rounding: the uncertainty gets 1 significant figure, or 2 if that
+/// GUM-style correlated rounding: under `[Settings] uncertainty_digits = gum` (the default) the
+/// uncertainty gets 1 significant figure, or 2 if that
 /// leading digit would be `1` (whether the original value's leading digit already was `1`, or
 /// rounding to 1 figure carried a digit over into one -- `0.981` rounds to `1.0` at 1 figure,
-/// so this re-checks and uses 2 instead: `0.98`). The mean is then rounded to the same decimal
+/// so this re-checks and uses 2 instead: `0.98`); under `uncertainty_digits = N`, N figures. The mean is then rounded to the same decimal
 /// place the (rounded) uncertainty landed on, so it's never shown with more precision than the
-/// uncertainty justifies. `sig_figs_override`, when given, replaces the automatic 1-or-2 rule
+/// uncertainty justifies. `sig_figs_override` (`@precision(N)`), when given, replaces the setting
 /// with a fixed count.
 ///
-/// An exact value (`std_dev <= 0.0`) and an extreme magnitude (matching `format_float`'s own
-/// scientific-notation threshold) both pass through to `format_float` untouched -- this is a
+/// An exact value (`std_dev <= 0.0`) and an extreme magnitude (one `format_float` writes in
+/// scientific notation: the same [`crate::settings::DisplayRules`], read once) both pass through to `format_float` untouched -- this is a
 /// normal-range display convenience, not a replacement for existing non-finite/extreme-value
 /// handling.
 pub fn gum_round(mean: f64, std_dev: f64, sig_figs_override: Option<u32>) -> (String, String) {
-    let extreme = |n: f64| { let a = n.abs(); a != 0.0 && (a < 1e-4 || a >= 1e16) };
-    if std_dev <= 0.0 || !std_dev.is_finite() || !mean.is_finite() || extreme(std_dev) || extreme(mean) {
-        return (format_float(mean), format_float(std_dev));
+    let rules = crate::settings::display_rules();
+    if std_dev <= 0.0 || !std_dev.is_finite() || !mean.is_finite() || rules.is_scientific(std_dev) || rules.is_scientific(mean) {
+        return (format_float_with(mean, &rules), format_float_with(std_dev, &rules));
     }
-    let sig_figs = match sig_figs_override {
-        Some(n) => n.max(1),
-        None => {
+    let sig_figs = match (sig_figs_override, rules.uncertainty_digits) {
+        (Some(n), _) => n.max(1),
+        (None, crate::settings::UncertaintyDigits::Figures(n)) => n,
+        (None, crate::settings::UncertaintyDigits::Gum) => {
             let one_fig = round_to_sig_figs(std_dev, 1);
             if leading_digit(one_fig) == 1 { 2 } else { 1 }
         }
@@ -769,10 +781,12 @@ impl Quantity {
         let mut base_unit = self.unit.clone().with_unit_scale();
         base_unit.display_name = None;
         let std_dev = self.value.std_dev() * self.unit.scale;
+        // read once for both numbers; never rounded by `uncertainty_digits`
+        let rules = crate::settings::display_rules();
         let val_str = if std_dev > 0.0 {
-            format!("{} ± {}", format_float(self.canonical_magnitude()), format_float(std_dev))
+            format!("{} ± {}", format_float_with(self.canonical_magnitude(), &rules), format_float_with(std_dev, &rules))
         } else {
-            format_float(self.canonical_magnitude())
+            format_float_with(self.canonical_magnitude(), &rules)
         };
         let unit_str = base_unit.base_repr();
         if unit_str.is_empty() {
@@ -1266,6 +1280,91 @@ mod tests {
     fn display_applies_gum_rounding_to_an_uncertain_quantity() {
         let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
         assert_eq!(q.to_string(), "630 ± 40 J");
+    }
+
+    use crate::settings::{scoped_display_rules, DisplayRules, UncertaintyDigits};
+
+    /// The compiled rules with one change, scoped to this thread (never the process-wide setters here: hundreds of
+    /// tests of this crate assert printed text).
+    fn rules(change: impl FnOnce(&mut DisplayRules)) -> DisplayRules {
+        let mut rules = DisplayRules::DEFAULT;
+        change(&mut rules);
+        rules
+    }
+
+    #[test]
+    fn display_significant_digits_rounds_the_decimal_form_and_not_the_scientific_one() {
+        let _six = scoped_display_rules(rules(|r| r.significant_digits = 6));
+        assert_eq!(format_float(1.0 / 3.0), "0.333333");
+        assert_eq!(format_float(123.456789), "123.457");
+        assert_eq!(format_float(0.1 + 0.2), "0.3");
+        // digits before the point are never replaced by zeros
+        assert_eq!(format_float(123456789.0), "123456789.0");
+        // the scientific form is the shortest round-trip, whatever the setting
+        assert_eq!(format_float(1.2345678901234567e-5), "1.2345678901234568e-5");
+        assert_eq!(format_float(f64::MAX), "1.7976931348623157e308");
+        let _seventeen = scoped_display_rules(rules(|r| r.significant_digits = 17));
+        assert_eq!(format_float(0.1 + 0.2), "0.30000000000000004", "17 digits: the shortest round-trip text");
+        assert_eq!(format_float(89.99999999999999), "89.99999999999999");
+    }
+
+    #[test]
+    fn the_scientific_thresholds_are_settings() {
+        let _guard = scoped_display_rules(rules(|r| {
+            r.scientific_below = 1e-2;
+            r.scientific_from = 1e6;
+        }));
+        assert_eq!(format_float(0.005), "5e-3");
+        assert_eq!(format_float(0.01), "0.01");
+        assert_eq!(format_float(999999.0), "999999.0");
+        assert_eq!(format_float(1234567.0), "1.234567e6");
+        assert_eq!(format_float(-0.0), "0.0");
+        assert_eq!(format_float(f64::INFINITY), "inf");
+    }
+
+    #[test]
+    fn gum_round_reads_the_same_thresholds_as_format_float() {
+        // one source of truth: a value the thresholds make scientific is not GUM-rounded either
+        assert_eq!(gum_round(5000.0, 30.0, None), ("5000".to_string(), "30".to_string()));
+        let _guard = scoped_display_rules(rules(|r| r.scientific_from = 1e3));
+        assert_eq!(gum_round(5000.0, 30.0, None), ("5e3".to_string(), "30.0".to_string()));
+        assert_eq!(gum_round(500.0, 30.0, None), ("500".to_string(), "30".to_string()));
+    }
+
+    #[test]
+    fn uncertainty_digits_fixes_the_figures_of_the_uncertainty_and_precision_still_wins() {
+        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
+        let exact = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::base("m"), None, None);
+        let _two = scoped_display_rules(rules(|r| r.uncertainty_digits = UncertaintyDigits::Figures(2)));
+        assert_eq!(q.to_string(), "625 ± 40 J");
+        assert_eq!(gum_round(19.62, 0.981, None), ("19.62".to_string(), "0.98".to_string()));
+        assert_eq!(gum_round(10.0, 2.0, None), ("10.0".to_string(), "2.0".to_string()));
+        assert_eq!(q.to_string_with_precision(Some(3)), "625.0 ± 40.0 J", "@precision wins");
+        assert_eq!(exact.to_string(), "3.14159265 m", "an exact value is not touched");
+        assert_eq!(exact.to_string_with_precision(Some(2)), "3.14 m", "@precision on an exact value: decimal places");
+        let _one = scoped_display_rules(rules(|r| r.uncertainty_digits = UncertaintyDigits::Figures(1)));
+        assert_eq!(gum_round(10.0, 0.12, None), ("10.0".to_string(), "0.1".to_string()), "no GUM bump to two figures");
+    }
+
+    #[test]
+    fn base_display_follows_the_digits_and_thresholds_and_never_rounds_by_the_uncertainty() {
+        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
+        let _guard = scoped_display_rules(rules(|r| {
+            r.significant_digits = 4;
+            r.uncertainty_digits = UncertaintyDigits::Figures(1);
+        }));
+        assert_eq!(q.base_display(), "625.0 ± 40.02 J");
+    }
+
+    #[test]
+    fn a_scoped_display_rule_ends_with_its_guard() {
+        let before = crate::settings::display_rules();
+        {
+            let _six = scoped_display_rules(rules(|r| r.significant_digits = 6));
+            assert_eq!(format_float(1.0 / 3.0), "0.333333");
+        }
+        assert_eq!(crate::settings::display_rules(), before);
+        assert_eq!(format_float(1.0 / 3.0), "0.333333333333333");
     }
 
     #[test]

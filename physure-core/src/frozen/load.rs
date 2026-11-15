@@ -551,7 +551,7 @@ mod tests {
                 crate::settings::max_while_iterations(),
                 crate::uncertainty::shapes::asymmetric_shape(),
                 crate::uncertainty::dof::default_dof().to_bits(),
-                crate::uncertainty::monte_carlo_seed(),
+                (crate::uncertainty::monte_carlo_seed(), crate::settings::display_rules()),
                 crate::uncertainty::mode::propagation_mode(),
                 crate::units::angle_mode::angle_mode(),
                 // nested: a tuple compares and prints up to 12 elements
@@ -560,7 +560,7 @@ mod tests {
         };
         let before = now();
         let dir = Dir::new();
-        let settings = "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\npropagation_mode = unscented\nmax_loop_iterations = 3\nmax_pipeline_steps = 4\napprox_rel_tol = 1e-6\nmonte_carlo_samples = 77\nmax_while_iterations = 78\nasymmetric_shape = fechner\ndefault_dof = 50\nmonte_carlo_seed = 79\n[Compatibility]\n";
+        let settings = "[Settings]\nparallel_threshold = 12345\nangle_mode = dimension\npropagation_mode = unscented\nmax_loop_iterations = 3\nmax_pipeline_steps = 4\napprox_rel_tol = 1e-6\nmonte_carlo_samples = 77\nmax_while_iterations = 78\nasymmetric_shape = fechner\ndefault_dof = 50\nmonte_carlo_seed = 79\ndisplay_significant_digits = 9\ndisplay_scientific_below = 0.001\ndisplay_scientific_from = 1e9\nuncertainty_digits = 2\n[Compatibility]\n";
         let catalog = load(&write_file(&dir, &standard(settings))).unwrap();
         assert_eq!(now(), before, "a successful load applied something");
         assert!(catalog.settings.ends_with(&[
@@ -575,6 +575,10 @@ mod tests {
             Setting::AsymmetricShape(crate::uncertainty::ShapeKind::Fechner),
             Setting::DefaultDof(50.0),
             Setting::MonteCarloSeed(crate::uncertainty::MonteCarloSeed::Fixed(79)),
+            Setting::DisplaySignificantDigits(9),
+            Setting::DisplayScientificBelow(0.001),
+            Setting::DisplayScientificFrom(1e9),
+            Setting::UncertaintyDigits(crate::settings::UncertaintyDigits::Figures(2)),
         ]));
         assert_eq!(catalog.compatibility, Some(vec![]), "the overrides' empty section replaces the rows");
         let failing = standard(&format!("{settings}[AtomicWeights]\nFe = abc, 0.1"));

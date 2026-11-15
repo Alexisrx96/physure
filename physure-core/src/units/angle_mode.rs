@@ -122,7 +122,7 @@ pub fn set_marker_grants(radian: bool, steradian: bool) {
     STERADIAN_READ_AS_ONE.store(steradian, Ordering::Relaxed);
 }
 
-/// Puts the process-wide mode, the grants and the Phase 4b settings (the Monte Carlo sample count, ...) back as they
+/// Puts the process-wide mode, the grants and the Phase 4b settings (the Monte Carlo sample count, ..., the display rules) back as they
 /// were when it was made, also on unwind. A test that
 /// changes either takes `crate::settings::TEST_LOCK` first and holds one of these for as long as it does.
 #[cfg(test)]
@@ -135,6 +135,7 @@ pub(crate) struct RestoreProcessState {
     asymmetric_shape: crate::uncertainty::ShapeKind,
     default_dof: f64,
     monte_carlo_seed: crate::uncertainty::MonteCarloSeed,
+    display_rules: crate::settings::DisplayRules,
 }
 
 #[cfg(test)]
@@ -149,6 +150,7 @@ impl RestoreProcessState {
             asymmetric_shape: crate::uncertainty::shapes::asymmetric_shape(),
             default_dof: crate::uncertainty::dof::default_dof(),
             monte_carlo_seed: crate::uncertainty::monte_carlo_seed(),
+            display_rules: *crate::settings::process_display_rules(),
         }
     }
 }
@@ -163,6 +165,7 @@ impl Drop for RestoreProcessState {
         crate::uncertainty::shapes::set_asymmetric_shape(self.asymmetric_shape);
         crate::uncertainty::dof::set_default_dof(self.default_dof);
         crate::uncertainty::set_monte_carlo_seed(self.monte_carlo_seed);
+        crate::settings::set_display_rules(self.display_rules);
     }
 }
 

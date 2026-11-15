@@ -249,8 +249,153 @@ impl Drop for MonteCarloSamplesGuard {
     }
 }
 
+/// How many significant figures the uncertainty of a printed measurement keeps, from `physure.conf`'s
+/// `[Settings] uncertainty_digits`.
+///
+/// The standard uncertainty is rounded to that many significant figures and the value is rounded to the same decimal
+/// place, so the value is never shown more precisely than its uncertainty (`625 ± 40.02` prints `630 ± 40` with one
+/// figure). This is the meaning `@precision(N)` has on a value **with** an uncertainty; it is not the meaning
+/// `@precision(N)` has on an exact value (N decimal places), and the setting does not apply to exact values at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UncertaintyDigits {
+    /// The Guide's rule (JCGM 100:2008 7.2.6): one significant figure, or two when the uncertainty rounded to one
+    /// figure has the leading digit 1 (`0.15` prints `0.15`, `0.981` prints `0.98`, `2.0` prints `2`).
+    Gum,
+    /// Always this many significant figures, from 1 to [`MAX_DISPLAY_DIGITS`].
+    Figures(u32),
+}
+
+impl std::fmt::Display for UncertaintyDigits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UncertaintyDigits::Gum => f.write_str("gum"),
+            UncertaintyDigits::Figures(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+impl std::str::FromStr for UncertaintyDigits {
+    type Err = String;
+
+    /// `gum`, or a whole number from 1 to [`MAX_DISPLAY_DIGITS`].
+    fn from_str(raw: &str) -> Result<Self, String> {
+        match raw {
+            "gum" => Ok(UncertaintyDigits::Gum),
+            _ => match raw.parse::<u32>() {
+                Ok(n) if (1..=MAX_DISPLAY_DIGITS).contains(&n) => Ok(UncertaintyDigits::Figures(n)),
+                _ => Err(format!("invalid uncertainty_digits '{raw}': gum, or a whole number from 1 to {MAX_DISPLAY_DIGITS}")),
+            },
+        }
+    }
+}
+
+/// The most significant digits a display setting accepts: 17 digits always write an `f64` exactly (the shortest text
+/// that reads back as the same number never needs more).
+pub const MAX_DISPLAY_DIGITS: u32 = 17;
+/// The smallest `display_scientific_below` accepted. The decimal form writes at most 17 decimal places (a rule of the
+/// formatter, not a setting), so below 1e-6 a "decimal" number would keep fewer than 12 significant figures, and
+/// below 1e-17 none at all.
+pub const MIN_DISPLAY_SCIENTIFIC_BELOW: f64 = 1e-6;
+
+/// The rules by which a number is printed (`physure.conf`'s `[Settings] display_significant_digits`,
+/// `display_scientific_below`, `display_scientific_from` and `uncertainty_digits`). One value, read once per
+/// formatted number by `quantity::format_float`, `quantity::gum_round`, `Quantity`'s `Display` and
+/// `Quantity::base_display`, so the four always agree within one number.
+///
+/// * A non-zero number whose magnitude is below `scientific_below` or at least `scientific_from` (the infinities
+///   included) is written in scientific notation, as the shortest text that reads back as the same `f64` (`1e-5`,
+///   `1.0000000000000002e16`). `significant_digits` does not apply there.
+/// * Any other number is written in decimal: the shortest text that reads back as the same `f64`, unless rounding it
+///   to `significant_digits` significant digits (and at most 17 decimal places) gives a shorter text, which is then
+///   written (`0.1 + 0.2` prints `0.3`, `1/3` prints `0.333333333333333` with 15). Digits before the decimal point
+///   are never replaced by zeros. A whole number gets `.0`; zero (`-0.0` too) is `0.0`.
+/// * A value with a finite, non-zero uncertainty, both inside the decimal range, is rounded by `uncertainty_digits`
+///   ([`UncertaintyDigits`]); `@precision(N)` replaces it for one value. Outside the range both are written as above,
+///   unrounded. `base_display` (`x: base` in PHS) never rounds by `uncertainty_digits`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DisplayRules {
+    /// From 1 to [`MAX_DISPLAY_DIGITS`].
+    pub significant_digits: u32,
+    /// From [`MIN_DISPLAY_SCIENTIFIC_BELOW`] to 1.
+    pub scientific_below: f64,
+    /// Finite, at least 1.
+    pub scientific_from: f64,
+    pub uncertainty_digits: UncertaintyDigits,
+}
+
+impl DisplayRules {
+    /// The rules every number was printed by before they were settings.
+    pub const DEFAULT: DisplayRules = DisplayRules {
+        significant_digits: 15,
+        scientific_below: 1e-4,
+        scientific_from: 1e16,
+        uncertainty_digits: UncertaintyDigits::Gum,
+    };
+
+    /// Whether a non-zero magnitude (an infinity included) is written in scientific notation.
+    pub fn is_scientific(&self, n: f64) -> bool {
+        let a = n.abs();
+        a != 0.0 && (a < self.scientific_below || a >= self.scientific_from)
+    }
+}
+
+static DISPLAY_RULES: std::sync::Mutex<DisplayRules> = std::sync::Mutex::new(DisplayRules::DEFAULT);
+
+thread_local! {
+    static DISPLAY_OVERRIDE: Cell<Option<DisplayRules>> = const { Cell::new(None) };
+}
+
+pub(crate) fn process_display_rules() -> std::sync::MutexGuard<'static, DisplayRules> {
+    DISPLAY_RULES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The display rules in force: a [`scoped_display_rules`] override on this thread, or the process-wide rules.
+pub fn display_rules() -> DisplayRules {
+    DISPLAY_OVERRIDE.with(Cell::get).unwrap_or_else(|| *process_display_rules())
+}
+
+/// Sets all four process-wide display rules, returning the ones they replaced. For a temporary change (a test, a
+/// witness), use [`scoped_display_rules`]: a process-wide change reaches every thread and every printed number.
+pub fn set_display_rules(rules: DisplayRules) -> DisplayRules {
+    std::mem::replace(&mut *process_display_rules(), rules)
+}
+
+/// Sets the process-wide `display_significant_digits`, returning the one it replaced.
+pub fn set_display_significant_digits(n: u32) -> u32 {
+    std::mem::replace(&mut process_display_rules().significant_digits, n)
+}
+
+/// Sets the process-wide `display_scientific_below`, returning the one it replaced.
+pub fn set_display_scientific_below(x: f64) -> f64 {
+    std::mem::replace(&mut process_display_rules().scientific_below, x)
+}
+
+/// Sets the process-wide `display_scientific_from`, returning the one it replaced.
+pub fn set_display_scientific_from(x: f64) -> f64 {
+    std::mem::replace(&mut process_display_rules().scientific_from, x)
+}
+
+/// Sets the process-wide `uncertainty_digits`, returning the one it replaced.
+pub fn set_uncertainty_digits(digits: UncertaintyDigits) -> UncertaintyDigits {
+    std::mem::replace(&mut process_display_rules().uncertainty_digits, digits)
+}
+
+/// Overrides all four display rules on this thread until the returned guard is dropped.
+pub fn scoped_display_rules(rules: DisplayRules) -> DisplayRulesGuard {
+    DisplayRulesGuard(DISPLAY_OVERRIDE.with(|slot| slot.replace(Some(rules))))
+}
+
+/// Restores the display rules that were in force before its [`scoped_display_rules`] call, including on unwind.
+pub struct DisplayRulesGuard(Option<DisplayRules>);
+
+impl Drop for DisplayRulesGuard {
+    fn drop(&mut self) {
+        DISPLAY_OVERRIDE.with(|slot| slot.set(self.0));
+    }
+}
+
 /// Puts every process-wide setting a conf can change back to the value compiled into the library: the three
-/// ceilings above, the `while` ceiling, the `≈` tolerance, the Monte Carlo sample count, the asymmetric shape, the default degrees of freedom, the Monte Carlo seed, the propagation mode, the angle mode and the
+/// ceilings above, the `while` ceiling, the `≈` tolerance, the Monte Carlo sample count, the asymmetric shape, the default degrees of freedom, the Monte Carlo seed, the display rules, the propagation mode, the angle mode and the
 /// `[Compatibility]` grants. Activating a frozen
 /// configuration calls it before applying the file's settings, so a setting the file does not mention takes its
 /// compiled default and never a value some earlier reading left behind. Thread-local overrides are not touched.
@@ -264,6 +409,7 @@ pub(crate) fn reset_to_defaults() {
     crate::uncertainty::shapes::set_asymmetric_shape(crate::uncertainty::ShapeKind::DEFAULT);
     crate::uncertainty::dof::set_default_dof(f64::INFINITY);
     crate::uncertainty::set_monte_carlo_seed(crate::uncertainty::MonteCarloSeed::DEFAULT);
+    set_display_rules(DisplayRules::DEFAULT);
     crate::uncertainty::set_propagation_mode(crate::uncertainty::PropagationMode::default());
     crate::units::angle_mode::set_angle_mode(crate::units::angle_mode::AngleMode::default());
     crate::units::angle_mode::set_marker_grants(true, true);
