@@ -189,6 +189,8 @@ pub enum Setting {
     ApproxRelTol(f64),
     /// The sample count of a Monte Carlo measurement that names none: from 2 to 10 000 000.
     MonteCarloSamples(usize),
+    /// The ceiling of a PHS `while` loop: at least 1.
+    MaxWhileIterations(usize),
     /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
     Ignored { key: String, value: String },
 }
@@ -218,6 +220,9 @@ impl Setting {
             Setting::MonteCarloSamples(n) => {
                 crate::settings::set_monte_carlo_samples(*n);
             }
+            Setting::MaxWhileIterations(n) => {
+                crate::settings::set_max_while_iterations(*n);
+            }
             Setting::Ignored { .. } => {}
         }
     }
@@ -233,6 +238,7 @@ pub struct EffectiveSettings {
     pub max_pipeline_steps: usize,
     pub approx_rel_tol: f64,
     pub monte_carlo_samples: usize,
+    pub max_while_iterations: usize,
     /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
     pub radian_grant: bool,
     pub steradian_grant: bool,
@@ -254,8 +260,8 @@ impl ProcessSettings {
     /// default if the file does not give it.
     pub fn effective(&self) -> EffectiveSettings {
         use crate::settings::{
-            DEFAULT_APPROX_REL_TOL, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_MONTE_CARLO_SAMPLES,
-            DEFAULT_PARALLEL_THRESHOLD,
+            DEFAULT_APPROX_REL_TOL, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_MAX_WHILE_ITERATIONS,
+            DEFAULT_MONTE_CARLO_SAMPLES, DEFAULT_PARALLEL_THRESHOLD,
         };
         let mut effective = EffectiveSettings {
             propagation_mode: PropagationMode::default(),
@@ -265,6 +271,7 @@ impl ProcessSettings {
             max_pipeline_steps: DEFAULT_MAX_PIPELINE_STEPS,
             approx_rel_tol: DEFAULT_APPROX_REL_TOL,
             monte_carlo_samples: DEFAULT_MONTE_CARLO_SAMPLES,
+            max_while_iterations: DEFAULT_MAX_WHILE_ITERATIONS,
             radian_grant: true,
             steradian_grant: true,
             ignored: BTreeMap::new(),
@@ -278,6 +285,7 @@ impl ProcessSettings {
                 Setting::MaxPipelineSteps(n) => effective.max_pipeline_steps = *n,
                 Setting::ApproxRelTol(rel) => effective.approx_rel_tol = *rel,
                 Setting::MonteCarloSamples(n) => effective.monte_carlo_samples = *n,
+                Setting::MaxWhileIterations(n) => effective.max_while_iterations = *n,
                 Setting::Ignored { key, value } => {
                     effective.ignored.insert(key.clone(), value.clone());
                 }
@@ -301,6 +309,7 @@ impl ProcessSettings {
         crate::settings::set_max_pipeline_steps(e.max_pipeline_steps);
         crate::settings::set_approx_rel_tol(e.approx_rel_tol);
         crate::settings::set_monte_carlo_samples(e.monte_carlo_samples);
+        crate::settings::set_max_while_iterations(e.max_while_iterations);
         crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
@@ -362,6 +371,13 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
                 }),
             }
         }
+        "max_while_iterations" => match raw.parse::<usize>() {
+            Ok(n) if n >= 1 => Ok(Setting::MaxWhileIterations(n)),
+            _ => Err(SettingIssue::Bad {
+                why: format!("invalid max_while_iterations '{raw}': a whole number of at least 1"),
+                keeping: "the ceiling in force",
+            }),
+        },
         _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
         _ => Err(SettingIssue::Unknown(key.to_string())),
     }
@@ -372,7 +388,7 @@ pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
         SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol and monte_carlo_samples, and accepts {} for other bindings",
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples and max_while_iterations, and accepts {} for other bindings",
             CORE_UNUSED_SETTINGS.join(", ")
         ),
         SettingIssue::Bad { why, .. } => why,
@@ -1899,13 +1915,14 @@ mod tests {
     }
 
     /// The readable process-wide settings, to show that a replay changed none of them.
-    fn process_settings_now() -> (usize, usize, usize, u64, usize, PropagationMode, AngleMode, (bool, bool)) {
+    fn process_settings_now() -> (usize, usize, usize, u64, usize, usize, PropagationMode, AngleMode, (bool, bool)) {
         (
             crate::settings::parallel_threshold(),
             crate::settings::max_loop_iterations(),
             crate::settings::max_pipeline_steps(),
             crate::settings::approx_rel_tol().to_bits(),
             crate::settings::monte_carlo_samples(),
+            crate::settings::max_while_iterations(),
             crate::uncertainty::mode::propagation_mode(),
             crate::units::angle_mode::angle_mode(),
             marker_grants(),
@@ -1980,6 +1997,7 @@ mod tests {
         assert!(collected.settings.contains(&Setting::PropagationMode(PropagationMode::Correlated)));
         assert!(collected.settings.contains(&Setting::ApproxRelTol(crate::settings::DEFAULT_APPROX_REL_TOL)));
         assert!(collected.settings.contains(&Setting::MonteCarloSamples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES)));
+        assert!(collected.settings.contains(&Setting::MaxWhileIterations(crate::settings::DEFAULT_MAX_WHILE_ITERATIONS)));
         assert!(collected.compatibility.is_some());
         // the strict replay builds what the lenient reading of the library builds
         let mut lenient = UnitRegistry::new();
@@ -2059,6 +2077,8 @@ mod tests {
             ("[Settings]\nmonte_carlo_samples = 1\n", "monte_carlo_samples"),
             ("[Settings]\nmonte_carlo_samples = abc\n", "abc"),
             ("[Settings]\nmonte_carlo_samples = 20000000\n", "20000000"),
+            ("[Settings]\nmax_while_iterations = 0\n", "max_while_iterations"),
+            ("[Settings]\nmax_while_iterations = abc\n", "abc"),
             ("[Settings]\nno equals sign here\n", "no equals sign here"),
             ("[Compatibility]\nradian, plain = add\n", "radian, plain = add"),
             ("[Compatibility]\nthis line has no equals sign\n", "this line has no equals sign"),
@@ -2286,6 +2306,45 @@ mod tests {
         assert_eq!(crate::settings::monte_carlo_samples(), crate::settings::DEFAULT_MONTE_CARLO_SAMPLES);
         Setting::MonteCarloSamples(65).apply();
         assert_eq!(crate::settings::monte_carlo_samples(), 65);
+    }
+
+    #[test]
+    fn max_while_iterations_is_a_whole_number_of_at_least_one() {
+        assert_eq!(parse_setting("max_while_iterations = 1"), Ok(Setting::MaxWhileIterations(1)));
+        assert_eq!(parse_setting("max_while_iterations = 20000"), Ok(Setting::MaxWhileIterations(20_000)));
+        for bad in ["0", "-1", "1.5", "abc", ""] {
+            let why = parse_setting(&format!("max_while_iterations = {bad}")).unwrap_err();
+            assert!(why.contains("max_while_iterations") && why.contains(&format!("'{bad}'")), "{bad:?}: {why}");
+        }
+        assert!(parse_setting("frobnicate = 1").unwrap_err().contains("max_while_iterations"), "the list of keys names it");
+    }
+
+    #[test]
+    fn the_lenient_reader_applies_a_good_max_while_iterations_and_keeps_the_one_in_force_for_a_bad_one() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        crate::settings::set_max_while_iterations(321);
+        let (mut reg, mut constants) = (UnitRegistry::new(), HashMap::new());
+        for bad in ["0", "-1", "abc"] {
+            parse_physure_conf(&format!("[Settings]\nmax_while_iterations = {bad}\n"), &mut reg, &mut constants);
+            assert_eq!(crate::settings::max_while_iterations(), 321, "{bad:?} replaced the value in force");
+        }
+        parse_physure_conf("[Settings]\nmax_while_iterations = 50\n", &mut reg, &mut constants);
+        assert_eq!(crate::settings::max_while_iterations(), 50);
+    }
+
+    #[test]
+    fn activation_sets_max_while_iterations_from_the_file_or_its_default() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        ProcessSettings { settings: vec![Setting::MaxWhileIterations(64)], compatibility: None }.activate();
+        assert_eq!(crate::settings::max_while_iterations(), 64);
+        ProcessSettings::default().activate();
+        assert_eq!(crate::settings::max_while_iterations(), crate::settings::DEFAULT_MAX_WHILE_ITERATIONS);
+        Setting::MaxWhileIterations(65).apply();
+        assert_eq!(crate::settings::max_while_iterations(), 65);
     }
 
     #[test]

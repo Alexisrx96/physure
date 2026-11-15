@@ -126,6 +126,33 @@ fn approx_uses_the_tolerance_of_the_frozen_file_and_the_library_one_without_it()
     assert_eq!(physure_core::settings::approx_rel_tol(), 1e-3);
 }
 
+/// A `while` loop of 20 000 iterations: refused at the ceiling, or the count it reached.
+fn while_20000() -> Result<f64, String> {
+    match eval_phs("i = 0\nwhile i < 20000 {\n  i = i + 1\n}\ni").map_err(|e| e.to_string())?.into_iter().last() {
+        Some(PhsValue::Quantity(q)) => Ok(q.value.mean()),
+        Some(PhsValue::Number(n)) => Ok(n),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `[Settings] max_while_iterations` of a frozen file is the ceiling of a `while` loop; without it, the 10 000 of
+/// the library (the error text is the one `phs eval` printed before the setting existed).
+#[test]
+fn a_while_loop_is_held_to_the_ceiling_of_the_frozen_file() {
+    let dir = Dir::new("while");
+    let refused = while_20000().unwrap_err();
+    assert!(refused.contains("while loop did not converge after 10000 iterations"), "{refused}");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\nmax_while_iterations = 20000\n")).unwrap();
+    reset_cache();
+    assert_eq!(while_20000(), Ok(20000.0));
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\nmax_while_iterations = 100\n")).unwrap();
+    reset_cache();
+    assert!(while_20000().unwrap_err().contains("after 100 iterations"));
+    fs::remove_file(dir.path.join(FROZEN_FILE_NAME)).unwrap();
+    reset_cache();
+    assert_eq!(physure_core::settings::max_while_iterations(), 10_000, "the library's ceiling is back");
+}
+
 /// `y = (10 +/- 1 m)^2` in Monte Carlo mode under seed 0, as `(mean, standard uncertainty, sample count)`.
 fn monte_carlo_square() -> (f64, f64, usize) {
     let values = physure_core::uncertainty::with_seed(0, || eval_phs("y = (10 +/- 1 m)^2")).unwrap();

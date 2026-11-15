@@ -164,6 +164,44 @@ pub fn set_approx_rel_tol(rel: f64) -> f64 {
     f64::from_bits(APPROX_REL_TOL.swap(rel.to_bits(), Ordering::Relaxed))
 }
 
+pub(crate) const DEFAULT_MAX_WHILE_ITERATIONS: usize = 10_000;
+static MAX_WHILE_ITERATIONS: AtomicUsize = AtomicUsize::new(DEFAULT_MAX_WHILE_ITERATIONS);
+
+thread_local! {
+    static WHILE_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// Ceiling on how many times one PHS `while` loop may run its body before it is an error ("while loop did not
+/// converge after N iterations"), from `physure.conf`'s `[Settings] max_while_iterations`. Default 10,000, the
+/// ceiling the interpreter hard-coded before the setting existed. At least 1 (a ceiling of 0 would refuse every loop
+/// whose condition holds once).
+///
+/// A [`scoped_max_while_iterations`] override on this thread (if set) takes precedence; otherwise, the process-wide
+/// value from [`set_max_while_iterations`] is returned.
+pub fn max_while_iterations() -> usize {
+    WHILE_OVERRIDE.with(Cell::get).unwrap_or_else(|| MAX_WHILE_ITERATIONS.load(Ordering::Relaxed))
+}
+
+/// Sets the process-wide `while` ceiling, returning the one it replaced. This is what reading a `physure.conf`
+/// calls; for a temporary change, use [`scoped_max_while_iterations`].
+pub fn set_max_while_iterations(n: usize) -> usize {
+    MAX_WHILE_ITERATIONS.swap(n, Ordering::Relaxed)
+}
+
+/// Overrides the `while` ceiling on this thread until the returned guard is dropped.
+pub fn scoped_max_while_iterations(n: usize) -> MaxWhileIterationsGuard {
+    MaxWhileIterationsGuard(WHILE_OVERRIDE.with(|slot| slot.replace(Some(n))))
+}
+
+/// Restores the ceiling that was in force before its [`scoped_max_while_iterations`] call, including on unwind.
+pub struct MaxWhileIterationsGuard(Option<usize>);
+
+impl Drop for MaxWhileIterationsGuard {
+    fn drop(&mut self) {
+        WHILE_OVERRIDE.with(|slot| slot.set(self.0));
+    }
+}
+
 /// How many samples a Monte Carlo measurement draws when it does not name a count, from `physure.conf`'s
 /// `[Settings] monte_carlo_samples`: the count every such measurement drew before the setting existed.
 pub(crate) const DEFAULT_MONTE_CARLO_SAMPLES: usize = 1_000;
@@ -212,7 +250,7 @@ impl Drop for MonteCarloSamplesGuard {
 }
 
 /// Puts every process-wide setting a conf can change back to the value compiled into the library: the three
-/// ceilings above, the `≈` tolerance, the Monte Carlo sample count, the propagation mode, the angle mode and the
+/// ceilings above, the `while` ceiling, the `≈` tolerance, the Monte Carlo sample count, the propagation mode, the angle mode and the
 /// `[Compatibility]` grants. Activating a frozen
 /// configuration calls it before applying the file's settings, so a setting the file does not mention takes its
 /// compiled default and never a value some earlier reading left behind. Thread-local overrides are not touched.
@@ -222,6 +260,7 @@ pub(crate) fn reset_to_defaults() {
     set_max_pipeline_steps(DEFAULT_MAX_PIPELINE_STEPS);
     set_approx_rel_tol(DEFAULT_APPROX_REL_TOL);
     set_monte_carlo_samples(DEFAULT_MONTE_CARLO_SAMPLES);
+    set_max_while_iterations(DEFAULT_MAX_WHILE_ITERATIONS);
     crate::uncertainty::set_propagation_mode(crate::uncertainty::PropagationMode::default());
     crate::units::angle_mode::set_angle_mode(crate::units::angle_mode::AngleMode::default());
     crate::units::angle_mode::set_marker_grants(true, true);
@@ -356,6 +395,28 @@ mod tests {
         reset_to_defaults();
         assert_eq!(monte_carlo_samples(), DEFAULT_MONTE_CARLO_SAMPLES);
         set_monte_carlo_samples(original);
+    }
+
+    #[test]
+    fn max_while_iterations_is_set_scoped_and_reset() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        assert_eq!(DEFAULT_MAX_WHILE_ITERATIONS, 10_000);
+        let original = set_max_while_iterations(42);
+        assert_eq!(max_while_iterations(), 42);
+        {
+            let _guard = scoped_max_while_iterations(7);
+            assert_eq!(max_while_iterations(), 7);
+            {
+                let _inner = scoped_max_while_iterations(3);
+                assert_eq!(max_while_iterations(), 3);
+            }
+            assert_eq!(max_while_iterations(), 7);
+        }
+        assert_eq!(max_while_iterations(), 42);
+        reset_to_defaults();
+        assert_eq!(max_while_iterations(), DEFAULT_MAX_WHILE_ITERATIONS);
+        set_max_while_iterations(original);
     }
 
     #[test]

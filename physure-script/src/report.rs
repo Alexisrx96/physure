@@ -83,15 +83,24 @@ pub fn evaluate(source: &str, limits: Limits, seed: u64) -> Report {
     run_sandboxed(limits, move |interp| physure_core::uncertainty::with_seed(seed, || evaluate_in(&interp, &source)))
 }
 
-/// [`evaluate`] with the loop-iteration and pipeline-step ceilings fixed for this run, opened on the thread that
-/// evaluates (`settings::scoped_max_loop_iterations`, `settings::scoped_max_pipeline_steps`): the process-wide values,
+/// [`evaluate`] with the loop-iteration, pipeline-step and `while` ceilings fixed for this run, opened on the thread
+/// that evaluates (`settings::scoped_max_loop_iterations`, `settings::scoped_max_pipeline_steps`,
+/// `settings::scoped_max_while_iterations`): the process-wide values,
 /// which an activated configuration file sets from its `[Settings]`, do not apply. For text that comes with a file
 /// received from elsewhere (a frozen file's witness scripts), whose settings must not raise its own bounds.
-pub fn evaluate_with_ceilings(source: &str, limits: Limits, seed: u64, max_loop_iterations: usize, max_pipeline_steps: usize) -> Report {
+pub fn evaluate_with_ceilings(
+    source: &str,
+    limits: Limits,
+    seed: u64,
+    max_loop_iterations: usize,
+    max_pipeline_steps: usize,
+    max_while_iterations: usize,
+) -> Report {
     let source = source.to_string();
     run_sandboxed(limits, move |interp| {
         let _loops = physure_core::settings::scoped_max_loop_iterations(max_loop_iterations);
         let _steps = physure_core::settings::scoped_max_pipeline_steps(max_pipeline_steps);
+        let _while = physure_core::settings::scoped_max_while_iterations(max_while_iterations);
         physure_core::uncertainty::with_seed(seed, || evaluate_in(&interp, &source))
     })
 }

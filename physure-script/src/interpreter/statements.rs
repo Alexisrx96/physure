@@ -248,15 +248,15 @@ impl PhsInterpreter {
                 }
             }
             Statement::While { cond, body, body_lines } => {
-                const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
+                // `[Settings] max_while_iterations`, read once per loop
+                let ceiling = physure_core::settings::max_while_iterations();
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
                 while self.eval_condition(cond, env, "the condition of `while`")? {
                     self.check_budget()?;
-                    if count >= DEFAULT_MAX_LOOP_ITERATIONS {
+                    if count >= ceiling {
                         return Err(PhysureError::Generic(format!(
-                            "while loop did not converge after {} iterations",
-                            DEFAULT_MAX_LOOP_ITERATIONS
+                            "while loop did not converge after {ceiling} iterations"
                         )));
                     }
                     count += 1;

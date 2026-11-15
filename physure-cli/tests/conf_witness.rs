@@ -98,7 +98,7 @@ fn keys(file: &FrozenFile, prefix: &str) -> Vec<String> {
 
 /// The hash `freeze` records for `text`, computed here as the CLI does (seed 0, the sandbox, the fixed ceilings).
 fn expected_hash(text: &str) -> String {
-    let report = evaluate_with_ceilings(text, Limits::sandboxed(Duration::from_secs(60)), DEFAULT_SEED, 1_000_000, 1_000);
+    let report = evaluate_with_ceilings(text, Limits::sandboxed(Duration::from_secs(60)), DEFAULT_SEED, 1_000_000, 1_000, 10_000);
     assert!(report.ok, "{:?}", report.diagnostics);
     sha256_hex(canonical_witness(&report).as_bytes())
 }
@@ -538,6 +538,23 @@ fn the_file_s_settings_do_not_raise_the_witness_ceiling() {
     assert_eq!(errors[0]["key"], Value::from("user.big"), "{doc}");
     let message = errors[0]["message"].as_str().unwrap();
     assert!(message.starts_with("limit: ") && message.contains("max_loop_iterations ceiling of 1000000"), "{message}");
+}
+
+/// Phase 4b: the file's `[Settings] max_while_iterations` cannot raise the `while` ceiling of its witnesses either.
+/// A script of 20 000 iterations, which the file's 20 000 would let finish, is refused at the compiled 10 000.
+#[test]
+fn the_file_s_settings_do_not_raise_the_witness_while_ceiling() {
+    let dir = Dir::new("run_while_ceiling");
+    dir.write("physure.conf", "[Settings]\nmax_while_iterations = 20000\n");
+    assert_eq!(dir.freeze(&[]).status.code(), Some(0));
+    let script = "i = 0\nwhile i < 20000 {\n  i = i + 1\n}\ni";
+    add_user_witness(&dir, "long_while", script, &hash_of_any_result(script));
+    let doc = json(&verify_run(&dir, &["--json"]));
+    let errors = doc["witnesses"]["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{doc}");
+    assert_eq!(errors[0]["key"], Value::from("user.long_while"), "{doc}");
+    let message = errors[0]["message"].as_str().unwrap();
+    assert!(message.contains("while loop did not converge after 10000 iterations"), "{message}");
 }
 
 // ---- B4: update and seal refuse silent witness changes ----
@@ -991,7 +1008,7 @@ fn forge_user_witness(dir: &Dir, name: &str, text: &str, hash: &str) {
 
 /// The hash `freeze` would record for `text` if it accepted it, whatever the report says.
 fn hash_of_any_result(text: &str) -> String {
-    let report = evaluate_with_ceilings(text, Limits::sandboxed(Duration::from_secs(60)), DEFAULT_SEED, 1_000_000, 1_000);
+    let report = evaluate_with_ceilings(text, Limits::sandboxed(Duration::from_secs(60)), DEFAULT_SEED, 1_000_000, 1_000, 10_000);
     sha256_hex(canonical_witness(&report).as_bytes())
 }
 

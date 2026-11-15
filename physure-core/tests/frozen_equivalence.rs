@@ -130,7 +130,7 @@ fn assert_same(frozen: &[String], unfrozen: &[String]) {
     assert!(extra.is_empty() && missing.is_empty(), "only frozen: {extra:#?}\nonly unfrozen: {missing:#?}");
 }
 
-const OVERRIDES: &str = "[Settings]\nparallel_threshold = 4321\nangle_mode = dimension\nmonte_carlo_samples = 321\n[Compatibility]\nsteradian, plain = convert\n[Units]\nzz_eq = 2.5, L, [zz_eq, zz_equivalence]\n[Constants]\nzz_eq_const = 3 zz_eq\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\n[AtomicWeights]\nFe = 55.8, 0.002\n[Chemistry]\natomic_weights = abridged\n";
+const OVERRIDES: &str = "[Settings]\nparallel_threshold = 4321\nangle_mode = dimension\nmonte_carlo_samples = 321\nmax_while_iterations = 322\n[Compatibility]\nsteradian, plain = convert\n[Units]\nzz_eq = 2.5, L, [zz_eq, zz_equivalence]\n[Constants]\nzz_eq_const = 3 zz_eq\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\n[AtomicWeights]\nFe = 55.8, 0.002\n[Chemistry]\natomic_weights = abridged\n";
 
 #[test]
 fn a_sealed_catalog_equals_the_unfrozen_one() {

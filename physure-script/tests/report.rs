@@ -258,11 +258,26 @@ fn the_fixed_ceilings_hold_whatever_the_process_wide_settings_say() {
     let program = "x = for i in 0..5000 { i }";
     let limits = || Limits::sandboxed(Duration::from_secs(60));
     let before = physure_core::settings::set_max_loop_iterations(usize::MAX);
-    let refused = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 1_000, 1_000);
-    let allowed = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 10_000, 1_000);
+    let refused = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 1_000, 1_000, 10_000);
+    let allowed = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 10_000, 1_000, 10_000);
     physure_core::settings::set_max_loop_iterations(before);
     assert!(!refused.ok);
     assert_eq!(codes(&refused), [(1, "limit")], "{:?}", refused.diagnostics);
     assert!(refused.diagnostics[0].message.contains("ceiling of 1000"), "{:?}", refused.diagnostics);
+    assert!(allowed.ok, "{:?}", allowed.diagnostics);
+}
+
+/// The `while` ceiling of a witness is the one given, not the process-wide `[Settings] max_while_iterations` (which
+/// a frozen file received from elsewhere sets).
+#[test]
+fn the_fixed_while_ceiling_holds_whatever_the_process_wide_setting_says() {
+    let program = "i = 0\nwhile i < 20000 {\n  i = i + 1\n}\ni";
+    let limits = || Limits::sandboxed(Duration::from_secs(60));
+    let before = physure_core::settings::set_max_while_iterations(usize::MAX);
+    let refused = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 1_000_000, 1_000, 10_000);
+    let allowed = evaluate_with_ceilings(program, limits(), DEFAULT_SEED, 1_000_000, 1_000, 20_000);
+    physure_core::settings::set_max_while_iterations(before);
+    assert!(!refused.ok);
+    assert!(refused.diagnostics.iter().any(|d| d.message.contains("did not converge after 10000 iterations")), "{:?}", refused.diagnostics);
     assert!(allowed.ok, "{:?}", allowed.diagnostics);
 }

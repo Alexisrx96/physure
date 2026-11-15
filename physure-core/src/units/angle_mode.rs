@@ -131,6 +131,7 @@ pub(crate) struct RestoreProcessState {
     radian: bool,
     steradian: bool,
     monte_carlo_samples: usize,
+    max_while_iterations: usize,
 }
 
 #[cfg(test)]
@@ -141,6 +142,7 @@ impl RestoreProcessState {
             radian: marker_converts_to_plain("rad"),
             steradian: marker_converts_to_plain("sr"),
             monte_carlo_samples: crate::settings::monte_carlo_samples(),
+            max_while_iterations: crate::settings::max_while_iterations(),
         }
     }
 }
@@ -151,6 +153,7 @@ impl Drop for RestoreProcessState {
         set_angle_mode(self.mode);
         set_marker_grants(self.radian, self.steradian);
         crate::settings::set_monte_carlo_samples(self.monte_carlo_samples);
+        crate::settings::set_max_while_iterations(self.max_while_iterations);
     }
 }
 

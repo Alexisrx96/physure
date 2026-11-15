@@ -155,6 +155,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         max_pipeline_steps,
         approx_rel_tol,
         monte_carlo_samples,
+        max_while_iterations,
         radian_grant,
         steradian_grant,
         ignored,
@@ -166,6 +167,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "max_pipeline_steps", max_pipeline_steps.to_string());
     push(&mut out, "setting", "approx_rel_tol", format!("{approx_rel_tol:?}"));
     push(&mut out, "setting", "monte_carlo_samples", monte_carlo_samples.to_string());
+    push(&mut out, "setting", "max_while_iterations", max_while_iterations.to_string());
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -354,6 +356,16 @@ mod tests {
             "1000",
             Setting::MonteCarloSamples(5000),
             Setting::MonteCarloSamples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES),
+        );
+    }
+
+    #[test]
+    fn max_while_iterations_is_an_entry_and_a_change_of_it_is_seen() {
+        assert_setting_entry(
+            "max_while_iterations",
+            "10000",
+            Setting::MaxWhileIterations(20_000),
+            Setting::MaxWhileIterations(crate::settings::DEFAULT_MAX_WHILE_ITERATIONS),
         );
     }
 

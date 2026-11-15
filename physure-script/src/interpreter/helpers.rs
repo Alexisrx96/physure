@@ -189,6 +189,7 @@ pub(crate) struct CallerScopes<'a> {
     max_loop_iterations: usize,
     max_pipeline_steps: usize,
     monte_carlo_samples: usize,
+    max_while_iterations: usize,
 }
 
 impl CallerScopes<'_> {
@@ -203,6 +204,7 @@ impl CallerScopes<'_> {
                 max_loop_iterations: physure_core::settings::max_loop_iterations(),
                 max_pipeline_steps: physure_core::settings::max_pipeline_steps(),
                 monte_carlo_samples: physure_core::settings::monte_carlo_samples(),
+                max_while_iterations: physure_core::settings::max_while_iterations(),
             })
         })
     }
@@ -215,6 +217,7 @@ impl CallerScopes<'_> {
         let _loops = physure_core::settings::scoped_max_loop_iterations(self.max_loop_iterations);
         let _steps = physure_core::settings::scoped_max_pipeline_steps(self.max_pipeline_steps);
         let _samples = physure_core::settings::scoped_monte_carlo_samples(self.monte_carlo_samples);
+        let _while = physure_core::settings::scoped_max_while_iterations(self.max_while_iterations);
         physure_core::units::with_scoped_catalog(self.catalog, f)
     }
 }

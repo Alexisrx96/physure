@@ -28,6 +28,19 @@ fn both_ways<R>(f: impl Fn() -> R) -> (R, R) {
 }
 
 #[test]
+fn a_scoped_while_ceiling_reaches_a_parallel_loop() {
+    let _ceiling = physure_core::settings::scoped_max_while_iterations(10);
+    let program = "fn count(n) =\n    i = 0\n    while i < n { i = i + 1 }\n    i\nv = for k in 0..16 { count(50) }";
+    let (parallel, sequential) = both_ways(|| eval_phs(program).map(|_| ()).map_err(|e| e.to_string()));
+    assert!(sequential.unwrap_err().contains("after 10 iterations"));
+    let parallel = parallel.expect_err("the caller's ceiling must reach the rayon workers");
+    assert!(parallel.contains("after 10 iterations"), "{parallel}");
+    let _raised = physure_core::settings::scoped_max_while_iterations(100);
+    let (parallel, sequential) = both_ways(|| items(program).len());
+    assert_eq!((parallel, sequential), (16, 16));
+}
+
+#[test]
 fn a_scoped_monte_carlo_sample_count_reaches_a_parallel_loop() {
     let _mode = mode::scoped(PropagationMode::MonteCarlo);
     let _samples = physure_core::settings::scoped_monte_carlo_samples(37);

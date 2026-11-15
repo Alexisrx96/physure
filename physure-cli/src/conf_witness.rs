@@ -7,8 +7,9 @@
 //!
 //! * in the sandbox of `physure_script` ([`Limits::sandboxed`]: no files, no plugins, bounded call depth and native
 //!   stack, a cap on the output, one thread), with Monte Carlo seed [`DEFAULT_SEED`] (0);
-//! * with the loop-iteration and pipeline-step ceilings **fixed** at [`WITNESS_MAX_LOOP_ITERATIONS`] and
-//!   [`WITNESS_MAX_PIPELINE_STEPS`] (the compiled defaults), opened on the evaluating thread: the `[Settings]` of the
+//! * with the loop-iteration, pipeline-step and `while` ceilings **fixed** at [`WITNESS_MAX_LOOP_ITERATIONS`],
+//!   [`WITNESS_MAX_PIPELINE_STEPS`] and [`WITNESS_MAX_WHILE_ITERATIONS`] (the compiled defaults), opened on the
+//!   evaluating thread: the `[Settings]` of the
 //!   activated file, which set the process-wide values, cannot raise them;
 //! * with a wall-clock deadline ([`DEFAULT_TIMEOUT`], 60 s, unless `--timeout-ms` says otherwise) that the interpreter
 //!   honours cooperatively, and a watchdog [`WATCHDOG_GRACE`] after it for an evaluation that does not;
@@ -48,6 +49,9 @@ pub const WITNESS_MAX_LOOP_ITERATIONS: usize = 1_000_000;
 /// The `max_pipeline_steps` ceiling of a witness, whatever the file in force sets: the compiled default
 /// (`physure_core::settings::max_pipeline_steps`).
 pub const WITNESS_MAX_PIPELINE_STEPS: usize = 1_000;
+/// The `max_while_iterations` ceiling of a witness, whatever the file in force sets: the compiled default
+/// (`physure_core::settings::max_while_iterations`).
+pub const WITNESS_MAX_WHILE_ITERATIONS: usize = 10_000;
 /// The largest witness script `freeze --witness` reads.
 pub const MAX_SCRIPT_BYTES: u64 = 1 << 20;
 /// The error of every script after one the watchdog gave up on.
@@ -163,7 +167,14 @@ pub fn evaluate_user_witness(text: &str, timeout: Duration) -> Result<WitnessRes
 fn attempt(text: &str, timeout: Duration) -> (Result<WitnessResult, String>, bool) {
     let source = text.to_string();
     let work = move || {
-        evaluate_with_ceilings(&source, Limits::sandboxed(timeout), DEFAULT_SEED, WITNESS_MAX_LOOP_ITERATIONS, WITNESS_MAX_PIPELINE_STEPS)
+        evaluate_with_ceilings(
+            &source,
+            Limits::sandboxed(timeout),
+            DEFAULT_SEED,
+            WITNESS_MAX_LOOP_ITERATIONS,
+            WITNESS_MAX_PIPELINE_STEPS,
+            WITNESS_MAX_WHILE_ITERATIONS,
+        )
     };
     interpret(guarded(work, timeout + WATCHDOG_GRACE), timeout)
 }
