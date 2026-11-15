@@ -837,9 +837,69 @@ const CHEMISTRY_IDS: &[&str] = &[
 fn the_battery_has_its_size_and_every_released_id() {
     let _lock = lock();
     let ids: BTreeSet<&str> = battery().iter().map(|c| c.id).collect();
-    for id in STABLE_IDS.iter().chain(CHEMISTRY_IDS) {
+    for id in STABLE_IDS.iter().chain(CHEMISTRY_IDS).chain(DISPLAY_TEXTS.iter().map(|(id, _)| id)) {
         assert!(ids.contains(id), "{id}");
     }
     assert!(battery().len() >= 38, "{}", battery().len());
-    assert_eq!(battery().len(), STABLE_IDS.len() + CHEMISTRY_IDS.len(), "every case is listed here: {ids:#?}");
+    assert_eq!(
+        battery().len(),
+        STABLE_IDS.len() + CHEMISTRY_IDS.len() + DISPLAY_TEXTS.len(),
+        "every case is listed here: {ids:#?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Printed text (Phase 4b, Task 2): the `display.*` cases.
+// ---------------------------------------------------------------------------------------------------------------
+
+/// The text of every `display.*` case: the rows of the golden table (`tests/display_golden.rs`) they repeat, as the
+/// library printed them before the display rules were settings.
+const DISPLAY_TEXTS: &[(&str, &str)] = &[
+    ("display.base_units", "2000.0 ± 100.0 A^-2 * kg * m^2 * s^-3; 273.15 K; 625.0 ± 40.0195264839553 kg * m^2 * s^-2"),
+    ("display.decimal_debris", "0.3; 90.0; 0.333333333333333; 33.3333333333333; 1.21"),
+    ("display.extremes", "0.0; inf; -inf; 5e-324; 2.2250738585072014e-308; 1.7976931348623157e308"),
+    ("display.folded_unit", "6000.0 m^2; 6000 ± 300 m^2"),
+    ("display.fractions", "3/2; 1 1/2; -2 1/2; 3/10; 90"),
+    ("display.gum_figures", "10.00 ± 0.95; 10.00 ± 0.10; 10.0 ± 0.2; 10.00 ± 0.98; 10 ± 2; 10 ± 2; 10.0 ± 9.5"),
+    ("display.gum_places", "630 ± 40 J; 12300 ± 700; -12.3 ± 0.2; 0 ± 5; 2.675 ± 0.010"),
+    ("display.gum_range", "0.00012 ± 1e-5 m; 1.00000 ± 0.00010; 1.0 ± 9.999999999999999e-5; 1000.0 ± 1e16; 1000000000000000 ± 200000000000000"),
+    ("display.integers_near_1e15", "1000000000000000.0; 999999999999999.0; 1000000000000001.0; 1234567890123456.0; 123456789012346.0"),
+    ("display.precision", "3.1 m; 3.14159265000000020862 m; 2.67 m; 20 ± 1 N; 19.62000000000000099476 ± 0.98099999999999998312 N"),
+    ("display.scientific_below", "0.0001; 9.999999999999999e-5; 9.99e-5; 0.00010001; -1e-5; 1.2345678901234568e-5"),
+    ("display.scientific_from", "9999999999999998.0; 1e16; 1.0000000000000002e16; -1e16; 6.02214076e23"),
+];
+
+#[test]
+fn every_display_case_prints_the_text_of_the_golden_table() {
+    let _lock = lock();
+    let rows = run_battery();
+    let found: Vec<(&str, WitnessValue)> = DISPLAY_TEXTS.iter().map(|(id, _)| (*id, value_of(&rows, id))).collect();
+    let expected: Vec<(&str, WitnessValue)> = DISPLAY_TEXTS.iter().map(|(id, text)| (*id, WitnessValue::Text(text.to_string()))).collect();
+    assert_eq!(found, expected);
+    for (id, _) in DISPLAY_TEXTS {
+        assert_eq!(run_one(id), value_of(&rows, id), "{id} pins its own rules: run alone it gives the same text");
+    }
+}
+
+/// The display rules are pinned at their compiled defaults for every case: set process-wide, or by a frozen file,
+/// they change an unpinned formatting (not vacuous) and no witness.
+#[test]
+fn every_case_pins_the_display_rules_whatever_the_process_or_the_file_says() {
+    let _lock = lock();
+    let baseline = run_battery();
+    let previous = physure_core::settings::set_display_rules(physure_core::settings::DisplayRules {
+        significant_digits: 3,
+        scientific_below: 0.01,
+        scientific_from: 100.0,
+        uncertainty_digits: physure_core::settings::UncertaintyDigits::Figures(4),
+    });
+    assert_eq!(physure_core::quantity::format_float(1.0 / 3.0), "0.333", "the process-wide rules are in force");
+    assert_eq!(run_battery(), baseline, "under process-wide display rules");
+    physure_core::settings::set_display_rules(previous);
+    let frozen = battery_under_frozen(
+        "[Settings]\ndisplay_significant_digits = 3\ndisplay_scientific_below = 0.01\ndisplay_scientific_from = 100\nuncertainty_digits = 4\n",
+    );
+    assert_eq!(physure_core::quantity::format_float(1.0 / 3.0), "0.333333333333333", "the process is restored");
+    assert_eq!(changed_keys(&frozen, &baseline), Vec::<String>::new(), "a frozen file's display rules changed a witness");
+    assert_eq!(run_battery(), baseline, "the process is restored");
 }

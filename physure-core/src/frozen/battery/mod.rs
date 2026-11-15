@@ -13,7 +13,9 @@
 //! * **Every setting it depends on is pinned**, with a thread-local scope (`uncertainty::mode::scoped`,
 //!   `units::angle_mode::scoped`, `settings::scoped`), never with the process-wide setters: a frozen file applies its
 //!   `[Settings]` process-wide, and a case must not depend on them nor change them. The units and constants cases
-//!   read no setting (an exact value is Gaussian whatever the propagation mode; no angle is involved).
+//!   read no setting (an exact value is Gaussian whatever the propagation mode; no angle is involved). The display
+//!   rules (`display_*`, `uncertainty_digits`) are pinned at their compiled defaults for every case by
+//!   [`run_cases`] (a failure's text may quote a number) and again by each `display.*` case.
 //! * **Deterministic:** no clock, no environment, no threads, a fixed seed wherever a generator is used.
 //! * **The stored number** is `Quantity::display_parts()`: the magnitude (with the scale of an anonymous compound
 //!   unit folded in), the standard uncertainty and the unit text.
@@ -36,6 +38,7 @@
 //! every case is an error naming why.
 
 pub mod chemistry;
+pub mod display;
 pub mod uncertainty;
 pub mod units;
 
@@ -82,6 +85,7 @@ pub fn battery() -> Vec<Case> {
     let mut cases = units::cases();
     cases.extend(uncertainty::cases());
     cases.extend(chemistry::cases());
+    cases.extend(display::cases());
     cases.sort_by_key(|case| case.id);
     cases
 }
@@ -108,6 +112,7 @@ pub fn run_cases(cases: &[Case]) -> Vec<(String, Result<WitnessValue, String>)> 
     cases
         .iter()
         .map(|case| {
+            let _display = crate::settings::scoped_display_rules(crate::settings::DisplayRules::DEFAULT);
             let result = match catch_unwind(AssertUnwindSafe(case.run)) {
                 Ok(Ok(value)) => Ok(value),
                 Ok(Err(CaseError::Failed(message))) => Ok(WitnessValue::failed(&message)),
