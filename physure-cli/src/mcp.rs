@@ -5,7 +5,7 @@
 //! does not finish, so a crash or a hang in an evaluation cannot take the server down; `convert` and `describe_unit`
 //! call the core in-process, since they run no user code. The resource `phs://language` is the `phs doc` reference.
 
-use physure_script::report::{self, DEFAULT_SEED};
+use physure_script::report;
 use serde_json::{json, Value};
 use std::io::{BufRead, Read, Write};
 use std::path::PathBuf;
@@ -179,7 +179,7 @@ fn tools() -> Value {
             "description": "Run a PhysureScript program in a sandbox (no files, no plugins, bounded time and output) and return, per statement, its value, unit, uncertainty and physical dimension, plus diagnostics (dimension errors, unknown units, syntax and runtime errors). Deterministic for a given seed.",
             "inputSchema": { "type": "object", "properties": {
                 "source": { "type": "string", "description": "The program, e.g. \"d = 120 m\\nt = 8 s\\nd / t\"" },
-                "seed": { "type": "integer", "minimum": 0, "description": "Seed for Monte Carlo draws (default 0)" },
+                "seed": { "type": "integer", "minimum": 0, "description": "Seed for Monte Carlo draws (default: the integer [Settings] monte_carlo_seed in force, 0 when it is random); the result says which seed was used" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MS, "description": "Deadline in milliseconds (default 5000)" }
             }, "required": ["source"] },
             "annotations": read_only("Evaluate PhysureScript")
@@ -252,9 +252,13 @@ fn child_json(code: i32, stdout: &str, stderr: &str) -> Result<Value, String> {
 
 fn tool_evaluate(arguments: &Value, runner: &dyn Runner) -> Result<Value, String> {
     let source = source_arg(arguments)?;
-    let seed = arguments.get("seed").and_then(Value::as_u64).unwrap_or(DEFAULT_SEED);
     let timeout_ms = arguments.get("timeout_ms").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT_MS).clamp(1, MAX_TIMEOUT_MS);
-    let args = ["eval", "-", "--seed", &seed.to_string(), "--timeout-ms", &timeout_ms.to_string()].map(String::from);
+    // no seed given: none is passed on, so the child reads the seed setting in force (and says so in its JSON)
+    let mut args = vec!["eval".to_string(), "-".to_string()];
+    if let Some(seed) = arguments.get("seed").and_then(Value::as_u64) {
+        args.extend(["--seed".to_string(), seed.to_string()]);
+    }
+    args.extend(["--timeout-ms".to_string(), timeout_ms.to_string()]);
     let (code, stdout, stderr) = runner.run(&args, source, Duration::from_millis(timeout_ms) + KILL_GRACE)?;
     child_json(code, &stdout, &stderr)
 }
@@ -353,6 +357,17 @@ mod tests {
         let (args, stdin) = fake.asked.borrow()[0].clone();
         assert_eq!(args, ["eval", "-", "--seed", "9", "--timeout-ms", "250"]);
         assert_eq!(stdin, "1 m + 1 s");
+    }
+
+    /// Without a `seed` argument no `--seed` is passed on: the child reads the seed setting in force and its report
+    /// says so (it used to pass `--seed 0` always, ignoring a frozen file's seed).
+    #[test]
+    fn evaluate_without_a_seed_leaves_it_to_the_setting_in_force() {
+        let fake = Fake::answering(0, r#"{"ok":true,"results":[],"diagnostics":[],"seed":{"value":5,"source":"setting"}}"#);
+        let reply = call(&fake, "evaluate", json!({ "source": "1 m", "timeout_ms": 250 }));
+        assert_eq!(reply["result"]["structuredContent"]["seed"]["source"], "setting");
+        let (args, _) = fake.asked.borrow()[0].clone();
+        assert_eq!(args, ["eval", "-", "--timeout-ms", "250"]);
     }
 
     #[test]

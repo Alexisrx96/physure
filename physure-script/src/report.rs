@@ -10,8 +10,45 @@ use physure_core::units::{formula_text, with_current_catalog, UnitKind, UnitRegi
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-/// The seed `phs eval` uses when none is given: the same program gives the same answer.
+/// The seed of a deterministic evaluation (`phs eval`, MCP, a user witness) when neither a flag nor the setting gives
+/// one: the compiled default of `[Settings] monte_carlo_seed`, and what they use when the setting is `random`.
 pub const DEFAULT_SEED: u64 = 0;
+
+/// Where the seed of a deterministic evaluation came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SeedSource {
+    /// Given explicitly (`phs eval --seed N`, the `seed` argument of the MCP tool).
+    Flag,
+    /// The integer `[Settings] monte_carlo_seed` in force (the compiled default 0 included).
+    Setting,
+    /// [`DEFAULT_SEED`], because the setting in force is `random`: these surfaces are deterministic and say so.
+    Default,
+}
+
+/// The seed a deterministic evaluation used, and where it came from (`"seed": {"value": 0, "source": "setting"}` in
+/// the JSON of `phs eval`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SeedUsed {
+    pub value: u64,
+    pub source: SeedSource,
+}
+
+impl SeedUsed {
+    /// `flag` when one was given; otherwise the seed setting in force ([`physure_core::uncertainty::monte_carlo_seed`]),
+    /// or [`DEFAULT_SEED`] when it is `random`.
+    pub fn resolve(flag: Option<u64>) -> SeedUsed {
+        use physure_core::uncertainty::{monte_carlo_seed, MonteCarloSeed};
+        // the working directory's `physure.conf` is read on first use: read it before its seed is looked at (an
+        // unusable configuration is reported by the evaluation itself)
+        let _ = try_with_conf_registry(|_| ());
+        match (flag, monte_carlo_seed()) {
+            (Some(value), _) => SeedUsed { value, source: SeedSource::Flag },
+            (None, MonteCarloSeed::Fixed(value)) => SeedUsed { value, source: SeedSource::Setting },
+            (None, MonteCarloSeed::Random) => SeedUsed { value: DEFAULT_SEED, source: SeedSource::Default },
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {

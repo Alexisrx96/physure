@@ -1224,3 +1224,91 @@ fn under_binary_a_file_without_the_battery_is_still_migrated_by_update() {
     assert!(keys(&dir.frozen(), "builtin.").len() >= 38);
     assert_eq!(verify_run(&dir, &[]).status.code(), Some(0), "{}", text(&verify_run(&dir, &[])));
 }
+// ---- Phase 4b: the Monte Carlo seed setting (`[Settings] monte_carlo_seed`) ----
+
+/// The user witness, `phs eval` and a program run of a directory frozen with `settings` (Monte Carlo mode and a seed).
+fn frozen_with_seed(name: &str, seed: &str) -> Dir {
+    let dir = Dir::new(name);
+    dir.write("physure.conf", &format!("[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_seed = {seed}\n"));
+    dir.write("draws.phs", "x = 10 +/- 1 m\ny = x^2\nx: base\ny: base\n");
+    let frozen = dir.freeze(&["--witness", "draws.phs"]);
+    assert_eq!(frozen.status.code(), Some(0), "{}", text(&frozen));
+    fs::remove_file(dir.path("physure.conf")).unwrap();
+    dir
+}
+
+/// `phs eval -` of the Monte Carlo program in `dir`, with `extra` flags: `(results, seed)` of its JSON.
+fn eval_in(dir: &Dir, extra: &[&str]) -> (Value, Value) {
+    let mut args = vec!["eval", "draws.phs"];
+    args.extend_from_slice(extra);
+    let doc = json(&dir.phs(&args, &[]));
+    assert_eq!(doc["ok"], Value::Bool(true), "{doc}");
+    (doc["results"].clone(), doc["seed"].clone())
+}
+
+/// A user witness evaluates under the integer seed of the file (0 when it is `random`): a script that draws records
+/// another hash under another seed, the same under `random` as under 0, and `verify --run` reproduces it.
+#[test]
+fn a_user_witness_draws_the_seed_of_its_file_and_zero_when_it_is_random() {
+    let hash = |dir: &Dir| dir.frozen().witnesses().get("user.draws").unwrap().to_string();
+    let (zero, five, random) = (frozen_with_seed("seed_w0", "0"), frozen_with_seed("seed_w5", "5"), frozen_with_seed("seed_wr", "random"));
+    assert_ne!(hash(&five), hash(&zero), "the seed of the file is the seed of its witnesses");
+    assert_eq!(hash(&random), hash(&zero), "random: the witnesses use seed 0");
+    for dir in [&zero, &five, &random] {
+        let output = verify_run(dir, &[]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    }
+}
+
+/// `phs eval` with no `--seed` uses the seed of the file in force and says so; `--seed` wins; with `random` it uses
+/// 0 (`source: default`).
+#[test]
+fn eval_uses_the_seed_of_the_file_in_force_unless_a_flag_gives_one() {
+    let five = frozen_with_seed("seed_e5", "5");
+    let (results, seed) = eval_in(&five, &[]);
+    assert_eq!(seed, serde_json::json!({ "value": 5, "source": "setting" }));
+    let (flag_five, flag_seed) = eval_in(&five, &["--seed", "5"]);
+    assert_eq!((flag_five, flag_seed["source"].clone()), (results.clone(), Value::from("flag")), "the same draws as --seed 5");
+    let (three, three_seed) = eval_in(&five, &["--seed", "3"]);
+    assert_eq!(three_seed, serde_json::json!({ "value": 3, "source": "flag" }));
+    assert_ne!(three, results);
+    let random = frozen_with_seed("seed_er", "random");
+    let (random_results, random_seed) = eval_in(&random, &[]);
+    assert_eq!(random_seed, serde_json::json!({ "value": 0, "source": "default" }));
+    let zero = frozen_with_seed("seed_e0", "0");
+    assert_eq!(eval_in(&zero, &[]), (random_results, serde_json::json!({ "value": 0, "source": "setting" })));
+}
+
+/// `phs file.phs` with no seed anywhere: the same output in every process (it differed on every run before the
+/// setting); a frozen seed 5 gives other samples, also the same in every process; `random` differs run to run.
+#[test]
+fn a_program_run_reproduces_across_processes_under_a_fixed_seed() {
+    let run = |dir: &Dir| {
+        let output = dir.phs(&["draws.phs"], &[]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+        stdout(&output)
+    };
+    let (zero, five, random) = (frozen_with_seed("seed_r0", "0"), frozen_with_seed("seed_r5", "5"), frozen_with_seed("seed_rr", "random"));
+    let first = run(&zero);
+    assert_eq!(run(&zero), first);
+    assert_ne!(run(&five), first);
+    assert_eq!(run(&five), run(&five));
+    assert_ne!(run(&random), run(&random));
+}
+
+/// `monte_carlo_seed = random` makes a file not reproducible by choice: `status` and `verify` say so, in text and
+/// JSON; a file with an integer seed has no such warning.
+#[test]
+fn status_and_verify_warn_about_a_random_seed() {
+    let random = frozen_with_seed("seed_sr", "random");
+    for command in ["status", "verify"] {
+        let shown = text(&random.conf(&[command]));
+        assert!(shown.contains("warning: monte_carlo_seed = random: this file is not reproducible by choice"), "{shown}");
+        let doc = json(&random.conf(&[command, "--json"]));
+        let warnings = doc["reproducibility_warnings"].as_array().unwrap_or_else(|| panic!("{doc}"));
+        assert_eq!(warnings.len(), 1, "{doc}");
+    }
+    let fixed = frozen_with_seed("seed_s5", "5");
+    assert!(!text(&fixed.conf(&["status"])).contains("monte_carlo_seed = random"));
+    assert_eq!(json(&fixed.conf(&["verify", "--json"]))["reproducibility_warnings"], serde_json::json!([]));
+}

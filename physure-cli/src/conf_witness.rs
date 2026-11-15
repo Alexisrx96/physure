@@ -6,7 +6,10 @@
 //! `phs conf verify --run` executes scripts that came inside a file someone sent. Each script runs:
 //!
 //! * in the sandbox of `physure_script` ([`Limits::sandboxed`]: no files, no plugins, bounded call depth and native
-//!   stack, a cap on the output, one thread), with Monte Carlo seed [`DEFAULT_SEED`] (0);
+//!   stack, a cap on the output, one thread), with the Monte Carlo seed of the file it runs under: its integer
+//!   `[Settings] monte_carlo_seed` (the library's 0 when it says nothing), and `DEFAULT_SEED` (0) when it says
+//!   `random` (a witness is reproducible by definition). A script that draws therefore records a different result
+//!   under another seed: changing a file's seed is a witness change, as changing its sample count is;
 //! * with the loop-iteration, pipeline-step and `while` ceilings **fixed** at [`WITNESS_MAX_LOOP_ITERATIONS`],
 //!   [`WITNESS_MAX_PIPELINE_STEPS`] and [`WITNESS_MAX_WHILE_ITERATIONS`] (the compiled defaults), opened on the
 //!   evaluating thread: the `[Settings]` of the
@@ -36,7 +39,7 @@ use std::time::Duration;
 use physure_core::frozen::active::{engine_file, explicit_conf};
 use physure_core::frozen::sha256::sha256_hex;
 use physure_core::frozen::{ensure_valid, reset_cache, run_battery, set_engine_file, set_explicit_conf, FrozenFile, WitnessScript, WitnessValue};
-use physure_script::report::{canonical_witness, evaluate_with_ceilings, Report, DEFAULT_SEED};
+use physure_script::report::{canonical_witness, evaluate_with_ceilings, Report, SeedUsed};
 use physure_script::Limits;
 
 /// The wall-clock time a user witness may take when no `--timeout-ms` is given.
@@ -166,11 +169,13 @@ pub fn evaluate_user_witness(text: &str, timeout: Duration) -> Result<WitnessRes
 
 fn attempt(text: &str, timeout: Duration) -> (Result<WitnessResult, String>, bool) {
     let source = text.to_string();
+    // read here, on the thread that made the file the configuration in force
+    let seed = SeedUsed::resolve(None).value;
     let work = move || {
         evaluate_with_ceilings(
             &source,
             Limits::sandboxed(timeout),
-            DEFAULT_SEED,
+            seed,
             WITNESS_MAX_LOOP_ITERATIONS,
             WITNESS_MAX_PIPELINE_STEPS,
             WITNESS_MAX_WHILE_ITERATIONS,

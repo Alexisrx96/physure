@@ -109,7 +109,14 @@ impl PhsInterpreter {
                 *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.stream);
             }
         }
-        let start = self.stream.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or_else(EvaluationStream::from_setting);
+        let saved = *self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        let start = saved.unwrap_or_else(|| {
+            // the working directory's `physure.conf` is read on first use: read it before its seed is looked at, or
+            // the first unit of an unfrozen process would start from the compiled seed (an unusable configuration
+            // is reported by the statement itself)
+            let _ = physure_core::units::conf::try_with_conf_registry(|_| ());
+            EvaluationStream::from_setting()
+        });
         let mut unit = WriteBack { slot: &self.stream, stream: start };
         unit.stream.run(f)
     }

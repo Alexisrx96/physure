@@ -476,6 +476,10 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
         }
         None => text.push_str("catalog: not replayed (the file does not verify)\n"),
     }
+    let reproducibility = reproducibility_warnings(inspection);
+    for warning in &reproducibility {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
     if !inspection.environment.is_empty() {
         text.push_str("warning: the environment differs from the one recorded (informational, outside the seal):\n");
         for change in &inspection.environment {
@@ -495,6 +499,7 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
         "atomic_weight_edition": inspection.atomic_weight_edition,
         "witnesses_recorded": { "builtin": builtin, "user": user },
         "environment": changes_json(&inspection.environment),
+        "reproducibility_warnings": reproducibility,
         "sources": file.map_or_else(Vec::new, |f| f
             .sources()
             .iter()
@@ -502,6 +507,20 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
             .collect::<Vec<_>>()),
     });
     (text, fields)
+}
+
+/// What makes the results of a file that replays not reproducible by its own choice: `monte_carlo_seed = random`
+/// (every run draws other Monte Carlo samples). The witnesses are not affected (they run under seed 0 then).
+fn reproducibility_warnings(inspection: &Inspection) -> Vec<String> {
+    let random = match &inspection.catalog {
+        Some(Ok(entries)) => entries.iter().any(|e| e.kind == "setting" && e.name == "monte_carlo_seed" && e.value == "random"),
+        _ => false,
+    };
+    if random {
+        vec!["monte_carlo_seed = random: this file is not reproducible by choice (every run draws other Monte Carlo samples; `phs eval` and the witnesses use seed 0)".to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The `builtin.*` and `user.*` keys a file records in `[Witness]`.
