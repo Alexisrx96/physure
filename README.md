@@ -189,7 +189,7 @@ layer on top of it.
 
 ## Documentation
 
-- [Master Roadmap](ROADMAP.md) — central status & subsystem progress tracker
+- [Roadmap](docs/ROADMAP.md) — goals, priorities, what is in progress and what is next
 - [PHS README](physure-cli/README.md) — the standalone DSL and CLI
 - [Unit reference](docs/UNITS.md) — every unit, prefix, and constant
 - [Tutorials](docs/tutorials/) and [examples](physure-python/examples/) — including a unit-checked [PINN notebook](physure-python/examples/pinn_harmonic_oscillator.ipynb)

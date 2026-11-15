@@ -142,4 +142,4 @@ Use the `=>` operator: `v_kmh = 25.0 m / s => km / h`.
 - [ ] **Stage 1**: Add `--prompt` and `--json` flags to the `phs doc` / `phs spec` subcommand in `physure-cli`.
 - [ ] **Stage 2**: Create the `docs/PHS_LLM_SYSTEM_PROMPT.md` template file for AI assistant integration.
 - [ ] **Stage 3**: Configure the GitHub Actions workflow to keep `docs/PHS_SPEC.md` synchronized on every push.
-- [ ] **Stage 4**: Implement the `phs mcp` subcommand in Rust for native Model Context Protocol support.
+- [x] **Stage 4**: Implement the `phs mcp` subcommand in Rust for native Model Context Protocol support. Done, with `phs eval` and `phs unit` (see the [Roadmap](ROADMAP.md)).

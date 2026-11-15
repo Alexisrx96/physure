@@ -1,127 +1,314 @@
-# 🗺️ Physure Master Development Roadmap
+# Physure Roadmap
 
-**Central Status & Subsystem Progress Tracker**
+*Last reviewed: 2026-11-14. Last release: 0.3.0. Everything landed since is listed under
+"Unreleased" in the [changelog](https://github.com/Alexisrx96/physure/blob/main/CHANGELOG.md).*
 
-Physure is a zero-dependency, unit-aware, dimension-correct scientific computing ecosystem built on a high-performance Rust core (`physure_core`) with multi-language bindings (Python, C, Java, WebAssembly) and standalone DSL (`phs`).
+Physure is a calculation engine that keeps units and uncertainties correct. It is a Rust core
+(`physure-core`), a small language for calculations (PHS, `physure-script`), and thin bindings
+over the core: Python, WebAssembly, Java, the `phs` command line and a language server.
 
-This document serves as the **single source of truth** for tracking project-wide progress, sub-roadmaps, subsystem milestones, and architectural goals across the entire workspace.
-
----
-
-## 📊 Master Subsystem Progress Dashboard
-
-| Subsystem / Sub-roadmap | Status | Progress | Target Path / Sub-roadmap Document | Key Modules |
-|---|---|---|---|---|
-| **1. Core Physics & Unit Engine** | ✅ Complete | 100% | `physure-core/src/`, `physure-python/physure/domain/measurement/` | Base units, dimensions, quantities, JIT/AOT |
-| **2. Uncertainty & Covariance Engine** | ✅ Complete | 95% | `physure-core/src/uncertainty/`, `physure-python/physure/domain/uncertainty/` | GUM covariance, Monte Carlo, affine arithmetic |
-| **3. Chemistry & Reaction Tracking** | 🚧 Python ✅ / Rust core ✅ / PHS + bindings Planned | 60% | [Chemistry Roadmap](chemistry_roadmap.md) | `physure.ext.chemistry` → `physure_core::chemistry` + PHS builtins |
-| **4. Symbolic Math & CAS Engine** | 🚧 Phase 1 Done / Phase 2–4 In Progress | 35% | [Symbolic Math Roadmap](symbolic_math_roadmap.md) | `physure_core::cas`, Gröbner, Risch, ODEs, SAT |
-| **5. Diagramming Engine (`physure.diagrams`)**| 📋 Planned | 10% | [Diagramming Engine Roadmap](diagrams_roadmap.md) | Free-body diagrams, vectors, circuits, TikZ/SVG |
-| **6. Scientific Companion & Metrology** | 🚧 In Progress | 40% | [Scientific Companion Roadmap](scientific_roadmap.md) | Buckingham $\pi$, IAPWS-IF97, EKF, Polars/Xarray |
-| **7. Metrological Rigor & Physical Reality Gaps**| 🚧 In Progress | 17% | [Scientific Gaps & Rigor](scientific_gaps_and_rigor.md) | Welch-Satterthwaite, DAEs, Real EOS, Intervals |
-| **8. PHS Language Readiness (LAB-READY)** | ✅ Complete | 100% | [Language Readiness Roadmap](language_readiness_roadmap.md) | `physure-script` loops/concurrency, `physure-cli` debugger, `DebugHook` |
-| **9. Reproducibility & Audited Use (`phs conf`)** | 🚧 Phase 1 (core: 1a file model and seal, 1b engine identity, 1c resolution, sealed loading, freeze/update/seal operations, 1d entry listing and semantic diff) Phase 2 (the eight `phs conf` commands, JSON output, exit codes) and Phase 3 (witnesses: a 47-case built-in battery and user scripts recorded bit for bit, `freeze --witness`, `verify --run`, witness drift refused by `update`/`seal`) done; data migration (Phase 4) next | 60% | [Design spec](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md), [User guide](conf_freeze.md) | Frozen configuration, engine pin, witnesses, `phs conf freeze/diff/update` |
+This page says what we are building toward, what we are working on, and in what order. It is the
+only place that tracks status. The sub-roadmaps linked at the end hold the designs, not the
+status.
 
 ---
 
-## 🗺️ Sub-Roadmap Registry
+## Goals
 
-> 🧭 **Active execution plan:** [Implementation Plan — Chemistry Core Port, then CAS Phase 2](implementation_plan.md). The sub-roadmaps below define *what* and *why*; that document defines *how* and *in what order*.
+**Physure is for the calculation you have to defend.** A result should have the right units, a
+stated uncertainty, and a way for someone else to reproduce it exactly, later, on another
+machine.
 
-For detailed architectural designs, mathematical specifications, API proposals, and paper citations for each domain, consult the dedicated sub-roadmaps:
+Four goals follow from that, in order of importance:
 
-1. 🧮 **[Symbolic Math & Advanced CAS Engine Roadmap](symbolic_math_roadmap.md)**
-   * Multivariate polynomials, Gröbner bases ($F_4/F_5$), Partial fraction decomposition, Taylor/Laurent series, Risch integrator, `dsolve`, `pdesolve`, symbolic linear algebra (Bareiss, Jordan form), number theory, and DPLL SAT solver.
-   * Companion research: **[Symbolic Math Scientific Research](symbolic_math_research.md)**.
+1. **No silently wrong answer.** A dimension, a conversion factor or an uncertainty is never
+   dropped. When an operation cannot keep them, it is an error. This covers the language too: a
+   comparison, a condition or a default that could hide a mistake is refused, not guessed.
+2. **Results that can be reproduced and audited.** The configuration is frozen and sealed, the
+   engine is pinned, reference calculations are re-run to prove nothing moved, randomness is
+   seeded, and every number that affects a result has a known origin.
+3. **One implementation, every surface.** Physics and unit logic exist once, in the Rust core.
+   PHS, Python, WebAssembly, Java, the CLI, the language server and the agent tools (`phs mcp`)
+   delegate to it. A feature is not finished while one surface computes it differently, or
+   cannot reach it.
+4. **Domain breadth on that foundation.** Chemistry, thermodynamic properties and symbolic
+   mathematics are added through the same pipeline, so a new domain is as trustworthy as a unit
+   conversion. Breadth never comes before the first three goals.
 
-2. 🧪 **[Chemistry & Physical-Chemical Reaction Tracking Roadmap](chemistry_roadmap.md)**
-   * **Phases 1–4** (✅): Chemical formula parsing, IUPAC molar masses, substance-aware mass-to-moles equivalencies, reaction balancing, stoichiometry yield calculator, and thermochemistry/kinetics helpers.
-   * **Phases 5–8** (🚧): Rust core chemistry module (`physure_core::chemistry`), PHS DSL native builtins (`species()`, `balance()`, `arrhenius()`), multi-reaction networks with kinetic ODE integration, chemical equilibrium solver (NASA CEA), and cross-language bindings (C/FFI, WASM, JNI).
+## How we prioritise
 
-3. 📐 **[Parametric Physical & Scientific Diagramming Engine Roadmap](diagrams_roadmap.md)**
-   * Physically parameter-driven diagramming (`physure.diagrams`), free-body diagrams, particle trajectories with uncertainty cones/ellipses, electrical schematics, field lines, and SVG/TikZ/Matplotlib/ASCII exporters.
+Work is taken in this order. An item higher in the list interrupts one lower down.
 
-4. 🔬 **[Scientific Companion & Metrology Roadmap](scientific_roadmap.md)**
-   * Buckingham $\pi$ theorem nullspace solver, GUM uncertainty propagation, IAPWS-IF97 steam tables, Polars/Xarray unit accessories, and unit-aware extended Kalman filters (EKF).
+1. **A defect that gives a wrong answer without saying so.**
+2. **Work already in progress.** Finish before starting something else.
+3. **Publishing what is done.** Finished work that is not released helps nobody.
+4. **Parity.** Closing the gap between what the core can do and what each surface exposes.
+5. **New domains**, bounded ones first.
 
-5. ⚖️ **[Scientific Gaps, Metrological Rigor & Reality Analysis](scientific_gaps_and_rigor.md)**
-   * GUM Welch-Satterthwaite effective degrees of freedom ($\nu_{\text{eff}}$), Peng-Robinson / IAPWS real gas equations of state, 3D anisotropic tensors (ISO 80000-4), Pantelides DAE index reduction, and IEEE 1788 verified interval arithmetic.
+Work without a finish line is not scheduled. It is listed under [Not planned](#not-planned) with
+what would bring it back.
 
-6. 📜 **[Paper Compliance, Validation & Theoretical Reconciliation](paper_compliance_and_validation.md)**
-   * Codebase vs. paper compliance matrix, computational limitations, theoretical contradictions resolution (GUM 1st order vs Monte Carlo, Interval vs Affine, Buchberger vs F4/F5), and open `[TODO: Paper Compliance Verification]` registry.
+## What "done" means
 
-7. 🧵 **[PHS Language Readiness Roadmap](language_readiness_roadmap.md)**
-   * `for`/`while` loops, `rayon`-backed data-parallelism and `parallel_map`, and an interpreter `DebugHook` powering a `phs debug` CLI debugger (DAP adapter staged as a stretch goal) — the path to the LAB-READY milestone.
+A feature is done when all of these hold:
 
-8. 🔒 **[`phs conf`: freezing the whole configuration](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md)**
-   * For audited settings: the data (conf sections, unit systems, constants), the engine (pinned by version, commit, build and binary hash) and the environment are frozen into a sealed `physure.frozen.conf` with a hash-chained history; `phs conf freeze / diff / update / seal / verify` change it only deliberately. Design approved 2026-11-07; Phases 1a (file model and seal), 1b (engine identity and its pinning policies) and 1c (resolution, sealed loading that fails closed for every consumer, the freeze/update/seal operations) are done, and so are 1d (the registry entry listing) and Phase 2 (the eight `phs conf` commands with `--json` schema 1 and exit codes 0/1/2/3, `verify --expect`, a compare-and-swap for `update`/`seal`, the `phs upgrade` hint; [user guide](conf_freeze.md)) and Phase 3 (witnesses: 47 built-in reference calculations and the user's own scripts recorded bit for bit in the sealed file, re-evaluated by `phs conf verify --run`, and `update`/`seal` refuse to change a validated result silently) are done; Phase 4 (the coverage table and the numbers that still live in code) is next; the Python and Java bindings refuse while a frozen file is in force until Phase 5 wires them.
-
----
-
-## 🏁 Consolidated Master Milestones
-
-```mermaid
-timeline
-    title Physure Master Development Milestones
-    Done : Rust Core Engine : phs conf Commands (Freeze, Verify, Diff, Update, Seal, History) : phs conf Witnesses (built-in battery, verify --run) : Rust Core Chemistry Module (formulas, molar mass, balancing, thermo) : Frozen Atomic-Weight Editions (CIAAW 2024) : Correlated Uncertainty & Covariance : Chemistry Python Extension (Species & Reactions) : Native Symbolic AST & Regression : PHS LAB-READY (loops, concurrency, debugger, incremental LSP, compiled exports, decorators) : Rust-Owned Unit Algebra (A1) : GUM Welch-Satterthwaite : Angle Mode
-    Now : PHS DSL Chemistry Builtins : Python Delegates to the Core Chemistry : phs conf (Freezing the Whole Configuration, data migration (Phase 4)) : Buckingham Pi Nullspace Solver
-    Next : CAS Exact-Arithmetic Placement (S0) : Multivariate Polynomials & Gröbner Bases (F4/F5) : Partial Fraction Decomposition : Risch Integration Engine : Analytical ODE/PDE Solvers (dsolve/pdesolve) : Real Gas EOS
-    Later : Advanced Reaction Networks & Equilibrium : Cross-Language Chemistry Bindings : Bareiss Symbolic Matrices & Forms : Parametric Free-Body Diagrams (physure.diagrams) : DAE Pantelides Index Reduction : Anisotropic 3D Tensors : Verified Interval Arithmetic (IEEE 1788) : DPLL SAT Solver & Noether Symmetries
-```
-
----
-
-## 🔍 Subsystem Milestone Matrix
-
-### Subsystem 1: Core Physics & Unit Engine (100% ✅)
-* [x] Base unit dictionary, prefix system, and SI rational unit vectors in Rust.
-* [x] Zero-copy Python bindings via PyO3 (`physure._core.Quantity`).
-* [x] `torch.compile` and `jax.jit` zero-overhead tracer compatibility.
-* [x] Standalone PHS DSL interpreter (`physure-cli`, `physure-script`).
-* [x] Unit algebra, conversion and dimensions owned by the Rust core; Python delegates (A1 program).
-* [x] Angle mode: `rad` and `sr` read as 1 for conversions, never for sums or comparisons.
-* [x] PHS LAB-READY: loops, concurrency, breakpoints, incremental LSP, compiled exports, decorators (Tracks A–F; the DAP adapter and cross-file incrementality remain as non-blocking follow-ons).
-
-### Subsystem 2: Chemistry & Physical-Chemistry (50% 🚧)
-* [x] **Phase 1–4 Python Extension** (`physure.ext.chemistry`): Species, molar equivalency, reaction balancer, thermo/kinetics.
-* [ ] **Phase 5**: Rust core chemistry module (`physure_core::chemistry`) — periodic table, recursive descent formula parser, exact rational RREF balancer (✅ done in the core); PyO3 bindings (not done).
-* [ ] **Phase 6**: PHS DSL native chemistry builtins — `species()`, `molar_mass()`, `balance()`, `arrhenius()`, `gibbs()`, `mass_to_moles()`, `moles_to_mass()`.
-* [ ] **Phase 7**: Advanced reaction networks — multi-reaction stoichiometric matrix, kinetic ODE integration (RK4), chemical equilibrium solver (NASA CEA algorithm).
-* [ ] **Phase 8**: Cross-language chemistry bindings — C/FFI (`physure.h`), WebAssembly (`wasm-bindgen`), Java/JNI.
-
-### Subsystem 3: Symbolic Math & CAS Engine (35% 🚧)
-* [x] **Phase 1**: Base `Expr` AST, basic simplification, derivatives, heuristic integration, AOT physics compilation, dimensional symbolic regression.
-* [ ] **Phase 2**: Multivariate polynomials, Gröbner bases (Buchberger/F4/F5), Hermite partial fraction decomposition, Taylor/Laurent series.
-* [ ] **Phase 3**: Risch decision-procedure integrator, analytical ODE solver (`dsolve`), PDE solver (`pdesolve`).
-* [ ] **Phase 4**: Symbolic linear algebra (Bareiss fraction-free det, Jordan/Smith canonical forms), number theory, combinatorics, and DPLL SAT solver.
-
-### Subsystem 4: Scientific & Metrological Rigor Gaps (17% 🚧)
-* [x] **Welch-Satterthwaite $\nu_{\text{eff}}$**: Effective degrees of freedom and Student-$t$ coverage factor $k_p$ (GUM §4.2, G.4). Core, PHS (`dof` clause and builtins), Python, WebAssembly and Java (see `docs/superpowers/specs/2026-11-01-welch-satterthwaite-design.md` and, for Java's quantities keeping their sources, `docs/superpowers/specs/2026-11-02-java-provenance-design.md`).
-* [ ] **Real Equations of State**: Peng-Robinson, Redlich-Kwong, and IAPWS-IF97 steam formulation.
-* [ ] **Anisotropic Physical Tensors**: 2nd and 4th-order tensors for stress-strain ($\boldsymbol{\sigma}, \boldsymbol{\varepsilon}$) and dielectric permittivity (ISO 80000-4).
-* [ ] **Verified Interval Arithmetic**: IEEE 1788 directed interval bounds to prevent floating-point rounding errors.
-* [ ] **DAE Pantelides Index Reduction**: Structural index reduction and initialization for coupled physical systems.
-* [ ] **Noether Symmetry Derivation**: Symbolic derivation of conserved quantities from Lagrangian/Hamiltonian symmetries.
-
-### Subsystem 5: Parametric Diagramming Engine (`physure.diagrams`) (10% 📋)
-* [ ] **Phase 1**: Free Body Diagrams (FBD) on inclined planes, weight/normal/friction force scaling, SVG & Matplotlib renderers.
-* [ ] **Phase 2**: Particle kinematics, coordinate transforms, uncertainty error cones, and covariance ellipses.
-* [ ] **Phase 3**: Electrical circuit schematics, 2D field line tracing, thermodynamic $P-V$ work integrals.
-* [ ] **Phase 4**: Chemistry reaction profiles, VSEPR geometries, and electrochemical cells.
-* [ ] **Phase 5**: LaTeX TikZ exporter and terminal ASCII renderer.
-
-### Subsystem 6: Reproducibility & Audited Use (60% 🚧)
-* [x] **Frozen atomic-weight editions**: named, immutable CIAAW editions with a fingerprint test, tables of your own, and the edition report (`atomic_weight_edition()`).
-* [x] **Phase 1 — core**: **1a done** (`physure_core::frozen`: SHA-256, canonical form, frozen-file model, hash-chained history, seal and verifier); **1b done** (`physure_core::frozen::engine`: the engine identity from a `build.rs` with a tested commit rule, the four policies `binary`/`build`/`release`/`record`, the strict `[Engine]` block, the `[Environment]` record, and each history entry recording the engine block it sealed); **1c done** (`physure_core::frozen::{active, load, ops}`: resolution from the host's explicit path, `PHYSURE_CONF`, discovery and `PHYSURE_REQUIRE_FROZEN`; sealed loading that replays only the file's sources, strictly; the catalog hooks fail closed for the core, PHS, the CLI and the language server, `ensure_valid()` with exit codes 1/2/3, one configuration per process; the per-process caches; `freeze`, `plan_update`, `plan_seal` and `write_atomic`; Python and Java refuse until Phase 5); **1d done** (`physure_core::frozen::entries`: every catalog as a sorted list of entries covering all 18 fields of the registry, the constants and the settings with their compiled defaults, and `diff`/`summary` of two such lists; a test mutates every field of `UnitRegistry` and checks the entries notice, and the destructuring without `..` makes a new field a compile error).
-* [x] **Phase 2 — CLI**: `phs conf` `status`, `show`, `freeze`, `verify`, `diff`, `update`, `seal`, `history` (`physure-cli/src/conf.rs`) over a report layer in the core (`physure_core::frozen::{report, origin}`: `inspect`, `compare`, `history_rows`, `entries_with_origin`, `overrides_contribution`); `--json` with `"schema": 1`; exit codes 0/1/2/3; `verify --expect` against a seal recorded elsewhere; `update`/`seal` confirm, and refuse to write a file changed since they read it; `phs conf` is dispatched before any other argument handling and exempt from the pre-command check; `phs upgrade` suggests `phs conf diff`. User guide: [Freezing the configuration](conf_freeze.md).
-* [x] **Phase 3 — witnesses**: `physure_core::frozen::witness` (the `[Witness]` value formats and the bit-for-bit comparison with ulp distances) and `frozen::battery` (47 versioned cases: units, constants, uncertainty in every mode, Student-t, chemistry, each checked against an independent reference); `ops` as a draft, a probe and one reseal (one read, one history entry, a byte-hash compare-and-swap); `physure_script::report::canonical_witness` (`phs-witness-1`); `phs conf freeze --witness`, `verify --run` (a sandbox with fixed ceilings, a timeout and panic capture), `update`/`seal` refusing witness drift without `--accept-witness-changes`, `update` recording the battery of a file made before witnesses; `--allow-engine-mismatch` removed.
-* [ ] **Phase 4 — data migration** (next): code-resident numbers (currency rates, Monte Carlo defaults, Python chemistry tables) move into the catalog; a public table of what is and is not frozen.
-* [ ] **Phase 5 — bindings**: Python, WebAssembly and Java honour the frozen file (until then Python and Java refuse while one is in force).
+1. It lives in the Rust core, with exact arithmetic wherever the mathematics is exact.
+2. Its numbers are catalog data, so `phs conf` can freeze them. None stay hidden in code.
+3. Its reference values are witnesses, each checked against an independent published source.
+4. PHS exposes it, and `phs check` knows its dimensions.
+5. Python, WebAssembly and Java delegate to the core, held by the shared conformance tests.
+6. The guide, the changelog and this page say so.
 
 ---
 
-## 🤝 Maintenance & Updating Guidelines
+## Where things stand
 
-1. **Central Progress Verification**: When completing a task or PR in any subsystem, update both the target sub-roadmap and this Master Roadmap's progress table.
-2. **Relative Linking**: All documentation links MUST remain relative (e.g. `symbolic_math_roadmap.md`) to guarantee portability across GitHub, MkDocs, and local clones.
-3. **Paper Citations**: Any new algorithm or physical model added to the roadmap must include peer-reviewed scientific paper citations with public DOI/web links in [`symbolic_math_research.md`](symbolic_math_research.md) or [`scientific_gaps_and_rigor.md`](scientific_gaps_and_rigor.md).
+| Area | State | Open work |
+|---|---|---|
+| **Units, dimensions, conversion** | Done. The Rust core owns the unit algebra; Python keeps no implementation of its own. | The catalog's constants carry no uncertainty. |
+| **Uncertainty** | Done: GUM propagation with covariance, Monte Carlo, unscented, asymmetric pairs, effective degrees of freedom and coverage factors. | Open audit findings; the asymmetric-uncertainty proposal ([#46](https://github.com/Alexisrx96/physure/issues/46)). |
+| **PHS language** | Lab-ready: loops, concurrency, debugger, compiled exports, decorators. Its semantics were tightened after the November audit. | A stability line; open audit findings. |
+| **Tools and agent surface** | Done: static dimension checking (`phs check`), sandboxed evaluation (`phs eval`, `phs unit`), the MCP server (`phs mcp`), the language server. | A machine-readable language specification. |
+| **Bindings** | Python, WebAssembly and Java wrap the core and pass the shared conformance tests. | They refuse to run under a frozen configuration until Phase 5. |
+| **Reproducibility (`phs conf`)** | Phases 1 to 3 done: sealed file, engine pin, the eight commands, witnesses. The Phase 4 audit is done. | Phase 4b in progress; Phase 5 not started. |
+| **Chemistry** | The Python extension and the Rust core are done. | PHS builtins; Python still runs its own copy; reaction networks. |
+| **Symbolic mathematics** | Phase 1 only: derivatives, heuristic integrals, series, simple ODEs and small matrices, on floating-point coefficients. | Engine defects, then exact coefficients, then polynomials. |
+| **Physical models** | Welch–Satterthwaite done. | Buckingham π, real-gas equations of state, steam tables: not started. |
+| **Diagrams** | Not started. | Parked. See [Not planned](#not-planned). |
+
+---
+
+## Now
+
+In order. Nothing under [Next](#next) starts before these are finished.
+
+### 1. Finish Phase 4b of the configuration freeze
+
+Every number a user would want to pin, audit or override moves out of the code and into the
+catalog, so a frozen file governs it. What cannot move is listed in a public coverage table, so
+nobody believes something is frozen when it is not.
+
+- [ ] Settings for the Monte Carlo sample count and seed, the `while` ceiling, the asymmetric
+      shape and the default degrees of freedom. Monte Carlo becomes deterministic by default
+      (seed 0), with random draws as an explicit choice. *(in progress)*
+- [ ] The "did you mean" hint for an unknown unit is deterministic.
+- [ ] Display rules are catalog settings, and printed text is covered by witnesses.
+- [ ] Standard enthalpies and entropies of formation are catalog data in the core.
+- [ ] Exchange rates are shipped catalog text, not Python literals.
+- [ ] The coverage table (`docs/conf_coverage.md`), with a test that fails when it drifts.
+
+Source: the
+[audit of code-resident numbers](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/audits/2026-11-14-code-resident-numbers.md).
+
+### 2. Publish the next release
+
+Everything since 0.3.0 is unreleased, and it includes breaking changes to PHS: operator
+precedence, a zero needs a unit, a condition must be a Bool, `pi` and the catalog constants are
+reserved names, and Monte Carlo is seeded by default once Phase 4b lands.
+
+- [ ] The changelog is complete against the git history since `v0.3.0`.
+- [ ] The Python, Rust, Java and WebAssembly packages are published.
+- [ ] The release workflows run end to end. They were rewritten after 0.3.0 and have not run yet.
+
+### 3. Close the open audit findings
+
+The November audit found defects beyond the ones already fixed. The ones that can give a wrong
+answer come first:
+
+- [ ] The symbolic engine drops comparisons: `integral("x < 0.5", "x")` answers `x^2/2` (T2).
+- [ ] Only the first call of a user function is inlined in a symbolic expression (T3).
+- [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
+- [ ] Covariance pruning reads a missing variance as an absolute `1.0`, whatever the unit (T7).
+- [ ] `e` means Euler's number in a symbolic string and is refused elsewhere (T13).
+- [ ] A compiled export without contracts has no way to report a failure (T15).
+- [ ] The JavaScript and TypeScript targets emit calls the binding does not have (T19).
+
+Then the ones that fail loudly or only read badly: T1 (reporting half), T4, T8, T9, T11, T16,
+T18, T20 and T21. The full list, with reproductions, is in section 11.2 of the audit.
+
+---
+
+## Next
+
+In order, after "Now".
+
+### 4. Phase 5 of the configuration freeze: the bindings
+
+Python, WebAssembly and Java honour a frozen configuration. Today Python and Java refuse to run
+while one is in force, so the audit features do not reach most users. Includes the two items
+deferred from Phase 4: the Python default coverage probability, and the unit display tables
+derived from the catalog.
+
+**Done when** the same frozen file gives the same witnesses through every binding.
+
+### 5. Chemistry on every surface
+
+- PHS builtins: `species()`, `molar_mass()`, `balance()`, `arrhenius()`, `gibbs()`
+  ([Phase 6](chemistry_roadmap.md)).
+- Python delegates to the core, and its 681 lines of independent chemistry are deleted.
+- A sourced thermochemistry edition with uncertainties. The first edition keeps the legacy
+  Python numbers unchanged and is named as such.
+
+**Done when** a chemistry result is identical in PHS and Python and is covered by a witness.
+
+### 6. Constants with uncertainties
+
+None of the 411 constants in the catalog carries an uncertainty, and the catalog grammar has no
+way to write one (audit T14). For a tool about uncertainty, the gravitational constant should not
+be exact.
+
+**Done when** the CODATA constants carry their published standard uncertainties and propagate
+like any measurement.
+
+### 7. A stability line for PHS
+
+The language changed in breaking ways in November. Users need to know what will not change
+again.
+
+**Done when** there is a language reference, a conformance suite that every code-generation
+target passes, and a written deprecation policy.
+
+### 8. Documentation for users
+
+The documentation site is mostly roadmaps and research notes. It needs task guides: an
+uncertainty budget from start to finish, checking a script with `phs check`, freezing a
+configuration for an audit, and using Physure from an agent through `phs mcp`.
+
+---
+
+## Later
+
+Each item is bounded and has a published reference to test against. Each starts with a short
+specification that states its done-criterion, and goes through the pipeline under
+[What "done" means](#what-done-means).
+
+| Item | Done when | Design |
+|---|---|---|
+| Buckingham π in the core | Dimensionless groups come from an exact rational nullspace, in PHS and Python. Today only a neural-network layer in Python does this. | [Scientific companion](scientific_roadmap.md) |
+| Real-gas equations of state | Peng–Robinson and Redlich–Kwong reproduce published values. | [Scientific gaps](scientific_gaps_and_rigor.md) |
+| Steam tables (IAPWS-IF97) | The standard's own verification tables pass as witnesses. | [Scientific companion](scientific_roadmap.md) |
+| Exact coefficients in the symbolic engine | Numeric leaves are exact rationals, not `f64`. Everything below depends on this. | [Symbolic mathematics](symbolic_math_roadmap.md) |
+| Multivariate polynomials and Gröbner bases | Canonical forms and Buchberger's algorithm on exact coefficients. | [Symbolic mathematics](symbolic_math_roadmap.md) |
+| Partial fractions, series, fraction-free determinants | Exact results, replacing today's floating-point ones. | [Symbolic mathematics](symbolic_math_roadmap.md) |
+| Reaction kinetics | Multi-reaction networks integrated as ODEs, with units. | [Chemistry, Phase 7](chemistry_roadmap.md) |
+| Chemistry in WebAssembly and Java | The conformance tests cover chemistry. | [Chemistry, Phase 8](chemistry_roadmap.md) |
+| Debug adapter and cross-file incremental analysis | The two follow-ons left open by the language-readiness work. | [Language readiness](language_readiness_roadmap.md) |
+| An independent external validator | A separate project re-derives results as a black box and reports disagreements. | [Design](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-10-30-external-scientific-validator-design.md) |
+
+### Needs scoping first
+
+These are worth doing but have no finish line as written. Each needs a bounded definition before
+it can be scheduled.
+
+| Item | What has to be decided |
+|---|---|
+| Risch integration | Which case. The logarithmic and exponential case is bounded; the full algorithm is not. |
+| `dsolve` and `pdesolve` | A named list of equation classes. |
+| Verified interval arithmetic (IEEE 1788) | Which conformance level, and whether it is an evaluation mode. This is the strongest form of goal 1: a result with a guaranteed enclosure. |
+| Chemical equilibrium (NASA CEA) | Where the thermodynamic data comes from, and under what licence. |
+| DAE index reduction (Pantelides) | An equation-system model, which does not exist yet. |
+| Anisotropic tensors | Which ranks and which operations. |
+| Kalman filtering, Polars and xarray accessors | Whether they belong in the core or stay Python extras. |
+| Free-body and trajectory diagrams | Whether a drawing feature belongs in a calculation engine at all. |
+| Faster Gröbner bases (F4/F5) | A benchmark that shows Buchberger is too slow for a real use. |
+
+## Not planned
+
+Parked on purpose. They stay in the sub-roadmaps as designs.
+
+| Item | Why | What would bring it back |
+|---|---|---|
+| SAT solver, number theory, combinatorics | General-purpose mathematics, far from units and uncertainty. | A physical-modelling feature that needs one. |
+| Jordan, Smith and Frobenius canonical forms | Same. | Same. |
+| Noether symmetry derivation | A research topic, with no bounded specification. | A specification with reference problems. |
+| Circuit schematics, field lines, VSEPR geometries, TikZ export | Drawing, not calculation. | Demand from users, after the first diagrams exist. |
+| A curated formula repository | Parked since the language-readiness work. | An explicit decision to start it. |
+| Unit objects resolved at `torch.compile` trace time | Measured: the graph breaks are not the bottleneck. | A benchmark that shows otherwise. |
+| Extracting the symbolic engine into its own crate | Measured: no binding could drop the interpreter. | A binding that can. |
+
+---
+
+## Done
+
+**Core and units**
+
+- The Rust core owns the unit algebra, conversion and dimensions; Python delegates (0.3.0).
+- Exact scales, temperatures as points and intervals, logarithmic units, exact fractional powers.
+- Angle mode: the radian and the steradian read as 1 in conversions, never in sums or comparisons.
+- One rule for how a unit is written, and it reads back.
+
+**Uncertainty**
+
+- GUM propagation with covariance, Monte Carlo, unscented and asymmetric uncertainties.
+- Effective degrees of freedom, coverage factors and expanded uncertainty (Welch–Satterthwaite)
+  in the core, PHS, Python, WebAssembly and Java
+  ([design](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-01-welch-satterthwaite-design.md)).
+- A quantity keeps the sources of its uncertainty, in Java too.
+
+**PHS language and tools**
+
+- Lab-ready: loops, parallel loops, a debugger, incremental language server, compiled exports,
+  decorators ([language readiness](language_readiness_roadmap.md)).
+- Static dimension checking: `phs check` finds a dimension mismatch without running the program.
+- Agent surface: a sandboxed interpreter, `phs eval`, `phs unit`, and the `phs mcp` server.
+- Language semantics after the audit: arithmetic binds tighter than conversion and comparison, a
+  zero needs a unit, a condition is a Bool, `pi` and the catalog constants are global, one-sided
+  limits.
+
+**Reproducibility**
+
+- `phs conf`, Phases 1 to 3: a sealed frozen file with a hash-chained history, the engine pinned
+  by version, commit, build and binary hash, the eight commands with JSON output and exit codes,
+  and witnesses (47 built-in reference calculations plus the user's own scripts, compared bit for
+  bit) ([user guide](conf_freeze.md),
+  [design](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md)).
+- Frozen atomic-weight editions (CIAAW 2024) ([guide](atomic_weights.md)).
+- The audit of numbers that live in code, and the fixes for the defects it found.
+
+**Chemistry**
+
+- The Python extension: species, molar equivalency, reaction balancing, thermochemistry and
+  kinetics helpers.
+- The Rust core module: formula parser, molar mass with uncertainty, exact rational balancing,
+  Arrhenius, Gibbs and Clausius–Clapeyron.
+
+**Bindings and project**
+
+- Java and WebAssembly are held to the core by shared golden conformance tests, on every
+  platform the Java library ships for.
+- First use of the Python package is fast, and parsing a unit no longer copies the catalog.
+- The release pipeline starts from the version bump (not yet exercised by a release).
+
+---
+
+## Sub-roadmaps and designs
+
+These hold designs, mathematics and references. Status lives on this page only.
+
+| Document | Covers |
+|---|---|
+| [Chemistry](chemistry_roadmap.md) | Species, reactions, thermochemistry, the port to the core and PHS. |
+| [PHS language readiness](language_readiness_roadmap.md) | Loops, concurrency, debugger, language server, exports, decorators. |
+| [Symbolic mathematics](symbolic_math_roadmap.md) and its [research notes](symbolic_math_research.md) | The computer-algebra design, Phases 1 to 4. |
+| [Scientific companion](scientific_roadmap.md) | Buckingham π, steam tables, data-frame accessors, ODEs, Kalman filtering. |
+| [Scientific gaps and rigor](scientific_gaps_and_rigor.md) | Equations of state, tensors, interval arithmetic, DAEs, symmetries. |
+| [Paper compliance and validation](paper_compliance_and_validation.md) | Where the code follows, or departs from, the cited literature. |
+| [Diagramming engine](diagrams_roadmap.md) | Parametric physical diagrams (parked). |
+| [Configuration freeze: design](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md) | The frozen file, the engine pin, witnesses, the phases. |
+| [Audit of code-resident numbers](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/audits/2026-11-14-code-resident-numbers.md) | Every number that lives in code, and the open findings. |
+
+## Keeping this page current
+
+1. **Update it in the same branch as the work.** When a phase lands or a new subsystem is
+   designed, edit this page before the branch merges. The sub-roadmap changes only if the design
+   changed.
+2. **One page.** `ROADMAP.md` at the repository root only points here. Do not copy status into
+   it or into a sub-roadmap.
+3. **No percentages.** An item is done, in progress, or not started. A new item needs a
+   "done when".
+4. **Links.** Other pages under `docs/` are linked relatively. Anything outside it, including
+   `docs/superpowers/` and source files, uses the full
+   `https://github.com/Alexisrx96/physure/blob/main/<path>` form, because the documentation
+   build fails on a relative link that leaves the docs tree.
+5. **Citations.** A new algorithm or physical model needs a published reference in its
+   sub-roadmap before it moves out of "Needs scoping first".

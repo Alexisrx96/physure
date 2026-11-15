@@ -1,8 +1,8 @@
 # Chemistry & Physical-Chemical Reaction Tracking Roadmap
 
-**Status: ✅ Python Extension Implemented | 🚧 Phases 5–8 Planned (Rust Core & PHS DSL Integration)**
+**Status: ✅ Python extension implemented | ✅ Rust core module done (Phase 5, core part) | Phases 6–8 not started**
 
-> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+> 🗺️ **Status and priority live in the [Roadmap](ROADMAP.md).** This document is a design: what it describes is scheduled, or parked, there.
 
 ---
 

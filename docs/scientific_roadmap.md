@@ -1,8 +1,8 @@
 # Scientific Companion Roadmap: Advanced Features for Physure
 
-**Status: 🚧 In Progress (Buckingham $\pi$ & EKF in progress)**
+**Status: Specification.** Implemented: GUM propagation, Monte Carlo propagation and effective degrees of freedom (in the core), and a unit-aware ODE solver in Python. Not started: the Buckingham $\pi$ solver (only a neural-network layer in `physure.nn` uses the idea), IAPWS-IF97, the Polars accessor and Kalman filtering.
 
-> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+> 🗺️ **Status and priority live in the [Roadmap](ROADMAP.md).** This document is a design: what it describes is scheduled, or parked, there.
 
 This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](https://github.com/Alexisrx96/physure).
 
