@@ -173,10 +173,46 @@ struct Reading {
     strict_sections: bool,
 }
 
-/// The keys of `[Settings]` that the core does not use (other bindings read them). A frozen replay accepts them
-/// as written; any other unknown key is a problem.
+/// The keys of `[Settings]` that every reader accepts and nothing reads: not the core, not PHS, the CLI, the LSP, the
+/// WASM or Java bindings, not Python (which stores a conf's `[Settings]` in `UnitSystem.settings` and acts on
+/// `propagation_mode` alone; verified by search, conf freeze Phase 4b). They are accepted so that an older conf
+/// still reads: a frozen replay keeps them as written (`setting_ignored` entries), applying one does nothing, and
+/// `phs conf status` / `verify` warn when a source other than the embedded catalog sets one
+/// ([`ignored_setting_warnings`]). Releases before Phase 4b shipped all six in the embedded catalog; it sets none of
+/// them now. Any other unknown key is a problem.
 pub const CORE_UNUSED_SETTINGS: [&str; 6] =
     ["default_output", "auto_simplify", "default_system", "readable_representation", "verbose", "mkml_recursion_limit"];
+
+/// The keys of [`CORE_UNUSED_SETTINGS`] that the `[Settings]` sections of `text` set, as `(key, value)` in the order
+/// they appear (lines are read as the conf readers read them: trimmed, `#` and `;` comments skipped).
+pub fn ignored_settings_in(text: &str) -> Vec<(String, String)> {
+    let mut section = "";
+    let mut found = Vec::new();
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            section = &line[1..line.len() - 1];
+        } else if section == "Settings" {
+            if let Ok(Setting::Ignored { key, value }) = read_setting(line) {
+                found.push((key, value));
+            }
+        }
+    }
+    found
+}
+
+/// One warning per key of [`CORE_UNUSED_SETTINGS`] that `text` (named `origin` in the warning) sets: an auditor must
+/// not assume that such a key does something. The caller passes every source but the embedded catalog.
+pub fn ignored_setting_warnings(origin: &str, text: &str) -> Vec<String> {
+    ignored_settings_in(text)
+        .into_iter()
+        .map(|(key, value)| {
+            format!("{origin}: [Settings] {key} = {value} is accepted and ignored: no part of physure reads it, so it changes nothing")
+        })
+        .collect()
+}
 
 /// One line of `[Settings]`, read and checked, not applied.
 #[derive(Debug, Clone, PartialEq)]
@@ -2246,6 +2282,18 @@ mod tests {
             // the same text read for a unit system (not frozen) is not the place of these rules
             let _ = extend_registry(&mut UnitRegistry::new(), &mut HashMap::new(), text);
         }
+    }
+
+    #[test]
+    fn the_ignored_settings_of_a_text_are_those_its_settings_sections_set() {
+        let text = "verbose = 1\n[Settings]\n# verbose = 2\nverbose = true\nparallel_threshold = 5\n  mkml_recursion_limit = 7  \n[Units]\ndefault_output = x\n[Settings]\nauto_simplify = false\n";
+        assert_eq!(
+            ignored_settings_in(text),
+            [("verbose", "true"), ("mkml_recursion_limit", "7"), ("auto_simplify", "false")].map(|(k, v)| (k.to_string(), v.to_string()))
+        );
+        let warnings = ignored_setting_warnings("overrides", "[Settings]\ndefault_system = SI\n");
+        assert_eq!(warnings, ["overrides: [Settings] default_system = SI is accepted and ignored: no part of physure reads it, so it changes nothing"]);
+        assert!(ignored_settings_in(DEFAULT_PHYSURE_CONF).is_empty(), "the shipped catalog sets none of them");
     }
 
     #[test]

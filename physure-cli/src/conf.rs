@@ -480,6 +480,10 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
     for warning in &reproducibility {
         text.push_str(&format!("warning: {warning}\n"));
     }
+    let ignored = ignored_settings_warnings(file);
+    for warning in &ignored {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
     if !inspection.environment.is_empty() {
         text.push_str("warning: the environment differs from the one recorded (informational, outside the seal):\n");
         for change in &inspection.environment {
@@ -500,6 +504,7 @@ fn inspection_report(inspection: &Inspection) -> (String, Value) {
         "witnesses_recorded": { "builtin": builtin, "user": user },
         "environment": changes_json(&inspection.environment),
         "reproducibility_warnings": reproducibility,
+        "ignored_settings": ignored,
         "sources": file.map_or_else(Vec::new, |f| f
             .sources()
             .iter()
@@ -521,6 +526,19 @@ fn reproducibility_warnings(inspection: &Inspection) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// A warning for each accepted-but-ignored `[Settings]` key (`CORE_UNUSED_SETTINGS`) that a source of the file other
+/// than its embedded catalog sets. The embedded catalog of a release before conf freeze Phase 4b set all six, so a
+/// warning about it would fire for every such file and say nothing about the user's choices.
+fn ignored_settings_warnings(file: Option<&FrozenFile>) -> Vec<String> {
+    let Some(file) = file else { return Vec::new() };
+    file.sources()
+        .iter()
+        .enumerate()
+        .filter(|(index, source)| !(*index == 0 && source.origin() == "embedded"))
+        .flat_map(|(_, source)| physure_core::units::conf::ignored_setting_warnings(source.origin(), source.text()))
+        .collect()
 }
 
 /// The `builtin.*` and `user.*` keys a file records in `[Witness]`.

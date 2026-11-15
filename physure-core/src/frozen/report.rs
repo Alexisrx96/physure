@@ -341,6 +341,7 @@ pub fn unfrozen_entries(cwd: &Path) -> Result<(Vec<Entry>, Vec<String>), String>
     })?;
     let lenient_problems = read_leniently_collected(&text, &mut registry, &mut constants, &mut collected, false);
     warnings.extend(lenient_problems.iter().map(|p| format!("{shown}: {p}; the line is ignored")));
+    warnings.extend(crate::units::conf::ignored_setting_warnings(&shown.to_string(), &text));
     let lenient = entries(&registry, &constants, &collected);
     let (mut strict_registry, mut strict_constants, mut strict_collected) =
         (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());

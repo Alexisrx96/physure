@@ -1218,3 +1218,59 @@ fn seal_on_a_sound_file_is_exit_0_nothing_to_do() {
     assert!(stdout(&output).contains("already verifies"), "{}", text(&output));
     assert_eq!(bytes(&dir), before);
 }
+
+// ---- Phase 4b, Task 2: the accepted-but-ignored settings ----
+
+/// The six `[Settings]` keys every reader accepts and nothing reads.
+const IGNORED: [&str; 6] = ["default_output", "auto_simplify", "default_system", "readable_representation", "verbose", "mkml_recursion_limit"];
+
+/// The embedded catalog as releases before Phase 4b shipped it: it set all six (every frozen file made by them
+/// embeds this text).
+fn old_embedded_catalog() -> String {
+    let lines = "[Settings]\ndefault_output = plain\nauto_simplify = true\ndefault_system = SI\nreadable_representation = true\nverbose = false\nmkml_recursion_limit = 100\n";
+    DEFAULT_PHYSURE_CONF.replacen("[Settings]\n", lines, 1)
+}
+
+/// A key nothing reads warns in `status` and `verify` (text and JSON) only when a source other than the embedded
+/// catalog sets it: not for the shipped catalog (which no longer sets them), nor for an older file whose embedded
+/// catalog did, nor for a file whose overrides set none.
+#[test]
+fn status_and_verify_warn_about_an_ignored_setting_only_outside_the_embedded_catalog() {
+    for key in IGNORED {
+        assert!(
+            !DEFAULT_PHYSURE_CONF.lines().any(|line| line.trim_start().starts_with(&format!("{key} ="))),
+            "the shipped catalog no longer sets {key}"
+        );
+    }
+    let clean = Dir::new("ignored_clean");
+    clean.write(FROZEN_FILE_NAME, &file_for_another_engine_with(&old_embedded_catalog(), "[Settings]\nparallel_threshold = 50\n"));
+    for command in ["status", "verify"] {
+        let out = text(&clean.conf(&[command]));
+        assert!(!out.contains("accepted and ignored"), "{command}: {out}");
+        let doc = json(&clean.conf(&[command, "--json"]));
+        assert_eq!(doc["ignored_settings"], serde_json::json!([]), "{command}: {doc}");
+    }
+    let set = Dir::new("ignored_set");
+    set.write(FROZEN_FILE_NAME, &file_for_another_engine_with(DEFAULT_PHYSURE_CONF, "[Settings]\nverbose = true\nmkml_recursion_limit = 7\n"));
+    for command in ["status", "verify"] {
+        let out = text(&set.conf(&[command]));
+        assert!(out.contains("warning: overrides: [Settings] verbose = true is accepted and ignored"), "{command}: {out}");
+        assert!(out.contains("mkml_recursion_limit = 7 is accepted and ignored"), "{command}: {out}");
+        let doc = json(&set.conf(&[command, "--json"]));
+        let warnings = doc["ignored_settings"].as_array().unwrap_or_else(|| panic!("{doc}"));
+        assert_eq!(warnings.len(), 2, "{command}: {doc}");
+    }
+}
+
+/// Unfrozen, a working-directory `physure.conf` that sets one warns too; the embedded catalog alone does not.
+#[test]
+fn status_unfrozen_warns_about_an_ignored_setting_of_the_working_directory() {
+    let dir = Dir::new("ignored_unfrozen");
+    let doc = json(&dir.conf(&["status", "--json"]));
+    assert!(!doc["warnings"].to_string().contains("accepted and ignored"), "{doc}");
+    dir.write("physure.conf", "[Settings]\ndefault_system = imperial\n");
+    let out = stdout(&dir.conf(&["status"]));
+    assert!(out.contains("[Settings] default_system = imperial is accepted and ignored"), "{out}");
+    let doc = json(&dir.conf(&["status", "--json"]));
+    assert!(doc["warnings"].to_string().contains("default_system = imperial is accepted and ignored"), "{doc}");
+}
