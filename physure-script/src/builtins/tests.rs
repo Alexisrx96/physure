@@ -310,3 +310,17 @@ fn test_exhaustive_requested_features() {
         PhsValue::String("24".into())
     );
 }
+
+#[test]
+fn a_function_that_calls_another_is_inlined_whatever_order_the_variables_are_in() {
+    // `g` calls `f`: inlined in the order the map of variables met them, `f` first left a call of `f` behind
+    // ("Unknown symbolic function 'f'") about half the time. A second call of the same function is still not
+    // inlined: the inliner does not substitute arguments, so it refuses rather than answer for other ones.
+    for _ in 0..30 {
+        let results = crate::eval_phs("use * from calc\nf(x) = 2*x\ng(x) = f(x) + 1\nderiv(\"g(x)\", \"x\")").unwrap();
+        assert_eq!(results.last(), Some(&PhsValue::String("2".into())));
+        let results = crate::eval_phs("use * from calc\ng(x) = 3*x\nf(x) = g(x) + 1\nderiv(\"f(x)\", \"x\")").unwrap();
+        assert_eq!(results.last(), Some(&PhsValue::String("3".into())));
+        assert!(crate::eval_phs("use * from calc\nf(x) = 2*x\nderiv(\"f(x) + f(x)\", \"x\")").is_err());
+    }
+}

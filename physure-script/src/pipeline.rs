@@ -123,7 +123,10 @@ impl PhsPipeline {
                 ))
             })?;
 
-            for input_key in step.inputs.keys() {
+            // by name, so an error names the same input every time
+            let mut input_keys: Vec<&String> = step.inputs.keys().collect();
+            input_keys.sort();
+            for input_key in input_keys {
                 if !sig.params.iter().any(|p| &p.name == input_key) {
                     return Err(PhysureError::Generic(format!(
                         "Unexpected input '{}' for {}.{}() in step '{}'",
@@ -301,6 +304,24 @@ mod tests {
             msg.contains("Unresolved reference") && msg.contains("area"),
             "unexpected message: {msg}"
         );
+    }
+
+    #[test]
+    fn of_several_unexpected_inputs_the_error_always_names_the_first_by_name() {
+        // which one it named was the one the map of inputs met first
+        for _ in 0..30 {
+            let mut pipeline = PhsPipeline::new();
+            pipeline.add_module(geom_module());
+            let one = || PipelineArg::Literal(PhsValue::Number(1.0));
+            pipeline.add_step(PipelineStep {
+                module_name: "geom".to_string(),
+                function_name: "pipe_area".to_string(),
+                inputs: HashMap::from([("y".to_string(), one()), ("x".to_string(), one()), ("z".to_string(), one())]),
+                output_alias: "area".to_string(),
+            });
+            let msg = pipeline.execute().unwrap_err().to_string();
+            assert!(msg.contains("Unexpected input 'x'"), "unexpected message: {msg}");
+        }
     }
 
     #[test]

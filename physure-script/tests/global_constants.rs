@@ -277,9 +277,7 @@ fn module_defining(name: &str) -> PhsInterpreter {
     let mut resolver = MemoryModuleResolver::new();
     let value = parse_phs("3").unwrap();
     let physure_script::Statement::Expr(three) = value.statements[0].clone() else { unreachable!() };
-    let mut symbols = HashMap::new();
-    symbols.insert(name.to_string(), three.clone());
-    symbols.insert("fine".to_string(), three);
+    let symbols = vec![(name.to_string(), three.clone()), ("fine".to_string(), three)];
     resolver.add_module("consts".to_string(), ModuleExport { symbols, functions: HashMap::new() });
     PhsInterpreter::new(Arc::new(resolver))
 }

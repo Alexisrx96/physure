@@ -915,10 +915,10 @@ r3 = circuito_abierto(5 V, 2 A)
     fn test_virtual_module_import() {
         let mut resolver = MemoryModuleResolver::new();
         let mut export = ModuleExport {
-            symbols: HashMap::new(),
+            symbols: Vec::new(),
             functions: HashMap::new(),
         };
-        export.symbols.insert("G".to_string(), Expr::Quantity(QuantityNode {
+        export.define("G".to_string(), Expr::Quantity(QuantityNode {
             magnitude: 6.674e-11,
             uncertainty: None,
             uncertainty_lower: None,
@@ -1317,6 +1317,17 @@ r3 = circuito_abierto(5 V, 2 A)
         let mut interp = PhsInterpreter::default();
         let err = interp.eval_str("op_eq(True)").unwrap_err();
         assert!(err.to_string().contains("missing argument"), "{err}");
+    }
+
+    #[test]
+    fn an_equation_lists_its_missing_arguments_by_name() {
+        // they were listed in the order a set iterated in, a new one each time
+        for _ in 0..30 {
+            let err = crate::interpreter::eval_phs("eq = \"foo_y * foo_z = qux_d * qux_c * qux_b * qux_a\"\neq(bar=1)").unwrap_err();
+            assert!(err.to_string().ends_with("'eq': foo_y, foo_z"), "{err}");
+            let err = crate::interpreter::eval_phs("eq = \"foo_y * foo_z * foo_w = qux_d * qux_c\"\neq(bar=1)").unwrap_err();
+            assert!(err.to_string().ends_with("'eq': qux_c, qux_d"), "{err}");
+        }
     }
 
 #[cfg(test)]

@@ -350,9 +350,10 @@ impl PhsInterpreter {
             ImportSpecifier::Wildcard => {
                 // what a module defines is known only now: a name of it that is a global identifier is refused
                 let what = format!("a name imported from `{}`", node.path);
-                for name in export.symbols.keys().chain(export.functions.keys()) {
+                for name in export.symbols.iter().map(|(name, _)| name).chain(export.function_names()) {
                     crate::globals::refuse_binding(name, &what)?;
                 }
+                // in the order the module defines them, so one may use another defined before it
                 for (name, expr) in &export.symbols {
                     let val = self.eval_expr(expr, env)?;
                     env.insert(name.clone(), val);
@@ -379,7 +380,7 @@ impl PhsInterpreter {
         env: &mut HashMap<String, PhsValue>,
     ) -> PhysureResult<()> {
         let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-        if let Some(expr) = export.symbols.get(&sym.name) {
+        if let Some(expr) = export.symbol(&sym.name) {
             let val = self.eval_expr(expr, env)?;
             env.insert(target_name, val);
         } else if let Some(func) = export.functions.get(&sym.name) {

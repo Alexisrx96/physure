@@ -87,28 +87,44 @@ fn expr_to_string(expr: &crate::ast::Expr) -> String {
 
 pub(crate) fn preprocess_symbolic_expression(expr_str: &str, interpreter: &PhsInterpreter) -> String {
     let mut result = expr_str.trim().to_string();
-    for (name, val) in &interpreter.env {
-        if let PhsValue::Function(func) = val {
-            inline_call(&mut result, name, func);
-        }
+    // By name, and again while a body brings in a call of another function, so a function calling another is
+    // inlined whatever order the map of variables iterates in. Each function at most once: the inliner does not
+    // substitute arguments, so a second call of the same function is left for the symbolic engine to refuse.
+    let mut functions: Vec<(&String, &crate::ast::FunctionDefNode)> = interpreter
+        .env
+        .iter()
+        .filter_map(|(name, val)| if let PhsValue::Function(func) = val { Some((name, func)) } else { None })
+        .collect();
+    functions.sort_by(|a, b| a.0.cmp(b.0));
+    let mut progress = true;
+    while progress {
+        progress = false;
+        functions.retain(|(name, func)| {
+            let inlined = inline_call(&mut result, name, func);
+            progress |= inlined;
+            !inlined
+        });
     }
     result
 }
 
 /// Replaces the first call of `name` in `text` (as far as its first closing parenthesis) with the body of `func`.
-fn inline_call(text: &mut String, name: &str, func: &crate::ast::FunctionDefNode) {
+/// Whether there was one.
+fn inline_call(text: &mut String, name: &str, func: &crate::ast::FunctionDefNode) -> bool {
     let fn_pattern = format!("{}(", name);
     let Some(start) = text.find(&fn_pattern) else {
-        return;
+        return false;
     };
     let body_expr = match func.body_stmts.last() {
         Some(crate::ast::Statement::Expr(ref e)) => expr_to_string(e),
         Some(crate::ast::Statement::Assignment(ref a)) => expr_to_string(&a.value),
         _ => String::new(),
     };
-    if let Some(end) = text[start..].find(')') {
-        text.replace_range(start..=start + end, &format!("({})", body_expr));
-    }
+    let Some(end) = text[start..].find(')') else {
+        return false;
+    };
+    text.replace_range(start..=start + end, &format!("({})", body_expr));
+    true
 }
 
 #[cfg(test)]

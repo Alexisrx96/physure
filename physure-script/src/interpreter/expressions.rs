@@ -135,7 +135,9 @@ fn solved_side<'a>(name: &str, lhs: &'a Node, rhs: &'a Node, local_env: &HashMap
     if lhs_missing.iter().all(|s| crate::parser::is_known_unit_symbol(s)) {
         return Ok(lhs);
     }
-    let missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
+    let mut missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
+    // by name: a set has no order of its own
+    missing.sort();
     Err(PhysureError::Generic(format!(
         "Missing argument(s) for equation '{}': {}",
         name,

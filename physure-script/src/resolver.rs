@@ -15,8 +15,32 @@ pub trait ModuleResolver: Send + Sync {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleExport {
-    pub symbols: HashMap<String, Expr>,
+    /// The values the module defines, in the order it defines them: an importer evaluates them in
+    /// that order, so a later one may use an earlier one (`q = 3 * p`).
+    pub symbols: Vec<(String, Expr)>,
     pub functions: HashMap<String, FunctionDefNode>,
+}
+
+impl ModuleExport {
+    /// The value the module defines under `name`.
+    pub fn symbol(&self, name: &str) -> Option<&Expr> {
+        self.symbols.iter().find(|(defined, _)| defined == name).map(|(_, expr)| expr)
+    }
+
+    /// Defines `name` as `expr`: a name defined again keeps its place and takes the new value.
+    pub fn define(&mut self, name: String, expr: Expr) {
+        match self.symbols.iter_mut().find(|(defined, _)| *defined == name) {
+            Some((_, value)) => *value = expr,
+            None => self.symbols.push((name, expr)),
+        }
+    }
+
+    /// The names of the functions, sorted (so whichever of them an error names is always the same).
+    pub fn function_names(&self) -> Vec<&String> {
+        let mut names: Vec<&String> = self.functions.keys().collect();
+        names.sort();
+        names
+    }
 }
 
 pub struct MemoryModuleResolver {
@@ -71,27 +95,26 @@ impl ModuleResolver for FsModuleResolver {
         let program = crate::parser::parse_phs(&source)
             .map_err(|e| ModuleResolutionError::ParseError(format!("{:?}", e)))?;
 
-        let mut symbols = HashMap::new();
-        let mut functions = HashMap::new();
+        let mut module = ModuleExport { symbols: Vec::new(), functions: HashMap::new() };
         let mut exports = Vec::new();
         for stmt in program.statements {
             match stmt {
-                Statement::Assignment(node) => { symbols.insert(node.name, node.value); }
-                Statement::FunctionDef(node) => { functions.insert(node.name.clone(), node); }
+                Statement::Assignment(node) => module.define(node.name, node.value),
+                Statement::FunctionDef(node) => { module.functions.insert(node.name.clone(), node); }
                 Statement::Export(node) => exports.push(node),
                 _ => {}
             }
         }
 
         if exports.is_empty() {
-            return Ok(ModuleExport { symbols, functions });
+            return Ok(module);
         }
 
-        let mut export = ModuleExport { symbols: HashMap::new(), functions: HashMap::new() };
+        let mut export = ModuleExport { symbols: Vec::new(), functions: HashMap::new() };
         for node in exports {
-            if let Some(expr) = symbols.get(&node.symbol) {
-                export.symbols.insert(node.export_name, expr.clone());
-            } else if let Some(func) = functions.get(&node.symbol) {
+            if let Some(expr) = module.symbol(&node.symbol) {
+                export.define(node.export_name, expr.clone());
+            } else if let Some(func) = module.functions.get(&node.symbol) {
                 export.functions.insert(node.export_name, func.clone());
             } else {
                 return Err(ModuleResolutionError::NotFound(node.symbol));
@@ -145,18 +168,18 @@ impl SymbolTable {
     }
     
     pub fn import_wildcard(&mut self, export: ModuleExport) -> Result<(), ModuleResolutionError> {
-        for (name, expr) in export.symbols {
-            self.insert(name, SymbolInfo::Variable(expr))?;
+        for (name, expr) in &export.symbols {
+            self.insert(name.clone(), SymbolInfo::Variable(expr.clone()))?;
         }
-        for (name, func) in export.functions {
-            self.insert(name, SymbolInfo::Function(func))?;
+        for name in export.function_names() {
+            self.insert(name.clone(), SymbolInfo::Function(export.functions[name].clone()))?;
         }
         Ok(())
     }
 
     pub fn import_symbol(&mut self, export: &ModuleExport, name: &str, alias: Option<&str>) -> Result<(), ModuleResolutionError> {
         let target_name = alias.unwrap_or(name).to_string();
-        if let Some(expr) = export.symbols.get(name) {
+        if let Some(expr) = export.symbol(name) {
             self.insert(target_name, SymbolInfo::Variable(expr.clone()))?;
             return Ok(());
         }
@@ -189,10 +212,10 @@ mod tests {
     fn test_memory_resolver() {
         let mut resolver = MemoryModuleResolver::new();
         let mut export = ModuleExport {
-            symbols: HashMap::new(),
+            symbols: Vec::new(),
             functions: HashMap::new(),
         };
-        export.symbols.insert("pi".to_string(), get_dummy_expr());
+        export.define("pi".to_string(), get_dummy_expr());
         
         resolver.add_module("math".to_string(), export.clone());
 
@@ -213,11 +236,11 @@ mod tests {
     fn test_symbol_table_wildcard_and_alias() {
         let mut table = SymbolTable::new();
         let mut export = ModuleExport {
-            symbols: HashMap::new(),
+            symbols: Vec::new(),
             functions: HashMap::new(),
         };
-        export.symbols.insert("h".to_string(), get_dummy_expr());
-        export.symbols.insert("c".to_string(), get_dummy_expr());
+        export.define("h".to_string(), get_dummy_expr());
+        export.define("c".to_string(), get_dummy_expr());
 
         // Wildcard
         table.import_wildcard(export.clone()).unwrap();
@@ -247,7 +270,7 @@ mod fs_resolver_tests {
 
         let resolver = FsModuleResolver::new(&dir);
         let export = resolver.resolve("constants").unwrap();
-        assert!(export.symbols.contains_key("G"));
+        assert!(export.symbol("G").is_some());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -262,9 +285,9 @@ mod fs_resolver_tests {
 
         let resolver = FsModuleResolver::new(&dir);
         let export = resolver.resolve("mod").unwrap();
-        assert!(export.symbols.contains_key("PUBLIC"));
-        assert!(!export.symbols.contains_key("internal"));
-        assert!(!export.symbols.contains_key("public"));
+        assert!(export.symbol("PUBLIC").is_some());
+        assert!(export.symbol("internal").is_none());
+        assert!(export.symbol("public").is_none());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -273,5 +296,28 @@ mod fs_resolver_tests {
     fn test_fs_resolver_missing_file() {
         let resolver = FsModuleResolver::new("/nonexistent/phs/dir/xyz");
         assert!(matches!(resolver.resolve("nope"), Err(ModuleResolutionError::NotFound(_))));
+    }
+
+    #[test]
+    fn an_imported_module_binds_its_names_in_the_order_it_defines_them() {
+        // `q` uses `p` and `r` both: imported in the order a map iterated in, `r` was 8 m one time in
+        // seven and otherwise an unknown unit `p` or `q`, or a type error.
+        let dir = std::env::temp_dir().join(format!("phs_resolver_test_order_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lib.phs"), "p = 2 m\nq = 3 * p\nr = q + p\n").unwrap();
+        std::fs::write(dir.join("hidden.phs"), "p = 2 m\nq = 3 * p\nexport p as P\nexport q as Q\n").unwrap();
+
+        let resolver = FsModuleResolver::new(&dir);
+        let names = |export: ModuleExport| export.symbols.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+        assert_eq!(names(resolver.resolve("lib").unwrap()), ["p", "q", "r"]);
+        assert_eq!(names(resolver.resolve("hidden").unwrap()), ["P", "Q"]);
+        for _ in 0..30 {
+            let mut interp = crate::interpreter::PhsInterpreter::with_base_dir(&dir);
+            let results = interp.eval_str("import \"lib\"\nr").unwrap();
+            let crate::value::PhsValue::Quantity(r) = &results[1] else { panic!("{results:?}") };
+            assert_eq!(r.value.mean(), 8.0);
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

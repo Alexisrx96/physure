@@ -357,7 +357,7 @@ impl UnitRegistry {
     /// The registered symbol closest to `name`, for a "did you mean" hint when a unit
     /// lookup fails. Suggestions are capped at roughly one edit per four characters so an
     /// unrelated word (`foobar`) gets no hint at all, while a plausible typo
-    /// (`metre` → `meter`, `Km` → `km`) does.
+    /// (`metre` → `meter`, `Km` → `km`) does. The same name always gets the same hint.
     pub fn closest_symbol(&self, name: &str) -> Option<String> {
         let budget = 1 + name.chars().count() / 4;
         let lowercase = name.to_lowercase();
@@ -373,23 +373,28 @@ impl UnitRegistry {
             }
         }
 
-        self.base_units
-            .keys()
-            .chain(self.derived_units.keys())
-            .chain(self.aliases.keys())
-            .map(|candidate| (edit_distance(name, candidate), candidate))
-            .filter(|(distance, _)| *distance <= budget)
+        // Each candidate with its rank: a base unit before a derived unit before an alias.
+        let base = self.base_units.keys().map(|candidate| (0, candidate));
+        let derived = self.derived_units.keys().map(|candidate| (1, candidate));
+        let aliases = self.aliases.keys().map(|candidate| (2, candidate));
+        base.chain(derived)
+            .chain(aliases)
+            .map(|(rank, candidate)| (edit_distance(name, candidate), rank, candidate))
+            .filter(|(distance, ..)| *distance <= budget)
             // Ties go to the candidate that shares the most of the typed prefix, so "wat"
-            // suggests "watt" and not "kat" — both are one edit away from it.
-            .min_by_key(|(distance, candidate)| {
+            // suggests "watt" and not "kat" — both are one edit away from it; then to the
+            // shorter one, then by rank, and last to the first in byte order, so the answer
+            // never depends on the order the maps iterate in (`x` is `A`, never `K`, `m` or
+            // `s` by chance).
+            .min_by_key(|(distance, rank, candidate)| {
                 let shared = lowercase
                     .chars()
                     .zip(candidate.to_lowercase().chars())
                     .take_while(|(a, b)| a == b)
                     .count();
-                (*distance, std::cmp::Reverse(shared), candidate.len())
+                (*distance, std::cmp::Reverse(shared), candidate.len(), *rank, candidate.as_str())
             })
-            .map(|(_, candidate)| candidate.clone())
+            .map(|(.., candidate)| candidate.clone())
     }
 
     pub fn get_unit(&self, name: &str) -> Option<RationalUnit> {
@@ -889,6 +894,29 @@ mod tests {
             let (symbol, factor, unit) = reg.split_prefix("dam").unwrap();
             assert_eq!((symbol.as_str(), factor), ("da", 10.0));
             assert_eq!(unit.dimensions, reg.get_unit("m").unwrap().dimensions);
+        }
+    }
+
+    /// The registry with its maps rebuilt, so each one iterates in a new random order, as in another process.
+    fn reshuffled(mut reg: super::UnitRegistry) -> super::UnitRegistry {
+        reg.base_units = reg.base_units.into_iter().collect();
+        reg.derived_units = reg.derived_units.into_iter().collect();
+        reg.aliases = reg.aliases.into_iter().collect();
+        reg.prefixes = reg.prefixes.into_iter().collect();
+        reg.prefix_names = reg.prefix_names.into_iter().collect();
+        reg
+    }
+
+    #[test]
+    fn the_suggestion_for_an_unknown_unit_does_not_depend_on_the_order_a_map_iterates_in() {
+        // `x` is one edit from `A`, `K`, `m` and `s`, and `y` from `yd` and `yr`: equally close, equally long,
+        // sharing as much of what was typed. The suggestion was whichever the map met first.
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        for (typo, expected) in [("x", "A"), ("y", "yd")] {
+            for _ in 0..50 {
+                let suggestion = reshuffled(reg.clone()).closest_symbol(typo);
+                assert_eq!(suggestion.as_deref(), Some(expected), "the suggestion for {typo:?}");
+            }
         }
     }
 

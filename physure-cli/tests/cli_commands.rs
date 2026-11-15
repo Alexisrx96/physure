@@ -332,6 +332,17 @@ fn eval_and_unit_answer_in_json() {
 }
 
 #[test]
+fn the_suggestion_for_an_unknown_unit_is_the_same_in_every_process() {
+    // `x` is one edit from `A`, `K`, `m` and `s`: each process used to suggest whichever its maps met first.
+    let dir = TempDir::new("suggestion");
+    for _ in 0..10 {
+        let evaluated = run_with_input(dir.path(), &["eval", "-"], "x = 5 x\n");
+        let report: serde_json::Value = serde_json::from_str(&stdout(&evaluated)).unwrap();
+        assert_eq!(report["diagnostics"][0]["message"], "Unknown unit 'x' — did you mean 'A'?", "{report}");
+    }
+}
+
+#[test]
 fn the_debugger_answers_each_command_at_a_breakpoint() {
     let dir = TempDir::new("debug");
     let script = dir.write(
