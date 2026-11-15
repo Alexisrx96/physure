@@ -28,6 +28,37 @@ fn module_aliases_unsupported() -> PhysureError {
     PhysureError::Generic("Module aliases not yet supported by interpreter".into())
 }
 
+thread_local! {
+    /// The modules being run on this thread, outermost first: a module that imports one of them is a cycle.
+    static LOADING_MODULES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A module being run, from `enter` until it is dropped (also on error).
+struct LoadingModule;
+
+impl LoadingModule {
+    /// Marks `path` as being run, or refuses it when it already is, naming the cycle.
+    fn enter(path: &str) -> PhysureResult<Self> {
+        LOADING_MODULES.with(|loading| {
+            let mut loading = loading.borrow_mut();
+            if let Some(first) = loading.iter().position(|p| p == path) {
+                let cycle = loading[first..].join(" -> ");
+                return Err(PhysureError::Generic(format!("cyclic import: {cycle} -> {path}")));
+            }
+            loading.push(path.to_string());
+            Ok(LoadingModule)
+        })
+    }
+}
+
+impl Drop for LoadingModule {
+    fn drop(&mut self) {
+        LOADING_MODULES.with(|loading| {
+            loading.borrow_mut().pop();
+        });
+    }
+}
+
 impl PhsInterpreter {
     pub fn eval_str(&mut self, code: &str) -> PhysureResult<Vec<PhsValue>> {
         let prog = crate::parse_phs(code)?;
@@ -289,9 +320,15 @@ impl PhsInterpreter {
             return Ok(PhsValue::None);
         }
 
-        if let Ok(export) = self.resolver.resolve(&node.path) {
-            self.import_module(node, &export, env)?;
-            return Ok(PhsValue::None);
+        match self.resolver.load(&node.path) {
+            Ok(module) => {
+                self.import_module(node, &module, env)?;
+                return Ok(PhsValue::None);
+            }
+            // no `.phs` module by that name: perhaps a native plugin
+            Err(crate::resolver::ModuleResolutionError::NotFound(path)) if path == node.path => {}
+            // a module that is there but cannot be read is not a missing one
+            Err(other) => return Err(PhysureError::Generic(other.to_string())),
         }
 
         if let Some(base_dir) = &self.plugin_base_dir {
@@ -337,58 +374,81 @@ impl PhsInterpreter {
         Ok(())
     }
 
-    /// `use "module"`: binds the module's exported symbols (evaluated) and functions in `env`.
+    /// `use ... from "module"`: binds the values the module computed, in its own scope, under the names imported.
+    /// A function keeps seeing its module's names (see `ModuleScope`), never the importer's.
     fn import_module(
         &self,
         node: &crate::ast::ImportNode,
-        export: &crate::resolver::ModuleExport,
+        module: &crate::resolver::ModuleSource,
         env: &mut HashMap<String, PhsValue>,
     ) -> PhysureResult<()> {
         use crate::ast::ImportSpecifier;
 
-        match &node.specifier {
+        let export = &module.export;
+        // (the name the module exports, the name it is bound under here), checked before the module runs
+        let names: Vec<(String, String)> = match &node.specifier {
             ImportSpecifier::Wildcard => {
                 // what a module defines is known only now: a name of it that is a global identifier is refused
                 let what = format!("a name imported from `{}`", node.path);
-                for name in export.symbols.iter().map(|(name, _)| name).chain(export.function_names()) {
+                let names: Vec<&String> = export.symbols.iter().map(|(name, _)| name).chain(export.function_names()).collect();
+                for name in &names {
                     crate::globals::refuse_binding(name, &what)?;
                 }
-                // in the order the module defines them, so one may use another defined before it
-                for (name, expr) in &export.symbols {
-                    let val = self.eval_expr(expr, env)?;
-                    env.insert(name.clone(), val);
-                }
-                for (name, func) in &export.functions {
-                    env.insert(name.clone(), PhsValue::Function(func.clone()));
-                }
+                names.into_iter().map(|name| (name.clone(), name.clone())).collect()
             }
             ImportSpecifier::Symbols(syms) => {
                 for sym in syms {
-                    self.import_symbol(sym, &node.path, export, env)?;
+                    if export.symbol(&sym.name).is_none() && !export.functions.contains_key(&sym.name) {
+                        return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, node.path)));
+                    }
                 }
+                syms.iter().map(|sym| (sym.name.clone(), sym.alias.clone().unwrap_or_else(|| sym.name.clone()))).collect()
             }
             ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        };
+
+        let scope = self.module_scope(&node.path, module)?;
+        for (exported, bound) in names {
+            let internal = module.internal_name(&exported);
+            let value = scope.get(internal).cloned().ok_or_else(|| {
+                PhysureError::Generic(format!("module {} defines '{exported}' but left no value under '{internal}'", node.path))
+            })?;
+            env.insert(bound, scope.close_over(value));
         }
         Ok(())
     }
 
-    fn import_symbol(
-        &self,
-        sym: &crate::ast::ImportSymbol,
-        module: &str,
-        export: &crate::resolver::ModuleExport,
-        env: &mut HashMap<String, PhsValue>,
-    ) -> PhysureResult<()> {
-        let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-        if let Some(expr) = export.symbol(&sym.name) {
-            let val = self.eval_expr(expr, env)?;
-            env.insert(target_name, val);
-        } else if let Some(func) = export.functions.get(&sym.name) {
-            env.insert(target_name, PhsValue::Function(func.clone()));
-        } else {
-            return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, module)));
+    /// The environment `module` (imported as `path`) leaves once it has run: run now, in an environment of its own,
+    /// unless this interpreter already ran the same module. A module importing one that is being run is refused.
+    fn module_scope(&self, path: &str, module: &crate::resolver::ModuleSource) -> PhysureResult<crate::value::ModuleScope> {
+        let ran = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(path).cloned();
+        if let Some((source, scope)) = ran {
+            if source == *module {
+                return Ok(scope);
+            }
         }
-        Ok(())
+        let _loading = LoadingModule::enter(path)?;
+        let mut module_env = HashMap::new();
+        match &module.program {
+            Some(program) => {
+                for stmt in program.statements.iter().filter(|stmt| crate::resolver::ModuleSource::runs(stmt)) {
+                    self.eval_statement_in(stmt, &mut module_env)?;
+                }
+            }
+            // a module given as its definitions: its functions, then its values in the order it lists them
+            None => {
+                for (name, func) in &module.export.functions {
+                    module_env.insert(name.clone(), PhsValue::Function(func.clone()));
+                }
+                for (name, expr) in &module.export.symbols {
+                    let value = self.eval_expr(expr, &module_env)?;
+                    module_env.insert(name.clone(), value);
+                }
+            }
+        }
+        let scope = crate::value::ModuleScope::new(path, module_env);
+        self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), (module.clone(), scope.clone()));
+        Ok(scope)
     }
 
     /// Installs the requested (possibly aliased) subset of `functions` into

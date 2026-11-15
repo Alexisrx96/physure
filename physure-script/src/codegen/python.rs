@@ -348,6 +348,7 @@ mod tests {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         };
 
         let prog = Program {

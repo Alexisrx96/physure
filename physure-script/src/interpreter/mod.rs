@@ -76,6 +76,10 @@ pub struct PhsInterpreter {
     /// function draws from the stream of the interpreter it came from). An evaluation already inside a unit (an
     /// explicit `with_seed`, `phs eval`, a `phs serve` request) uses that one instead and leaves this one alone.
     pub(crate) stream: Arc<Mutex<Option<physure_core::uncertainty::EvaluationStream>>>,
+    /// Each module imported so far, by its path: what it was and the environment it left. A module is run once, so
+    /// every import of it takes the same values (the same measurements); one whose source changed since is run
+    /// again. Shared by clones.
+    pub(crate) modules: Arc<Mutex<HashMap<String, (crate::resolver::ModuleSource, crate::value::ModuleScope)>>>,
 }
 
 impl Default for PhsInterpreter {
@@ -100,6 +104,7 @@ impl PhsInterpreter {
             breakpoints: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             step_mode: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(None)),
+            modules: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

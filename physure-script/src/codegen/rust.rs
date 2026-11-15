@@ -496,6 +496,7 @@ mod tests {
                 body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
+                scope: None,
             })],
             lines: vec![],
         };
@@ -737,6 +738,7 @@ mod tests {
             body_lines: vec![],
             decorators: vec![],
             doc: None,
+            scope: None,
         };
         let shim = RustTranspiler.generate_export_shim(&node).unwrap();
         assert!(shim.contains("pub fn kinetic_energy_impl(m: Quantity, v: Quantity) -> Quantity"));
@@ -799,6 +801,7 @@ mod tests {
                 },
             ],
             doc: None,
+            scope: None,
         };
         let shim = RustTranspiler.generate_export_shim(&node).unwrap();
         assert!(shim.contains("pub struct KineticEnergyResult"));

@@ -1,16 +1,66 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::ast::{Expr, FunctionDefNode, Statement};
+use crate::ast::{Expr, FunctionDefNode, Program, Statement};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum ModuleResolutionError {
     NotFound(String),
     ParseError(String),
     Collision(String),
+    /// `export name` in `module`, which defines no `name`.
+    UndefinedExport { module: String, name: String },
+}
+
+impl std::fmt::Display for ModuleResolutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(path) => write!(f, "no module '{path}'"),
+            Self::ParseError(message) => write!(f, "{message}"),
+            Self::Collision(name) => write!(f, "'{name}' is defined twice"),
+            Self::UndefinedExport { module, name } => {
+                write!(f, "module '{module}' exports '{name}', which it does not define")
+            }
+        }
+    }
 }
 
 pub trait ModuleResolver: Send + Sync {
     fn resolve(&self, path: &str) -> Result<ModuleExport, ModuleResolutionError>;
+
+    /// The module at `path` as the interpreter runs it: by default the definitions `resolve` gives, without a
+    /// program of its own.
+    fn load(&self, path: &str) -> Result<ModuleSource, ModuleResolutionError> {
+        Ok(ModuleSource { export: self.resolve(path)?, program: None })
+    }
+}
+
+/// A module as the interpreter runs it: once, in an environment of its own where nothing of the importer is visible.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleSource {
+    /// The names an importer may take from the module.
+    pub export: ModuleExport,
+    /// The module's own program, when it has one (a `.phs` file): its top-level definitions, imports and loops run
+    /// in order, and an exported name is the value the program leaves under the name it exports. `None` for a module
+    /// given as its definitions alone, whose functions and then values (in the order of `export.symbols`) are what
+    /// runs.
+    pub program: Option<Program>,
+}
+
+impl ModuleSource {
+    /// The name inside the module of what it exports as `exported` (`export p as P` exports `p` as `P`).
+    pub fn internal_name<'a>(&'a self, exported: &'a str) -> &'a str {
+        let renamed = self.program.iter().flat_map(|program| &program.statements).find_map(|stmt| match stmt {
+            Statement::Export(node) if node.export_name == exported => Some(node.symbol.as_str()),
+            _ => None,
+        });
+        renamed.unwrap_or(exported)
+    }
+
+    /// Whether `stmt`, a top-level statement of the module's program, runs when the module is imported: its
+    /// definitions, imports and loops do; an expression shown, a `return` and an `export` do not.
+    pub fn runs(stmt: &Statement) -> bool {
+        matches!(stmt, Statement::Assignment(_) | Statement::FunctionDef(_) | Statement::Import(_) | Statement::While { .. })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,39 +138,44 @@ impl Default for FsModuleResolver {
 
 impl ModuleResolver for FsModuleResolver {
     fn resolve(&self, path: &str) -> Result<ModuleExport, ModuleResolutionError> {
+        self.load(path).map(|module| module.export)
+    }
+
+    fn load(&self, path: &str) -> Result<ModuleSource, ModuleResolutionError> {
         let rel_path = path.replace('.', "/") + ".phs";
         let file_path = self.base_dir.join(rel_path);
         let source = std::fs::read_to_string(&file_path)
             .map_err(|_| ModuleResolutionError::NotFound(path.to_string()))?;
         let program = crate::parser::parse_phs(&source)
-            .map_err(|e| ModuleResolutionError::ParseError(format!("{:?}", e)))?;
+            .map_err(|e| ModuleResolutionError::ParseError(format!("module '{path}' cannot be read: {e}")))?;
 
         let mut module = ModuleExport { symbols: Vec::new(), functions: HashMap::new() };
         let mut exports = Vec::new();
-        for stmt in program.statements {
+        for stmt in &program.statements {
             match stmt {
-                Statement::Assignment(node) => module.define(node.name, node.value),
-                Statement::FunctionDef(node) => { module.functions.insert(node.name.clone(), node); }
+                Statement::Assignment(node) => module.define(node.name.clone(), node.value.clone()),
+                Statement::FunctionDef(node) => { module.functions.insert(node.name.clone(), node.clone()); }
                 Statement::Export(node) => exports.push(node),
                 _ => {}
             }
         }
 
-        if exports.is_empty() {
-            return Ok(module);
-        }
-
-        let mut export = ModuleExport { symbols: Vec::new(), functions: HashMap::new() };
-        for node in exports {
-            if let Some(expr) = module.symbol(&node.symbol) {
-                export.define(node.export_name, expr.clone());
-            } else if let Some(func) = module.functions.get(&node.symbol) {
-                export.functions.insert(node.export_name, func.clone());
-            } else {
-                return Err(ModuleResolutionError::NotFound(node.symbol));
+        let export = if exports.is_empty() {
+            module
+        } else {
+            let mut export = ModuleExport { symbols: Vec::new(), functions: HashMap::new() };
+            for node in exports {
+                if let Some(expr) = module.symbol(&node.symbol) {
+                    export.define(node.export_name.clone(), expr.clone());
+                } else if let Some(func) = module.functions.get(&node.symbol) {
+                    export.functions.insert(node.export_name.clone(), func.clone());
+                } else {
+                    return Err(ModuleResolutionError::UndefinedExport { module: path.to_string(), name: node.symbol.clone() });
+                }
             }
-        }
-        Ok(export)
+            export
+        };
+        Ok(ModuleSource { export, program: Some(program) })
     }
 }
 

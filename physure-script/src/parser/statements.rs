@@ -173,6 +173,7 @@ fn parse_function_def(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Statem
         body_lines,
         decorators: Vec::new(),
         doc: None,
+        scope: None,
     }))
 }
 

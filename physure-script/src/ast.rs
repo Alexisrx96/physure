@@ -74,6 +74,11 @@ pub struct FunctionDefNode {
     /// and one leading space stripped per line. `None` if the function has no doc comment.
     #[serde(default)]
     pub doc: Option<String>,
+    /// What the body sees besides the parameters: `None` for a function of the program itself (it sees the names of
+    /// whoever calls it), the environment of its module for a function imported from one. Never written by the
+    /// parser and never serialized: it exists only once a module has run.
+    #[serde(skip)]
+    pub scope: Option<crate::value::ModuleScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,6 +236,7 @@ mod tests {
                 args: vec![],
             }],
             doc: None,
+            scope: None,
         };
         assert_eq!(node.decorators.len(), 1);
         assert_eq!(node.decorators[0].name, "stable");

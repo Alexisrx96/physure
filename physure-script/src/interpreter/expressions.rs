@@ -447,6 +447,7 @@ impl PhsInterpreter {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         }))
     }
 
@@ -571,7 +572,8 @@ impl PhsInterpreter {
         let diff_node = node.diff_node_n(var_name, order)?;
 
         if let Some(point @ (PhsValue::Number(_) | PhsValue::Quantity(_))) = arg_vals.first() {
-            let mut local_env = env.clone();
+            // the derivative reads the names the function reads: its module's, for an imported one
+            let mut local_env = func.scope.as_ref().map_or_else(|| env.clone(), |scope| (*scope.env).clone());
             local_env.insert(var_name.clone(), point.clone());
             let expr_node = crate::parser::parse_phs(&diff_node.to_phs_string())?;
             if let Some(Statement::Expr(e)) = expr_node.statements.first() {
@@ -609,7 +611,12 @@ impl PhsInterpreter {
         self.check_budget()?;
         let _depth = crate::limits::CallDepth::enter(self.limits.max_call_depth).map_err(PhysureError::Generic)?;
         let implicit_units = func.decorators.iter().any(|d| d.name == "implicit_units");
-        let mut local_env = env.clone();
+        // the body sees its parameters and the names of its module, for a function imported from one, or else those
+        // of the caller
+        let (mut local_env, arg_vals) = match &func.scope {
+            Some(scope) => ((*scope.env).clone(), close_over_caller(arg_vals, env)),
+            None => (env.clone(), arg_vals),
+        };
         for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {
             let bound_val = self.bind_param_value(&func.name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val, implicit_units)?;
             local_env.insert(param_name.clone(), bound_val);
@@ -654,7 +661,11 @@ impl PhsInterpreter {
         }
 
         self.check_ensures(func, &local_env, &last_val)?;
-        Ok(last_val)
+        // a function of the module it returns keeps seeing the module
+        Ok(match &func.scope {
+            Some(scope) => scope.close_over(last_val),
+            None => last_val,
+        })
     }
 
     /// Evaluates every `@requires` condition against the already-bound parameters,
@@ -795,4 +806,14 @@ impl PhsInterpreter {
         }
     }
 
+}
+
+/// The arguments of a call of a function of a module: a function among them that sees whoever calls it is made to see
+/// `caller_env`, the names of the caller that handed it over, and not the module's.
+fn close_over_caller(arg_vals: Vec<PhsValue>, caller_env: &HashMap<String, PhsValue>) -> Vec<PhsValue> {
+    if !arg_vals.iter().any(|v| matches!(v, PhsValue::Function(f) if f.scope.is_none())) {
+        return arg_vals;
+    }
+    let caller = crate::value::ModuleScope::new("the caller", caller_env.clone());
+    arg_vals.into_iter().map(|v| caller.close_over(v)).collect()
 }

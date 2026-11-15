@@ -339,6 +339,7 @@ mod tests {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         });
         
         let result = transpiler.generate_statement(&func, &mut HashSet::new(), &mut HashSet::new()).unwrap();

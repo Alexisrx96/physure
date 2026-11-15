@@ -9,7 +9,8 @@
 //! What a symbolic expression cannot carry is refused, naming it, never dropped: a recursive function, a wrong
 //! number of arguments, a parameter with a declared unit (which converts and checks its argument), a decorator (whose
 //! check would not run), an uncertain literal, a body of more than one expression, and the parts of the language that
-//! are not algebra (comparisons, conditionals, strings, vectors, conversions, ranges, loops).
+//! are not algebra (comparisons, conditionals, strings, vectors, conversions, ranges, loops), and a name of the module
+//! an imported function comes from (the expression would read it where it is evaluated, not in the module).
 
 use std::collections::HashMap;
 
@@ -90,6 +91,7 @@ impl Inliner<'_> {
         }
         let func = self.functions[name];
         check_inlinable(name, func, arguments.len())?;
+        check_reads_no_module_name(name, func)?;
         let body = match func.body_stmts.as_slice() {
             [Statement::Expr(e)] | [Statement::Return(e)] => e,
             [_] => {
@@ -200,6 +202,45 @@ fn check_inlinable(name: &str, func: &FunctionDefNode, given: usize) -> PhysureR
         )));
     }
     Ok(())
+}
+
+/// Refuses an imported `func` whose body names something of its module (a value or a function), which the inlined
+/// text would look up where the expression is evaluated instead.
+fn check_reads_no_module_name(name: &str, func: &FunctionDefNode) -> PhysureResult<()> {
+    let Some(scope) = &func.scope else { return Ok(()) };
+    let mut used = Vec::new();
+    for stmt in &func.body_stmts {
+        if let Statement::Expr(e) | Statement::Return(e) = stmt {
+            names_in(e, &mut used);
+        }
+    }
+    match used.into_iter().find(|n| !func.params.contains(n) && scope.get(n).is_some()) {
+        Some(used) => Err(refusal(format!(
+            "'{name}' cannot be inlined into a symbolic expression: it uses '{used}' of {}, which the expression would              read where it is evaluated instead",
+            if scope.module() == "the caller" { "the caller".to_string() } else { format!("the module {}", scope.module()) }
+        ))),
+        None => Ok(()),
+    }
+}
+
+/// Every name `e` reads: its identifiers and the functions it calls.
+fn names_in(e: &Expr, out: &mut Vec<String>) {
+    match e {
+        Expr::Identifier(name) => out.push(name.clone()),
+        Expr::BinaryOp { left, right, .. } => {
+            names_in(left, out);
+            names_in(right, out);
+        }
+        Expr::FunctionCall { name, args, kwargs } => {
+            out.push(name.clone());
+            args.iter().chain(kwargs.iter().map(|(_, a)| a)).for_each(|a| names_in(a, out));
+        }
+        Expr::ForExpr { iterable, body, .. } => {
+            names_in(iterable, out);
+            names_in(body, out);
+        }
+        Expr::Quantity(_) | Expr::Str(_) | Expr::Bool(_) => {}
+    }
 }
 
 /// What a call the parser builds for a part of the language that is not algebra stands for.

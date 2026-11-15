@@ -791,6 +791,7 @@ r3 = circuito_abierto(5 V, 2 A)
                 body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
+                scope: None,
             }),
             Statement::Assignment(AssignmentNode {
                 name: "m".to_string(),

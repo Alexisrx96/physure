@@ -759,6 +759,7 @@ fn rewrite_equation_calls(
                         body_lines: vec![],
                         decorators: Vec::new(),
                         doc: None,
+                        scope: None,
                     });
                     signatures.insert(name.clone(), kwarg_names.clone());
                 }
