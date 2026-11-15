@@ -84,15 +84,38 @@ fn a_dof_can_be_declared_once_and_the_same_value_again() {
     assert!(declare_dof(id, f64::INFINITY).is_err());
 }
 
+/// Infinity is a declaration like any other: recorded, so a later different value is refused, as `9` then `12` is.
+/// It used to be dropped (only a finite value was stored), so declaring `∞` and then `3` passed the conflict check
+/// and changed what an earlier result had reported (found in the Phase 4b review; this test was red first). It must
+/// also be told apart from no declaration at all, once a configuration can give undeclared sources a finite default.
 #[test]
-fn infinity_may_be_declared_for_a_source_without_a_dof_and_changes_nothing() {
+fn a_declared_infinity_is_recorded_and_another_value_after_it_is_refused() {
     let lineage = Lineage::measured(1.0);
     let id = lineage.terms()[0].0;
     declare_dof(id, f64::INFINITY).unwrap();
     assert_eq!(dof_of(id), f64::INFINITY);
-    // so a finite value can still be declared later: infinity was never recorded
-    declare_dof(id, 3.0).unwrap();
-    assert_eq!(dof_of(id), 3.0);
+    declare_dof(id, f64::INFINITY).unwrap();
+    let error = declare_dof(id, 3.0).unwrap_err().to_string();
+    assert!(error.contains("already has inf"), "{error}");
+    assert_eq!(dof_of(id), f64::INFINITY);
+    assert_eq!(lineage.effective_dof(), f64::INFINITY);
+    assert_eq!(lineage.declared_dofs(), vec![(id, f64::INFINITY)], "a serialized lineage carries the declaration");
+    // an undeclared source is not listed: nothing was declared for it
+    let undeclared = Lineage::measured(1.0);
+    assert_eq!(undeclared.declared_dofs(), vec![]);
+}
+
+/// A declared infinity among finite sources adds to the uncertainty and nothing to the denominator: the same as an
+/// undeclared one under the compiled default, bit for bit.
+#[test]
+fn a_declared_infinity_combines_like_an_undeclared_source() {
+    let declared = Lineage::measured(4.0);
+    declare_dof(declared.terms()[0].0, f64::INFINITY).unwrap();
+    let a = source(3.0, 4.0);
+    let with_declared = Lineage::combine(&a, 1.0, &declared, 1.0).effective_dof();
+    let with_undeclared = Lineage::combine(&a, 1.0, &Lineage::measured(4.0), 1.0).effective_dof();
+    assert_eq!(with_declared.to_bits(), with_undeclared.to_bits());
+    assert!(close(with_declared, 625.0 / (81.0 / 4.0)));
 }
 
 #[test]

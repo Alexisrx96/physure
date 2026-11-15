@@ -14,8 +14,10 @@
 //! not change, and a source that declares nothing has infinitely many degrees of freedom, which is what
 //! the Guide assumes for an uncertainty known exactly (a Type B estimate with a negligible uncertainty).
 //!
-//! The table only grows: ids are never reused, so an entry cannot come to describe another source, and
-//! only a source that declares a finite value is stored.
+//! The table only grows: ids are never reused, so an entry cannot come to describe another source. Every
+//! declaration is stored, `+∞` included: a declared infinity must stay distinguishable from no declaration
+//! at all (it is refused to change, like any declared value, and the degrees of freedom of a source that
+//! declared nothing are a setting, not necessarily infinite).
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -47,9 +49,8 @@ pub fn declare_dof(id: u32, nu: f64) -> PhysureResult<()> {
         ))),
         Some(_) => Ok(()),
         None => {
-            if nu.is_finite() {
-                table.insert(id, nu);
-            }
+            // `+∞` too: dropping it let a later finite value through the check above
+            table.insert(id, nu);
             Ok(())
         }
     }
@@ -84,12 +85,10 @@ impl Lineage {
     }
 
     /// The degrees of freedom declared for the sources of this lineage, `(source id, nu)`, for those that
-    /// have a finite number: what a serialized lineage must carry so that it can be rebuilt elsewhere.
+    /// declared any (`+∞` included): what a serialized lineage must carry so that it can be rebuilt elsewhere.
     pub fn declared_dofs(&self) -> Vec<(u32, f64)> {
-        self.terms()
-            .iter()
-            .filter_map(|&(id, _)| Some((id, dof_of(id))).filter(|(_, nu)| nu.is_finite()))
-            .collect()
+        let table = table().read().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.terms().iter().filter_map(|&(id, _)| table.get(&id).map(|&nu| (id, nu))).collect()
     }
 
     /// The effective degrees of freedom of the value this lineage describes (Welch–Satterthwaite).
@@ -107,7 +106,8 @@ impl Lineage {
         let denominator: f64 = terms
             .iter()
             .filter_map(|&(id, c)| {
-                let nu = table.get(&id).copied()?;
+                // an infinite one contributes nothing (`share² / ∞` is zero): skipped, so the sum keeps its bits
+                let nu = table.get(&id).copied().filter(|nu| nu.is_finite())?;
                 let share = c * c / variance;
                 Some(share * share / nu)
             })
