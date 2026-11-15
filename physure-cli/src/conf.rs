@@ -673,7 +673,7 @@ fn history(args: &ConfArgs) -> Outcome {
 type Listing = Vec<(Entry, String)>;
 
 /// The sections a `show` of the catalog groups several kinds under: the kind is shown with the key there.
-const POOLED_SECTIONS: [&str; 3] = ["units", "atomic_weights", "settings"];
+const POOLED_SECTIONS: [&str; 4] = ["units", "atomic_weights", "thermochemistry", "settings"];
 
 /// `phs conf show [SELECTOR] [--origin]`: the catalog in force. Unlike the other commands it needs the configuration
 /// in force to be usable (decision 2 of the Phase 2 plan), so a broken file is its exit code (1, 2 or 3).

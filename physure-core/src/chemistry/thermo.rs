@@ -1,4 +1,5 @@
-//! Kinetics and thermodynamics: Arrhenius, Clausius-Clapeyron, Gibbs.
+//! Kinetics and thermodynamics: Arrhenius, Clausius-Clapeyron, Gibbs, and the standard enthalpies of formation and
+//! entropies, which are catalog data (`[Thermochemistry:<edition>]`, `docs/thermochemistry.md`).
 //!
 //! They work on `Quantity`, so a dimension that does not fit is an error and the uncertainty of
 //! every input is in the result. The gas constant is the catalog's `molar_gas_constant` (exact
@@ -59,6 +60,28 @@ pub fn clausius_clapeyron(
         .mul(&inverse(t1)?.sub(&inverse(t2)?)?)?
         .convert_to(&RationalUnit::dimensionless())?;
     p1.mul(&exponent.exp()?)
+}
+
+/// The `(standard enthalpy of formation in kJ/mol, standard molar entropy in J/(mol*K))` of `species` in the
+/// catalog in scope: the edition `[Chemistry] thermochemistry` selects with your `[Thermochemistry]` definitions on
+/// it ([`UnitRegistry::thermochemistry_of`]). Unicode subscript digits read as digits.
+fn thermochemistry(species: &str) -> PhysureResult<(f64, f64)> {
+    let species = crate::chemistry::subscripts_to_ascii(species);
+    try_with_catalog_in_scope(|registry| registry.thermochemistry_of(&species).map(|(_, data)| data))?
+        .map_err(PhysureError::DomainError)
+}
+
+/// The standard enthalpy of formation of `species` at 298.15 K and 1 bar, in kJ/mol, from the catalog in scope.
+/// `H2O(l)` names a phase; `H2O` is the unique phase of water the data have, and an error naming the phases when
+/// they have several. A species the data lack is an error naming the edition. The data carry no uncertainty.
+pub fn standard_enthalpy(species: &str) -> PhysureResult<Quantity> {
+    Quantity::new(thermochemistry(species)?.0, "kJ/mol")
+}
+
+/// The standard molar entropy of `species` at 298.15 K and 1 bar, in J/(mol*K), from the catalog in scope; the
+/// species is read as by [`standard_enthalpy`].
+pub fn standard_entropy(species: &str) -> PhysureResult<Quantity> {
+    Quantity::new(thermochemistry(species)?.1, "J/(mol*K)")
 }
 
 /// Gibbs free energy: `dG = dH - T dS`.

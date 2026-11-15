@@ -890,6 +890,27 @@ molar_gas_constant = 8.0 J*mol^-1*K^-1
     assert_eq!(a.conf(&["diff", fb.to_str().unwrap()]).status.code(), Some(1));
 }
 
+#[test]
+fn diff_and_show_name_a_thermochemistry_definition() {
+    let a = Dir::new("diff_thermo_a");
+    let b = Dir::new("diff_thermo_b");
+    freeze_cli(&a, &[]);
+    b.write("physure.conf", "[Thermochemistry]\nH2O = -280.0, 70.0\n");
+    freeze_cli(&b, &[]);
+    let (fa, fb) = (a.path(FROZEN_FILE_NAME), b.path(FROZEN_FILE_NAME));
+    let output = a.conf(&["diff", fa.to_str().unwrap(), fb.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(out.contains("  thermochemistry:\n    + H2O = (-280.0, 70.0)"), "{out}");
+    assert!(out.contains("thermochemistry +1 -0 ~0"), "the summary: {out}");
+    let output = b.conf(&["show", "thermochemistry"]);
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    let out = stdout(&output);
+    assert!(out.contains("thermochemistry.H2O (thermochemistry) = (-280.0, 70.0)"), "{out}");
+    assert!(out.contains("thermochemistry.legacy-python-1/H2O(l) (thermochemistry_table) = (-285.8, 69.9)"), "{out}");
+    assert!(out.contains("thermochemistry.thermochemistry (thermochemistry_selection) = legacy-python-1"), "{out}");
+}
+
 /// Review finding 2: `[Environment]` is outside the seal and informational everywhere, so it is listed but does not
 /// make two configurations different.
 #[test]

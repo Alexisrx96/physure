@@ -189,6 +189,13 @@ CHEMISTRY_HEADER = """\
 # used, so the choice and the table may come from different texts in any order.
 # The table in use is reported by chemistry::atomic_weight_edition() (UnitRegistry::atomic_weight_edition()).
 atomic_weights = standard
+# Which edition of standard thermochemical data (enthalpies of formation, entropies; the sections
+# [Thermochemistry:<edition>] before the atomic weights) the chemistry module reads:
+#   thermochemistry = legacy-python-1   the edition this release ships
+#   thermochemistry = acme-1            a complete table of your own, defined in [Thermochemistry:acme-1]
+# There is no alias: the name is the edition. The names follow the rules above (`legacy-` is reserved too);
+# the choice is checked when the data are read. More: docs/thermochemistry.md.
+thermochemistry = legacy-python-1
 """
 
 

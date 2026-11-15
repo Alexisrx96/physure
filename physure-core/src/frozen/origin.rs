@@ -42,13 +42,15 @@ const UNIT_KINDS: [&str; 7] = ["unit", "base_unit", "derived_unit", "alias", "un
 
 /// The `section.key` an entry is shown under: the units and their kinds (`unit`, `base_unit`, `derived_unit`, `alias`,
 /// `unit_meta`, `unit_names`, `no_prefix`) under `units`, `constant` under `constants`, `atomic_weight*` under
-/// `atomic_weights`, `setting*` under `settings`, `category` under `categories`, each other kind under its own name.
-/// The key is the entry's name (`edition/symbol` for the tables of atomic weights).
+/// `atomic_weights`, `thermochemistry*` under `thermochemistry`, `setting*` under `settings`, `category` under
+/// `categories`, each other kind under its own name. The key is the entry's name (`edition/symbol` for the tables of
+/// atomic weights, `edition/species` for the thermochemistry tables).
 pub fn section_and_key(entry: &Entry) -> (String, String) {
     let section = match entry.kind {
         kind if UNIT_KINDS.contains(&kind) => "units",
         "constant" => "constants",
         kind if kind.starts_with("atomic_weight") => "atomic_weights",
+        kind if kind.starts_with("thermochemistry") => "thermochemistry",
         kind if kind.starts_with("setting") => "settings",
         "category" => "categories",
         kind => kind,
@@ -92,10 +94,18 @@ fn declared(text: &str) -> HashSet<(String, String)> {
             "Constants" => &["constants"],
             "Settings" => &["settings"],
             "Categories" => &["categories"],
-            "AtomicWeights" | "Chemistry" => &["atomic_weights"],
+            "AtomicWeights" => &["atomic_weights"],
+            "Thermochemistry" => &["thermochemistry"],
+            // the key of a selection is the name of its entry, in the section of its kind
+            "Chemistry" if key == "thermochemistry" => &["thermochemistry"],
+            "Chemistry" => &["atomic_weights"],
             "Prefixes" => &["prefix", "prefix_exact", "prefix_name"],
             table if table.starts_with("AtomicWeights:") => {
                 out.insert(("atomic_weights".to_string(), format!("{}/{key}", &table["AtomicWeights:".len()..])));
+                continue;
+            }
+            table if table.starts_with("Thermochemistry:") => {
+                out.insert(("thermochemistry".to_string(), format!("{}/{key}", &table["Thermochemistry:".len()..])));
                 continue;
             }
             _ => &[],
@@ -159,6 +169,26 @@ mod tests {
             assert!(seen.contains(&(section.to_string(), key.to_string())), "{section}.{key}: {seen:?}");
         }
         assert_eq!(seen.len(), 7, "{seen:?}");
+    }
+
+    #[test]
+    fn declared_thermochemistry_names_are_those_of_its_entries() {
+        let text = "[Thermochemistry:acme-1]\nH2O(l) = -1.0, 1.0\n[Thermochemistry]\nH2O = -2.0, 2.0\n[Chemistry]\nthermochemistry = acme-1\natomic_weights = standard\n";
+        let seen = declared(text);
+        let expected: HashSet<(String, String)> = [
+            ("thermochemistry", "acme-1/H2O(l)"),
+            ("thermochemistry", "H2O"),
+            ("thermochemistry", "thermochemistry"),
+            ("atomic_weights", "atomic_weights"),
+        ]
+        .iter()
+        .map(|(s, k)| (s.to_string(), k.to_string()))
+        .collect();
+        assert_eq!(seen, expected);
+        for (kind, name) in [("thermochemistry", "H2O"), ("thermochemistry_table", "acme-1/H2O(l)"), ("thermochemistry_selection", "thermochemistry")] {
+            let entry = Entry { kind, name: name.into(), value: String::new() };
+            assert_eq!(section_and_key(&entry), ("thermochemistry".to_string(), name.to_string()));
+        }
     }
 
     #[test]

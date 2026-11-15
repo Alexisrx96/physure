@@ -619,8 +619,26 @@ pub fn unit_constant_disagreement(name: &str, registry: &UnitRegistry) -> Option
 
 /// The sections that a conf has, spelt as they must be. A header that is one of these but for case or for
 /// whitespace is a problem, not an unknown section: see [`misspelt_section`].
-const SECTION_NAMES: [&str; 9] =
-    ["Settings", "Dimensions", "Prefixes", "Units", "Constants", "Categories", "Compatibility", "Chemistry", "AtomicWeights"];
+const SECTION_NAMES: [&str; 10] = [
+    "Settings",
+    "Dimensions",
+    "Prefixes",
+    "Units",
+    "Constants",
+    "Categories",
+    "Compatibility",
+    "Chemistry",
+    "AtomicWeights",
+    "Thermochemistry",
+];
+
+/// The sections that hold a table by edition, `[<kind>:<edition>]`.
+const EDITION_KINDS: [&str; 2] = ["AtomicWeights", "Thermochemistry"];
+
+/// `(kind, edition)` of a header `[<kind>:<edition>]` of [`EDITION_KINDS`], spelt exactly.
+fn edition_section(header: &str) -> Option<(&'static str, &str)> {
+    EDITION_KINDS.iter().find_map(|kind| Some((*kind, header.strip_prefix(kind)?.strip_prefix(':')?)))
+}
 
 /// The right spelling of `header` (the text between the brackets) when it is a near miss of a known section:
 /// the same name once trimmed and compared without regard to case, but not spelt exactly so. `None` for the right
@@ -628,21 +646,24 @@ const SECTION_NAMES: [&str; 9] =
 fn misspelt_section(header: &str) -> Option<String> {
     let trimmed = header.trim();
     let right = match trimmed.split_once(':') {
-        Some((name, edition)) if name.trim().eq_ignore_ascii_case("AtomicWeights") => {
-            format!("AtomicWeights:{}", edition.trim())
+        Some((name, edition)) => {
+            let kind = EDITION_KINDS.iter().find(|kind| kind.eq_ignore_ascii_case(name.trim()))?;
+            format!("{kind}:{}", edition.trim())
         }
-        Some(_) => return None,
         None => SECTION_NAMES.iter().find(|name| name.eq_ignore_ascii_case(trimmed))?.to_string(),
     };
     (right != header).then_some(right)
 }
 
-/// The editions that this library ships are frozen (`docs/atomic_weights.md`, section 6), and the names that start
-/// like them are kept for the editions a later release may ship: a table of a user called `standard-2026` would
-/// be merged with the shipped one on the day a release adds it.
+/// The editions that this library ships are frozen (`docs/atomic_weights.md`, section 6; `docs/thermochemistry.md`),
+/// and the names that start like them are kept for the editions a later release may ship: a table of a user called
+/// `standard-2026` would be merged with the shipped one on the day a release adds it. One rule for every kind of
+/// edition: `standard-`, `abridged-` (the atomic weights) and `legacy-` (the thermochemical data) are reserved.
 fn is_reserved_edition_name(edition: &str) -> bool {
-    edition.starts_with("standard-") || edition.starts_with("abridged-")
+    RESERVED_EDITION_PREFIXES.iter().any(|prefix| edition.starts_with(prefix))
 }
+
+const RESERVED_EDITION_PREFIXES: [&str; 3] = ["standard-", "abridged-", "legacy-"];
 
 fn parse_conf(
     conf_str: &str,
@@ -667,6 +688,9 @@ fn parse_conf(
     let mut saw_periodic = false;
     let mut compatibility_rows: Vec<String> = Vec::new();
     let mut has_compatibility = false;
+    // (section, species) defined by this text in a thermochemistry section, in every reading: a species written twice
+    // in one section of one text is a problem, not a silent choice of one value
+    let mut thermochemistry_keys: HashSet<(String, String)> = HashSet::new();
 
     // Pass 1: Extract Prefixes, Constants, Dimensions, and Base Units
     for line in conf_str.lines() {
@@ -680,7 +704,7 @@ fn parse_conf(
             current_section = &line[1..line.len() - 1];
             if strict_sections && !is_conf_section(current_section) && misspelt_section(current_section).is_none() {
                 problems.push(format!(
-                    "[{current_section}]: not a section of a conf; the sections are [{}] and [AtomicWeights:<edition>]",
+                    "[{current_section}]: not a section of a conf; the sections are [{}], [AtomicWeights:<edition>] and [Thermochemistry:<edition>]",
                     SECTION_NAMES.join("], [")
                 ));
                 current_section = "";
@@ -696,16 +720,20 @@ fn parse_conf(
                 continue;
             }
             has_compatibility |= current_section == "Compatibility";
-            if let Some(edition) = current_section.strip_prefix("AtomicWeights:") {
+            if let Some((kind, edition)) = edition_section(current_section) {
+                let shipped = match kind {
+                    "AtomicWeights" => registry.atomic_weight_tables.contains_key(edition),
+                    _ => registry.thermochemistry_tables.contains_key(edition),
+                };
                 if !trusted && is_reserved_edition_name(edition) {
                     // one problem for the section, whose lines are not read
-                    problems.push(if registry.atomic_weight_tables.contains_key(edition) {
+                    problems.push(if shipped {
                         format!("[{current_section}]: '{edition}' is a shipped edition and is frozen; a text of yours cannot edit it, define a table under a name of your own")
                     } else {
-                        format!("[{current_section}]: names that start with `standard-` or `abridged-` are reserved for the editions of this library, present and future; choose another name for your table")
+                        format!("[{current_section}]: names that start with `standard-`, `abridged-` or `legacy-` are reserved for the editions of this library, present and future; choose another name for your table")
                     });
                     current_section = "";
-                } else if is_atomic_weight_edition_name(edition) && resolve_atomic_weight_edition(edition) != edition {
+                } else if kind == "AtomicWeights" && is_atomic_weight_edition_name(edition) && resolve_atomic_weight_edition(edition) != edition {
                     // a table called like an alias could never be selected: the alias would shadow it
                     problems.push(format!(
                         "[{current_section}]: '{edition}' is an alias of '{}' and cannot name a table; choose another name",
@@ -714,7 +742,11 @@ fn parse_conf(
                     current_section = "";
                 } else if is_atomic_weight_edition_name(edition) {
                     // the table exists as soon as its section does, even before its first line
-                    registry.atomic_weight_tables.entry(edition.to_string()).or_default();
+                    if kind == "AtomicWeights" {
+                        registry.atomic_weight_tables.entry(edition.to_string()).or_default();
+                    } else {
+                        registry.thermochemistry_tables.entry(edition.to_string()).or_default();
+                    }
                 } else {
                     problems.push(format!(
                         "[{current_section}]: {EDITION_NAME_RULE}, not '{edition}'"
@@ -770,9 +802,9 @@ fn parse_conf(
             }
             "AtomicWeights" => read_atomic_weight(line, &mut registry.atomic_weights, problems),
             "Chemistry" => read_chemistry(line, registry, problems),
-            table if table.starts_with("AtomicWeights:") => {
-                let edition = &table["AtomicWeights:".len()..];
-                read_atomic_weight(line, registry.atomic_weight_tables.entry(edition.to_string()).or_default(), problems);
+            "Thermochemistry" => {
+                let definitions = &mut registry.thermochemistry;
+                read_thermochemistry(line, current_section, definitions, false, &mut thermochemistry_keys, problems);
             }
             "Categories" => read_category(line, registry),
             "Compatibility" => {
@@ -783,7 +815,16 @@ fn parse_conf(
                 }
                 read_compatibility_line(line, &mut periodic_names, &mut saw_periodic, &mut compatibility_rows)
             }
-            _ => {}
+            table => match edition_section(table) {
+                Some(("AtomicWeights", edition)) => {
+                    read_atomic_weight(line, registry.atomic_weight_tables.entry(edition.to_string()).or_default(), problems);
+                }
+                Some((_, edition)) => {
+                    let table_of = registry.thermochemistry_tables.entry(edition.to_string()).or_default();
+                    read_thermochemistry(line, current_section, table_of, true, &mut thermochemistry_keys, problems);
+                }
+                None => {}
+            },
         }
     }
 
@@ -893,7 +934,7 @@ fn unread_unit_fields(line: &str, dim_to_base: &HashMap<String, String>) -> Opti
 
 /// Whether `header` (the text between the brackets) names a section of a conf, spelt exactly.
 fn is_conf_section(header: &str) -> bool {
-    SECTION_NAMES.contains(&header) || header.starts_with("AtomicWeights:")
+    SECTION_NAMES.contains(&header) || edition_section(header).is_some()
 }
 
 /// One line of `[Prefixes]`: `name = symbol, factor`.
@@ -1023,19 +1064,72 @@ const EDITION_NAME_RULE: &str =
 /// when it is used, not here, so the choice and the table may come from different texts in any order. Any other
 /// key, or an empty or ill-formed value, is a problem.
 fn read_chemistry(line: &str, registry: &mut UnitRegistry, problems: &mut Vec<String>) {
+    let edition = |value: &str| {
+        let value = value.trim();
+        if is_atomic_weight_edition_name(value) {
+            Ok(value.to_string())
+        } else {
+            Err(format!("'{value}' is not an edition name: {EDITION_NAME_RULE}"))
+        }
+    };
     let reading = match line.split_once('=') {
         Some((key, value)) if key.trim() == "atomic_weights" => {
-            let value = value.trim();
-            if is_atomic_weight_edition_name(value) {
-                Ok(value.to_string())
-            } else {
-                Err(format!("'{value}' is not an edition name: {EDITION_NAME_RULE}"))
-            }
+            edition(value).map(|selection| registry.atomic_weight_selection = selection)
         }
-        _ => Err("the only key of [Chemistry] is `atomic_weights = <edition or alias>`".to_string()),
+        Some((key, value)) if key.trim() == "thermochemistry" => {
+            edition(value).map(|selection| registry.thermochemistry_selection = selection)
+        }
+        _ => Err(
+            "the keys of [Chemistry] are `atomic_weights = <edition or alias>` and `thermochemistry = <edition>`".to_string(),
+        ),
     };
-    match reading {
-        Ok(selection) => registry.atomic_weight_selection = selection,
+    if let Err(why) = reading {
+        problems.push(format!("{line}: {why}"));
+    }
+}
+
+/// One line of a thermochemistry section, stored in `table`: `species = enthalpy, entropy`, the standard enthalpy of
+/// formation in kJ/mol and the standard molar entropy in J/(mol*K), at 298.15 K and 1 bar, two finite numbers. The
+/// species is a formula with its phase (`H2O(l)`, `Ca(OH)2(s)`; the phases are `l`, `g`, `s`, `cr`, `aq`,
+/// [`split_species`](crate::units::registry::split_species)). In a table `[Thermochemistry:<edition>]` the phase is
+/// required; in your definitions `[Thermochemistry]` it may be left out, and the species is then the unique phase of
+/// that formula in the selected edition, placed when the data are read
+/// ([`UnitRegistry::thermochemistry_table`]). A species written twice in one section of one text is a problem.
+fn read_thermochemistry(
+    line: &str,
+    section: &str,
+    table: &mut BTreeMap<String, (f64, f64)>,
+    phase_required: bool,
+    seen: &mut HashSet<(String, String)>,
+    problems: &mut Vec<String>,
+) {
+    let parsed = (|| -> Result<(String, (f64, f64)), String> {
+        let (key, values) = line.split_once('=').ok_or("expected `species = enthalpy, entropy`")?;
+        let key = key.trim();
+        let (formula, phase) = crate::units::registry::split_species(key)?;
+        if phase_required && phase.is_none() {
+            return Err(format!(
+                "a species of an edition is written with its phase: {formula}(l), {formula}(g), {formula}(s), {formula}(cr) or {formula}(aq)"
+            ));
+        }
+        let fields: Vec<&str> = values.split(',').map(str::trim).collect();
+        let [enthalpy, entropy] = fields.as_slice() else {
+            return Err("expected `species = enthalpy, entropy` (kJ/mol, J/(mol*K)): two numbers".to_string());
+        };
+        let number = |text: &str| match text.parse::<f64>() {
+            Ok(x) if x.is_finite() => Ok(x),
+            _ => Err(format!("'{text}' is not a finite number")),
+        };
+        let data = (number(enthalpy)?, number(entropy)?);
+        if !seen.insert((section.to_string(), key.to_string())) {
+            return Err(format!("'{key}' is defined a second time in [{section}] of this text; the first definition would be lost"));
+        }
+        Ok((key.to_string(), data))
+    })();
+    match parsed {
+        Ok((key, data)) => {
+            table.insert(key, data);
+        }
         Err(why) => problems.push(format!("{line}: {why}")),
     }
 }

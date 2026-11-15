@@ -36,4 +36,4 @@ pub use reaction::{balance, Reaction};
 
 pub mod thermo;
 
-pub use thermo::{arrhenius, clausius_clapeyron, gas_constant, gibbs_free_energy};
+pub use thermo::{arrhenius, clausius_clapeyron, gas_constant, gibbs_free_energy, standard_enthalpy, standard_entropy};

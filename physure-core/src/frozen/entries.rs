@@ -76,6 +76,9 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         atomic_weights,
         atomic_weight_tables,
         atomic_weight_selection,
+        thermochemistry,
+        thermochemistry_tables,
+        thermochemistry_selection,
     } = registry;
     let mut out = Vec::new();
     for (name, unit) in base_units {
@@ -147,6 +150,18 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         push(&mut out, "atomic_weight_edition", edition, table.len().to_string());
     }
     push(&mut out, "atomic_weight_selection", "atomic_weights", atomic_weight_selection);
+    // (standard enthalpy of formation in kJ/mol, standard molar entropy in J/(mol*K)); a definition under its key as
+    // written, a table entry as `edition/species(phase)`
+    for (species, data) in thermochemistry {
+        push(&mut out, "thermochemistry", species, format!("{data:?}"));
+    }
+    for (edition, table) in thermochemistry_tables {
+        for (species, data) in table {
+            push(&mut out, "thermochemistry_table", format!("{edition}/{species}"), format!("{data:?}"));
+        }
+        push(&mut out, "thermochemistry_edition", edition, table.len().to_string());
+    }
+    push(&mut out, "thermochemistry_selection", "thermochemistry", thermochemistry_selection);
     let EffectiveSettings {
         propagation_mode,
         angle_mode,
@@ -302,8 +317,11 @@ mod tests {
             ("atomic_weights", Box::new(|r| { r.atomic_weights.insert("H".into(), (1.0, 0.0)); })),
             ("atomic_weight_tables", Box::new(|r| { r.atomic_weight_tables.values_mut().next().unwrap().insert("Zz".into(), (1.0, 0.0)); })),
             ("atomic_weight_selection", Box::new(|r| r.atomic_weight_selection.push_str("-x"))),
+            ("thermochemistry", Box::new(|r| { r.thermochemistry.insert("H2O".into(), (-280.0, 70.0)); })),
+            ("thermochemistry_tables", Box::new(|r| { r.thermochemistry_tables.values_mut().next().unwrap().insert("Zz(g)".into(), (1.0, 0.0)); })),
+            ("thermochemistry_selection", Box::new(|r| r.thermochemistry_selection.push_str("-x"))),
         ];
-        assert_eq!(mutations.len(), 18, "a field was added to UnitRegistry: add its mutation");
+        assert_eq!(mutations.len(), 21, "a field was added to UnitRegistry: add its mutation");
         for (field, mutate) in mutations {
             let mut changed = registry.clone();
             mutate(&mut changed);
@@ -445,6 +463,27 @@ zzcat = [kg, s, m]
         let e = |value: &str| Entry { kind: "unit", name: "m".into(), value: value.into() };
         let seen = diff(&[e("1"), e("2")], &[e("2")]);
         assert_eq!(seen, vec![Change::Changed { kind: "unit", name: "m".into(), old: "1 | 2".into(), new: "2".into() }]);
+    }
+
+    #[test]
+    fn a_thermochemistry_definition_or_selection_is_a_named_difference() {
+        let build = |text: &str| {
+            let (mut registry, mut constants, mut collected) = shipped();
+            replay_source(&mut registry, &mut constants, &mut collected, text, false).unwrap();
+            entries(&registry, &constants, &collected)
+        };
+        let base = build("");
+        assert!(base.iter().any(|e| e.kind == "thermochemistry_table" && e.name == "legacy-python-1/H2O(l)" && e.value == "(-285.8, 69.9)"));
+        assert!(base.iter().any(|e| e.kind == "thermochemistry_edition" && e.name == "legacy-python-1" && e.value == "8"));
+        assert!(base.iter().any(|e| e.kind == "thermochemistry_selection" && e.name == "thermochemistry" && e.value == "legacy-python-1"));
+        let changed = diff(&base, &build("[Thermochemistry]\nH2O = -280.0, 70.0\n"));
+        assert_eq!(
+            changed,
+            vec![Change::Added(Entry { kind: "thermochemistry", name: "H2O".into(), value: "(-280.0, 70.0)".into() })]
+        );
+        let selected = diff(&base, &build("[Thermochemistry:mine-1]\nH2O(l) = -1.0, 1.0\n[Chemistry]\nthermochemistry = mine-1\n"));
+        assert!(selected.iter().any(|c| c.kind() == "thermochemistry_selection"), "{selected:?}");
+        assert!(selected.iter().any(|c| c.kind() == "thermochemistry_table" && c.name() == "mine-1/H2O(l)"), "{selected:?}");
     }
 
     #[test]

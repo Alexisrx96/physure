@@ -64,6 +64,15 @@ pub fn describe(registry: &UnitRegistry, constants: &HashMap<String, String>) ->
         }
     }
     lines.push(format!("atomic weight selection = {}", registry.atomic_weight_selection));
+    for (species, data) in &registry.thermochemistry {
+        lines.push(format!("your thermochemistry {species} = {data:?}"));
+    }
+    for (edition, table) in &registry.thermochemistry_tables {
+        for (species, data) in table {
+            lines.push(format!("thermochemistry {edition} {species} = {data:?}"));
+        }
+    }
+    lines.push(format!("thermochemistry selection = {}", registry.thermochemistry_selection));
     for (category, members) in &registry.categories {
         let mut members = members.clone();
         members.sort();

@@ -214,6 +214,10 @@ pub(crate) fn replay_file_with(
             )],
         ));
     }
+    // likewise the thermochemical data: a selected edition no source defines, or a definition that cannot be placed
+    if let Some(why) = registry.thermochemistry_problem() {
+        return Err(("the sources together".to_string(), vec![why]));
+    }
     Ok((registry, constants, collected))
 }
 
@@ -618,6 +622,34 @@ mod tests {
         // defined by a later source than the one that selects it: fine; an alias of a shipped edition: fine
         load(&write_file(&dir, &standard("[Chemistry]\natomic_weights = acme-2026-03\n[AtomicWeights:acme-2026-03]\nH = 1.0, 0"))).unwrap();
         load(&write_file(&dir, &standard("[Chemistry]\natomic_weights = abridged"))).unwrap();
+    }
+
+    #[test]
+    fn a_thermochemistry_selection_or_definition_the_sources_cannot_honour_is_refused() {
+        let dir = Dir::new();
+        for (overrides, expected) in [
+            ("[Chemistry]\nthermochemistry = acme-1", "acme-1"),
+            ("[Thermochemistry]\nXeF4 = -251.0, 316.0", "XeF4"),
+            ("[Thermochemistry]\nH2O = -280.0, 70.0\nH2O(l) = -281.0, 70.0", "H2O(l)"),
+            ("[Thermochemistry]\nH2O(l) = -280.0, abc", "abc"),
+            ("[Thermochemistry:legacy-python-1]\nH2O(l) = -280.0, 70.0", "frozen"),
+        ] {
+            let e = load(&write_file(&dir, &standard(overrides))).unwrap_err();
+            let LoadError::Replay { problems, .. } = &e else { panic!("{overrides}: {e:?}") };
+            assert!(problems.iter().any(|p| p.contains(expected)), "{overrides}: {problems:?}");
+        }
+        let catalog = load(&write_file(&dir, &standard("[Thermochemistry]\nH2O = -280.0, 70.0"))).unwrap();
+        assert_eq!(catalog.registry.thermochemistry["H2O"], (-280.0, 70.0));
+        load(&write_file(&dir, &standard("[Chemistry]\nthermochemistry = acme-1\n[Thermochemistry:acme-1]\nH2O(l) = -1.0, 1.0"))).unwrap();
+        // a file frozen before the data moved into the catalog has no selection and still loads
+        let start = DEFAULT_PHYSURE_CONF.find("[Thermochemistry:legacy-python-1]").unwrap();
+        let end = DEFAULT_PHYSURE_CONF.find("[AtomicWeights:standard-2024]").unwrap();
+        let before_the_move = format!("{}{}", &DEFAULT_PHYSURE_CONF[..start], &DEFAULT_PHYSURE_CONF[end..])
+            .replacen("\nthermochemistry = legacy-python-1", "\n", 1);
+        assert!(!before_the_move.lines().any(|l| l.starts_with("[Thermochemistry") || l.starts_with("thermochemistry")));
+        let old = frozen(&[("embedded", &before_the_move), ("overrides", "")], release_engine());
+        let catalog = load(&write_file(&dir, &old)).unwrap();
+        assert_eq!(catalog.registry.thermochemistry_selection, "");
     }
 
     #[test]

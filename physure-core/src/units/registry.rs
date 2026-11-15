@@ -109,6 +109,91 @@ pub struct UnitRegistry {
     /// It is resolved, and checked against the tables, when it is used, so the choice and the table may come from
     /// different texts in any order.
     pub atomic_weight_selection: String,
+    /// Your definitions from `[Thermochemistry]` (no suffix): species **as written** (`H2O` or `H2O(l)`) to
+    /// `(standard enthalpy of formation in kJ/mol, standard molar entropy in J/(mol*K))` at 298.15 K and 1 bar.
+    /// Empty in the shipped catalog. A species written without its phase is placed when the data are read, against
+    /// the selected edition (see [`UnitRegistry::thermochemistry_table`]).
+    pub thermochemistry: BTreeMap<String, (f64, f64)>,
+    /// The tables of standard thermochemical data by edition, from the sections `[Thermochemistry:<edition>]`, same
+    /// units, every species with its phase (`H2O(l)`). The shipped file defines `legacy-python-1`.
+    pub thermochemistry_tables: BTreeMap<String, BTreeMap<String, (f64, f64)>>,
+    /// What `[Chemistry] thermochemistry` selected: an edition name, or empty when no text selected one (a catalog
+    /// frozen before the data were catalog data). There are no aliases. Checked when the data are read.
+    pub thermochemistry_selection: String,
+}
+
+/// The phases a species of the thermochemical data is written with, as the trailing `(phase)` of its key: liquid,
+/// gas, solid, crystalline, aqueous.
+pub const THERMOCHEMISTRY_PHASES: [&str; 5] = ["l", "g", "s", "cr", "aq"];
+
+/// Whether `formula` is written as a formula: ASCII element symbols (an upper-case letter and at most one lower-case
+/// one), counts that do not start with `0`, and balanced, non-empty parentheses. The syntax only: the elements are
+/// not looked up (a catalog read in pieces may not have its atomic weights yet).
+fn is_formula_text(formula: &str) -> bool {
+    let bytes = formula.as_bytes();
+    if !bytes.first().is_some_and(|b| b.is_ascii_uppercase() || *b == b'(') {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' if bytes.get(i + 1) != Some(&b')') => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'A'..=b'Z' => i += 1 + usize::from(bytes.get(i + 1).is_some_and(u8::is_ascii_lowercase)),
+            b')' if depth > 0 => {
+                depth -= 1;
+                i += 1;
+            }
+            _ => return false,
+        }
+        // a count after an element or a group
+        if bytes.get(i) == Some(&b'0') {
+            return false;
+        }
+        i += bytes[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+    }
+    depth == 0
+}
+
+/// A species key of the thermochemical data as `(formula, phase)`: the trailing `(phase)` is read first, so that
+/// `Ca(OH)2(s)` is `Ca(OH)2` in the phase `s` (a formula parser would read `(s)` as a group). A trailing group of
+/// lower-case letters is a phase and must be one of [`THERMOCHEMISTRY_PHASES`]; the rest must be a formula.
+pub fn split_species(key: &str) -> Result<(&str, Option<&str>), String> {
+    let trailing = key.strip_suffix(')').and_then(|rest| rest.rfind('(').map(|at| (&rest[..at], &rest[at + 1..])));
+    let (formula, phase) = match trailing {
+        Some((formula, phase)) if phase.bytes().all(|b| b.is_ascii_lowercase()) => {
+            if !THERMOCHEMISTRY_PHASES.contains(&phase) {
+                return Err(format!(
+                    "'{key}': the phase is one of ({}), not '({phase})'",
+                    THERMOCHEMISTRY_PHASES.join("|")
+                ));
+            }
+            (formula, Some(phase))
+        }
+        _ => (key, None),
+    };
+    if !is_formula_text(formula) {
+        return Err(format!("'{key}' is not a species: a formula (`H2O`, `Ca(OH)2`) and an optional phase (`(l)`)"));
+    }
+    Ok((formula, phase))
+}
+
+/// `formula(phase)`, the key of a species in a table.
+fn species_key(formula: &str, phase: &str) -> String {
+    format!("{formula}({phase})")
+}
+
+/// The keys of `table` whose formula is `formula`, in key order.
+fn phases_of<'t>(table: &'t BTreeMap<String, (f64, f64)>, formula: &str) -> Vec<&'t str> {
+    table
+        .keys()
+        .filter(|key| split_species(key).is_ok_and(|(f, _)| f == formula))
+        .map(String::as_str)
+        .collect()
 }
 
 /// An alias of `[Chemistry] atomic_weights` and the edition it stands for in this release. **An alias moves when a
@@ -155,7 +240,93 @@ impl UnitRegistry {
             atomic_weights: HashMap::new(),
             atomic_weight_tables: BTreeMap::new(),
             atomic_weight_selection: "standard".to_string(),
+            thermochemistry: BTreeMap::new(),
+            thermochemistry_tables: BTreeMap::new(),
+            thermochemistry_selection: String::new(),
         }
+    }
+
+    /// The standard thermochemical data in force: the table of the edition `[Chemistry] thermochemistry` selects,
+    /// with your definitions of `[Thermochemistry]` placed on it and winning over it. A definition written with its
+    /// phase is that species; one written without a phase is the **unique** phase of that formula in the edition
+    /// (the same rule as a lookup, [`UnitRegistry::thermochemistry_of`]). An error, naming what is wrong, when no
+    /// edition is selected, when no text defines the selected one, when a definition without a phase names a
+    /// formula the edition has in no phase or in several, or when two definitions are one species.
+    pub fn thermochemistry_table(&self) -> Result<BTreeMap<String, (f64, f64)>, String> {
+        let edition = self.thermochemistry_selection.as_str();
+        if edition.is_empty() {
+            return Err("no edition of standard thermochemical data is selected: `[Chemistry] thermochemistry = <edition>` selects one".to_string());
+        }
+        let table = self.thermochemistry_tables.get(edition).ok_or_else(|| {
+            format!("the thermochemistry edition '{edition}' is selected by [Chemistry] thermochemistry but no [Thermochemistry:{edition}] section defines it")
+        })?;
+        let mut effective = table.clone();
+        let mut placed: BTreeMap<String, &str> = BTreeMap::new();
+        for (written, data) in &self.thermochemistry {
+            let (formula, phase) = split_species(written).map_err(|why| format!("[Thermochemistry] {why}"))?;
+            let key = match phase {
+                Some(phase) => species_key(formula, phase),
+                None => match phases_of(table, formula).as_slice() {
+                    [one] => one.to_string(),
+                    [] => {
+                        return Err(format!(
+                            "[Thermochemistry] {written}: edition '{edition}' has no {formula} in any phase; a species it does not have is written with its phase ({formula}(g), {formula}(l), ...)"
+                        ))
+                    }
+                    several => {
+                        return Err(format!(
+                            "[Thermochemistry] {written}: edition '{edition}' has {formula} in several phases ({}); write the one you mean",
+                            several.join(", ")
+                        ))
+                    }
+                },
+            };
+            if let Some(other) = placed.insert(key.clone(), written) {
+                return Err(format!("[Thermochemistry] {other} and {written} are both {key}; keep one"));
+            }
+            effective.insert(key, *data);
+        }
+        Ok(effective)
+    }
+
+    /// The species `species` names in the data in force ([`UnitRegistry::thermochemistry_table`]) and its
+    /// `(standard enthalpy of formation in kJ/mol, standard molar entropy in J/(mol*K))`. With a phase (`H2O(l)`)
+    /// it is that species; without one (`H2O`) it is the unique phase of that formula, and a formula present in
+    /// several phases is an error naming them. There is no alias table: the phase comes from the data.
+    pub fn thermochemistry_of(&self, species: &str) -> Result<(String, (f64, f64)), String> {
+        let table = self.thermochemistry_table()?;
+        let edition = &self.thermochemistry_selection;
+        let (formula, phase) = split_species(species)?;
+        let found = phases_of(&table, formula);
+        let key = match (phase, found.as_slice()) {
+            (Some(phase), _) => species_key(formula, phase),
+            (None, [one]) => one.to_string(),
+            (None, []) => return Err(format!("no standard thermochemical data for '{species}' in edition '{edition}'")),
+            (None, several) => {
+                return Err(format!(
+                    "'{species}' is in edition '{edition}' in several phases ({}); write the one you mean",
+                    several.join(", ")
+                ))
+            }
+        };
+        match table.get(&key) {
+            Some(data) => Ok((key, *data)),
+            None if found.is_empty() => Err(format!("no standard thermochemical data for '{species}' in edition '{edition}'")),
+            None => Err(format!(
+                "no standard thermochemical data for '{species}' in edition '{edition}', which has {}",
+                found.join(", ")
+            )),
+        }
+    }
+
+    /// Why the thermochemical data in force cannot be read, for a replay to refuse a catalog with: `None` when they
+    /// can, and when the catalog has neither a selection nor definitions (a catalog frozen before the data were
+    /// catalog data reads as it did).
+    pub fn thermochemistry_problem(&self) -> Option<String> {
+        if self.thermochemistry_selection.is_empty() && self.thermochemistry.is_empty() {
+            return None;
+        }
+        self.thermochemistry_table().err()
     }
 
     /// The edition that `[Chemistry] atomic_weights` selects, with an alias resolved (`standard` is
