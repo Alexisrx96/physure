@@ -154,6 +154,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
         max_loop_iterations,
         max_pipeline_steps,
         approx_rel_tol,
+        monte_carlo_samples,
         radian_grant,
         steradian_grant,
         ignored,
@@ -164,6 +165,7 @@ pub fn entries(registry: &UnitRegistry, constants: &HashMap<String, String>, set
     push(&mut out, "setting", "max_loop_iterations", max_loop_iterations.to_string());
     push(&mut out, "setting", "max_pipeline_steps", max_pipeline_steps.to_string());
     push(&mut out, "setting", "approx_rel_tol", format!("{approx_rel_tol:?}"));
+    push(&mut out, "setting", "monte_carlo_samples", monte_carlo_samples.to_string());
     push(&mut out, "setting", "radian_plain", radian_grant.to_string());
     push(&mut out, "setting", "steradian_plain", steradian_grant.to_string());
     for (key, value) in &ignored {
@@ -329,6 +331,30 @@ mod tests {
         let default = ProcessSettings::default();
         let explicit = ProcessSettings { settings: vec![Setting::ApproxRelTol(crate::settings::DEFAULT_APPROX_REL_TOL)], compatibility: None };
         assert_eq!(entries(&registry, &constants, &default), entries(&registry, &constants, &explicit));
+    }
+
+    /// `name` is a `setting` entry with `shown` for the shipped catalog; a file that sets `changed` is seen by `diff`,
+    /// and a file that writes the compiled default `default` has the entries of one that does not mention it.
+    fn assert_setting_entry(name: &str, shown: &str, changed: Setting, default: Setting) {
+        let (registry, constants, settings) = shipped();
+        let e = entries(&registry, &constants, &settings);
+        assert!(e.iter().any(|x| x.kind == "setting" && x.name == name && x.value == shown), "{name}: {e:?}");
+        let mut other = settings.clone();
+        other.settings.push(changed);
+        let seen = diff(&e, &entries(&registry, &constants, &other));
+        assert!(seen.iter().any(|c| c.kind() == "setting" && c.name() == name), "{seen:?}");
+        let explicit = ProcessSettings { settings: vec![default], compatibility: None };
+        assert_eq!(entries(&registry, &constants, &ProcessSettings::default()), entries(&registry, &constants, &explicit));
+    }
+
+    #[test]
+    fn monte_carlo_samples_is_an_entry_and_a_change_of_it_is_seen() {
+        assert_setting_entry(
+            "monte_carlo_samples",
+            "1000",
+            Setting::MonteCarloSamples(5000),
+            Setting::MonteCarloSamples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES),
+        );
     }
 
     #[test]

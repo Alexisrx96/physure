@@ -125,3 +125,34 @@ fn approx_uses_the_tolerance_of_the_frozen_file_and_the_library_one_without_it()
     assert!(holds("1 km ≈ 1.0009 km"), "the library's tolerance is back");
     assert_eq!(physure_core::settings::approx_rel_tol(), 1e-3);
 }
+
+/// `y = (10 +/- 1 m)^2` in Monte Carlo mode under seed 0, as `(mean, standard uncertainty, sample count)`.
+fn monte_carlo_square() -> (f64, f64, usize) {
+    let values = physure_core::uncertainty::with_seed(0, || eval_phs("y = (10 +/- 1 m)^2")).unwrap();
+    match values.into_iter().last() {
+        Some(PhsValue::Quantity(q)) => match &q.value {
+            physure_core::uncertainty::UncertaintyValue::MonteCarlo(mc) => (q.value.mean(), q.value.std_dev(), mc.samples.len()),
+            other => panic!("not Monte Carlo: {}", other.get_model_name()),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `[Settings] monte_carlo_samples` of a frozen file is the sample count of a Monte Carlo literal; a file that does
+/// not set it gives the bits of `phs eval --seed 0` before the setting existed (`100.77165846524241 ±
+/// 20.343001315331314`, 1000 samples).
+#[test]
+fn a_monte_carlo_literal_draws_the_sample_count_of_the_frozen_file() {
+    let dir = Dir::new("samples");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\npropagation_mode = monte_carlo\n")).unwrap();
+    reset_cache();
+    assert_eq!(monte_carlo_square(), (100.77165846524241, 20.343001315331314, 1000), "today's bits");
+    fs::write(dir.path.join(FROZEN_FILE_NAME), frozen("[Settings]\npropagation_mode = monte_carlo\nmonte_carlo_samples = 50\n")).unwrap();
+    reset_cache();
+    let (mean, u, count) = monte_carlo_square();
+    assert_eq!(count, 50);
+    assert_ne!((mean, u), (100.77165846524241, 20.343001315331314));
+    fs::remove_file(dir.path.join(FROZEN_FILE_NAME)).unwrap();
+    reset_cache();
+    assert_eq!(physure_core::settings::monte_carlo_samples(), 1000, "the library's count is back");
+}

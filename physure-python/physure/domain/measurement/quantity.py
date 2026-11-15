@@ -573,7 +573,8 @@ class Quantity(
         std_dev = getattr(uncertainty, "std_dev", uncertainty)
         if hasattr(std_dev, "std_dev"):
             std_dev = std_dev.std_dev
-        samples = mode_args.get("samples", 1000) if mode_args else 1000
+        # None: the core's `[Settings] monte_carlo_samples` decides (default 1000)
+        samples = mode_args.get("samples") if mode_args else None
         return RustCoreQuantity(
             float(value), r_unit, float(std_dev or 0.0), mode, samples
         )

@@ -1,0 +1,49 @@
+//! The thread-local settings a host or a witness opens on its thread reach the body of a parallel loop (rayon
+//! workers are other threads): `CallerScopes` carries each of them. Every test makes every loop parallel with
+//! `settings::scoped(0)` (at and above `parallel_threshold`) and runs the same program sequentially for comparison.
+
+use physure_core::uncertainty::{mode, PropagationMode, UncertaintyValue};
+use physure_script::interpreter::eval_phs;
+use physure_script::value::PhsValue;
+
+/// The elements of the vector the last statement of `source` gives.
+fn items(source: &str) -> Vec<PhsValue> {
+    match eval_phs(source).unwrap_or_else(|e| panic!("{source}: {e}")).into_iter().last() {
+        Some(PhsValue::Vector(items)) => items,
+        other => panic!("{source}: {other:?}"),
+    }
+}
+
+/// `source` with every loop parallel and with every loop sequential.
+fn both_ways<R>(f: impl Fn() -> R) -> (R, R) {
+    let parallel = {
+        let _parallel = physure_core::settings::scoped(0);
+        f()
+    };
+    let sequential = {
+        let _sequential = physure_core::settings::scoped(usize::MAX);
+        f()
+    };
+    (parallel, sequential)
+}
+
+#[test]
+fn a_scoped_monte_carlo_sample_count_reaches_a_parallel_loop() {
+    let _mode = mode::scoped(PropagationMode::MonteCarlo);
+    let _samples = physure_core::settings::scoped_monte_carlo_samples(37);
+    let counts = || -> Vec<usize> {
+        items("v = for i in 0..16 { 10 +/- 1 m }")
+            .into_iter()
+            .map(|item| match item {
+                PhsValue::Quantity(q) => match &q.value {
+                    UncertaintyValue::MonteCarlo(mc) => mc.samples.len(),
+                    other => panic!("not Monte Carlo: {}", other.get_model_name()),
+                },
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    let (parallel, sequential) = both_ways(counts);
+    assert_eq!(sequential, vec![37; 16]);
+    assert_eq!(parallel, vec![37; 16], "the caller's count must reach the rayon workers");
+}

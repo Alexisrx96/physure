@@ -6,7 +6,9 @@
 //! The propagation mode is a process-wide setting that a frozen file's `[Settings]` sets, so every `unc.*` case
 //! runs under a thread-local [`scoped`] mode of its own and never reads the process's: `correlated` for the
 //! first-order and the GUM cases, `uncorrelated` for `unc.sum_uncorrelated`, `monte_carlo` and `unscented` for the
-//! two cases named after them. The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
+//! two cases named after them. The other uncertainty settings a frozen file can change are pinned the same way, at
+//! their compiled defaults, for every `unc.*` case: the Monte Carlo sample count (`monte_carlo_samples = 1000`, the
+//! count `unc.montecarlo_seed_1` always drew). The `stat.*` cases read no setting. The units (`m`, `s`, `nm`) are read through the
 //! hooked catalog like every other case.
 //!
 //! # Monte Carlo
@@ -27,9 +29,11 @@ use crate::quantity::Quantity;
 use crate::uncertainty::mode::scoped;
 use crate::uncertainty::{with_seed, PropagationMode};
 
-/// Runs `f` with the propagation mode `mode` on this thread only.
+/// Runs `f` with the propagation mode `mode` on this thread only, and every other uncertainty setting at its
+/// compiled default (see the module documentation).
 fn under(mode: PropagationMode, f: impl FnOnce() -> CaseResult) -> CaseResult {
     let _mode = scoped(mode);
+    let _samples = crate::settings::scoped_monte_carlo_samples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES);
     f()
 }
 

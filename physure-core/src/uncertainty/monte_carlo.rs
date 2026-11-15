@@ -218,6 +218,36 @@ mod tests {
         assert!(one.std_dev().is_nan(), "one sample has no deviation to report, not a zero");
     }
 
+    fn sample_count(q: &crate::Quantity) -> usize {
+        match &q.value {
+            crate::uncertainty::UncertaintyValue::MonteCarlo(mc) => mc.samples.len(),
+            other => panic!("not Monte Carlo: {}", other.get_model_name()),
+        }
+    }
+
+    /// `[Settings] monte_carlo_samples` is the count of a Monte Carlo measurement that does not name one; a count
+    /// given explicitly wins. The compiled default is 1000, the count every such measurement drew before the
+    /// setting existed, and a seeded draw under it gives the bits it gave then.
+    #[test]
+    fn a_measurement_that_names_no_sample_count_draws_the_setting_in_force() {
+        let unit = crate::RationalUnit::dimensionless;
+        let draw = |samples| crate::Quantity::new_scalar(5.0, 0.1, unit(), Some("monte_carlo"), samples);
+        {
+            let _default = crate::settings::scoped_monte_carlo_samples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES);
+            assert_eq!(sample_count(&draw(None)), 1000);
+            let explicit = with_seed(9, || draw(Some(1000)));
+            let defaulted = with_seed(9, || draw(None));
+            assert_eq!(explicit.value.mean().to_bits(), defaulted.value.mean().to_bits());
+            assert_eq!(explicit.value.std_dev().to_bits(), defaulted.value.std_dev().to_bits());
+        }
+        let _seven = crate::settings::scoped_monte_carlo_samples(7);
+        assert_eq!(sample_count(&draw(None)), 7);
+        assert_eq!(sample_count(&draw(Some(12))), 12, "an explicit count wins");
+        let _mode = crate::uncertainty::mode::scoped(crate::uncertainty::PropagationMode::MonteCarlo);
+        let by_mode = crate::Quantity::new_scalar(5.0, 0.1, unit(), None, None);
+        assert_eq!(sample_count(&by_mode), 7, "a measurement made Monte Carlo by the propagation mode too");
+    }
+
     #[test]
     fn outside_a_scope_nothing_is_seeded_and_a_scope_leaves_no_trace() {
         with_seed(1, || ());

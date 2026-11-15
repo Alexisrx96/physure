@@ -1005,7 +1005,7 @@ fn build_backend(
         if let Ok(std_dev) = std_dev_obj.bind(py).extract::<f64>() {
             return Ok(match mode.as_deref() {
                 Some("monte_carlo") => UncertaintyValue::MonteCarlo(
-                    MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))
+                    MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or_else(::physure_core::settings::monte_carlo_samples))
                         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
                 ),
                 Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),

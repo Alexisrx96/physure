@@ -164,8 +164,56 @@ pub fn set_approx_rel_tol(rel: f64) -> f64 {
     f64::from_bits(APPROX_REL_TOL.swap(rel.to_bits(), Ordering::Relaxed))
 }
 
+/// How many samples a Monte Carlo measurement draws when it does not name a count, from `physure.conf`'s
+/// `[Settings] monte_carlo_samples`: the count every such measurement drew before the setting existed.
+pub(crate) const DEFAULT_MONTE_CARLO_SAMPLES: usize = 1_000;
+/// The fewest samples the setting accepts: the standard uncertainty is the sample standard deviation (JCGM 101:2008
+/// 7.6), which needs two.
+pub const MIN_MONTE_CARLO_SAMPLES: usize = 2;
+/// The most samples the setting accepts. Every Monte Carlo measurement allocates an array of this many `f64`s, so a
+/// file received from elsewhere (under `phs conf verify --run` or `phs serve`) could otherwise make each literal
+/// allocate without bound and the allocator abort the process, as `max_loop_iterations` documents: ten million is
+/// 80 MB per measurement.
+pub const MAX_MONTE_CARLO_SAMPLES: usize = 10_000_000;
+static MONTE_CARLO_SAMPLES: AtomicUsize = AtomicUsize::new(DEFAULT_MONTE_CARLO_SAMPLES);
+
+thread_local! {
+    static SAMPLES_OVERRIDE: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+/// The sample count of a Monte Carlo measurement that does not name one (`Quantity::new_scalar` with `samples:
+/// None`, every Monte Carlo literal of PHS, Python's `Q_` in Monte Carlo mode). A count given explicitly wins.
+///
+/// A [`scoped_monte_carlo_samples`] override on this thread (if set) takes precedence; otherwise, the process-wide
+/// value from [`set_monte_carlo_samples`] is returned.
+pub fn monte_carlo_samples() -> usize {
+    SAMPLES_OVERRIDE.with(Cell::get).unwrap_or_else(|| MONTE_CARLO_SAMPLES.load(Ordering::Relaxed))
+}
+
+/// Sets the process-wide sample count, returning the one it replaced. The conf readers validate it (from
+/// [`MIN_MONTE_CARLO_SAMPLES`] to [`MAX_MONTE_CARLO_SAMPLES`]); for a temporary change, use
+/// [`scoped_monte_carlo_samples`].
+pub fn set_monte_carlo_samples(n: usize) -> usize {
+    MONTE_CARLO_SAMPLES.swap(n, Ordering::Relaxed)
+}
+
+/// Overrides the sample count on this thread until the returned guard is dropped.
+pub fn scoped_monte_carlo_samples(n: usize) -> MonteCarloSamplesGuard {
+    MonteCarloSamplesGuard(SAMPLES_OVERRIDE.with(|slot| slot.replace(Some(n))))
+}
+
+/// Restores the sample count that was in force before its [`scoped_monte_carlo_samples`] call, including on unwind.
+pub struct MonteCarloSamplesGuard(Option<usize>);
+
+impl Drop for MonteCarloSamplesGuard {
+    fn drop(&mut self) {
+        SAMPLES_OVERRIDE.with(|slot| slot.set(self.0));
+    }
+}
+
 /// Puts every process-wide setting a conf can change back to the value compiled into the library: the three
-/// ceilings above, the `≈` tolerance, the propagation mode, the angle mode and the `[Compatibility]` grants. Activating a frozen
+/// ceilings above, the `≈` tolerance, the Monte Carlo sample count, the propagation mode, the angle mode and the
+/// `[Compatibility]` grants. Activating a frozen
 /// configuration calls it before applying the file's settings, so a setting the file does not mention takes its
 /// compiled default and never a value some earlier reading left behind. Thread-local overrides are not touched.
 pub(crate) fn reset_to_defaults() {
@@ -173,6 +221,7 @@ pub(crate) fn reset_to_defaults() {
     set_max_loop_iterations(DEFAULT_MAX_LOOP_ITERATIONS);
     set_max_pipeline_steps(DEFAULT_MAX_PIPELINE_STEPS);
     set_approx_rel_tol(DEFAULT_APPROX_REL_TOL);
+    set_monte_carlo_samples(DEFAULT_MONTE_CARLO_SAMPLES);
     crate::uncertainty::set_propagation_mode(crate::uncertainty::PropagationMode::default());
     crate::units::angle_mode::set_angle_mode(crate::units::angle_mode::AngleMode::default());
     crate::units::angle_mode::set_marker_grants(true, true);
@@ -272,6 +321,41 @@ mod tests {
         set_max_loop_iterations(iterations);
         set_max_pipeline_steps(steps);
         crate::uncertainty::set_propagation_mode(mode);
+    }
+
+    #[test]
+    fn set_monte_carlo_samples_returns_previous_and_updates() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = set_monte_carlo_samples(4321);
+        assert_eq!(monte_carlo_samples(), 4321);
+        assert_eq!(set_monte_carlo_samples(original), 4321);
+        assert_eq!(DEFAULT_MONTE_CARLO_SAMPLES, 1000);
+        assert_eq!((MIN_MONTE_CARLO_SAMPLES, MAX_MONTE_CARLO_SAMPLES), (2, 10_000_000));
+    }
+
+    #[test]
+    fn scoped_monte_carlo_samples_takes_precedence_and_restores_on_drop() {
+        let baseline = monte_carlo_samples();
+        {
+            let _guard = scoped_monte_carlo_samples(17);
+            assert_eq!(monte_carlo_samples(), 17);
+            {
+                let _inner = scoped_monte_carlo_samples(5);
+                assert_eq!(monte_carlo_samples(), 5);
+            }
+            assert_eq!(monte_carlo_samples(), 17);
+        }
+        assert_eq!(monte_carlo_samples(), baseline);
+    }
+
+    #[test]
+    fn reset_to_defaults_restores_monte_carlo_samples() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        let original = set_monte_carlo_samples(3);
+        reset_to_defaults();
+        assert_eq!(monte_carlo_samples(), DEFAULT_MONTE_CARLO_SAMPLES);
+        set_monte_carlo_samples(original);
     }
 
     #[test]

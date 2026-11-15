@@ -269,6 +269,9 @@ impl Quantity {
     /// no distribution to sample or to place sigma points on, and drawing a thousand
     /// identical samples for every plain number in a script is a cost with nothing behind it.
     ///
+    /// `samples: None` draws `[Settings] monte_carlo_samples` (default 1000, see
+    /// [`crate::settings::monte_carlo_samples`]).
+    ///
     /// **Panics** when `samples` is `Some(n)` with `n < 2` and the backend is Monte Carlo (see
     /// [`MonteCarloBackend::from_stats`]); a sample count that comes from a user goes through
     /// [`Quantity::try_new_scalar`], which returns the error instead.
@@ -290,7 +293,7 @@ impl Quantity {
             None => crate::uncertainty::propagation_mode().name(),
         };
         let value = match resolved {
-            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))?),
+            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or_else(crate::settings::monte_carlo_samples))?),
             "unscented"   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
             _             => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
         };

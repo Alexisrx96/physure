@@ -174,7 +174,8 @@ pub(crate) fn strip_unit_comment(text: &str) -> &str {
 /// which every rayon task opens again: a worker is another thread and sees none of them. Without this, a program
 /// evaluated inside `with_catalog` (every WASM and Java evaluation) read the embedded catalog in a loop of
 /// `parallel_threshold` items or more, and a scoped angle mode, propagation mode or loop ceiling did not reach the
-/// body either.
+/// body either. The same holds for the uncertainty settings a host or a witness pins on its thread (the Monte Carlo
+/// sample count, ...).
 ///
 /// Not carried: a `with_seed` scope (each task drawing the caller's sequence would make the draws of every item the
 /// same; a seeded evaluation is sequential, `Limits::sequential`), and the call depth and the stack floor of
@@ -187,6 +188,7 @@ pub(crate) struct CallerScopes<'a> {
     parallel_threshold: usize,
     max_loop_iterations: usize,
     max_pipeline_steps: usize,
+    monte_carlo_samples: usize,
 }
 
 impl CallerScopes<'_> {
@@ -200,6 +202,7 @@ impl CallerScopes<'_> {
                 parallel_threshold: physure_core::settings::parallel_threshold(),
                 max_loop_iterations: physure_core::settings::max_loop_iterations(),
                 max_pipeline_steps: physure_core::settings::max_pipeline_steps(),
+                monte_carlo_samples: physure_core::settings::monte_carlo_samples(),
             })
         })
     }
@@ -211,6 +214,7 @@ impl CallerScopes<'_> {
         let _threshold = physure_core::settings::scoped(self.parallel_threshold);
         let _loops = physure_core::settings::scoped_max_loop_iterations(self.max_loop_iterations);
         let _steps = physure_core::settings::scoped_max_pipeline_steps(self.max_pipeline_steps);
+        let _samples = physure_core::settings::scoped_monte_carlo_samples(self.monte_carlo_samples);
         physure_core::units::with_scoped_catalog(self.catalog, f)
     }
 }

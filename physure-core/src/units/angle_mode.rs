@@ -122,13 +122,15 @@ pub fn set_marker_grants(radian: bool, steradian: bool) {
     STERADIAN_READ_AS_ONE.store(steradian, Ordering::Relaxed);
 }
 
-/// Puts the process-wide mode and the grants back as they were when it was made, also on unwind. A test that
+/// Puts the process-wide mode, the grants and the Phase 4b settings (the Monte Carlo sample count, ...) back as they
+/// were when it was made, also on unwind. A test that
 /// changes either takes `crate::settings::TEST_LOCK` first and holds one of these for as long as it does.
 #[cfg(test)]
 pub(crate) struct RestoreProcessState {
     mode: AngleMode,
     radian: bool,
     steradian: bool,
+    monte_carlo_samples: usize,
 }
 
 #[cfg(test)]
@@ -138,6 +140,7 @@ impl RestoreProcessState {
             mode: AngleMode::from_u8(CONFIGURED.load(Ordering::Relaxed)),
             radian: marker_converts_to_plain("rad"),
             steradian: marker_converts_to_plain("sr"),
+            monte_carlo_samples: crate::settings::monte_carlo_samples(),
         }
     }
 }
@@ -147,6 +150,7 @@ impl Drop for RestoreProcessState {
     fn drop(&mut self) {
         set_angle_mode(self.mode);
         set_marker_grants(self.radian, self.steradian);
+        crate::settings::set_monte_carlo_samples(self.monte_carlo_samples);
     }
 }
 

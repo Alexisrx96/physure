@@ -187,6 +187,8 @@ pub enum Setting {
     MaxPipelineSteps(usize),
     /// The relative tolerance of PHS `≈`: finite and in `(0, 1)`.
     ApproxRelTol(f64),
+    /// The sample count of a Monte Carlo measurement that names none: from 2 to 10 000 000.
+    MonteCarloSamples(usize),
     /// A key of [`CORE_UNUSED_SETTINGS`], kept as written; applying it does nothing.
     Ignored { key: String, value: String },
 }
@@ -213,6 +215,9 @@ impl Setting {
             Setting::ApproxRelTol(rel) => {
                 crate::settings::set_approx_rel_tol(*rel);
             }
+            Setting::MonteCarloSamples(n) => {
+                crate::settings::set_monte_carlo_samples(*n);
+            }
             Setting::Ignored { .. } => {}
         }
     }
@@ -227,6 +232,7 @@ pub struct EffectiveSettings {
     pub max_loop_iterations: usize,
     pub max_pipeline_steps: usize,
     pub approx_rel_tol: f64,
+    pub monte_carlo_samples: usize,
     /// Whether a plain number may stand for a radian / a steradian (`[Compatibility]`).
     pub radian_grant: bool,
     pub steradian_grant: bool,
@@ -248,7 +254,8 @@ impl ProcessSettings {
     /// default if the file does not give it.
     pub fn effective(&self) -> EffectiveSettings {
         use crate::settings::{
-            DEFAULT_APPROX_REL_TOL, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_PARALLEL_THRESHOLD,
+            DEFAULT_APPROX_REL_TOL, DEFAULT_MAX_LOOP_ITERATIONS, DEFAULT_MAX_PIPELINE_STEPS, DEFAULT_MONTE_CARLO_SAMPLES,
+            DEFAULT_PARALLEL_THRESHOLD,
         };
         let mut effective = EffectiveSettings {
             propagation_mode: PropagationMode::default(),
@@ -257,6 +264,7 @@ impl ProcessSettings {
             max_loop_iterations: DEFAULT_MAX_LOOP_ITERATIONS,
             max_pipeline_steps: DEFAULT_MAX_PIPELINE_STEPS,
             approx_rel_tol: DEFAULT_APPROX_REL_TOL,
+            monte_carlo_samples: DEFAULT_MONTE_CARLO_SAMPLES,
             radian_grant: true,
             steradian_grant: true,
             ignored: BTreeMap::new(),
@@ -269,6 +277,7 @@ impl ProcessSettings {
                 Setting::MaxLoopIterations(n) => effective.max_loop_iterations = *n,
                 Setting::MaxPipelineSteps(n) => effective.max_pipeline_steps = *n,
                 Setting::ApproxRelTol(rel) => effective.approx_rel_tol = *rel,
+                Setting::MonteCarloSamples(n) => effective.monte_carlo_samples = *n,
                 Setting::Ignored { key, value } => {
                     effective.ignored.insert(key.clone(), value.clone());
                 }
@@ -291,6 +300,7 @@ impl ProcessSettings {
         crate::settings::set_max_loop_iterations(e.max_loop_iterations);
         crate::settings::set_max_pipeline_steps(e.max_pipeline_steps);
         crate::settings::set_approx_rel_tol(e.approx_rel_tol);
+        crate::settings::set_monte_carlo_samples(e.monte_carlo_samples);
         crate::units::angle_mode::set_marker_grants(e.radian_grant, e.steradian_grant);
     }
 
@@ -340,6 +350,18 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
                 keeping: "the tolerance in force",
             }),
         },
+        "monte_carlo_samples" => {
+            use crate::settings::{MAX_MONTE_CARLO_SAMPLES, MIN_MONTE_CARLO_SAMPLES};
+            match raw.parse::<usize>() {
+                Ok(n) if (MIN_MONTE_CARLO_SAMPLES..=MAX_MONTE_CARLO_SAMPLES).contains(&n) => Ok(Setting::MonteCarloSamples(n)),
+                _ => Err(SettingIssue::Bad {
+                    why: format!(
+                        "invalid monte_carlo_samples '{raw}': a whole number from {MIN_MONTE_CARLO_SAMPLES} to {MAX_MONTE_CARLO_SAMPLES}"
+                    ),
+                    keeping: "the sample count in force",
+                }),
+            }
+        }
         _ if CORE_UNUSED_SETTINGS.contains(&key) => Ok(Setting::Ignored { key: key.to_string(), value: raw.to_string() }),
         _ => Err(SettingIssue::Unknown(key.to_string())),
     }
@@ -350,7 +372,7 @@ pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
         SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps and approx_rel_tol, and accepts {} for other bindings",
+            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol and monte_carlo_samples, and accepts {} for other bindings",
             CORE_UNUSED_SETTINGS.join(", ")
         ),
         SettingIssue::Bad { why, .. } => why,
@@ -1877,12 +1899,13 @@ mod tests {
     }
 
     /// The readable process-wide settings, to show that a replay changed none of them.
-    fn process_settings_now() -> (usize, usize, usize, u64, PropagationMode, AngleMode, (bool, bool)) {
+    fn process_settings_now() -> (usize, usize, usize, u64, usize, PropagationMode, AngleMode, (bool, bool)) {
         (
             crate::settings::parallel_threshold(),
             crate::settings::max_loop_iterations(),
             crate::settings::max_pipeline_steps(),
             crate::settings::approx_rel_tol().to_bits(),
+            crate::settings::monte_carlo_samples(),
             crate::uncertainty::mode::propagation_mode(),
             crate::units::angle_mode::angle_mode(),
             marker_grants(),
@@ -1956,6 +1979,7 @@ mod tests {
         assert!(constants.contains_key("molar_gas_constant"));
         assert!(collected.settings.contains(&Setting::PropagationMode(PropagationMode::Correlated)));
         assert!(collected.settings.contains(&Setting::ApproxRelTol(crate::settings::DEFAULT_APPROX_REL_TOL)));
+        assert!(collected.settings.contains(&Setting::MonteCarloSamples(crate::settings::DEFAULT_MONTE_CARLO_SAMPLES)));
         assert!(collected.compatibility.is_some());
         // the strict replay builds what the lenient reading of the library builds
         let mut lenient = UnitRegistry::new();
@@ -2031,6 +2055,10 @@ mod tests {
             ("[Settings]\napprox_rel_tol = nan\n", "nan"),
             ("[Settings]\napprox_rel_tol = abc\n", "abc"),
             ("[Settings]\napprox_rel_tol = 1\n", "approx_rel_tol"),
+            ("[Settings]\nmonte_carlo_samples = 0\n", "monte_carlo_samples"),
+            ("[Settings]\nmonte_carlo_samples = 1\n", "monte_carlo_samples"),
+            ("[Settings]\nmonte_carlo_samples = abc\n", "abc"),
+            ("[Settings]\nmonte_carlo_samples = 20000000\n", "20000000"),
             ("[Settings]\nno equals sign here\n", "no equals sign here"),
             ("[Compatibility]\nradian, plain = add\n", "radian, plain = add"),
             ("[Compatibility]\nthis line has no equals sign\n", "this line has no equals sign"),
@@ -2218,6 +2246,46 @@ mod tests {
         ProcessSettings::default().activate();
         assert_eq!(crate::settings::approx_rel_tol(), crate::settings::DEFAULT_APPROX_REL_TOL);
         crate::settings::set_approx_rel_tol(original);
+    }
+
+    #[test]
+    fn monte_carlo_samples_is_a_whole_number_from_two_to_ten_million() {
+        assert_eq!(parse_setting("monte_carlo_samples = 2"), Ok(Setting::MonteCarloSamples(2)));
+        assert_eq!(parse_setting("monte_carlo_samples = 1000"), Ok(Setting::MonteCarloSamples(1000)));
+        assert_eq!(parse_setting("monte_carlo_samples = 10000000"), Ok(Setting::MonteCarloSamples(10_000_000)));
+        for bad in ["0", "1", "-1", "1.5", "abc", "", "10000001", "20000000", "1e3"] {
+            let why = parse_setting(&format!("monte_carlo_samples = {bad}")).unwrap_err();
+            assert!(why.contains("monte_carlo_samples") && why.contains(&format!("'{bad}'")), "{bad:?}: {why}");
+        }
+        assert!(parse_setting("frobnicate = 1").unwrap_err().contains("monte_carlo_samples"), "the list of keys names it");
+    }
+
+    #[test]
+    fn the_lenient_reader_applies_a_good_monte_carlo_samples_and_keeps_the_one_in_force_for_a_bad_one() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let original = crate::settings::set_monte_carlo_samples(1234);
+        let (mut reg, mut constants) = (UnitRegistry::new(), HashMap::new());
+        for bad in ["0", "1", "abc", "20000000", "-3"] {
+            parse_physure_conf(&format!("[Settings]\nmonte_carlo_samples = {bad}\n"), &mut reg, &mut constants);
+            assert_eq!(crate::settings::monte_carlo_samples(), 1234, "{bad:?} replaced the value in force");
+        }
+        parse_physure_conf("[Settings]\nmonte_carlo_samples = 50\n", &mut reg, &mut constants);
+        assert_eq!(crate::settings::monte_carlo_samples(), 50);
+        crate::settings::set_monte_carlo_samples(original);
+    }
+
+    #[test]
+    fn activation_sets_monte_carlo_samples_from_the_file_or_its_default() {
+        let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        settle_catalog_settings();
+        let _restore = crate::units::angle_mode::RestoreProcessState::capture();
+        ProcessSettings { settings: vec![Setting::MonteCarloSamples(64)], compatibility: None }.activate();
+        assert_eq!(crate::settings::monte_carlo_samples(), 64);
+        ProcessSettings::default().activate();
+        assert_eq!(crate::settings::monte_carlo_samples(), crate::settings::DEFAULT_MONTE_CARLO_SAMPLES);
+        Setting::MonteCarloSamples(65).apply();
+        assert_eq!(crate::settings::monte_carlo_samples(), 65);
     }
 
     #[test]

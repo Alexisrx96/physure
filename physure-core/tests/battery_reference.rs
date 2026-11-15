@@ -546,6 +546,32 @@ fn every_uncertainty_case_pins_its_mode_whatever_the_process_says() {
     set_propagation_mode(previous);
 }
 
+/// The Monte Carlo sample count of a measurement that names none, read here under whatever the process says.
+fn unpinned_sample_count() -> usize {
+    let q = Quantity::new_scalar(2.0, 0.1, Quantity::new(1.0, "m").unwrap().unit, Some("monte_carlo"), None);
+    match &q.value {
+        UncertaintyValue::MonteCarlo(mc) => mc.samples.len(),
+        _ => panic!("expected a Monte Carlo value"),
+    }
+}
+
+/// The uncertainty settings of Phase 4b (`monte_carlo_samples`, ...) are pinned at their compiled defaults for every
+/// `unc.*` case: set process-wide, or by a frozen file, they change an unpinned computation (not vacuous) and no
+/// witness.
+#[test]
+fn every_uncertainty_case_pins_the_phase_4b_settings_whatever_the_process_or_the_file_says() {
+    let _lock = lock();
+    let baseline = run_battery();
+    let previous = physure_core::settings::set_monte_carlo_samples(7);
+    assert_eq!(unpinned_sample_count(), 7, "the process-wide count is in force (not vacuous)");
+    assert_eq!(run_battery(), baseline, "under process-wide sentinels");
+    physure_core::settings::set_monte_carlo_samples(previous);
+    assert_eq!(unpinned_sample_count(), 1000);
+    let frozen = battery_under_frozen("[Settings]\nmonte_carlo_samples = 7\n");
+    assert_eq!(changed_keys(&frozen, &baseline), Vec::<String>::new(), "a frozen file's settings changed a witness");
+    assert_eq!(run_battery(), baseline, "the process is restored");
+}
+
 /// `unc.sum_correlated`, `unc.product_first_order` and `unc.power_first_order` computed here under whatever mode
 /// the process is in.
 fn unpinned_gaussian_arithmetic() -> Vec<WitnessValue> {
