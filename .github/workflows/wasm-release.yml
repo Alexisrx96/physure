@@ -76,7 +76,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: actions/setup-node@39370e3970a6d050c3800040652e1a4d1d2345e4 # v4.1.0
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
