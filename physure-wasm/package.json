@@ -1,6 +1,6 @@
 {
   "name": "physure",
-  "version": "0.2.3",
+  "version": "0.4.0",
   "description": "Unit-aware, dimension-correct physics computing — WebAssembly bindings for the physure core physics engine.",
   "license": "MIT",
   "repository": {
