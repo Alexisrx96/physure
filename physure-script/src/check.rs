@@ -474,13 +474,7 @@ impl<'a> Checker<'a> {
             Ty::Unknown | Ty::Bool => return,
             Ty::Qty(dim) if dim.is_ratio() && !dim.point => KnownCondition::Number,
             Ty::Qty(dim) => {
-                let unit = if dim.level || dim.point || dim.exps.is_empty() {
-                    None
-                } else {
-                    let dimension: Vec<(String, (i64, i64))> =
-                        dim.exps.iter().map(|(symbol, power)| (symbol.clone(), (*power.numer(), *power.denom()))).collect();
-                    self.registry.unit_of_dimension(&dimension).ok().map(|unit| unit.__repr__())
-                };
+                let unit = if dim.level || dim.point || dim.exps.is_empty() { None } else { self.unit_of(dim) };
                 let described = if dim.level || dim.point { dim.described() } else { format!("of dimension {}", dim.text()) };
                 KnownCondition::Quantity { described, unit }
             }
@@ -915,6 +909,22 @@ impl<'a> Checker<'a> {
         Ty::Qty(Dim { constant: None, ..dims[0].clone() })
     }
 
+    /// A unit of the dimension `dim`, from the registry: `kg` for a mass, `K` for an absolute temperature.
+    fn unit_of(&self, dim: &Dim) -> Option<String> {
+        let dimension: Vec<(String, (i64, i64))> =
+            dim.exps.iter().map(|(symbol, power)| (symbol.clone(), (*power.numer(), *power.denom()))).collect();
+        self.registry.unit_of_dimension(&dimension).ok().map(|unit| unit.__repr__())
+    }
+
+    /// The unit the message of a zero tells to write (audit T18). The interpreter knows the unit the operand was
+    /// written in; the checker knows its dimension only, so it names a unit of that dimension (`dB` for a level).
+    fn zero_unit(&self, dim: &Dim) -> String {
+        if dim.level && dim.exps.is_empty() {
+            return "dB".to_string();
+        }
+        self.unit_of(dim).unwrap_or_else(|| "<its unit>".to_string())
+    }
+
     /// The rule of `Quantity::comparable_magnitudes`: different dimensions have no comparison, so a zero needs a
     /// unit (`x > 0 m`) and an angle is not a plain number; a level and a dimensionless value that is not one have
     /// none either (`20 dB == 100`); a plain number compares with a ratio (`50 % == 0.5`).
@@ -923,10 +933,11 @@ impl<'a> Checker<'a> {
             let (with, plain) = if b.is_ratio() && !a.is_ratio() { (a, b) } else { (b, a) };
             let message = if plain.is_ratio() && !with.is_ratio() && plain.constant == Some(0.0) {
                 Some(format!(
-                    "cannot compare {} with the plain number 0: a zero needs a unit, write it with one (`x > 0 m`; for \
+                    "cannot compare {} with the plain number 0: a zero needs a unit, write it with one (`x > 0 {}`; for \
                      a temperature point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB \
                      is a ratio of 1)",
-                    with.described()
+                    with.described(),
+                    self.zero_unit(with)
                 ))
             } else if plain.is_ratio() && with.level && with.exps.is_empty() {
                 Some(format!(

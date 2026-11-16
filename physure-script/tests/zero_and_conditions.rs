@@ -151,6 +151,18 @@ fn a_zero_written_without_a_unit_says_to_write_it_with_one() {
     assert_eq!(diagnostics[0].code, "dimension-mismatch");
 }
 
+/// Audit T18: the checker's message wrote `x > 0 m` whatever the dimension. It names a unit of the operand's own
+/// dimension now, as the interpreter does (the interpreter knows the written unit, the checker only the dimension).
+#[test]
+fn the_checker_names_a_unit_of_the_dimension_that_a_zero_needs() {
+    for (source, unit) in [("1 m > 0", "m"), ("2 kg > 0", "kg"), ("30 deg > 0", "rad"), ("t = 20 degC\nt > 0", "K"), ("-5 dB > 0", "dB")] {
+        let diagnostics = check_source(source).unwrap();
+        let message = &diagnostics[0].message;
+        assert!(message.contains(&format!("`x > 0 {unit}`")), "{source:?} should name `{unit}`: {message}");
+        assert!(unit == "m" || !message.contains("`x > 0 m`"), "{source:?} names metres: {message}");
+    }
+}
+
 #[test]
 fn a_level_against_a_plain_number_says_to_write_the_level_or_compare_the_ratio() {
     let why = runtime_error("20 dB == 100");
