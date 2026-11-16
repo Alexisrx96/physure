@@ -26,7 +26,9 @@ impl SymbolicParser {
         let lexer = PhsLexer::new(clean_input);
         let tokens = lexer.tokenize()?;
         let mut parser = SymbolicParser { tokens, pos: 0 };
-        parser.parse_equality()
+        let node = parser.parse_equality()?;
+        parser.finish()?;
+        Ok(node)
     }
 
     /// Parses `input` as `lhs = rhs` without collapsing to `Sub`, for coercing a
@@ -47,6 +49,7 @@ impl SymbolicParser {
         let left = parser.parse_sum()?;
         if parser.match_op("=") || parser.match_op("==") {
             let right = parser.parse_sum()?;
+            parser.finish()?;
             Ok(Some((left.simplify(), right.simplify())))
         } else {
             Ok(None)
@@ -55,6 +58,41 @@ impl SymbolicParser {
 
     fn peek(&self) -> Option<&PhsToken> {
         self.tokens.get(self.pos)
+    }
+
+    /// The whole text must have been read. The parser stops at the first token no rule takes, and what followed
+    /// was dropped without a word: `integral("x < 0.5", "x")` was the integral of `x` (audit T2), and
+    /// `deriv("x^2 )", "x")` was `2 * x`.
+    fn finish(&self) -> PhysureResult<()> {
+        self.refuse_comparison()?;
+        match self.peek() {
+            None => Ok(()),
+            Some(t) => Err(PhysureError::Generic(format!("unexpected `{}` after the end of the expression", t.value))),
+        }
+    }
+
+    /// A comparison is named where the parser meets one, inside parentheses too (`(y >= 2) + 1`), not reported as
+    /// a missing `)`.
+    fn refuse_comparison(&self) -> PhysureResult<()> {
+        match self.peek() {
+            Some(t) if COMPARISONS.contains(&t.value.as_str()) => Err(PhysureError::Generic(format!(
+                "`{}` is a comparison, which a symbolic expression cannot hold: write an expression, or an equation \
+                 with `=`",
+                t.value
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Consumes the `)` that closes a group or a call, or fails with `message`.
+    fn expect_close(&mut self, message: &str) -> PhysureResult<()> {
+        self.refuse_comparison()?;
+        // the end of the text is no closing parenthesis either: `sin(x` was `sin(x)`
+        if self.next().is_some_and(|t| t.value == ")") {
+            Ok(())
+        } else {
+            Err(PhysureError::Generic(message.to_string()))
+        }
     }
 
     fn next(&mut self) -> Option<PhsToken> {
@@ -205,10 +243,8 @@ impl SymbolicParser {
             TokenKind::Ident(ref name) => self.parse_identifier(name, tok.pos),
             TokenKind::Op(ref op) if op == "(" => {
                 let node = self.parse_equality()?;
-                match self.next() {
-                    Some(close_t) if close_t.value == ")" => Ok(node),
-                    _ => Err(PhysureError::Generic("Expected closing ')'".to_string())),
-                }
+                self.expect_close("Expected closing ')'")?;
+                Ok(node)
             }
             TokenKind::StringLiteral(ref s) => {
                 Self::parse_str(s)
@@ -248,11 +284,7 @@ impl SymbolicParser {
     fn parse_func_call(&mut self, name: &str) -> PhysureResult<Node> {
         self.next(); // consume '('
         let mut args = self.parse_call_arguments()?;
-        if let Some(close_t) = self.next() {
-            if close_t.value != ")" {
-                return Err(PhysureError::Generic("Expected closing ')' after function arguments".to_string()));
-            }
-        }
+        self.expect_close("Expected closing ')' after function arguments")?;
 
         match name {
             "deriv" | "diff" => {
@@ -297,6 +329,9 @@ impl SymbolicParser {
         Ok(args)
     }
 }
+
+/// The operators of PHS that compare; `=` and `==` are the equation, not in this list.
+const COMPARISONS: [&str; 6] = ["<", ">", "<=", ">=", "!=", "≈"];
 
 /// What follows a factor in a product.
 #[derive(Clone, Copy)]

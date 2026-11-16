@@ -183,6 +183,34 @@ fn an_integral_that_is_not_known_is_refused_not_guessed() {
     assert!(calc_refused(r#"integral("x + 1")"#).contains("integral expects"));
 }
 
+/// Audit T2: the symbolic parser stopped at the first token it did not know and dropped the rest, so
+/// `integral("x < 0.5", "x")` was `integral("x", "x")` = `x^2/2`, and `deriv("x > 0", "x")` was 1.
+#[test]
+fn a_comparison_is_not_a_symbolic_expression() {
+    for op in ["<", ">", "<=", ">=", "!="] {
+        let text = format!("x {op} 0.5");
+        for call in [format!(r#"integral("{text}", "x")"#), format!(r#"deriv("{text}", "x")"#), format!(r#"simplify("{text}")"#)] {
+            let message = calc_refused(&call);
+            assert!(message.contains(&format!("`{op}`")) && message.contains("comparison"), "{call}: {message}");
+        }
+    }
+    // the same for `solve` and a comparison after an equation; `limit` samples the expression and already saw a Bool
+    assert!(calc_refused(r#"solve("x^2 < 4", "x")"#).contains("comparison"));
+    assert!(calc_refused(r#"limit("x > 0", "x", 0)"#).contains("Bool"));
+    assert!(calc_refused(r#"solve("x = 2 < 3", "x")"#).contains("comparison"));
+    // `substitute` took the `=` of `<=` for an equation, and a comparison as the replacement for its right side
+    assert!(calc_refused(r#"substitute("x <= 3", "x", "2")"#).contains("`<=`"));
+    assert!(calc_refused(r#"substitute("x + 1", "x", "y >= 2")"#).contains("`>=`"));
+}
+
+/// The cause behind T2: whatever the parser did not read was dropped, not only comparisons.
+#[test]
+fn text_after_a_symbolic_expression_is_refused_not_dropped() {
+    assert!(calc_refused(r#"deriv("x^2 )", "x")"#).contains("`)`"));
+    assert!(calc_refused(r#"deriv("x^2 , 3", "x")"#).contains("`,`"));
+    assert!(calc_refused(r#"deriv("sin(x", "x")"#).contains("Expected closing"));
+}
+
 #[test]
 fn a_definite_integral_is_the_area_under_the_curve() {
     // symbolic antiderivative at both ends

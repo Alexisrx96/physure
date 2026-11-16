@@ -222,7 +222,8 @@ fn a_closed_form_that_jumps_inside_the_interval_is_refused() {
     assert!(refused(r#"integral("1/cos(x)^2", "x", 0, 3)"#).contains("did not converge"));
     // before: did not stop (the deadlock), and once unblocked -1.99 across the pole of tan at pi/2
     assert!(refused(r#"integral("tan(x)", "x", 0, 3)"#).starts_with("integral: "));
-    // the symbolic engine reads `x < 0.5` as `x` and integrates it to x^2/2 (0.5 here); the integrand is a Bool
+    // the symbolic engine used to read `x < 0.5` as `x` and integrate it to x^2/2 (0.5 here, audit T2); it refuses the
+    // comparison now, so no closed form is tried and the quadrature sees what the integrand is: a Bool
     assert!(refused(r#"integral("x < 0.5", "x", 0, 1)"#).contains("Bool"));
 }
 

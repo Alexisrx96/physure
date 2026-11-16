@@ -209,6 +209,12 @@ fn parse_inlined(text: &str, interpreter: &PhsInterpreter, env: &HashMap<String,
     crate::symbolic::SymbolicParser::parse_str(&inlined)
 }
 
+/// The byte index of the `=` that makes `text` an equation. The `=` of `<=`, `>=` and `!=` is not one: they are
+/// comparisons, which the symbolic parser refuses by name, and a split at it read `x <= 3` as `x <` and `3`.
+fn equation_sign(text: &str) -> Option<usize> {
+    text.char_indices().find(|&(i, c)| c == '=' && !text[..i].ends_with(['<', '>', '!'])).map(|(i, _)| i)
+}
+
 /// What `deriv` was asked: the expression, the variable, the order, and the dependent variable when the
 /// expression is a bare name (`y` in `dy/dx`).
 fn deriv_request(args: &[PhsValue]) -> PhysureResult<(String, String, usize, Option<String>)> {
@@ -238,7 +244,7 @@ fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, 
     let (expr_str, var_str, order, explicit_dep) = deriv_request(args)?;
 
     let inlined = preprocess_symbolic_expression(&expr_str, interpreter, env)?;
-    if let Some(idx) = inlined.find('=') {
+    if let Some(idx) = equation_sign(&inlined) {
         let lhs = crate::symbolic::SymbolicParser::parse_str(&inlined[..idx])?;
         let rhs = crate::symbolic::SymbolicParser::parse_str(&inlined[idx + 1..])?;
         let eq_node = crate::symbolic::Node::Equation(Box::new(lhs), Box::new(rhs));
@@ -450,8 +456,13 @@ fn evaluate_if_bound(solved_str: &str, interpreter: &PhsInterpreter) -> Option<P
 /// The text a `substitute` replacement stands for: the right side of an equation, or the value written out.
 fn replacement_text(replacement: &PhsValue) -> String {
     match replacement {
-        PhsValue::String(s) if s.contains('=') => s.split('=').nth(1).unwrap_or(s).trim().to_string(),
-        PhsValue::String(s) => s.clone(),
+        PhsValue::String(s) => match equation_sign(s) {
+            Some(sign) => {
+                let rest = &s[sign + 1..];
+                rest[..equation_sign(rest).unwrap_or(rest.len())].trim().to_string()
+            }
+            None => s.clone(),
+        },
         PhsValue::Equation(_, r) => r.to_phs_string(),
         other => other.to_string(),
     }
@@ -472,9 +483,11 @@ fn substitute(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     match &args[0] {
         PhsValue::Equation(l, r) => replaced_equation(&l.to_phs_string(), &r.to_phs_string()),
         PhsValue::String(eq_str) => {
-            let parts: Vec<&str> = eq_str.split('=').collect();
-            if parts.len() == 2 {
-                return replaced_equation(parts[0].trim(), parts[1].trim());
+            if let Some(sign) = equation_sign(eq_str) {
+                let (left, right) = (&eq_str[..sign], &eq_str[sign + 1..]);
+                if equation_sign(right).is_none() {
+                    return replaced_equation(left.trim(), right.trim());
+                }
             }
             let new_node = crate::symbolic::SymbolicParser::parse_str(&eq_str.replace(target_str, &replacement))?;
             Ok(Some(PhsValue::String(new_node.to_string())))
