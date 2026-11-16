@@ -2,7 +2,7 @@
 
 This guide is for sites where a calculation, once validated, must not change because the software was
 upgraded: factories, laboratories, anything under an audit. It says what a frozen configuration is, what
-the `phs conf` commands do (as built in Phases 2 and 3 of the
+the `phs conf` commands do (as built in Phases 2 to 4 of the
 [design](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/specs/2026-11-07-conf-freeze-design.md)),
 and, just as plainly, what a frozen configuration does **not** pin.
 
@@ -92,7 +92,7 @@ actor = alice@lab-pc
 reason = initial validation
 old_content_sha256 =
 new_content_sha256 = a1b2c48e...
-diff = embedded 847 lines; overrides 2 lines; witnesses: 47 built-in, 1 user
+diff = embedded 847 lines; overrides 2 lines; witnesses: 63 built-in, 1 user
 prev_entry_sha256 =
 entry_sha256 = 76202900...
 
@@ -164,7 +164,8 @@ JSON documents carry the strings as they are (JSON escapes them).
 
 Which configuration is in force and why; whether it verifies; its seal, creation date, engine state,
 number of history entries, recorded witnesses (`builtin.*` and `user.*`) and atomic-weight edition; and the warnings: an ignored `physure.conf`, a
-missing required frozen file, environment differences.
+missing required frozen file, environment differences, a `monte_carlo_seed = random` (section 10.2) and a
+setting that is accepted and ignored (section 10.6).
 
 ```console
 $ phs conf
@@ -173,7 +174,7 @@ file: /srv/lab/physure.frozen.conf
 seal: b1844aad0461a8b15bae3505155eb2b2c3333c3421bb3fd72625aab8c3326658
 created: 2026-11-13T04:59:07Z
 history: 1 entries
-witnesses: 47 built-in, 1 user recorded
+witnesses: 63 built-in, 1 user recorded
 verification: the seal, the hashes and the chain hold
 engine: matches (policy release, pinned 0.3.0+unknown)
 atomic-weight edition: standard-2024
@@ -232,7 +233,7 @@ wrote /srv/lab/physure.frozen.conf
 seal: b1844aad0461a8b15bae3505155eb2b2c3333c3421bb3fd72625aab8c3326658
   record this seal outside this directory: `phs conf verify --expect SEAL` checks the file against it
 engine: 0.3.0+unknown (policy release)
-witnesses: 47 built-in, 1 user recorded
+witnesses: 63 built-in, 1 user recorded
 ```
 
 Without `--engine-policy` the default is `build` when this `phs` names its commit and `binary` when it does
@@ -388,7 +389,7 @@ what the overrides contribute to the catalog (4): constant +1 -0 ~1; constant_me
   constant_meta:
     + lab_speed_of_sound = 343 m/s None None
     ~ molar_gas_constant: 8.31446261815324 J*mol^-1*K^-1 None None -> 8.0 J*mol^-1*K^-1 None None
-witnesses: as recorded (47 built-in, 1 user) against evaluated under the file to be written:
+witnesses: as recorded (63 built-in, 1 user) against evaluated under the file to be written:
 ...
 wrote /srv/lab/physure.frozen.conf
 seal: 13a40b21d253887e12bea347e4efc910433c240665b5b058907e9f5a039b8c82
@@ -566,10 +567,14 @@ State these limits in your audit documentation.
 * **Environment differences are warnings**, never a discrepancy (not for `status`, `verify` or `diff`):
   bit-for-bit reproducibility across machines is not promised. The witnesses are how the *consequence* of a
   difference is seen: `verify --run` reports a result whose bits moved (section 9.6).
-* **Not frozen yet** (Phase 4 moves each into the catalog): the exchange rates of `physure.ext.currency`
-  (literals in Python), the default number of Monte Carlo samples (a literal in the core), the unit systems
-  `imperial.conf` and `international.conf` (read by Python only), and the Python chemistry tables
-  (`STANDARD_ENTHALPY_FORMATION`, `STANDARD_ENTROPY`).
+* **What a frozen file does not govern is listed, row by row, in
+  [What a frozen configuration covers](conf_coverage.md)**, with who owns each row; that page is part of
+  the guarantee, and a test keeps it in step with the catalog and the battery. Phase 4 moved the numbers
+  that lived in the core into the catalog (section 10). Still outside: everything Python, Java and
+  WebAssembly compute until Phase 5 (Python's exchange rates, thermochemistry and atomic-weight tables, the
+  system files `imperial.conf` and `international.conf`); `.phs` modules and native plugins loaded with
+  `use`; the platform's math library; draws under `monte_carlo_seed = random`; printed text the display keys
+  do not govern (`format()`, fractions, plot axes, Python's `str`).
 
 ### Long-running processes
 
@@ -619,8 +624,13 @@ and with `PHYSURE_REQUIRE_FROZEN=1` that fails closed.
 * **WebAssembly ignores frozen files**: it has no file system, environment or working directory, so its
   configuration is always the unfrozen one.
 * **Witnesses run in `phs` only**: the bindings do not evaluate them (Phase 5).
-* **Next, Phase 4**: the table of what is and is not frozen (`docs/conf_coverage.md`) and the move of the
-  numbers that still live in code (section 6) into the catalog.
+* **The seed of the bindings.** WebAssembly, Java and Python draw Monte Carlo samples from the compiled
+  default seed (0) or an unfrozen working-directory `physure.conf`; none honours a frozen file's
+  `monte_carlo_seed` until Phase 5 (section 10.2).
+* **Phase 4 is done**: the table of what is and is not frozen ([conf_coverage.md](conf_coverage.md)) and the
+  move of the numbers that lived in code into the catalog (section 10). **Next, Phase 5**: Python,
+  WebAssembly and Java honour the frozen file, report their environment, and the system files become
+  sources of it.
 
 The implementation: the commands are in
 [`physure-cli/src/conf.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/conf.rs#L28), and
@@ -659,7 +669,7 @@ battery in id order, then the user scripts in file order.
 
 ### 9.2 The built-in battery
 
-This release has **47 cases**. **Ids are versioned**: a release may add cases, and it never changes what an
+This release has **63 cases** (47 in Phase 3; Phase 4 added 16). **Ids are versioned**: a release may add cases, and it never changes what an
 id computes; a case a newer library adds is *new* for an older file, a case an older file records and the
 running build lacks is *missing*. Each case is checked in the test suite against a reference that does not
 come from the engine
@@ -671,9 +681,10 @@ the cases themselves are in
 | --- | --- | --- |
 | units (12) | `units.foot_to_metre`, `units.kmh_to_ms`, `units.degc_to_k_25`, `units.degf_to_degc_212`, `units.db_20_to_ratio`, `units.psi_to_pa`, `units.kwh_to_j`, `units.ev_to_j`, `units.atm_to_kpa`, `units.cal_th_to_j`, `units.nmi_per_h_to_ms`, `units.ph_7_to_ratio` | NIST SP 811 (2008), Appendix B.8 and B.9; the SI Brochure, 9th edition (2019); pH: IUPAC Gold Book |
 | constants (6) | `const.molar_gas_constant`, `const.boltzmann_constant`, `const.planck_constant`, `const.avogadro_constant`, `const.speed_of_light_in_vacuum`, `const.elementary_charge` | the SI Brochure, Table 1, and CODATA 2022 (exact since the 2019 SI) |
-| uncertainty (11) | `unc.sum_correlated`, `unc.sum_uncorrelated`, `unc.product_first_order`, `unc.quotient_first_order`, `unc.power_first_order`, `unc.montecarlo_seed_1`, `unc.unscented_square`, `unc.gum_h1_uc`, `unc.gum_h1_nu_eff`, `unc.expanded_k_p95`, `unc.welch_satterthwaite_g41` | first order: closed forms (GUM 5.1.2, 5.2.2); JCGM 100:2008 H.1, the end gauge (u_c 32 nm, nu_eff 16.7, k 2.12 at 95 %) and G.4.1 (nu_eff 19.0); Monte Carlo against the exact moments of the product within five standard errors (JCGM 101:2008, 7.2); unscented against the moments of `x^2` |
+| uncertainty (12) | `unc.sum_correlated`, `unc.sum_uncorrelated`, `unc.product_first_order`, `unc.quotient_first_order`, `unc.power_first_order`, `unc.montecarlo_seed_1`, `unc.unscented_square`, `unc.gum_h1_uc`, `unc.gum_h1_nu_eff`, `unc.expanded_k_p95`, `unc.welch_satterthwaite_g41`, `unc.asymmetric_sum` | first order: closed forms (GUM 5.1.2, 5.2.2); JCGM 100:2008 H.1, the end gauge (u_c 32 nm, nu_eff 16.7, k 2.12 at 95 %) and G.4.1 (nu_eff 19.0); Monte Carlo against the exact moments of the product within five standard errors (JCGM 101:2008, 7.2); unscented against the moments of `x^2`; `12.3 (+0.5 -0.4) m + 1.0 (+0.5 -0.4) m` against the closed form of two dimidiated Gaussians |
 | statistics (8) | `stat.t_p95_nu1`, `stat.t_p95_nu2`, `stat.t_p95_nu5`, `stat.t_p95_nu10`, `stat.t_p95_nu30`, `stat.t_p95_nu100`, `stat.t_p99_nu10`, `stat.t_p99_nu100` | the Student-t table of the NIST/SEMATECH e-Handbook of Statistical Methods, 1.3.6.7.2 (JCGM 100:2008, Table G.2), within 5e-5 relative |
 | chemistry (13) | `chem.molar_mass_h2o`, `chem.molar_mass_glucose`, `chem.molar_mass_calcium_hydroxide`, `chem.molar_mass_iron_sulfate`, `chem.mass_to_moles_nacl`, `chem.balance_propane_combustion`, `chem.balance_iron_oxide_reduction`, `chem.arrhenius`, `chem.clausius_clapeyron_water`, `chem.gibbs_298`, `chem.dhf_h2o_l`, `chem.entropy_h2o_l`, `chem.gibbs_formation_h2o_l` | CIAAW 2024 standard atomic weights, summed by hand; the textbook coefficients; closed forms with the catalog's gas constant; the thermochemistry edition `legacy-python-1` ([thermochemistry.md](thermochemistry.md)) and dG = dH - T dS of its entries |
+| display (12) | `display.base_units`, `display.decimal_debris`, `display.extremes`, `display.folded_unit`, `display.fractions`, `display.gum_figures`, `display.gum_places`, `display.gum_range`, `display.integers_near_1e15`, `display.precision`, `display.scientific_below`, `display.scientific_from` | the text the library writes (`text=`), each a row of the golden table of printed numbers ([`physure-core/tests/display_golden.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/tests/display_golden.rs#L1)), recorded by the display code before the display keys existed; NaN is not recorded (it prints `NaN.0`, an open defect) |
 
 **What the cases read.** Every case reads units, constants and atomic weights through the configuration it
 is evaluated under, never through a catalog of its own, so an override shows in the witnesses that depend on
@@ -691,11 +702,13 @@ it:
   `chem.gibbs_formation_h2o_l` (H2O(l), H2(g), O2(g)); a species the data lack is a recorded `failed=`.
   `chem.gibbs_298` reads none: its dH and dS are literals of the case (and its dS, -163.2 J/(mol K), is not the
   -163.4 of the table: an id is forever, so the case that reads the table is a new one);
-* **settings:** the only one a case depends on is the propagation mode, and every `unc.*` case and every
-  `chem.*` case that combines uncertain quantities pins its own on its thread (`correlated`, or the mode it
-  is named after). The file's `[Settings]` (`propagation_mode`, `parallel_threshold`, the loop ceilings)
-  therefore do not reach the battery. The `units.*`, `const.*` and `stat.*` cases and the balancings read no
-  setting.
+* **settings: a built-in case never reads a setting of the file.** Every `unc.*` case and every `chem.*`
+  case that combines uncertain quantities pins its propagation mode on its thread (`correlated`, or the mode
+  it is named after), and every `unc.*` case also pins `monte_carlo_samples` (1000), `asymmetric_shape`
+  (`dimidiated`) and `default_dof` (`inf`); `unc.montecarlo_seed_1` opens its own seed (1); every case runs
+  under the compiled display rules. The file's `[Settings]` therefore do not reach the battery: a file with
+  other display keys prints differently by design and changes none of the witnesses. The `units.*`,
+  `const.*` and `stat.*` cases and the balancings read no setting.
 
 **Determinism rules.** No clock, no environment, no threads whose scheduling could reorder a sum, a fixed
 seed wherever a generator is used (`unc.montecarlo_seed_1`: seed 1, 1000 samples, on the calling thread).
@@ -743,8 +756,8 @@ file: /srv/lab/physure.frozen.conf
 verification: the seal, the hashes and the chain hold
 engine: matches (policy release, pinned 0.3.0+unknown)
 atomic-weight edition: standard-2024
-witnesses: checked 47 built-in, 1 user, under /srv/lab/physure.frozen.conf
-48 matched
+witnesses: checked 63 built-in, 1 user, under /srv/lab/physure.frozen.conf
+64 matched
 ```
 
 The rows come grouped: `DIFFERS` (both bit patterns, both decimals and the distance in ulps, section 9.6;
@@ -847,7 +860,7 @@ else in the temporary directory is touched). Then the rule:
 ```console
 $ phs conf seal --reason "lab value of R" --yes
 ...
-witnesses: as recorded (47 built-in, 1 user) against evaluated under the file to be written:
+witnesses: as recorded (63 built-in, 1 user) against evaluated under the file to be written:
 DIFFERS builtin.chem.arrhenius
   recorded: mean 3fe7365a4517c8e5 (0.7253848409148104), uncertainty 0000000000000000 (0.0), unit "s^-1"
   running:  mean 3fcc449f4e7e7426 (0.22084418614113693), uncertainty 0000000000000000 (0.0), unit "s^-1"
@@ -900,7 +913,7 @@ the unit, a sign or a non-finite value differs.
 
 ### 9.7 What witnesses do not prove
 
-* **They sample behaviour.** 47 calculations and your scripts pass or fail; a function that none of them
+* **They sample behaviour.** 63 calculations and your scripts pass or fail; a function that none of them
   touches can change unseen. Passing is not a proof that the rest of the library is correct or unchanged.
 * **They compare the engine with itself over time**, not with the truth: the reference values are checked
   in the test suite, not by `verify --run`.
@@ -924,3 +937,132 @@ the draft, probe and single reseal of `freeze`, `update` and `seal`
 [`physure-core/src/frozen/ops/draft.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/frozen/ops/draft.rs#L96),
 and the sandboxed evaluation of the commands
 [`physure-cli/src/conf_witness.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-cli/src/conf_witness.rs#L206).
+
+## 10. Phase 4: the numbers that lived in code
+
+Phase 4 audited every number in the code that can change a result
+([the audit](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/audits/2026-11-14-code-resident-numbers.md)) and moved the
+ones a site may want to pin into the catalog, where a frozen file copies and seals them. What it did not
+move is a row of [What a frozen configuration covers](conf_coverage.md), with its owner.
+
+### 10.1 New `[Settings]` keys
+
+Each is an entry `setting <key>` that `diff`, `show` and the seal see. A key a file does not set takes its
+compiled default, and every default reproduces the behaviour from before the key existed, except the seed
+(section 10.2). A frozen file's strict replay refuses a value out of range; the lenient reading of a
+`physure.conf` warns and keeps the value in force.
+
+| Key | Default | What it governs |
+| --- | --- | --- |
+| `monte_carlo_samples` | `1000` | the samples a Monte Carlo measurement draws (2 to 10000000) |
+| `monte_carlo_seed` | `0` | the seed of the Monte Carlo draws, or `random` (section 10.2) |
+| `max_while_iterations` | `10000` | the ceiling of one PHS `while` loop (at least 1); user witnesses keep 10000, as they keep the other ceilings |
+| `asymmetric_shape` | `dimidiated` | what a bare asymmetric pair (σ−, σ+) means: `dimidiated` or `fechner` |
+| `default_dof` | `inf` | the degrees of freedom of an uncertainty that declares none (a declared `dof inf` stays infinite) |
+| `display_significant_digits` | `15` | the significant digits of a printed decimal number (1 to 17), section 10.3 |
+| `display_scientific_below` | `1e-4` | below this magnitude a number prints in scientific notation (1e-6 to 1) |
+| `display_scientific_from` | `1e16` | from this magnitude a number prints in scientific notation (finite, at least 1) |
+| `uncertainty_digits` | `gum` | the significant figures of a printed uncertainty: `gum` or a count from 1 to 17 |
+
+### 10.2 The seed: reproducible by default, `random` by choice
+
+Before Phase 4, every Monte Carlo draw outside an explicit seed (`phs eval --seed`, the witnesses) came from
+operating-system entropy, so `phs file.phs` under `propagation_mode = monte_carlo` printed other samples on
+every run. Now the draws follow `monte_carlo_seed`, **0 by default**:
+
+* **A unit of evaluation draws one stream from the seed**: one program run (`phs file.phs` and its TUI, web
+  and HTML views), one REPL session, each request of the editor daemon, one start of `phs serve`, one
+  language-server document, a WebAssembly or Java handle, a Python `PhsInterpreter` or module. The same
+  program gives the same samples on every run, and two measurements of one unit are independent.
+* **`phs serve`** loads its modules in name order inside one unit, and every request starts at the position
+  after loading: a request is deterministic, so repeated requests of the same program are **not**
+  independent replicates.
+* **The language server** keeps a document's stream across edits, so a value it shows depends on the edit
+  history; a fresh open, like `phs file.phs`, reproduces.
+* **Outside a unit** (Python `Q_`) each thread draws from a stream of its own, reproducible for one thread
+  doing the same operations in the same order, not across threads.
+* **A loop in `monte_carlo` mode runs on the thread of its unit** (a `for` of `parallel_threshold` items or
+  more and `parallel_map`), so its values never depend on the number of threads; loops in every other mode
+  stay parallel.
+* **`phs eval`, MCP and user witnesses** draw the file's integer seed (0 when it is `random`); `phs eval
+  --seed N` wins, and its JSON says which seed was used: `"seed": {"value": 5, "source": "setting"}`
+  (`flag`, `setting` or `default`). A user witness recorded under seed 0, which is every file made before
+  Phase 4, keeps its hash.
+* **`monte_carlo_seed = random`** draws operating-system entropy: the file is not reproducible by choice, and
+  `status` and `verify` say so (`warning: monte_carlo_seed = random: this file is not reproducible by choice
+  ...`; JSON `reproducibility_warnings`).
+
+`builtin.unc.montecarlo_seed_1` opens its own seed, so no seed setting changes it. WebAssembly, Java and
+Python read the compiled default or an unfrozen working-directory `physure.conf` until Phase 5.
+
+### 10.3 Printed text
+
+The four display keys govern the text of `phs`, of `phs eval`'s `"text"`, and of Java and WebAssembly:
+`display_significant_digits` rounds the decimal form (the scientific form stays the shortest text that
+reads back as the same number; 17 prints every number exactly), the two thresholds decide when a number is
+printed in scientific notation (a number printed so is never GUM-rounded), and `uncertainty_digits` gives
+the figures of a printed standard uncertainty, the value rounded to the same decimal place. `@precision`
+wins over them. Under `display_significant_digits = 6`, `x = 1/3` prints `0.333333` (by default
+`0.333333333333333`).
+
+They do not govern a number in an error message, `frac` and `ifrac`, `format()` with a spec, plot axes, the
+symbolic printer, or Python's `str` (rows of [the coverage table](conf_coverage.md), section 3.4). A user
+witness records value bits, not text, so a display key never changes its hash; the twelve `display.*`
+built-in cases (section 9.2) record text under the compiled rules, so they detect a change of the printing
+code, not of your keys.
+
+### 10.4 Thermochemistry
+
+Standard enthalpies and entropies of formation follow the pattern of the atomic weights: tables by edition
+in `[Thermochemistry:<edition>]` (`species = ΔfH° in kJ/mol, S° in J/(mol·K)`, at 298.15 K and 1 bar), the
+edition read selected by `[Chemistry] thermochemistry = <edition>`, and your definitions in
+`[Thermochemistry]`, which apply with any edition. A species is a formula with its phase (`H2O(l)`,
+`Ca(OH)2(s)`); an unqualified name is the unique phase of that formula in the edition. The shipped edition
+`legacy-python-1` is the 8 species of the Python table: textbook values rounded to 0.1, no uncertainty,
+mixed sources ([Standard thermochemical data](thermochemistry.md) states its provenance). `legacy-` is a
+reserved edition prefix, for atomic weights too. `diff` and `show` list the `thermochemistry*` entries;
+`status` has no thermochemistry line yet. The witnesses `chem.dhf_h2o_l`, `chem.entropy_h2o_l` and
+`chem.gibbs_formation_h2o_l` read the table in force, so an override of H2O(l), H2(g) or O2(g) shows in
+them.
+
+### 10.5 Currency (Python, opt-in)
+
+`enable_currency()` reads the shipped text `physure/infrastructure/config/systems/currency.conf` (the `$`
+dimension and the USD, EUR and MXN units) from the installed package; a missing file is
+`FileNotFoundError`, and a `currency.conf` in the working directory is never read. Every result is
+bit-identical to before. The rates are placeholders, not market data. A frozen file does not hold them:
+Python honours frozen files only from Phase 5.
+
+### 10.6 Settings accepted and ignored
+
+`default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose` and
+`mkml_recursion_limit` are read by nothing. They have left the shipped catalog; every reader still accepts
+them, so an older `physure.conf` still reads. `status` and `verify` warn once per key that a source of the
+frozen file other than its embedded catalog sets (and, unfrozen, the working directory's `physure.conf`),
+in text and in JSON `ignored_settings`:
+
+```console
+warning: overrides: [Settings] verbose = true is accepted and ignored: no part of physure reads it, so it changes nothing
+```
+
+An older file's embedded catalog, which set all six, gets no warning for that.
+
+### 10.7 What changes for a file frozen before Phase 4
+
+* **Its library catalog changed.** `phs conf diff` against this build lists the nine new `setting` entries,
+  the thermochemistry entries, and the six ignored settings the embedded catalog no longer sets;
+  `phs conf update` adopts them (the overrides are kept).
+* **16 new built-in witnesses** (`unc.asymmetric_sum`, the twelve `display.*`, the three thermochemistry
+  cases): `verify --run` lists them as `NEW` rows, and `update` records them without
+  `--accept-witness-changes` (section 9.5). No recorded witness changes.
+* **Its behaviour is the same, but for the seed.** The keys it lacks take compiled defaults that reproduce the
+  previous behaviour; the seed is 0, where Monte Carlo draws outside `phs eval` were unseeded before. Its user
+  witnesses were recorded under seed 0 and keep their hashes.
+
+The implementation: the settings are read in
+[`physure-core/src/units/conf.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/units/conf.rs#L1) (`CORE_SETTING_KEYS`),
+the seed and the units of evaluation in
+[`physure-core/src/uncertainty/monte_carlo.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/uncertainty/monte_carlo.rs#L1),
+the display rules in [`physure-core/src/settings.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/settings.rs#L1) and
+[`physure-core/src/quantity.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/quantity.rs#L1), and the thermochemistry
+readers in [`physure-core/src/chemistry/thermo.rs`](https://github.com/Alexisrx96/physure/blob/main/physure-core/src/chemistry/thermo.rs#L1).

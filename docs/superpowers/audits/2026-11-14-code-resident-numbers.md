@@ -8,8 +8,11 @@
 (plan `docs/superpowers/plans/2026-11-14-audit-defects.md`); the commits are named in §4. That track found further
 defects, listed in §11. The language-semantics track (branch feat/lang-semantics, plan
 `docs/superpowers/plans/2026-11-14-language-semantics.md`) then resolved B26, T1 (the disagreement), T6, T10 and T12
-of §11.2 and recorded its own findings in §11.1 and §11.2. The rest of this file is the audit as written; only the status
-cells and notes are new.
+of §11.2 and recorded its own findings in §11.1 and §11.2. Phase 4b (branch feat/data-migration, plan
+`docs/superpowers/plans/2026-11-15-conf-freeze-phase-4b-data-migration.md`, 2026-11-15) then built M1-M8 of §8 (status
+table at the start of §8; M9 and M10 deferred to Phase 5 by the owner), resolved T3 and T17 of §11.2, answered Q1-Q3, Q5,
+Q6 and Q8 of §10, and recorded its own findings as X24-X32 in §11.1. The rest of this file is the audit as written; only the
+status cells and notes are new.
 
 **Method.** I ran a literal extractor over every non-test source file (Rust `#[cfg(test)] mod` and `tests.rs` excluded,
 Python `tests/` and doctests excluded) and then searched for `unwrap_or(`, `Default`, `const`, `env::var`, `rand`, `seed`,
@@ -28,8 +31,8 @@ Every `file:line` below was read at `fd41d1c`.
 * **C, binding-only data.** It must be migrated or removed when that binding delegates to the core.
 * **D, not a result.** UI, styling, buffers. Only the categories are listed.
 
-**Witness column.** "yes" means a case of the built-in battery (`physure-core/src/frozen/battery/`, 47 cases) would
-change its recorded bits if the number changed. "no" means nothing records it today.
+**Witness column.** "yes" means a case of the built-in battery (`physure-core/src/frozen/battery/`, 47 cases at the
+audit; 63 since Phase 4b) would change its recorded bits if the number changed. "no" means nothing records it today.
 
 ---
 
@@ -270,6 +273,23 @@ never enables `jax_enable_x64` (`backends/jax_backend.py:162`). These versions a
 
 ## 8. Proposed migration set (Phase 4)
 
+**Status (2026-11-15, Phase 4b, branch feat/data-migration):**
+
+| Item | Audit | Status | Commits |
+|---|---|---|---|
+| M1 Monte Carlo samples | A1, C4 | done: `[Settings] monte_carlo_samples = 1000` (2 to 10000000); Python passes `None`; the battery pins 1000 | `429cf6a` |
+| M2 seed policy | A10 | done, with the owner's decision on Q1: `monte_carlo_seed = 0` by default (not `none`), `random` opt-in; a seed per **unit of evaluation** (a program run, a REPL session, a daemon request, a `phs serve` start, an LSP document, a WASM or Java handle), per-thread streams outside a unit; `phs eval`, MCP and user witnesses draw the seed in force and report it; Monte Carlo loops stay on the unit's thread | `d1a5a7a`, `67af7de`, `320f1a7`, `785defc` |
+| M3 `while` cap | A9 | done: `[Settings] max_while_iterations = 10000`; witnesses keep 10000 | `422eedc` |
+| M4 exchange rates | A2 | done as data: a shipped `currency.conf` read by `enable_currency()`, fail-closed; **bit-identical** (the exactness change proposed above was withdrawn by the plan's review); not frozen until Phase 5 | `44de88a` |
+| M5 thermochemistry | A3 | done: `[Thermochemistry:legacy-python-1]` (not `starter-2026`), selector `[Chemistry] thermochemistry`, `[Thermochemistry]` definitions, readers, three witnesses; keys carry a phase and an unqualified name is the unique phase (no alias table); Python delegates in chemistry plan 3 | `0c41617`, `1d0ca1f`, `7390d31` |
+| M6 asymmetric shape | A4 | done: `[Settings] asymmetric_shape = dimidiated`; witness `unc.asymmetric_sum` | `72a0c5a` |
+| M7 display rules | A6 | done: `display_significant_digits`, `display_scientific_below`, `display_scientific_from`, `uncertainty_digits`; a 120-row golden table; twelve `display.*` witnesses record the printed text | `99aee4a`, `0ca99d4`, `969d3ec` |
+| M8 default dof | A7 | done: `[Settings] default_dof = inf`, after a fix that records a declared infinity (X29) | `4f71c98`, `4c962e9` |
+| M9 coverage probability | A5 | deferred by the owner to Phase 5 (a row of `docs/conf_coverage.md`) | - |
+| M10 unit display tables | A8 | deferred by the owner to Phase 5 (a row of `docs/conf_coverage.md`) | - |
+| Inert settings (Q8) | §5 | the six keys left the shipped catalog, stay readable, and `status`/`verify` warn where a user sets one; `[System] base_units` is Python-only (Phase 5) | `df63945` |
+| Coverage table (spec §9) | - | `docs/conf_coverage.md` (92 rows) and its drift test; `CORE_SETTING_KEYS` | `d375b1c`, `c810091`, `c9d2523` |
+
 These rules apply to every item:
 
 * **Compiled default.** Spec §13 requires that a compiled default reproduce the previous behaviour bit for bit.
@@ -403,16 +423,16 @@ CHANGELOG entry. Test: the repr of an anonymous `1e-6` force unit equals the cat
 
 | Protection | Items |
 |---|---|
-| Engine pin **and** a battery witness | B1, B2, B3, B5, B6, B7, B8 (fixed; the witness value changed) (and A1 until M1) |
+| Engine pin **and** a battery witness | B1, B2, B3, B5, B6, B7, B8 (fixed; the witness value changed), B9 (since Phase 4b: `unc.asymmetric_sum`, the dimidiated moments, not the extremes) (and A1 until M1, which is now the key `monte_carlo_samples`, `429cf6a`) |
 | Engine pin, indirect witness (`units.*`, `const.*`) | B12, B13 |
-| Engine pin only, **no witness** | B4 (ν > 10⁶), B9 (asymmetric shapes), B10 (fixed), B11 (fixed), B14 (fixed), B15, B16 (fixed), B18 (fixed), B19 (fixed), B20 (fixed), B21, B22 (fixed), B23, B24 |
+| Engine pin only, **no witness** | B4 (ν > 10⁶), B10 (fixed), B11 (fixed), B14 (fixed), B15, B16 (fixed), B18 (fixed), B19 (fixed), B20 (fixed), B21, B22 (fixed), B23, B24 |
 | Engine pin only, no witness, **defect** | none open: B14, B16, B17, B18, B19, B20 and B22 are **fixed on branch fix/audit-defects** (§4) |
 | Already covered by `[Settings]` | B25; B17 (its tolerance is now `approx_rel_tol`, a frozen entry; the rule itself is engine) |
 
 Cheap witnesses that would close gaps:
 
 * `stat.t_p95_nu2e6` (B4);
-* `unc.asymmetric_sum` (B9 and A4);
+* `unc.asymmetric_sum` (B9 and A4): **added in Phase 4b** (`72a0c5a`);
 * PHS-level cases, as built-in user witnesses or a new `phs.*` family, for `==`, `≈`, `limit`, numeric `integral` and
   `linspace` (B16–B21). The core battery cannot reach PHS builtins. Now that these are fixed, such cases would pin the
   corrected behaviour (the tests of the defects track pin it in the test suite, not in a frozen file).
@@ -425,22 +445,35 @@ Cheap witnesses that would close gaps:
    1. `monte_carlo_seed` defaults to `none` (today's behaviour);
    2. a frozen file **requires** a seed whenever `propagation_mode = monte_carlo`;
    3. seed per evaluation, or per process.
+
+   **Answered (2026-11-15, owner):** a fixed default seed (0), configurable, `random` opt-in; a seed per unit of evaluation
+   (M2 status, §8; `d1a5a7a`). A frozen file does not require a seed: `status` and `verify` warn on `random`.
 2. **Q2. Battery and settings.** Should battery cases pin `monte_carlo_samples` (and the future `asymmetric_shape`)
    thread-locally, as they pin the propagation mode, so a witness tests the engine and not the file's own settings? Or
    should they read the file, so an override shows in its witness?
+   **Answered in Phase 4b:** they pin them (samples, shape, default dof, display rules, seed), so a built-in witness tests the
+   engine; a user witness runs under the file's settings.
 3. **Q3. Currency.** Ship exchange rates at all? They are not physical constants and go stale. They could ship as a
    dated, opt-in `currency.conf` (proposed), or with no rates at all, leaving the user to define them.
+   **Answered in Phase 4b:** the opt-in `currency.conf`, its rates marked as placeholders as of 2026-11-15 (`44de88a`).
 4. **Q4. Thermochemistry.** Phase, standard-state pressure (1 bar against 1 atm), uncertainties (NIST quotes, e.g.
    ΔfH°(H2O, l) = −285.83 ± 0.04 kJ/mol), and the edition name. Is 0.1 kJ/mol rounding acceptable as "starter" data?
+   **Partly answered in Phase 4b:** phases on every key, 298.15 K and 1 bar, the edition named `legacy-python-1` (the Python
+   data bit for bit, its provenance in `docs/thermochemistry.md`); uncertainties and a sourced edition are future work.
 5. **Q5. Degrees of freedom.** Is "undeclared ν means ∞" the right default for a metrology library, or should `expanded`
    refuse when an input has no declared ν?
+   **Built in Phase 4b** as a setting, `default_dof = inf` (M8, `4c962e9`); whether `expanded` should refuse is not decided.
 6. **Q6. Display as a result.** Do audited users treat printed text as the result? If so, M7 belongs in priority 1, and
    `phs-witness-1` could also record the display text.
+   **Answered in Phase 4b:** M7 was built, and the twelve `display.*` built-in cases record printed text (`text=`);
+   `phs-witness-1` still records value bits, so a display key never changes a user witness.
 7. **Q7. Defects before freezing.** Fix B14 and B16–B20/B22 before Phase 4 ships? Freezing validations on top of them
    would make every later fix an "unannounced alteration" for frozen users. **Answered (2026-11-14):** fixed first, in
    their own track, before Phase 4b; done on branch fix/audit-defects (§4, §11).
 8. **Q8. Inert settings.** Remove `default_output`, `auto_simplify`, `default_system`, `readable_representation`,
    `verbose`, `mkml_recursion_limit` and `[System] base_units`, or keep them and mark them inert in the coverage table?
+   **Answered in Phase 4b:** both: removed from the shipped catalog, still readable, marked inert in the coverage table, and
+   `status`/`verify` warn where a user sets one (`df63945`); `[System] base_units` is Python-only (Phase 5).
 9. **Q9. Catalog constants without uncertainties, and the duplicate Bohr-magneton entries (S8).** Is that in scope for
    Phase 4's "data" audit, or a separate catalog task?
 10. **Q10. Plugins and modules.** PHS `use` loads `.phs` modules and native plugins from disk, and neither is in the
@@ -462,6 +495,10 @@ Rows X15-X23 and T13-T21 were added on 2026-11-14 by the language-semantics trac
 `docs/superpowers/plans/2026-11-14-language-semantics.md`), which also resolved B26, T6, T10, T12 and half of T1 (status
 in the ID cell). Their "before" values were measured on `main` (`85f2ef0`) or on the branch commit before each fix,
 their "after" values on the fix; the commit messages hold the full probe lists.
+
+Rows X24-X32 were added on 2026-11-15 by Phase 4b (branch `feat/data-migration`, plan
+`docs/superpowers/plans/2026-11-15-conf-freeze-phase-4b-data-migration.md`), which also resolved T3 and T17. Their "before"
+values were measured on the branch commit before each fix (`phs` built from it), their "after" values on the fix.
 
 ### 11.1 Found and fixed on the branch
 
@@ -490,6 +527,15 @@ their "after" values on the fix; the commit messages hold the full probe lists.
 | X21 | `abs` was outside the continuous class of `limit`, and the value at the point was used at an isolated point of the domain | `limit("1/(abs(x)-1e-9)","x",0)` `inf`; `limit("sqrt(x^2*(x^2-1e-4))","x",0)` `0.0` | `-1000000000.0`; refused (the closest sample of each side must be defined) | `5a0b227` |
 | X22 | The `extern "C"` shim of `phs export --native` for a function with `@requires`/`@ensures` aborted the host on a refused comparison (transpiled Rust comparisons panic since `cb975c4`) | the test runner killed, "panic in a function that cannot unwind", exit `0xc0000409` | the body runs in `catch_unwind`; `ok: false` and the message as `<name>_last_error()` | `4a9be8d` |
 | X23 | The static checker refused every negative temperature literal (unary minus is `-1 * x`) and let a point as a divisor through | `x = -10 degC` ran, `phs check` reported `temperature-points`; `2 / 5 degC` refused at run time, checker silent | an exact ±1 factor is a sign, as in the core; the divisor is reported | `441fa25` |
+| X24 | The calc inliner (T3) pasted a user function's body without its arguments, dropped its parentheses, matched `sqf(` inside `sqrt(`, inlined each function once, ignored arity, declared units and decorators, and saw only the interpreter's functions | `f(x)=2*x; deriv("f(t)","t")` `0`; `h(a,b)=a-b; deriv("h(b, a)","a")` `1`; `f(x)=x^2; deriv("f(t) + x","x")` `2 * x + 1`; `f(x)=3*x^2; integral("f(t)","t",0,1)` refused; `phs eval` "Unknown symbolic function 'f'" | `2`; `-1`; `1`; `1`; `2`; recursion, arity, declared units, decorators, uncertain literals and non-algebra refused, naming the function | `1931aac` |
+| X25 | A module's exported values and functions were evaluated in the importer's environment, so the importer's bindings leaked in | lib `k = 2; r = 3*k; f(x) = k*x`: `k = 10; use r from "lib"; r` `30`; `k = 10; use f; f(1)` `10`; `use r` alone "Unknown unit 'k'"; a cyclic import accepted; a measurement imported twice two measurements | `6`; `2`; `6`; refused naming the cycle; one measurement (a module runs once, whole, in its own scope) | `9bdf3a7` |
+| X26 | `HashMap` iteration order decided answers: the "did you mean" tie-break (T17), the order a wildcard `use` evaluated a module's values, the order calc builtins inlined functions, the names of "Missing argument(s) for equation" and of a pipeline step's unexpected inputs | 10 runs of `x = 5 x`: 'K' ×4, 'm' ×3, 's' ×3; `p = 2 m; q = 3 * p; r = q + p` via `use *`: `8 m` about 1 run in 7, otherwise an unknown-unit or type error; `g(x) = f(x) + 1; deriv("g(x)","x")` failed half the time | 'A' ×10; `8 m` always (definition order); always answered; sorted names | `22f6845` |
+| X27 | Reading a frozen file failed on a transient sharing violation (Windows, a scanner holding a file just written) | `load_file` right after `write_atomic`: "os error 32" once | retried (errors 5 and 32, 5 waits of 25-400 ms), as the rename already was | `568f6d5` |
+| X28 | `phs serve` modules each started the seed's stream again, and a request continued its module's stream | two modules holding `10 +/- 1 m` held the same 1000 samples; `fresh()` depended on the requests served before | modules differ; every request starts at the same position (deterministic, not independent replicates) | `320f1a7` |
+| X29 | `declare_dof` stored only finite values, so a declared infinity could be changed later | `declare_dof(id, inf)` then `declare_dof(id, 3)`: Ok, dof became 3 | the conflict error; a declared infinity is recorded (and never reads back as `default_dof`) | `4f71c98` |
+| X30 | A Monte Carlo `for` loop or `parallel_map` ran on rayon workers, each drawing from whichever thread ran it; the scoped sample count did not reach the workers | RAYON_NUM_THREADS=1: `t = 10.0008141166994` m; 8 threads: `9.99990039281738`, `10.000397593332` m; a loop under a host scope of 37 samples drew 1000 | `9.99988684814229` m at any thread count (the loop stays on the unit's thread); 37 | `785defc`, `429cf6a` |
+| X31 | Python read a missing system file as an empty one and fell back to a same-named file in the working directory | `create_system("absent.conf")` a base-catalog system; a `decoy.conf` in the working directory was read | `FileNotFoundError` naming the file, for both | `d965bf0` |
+| X32 | The pydantic dict validator built `create_system("si.conf")`, a file that never existed (found by X31's fix) | `Model(q={"magnitude": 2, "unit": "m"}).q.system.name` `"Default"`; an unknown system name a base-catalog system | `"SI"` (`international.conf`); a `ValidationError` naming the file | `d965bf0` |
 
 ### 11.2 Open (not fixed on the branch)
 
@@ -498,7 +544,7 @@ their "after" values on the fix; the commit messages hold the full probe lists.
 | B26 **resolved on branch feat/lang-semantics** (`6eb3d23`) | `physure-script/src/phs.pest:125` (`comp_expr = { term ~ (_is_compare ~ op_compare ~ term)* }`), `:135` | **Comparison binds tighter than `+` and `-`.** `0.1 + 0.2 == 0.3` is parsed as `0.1 + (0.2 == 0.3)` | `0.1 + 0.2 == 0.3` and `0.1 m + 0.2 m == 0.3 m`: "Invalid operand types for binary operation" (before and after the track). Every test of the track parenthesises its sums; the guide says to. | Language semantics, for the owner. The grammar was **not** changed. |
 | T1 **disagreement resolved on branch feat/lang-semantics** (`9bed746`); the reporting half is open | `physure-script/src/check.rs:745`; `physure-script/src/report.rs:184` | The static checker flags a valid sign test as a dimension mismatch, and `phs eval` hides the runtime error of any line the checker flagged | `1 m > 0`: the runtime answers `True`, the checker reports "cannot compare L with dimensionless", so `phs eval` gives `ok: false`. On a flagged line the interpreter's own error is dropped ("say it once"), so a different runtime error there is never shown. | Teach the checker the dimensionless-zero exception (linear units only, as the runtime now does); report a runtime error whose text differs from the checker's. **Resolution:** the owner decided the checker is right: a zero needs a unit, so `1 m > 0` is now an error in the interpreter too, with the same reason (75 snippets × both angle modes agree). Still open: `report.rs` (`run_program`, "say it once") still drops the interpreter's error on a line the checker flagged. |
 | T2 | the symbolic engine (`physure-script/src/symbolic/`) | Comparisons are dropped silently by the symbolic engine | `integral("x < 0.5","x")` (indefinite) answers `x^2/2`. The definite form is now refused (X4) because the quadrature sees a Bool. | Refuse a comparison in symbolic input. |
-| T3 | `physure-script/src/builtins/mod.rs:88-112` (`preprocess_symbolic_expression`, `inline_call`) | Inlines only the **first** call of each user function, up to its first closing parenthesis, and does not substitute the arguments | read at file:line, not probed | Inline every call with its arguments, or refuse user functions in symbolic input. |
+| T3 **resolved on branch feat/data-migration** (`1931aac`, X24) | `physure-script/src/builtins/mod.rs:88-112` (`preprocess_symbolic_expression`, `inline_call`) | Inlines only the **first** call of each user function, up to its first closing parenthesis, and does not substitute the arguments | read at file:line, not probed | Inline every call with its arguments, or refuse user functions in symbolic input. |
 | T4 | the runtime builtins | PHS has no runtime `sec`, `csc`, `cot` or `erf`, while the symbolic engine integrates them | `sec(1)`, `csc(1)`, `cot(1)`, `erf(1)`: "Undefined function". `integral("sec(x)^2","x",0,1)` is refused: "the antiderivative tan(x) cannot be confirmed … Undefined function 'sec'" (true value `tan 1`). | Add the four functions (core first). |
 | T5 | the interpreter's name lookup | An unbound name evaluates to a string of itself | `foo` gives `foo` (still, on feat/lang-semantics; `pi` and the catalog constants are no longer unbound, T12); `pi` gave `pi`; `x = pi * 2` was flagged by the checker ("'pi' is neither a variable nor a unit"). Before the track `pressure > 0 Pa` answered `False` silently (now a type error, X8). | Whether an unbound name should be an error. Still open after feat/lang-semantics, which shows it in two places: a fragment `"{F_e => nN}"` with `F_e` unbound now prints the placeholder raw (`=> unit` of a name with no value is an error since `a14c883`), and a condition or a conversion names the unbound name ("`true` has no value"). |
 | T6 **resolved on branch feat/lang-semantics** (`ee9f7f1`, `867c753`) | `physure-script/src/interpreter/helpers.rs:89-90` | Truthiness of strings and other types is unchanged by B22: the strings `"true"`, `"True"` and `"1"` are true, every other string is false, and every other type (vector, matrix, function, ...) is false | `if "true" then 1 else 0` and `if "1" then 1 else 0` give `1.0` | Ask the owner: should a non-Bool, non-numeric condition be an error? **Resolution:** every condition is a Bool; a number, a quantity, text and every other type is an error that says what to write (`helpers::not_a_bool`), at run time and in `phs check`. |
@@ -512,7 +558,7 @@ their "after" values on the fix; the commit messages hold the full probe lists.
 | T14 | `physure-core/src/units/physure.conf:324`; the catalog grammar | **Data finding.** The catalog's constants carry no uncertainty: none of the 411 has one, and the grammar has none, so `newtonian_constant_of_gravitation = 6.6743e-11` drops CODATA 2022's relative standard uncertainty of 2.2e-5 (and every other measured constant its own). A constant written with `+/-` in a lenient `physure.conf` is refused when used, never read without it. | read at file:line | Phase 4b (data migration): a `[Constants]` uncertainty, propagated like any measurement. |
 | T15 | `physure-script/src/codegen/rust.rs` (the `phs export --native` shim) | A shim of a function **without** contracts returns a bare `f64` and has no failure status, so a panic in it (a refused comparison in a ternary of the body, a unit mismatch) still aborts the host. In the shim **with** contracts the panic is caught, but the default panic hook still prints the message to the host's stderr, and `catch_unwind` covers exactly the shim body (the `@requires` checks, the call, the `@ensures` checks) and relies on the default `panic = "unwind"` of the crate that builds the library; built with `panic = "abort"`, the abort comes back. | stated by `4a9be8d`; not probed further | Give every shim a failure status and a quiet panic hook, or make the generated comparisons return errors instead of panicking. |
 | T16 | `physure-script/src/parser/quantities.rs` (the sigma-bound grammar) | A sigma bound follows only a written target value: `x == t +/- 2 sigma` with `t` a variable is an error (since `8decf7b`; it used to compare exactly) | "a `sigma` bound is written after a literal target value, `x == 9.80 m/s^2 +/- 2 sigma`" | Whether a bound should accept a variable target. |
-| T17 | `physure-core/src/units/registry.rs:361-392` (`closest_symbol`) | **Non-determinism.** The "did you mean" hint for an unknown unit varies between runs of the same binary: candidates come from `HashMap` keys and ties of (distance, shared prefix, length) go to whichever the iteration order meets first | every corpus run of this track showed the noise ("did you mean 'A'" against "'K'" for one input) | Break ties by the symbol itself. |
+| T17 **resolved on branch feat/data-migration** (`22f6845`, X26) | `physure-core/src/units/registry.rs:361-392` (`closest_symbol`) | **Non-determinism.** The "did you mean" hint for an unknown unit varies between runs of the same binary: candidates come from `HashMap` keys and ties of (distance, shared prefix, length) go to whichever the iteration order meets first | every corpus run of this track showed the noise ("did you mean 'A'" against "'K'" for one input) | Break ties by the symbol itself. |
 | T18 | `physure-script/src/check.rs` (the comparison message) | The checker's message for a plain zero says `x > 0 m` whatever the dimension: for an angle, a level or a temperature it names metres | `30 deg > 0` under `phs eval`: "cannot compare A with the plain number 0: a zero needs a unit, write it with one (`x > 0 m`; ...)", where the interpreter names the operand ("`x > 0 dB`" for a level since `926093a`) | Name a unit of the operand's dimension, as the interpreter does. |
 | T19 | `physure-script/src/codegen/js.rs:262-269`, `codegen/mod.rs:536` | The JavaScript/TypeScript target emits `Quantity.of(...)` for a literal and `x.pow(y.getValue())` for a non-literal exponent; neither `of` nor `getValue` is a method of the WASM `Quantity` | read at file:line (noted by `cb975c4`, which moved comparisons to `phsCompare`) | Emit the WASM constructor and the `value` getter, and run the generated JS in a test. |
 | T20 | `physure-core/src/quantity.rs:131-132` (the display of a number) | NaN displays as `NaN.0` (a `.0` is appended to any text without `.` or `e`) | `x = 1e308 * 10 - 1e308 * 10` in `phs <file>`: `x = NaN.0`; `x - x` with `x = 1e308 m * 10`: `NaN.0 m` | Print `NaN`. |
@@ -529,3 +575,16 @@ comparison is exposed as `_core.Quantity.phs_compare`/`physure.ext.helpers.phs_c
 (Java) and `Quantity.phsCompare` (WASM). Still open for Phase 5: Python `Quantity.__eq__` (exact after conversion),
 `PyQuantity.__eq__`, the `approx_eq` defaults (`0.1` / `1e-5`), Java `approxEquals` (absolute `1e-6`) and Java
 `Quantity.equals` (same unit and bits), which do not use that comparison.
+
+**Still open after Phase 4b** (each a row of `docs/conf_coverage.md` with its owner; none was decided on the branch):
+
+* Q10: `.phs` modules and native plugins loaded by `use` are code outside the frozen file (refuse them under a frozen file,
+  or record their hashes): the owner's decision.
+* M9 (Python's default `p = 0.95`) and M10 (unit names written by code tables, `µ` against the catalog's `u`; it will change
+  user-witness hashes when it moves): deferred by the owner to Phase 5.
+* T5 (an unbound name is its own text) and T13 (`e` in symbolic strings): language semantics, for the owner.
+* T14 (catalog constants without uncertainty): a later catalog task.
+* T20 (NaN prints `NaN.0`): a defect; no display witness records NaN while it is open.
+* The quality of `legacy-python-1` (rounded, no uncertainty, NBS-82 values not verified, NH3(g) S° about 7 σ from CODATA) and
+  the missing thermochemistry line of `phs conf status`: a future edition and a follow-up.
+* Whether `expanded` should refuse an input without a declared ν (Q5): not decided; `default_dof = inf` keeps today's answer.
