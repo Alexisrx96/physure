@@ -1,8 +1,8 @@
 # Physical & Scientific Diagramming Engine Roadmap
 
-**Status: 📋 Planned / Specification Defined**
+**Status: Parked. Specification only, no code.**
 
-> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+> 🗺️ **Status and priority live in the [Roadmap](ROADMAP.md).** This document is a design: what it describes is scheduled, or parked, there.
 
 This document outlines the roadmap, architectural design, and implementation path for introducing a **Parametric Physical & Scientific Diagramming Engine** (`physure.diagrams`) to [Physure](https://github.com/Alexisrx96/physure).
 

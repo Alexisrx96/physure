@@ -1,11 +1,13 @@
 # Symbolic Math & Advanced CAS Engine Roadmap
 
-**Status: Phase 1 Implemented | Phase 2–4 In Progress / Planned**
+**Status: Phase 1 implemented | Phases 2–4 not started**
 
 This document outlines the architectural design, specifications, algebraic algorithms, and implementation path for developing a full-featured, zero-dependency, high-performance **Computer Algebra System (CAS)** and Symbolic Engine inside **`physure_core`** (Rust) with seamless multi-language bindings (Python, C, Java/Wasm).
 
 > 📚 **Academic Rationale & Scientific Literature**: For detailed academic paper citations, algorithmic complexity proofs, and theoretical justifications supporting these choices, see the companion document [Symbolic Math Scientific Research](symbolic_math_research.md).
-> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+> 🗺️ **Status and priority live in the [Roadmap](ROADMAP.md).** This document is a design: what it describes is scheduled, or parked, there.
+>
+> ⚠️ **Where the engine really is.** The `physure_core::cas::*` and `physure_core::symbolic` paths below are the original proposal. No such module exists. The engine is `physure-script/src/symbolic/`, built on an expression tree whose numeric leaf is an `f64`, so it has no exact arithmetic yet. Where Phase 2 lives (the core or `physure-script`) is decided together with exact coefficients, the first symbolic item of the Roadmap.
 
 ---
 

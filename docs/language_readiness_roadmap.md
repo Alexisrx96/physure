@@ -2,7 +2,7 @@
 
 **Status: ✅ LAB-READY reached — Tracks A/B/C/D/E/F all merged** (Track C's DAP adapter stretch item and Track D's cross-file incrementality follow-on remain open, both explicitly non-blocking)
 
-> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+> 🗺️ **Status and priority live in the [Roadmap](ROADMAP.md).** This document is a design: what it describes is scheduled, or parked, there.
 
 This document defines the path to **LAB-READY**: the point at which PHS scripts can express real
 iterative/convergence workflows (loops), get real speedups on lab-scale data (concurrency), and can
