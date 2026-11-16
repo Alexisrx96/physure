@@ -135,11 +135,13 @@ def test_a_missing_packaged_file_raises_and_never_reads_the_cwd(
     empty_package = tmp_path / "package"
     empty_package.mkdir()
     monkeypatch.chdir(decoy)
+    # built before the patch: it reads a shipped system file through the
+    # same importlib.resources module, which fails closed too
+    system = get_current_system()
     monkeypatch.setattr(
         currency.resources, "files", lambda _package: empty_package
     )
 
-    system = get_current_system()
     with pytest.raises(FileNotFoundError):
         enable_currency()
     assert "EUR" not in system

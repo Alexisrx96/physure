@@ -718,7 +718,15 @@ class Quantity(
                 # Lazy import to avoid circular dependencies
                 from physure.application.startup import create_system
 
-                sys = create_system(f"{system_name.lower()}.conf")
+                # "SI" is international.conf (its [System] name is SI);
+                # there is no si.conf, which used to fall back in silence
+                # to the base catalog
+                stem = system_name.lower()
+                stem = "international" if stem == "si" else stem
+                try:
+                    sys = create_system(f"{stem}.conf")
+                except FileNotFoundError as missing:
+                    raise ValueError(str(missing)) from missing
                 if unit is None:
                     raise ValueError(
                         f"Cannot validate Quantity from {type(value)}"

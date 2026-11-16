@@ -161,26 +161,39 @@ def _load_base_config(
 def _load_extra_config_file(
     parser: configparser.ConfigParser, file_name: str, verbose: bool
 ) -> None:
-    """Loads one extra config file, falling back to a direct path lookup."""
-    try:
-        sys_config_path = resources.files(
-            "physure.infrastructure.config.systems"
-        ).joinpath(file_name)
-        with resources.as_file(sys_config_path) as sys_config:
-            parser.read(str(sys_config), encoding="utf-8")
-            if verbose:
-                print(f"  -> Loaded system config: {sys_config}")
-        return
-    except Exception:
-        pass
+    """Loads one system file, or fails naming it.
 
-    # Fallback: try as a direct path or user file
-    if Path(file_name).is_file():
-        parser.read(file_name, encoding="utf-8")
+    A bare name (``imperial.conf``) is a file shipped in
+    ``physure.infrastructure.config.systems`` and is read from the installed
+    package only: never from the working directory, where a same-named file
+    would otherwise be loaded in its place. A name with a directory part
+    (``./mine.conf``, an absolute path) is a file of your own.
+
+    Raises:
+        FileNotFoundError: If the file does not exist. A system that silently
+            fell back to the base catalog would answer in the wrong system.
+    """
+    if Path(file_name).name != file_name:
+        own = Path(file_name)
+        if not own.is_file():
+            raise FileNotFoundError(f"system file not found: {own}")
+        parser.read_string(own.read_text(encoding="utf-8"), source=str(own))
         if verbose:
-            print(f"  -> Loaded external config: {file_name}")
-    elif verbose:
-        print(f"  -> Config file not found: {file_name}")
+            print(f"  -> Loaded external config: {own}")
+        return
+    shipped = resources.files("physure.infrastructure.config.systems")
+    sys_config = shipped.joinpath(file_name)
+    if not sys_config.is_file():
+        raise FileNotFoundError(
+            f"no system file {file_name!r} ships with physure "
+            f"(physure.infrastructure.config.systems); a file of your own "
+            f"is named by a path, e.g. './{file_name}'"
+        )
+    parser.read_string(
+        sys_config.read_text(encoding="utf-8"), source=file_name
+    )
+    if verbose:
+        print(f"  -> Loaded system config: {file_name}")
 
 
 def _get_config_parser(
@@ -215,9 +228,15 @@ def create_system(
     """Creates a UnitSystem, optionally loading a specific system config file.
 
     Args:
-        config_name: The name of the config file (e.g., 'imperial.conf')
-                     located in infrastructure/config/systems, or a path.
+        config_name: The name of a system file shipped in
+                     infrastructure/config/systems (e.g., 'imperial.conf'),
+                     or the path of a file of your own ('./mine.conf').
+                     A bare name is never looked up in the working
+                     directory.
         verbose: If True, prints loading details.
+
+    Raises:
+        FileNotFoundError: If the system file does not exist.
     """
     extra_files = [config_name] if config_name else []
     parser = _get_config_parser(extra_files, verbose)
