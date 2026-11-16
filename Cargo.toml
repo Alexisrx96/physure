@@ -27,8 +27,11 @@ description = "High-performance physical dimension engine — Rust-first, zero-c
 
 # ── Shared dependency versions ─────────────────────────────────────────────
 [workspace.dependencies]
-physure-core   = { path = "physure-core", package = "physure" }
-physure-script = { path = "physure-script" }
+# default-features = false: each member says whether it wants the `html-viewer`
+# (three.js, ~630 KB). The bindings that expose plot3d ask for it; the language
+# server does not.
+physure-core   = { path = "physure-core", package = "physure", default-features = false }
+physure-script = { path = "physure-script", default-features = false }
 tower-lsp     = "0.20"
 tokio         = { version = "1", features = ["full"] }
 num-bigint    = "0.4"

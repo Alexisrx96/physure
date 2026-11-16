@@ -23,8 +23,8 @@ name       = "physure_core"
 crate-type = ["cdylib"]      # Shared library for Python import
 
 [dependencies]
-physure-core.workspace = true
-physure-script.workspace = true
+physure-core   = { workspace = true, features = ["html-viewer"] }
+physure-script = { workspace = true, features = ["html-viewer"] }
 pyo3.workspace         = true
 numpy.workspace        = true
 # Used directly by src/lib.rs (Rational64, FromPrimitive).

@@ -78,6 +78,28 @@ a leading `1` would otherwise round to a coarse `±0.2`). The full, unrounded va
 lost — it stays available for every further calculation, and an explicit format spec like
 `kinetic_energy:.6f` still shows exactly the precision you ask for.
 
+### Degrees of freedom and expanded uncertainty
+
+A standard uncertainty that comes from `n` observations is itself uncertain, by `n - 1` degrees of freedom. Declare them
+after the uncertainty with `dof` (or `ν`), and PHS combines them through every calculation by the Welch–Satterthwaite
+formula, so that a result can say how wide its interval is at a given confidence:
+
+```phs
+l_s = 50000623 +/- 25 dof 18 nm
+d0 = 215 +/- 5.8 dof 24 nm
+d_theta = 0 +/- 16.599 dof 2 nm
+length = l_s + d0 + d_theta
+
+nu_eff = dof(length)                 # effective degrees of freedom
+k95 = coverage_factor(length, 0.95)  # Student-t factor, at nu_eff truncated to an integer
+U95 = expanded(length, 0.95)         # U = k * u_c, in nm
+```
+
+`dof(x)` is `inf` for a measurement that declares none, and `from_samples([9.8, 10.1, 10.0] V)` makes a measurement from
+observations (the mean, `s/√n`, `n − 1` degrees of freedom). The complete worked example of the Guide to the Expression
+of Uncertainty in Measurement, Annex H.1, is the file `dof_example.phs` next to this page: its six contributions give
+`nu_eff = 16.75`, `k95 = 2.12` and `U95 = 67.1 nm`, the 0.07 µm the Guide prints.
+
 ## 4. `where` for showing intermediate steps
 
 ```phs
@@ -91,6 +113,17 @@ to where it's used instead of buried earlier in the script:
 ```
 force                   = 19.62 ± 0.98 N
 ```
+
+`pi` (or `π`) and the constants of the catalog are names you can use anywhere, each with its unit:
+
+```phs
+circumference = 2 * pi * 0.5 m
+thermal_energy = boltzmann_constant * 300 K => meV
+```
+
+They are the catalog's own long names (`speed_of_light_in_vacuum`, `molar_gas_constant`; not `c` or
+`R`), read from the catalog in force, and no binding can reuse them: `pi = 3`, or `where pi = 3`,
+is an error. Section 1.5 of `PHYSURE_LANGUAGE_GUIDE.md` lists the rule in full.
 
 Every value computed so far can be interpolated straight into a string, for a one-line summary
 of the whole calculation:
@@ -118,8 +151,20 @@ without anyone having to re-run anything to trust it. The report *is* the audit 
 ## 6. Booleans, `not`/`and`/`or`, and assertions
 
 Comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `≈`) return a real boolean, `True` or `False`.
-There is no implicit truthiness: a quantity, a number, or a string is never treated as a
-condition on its own.
+They compare what the quantities stand for, in any units: `1 km == 1000 m` is true, and `==`
+means "equal up to a relative 1e-12 of the larger", so `1 pm == 2 pm` is false. A relative
+bound never accepts a difference against an exact zero (`cos(90 deg) == 0` is false): compare
+`abs(x)` with an explicit tolerance in the unit of `x` instead. `≈` uses the relative tolerance
+`approx_rel_tol` of `physure.conf` (default `1e-3`), and `approx(a, b, rel)` names its own.
+Comparing different dimensions, or values that have no comparison (a vector, a string and a
+quantity), is an error, never `False`, and a zero needs a unit: `x > 0` with `x` in metres is
+an error, write `x > 0 m` (0 degC and 0 K are different zeros); a level compares with a level,
+`20 dB > 10 dB`, never with a plain number (`20 dB == 100` is an error). A condition (`if`,
+`while`, `? :`, `@requires`) is a Bool: a number or a quantity is not one (write `x != 0 m`), and
+neither is text (`"true"` is not `True`; lowercase `true` is a name with no value). Arithmetic
+binds tighter than comparison, as in mathematics: `a + b == c` is `(a + b) == c`, and
+`x => km < 5 km` converts, then compares. One comparison per expression: write `a < b < c` as
+`a < b and b < c`. A `+` or `-` cannot follow `=> unit`: write `(x => km) - 5 m`.
 
 ```phs
 pressure > 0 Pa
@@ -143,7 +188,7 @@ compare directly:
 ```phs
 assert(power > 0 kW)
 assert(pressure >= minimum_pressure, "V-PUMP-004: pressure is below the operating range")
-assert(actual, expected)          # existing form: dimensional + magnitude tolerance check
+assert(actual, expected)          # existing form: the same test as actual == expected
 exact_assert(actual, expected)    # existing form: exact unit and magnitude match
 ```
 
@@ -156,8 +201,9 @@ Prefer several small assertions with descriptive messages over one large compoun
 a boolean built from named domain predicates (`is_within_tolerance and is_powered`) reads
 better and fails with a clearer message than one long inline expression.
 
-A sigma-bound condition like `assert(result == reference +/- 2 sigma)` parses and runs in the
-interpreter, but its behavior is not yet identical across every transpile target (see
+A sigma-bound condition like `assert(result == 9.80 m/s^2 +/- 2 sigma)` runs in the
+interpreter (the bound follows a written target value; after a variable or a parenthesised
+expression it is an error, not a dropped bound), but its behavior is not yet identical across every transpile target (see
 `docs/uncertainty-gum-compliance.md`) — use `assert(actual, expected)` instead when the check
 needs to produce the same result in every generated language.
 

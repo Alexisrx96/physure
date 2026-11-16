@@ -49,6 +49,7 @@ class SpecializedQuantityFactory:
         from_unit: str | CompoundUnit | None = None,
         uncertainty: Any = 0.0,
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Quantity[_V, _U, Any]: ...
 
     @overload
@@ -61,6 +62,7 @@ class SpecializedQuantityFactory:
         # never executes (only the untyped implementation below does).
         uncertainty: _U = 0.0,  # ty: ignore[invalid-parameter-default]
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Quantity[_V, _U, Any]: ...
 
     def __call__(
@@ -69,6 +71,7 @@ class SpecializedQuantityFactory:
         from_unit: str | CompoundUnit | None = None,
         uncertainty: Any = 0.0,
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Quantity[Any, Any, Any]:
         """Creates a Quantity with the factory's default unit."""
         system = (
@@ -77,7 +80,7 @@ class SpecializedQuantityFactory:
         if from_unit:
             temp_unit = system.resolve_unit(from_unit)
             temp_q = Quantity.from_input(
-                value, temp_unit, system, uncertainty, symbol
+                value, temp_unit, system, uncertainty, symbol, dof
             )
             return temp_q.to(self._default_unit)
 
@@ -87,6 +90,7 @@ class SpecializedQuantityFactory:
             system=system,
             uncertainty=uncertainty,
             symbol=symbol,
+            dof=dof,
         )
 
     def __repr__(self) -> str:
@@ -116,6 +120,7 @@ class QuantityFactory:
         # ponytail: same unbound-TypeVar-default limitation as above.
         uncertainty: _U = 0.0,  # ty: ignore[invalid-parameter-default]
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Quantity[_V, _U, Any]: ...
 
     @overload
@@ -126,6 +131,7 @@ class QuantityFactory:
         # ponytail: same unbound-TypeVar-default limitation as above.
         uncertainty: _U = 0.0,  # ty: ignore[invalid-parameter-default]
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Quantity[_V, _U, _UT]: ...
 
     @overload
@@ -140,6 +146,7 @@ class QuantityFactory:
         unit: Any = None,
         uncertainty: Any = 0.0,
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Quantity[Any, Any, Any]:
         """Creates a Quantity, parsing strings if necessary."""
         system = (
@@ -191,6 +198,58 @@ class QuantityFactory:
             system=system,
             uncertainty=uncertainty,
             symbol=symbol,
+            dof=dof,
+        )
+
+    def from_samples(
+        self,
+        values: Any,
+        unit: Any = None,
+        symbol: str | None = None,
+    ) -> Quantity[Any, Any, Any]:
+        """A Type A evaluation (JCGM 100:2008 4.2) of repeated observations of one quantity.
+
+        The result is the mean, its standard uncertainty `s / sqrt(n)` (the experimental
+        standard deviation of the mean) and `n - 1` degrees of freedom. The observations
+        are numbers (with `unit`) or exact quantities of one dimension, taken in the unit
+        of the first. Observations that are all equal have no spread to estimate and give
+        an exact quantity.
+
+        Raises:
+            ValueError: Fewer than two observations, one that is not finite, or one with an
+                uncertainty.
+
+        Examples:
+            >>> from physure import Q_
+            >>> v = Q_.from_samples([10.0, 10.2, 9.9, 10.1, 10.3], "V")
+            >>> v.magnitude, v.dof
+            (10.1, 4.0)
+        """
+        from physure._core import type_a_evaluation
+
+        items = list(values)
+        if items and all(isinstance(v, Quantity) for v in items):
+            if any(float(v.uncertainty) > 0 for v in items):
+                raise ValueError(
+                    "the observations of from_samples must be exact: it estimates the uncertainty "
+                    "from their spread"
+                )
+            unit = items[0].unit if unit is None else unit
+            target = (
+                unit
+                if not isinstance(unit, str)
+                else (self._system or get_active_system()).resolve_unit(unit)
+            )
+            items = [v.to(target).magnitude for v in items]
+        mean, standard_error, dof = type_a_evaluation(
+            [float(v) for v in items]
+        )
+        return self(
+            mean,
+            unit,
+            uncertainty=standard_error,
+            symbol=symbol,
+            dof=dof if standard_error > 0 else None,
         )
 
     def __getitem__(

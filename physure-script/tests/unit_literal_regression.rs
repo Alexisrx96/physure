@@ -224,9 +224,11 @@ fn comparisons_convert_scale_and_reject_mismatched_dimensions() {
     assert!(truth("999.0 m < 1.0 km"));
     assert!(!truth("1.0 km != 1000.0 m"));
 
-    // A sign test against a bare zero stays legal: zero reads the same in every unit.
-    assert!(truth("2.0 m > 0"));
-    assert!(!truth("0.0 m > 0"));
+    // A sign test writes its zero with a unit: zeros of different scales are different values, so a bare `0`
+    // against a length is a dimension mismatch like any other plain number.
+    assert!(truth("2.0 m > 0 m"));
+    assert!(!truth("0.0 m > 0 m"));
+    assert!(eval_phs("2.0 m > 0").is_err(), "a zero needs a unit");
 
     // Comparing across dimensions has no answer, and answering `false` would let it
     // pass silently through a conditional.
@@ -251,9 +253,12 @@ fn comparisons_produce_a_real_bool_not_a_dimensionless_1_0() {
     assert_eq!(last("1.0 km != 1000.0 m"), Some(PhsValue::Bool(false)));
 
     // The sigma-tolerance comparison (`a == b +/- N sigma`) goes through the exact same
-    // `boolean()` call as the plain relational operators -- one fix covers both.
-    assert_eq!(last("9.81 m/s^2 == 9.80 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(true)));
-    assert_eq!(last("9.81 m/s^2 == 9.00 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(false)));
+    // `boolean()` call as the plain relational operators -- one fix covers both. The sigma is the
+    // measured (left) operand's: an exact left side used to borrow a default of 0.05 in its own unit,
+    // and is an error now (audit B18).
+    assert_eq!(last("(9.81 +/- 0.01) m/s^2 == 9.80 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(true)));
+    assert_eq!(last("(9.81 +/- 0.01) m/s^2 == 9.00 m/s^2 +/- 2 sigma"), Some(PhsValue::Bool(false)));
+    assert!(eval_phs("9.81 m/s^2 == 9.80 m/s^2 +/- 2 sigma").is_err());
 
     // Display must read like an answer, not a magnitude.
     assert_eq!(eval_phs("5.0 m > 3.0 m").unwrap().last().unwrap().to_string(), "True");

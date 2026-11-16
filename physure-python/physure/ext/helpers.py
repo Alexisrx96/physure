@@ -41,6 +41,70 @@ def approx_eq(
         return False
 
 
+def _core_quantity(x: Any) -> Any:
+    """The Rust core's quantity for a number or a Quantity, its unit read by the registry."""
+    from physure._core import Quantity as _CoreQuantity
+    from physure.domain.measurement.units import get_default_system
+
+    if isinstance(x, (int, float)) and not isinstance(x, bool):
+        x = Q_(float(x), "")
+    unit = get_default_system().core_registry.expand(x.unit)
+    return _CoreQuantity(float(x.magnitude), unit)
+
+
+def phs_compare(a: Any, op: str, b: Any) -> bool:
+    """PHS `a op b` (`op` one of `<`, `>`, `<=`, `>=`, `==`, `!=`), as the interpreter answers it.
+
+    Two numbers or quantities are compared by the Rust core (`Quantity::phs_compare`):
+    canonical magnitudes, `==` within the relative tolerance of PHS, and a `ValueError` when
+    they have no comparison (different dimensions, a zero written without a unit, a level
+    against a plain number). Two Bools or two strings compare with `==` and `!=` only; any
+    other pair is a `TypeError`. This is what PHS transpiled to Python calls.
+    """
+    for kind in (bool, str):
+        if isinstance(a, kind) or isinstance(b, kind):
+            if (
+                isinstance(a, kind)
+                and isinstance(b, kind)
+                and op in ("==", "!=")
+            ):
+                return (a == b) == (op == "==")
+            raise TypeError(
+                f"cannot compare {type(a).__name__} and {type(b).__name__} with {op}"
+            )
+    return bool(_core_quantity(a).phs_compare(_core_quantity(b), op))
+
+
+def dof(x: Any) -> float:
+    """Effective degrees of freedom of a measurement (`inf` for a number or an exact quantity)."""
+    return float(getattr(x, "dof", math.inf))
+
+
+def _probability(p: Any) -> float:
+    """A coverage probability: a number, or the dimensionless quantity a PHS literal becomes."""
+    return float(getattr(p, "magnitude", p))
+
+
+def coverage_factor(x: Any, p: Any) -> float:
+    """Coverage factor for the coverage probability `p` (Student-t at the effective dof)."""
+    from physure._core import coverage_factor as _coverage_factor
+
+    return float(_coverage_factor(_probability(p), dof(x)))
+
+
+def expanded(x: Any, p: Any) -> Any:
+    """Expanded uncertainty `U = k u_c`, an exact quantity in the unit of `x` (0.0 for a number)."""
+    if not hasattr(x, "expanded"):
+        return 0.0
+    result = x.expanded(_probability(p))
+    return Q_(result.expanded_uncertainty, result.unit)
+
+
+def from_samples(values: Any) -> Any:
+    """Type A evaluation of repeated observations (mean, standard error, `n - 1` dof)."""
+    return Q_.from_samples(values)
+
+
 def linspace(start: Any, stop: Any, num: int = 50) -> Any:
     """Generate linearly spaced numbers or Quantities."""
     import numpy as np

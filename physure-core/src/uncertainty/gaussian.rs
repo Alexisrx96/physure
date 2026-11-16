@@ -110,7 +110,10 @@ pub(crate) fn function_mean_and_jacobian(func: &str, m: f64) -> (f64, f64) {
             let p = 10f64.powf(m);
             (p, p * std::f64::consts::LN_10)
         }
-        "abs" => (m.abs(), 1.0),
+        // d|x|/dx is sign(x): the spread is the same either way, but |x| is -x for a negative x, and what it
+        // shares with x (|x| + x is zero) depends on the sign. At zero there is no derivative, and the spread
+        // carries over as it always did.
+        "abs" => (m.abs(), if m < 0.0 { -1.0 } else { 1.0 }),
         "tan" => (m.tan(), 1.0 + m.tan().powi(2)),
         "tanh" => (m.tanh(), 1.0 - m.tanh().powi(2)),
         _ => (m, 1.0),

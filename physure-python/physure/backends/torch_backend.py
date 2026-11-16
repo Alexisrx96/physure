@@ -429,7 +429,11 @@ class TorchBackend(BackendOps):
         """Returns an identity operator."""
         device = getattr(reference, "device", None)
         dtype = getattr(reference, "dtype", None)
-        return torch.eye(size, device=device, dtype=dtype)
+        if torch.compiler.is_compiling():
+            return torch.eye(size, device=device, dtype=dtype)
+        return self.diagonal_operator(
+            torch.ones(size, device=device, dtype=dtype)
+        )
 
     def broadcast_operator(
         self,
@@ -465,8 +469,27 @@ class TorchBackend(BackendOps):
         ).coalesce()
 
     def diagonal_operator(self, diagonal: Any) -> Any:
-        """Returns a diagonal operator from the given diagonal values."""
-        return torch.diag(self.asarray(diagonal))
+        """Returns a diagonal operator from the given diagonal values.
+
+        Sparse, as the numpy backend's is: the element-wise Jacobian of
+        ``x * y`` has N entries, and ``torch.diag`` made it N * N (4 TB for a
+        million elements; ``a * b`` at 16,000 elements: 2,046 ms -> 1.6 ms).
+        While ``torch.compile`` traces it stays dense: Dynamo cannot trace a
+        sparse tensor, and the graph-break gate (tests/ext/test_graph_breaks.py)
+        must not go up.
+        """
+        values = torch.reshape(self.asarray(diagonal), (-1,))
+        if torch.compiler.is_compiling():
+            return torch.diag(values)
+        size = values.shape[0]
+        index = torch.arange(size, device=values.device)
+        return torch.sparse_coo_tensor(
+            torch.stack([index, index]),
+            values,
+            (size, size),
+            check_invariants=False,
+            is_coalesced=True,
+        )
 
     def sparse_matrix(
         self,

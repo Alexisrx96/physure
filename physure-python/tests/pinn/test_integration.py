@@ -49,7 +49,7 @@ def test_pinn_friction_factor_learning():
         sys = get_default_system()
     except Exception:
         # Fallback for testing environment
-        sys = create_system("si.conf")
+        sys = create_system("international.conf")
 
     # 1. Physics Ground Truth (Blasius Correlation)
     # f = 0.316 * Re^(-0.25)

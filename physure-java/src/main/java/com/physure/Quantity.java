@@ -5,7 +5,6 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.DoubleUnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -16,6 +15,13 @@ import java.util.regex.Pattern;
  * units combine, how an uncertainty propagates and what a temperature point plus an interval is. This
  * class does not repeat any of that, and an operation the core refuses (incompatible dimensions,
  * a division by zero) is a {@link PhysureException}, never a number.
+ * <p>
+ * A quantity is also a <b>measurement</b>: it remembers the sources of its uncertainty, and so does every
+ * result derived from it. Reusing a measurement therefore cancels or accumulates as the GUM says
+ * ({@code x.subtract(x)} is exactly zero, {@code x.multiply(x)} has uncertainty {@code 2 |x| u}), while two
+ * quantities constructed separately are two measurements even when their numbers are equal. The identity
+ * of a measurement is not part of {@link #equals(Object)} and {@link #hashCode()}, which compare the three
+ * numbers and the unit as before: two equal quantities can behave differently in arithmetic.
  * Compatible with Java 8+.
  */
 public class Quantity {
@@ -32,9 +38,41 @@ public class Quantity {
             + "(?:\\s+(.*))?$",
         Pattern.DOTALL);
 
+    /** The sources of an uncertainty: ids from the core's counter, and what each one contributes (signed, in this unit). */
+    private static final class Sources {
+        private static final Sources EXACT = new Sources(new long[0], new double[0]);
+
+        private final long[] ids;
+        private final double[] coefficients;
+
+        private Sources(long[] ids, double[] coefficients) {
+            this.ids = ids;
+            this.coefficients = coefficients;
+        }
+
+        /** The same sources scaled to add up to {@code target} instead of {@code current}; none if {@code target} is zero. */
+        private Sources scaled(double current, double target) {
+            if (target == 0.0 || current == 0.0) {
+                return EXACT;
+            }
+            double factor = target / current;
+            double[] scaled = new double[coefficients.length];
+            for (int i = 0; i < scaled.length; i++) {
+                scaled[i] = coefficients[i] * factor;
+            }
+            return new Sources(ids, scaled);
+        }
+    }
+
     private final double value;
     private final double uncertainty;
     private final String unit;
+    /**
+     * Null until needed for a quantity constructed here: a result of the core arrives with its sources, and the
+     * first use of a quantity with an uncertainty mints one id for it (see {@link #sources()}). Volatile and
+     * immutable, so that threads racing on the first use agree on the id.
+     */
+    private volatile Sources sources;
 
     public Quantity(double value, String unit) {
         this(value, 0.0, unit);
@@ -53,6 +91,49 @@ public class Quantity {
         this.value = value;
         this.uncertainty = Math.abs(uncertainty);
         this.unit = unit != null ? unit.trim() : "";
+    }
+
+    /** A result of the native engine: the sources it reports, or none when the core's model keeps none (they are then minted on first use). */
+    Quantity(double value, double uncertainty, String unit, long[] ids, double[] coefficients) {
+        this(value, uncertainty, unit);
+        if (ids != null && coefficients != null) {
+            this.sources = new Sources(ids, coefficients);
+        }
+    }
+
+    private Quantity(double value, double uncertainty, String unit, Sources sources) {
+        this(value, uncertainty, unit);
+        this.sources = sources;
+    }
+
+    /**
+     * The sources of this quantity's uncertainty, minting the one id of a quantity constructed here the first
+     * time they are needed. Nothing is minted at construction, so building a quantity needs no native library
+     * and one that is never used in arithmetic never takes an id.
+     */
+    private Sources sources() {
+        Sources known = sources;
+        if (known != null) {
+            return known;
+        }
+        synchronized (this) {
+            if (sources == null) {
+                sources = uncertainty == 0.0
+                    ? Sources.EXACT
+                    : new Sources(new long[] {NativeEngine.newSourceId()}, new double[] {uncertainty});
+            }
+            return sources;
+        }
+    }
+
+    /** Read by the native engine: the ids of the sources of the uncertainty. */
+    long[] sourceIds() {
+        return sources().ids;
+    }
+
+    /** Read by the native engine: what each source contributes, in this quantity's unit. */
+    double[] sourceCoefficients() {
+        return sources().coefficients;
     }
 
     public double getValue() {
@@ -132,38 +213,94 @@ public class Quantity {
     /**
      * The sine of this angle. The angle is read in its unit (90 {@code deg} is 1) and a quantity that is not
      * an angle is a {@link PhysureException}; a plain number is taken as radians. The uncertainty of the
-     * angle propagates: {@code |cos x| * u}.
+     * angle propagates ({@code |cos x| * u}) with its sources, as the core does it.
      */
     public Quantity sin() {
-        return trigonometric(Math::sin, Math::cos);
+        return NativeEngine.mathFunction(this, "sin");
     }
 
     /** The cosine of this angle; see {@link #sin()}. */
     public Quantity cos() {
-        return trigonometric(Math::cos, Math::sin);
+        return NativeEngine.mathFunction(this, "cos");
     }
 
     /** The tangent of this angle; see {@link #sin()}. */
     public Quantity tan() {
-        return trigonometric(Math::tan, x -> 1.0 / (Math.cos(x) * Math.cos(x)));
+        return NativeEngine.mathFunction(this, "tan");
     }
 
-    private Quantity trigonometric(DoubleUnaryOperator function, DoubleUnaryOperator derivative) {
-        Quantity angle = unit.isEmpty() || unit.equals("unity") ? this : to("rad");
-        double x = angle.value;
-        return new Quantity(function.applyAsDouble(x), Math.abs(derivative.applyAsDouble(x)) * angle.uncertainty, "");
-    }
-
+    /** The absolute value: where the measurement sits changes, how well it is known does not, and its sources stay. */
     public Quantity abs() {
-        return new Quantity(Math.abs(this.value), this.uncertainty, this.unit);
+        return NativeEngine.mathFunction(this, "abs");
+    }
+
+    /**
+     * Declares that the uncertainty of this measurement has {@code nu} degrees of freedom (JCGM 100:2008 4.3.2):
+     * how well the uncertainty itself is known, as a Type A evaluation of {@code n} observations has
+     * {@code n - 1}. Use {@code Double.POSITIVE_INFINITY} for one known exactly. They belong to the
+     * <b>measurement</b>, so this quantity must be one: an exact quantity, or a result that combines several
+     * measurements, has none to declare (declare them on each before combining), and a source that already has
+     * another number cannot be given a second one. Returns this quantity.
+     *
+     * @throws PhysureException if {@code nu} is not positive, or the quantity cannot carry it
+     */
+    public Quantity withDof(double nu) {
+        NativeEngine.declareDof(this, nu);
+        return this;
+    }
+
+    /**
+     * A Type A evaluation (JCGM 100:2008 4.2): the mean of the observations, its experimental standard
+     * deviation {@code s / sqrt(n)} as the standard uncertainty, and {@code n - 1} degrees of freedom.
+     * Observations that are all equal have no spread to estimate and give an exact quantity.
+     *
+     * @throws PhysureException if there are fewer than two observations or one is not finite
+     */
+    public static Quantity fromSamples(double[] samples, String unit) {
+        return NativeEngine.fromSamples(Objects.requireNonNull(samples, "samples"), Objects.requireNonNull(unit, "unit"));
+    }
+
+    /**
+     * The effective degrees of freedom of the uncertainty by the Welch-Satterthwaite formula
+     * (JCGM 100:2008 G.4.1), combining those of the sources it came from; infinite when none of them has a
+     * finite number, and for an exact quantity.
+     */
+    public double effectiveDof() {
+        return NativeEngine.effectiveDof(this);
+    }
+
+    /**
+     * The coverage factor {@code k_p} for a coverage probability {@code p} strictly between 0 and 1: the
+     * Student-t factor at the effective degrees of freedom truncated to an integer, as the Guide recommends
+     * (G.4.1), or the normal factor when they are infinite.
+     *
+     * @throws PhysureException if {@code p} is outside (0, 1)
+     */
+    public double coverageFactor(double p) {
+        return NativeEngine.expanded(this, p)[0];
+    }
+
+    /**
+     * The expanded uncertainty {@code U = k_p * u_c} for a coverage probability {@code p}, with the factor and
+     * the degrees of freedom it came from, in this quantity's unit.
+     *
+     * @throws PhysureException if {@code p} is outside (0, 1)
+     */
+    public ExpandedUncertainty expanded(double p) {
+        double[] parts = NativeEngine.expanded(this, p);
+        return new ExpandedUncertainty(value, uncertainty, parts[1], parts[0], p, parts[2], unit);
     }
 
     /**
      * Rounds the value and the uncertainty to {@code decimals} decimal places (half up); a negative count
      * rounds to tens, hundreds... {@code NaN} and infinity are returned as they are.
+     * The result is the same measurement, presented with fewer digits, and not a new one: its sources are
+     * the same, scaled to add up to the rounded uncertainty (an uncertainty that rounds to zero is exact).
      */
     public Quantity round(int decimals) {
-        return new Quantity(roundTo(this.value, decimals), roundTo(this.uncertainty, decimals), this.unit);
+        double roundedUncertainty = roundTo(this.uncertainty, decimals);
+        return new Quantity(roundTo(this.value, decimals), roundedUncertainty, this.unit,
+            sources().scaled(this.uncertainty, roundedUncertainty));
     }
 
     private static double roundTo(double x, int decimals) {
@@ -192,6 +329,16 @@ public class Quantity {
     public boolean approxEquals(Quantity other) {
         Quantity converted = Objects.requireNonNull(other, OTHER).to(this.unit);
         return Math.abs(this.value - converted.getValue()) < 1e-6;
+    }
+
+    /**
+     * PHS's {@code this op other} for {@code op} one of {@code < > <= >= == !=}: the core's comparison (canonical
+     * magnitudes, {@code ==} within the relative tolerance of PHS). Throws {@link PhysureException} when the two have
+     * no comparison: different dimensions, a zero written without a unit ({@code x > 0} for a length), a level
+     * against a plain number. Transpiled PHS calls this, so it answers what the interpreter answers.
+     */
+    public boolean phsCompare(Quantity other, String op) {
+        return NativeEngine.compareQuantities(this, Objects.requireNonNull(other, OTHER), Objects.requireNonNull(op, "op"));
     }
 
     /**

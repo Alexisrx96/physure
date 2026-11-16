@@ -5,6 +5,11 @@ use super::pruning::PruningConfig;
 
 pub type VariableID = u64;
 
+/// The correlation coefficient at or below which a covariance between two components of a registered variable is
+/// not stored (see [`CovarianceStore::register_variable`]). Relative to the standard deviations, so the same
+/// entries are kept whatever unit the caller's numbers are in.
+pub const NEGLIGIBLE_CORRELATION: f64 = 1e-12;
+
 pub struct CovarianceStore {
     pub(crate) blocks: HashMap<(VariableID, VariableID), CsMat<f64>>,
     pub(crate) access_ledger: HashMap<VariableID, u64>,
@@ -36,30 +41,61 @@ impl CovarianceStore {
         }
     }
 
+    /// A dense array (a Jacobian) as a sparse matrix holding every entry that is not exactly zero. A sensitivity
+    /// coefficient is in the units of output per input, so no absolute threshold can tell a small one from a
+    /// negligible one (audit B14: `x * 1e-13` lost its uncertainty under the old `|value| <= 1e-12` rule).
     pub(crate) fn numpy_to_csr(arr: ArrayViewD<'_, f64>) -> CsMat<f64> {
         if let Ok(arr2) = arr.clone().into_dimensionality::<Ix2>() {
             let (rows, cols) = arr2.dim();
             let mut tri = TriMat::new((rows, cols));
             for ((r, c), &val) in arr2.indexed_iter() {
-                if val.abs() > 1e-12 {
-                     tri.add_triplet(r, c, val);
+                if val != 0.0 {
+                    tri.add_triplet(r, c, val);
                 }
             }
             return tri.to_csr();
-        } 
-        
-        if let Ok(arr1) = arr.into_dimensionality::<Ix1>() {
-             let size = arr1.dim();
-             let mut tri = TriMat::new((size, 1));
-             for (i, &val) in arr1.indexed_iter() {
-                 if val.abs() > 1e-12 {
-                     tri.add_triplet(i, 0, val);
-                 }
-             }
-             return tri.to_csr();
         }
-        
+
+        if let Ok(arr1) = arr.into_dimensionality::<Ix1>() {
+            let size = arr1.dim();
+            let mut tri = TriMat::new((size, 1));
+            for (i, &val) in arr1.indexed_iter() {
+                if val != 0.0 {
+                    tri.add_triplet(i, 0, val);
+                }
+            }
+            return tri.to_csr();
+        }
+
         TriMat::new((0, 0)).to_csr()
+    }
+
+    /// A registered covariance block as a sparse matrix. A variance (diagonal entry) is dropped only when it is
+    /// exactly zero; a covariance between two components is dropped only when it is negligible relative to their
+    /// standard deviations, `|cov(i, j)| <= NEGLIGIBLE_CORRELATION * sqrt(var_i * var_j)`: a bound on the
+    /// correlation coefficient, which a change of unit (scaling a variable by any factor) does not move. A square
+    /// array is read as that block; any other shape is kept entry by entry as [`Self::numpy_to_csr`] does.
+    fn covariance_to_csr(arr: ArrayViewD<'_, f64>) -> CsMat<f64> {
+        let Ok(arr2) = arr.clone().into_dimensionality::<Ix2>() else {
+            return Self::numpy_to_csr(arr);
+        };
+        let (rows, cols) = arr2.dim();
+        if rows != cols {
+            return Self::numpy_to_csr(arr);
+        }
+        let mut tri = TriMat::new((rows, cols));
+        for ((r, c), &val) in arr2.indexed_iter() {
+            let negligible = if r == c {
+                val == 0.0
+            } else {
+                // a NaN bound (a negative variance) keeps the entry: nothing is dropped on a guess
+                val == 0.0 || val.abs() <= NEGLIGIBLE_CORRELATION * (arr2[(r, r)] * arr2[(c, c)]).sqrt()
+            };
+            if !negligible {
+                tri.add_triplet(r, c, val);
+            }
+        }
+        tri.to_csr()
     }
 
     pub(crate) fn compute_output_variance(&self, input_ids: &[VariableID], js: &[CsMat<f64>]) -> Option<CsMat<f64>> {
@@ -94,12 +130,14 @@ impl CovarianceStore {
         acc: &mut HashMap<VariableID, CsMat<f64>>,
     ) {
         if ext_id == out_id { return; }
-        let Some(idx_i) = input_ids.iter().position(|&x| x == input_id) else { return; };
         let block_key = if transpose { (ext_id, input_id) } else { (input_id, ext_id) };
         let Some(sigma) = self.blocks.get(&block_key) else { return; };
         let sigma_owned = if transpose { sigma.transpose_view().to_csr() } else { sigma.clone() };
-        let term = &js[idx_i] * &sigma_owned;
-        acc.entry(ext_id).and_modify(|a| *a = &*a + &term).or_insert(term);
+        // an input that appears more than once (`x + x`) contributes through each of its Jacobians
+        for idx_i in input_ids.iter().enumerate().filter(|&(_, &x)| x == input_id).map(|(i, _)| i) {
+            let term = &js[idx_i] * &sigma_owned;
+            acc.entry(ext_id).and_modify(|a| *a = &*a + &term).or_insert(term);
+        }
     }
 
     fn accumulate_cross_covs(
@@ -171,8 +209,11 @@ impl CovarianceStore {
         }
     }
 
+    /// Registers `var_id` with its covariance matrix. A variance is stored unless it is exactly zero; a covariance
+    /// between two of its components is stored unless its correlation coefficient is at most
+    /// [`NEGLIGIBLE_CORRELATION`]. No absolute threshold applies: what is kept does not depend on the unit.
     pub fn register_variable(&mut self, var_id: VariableID, variance: ArrayViewD<'_, f64>) {
-        let csr = Self::numpy_to_csr(variance);
+        let csr = Self::covariance_to_csr(variance);
         self.blocks.insert((var_id, var_id), csr);
         self.access_ledger.insert(var_id, self.current_step);
     }
@@ -186,9 +227,10 @@ impl CovarianceStore {
         let size = variance_diag.len();
         let mut tri = TriMat::new((size, size));
         for (i, &val) in variance_diag.iter().enumerate() {
-             if val.abs() > 1e-12 {
-                 tri.add_triplet(i, i, val);
-             }
+            // a variance is dropped only when it is exactly zero (audit B14: `u = 1e-7 m` has variance 1e-14)
+            if val != 0.0 {
+                tri.add_triplet(i, i, val);
+            }
         }
         self.blocks.insert((var_id, var_id), tri.to_csr());
         self.access_ledger.insert(var_id, self.current_step);

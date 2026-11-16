@@ -35,8 +35,10 @@ if TYPE_CHECKING:
 from physure.domain.exceptions import IncompatibleUnitsError
 from physure.domain.measurement.conversion_plan import apply_conversion
 from physure.domain.measurement.uncertainty import (
+    LineageModel,
     Uncertainty,
 )
+from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import (
     _CORE_ERRORS,
     CompoundUnit,
@@ -135,12 +137,16 @@ from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
 from physure.domain.measurement._backend_mixin import (  # noqa: E402
     BackendMixin,
 )
+from physure.domain.measurement.degrees_of_freedom import (  # noqa: E402
+    DegreesOfFreedomMixin,
+)
 
 
 @dataclass(frozen=False)
 class Quantity(
     ArithmeticMixin,
     BackendMixin,
+    DegreesOfFreedomMixin,
     CoreQuantity,
     Generic[ValueType, UncType, UnitType],
 ):
@@ -457,8 +463,12 @@ class Quantity(
         system: UnitSystem,
         uncertainty: Any = 0.0,
         symbol: str | None = None,
+        dof: float | None = None,
     ) -> Self:
-        """Creates a Quantity from raw input values."""
+        """Creates a Quantity from raw input values.
+
+        `dof` declares the degrees of freedom of the standard uncertainty (`with_dof`).
+        """
         resolved_system = system
 
         backend = BackendManager.get_backend(value)
@@ -503,7 +513,7 @@ class Quantity(
             # Upgrade to rich model (handles active store + scalar/array logic)
             u_obj = Uncertainty.from_standard(uncertainty)
 
-        return cls(
+        quantity = cls(
             magnitude=cast("Numeric", value),
             unit=unit,
             uncertainty=raw_uncertainty,
@@ -511,6 +521,9 @@ class Quantity(
             symbol=symbol,
             _uncertainty_obj=u_obj,
         )
+        if dof is not None:
+            quantity.with_dof(dof)
+        return quantity
 
     @staticmethod
     def _reject_asymmetric_pair(
@@ -560,7 +573,8 @@ class Quantity(
         std_dev = getattr(uncertainty, "std_dev", uncertainty)
         if hasattr(std_dev, "std_dev"):
             std_dev = std_dev.std_dev
-        samples = mode_args.get("samples", 1000) if mode_args else 1000
+        # None: the core's `[Settings] monte_carlo_samples` decides (default 1000)
+        samples = mode_args.get("samples") if mode_args else None
         return RustCoreQuantity(
             float(value), r_unit, float(std_dev or 0.0), mode, samples
         )
@@ -704,7 +718,15 @@ class Quantity(
                 # Lazy import to avoid circular dependencies
                 from physure.application.startup import create_system
 
-                sys = create_system(f"{system_name.lower()}.conf")
+                # "SI" is international.conf (its [System] name is SI);
+                # there is no si.conf, which used to fall back in silence
+                # to the base catalog
+                stem = system_name.lower()
+                stem = "international" if stem == "si" else stem
+                try:
+                    sys = create_system(f"{stem}.conf")
+                except FileNotFoundError as missing:
+                    raise ValueError(str(missing)) from missing
                 if unit is None:
                     raise ValueError(
                         f"Cannot validate Quantity from {type(value)}"
@@ -1098,11 +1120,18 @@ class Quantity(
         )
 
     def _convert_by_plan(
-        self, target_unit: CompoundUnit
+        self, target_unit: CompoundUnit, written: CompoundUnit | None = None
     ) -> Quantity[ValueType, UncType, UnitType]:
-        """Converts by the plan that the core registry gives for the two units."""
+        """Converts by the plan that the core registry gives for the two units.
+
+        `written` is the target as it was typed, before a recipe unit was replaced
+        by its base units: the core flags the hertz by how a unit is written, and
+        `Hz` is `s^-1` once simplified.
+        """
         try:
-            plan = self.system.core_registry.conversion(self.unit, target_unit)
+            plan = self.system.core_registry.conversion(
+                self.unit, written or target_unit
+            )
         except _CORE_ERRORS as error:
             raise _python_error(error, self.unit, target_unit) from error
         magnitude, uncertainty = apply_conversion(
@@ -1111,15 +1140,25 @@ class Quantity(
             self.uncertainty,
             self._backend,
         )
-        return cast(
-            "Quantity[ValueType, UncType, UnitType]",
-            Quantity.from_input(
-                magnitude,
-                target_unit,
-                self.system,
-                uncertainty=uncertainty,
-            ),
+        converted = Quantity.from_input(
+            magnitude,
+            target_unit,
+            self.system,
+            uncertainty=uncertainty,
         )
+        # A conversion restates the same measurement in another unit, so it keeps the
+        # sources it came from, rescaled: `x.to("mm") - x.to("mm")` is zero and the degrees
+        # of freedom stay with it. `from_input` alone would mint a new, independent source.
+        model = self._uncertainty_obj
+        if (
+            isinstance(model, LineageModel)
+            and isinstance(uncertainty, (int, float))
+            and uncertainty > 0
+        ):
+            converted._uncertainty_obj = LineageModel(
+                native=model.native.rescaled_to(float(uncertainty))
+            )
+        return cast("Quantity[ValueType, UncType, UnitType]", converted)
 
     def plot(
         self,
@@ -1237,10 +1276,12 @@ class Quantity(
             >>> temp.to("K")
             Quantity(298.15, K)
         """
+        written_text = None
         if isinstance(target_unit, str):
             # Check if target_unit is a device string (e.g. "cuda", "cpu")
             if self._is_device_string(target_unit):
                 return self.to_device(target_unit)
+            written_text = target_unit
             target_unit = self.system.get_unit(target_unit)
 
         # Fast path for same unit
@@ -1248,7 +1289,20 @@ class Quantity(
             return self
 
         if self.dimension != target_unit.dimension(self.system):
-            return self._convert_via_equivalencies(target_unit, equivalencies)
+            # The core decides whether the dimensions differ only by an angle a
+            # conversion may read as 1 (`rad/s * m => m/s`); only a refusal of
+            # the core sends the pair on to the equivalencies.
+            written = (
+                parse_unit_string(written_text, CompoundUnit)
+                if written_text not in (None, "dimensionless")
+                else None
+            )
+            try:
+                return self._convert_by_plan(target_unit, written)
+            except IncompatibleUnitsError:
+                return self._convert_via_equivalencies(
+                    target_unit, equivalencies
+                )
 
         return self._convert_by_plan(target_unit)
 

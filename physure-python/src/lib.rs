@@ -33,7 +33,9 @@ use ::physure_core::{
     DimVector, UnitKind,
 };
 use ::physure_core::units::registry::{Conversion, Stage};
+use ::physure_core::units::angle_mode::{self as angle, AngleMode, AngleModeGuard};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
+use ::physure_core::uncertainty::{coverage_factor_for, declare_dof, type_a};
 use ::physure_core::uncertainty::moments::{self, AsymmetricMoments, MomentsBackend};
 use physure_script::symbolic::Expr;
 
@@ -42,7 +44,8 @@ use physure_script::symbolic::Expr;
 // `RationalUnit::id` is derived from the dimensions alone, so it cannot be the whole key:
 // J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
 // handed back whichever of them was cached first.
-static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>), PyObject>>> = OnceLock::new();
+// The key carries `periodic`: equality ignores the flag, but a flagged hertz must not be answered by an unflagged one.
+static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool), PyObject>>> = OnceLock::new();
 
 // The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
 // other backends, which live in Python, so Python registers the factory at import.
@@ -51,7 +54,7 @@ static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
-    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone());
+    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic);
     if let Some(existing) = cache.get(&key) {
         return Ok(existing.clone_ref(py));
     }
@@ -312,6 +315,12 @@ fn value_error(e: PhysureError) -> PyErr {
 }
 
 /// The lines of a conf that the core could not read, one per line of the message.
+/// The configuration in force (a frozen `physure.frozen.conf`, `PHYSURE_CONF`, ...) cannot be used: an ordinary
+/// exception, never a panic.
+fn configuration_error(e: ::physure_core::frozen::ActiveError) -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
+}
+
 fn conf_problems(problems: Vec<String>) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(problems.join("\n"))
 }
@@ -379,10 +388,12 @@ impl PyUnitRegistry {
         self.0.prefixes.clone()
     }
 
+    /// The catalog in force: a frozen configuration's when one is in force, otherwise the embedded catalog plus the
+    /// working directory's `physure.conf`. RuntimeError when the configuration in force cannot be used.
     #[staticmethod]
-    fn from_conf() -> Self {
-        let (reg, _constants) = ::physure_core::units::conf::build_registry_from_conf();
-        PyUnitRegistry(reg)
+    fn from_conf() -> PyResult<Self> {
+        let (reg, _constants) = ::physure_core::units::conf::try_build_registry_from_conf().map_err(configuration_error)?;
+        Ok(PyUnitRegistry(reg))
     }
 
     /// The catalog plus extra conf text (the text of a system file, or units of the user's).
@@ -551,7 +562,8 @@ impl PyQuantity {
         if args.len() > 1 { unit = args.get_item(1)?.extract::<PyRationalUnit>().ok(); }
         if args.len() > 2 { std_dev_val = Some(args.get_item(2)?.unbind()); }
         if args.len() > 3 { mode = args.get_item(3)?.extract::<String>().ok(); }
-        if args.len() > 4 { samples = args.get_item(4)?.extract::<usize>().ok(); }
+        // a sample count that does not read as a non-negative integer is an error, not the default (audit B8)
+        if args.len() > 4 { samples = args.get_item(4)?.extract::<Option<usize>>()?; }
 
         // Keyword args override positionals
         if let Some(kw) = kwargs {
@@ -565,7 +577,7 @@ impl PyQuantity {
                 unit = v.extract::<PyRationalUnit>().ok();
             }
             if let Some(v) = kw.get_item("mode")? { mode = v.extract::<String>().ok(); }
-            if let Some(v) = kw.get_item("samples")? { samples = v.extract::<usize>().ok(); }
+            if let Some(v) = kw.get_item("samples")? { samples = v.extract::<Option<usize>>()?; }
         }
 
         let u = unit.ok_or_else(|| {
@@ -711,6 +723,13 @@ impl PyQuantity {
         let new_q = self.0.sqrt()
             .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))?;
         Ok(PyQuantity(new_q))
+    }
+
+    /// PHS `self op other` for `op` one of `<`, `>`, `<=`, `>=`, `==`, `!=`: the core's comparison
+    /// (`Quantity::phs_compare`). A `ValueError` (`UnitMismatchError` for different dimensions) when they have none:
+    /// a zero written without a unit, a level against a plain number.
+    fn phs_compare(&self, other: &PyQuantity, op: &str) -> PyResult<bool> {
+        self.0.phs_compare(&other.0, op).map_err(value_error)
     }
 
     #[pyo3(signature = (other, rel_tol = 0.1, abs_tol = 1e-5))]
@@ -985,7 +1004,10 @@ fn build_backend(
         let mean = mean_obj.bind(py).extract::<f64>()?;
         if let Ok(std_dev) = std_dev_obj.bind(py).extract::<f64>() {
             return Ok(match mode.as_deref() {
-                Some("monte_carlo") => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+                Some("monte_carlo") => UncertaintyValue::MonteCarlo(
+                    MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or_else(::physure_core::settings::monte_carlo_samples))
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+                ),
                 Some("unscented")   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
                 _                   => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
             });
@@ -1618,10 +1640,16 @@ impl PyLineage {
         PyLineage(Lineage::exact())
     }
 
-    /// Rebuilds from `(source_id, coefficient)` pairs as produced by `terms()`.
+    /// Rebuilds from `(source_id, coefficient)` pairs as produced by `terms()`, and the degrees of freedom
+    /// `(source_id, nu)` that `declared_dofs()` reported for them.
     #[staticmethod]
-    fn from_terms(terms: Vec<(u32, f64)>) -> Self {
-        PyLineage(Lineage::from_terms(terms))
+    #[pyo3(signature = (terms, dofs = None))]
+    fn from_terms(terms: Vec<(u32, f64)>, dofs: Option<Vec<(u32, f64)>>) -> PyResult<Self> {
+        let lineage = PyLineage(Lineage::from_terms(terms));
+        for (id, nu) in dofs.unwrap_or_default() {
+            declare_dof(id, nu).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        }
+        Ok(lineage)
     }
 
     /// Mints a source id that no other lineage will reuse.
@@ -1649,6 +1677,24 @@ impl PyLineage {
     /// The `(source_id, coefficient)` pairs, sorted by id.
     fn terms(&self) -> Vec<(u32, f64)> {
         self.0.terms().to_vec()
+    }
+
+    /// The effective degrees of freedom of this value by the Welch–Satterthwaite formula (JCGM 100:2008
+    /// G.4.1); `inf` when none of its sources has a finite number, and for an exact value.
+    fn effective_dof(&self) -> f64 {
+        self.0.effective_dof()
+    }
+
+    /// Declares `nu` degrees of freedom for the one measurement this lineage is. A `ValueError` for an exact
+    /// lineage, one that combines several sources, a `nu` that is not positive, or one that differs from what
+    /// the source already declared.
+    fn declare_dof(&self, nu: f64) -> PyResult<()> {
+        self.0.declare_dof(nu).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// `(source_id, nu)` of the sources of this lineage that declared a finite number of degrees of freedom.
+    fn declared_dofs(&self) -> Vec<(u32, f64)> {
+        self.0.declared_dofs()
     }
 
     #[getter]
@@ -1690,9 +1736,9 @@ impl PyLineage {
     // source id and leave the restored value uncorrelated with its own siblings.
     // `from_terms` also reserves the ids it sees, so a lineage restored in a fresh
     // process cannot collide with one minted there later.
-    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (Vec<(u32, f64)>,))> {
+    fn __reduce__(&self, py: Python<'_>) -> PyResult<(PyObject, (Vec<(u32, f64)>, Vec<(u32, f64)>))> {
         let from_terms = py.get_type::<PyLineage>().getattr("from_terms")?;
-        Ok((from_terms.unbind(), (self.0.terms().to_vec(),)))
+        Ok((from_terms.unbind(), (self.0.terms().to_vec(), self.0.declared_dofs())))
     }
 }
 
@@ -1833,6 +1879,32 @@ impl PyMomentsBackend {
     }
 }
 
+/// The coverage factor `k_p` for a coverage probability `p` and effective degrees of freedom `nu_eff`: the
+/// two-sided Student-t factor at `nu_eff` truncated to an integer (JCGM 100:2008 G.4.1), the normal factor
+/// when they are infinite. A `ValueError` for `p` outside (0, 1) or a `nu_eff` that is not positive.
+#[pyfunction]
+fn coverage_factor(p: f64, nu_eff: f64) -> PyResult<f64> {
+    coverage_factor_for(p, nu_eff).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+/// The Type A evaluation of observations (JCGM 100:2008 4.2): `(mean, standard_error, dof)` with the
+/// experimental standard deviation of the mean `s / sqrt(n)` and `n - 1` degrees of freedom. A `ValueError`
+/// for fewer than two observations or one that is not finite.
+#[pyfunction]
+fn type_a_evaluation(samples: Vec<f64>) -> PyResult<(f64, f64, f64)> {
+    let evaluation = type_a(&samples).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok((evaluation.mean, evaluation.standard_error, evaluation.dof))
+}
+
+/// A value and its standard uncertainty as the GUM presents them (JCGM 100:2008 7.2.6): the uncertainty to one or
+/// two significant figures and the value to the same decimal place, as the two strings `(value, uncertainty)`.
+/// `sig_figs` overrides the number of figures of the uncertainty.
+#[pyfunction]
+#[pyo3(signature = (mean, std_dev, sig_figs = None))]
+fn gum_round(mean: f64, std_dev: f64, sig_figs: Option<u32>) -> (String, String) {
+    ::physure_core::quantity::gum_round(mean, std_dev, sig_figs)
+}
+
 /// The largest skewness a pair of half-widths can express, reached only when one side is zero.
 #[pyfunction]
 fn max_skewness() -> f64 {
@@ -1847,16 +1919,19 @@ fn register_quantity_factory(factory: PyObject) {
     *QUANTITY_FACTORY.lock().unwrap() = Some(factory);
 }
 
+/// RuntimeError while a frozen configuration is in force: the `UnitSystem` built from this text would be the library's
+/// catalog, not the frozen one (the Python binding honours frozen configurations from Phase 5).
 #[pyfunction]
-fn default_conf() -> &'static str {
-    ::physure_core::units::conf::DEFAULT_PHYSURE_CONF
+fn default_conf() -> PyResult<&'static str> {
+    ::physure_core::frozen::refuse_unwired("Python").map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    Ok(::physure_core::units::conf::DEFAULT_PHYSURE_CONF)
 }
 
 /// What the core says about a unit expression of the default catalog: its dimension (by
 /// dimension symbol), kind, linearity, alias and simplified form.
 #[pyfunction]
 fn unit_facts<'py>(py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
-    let (registry, _) = ::physure_core::units::conf::build_registry_from_conf();
+    let (registry, _) = ::physure_core::units::conf::try_build_registry_from_conf().map_err(configuration_error)?;
     facts_dict(py, &registry, expression)
 }
 
@@ -1885,6 +1960,47 @@ fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -
     Ok(out)
 }
 
+/// The angle mode in force on this thread: `"dimensionless"` or `"dimension"`.
+#[pyfunction]
+fn angle_mode() -> &'static str {
+    angle::angle_mode().name()
+}
+
+/// `with AngleModeScope("dimension"): ...` reads angles by the given mode until the block ends; scopes nest. The
+/// mode is that of the thread that made the scope: a guard restores a thread-local, so the object is not `Send`.
+#[pyclass(name = "AngleModeScope", module = "physure._core", unsendable)]
+struct PyAngleModeScope {
+    mode: AngleMode,
+    guards: Vec<AngleModeGuard>,
+}
+
+#[pymethods]
+impl PyAngleModeScope {
+    #[new]
+    fn new(mode: &str) -> PyResult<Self> {
+        let mode = mode.parse::<AngleMode>().map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(Self { mode, guards: Vec::new() })
+    }
+
+    fn __enter__(mut slf: PyRefMut<'_, Self>) -> PyRefMut<'_, Self> {
+        let guard = angle::scoped(slf.mode);
+        slf.guards.push(guard);
+        slf
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_value=None, _traceback=None))]
+    fn __exit__(
+        &mut self,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_value: Option<&Bound<'_, PyAny>>,
+        _traceback: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        // dropping the guard restores the mode that was in force before the matching `__enter__`
+        self.guards.pop();
+        false
+    }
+}
+
 // ── Module Registration ──────────────────────────────────────────────────────
 #[pymodule(name = "_core")]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -1892,7 +2008,12 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAsymmetricMoments>()?;
     m.add_class::<PyMomentsBackend>()?;
     m.add_function(wrap_pyfunction!(max_skewness, m)?)?;
+    m.add_function(wrap_pyfunction!(coverage_factor, m)?)?;
+    m.add_function(wrap_pyfunction!(gum_round, m)?)?;
+    m.add_function(wrap_pyfunction!(type_a_evaluation, m)?)?;
     m.add_function(wrap_pyfunction!(default_conf, m)?)?;
+    m.add_class::<PyAngleModeScope>()?;
+    m.add_function(wrap_pyfunction!(angle_mode, m)?)?;
     m.add_class::<PyRationalUnit>()?;
     m.add_class::<PyUnitRegistry>()?;
     m.add("UnknownUnitError", m.py().get_type::<UnknownUnitError>())?;

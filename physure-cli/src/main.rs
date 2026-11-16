@@ -5,6 +5,8 @@ use std::process;
 use physure_script::{parse_phs, transpile, PhsInterpreter, PhsValue, Target};
 
 mod check;
+mod conf;
+mod conf_witness;
 mod config;
 mod debug;
 mod eval;
@@ -43,6 +45,8 @@ fn print_help() {
     println!("    phs serve [dir|file]     [--port 8080] [--host 127.0.0.1] [--token <secret>] Run Model REST Server");
     println!("    phs doc [--save]         Generate full Markdown language & syntax specification");
     println!("    phs upgrade [--nightly]  Update phs and physure-lsp to the latest release (or main, with --nightly)");
+    println!("    phs conf [status]        The frozen configuration in force (physure.frozen.conf); phs conf --help");
+    println!("    phs conf show [KEY] | diff [A] [B] | freeze | verify [FILE] | update | seal | history");
     println!();
     println!("FLAGS & OPTIONS:");
     println!("    -h, --help               Print this help information");
@@ -494,6 +498,60 @@ fn generate_language_docs_md() -> String {
     md.push_str("p_bar = 100.0 kPa => bar         # Converts 100.0 kPa to bar\n");
     md.push_str("v_kmh = 25.0 m / s => km / h     # Converts 25 m/s to km/h\n");
     md.push_str("```\n\n");
+    md.push_str("#### Angles in a conversion\n\n");
+    md.push_str("The SI gives the radian and the steradian the expression 1, and `=>` follows it: an angle is read as 1 when a conversion needs it, so the formulas of mechanics, circuits and photometry convert without ceremony.\n\n");
+    md.push_str("```phs\n");
+    md.push_str("energy = 0.5 * (0.5 kg * m^2) * (10 rad/s)^2   # kg * m^2 * rad^2 * s^-2\n");
+    md.push_str("e_j = energy => J                              # 25 J\n");
+    md.push_str("v = (10 rad/s) * (0.5 m) => m/s                # 5 m/s\n");
+    md.push_str("lux = (100 cd) / (2 m)^2 => lx                 # 25 lx\n");
+    md.push_str("```\n\n");
+    md.push_str("A sum or a comparison never reads an angle as 1: `2 rad + 1` and `2 m*rad + 1 m` are errors, and the way is to convert first, `(2 rad => unity) + 1`. A rate of angle is not a frequency (they differ by 2π), so `10 rad/s => Hz` is an error; divide by the angle of a cycle instead, `(10 rad/s) / (6.283185307179586 rad) => Hz`. `angle_mode = dimension` in `physure.conf` makes the angle a dimension like any other.\n\n");
+    md.push_str("#### Comparisons\n\n");
+    md.push_str("`==` compares what two quantities stand for, whatever units they are written in: `1 km == 1000 m` and `0.01 degC == 273.16 K` are true in either order. Two values are equal when they agree within a relative 1e-12 of the larger (the rounding of a conversion or of ordinary arithmetic): `1 pm == 2 pm` is false and `(0.1 m + 0.2 m) == 0.3 m` is true. A relative bound never accepts a difference against an exact zero, so `cos(90 deg) == 0` is false: write `abs(cos(90 deg)) < 1e-12`, or `abs(x) < 1e-9 m` with the unit of `x`. Near the bound `==` is not transitive. `inf == inf` is true and NaN equals nothing. `!=` is exactly `not (a == b)`.\n\n");
+    md.push_str("`a ≈ b` is `|a − b| <= rel · max(|a|, |b|)` with `rel` from `[Settings] approx_rel_tol` in `physure.conf` (default `1e-3`); `approx(a, b, rel)` names the tolerance (`approx(x, y, 1 %)`). `≈` with exactly one operand zero is an error: no relative tolerance says how close to zero is close.\n\n");
+    md.push_str("`x == t +/- k sigma` asks whether the measured `x` lies within `k` of its own standard uncertainties of the exact target `t`: `(9.81 +/- 0.01) m/s^2 == 9.80 m/s^2 +/- 2 sigma` is true. An `x` with no uncertainty is an error; use `==`.\n\n");
+    md.push_str("Different dimensions, and operand types that have no comparison (two vectors, a string and a quantity), are errors, never `False`. Arithmetic and conversion bind tighter than a comparison, so `0.1 m + 0.2 m == 0.3 m` is true and `x => km < 5 km` converts, then compares (see the operator table below).\n\n");
+    md.push_str("**A zero needs a unit.** A plain number has no dimension, so it compares only with a dimensionless value: `x > 0` with `x` in metres is an error, as `x > 5` is. Zeros of different scales are different values (0 degC is 273.15 K, 0 degF is 255.37 K, 0 dB is a ratio of 1), and only the unit says which one is meant. `==`, `!=`, `<`, `<=`, `>`, `>=`, `≈`, `approx`, `assert(a, b)`, `phs check` and transpiled code all follow the same rule, and its error texts say what to write:\n\n");
+    md.push_str("| Comparison | Answer | Write instead |\n");
+    md.push_str("| :--- | :--- | :--- |\n");
+    md.push_str("| `x > 0` with `x = 2 m` | error: \"cannot compare 2.0 m with the plain number 0: a zero needs a unit, write `x > 0 m` (for a temperature point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB is a ratio of 1)\" | `x > 0 m` |\n");
+    md.push_str("| `x > 5` with `x = 2 m` | error: \"... a number compared with a quantity needs a unit, write `x > 5 m`\" | `x > 5 m` |\n");
+    md.push_str("| `t > 0` with `t = 20 degC` | error: the zero message | `t > 0 degC` (or `t > 273.15 K`, the same point) |\n");
+    md.push_str("| `30 deg > 0`, `1 rad > 0.5` | error: an angle is a dimension in a comparison, in either angle mode | `30 deg > 0 deg`, `1 rad > 0.5 rad` |\n");
+    md.push_str("| `20 dB == 100` | error: \"cannot compare 20.0 dB with the plain number 100: write the level with its unit (`x > 20 dB`) or compare the ratio explicitly (`(x => unity) > 100`)\": whether 100 is a ratio, a power ratio or 100 dB is written nowhere | `20 dB > 10 dB`; `(20 dB => unity) == 100` is true |\n");
+    md.push_str("| `5 dB > 0`, `0 dB == 0` | error: the zero message | `5 dB > 0 dB` |\n");
+    md.push_str("| `50 % == 0.5`, `1 % > 0`, `3 ppm == 3e-6`, `(2 m / 1 m) > 1` | true: a dimensionless ratio in any unit (not a level) compares with plain numbers by its ratio | |\n\n");
+    md.push_str("A test against zero with a tolerance writes the tolerance in the unit of `x`: `abs(x) < 1e-9 m`.\n\n");
+    md.push_str("#### Conditions\n\n");
+    md.push_str("A condition is a Bool: `True`, `False`, a comparison, or `and`, `or`, `not` of those. This holds wherever PHS reads one: `if c then a else b`, `c ? a : b`, `while c { ... }`, `if c then return v`, `@requires(c, \"...\")`, `@ensures(c, \"...\")`, a conditional breakpoint of `phs debug`, the operands of `and`, `or` and `not`, and `assert(c)`. Anything else is an error that names what it got, after \"the condition of `if` needs a Bool (True or False), got\" (the place changes: `while`, `? :`, `@requires`, \"the left side of `and`\"...):\n\n");
+    md.push_str("| The condition is | The error says | Write instead |\n");
+    md.push_str("| :--- | :--- | :--- |\n");
+    md.push_str("| a number, `if n` with `n = 3` | a Number (3.0): a number is not a condition; compare it, e.g. `x != 0` | `if n != 0` |\n");
+    md.push_str("| a quantity, `if x` with `x = 2 m` | a Quantity (2.0 m): a quantity is not a condition; compare it, e.g. `x != 0 m` | `if x != 0 m` |\n");
+    md.push_str("| the text `\"true\"` or `\"false\"` | a String (\"true\"): text is not a condition; the Bool literals are True and False | `if True` |\n");
+    md.push_str("| other text, `if s` with `s = \"on\"` | a String (\"on\"): text is not a condition; compare it, e.g. `s == \"on\"` | `if s == \"on\"` |\n");
+    md.push_str("| a name with no value, `while true` | `true` has no value; the Bool literals are True and False | `while True` |\n");
+    md.push_str("| a vector, a range, a function, None, a sigma bound, an equation, a matrix, a plot | a Vector: a Vector is not a condition (and so on) | the comparison that is meant |\n\n");
+    md.push_str("A number is not a condition because \"zero is false\" is a convention the reader cannot see, and the zero of a quantity depends on its unit (above). `phs check` reports the same error without running the program wherever it knows the type of the condition (a literal, a variable assigned one, a parameter with a unit, a name with no value); where it does not, the error comes when the line runs.\n\n");
+
+    md.push_str("#### Operator precedence\n\n");
+    md.push_str("Tightest first; the operators of one row bind equally and, where they repeat, from left to right.\n\n");
+    md.push_str("| Operators | Reading |\n");
+    md.push_str("| :--- | :--- |\n");
+    md.push_str("| `^`, unary `-` | `-2 ^ 2` is `-(2 ^ 2)`, -4; a power of a power needs parentheses: `(2 ^ 3) ^ 2` or `2 ^ (3 ^ 2)` |\n");
+    md.push_str("| `*`, `/`, implicit multiplication | `6 m / 2 * 3` is 9 m; `2 3 m` is 6 m |\n");
+    md.push_str("| `+`, `-` | `a - b + c` is `(a - b) + c` |\n");
+    md.push_str("| `=>` | converts everything to its left: `1 m + 2 m => cm` is 300 cm; the target is a unit |\n");
+    md.push_str("| `==`, `!=`, `<`, `<=`, `>`, `>=`, `≈` | one per expression: `0.1 + 0.2 == 0.3` is true |\n");
+    md.push_str("| `..` | one per expression; each endpoint is a whole expression: `0 m .. 10 m => km` is `0 m .. 0.01 km` |\n");
+    md.push_str("| `: spec` | formats the whole expression: `0.1 + 0.2: .3f` |\n");
+    md.push_str("| `not` | `not a + b > c` is `not ((a + b) > c)` |\n");
+    md.push_str("| `and` | |\n");
+    md.push_str("| `or` | |\n");
+    md.push_str("| `c ? a : b` | |\n");
+    md.push_str("| `where` | |\n\n");
+    md.push_str("Two forms are errors that say which parentheses to write. A `+` or `-` after `=> unit`: `x => km - 5 m` cannot subtract from the unit, and the standard order does not say `(x => km) - 5 m`, so write that. A chain of comparisons: `a < b < c` would compare the `True` or `False` of `a < b` with `c`, so write `a < b and b < c`. The strings the symbolic builtins read (`deriv`, `integral`, `limit`, ...) follow the same order: `deriv(\"-x^2\", \"x\")` is `-2 * x`, and `x^2^3` needs parentheses there too; in them an exponent may carry its own sign (`e^-x`) and `**` is `^`.\n\n");
 
     md.push_str("### 1.2 Function Definitions & Docstrings\n");
     md.push_str("Functions can be defined with or without the optional `fn` keyword. Unit constraints on parameters are checked automatically.\n\n");
@@ -512,6 +570,7 @@ fn generate_language_docs_md() -> String {
     md.push_str("doubled = x * 2.0 where x = 10.0 m\n");
     md.push_str("status = if pressure > 50.0 kPa then \"High Pressure\" else \"Normal Pressure\"\n");
     md.push_str("```\n\n");
+    md.push_str("A `while` loop stops with the error \"while loop did not converge after N iterations\" after `[Settings] max_while_iterations` iterations (default 10000, at least 1), as `max_loop_iterations` (default 1000000) bounds the range or vector a `for` loop may build (section 1.6).\n\n");
 
     md.push_str("### 1.4 Imports & Domain Modules\n");
     md.push_str("```phs\n");
@@ -519,6 +578,18 @@ fn generate_language_docs_md() -> String {
     md.push_str("use plot, plot3d, export3d from plot\n");
     md.push_str("use linspace, gradient, trapz from array\n");
     md.push_str("```\n\n");
+    md.push_str("`use a, b from \"lib\"` (also `use * from \"lib\"` and `use a as b from \"lib\"`) imports from the module file `lib.phs`. A module is a program of its own:\n\n- It runs once per interpreter (again only when its file changed), whole and in definition order, in an environment of its own: the importer's names never reach it. With `lib.phs` holding `k = 2`, `r = 3*k` and `f(x) = k*x`, the program `k = 10; use r, f from \"lib\"` gets `r` = 6 and `f(1)` = 2.\n- An imported value is the value the module computed, so a measurement imported twice is one measurement. An imported function sees the names of its module and its parameters; a function you pass to it keeps seeing yours, and a function it returns keeps its module.\n- Errors name the module: a name it does not define, a cyclic import (`a -> b -> a`), a file that cannot be parsed, and a module that binds a reserved name (section 1.5): a module with `pi = 3` makes every import from it an error, whichever name is imported.\n\n");
+
+    md.push_str("### 1.5 Names: variables, `pi` and the constants of the catalog\n");
+    md.push_str("A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is its own text.\n\n");
+    md.push_str("```phs\n");
+    md.push_str("area = pi * (2 m)^2                                   # 12.566 m^2\n");
+    md.push_str("rt = molar_gas_constant * 300 K => J/mol              # 2494.3 J/mol\n");
+    md.push_str("photon = planck_constant * speed_of_light_in_vacuum / (500 nm) => eV   # 2.48 eV\n");
+    md.push_str("```\n\n");
+    md.push_str("The constants are the `[Constants]` of the catalog in force, by their catalog names: the embedded catalog (411 CODATA values, with no uncertainties), a project's `physure.conf`, a frozen file, or the registry a binding evaluates for. An override or a frozen configuration changes them. Only the catalog's own names are constants: `e`, `c`, `k` and `R` are not (write `exp(1)`, `speed_of_light_in_vacuum`, `boltzmann_constant`, `molar_gas_constant`), and `h`, `g`, `G` are units (hour, gram, gauss). Seven names are a unit and a constant at once (`bohr_radius`, `electron_mass`, `electron_volt`, `planck_length`, `planck_mass`, `planck_temperature`, `planck_time`): the catalog gives both one value (a frozen file or a unit system where they differ is refused; a `physure.conf` where they differ loses the constant, with a message), so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) are the same length. A constant carries no uncertainty: a catalog line is `name = number unit`, and one written with `+/-` is an error when it is used.\n\n");
+    md.push_str("Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file.\n\n");
+    md.push_str("### 1.6 Settings that change a run\nThe `[Settings]` of the frozen file in force (`phs conf`), or else of the `physure.conf` in the working directory, govern these. A key that is not set takes its default, which is the behaviour from before the key existed (but for the seed, below).\n\n| Key | Default | What it governs |\n| :--- | :--- | :--- |\n| `max_while_iterations` | `10000` | the ceiling of one `while` loop (at least 1) |\n| `monte_carlo_samples` | `1000` | the samples a Monte Carlo measurement draws (2 to 10000000) |\n| `monte_carlo_seed` | `0` | the seed of the Monte Carlo draws, or `random` |\n| `default_dof` | `inf` | the degrees of freedom of an uncertainty that declares none (`dof`, `coverage_factor`, `expanded`) |\n| `display_significant_digits` | `15` | the significant digits of a printed decimal number (1 to 17; 17 prints every number exactly); not the scientific form |\n| `display_scientific_below` | `1e-4` | below this magnitude a number prints in scientific notation (1e-6 to 1) |\n| `display_scientific_from` | `1e16` | from this magnitude a number prints in scientific notation (finite, at least 1) |\n| `uncertainty_digits` | `gum` | the significant figures of a printed uncertainty: `gum` (the GUM rule) or a count from 1 to 17; the value is rounded to the same decimal place |\n\n**Monte Carlo draws are reproducible by default.** Under `propagation_mode = monte_carlo` each unit of evaluation draws one stream from the seed: a program run (`phs file.phs` and its viewers), a REPL session, a request of the editor daemon, one start of `phs serve`, a document of the language server. So the same program gives the same samples on every run, and two measurements of one run are independent. `monte_carlo_seed = random` draws operating-system entropy, different on every run (`phs conf status` warns that such a file is not reproducible). `phs eval --seed N` wins over the setting, and the JSON says which seed was used and where it came from. A `for` loop or `parallel_map` in `monte_carlo` mode runs on one thread, so its values never depend on the number of threads.\n\n**Printed text.** `@precision` wins over the display keys, and `x: base` follows the digits and thresholds without GUM rounding. The keys do not govern `format()` with a spec, `frac` and `ifrac`, plot axes or the symbolic printer. With `display_significant_digits = 6` and `uncertainty_digits = 3`, `x = 1/3` prints `0.333333` (by default `0.333333333333333`) and `10.0 +/- 0.15 m` prints `10.000 ± 0.150 m` (by default `10.0 ± 0.2 m`).\n\nSix old keys are accepted and do nothing: `default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose`, `mkml_recursion_limit`. `phs conf status` warns where a file of yours sets one.\n\n");
 
     md.push_str("---\n\n");
     md.push_str("## 2. 3D WebGL Surface Visualization & Mesh Export\n\n");
@@ -548,10 +619,16 @@ fn generate_language_docs_md() -> String {
     md.push_str("| `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |\n");
     md.push_str("| `calc` | `solve(eq, target)` | Symbolic equation solver | `solve(P == F / A, F)` |\n");
     md.push_str("| `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv(0.5 * m * v^2, v)` |\n");
-    md.push_str("| `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |\n");
+    md.push_str("| `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |\n| `calc` | `integral(expr, var, a, b)` | Definite integral (closed form confirmed numerically, or tanh-sinh quadrature with an error estimate) | `integral(\"v\", \"t\", 0 s, 1 h)` |\n");
+    md.push_str("| `calc` | `limit(expr, var, point, side?)` | Limit (value at a point of continuity, or Richardson extrapolation with a convergence check); two-sided, or from one side with `side` `\"+\"` (right) or `\"-\"` (left) | `limit(\"sin(x)/x\", \"x\", 0)`, `limit(\"1/x\", \"x\", 0, \"+\")` |\n");
     md.push_str("| `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |\n");
     md.push_str("| `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient(presion_vec, pos_vec)` |\n");
     md.push_str("| `array` | `trapz(y, x)` | Numerical integration (area) | `trapz(fuerza_vec, pos_vec)` |\n\n");
+    md.push_str("#### Definite integrals\n\n");
+    md.push_str("`integral(expr, var, a, b)` (after `use integral from calc`) is the definite integral of `expr` over `var` from `a` to `b`; `integral(expr, var)` is the symbolic antiderivative.\n\n");
+    md.push_str("- **Bounds**: a number, a quantity, `\"inf\"` or `\"-inf\"`, or a name or an expression written as text (`pi`, `\"pi/2\"`, `\"bohr_radius\"`, a variable of the program). A name that resolves to nothing is an error, never 0. A quantity bound makes `var` a quantity of that unit; the other bound must have the same dimension, or be a plain `0` or an infinity. A temperature point or a level is not a bound.\n- **Names**: the integrand sees the program's variables (and a function's parameters). A free name resolves as everywhere in PHS (section 1.5): a variable, `pi`, a constant of the catalog, a unit; any other name is an error.\n- **Result**: a quantity in (unit of `expr`) times (unit of `var`) whenever a unit or an uncertainty is involved, otherwise a number. With `v = 3 m/s`, `integral(\"v\", \"t\", 0 s, 1 h)` is `10800 m`.\n- **Uncertainty** propagates, from the program's uncertain variables and from uncertain bounds, and the result stays correlated with them.\n- **Method**: the closed form `F(b) - F(a)` when the symbolic engine has an antiderivative *and* the quadrature confirms it, so a closed form that jumps across a pole is refused (`integral(\"x^(-2)\", \"x\", -1, 1)` is an error, not -2). Otherwise tanh-sinh quadrature with an error estimate: accepted when two successive levels agree within a relative 1e-12 of max(|I|, the integral of |f|), from level 4 on, with at most 20000 samples per piece. An infinite end is mapped by x = c ± (1 - u)/u.\n- **Refused, not guessed**: a singularity at a non-zero end (`1/sqrt(1-x)` on [0, 1]: substitute so that it sits at 0), a jump or a kink inside the interval (split the interval there), `sin(1/x)` next to 0, an integrand that decays too slowly towards an infinite end. An integrand that cannot be evaluated, or is not finite, at a sample is an error.\n- **Known failure mode**: a peak much narrower than the spacing of the first levels' samples is never sampled, and every level agrees on a wrong value: a Gaussian of width 1e-4 at x = 0.3 on [0, 1] integrates to a confident 0. Split the interval around a known peak.\n\n");
+    md.push_str("#### Limits\n\n`limit(expr, var, point)` (after `use limit from calc`) is the limit of `expr` as `var` tends to `point`, from both sides; `limit(expr, var, point, \"+\")` is the limit from the right (`var -> point+`) and `\"-\"` from the left, also written `side=\"+\"`. The symbolic engine has no limit: the answer is numeric, and it is given only when it converged; otherwise the call is an error, never a guessed `0` or `inf`.\n\n- **Point**: a number, a quantity, `\"inf\"` or `\"-inf\"`, or a name or an expression written as text (`pi`, `\"pi/2\"`, a variable, a constant of the catalog). A name that resolves to nothing is an error. A quantity point makes `var` a quantity of that unit; a temperature point or a level is refused. Towards an infinite point `var` is a plain number.\n- **Side**: without a side the limit is two-sided and needs `expr` defined on both sides of the point: `limit(\"sqrt(x)\", \"x\", 0)` and `limit(\"x*ln(x)\", \"x\", 0)` are errors (undefined for x < 0: use side `\"+\"`), `limit(\"x*ln(x)\", \"x\", 0, \"+\")` is 0. With a side only that side is sampled, and `expr` must be defined there (`limit(\"sqrt(x)\", \"x\", 0, \"-\")` is an error). A side other than `\"+\"` or `\"-\"` is an error, and so is a side at `\"inf\"` or `\"-inf\"` (approached from one side already). Every other keyword argument of a calc builtin is an error too, never ignored.\n- **Names**: `expr` sees the program's variables (and a function's parameters), as the integrand of `integral` does; any other free name is an error.\n- **Continuous point**: when `expr` calls only `sin`, `cos`, `tan`, `exp`, `ln`, `log`, `sqrt`, `abs`, `min`, `max` and arithmetic (no exponent involving `var`) and its value at the point is defined and finite, and `expr` is defined at the first step of each side approached and at its closest sample (1/2048 of that step from the point), the limit is that value, with the units and the uncertainty the core gives it (`limit(\"2000000+x\", \"x\", 1)` is `2000001`). This holds from one side too: `limit(\"1/(x-1e-9)\", \"x\", 0, \"+\")` is -1e9, its value at 0, where samples from 1/8 down would all lie past the pole. A point outside the domain is never used (`limit(\"ln(x)\", \"x\", 0, \"+\")` is `-inf`, from the samples), nor one isolated from the rest of the domain (`limit(\"sqrt(x^2*(x^2-1e-4))\", \"x\", 0)` is an error: undefined for 0 < |x| < 0.01). Known limitation: a gap in the domain narrower than the closest sample is not seen, and the value at such a point is taken.\n- **Extrapolation**: otherwise (a removable singularity such as `sin(x)/x` at 0, or `floor`, `ceil`, `round`, a comparison, a ternary in `expr`) the samples at `point ± h`, `h = 1/8, 1/16, ...` (12 steps), are extrapolated to `h = 0` (Richardson, by Neville's algorithm) separately on each side. A side is accepted when its error estimate is below `1e-9` of max(|L|, the largest sample) at two successive steps, so a limit of 0 works; the two sides of a two-sided limit must agree to the same tolerance. Where `expr` is undefined at the first step (a boundary of its domain or a pole closer than 1/8), that side starts closer, halving the step up to 20 times: `limit(\"abs(ln(x+0.1))\", \"x\", 0)` is ln 10. Measured: `(1-cos(x))/x^2` at 0 is 0.5 within 5e-11 (its samples cancel), `sin(x)/x` within 1e-15; `limit(\"sin(sqrt(x))/sqrt(x)\", \"x\", 0, \"+\")` is 1.\n- **Infinite point**: `var = ±8, ±16, ±32, ...` (24 steps), extrapolated in `1/var`: `limit(\"1/x\", \"x\", \"inf\")` is 0, `limit(\"(1+1/x)^x\", \"x\", \"inf\")` is e.\n- **Zero and infinity**: samples of one sign falling geometrically give 0 (`x*ln(x)` at 0); samples of one sign growing with non-decreasing increments give `inf` or `-inf`, for a two-sided limit when both sides agree: `limit(\"1/x^2\", \"x\", 0)` is `inf`, `limit(\"1/x\", \"x\", 0)` is an error, `limit(\"1/x\", \"x\", 0, \"+\")` is `inf` and `\"-\"` gives `-inf`.\n- **Uncertainty** propagates: at a continuous point through the core, and an extrapolated limit is a weighted sum of samples formed with the core's arithmetic. An uncertain point where the limit must be extrapolated is refused.\n- **Refused, not guessed**: sides that disagree (`abs(x)/x` at 0, `floor(x)` at 1: ask for one side, `limit(\"floor(x)\", \"x\", 1, \"-\")` is 0), a side where `expr` is undefined (`sqrt(x)` at -1, `sqrt(x)` at 0 without `\"+\"`), oscillation (`sin(1/x)` at 0, `sin(x)` at `\"inf\"`), a change on a scale smaller than the smallest step (`(1-cos(1000*x))/x^2` at 0), and samples that rounding has made equal (`min(x, 100)` at `\"inf\"`).\n\n");
+    md.push_str("#### Your functions inside calc texts\n\nThe calc builtins (`deriv`, `integral`, `limit`, `solve`, `simplify`, `series`, `laplace`, `dsolve`, `grad`, ...) and `plot3d`/`plot_field` read a call of one of your functions inside their text by writing its body there, every argument in place of its parameter and in parentheses: with `f(x) = 2*x`, `deriv(\"f(t)\", \"t\")` is 2; with `f(x) = x^2`, `deriv(\"f(2*t)\", \"t\")` is `8 * t` and `deriv(\"f(t) + f(2*t)\", \"t\")` is `10 * t`; nested calls are read too (`g(y) = f(3*y) + y` gives `deriv(\"g(t)\", \"t\")` = `18 * t + 1`). A function is looked up where the builtin is called, then in the program. Refused, naming the function: recursion (`f -> g -> f`), a wrong number of arguments, a parameter with a declared unit, a decorator, an uncertain literal, a body of more than one expression, a body that is not algebra (a comparison, a conditional, text, a vector, `=>`, `..`, a loop), and an imported function whose body reads a name of its module.\n\n");
 
     md.push_str("---\n\n");
     md.push_str("## 4. Physical Units & Aliases Registry\n\n");
@@ -786,10 +863,30 @@ fn run_statements(
 
 fn main() {
     let args: Vec<String> = env::args().collect();
+    // `phs conf` first: its own arguments (`--reason help`, `show doc`) must never reach `run_flag_command`, and it
+    // exists to inspect a configuration the pre-command check would refuse (it sets the engine file itself).
+    if args.get(1).map(String::as_str) == Some("conf") {
+        conf::run_conf(&args);
+    }
+    refuse_an_unusable_configuration();
     if run_flag_command(&args) || run_subcommand(&args) || handle_transpile(&args) {
         return;
     }
     run_script(&args);
+}
+
+/// Before anything runs: the configuration in force (a frozen `physure.frozen.conf`, `PHYSURE_CONF`, ...) must be
+/// usable, or the program stops with its message on stderr and an exit code that says what kind of problem it is:
+/// 1 for the integrity of the file, 2 for resolution, 3 for the engine. Without this the first computation would
+/// refuse in the middle of the run. The engine file of the policy `binary` is this executable.
+fn refuse_an_unusable_configuration() {
+    if let Ok(exe) = env::current_exe() {
+        physure_core::frozen::set_engine_file(Some(exe));
+    }
+    if let Err(e) = physure_core::frozen::ensure_valid() {
+        eprintln!("phs: refusing to run: {e}");
+        process::exit(e.exit_code());
+    }
 }
 
 /// Runs the script (or snippet) named by the first argument and shows the result the way the flags ask.

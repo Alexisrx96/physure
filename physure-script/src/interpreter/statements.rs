@@ -5,7 +5,6 @@ use crate::ast::{Program, Statement};
 use crate::value::PhsValue;
 use crate::debug::{DebugAction, DebugContext};
 use super::{PhsInterpreter, ExternalFn};
-use super::helpers::is_truthy;
 
 /// Tracks what a `Step*`/`Pause` `DebugAction` committed the interpreter to doing next, so a
 /// later `debug_checkpoint` call can decide whether to fire the hook even when no `Breakpoint`
@@ -27,6 +26,37 @@ pub(crate) enum StepMode {
 
 fn module_aliases_unsupported() -> PhysureError {
     PhysureError::Generic("Module aliases not yet supported by interpreter".into())
+}
+
+thread_local! {
+    /// The modules being run on this thread, outermost first: a module that imports one of them is a cycle.
+    static LOADING_MODULES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A module being run, from `enter` until it is dropped (also on error).
+struct LoadingModule;
+
+impl LoadingModule {
+    /// Marks `path` as being run, or refuses it when it already is, naming the cycle.
+    fn enter(path: &str) -> PhysureResult<Self> {
+        LOADING_MODULES.with(|loading| {
+            let mut loading = loading.borrow_mut();
+            if let Some(first) = loading.iter().position(|p| p == path) {
+                let cycle = loading[first..].join(" -> ");
+                return Err(PhysureError::Generic(format!("cyclic import: {cycle} -> {path}")));
+            }
+            loading.push(path.to_string());
+            Ok(LoadingModule)
+        })
+    }
+}
+
+impl Drop for LoadingModule {
+    fn drop(&mut self) {
+        LOADING_MODULES.with(|loading| {
+            loading.borrow_mut().pop();
+        });
+    }
 }
 
 impl PhsInterpreter {
@@ -57,11 +87,15 @@ impl PhsInterpreter {
     /// have line-accurate debugging as a goal.
     pub fn run_statements_with_lines(&mut self, program: &Program) -> PhysureResult<PhsValue> {
         let mut env = self.env.clone();
-        let mut last = PhsValue::None;
-        for (i, stmt) in program.statements.iter().enumerate() {
-            let line = program.lines.get(i).copied().unwrap_or(0);
-            last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
-        }
+        let last = self.in_unit(|| {
+            let mut last = PhsValue::None;
+            for (i, stmt) in program.statements.iter().enumerate() {
+                let line = program.lines.get(i).copied().unwrap_or(0);
+                crate::globals::refuse_global_bindings(stmt)?;
+                last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
+            }
+            Ok::<_, PhysureError>(last)
+        })?;
         self.env = env;
         Ok(last)
     }
@@ -137,7 +171,7 @@ impl PhsInterpreter {
                     // `PhysureResult` with `?`, so a user with a broken breakpoint condition
                     // gets a real error message instead of a breakpoint that quietly never
                     // fires.
-                    *l == line && is_truthy(&self.eval_expr(cond, env)?)
+                    *l == line && self.eval_condition(cond, env, "the condition of a breakpoint")?
                 }
                 // Fires on every statement inside the named function's innermost frame, not
                 // only its first statement -- see the doc comment on `Breakpoint::FunctionEntry`
@@ -192,8 +226,39 @@ impl PhsInterpreter {
         Ok(())
     }
 
+    /// Runs `program` with `bindings` visible as variables and returns the value of its last statement, without
+    /// touching the interpreter: the program runs in a copy of the environment, so neither the bindings nor
+    /// anything the program assigns stays behind, and a binding named like a variable shadows it for this call
+    /// only.
+    ///
+    /// This is how a binding calls a function with values it holds. The values arrive as they are, with the
+    /// sources of their uncertainty: writing them as source text would make a new measurement of each, and
+    /// `f(x, x)` would no longer see one.
+    pub fn run_program_with(&self, program: &Program, bindings: Vec<(String, PhsValue)>) -> PhysureResult<PhsValue> {
+        // `pi` and the catalog's constants are global: a host cannot rebind them either
+        for (name, _) in &bindings {
+            crate::globals::refuse_binding(name, "a value given by the host")?;
+        }
+        let mut env = self.env.clone();
+        env.extend(bindings);
+        let mut last = PhsValue::None;
+        for stmt in &program.statements {
+            last = self.eval_statement_with_env(stmt, &mut env)?;
+        }
+        Ok(last)
+    }
+
+    /// Runs one top-level statement in `env`, inside this interpreter's evaluation unit (see `in_unit`).
     pub fn eval_statement_with_env(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        self.in_unit(|| self.eval_statement_in(stmt, env))
+    }
+
+    /// [`PhsInterpreter::eval_statement_with_env`] in whatever unit is open (a template string's `{expr}`, which may
+    /// run on a rayon worker, must not take the interpreter's stream).
+    pub(crate) fn eval_statement_in(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
+        // once per statement before it runs, function bodies and loops included (see `globals`)
+        crate::globals::refuse_global_bindings(stmt)?;
         self.eval_statement_with_env_at(stmt, env, 0)
     }
 
@@ -217,23 +282,22 @@ impl PhsInterpreter {
             Statement::Export(_node) => Ok(PhsValue::None),
             Statement::Return(expr) => self.eval_expr(expr, env),
             Statement::GuardReturn { cond, value } => {
-                let cond_val = self.eval_expr(cond, env)?;
-                if is_truthy(&cond_val) {
+                if self.eval_condition(cond, env, "the condition of `if ... then return`")? {
                     self.eval_expr(value, env)
                 } else {
                     Ok(PhsValue::None)
                 }
             }
             Statement::While { cond, body, body_lines } => {
-                const DEFAULT_MAX_LOOP_ITERATIONS: usize = 10_000;
+                // `[Settings] max_while_iterations`, read once per loop
+                let ceiling = physure_core::settings::max_while_iterations();
                 let mut count = 0;
                 let mut last_val = PhsValue::None;
-                while is_truthy(&self.eval_expr(cond, env)?) {
+                while self.eval_condition(cond, env, "the condition of `while`")? {
                     self.check_budget()?;
-                    if count >= DEFAULT_MAX_LOOP_ITERATIONS {
+                    if count >= ceiling {
                         return Err(PhysureError::Generic(format!(
-                            "while loop did not converge after {} iterations",
-                            DEFAULT_MAX_LOOP_ITERATIONS
+                            "while loop did not converge after {ceiling} iterations"
                         )));
                     }
                     count += 1;
@@ -256,9 +320,15 @@ impl PhsInterpreter {
             return Ok(PhsValue::None);
         }
 
-        if let Ok(export) = self.resolver.resolve(&node.path) {
-            self.import_module(node, &export, env)?;
-            return Ok(PhsValue::None);
+        match self.resolver.load(&node.path) {
+            Ok(module) => {
+                self.import_module(node, &module, env)?;
+                return Ok(PhsValue::None);
+            }
+            // no `.phs` module by that name: perhaps a native plugin
+            Err(crate::resolver::ModuleResolutionError::NotFound(path)) if path == node.path => {}
+            // a module that is there but cannot be read is not a missing one
+            Err(other) => return Err(PhysureError::Generic(other.to_string())),
         }
 
         if let Some(base_dir) = &self.plugin_base_dir {
@@ -304,52 +374,81 @@ impl PhsInterpreter {
         Ok(())
     }
 
-    /// `use "module"`: binds the module's exported symbols (evaluated) and functions in `env`.
+    /// `use ... from "module"`: binds the values the module computed, in its own scope, under the names imported.
+    /// A function keeps seeing its module's names (see `ModuleScope`), never the importer's.
     fn import_module(
         &self,
         node: &crate::ast::ImportNode,
-        export: &crate::resolver::ModuleExport,
+        module: &crate::resolver::ModuleSource,
         env: &mut HashMap<String, PhsValue>,
     ) -> PhysureResult<()> {
         use crate::ast::ImportSpecifier;
 
-        match &node.specifier {
+        let export = &module.export;
+        // (the name the module exports, the name it is bound under here), checked before the module runs
+        let names: Vec<(String, String)> = match &node.specifier {
             ImportSpecifier::Wildcard => {
-                for (name, expr) in &export.symbols {
-                    let val = self.eval_expr(expr, env)?;
-                    env.insert(name.clone(), val);
+                // what a module defines is known only now: a name of it that is a global identifier is refused
+                let what = format!("a name imported from `{}`", node.path);
+                let names: Vec<&String> = export.symbols.iter().map(|(name, _)| name).chain(export.function_names()).collect();
+                for name in &names {
+                    crate::globals::refuse_binding(name, &what)?;
                 }
-                for (name, func) in &export.functions {
-                    env.insert(name.clone(), PhsValue::Function(func.clone()));
-                }
+                names.into_iter().map(|name| (name.clone(), name.clone())).collect()
             }
             ImportSpecifier::Symbols(syms) => {
                 for sym in syms {
-                    self.import_symbol(sym, &node.path, export, env)?;
+                    if export.symbol(&sym.name).is_none() && !export.functions.contains_key(&sym.name) {
+                        return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, node.path)));
+                    }
                 }
+                syms.iter().map(|sym| (sym.name.clone(), sym.alias.clone().unwrap_or_else(|| sym.name.clone()))).collect()
             }
             ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        };
+
+        let scope = self.module_scope(&node.path, module)?;
+        for (exported, bound) in names {
+            let internal = module.internal_name(&exported);
+            let value = scope.get(internal).cloned().ok_or_else(|| {
+                PhysureError::Generic(format!("module {} defines '{exported}' but left no value under '{internal}'", node.path))
+            })?;
+            env.insert(bound, scope.close_over(value));
         }
         Ok(())
     }
 
-    fn import_symbol(
-        &self,
-        sym: &crate::ast::ImportSymbol,
-        module: &str,
-        export: &crate::resolver::ModuleExport,
-        env: &mut HashMap<String, PhsValue>,
-    ) -> PhysureResult<()> {
-        let target_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-        if let Some(expr) = export.symbols.get(&sym.name) {
-            let val = self.eval_expr(expr, env)?;
-            env.insert(target_name, val);
-        } else if let Some(func) = export.functions.get(&sym.name) {
-            env.insert(target_name, PhsValue::Function(func.clone()));
-        } else {
-            return Err(PhysureError::Generic(format!("Symbol {} not found in module {}", sym.name, module)));
+    /// The environment `module` (imported as `path`) leaves once it has run: run now, in an environment of its own,
+    /// unless this interpreter already ran the same module. A module importing one that is being run is refused.
+    fn module_scope(&self, path: &str, module: &crate::resolver::ModuleSource) -> PhysureResult<crate::value::ModuleScope> {
+        let ran = self.modules.lock().unwrap_or_else(|e| e.into_inner()).get(path).cloned();
+        if let Some((source, scope)) = ran {
+            if source == *module {
+                return Ok(scope);
+            }
         }
-        Ok(())
+        let _loading = LoadingModule::enter(path)?;
+        let mut module_env = HashMap::new();
+        match &module.program {
+            Some(program) => {
+                for stmt in program.statements.iter().filter(|stmt| crate::resolver::ModuleSource::runs(stmt)) {
+                    self.eval_statement_in(stmt, &mut module_env)?;
+                }
+            }
+            // a module given as its definitions: its functions, then its values in the order it lists them
+            None => {
+                for (name, func) in &module.export.functions {
+                    module_env.insert(name.clone(), PhsValue::Function(func.clone()));
+                }
+                for (name, expr) in &module.export.symbols {
+                    let value = self.eval_expr(expr, &module_env)?;
+                    module_env.insert(name.clone(), value);
+                }
+            }
+        }
+        let scope = crate::value::ModuleScope::new(path, module_env);
+        self.modules.lock().unwrap_or_else(|e| e.into_inner()).insert(path.to_string(), (module.clone(), scope.clone()));
+        Ok(scope)
     }
 
     /// Installs the requested (possibly aliased) subset of `functions` into

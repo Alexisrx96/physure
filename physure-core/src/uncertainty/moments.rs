@@ -20,7 +20,7 @@
 
 use super::lineage::{Lineage, fresh_id, reserve_id};
 use super::mode::{PropagationMode, propagation_mode};
-use super::shapes::ShapeKind;
+use super::shapes::{asymmetric_shape, ShapeKind};
 use super::trait_def::UncertaintyBackend;
 use crate::error::{PhysureError, PhysureResult};
 
@@ -63,7 +63,7 @@ impl AsymmetricMoments {
     }
 }
 
-/// The moments of the default shape ([`ShapeKind::DEFAULT`]) with half-widths `sigma_minus`
+/// The moments of the shape in force ([`asymmetric_shape`], `[Settings] asymmetric_shape`) with half-widths `sigma_minus`
 /// and `sigma_plus`.
 ///
 /// Both widths measure outwards from the mode, so both are non-negative; a negative one is a
@@ -80,20 +80,20 @@ impl AsymmetricMoments {
 /// assert!((m.variance - 0.25).abs() < 1e-12);
 /// ```
 pub fn moments_from_sigmas(sigma_minus: f64, sigma_plus: f64) -> PhysureResult<AsymmetricMoments> {
-    ShapeKind::DEFAULT.strategy().moments_from_sigmas(sigma_minus, sigma_plus)
+    asymmetric_shape().strategy().moments_from_sigmas(sigma_minus, sigma_plus)
 }
 
-/// The largest skewness the default shape ([`ShapeKind::DEFAULT`]) can represent as a pair of
+/// The largest skewness the shape in force ([`asymmetric_shape`]) can represent as a pair of
 /// half-widths, reached in the one-sided limit σ⁻ → 0.
 ///
 /// A distribution more skewed than this cannot be written as a pair under the default shape at
 /// all. That is a property of the shape, not a limitation of the search, and
 /// [`sigmas_from_moments`] reports it rather than returning the closest thing it can find.
 pub fn max_skewness() -> f64 {
-    ShapeKind::DEFAULT.strategy().max_skewness()
+    asymmetric_shape().strategy().max_skewness()
 }
 
-/// The `(σ⁻, σ⁺)` pair whose default-shape ([`ShapeKind::DEFAULT`]) distribution has this
+/// The `(σ⁻, σ⁺)` pair whose shape-in-force ([`asymmetric_shape`]) distribution has this
 /// variance and third moment.
 ///
 /// The inverse of [`moments_from_sigmas`]. Only two of the three moments are needed: the pair
@@ -109,7 +109,7 @@ pub fn max_skewness() -> f64 {
 /// assert!((lo - 0.4).abs() < 1e-9 && (hi - 0.5).abs() < 1e-9);
 /// ```
 pub fn sigmas_from_moments(variance: f64, third: f64) -> PhysureResult<(f64, f64)> {
-    ShapeKind::DEFAULT.strategy().sigmas_from_moments(variance, third)
+    asymmetric_shape().strategy().sigmas_from_moments(variance, third)
 }
 
 /// One noise source as seen from a derived value: how sensitive the value is to it, and the
@@ -393,13 +393,13 @@ pub struct MomentsBackend {
 
 impl MomentsBackend {
     /// A newly measured asymmetric quantity, quoted as `value +sigma_plus -sigma_minus`, under
-    /// the default shape ([`ShapeKind::DEFAULT`]).
+    /// the shape in force ([`asymmetric_shape`]).
     ///
     /// `value` is the mode — the number the experimenter wrote — so the mean lands a little to
     /// the long-tailed side of it. Each call mints a fresh source id, as measuring twice gives
     /// two independent measurements.
     pub fn measured(value: f64, sigma_minus: f64, sigma_plus: f64) -> PhysureResult<Self> {
-        Self::measured_with(value, sigma_minus, sigma_plus, ShapeKind::DEFAULT, None)
+        Self::measured_with(value, sigma_minus, sigma_plus, asymmetric_shape(), None)
     }
 
     /// As [`Self::measured`], but with an explicit shape and, optionally, a caller-supplied
@@ -423,7 +423,7 @@ impl MomentsBackend {
     /// Lifts a symmetric, lineage-tracked value into the moments world, keeping its source ids
     /// so a later reuse of the same source still cancels. See [`MomentLineage::from_lineage`].
     pub fn from_lineage(mean: f64, lineage: &Lineage) -> Self {
-        MomentsBackend { mean, shape: ShapeKind::DEFAULT, sources: MomentLineage::from_lineage(lineage) }
+        MomentsBackend { mean, shape: asymmetric_shape(), sources: MomentLineage::from_lineage(lineage) }
     }
 
     /// The variance this value represents — `Σ sensitivity² · variance` over its sources.
@@ -487,7 +487,7 @@ impl MomentsBackend {
     /// be ambiguous for a mix, so that case is refused rather than silently picking one side's
     /// shape.
     pub fn combine(terms: &[(f64, &MomentsBackend)]) -> PhysureResult<MomentsBackend> {
-        let shape = terms.first().map(|(_, b)| b.shape).unwrap_or(ShapeKind::DEFAULT);
+        let shape = terms.first().map(|(_, b)| b.shape).unwrap_or_else(asymmetric_shape);
         if terms.iter().any(|(_, b)| b.shape != shape) {
             return Err(shape_mismatch());
         }
@@ -719,6 +719,40 @@ pub(super) fn not_implemented(op: &str) -> PhysureError {
 }
 
 #[cfg(test)]
+mod shape_setting_tests {
+    use super::*;
+    use crate::uncertainty::shapes::scoped_asymmetric_shape;
+
+    /// `[Settings] asymmetric_shape` decides what a bare `(σ⁻, σ⁺)` pair means wherever the default shape was
+    /// hard-coded: a new measurement, a symmetric value lifted into the moments world (so the two still combine),
+    /// the free functions and an empty combination. The default reproduces the dimidiated numbers.
+    #[test]
+    fn every_reader_of_the_default_shape_follows_the_setting_in_force() {
+        let dimidiated = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
+        assert_eq!(dimidiated.shape, ShapeKind::Dimidiated);
+        assert_eq!(dimidiated.mean, 12.3 + 0.1 / (2.0 * std::f64::consts::PI).sqrt());
+        let _fechner = scoped_asymmetric_shape(ShapeKind::Fechner);
+        let x = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
+        assert_eq!(x.shape, ShapeKind::Fechner);
+        let by_hand = ShapeKind::Fechner.strategy().moments_from_sigmas(0.4, 0.5).unwrap();
+        assert_eq!(x.mean, 12.3 + by_hand.shift);
+        assert_eq!(moments_from_sigmas(0.4, 0.5).unwrap(), by_hand);
+        assert_eq!(max_skewness(), FechnerGaussian_max());
+        let (lo, hi) = sigmas_from_moments(by_hand.variance, by_hand.third).unwrap();
+        assert!((lo - 0.4).abs() < 1e-9 && (hi - 0.5).abs() < 1e-9);
+        let lifted = MomentsBackend::from_lineage(1.0, &Lineage::measured(0.2));
+        assert_eq!(lifted.shape, ShapeKind::Fechner);
+        assert!(MomentsBackend::combine(&[(1.0, &x), (1.0, &lifted)]).is_ok(), "a lifted value has the shape in force");
+        assert_eq!(MomentsBackend::combine(&[]).unwrap().shape, ShapeKind::Fechner);
+    }
+
+    #[allow(non_snake_case)]
+    fn FechnerGaussian_max() -> f64 {
+        ShapeKind::Fechner.strategy().max_skewness()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -813,6 +847,7 @@ mod tests {
         // combined via the generic trait method rather than the enum's own arms) produces.
         let x = MomentsBackend::measured(12.3, 0.4, 0.5).unwrap();
         let y = MomentsBackend::measured(1.0, 0.4, 0.5).unwrap();
+        assert_eq!((x.shape, y.shape), (ShapeKind::Dimidiated, ShapeKind::Dimidiated), "the compiled default");
         let sum = x.propagate_add(&y).unwrap();
         assert!((sum.mean() - (x.mean + y.mean)).abs() < 1e-12);
         // `y` is folded in as a symmetric source here (third forced to 0), but its own real

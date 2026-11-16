@@ -8,6 +8,18 @@ This package contains JVM JNI bindings for the high-performance `physure` core p
 * **`src/main/java/com/physure/`**: High-level Java wrapper classes (`NativeEngine.java`, `UnitRegistry.java`, `Quantity.java`) offering a clean object-oriented interface.
 * **`pom.xml`**: Maven build (groupId `io.github.alexisrx96`, artifactId `physure`) for publishing to Maven Central.
 
+## Uncertainty and the measurements it comes from
+
+A `Quantity` is a *measurement*: it remembers the sources of its uncertainty, and so does every result derived
+from it, as in the core. Reusing a measurement therefore cancels or accumulates as the GUM says
+(`x.subtract(x)` is exactly `0`, `x.multiply(x)` has uncertainty `2 |x| u`), and two quantities constructed
+separately are two measurements even when their numbers are equal. `equals` compares the numbers and the unit
+only, so two equal quantities can behave differently in arithmetic.
+
+Degrees of freedom work as in the other bindings: `x.withDof(9)`, `Quantity.fromSamples(new double[] {...}, "V")`
+(Type A), `y.effectiveDof()`, `y.coverageFactor(0.95)` and `y.expanded(0.95)` (an `ExpandedUncertainty`).
+`PhyFunction.call(Quantity...)` and `PhyEquation.call(...)` pass quantities by value, with their sources.
+
 ## How to Build the Native Library
 
 Compile the dynamic JNI library:

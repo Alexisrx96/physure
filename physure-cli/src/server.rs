@@ -90,6 +90,9 @@ pub struct PipelineRequestJson {
 pub struct ModelServer {
     pub modules: HashMap<String, PhsModule>,
     pub config: ModelServerConfig,
+    /// Where the Monte Carlo stream of the seed setting stands after the modules were loaded: every request is an
+    /// evaluation unit that starts here (see [`ModelServer::in_request`]).
+    requests_stream: physure_core::uncertainty::EvaluationStream,
 }
 
 impl ModelServer {
@@ -101,13 +104,33 @@ impl ModelServer {
     /// waste, see `execute_pipeline_steps`'s doc comment) in favor of executing directly
     /// against the already-parsed `modules`, so nothing reads the raw source text again
     /// after construction.
+    ///
+    /// The modules are evaluated in name order inside one evaluation unit of the Monte Carlo seed setting
+    /// (`[Settings] monte_carlo_seed`, read here): the measurements of two modules get independent samples (each module
+    /// starting the stream of the seed again would give them identical ones, and a pipeline combining them would see
+    /// a perfect correlation), and the same modules give the same samples on every start.
     pub fn new(sources: HashMap<String, String>, config: ModelServerConfig) -> PhysureResult<Self> {
-        let mut modules = HashMap::new();
-        for (name, src) in &sources {
-            let module = PhsModule::from_source(name, src)?;
-            modules.insert(name.clone(), module);
-        }
-        Ok(Self { modules, config })
+        // the working directory's `physure.conf` is read on first use: read it before its seed is looked at
+        let _ = physure_core::units::conf::try_with_conf_registry(|_| ());
+        let mut stream = physure_core::uncertainty::EvaluationStream::from_setting();
+        let mut names: Vec<&String> = sources.keys().collect();
+        names.sort();
+        let modules = stream.run(|| {
+            names
+                .into_iter()
+                .map(|name| PhsModule::from_source(name, &sources[name]).map(|module| (name.clone(), module)))
+                .collect::<PhysureResult<HashMap<String, PhsModule>>>()
+        })?;
+        Ok(Self { modules, config, requests_stream: stream })
+    }
+
+    /// Runs `f` as the evaluation unit of one request: the Monte Carlo stream of the seed setting, from where the
+    /// loading of the modules left it. Every request starts at the same place, so a request is deterministic (the
+    /// same request gives the same samples: repeated requests are **not** independent replicates) and its draws are
+    /// never those of a module's measurements.
+    fn in_request<R>(&self, f: impl FnOnce() -> R) -> R {
+        let mut unit = self.requests_stream;
+        unit.run(f)
     }
 
     /// Loads `.phs` modules from a directory, manifest file, or single `.phs` file.
@@ -334,7 +357,7 @@ impl ModelServer {
             return Ok(());
         }
 
-        let reply = self.route(&mut request, &method, path);
+        let reply = self.in_request(|| self.route(&mut request, &method, path));
         self.respond(request, reply);
         Ok(())
     }
@@ -1019,6 +1042,45 @@ mod tests {
         });
 
         (model_server, base_url)
+    }
+
+    /// The Monte Carlo samples a module function returns (Monte Carlo mode is scoped on the calling thread).
+    fn samples_of(server: &ModelServer, module: &str, function: &str) -> Vec<f64> {
+        match server.in_request(|| server.modules[module].invoke(function, &[]).unwrap()) {
+            PhsValue::Quantity(q) => match &q.value {
+                physure_core::uncertainty::UncertaintyValue::MonteCarlo(mc) => mc.samples.to_vec(),
+                other => panic!("not Monte Carlo: {}", other.get_model_name()),
+            },
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The seed policy of `phs serve` (conf freeze Phase 4b): the modules load in one unit, so two modules'
+    /// measurements are independent (each module starting the stream again gave them identical samples); a request
+    /// starts where loading left off, so its draws are never a module's, and the same request gives the same samples
+    /// (repeated requests are not independent replicates); another start of the same modules gives the same samples.
+    #[test]
+    fn the_modules_load_in_one_unit_and_every_request_starts_where_loading_left_off() {
+        use physure_core::uncertainty::{mode::scoped, scoped_monte_carlo_seed, MonteCarloSeed, PropagationMode};
+        let _mode = scoped(PropagationMode::MonteCarlo);
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+        let sources = || {
+            HashMap::from([
+                ("a".to_string(), "g = 10 +/- 1 m\nfn get_g() = g\nfn fresh() = 10 +/- 1 m\n".to_string()),
+                ("b".to_string(), "h = 10 +/- 1 m\nfn get_h() = h\n".to_string()),
+            ])
+        };
+        let server = ModelServer::new(sources(), ModelServerConfig::default()).unwrap();
+        let (g, h) = (samples_of(&server, "a", "get_g"), samples_of(&server, "b", "get_h"));
+        assert!(g != h, "two modules, two independent measurements");
+        let fresh = samples_of(&server, "a", "fresh");
+        assert_eq!(samples_of(&server, "a", "fresh"), fresh, "the same request, the same samples");
+        assert!(fresh != g && fresh != h, "a request never redraws a module's samples");
+        let again = ModelServer::new(sources(), ModelServerConfig::default()).unwrap();
+        assert_eq!(samples_of(&again, "a", "get_g"), g, "the same modules, the same samples on every start");
+        let _seven = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(7));
+        let seven = ModelServer::new(sources(), ModelServerConfig::default()).unwrap();
+        assert_ne!(samples_of(&seven, "a", "get_g"), g, "the seed setting is read at start");
     }
 
     #[test]

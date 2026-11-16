@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use physure_core::error::{PhysureError, PhysureResult};
 use crate::value::PhsValue;
 use crate::interpreter::PhsInterpreter;
@@ -90,22 +92,65 @@ pub(crate) fn parse_differential_integrand(s: &str) -> Option<(String, String)> 
     None
 }
 
+/// A calc builtin that sees `interpreter.env` (the unit tests call the builtins this way).
+#[cfg(test)]
 pub(crate) fn eval_calc_builtin(name: &str, args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+    eval_calc_builtin_in(name, args, &[], interpreter, &interpreter.env)
+}
+
+/// The keyword arguments a calc builtin accepts; every other one is refused, never ignored.
+fn accepted_keywords(name: &str) -> &'static [&'static str] {
     match name {
-        "deriv" | "derivative" | "diff" => deriv(args, interpreter),
-        "grad" | "gradient" => grad(args, interpreter),
-        "div" | "divergence" => divergence(args, interpreter),
-        "curl" => curl(args, interpreter),
-        "laplacian" => laplacian(args, interpreter),
-        "series" | "taylor" => series(args, interpreter),
-        "simplify" | "expand" => simplify(args, interpreter),
-        "integral" | "integrate" => integral(args, interpreter),
-        "limit" | "lim" => limit(args, interpreter),
-        "solve" => solve(args, interpreter),
+        "limit" | "lim" => &["side"],
+        _ => &[],
+    }
+}
+
+/// An error for a keyword argument the builtin `name` does not take, or one given twice.
+fn refuse_unknown_keywords(name: &str, kwargs: &[(String, PhsValue)]) -> PhysureResult<()> {
+    let accepted = accepted_keywords(name);
+    for (i, (key, _)) in kwargs.iter().enumerate() {
+        if !accepted.contains(&key.as_str()) {
+            let takes = if accepted.is_empty() {
+                "it takes no keyword arguments: pass its arguments by position".to_string()
+            } else {
+                let names: Vec<String> = accepted.iter().map(|k| format!("`{k}`")).collect();
+                format!("its keyword arguments are {}", names.join(", "))
+            };
+            return Err(PhysureError::Generic(format!("{name}: unknown keyword argument `{key}`; {takes}")));
+        }
+        if kwargs[..i].iter().any(|(k, _)| k == key) {
+            return Err(PhysureError::Generic(format!("{name}: the keyword argument `{key}` is given twice")));
+        }
+    }
+    Ok(())
+}
+
+/// A calc builtin called where the program's variables are `env` (the scope of the call, which a statement of
+/// `phs eval` or a function body does not share with `interpreter.env`).
+pub(crate) fn eval_calc_builtin_in(
+    name: &str,
+    args: &[PhsValue],
+    kwargs: &[(String, PhsValue)],
+    interpreter: &PhsInterpreter,
+    env: &HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
+    refuse_unknown_keywords(name, kwargs)?;
+    match name {
+        "deriv" | "derivative" | "diff" => deriv(args, interpreter, env),
+        "grad" | "gradient" => grad(args, interpreter, env),
+        "div" | "divergence" => divergence(args, interpreter, env),
+        "curl" => curl(args, interpreter, env),
+        "laplacian" => laplacian(args, interpreter, env),
+        "series" | "taylor" => series(args, interpreter, env),
+        "simplify" | "expand" => simplify(args, interpreter, env),
+        "integral" | "integrate" => integral(args, interpreter, env),
+        "limit" | "lim" => limit(args, kwargs, interpreter, env),
+        "solve" => solve(args, interpreter, env),
         "substitute" | "sub" => substitute(args),
-        "dsolve" => dsolve(args, interpreter),
-        "laplace" => laplace(args, interpreter),
-        "inv_laplace" | "inverse_laplace" => inv_laplace(args, interpreter),
+        "dsolve" => dsolve(args, interpreter, env),
+        "laplace" => laplace(args, interpreter, env),
+        "inv_laplace" | "inverse_laplace" => inv_laplace(args, interpreter, env),
         "sym_det" => {
             let mat_str = string_arg(args, 0, "sym_det expects a symbolic matrix string, e.g. sym_det(\"[[a, b], [c, d]]\")")?;
             let det_node = crate::symbolic::SymMatrix::parse_str(mat_str)?.det()?;
@@ -159,23 +204,9 @@ fn string_arg<'a>(args: &'a [PhsValue], index: usize, message: &str) -> PhysureR
 }
 
 /// The symbolic tree of an expression string, with the user's functions inlined.
-fn parse_inlined(text: &str, interpreter: &PhsInterpreter) -> PhysureResult<crate::symbolic::Node> {
-    let inlined = preprocess_symbolic_expression(text, interpreter);
+fn parse_inlined(text: &str, interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<crate::symbolic::Node> {
+    let inlined = preprocess_symbolic_expression(text, interpreter, env)?;
     crate::symbolic::SymbolicParser::parse_str(&inlined)
-}
-
-/// A point or a bound: a number, a quantity, or a string such as `"inf"`; anything else reads as 0.
-fn bound_value(v: &PhsValue) -> f64 {
-    match v {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        PhsValue::String(s) => match s.trim() {
-            "inf" | "+inf" | "infinity" | "oo" | "∞" => f64::INFINITY,
-            "-inf" | "-infinity" | "-oo" | "-∞" => f64::NEG_INFINITY,
-            _ => 0.0,
-        },
-        _ => 0.0,
-    }
 }
 
 /// What `deriv` was asked: the expression, the variable, the order, and the dependent variable when the
@@ -200,13 +231,13 @@ fn deriv_request(args: &[PhsValue]) -> PhysureResult<(String, String, usize, Opt
     Ok((e, v, o, dep))
 }
 
-fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() || args.len() > 3 {
         return Err(generic_error("deriv expects 1, 2, or 3 arguments: deriv(expr, [var], [order])"));
     }
     let (expr_str, var_str, order, explicit_dep) = deriv_request(args)?;
 
-    let inlined = preprocess_symbolic_expression(&expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(&expr_str, interpreter, env)?;
     if let Some(idx) = inlined.find('=') {
         let lhs = crate::symbolic::SymbolicParser::parse_str(&inlined[..idx])?;
         let rhs = crate::symbolic::SymbolicParser::parse_str(&inlined[idx + 1..])?;
@@ -222,13 +253,13 @@ fn deriv(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Optio
     Ok(Some(PhsValue::String(diff_node.to_string())))
 }
 
-fn grad(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn grad(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("grad expects (expression_string, variables_vector)"));
     }
     let expr_str = string_arg(args, 0, "grad expects expression string")?;
     let vars = extract_string_list(&args[1])?;
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     let mut grads = Vec::new();
     for v in vars {
         let d = node.diff_node(clean_diff_var(&v))?.simplify();
@@ -237,7 +268,7 @@ fn grad(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option
     Ok(Some(PhsValue::Vector(grads)))
 }
 
-fn divergence(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn divergence(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("div expects (vector_field, variables_vector)"));
     }
@@ -248,14 +279,14 @@ fn divergence(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<
     }
     let mut sum_nodes = Vec::new();
     for (f_str, v) in field_exprs.iter().zip(vars.iter()) {
-        let node = parse_inlined(f_str, interpreter)?;
+        let node = parse_inlined(f_str, interpreter, env)?;
         sum_nodes.push(node.diff_node(clean_diff_var(v))?.simplify());
     }
     let div_node = crate::symbolic::Node::Add(sum_nodes).simplify();
     Ok(Some(PhsValue::String(div_node.to_string())))
 }
 
-fn curl(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn curl(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("curl expects (3D_vector_field, 3D_variables_vector)"));
     }
@@ -265,9 +296,9 @@ fn curl(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option
         return Err(generic_error("curl requires 3D vector field and 3D variables"));
     }
     let (p, q, r) = (
-        parse_inlined(&field[0], interpreter)?,
-        parse_inlined(&field[1], interpreter)?,
-        parse_inlined(&field[2], interpreter)?,
+        parse_inlined(&field[0], interpreter, env)?,
+        parse_inlined(&field[1], interpreter, env)?,
+        parse_inlined(&field[2], interpreter, env)?,
     );
     let (x, y, z) = (clean_diff_var(&vars[0]), clean_diff_var(&vars[1]), clean_diff_var(&vars[2]));
 
@@ -282,13 +313,13 @@ fn curl(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option
     ])))
 }
 
-fn laplacian(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn laplacian(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("laplacian expects (expression_string, variables_vector)"));
     }
     let expr_str = string_arg(args, 0, "laplacian expects expression string")?;
     let vars = extract_string_list(&args[1])?;
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     let mut second_diffs = Vec::new();
     for v in vars {
         second_diffs.push(node.diff_node_n(clean_diff_var(&v), 2)?.simplify());
@@ -297,7 +328,7 @@ fn laplacian(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<O
     Ok(Some(PhsValue::String(lap_node.to_string())))
 }
 
-fn series(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn series(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 2 || args.len() > 4 {
         return Err(generic_error(
             "series expects (expression_string, variable_string, [about], [order]); `order` is the highest power kept, default 6",
@@ -318,16 +349,16 @@ fn series(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Opti
         Some(PhsValue::Quantity(q)) => q.value.mean() as usize,
         Some(_) => return Err(generic_error("series order must be a number")),
     };
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(node.series(&var, &about, order)?.to_string())))
 }
 
-fn simplify(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn simplify(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() {
         return Err(generic_error("simplify expects an expression string"));
     }
     let expr_str = string_arg(args, 0, "simplify expects expression string")?;
-    let node = parse_inlined(expr_str, interpreter)?;
+    let node = parse_inlined(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(node.simplify().to_string())))
 }
 
@@ -344,70 +375,44 @@ fn integral_request(args: &[PhsValue]) -> PhysureResult<(String, String)> {
     Ok((e, clean_diff_var(raw_v).to_string()))
 }
 
-fn integral(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn integral(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() || args.len() > 4 {
         return Err(generic_error("integral expects (expression_string, variable_string) or (expression_string, variable_string, a, b)"));
     }
     let (expr_str, var_str) = integral_request(args)?;
 
     if args.len() == 4 {
-        let (a, b) = (bound_value(&args[2]), bound_value(&args[3]));
-        let res_val = eval_definite_integral(&expr_str, &var_str, a, b, interpreter)?;
-        return Ok(Some(PhsValue::Number(res_val)));
+        return super::definite_integral::definite_integral(&expr_str, &var_str, &args[2], &args[3], interpreter, env).map(Some);
     }
 
-    let node = parse_inlined(&expr_str, interpreter)?;
+    let node = parse_inlined(&expr_str, interpreter, env)?;
     let int_node = node.integrate_node(&var_str)?.simplify();
     Ok(Some(PhsValue::String(int_node.to_string())))
 }
 
-fn limit(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
-    if args.len() != 3 {
-        return Err(generic_error("limit expects (expression_string, variable_string, target_point)"));
+/// `limit(expr, var, point)` or `limit(expr, var, point, side)`, `side` also as the keyword `side=`.
+fn limit(
+    args: &[PhsValue],
+    kwargs: &[(String, PhsValue)],
+    interpreter: &PhsInterpreter,
+    env: &HashMap<String, PhsValue>,
+) -> PhysureResult<Option<PhsValue>> {
+    if args.len() < 3 || args.len() > 4 {
+        return Err(generic_error(
+            "limit expects (expression_string, variable_string, point) or (expression_string, variable_string, point, side) with side \"+\" or \"-\"",
+        ));
     }
+    let keyword_side = kwargs.iter().find(|(k, _)| k == "side").map(|(_, v)| v);
+    let side = match (args.get(3), keyword_side) {
+        (Some(_), Some(_)) => return Err(generic_error("limit: the side is given twice, as the fourth argument and as `side=`")),
+        (positional, keyword) => positional.or(keyword),
+    };
     let expr_str = string_arg(args, 0, "limit expects expression string")?;
-    let var_str = string_arg(args, 1, "limit expects variable string")?;
-    let point_val = bound_value(&args[2]);
-
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
-    let probed = probe_limit(&inlined, var_str, point_val, interpreter);
-    Ok(Some(probed.unwrap_or(PhsValue::Number(0.0))))
+    let var_str = clean_diff_var(string_arg(args, 1, "limit expects variable string")?);
+    super::limit::limit(expr_str, var_str, &args[2], side, interpreter, env).map(Some)
 }
 
-/// The expression evaluated next to the point (or very far out, for an infinite one): a value that has grown
-/// huge is an infinity and one that has shrunk to nothing is 0. `None` when it cannot be evaluated there.
-fn probe_limit(inlined: &str, var_str: &str, point_val: f64, interpreter: &PhsInterpreter) -> Option<PhsValue> {
-    let program = crate::parser::parse_phs(inlined).ok()?;
-    let expr = match program.statements.first()? {
-        crate::ast::Statement::Expr(e) => e.clone(),
-        crate::ast::Statement::Assignment(node) => node.value.clone(),
-        _ => return Some(PhsValue::Number(0.0)),
-    };
-    let test_val = if point_val.is_infinite() {
-        if point_val.is_sign_positive() { 1e7 } else { -1e7 }
-    } else {
-        point_val + 1e-8
-    };
-    let mut local_env = interpreter.env.clone();
-    let q_val = physure_core::Quantity::new_scalar(test_val, 0.0, physure_core::units::RationalUnit::dimensionless(), None, None);
-    local_env.insert(var_str.to_string(), PhsValue::Quantity(q_val));
-    let val = interpreter.eval_expr(&expr, &local_env).ok()?;
-    let num = match &val {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        _ => 0.0,
-    };
-    if num.abs() < 1e-5 {
-        return Some(PhsValue::Number(0.0));
-    }
-    if num.abs() > 1e6 {
-        let sign = if num.is_sign_positive() { f64::INFINITY } else { f64::NEG_INFINITY };
-        return Some(PhsValue::Number(sign));
-    }
-    Some(val)
-}
-
-fn solve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn solve(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() != 2 {
         return Err(generic_error("solve expects equation string and target string"));
     }
@@ -416,7 +421,7 @@ fn solve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Optio
         _ => return Err(generic_error("solve expects target string")),
     };
     let node = match &args[0] {
-        PhsValue::String(eq_str) => parse_inlined(eq_str, interpreter)?,
+        PhsValue::String(eq_str) => parse_inlined(eq_str, interpreter, env)?,
         PhsValue::Equation(l, r) => crate::symbolic::Node::Sub(Box::new(l.clone()), Box::new(r.clone())),
         _ => return Err(generic_error("solve expects an equation string or a previously-solved equation")),
     };
@@ -478,36 +483,36 @@ fn substitute(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     }
 }
 
-fn dsolve(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn dsolve(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 3 {
         return Err(generic_error("dsolve expects 3 arguments: dsolve(eq_str, dep_var, indep_var)"));
     }
     let eq_str = string_arg(args, 0, "dsolve expects equation string")?;
     let dep_var = string_arg(args, 1, "dsolve expects dependent variable string")?;
     let indep_var = string_arg(args, 2, "dsolve expects independent variable string")?;
-    let inlined = preprocess_symbolic_expression(eq_str, interpreter);
+    let inlined = preprocess_symbolic_expression(eq_str, interpreter, env)?;
     Ok(Some(PhsValue::String(crate::symbolic::dsolve_str(&inlined, dep_var, indep_var)?)))
 }
 
-fn laplace(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn laplace(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 3 {
         return Err(generic_error("laplace expects 3 arguments: laplace(expr_str, t_var, s_var)"));
     }
     let expr_str = string_arg(args, 0, "laplace expects expression string")?;
     let t_var = string_arg(args, 1, "laplace expects time variable string")?;
     let s_var = string_arg(args, 2, "laplace expects s variable string")?;
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(crate::symbolic::laplace_str(&inlined, t_var, s_var)?)))
 }
 
-fn inv_laplace(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn inv_laplace(args: &[PhsValue], interpreter: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 3 {
         return Err(generic_error("inv_laplace expects 3 arguments: inv_laplace(expr_str, s_var, t_var)"));
     }
     let expr_str = string_arg(args, 0, "inv_laplace expects expression string")?;
     let s_var = string_arg(args, 1, "inv_laplace expects s variable string")?;
     let t_var = string_arg(args, 2, "inv_laplace expects time variable string")?;
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, env)?;
     Ok(Some(PhsValue::String(crate::symbolic::inv_laplace_str(&inlined, s_var, t_var)?)))
 }
 
@@ -541,101 +546,4 @@ fn extract_string_list(val: &PhsValue) -> PhysureResult<Vec<String>> {
         PhsValue::String(s) => Ok(s.split(',').map(|item| item.trim().to_string()).collect()),
         _ => Err(PhysureError::Generic("Expected vector or comma-separated string list".into())),
     }
-}
-
-fn eval_definite_integral(expr_str: &str, var_str: &str, a: f64, b: f64, interpreter: &PhsInterpreter) -> PhysureResult<f64> {
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
-    let program = crate::parser::parse_phs(&inlined)?;
-    let expr = match program.statements.first() {
-        Some(crate::ast::Statement::Expr(e)) => e.clone(),
-        Some(crate::ast::Statement::Assignment(node)) => node.value.clone(),
-        _ => return Err(PhysureError::Generic("Failed to parse integrand expression".into())),
-    };
-
-    // Try Symbolic First
-    if !a.is_infinite() && !b.is_infinite() {
-        if let Some(value) = symbolic_definite_integral(&inlined, var_str, a, b, interpreter) {
-            return Ok(value);
-        }
-    }
-
-    let mut local_env = interpreter.env.clone();
-    let mut eval_at = |x: f64| -> f64 {
-        local_env.insert(var_str.to_string(), PhsValue::Number(x));
-        match interpreter.eval_expr(&expr, &local_env) {
-            Ok(PhsValue::Number(n)) => n,
-            Ok(PhsValue::Quantity(q)) => q.value.mean(),
-            _ => 0.0,
-        }
-    };
-
-    if a.is_infinite() || b.is_infinite() {
-        return Ok(improper_integral(&mut eval_at, a, b));
-    }
-    Ok(quad_gauss_legendre(&mut eval_at, a, b, 100))
-}
-
-/// The antiderivative evaluated at both ends, when the integrand has one the interpreter can evaluate there.
-fn symbolic_definite_integral(inlined: &str, var_str: &str, a: f64, b: f64, interpreter: &PhsInterpreter) -> Option<f64> {
-    let node = crate::symbolic::SymbolicParser::parse_str(inlined).ok()?;
-    let int_node = node.integrate_node(var_str).ok()?;
-    let int_prog = crate::parser::parse_phs(&int_node.simplify().to_string()).ok()?;
-    let Some(crate::ast::Statement::Expr(int_expr)) = int_prog.statements.first() else {
-        return None;
-    };
-    let value_at = |x: f64| -> Option<f64> {
-        let mut env = interpreter.env.clone();
-        env.insert(var_str.to_string(), PhsValue::Number(x));
-        match interpreter.eval_expr(int_expr, &env).ok()? {
-            PhsValue::Number(n) => Some(n),
-            PhsValue::Quantity(q) => Some(q.value.mean()),
-            _ => None,
-        }
-    };
-    Some(value_at(b)? - value_at(a)?)
-}
-
-/// Where an end of an improper integral lands on (-1, 1) under `x = t / (1 - t^2)`.
-fn to_unit_interval(x: f64) -> f64 {
-    if x == f64::NEG_INFINITY {
-        -1.0 + 1e-6
-    } else if x == f64::INFINITY {
-        1.0 - 1e-6
-    } else {
-        x / (1.0 + (1.0 + x * x).sqrt())
-    }
-}
-
-/// An integral with an infinite end, by the substitution `x = t / (1 - t^2)` onto the finite interval (-1, 1).
-fn improper_integral(eval_at: &mut impl FnMut(f64) -> f64, a: f64, b: f64) -> f64 {
-    let mut transform_eval = |t: f64| -> f64 {
-        if t.abs() >= 1.0 - 1e-7 {
-            return 0.0;
-        }
-        let x = t / (1.0 - t * t);
-        let dxdt = (1.0 + t * t) / ((1.0 - t * t) * (1.0 - t * t));
-        let fx = eval_at(x);
-        if fx.is_nan() || fx.is_infinite() {
-            0.0
-        } else {
-            fx * dxdt
-        }
-    };
-    quad_gauss_legendre(&mut transform_eval, to_unit_interval(a), to_unit_interval(b), 100)
-}
-
-/// Composite three-point Gauss-Legendre quadrature over `steps` equal panels of `[a, b]` (exact for a polynomial of
-/// degree 5 or less on each panel).
-fn quad_gauss_legendre<F>(mut f: F, a: f64, b: f64, steps: usize) -> f64
-where F: FnMut(f64) -> f64 {
-    let h = (b - a) / steps as f64;
-    let half_h = 0.5 * h;
-    // the nodes mid, mid +- half_h * sqrt(3/5) carry the weights 8/9, 5/9, 5/9 (of the panel's length)
-    let offset = half_h * 0.774_596_669_241_483_4;
-    let mut sum = 0.0;
-    for i in 0..steps {
-        let mid = a + (i as f64 + 0.5) * h;
-        sum += half_h * (5.0 * (f(mid - offset) + f(mid + offset)) + 8.0 * f(mid)) / 9.0;
-    }
-    sum
 }

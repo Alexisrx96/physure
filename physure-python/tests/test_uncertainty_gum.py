@@ -266,7 +266,10 @@ def test_the_moments_model_refuses_rather_than_building_a_gaussian():
         physure.uncertainty_model("moments"),
         pytest.raises(NotImplementedError, match="not implemented yet"),
     ):
-        Q_(12.3, "pb", uncertainty=0.4)
+        # A unit the catalog has: with a unit it lacks, this raised
+        # UnknownUnitError instead, and only seemed to pass while building the
+        # default system ran Q_() inside the scope.
+        Q_(12.3, "m", uncertainty=0.4)
 
 
 # --- Propagation mode from physure.conf --------------------------------------
@@ -316,3 +319,13 @@ def test_a_misspelled_mode_in_a_block_is_rejected():
         physure.propagation_mode("corelated"),
     ):
         pass
+
+
+def test_building_the_default_system_does_not_depend_on_the_uncertainty_model():
+    # Loading the constants once built a Quantity per row, so a first use inside
+    # a "moments" scope failed in the library's own start-up, not in the caller's code.
+    import physure
+    from physure.application.startup import create_default_system
+
+    with physure.uncertainty_model("moments"):
+        create_default_system()

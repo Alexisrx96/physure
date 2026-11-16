@@ -180,6 +180,7 @@ mod tests {
             uncertainty: None,
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: None,
         })
     }
@@ -220,6 +221,7 @@ mod tests {
             body_lines: vec![],
             decorators,
             doc: None,
+            scope: None,
         })
     }
 
@@ -316,6 +318,7 @@ mod tests {
                 args: vec![Expr::Identifier("result".to_string()), Expr::Str("must hold".to_string())],
             }],
             doc: None,
+            scope: None,
         });
         assert!(validate_decorators(&[stmt]).is_err());
     }

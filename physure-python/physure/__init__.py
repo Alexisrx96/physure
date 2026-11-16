@@ -64,6 +64,8 @@ except ImportError as _err:
 
 if TYPE_CHECKING:
     from physure.application.context import (
+        angle_mode,
+        get_angle_mode,
         get_current_system,
         get_propagation_mode,
         get_uncertainty_model,
@@ -128,6 +130,8 @@ _IO_ATTRS = {"save_state", "load_state"}
 _UNITS_ATTRS = {"units", "CompoundUnit"}
 _STARTUP_ATTRS = {"create_system", "create_default_system"}
 _CONTEXT_ATTRS = {
+    "angle_mode",
+    "get_angle_mode",
     "get_current_system",
     "get_active_system",
     "get_propagation_mode",
@@ -237,6 +241,8 @@ def _load_jit(name: str) -> Any:
 
 def _load_context(name: str) -> Any:
     from physure.application.context import (
+        angle_mode,
+        get_angle_mode,
         get_current_system,
         get_propagation_mode,
         get_uncertainty_model,
@@ -248,6 +254,8 @@ def _load_context(name: str) -> Any:
     )
 
     _map = {
+        "angle_mode": angle_mode,
+        "get_angle_mode": get_angle_mode,
         "get_current_system": get_current_system,
         "get_active_system": get_current_system,
         "get_propagation_mode": get_propagation_mode,

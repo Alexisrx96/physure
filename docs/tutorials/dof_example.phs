@@ -1,0 +1,15 @@
+# Degrees of freedom and expanded uncertainty: the calibration of an end gauge, JCGM 100:2008 Annex H.1.
+# The six contributions to the standard uncertainty of the length, in nm, each with its degrees of freedom.
+l_s = 50000623 +/- 25 dof 18 nm
+d0 = 215 +/- 5.8 dof 24 nm
+d1 = 0 +/- 3.9 dof 5 nm
+d2 = 0 +/- 6.7 dof 8 nm
+d_theta = 0 +/- 16.599 dof 2 nm
+d_alpha = 0 +/- 2.88679 dof 50 nm
+
+length = l_s + d0 + d1 + d2 + d_theta + d_alpha
+
+nu_eff = dof(length)
+k95 = coverage_factor(length, 0.95)
+U95 = expanded(length, 0.95)
+U99 = expanded(length, 0.99)

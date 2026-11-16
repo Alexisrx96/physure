@@ -822,10 +822,10 @@ fn a_later_text_starts_from_the_base_units_of_the_first() {
 /// nothing of a refused text is kept, and the embedded catalog has no line the parser refuses.
 #[test]
 fn extending_a_registry_is_all_or_nothing_and_the_catalog_has_no_unreadable_line() {
-    use std::collections::HashMap;
-    let (mut catalog, mut catalog_constants) = (UnitRegistry::new(), HashMap::new());
-    let outcome = conf::extend_registry(&mut catalog, &mut catalog_constants, conf::DEFAULT_PHYSURE_CONF);
-    assert!(outcome.is_ok(), "{:?}", outcome.err());
+    // (not by `extend_registry`: the catalog defines the shipped editions of the atomic weights, which a text of a
+    // user cannot)
+    let problems = conf::embedded_catalog_problems();
+    assert!(problems.is_empty(), "{problems:?}");
 
     let (mut reg, mut constants) = conf::build_registry_from_conf();
     let before = reg.clone();
@@ -1023,4 +1023,58 @@ fn unity_takes_no_prefix() {
     for name in ["kunity", "kilounity", "E1", "k1"] {
         assert!(reg.get_unit(name).is_none(), "{name}");
     }
+}
+
+/// Without a `physure.conf` in the working directory, unit text is read against the embedded catalog itself and
+/// not a copy of it: two calls see one registry at one address.
+#[test]
+fn with_conf_registry_gives_the_embedded_catalog_by_reference() {
+    let first = conf::with_conf_registry(|registry| registry as *const UnitRegistry);
+    let second = conf::with_conf_registry(|registry| registry as *const UnitRegistry);
+    assert_eq!(first, second);
+    conf::with_conf_registry(|registry| assert!(registry.get_unit("km").is_some()));
+}
+
+/// Each grant of `[Compatibility]` belongs to its own marker: revoking one stops that marker, and only that one,
+/// from being read as 1 in a conversion.
+#[test]
+fn a_revoked_grant_stops_only_its_marker_reading_as_one() {
+    use crate::units::angle_mode::{scoped, set_marker_grants, AngleMode, RestoreProcessState};
+    use crate::units::parser::Parser;
+    let _lock = crate::settings::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _restore = RestoreProcessState::capture();
+    let _mode = scoped(AngleMode::Dimensionless);
+    // Load the catalog first: its first read applies [Compatibility] and would reset the grants set below.
+    let _ = crate::units::conf::build_registry_from_conf();
+    let u = |t: &str| Parser::parse_expression(t).unwrap_or_else(|e| panic!("{t}: {e}"));
+    let (rad, unity, lum, lx) = (u("rad"), u("unity"), u("cd/m^2"), u("lx"));
+
+    set_marker_grants(true, false);
+    assert!(rad.convertible_to(&unity) && unity.convertible_to(&rad));
+    assert!(!lum.convertible_to(&lx) && !lx.convertible_to(&lum));
+
+    set_marker_grants(false, true);
+    assert!(!rad.convertible_to(&unity) && !unity.convertible_to(&rad));
+    assert!(lum.convertible_to(&lx) && lx.convertible_to(&lum));
+
+    set_marker_grants(false, false);
+    assert!(!rad.convertible_to(&unity) && !lum.convertible_to(&lx));
+    // the strict comparison never reads the grants
+    assert!(u("rad").convertible_to(&u("deg")));
+}
+
+#[test]
+fn a_level_times_a_plain_number_keeps_the_level_name_on_either_side() {
+    // `-1 * dB` took the plain number's (absent) name: `-5 dB` printed `-5.0`.
+    let (reg, _) = conf::build_registry_from_conf();
+    let plain = RationalUnit::dimensionless();
+    for name in ["dB", "pH"] {
+        let level = reg.get_unit(name).unwrap();
+        for product in [plain.mul(&level), level.mul(&plain), level.div(&plain), level.pow(Rational64::from_integer(1))] {
+            assert_eq!(product.__repr__(), name);
+            assert!(product.is_logarithmic());
+        }
+    }
+    // a product of two plain numbers is still unnamed
+    assert_eq!(plain.mul(&plain).__repr__(), "");
 }

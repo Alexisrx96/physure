@@ -139,6 +139,7 @@ fn combine_functions(op: BinaryOp, f: &crate::ast::FunctionDefNode, g: &crate::a
         body_lines: vec![],
         decorators: Vec::new(),
         doc: None,
+        scope: None,
     }
 }
 

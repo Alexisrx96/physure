@@ -61,6 +61,44 @@ pub fn run_upgrade(nightly: bool) {
         eprintln!("{e}");
         std::process::exit(1);
     }
+    if let Some(hint) = frozen_hint(&physure_core::frozen::active::resolve_process()) {
+        println!("{hint}");
+    }
+}
+
+/// What a successful upgrade says about a frozen configuration (spec §5.4): when one is in force, how to review what
+/// the new version changes. The upgrade never touches the file; a resolution error or no frozen file says nothing.
+fn frozen_hint(
+    resolution: &Result<physure_core::frozen::Resolution, physure_core::frozen::ResolveError>,
+) -> Option<String> {
+    match resolution {
+        Ok(physure_core::frozen::Resolution::Frozen { .. }) => Some(
+            "A frozen configuration is in force; review what the new version changes with: phs conf diff".to_string(),
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod frozen_hint_tests {
+    use super::frozen_hint;
+    use physure_core::frozen::{Resolution, ResolveError, Why};
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_frozen_file_in_force_suggests_phs_conf_diff() {
+        let frozen = Ok(Resolution::Frozen { path: PathBuf::from("physure.frozen.conf"), why: Why::Discovered });
+        assert_eq!(
+            frozen_hint(&frozen).as_deref(),
+            Some("A frozen configuration is in force; review what the new version changes with: phs conf diff")
+        );
+    }
+
+    #[test]
+    fn no_frozen_file_or_a_resolution_error_says_nothing() {
+        assert_eq!(frozen_hint(&Ok(Resolution::Unfrozen)), None);
+        assert_eq!(frozen_hint(&Err(ResolveError::Required)), None);
+    }
 }
 
 fn exe_suffix() -> &'static str {

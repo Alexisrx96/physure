@@ -58,6 +58,19 @@ const TEST_CASES: &[ParityTestCase] = &[
         expected_substring: "8",
     },
     ParityTestCase {
+        // every target compares through the core (`phs_compare`): metres against kilometres by what they measure
+        name: "comparison_across_units",
+        script: "d = 1 km
+n = 0
+while d > 990 m {
+  d = d - 1 m
+  n = n + 1
+}
+steps = n * 1 m
+",
+        expected_substring: "10",
+    },
+    ParityTestCase {
         name: "while_loop_convergence",
         script: "x = 1.5\ni = 0\nwhile i < 5 {\n  x = (x + 2.0 / x) / 2.0\n  i = i + 1\n}\nx\n",
         expected_substring: "1.41421",

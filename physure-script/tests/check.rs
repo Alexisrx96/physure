@@ -113,6 +113,58 @@ fn temperature_points_and_intervals_follow_the_core() {
     assert!(errors("8.314 J/(mol*K) * 25 degC").is_empty());
 }
 
+/// Unary minus is parsed as `-1 * x`, and the core takes an exact sign as a mirror of the number in its own
+/// scale (`-10 degC` is minus ten on the Celsius scale). The checker used to read it as "a point times a plain
+/// number" and refused every negative temperature literal the interpreter accepts.
+#[test]
+fn a_negative_temperature_is_a_sign_not_a_product() {
+    assert_clean("x = -10 degC\nx");
+    assert_clean("-40 degF");
+    assert_clean("-273.15 degC");
+    assert_clean("-5 K");
+    assert_clean("x = 5 degC\n-x");
+    assert_clean("x = 5 degC\n-(x)");
+    assert_clean("-(5 degC)");
+    assert_clean("-(-(5 degC))");
+    assert_clean("-10 degC => K");
+    assert_clean("-10 degC + 5 delta_degC");
+    assert_clean("-10 degC - 5 degC");
+    assert_clean("-5 degF => degC");
+    // the sign the core accepts, written out: on either side of a product, as a divisor of the point
+    assert_clean("-1 * 5 degC");
+    assert_clean("5 degC * -1");
+    assert_clean("5 degC / -1");
+    assert_clean("5 degC * 1");
+    assert_clean("s = -1\ns * 5 degC");
+    assert_clean("fn neg(t) = -t\nneg(5 degC)");
+    // any other plain number is still refused, whether or not a minus is in front
+    assert_refused("5 degC * 2", 1, "temperature-points");
+    assert_refused("-5 degC * 2", 1, "temperature-points");
+    assert_refused("(-5 degC) * 2", 1, "temperature-points");
+    assert_refused("2 * -10 degC", 1, "temperature-points");
+    assert_refused("-2 * 5 degC", 1, "temperature-points");
+    assert_refused("(1.0 +/- 0.1) * 5 degC", 1, "temperature-points");
+    // a point is never a divisor, not even of a sign: the core refuses it
+    assert_refused("2 / 5 degC", 1, "temperature-points");
+    assert_refused("-1 / 5 degC", 1, "temperature-points");
+}
+
+/// The values the interpreter gives the negative temperatures the checker now accepts: the number mirrored in
+/// its own scale, never in kelvin.
+#[test]
+fn a_negative_temperature_is_the_number_mirrored_in_its_own_scale() {
+    use physure_script::value::PhsValue;
+    let last = |source: &str| match eval_phs(source).unwrap().pop() {
+        Some(PhsValue::Quantity(q)) => (q.value.mean(), q.unit.__repr__()),
+        other => panic!("{source:?}: {other:?}"),
+    };
+    assert_eq!(last("-10 degC"), (-10.0, "degC".to_string()));
+    assert_eq!(last("-40 degF"), (-40.0, "degF".to_string()));
+    assert_eq!(last("x = 5 degC\n-x"), (-5.0, "degC".to_string()));
+    let (kelvin, unit) = last("-273.15 degC => K");
+    assert!(kelvin.abs() < 1e-9 && unit == "K", "{kelvin} {unit}");
+}
+
 // ---- powers
 
 #[test]
@@ -366,4 +418,40 @@ fn a_boolean_is_not_a_quantity_and_is_not_reported_as_one() {
 fn a_function_called_before_it_is_defined_and_one_that_is_shadowed_are_unknown() {
     assert!(errors("f(1 m) + 1 s\nfn f(x) = x").is_empty());
     assert!(errors("fn f(x) = x\nf = 3 kg\nf(1 m) + 1 s").is_empty());
+}
+
+// ---- degrees of freedom
+
+#[test]
+fn degrees_of_freedom_are_a_plain_number_and_an_expanded_uncertainty_keeps_the_unit() {
+    assert_refused("x = 1 +/- 0.1 dof 5 m\ndof(x) + 1 m", 2, "dimension-mismatch");
+    assert_refused("x = 1 +/- 0.1 dof 5 m\ncoverage_factor(x, 0.95) + 1 m", 2, "dimension-mismatch");
+    assert_refused("x = 1 +/- 0.1 dof 5 m\nexpanded(x, 0.95) + 1 s", 2, "dimension-mismatch");
+    assert_clean("x = 1 +/- 0.1 dof 5 m\nexpanded(x, 0.95) + 1 mm");
+    assert_clean("x = 1 +/- 0.1 dof 5 m\ndof(x) + 1");
+    assert_clean("x = 1 +/- 0.1 dof 5 m\ncoverage_factor(x, 0.95) * x");
+}
+
+// ---- the angle in a conversion
+
+#[test]
+fn a_conversion_that_differs_only_in_the_angle_is_left_to_the_interpreter() {
+    // `facts` gives `rad`, `deg` and `sr` the same dimension symbol `A`, so the checker cannot tell whether a
+    // conversion may read the angle as 1; it stays silent and the interpreter decides.
+    assert_clean("(10 rad/s) * (0.5 m) => m/s");
+    assert_clean("(100 cd) / (2 m)^2 => lx");
+    assert_clean("(2 rad) => unity");
+    assert!(found("(10 rad/s) => Hz").is_empty(), "silence is sound: the interpreter refuses it");
+    assert!(eval_phs("(10 rad/s) => Hz").is_err());
+}
+
+#[test]
+fn a_conversion_that_differs_in_more_than_the_angle_is_still_an_error() {
+    assert_refused("(10 rad/s) * (0.5 m) => m", 1, "dimension-mismatch");
+    assert_refused("(2 rad) => m", 1, "dimension-mismatch");
+}
+
+#[test]
+fn a_sum_across_the_angle_is_still_reported() {
+    assert_refused("(2 m*rad) + (1 m)", 1, "dimension-mismatch");
 }

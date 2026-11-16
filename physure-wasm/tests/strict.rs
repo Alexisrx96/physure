@@ -257,7 +257,7 @@ fn evaluate_reads_and_writes_unicode_and_a_nul_without_damage() {
 
 #[wasm_bindgen_test]
 fn a_runaway_loop_stops_with_an_error() {
-    assert!(message(UnitRegistry::new().evaluate("while true { x = 1 }").unwrap_err()).contains("did not converge"));
+    assert!(message(UnitRegistry::new().evaluate("while True { x = 1 }").unwrap_err()).contains("did not converge"));
 }
 
 #[wasm_bindgen_test]

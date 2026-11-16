@@ -243,7 +243,12 @@ impl RustTranspiler {
         if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
             let l_str = self.generate_expr(l)?;
             let r_str = self.generate_expr(r)?;
-            return Ok(format!("({}.canonical_magnitude() {} {}.canonical_magnitude())", l_str, op_sym, r_str));
+            if super::both_definitely_bool(l, r) {
+                return Ok(format!("({} {} {})", l_str, op_sym, r_str));
+            }
+            // the core's comparison, the interpreter's: different dimensions, a zero without a unit and a level
+            // against a plain number stop the program instead of comparing magnitudes that mean different things
+            return Ok(format!("(&({})).phs_compare(&({}), \"{}\").unwrap_or_else(|e| panic!(\"{{e}}\"))", l_str, r_str, op_sym));
         }
         if let Some(logical) = super::as_logical_op(expr) {
             return super::c_logical_expr(logical, |e| self.generate_expr(e));
@@ -261,6 +266,11 @@ impl RustTranspiler {
     /// path already used for the function body, so compiled and interpreted pass/fail can never
     /// diverge by construction. On the first failing check, the message is stashed in a
     /// thread-local string readable via `<name>_last_error()`, mirroring `errno`/`GetLastError`.
+    ///
+    /// The body runs inside `std::panic::catch_unwind`: a comparison the core refuses (different
+    /// dimensions, a zero without a unit, a level against a plain number) panics in the generated
+    /// code, and a panic that leaves an `extern "C"` function aborts the host process. Caught, it is
+    /// the shim's failure status instead: `ok: false`, with the panic message as the last error.
     pub fn generate_export_shim(&self, node: &FunctionDefNode) -> Result<String, CodegenError> {
         let impl_name = format!("{}_impl", node.name);
         let mut impl_node = node.clone();
@@ -333,12 +343,23 @@ impl RustTranspiler {
         }
         body.push_str(&format!("    {pascal}Result {{ value: result.value.mean(), ok: true }}\n", pascal = pascal));
 
+        let body: String = body.lines().map(|line| format!("    {line}\n")).collect();
         shim.push_str(&format!(
-            "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> {pascal}Result {{\n{body}}}\n\n",
+            "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> {pascal}Result {{\n    \
+             match std::panic::catch_unwind(move || -> {pascal}Result {{\n{body}    }}) {{\n        \
+             Ok(result) => result,\n        \
+             Err(payload) => {{\n            \
+             let message = payload.downcast_ref::<String>().cloned()\n                \
+             .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))\n                \
+             .unwrap_or_else(|| \"{name} panicked\".to_string());\n            \
+             {error_static}.with(|e| *e.borrow_mut() = message);\n            \
+             {pascal}Result {{ value: 0.0, ok: false }}\n        \
+             }}\n    }}\n}}\n\n",
             name = node.name,
             params = params_sig.join(", "),
             pascal = pascal,
             body = body,
+            error_static = error_static,
         ));
 
         shim.push_str(&format!(
@@ -360,8 +381,13 @@ fn quantity_expr(node: &crate::ast::QuantityNode) -> Result<String, CodegenError
         Some(u) => format!("\"{}\"", u),
         None => "\"\"".to_string(),
     };
+    let dof = match node.dof {
+        Some(nu) if nu.is_infinite() => ".with_dof(f64::INFINITY).unwrap()".to_string(),
+        Some(nu) => format!(".with_dof({:?}).unwrap()", nu),
+        None => String::new(),
+    };
     Ok(match node.uncertainty {
-        Some(uncertainty) => format!("Quantity::with_uncertainty({:?}, {:?}, {}).unwrap()", node.magnitude, uncertainty, unit),
+        Some(uncertainty) => format!("Quantity::with_uncertainty({:?}, {:?}, {}).unwrap(){}", node.magnitude, uncertainty, unit, dof),
         None => format!("Quantity::new({:?}, {}).unwrap()", node.magnitude, unit),
     })
 }
@@ -453,6 +479,7 @@ mod tests {
                                 uncertainty: None,
                                 uncertainty_lower: None,
                                 is_sigma: false,
+                                dof: None,
                                 unit: None,
                             })),
                         }),
@@ -462,12 +489,14 @@ mod tests {
                         uncertainty: None,
                         uncertainty_lower: None,
                         is_sigma: false,
+                        dof: None,
                         unit: None,
                     })),
                 })],
                 body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
+                scope: None,
             })],
             lines: vec![],
         };
@@ -485,6 +514,7 @@ mod tests {
                 uncertainty: Some(0.5),
                 uncertainty_lower: None,
                 is_sigma: false,
+                dof: None,
                 unit: Some("kg".to_string()),
             }))],
             lines: vec![],
@@ -700,6 +730,7 @@ mod tests {
                     uncertainty: None,
                     uncertainty_lower: None,
                     is_sigma: false,
+                    dof: None,
                     unit: None,
                 })),
                 right: Box::new(Expr::Identifier("m".to_string())),
@@ -707,6 +738,7 @@ mod tests {
             body_lines: vec![],
             decorators: vec![],
             doc: None,
+            scope: None,
         };
         let shim = RustTranspiler.generate_export_shim(&node).unwrap();
         assert!(shim.contains("pub fn kinetic_energy_impl(m: Quantity, v: Quantity) -> Quantity"));
@@ -737,6 +769,7 @@ mod tests {
                                     uncertainty: None,
                                     uncertainty_lower: None,
                                     is_sigma: false,
+                                    dof: None,
                                     unit: Some("kg".to_string()),
                                 }),
                             ],
@@ -757,6 +790,7 @@ mod tests {
                                     uncertainty: None,
                                     uncertainty_lower: None,
                                     is_sigma: false,
+                                    dof: None,
                                     unit: Some("kg".to_string()),
                                 }),
                             ],
@@ -767,6 +801,7 @@ mod tests {
                 },
             ],
             doc: None,
+            scope: None,
         };
         let shim = RustTranspiler.generate_export_shim(&node).unwrap();
         assert!(shim.contains("pub struct KineticEnergyResult"));
@@ -775,5 +810,70 @@ mod tests {
         assert!(shim.contains("\"result must be positive\""));
         assert!(shim.contains("let result = kinetic_energy_impl(m);"));
         assert!(shim.contains("pub extern \"C\" fn kinetic_energy_last_error() -> *const std::os::raw::c_char"));
+    }
+
+    /// `@requires(m > 0 kg)` on a parameter without a unit: the shim binds `m` as a plain number, and the core
+    /// refuses to compare it with kilograms.
+    fn shim_with_a_refused_comparison() -> String {
+        let program = crate::parser::parse_phs("@requires(m > 0 kg, \"m must be positive\")\nfn mass(m) = m\n").unwrap();
+        let node = program
+            .statements
+            .iter()
+            .find_map(|s| match s {
+                Statement::FunctionDef(node) => Some(node.clone()),
+                _ => None,
+            })
+            .unwrap();
+        RustTranspiler.generate_export_shim(&node).unwrap()
+    }
+
+    #[test]
+    fn export_shim_catches_a_refused_comparison_instead_of_aborting_the_host() {
+        // before: the comparison was `phs_compare(..).unwrap_or_else(|e| panic!("{e}"))` straight in the
+        // `extern "C"` body, and a panic that leaves an `extern "C"` function aborts the process
+        let shim = shim_with_a_refused_comparison();
+        assert!(shim.contains("match std::panic::catch_unwind(move || -> MassResult {"), "{shim}");
+        assert!(shim.contains("MASS_LAST_ERROR.with(|e| *e.borrow_mut() = message);"), "{shim}");
+        assert!(shim.contains("MassResult { value: 0.0, ok: false }"), "{shim}");
+    }
+
+    /// Builds and runs the shim with a `main` that calls it: the refused comparison is `ok: false` with the core's
+    /// message, and the process goes on (it exits 0 and prints).
+    #[test]
+    fn export_shim_with_a_refused_comparison_returns_failure_when_called() {
+        use std::hash::{Hash, Hasher};
+        let code = format!(
+            "#![allow(unused)]\nuse physure_core::Quantity;\n{}\nfn main() {{\n    let r = mass(2.0);\n    let error = unsafe {{ std::ffi::CString::from_raw(mass_last_error() as *mut std::os::raw::c_char) }};\n    println!(\"ok={{}} error={{}}\", r.ok, error.to_str().unwrap());\n}}\n",
+            shim_with_a_refused_comparison()
+        );
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        code.hash(&mut hasher);
+        let crate_name = format!("phs_shim_run_{:x}", hasher.finish());
+        let temp_dir = std::env::temp_dir().join(&crate_name);
+        std::fs::create_dir_all(temp_dir.join("src")).unwrap();
+        std::fs::write(
+            temp_dir.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nphysure_core = {{ package = \"physure\", path = \"{}\" }}\n",
+                repo_root.join("physure-core").to_str().unwrap().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        std::fs::write(temp_dir.join("src").join("main.rs"), &code).unwrap();
+        let output = std::process::Command::new("cargo")
+            .args(["run", "--quiet"])
+            .env("RUSTFLAGS", "-A unused_parens")
+            .env("CARGO_TARGET_DIR", repo_root.join("target"))
+            .current_dir(&temp_dir)
+            .output();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let Ok(output) = output else {
+            eprintln!("skipping the run: cargo unavailable in this environment");
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "the host process did not survive:\n{code}\nstderr: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(stdout.starts_with("ok=false error=cannot compare"), "{stdout}");
     }
 }

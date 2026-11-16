@@ -85,6 +85,7 @@ python-source   = "."
 manifest-path   = "Cargo.toml"
 module-name     = "physure._core"
 features        = ["pyo3/extension-module"]
+exclude         = ["**/__pycache__/**"]
 
 # ── UV ────────────────────────────────────────────────────────────────────────
 [tool.uv]

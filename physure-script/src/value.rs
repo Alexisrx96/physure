@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 use physure_core::quantity::Quantity;
 use crate::symbolic::Node;
 
@@ -9,6 +11,57 @@ pub struct PlotData {
     pub y_unit: String,
     pub ascii: String,
     pub svg: String,
+}
+
+/// The names a function sees besides its parameters, when they are not those of whoever calls it: the environment of
+/// the module it was imported from (its values, functions and imports, as the module left them), or of the caller
+/// that handed it to a function of a module.
+///
+/// Two scopes are equal when they are the same one (a scope is never compared by its contents).
+#[derive(Clone)]
+pub struct ModuleScope {
+    /// The module, or `"the caller"`: what an error about the scope names.
+    pub(crate) module: Arc<str>,
+    pub(crate) env: Arc<HashMap<String, PhsValue>>,
+}
+
+impl ModuleScope {
+    pub(crate) fn new(module: &str, env: HashMap<String, PhsValue>) -> Self {
+        Self { module: Arc::from(module), env: Arc::new(env) }
+    }
+
+    /// The module this scope is the environment of.
+    pub fn module(&self) -> &str {
+        &self.module
+    }
+
+    /// The value the scope binds to `name`.
+    pub fn get(&self, name: &str) -> Option<&PhsValue> {
+        self.env.get(name)
+    }
+
+    /// `value`, made to see this scope when it is a function that sees whoever calls it.
+    pub(crate) fn close_over(&self, value: PhsValue) -> PhsValue {
+        match value {
+            PhsValue::Function(mut func) if func.scope.is_none() => {
+                func.scope = Some(self.clone());
+                PhsValue::Function(func)
+            }
+            other => other,
+        }
+    }
+}
+
+impl PartialEq for ModuleScope {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.env, &other.env)
+    }
+}
+
+impl fmt::Debug for ModuleScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ModuleScope({})", self.module)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,7 +118,7 @@ impl fmt::Display for PhsValue {
 impl PhsValue {
     /// A short, human-readable name for this value's PHS type. Used by the strict-Bool
     /// logical operators and the `assert`/`exact_assert` dispatcher, neither of which may
-    /// fall back to `is_truthy` -- their errors need to say what type they actually got.
+    /// guess a truth -- their errors need to say what type they actually got.
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             PhsValue::None => "None",

@@ -221,6 +221,54 @@ use super::*;
     }
 
     #[test]
+    fn a_literal_declares_its_degrees_of_freedom_after_the_uncertainty() {
+        // `dof` or the Greek nu, with `+/-` or `±`, before or after the unit
+        for code in [
+            "x = 10.003 +/- 0.002 dof 9 V",
+            "x = 10.003 ± 0.002 dof 9 V",
+            "x = 10.003 +/- 0.002 ν 9 V",
+            "x = 10.003 V +/- 0.002 dof 9",
+            "x = 10.003 V ± 0.002 ν 9",
+            "x = 10.003 +/- 0.002 dof 9.0 V",
+        ] {
+            let q = parse_one_quantity(code);
+            assert_eq!((q.magnitude, q.uncertainty, q.dof), (10.003, Some(0.002), Some(9.0)), "{code}");
+            assert_eq!(q.unit.as_deref(), Some("V"), "{code}");
+        }
+    }
+
+    #[test]
+    fn the_degrees_of_freedom_may_be_fractional_infinite_and_follow_a_percentage() {
+        assert_eq!(parse_one_quantity("x = 5 +/- 0.2 dof 16.7 m").dof, Some(16.7));
+        assert_eq!(parse_one_quantity("x = 5 +/- 0.2 dof inf m").dof, Some(f64::INFINITY));
+        let relative = parse_one_quantity("x = 5 +/- 2% dof 4 m");
+        assert_eq!((relative.uncertainty, relative.dof), (Some(0.1), Some(4.0)));
+    }
+
+    #[test]
+    fn a_literal_without_the_clause_has_none() {
+        assert_eq!(parse_one_quantity("x = 75.0 +/- 0.5 kg").dof, None);
+        assert_eq!(parse_one_quantity("x = 75.0 kg").dof, None);
+    }
+
+    #[test]
+    fn degrees_of_freedom_that_make_no_sense_are_refused_when_the_program_is_read() {
+        let refused = |code: &str| parse_phs(code).err().unwrap_or_else(|| panic!("{code} should not parse")).to_string();
+        assert!(refused("x = 5 +/- (0.5, 0.4) dof 4 m").contains("asymmetric"));
+        assert!(refused("x = 5 +/- 2 sigma dof 4 m").contains("sigma"));
+        assert!(refused("x = 5 +/- 0.5 dof 0 m").contains("positive"));
+        assert!(refused("x = 5 +/- 0.5 dof -2 m").contains("positive, got -2"));
+    }
+
+    #[test]
+    fn dof_and_nu_stay_ordinary_names_outside_the_clause() {
+        // a variable called dof, a call dof(x), and a sum with a parenthesised addend are not the clause
+        let prog = parse_phs("dof = 3\ny = dof + 1\nz = 12.3 + (0.5)").unwrap();
+        assert_eq!(prog.statements.len(), 3);
+        assert!(parse_phs("a = 5 +/- 1 m\nb = dof(a)").is_ok());
+    }
+
+    #[test]
     fn test_exports() {
         let code = "export E as \"kinetic_energy\"";
         let prog = parse_phs(code).unwrap();
@@ -500,4 +548,58 @@ use super::*;
         // A later task wires `assert(condition)` through exactly this call-arg position.
         assert!(parse_phs("f(True)").is_ok());
         assert!(parse_phs("f(a and b)").is_ok());
+    }
+
+    /// Two statements on one line need a `;` between them. Without one, `1 m => km 2` was the two statements
+    /// `1 m => km` and `2` and answered `2.0`: whatever follows a unit after `=>` started a statement of its own.
+    #[test]
+    fn two_statements_on_one_line_without_a_separator_are_a_parse_error() {
+        for glued in [
+            "1 m => km 2",
+            "x = 2 m => km 3",
+            "f(x) = x => km 2",
+            "5 m => km \"t\"",
+            "x = 1 m => km [1, 2]",
+            "1 m => km (2)",
+            "2 m => km for i in 0..2 { i }",
+            "1 m => km if True then 1 else 2",
+            "a not b",
+            "x = 0\nwhile x < 3 {\n  x = x + 1\n  x => km 2\n}",
+        ] {
+            let message = parse_phs(glued).map(|_| ()).expect_err(glued).to_string();
+            assert!(message.contains("expected a newline or `;`"), "{glued:?}: {message}");
+            let lines = parse_phs_with_lines(glued).map(|_| ()).expect_err(glued).to_string();
+            assert_eq!(lines, message, "{glued:?}");
+        }
+        // the message points at the statement that has no separator before it
+        let message = parse_phs("y = 1\n1 m => km 2").map(|_| ()).unwrap_err().to_string();
+        assert!(message.contains("--> 2:11"), "{message}");
+    }
+
+    #[test]
+    fn statements_separated_by_a_newline_or_a_semicolon_still_parse() {
+        for separated in [
+            "1 m => km; 2",
+            "1 m => km\n2",
+            "1 m => km # a comment\n2",
+            "1 m => km // a comment\n2",
+            "a = 1; b = 2; a + b",
+            "(1 m => km) -2",
+            "fn f(x) = x * 2; f(3)",
+            "fn f(x) =\n  a = x\n  a\nf(2)",
+            "f(x) = x => km\nf(1 m)",
+            "@requires(x > 0, \"positive\")\nfn f(x) = x\nf(1)",
+            "/// doubles\nfn f(x) = 2 * x\nf(1)",
+            "c = True\nc ? 1 : 2",
+            "y = x * 2 where x = 3",
+            "y = x * 2 where x = 3, z = 4",
+            "x = 1\nwhile x < 3 { x = x + 1 }",
+            "x = 1\nwhile x < 3 {\n  x = x + 1\n  y = 2\n}",
+            "x = if True then 1 m else 2 m",
+            "fn g(x) =\n  if x < 0 then return 0\n  x\ng(1)",
+            "\n\n1 m\n\n;;2 m;\n",
+        ] {
+            parse_phs(separated).unwrap_or_else(|e| panic!("{separated:?}: {e}"));
+            parse_phs_with_lines(separated).unwrap_or_else(|e| panic!("{separated:?}: {e}"));
+        }
     }

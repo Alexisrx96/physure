@@ -99,6 +99,11 @@ public class NativeEngine {
      */
     public static native String evaluateExpression(long registryHandle, String expr);
     public static native Quantity evaluateQuantity(long registryHandle, String expr);
+    /**
+     * Like {@link #evaluateQuantity}, with {@code values} visible under {@code names} for this call only: bound
+     * as they are, with the sources of their uncertainty, and not written into the source as text.
+     */
+    static native Quantity evaluateQuantityWith(long registryHandle, String expr, String[] names, Quantity[] values);
 
     /**
      * Returns categories mapping (e.g. "length" -> ["m", "cm", "km", ...]).
@@ -108,14 +113,33 @@ public class NativeEngine {
      */
     public static native Map<String, String[]> getCategories(long registryHandle);
 
+    /**
+     * A fresh source id from the core's one counter (the same one PHS and Python mint theirs from), for the first
+     * use of a quantity constructed in Java: two measurements never share an id by accident.
+     */
+    static native long newSourceId();
+
     // --- Quantity JNI math operations ---
     public static native Quantity addQuantities(Quantity a, Quantity b);
     public static native Quantity subQuantities(Quantity a, Quantity b);
     public static native Quantity mulQuantities(Quantity a, Quantity b);
     public static native Quantity divQuantities(Quantity a, Quantity b);
     public static native Quantity powQuantity(Quantity q, double power);
+    /** The core's {@code sin}, {@code cos}, {@code tan} or {@code abs} of a quantity, by name. */
+    static native Quantity mathFunction(Quantity q, String name);
     public static native Quantity convertQuantity(Quantity q, String targetUnit);
+    /** Declares {@code nu} degrees of freedom for the one source of {@code q}; the core refuses what cannot carry them. */
+    static native void declareDof(Quantity q, double nu);
+    static native double effectiveDof(Quantity q);
+    /** {@code {k, U, nu_eff}} of {@code q} for the coverage probability {@code p}. */
+    static native double[] expanded(Quantity q, double p);
+    /** A Type A evaluation: the mean of the observations, {@code s / sqrt(n)} and {@code n - 1} degrees of freedom. */
+    static native Quantity fromSamples(double[] samples, String unit);
+    /** {@code {mean, uncertainty}} as text, rounded by the Guide's rule. */
+    static native String[] gumRound(double mean, double uncertainty);
     public static native void assertQuantities(Quantity a, Quantity b);
+    /** PHS {@code a op b} for {@code op} one of {@code < > <= >= == !=}, by the core's rule; throws when they have no comparison. */
+    public static native boolean compareQuantities(Quantity a, Quantity b, String op);
     public static native void assertExactQuantities(Quantity a, Quantity b);
     public static native String[] getFunctionParams(long registryHandle, String funcName);
 }

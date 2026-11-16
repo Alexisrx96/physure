@@ -205,7 +205,11 @@ impl JavaTranspiler {
 
     fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {
         if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
-            return Ok(comparison_expr(op_sym, &self.generate_expr(l)?, &self.generate_expr(r)?));
+            let (l_str, r_str) = (self.generate_expr(l)?, self.generate_expr(r)?);
+            if super::both_definitely_bool(l, r) {
+                return Ok(format!("({} {} {})", l_str, op_sym, r_str));
+            }
+            return Ok(comparison_expr(op_sym, &l_str, &r_str));
         }
         if let Some(logical) = super::as_logical_op(expr) {
             return super::c_logical_expr(logical, |e| self.generate_expr(e));
@@ -280,20 +284,20 @@ fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
         args.push(format!("\"{}\"", unit));
     }
     let constructor = if q.uncertainty.is_some() { "withUncertainty" } else { "of" };
-    Ok(format!("Quantity.{}({})", constructor, args.join(", ")))
+    // the degrees of freedom of the uncertainty (JCGM 100:2008 4.3.2) go with it: `withDof` returns the quantity
+    let dof = match q.dof {
+        Some(nu) if nu.is_infinite() => ".withDof(Double.POSITIVE_INFINITY)".to_string(),
+        Some(nu) => format!(".withDof({:?})", nu),
+        None => String::new(),
+    };
+    Ok(format!("Quantity.{}({}){}", constructor, args.join(", "), dof))
 }
 
-/// The Java method that carries out a comparison operator.
+/// A comparison operator as Java: `Quantity.phsCompare`, the core's comparison through JNI, so that the program
+/// answers what the interpreter answers. `greaterThan`/`lessThan` converted the right side to the left's unit and
+/// compared, and `equals` was exact (same unit, same bits): `1 km == 1000 m` was false.
 fn comparison_expr(op_sym: &str, l_str: &str, r_str: &str) -> String {
-    match op_sym {
-        ">" => format!("{}.greaterThan({})", l_str, r_str),
-        "<" => format!("{}.lessThan({})", l_str, r_str),
-        ">=" => format!("!{}.lessThan({})", l_str, r_str),
-        "<=" => format!("!{}.greaterThan({})", l_str, r_str),
-        "==" => format!("{}.equals({})", l_str, r_str),
-        "!=" => format!("!{}.equals({})", l_str, r_str),
-        _ => unreachable!(),
-    }
+    format!("{}.phsCompare({}, \"{}\")", l_str, r_str, op_sym)
 }
 
 /// The declaration of a variable first assigned `val`, typed by what the expression is.
@@ -335,6 +339,7 @@ mod tests {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         });
         
         let result = transpiler.generate_statement(&func, &mut HashSet::new(), &mut HashSet::new()).unwrap();
@@ -350,6 +355,7 @@ mod tests {
             uncertainty: Some(0.5),
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("kg".to_string()),
         });
         let result = transpiler.generate_expr(&q).unwrap();

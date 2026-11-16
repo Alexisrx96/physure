@@ -252,6 +252,32 @@ use physure_core::units::parser::Parser as UnitParser;
     }
 
     #[test]
+    fn a_breakpoint_condition_that_is_not_a_bool_is_an_error() {
+        use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
+
+        struct Continue;
+        impl DebugHook for Continue {
+            fn on_statement(&self, _ctx: &DebugContext) -> DebugAction {
+                DebugAction::Continue
+            }
+        }
+        for (condition, says) in [("x", "got a Number (1.0)"), ("\"x\"", "got a String"), ("true", "`true` has no value")] {
+            let mut interp = PhsInterpreter::with_debug_hook(
+                std::sync::Arc::new(crate::resolver::FsModuleResolver::default()),
+                std::sync::Arc::new(Continue),
+            );
+            let program = crate::parser::parse_phs("x = 1\ny = x\n").unwrap();
+            let crate::ast::Statement::Expr(cond) = crate::parser::parse_phs(condition).unwrap().statements.remove(0) else {
+                panic!("expected an expression")
+            };
+            interp.add_breakpoint(Breakpoint::Conditional(program.lines[1], cond));
+            let err = interp.run_statements_with_lines(&program).unwrap_err().to_string();
+            assert!(err.contains("the condition of a breakpoint") || err.contains("has no value"), "{condition}: {err}");
+            assert!(err.contains(says), "{condition}: {err}");
+        }
+    }
+
+    #[test]
     fn step_over_skips_statements_inside_a_deeper_nested_call() {
         use crate::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
         use std::sync::{Arc, Mutex};
@@ -627,8 +653,11 @@ use physure_core::units::parser::Parser as UnitParser;
     #[test]
     fn a_false_sigma_bound_comparison_reaches_bool_assert_and_fails() {
         let mut interp = PhsInterpreter::default();
-        let err = interp.eval_str("assert(5.0 == 1.0 +/- 0.1 sigma)").unwrap_err();
+        // the measured side carries the sigma the bound counts in: an exact `5.0` is an error of its own now
+        let err = interp.eval_str("assert((5.0 +/- 0.2) == 1.0 +/- 0.1 sigma)").unwrap_err();
         assert!(matches!(err, PhysureError::AssertionFailed { kind: "assert", .. }));
+        let err = interp.eval_str("assert(5.0 == 1.0 +/- 0.1 sigma)").unwrap_err();
+        assert!(err.to_string().contains("uncertainty"), "{err}");
     }
 
     #[test]
@@ -741,6 +770,7 @@ r3 = circuito_abierto(5 V, 2 A)
                             uncertainty: None,
                             uncertainty_lower: None,
                             is_sigma: false,
+                            dof: None,
                             unit: None,
                         })),
                         right: Box::new(Expr::Identifier("m".to_string())),
@@ -753,6 +783,7 @@ r3 = circuito_abierto(5 V, 2 A)
                             uncertainty: None,
                             uncertainty_lower: None,
                             is_sigma: false,
+                            dof: None,
                             unit: None,
                         })),
                     })
@@ -760,6 +791,7 @@ r3 = circuito_abierto(5 V, 2 A)
                 body_lines: vec![],
                 decorators: Vec::new(),
                 doc: None,
+                scope: None,
             }),
             Statement::Assignment(AssignmentNode {
                 name: "m".to_string(),
@@ -768,6 +800,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     uncertainty: None,
                     uncertainty_lower: None,
                     is_sigma: false,
+                    dof: None,
                     unit: Some("kg".to_string()),
                 }),
                 decorators: Vec::new(),
@@ -779,6 +812,7 @@ r3 = circuito_abierto(5 V, 2 A)
                     uncertainty: None,
                     uncertainty_lower: None,
                     is_sigma: false,
+                    dof: None,
                     unit: Some("m/s".to_string()),
                 }),
                 decorators: Vec::new(),
@@ -823,6 +857,7 @@ r3 = circuito_abierto(5 V, 2 A)
                         uncertainty: Some(0.5),
                         uncertainty_lower: None,
                         is_sigma: false,
+                        dof: None,
                         unit: Some("kg".to_string()),
                     }),
                     decorators: Vec::new(),
@@ -881,14 +916,15 @@ r3 = circuito_abierto(5 V, 2 A)
     fn test_virtual_module_import() {
         let mut resolver = MemoryModuleResolver::new();
         let mut export = ModuleExport {
-            symbols: HashMap::new(),
+            symbols: Vec::new(),
             functions: HashMap::new(),
         };
-        export.symbols.insert("G".to_string(), Expr::Quantity(QuantityNode {
+        export.define("G".to_string(), Expr::Quantity(QuantityNode {
             magnitude: 6.674e-11,
             uncertainty: None,
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("m^3 / (kg * s^2)".to_string()),
         }));
         resolver.add_module("constants".to_string(), export);
@@ -1153,15 +1189,26 @@ r3 = circuito_abierto(5 V, 2 A)
         let val = interp.get_var("i").unwrap();
         assert_eq!(val.to_string(), "5.0");
 
-        let infinite = crate::parser::parse_phs("i = 0\nwhile true { i = i + 1 }").unwrap();
-        assert!(interp.run_statements(&infinite).is_err());
+        // `while true` ran to the loop guard only because lowercase `true` is a name with no value, read as the
+        // text "true"; the Bool literal is `True`
+        let infinite = crate::parser::parse_phs("i = 0\nwhile True { i = i + 1 }").unwrap();
+        let err = interp.run_statements(&infinite).unwrap_err().to_string();
+        assert!(err.contains("did not converge"), "{err}");
+        let text = crate::parser::parse_phs("i = 0\nwhile true { i = i + 1 }").unwrap();
+        let err = interp.run_statements(&text).unwrap_err().to_string();
+        assert!(err.contains("`true` has no value"), "{err}");
     }
 
     #[test]
-    fn test_is_truthy_negative_numbers() {
+    fn a_loop_on_a_negative_counter_compares_it_explicitly() {
+        // `while i` with `i = -5` relied on "a number other than zero is true"; a number is not a condition
         let mut interp = PhsInterpreter::default();
-        let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i { count = count + 1\n i = i + 1 }").unwrap();
-        assert!(interp.run_statements(&stmts).is_ok());
+        let stmts = crate::parser::parse_phs("i = -5\ncount = 0\nwhile i != 0 { count = count + 1\n i = i + 1 }").unwrap();
+        interp.run_statements(&stmts).unwrap();
+        assert_eq!(interp.get_var("count").unwrap().to_string(), "5.0");
+        let bare = crate::parser::parse_phs("i = -5\nwhile i { i = i + 1 }").unwrap();
+        let err = interp.run_statements(&bare).unwrap_err().to_string();
+        assert!(err.contains("the condition of `while` needs a Bool"), "{err}");
     }
 
     /// `Number ^ Number` with a negative base and a fractional exponent used to answer
@@ -1271,6 +1318,17 @@ r3 = circuito_abierto(5 V, 2 A)
         let mut interp = PhsInterpreter::default();
         let err = interp.eval_str("op_eq(True)").unwrap_err();
         assert!(err.to_string().contains("missing argument"), "{err}");
+    }
+
+    #[test]
+    fn an_equation_lists_its_missing_arguments_by_name() {
+        // they were listed in the order a set iterated in, a new one each time
+        for _ in 0..30 {
+            let err = crate::interpreter::eval_phs("eq = \"foo_y * foo_z = qux_d * qux_c * qux_b * qux_a\"\neq(bar=1)").unwrap_err();
+            assert!(err.to_string().ends_with("'eq': foo_y, foo_z"), "{err}");
+            let err = crate::interpreter::eval_phs("eq = \"foo_y * foo_z * foo_w = qux_d * qux_c\"\neq(bar=1)").unwrap_err();
+            assert!(err.to_string().ends_with("'eq': qux_c, qux_d"), "{err}");
+        }
     }
 
 #[cfg(test)]

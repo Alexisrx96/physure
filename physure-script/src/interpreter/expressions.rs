@@ -9,7 +9,7 @@ use crate::debug::StackFrame;
 use crate::symbolic::Node;
 use crate::value::PhsValue;
 use super::{PhsInterpreter, coerce_equation_string};
-use super::helpers::{is_truthy, make_range, strip_unit_comment};
+use super::helpers::{condition_of, make_range, strip_unit_comment};
 
 struct CallStackGuard {
     call_stack: Arc<Mutex<Vec<StackFrame>>>,
@@ -59,7 +59,7 @@ fn interpolate(text: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsVal
 fn evaluate_span(expr_str: &str, interp: &PhsInterpreter, env: &HashMap<String, PhsValue>) -> Option<String> {
     let prog = crate::parse_phs(expr_str).ok()?;
     let stmt = prog.statements.first()?;
-    interp.eval_statement_with_env(stmt, &mut env.clone()).ok().map(|val| val.to_string())
+    interp.eval_statement_in(stmt, &mut env.clone()).ok().map(|val| val.to_string())
 }
 
 fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
@@ -82,7 +82,13 @@ fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsVa
     } else {
         UnitParser::parse_expression(clean_unit_str)?
     };
-    let q = Quantity::new_scalar(node.magnitude, node.uncertainty.unwrap_or(0.0), unit, None, None);
+    // In `t +/- k sigma` the number after `+/-` is k, not an uncertainty of the target: the target is exact.
+    let sigma = if node.is_sigma { 0.0 } else { node.uncertainty.unwrap_or(0.0) };
+    let q = Quantity::new_scalar(node.magnitude, sigma, unit, None, None);
+    let q = match node.dof {
+        Some(nu) => q.with_dof(nu)?,
+        None => q,
+    };
     if node.is_sigma {
         Ok(PhsValue::SigmaBound(q, node.uncertainty.unwrap_or(1.0)))
     } else {
@@ -94,7 +100,17 @@ fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsVa
 /// Algebra (e.g. multiplying both sides) can move the unknown to either side of the equation, so try whichever
 /// side is fully bound by the supplied kwargs rather than assuming it's the RHS.
 fn solved_side<'a>(name: &str, lhs: &'a Node, rhs: &'a Node, local_env: &HashMap<String, PhsValue>) -> PhysureResult<&'a Node> {
-    let unbound = |s: &&String| !local_env.contains_key(*s);
+    // a global identifier (`pi`, a constant of the catalog) has its value: it is not an argument the call is missing
+    let mut free = std::collections::HashSet::new();
+    lhs.free_symbols(&mut free);
+    rhs.free_symbols(&mut free);
+    let mut globals = std::collections::HashSet::new();
+    for symbol in free.iter().filter(|s| !local_env.contains_key(*s)) {
+        if crate::globals::is_global(symbol)? {
+            globals.insert(symbol.clone());
+        }
+    }
+    let unbound = |s: &&String| !local_env.contains_key(*s) && !globals.contains(*s);
     let mut rhs_free = std::collections::HashSet::new();
     rhs.free_symbols(&mut rhs_free);
     let rhs_missing: Vec<&String> = rhs_free.iter().filter(unbound).collect();
@@ -119,7 +135,9 @@ fn solved_side<'a>(name: &str, lhs: &'a Node, rhs: &'a Node, local_env: &HashMap
     if lhs_missing.iter().all(|s| crate::parser::is_known_unit_symbol(s)) {
         return Ok(lhs);
     }
-    let missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
+    let mut missing = if rhs_missing.len() <= lhs_missing.len() { rhs_missing } else { lhs_missing };
+    // by name: a set has no order of its own
+    missing.sort();
     Err(PhysureError::Generic(format!(
         "Missing argument(s) for equation '{}': {}",
         name,
@@ -192,18 +210,22 @@ impl PhsInterpreter {
             // `v = 3 m/s` in scope, `deriv("0.5*m*v^2", "v")` used to receive the quantity
             // instead of the name. `{v}` folds a value in explicitly.
             Expr::Str(text) => Ok(PhsValue::String(interpolate(text, self, env))),
-            Expr::Identifier(name) => Ok(self.eval_identifier(name, env)),
+            Expr::Identifier(name) => self.eval_identifier(name, env),
             Expr::BinaryOp { op, left, right } => self.eval_binary_expr(*op, left, right, env),
             Expr::FunctionCall { name, args, kwargs } => self.eval_call(name, args, kwargs, env),
             Expr::ForExpr { var, iterable, body } => self.eval_for(var, iterable, body, env),
         }
     }
 
-    fn eval_identifier(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhsValue {
-        if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
+    /// A bare name, in the one resolution order of PHS (`crate::globals`): a binding in `env` (lexical, variable,
+    /// user function), then `pi`/`π` and the constants of the catalog in force, then a unit, else the name as text.
+    fn eval_identifier(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
+        Ok(if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
             PhsValue::String(eval_template_string(name, self, env))
         } else if let Some(val) = env.get(name) {
             val.clone()
+        } else if let Some(global) = crate::globals::global_value(name)? {
+            global
         } else if let Some(unit) = unit_symbol_as_quantity(name) {
             // The symbolic layer has no notion of units: it parses `2.0 J / (gram * K)`
             // into plain algebra over the symbols J, gram and K. Re-evaluating such a
@@ -213,7 +235,7 @@ impl PhsInterpreter {
             PhsValue::Quantity(unit)
         } else {
             PhsValue::String(name.to_string())
-        }
+        })
     }
 
     fn eval_binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
@@ -225,7 +247,13 @@ impl PhsInterpreter {
                 return Ok(l_val);
             }
             let parsed_unit = UnitParser::parse_expression(clean_target)?;
-            return self.convert_value_to_unit(l_val, &parsed_unit);
+            // a name with no value evaluates to its own text: say so, not "cannot convert a String"
+            if let (Expr::Identifier(name), PhsValue::String(text)) = (left, &l_val) {
+                if text == name && !env.contains_key(name) {
+                    return Err(PhysureError::Generic(format!("`{name}` has no value: there is nothing to convert to `{clean_target}`")));
+                }
+            }
+            return self.convert_value_to_unit(l_val, &parsed_unit, clean_target);
         }
         let r_val = self.eval_expr(right, env)?;
         self.eval_binary_op_vals(op, l_val, r_val)
@@ -291,6 +319,7 @@ impl PhsInterpreter {
         }
         let mut local_env = env.clone();
         for (kwarg_name, kwarg_expr) in kwargs {
+            crate::globals::refuse_binding(kwarg_name, &format!("an argument of the equation `{name}`"))?;
             let val = self.eval_expr(kwarg_expr, env)?;
             local_env.insert(kwarg_name.clone(), val);
         }
@@ -304,9 +333,10 @@ impl PhsInterpreter {
 
     /// Short-circuit logical operators: language semantics, not an optimization,
     /// so they must run before the eager argument evaluation of an ordinary call rather than as
-    /// ordinary builtins. Strict Bool checking here (never `is_truthy`) is what
-    /// keeps `5 m and enabled` a type error instead of a silent truthiness test.
-    /// `None` when the call is not one of them.
+    /// ordinary builtins. Strict Bool checking here is what keeps `5 m and enabled` a type error instead
+    /// of a silent truthiness test. The conditional (`if ... then ... else`, `? :`) is taken here too, so
+    /// that a condition that is a name with no value is told so (both branches are still evaluated, as
+    /// they always were). `None` when the call is not one of them.
     fn eval_short_circuit(
         &self,
         name: &str,
@@ -320,39 +350,64 @@ impl PhsInterpreter {
         match (name, args) {
             ("op_not", [operand]) => Some(self.eval_not(operand, env)),
             ("op_and" | "op_or", [left, right]) => Some(self.eval_and_or(name == "op_and", left, right, env)),
+            ("ternary" | "if_then_else", [cond, then, otherwise]) if !env.contains_key(name) => {
+                let context = if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" };
+                Some(self.eval_conditional(cond, then, otherwise, env, context))
+            }
+            // `assert(true)`: a name with no value is told so, as in every condition
+            ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 && !env.contains_key("assert") => {
+                match self.eval_condition(&args[0], env, "`assert`") {
+                    Err(e) if e.to_string().starts_with(&format!("`{name}` has no value")) => Some(Err(e)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
 
+    /// The truth of the condition `expr` (only a Bool has one: [`condition_of`]). A name with no value
+    /// evaluates to its own text; as a condition it is told so, naming it: `while true` read the text "true".
+    pub(crate) fn eval_condition(&self, expr: &Expr, env: &HashMap<String, PhsValue>, context: &str) -> PhysureResult<bool> {
+        let value = self.eval_expr(expr, env)?;
+        if let (Expr::Identifier(name), PhsValue::String(text)) = (expr, &value) {
+            if text == name && !env.contains_key(name) {
+                return Err(PhysureError::Generic(format!(
+                    "`{name}` has no value; the Bool literals are True and False ({context} needs a Bool)"
+                )));
+            }
+        }
+        condition_of(&value, context)
+    }
+
+    /// `if c then a else b` and `c ? a : b`: both branches are evaluated (an error in either is reported), and
+    /// the Bool `c` chooses.
+    fn eval_conditional(
+        &self,
+        cond: &Expr,
+        then: &Expr,
+        otherwise: &Expr,
+        env: &HashMap<String, PhsValue>,
+        context: &str,
+    ) -> PhysureResult<PhsValue> {
+        let holds = self.eval_condition(cond, env, context)?;
+        let then = self.eval_expr(then, env)?;
+        let otherwise = self.eval_expr(otherwise, env)?;
+        Ok(if holds { then } else { otherwise })
+    }
+
     fn eval_not(&self, operand: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
-        let operand = self.eval_expr(operand, env)?;
-        let PhsValue::Bool(b) = operand else {
-            return Err(PhysureError::Generic(format!(
-                "`not` expects a Bool operand, got {}", operand.type_name()
-            )));
-        };
-        Ok(PhsValue::Bool(!b))
+        Ok(PhsValue::Bool(!self.eval_condition(operand, env, "`not`")?))
     }
 
     fn eval_and_or(&self, is_and: bool, left: &Expr, right: &Expr, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
-        let word = if is_and { "and" } else { "or" };
-        let left = self.eval_expr(left, env)?;
-        let PhsValue::Bool(left_b) = left else {
-            return Err(PhysureError::Generic(format!(
-                "`{}` expects Bool operands, left side was {}", word, left.type_name()
-            )));
-        };
+        let (left_side, right_side) =
+            if is_and { ("the left side of `and`", "the right side of `and`") } else { ("the left side of `or`", "the right side of `or`") };
+        let left_b = self.eval_condition(left, env, left_side)?;
         // `false and _` and `true or _` are decided by the left side alone
         if left_b != is_and {
             return Ok(PhsValue::Bool(left_b));
         }
-        let right = self.eval_expr(right, env)?;
-        let PhsValue::Bool(right_b) = right else {
-            return Err(PhysureError::Generic(format!(
-                "`{}` expects Bool operands, right side was {}", word, right.type_name()
-            )));
-        };
-        Ok(PhsValue::Bool(right_b))
+        Ok(PhsValue::Bool(self.eval_condition(right, env, right_side)?))
     }
 
     /// `f(g)` for a function `f` bound in `env` and a function value `g` is their composition `f_g`.
@@ -392,6 +447,7 @@ impl PhsInterpreter {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         }))
     }
 
@@ -409,7 +465,11 @@ impl PhsInterpreter {
             return Ok(val);
         }
 
-        if let Some((domain, canonical)) = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned() {
+        // The guard must be dropped before the builtin runs: in an `if let` scrutinee it would live to the end of the
+        // block, and a builtin that evaluates an expression calling another domain builtin (`integral` evaluating the
+        // antiderivative `integral(sqrt(x), x)`) would wait on this same lock forever.
+        let unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).cloned();
+        if let Some((domain, canonical)) = unlocked {
             if let Some(val) = crate::builtins::eval_domain_builtin_with_kwargs(domain, &canonical, &arg_vals, kwarg_vals, self, env)? {
                 return Ok(val);
             }
@@ -444,16 +504,23 @@ impl PhsInterpreter {
         // Note: rayon's parallel collect stops scheduling new work on error but may
         // leave in-flight work on other threads to complete, so loop body side effects
         // (e.g. I/O in external functions) may partially execute even if evaluation fails.
-        if items.len() >= physure_core::settings::parallel_threshold() && !self.debug_hook_is_set() && !self.limits.sequential {
+        if items.len() >= physure_core::settings::parallel_threshold() && self.runs_in_parallel() {
             use rayon::prelude::*;
-            let results: Vec<PhsValue> = items
-                .into_par_iter()
-                .map(|item| {
-                    let mut local_env = env.clone();
-                    local_env.insert(var.to_string(), item);
-                    self.eval_expr(body, &local_env)
-                })
-                .collect::<PhysureResult<Vec<PhsValue>>>()?;
+            super::count_parallel_loop();
+            // The scopes of this thread (the catalog, the angle mode, ...) are per thread and a rayon worker is
+            // another thread: read them here and open them again inside each task.
+            let results: Vec<PhsValue> = super::helpers::CallerScopes::capture(|scopes| {
+                items
+                    .into_par_iter()
+                    .map(|item| {
+                        scopes.run(|| {
+                            let mut local_env = env.clone();
+                            local_env.insert(var.to_string(), item);
+                            self.eval_expr(body, &local_env)
+                        })
+                    })
+                    .collect::<PhysureResult<Vec<PhsValue>>>()
+            })?;
             return Ok(PhsValue::Vector(results));
         }
         let mut local_env = env.clone();
@@ -505,7 +572,8 @@ impl PhsInterpreter {
         let diff_node = node.diff_node_n(var_name, order)?;
 
         if let Some(point @ (PhsValue::Number(_) | PhsValue::Quantity(_))) = arg_vals.first() {
-            let mut local_env = env.clone();
+            // the derivative reads the names the function reads: its module's, for an imported one
+            let mut local_env = func.scope.as_ref().map_or_else(|| env.clone(), |scope| (*scope.env).clone());
             local_env.insert(var_name.clone(), point.clone());
             let expr_node = crate::parser::parse_phs(&diff_node.to_phs_string())?;
             if let Some(Statement::Expr(e)) = expr_node.statements.first() {
@@ -543,7 +611,12 @@ impl PhsInterpreter {
         self.check_budget()?;
         let _depth = crate::limits::CallDepth::enter(self.limits.max_call_depth).map_err(PhysureError::Generic)?;
         let implicit_units = func.decorators.iter().any(|d| d.name == "implicit_units");
-        let mut local_env = env.clone();
+        // the body sees its parameters and the names of its module, for a function imported from one, or else those
+        // of the caller
+        let (mut local_env, arg_vals) = match &func.scope {
+            Some(scope) => ((*scope.env).clone(), close_over_caller(arg_vals, env)),
+            None => (env.clone(), arg_vals),
+        };
         for (i, (param_name, arg_val)) in func.params.iter().zip(arg_vals.into_iter()).enumerate() {
             let bound_val = self.bind_param_value(&func.name, param_name, func.param_units.get(i).and_then(|u| u.as_ref()), arg_val, implicit_units)?;
             local_env.insert(param_name.clone(), bound_val);
@@ -576,8 +649,7 @@ impl PhsInterpreter {
                 }
                 Statement::GuardReturn { cond, value } => {
                     self.debug_checkpoint(line, &local_env)?;
-                    let cond_val = self.eval_expr(cond, &local_env)?;
-                    if is_truthy(&cond_val) {
+                    if self.eval_condition(cond, &local_env, "the condition of `if ... then return`")? {
                         last_val = self.eval_expr(value, &local_env)?;
                         break;
                     }
@@ -589,23 +661,22 @@ impl PhsInterpreter {
         }
 
         self.check_ensures(func, &local_env, &last_val)?;
-        Ok(last_val)
+        // a function of the module it returns keeps seeing the module
+        Ok(match &func.scope {
+            Some(scope) => scope.close_over(last_val),
+            None => last_val,
+        })
     }
 
     /// Evaluates every `@requires` condition against the already-bound parameters,
-    /// erroring on the first one that is not truthy. Conditions are ordinary `Expr`s —
-    /// a comparison like `m > 0.0` is a `FunctionCall { name: "op_>", .. }` under the
-    /// hood, so this needs no evaluator support beyond `eval_expr`/`is_truthy`.
-    ///
-    /// Note: conditions must evaluate to a numeric/`Quantity` truthy value (as produced by
-    /// comparison operators like `op_>`); a plugin-provided `PhsValue::Bool` is currently
-    /// always treated as falsy by `is_truthy`, so boolean-returning plugin predicates are
-    /// not yet safe to use directly as `@requires`/`@ensures` conditions.
+    /// erroring on the first one that is False. Conditions are ordinary `Expr`s —
+    /// a comparison like `m > 0 kg` is a `FunctionCall { name: "op_>", .. }` under the
+    /// hood — and, like every condition, must be a Bool (`eval_condition`).
     fn check_requires(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         for dec in &func.decorators {
             if dec.name == "requires" {
                 let cond = &dec.args[0];
-                if !is_truthy(&self.eval_expr(cond, local_env)?) {
+                if !self.eval_condition(cond, local_env, "the condition of `@requires`")? {
                     let message = self.eval_expr(&dec.args[1], local_env)?.to_string();
                     return Err(PhysureError::ContractViolation { decorator: "requires".to_string(), message });
                 }
@@ -619,7 +690,7 @@ impl PhsInterpreter {
     /// function with a parameter literally named `result`, so this insert can never
     /// silently shadow a caller-visible binding.
     ///
-    /// See `check_requires`'s note on `PhsValue::Bool`.
+    /// Its conditions are Bools, as those of `check_requires` are.
     fn check_ensures(&self, func: &crate::ast::FunctionDefNode, local_env: &HashMap<String, PhsValue>, result: &PhsValue) -> PhysureResult<()> {
         if !func.decorators.iter().any(|d| d.name == "ensures") {
             return Ok(());
@@ -629,7 +700,7 @@ impl PhsInterpreter {
         for dec in &func.decorators {
             if dec.name == "ensures" {
                 let cond = &dec.args[0];
-                if !is_truthy(&self.eval_expr(cond, &result_env)?) {
+                if !self.eval_condition(cond, &result_env, "the condition of `@ensures`")? {
                     let message = self.eval_expr(&dec.args[1], &result_env)?.to_string();
                     return Err(PhysureError::ContractViolation { decorator: "ensures".to_string(), message });
                 }
@@ -686,13 +757,13 @@ impl PhsInterpreter {
         Ok(PhsValue::Quantity(converted))
     }
 
-    fn convert_value_to_unit(&self, val: PhsValue, unit: &RationalUnit) -> PhysureResult<PhsValue> {
+    fn convert_value_to_unit(&self, val: PhsValue, unit: &RationalUnit, target: &str) -> PhysureResult<PhsValue> {
         match val {
             PhsValue::Quantity(q) => Ok(PhsValue::Quantity(q.convert_to(unit)?)),
             PhsValue::Vector(vec) => {
                 let mut results = Vec::new();
                 for item in vec {
-                    results.push(self.convert_value_to_unit(item, unit)?);
+                    results.push(self.convert_value_to_unit(item, unit, target)?);
                 }
                 Ok(PhsValue::Vector(results))
             }
@@ -700,11 +771,49 @@ impl PhsInterpreter {
             // is `0 km .. 0.1 km`. Without this arm it fell to the catch-all below and came
             // back as the metres it went in as, with nothing said about the `=> km`.
             PhsValue::Range(start, end) => make_range(
-                self.convert_value_to_unit(*start, unit)?,
-                self.convert_value_to_unit(*end, unit)?,
+                self.convert_value_to_unit(*start, unit, target)?,
+                self.convert_value_to_unit(*end, unit, target)?,
             ),
-            other => Ok(other),
+            // A plain number is dimensionless, as a literal `5` is: `0.5 => %` is 50 %, `5 => km` is refused.
+            PhsValue::Number(n) => {
+                let q = Quantity::new_scalar(n, 0.0, RationalUnit::dimensionless(), None, None);
+                Ok(PhsValue::Quantity(q.convert_to(unit)?))
+            }
+            // `10.04 mm +/- 2 sigma => cm`: the target value converts, the bound in sigmas stays.
+            PhsValue::SigmaBound(q, k) => Ok(PhsValue::SigmaBound(q.convert_to(unit)?, k)),
+            PhsValue::Matrix(m) => {
+                let rows = m
+                    .data
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|q| q.convert_to(unit)).collect::<PhysureResult<Vec<_>>>())
+                    .collect::<PhysureResult<Vec<_>>>()?;
+                Ok(PhsValue::Matrix(physure_core::linalg::QuantityMatrix::new(rows)?))
+            }
+            // Everything else has no unit: `(a < b) => km` came back as `True` and `"x" => km`
+            // as `x`, with nothing said about the `=> km`.
+            other => {
+                let shown = match &other {
+                    PhsValue::Function(_) | PhsValue::Plot(_) => String::new(),
+                    value => format!(" ({value})"),
+                };
+                Err(PhysureError::Generic(format!(
+                    "cannot convert a {}{shown} to `{}`: only a quantity or a number, or a vector, matrix or range \
+                     of them, has a unit to convert",
+                    other.type_name(),
+                    target
+                )))
+            }
         }
     }
 
+}
+
+/// The arguments of a call of a function of a module: a function among them that sees whoever calls it is made to see
+/// `caller_env`, the names of the caller that handed it over, and not the module's.
+fn close_over_caller(arg_vals: Vec<PhsValue>, caller_env: &HashMap<String, PhsValue>) -> Vec<PhsValue> {
+    if !arg_vals.iter().any(|v| matches!(v, PhsValue::Function(f) if f.scope.is_none())) {
+        return arg_vals;
+    }
+    let caller = crate::value::ModuleScope::new("the caller", caller_env.clone());
+    arg_vals.into_iter().map(|v| caller.close_over(v)).collect()
 }

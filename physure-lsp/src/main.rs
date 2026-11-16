@@ -23,6 +23,10 @@ impl LanguageServer for Backend {
         if let Some(locale) = params.locale {
             *self.locale.write().unwrap() = locale;
         }
+        // Resolved and loaded here, before any document: a frozen configuration that cannot be used is said once
+        // when the client is ready (`initialized`), and as a diagnostic on every document; the server keeps running
+        // (a crash would only make the client restart it in a loop).
+        let _ = physure_core::frozen::ensure_valid();
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -48,6 +52,12 @@ impl LanguageServer for Backend {
                 version: Some("0.2.1".to_string()),
             }),
         })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        if let Some(message) = configuration_problem() {
+            self.client.show_message(MessageType::ERROR, message).await;
+        }
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -122,6 +132,7 @@ impl LanguageServer for Backend {
         items.extend(keyword_completions());
         items.extend(domain_completions());
         items.extend(unit_completions());
+        items.extend(constant_completions());
         items.extend(symbol_completions());
 
         Ok(Some(CompletionResponse::Array(items)))
@@ -145,6 +156,14 @@ impl LanguageServer for Backend {
                     }),
                     range: None,
                 }));
+            } else if let Some(doc) = constant_hover(&word) {
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: doc,
+                    }),
+                    range: None,
+                }));
             } else if let Some(user_doc) = extract_user_docstring(&text, &word) {
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
@@ -161,6 +180,10 @@ impl LanguageServer for Backend {
 
 impl Backend {
     async fn on_change(&self, uri: Url, text: String) {
+        if let Some(message) = configuration_problem() {
+            self.client.publish_diagnostics(uri, vec![configuration_diagnostic(message)], None).await;
+            return;
+        }
         // Take ownership of any previous state before the panic guard: on a panic the
         // closure's argument is dropped along with the unwind, which correctly leaves no
         // entry behind (next edit falls back to a full bootstrap run, the same graceful
@@ -205,6 +228,25 @@ impl Backend {
     }
 }
 
+/// Why the configuration in force (a frozen `physure.frozen.conf`, `PHYSURE_CONF`, ...) cannot be used, if it cannot:
+/// nothing is analysed against another catalog then.
+fn configuration_problem() -> Option<String> {
+    physure_core::frozen::ensure_valid()
+        .err()
+        .map(|e| format!("physure: the configuration in force cannot be used, nothing is analysed: {e}"))
+}
+
+/// One error at the top of a document that says why it is not analysed.
+fn configuration_diagnostic(message: String) -> Diagnostic {
+    Diagnostic {
+        range: Range { start: Position { line: 0, character: 0 }, end: Position { line: 0, character: 1 } },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("physure-lsp".to_string()),
+        message,
+        ..Default::default()
+    }
+}
+
 /// The always-available builtin functions.
 fn builtin_completions() -> Vec<CompletionItem> {
     let mut items = Vec::new();
@@ -220,15 +262,21 @@ fn builtin_completions() -> Vec<CompletionItem> {
         ("exp", "exp(x)", "Exponential e^x"),
         ("log", "log(x)", "Natural logarithm"),
         ("ln", "ln(x)", "Natural logarithm (alias)"),
+        ("approx", "approx(a, b, rel?)", "Relative approximate equality |a − b| <= rel·max(|a|, |b|); rel defaults to [Settings] approx_rel_tol (1e-3)"),
         ("solve", "solve(equation, target)", "Solve an equation symbolically — requires `use solve from calc`"),
         ("deriv", "deriv(expression, variable)", "Symbolic derivative — requires `use deriv from calc`"),
         ("diff", "diff(expression, variable)", "Symbolic derivative (alias) — requires `use diff from calc`"),
-        ("integral", "integral(expression, variable)", "Symbolic indefinite integral — requires `use integral from calc`"),
-        ("integrate", "integrate(expression, variable)", "Symbolic indefinite integral (alias) — requires `use integrate from calc`"),
+        ("integral", "integral(expression, variable, a?, b?)", "Symbolic indefinite integral; with bounds, the definite integral (a confirmed closed form, or tanh-sinh quadrature with an error estimate; refuses what it cannot resolve) — requires `use integral from calc`"),
+        ("integrate", "integrate(expression, variable, a?, b?)", "Alias of integral — requires `use integrate from calc`"),
+        ("limit", "limit(expression, variable, point, side?)", "Numeric limit, never a guess: two-sided (both sides must be defined), or from one side with side \"+\" (from the right) or \"-\" (from the left) — requires `use limit from calc`"),
         ("gradient", "gradient(y_array, x_array)", "Numerical derivative dy/dx for vector data — requires `use gradient from array`"),
         ("trapz", "trapz(y_array, x_array)", "Numerical integration (area under curve) — requires `use trapz from array`"),
         ("linspace", "linspace(start, stop, n)", "Evenly spaced vector range — requires `use linspace from array`"),
         ("plot", "plot(x_array, y_array)", "Plot one vector array against another — requires `use plot from plot`"),
+        ("dof", "dof(x)", "Effective degrees of freedom of a measurement (Welch–Satterthwaite); `inf` when none is finite"),
+        ("coverage_factor", "coverage_factor(x, p)", "Student-t coverage factor for the coverage probability p, at the effective degrees of freedom truncated to an integer"),
+        ("expanded", "expanded(x, p)", "Expanded uncertainty U = k·u_c in the unit of x, for the coverage probability p"),
+        ("from_samples", "from_samples([x1, x2, ...] unit)", "Type A evaluation: the mean with its standard error and n−1 degrees of freedom"),
     ];
 
     for (name, label, doc) in builtins {
@@ -254,7 +302,7 @@ fn keyword_completions() -> Vec<CompletionItem> {
     // 2. Control Keywords
     let keywords = vec![
         ("where", "expr where var = value", "Local binding, `a * b where a = 2 m, b = 3 m`"),
-        ("if", "if cond then expr1 else expr2", "Conditional expression"),
+        ("if", "if cond then expr1 else expr2", "Conditional expression; cond is a Bool"),
         ("then", "then expr1", "Conditional then branch"),
         ("else", "else expr2", "Conditional else branch"),
         ("use", "use name from <domain|module>", "Import name(s) from a domain (calc/plot/array), .phs module, or plugin/ext file"),
@@ -309,7 +357,10 @@ fn unit_completions() -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
     // 3. Physical Units & Aliases dynamically loaded from UnitRegistry
-    let (registry, _) = physure_core::units::conf::build_registry_from_conf();
+    // no unit is offered when the configuration in force cannot be used (the diagnostics say why)
+    let Ok((registry, _)) = physure_core::units::conf::try_build_registry_from_conf() else {
+        return items;
+    };
     let mut seen = std::collections::HashSet::new();
 
     // 3a. Primary Base Units
@@ -366,6 +417,63 @@ fn unit_completions() -> Vec<CompletionItem> {
     items
 }
 
+/// `pi` and the constants of the catalog in force: global names of PHS, read where they are used (an override or a
+/// frozen configuration changes them) and never rebound. None when the configuration in force cannot be used (the
+/// diagnostics say why).
+fn constant_completions() -> Vec<CompletionItem> {
+    let mut items = vec![CompletionItem {
+        label: "pi".to_string(),
+        kind: Some(CompletionItemKind::CONSTANT),
+        detail: Some("Constant • the number π = 3.141592653589793".to_string()),
+        documentation: Some(Documentation::String("The circle constant, also written `π`. A global name: it cannot be bound.".to_string())),
+        sort_text: Some("y_constant_pi".to_string()),
+        ..Default::default()
+    }];
+    let Ok(constants) = physure_core::units::conf::try_with_conf_registry(|registry| {
+        let mut all: Vec<(String, String, Option<String>)> = registry
+            .constants_meta
+            .iter()
+            .map(|(name, meta)| (name.clone(), meta.value.clone(), meta.description.clone()))
+            .collect();
+        all.sort();
+        all
+    }) else {
+        return items;
+    };
+    for (name, value, description) in constants {
+        let what = description.map(|d| format!("{d}. ")).unwrap_or_default();
+        items.push(CompletionItem {
+            label: name.clone(),
+            kind: Some(CompletionItemKind::CONSTANT),
+            detail: Some(format!("Constant of the catalog • {value}")),
+            documentation: Some(Documentation::String(format!(
+                "{what}`{name}` = {value}, from the catalog in force. A global name: it cannot be bound."
+            ))),
+            sort_text: Some(format!("y_constant_{name}")),
+            ..Default::default()
+        });
+    }
+    items
+}
+
+/// The hover of `pi`, `π` or a constant of the catalog in force.
+fn constant_hover(word: &str) -> Option<String> {
+    if physure_script::globals::PI_NAMES.contains(&word) {
+        return Some(format!(
+            "**Constant**: `{word}`\n\nThe number π = {}. A global name of PHS: it cannot be bound (`{word} = 3` is an error).",
+            std::f64::consts::PI
+        ));
+    }
+    let (value, description) = physure_core::units::conf::try_with_conf_registry(|registry| {
+        registry.constants_meta.get(word).map(|meta| (meta.value.clone(), meta.description.clone()))
+    })
+    .ok()??;
+    let what = description.map(|d| format!("{d}\n\n")).unwrap_or_default();
+    Some(format!(
+        "**Constant of the catalog**: `{word}` = {value}\n\n{what}Read from the catalog in force where it is used (an override or a frozen configuration changes it). A global name of PHS: it cannot be bound."
+    ))
+}
+
 /// Greek letters and mathematical symbols, by Unicode, name and LaTeX alias.
 fn symbol_completions() -> Vec<CompletionItem> {
     let mut items = Vec::new();
@@ -384,8 +492,7 @@ fn symbol_completions() -> Vec<CompletionItem> {
         ("Omega", "Ω", "Omega (-> Ω)", "Inserts Greek letter Omega (Ω)"),
         ("\\omega", "ω", "LaTeX \\omega (-> ω)", "Inserts Greek letter lowercase Omega (ω)"),
         ("\\Omega", "Ω", "LaTeX \\Omega (-> Ω)", "Inserts Greek letter capital Omega (Ω)"),
-        ("π", "π", "Pi", "Greek letter Pi (3.14159...)"),
-        ("pi", "π", "Pi (-> π)", "Inserts Greek letter Pi (π)"),
+        ("π", "π", "Pi", "Greek letter Pi: the number π (3.14159...), like `pi`"),
         ("\\pi", "π", "LaTeX \\pi (-> π)", "Inserts Greek letter Pi (π)"),
         ("θ", "θ", "Theta", "Greek letter Theta (Angle / Temperature)"),
         ("theta", "θ", "Theta (-> θ)", "Inserts Greek letter Theta (θ)"),
@@ -627,7 +734,7 @@ fn lookup_hover_doc(word: &str, locale: &str) -> Option<String> {
     match word {
         "solve" => Some("**Built-in Function**: `solve(equation, target)`\n\nSolves an equation symbolically for target variable.\n\n**Domain**: `calc` (requires `use solve from calc`).".to_string()),
         "deriv" | "diff" => Some("**Built-in Function**: `deriv(expression, variable)`\n\nDifferentiates a mathematical expression symbolically.\n\n**Domain**: `calc` (requires `use deriv from calc`).".to_string()),
-        "integral" | "integrate" => Some("**Built-in Function**: `integral(expression, variable)`\n\nComputes indefinite integral symbolically.\n\n**Domain**: `calc` (requires `use integral from calc`).".to_string()),
+        "integral" | "integrate" => Some("**Built-in Function**: `integral(expression, variable)` or `integral(expression, variable, a, b)`\n\nWithout bounds: the antiderivative, symbolically. With bounds: the definite integral, in (unit of the expression) times (unit of the variable), with its uncertainty. A closed form is used only when the quadrature confirms it; otherwise tanh-sinh quadrature, accepted at a relative 1e-12 with an error estimate. Bounds: numbers, quantities, \"inf\", or names (`pi`, a variable, a catalog constant). Refused: a singularity at a non-zero end, a jump or kink inside (split the interval), a non-finite sample. A peak much narrower than the first samples' spacing can be missed (split the interval around it).\n\n**Domain**: `calc` (requires `use integral from calc`).".to_string()),
         "gradient" => Some("**Built-in Function**: `gradient(y_array, x_array)`\n\nComputes numerical derivative dy/dx across vector arrays.\n\n**Domain**: `array` (requires `use gradient from array`).".to_string()),
         "trapz" => Some("**Built-in Function**: `trapz(y_array, x_array)`\n\nComputes trapezoidal numerical integration across vector arrays.\n\n**Domain**: `array` (requires `use trapz from array`).".to_string()),
         "linspace" => Some("**Built-in Function**: `linspace(start, stop, n)`\n\nReturns a vector of evenly spaced quantities.\n\n**Domain**: `array` (requires `use linspace from array`).".to_string()),
@@ -638,18 +745,22 @@ fn lookup_hover_doc(word: &str, locale: &str) -> Option<String> {
         "matmul" => Some("**Built-in Function**: `matmul(matrix_a, matrix_b)`\n\nComputes matrix multiplication of two matrices.\n\n**Domain**: `array` (requires `use matmul from array`).".to_string()),
         "det" => Some("**Built-in Function**: `det(matrix)`\n\nComputes determinant of a square matrix.\n\n**Domain**: `array` (requires `use det from array`).".to_string()),
         "unit_vector" => Some("**Built-in Function**: `unit_vector(vec)`\n\nNormalizes vector to a unit vector.\n\n**Domain**: `array` (requires `use unit_vector from array`).".to_string()),
+        "dof" | "ν" => Some("**Degrees of freedom**: `dof(x)` is the effective degrees of freedom of a measurement (Welch–Satterthwaite, JCGM 100:2008 G.4); in a literal, `10.003 +/- 0.002 dof 9 V` declares that the uncertainty rests on 9 degrees of freedom (`ν 9` and `dof inf` also work).".to_string()),
+        "coverage_factor" => Some("**Built-in Function**: `coverage_factor(x, p)`\n\nThe two-sided Student-t factor k_p for the coverage probability p (0.95 gives about 2 for many degrees of freedom), at the effective degrees of freedom of `x` truncated to an integer, as the Guide recommends.".to_string()),
+        "expanded" => Some("**Built-in Function**: `expanded(x, p)`\n\nThe expanded uncertainty U = k_p · u_c in the unit of `x`, an exact bound and not a measurement.".to_string()),
+        "from_samples" => Some("**Built-in Function**: `from_samples([x1, x2, ...] unit)`\n\nA Type A evaluation: the mean of the observations, `s/√n` as its standard uncertainty and n−1 degrees of freedom.".to_string()),
         "plot" => Some("**Built-in Function**: `plot(x_array, y_array)`\n\nPlots one vector array against another in 2D.\n\n**Domain**: `plot` (requires `use plot from plot`).".to_string()),
         "plot3d" => Some("**Built-in Function**: `plot3d(expr: string, title?: string)`\n\nRenders a 3D physical surface Z = f(x, y) in WebGL with interactive OrbitControls, Colorbar legend, and Raycaster point inspection.\n\n**Domain**: `plot` (requires `use plot3d from plot`).".to_string()),
         "export3d" | "export_3d" => Some("**Built-in Function**: `export3d(expr: string, filename: string, format?: string)`\n\nExports 3D physical surface geometries to standard 3D formats (`html`, `stl`, `obj`, `gltf`, `ply`).\n\n**Domain**: `plot` (requires `use export3d from plot`).".to_string()),
         "substitute" | "sub" => Some("**Built-in Function**: `substitute(expr, var, val)`\n\nSubstitutes variable in symbolic expression.\n\n**Domain**: `calc` (requires `use substitute from calc`).".to_string()),
-        "limit" | "lim" => Some("**Built-in Function**: `limit(expr, var, target)`\n\nComputes symbolic limit.\n\n**Domain**: `calc` (requires `use limit from calc`).".to_string()),
+        "limit" | "lim" => Some("**Built-in Function**: `limit(expr, var, point)` or `limit(expr, var, point, side)`\n\nThe limit of `expr` as `var` tends to `point` (a number, a quantity, `\"inf\"` or `\"-inf\"`, or a name such as `pi`). Without `side` it is two-sided and needs `expr` defined on both sides (`sqrt(x)` at 0 is an error); `side` `\"+\"` is the limit from the right, `\"-\"` from the left (also `side=\"+\"`; not at an infinite point). Numeric, never a guess: the value at the point when `expr` is continuous there and defined at the first step and at the closest sample of each side approached; otherwise Richardson extrapolation of each side, accepted only when it converges (relative 1e-9) and, two-sided, both sides agree. A monotone divergence gives `inf` or `-inf`; sides that disagree, oscillation or an undefined side are errors. There is no symbolic limit.\n\n**Domain**: `calc` (requires `use limit from calc`).".to_string()),
         "grad" => Some("**Built-in Function**: `grad(expr, vars)`\n\nComputes symbolic gradient vector.\n\n**Domain**: `calc` (requires `use grad from calc`).".to_string()),
         "div" | "divergence" => Some("**Built-in Function**: `div(vector_field, vars)`\n\nComputes symbolic divergence.\n\n**Domain**: `calc` (requires `use div from calc`).".to_string()),
         "curl" => Some("**Built-in Function**: `curl(vector_field, vars)`\n\nComputes symbolic curl.\n\n**Domain**: `calc` (requires `use curl from calc`).".to_string()),
         "laplacian" => Some("**Built-in Function**: `laplacian(expr, vars)`\n\nComputes symbolic Laplacian.\n\n**Domain**: `calc` (requires `use laplacian from calc`).".to_string()),
         "simplify" => Some("**Built-in Function**: `simplify(expr)`\n\nSimplifies symbolic expression.\n\n**Domain**: `calc` (requires `use simplify from calc`).".to_string()),
         "expand" => Some("**Built-in Function**: `expand(expr)`\n\nExpands algebraic products in expression.\n\n**Domain**: `calc` (requires `use expand from calc`).".to_string()),
-        "if" => Some("**PHS Keyword**: `if`\n\nConditional expression construct: `if cond then expr1 else expr2`".to_string()),
+        "if" => Some("**PHS Keyword**: `if`\n\nConditional expression construct: `if cond then expr1 else expr2`. `cond` is a Bool (`True`, `False`, a comparison): a number, a quantity or text is an error (write `x != 0 m`).".to_string()),
         "then" => Some("**PHS Keyword**: `then`\n\nConditional then-branch.".to_string()),
         "else" => Some("**PHS Keyword**: `else`\n\nConditional else-branch.".to_string()),
         "where" => Some("**PHS Keyword**: `where`\n\nLocal binding clause: `expr where name = value[, name2 = value2]`. A later binding can use an earlier one.".to_string()),
@@ -789,6 +900,29 @@ mod tests {
         assert!(lookup_hover_doc("W", "es").unwrap().contains("`kg·m²·s⁻³`"));
         // a keyword has one text for everybody
         assert_eq!(lookup_hover_doc("else", "es"), lookup_hover_doc("else", "en"));
+    }
+
+    #[test]
+    fn pi_and_the_catalog_constants_are_completed_and_hovered() {
+        let items = constant_completions();
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        for name in ["pi", "molar_gas_constant", "speed_of_light_in_vacuum", "bohr_radius"] {
+            assert!(labels.contains(&name), "{name}");
+        }
+        assert!(!labels.contains(&"e") && !labels.contains(&"c"), "only the catalog's own names");
+        let r = items.iter().find(|i| i.label == "molar_gas_constant").unwrap();
+        assert_eq!(r.kind, Some(CompletionItemKind::CONSTANT));
+        assert!(r.detail.as_deref().unwrap().contains("8.31446261815324 J*mol^-1*K^-1"), "{:?}", r.detail);
+        // `pi` is one completion, the constant (no longer also a "Greek letter" item that inserts π)
+        assert_eq!(builtin_and_symbol_labels().iter().filter(|l| **l == "pi").count(), 1);
+        let hover = constant_hover("molar_gas_constant").unwrap();
+        assert!(hover.contains("8.31446261815324 J*mol^-1*K^-1") && hover.contains("cannot be bound"), "{hover}");
+        assert!(constant_hover("π").unwrap().contains("3.141592653589793"));
+        assert_eq!(constant_hover("zz_not_a_constant"), None);
+    }
+
+    fn builtin_and_symbol_labels() -> Vec<String> {
+        constant_completions().into_iter().chain(symbol_completions()).map(|i| i.label).collect()
     }
 
     #[test]

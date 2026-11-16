@@ -243,8 +243,10 @@ impl PhsModule {
                 fn_name, self.name
             )));
         };
+        // in the module's evaluation unit, which its top-level statements started: a call never redraws the samples
+        // of a measurement the module made (an explicit unit open on this thread, a `phs serve` request, wins)
         self.interpreter
-            .call_function_node(func, args.to_vec(), &self.interpreter.env)
+            .in_unit(|| self.interpreter.call_function_node(func, args.to_vec(), &self.interpreter.env))
     }
 
     /// Composes `outer_fn` (a function of `self`) with `inner_fn` (a function of `inner`),

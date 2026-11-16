@@ -25,6 +25,10 @@ concurrency:
 permissions:
   contents: read
 
+# the engine identity (frozen configurations, spec section 7) names the commit the pipeline says it built
+env:
+  PHYSURE_BUILD_COMMIT: ${{ github.sha }}
+
 jobs:
   check-version:
     runs-on: ubuntu-latest
@@ -70,6 +74,8 @@ jobs:
           working-directory: physure-python
           args: --release --out dist
           manylinux: auto
+          # the manylinux container does not inherit the job's environment
+          docker-options: -e PHYSURE_BUILD_COMMIT
           sccache: true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

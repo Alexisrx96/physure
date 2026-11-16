@@ -53,7 +53,7 @@ speed = 25.0 +/- 0.5 m / s
 mass  = 2.0 +/- 0.1 kg
 kinetic_energy = 0.5 * mass * speed^2
 
-# Assert a measured value against an expected one within N-sigma
+# Is a measured value within N of its own standard uncertainties of an expected one?
 g_exp = 9.81 +/- 0.05 m / s^2
 g_exp == 9.80 m / s^2 +/- 2 sigma
 

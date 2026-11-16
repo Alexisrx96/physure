@@ -31,7 +31,9 @@ pub struct Limits {
     pub max_stack_bytes: Option<usize>,
     /// Whether a builtin may write a file (the mesh export).
     pub allow_files: bool,
-    /// Whether `for` expressions and `parallel_map` must stay on one thread (reproducible random draws).
+    /// Whether `for` expressions and `parallel_map` must stay on one thread whatever the propagation mode (the
+    /// sandbox: one thread, one stack budget). A loop in `monte_carlo` mode stays on one thread without it
+    /// (`PhsInterpreter::runs_in_parallel`).
     pub sequential: bool,
 }
 

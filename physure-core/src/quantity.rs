@@ -25,10 +25,34 @@ impl std::fmt::Debug for Quantity {
     }
 }
 
+/// Exact equality: the same unit (an alias is the same unit) and the same bits of the mean. It does not convert
+/// and has no tolerance, so it stays an equivalence relation and `assert_eq!` sees the unit an engine returned.
+/// The uncertainty is not compared (it never was). The PHS meaning of `==` is [`Quantity::phs_eq`].
+///
+/// It used an absolute `1e-9` on the mean, in whatever unit the operands carried: `1 pm` equalled `2 pm` while
+/// `1 nm` did not equal `2 nm` (audit B10).
 impl PartialEq for Quantity {
     fn eq(&self, other: &Self) -> bool {
-        self.unit == other.unit && (self.value.mean() - other.value.mean()).abs() < 1e-9
+        self.unit == other.unit && self.value.mean().to_bits() == other.value.mean().to_bits()
     }
+}
+
+/// The relative bound of PHS `==` ([`Quantity::phs_eq`]): two canonical magnitudes are equal when they differ by at
+/// most this fraction of the larger. It absorbs the rounding of a conversion and of ordinary arithmetic
+/// (`1000 * 0.1` and `100` are 63 ulps apart) and still separates physically different values.
+pub const EQ_REL: f64 = 1e-12;
+
+/// `a` and `b` are within `rel` of the larger, by the rule PHS comparisons share: exactly equal values are equal
+/// (`-0.0 == 0.0`), a non-finite operand compares by IEEE (`inf == inf`, NaN equals nothing; the relative formula
+/// would make `inf` equal to every finite value), otherwise `|a - b| <= rel * max(|a|, |b|)`.
+fn within_relative(a: f64, b: f64, rel: f64) -> bool {
+    if a == b {
+        return true;
+    }
+    if !a.is_finite() || !b.is_finite() {
+        return false;
+    }
+    (a - b).abs() <= rel * a.abs().max(b.abs())
 }
 
 /// `n` written as a fraction, when one applies: `1.5` is `3/2`, or `1 1/2` with `mixed`.
@@ -67,22 +91,42 @@ pub fn format_fraction(n: f64, mixed: bool) -> Option<String> {
     Some(format!("{} {}/{}", whole, (numer % denom).abs(), denom))
 }
 
+/// A number as an error message quotes it: an integer without a decimal point (`0`, `100`), anything else as
+/// [`format_float`] writes it.
+fn short_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format_float(n)
+    }
+}
+
+/// `n` as the display rules in force write it ([`crate::settings::DisplayRules`], `[Settings]
+/// display_significant_digits`, `display_scientific_below` and `display_scientific_from`): scientific notation outside
+/// the decimal range, the shortest round-trip decimal or its rounding to the significant digits otherwise.
 pub fn format_float(n: f64) -> String {
+    format_float_with(n, &crate::settings::display_rules())
+}
+
+/// [`format_float`] under the given rules, so that a caller formatting several numbers reads the rules once.
+fn format_float_with(n: f64, rules: &crate::settings::DisplayRules) -> String {
     if n == 0.0 {
         return "0.0".to_string();
     }
     let abs_n = n.abs();
-    if abs_n < 1e-4 || abs_n >= 1e16 {
+    if rules.is_scientific(n) {
         format!("{:e}", n)
     } else {
         // `{}` prints the shortest string that round-trips the f64, which is honest but
         // unreadable once a conversion has left rounding debris: 25 m/s => km/h comes out
         // as 89.99999999999999. An f64 carries 15 decimal digits exactly and the debris
-        // always lands past them, so round to 15 significant digits and keep the result
-        // only when it is genuinely shorter.
+        // always lands past them, so round to `display_significant_digits` (15 by default)
+        // significant digits, at most 17 decimal places, and keep the result only when it
+        // is genuinely shorter.
+        let digits = rules.significant_digits as i32;
         let s = {
             let exact = format!("{}", n);
-            let rounded = format!("{:.*}", (15 - (abs_n.log10().floor() as i32 + 1)).clamp(0, 17) as usize, n);
+            let rounded = format!("{:.*}", (digits - (abs_n.log10().floor() as i32 + 1)).clamp(0, 17) as usize, n);
             let trimmed = if rounded.contains('.') {
                 rounded.trim_end_matches('0').trim_end_matches('.').to_string()
             } else {
@@ -129,26 +173,28 @@ fn leading_digit(x: f64) -> i64 {
     (x.abs() / 10f64.powi(magnitude_exponent(x))).round() as i64
 }
 
-/// GUM-style correlated rounding: the uncertainty gets 1 significant figure, or 2 if that
+/// GUM-style correlated rounding: under `[Settings] uncertainty_digits = gum` (the default) the
+/// uncertainty gets 1 significant figure, or 2 if that
 /// leading digit would be `1` (whether the original value's leading digit already was `1`, or
 /// rounding to 1 figure carried a digit over into one -- `0.981` rounds to `1.0` at 1 figure,
-/// so this re-checks and uses 2 instead: `0.98`). The mean is then rounded to the same decimal
+/// so this re-checks and uses 2 instead: `0.98`); under `uncertainty_digits = N`, N figures. The mean is then rounded to the same decimal
 /// place the (rounded) uncertainty landed on, so it's never shown with more precision than the
-/// uncertainty justifies. `sig_figs_override`, when given, replaces the automatic 1-or-2 rule
+/// uncertainty justifies. `sig_figs_override` (`@precision(N)`), when given, replaces the setting
 /// with a fixed count.
 ///
-/// An exact value (`std_dev <= 0.0`) and an extreme magnitude (matching `format_float`'s own
-/// scientific-notation threshold) both pass through to `format_float` untouched -- this is a
+/// An exact value (`std_dev <= 0.0`) and an extreme magnitude (one `format_float` writes in
+/// scientific notation: the same [`crate::settings::DisplayRules`], read once) both pass through to `format_float` untouched -- this is a
 /// normal-range display convenience, not a replacement for existing non-finite/extreme-value
 /// handling.
 pub fn gum_round(mean: f64, std_dev: f64, sig_figs_override: Option<u32>) -> (String, String) {
-    let extreme = |n: f64| { let a = n.abs(); a != 0.0 && (a < 1e-4 || a >= 1e16) };
-    if std_dev <= 0.0 || !std_dev.is_finite() || !mean.is_finite() || extreme(std_dev) || extreme(mean) {
-        return (format_float(mean), format_float(std_dev));
+    let rules = crate::settings::display_rules();
+    if std_dev <= 0.0 || !std_dev.is_finite() || !mean.is_finite() || rules.is_scientific(std_dev) || rules.is_scientific(mean) {
+        return (format_float_with(mean, &rules), format_float_with(std_dev, &rules));
     }
-    let sig_figs = match sig_figs_override {
-        Some(n) => n.max(1),
-        None => {
+    let sig_figs = match (sig_figs_override, rules.uncertainty_digits) {
+        (Some(n), _) => n.max(1),
+        (None, crate::settings::UncertaintyDigits::Figures(n)) => n,
+        (None, crate::settings::UncertaintyDigits::Gum) => {
             let one_fig = round_to_sig_figs(std_dev, 1);
             if leading_digit(one_fig) == 1 { 2 } else { 1 }
         }
@@ -176,12 +222,18 @@ impl Quantity {
     /// number and unit to other code (the Java and WASM bindings) has to take them from here, or from
     /// `Display`, and not from `value` and `unit` separately.
     pub fn display_parts(&self) -> (f64, f64, String) {
-        if self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9 {
+        if let Some(scale) = self.folded_scale() {
             let canonical_unit = self.unit.clone().with_unit_scale();
-            (self.canonical_magnitude(), self.value.std_dev() * self.unit.scale, canonical_unit.__repr__())
+            (self.canonical_magnitude(), self.value.std_dev() * scale, canonical_unit.__repr__())
         } else {
             (self.value.mean(), self.value.std_dev(), self.unit.__repr__())
         }
+    }
+
+    /// The scale that `display_parts` folds into the magnitude and the uncertainty: that of an anonymous
+    /// compound unit, which has no symbol to carry it. `None` for a unit that has a name or a scale of one.
+    pub(crate) fn folded_scale(&self) -> Option<f64> {
+        (self.unit.display_name.is_none() && (self.unit.scale - 1.0).abs() > 1e-9).then_some(self.unit.scale)
     }
 
     /// The default `Display` string, or one with `@precision(N)`'s override applied: `N`
@@ -228,18 +280,36 @@ impl Quantity {
     /// having to read it. An exact value stays Gaussian whatever the setting says: there is
     /// no distribution to sample or to place sigma points on, and drawing a thousand
     /// identical samples for every plain number in a script is a cost with nothing behind it.
+    ///
+    /// `samples: None` draws `[Settings] monte_carlo_samples` (default 1000, see
+    /// [`crate::settings::monte_carlo_samples`]).
+    ///
+    /// **Panics** when `samples` is `Some(n)` with `n < 2` and the backend is Monte Carlo (see
+    /// [`MonteCarloBackend::from_stats`]); a sample count that comes from a user goes through
+    /// [`Quantity::try_new_scalar`], which returns the error instead.
     pub fn new_scalar(mean: f64, std_dev: f64, unit: RationalUnit, mode: Option<&str>, samples: Option<usize>) -> Self {
+        Self::try_new_scalar(mean, std_dev, unit, mode, samples).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`Quantity::new_scalar`], refusing a Monte Carlo sample count below 2 with an error.
+    pub fn try_new_scalar(
+        mean: f64,
+        std_dev: f64,
+        unit: RationalUnit,
+        mode: Option<&str>,
+        samples: Option<usize>,
+    ) -> PhysureResult<Self> {
         let resolved = match mode {
             Some(named) => named,
             None if std_dev == 0.0 => "gaussian",
             None => crate::uncertainty::propagation_mode().name(),
         };
         let value = match resolved {
-            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or(1000))),
+            "monte_carlo" => UncertaintyValue::MonteCarlo(MonteCarloBackend::from_stats(mean, std_dev, samples.unwrap_or_else(crate::settings::monte_carlo_samples))?),
             "unscented"   => UncertaintyValue::Unscented(UnscentedBackend::new_scalar(mean, std_dev)),
             _             => UncertaintyValue::Gaussian(GaussianBackend::new(mean, std_dev)),
         };
-        Quantity { value, unit }
+        Ok(Quantity { value, unit })
     }
 
     pub fn from_backend(backend: Box<dyn UncertaintyBackend>, unit: RationalUnit) -> Self {
@@ -534,26 +604,143 @@ impl Quantity {
         diff <= tol
     }
 
-    /// Backing implementation for PHS's `assert(actual, expected)` builtin: passes when the
-    /// two quantities have compatible dimensions and their magnitudes agree once converted
-    /// to a common scale, within a fixed tolerance chosen to catch real bugs while
-    /// tolerating floating-point drift across languages.
-    pub fn phs_assert(&self, other: &Quantity) -> PhysureResult<()> {
-        const REL_TOL: f64 = 1e-9;
-        const ABS_TOL: f64 = 1e-12;
-        if self.approx_eq(other, REL_TOL, ABS_TOL) {
-            return Ok(());
+    /// The canonical magnitudes of two quantities that a comparison may set side by side: absolute kelvin for a
+    /// temperature point, the plain ratio for a level, base SI otherwise. They are not converted to either operand's
+    /// unit: converting K to degC cancels, so `0.01 degC == 273.16 K` and its mirror disagreed.
+    ///
+    /// The rule, the one every comparison of PHS and of the bindings goes through:
+    /// * different dimensions are an error rather than `false`: `5 m > 2 s` has no answer;
+    /// * **a zero needs a unit**: a plain `0` has no dimension, so `x > 0` with `x` in metres is the error above. Zeros
+    ///   of different scales are different values (0 degC is 273.15 K, 0 dB is a ratio of 1), and only the unit says
+    ///   which one is meant: `x > 0 m`. An angle is a dimension here in every angle mode (`1 rad > 0` is an error);
+    /// * **a level** (`dB`, `pH`, ...) and a dimensionless value that is not a level have no comparison: whether `100`
+    ///   is a ratio, a power ratio or 100 dB is a convention nothing written states. Two levels compare by the ratios
+    ///   they stand for, and a level with a dimension compares with a linear quantity of that dimension;
+    /// * a dimensionless quantity that is not a level, in any unit (a plain number, `unity`, `%`, `ppm`), compares with
+    ///   plain numbers by its ratio: `50 % == 0.5`, `1 % > 0`.
+    pub fn comparable_magnitudes(&self, other: &Quantity) -> PhysureResult<(f64, f64)> {
+        if let Some(message) = self.incomparability(other) {
+            return Err(message);
+        }
+        Ok((self.canonical_magnitude(), other.canonical_magnitude()))
+    }
+
+    /// Why `self` and `other` have no comparison ([`Quantity::comparable_magnitudes`]), `None` when they have one.
+    fn incomparability(&self, other: &Quantity) -> Option<PhysureError> {
+        let ratio = |q: &Quantity| q.unit.dimensions.is_empty() && !q.unit.is_logarithmic();
+        let level = |q: &Quantity| q.unit.is_logarithmic() && q.unit.dimensions.is_empty();
+        // `with` is the operand that carries the unit, `plain` the one written without
+        let (with, plain) = if ratio(other) && !ratio(self) { (self, other) } else { (other, self) };
+        if ratio(plain) && !ratio(with) {
+            let zero = plain.value.mean() == 0.0;
+            // a level that has lost its name to an arithmetic step still says what it is
+            let named = with.unit.__repr__();
+            let unit = if named.is_empty() { "<its unit>".to_string() } else { named.clone() };
+            let with_text = if named.is_empty() && with.unit.is_logarithmic() { format!("the level {with}") } else { format!("{with}") };
+            let plain_text = if plain.unit.is_plain_number() {
+                format!("the plain number {}", short_number(plain.value.mean()))
+            } else {
+                format!("{plain}")
+            };
+            if zero {
+                return Some(PhysureError::Generic(format!(
+                    "cannot compare {with_text} with {plain_text}: a zero needs a unit, write `x > 0 {unit}` (for a temperature \
+                     point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB is a ratio of 1)"
+                )));
+            }
+            if level(with) {
+                return Some(PhysureError::Generic(format!(
+                    "cannot compare {with_text} with {plain_text}: write the level with its unit (`x > {} {unit}`) or \
+                     compare the ratio explicitly (`(x => unity) > {}`)",
+                    short_number(with.value.mean()),
+                    short_number(plain.canonical_magnitude())
+                )));
+            }
+            if !with.unit.same_dimensions(&plain.unit) {
+                return Some(PhysureError::Generic(format!(
+                    "cannot compare {with_text} with {plain_text}: a number compared with a quantity needs a unit, write `x > {} {unit}`",
+                    short_number(plain.value.mean())
+                )));
+            }
         }
         if !self.unit.same_dimensions(&other.unit) {
-            return Err(PhysureError::AssertionFailed {
+            return Some(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
+        }
+        None
+    }
+
+    /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],
+    /// `!=` its negation, the order is that of the canonical magnitudes; operands without a comparison are an error
+    /// ([`Quantity::comparable_magnitudes`]). This is what transpiled code calls, so that it answers what the
+    /// interpreter answers.
+    pub fn phs_compare(&self, other: &Quantity, op: &str) -> PhysureResult<bool> {
+        match op {
+            "==" => self.phs_eq(other),
+            "!=" | "≠" => self.phs_eq(other).map(|equal| !equal),
+            "<" | ">" | "<=" | ">=" | "≤" | "≥" => {
+                let (a, b) = self.comparable_magnitudes(other)?;
+                Ok(match op {
+                    "<" => a < b,
+                    ">" => a > b,
+                    "<=" | "≤" => a <= b,
+                    _ => a >= b,
+                })
+            }
+            other => Err(PhysureError::Generic(format!(
+                "unknown comparison operator '{other}': expected one of <, >, <=, >=, ==, !="
+            ))),
+        }
+    }
+
+    /// PHS equality, the one definition the interpreter, `assert(a, b)` and the bindings share: the canonical
+    /// magnitudes ([`Quantity::comparable_magnitudes`]) agree within [`EQ_REL`] of the larger. Symmetric and
+    /// independent of the units the operands are written in; the uncertainty is not compared (a `±` comparison is
+    /// written `x == t ± k sigma`).
+    ///
+    /// Consequences of any tolerance, documented rather than hidden: `==` is not transitive, and a relative bound
+    /// never accepts a difference against an exact zero (`cos(90 deg) == 0` is false: compare `abs(x)` with an
+    /// explicit tolerance instead).
+    pub fn phs_eq(&self, other: &Quantity) -> PhysureResult<bool> {
+        let (a, b) = self.comparable_magnitudes(other)?;
+        Ok(within_relative(a, b, EQ_REL))
+    }
+
+    /// PHS `≈` with the relative tolerance `rel`: `|a - b| <= rel * max(|a|, |b|)` on the canonical magnitudes, the
+    /// gate and the non-finite rule of [`Quantity::phs_eq`]. There is no absolute floor (it would depend on the
+    /// unit). Both zero is true; exactly one zero is an error, since no relative tolerance can say how close to zero
+    /// is close. `rel` must be finite and in `(0, 1)`.
+    pub fn phs_approx(&self, other: &Quantity, rel: f64) -> PhysureResult<bool> {
+        if !(rel.is_finite() && rel > 0.0 && rel < 1.0) {
+            return Err(PhysureError::Generic(format!(
+                "a relative tolerance is a finite number between 0 and 1 (exclusive), not {rel}"
+            )));
+        }
+        let (a, b) = self.comparable_magnitudes(other)?;
+        if (a == 0.0) != (b == 0.0) {
+            return Err(PhysureError::Generic(
+                "`≈` against zero has no relative meaning: compare abs(x) with an explicit tolerance".into(),
+            ));
+        }
+        Ok(within_relative(a, b, rel))
+    }
+
+    /// Backing implementation for PHS's `assert(actual, expected)` builtin: passes when the two quantities are equal
+    /// by [`Quantity::phs_eq`], so `assert(a, b)` and `assert(a == b)` cannot disagree. It used its own tolerances
+    /// (relative 1e-9 or absolute 1e-12 in base SI), which passed `assert(1 fm, 1000 fm)` (audit B11).
+    pub fn phs_assert(&self, other: &Quantity) -> PhysureResult<()> {
+        match self.phs_eq(other) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(PhysureError::AssertionFailed {
+                kind: "assert",
+                message: format!("{} != {}", self, other),
+            }),
+            Err(PhysureError::UnitMismatch { .. }) => Err(PhysureError::AssertionFailed {
                 kind: "assert",
                 message: format!("{} and {} have incompatible dimensions", self, other),
-            });
+            }),
+            // a plain number against a quantity, or a level against a ratio: the comparison says why
+            Err(reason) => Err(PhysureError::AssertionFailed { kind: "assert", message: reason.to_string() }),
         }
-        Err(PhysureError::AssertionFailed {
-            kind: "assert",
-            message: format!("{} != {}", self, other),
-        })
     }
 
     /// Backing implementation for PHS's `exact_assert(actual, expected)` builtin: passes
@@ -594,10 +781,12 @@ impl Quantity {
         let mut base_unit = self.unit.clone().with_unit_scale();
         base_unit.display_name = None;
         let std_dev = self.value.std_dev() * self.unit.scale;
+        // read once for both numbers; never rounded by `uncertainty_digits`
+        let rules = crate::settings::display_rules();
         let val_str = if std_dev > 0.0 {
-            format!("{} ± {}", format_float(self.canonical_magnitude()), format_float(std_dev))
+            format!("{} ± {}", format_float_with(self.canonical_magnitude(), &rules), format_float_with(std_dev, &rules))
         } else {
-            format_float(self.canonical_magnitude())
+            format_float_with(self.canonical_magnitude(), &rules)
         };
         let unit_str = base_unit.base_repr();
         if unit_str.is_empty() {
@@ -608,9 +797,10 @@ impl Quantity {
     }
 
     /// Converts this quantity to an equivalent one expressed in `target`'s unit/scale.
-    /// Errors if `target` has different physical dimensions.
+    /// Errors if `target` has different physical dimensions. In `Dimensionless` angle mode it may read `rad` and
+    /// `sr` as 1 (see `RationalUnit::convertible_to`); a sum or a comparison never does.
     pub fn convert_to(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
-        if !self.unit.same_dimensions(target) {
+        if !self.unit.convertible_to(target) {
             return Err(PhysureError::UnitMismatch {
                 expected: self.unit.__repr__(),
                 actual: target.__repr__(),
@@ -1090,6 +1280,91 @@ mod tests {
     fn display_applies_gum_rounding_to_an_uncertain_quantity() {
         let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
         assert_eq!(q.to_string(), "630 ± 40 J");
+    }
+
+    use crate::settings::{scoped_display_rules, DisplayRules, UncertaintyDigits};
+
+    /// The compiled rules with one change, scoped to this thread (never the process-wide setters here: hundreds of
+    /// tests of this crate assert printed text).
+    fn rules(change: impl FnOnce(&mut DisplayRules)) -> DisplayRules {
+        let mut rules = DisplayRules::DEFAULT;
+        change(&mut rules);
+        rules
+    }
+
+    #[test]
+    fn display_significant_digits_rounds_the_decimal_form_and_not_the_scientific_one() {
+        let _six = scoped_display_rules(rules(|r| r.significant_digits = 6));
+        assert_eq!(format_float(1.0 / 3.0), "0.333333");
+        assert_eq!(format_float(123.456789), "123.457");
+        assert_eq!(format_float(0.1 + 0.2), "0.3");
+        // digits before the point are never replaced by zeros
+        assert_eq!(format_float(123456789.0), "123456789.0");
+        // the scientific form is the shortest round-trip, whatever the setting
+        assert_eq!(format_float(1.2345678901234567e-5), "1.2345678901234568e-5");
+        assert_eq!(format_float(f64::MAX), "1.7976931348623157e308");
+        let _seventeen = scoped_display_rules(rules(|r| r.significant_digits = 17));
+        assert_eq!(format_float(0.1 + 0.2), "0.30000000000000004", "17 digits: the shortest round-trip text");
+        assert_eq!(format_float(89.99999999999999), "89.99999999999999");
+    }
+
+    #[test]
+    fn the_scientific_thresholds_are_settings() {
+        let _guard = scoped_display_rules(rules(|r| {
+            r.scientific_below = 1e-2;
+            r.scientific_from = 1e6;
+        }));
+        assert_eq!(format_float(0.005), "5e-3");
+        assert_eq!(format_float(0.01), "0.01");
+        assert_eq!(format_float(999999.0), "999999.0");
+        assert_eq!(format_float(1234567.0), "1.234567e6");
+        assert_eq!(format_float(-0.0), "0.0");
+        assert_eq!(format_float(f64::INFINITY), "inf");
+    }
+
+    #[test]
+    fn gum_round_reads_the_same_thresholds_as_format_float() {
+        // one source of truth: a value the thresholds make scientific is not GUM-rounded either
+        assert_eq!(gum_round(5000.0, 30.0, None), ("5000".to_string(), "30".to_string()));
+        let _guard = scoped_display_rules(rules(|r| r.scientific_from = 1e3));
+        assert_eq!(gum_round(5000.0, 30.0, None), ("5e3".to_string(), "30.0".to_string()));
+        assert_eq!(gum_round(500.0, 30.0, None), ("500".to_string(), "30".to_string()));
+    }
+
+    #[test]
+    fn uncertainty_digits_fixes_the_figures_of_the_uncertainty_and_precision_still_wins() {
+        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
+        let exact = Quantity::new_scalar(3.14159265, 0.0, RationalUnit::base("m"), None, None);
+        let _two = scoped_display_rules(rules(|r| r.uncertainty_digits = UncertaintyDigits::Figures(2)));
+        assert_eq!(q.to_string(), "625 ± 40 J");
+        assert_eq!(gum_round(19.62, 0.981, None), ("19.62".to_string(), "0.98".to_string()));
+        assert_eq!(gum_round(10.0, 2.0, None), ("10.0".to_string(), "2.0".to_string()));
+        assert_eq!(q.to_string_with_precision(Some(3)), "625.0 ± 40.0 J", "@precision wins");
+        assert_eq!(exact.to_string(), "3.14159265 m", "an exact value is not touched");
+        assert_eq!(exact.to_string_with_precision(Some(2)), "3.14 m", "@precision on an exact value: decimal places");
+        let _one = scoped_display_rules(rules(|r| r.uncertainty_digits = UncertaintyDigits::Figures(1)));
+        assert_eq!(gum_round(10.0, 0.12, None), ("10.0".to_string(), "0.1".to_string()), "no GUM bump to two figures");
+    }
+
+    #[test]
+    fn base_display_follows_the_digits_and_thresholds_and_never_rounds_by_the_uncertainty() {
+        let q = Quantity::new_scalar(625.0, 40.0195264839553, RationalUnit::base("J"), None, None);
+        let _guard = scoped_display_rules(rules(|r| {
+            r.significant_digits = 4;
+            r.uncertainty_digits = UncertaintyDigits::Figures(1);
+        }));
+        assert_eq!(q.base_display(), "625.0 ± 40.02 J");
+    }
+
+    #[test]
+    fn a_scoped_display_rule_ends_with_its_guard() {
+        let before = crate::settings::display_rules();
+        {
+            let _six = scoped_display_rules(rules(|r| r.significant_digits = 6));
+            assert_eq!(format_float(1.0 / 3.0), "0.333333");
+        }
+        assert_eq!(crate::settings::display_rules(), before);
+        assert_eq!(format_float(1.0 / 3.0), "0.333333333333333");
     }
 
     #[test]

@@ -105,3 +105,88 @@ fn two_threads_each_evaluate_for_their_own_registry() {
         assert!(handle.join().unwrap());
     }
 }
+
+// ---- a loop that runs on rayon's threads
+//
+// A `for` expression of `parallel_threshold` items or more, and every `parallel_map`, evaluates its body on rayon's
+// worker threads, which do not see the scopes of the thread that started the loop. WASM and Java evaluate every
+// program inside `with_catalog`, so a long loop there read the embedded catalog: `1 km` was 7 m for three items and
+// 1000 m for twenty thousand.
+
+/// The base magnitude of every item of the vector `source` ends with.
+fn base_magnitudes(source: &str) -> Vec<f64> {
+    match eval_phs(source).unwrap_or_else(|e| panic!("{source:?}: {e:?}")).into_iter().last() {
+        Some(PhsValue::Vector(items)) => items
+            .into_iter()
+            .map(|item| match item {
+                PhsValue::Quantity(q) => q.canonical_magnitude(),
+                other => panic!("{source:?}: an item is {other:?}"),
+            })
+            .collect(),
+        other => panic!("{source:?} produced {other:?}, expected a vector"),
+    }
+}
+
+#[test]
+fn a_loop_long_enough_to_run_in_parallel_reads_the_registry_of_its_caller() {
+    let custom = km_is_seven();
+    let threshold = physure_core::settings::parallel_threshold();
+    for n in [3, threshold, threshold + 10_000] {
+        let source = format!("for i in 0..{n} {{ 1 km }}");
+        let values = with_catalog(&custom, || base_magnitudes(&source));
+        assert_eq!(values.len(), n);
+        assert!(values.iter().all(|&v| v == 7.0), "{n} items: {:?}", values.iter().find(|&&v| v != 7.0));
+    }
+}
+
+#[test]
+fn parallel_map_reads_the_registry_of_its_caller() {
+    let custom = km_is_seven();
+    let values = with_catalog(&custom, || base_magnitudes("fn f(x) = x * 1 km\nparallel_map(f, vector(1, 2, 3, 4))"));
+    assert_eq!(values, vec![7.0, 14.0, 21.0, 28.0]);
+}
+
+#[test]
+fn a_constant_read_in_a_parallel_loop_is_the_one_of_the_callers_registry() {
+    // the constants of the catalog are read through the scope too (by `integral` and `limit` today)
+    let custom = registry("[Constants]\nmolar_gas_constant = 8.0 J*mol^-1*K^-1\n");
+    let source = "use * from calc\nfor i in 0..6 { integral(\"molar_gas_constant * x\", \"x\", 0, 2) }";
+    for threshold in [usize::MAX, 0] {
+        let _loops = physure_core::settings::scoped(threshold);
+        let values = with_catalog(&custom, || base_magnitudes(source));
+        assert_eq!(values.len(), 6);
+        assert!(values.iter().all(|&v| (v - 16.0).abs() < 1e-9), "threshold {threshold}: {values:?}");
+    }
+}
+
+#[test]
+fn a_parallel_loop_runs_under_the_propagation_mode_and_the_ceilings_of_its_caller() {
+    use physure_core::uncertainty::mode;
+    use physure_core::PropagationMode;
+    // `x - x` has no uncertainty when the two are known to be one quantity, and sqrt(2) times it when they are not
+    let source = "x = 1 +/- 0.1\nfor i in 0..6 { x - x }";
+    let spreads = |threshold: usize| {
+        let _loops = physure_core::settings::scoped(threshold);
+        let _mode = mode::scoped(PropagationMode::Uncorrelated);
+        match eval_phs(source).unwrap().into_iter().last() {
+            Some(PhsValue::Vector(items)) => items
+                .into_iter()
+                .map(|item| match item {
+                    PhsValue::Quantity(q) => q.value.std_dev(),
+                    PhsValue::Number(_) => 0.0,
+                    other => panic!("{other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let sequential = spreads(usize::MAX);
+    assert!(sequential.iter().all(|&s| (s - 0.1 * 2f64.sqrt()).abs() < 1e-12), "{sequential:?}");
+    assert_eq!(spreads(0), sequential);
+
+    // a loop inside the parallel body is held to the ceiling of the caller, not to the process-wide one
+    let _loops = physure_core::settings::scoped(0);
+    let _ceiling = physure_core::settings::scoped_max_loop_iterations(10);
+    let error = eval_phs("for i in 0..4 { for j in 0..50 { j } }").expect_err("the inner loop is over the ceiling");
+    assert!(error.to_string().contains("max_loop_iterations"), "{error}");
+}

@@ -74,6 +74,11 @@ pub struct FunctionDefNode {
     /// and one leading space stripped per line. `None` if the function has no doc comment.
     #[serde(default)]
     pub doc: Option<String>,
+    /// What the body sees besides the parameters: `None` for a function of the program itself (it sees the names of
+    /// whoever calls it), the environment of its module for a function imported from one. Never written by the
+    /// parser and never serialized: it exists only once a module has run.
+    #[serde(skip)]
+    pub scope: Option<crate::value::ModuleScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +153,11 @@ pub struct QuantityNode {
     pub uncertainty_lower: Option<f64>,
     #[serde(default)]
     pub is_sigma: bool,
+    /// The degrees of freedom of the standard uncertainty, when the literal declared them:
+    /// `10.003 +/- 0.002 dof 9 V`. A consumer must carry them, or refuse the quantity, and never drop
+    /// them: a quantity with nine degrees of freedom is not one with infinitely many.
+    #[serde(default)]
+    pub dof: Option<f64>,
     pub unit: Option<String>,
 }
 
@@ -184,6 +194,7 @@ mod tests {
             uncertainty: Some(0.5),
             uncertainty_lower: Some(0.4),
             is_sigma: false,
+            dof: None,
             unit: Some("pb".to_string()),
         };
         assert!(node.asymmetric_refusal().unwrap().contains("cannot be evaluated yet"));
@@ -225,6 +236,7 @@ mod tests {
                 args: vec![],
             }],
             doc: None,
+            scope: None,
         };
         assert_eq!(node.decorators.len(), 1);
         assert_eq!(node.decorators[0].name, "stable");
@@ -250,6 +262,7 @@ mod tests {
             uncertainty: None,
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: None,
         };
         let expr = Expr::Quantity(node);

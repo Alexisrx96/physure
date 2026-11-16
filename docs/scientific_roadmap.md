@@ -1,8 +1,8 @@
 # Scientific Companion Roadmap: Advanced Features for Physure
 
-**Status: 🚧 In Progress (Buckingham $\pi$ & EKF in progress)**
+**Status: Specification.** Implemented: GUM propagation, Monte Carlo propagation and effective degrees of freedom (in the core), and a unit-aware ODE solver in Python. Not started: the Buckingham $\pi$ solver (only a neural-network layer in `physure.nn` uses the idea), IAPWS-IF97, the Polars accessor and Kalman filtering.
 
-> 🗺️ **Master Progress Tracker**: This document is a sub-roadmap of the [Master Development Roadmap](ROADMAP.md).
+> 🗺️ **Status and priority live in the [Roadmap](ROADMAP.md).** This document is a design: what it describes is scheduled, or parked, there.
 
 This document outlines the architectural specifications, API designs, and implementation paths for the advanced mathematical, industrial, and metrological features planned for [Physure](https://github.com/Alexisrx96/physure).
 
@@ -304,19 +304,17 @@ print(filter.state)  # State remains fully unit-safe and verified!
 ## 8. Implementation Roadmap
 
 ```mermaid
-gantt
-    title Scientific Companion Implementation Path
-    dateFormat  YYYY-MM-DD
-    section Core Math & Physics
-    Buckingham Pi Solver        :active, 2026-07-08, 14d
-    Monte Carlo Propagation    : 2026-07-22, 14d
-    section Metrology & Industry
-    GUM Metrology Module       : 2026-08-05, 18d
-    IAPWS-IF97 Steam Tables    : 2026-08-23, 21d
-    section Integrations & Sim
-    Polars & xarray accessory   : 2026-09-13, 14d
-    Unit-Aware ODE Solvers      : 2026-09-27, 21d
-    Unit-Aware State Estimation : 2026-10-18, 18d
+flowchart LR
+    subgraph core["Core Math & Physics"]
+        A["Buckingham Pi Solver"] --> B["Monte Carlo Propagation"]
+    end
+    subgraph metrology["Metrology & Industry"]
+        C["GUM Metrology Module"] --> D["IAPWS-IF97 Steam Tables"]
+    end
+    subgraph sim["Integrations & Sim"]
+        E["Polars & xarray accessory"] --> F["Unit-Aware ODE Solvers"] --> G["Unit-Aware State Estimation"]
+    end
+    core --> metrology --> sim
 ```
 
 ---

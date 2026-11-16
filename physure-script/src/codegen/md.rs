@@ -101,6 +101,7 @@ mod tests {
             body_lines: vec![],
             decorators: vec![],
             doc: None,
+            scope: None,
         }
     }
 

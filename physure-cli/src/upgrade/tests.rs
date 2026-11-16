@@ -39,10 +39,13 @@ fn serve(routes: Vec<(&str, Vec<u8>)>) -> String {
     serve_with(|_| routes.into_iter().map(|(path, body)| (path.to_string(), body)).collect())
 }
 
-/// The URL of a port nothing listens on.
+/// The URL of a port nothing listens on: port 0, which no server can bind (binding 0 asks the system for a free port).
+///
+/// It was the port of a listener bound and dropped here, which is free again the moment this returns: in a parallel
+/// run the `serve` of another test could bind that same port, and the request "to nobody" was answered by that server
+/// with a 404 (`a_request_returns_the_body_and_says_why_it_failed` failed once that way, at its `!contains("404")`).
 fn nobody_home() -> String {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    format!("http://127.0.0.1:{}", listener.local_addr().unwrap().port())
+    "http://127.0.0.1:0".to_string()
 }
 
 /// A `.tar.gz` made by the same `tar` the upgrade extracts with, holding the given files.

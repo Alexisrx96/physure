@@ -71,13 +71,15 @@
           </compilerArgs>
         </configuration>
       </plugin>
-      <!-- The tests call the real native library, so build it first: `cargo build -p physure-java`. -->
+      <!-- The tests call the real native library, so build it first: `cargo build -p physure-java`.
+           4 MiB of thread stack (-Xss4m) so a debug build of the PHS parser (~40 KB of native stack per nested
+           bracket) can parse deep nesting on a worker thread (e.g. assertTimeoutPreemptively). -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
         <configuration>
-          <argLine>@{argLine} -Djava.library.path=${physure.native.dir} ${physure.native.access}</argLine>
+          <argLine>@{argLine} -Xss4m -Djava.library.path=${physure.native.dir} ${physure.native.access}</argLine>
         </configuration>
       </plugin>
       <!-- Required by Maven Central: sources + javadoc jars alongside the main jar. -->

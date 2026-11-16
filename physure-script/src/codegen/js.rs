@@ -206,7 +206,17 @@ impl JsTranspiler {
         if let Some((op_sym, l, r)) = super::as_comparison_op(expr) {
             let l_str = self.generate_expr(l)?;
             let r_str = self.generate_expr(r)?;
-            return Ok(format!("({}.getValue() {} {}.getValue())", l_str, op_sym, r_str));
+            if super::both_definitely_bool(l, r) {
+                let js_op = match op_sym {
+                    "==" => "===",
+                    "!=" => "!==",
+                    other => other,
+                };
+                return Ok(format!("({} {} {})", l_str, js_op, r_str));
+            }
+            // `phsCompare` is the core's comparison (the WASM `Quantity`), so the answer is the interpreter's;
+            // `getValue()` was not a method of it, and compared display values in different units
+            return Ok(format!("{}.phsCompare({}, \"{}\")", l_str, r_str, op_sym));
         }
         if let Some(logical) = super::as_logical_op(expr) {
             return super::c_logical_expr(logical, |e| self.generate_expr(e));
@@ -250,7 +260,13 @@ fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
         args.push(format!("\"{}\"", unit));
     }
     let constructor = if q.uncertainty.is_some() { "withUncertainty" } else { "of" };
-    Ok(format!("Quantity.{}({})", constructor, args.join(", ")))
+    // the degrees of freedom of the standard uncertainty, declared on the measurement it builds
+    let dof = match q.dof {
+        Some(nu) if nu.is_infinite() => ".withDof(Infinity)".to_string(),
+        Some(nu) => format!(".withDof({})", nu),
+        None => String::new(),
+    };
+    Ok(format!("Quantity.{}({}){}", constructor, args.join(", "), dof))
 }
 
 /// Escapes the characters that would otherwise break out of a template literal:
@@ -279,6 +295,7 @@ mod tests {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         });
 
         let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
@@ -301,6 +318,7 @@ mod tests {
             body_lines: vec![],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         });
 
         let result = transpiler.generate_statement(&func, &mut HashSet::new()).unwrap();
@@ -316,6 +334,7 @@ mod tests {
             uncertainty: Some(0.5),
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("kg".to_string()),
         });
         let result = transpiler.generate_expr(&q).unwrap();
@@ -330,6 +349,7 @@ mod tests {
             uncertainty: Some(0.5),
             uncertainty_lower: None,
             is_sigma: false,
+            dof: None,
             unit: Some("kg".to_string()),
         });
         let result = transpiler.generate_expr(&q).unwrap();

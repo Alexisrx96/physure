@@ -3,7 +3,7 @@
 
 use physure_core::quantity::Quantity;
 use physure_core::units::conf::{build_registry_from_conf, extend_registry};
-use physure_core::units::{with_catalog, with_current_catalog, UnitRegistry};
+use physure_core::units::{with_catalog, with_current_catalog, with_scoped_catalog, UnitRegistry};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn extended(conf: &str) -> UnitRegistry {
@@ -117,4 +117,22 @@ fn two_threads_with_two_registries_each_read_their_own() {
     for handle in handles {
         assert!(handle.join().unwrap());
     }
+}
+
+#[test]
+fn a_catalog_read_on_one_thread_is_opened_again_on_another() {
+    let custom = km_is_seven();
+    let seen = with_catalog(&custom, || {
+        with_current_catalog(|catalog| {
+            std::thread::scope(|scope| scope.spawn(|| with_scoped_catalog(catalog, || scale_of("km"))).join().unwrap())
+        })
+    });
+    assert_eq!(seen, 7.0);
+    // the caller had no scope: the other thread reads the embedded catalog, even inside a scope of its own
+    let seen = with_current_catalog(|catalog| with_catalog(&custom, || with_scoped_catalog(catalog, || scale_of("km"))));
+    assert_eq!(seen, 1000.0);
+    with_catalog(&custom, || {
+        with_scoped_catalog(None, || with_current_catalog(|scoped| assert!(scoped.is_none())));
+        assert_eq!(scale_of("km"), 7.0, "the scope below is back");
+    });
 }

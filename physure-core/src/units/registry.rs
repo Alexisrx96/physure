@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use num_rational::Rational64;
 use crate::error::{PhysureError, PhysureResult};
 use crate::units::exact::ExactScale;
@@ -98,6 +98,125 @@ pub struct UnitRegistry {
     pub unit_meta: HashMap<String, UnitMetadata>,
     pub categories: HashMap<String, Vec<String>>,
     pub constants_meta: HashMap<String, ConstantMetadata>,
+    /// Your definitions from `[AtomicWeights]` (no suffix): symbol to `(weight in g/mol, standard uncertainty)`.
+    /// Empty in the shipped catalog. They are read first, whichever table is selected, so a definition of yours
+    /// never depends on a selection made elsewhere (see [`UnitRegistry::atomic_weight`]).
+    pub atomic_weights: HashMap<String, (f64, f64)>,
+    /// The tables of atomic weights by edition, from the sections `[AtomicWeights:<edition>]`, same units. The
+    /// shipped file defines `standard-2024` and `abridged-2024`; any text can define a complete table of its own.
+    pub atomic_weight_tables: BTreeMap<String, HashMap<String, (f64, f64)>>,
+    /// What `[Chemistry] atomic_weights` selected, as written: an edition or an alias (`standard`, `abridged`).
+    /// It is resolved, and checked against the tables, when it is used, so the choice and the table may come from
+    /// different texts in any order.
+    pub atomic_weight_selection: String,
+    /// Your definitions from `[Thermochemistry]` (no suffix): species **as written** (`H2O` or `H2O(l)`) to
+    /// `(standard enthalpy of formation in kJ/mol, standard molar entropy in J/(mol*K))` at 298.15 K and 1 bar.
+    /// Empty in the shipped catalog. A species written without its phase is placed when the data are read, against
+    /// the selected edition (see [`UnitRegistry::thermochemistry_table`]).
+    pub thermochemistry: BTreeMap<String, (f64, f64)>,
+    /// The tables of standard thermochemical data by edition, from the sections `[Thermochemistry:<edition>]`, same
+    /// units, every species with its phase (`H2O(l)`). The shipped file defines `legacy-python-1`.
+    pub thermochemistry_tables: BTreeMap<String, BTreeMap<String, (f64, f64)>>,
+    /// What `[Chemistry] thermochemistry` selected: an edition name, or empty when no text selected one (a catalog
+    /// frozen before the data were catalog data). There are no aliases. Checked when the data are read.
+    pub thermochemistry_selection: String,
+}
+
+/// The phases a species of the thermochemical data is written with, as the trailing `(phase)` of its key: liquid,
+/// gas, solid, crystalline, aqueous.
+pub const THERMOCHEMISTRY_PHASES: [&str; 5] = ["l", "g", "s", "cr", "aq"];
+
+/// Whether `formula` is written as a formula: ASCII element symbols (an upper-case letter and at most one lower-case
+/// one), counts that do not start with `0`, and balanced, non-empty parentheses. The syntax only: the elements are
+/// not looked up (a catalog read in pieces may not have its atomic weights yet).
+fn is_formula_text(formula: &str) -> bool {
+    let bytes = formula.as_bytes();
+    if !bytes.first().is_some_and(|b| b.is_ascii_uppercase() || *b == b'(') {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' if bytes.get(i + 1) != Some(&b')') => {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            b'A'..=b'Z' => i += 1 + usize::from(bytes.get(i + 1).is_some_and(u8::is_ascii_lowercase)),
+            b')' if depth > 0 => {
+                depth -= 1;
+                i += 1;
+            }
+            _ => return false,
+        }
+        // a count after an element or a group
+        if bytes.get(i) == Some(&b'0') {
+            return false;
+        }
+        i += bytes[i..].iter().take_while(|b| b.is_ascii_digit()).count();
+    }
+    depth == 0
+}
+
+/// A species key of the thermochemical data as `(formula, phase)`: the trailing `(phase)` is read first, so that
+/// `Ca(OH)2(s)` is `Ca(OH)2` in the phase `s` (a formula parser would read `(s)` as a group). A trailing group of
+/// lower-case letters is a phase and must be one of [`THERMOCHEMISTRY_PHASES`]; the rest must be a formula.
+pub fn split_species(key: &str) -> Result<(&str, Option<&str>), String> {
+    let trailing = key.strip_suffix(')').and_then(|rest| rest.rfind('(').map(|at| (&rest[..at], &rest[at + 1..])));
+    let (formula, phase) = match trailing {
+        Some((formula, phase)) if phase.bytes().all(|b| b.is_ascii_lowercase()) => {
+            if !THERMOCHEMISTRY_PHASES.contains(&phase) {
+                return Err(format!(
+                    "'{key}': the phase is one of ({}), not '({phase})'",
+                    THERMOCHEMISTRY_PHASES.join("|")
+                ));
+            }
+            (formula, Some(phase))
+        }
+        _ => (key, None),
+    };
+    if !is_formula_text(formula) {
+        return Err(format!("'{key}' is not a species: a formula (`H2O`, `Ca(OH)2`) and an optional phase (`(l)`)"));
+    }
+    Ok((formula, phase))
+}
+
+/// `formula(phase)`, the key of a species in a table.
+fn species_key(formula: &str, phase: &str) -> String {
+    format!("{formula}({phase})")
+}
+
+/// The keys of `table` whose formula is `formula`, in key order.
+fn phases_of<'t>(table: &'t BTreeMap<String, (f64, f64)>, formula: &str) -> Vec<&'t str> {
+    table
+        .keys()
+        .filter(|key| split_species(key).is_ok_and(|(f, _)| f == formula))
+        .map(String::as_str)
+        .collect()
+}
+
+/// An alias of `[Chemistry] atomic_weights` and the edition it stands for in this release. **An alias moves when a
+/// release ships a newer edition of its kind; an edition name never changes meaning.** Whoever must reproduce a
+/// result pins the name. Every release that moves an alias says so in the CHANGELOG.
+const ATOMIC_WEIGHT_ALIASES: [(&str, &str); 2] = [("standard", "standard-2024"), ("abridged", "abridged-2024")];
+
+/// FNV-1a, 64 bits (offset basis `0xcbf29ce484222325`, prime `0x100000001b3`).
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The edition that `name` stands for: the edition an alias resolves to in this release, or `name` itself.
+pub fn resolve_atomic_weight_edition(name: &str) -> &str {
+    ATOMIC_WEIGHT_ALIASES.iter().find(|(alias, _)| *alias == name).map_or(name, |(_, edition)| edition)
+}
+
+/// Whether `name` can name an edition: lower-case ASCII letters, digits and `-`, `_`, `.`, starting with a
+/// letter, at most 64 characters.
+pub fn is_atomic_weight_edition_name(name: &str) -> bool {
+    name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.'))
 }
 
 impl UnitRegistry {
@@ -118,7 +237,149 @@ impl UnitRegistry {
             unit_meta: HashMap::new(),
             categories: HashMap::new(),
             constants_meta: HashMap::new(),
+            atomic_weights: HashMap::new(),
+            atomic_weight_tables: BTreeMap::new(),
+            atomic_weight_selection: "standard".to_string(),
+            thermochemistry: BTreeMap::new(),
+            thermochemistry_tables: BTreeMap::new(),
+            thermochemistry_selection: String::new(),
         }
+    }
+
+    /// The standard thermochemical data in force: the table of the edition `[Chemistry] thermochemistry` selects,
+    /// with your definitions of `[Thermochemistry]` placed on it and winning over it. A definition written with its
+    /// phase is that species; one written without a phase is the **unique** phase of that formula in the edition
+    /// (the same rule as a lookup, [`UnitRegistry::thermochemistry_of`]). An error, naming what is wrong, when no
+    /// edition is selected, when no text defines the selected one, when a definition without a phase names a
+    /// formula the edition has in no phase or in several, or when two definitions are one species.
+    pub fn thermochemistry_table(&self) -> Result<BTreeMap<String, (f64, f64)>, String> {
+        let edition = self.thermochemistry_selection.as_str();
+        if edition.is_empty() {
+            return Err("no edition of standard thermochemical data is selected: `[Chemistry] thermochemistry = <edition>` selects one".to_string());
+        }
+        let table = self.thermochemistry_tables.get(edition).ok_or_else(|| {
+            format!("the thermochemistry edition '{edition}' is selected by [Chemistry] thermochemistry but no [Thermochemistry:{edition}] section defines it")
+        })?;
+        let mut effective = table.clone();
+        let mut placed: BTreeMap<String, &str> = BTreeMap::new();
+        for (written, data) in &self.thermochemistry {
+            let (formula, phase) = split_species(written).map_err(|why| format!("[Thermochemistry] {why}"))?;
+            let key = match phase {
+                Some(phase) => species_key(formula, phase),
+                None => match phases_of(table, formula).as_slice() {
+                    [one] => one.to_string(),
+                    [] => {
+                        return Err(format!(
+                            "[Thermochemistry] {written}: edition '{edition}' has no {formula} in any phase; a species it does not have is written with its phase ({formula}(g), {formula}(l), ...)"
+                        ))
+                    }
+                    several => {
+                        return Err(format!(
+                            "[Thermochemistry] {written}: edition '{edition}' has {formula} in several phases ({}); write the one you mean",
+                            several.join(", ")
+                        ))
+                    }
+                },
+            };
+            if let Some(other) = placed.insert(key.clone(), written) {
+                return Err(format!("[Thermochemistry] {other} and {written} are both {key}; keep one"));
+            }
+            effective.insert(key, *data);
+        }
+        Ok(effective)
+    }
+
+    /// The species `species` names in the data in force ([`UnitRegistry::thermochemistry_table`]) and its
+    /// `(standard enthalpy of formation in kJ/mol, standard molar entropy in J/(mol*K))`. With a phase (`H2O(l)`)
+    /// it is that species; without one (`H2O`) it is the unique phase of that formula, and a formula present in
+    /// several phases is an error naming them. There is no alias table: the phase comes from the data.
+    pub fn thermochemistry_of(&self, species: &str) -> Result<(String, (f64, f64)), String> {
+        let table = self.thermochemistry_table()?;
+        let edition = &self.thermochemistry_selection;
+        let (formula, phase) = split_species(species)?;
+        let found = phases_of(&table, formula);
+        let key = match (phase, found.as_slice()) {
+            (Some(phase), _) => species_key(formula, phase),
+            (None, [one]) => one.to_string(),
+            (None, []) => return Err(format!("no standard thermochemical data for '{species}' in edition '{edition}'")),
+            (None, several) => {
+                return Err(format!(
+                    "'{species}' is in edition '{edition}' in several phases ({}); write the one you mean",
+                    several.join(", ")
+                ))
+            }
+        };
+        match table.get(&key) {
+            Some(data) => Ok((key, *data)),
+            None if found.is_empty() => Err(format!("no standard thermochemical data for '{species}' in edition '{edition}'")),
+            None => Err(format!(
+                "no standard thermochemical data for '{species}' in edition '{edition}', which has {}",
+                found.join(", ")
+            )),
+        }
+    }
+
+    /// Why the thermochemical data in force cannot be read, for a replay to refuse a catalog with: `None` when they
+    /// can, and when the catalog has neither a selection nor definitions (a catalog frozen before the data were
+    /// catalog data reads as it did).
+    pub fn thermochemistry_problem(&self) -> Option<String> {
+        if self.thermochemistry_selection.is_empty() && self.thermochemistry.is_empty() {
+            return None;
+        }
+        self.thermochemistry_table().err()
+    }
+
+    /// The edition that `[Chemistry] atomic_weights` selects, with an alias resolved (`standard` is
+    /// `standard-2024`). It may name a table that no text has defined: see
+    /// [`UnitRegistry::selected_atomic_weight_table_missing`].
+    pub fn selected_atomic_weight_edition(&self) -> &str {
+        resolve_atomic_weight_edition(&self.atomic_weight_selection)
+    }
+
+    /// `(weight in g/mol, standard uncertainty)` of an element: your definitions first, then the selected
+    /// edition, and nothing else. There is no fallback to any other table.
+    pub fn atomic_weight(&self, symbol: &str) -> Option<(f64, f64)> {
+        self.atomic_weights
+            .get(symbol)
+            .or_else(|| self.atomic_weight_tables.get(self.selected_atomic_weight_edition())?.get(symbol))
+            .copied()
+    }
+
+    /// The selected edition when no text has defined its table: every use of the weights is then an error that
+    /// names it. `None` when the table exists.
+    pub fn selected_atomic_weight_table_missing(&self) -> Option<&str> {
+        let edition = self.selected_atomic_weight_edition();
+        (!self.atomic_weight_tables.contains_key(edition)).then_some(edition)
+    }
+
+    /// Which table produced the atomic weights, for a report to quote:
+    ///
+    /// - the resolved edition (`standard-2024`; an alias is reported as the edition it stood for), followed by
+    ///   ` (undefined)` when no text defines that table (every use of the weights is then an error);
+    /// - followed by ` + N definitions (fnv1a:<hash>)` when you defined any, e.g.
+    ///   `standard-2024 + 2 definitions (fnv1a:3fccc6fb20553b8a)` ("1 definitions" is written as is, there is no
+    ///   pluralisation). The hash is the FNV-1a 64-bit hash of the canonical text of the definitions, one
+    ///   `Sym=<weight bits>,<standard uncertainty bits>;` entry per symbol in symbol order, the bits being the
+    ///   IEEE-754 binary64 pattern as 16 lower-case hex digits (the format that fingerprints the shipped editions in
+    ///   `tests/atomic_weights_ciaaw.rs`). Two different sets of definitions give different reports; the same set
+    ///   gives the same one however it was written.
+    ///
+    /// A table of your own is identified by its name, which is yours to keep unique.
+    pub fn atomic_weight_edition(&self) -> String {
+        let mut report = self.selected_atomic_weight_edition().to_string();
+        if self.selected_atomic_weight_table_missing().is_some() {
+            report.push_str(" (undefined)");
+        }
+        if !self.atomic_weights.is_empty() {
+            let mut definitions: Vec<_> = self.atomic_weights.iter().collect();
+            definitions.sort_by_key(|(symbol, _)| *symbol);
+            let canonical: String = definitions
+                .iter()
+                .map(|(symbol, (weight, std))| format!("{symbol}={:016x},{:016x};", weight.to_bits(), std.to_bits()))
+                .collect();
+            report.push_str(&format!(" + {} definitions (fnv1a:{:016x})", definitions.len(), fnv1a64(canonical.as_bytes())));
+        }
+        report
     }
 
     pub fn get_unit_latex(&self, name: &str) -> Option<&str> {
@@ -267,7 +528,7 @@ impl UnitRegistry {
     /// The registered symbol closest to `name`, for a "did you mean" hint when a unit
     /// lookup fails. Suggestions are capped at roughly one edit per four characters so an
     /// unrelated word (`foobar`) gets no hint at all, while a plausible typo
-    /// (`metre` → `meter`, `Km` → `km`) does.
+    /// (`metre` → `meter`, `Km` → `km`) does. The same name always gets the same hint.
     pub fn closest_symbol(&self, name: &str) -> Option<String> {
         let budget = 1 + name.chars().count() / 4;
         let lowercase = name.to_lowercase();
@@ -283,23 +544,28 @@ impl UnitRegistry {
             }
         }
 
-        self.base_units
-            .keys()
-            .chain(self.derived_units.keys())
-            .chain(self.aliases.keys())
-            .map(|candidate| (edit_distance(name, candidate), candidate))
-            .filter(|(distance, _)| *distance <= budget)
+        // Each candidate with its rank: a base unit before a derived unit before an alias.
+        let base = self.base_units.keys().map(|candidate| (0, candidate));
+        let derived = self.derived_units.keys().map(|candidate| (1, candidate));
+        let aliases = self.aliases.keys().map(|candidate| (2, candidate));
+        base.chain(derived)
+            .chain(aliases)
+            .map(|(rank, candidate)| (edit_distance(name, candidate), rank, candidate))
+            .filter(|(distance, ..)| *distance <= budget)
             // Ties go to the candidate that shares the most of the typed prefix, so "wat"
-            // suggests "watt" and not "kat" — both are one edit away from it.
-            .min_by_key(|(distance, candidate)| {
+            // suggests "watt" and not "kat" — both are one edit away from it; then to the
+            // shorter one, then by rank, and last to the first in byte order, so the answer
+            // never depends on the order the maps iterate in (`x` is `A`, never `K`, `m` or
+            // `s` by chance).
+            .min_by_key(|(distance, rank, candidate)| {
                 let shared = lowercase
                     .chars()
                     .zip(candidate.to_lowercase().chars())
                     .take_while(|(a, b)| a == b)
                     .count();
-                (*distance, std::cmp::Reverse(shared), candidate.len())
+                (*distance, std::cmp::Reverse(shared), candidate.len(), *rank, candidate.as_str())
             })
-            .map(|(_, candidate)| candidate.clone())
+            .map(|(.., candidate)| candidate.clone())
     }
 
     pub fn get_unit(&self, name: &str) -> Option<RationalUnit> {
@@ -533,7 +799,7 @@ impl UnitRegistry {
                 to.__repr__()
             )));
         }
-        if !from.same_dimensions(&to) {
+        if !from.convertible_to(&to) {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
         }
         Ok(from.ratio_to(&to))
@@ -559,7 +825,7 @@ impl UnitRegistry {
     /// answer of the core, rounded the same way.
     pub fn conversion(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<Conversion> {
         let (from, to) = (self.expand(from)?, self.expand(to)?);
-        if !from.same_dimensions(&to) {
+        if !from.convertible_to(&to) {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
         }
         if from.is_logarithmic() || to.is_logarithmic() {
@@ -799,6 +1065,29 @@ mod tests {
             let (symbol, factor, unit) = reg.split_prefix("dam").unwrap();
             assert_eq!((symbol.as_str(), factor), ("da", 10.0));
             assert_eq!(unit.dimensions, reg.get_unit("m").unwrap().dimensions);
+        }
+    }
+
+    /// The registry with its maps rebuilt, so each one iterates in a new random order, as in another process.
+    fn reshuffled(mut reg: super::UnitRegistry) -> super::UnitRegistry {
+        reg.base_units = reg.base_units.into_iter().collect();
+        reg.derived_units = reg.derived_units.into_iter().collect();
+        reg.aliases = reg.aliases.into_iter().collect();
+        reg.prefixes = reg.prefixes.into_iter().collect();
+        reg.prefix_names = reg.prefix_names.into_iter().collect();
+        reg
+    }
+
+    #[test]
+    fn the_suggestion_for_an_unknown_unit_does_not_depend_on_the_order_a_map_iterates_in() {
+        // `x` is one edit from `A`, `K`, `m` and `s`, and `y` from `yd` and `yr`: equally close, equally long,
+        // sharing as much of what was typed. The suggestion was whichever the map met first.
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        for (typo, expected) in [("x", "A"), ("y", "yd")] {
+            for _ in 0..50 {
+                let suggestion = reshuffled(reg.clone()).closest_symbol(typo);
+                assert_eq!(suggestion.as_deref(), Some(expected), "the suggestion for {typo:?}");
+            }
         }
     }
 

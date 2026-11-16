@@ -165,8 +165,10 @@ fn a_range_is_its_two_ends_and_can_be_scaled_or_converted() {
 #[test]
 fn comparisons_are_booleans_and_logic_wants_booleans() {
     check(&[("1 < 2", "True"), ("2 m == 200 cm", "True"), ("ternary(1 < 2, 10, 20)", "10.0")]);
-    assert!(refused("true and false").contains("expects Bool operands"));
-    assert!(refused("not true").contains("expects a Bool operand"));
+    // `true` is not a Bool literal (it is a name with no value): the operators say so
+    assert!(refused("true and false").contains("`true` has no value; the Bool literals are True and False"));
+    assert!(refused("not true").contains("`true` has no value"));
+    assert!(refused("1 and True").contains("the left side of `and` needs a Bool"));
 }
 
 #[test]

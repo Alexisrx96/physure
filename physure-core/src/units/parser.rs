@@ -172,15 +172,15 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a unit expression against the catalog of the innermost `units::with_catalog` scope on this
-    /// thread if there is one (no copy of it is made), and against the embedded catalog (plus a
-    /// `physure.conf` in the working directory) if there is not.
+    /// thread if there is one, and against the embedded catalog (plus a `physure.conf` in the working
+    /// directory) if there is not. Neither case copies the embedded catalog; see
+    /// `units::conf::with_conf_registry`. When a frozen configuration is in force its catalog is the one read, and
+    /// when it cannot be used the error says why (`PhysureError::Generic`), never a fall back to another catalog.
     pub fn parse_expression(input: &str) -> PhysureResult<RationalUnit> {
         crate::units::with_current_catalog(|scoped| match scoped {
             Some(registry) => Self::parse_expression_impl(input, Some(registry)),
-            None => {
-                let (registry, _) = crate::units::conf::build_registry_from_conf();
-                Self::parse_expression_impl(input, Some(&registry))
-            }
+            None => crate::units::conf::try_with_conf_registry(|registry| Self::parse_expression_impl(input, Some(registry)))
+                .map_err(|e| PhysureError::Generic(e.to_string()))?,
         })
     }
 

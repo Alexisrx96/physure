@@ -286,7 +286,7 @@ impl PluginState {
     /// whose file changed since. For each reloaded function name that's
     /// already a key in `externals` (i.e. some `use` actually unlocked it),
     /// installs the fresh closure there. Functions a plugin exports but that
-    /// were never `use`d are not injected. Returns the names refreshed.
+    /// were never `use`d are not injected. Returns the names refreshed, sorted.
     ///
     /// ponytail: reload is caller-triggered, not automatic — nothing watches
     /// the filesystem. Callers that want auto-reload can poll this on an
@@ -321,6 +321,7 @@ impl PluginState {
                 ),
             }
         }
+        reloaded.sort();
         reloaded
     }
 }
@@ -630,8 +631,7 @@ mod tests {
             .set_modified(SystemTime::now() + Duration::from_secs(2))
             .unwrap();
 
-        let mut reloaded = state.reload_loaded_into(&mut externals);
-        reloaded.sort();
+        let reloaded = state.reload_loaded_into(&mut externals);
         assert_eq!(reloaded, vec!["triple".to_string()]);
         assert_eq!(
             externals["triple"](&[PhsValue::Number(14.0)]).unwrap(),

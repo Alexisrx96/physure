@@ -5,12 +5,50 @@
 use crate::ast::Statement;
 use crate::check::{check_program, Severity};
 use crate::{run_sandboxed, Limits, PhsInterpreter, PhsValue};
+use physure_core::units::conf::try_with_conf_registry;
 use physure_core::units::{formula_text, with_current_catalog, UnitKind, UnitRegistry};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
-/// The seed `phs eval` uses when none is given: the same program gives the same answer.
+/// The seed of a deterministic evaluation (`phs eval`, MCP, a user witness) when neither a flag nor the setting gives
+/// one: the compiled default of `[Settings] monte_carlo_seed`, and what they use when the setting is `random`.
 pub const DEFAULT_SEED: u64 = 0;
+
+/// Where the seed of a deterministic evaluation came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SeedSource {
+    /// Given explicitly (`phs eval --seed N`, the `seed` argument of the MCP tool).
+    Flag,
+    /// The integer `[Settings] monte_carlo_seed` in force (the compiled default 0 included).
+    Setting,
+    /// [`DEFAULT_SEED`], because the setting in force is `random`: these surfaces are deterministic and say so.
+    Default,
+}
+
+/// The seed a deterministic evaluation used, and where it came from (`"seed": {"value": 0, "source": "setting"}` in
+/// the JSON of `phs eval`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SeedUsed {
+    pub value: u64,
+    pub source: SeedSource,
+}
+
+impl SeedUsed {
+    /// `flag` when one was given; otherwise the seed setting in force ([`physure_core::uncertainty::monte_carlo_seed`]),
+    /// or [`DEFAULT_SEED`] when it is `random`.
+    pub fn resolve(flag: Option<u64>) -> SeedUsed {
+        use physure_core::uncertainty::{monte_carlo_seed, MonteCarloSeed};
+        // the working directory's `physure.conf` is read on first use: read it before its seed is looked at (an
+        // unusable configuration is reported by the evaluation itself)
+        let _ = try_with_conf_registry(|_| ());
+        match (flag, monte_carlo_seed()) {
+            (Some(value), _) => SeedUsed { value, source: SeedSource::Flag },
+            (None, MonteCarloSeed::Fixed(value)) => SeedUsed { value, source: SeedSource::Setting },
+            (None, MonteCarloSeed::Random) => SeedUsed { value: DEFAULT_SEED, source: SeedSource::Default },
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Report {
@@ -82,6 +120,82 @@ pub fn evaluate(source: &str, limits: Limits, seed: u64) -> Report {
     run_sandboxed(limits, move |interp| physure_core::uncertainty::with_seed(seed, || evaluate_in(&interp, &source)))
 }
 
+/// [`evaluate`] with the loop-iteration, pipeline-step and `while` ceilings fixed for this run, opened on the thread
+/// that evaluates (`settings::scoped_max_loop_iterations`, `settings::scoped_max_pipeline_steps`,
+/// `settings::scoped_max_while_iterations`): the process-wide values,
+/// which an activated configuration file sets from its `[Settings]`, do not apply. For text that comes with a file
+/// received from elsewhere (a frozen file's witness scripts), whose settings must not raise its own bounds.
+pub fn evaluate_with_ceilings(
+    source: &str,
+    limits: Limits,
+    seed: u64,
+    max_loop_iterations: usize,
+    max_pipeline_steps: usize,
+    max_while_iterations: usize,
+) -> Report {
+    let source = source.to_string();
+    run_sandboxed(limits, move |interp| {
+        let _loops = physure_core::settings::scoped_max_loop_iterations(max_loop_iterations);
+        let _steps = physure_core::settings::scoped_max_pipeline_steps(max_pipeline_steps);
+        let _while = physure_core::settings::scoped_max_while_iterations(max_while_iterations);
+        physure_core::uncertainty::with_seed(seed, || evaluate_in(&interp, &source))
+    })
+}
+
+/// The first line of [`canonical_witness`]: the version of the format.
+pub const WITNESS_FORMAT: &str = "phs-witness-1";
+
+/// The canonical result of a witness script (format `phs-witness-1`), whose SHA-256 a frozen file records: what the
+/// program computed, never how it was worded. One line per line of text, LF-terminated:
+///
+/// * `phs-witness-1`;
+/// * `ok true` or `ok false`;
+/// * per result item, in order: `item line=<n> name=<json> kind=<kind> value=<bits> uncertainty=<bits> unit=<json>
+///   dimension=<json>`, where `<bits>` is the IEEE-754 bit pattern as 16 lowercase hexadecimal digits (non-finite
+///   values included: they have bit patterns too) or `-` when absent, and `<json>` is a JSON string or `-`; a value
+///   that has no number (a boolean, a string, a function, ...) adds ` text=<json>` (what the interpreter prints,
+///   since nothing else says what it is); the elements of a vector follow as `element <depth> ...` lines in the same
+///   form;
+/// * per error finding, in order: `error <code>` (the code only: never the message, which may be reworded, and
+///   never a warning).
+pub fn canonical_witness(report: &Report) -> String {
+    let mut text = format!("{WITNESS_FORMAT}\nok {}\n", report.ok);
+    for item in &report.results {
+        let name = item.name.as_deref().map_or_else(|| "-".to_string(), json_string);
+        text.push_str(&format!("item line={} name={name} ", item.line));
+        canonical_value(&item.value, 0, &mut text);
+    }
+    for finding in report.diagnostics.iter().filter(|d| d.severity == "error") {
+        text.push_str(&format!("error {}\n", finding.code));
+    }
+    text
+}
+
+fn json_string(text: &str) -> String {
+    serde_json::to_string(text).unwrap_or_default()
+}
+
+fn canonical_value(value: &Value, depth: usize, text: &mut String) {
+    let bits = |x: Option<f64>| x.map_or_else(|| "-".to_string(), |x| format!("{:016x}", x.to_bits()));
+    let words = |x: &Option<String>| x.as_deref().map_or_else(|| "-".to_string(), json_string);
+    text.push_str(&format!(
+        "kind={} value={} uncertainty={} unit={} dimension={}",
+        value.kind,
+        bits(value.value),
+        bits(value.uncertainty),
+        words(&value.unit),
+        words(&value.dimension)
+    ));
+    if value.value.is_none() {
+        text.push_str(&format!(" text={}", json_string(&value.text)));
+    }
+    text.push('\n');
+    for element in value.items.iter().flatten() {
+        text.push_str(&format!("element {} ", depth + 1));
+        canonical_value(element, depth + 1, text);
+    }
+}
+
 fn evaluate_in(interp: &PhsInterpreter, source: &str) -> Report {
     let program = match crate::parser::parse_phs(source) {
         Ok(program) => program,
@@ -89,8 +203,14 @@ fn evaluate_in(interp: &PhsInterpreter, source: &str) -> Report {
     };
     with_current_catalog(|scoped| match scoped {
         Some(registry) => run_program(interp, &program, registry),
-        None => run_program(interp, &program, &physure_core::units::conf::build_registry_from_conf().0),
+        None => try_with_conf_registry(|registry| run_program(interp, &program, registry))
+            .unwrap_or_else(|e| configuration_report(e.to_string())),
     })
+}
+
+/// The report of a program that did not run because the configuration in force (a frozen one) cannot be used.
+fn configuration_report(message: String) -> Report {
+    Report { ok: false, results: Vec::new(), diagnostics: vec![Finding { line: 0, severity: "error", code: "configuration".into(), message }] }
 }
 
 fn syntax_report(message: String) -> Report {
@@ -178,7 +298,8 @@ fn error(line: usize, code: &str, message: String) -> Finding {
 }
 
 fn classify(message: &str) -> &'static str {
-    if ["call depth limit", "stack limit", "time limit"].iter().any(|prefix| message.contains(prefix)) {
+    let ceilings = ["max_loop_iterations ceiling", "max_pipeline_steps ceiling"];
+    if ["call depth limit", "stack limit", "time limit"].iter().chain(&ceilings).any(|prefix| message.contains(prefix)) {
         "limit"
     } else if message.contains("forbidden:") {
         "forbidden"
@@ -232,10 +353,10 @@ pub fn convert(value: f64, from: &str, to: &str) -> Result<Value, String> {
     check_unit_len(to)?;
     let converted = physure_core::quantity::Quantity::new(value, from).and_then(|quantity| quantity.to(to)).map_err(|error| error.to_string())?;
     let value = PhsValue::Quantity(converted);
-    Ok(with_current_catalog(|scoped| match scoped {
-        Some(registry) => render(&value, registry),
-        None => render(&value, &physure_core::units::conf::build_registry_from_conf().0),
-    }))
+    with_current_catalog(|scoped| match scoped {
+        Some(registry) => Ok(render(&value, registry)),
+        None => try_with_conf_registry(|registry| render(&value, registry)).map_err(|e| e.to_string()),
+    })
 }
 
 /// What the core knows of a unit: its dimension, whether it is an absolute temperature scale, its shortest name.
@@ -243,7 +364,7 @@ pub fn describe_unit(symbol: &str) -> Result<UnitDescription, String> {
     check_unit_len(symbol)?;
     with_current_catalog(|scoped| match scoped {
         Some(registry) => describe(registry, symbol),
-        None => describe(&physure_core::units::conf::build_registry_from_conf().0, symbol),
+        None => try_with_conf_registry(|registry| describe(registry, symbol)).map_err(|e| e.to_string())?,
     })
 }
 

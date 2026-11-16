@@ -1,8 +1,9 @@
 use jni::JNIEnv;
-use jni::objects::{JClass, JString, JObject, JValue};
+use jni::objects::{JClass, JDoubleArray, JLongArray, JObject, JObjectArray, JString, JValue};
 use jni::sys::{jdouble, jlong, jobject, jstring};
+use physure_core::error::{PhysureError, PhysureResult};
 use physure_core::{UnitRegistry, Quantity};
-use physure_script::{parse_phs, PhsInterpreter};
+use physure_script::{parse_phs, PhsInterpreter, PhsValue};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -20,25 +21,26 @@ struct RegistryHandle {
 
 /// The embedded catalog and its constants, parsed once per process: parsing it is the expensive part of
 /// a call, and a registry of its own only needs a copy.
-fn default_catalog() -> &'static (UnitRegistry, HashMap<String, String>) {
+///
+/// An error while a frozen configuration is in force: this binding builds its registries from the library's own
+/// catalog and honours frozen configurations from Phase 5, so until then it refuses rather than mixing two
+/// configurations in one process. Checked on every call: the configuration in force can change.
+fn default_catalog() -> Result<&'static (UnitRegistry, HashMap<String, String>), String> {
     static DEFAULT: OnceLock<(UnitRegistry, HashMap<String, String>)> = OnceLock::new();
-    DEFAULT.get_or_init(|| {
+    physure_core::frozen::refuse_unwired("Java")?;
+    Ok(DEFAULT.get_or_init(|| {
         let mut reg = UnitRegistry::new();
         let mut constants = HashMap::new();
-        physure_core::units::conf::parse_physure_conf(
-            physure_core::units::conf::DEFAULT_PHYSURE_CONF,
-            &mut reg,
-            &mut constants,
-        );
+        physure_core::units::conf::load_embedded_catalog(&mut reg, &mut constants);
         (reg, constants)
-    })
+    }))
 }
 
 /// A new registry over the embedded catalog extended by `custom` conf text, as the raw handle Java keeps.
 /// The text is read strictly: a line that cannot be read is an error naming it, and not a definition quietly
 /// left out (and the `[Settings]` of a conf, which are process-wide, are not the registry's to change).
 fn new_handle(custom: Option<&str>) -> Result<jlong, String> {
-    let (mut registry, mut constants) = default_catalog().clone();
+    let (mut registry, mut constants) = default_catalog()?.clone();
     if let Some(text) = custom {
         physure_core::units::conf::extend_registry(&mut registry, &mut constants, text)
             .map_err(|problems| format!("Invalid unit definitions: {}", problems.join("; ")))?;
@@ -64,13 +66,31 @@ fn get_interpreter(handle: jlong) -> &'static mut PhsInterpreter {
     unsafe { &mut (*(handle as *mut RegistryHandle)).interpreter }
 }
 
-/// The registry of `handle`; 0 (the static quantity operations, which carry no registry) is the embedded catalog.
-fn get_registry(handle: jlong) -> &'static UnitRegistry {
+/// The registry of `handle`; 0 (the static quantity operations, which carry no registry) is the embedded catalog,
+/// an error while a frozen configuration is in force (see [`default_catalog`]).
+fn get_registry(handle: jlong) -> Result<&'static UnitRegistry, String> {
     if handle == 0 {
-        &default_catalog().0
+        Ok(&default_catalog()?.0)
     } else {
-        unsafe { &(*(handle as *const RegistryHandle)).registry }
+        Ok(unsafe { &(*(handle as *const RegistryHandle)).registry })
     }
+}
+
+/// [`get_registry`], or a pending `PhysureException` and `None`.
+fn registry_or_throw(env: &mut JNIEnv, handle: jlong) -> Option<&'static UnitRegistry> {
+    get_registry(handle).map_err(|message| throw_physure_exception(env, &message)).ok()
+}
+
+/// The sources of the uncertainty that a Java `Quantity` holds: `(id, contribution)` pairs, which the core
+/// merges as it does for any quantity. Java mints the one id of a quantity it constructed on its first use.
+fn read_sources(env: &mut JNIEnv, java_q: &JObject) -> Result<Vec<(u32, f64)>, jni::errors::Error> {
+    let ids = JLongArray::from(env.call_method(java_q, "sourceIds", "()[J", &[])?.l()?);
+    let coefficients = JDoubleArray::from(env.call_method(java_q, "sourceCoefficients", "()[D", &[])?.l()?);
+    let mut raw_ids = vec![0; env.get_array_length(&ids)? as usize];
+    let mut raw_coefficients = vec![0.0; env.get_array_length(&coefficients)? as usize];
+    env.get_long_array_region(&ids, 0, &mut raw_ids)?;
+    env.get_double_array_region(&coefficients, 0, &mut raw_coefficients)?;
+    Ok(raw_ids.into_iter().zip(raw_coefficients).map(|(id, c)| (id as u32, c)).collect())
 }
 
 fn get_rust_quantity(
@@ -78,11 +98,10 @@ fn get_rust_quantity(
     java_q: &JObject,
 ) -> Result<Quantity, jni::errors::Error> {
     let value: f64 = env.get_field(java_q, "value", "D")?.d()?;
-    let uncertainty: f64 = env.get_field(java_q, "uncertainty", "D")?.d()?;
     let unit_jstr: JString = env.get_field(java_q, "unit", "Ljava/lang/String;")?.l()?.into();
     let unit_str: String = env.get_string(&unit_jstr)?.into();
     
-    let reg = get_registry(0);
+    let Some(reg) = registry_or_throw(env, 0) else { return Err(jni::errors::Error::JavaException) };
     let _r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
@@ -91,39 +110,193 @@ fn get_rust_quantity(
         }
     };
     
-    // the uncertainty goes in with the value: dropping it here made every operation answer "exactly"
-    let built = if uncertainty == 0.0 {
-        Quantity::new(value, &unit_str)
-    } else {
-        Quantity::with_uncertainty(value, uncertainty, &unit_str)
+    // The uncertainty goes in as the sources the Java quantity holds, not as a number: a number would make a
+    // new measurement of an old one, and `x - x` would no longer be zero.
+    let sources = read_sources(env, java_q)?;
+    let unit = Quantity::new(value, &unit_str)
+        .map_err(|e| {
+            let _ = env.throw_new("com/physure/PhysureException", &format!("{}", e));
+            jni::errors::Error::JavaException
+        })?
+        .unit;
+    Ok(Quantity::from_sources(value, sources, unit))
+}
+
+/// A Java `Quantity` from its numbers, its unit and its sources (`None` when the core's model keeps none, and
+/// Java then mints one on the first use).
+fn java_quantity<'local>(
+    env: &mut JNIEnv<'local>,
+    value: f64,
+    uncertainty: f64,
+    unit: &str,
+    sources: Option<Vec<(u32, f64)>>,
+) -> Result<JObject<'local>, jni::errors::Error> {
+    let q_class = env.find_class("com/physure/Quantity")?;
+    let unit_jstr = env.new_string(unit)?;
+    let (ids, coefficients) = match sources {
+        Some(terms) => {
+            let ids = env.new_long_array(terms.len() as i32)?;
+            let coefficients = env.new_double_array(terms.len() as i32)?;
+            let raw_ids: Vec<jlong> = terms.iter().map(|&(id, _)| jlong::from(id)).collect();
+            let raw_coefficients: Vec<f64> = terms.iter().map(|&(_, c)| c).collect();
+            env.set_long_array_region(&ids, 0, &raw_ids)?;
+            env.set_double_array_region(&coefficients, 0, &raw_coefficients)?;
+            (JObject::from(ids), JObject::from(coefficients))
+        }
+        None => (JObject::null(), JObject::null()),
     };
-    built.map_err(|e| {
-        let _ = env.throw_new("com/physure/PhysureException", &format!("{}", e));
-        jni::errors::Error::JavaException
-    })
+    env.new_object(
+        q_class,
+        "(DDLjava/lang/String;[J[D)V",
+        &[
+            JValue::Double(value),
+            JValue::Double(uncertainty),
+            JValue::Object(&unit_jstr),
+            JValue::Object(&ids),
+            JValue::Object(&coefficients),
+        ],
+    )
 }
 
 fn make_java_quantity<'local>(
     env: &mut JNIEnv<'local>,
     q: Quantity,
 ) -> Result<JObject<'local>, jni::errors::Error> {
-    let q_class = env.find_class("com/physure/Quantity")?;
-    // the magnitude, uncertainty and unit as one consistent triple (`2 m * 3 km` is 6000 m^2, not 6 m^2)
+    // the magnitude, uncertainty, unit and sources as one consistent set (`2 m * 3 km` is 6000 m^2, not 6 m^2)
     let (value, uncertainty, unit) = q.display_parts();
-    let unit_jstr = env.new_string(unit)?;
-    env.new_object(
-        q_class,
-        "(DDLjava/lang/String;)V",
-        &[JValue::Double(value), JValue::Double(uncertainty), JValue::Object(&unit_jstr)],
-    )
+    java_quantity(env, value, uncertainty, &unit, q.display_sources())
+}
+
+/// What the core says of the quantity that Java holds. Its refusal is a `PhysureException`, and `default` is
+/// only returned with that exception pending.
+fn ask<T>(env: &mut JNIEnv, q_obj: &JObject, default: T, f: impl FnOnce(Quantity) -> PhysureResult<T>) -> T {
+    let Ok(q) = get_rust_quantity(env, q_obj) else { return default };
+    f(q).unwrap_or_else(|e| {
+        throw_physure_exception(env, &e.to_string());
+        default
+    })
+}
+
+/// Declares `nu` degrees of freedom for the one source of the quantity (JCGM 100:2008 4.3.2). The id is the one
+/// the Java object holds, so every copy of the measurement shares them.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_declareDof<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+    nu: jdouble,
+) {
+    ask(&mut env, &q_obj, (), |q| q.with_dof(nu).map(|_| ()))
+}
+
+/// The effective degrees of freedom of the quantity by Welch-Satterthwaite (JCGM 100:2008 G.4.1).
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_effectiveDof<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+) -> jdouble {
+    ask(&mut env, &q_obj, 0.0, |q| q.effective_dof())
+}
+
+/// `{k, U, nu_eff}` of the quantity for the coverage probability `p`: the coverage factor, the expanded
+/// uncertainty (in the unit of the quantity) and the effective degrees of freedom they came from.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_expanded<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+    p: jdouble,
+) -> jobject {
+    let Some(parts) = ask(&mut env, &q_obj, None, |q| {
+        q.expanded(p).map(|e| Some([e.coverage_factor, e.expanded_uncertainty, e.dof_eff]))
+    }) else {
+        return std::ptr::null_mut();
+    };
+    match env.new_double_array(parts.len() as i32) {
+        Ok(array) if env.set_double_array_region(&array, 0, &parts).is_ok() => array.into_raw(),
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// A Type A evaluation (JCGM 100:2008 4.2): the mean of the observations with its standard error and `n - 1`
+/// degrees of freedom.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_fromSamples<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    samples: JDoubleArray<'local>,
+    unit: JString<'local>,
+) -> jobject {
+    let Ok(count) = env.get_array_length(&samples) else { return std::ptr::null_mut() };
+    let mut values = vec![0.0; count as usize];
+    if env.get_double_array_region(&samples, 0, &mut values).is_err() {
+        return std::ptr::null_mut();
+    }
+    let unit: String = match env.get_string(&unit) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    answer(&mut env, Quantity::from_samples(&values, &unit))
+}
+
+/// `{mean, uncertainty}` as text, rounded by the Guide's rule (JCGM 100:2008 7.2.6), which is the core's.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_gumRound<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    mean: jdouble,
+    uncertainty: jdouble,
+) -> jobject {
+    let (value, spread) = physure_core::quantity::gum_round(mean, uncertainty, None);
+    let Ok(string_class) = env.find_class("java/lang/String") else { return std::ptr::null_mut() };
+    let Ok(array) = env.new_object_array(2, &string_class, JObject::null()) else { return std::ptr::null_mut() };
+    for (index, text) in [value, spread].iter().enumerate() {
+        let Ok(jtext) = env.new_string(text) else { return std::ptr::null_mut() };
+        if env.set_object_array_element(&array, index as i32, &jtext).is_err() {
+            return std::ptr::null_mut();
+        }
+    }
+    array.into_raw()
+}
+
+/// The Java object for the core's answer, or the `PhysureException` for its refusal (a null return with the
+/// exception pending).
+fn answer(env: &mut JNIEnv, result: PhysureResult<Quantity>) -> jobject {
+    match result {
+        Ok(res) => match make_java_quantity(env, res) {
+            Ok(j_q) => j_q.into_raw(),
+            Err(e) => {
+                throw_physure_exception(env, &format!("Failed to build Java Quantity: {}", e));
+                std::ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            throw_physure_exception(env, &format!("{}", e));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// A source id from the core's one counter, for the first use of a quantity that Java constructed.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_newSourceId(_env: JNIEnv, _class: JClass) -> jlong {
+    jlong::from(physure_core::uncertainty::new_source_id())
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_initRegistry(
-    _env: JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    new_handle(None).unwrap_or(0)
+    // an error is an exception, never 0 without a word: 0 is the handle of the embedded catalog
+    match new_handle(None) {
+        Ok(handle) => handle,
+        Err(message) => {
+            throw_physure_exception(&mut env, &message);
+            0
+        }
+    }
 }
 
 #[no_mangle]
@@ -215,7 +388,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitPowers<'local>(
 /// power is an error, because truncating it to its numerator would be a wrong answer), `Double` values
 /// (numerator over denominator, as the WASM binding returns them) when it is true.
 fn unit_exponent_map<'local>(mut env: JNIEnv<'local>, registry_handle: jlong, expr: JString<'local>, exact: bool) -> jobject {
-    let reg = get_registry(registry_handle);
+    let Some(reg) = registry_or_throw(&mut env, registry_handle) else { return std::ptr::null_mut() };
     match exponent_map(&mut env, reg, &expr, exact) {
         Ok(map) => map.into_raw(),
         Err(failure) => {
@@ -291,7 +464,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getUnitScale(
     registry_handle: jlong,
     expr: JString,
 ) -> jdouble {
-    let reg = get_registry(registry_handle);
+    let Some(reg) = registry_or_throw(&mut env, registry_handle) else { return 0.0 };
     let expr_str: String = match env.get_string(&expr) {
         Ok(s) => s.into(),
         Err(e) => {
@@ -315,7 +488,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_getCategories<'local>(
     _class: JClass,
     registry_handle: jlong,
 ) -> jobject {
-    let reg = get_registry(registry_handle);
+    let Some(reg) = registry_or_throw(&mut env, registry_handle) else { return std::ptr::null_mut() };
 
     let map_class = match env.find_class("java/util/HashMap") {
         Ok(c) => c,
@@ -365,13 +538,14 @@ pub extern "system" fn Java_com_physure_NativeEngine_getCategories<'local>(
 
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_evaluateExpression<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     class: JClass,
     interpreter_handle: jlong,
     expr: JString<'local>,
 ) -> jstring {
+    let Some(registry) = registry_or_throw(&mut env, interpreter_handle) else { return std::ptr::null_mut() };
     // the registry's own catalog is what the parser and the interpreter read unit text against while it runs
-    physure_core::units::with_catalog(get_registry(interpreter_handle), || {
+    physure_core::units::with_catalog(registry, || {
         evaluate_expression(env, class, interpreter_handle, expr)
     })
 }
@@ -425,13 +599,14 @@ fn assigned_value(interpreter: &PhsInterpreter, stmt: &physure_script::Statement
 /// quantity rebuilt from it would carry the rounding.
 #[no_mangle]
 pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantity<'local>(
-    env: JNIEnv<'local>,
+    mut env: JNIEnv<'local>,
     class: JClass,
     interpreter_handle: jlong,
     expr: JString<'local>,
 ) -> jobject {
+    let Some(registry) = registry_or_throw(&mut env, interpreter_handle) else { return std::ptr::null_mut() };
     // the registry's own catalog is what the parser and the interpreter read unit text against while it runs
-    physure_core::units::with_catalog(get_registry(interpreter_handle), || {
+    physure_core::units::with_catalog(registry, || {
         evaluate_quantity(env, class, interpreter_handle, expr)
     })
 }
@@ -452,6 +627,50 @@ fn evaluate_quantity<'local>(
             std::ptr::null_mut()
         }
     }
+}
+
+/// Evaluates PHS like `evaluateQuantity`, with the Java quantities `values` visible under `names`: bound by
+/// value, with the sources of their uncertainty, and not written into the source as text (which would make a
+/// new measurement of each, so `f(x, x)` would not see one). Nothing stays in the registry's interpreter.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_evaluateQuantityWith<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    interpreter_handle: jlong,
+    expr: JString<'local>,
+    names: JObjectArray<'local>,
+    values: JObjectArray<'local>,
+) -> jobject {
+    let Ok(bindings) = bindings(&mut env, &names, &values) else { return std::ptr::null_mut() };
+    let Some(registry) = registry_or_throw(&mut env, interpreter_handle) else { return std::ptr::null_mut() };
+    let result = physure_core::units::with_catalog(registry, || {
+        source_text(&mut env, &expr).and_then(|source| {
+            let program = parse_phs(&source).map_err(|e| format!("Syntax error: {}", e))?;
+            let value = get_interpreter(interpreter_handle).run_program_with(&program, bindings).map_err(|e| e.to_string())?;
+            as_quantity(value)
+        })
+    });
+    answer(&mut env, result.map_err(PhysureError::Generic))
+}
+
+/// The `(name, quantity)` pairs of two parallel Java arrays. A JNI failure (or a unit the core refuses) leaves
+/// its exception pending.
+fn bindings(env: &mut JNIEnv, names: &JObjectArray, values: &JObjectArray) -> Result<Vec<(String, PhsValue)>, jni::errors::Error> {
+    let count = env.get_array_length(names)?;
+    let mut bindings = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let name = JString::from(env.get_object_array_element(names, index)?);
+        let name: String = env.get_string(&name)?.into();
+        let value = env.get_object_array_element(values, index)?;
+        let quantity = get_rust_quantity(env, &value)?;
+        // as when the argument was written into the source, where `NaN m` is not a number PHS reads
+        if !quantity.value.mean().is_finite() {
+            throw_physure_exception(env, &format!("The value given for '{}' is not a finite number: {}", name, quantity.value.mean()));
+            return Err(jni::errors::Error::JavaException);
+        }
+        bindings.push((name, PhsValue::Quantity(quantity)));
+    }
+    Ok(bindings)
 }
 
 /// Runs the source and returns its last value as a quantity, or the message of the exception to throw.
@@ -497,21 +716,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_addQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.add(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.add(&q2))
 }
 
 #[no_mangle]
@@ -530,21 +735,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_subQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.sub(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.sub(&q2))
 }
 
 #[no_mangle]
@@ -563,21 +754,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_mulQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.mul(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.mul(&q2))
 }
 
 #[no_mangle]
@@ -596,21 +773,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_divQuantities<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q1.div(&q2) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q1.div(&q2))
 }
 
 #[no_mangle]
@@ -625,21 +788,36 @@ pub extern "system" fn Java_com_physure_NativeEngine_powQuantity<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    match q.pow(power) {
-        Ok(res) => {
-            match make_java_quantity(&mut env, res) {
-                Ok(j_q) => j_q.into_raw(),
-                Err(e) => {
-                    throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    std::ptr::null_mut()
-                }
-            }
-        }
-        Err(e) => {
-            throw_physure_exception(&mut env, &format!("{}", e));
-            std::ptr::null_mut()
-        }
-    }
+    answer(&mut env, q.pow(power))
+}
+
+/// The function of a quantity that Java asked for, by name: the core's own `sin`, `cos`, `tan` and `abs`, which
+/// read the angle unit, refuse what is not an angle and carry the sources through the derivative.
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_mathFunction<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q_obj: JObject<'local>,
+    name: JString<'local>,
+) -> jobject {
+    let q = match get_rust_quantity(&mut env, &q_obj) {
+        Ok(q) => q,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let name: String = match env.get_string(&name) {
+        Ok(s) => s.into(),
+        Err(_) => return std::ptr::null_mut(),
+    };
+    answer(
+        &mut env,
+        match name.as_str() {
+            "sin" => q.sin(),
+            "cos" => q.cos(),
+            "tan" => q.tan(),
+            "abs" => q.abs(),
+            other => Err(PhysureError::Generic(format!("'{}' is not a function of a quantity", other))),
+        },
+    )
 }
 
 #[no_mangle]
@@ -658,7 +836,7 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
         Err(_) => return std::ptr::null_mut(),
     };
 
-    let reg = get_registry(0);
+    let Some(reg) = registry_or_throw(&mut env, 0) else { return std::ptr::null_mut() };
     let r_unit = match physure_core::units::parser::Parser::parse_expression_with_registry(&unit_str, &reg) {
         Ok(u) => u,
         Err(e) => {
@@ -669,33 +847,16 @@ pub extern "system" fn Java_com_physure_NativeEngine_convertQuantity<'local>(
 
     match q.convert_to(&r_unit) {
         Ok(res) => {
-            let q_class = match env.find_class("com/physure/Quantity") {
-                Ok(c) => c,
-                Err(_) => return std::ptr::null_mut(),
-            };
-            let unit_jstr = match env.new_string(&unit_str) {
-                Ok(s) => s,
-                Err(_) => return std::ptr::null_mut(),
-            };
-            // `res` is already in the target unit: its value and its spread are what to hand back
-            // (the canonical magnitude carries the scale and the zero point of the unit).
-            let converted_val = res.value.mean();
-            let j_q = match env.new_object(
-                q_class,
-                "(DDLjava/lang/String;)V",
-                &[
-                    JValue::Double(converted_val),
-                    JValue::Double(res.value.std_dev()),
-                    JValue::Object(&unit_jstr),
-                ],
-            ) {
-                Ok(o) => o,
+            // `res` is already in the target unit: its value, its spread and its sources are what to hand back
+            // (the canonical magnitude carries the scale and the zero point of the unit). A conversion is the
+            // same measurement in another unit, so it keeps the sources and mints none.
+            match java_quantity(&mut env, res.value.mean(), res.value.std_dev(), &unit_str, res.sources()) {
+                Ok(j_q) => j_q.into_raw(),
                 Err(e) => {
                     throw_physure_exception(&mut env, &format!("Failed to build Java Quantity: {}", e));
-                    return std::ptr::null_mut();
+                    std::ptr::null_mut()
                 }
-            };
-            j_q.into_raw()
+            }
         }
         Err(e) => {
             throw_physure_exception(&mut env, &format!("{}", e));
@@ -721,6 +882,31 @@ pub extern "system" fn Java_com_physure_NativeEngine_assertQuantities<'local>(
     };
     if let Err(e) = q1.phs_assert(&q2) {
         throw_physure_exception(&mut env, &format!("{}", e));
+    }
+}
+
+/// `NativeEngine.compareQuantities(a, b, op)`: the core's `Quantity::phs_compare`, the comparison of PHS. A pair with
+/// no comparison throws a `PhysureException` with the core's reason (and the return value is then ignored).
+#[no_mangle]
+pub extern "system" fn Java_com_physure_NativeEngine_compareQuantities<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass,
+    q1_obj: JObject<'local>,
+    q2_obj: JObject<'local>,
+    op: JString<'local>,
+) -> jni::sys::jboolean {
+    let Ok(q1) = get_rust_quantity(&mut env, &q1_obj) else { return 0 };
+    let Ok(q2) = get_rust_quantity(&mut env, &q2_obj) else { return 0 };
+    let op: String = match env.get_string(&op) {
+        Ok(s) => s.into(),
+        Err(_) => return 0,
+    };
+    match q1.phs_compare(&q2, &op) {
+        Ok(answer) => u8::from(answer),
+        Err(e) => {
+            throw_physure_exception(&mut env, &format!("{}", e));
+            0
+        }
     }
 }
 
@@ -775,5 +961,100 @@ pub extern "system" fn Java_com_physure_NativeEngine_getFunctionParams<'local>(
     } else {
         throw_physure_exception(&mut env, &format!("Function '{}' not found in interpreter context", name_str));
         std::ptr::null_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The embedded catalog is what this binding reads, so it refuses while a frozen configuration is in force or
+    /// required (here: required and missing, which needs no file), and serves it again once nothing is.
+    /// One test sets `PHYSURE_REQUIRE_FROZEN` for a moment and every handle is refused meanwhile: the tests that
+    /// make a handle and the one that sets the variable take turns.
+    static ENVIRONMENT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn the_embedded_catalog_is_refused_while_a_frozen_configuration_is_required() {
+        let _alone = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(std::env::var_os("PHYSURE_REQUIRE_FROZEN").is_none() && std::env::var_os("PHYSURE_CONF").is_none());
+        assert!(get_registry(0).is_ok());
+        std::env::set_var("PHYSURE_REQUIRE_FROZEN", "1");
+        let refused = (default_catalog().err(), new_handle(None).err(), get_registry(0).err());
+        std::env::remove_var("PHYSURE_REQUIRE_FROZEN");
+        let (catalog, handle, registry) = refused;
+        for message in [catalog, handle, registry] {
+            let message = message.expect("refused");
+            assert!(message.contains("PHYSURE_REQUIRE_FROZEN") && message.contains("Java"), "{message}");
+        }
+        assert!(get_registry(0).is_ok());
+    }
+
+    /// The Monte Carlo samples of the variable `name` of an interpreter.
+    fn samples_of(interpreter: &PhsInterpreter, name: &str) -> Vec<f64> {
+        match interpreter.get_var(name).map(|v| v.clone()) {
+            Some(PhsValue::Quantity(q)) => match &q.value {
+                physure_core::uncertainty::UncertaintyValue::MonteCarlo(mc) => mc.samples.to_vec(),
+                other => panic!("{name} is not Monte Carlo: {}", other.get_model_name()),
+            },
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    /// Runs `source` on a handle's interpreter the way `evaluateExpression` and `evaluateQuantity` do (statement by
+    /// statement, under the registry's catalog), without the JNI strings.
+    fn evaluate(handle: jlong, source: &str) {
+        let registry = get_registry(handle).unwrap();
+        physure_core::units::with_catalog(registry, || {
+            for statement in &parse_phs(source).unwrap().statements {
+                get_interpreter(handle).run_statement(statement).unwrap();
+            }
+        })
+    }
+
+    /// Frees a handle made by `new_handle` (what `destroyRegistry` does, without the JNI arguments).
+    fn free_handle(handle: jlong) {
+        drop(unsafe { Box::from_raw(handle as *mut RegistryHandle) });
+    }
+
+    /// The seed policy of this binding (conf freeze Phase 4b): a Java `UnitRegistry` (a handle) keeps its
+    /// interpreter, and with it one Monte Carlo stream of the seed setting, across `evaluate` calls. A measurement
+    /// made by a later call is independent of an earlier one the handle still holds (each call starting the stream
+    /// again would give `y` the samples of `x`, and `x - y` an uncertainty of exactly 0); a new handle starts the
+    /// stream again, so the same calls give the same samples. `evaluateQuantityWith` (by-value bindings, nothing kept)
+    /// draws from the same stream of the handle. The setting is the compiled default or the embedded catalog's until
+    /// Phase 5 (this binding refuses a frozen file); the mode and the seed are scoped on the test's thread.
+    #[test]
+    fn a_handle_continues_one_stream_of_the_seed_setting_across_its_calls() {
+        use physure_core::uncertainty::{mode::scoped, scoped_monte_carlo_seed, MonteCarloSeed, PropagationMode};
+        let _alone = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
+        let _mode = scoped(PropagationMode::MonteCarlo);
+        let _seed = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(0));
+        let session = || {
+            let handle = new_handle(None).unwrap();
+            evaluate(handle, "x = 10 +/- 1 m");
+            evaluate(handle, "y = 10 +/- 1 m\nd = x - y");
+            let interpreter = get_interpreter(handle);
+            let samples = (samples_of(interpreter, "x"), samples_of(interpreter, "y"), samples_of(interpreter, "d"));
+            let program = parse_phs("10 +/- 1 m").unwrap();
+            let with = match interpreter.run_program_with(&program, Vec::new()).unwrap() {
+                PhsValue::Quantity(q) => (q.value.mean(), q.value.std_dev()),
+                other => panic!("{other:?}"),
+            };
+            free_handle(handle);
+            (samples, with)
+        };
+        let ((x, y, d), with) = session();
+        assert!(x != y, "a later call draws its own samples");
+        let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+        let deviation = |v: &[f64]| (v.iter().map(|s| (s - mean(v)).powi(2)).sum::<f64>() / (v.len() - 1) as f64).sqrt();
+        let ratio = deviation(&d) / deviation(&x);
+        assert!((ratio - 2f64.sqrt()).abs() < 0.1, "u(x - y) / u(x) = {ratio}");
+        assert!(with.0 != mean(&x) && with.0 != mean(&y), "a by-value call does not redraw the handle's measurements");
+        assert_eq!(session(), ((x.clone(), y, d), with), "a new handle, the same calls, the same samples");
+        let _seven = scoped_monte_carlo_seed(MonteCarloSeed::Fixed(7));
+        assert!(session().0 .0 != x, "the seed setting is read when the handle is made");
+        let _random = scoped_monte_carlo_seed(MonteCarloSeed::Random);
+        assert!(session().0 .0 != session().0 .0, "random: entropy");
     }
 }

@@ -106,7 +106,7 @@ fn a_deadline_that_has_passed_refuses_the_first_statement() {
 #[test]
 fn slow_work_is_stopped_at_the_deadline() {
     // 10,000 iterations of a 150-deep recursion take seconds; the deadline is 100 ms
-    let source = format!("{}\nx = 0\nwhile true {{ x = down(150) }}", down(0).lines().take(3).collect::<Vec<_>>().join("\n"));
+    let source = format!("{}\nx = 0\nwhile True {{ x = down(150) }}", down(0).lines().take(3).collect::<Vec<_>>().join("\n"));
     let started = std::time::Instant::now();
     let error = run_sandboxed(Limits::sandboxed(Duration::from_millis(100)), move |interp| run(&interp, &source)).unwrap_err();
     assert!(error.contains("time limit"), "{error}");
@@ -177,10 +177,12 @@ fn run_sandboxed_with(interp: PhsInterpreter, source: &'static str) -> Result<Ve
     on_a_stack(physure_script::limits::SANDBOX_THREAD_STACK_BYTES, move || run(&interp, source))
 }
 
-/// Mean and standard deviation of `y = x * x + x` for `x = 10 +/- 1 m`, with Monte Carlo propagation selected.
-fn monte_carlo_result(seed: Option<u64>) -> (f64, f64) {
+/// Mean and standard deviation of `y = x * x + x` for `x = 10 +/- 1 m`, with Monte Carlo propagation selected, under
+/// the seed setting `setting` (a scoped one: the process-wide value is not touched).
+fn monte_carlo_result_under(seed: Option<u64>, setting: physure_core::uncertainty::MonteCarloSeed) -> (f64, f64) {
     run_sandboxed(sandbox(), move |interp| {
         let _mode = physure_core::uncertainty::mode::scoped(physure_core::PropagationMode::MonteCarlo);
+        let _setting = physure_core::uncertainty::scoped_monte_carlo_seed(setting);
         let evaluate = || match run(&interp, "x = 10 +/- 1 m\ny = x * 1 + x\ny").unwrap().pop() {
             Some(PhsValue::Quantity(q)) => (q.value.mean(), q.value.std_dev()),
             other => panic!("expected a quantity, got {other:?}"),
@@ -192,10 +194,21 @@ fn monte_carlo_result(seed: Option<u64>) -> (f64, f64) {
     })
 }
 
+fn monte_carlo_result(seed: Option<u64>) -> (f64, f64) {
+    monte_carlo_result_under(seed, physure_core::uncertainty::MonteCarloSeed::DEFAULT)
+}
+
+/// Before `[Settings] monte_carlo_seed` (conf freeze Phase 4b) a run without a seed drew operating-system entropy;
+/// it now draws the stream of the seed in force (0 by default), so it is reproducible too, and `random` brings the
+/// old behaviour back.
 #[test]
-fn monte_carlo_is_reproducible_under_a_seed_and_random_without_one() {
+fn monte_carlo_is_reproducible_under_a_seed_and_under_the_seed_setting_and_random_only_when_asked() {
+    use physure_core::uncertainty::MonteCarloSeed;
     assert_eq!(monte_carlo_result(Some(42)), monte_carlo_result(Some(42)));
     assert_ne!(monte_carlo_result(Some(42)), monte_carlo_result(Some(43)));
-    // the control: without a seed the draws differ, so the equality above is not an accident of the model
-    assert_ne!(monte_carlo_result(None), monte_carlo_result(None));
+    assert_eq!(monte_carlo_result(None), monte_carlo_result(None), "no explicit seed: the setting's, 0");
+    assert_eq!(monte_carlo_result(None), monte_carlo_result(Some(0)));
+    assert_eq!(monte_carlo_result_under(None, MonteCarloSeed::Fixed(42)), monte_carlo_result(Some(42)));
+    // the control: with `random` the draws differ, so the equalities above are not an accident of the model
+    assert_ne!(monte_carlo_result_under(None, MonteCarloSeed::Random), monte_carlo_result_under(None, MonteCarloSeed::Random));
 }

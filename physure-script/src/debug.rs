@@ -124,6 +124,7 @@ mod tests {
             body_lines: vec![1, 2],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         };
         let frame = StackFrame::new(&func, 1);
         assert!(frame.declared.contains("solve"), "unaliased import name missing: {:?}", frame.declared);
@@ -148,6 +149,7 @@ mod tests {
             body_lines: vec![1, 2],
             decorators: Vec::new(),
             doc: None,
+            scope: None,
         };
         let frame = StackFrame::new(&func, 10);
         assert!(frame.declared.contains("a"));

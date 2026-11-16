@@ -20,7 +20,7 @@ pub(crate) fn eval_plot_builtin_with_kwargs(
     match name {
         "plot" => plot_2d(args),
         "plot3d" | "export3d" | "export_3d" => plot_3d(name, args, kwargs, interpreter, env),
-        "plot_field" => plot_field(args, interpreter),
+        "plot_field" => plot_field(args, interpreter, env),
         "plot_nd" => plot_nd(args),
         _ => Ok(None),
     }
@@ -193,7 +193,7 @@ fn sample_expression(
     interpreter: &PhsInterpreter,
     env: &std::collections::HashMap<String, PhsValue>,
 ) -> PhysureResult<(Vec<f64>, String)> {
-    let inlined = preprocess_symbolic_expression(expr_str, interpreter);
+    let inlined = preprocess_symbolic_expression(expr_str, interpreter, env)?;
     let program = crate::parser::parse_phs(&inlined)?;
     let expr = match program.statements.first() {
         Some(crate::ast::Statement::Expr(e)) => e.clone(),
@@ -261,7 +261,11 @@ fn plot_3d(
     );
 
     if name == "plot3d" {
+        // Without the viewer there is still the ASCII plot; the HTML part is empty.
+        #[cfg(feature = "html-viewer")]
         let html_str = mesh_data.export_html_threejs();
+        #[cfg(not(feature = "html-viewer"))]
+        let html_str = String::new();
         let ascii_plot = draw_3d_surface_ascii(&req.title, &req.title, interpreter)?;
         return Ok(plot_value(req.title, &req.x_unit, &req.y_unit, ascii_plot, html_str));
     }
@@ -274,7 +278,7 @@ fn plot_3d(
     Ok(Some(PhsValue::String(format!("✓ Exported 3D mesh '{}' ({})", req.filename, req.format_name))))
 }
 
-fn plot_field(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
+fn plot_field(args: &[PhsValue], interpreter: &PhsInterpreter, env: &std::collections::HashMap<String, PhsValue>) -> PhysureResult<Option<PhsValue>> {
     let u_expr = match args.first() {
         Some(PhsValue::String(s)) => s.as_str(),
         _ => return Err(PhysureError::Generic("plot_field expects u(x, y) expression string".into())),
@@ -288,7 +292,7 @@ fn plot_field(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<
         _ => format!("Vector Field Plot: F = ({}, {})", u_expr, v_expr),
     };
 
-    let svg_plot = draw_vector_field_svg(u_expr, v_expr, &title, interpreter)?;
+    let svg_plot = draw_vector_field_svg(u_expr, v_expr, &title, interpreter, env)?;
     let ascii_plot = draw_vector_field_ascii(u_expr, v_expr, &title, interpreter)?;
     Ok(plot_value(title, "x", "y", ascii_plot, svg_plot))
 }
@@ -488,9 +492,15 @@ fn draw_3d_surface_ascii(_expr_str: &str, title: &str, _interpreter: &PhsInterpr
     Ok(format!("🏔️ {} [3D Surface View]", title))
 }
 
-fn draw_vector_field_svg(u_expr: &str, v_expr: &str, title: &str, interpreter: &PhsInterpreter) -> PhysureResult<String> {
+fn draw_vector_field_svg(
+    u_expr: &str,
+    v_expr: &str,
+    title: &str,
+    interpreter: &PhsInterpreter,
+    env: &std::collections::HashMap<String, PhsValue>,
+) -> PhysureResult<String> {
     let parse_expr = |s: &str| -> PhysureResult<crate::ast::Expr> {
-        let inlined = preprocess_symbolic_expression(s, interpreter);
+        let inlined = preprocess_symbolic_expression(s, interpreter, env)?;
         let program = crate::parser::parse_phs(&inlined)?;
         match program.statements.first() {
             Some(crate::ast::Statement::Expr(e)) => Ok(e.clone()),

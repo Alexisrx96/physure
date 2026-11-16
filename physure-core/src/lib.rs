@@ -1,6 +1,8 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 pub mod error;
+pub mod chemistry;
+pub mod frozen;
 pub mod units;
 pub mod uncertainty;
 pub mod quantity;
@@ -12,10 +14,11 @@ pub mod plotting;
 pub mod settings;
 pub use error::{PhysureError, PhysureResult};
 pub use units::{RationalUnit, UnitRegistry, DimVector, UnitKind};
+pub use units::angle_mode::{angle_mode, set_angle_mode, AngleMode};
 pub use quantity::Quantity;
 pub use linalg::{QuantityVector, QuantityMatrix};
 pub use covariance::{CovarianceStore, PruningConfig};
-pub use uncertainty::{UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, PropagationMode, with_seed, UnscentedBackend, propagation_mode, set_propagation_mode};
+pub use uncertainty::{Expanded, UncertaintyBackend, UncertaintyValue, AsymmetricMoments, GaussianBackend, MomentsBackend, MonteCarloBackend, PropagationMode, with_seed, UnscentedBackend, propagation_mode, set_propagation_mode};
 pub use plotting::Mesh3DData;
 pub use settings::{
     parallel_threshold, set_parallel_threshold, max_loop_iterations, set_max_loop_iterations,

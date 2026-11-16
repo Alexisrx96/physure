@@ -9,6 +9,22 @@ use std::collections::HashMap;
 use physure_core::error::{PhysureError, PhysureResult};
 use std::sync::{Arc, Mutex};
 
+thread_local! {
+    static PARALLEL_LOOPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `for` expressions and `parallel_map` calls the calling thread handed to rayon workers so far: what a
+/// test reads to know which path a loop took (the value of a loop is the same on both).
+#[doc(hidden)]
+pub fn parallel_loops_started() -> u64 {
+    PARALLEL_LOOPS.with(std::cell::Cell::get)
+}
+
+/// Counts one loop handed to rayon workers by this thread (see [`parallel_loops_started`]).
+pub(crate) fn count_parallel_loop() {
+    PARALLEL_LOOPS.with(|count| count.set(count.get() + 1));
+}
+
 /// A host-registered function callable from PHS source by name. Lets embedders
 /// (e.g. the PyO3 binding) expose functions without physure-script depending on them.
 pub type ExternalFn = Arc<dyn Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync>;
@@ -53,6 +69,17 @@ pub struct PhsInterpreter {
     /// `add_breakpoint`, when a new breakpoint is actually added (copy-on-write).
     pub(crate) breakpoints: Arc<Mutex<Arc<Vec<crate::debug::Breakpoint>>>>,
     pub(crate) step_mode: Arc<Mutex<Option<StepMode>>>,
+    /// The Monte Carlo stream of this interpreter's evaluation unit: the whole life of the interpreter (one program
+    /// run, one REPL session, one LSP document between two full analyses, one WASM or Java handle). `None` until the
+    /// first statement runs, when it starts from the seed setting in force; every later statement continues it, so a
+    /// measurement made by a later call never gets the samples of an earlier one. Shared by clones (a derived
+    /// function draws from the stream of the interpreter it came from). An evaluation already inside a unit (an
+    /// explicit `with_seed`, `phs eval`, a `phs serve` request) uses that one instead and leaves this one alone.
+    pub(crate) stream: Arc<Mutex<Option<physure_core::uncertainty::EvaluationStream>>>,
+    /// Each module imported so far, by its path: what it was and the environment it left. A module is run once, so
+    /// every import of it takes the same values (the same measurements); one whose source changed since is run
+    /// again. Shared by clones.
+    pub(crate) modules: Arc<Mutex<HashMap<String, (crate::resolver::ModuleSource, crate::value::ModuleScope)>>>,
 }
 
 impl Default for PhsInterpreter {
@@ -76,7 +103,43 @@ impl PhsInterpreter {
             call_stack: Arc::new(Mutex::new(Vec::new())),
             breakpoints: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             step_mode: Arc::new(Mutex::new(None)),
+            stream: Arc::new(Mutex::new(None)),
+            modules: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Where this interpreter's Monte Carlo stream stands (`None` before its first statement): see the `stream` field.
+    pub fn evaluation_stream(&self) -> Option<physure_core::uncertainty::EvaluationStream> {
+        *self.stream.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Runs `f` inside this interpreter's evaluation unit, unless a unit is already open on this thread (then `f`
+    /// continues that one). The lock is not held while `f` runs; the position `f` leaves is stored back, also on
+    /// unwind.
+    pub(crate) fn in_unit<R>(&self, f: impl FnOnce() -> R) -> R {
+        use physure_core::uncertainty::{in_evaluation_unit, EvaluationStream};
+        if in_evaluation_unit() {
+            return f();
+        }
+        struct WriteBack<'a> {
+            slot: &'a Mutex<Option<EvaluationStream>>,
+            stream: EvaluationStream,
+        }
+        impl Drop for WriteBack<'_> {
+            fn drop(&mut self) {
+                *self.slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.stream);
+            }
+        }
+        let saved = *self.stream.lock().unwrap_or_else(|e| e.into_inner());
+        let start = saved.unwrap_or_else(|| {
+            // the working directory's `physure.conf` is read on first use: read it before its seed is looked at, or
+            // the first unit of an unfrozen process would start from the compiled seed (an unusable configuration
+            // is reported by the statement itself)
+            let _ = physure_core::units::conf::try_with_conf_registry(|_| ());
+            EvaluationStream::from_setting()
+        });
+        let mut unit = WriteBack { slot: &self.stream, stream: start };
+        unit.stream.run(f)
     }
 
     pub fn new_default() -> Self {
@@ -119,6 +182,25 @@ impl PhsInterpreter {
 
     pub(crate) fn debug_hook_is_set(&self) -> bool {
         self.debug_hook.is_some()
+    }
+
+    /// Whether a `for` expression or a `parallel_map` of this interpreter may hand its items to rayon workers.
+    ///
+    /// Not while the propagation mode in force is `monte_carlo`: that is the only mode in which a PHS program draws
+    /// random numbers (every measurement it makes takes the mode in force; `physure-script` has no generator of its
+    /// own), and the draws of a loop must be the next ones of the evaluation unit's stream, in item order. A worker
+    /// is outside the unit, so each item would draw from the stream of whichever thread ran it, and the values would
+    /// depend on the number of workers and on `parallel_threshold`. There are no derived per-item seeds (the review
+    /// of the Phase 4b plan measured that they collide and change today's seeded bits). In every other mode nothing
+    /// draws and the loop stays parallel. The mode is read on the calling thread; `CallerScopes` carries it to the
+    /// workers, so a loop nested in a parallel loop decides the same.
+    ///
+    /// Nor under a debug hook (a breakpoint inside one of N racing workers is not a debugging session) or in the
+    /// sandbox (`Limits::sequential`).
+    pub fn runs_in_parallel(&self) -> bool {
+        !self.debug_hook_is_set()
+            && !self.limits.sequential
+            && physure_core::propagation_mode() != physure_core::PropagationMode::MonteCarlo
     }
 
     /// Like `default()`, but resolves `import` paths relative to `base_dir`
