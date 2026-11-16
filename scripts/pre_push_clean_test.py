@@ -148,6 +148,9 @@ def main():
     if run_python:
         print("\n--- [Step 3/4] Prebuilding Stripped ABI3 PyO3 Wheel ---")
         dist_dir = python_dir / "dist"
+        if dist_dir.exists():
+            for old_wheel in dist_dir.glob("*.whl"):
+                old_wheel.unlink()
         code = run_command(["uv", "run", "maturin", "build", "--release", "--strip", "--out", str(dist_dir)], cwd=python_dir)
         if code != 0:
             print("\n[FAIL] Step 3: PyO3 wheel prebuild failed!")

@@ -69,12 +69,15 @@ jobs:
       - name: Build the native library
         shell: bash
         run: |
+          # Release, as java-release.yml builds the library the jar ships: a debug build of the PHS parser
+          # spends about 40 KB of native stack per nested bracket and overflows the 1 MiB stack of a Java thread
+          # at 24 levels (a release build fits the full 64-level MAX_NESTING_DEPTH in 1 MiB).
           if [ -n "${{ matrix.target }}" ]; then
-            cargo build -p physure-java --target "${{ matrix.target }}"
-            built="target/${{ matrix.target }}/debug"
+            cargo build --release -p physure-java --target "${{ matrix.target }}"
+            built="target/${{ matrix.target }}/release"
           else
-            cargo build -p physure-java
-            built="target/debug"
+            cargo build --release -p physure-java
+            built="target/release"
           fi
           mkdir -p native-out
           cp "$built/${{ matrix.lib }}" native-out/

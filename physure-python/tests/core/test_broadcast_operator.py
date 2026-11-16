@@ -118,4 +118,9 @@ def test_a_sparse_operator_is_powered_like_a_dense_one(name, exponent):
     with np.errstate(divide="ignore"):
         expected = np.power(densify(operator), exponent)
     got = densify(backend.pow(operator, exponent))
-    np.testing.assert_array_equal(got, expected)
+    # `torch.pow(2.0, 0.5)` and `np.power(2.0, 0.5)` can differ by 1 ULP on Linux x86_64 (`1.414213562373095` vs
+    # `1.4142135623730951`); for integer exponents (2, 0, -1) and on every zero entry they are exact.
+    if exponent == 0.5:
+        np.testing.assert_allclose(got, expected, rtol=1e-15, atol=0.0)
+    else:
+        np.testing.assert_array_equal(got, expected)
