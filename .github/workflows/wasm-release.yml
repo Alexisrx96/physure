@@ -18,6 +18,13 @@ name: WASM Release
 on:
   push:
     tags: ["wasm-v*"]
+  workflow_dispatch:
+    # Started by the bump workflow (`gh workflow run ... --ref <tag>`). Run from a branch by hand,
+    # the check-version job fails (the ref is not a tag of the right version) before anything is built.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -39,7 +46,7 @@ jobs:
           version="$(grep -m1 -oP '(?<=^version = ")[^"]+' physure-wasm/Cargo.toml || true)"
           if [ -z "$version" ]; then
             if grep -m1 -q 'version.workspace *= *true' physure-wasm/Cargo.toml; then
-              version="$(grep -m1 -oP '(?<=^version *= *")[^"]+' Cargo.toml)"
+              version="$(grep -m1 -oP '(?<=^version     = ")[^"]+' Cargo.toml)"
             fi
           fi
           if [ "$tag" != "$version" ]; then
