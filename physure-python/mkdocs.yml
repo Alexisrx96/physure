@@ -64,6 +64,7 @@ nav:
       - Standard Atomic Weights: atomic_weights.md
       - Standard Thermochemical Data: thermochemistry.md
       - Freezing the Configuration (phs conf): conf_freeze.md
+      - What a Frozen Configuration Covers: conf_coverage.md
       - Diagramming Engine Roadmap: diagrams_roadmap.md
       - Scientific Companion Roadmap: scientific_roadmap.md
       - Symbolic Math Engine Roadmap: symbolic_math_roadmap.md
