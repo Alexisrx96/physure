@@ -173,6 +173,28 @@ struct Reading {
     strict_sections: bool,
 }
 
+/// Every key of `[Settings]` the core reads: one arm of `read_setting` each, in the order the unknown-key message names
+/// them. The frozen entries list exactly these plus the `[Compatibility]` grants (a test in `frozen/entries.rs`), and the
+/// coverage table `docs/conf_coverage.md` must have a row for each (`tests/conf_coverage.rs`), so a key cannot be added
+/// without saying what it governs.
+pub const CORE_SETTING_KEYS: &[&str] = &[
+    "propagation_mode",
+    "angle_mode",
+    "parallel_threshold",
+    "max_loop_iterations",
+    "max_pipeline_steps",
+    "approx_rel_tol",
+    "monte_carlo_samples",
+    "max_while_iterations",
+    "asymmetric_shape",
+    "default_dof",
+    "monte_carlo_seed",
+    "display_significant_digits",
+    "display_scientific_below",
+    "display_scientific_from",
+    "uncertainty_digits",
+];
+
 /// The keys of `[Settings]` that every reader accepts and nothing reads: not the core, not PHS, the CLI, the LSP, the
 /// WASM or Java bindings, not Python (which stores a conf's `[Settings]` in `UnitSystem.settings` and acts on
 /// `propagation_mode` alone; verified by search, conf freeze Phase 4b). They are accepted so that an older conf
@@ -525,10 +547,14 @@ fn read_setting(line: &str) -> Result<Setting, SettingIssue> {
 pub fn parse_setting(line: &str) -> Result<Setting, String> {
     read_setting(line).map_err(|issue| match issue {
         SettingIssue::NotKeyValue => "a setting is `key = value`".to_string(),
-        SettingIssue::Unknown(key) => format!(
-            "unknown setting '{key}': the core reads propagation_mode, angle_mode, parallel_threshold, max_loop_iterations, max_pipeline_steps, approx_rel_tol, monte_carlo_samples, max_while_iterations, asymmetric_shape, default_dof, monte_carlo_seed, display_significant_digits, display_scientific_below, display_scientific_from and uncertainty_digits, and accepts {} for other bindings",
-            CORE_UNUSED_SETTINGS.join(", ")
-        ),
+        SettingIssue::Unknown(key) => {
+            let (last, rest) = CORE_SETTING_KEYS.split_last().expect("the core reads settings");
+            format!(
+                "unknown setting '{key}': the core reads {} and {last}, and accepts {} for other bindings",
+                rest.join(", "),
+                CORE_UNUSED_SETTINGS.join(", ")
+            )
+        }
         SettingIssue::Bad { why, .. } => why,
     })
 }
@@ -1792,6 +1818,24 @@ mod tests {
     /// process-wide globals, and a test that sets one and reads it back must not meet that.
     fn settle_catalog_settings() {
         let _ = build_registry_from_conf();
+    }
+
+    #[test]
+    fn every_core_setting_key_is_read_and_named_by_the_unknown_key_message() {
+        let message = parse_setting("no_such_key = 1").unwrap_err();
+        for key in CORE_SETTING_KEYS {
+            // a bad value is a `Bad` issue, never `Unknown`: the key has an arm in `read_setting`
+            assert!(
+                !matches!(read_setting(&format!("{key} = ?")), Err(SettingIssue::Unknown(_))),
+                "{key} is listed in CORE_SETTING_KEYS but read_setting does not know it"
+            );
+            assert!(message.contains(key), "{key} missing from: {message}");
+            assert!(!CORE_UNUSED_SETTINGS.contains(key), "{key} is both read and ignored");
+        }
+        let mut unique = CORE_SETTING_KEYS.to_vec();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), CORE_SETTING_KEYS.len(), "a key is listed twice");
     }
 
     #[test]

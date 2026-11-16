@@ -278,6 +278,22 @@ mod tests {
         (registry, constants, collected)
     }
 
+    /// The `setting` entries are exactly the keys the core reads (`CORE_SETTING_KEYS`, the list the coverage table
+    /// `docs/conf_coverage.md` is checked against) plus the grants of `[Compatibility]`, which are settings derived
+    /// from another section. A key added to `read_setting` and to the entries but not to the list fails here.
+    #[test]
+    fn the_setting_entries_are_the_core_setting_keys_and_the_derived_grants() {
+        use crate::units::conf::CORE_SETTING_KEYS;
+        const DERIVED: [&str; 2] = ["radian_plain", "steradian_plain"];
+        let (registry, constants, settings) = shipped();
+        let mut emitted: Vec<String> =
+            entries(&registry, &constants, &settings).into_iter().filter(|e| e.kind == "setting").map(|e| e.name).collect();
+        emitted.sort();
+        let mut expected: Vec<String> = CORE_SETTING_KEYS.iter().chain(DERIVED.iter()).map(|k| k.to_string()).collect();
+        expected.sort();
+        assert_eq!(emitted, expected);
+    }
+
     #[test]
     fn two_builds_of_the_same_text_give_the_same_entries_and_no_difference() {
         let (a, ca, sa) = shipped();
