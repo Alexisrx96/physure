@@ -199,8 +199,9 @@ impl CovarianceStore {
                 if r == c { return None; }
                 let cov_norm: f64 = mat.iter().map(|(&v, _)| v * v).sum::<f64>().sqrt();
                 if cov_norm == 0.0 { return Some((r, c)); }
-                let norm_r = variance_norms.get(&r).cloned().unwrap_or(1.0);
-                let norm_c = variance_norms.get(&c).cloned().unwrap_or(1.0);
+                // a variance that is not stored cannot be stood in for by a number: `1.0` is an absolute value in
+                // whatever unit, so the block is kept (audit T7)
+                let (norm_r, norm_c) = (variance_norms.get(&r)?, variance_norms.get(&c)?);
                 (cov_norm / (norm_r * norm_c).sqrt() < threshold).then_some((r, c))
             })
             .collect();
@@ -279,5 +280,38 @@ impl CovarianceStore {
     pub fn prune(&mut self) {
         self.prune_by_age();
         self.prune_weak_correlations();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::IxDyn;
+
+    fn csr_1x1(value: f64) -> CsMat<f64> {
+        CovarianceStore::numpy_to_csr(ArrayViewD::from_shape(IxDyn(&[1, 1]), &[value]).unwrap())
+    }
+
+    /// Audit T7: a missing variance norm was read as `1.0`, an absolute value in whatever unit, so a covariance
+    /// block whose variances are not both stored was judged against a variance nobody registered: here the
+    /// correlation with a variable of variance 1e-14 is 1, and the guess `1.0` made it look like 1e-7.
+    #[test]
+    fn a_block_whose_variances_are_not_both_known_is_kept_not_judged_on_a_guess() {
+        let mut s = CovarianceStore::new(PruningConfig::new(100, true, 0.5));
+        s.register_diagonal_slice(0, &[1e-14]);
+        s.blocks.insert((0, 1), csr_1x1(1e-14)); // variable 1 has no variance block
+        s.prune();
+        assert!(s.blocks.contains_key(&(0, 1)), "a block that cannot be judged is not pruned");
+    }
+
+    /// The rule itself is unchanged where both variances are known: a correlation of 1e-9 is below 0.5.
+    #[test]
+    fn a_weak_correlation_between_known_variances_is_still_pruned() {
+        let mut s = CovarianceStore::new(PruningConfig::new(100, true, 0.5));
+        s.register_diagonal_slice(0, &[1.0]);
+        s.register_diagonal_slice(1, &[1.0]);
+        s.blocks.insert((0, 1), csr_1x1(1e-9));
+        s.prune();
+        assert!(!s.blocks.contains_key(&(0, 1)));
     }
 }
