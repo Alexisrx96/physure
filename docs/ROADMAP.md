@@ -127,13 +127,13 @@ answer come first:
 - [ ] The symbolic parser reads `and`, `or` and `not` as symbols and multiplies them: `simplify("x and y")` is `and * x * y` and `deriv("x not y", "x")` is `not * y`. Found while fixing T2.
 - [x] Only the first call of a user function is inlined in a symbolic expression (T3); arguments were not substituted either. Fixed in Phase 4b.
 - [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
-- [ ] Covariance pruning reads a missing variance as an absolute `1.0`, whatever the unit (T7).
+- [x] Covariance pruning read a missing variance as an absolute `1.0`, whatever the unit (T7). A block whose variances are not both stored is kept now. It was latent: no public call sequence reaches it, and pruning is off by default.
 - [ ] `e` means Euler's number in a symbolic string and is refused elsewhere (T13).
 - [ ] A compiled export without contracts has no way to report a failure (T15).
 - [ ] The JavaScript and TypeScript targets emit calls the binding does not have (T19).
 
-Then the ones that fail loudly or only read badly: T1 (reporting half), T4, T8, T9, T11, T16,
-T18, T20 and T21. The full list, with reproductions, is in section 11.2 of the audit.
+Then the ones that fail loudly or only read badly: T1 (reporting half), T4, T8, T9, T11, T16
+and T21 (T18 and T20 are fixed). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
