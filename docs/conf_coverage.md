@@ -179,7 +179,6 @@ The seed is a frozen setting (section 1.2); what it makes reproducible is this.
 | `legacy-python-1` is textbook data rounded to 0.1, with no uncertainty and mixed sources (NH3(g) S° about 7 σ from CODATA); a better-sourced edition with uncertainties is future work | `physure-core/src/units/physure.conf` | not frozen | none | future edition (docs/thermochemistry.md) |
 | `phs conf status` names the atomic-weight edition in force but has no thermochemistry line (`phs conf show` lists the thermochemistry entries) | `physure-cli/src/conf.rs` | not frozen | none | Phase 4b docs and follow-up |
 | An unbound PHS identifier evaluates to its own name as text (T5) | `physure-script` interpreter | not frozen | none | language semantics, owner decision |
-| The symbolic engine has its own parser: `e` before `^` is Euler's number there and refused in the numeric path (T13) | `physure-script/src/symbolic/parser.rs` | not frozen | none | language semantics, open |
 
 ## 4. What a validated site must still do itself
 

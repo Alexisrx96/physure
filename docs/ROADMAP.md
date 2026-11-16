@@ -128,7 +128,7 @@ answer come first:
 - [x] Only the first call of a user function is inlined in a symbolic expression (T3); arguments were not substituted either. Fixed in Phase 4b.
 - [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
 - [x] Covariance pruning read a missing variance as an absolute `1.0`, whatever the unit (T7). A block whose variances are not both stored is kept now. It was latent: no public call sequence reaches it, and pruning is off by default.
-- [ ] `e` means Euler's number in a symbolic string and is refused elsewhere (T13).
+- [x] `e` meant Euler's number in a symbolic string and was refused elsewhere (T13). It is a name like any other in both now, and `e^x` in a symbolic text is refused (write `exp(x)`). The same change fixed a silent wrong answer: a name ending in `e` before `^` was cut into the name and `e`, so `deriv("time^2", "time")` answered 0.
 - [ ] A compiled export without contracts has no way to report a failure (T15).
 - [ ] The JavaScript and TypeScript targets emit calls the binding does not have (T19).
 
