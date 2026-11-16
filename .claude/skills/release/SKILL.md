@@ -17,12 +17,12 @@ version file.
 | `physure` (Python) | `bump-release.yml` — bumps `physure-python/physure/__init__.py` | `release.yml` | `vX.Y.Z` | PyPI (Trusted Publishing) |
 | `physure` (Rust crate) | `bump-core-release.yml` — bumps `[workspace.package] version` in root `Cargo.toml` | `core-release.yml` — also builds and attaches prebuilt `phs` + `physure-lsp` binaries (5 platforms) to the GitHub release | `core-vX.Y.Z` | crates.io (Trusted Publishing) |
 | `physure-java` | `bump-java-release.yml` — bumps `physure-java/pom.xml` | `java-release.yml` — builds native JNI libs (5 platforms), publishes via Sonatype Central Portal | `java-vX.Y.Z` | Maven Central (`io.github.alexisrx96:physure`) |
-| `physure` (npm/WASM) | `bump-wasm-release.yml` — no `bump` part: it brings `physure-wasm/package.json` to the workspace version and tags it, so run it **after** the core bump | `wasm-release.yml` | `wasm-vX.Y.Z` | npm |
+| `physure` (npm/WASM) | `bump-wasm-release.yml` — no `bump` part: it brings `physure-wasm/package.json` to the workspace version and tags it, so run it **after** the core bump | `wasm-release.yml` | `wasm-vX.Y.Z` | npm (Trusted Publishing) |
 
-No PyPI/crates.io tokens exist locally for any of these — never try
+No PyPI/crates.io/npm tokens exist locally for any of these — never try
 `twine`, `cargo login`, or `npm login` locally. All four use short-lived,
-per-run tokens (OIDC Trusted Publishing for PyPI/crates.io; stored
-secrets in a required-reviewer GitHub environment for Maven/npm).
+per-run tokens (OIDC Trusted Publishing for PyPI, crates.io, and npm; stored
+secrets in a required-reviewer GitHub environment for Maven Central).
 
 ## How a release really runs (read this first)
 
@@ -196,9 +196,9 @@ produces — but the release workflows themselves accept more than that:
 - Any `check-version` job failure → tag doesn't match the package's
   version file; delete the bad tag (the `gh api -X DELETE` call above, or
   `git push origin :<tag>`), fix the version file, re-tag.
-- `release.yml`/`core-release.yml` publish failure mentioning trusted
-  publisher / OIDC → the PyPI/crates.io Trusted Publisher config (repo,
-  workflow filename, environment name) is missing or wrong — that's set
+- `release.yml`/`core-release.yml`/`wasm-release.yml` publish failure mentioning
+  trusted publisher / OIDC → the PyPI/crates.io/npm Trusted Publisher config
+  (repo, workflow filename, environment name) is missing or wrong — that's set
   in the registry's web UI, the user must fix it.
 - `java-release.yml` publish failure → check the `maven-central`
   environment's `CENTRAL_USERNAME`/`CENTRAL_TOKEN`/`GPG_PRIVATE_KEY`/

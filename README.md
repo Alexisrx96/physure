@@ -11,6 +11,7 @@
 [![PyPI](https://img.shields.io/pypi/v/physure?color=F59E0B&labelColor=18181A)](https://pypi.org/project/physure/)
 [![crates.io](https://img.shields.io/crates/v/physure?color=F59E0B&labelColor=18181A)](https://crates.io/crates/physure)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.alexisrx96/physure?color=F59E0B&labelColor=18181A)](https://central.sonatype.com/artifact/io.github.alexisrx96/physure)
+[![npm](https://img.shields.io/npm/v/physure?color=F59E0B&labelColor=18181A)](https://www.npmjs.com/package/physure)
 [![CI](https://img.shields.io/github/actions/workflow/status/Alexisrx96/physure/tests.yml?branch=main&labelColor=18181A)](https://github.com/Alexisrx96/physure/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-F59E0B?labelColor=18181A)](LICENSE)
 

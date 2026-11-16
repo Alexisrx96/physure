@@ -9,10 +9,14 @@
 # bump-core-release.yml, because physure-wasm has no version of its own.
 #
 # One-time setup (repo owner):
-#   1. Create an npm account/org and verify it can publish the `physure` name.
-#   2. Generate an npm "Automation" access token (npmjs.com -> Access Tokens).
-#   3. GitHub: create the `npm` environment (Settings -> Environments) and add
-#      the token as the NPM_TOKEN secret in that environment.
+#   1. On npmjs.com -> package `physure` -> Settings -> Trusted Publisher,
+#      configure GitHub Actions with:
+#        - Organization or user: Alexisrx96
+#        - Repository: physure
+#        - Workflow filename: wasm-release.yml
+#        - Environment name: npm
+#   2. GitHub: ensure the `npm` environment exists (Settings -> Environments).
+#      No NPM_TOKEN secret is needed when OIDC Trusted Publishing is active.
 name: WASM Release
 
 on:
@@ -71,6 +75,9 @@ jobs:
     needs: [check-version, bindings-tests]
     runs-on: ubuntu-latest
     environment: npm
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: dtolnay/rust-toolchain@stable
@@ -78,8 +85,9 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org"
+          node-version: "24"
+      - name: Ensure npm supports OIDC Trusted Publishing (>=11.5.1)
+        run: npm install -g npm@latest
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
       - name: Build bundler target
@@ -94,6 +102,4 @@ jobs:
           rm -f pkg-node/.gitignore pkg-node/package.json
       - name: Publish to npm
         working-directory: physure-wasm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
