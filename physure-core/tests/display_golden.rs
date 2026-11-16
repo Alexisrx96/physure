@@ -5,8 +5,8 @@
 //!
 //! The expected strings were generated once by the implementation before the display rules became catalog settings
 //! (Phase 4b, Task 2) and reviewed: the compiled defaults of `display_significant_digits`, `display_scientific_below`,
-//! `display_scientific_from` and `uncertainty_digits` must reproduce every one of them. NaN is not recorded (it prints
-//! `NaN.0`, an open defect). Some rows record quirks on purpose, so that a change to them is a decision: `gum_round`
+//! `display_scientific_from` and `uncertainty_digits` must reproduce every one of them. `format_float(NaN)` is `NaN` (it
+//! was `NaN.0`, audit T20). Some rows record quirks on purpose, so that a change to them is a decision: `gum_round`
 //! writes `-0.00` for a negative zero mean where `format_float` writes `0.0`, writes a large rounded mean without a
 //! `.0`, and switches to the unrounded scientific form one ulp below an uncertainty of 1e-4.
 
@@ -63,6 +63,7 @@ fn rows() -> Vec<(String, String)> {
         ("-0.0", -0.0),
         ("inf", f64::INFINITY),
         ("-inf", f64::NEG_INFINITY),
+        ("NaN", f64::NAN),
         ("smallest subnormal", f64::from_bits(1)),
         ("1e-310 subnormal", 1e-310),
         ("min positive normal", f64::MIN_POSITIVE),
@@ -224,6 +225,7 @@ const GOLDEN: &[(&str, &str)] = &[
         ("float -0.0", "0.0"),
         ("float inf", "inf"),
         ("float -inf", "-inf"),
+        ("float NaN", "NaN"),
         ("float smallest subnormal", "5e-324"),
         ("float 1e-310 subnormal", "1e-310"),
         ("float min positive normal", "2.2250738585072014e-308"),

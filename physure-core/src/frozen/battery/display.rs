@@ -12,7 +12,7 @@
 //! unit's scale. `display.folded_unit` and `display.base_units` read `m`, `km`, `kohm`, `degC` and `J` through the
 //! hooked catalog like every other case.
 //!
-//! Each case writes several values joined by `"; "`; NaN is never recorded (it prints `NaN.0`, an open defect).
+//! Each case writes several values joined by `"; "`; NaN is never recorded (no rule of the display decides it: `NaN`).
 
 use super::{case, Case, CaseError, CaseResult};
 use crate::frozen::witness::WitnessValue;

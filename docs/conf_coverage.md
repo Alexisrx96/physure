@@ -169,7 +169,6 @@ The seed is a frozen setting (section 1.2); what it makes reproducible is this.
 | Plot axis labels `{:.3e}` and the symbolic printer's integer cut at 1e15 | `physure-script/src/builtins/plot.rs`, `physure-script/src/symbolic/display.rs` | not frozen | none | engine (no key planned) |
 | Python `str` and `repr` of a quantity: the raw float text, no GUM rounding, the unit not folded (C11) | `physure-python/physure/domain/measurement/quantity.py` | not frozen | none | Phase 5 (call the core's display) |
 | Unit names written by code tables, not the catalog: `µ` where the catalog's micro is `u`, 16 derived symbols (M10). When it moves, unit text changes, and with it the hash of a user witness (`unit=` is part of `phs-witness-1`) | `physure-core/src/units/rational.rs` | not frozen | none | Phase 5 (deferred by the owner) |
-| NaN prints as `NaN.0` (T20); no display witness records NaN while it is open | `physure-core/src/quantity.rs` | not frozen | none | defect, open |
 
 ### 3.5 Accepted, ignored, and known gaps
 

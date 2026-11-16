@@ -113,6 +113,10 @@ fn format_float_with(n: f64, rules: &crate::settings::DisplayRules) -> String {
     if n == 0.0 {
         return "0.0".to_string();
     }
+    // `NaN` has no `.` and no `e`, so the `.0` below made it `NaN.0` (audit T20); the infinities are `{:e}` ones
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
     let abs_n = n.abs();
     if rules.is_scientific(n) {
         format!("{:e}", n)
@@ -1320,6 +1324,14 @@ mod tests {
         assert_eq!(format_float(1234567.0), "1.234567e6");
         assert_eq!(format_float(-0.0), "0.0");
         assert_eq!(format_float(f64::INFINITY), "inf");
+    }
+
+    /// Audit T20: a `.0` was appended to any text without a `.` or an `e`, and `NaN` has neither.
+    #[test]
+    fn a_number_that_is_not_a_number_prints_as_nan() {
+        assert_eq!(format_float(f64::NAN), "NaN");
+        assert_eq!(format_float(-f64::NAN), "NaN");
+        assert_eq!(Quantity::new(f64::NAN, "m").unwrap().to_string(), "NaN m");
     }
 
     #[test]
