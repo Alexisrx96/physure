@@ -198,6 +198,12 @@ impl SymbolicParser {
         if !self.at_power() {
             return Ok(base);
         }
+        // `e` is a name like any other here and Euler's number nowhere, as in the numeric path (audit T13)
+        if matches!(&base, Node::Symbol(name) if name == "e") {
+            return Err(PhysureError::Generic(
+                "`e` is not Euler's number in a symbolic text: write `exp(x)` for e^x, or another name for a variable".to_string(),
+            ));
+        }
         self.next();
         let mut exponent = self.parse_exponent()?;
         // a number exponent followed by a name takes the name along (`e^2x` is `e^(2 x)`)
@@ -240,7 +246,7 @@ impl SymbolicParser {
 
         match tok.kind {
             TokenKind::Number(n) => Ok(Node::Number(n)),
-            TokenKind::Ident(ref name) => self.parse_identifier(name, tok.pos),
+            TokenKind::Ident(ref name) => self.parse_identifier(name),
             TokenKind::Op(ref op) if op == "(" => {
                 let node = self.parse_equality()?;
                 self.expect_close("Expected closing ')'")?;
@@ -262,21 +268,12 @@ impl SymbolicParser {
         }
     }
 
-    /// A name: a function call when `(` follows, otherwise a symbol. A name ending in `e` before `^` is the
-    /// symbol and the constant `e` (`2xe^x`), so the `e` goes back as a token of its own.
-    fn parse_identifier(&mut self, name: &str, pos: usize) -> PhysureResult<Node> {
+    /// A name: a function call when `(` follows, otherwise a symbol, whole. It used to cut a name that ends in `e`
+    /// before `^` into the name and the constant `e` (to read `2xe^x`), so `time^2` was `tim * e^2` and `deriv("time^2",
+    /// "time")` answered 0 (audit T13).
+    fn parse_identifier(&mut self, name: &str) -> PhysureResult<Node> {
         if self.peek().is_some_and(|next_t| next_t.value == "(") {
             return self.parse_func_call(name);
-        }
-        let before_power = self.peek().is_some_and(|next_t| next_t.value == "^" || next_t.value == "**");
-        if name.len() > 1 && name.ends_with('e') && before_power {
-            let prefix = name[..name.len() - 1].to_string();
-            self.tokens.insert(self.pos, PhsToken {
-                kind: TokenKind::Ident("e".to_string()),
-                value: "e".to_string(),
-                pos: pos + prefix.len(),
-            });
-            return Ok(Node::Symbol(prefix));
         }
         Ok(Node::Symbol(name.to_string()))
     }

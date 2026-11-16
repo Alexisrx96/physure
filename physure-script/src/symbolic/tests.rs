@@ -312,8 +312,9 @@ fn test_diff_hyperbolic_functions() {
 
 #[test]
 fn test_diff_chain_rule_and_exponent_precedence() {
-    // d/dx [e^2x] = 2 * e^(2 * x)
-    assert_eq!(Expr::diff_str("e^2x", "x").unwrap(), "2 * e^(2 * x)");
+    // d/dx [exp(2x)] = exp(2 * x) * 2; `e` is not Euler's number in a symbolic text (audit T13)
+    assert_eq!(Expr::diff_str("exp(2x)", "x").unwrap(), "exp(2 * x) * 2");
+    assert!(Expr::diff_str("e^2x", "x").unwrap_err().to_string().contains("exp(x)"));
 
     // d/dx [ln(cos(x))] = (-1 * sin(x))/cos(x)
     let d_ln_cos = Expr::diff_str("ln(cos(x))", "x").unwrap();
@@ -370,9 +371,9 @@ fn test_integrate_trig_and_hyperbolic_extended() {
 
 #[test]
 fn test_integrate_by_parts_suite() {
-    // ∫ xe^x dx = e^x * x - e^x
-    let i_xe_x = Expr::integrate_str("xe^x", "x").unwrap();
-    assert_eq!(i_xe_x, "e^x * x - e^x");
+    // ∫ x exp(x) dx = exp(x) * x - exp(x)
+    let i_xe_x = Expr::integrate_str("x * exp(x)", "x").unwrap();
+    assert_eq!(i_xe_x, "exp(x) * x - exp(x)");
 
     // ∫ x * cos(x) dx = sin(x) * x - -1 * cos(x)
     let i_x_cos = Expr::integrate_str("x * cos(x)", "x").unwrap();
@@ -484,7 +485,7 @@ fn test_diff_edge_cases_extended_req() {
 #[test]
 fn test_integrate_edge_cases_extended_req() {
     assert_eq!(Expr::integrate_str("x * sin(x)", "x").unwrap(), "cos(x) * -1 * x - -1 * sin(x)");
-    assert_eq!(Expr::integrate_str("x^2 * e^x", "x").unwrap(), "e^x * x^2 - 2 * (e^x * x - e^x)");
+    assert_eq!(Expr::integrate_str("x^2 * exp(x)", "x").unwrap(), "exp(x) * x^2 - 2 * (exp(x) * x - exp(x))");
     assert_eq!(Expr::integrate_str("x * ln(x)", "x").unwrap(), "(ln(x) * x^2)/2 - x^2/4");
     assert_eq!(Expr::integrate_str("2*x / (x^2 + 1)", "x").unwrap(), "ln(abs(1 + x^2))");
     assert_eq!(Expr::integrate_str("3*x^2 * cos(x^3)", "x").unwrap(), "sin(x^3)");

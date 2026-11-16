@@ -174,7 +174,6 @@ impl Node {
             Node::Ln(u) => {
                 let su = u.simplify();
                 match su {
-                    Node::Symbol(ref s) if s == "e" => Node::Number(1.0),
                     Node::Number(n) if n == 1.0 => Node::Number(0.0),
                     Node::Exp(inner) => *inner,
                     _ => Node::Ln(Box::new(su)),

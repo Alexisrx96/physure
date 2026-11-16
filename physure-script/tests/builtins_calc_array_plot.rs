@@ -203,6 +203,19 @@ fn a_comparison_is_not_a_symbolic_expression() {
     assert!(calc_refused(r#"substitute("x + 1", "x", "y >= 2")"#).contains("`>=`"));
 }
 
+/// Audit T13: `e` was Euler's number in a symbolic text and nothing in a numeric one. To read `2xe^x` the parser also
+/// cut every name that ends in `e` before a `^` into the name and `e`, so a variable named `time`, `rate` or `Re` (the
+/// Reynolds number) was `tim * e`: `deriv("time^2", "time")` answered 0.
+#[test]
+fn e_is_not_euler_s_number_in_a_symbolic_text_and_a_name_ending_in_e_is_that_name() {
+    assert!(calc_refused(r#"deriv("e^x", "x")"#).contains("exp(x)"));
+    assert!(calc_refused(r#"integral("e^x", "x")"#).contains("exp(x)"));
+    assert_eq!(calc(r#"deriv("time^2", "time")"#), "2 * time");
+    assert_eq!(calc(r#"deriv("Re^2", "Re")"#), "2 * Re");
+    assert_eq!(calc(r#"simplify("rate^2")"#), "rate^2");
+    assert_eq!(calc(r#"deriv("exp(x)", "x")"#), "exp(x)");
+}
+
 /// The cause behind T2: whatever the parser did not read was dropped, not only comparisons.
 #[test]
 fn text_after_a_symbolic_expression_is_refused_not_dropped() {

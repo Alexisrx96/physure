@@ -129,8 +129,8 @@ fn test_solve() {
 #[test]
 fn test_deriv_extended_script_suite() {
     assert_eq!(
-        eval_calc("deriv", vec![PhsValue::String("e^2x".into()), PhsValue::String("x".into())]),
-        PhsValue::String("2 * e^(2 * x)".into())
+        eval_calc("deriv", vec![PhsValue::String("exp(2x)".into()), PhsValue::String("x".into())]),
+        PhsValue::String("exp(2 * x) * 2".into())
     );
     assert_eq!(
         eval_calc("deriv", vec![PhsValue::String("0 = sin(x)^2 + cosec(y)^2".into()), PhsValue::String("x".into())]),
@@ -175,8 +175,8 @@ fn test_deriv_extended_script_suite() {
 #[test]
 fn test_integral_extended_script_suite() {
     assert_eq!(
-        eval_calc("integral", vec![PhsValue::String("xe^x".into()), PhsValue::String("x".into())]),
-        PhsValue::String("e^x * x - e^x".into())
+        eval_calc("integral", vec![PhsValue::String("x * exp(x)".into()), PhsValue::String("x".into())]),
+        PhsValue::String("exp(x) * x - exp(x)".into())
     );
     assert_eq!(
         eval_calc("integral", vec![PhsValue::String("1 / (1 + x^2)".into()), PhsValue::String("x".into())]),
