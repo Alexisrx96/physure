@@ -9,6 +9,7 @@ none of them require the others.
 | Use unit-aware quantities from Python (NumPy/PyTorch/JAX) | [Python package](#python) |
 | Use the physics engine from a Rust project | [Rust crate](#rust) |
 | Use it from a JVM project | [Java / Maven Central](#java) |
+| Use it from Node.js or a JS/TS bundler | [JavaScript / TypeScript (WASM)](#javascript--typescript-wasm) |
 | Get syntax highlighting, live evaluation, hover docs in VS Code | [VS Code extension](#vs-code-extension) |
 
 ---
@@ -90,7 +91,7 @@ See the [Python package README](physure-python/README.md) for the full API.
 
 ```toml
 [dependencies]
-physure = "0.2"
+physure = "0.4"
 ```
 
 The crate is pure Rust with no FFI dependencies — it's the same engine that backs the Python
@@ -108,13 +109,26 @@ Published to Maven Central as `io.github.alexisrx96:physure` (note: the module's
 <dependency>
     <groupId>io.github.alexisrx96</groupId>
     <artifactId>physure</artifactId>
-    <version>0.2.3</version>
+    <version>0.4.0</version>
 </dependency>
 ```
 
 The jar bundles prebuilt natives for Linux/macOS/Windows (x86_64 + aarch64) — no
 `-Djava.library.path` setup needed. Requires Java 8+. See the
 [Java bindings README](physure-java/README.md) for usage examples.
+
+---
+
+## JavaScript / TypeScript (WASM)
+
+Published to npm as [`physure`](https://www.npmjs.com/package/physure) with prebuilt WebAssembly
+targets for both Node.js and JS/TS bundlers (plus `.d.ts` TypeScript declarations):
+
+```bash
+npm install physure
+```
+
+See the [WASM bindings README](physure-wasm/README.md) for usage examples.
 
 ---
 

@@ -13,8 +13,8 @@
   <packaging>jar</packaging>
 
   <name>physure</name>
-  <description>JVM JNI bindings for the high-performance physure core physics engine.</description>
-  <url>https://github.com/Alexisrx96/physure</url>
+  <description>Unit-aware, dimension-correct physics computing and GUM uncertainty propagation for the JVM (Java 8+), backed by the physure Rust core engine with bundled native JNI libraries for Linux, macOS, and Windows.</description>
+  <url>https://github.com/Alexisrx96/physure/tree/main/physure-java#readme</url>
 
   <licenses>
     <license>

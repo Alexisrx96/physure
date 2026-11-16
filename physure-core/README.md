@@ -26,7 +26,7 @@ This crate is the core of the [physure](https://github.com/Alexisrx96/physure) p
 
 ```toml
 [dependencies]
-physure = "0.2"
+physure = "0.4"
 ```
 
 The package is `physure`, but its library target is `physure_core`, so that is the name
