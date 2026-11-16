@@ -84,10 +84,14 @@ jobs:
         run: cargo install wasm-pack --locked
       - name: Build bundler target
         working-directory: physure-wasm
-        run: wasm-pack build --release --target bundler --out-dir pkg-bundler
+        run: |
+          wasm-pack build --release --target bundler --out-dir pkg-bundler
+          rm -f pkg-bundler/.gitignore pkg-bundler/package.json
       - name: Build nodejs target
         working-directory: physure-wasm
-        run: wasm-pack build --release --target nodejs --out-dir pkg-node
+        run: |
+          wasm-pack build --release --target nodejs --out-dir pkg-node
+          rm -f pkg-node/.gitignore pkg-node/package.json
       - name: Publish to npm
         working-directory: physure-wasm
         run: npm publish --access public
