@@ -30,6 +30,7 @@ the one that matches how you work — none of them require the others:
 | **[physure (Python)](physure-python/)** | The library this README focuses on below: `Quantity`, NumPy/PyTorch/JAX backends, `@physure.jit`. | Yes (it *is* the Python package) |
 | **[physure (Rust)](physure-core/README.md)** | The core crate directly, for Rust projects that want dimensional analysis and uncertainty propagation without any FFI. | No |
 | **[physure (Java)](physure-java/README.md)** | JNI bindings for JVM projects, published to Maven Central. | No |
+| **[physure (WASM / JS)](physure-wasm/README.md)** | WebAssembly bindings for Node.js and JS/TS bundlers, published to npm. | No |
 
 Full install instructions for all four: **[INSTALL.md](INSTALL.md)**.
 

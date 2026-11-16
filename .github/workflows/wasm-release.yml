@@ -94,12 +94,12 @@ jobs:
         working-directory: physure-wasm
         run: |
           wasm-pack build --release --target bundler --out-dir pkg-bundler
-          rm -f pkg-bundler/.gitignore pkg-bundler/package.json
+          rm -f pkg-bundler/.gitignore pkg-bundler/package.json pkg-bundler/README.md
       - name: Build nodejs target
         working-directory: physure-wasm
         run: |
           wasm-pack build --release --target nodejs --out-dir pkg-node
-          rm -f pkg-node/.gitignore pkg-node/package.json
+          rm -f pkg-node/.gitignore pkg-node/package.json pkg-node/README.md
       - name: Publish to npm
         working-directory: physure-wasm
         run: npm publish --provenance --access public
