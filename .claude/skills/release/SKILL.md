@@ -26,7 +26,7 @@ secrets in a required-reviewer GitHub environment for Maven Central).
 
 ## How a release really runs (read this first)
 
-Verified on 0.3.0. The order is:
+Verified on 0.3.0 and 0.4.0. The order is:
 
 1. The work is merged by PR (a merge commit keeps one commit per change).
 2. A `docs(changelog): cut X.Y.Z` PR moves `[Unreleased]` to the new version
@@ -46,8 +46,10 @@ Verified on 0.3.0. The order is:
    `gh workflow run <release>.yml --ref <tag>`. `workflow_dispatch` is the
    exception to the rule, and the release workflows accept it. Their
    `check-version` jobs compare the ref with the version file, so a dispatch
-   from a branch fails before anything is built. **This path has not run yet
-   (it is new after 0.3.0); the first bump that uses it is its test.** If the
+   from a branch fails before anything is built. **This path ran on 0.4.0: the Python, core and Java bumps started their releases by
+   dispatch and the runs passed (OIDC trusted publishing accepted a `workflow_dispatch` run). The
+   WASM bump's dispatch failed with HTTP 422 because `wasm-release.yml` had no
+   `workflow_dispatch` trigger; that is fixed, and it was the only failure of its kind.** If the
    step failed or the release run is missing, start it by hand:
 
    ```bash
@@ -170,8 +172,10 @@ produces — but the release workflows themselves accept more than that:
 3. Trigger: `gh workflow run bump-wasm-release.yml`. It writes that version
    into `physure-wasm/package.json`, commits `chore: release wasm-vX.Y.Z`
    (no commit if `package.json` is already at it), tags `wasm-vX.Y.Z`, pushes,
-   and starts `wasm-release.yml` (see "How a release really runs"). Its first
-   run is the test of this workflow; if it fails, the by-hand way still works:
+   and starts `wasm-release.yml` (see "How a release really runs"). On 0.4.0 its
+   dispatch step failed (no `workflow_dispatch` trigger in `wasm-release.yml`, since fixed),
+   so check that a `WASM Release` run started; if the bump or the dispatch fails, the by-hand way
+   still works:
    ```bash
    git add physure-wasm/package.json
    git commit -m "chore: release wasm-vX.Y.Z"
@@ -183,6 +187,9 @@ produces — but the release workflows themselves accept more than that:
    `bindings.yml`) → `publish`, builds `bundler` + `nodejs` targets via
    `wasm-pack`, publishes to npm).
 5. Verify: `npm view physure versions`.
+   A published npm version cannot be changed: the README, `keywords` and
+   `homepage` of `physure-wasm/package.json` must be in the commit the tag points to *before* the
+   release, or the package page stays without them until the next version (0.4.0 shipped without).
 
 ## If it fails
 

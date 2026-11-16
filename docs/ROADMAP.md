@@ -1,6 +1,6 @@
 # Physure Roadmap
 
-*Last reviewed: 2026-11-14. Last release: 0.3.0. Everything landed since is listed under
+*Last reviewed: 2026-11-16. Last release: 0.4.0. Anything landed since is listed under
 "Unreleased" in the [changelog](https://github.com/Alexisrx96/physure/blob/main/CHANGELOG.md).*
 
 Physure is a calculation engine that keeps units and uncertainties correct. It is a Rust core
@@ -100,15 +100,23 @@ nobody believes something is frozen when it is not.
 Source: the
 [audit of code-resident numbers](https://github.com/Alexisrx96/physure/blob/main/docs/superpowers/audits/2026-11-14-code-resident-numbers.md).
 
-### 2. Publish the next release
+### 2. Publish the next release *(done: 0.4.0, 2026-11-16)*
 
-Everything since 0.3.0 is unreleased, and it includes breaking changes to PHS: operator
+0.4.0 shipped everything since 0.3.0, including the breaking changes to PHS: operator
 precedence, a zero needs a unit, a condition must be a Bool, `pi` and the catalog constants are
-reserved names, Monte Carlo is seeded by default, and a module runs in its own scope.
+reserved names, Monte Carlo is seeded by default, and a module runs in its own scope. The
+changelog opens with what to change when upgrading from 0.3.x.
 
-- [ ] The changelog is complete against the git history since `v0.3.0`.
-- [ ] The Python, Rust, Java and WebAssembly packages are published.
-- [ ] The release workflows run end to end. They were rewritten after 0.3.0 and have not run yet.
+- [x] The changelog covers the work since `v0.3.0`. It was checked by feature (chemistry, angle
+      mode, the configuration freeze phases, witnesses, degrees of freedom, the PHS tools, the
+      bindings), not commit by commit.
+- [x] The Python, Rust, Java and WebAssembly packages are published (PyPI, crates.io, Maven
+      Central, npm).
+- [x] The release workflows run end to end. The bumps of Python, core and Java started their
+      releases by dispatch. The npm one did not at first: `wasm-release.yml` had no dispatch
+      trigger, and it took four attempts. That is fixed.
+- [ ] npm 0.4.0 has no README or keywords: they were committed after it was published. They
+      appear with the next npm version.
 
 ### 3. Close the open audit findings
 
@@ -278,7 +286,8 @@ Parked on purpose. They stay in the sub-roadmaps as designs.
 - Java and WebAssembly are held to the core by shared golden conformance tests, on every
   platform the Java library ships for.
 - First use of the Python package is fast, and parsing a unit no longer copies the catalog.
-- The release pipeline starts from the version bump (not yet exercised by a release).
+- 0.4.0 is published on PyPI, crates.io, Maven Central and npm. The release pipeline starts from
+  the version bump, and the four bump workflows have run in a real release.
 
 ---
 
