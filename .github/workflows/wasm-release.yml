@@ -4,6 +4,10 @@
 # physure-wasm is versioned independently from the Rust core, Python wrapper,
 # and Java bindings (see core-release.yml / release.yml / java-release.yml).
 #
+# The tag is made by bump-wasm-release.yml (manual trigger): it brings package.json to the
+# workspace version, commits, tags `wasm-vX.Y.Z` and starts this workflow. Run it after
+# bump-core-release.yml, because physure-wasm has no version of its own.
+#
 # One-time setup (repo owner):
 #   1. Create an npm account/org and verify it can publish the `physure` name.
 #   2. Generate an npm "Automation" access token (npmjs.com -> Access Tokens).

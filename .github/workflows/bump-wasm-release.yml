@@ -1,0 +1,80 @@
+# Manually-triggered release of the npm package `physure` (physure-wasm/): brings
+# physure-wasm/package.json to the workspace version, commits, tags `wasm-vX.Y.Z`,
+# pushes, and starts wasm-release.yml, which publishes to npm.
+#
+# Unlike the other bump workflows this one takes no `bump` part. physure-wasm has
+# no version of its own: its Cargo.toml inherits the workspace version
+# (`version.workspace = true`) and wasm-release.yml's check-version job requires
+# the tag, that version and package.json to be the same. So the version comes from
+# the root Cargo.toml, which bump-core-release.yml moves: run that bump first.
+#
+# Run it when the workspace version is the one you want to publish. It refuses a
+# tag that already exists, so a version is never published twice by mistake.
+name: Bump and Release WASM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write # to start the release workflow with `gh workflow run`
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Read the workspace version and bring package.json to it
+        id: bump
+        run: |
+          set -euo pipefail
+          # physure-wasm inherits the workspace version; if that ever changes, use its own.
+          if grep -q 'version.workspace *= *true' physure-wasm/Cargo.toml; then
+            new="$(grep -m1 -Po '(?<=^version     = ")[^"]*' Cargo.toml)"
+          else
+            new="$(grep -m1 -Po '(?<=^version = ")[^"]*' physure-wasm/Cargo.toml)"
+          fi
+          if [ -z "$new" ]; then
+            echo "Could not read the version of physure-wasm from Cargo.toml" >&2
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/wasm-v$new" >/dev/null; then
+            echo "The tag wasm-v$new already exists: bump the core first, or this version is already released" >&2
+            exit 1
+          fi
+          current="$(grep -m1 -Po '(?<="version": ")[^"]*' physure-wasm/package.json)"
+          echo "workspace version $new, package.json version $current"
+          if [ "$current" != "$new" ]; then
+            sed -i "0,/\"version\": \"$current\"/s//\"version\": \"$new\"/" physure-wasm/package.json
+          fi
+          check="$(grep -m1 -Po '(?<="version": ")[^"]*' physure-wasm/package.json)"
+          if [ "$check" != "$new" ]; then
+            echo "package.json is at $check after the edit, expected $new" >&2
+            exit 1
+          fi
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          echo "changed=$([ "$current" != "$new" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+
+      - name: Commit, tag, and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [ "${{ steps.bump.outputs.changed }}" = "yes" ]; then
+            git add physure-wasm/package.json
+            git commit -m "chore: release wasm-v${{ steps.bump.outputs.new }}"
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+          git tag "wasm-v${{ steps.bump.outputs.new }}"
+          git push origin "wasm-v${{ steps.bump.outputs.new }}"
+
+      # A tag pushed with GITHUB_TOKEN starts no workflow (GitHub does not let that token cause
+      # runs), so the release is started by hand from here. workflow_dispatch is the exception.
+      - name: Start the release pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run wasm-release.yml --ref "wasm-v${{ steps.bump.outputs.new }}"

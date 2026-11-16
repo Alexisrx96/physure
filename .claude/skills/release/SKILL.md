@@ -17,7 +17,7 @@ version file.
 | `physure` (Python) | `bump-release.yml` — bumps `physure-python/physure/__init__.py` | `release.yml` | `vX.Y.Z` | PyPI (Trusted Publishing) |
 | `physure` (Rust crate) | `bump-core-release.yml` — bumps `[workspace.package] version` in root `Cargo.toml` | `core-release.yml` — also builds and attaches prebuilt `phs` + `physure-lsp` binaries (5 platforms) to the GitHub release | `core-vX.Y.Z` | crates.io (Trusted Publishing) |
 | `physure-java` | `bump-java-release.yml` — bumps `physure-java/pom.xml` | `java-release.yml` — builds native JNI libs (5 platforms), publishes via Sonatype Central Portal | `java-vX.Y.Z` | Maven Central (`io.github.alexisrx96:physure`) |
-| `physure` (npm/WASM) | **none — manual** | `wasm-release.yml` | `wasm-vX.Y.Z` | npm |
+| `physure` (npm/WASM) | `bump-wasm-release.yml` — no `bump` part: it brings `physure-wasm/package.json` to the workspace version and tags it, so run it **after** the core bump | `wasm-release.yml` | `wasm-vX.Y.Z` | npm |
 
 No PyPI/crates.io tokens exist locally for any of these — never try
 `twine`, `cargo login`, or `npm login` locally. All four use short-lived,
@@ -80,12 +80,14 @@ Verified on 0.3.0. The order is:
 - `physure-wasm/Cargo.toml` has `version.workspace = true` — it silently
   moves whenever `bump-core-release.yml` bumps the workspace version. It
   is **not** independently bumpable via a Cargo.toml edit alone.
-- `physure-wasm/package.json`'s `"version"` is a **separate, hand-edited**
-  field. `wasm-release.yml`'s `check-version` job requires the tag,
+- `physure-wasm/package.json`'s `"version"` is a separate field.
+  `wasm-release.yml`'s `check-version` job requires the tag,
   `Cargo.toml`'s (workspace-inherited) version, and `package.json`'s
-  version to all match — so before tagging a wasm release, bump
-  `physure-wasm/package.json` by hand to match whatever the current
-  workspace version is.
+  version to all match. `bump-wasm-release.yml` does that: it reads the
+  workspace version, writes it into `package.json`, commits, tags and
+  starts the release. It takes no `bump` part (the version is the
+  workspace's, which `bump-core-release.yml` moves), and it refuses a tag
+  that already exists.
 
 ## Tag-prefix overlaps worth knowing about
 
@@ -162,23 +164,25 @@ produces — but the release workflows themselves accept more than that:
 ## Steps: WASM/npm release
 
 1. Confirm main is green.
-2. Check the current workspace version: `grep -m1 '^version' Cargo.toml`.
-3. Manually bump `physure-wasm/package.json`'s `"version"` field to match
-   (or to the version the workspace will be at — coordinate with a core
-   release if you need a version bump first, since there's no dedicated
-   wasm bump workflow).
-4. Commit that change, then tag by hand:
+2. Check the current workspace version: `grep -m1 '^version' Cargo.toml`. It is
+   the version that will be published: run `bump-core-release.yml` first if it
+   must change (the npm package follows the workspace version, not its own).
+3. Trigger: `gh workflow run bump-wasm-release.yml`. It writes that version
+   into `physure-wasm/package.json`, commits `chore: release wasm-vX.Y.Z`
+   (no commit if `package.json` is already at it), tags `wasm-vX.Y.Z`, pushes,
+   and starts `wasm-release.yml` (see "How a release really runs"). Its first
+   run is the test of this workflow; if it fails, the by-hand way still works:
    ```bash
    git add physure-wasm/package.json
    git commit -m "chore: release wasm-vX.Y.Z"
    git tag wasm-vX.Y.Z
    git push origin main wasm-vX.Y.Z
    ```
-5. Watch the release run: `gh run watch` (jobs `check-version` →
+4. Watch the release run: `gh run watch` (jobs `check-version` →
    `bindings-tests` (the golden-file tests of the Java and WASM bindings,
    `bindings.yml`) → `publish`, builds `bundler` + `nodejs` targets via
    `wasm-pack`, publishes to npm).
-6. Verify: `npm view physure versions`.
+5. Verify: `npm view physure versions`.
 
 ## If it fails
 
