@@ -123,7 +123,8 @@ changelog opens with what to change when upgrading from 0.3.x.
 The November audit found defects beyond the ones already fixed. The ones that can give a wrong
 answer come first:
 
-- [ ] The symbolic engine drops comparisons: `integral("x < 0.5", "x")` answers `x^2/2` (T2).
+- [x] The symbolic engine dropped comparisons: `integral("x < 0.5", "x")` answered `x^2/2` (T2). The parser stopped at the first token it did not know and dropped the rest, so it now refuses any text it did not read, and names a comparison.
+- [ ] The symbolic parser reads `and`, `or` and `not` as symbols and multiplies them: `simplify("x and y")` is `and * x * y` and `deriv("x not y", "x")` is `not * y`. Found while fixing T2.
 - [x] Only the first call of a user function is inlined in a symbolic expression (T3); arguments were not substituted either. Fixed in Phase 4b.
 - [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
 - [ ] Covariance pruning reads a missing variance as an absolute `1.0`, whatever the unit (T7).
