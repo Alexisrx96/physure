@@ -115,12 +115,20 @@ doubled = x * 2.0 where x = 10.0 m
 status = if pressure > 50.0 kPa then "High Pressure" else "Normal Pressure"
 ```
 
+A `while` loop stops with the error "while loop did not converge after N iterations" after `[Settings] max_while_iterations` iterations (default 10000, at least 1), as `max_loop_iterations` (default 1000000) bounds the range or vector a `for` loop may build (section 1.6).
+
 ### 1.4 Imports & Domain Modules
 ```phs
 use solve, deriv, integral from calc
 use plot, plot3d, export3d from plot
 use linspace, gradient, trapz from array
 ```
+
+`use a, b from "lib"` (also `use * from "lib"` and `use a as b from "lib"`) imports from the module file `lib.phs`. A module is a program of its own:
+
+- It runs once per interpreter (again only when its file changed), whole and in definition order, in an environment of its own: the importer's names never reach it. With `lib.phs` holding `k = 2`, `r = 3*k` and `f(x) = k*x`, the program `k = 10; use r, f from "lib"` gets `r` = 6 and `f(1)` = 2.
+- An imported value is the value the module computed, so a measurement imported twice is one measurement. An imported function sees the names of its module and its parameters; a function you pass to it keeps seeing yours, and a function it returns keeps its module.
+- Errors name the module: a name it does not define, a cyclic import (`a -> b -> a`), a file that cannot be parsed, and a module that binds a reserved name (section 1.5): a module with `pi = 3` makes every import from it an error, whichever name is imported.
 
 ### 1.5 Names: variables, `pi` and the constants of the catalog
 A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is its own text.
@@ -134,6 +142,26 @@ photon = planck_constant * speed_of_light_in_vacuum / (500 nm) => eV   # 2.48 eV
 The constants are the `[Constants]` of the catalog in force, by their catalog names: the embedded catalog (411 CODATA values, with no uncertainties), a project's `physure.conf`, a frozen file, or the registry a binding evaluates for. An override or a frozen configuration changes them. Only the catalog's own names are constants: `e`, `c`, `k` and `R` are not (write `exp(1)`, `speed_of_light_in_vacuum`, `boltzmann_constant`, `molar_gas_constant`), and `h`, `g`, `G` are units (hour, gram, gauss). Seven names are a unit and a constant at once (`bohr_radius`, `electron_mass`, `electron_volt`, `planck_length`, `planck_mass`, `planck_temperature`, `planck_time`): the catalog gives both one value (a frozen file or a unit system where they differ is refused; a `physure.conf` where they differ loses the constant, with a message), so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) are the same length. A constant carries no uncertainty: a catalog line is `name = number unit`, and one written with `+/-` is an error when it is used.
 
 Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file.
+
+### 1.6 Settings that change a run
+The `[Settings]` of the frozen file in force (`phs conf`), or else of the `physure.conf` in the working directory, govern these. A key that is not set takes its default, which is the behaviour from before the key existed (but for the seed, below).
+
+| Key | Default | What it governs |
+| :--- | :--- | :--- |
+| `max_while_iterations` | `10000` | the ceiling of one `while` loop (at least 1) |
+| `monte_carlo_samples` | `1000` | the samples a Monte Carlo measurement draws (2 to 10000000) |
+| `monte_carlo_seed` | `0` | the seed of the Monte Carlo draws, or `random` |
+| `default_dof` | `inf` | the degrees of freedom of an uncertainty that declares none (`dof`, `coverage_factor`, `expanded`) |
+| `display_significant_digits` | `15` | the significant digits of a printed decimal number (1 to 17; 17 prints every number exactly); not the scientific form |
+| `display_scientific_below` | `1e-4` | below this magnitude a number prints in scientific notation (1e-6 to 1) |
+| `display_scientific_from` | `1e16` | from this magnitude a number prints in scientific notation (finite, at least 1) |
+| `uncertainty_digits` | `gum` | the significant figures of a printed uncertainty: `gum` (the GUM rule) or a count from 1 to 17; the value is rounded to the same decimal place |
+
+**Monte Carlo draws are reproducible by default.** Under `propagation_mode = monte_carlo` each unit of evaluation draws one stream from the seed: a program run (`phs file.phs` and its viewers), a REPL session, a request of the editor daemon, one start of `phs serve`, a document of the language server. So the same program gives the same samples on every run, and two measurements of one run are independent. `monte_carlo_seed = random` draws operating-system entropy, different on every run (`phs conf status` warns that such a file is not reproducible). `phs eval --seed N` wins over the setting, and the JSON says which seed was used and where it came from. A `for` loop or `parallel_map` in `monte_carlo` mode runs on one thread, so its values never depend on the number of threads.
+
+**Printed text.** `@precision` wins over the display keys, and `x: base` follows the digits and thresholds without GUM rounding. The keys do not govern `format()` with a spec, `frac` and `ifrac`, plot axes or the symbolic printer. With `display_significant_digits = 6` and `uncertainty_digits = 3`, `x = 1/3` prints `0.333333` (by default `0.333333333333333`) and `10.0 +/- 0.15 m` prints `10.000 ± 0.150 m` (by default `10.0 ± 0.2 m`).
+
+Six old keys are accepted and do nothing: `default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose`, `mkml_recursion_limit`. `phs conf status` warns where a file of yours sets one.
 
 ---
 
@@ -203,6 +231,10 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 - **Zero and infinity**: samples of one sign falling geometrically give 0 (`x*ln(x)` at 0); samples of one sign growing with non-decreasing increments give `inf` or `-inf`, for a two-sided limit when both sides agree: `limit("1/x^2", "x", 0)` is `inf`, `limit("1/x", "x", 0)` is an error, `limit("1/x", "x", 0, "+")` is `inf` and `"-"` gives `-inf`.
 - **Uncertainty** propagates: at a continuous point through the core, and an extrapolated limit is a weighted sum of samples formed with the core's arithmetic. An uncertain point where the limit must be extrapolated is refused.
 - **Refused, not guessed**: sides that disagree (`abs(x)/x` at 0, `floor(x)` at 1: ask for one side, `limit("floor(x)", "x", 1, "-")` is 0), a side where `expr` is undefined (`sqrt(x)` at -1, `sqrt(x)` at 0 without `"+"`), oscillation (`sin(1/x)` at 0, `sin(x)` at `"inf"`), a change on a scale smaller than the smallest step (`(1-cos(1000*x))/x^2` at 0), and samples that rounding has made equal (`min(x, 100)` at `"inf"`).
+
+#### Your functions inside calc texts
+
+The calc builtins (`deriv`, `integral`, `limit`, `solve`, `simplify`, `series`, `laplace`, `dsolve`, `grad`, ...) and `plot3d`/`plot_field` read a call of one of your functions inside their text by writing its body there, every argument in place of its parameter and in parentheses: with `f(x) = 2*x`, `deriv("f(t)", "t")` is 2; with `f(x) = x^2`, `deriv("f(2*t)", "t")` is `8 * t` and `deriv("f(t) + f(2*t)", "t")` is `10 * t`; nested calls are read too (`g(y) = f(3*y) + y` gives `deriv("g(t)", "t")` = `18 * t + 1`). A function is looked up where the builtin is called, then in the program. Refused, naming the function: recursion (`f -> g -> f`), a wrong number of arguments, a parameter with a declared unit, a decorator, an uncertain literal, a body of more than one expression, a body that is not algebra (a comparison, a conditional, text, a vector, `=>`, `..`, a loop), and an imported function whose body reads a name of its module.
 
 ---
 
