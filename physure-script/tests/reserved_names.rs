@@ -212,3 +212,9 @@ fn a_value_a_host_gives_cannot_be_a_function_of_an_imported_module() {
         .to_string();
     assert!(error.contains("`limit` is a function of `calc`") && error.contains("a value given by the host"), "{error}");
 }
+
+#[test]
+fn matrix_is_an_alias_of_array() {
+    assert_eq!(value("use * from matrix
+1"), "1.0");
+}

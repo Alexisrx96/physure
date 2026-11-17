@@ -366,7 +366,7 @@ impl PhsInterpreter {
         let domain: &'static str = match node.path.as_str() {
             "calc" => "calc",
             "plot" => "plot",
-            "array" => "array",
+            "array" | "matrix" => "array",
             _ => unreachable!("domain_members returned Some for unknown domain"),
         };
         let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
