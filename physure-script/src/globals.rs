@@ -18,7 +18,8 @@
 //!
 //! **Shadowing is an error.** A name of step 3 cannot be bound by an assignment, a parameter, a `for` variable, a
 //! `where` binding, a function definition, an import or a host: a scientist who writes `pi = 3` has made a mistake,
-//! not a choice. Which names those are depends on the catalog in force, so a conf that adds a `[Constants]` entry
+//! not a choice. The statement words, the literals and the functions of the core are refused the same way (see
+//! [`crate::reserved`]). Which names those are depends on the catalog in force, so a conf that adds a `[Constants]` entry
 //! makes a script that binds that name an error under that conf only.
 //!
 //! Only the catalog's own names are constants: `e`, `c`, `k`, `R` are not (`h`, `g`, `G` are units).
@@ -100,6 +101,9 @@ pub fn shadowing_error(name: &str, what: &str, value: Option<&str>) -> String {
 
 /// An error when `name` is a global identifier of the catalog in force: it cannot be bound as `what`.
 pub fn refuse_binding(name: &str, what: &str) -> PhysureResult<()> {
+    if let Some(kind) = crate::reserved::static_kind(name) {
+        return Err(PhysureError::Generic(crate::reserved::binding_error(name, what, kind)));
+    }
     if PI_NAMES.contains(&name) {
         return Err(PhysureError::Generic(shadowing_error(name, what, None)));
     }
