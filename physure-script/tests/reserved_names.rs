@@ -75,3 +75,12 @@ fn a_value_a_host_gives_cannot_be_a_reserved_name() {
         .to_string();
     assert!(error.contains("`max` is a function of PHS and cannot be bound as a value given by the host"), "{error}");
 }
+
+#[test]
+fn an_equation_call_may_name_a_variable_after_a_core_function() {
+    // the variables of an equation call are local to it, and a call reaches the builtin first
+    assert_eq!(value("eq = \"F = sigma * A\"\neq(sigma=5, A=2)"), "10.0");
+    assert_eq!(value("eq = \"y = max * x\"\neq(max=3, x=2)"), "6.0");
+    // pi and the constants of the catalog are still refused
+    assert!(refused("eq = \"y = 2 * x\"\neq(pi=3)").contains("`pi` is the constant"));
+}
