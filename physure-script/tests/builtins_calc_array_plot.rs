@@ -410,3 +410,29 @@ fn a_plot_that_is_not_given_what_it_needs_says_so() {
     assert!(plot_refused("plot_nd()").contains("2D matrix"));
     assert!(plot_refused("plot_nd(3)").contains("2D matrix"));
 }
+
+/// The follow-up of audit T2: the symbolic parser read `and`, `or` and `not` as symbols and multiplied them
+/// (`simplify("x and y")` was `and * x * y`, `deriv("x not y", "x")` was `not * y`), and a function written without
+/// its parentheses (`sin * x`) as a symbol called `sin`.
+#[test]
+fn a_word_the_language_reads_is_not_a_symbol_of_a_symbolic_text() {
+    for (text, word) in [
+        ("x and y", "and"),
+        ("x or y", "or"),
+        ("not x", "not"),
+        ("if x", "if"),
+        ("x where y", "where"),
+        ("True * x", "True"),
+        ("true * x", "true"),
+        ("x * inf", "inf"),
+        ("sin * x", "sin"),
+        ("x * log", "log"),
+    ] {
+        let message = calc_refused(&format!(r#"simplify("{text}")"#));
+        assert!(message.contains(&format!("`{word}`")), "{text}: {message}");
+    }
+    // a function with its parentheses, and a word that is only a name, stay what they were
+    assert!(calc(r#"simplify("sin(x) * 2")"#).contains("sin(x)"));
+    assert_eq!(calc(r#"deriv("sigma^2", "sigma")"#), "2 * sigma");
+    assert!(calc(r#"deriv("max * x", "x")"#).contains("max"));
+}

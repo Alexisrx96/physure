@@ -275,6 +275,7 @@ impl SymbolicParser {
         if self.peek().is_some_and(|next_t| next_t.value == "(") {
             return self.parse_func_call(name);
         }
+        refuse_bare_word(name)?;
         Ok(Node::Symbol(name.to_string()))
     }
 
@@ -350,6 +351,22 @@ fn product_step(t: &PhsToken) -> ProductStep {
     } else {
         ProductStep::Stop
     }
+}
+
+/// A word PHS reads as something other than a name is not a symbol of a symbolic text: `x and y` was `and * x * y`,
+/// and a function without its parentheses (`sin * x`) a symbol called `sin`. The words that are only plausible names
+/// (`sigma`, `max`, `dof`, a statement word) stay symbols, as the variables of an equation call do.
+fn refuse_bare_word(name: &str) -> PhysureResult<()> {
+    use crate::reserved::{static_kind, Reserved};
+    let message = match static_kind(name) {
+        Some(Reserved::Keyword) => format!("`{name}` is a word of the language and is not a symbol of a symbolic text; use another name"),
+        Some(Reserved::Literal) => format!("`{name}` is a literal of the language and is not a symbol of a symbolic text; use another name"),
+        _ if unary_function(name).is_some() || matches!(name, "deriv" | "integral") => {
+            format!("`{name}` is a function: write it with its argument in parentheses, `{name}(x)`")
+        }
+        _ => return Ok(()),
+    };
+    Err(PhysureError::Generic(message))
 }
 
 /// The node built by a one-argument symbolic function, by the name it is written with, and the name its
