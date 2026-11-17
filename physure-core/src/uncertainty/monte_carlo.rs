@@ -274,11 +274,18 @@ impl MonteCarloBackend {
     ///
     /// Refuses fewer than two samples: the standard uncertainty is the sample standard deviation (JCGM 101:2008
     /// 7.6), which needs `M >= 2`. One sample would report a confident zero uncertainty and none a mean of `0.0`
-    /// (audit B8).
+    /// (audit B8). Refuses more than [`crate::settings::MAX_MONTE_CARLO_SAMPLES`] too: the draw allocates that many
+    /// `f64`s, and a count from a user must not allocate without bound (audit T9).
     pub fn from_stats(mean: f64, std_dev: f64, n_samples: usize) -> PhysureResult<Self> {
         if n_samples < 2 {
             return Err(PhysureError::DomainError(format!(
                 "a Monte Carlo evaluation needs at least 2 samples to estimate a standard uncertainty, got {n_samples}"
+            )));
+        }
+        let max = crate::settings::MAX_MONTE_CARLO_SAMPLES;
+        if n_samples > max {
+            return Err(PhysureError::DomainError(format!(
+                "a Monte Carlo evaluation takes at most {max} samples, got {n_samples}"
             )));
         }
         let mut rng = next_rng();
@@ -440,6 +447,17 @@ mod tests {
         assert!(empty.std_dev().is_nan());
         let one = MonteCarloBackend { samples: Array1::from_vec(vec![3.0]) };
         assert!(one.std_dev().is_nan(), "one sample has no deviation to report, not a zero");
+    }
+
+    /// More samples than the setting allows is refused too: every draw allocates that many `f64`s, so an explicit
+    /// count from a user (Python's `samples=`) must not allocate without bound.
+    #[test]
+    fn more_than_the_maximum_samples_are_refused() {
+        let max = crate::settings::MAX_MONTE_CARLO_SAMPLES;
+        let err = MonteCarloBackend::from_stats(0.0, 1.0, max + 1).err().expect("refused");
+        assert!(matches!(err, PhysureError::DomainError(_)), "{err:?}");
+        assert!(err.to_string().contains("at most 10000000 samples"), "{err}");
+        assert_eq!(MonteCarloBackend::from_stats(0.0, 1.0, 2).unwrap().samples.len(), 2);
     }
 
     fn sample_count(q: &crate::Quantity) -> usize {

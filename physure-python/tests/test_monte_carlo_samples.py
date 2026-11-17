@@ -18,6 +18,11 @@ def test_fewer_than_two_samples_are_refused(samples):
         Quantity(5.0, METRE, 0.1, mode="monte_carlo", samples=samples)
 
 
+def test_a_count_above_the_maximum_is_refused_not_allocated():
+    with pytest.raises(ValueError, match="at most 10000000 samples"):
+        Quantity(1.0, METRE, 0.1, mode="monte_carlo", samples=10**12)
+
+
 def test_a_negative_sample_count_is_refused_not_replaced_by_the_default():
     with pytest.raises(OverflowError):
         Quantity(5.0, METRE, 0.1, mode="monte_carlo", samples=-1)

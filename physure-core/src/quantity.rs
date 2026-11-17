@@ -288,9 +288,11 @@ impl Quantity {
     /// `samples: None` draws `[Settings] monte_carlo_samples` (default 1000, see
     /// [`crate::settings::monte_carlo_samples`]).
     ///
-    /// **Panics** when `samples` is `Some(n)` with `n < 2` and the backend is Monte Carlo (see
-    /// [`MonteCarloBackend::from_stats`]); a sample count that comes from a user goes through
-    /// [`Quantity::try_new_scalar`], which returns the error instead.
+    /// **Panics** only when a Rust caller names a Monte Carlo sample count outside 2 to
+    /// [`crate::settings::MAX_MONTE_CARLO_SAMPLES`] explicitly (`samples: Some(n)`, see
+    /// [`MonteCarloBackend::from_stats`]); the setting can no longer hold such a count, so `samples: None` never
+    /// panics. Code that can receive a user's count goes through [`Quantity::try_new_scalar`], which returns the
+    /// error instead.
     pub fn new_scalar(mean: f64, std_dev: f64, unit: RationalUnit, mode: Option<&str>, samples: Option<usize>) -> Self {
         Self::try_new_scalar(mean, std_dev, unit, mode, samples).unwrap_or_else(|e| panic!("{e}"))
     }
