@@ -142,9 +142,12 @@ answer come first:
 - [ ] `erf` is unknown to the symbolic engine (`deriv`, `integral`).
 - [ ] The Java binding's `mathFunction` (`physure-java/src/lib.rs`) and the Python `Quantity` have no `sec`, `csc`, `cot`, `erf` (nor `exp`, `ln` in Java).
 - [ ] The Monte Carlo and unscented `propagate_function` tables fall through to the identity for an unknown function name, with no error (`erf` was added to all of them; the next function must be).
+- [ ] `np.mean(x)`, `Quantity.dot` and `cross` return an uncertainty of 0.0 without a warning: `np.mean` of `[1, 2, 3] +/- 0.1 m` is `2.0 m` with uncertainty 0 (it is 0.058 m). A wrong answer with confident units (found measuring T8).
+- [ ] The Python array path densifies each diagonal Jacobian to n x n before the call into the core: 128 MB per operand at n = 4000 (found measuring T8).
+- [ ] `AutogradPropagator._compute_finite_diff` perturbs every element at once, so for a function that is not elementwise it returns a wrong diagonal Jacobian; the path is unused today (found measuring T8).
 
-Then the ones that fail loudly or only read badly: T1 (reporting half), T8
-and T11 (T4, T9, T18, T20 and T21 are fixed or done: on this branch the Python suite passes with 1762 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
+Then the ones that fail loudly or only read badly: T1 (reporting half)
+and T11 (T4, T8, T9, T18, T20 and T21 are fixed or done; T8 was measured and closed with no code change, see `docs/superpowers/audits/2026-11-17-t8-noisy-jacobians.md`: on this branch the Python suite passes with 1762 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
