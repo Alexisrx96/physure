@@ -356,57 +356,18 @@ impl PhsInterpreter {
         self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(domain, _)| *domain)
     }
 
-    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. A member whose
-    /// name the program already holds (a variable or a function) is refused, so that a reserved name never has
-    /// two meanings in one program, and so is one that would remap a name the program already imported as another
-    /// function. Nothing is unlocked unless every name of the import is accepted.
+    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. What an import may
+    /// unlock is decided by [`crate::reserved::plan_import`], the function the checker asks too: a member whose name
+    /// the program already holds (a variable or a function) is refused, so is one that would remap a name the
+    /// program already imported as another function, and nothing is unlocked unless every name is accepted.
     fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str], env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
-        use crate::ast::ImportSpecifier;
-
-        let domain: &'static str = match node.path.as_str() {
-            "calc" => "calc",
-            "plot" => "plot",
-            "array" | "matrix" => "array",
-            _ => unreachable!("domain_members returned Some for unknown domain"),
-        };
-        let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
-        let held = |name: &str| -> PhysureResult<()> {
-            if env.contains_key(name) {
-                return Err(PhysureError::Generic(crate::reserved::module_import_error(name, domain)));
-            }
-            Ok(())
-        };
-        let mut imports: Vec<(String, (&'static str, String))> = Vec::new();
-        match &node.specifier {
-            ImportSpecifier::Wildcard => {
-                for &member in members {
-                    held(member)?;
-                    // an alias of this module on the same name is a remap; another module's function of that name
-                    // is replaced by the later import, as it always was
-                    if let Some((other, canonical)) = unlocked.get(member) {
-                        if *other == domain && canonical != member {
-                            return Err(PhysureError::Generic(crate::reserved::module_remap_error(member, domain)));
-                        }
-                    }
-                    imports.push((member.to_string(), (domain, member.to_string())));
-                }
-            }
-            ImportSpecifier::Symbols(syms) => {
-                for sym in syms {
-                    if !members.contains(&sym.name.as_str()) {
-                        return Err(PhysureError::Generic(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
-                    }
-                    let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                    held(&call_name)?;
-                    let wanted = (domain, sym.name.clone());
-                    if unlocked.get(&call_name).is_some_and(|already| *already != wanted) {
-                        return Err(PhysureError::Generic(crate::reserved::module_remap_error(&call_name, domain)));
-                    }
-                    imports.push((call_name, wanted));
-                }
-            }
-            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        if let crate::ast::ImportSpecifier::ModuleAlias(_) = &node.specifier {
+            return Err(module_aliases_unsupported());
         }
+        let domain = crate::reserved::domain_of(&node.path).expect("domain_members returned Some for unknown domain");
+        let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
+        let imports = crate::reserved::plan_import(node, domain, members, &|name| env.contains_key(name), &unlocked)
+            .map_err(|error| PhysureError::Generic(error.message().to_string()))?;
         unlocked.extend(imports);
         Ok(())
     }

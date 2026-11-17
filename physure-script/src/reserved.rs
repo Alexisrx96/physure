@@ -8,6 +8,10 @@
 //! [`static_kind`] answers for the classes that do not depend on the program. A module function is reserved by what the
 //! interpreter has unlocked, which only the interpreter knows (`PhsInterpreter::module_domain`).
 
+use std::collections::HashMap;
+
+use crate::ast::{ImportNode, ImportSpecifier};
+
 /// The class of a reserved name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reserved {
@@ -85,6 +89,88 @@ pub fn module_remap_error(name: &str, domain: &str) -> String {
     format!("`{name}` is already a function of `{domain}` in this program and cannot be imported under that name as something else; choose another alias")
 }
 
+/// What a program has unlocked from the modules: the name it calls a function by, and the module and the
+/// function's own name behind it.
+pub type Unlocked = HashMap<String, (&'static str, String)>;
+
+/// The module a path of `use` names (`matrix` is another name of `array`), `None` for anything else.
+pub fn domain_of(path: &str) -> Option<&'static str> {
+    match path {
+        "calc" => Some("calc"),
+        "plot" => Some("plot"),
+        "array" | "matrix" => Some("array"),
+        _ => None,
+    }
+}
+
+/// Why an import of a module is refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportError {
+    /// The module has no such function.
+    NoSuchFunction(String),
+    /// A name it would unlock is already held by the program, or already unlocked as another function.
+    Reserved(String),
+}
+
+impl ImportError {
+    /// The text of the error.
+    pub fn message(&self) -> &str {
+        match self {
+            ImportError::NoSuchFunction(message) | ImportError::Reserved(message) => message,
+        }
+    }
+}
+
+/// What `use` of the module `domain` (whose functions are `members`) unlocks: the name a function is called by and
+/// the function behind it, for each name of the import; or why it is refused. `held` says whether the program
+/// already holds a variable or a function of a name, `unlocked` is what it has imported so far. Nothing is unlocked
+/// unless every name of the import is accepted. A module alias (`use calc as c`) unlocks nothing here: the caller
+/// refuses it.
+pub fn plan_import(
+    node: &ImportNode,
+    domain: &'static str,
+    members: &[&str],
+    held: &dyn Fn(&str) -> bool,
+    unlocked: &Unlocked,
+) -> Result<Vec<(String, (&'static str, String))>, ImportError> {
+    let mut imports = Vec::new();
+    match &node.specifier {
+        ImportSpecifier::Wildcard => {
+            for &member in members {
+                if held(member) {
+                    return Err(ImportError::Reserved(module_import_error(member, domain)));
+                }
+                // an alias of this module on the same name is a remap; another module's function of that name
+                // is replaced by the later import, as it always was
+                if let Some((other, canonical)) = unlocked.get(member) {
+                    if *other == domain && canonical != member {
+                        return Err(ImportError::Reserved(module_remap_error(member, domain)));
+                    }
+                }
+                imports.push((member.to_string(), (domain, member.to_string())));
+            }
+        }
+        ImportSpecifier::Symbols(syms) => {
+            for sym in syms {
+                if !members.contains(&sym.name.as_str()) {
+                    return Err(ImportError::NoSuchFunction(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
+                }
+                let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                if held(&call_name) {
+                    return Err(ImportError::Reserved(module_import_error(&call_name, domain)));
+                }
+                let wanted = (domain, sym.name.clone());
+                if unlocked.get(&call_name).is_some_and(|already| *already != wanted) {
+                    return Err(ImportError::Reserved(module_remap_error(&call_name, domain)));
+                }
+                imports.push((call_name, wanted));
+            }
+        }
+        ImportSpecifier::ModuleAlias(_) => {}
+    }
+    Ok(imports)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +178,59 @@ mod tests {
     fn sorted(mut words: Vec<String>) -> Vec<String> {
         words.sort();
         words
+    }
+
+    use crate::ast::{ImportNode, ImportSpecifier, ImportSymbol};
+
+    fn import(path: &str, specifier: ImportSpecifier) -> ImportNode {
+        ImportNode { path: path.to_string(), specifier }
+    }
+
+    fn symbol(name: &str, alias: Option<&str>) -> ImportSymbol {
+        ImportSymbol { name: name.to_string(), alias: alias.map(str::to_string) }
+    }
+
+    const MEMBERS: [&str; 3] = ["limit", "solve", "deriv"];
+
+    #[test]
+    fn a_path_names_a_module_exactly_when_the_builtins_do() {
+        for path in ["calc", "plot", "array", "matrix", "core", "nope", ""] {
+            assert_eq!(domain_of(path).is_some(), crate::builtins::domain_members(path).is_some(), "{path}");
+        }
+        assert_eq!(domain_of("matrix"), Some("array"));
+    }
+
+    #[test]
+    fn a_wildcard_unlocks_every_member_and_a_named_import_only_what_it_names() {
+        let none = |_: &str| false;
+        let unlocked = Unlocked::new();
+        let all = plan_import(&import("calc", ImportSpecifier::Wildcard), "calc", &MEMBERS, &none, &unlocked).unwrap();
+        assert_eq!(all.len(), 3);
+        let named = import("calc", ImportSpecifier::Symbols(vec![symbol("solve", Some("sv"))]));
+        let one = plan_import(&named, "calc", &MEMBERS, &none, &unlocked).unwrap();
+        assert_eq!(one, vec![("sv".to_string(), ("calc", "solve".to_string()))]);
+    }
+
+    #[test]
+    fn an_import_over_a_held_name_or_a_remap_is_refused_and_a_repeat_is_not() {
+        let held = |name: &str| name == "limit";
+        let mut unlocked = Unlocked::new();
+        let wildcard = import("calc", ImportSpecifier::Wildcard);
+        let error = plan_import(&wildcard, "calc", &MEMBERS, &held, &unlocked).unwrap_err();
+        assert!(matches!(&error, ImportError::Reserved(m) if m.contains("already bound in the program")), "{error:?}");
+
+        unlocked.insert("limit".to_string(), ("calc", "solve".to_string()));
+        let none = |_: &str| false;
+        let error = plan_import(&wildcard, "calc", &MEMBERS, &none, &unlocked).unwrap_err();
+        assert!(matches!(&error, ImportError::Reserved(m) if m.contains("already a function of `calc`")), "{error:?}");
+        let remap = import("calc", ImportSpecifier::Symbols(vec![symbol("deriv", Some("limit"))]));
+        assert!(plan_import(&remap, "calc", &MEMBERS, &none, &unlocked).is_err());
+        let repeat = import("calc", ImportSpecifier::Symbols(vec![symbol("solve", Some("limit"))]));
+        assert!(plan_import(&repeat, "calc", &MEMBERS, &none, &unlocked).is_ok());
+
+        let missing = import("calc", ImportSpecifier::Symbols(vec![symbol("nope", None)]));
+        let error = plan_import(&missing, "calc", &MEMBERS, &none, &Unlocked::new()).unwrap_err();
+        assert_eq!(error, ImportError::NoSuchFunction("no such function 'nope' in domain 'calc'".to_string()));
     }
 
     #[test]
