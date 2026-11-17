@@ -6,7 +6,11 @@
 //!
 //! - **Point.** A number, a quantity, `"inf"`/`"-inf"` (and their spellings), or a name or an expression written as
 //!   text (`pi`, `"pi/2"`, a variable, a constant of the catalog). A name that resolves to nothing is an error. A
-//!   quantity point makes the variable a quantity of that unit; a temperature point or a level is refused.
+//!   quantity point makes the variable a quantity of its dimension, sampled in the coherent unit of that dimension
+//!   (`m` for a point in `km` or `um`, `m*s^-1` for `km/h`; a dimensionless point such as `3 percent` is the plain
+//!   number 0.03), so the answer does not depend on the unit the point is written in (audit T11); the units in a
+//!   refusal message are the coherent ones. The value at the point itself (see continuity) is taken at the point as
+//!   it was written. A temperature point or a level is refused.
 //! - **Side.** Absent: the two-sided limit, which needs the expression defined on both sides (`sqrt(x)` and `x ln x`
 //!   at 0 are refused with the advice to give `side "+"`). `"+"` or `"-"`: only that side is sampled, and the
 //!   expression must be defined there. Any other side is an error, and so is a side at an infinite point (approached
@@ -14,7 +18,9 @@
 //! - **Names.** The expression is evaluated with the program's variables visible; a free name resolves to a variable,
 //!   `pi`, a constant of the catalog or a unit (the one order of PHS, `crate::globals`), and any other name is an
 //!   error (as for `integral`).
-//! - **First step.** Each side starts at `h0 = 1/8` (or more where the spacing of f64 next to `p` requires it); where
+//! - **First step.** Each side starts at `h0 = 1/8` of the coherent unit of the variable's dimension, or of the plain
+//!   number for a plain variable, which is the user's own scale (so `sin(x*1e3)/(x*1e3)` at 0 is refused: its
+//!   feature is narrower than the smallest step), or more where the spacing of f64 next to `p` requires it; where
 //!   the expression is undefined there (a boundary of its domain or a pole closer than `h0`), the step is halved, up
 //!   to 20 times, until it is defined. A side undefined at every one of these steps is undefined next to the point.
 //! - **Continuity.** When the expression calls only functions that are continuous on their domain (`sin`, `cos`,
@@ -49,8 +55,9 @@
 //! Measured: removable singularities whose samples cancel (`(1 - cos x)/x^2`, `(exp x - 1 - x)/x^2`) reach about
 //! 5e-11 relative; others (`sin(x)/x`, `(sqrt(1 + x) - 1)/x`, rational functions, `(1 + 1/x)^x` at infinity) 3e-13
 //! or better. Refused, not guessed: sides that disagree (`abs(x)/x`, `floor(x)` at 1, `1/x` at 0), oscillation
-//! (`sin(1/x)` at 0, `sin(x)` at infinity), a feature narrower than the smallest step (`(1 - cos(1000 x))/x^2`),
-//! and a function that is only constant from some point on (`min(x, 100)` at infinity).
+//! (`sin(1/x)` at 0, `sin(x)` at infinity), a feature narrower than the smallest step (`(1 - cos(1000 x))/x^2`; the
+//! steps are fractions of the coherent unit, so this holds in whatever unit the point is written), and a function
+//! that is only constant from some point on (`min(x, 100)` at infinity).
 
 use std::collections::HashMap;
 
@@ -147,6 +154,19 @@ fn point_of_quantity(q: Quantity) -> PhysureResult<Point> {
     Ok(Point::Finite(q))
 }
 
+/// The unit the variable is sampled in, and the point's value in it: the coherent unit of the point's dimension
+/// (`m` for `km`, `m*s^-1` for `km/h`, `kg` for `g`, `rad` for `deg`), so that the steps are the same whatever unit
+/// the point is written in (audit T11); `None`, a plain number, for a plain point and for a dimensionless one
+/// (`3 percent` is sampled next to 0.03). A unit that is already coherent is converted by the exact ratio 1.
+fn sampling_unit(p: &Quantity) -> PhysureResult<(Option<RationalUnit>, f64)> {
+    if p.unit.is_plain_number() {
+        return Ok((None, p.value.mean()));
+    }
+    let coherent = RationalUnit::new_from_dimensions(p.unit.dimensions.clone());
+    let mean = p.convert_to(&coherent)?.value.mean();
+    Ok(((!coherent.is_plain_number()).then_some(coherent), mean))
+}
+
 /// Whether the value of `expr` at a point where it is defined and finite is its limit there: every function it calls
 /// is continuous on its domain, and no exponent involves the variable (`0^x` is 1 at 0, its limit from the right 0).
 fn continuous(expr: &Expr, var: &str) -> bool {
@@ -182,6 +202,7 @@ struct Function<'a> {
     expr: Expr,
     env: HashMap<String, PhsValue>,
     var: String,
+    /// The coherent unit the variable is sampled in (see [`sampling_unit`]); `None` for a plain number.
     var_unit: Option<RationalUnit>,
     /// The unit of the first sample; every other sample is converted to it.
     unit: Option<RationalUnit>,
@@ -491,9 +512,9 @@ pub(crate) fn limit(
     bind_free_names(&expr, &mut env, &mut vec![var.to_string()], "expression", "limit")?;
     let point = read_point(point, interpreter, scope, 0)?;
     let approach = read_side(side_argument)?;
-    let var_unit = match &point {
-        Point::Finite(q) if !q.unit.is_plain_number() => Some(q.unit.clone()),
-        _ => None,
+    let (var_unit, mean) = match &point {
+        Point::Finite(q) => sampling_unit(q)?,
+        Point::Infinite(_) => (None, 0.0),
     };
     let trusted_at_point = continuous(&expr, var);
     let mut function = Function { interpreter, expr, env, var: var.to_string(), var_unit, unit: None };
@@ -520,7 +541,6 @@ pub(crate) fn limit(
             }
         }
         Point::Finite(p) => {
-            let mean = p.value.mean();
             let h0 = first_step(mean);
             let directions: &[f64] = match approach {
                 Approach::Both => &[-1.0, 1.0],
@@ -546,12 +566,13 @@ pub(crate) fn limit(
             // ... and defined at the closest sample of each of those sides too, so a point that is isolated from the
             // rest of the domain (`sqrt(x^2 (x^2 - 1e-4))` at 0: defined at 0 and for |x| >= 0.01) is not taken
             if trusted_at_point && defined_next_to(&mut function, mean, &starts)? {
-                let at = match &function.var_unit {
-                    Some(_) => PhsValue::Quantity(p.clone()),
-                    None if p.value.std_dev() == 0.0 => PhsValue::Number(p.value.mean()),
-                    None => PhsValue::Quantity(p.clone()),
+                // the point as it was written (its unit and uncertainty), not its value in the sampling unit
+                let at = if p.unit.is_plain_number() && p.value.std_dev() == 0.0 {
+                    PhsValue::Number(p.value.mean())
+                } else {
+                    PhsValue::Quantity(p.clone())
                 };
-                if let Some(value) = function.raw(at, p.value.mean())? {
+                if let Some(value) = function.raw(at, mean)? {
                     let finite = match &value {
                         PhsValue::Number(n) => n.is_finite(),
                         PhsValue::Quantity(q) => q.value.mean().is_finite(),
