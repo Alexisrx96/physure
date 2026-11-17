@@ -79,3 +79,47 @@ fn a_typo_of_a_unit_names_the_unit() {
     let message = refused("5 metre");
     assert!(message.starts_with("`metre` has no value") && message.contains("did you mean the unit"), "{message}");
 }
+
+// ---- the checker and the interpreter agree
+
+/// The checker's findings that are errors.
+fn checker_errors(source: &str) -> Vec<&'static str> {
+    use physure_script::check::{check_source, Severity};
+    check_source(source)
+        .unwrap_or_else(|e| panic!("{source:?} does not parse: {e}"))
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| d.code)
+        .collect()
+}
+
+#[test]
+fn every_program_the_checker_flags_as_an_unknown_name_the_interpreter_refuses_naming_it() {
+    for (source, name) in [
+        ("5 fooz", "fooz"),
+        ("x = 2 barrelz\nx", "barrelz"),
+        ("5 m * foo", "foo"),
+        ("5 m + foo", "foo"),
+        ("x = 3 barz", "barz"),
+    ] {
+        assert!(checker_errors(source).contains(&"unknown-name"), "{source:?}: the checker is silent");
+        let message = refused(source);
+        assert!(message.contains(&format!("`{name}` has no value")), "{source:?}: {message}");
+    }
+}
+
+#[test]
+fn the_checker_never_flags_a_name_the_interpreter_gives_a_value() {
+    for source in [
+        "foo = 2\n5 m * foo",
+        "fn f(foo) = 5 m * foo\nf(2)",
+        "for i in 1..3 { 5 m * i }",
+        "fn g(x) = y + 1 m where y = x * 2\ng(3 m)",
+        "5 m * pi",
+        "5 m * s",
+        "5 m * (2 s)",
+    ] {
+        eval_phs(source).unwrap_or_else(|e| panic!("{source:?} should run: {e}"));
+        assert!(!checker_errors(source).contains(&"unknown-name"), "{source:?}: a false positive");
+    }
+}
