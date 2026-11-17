@@ -1,3 +1,5 @@
+import pytest
+
 from physure._core import Interpreter
 from physure.ext.phs_loader import load_ext_functions
 
@@ -20,3 +22,14 @@ def test_load_ext_functions_registers_and_evaluates(tmp_path):
 def test_load_ext_functions_no_ext_dir_returns_empty(tmp_path):
     interp = Interpreter(base_dir=str(tmp_path))
     assert load_ext_functions(interp, tmp_path) == []
+
+
+def test_a_host_function_cannot_take_a_reserved_name(tmp_path):
+    interpreter = Interpreter(base_dir=str(tmp_path))
+    with pytest.raises(
+        ValueError, match="cannot be bound as a function a host registers"
+    ):
+        interpreter.register_function(lambda *args: 1.0, "max")
+    interpreter.register_function(
+        lambda *args: 2.0, "double"
+    )  # a free name registers
