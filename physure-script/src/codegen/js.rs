@@ -25,10 +25,23 @@ fn defined_functions(stmts: &[Statement], names: &mut HashSet<String>) {
     }
 }
 
-/// Names assigned inside a `while` body anywhere in the program: a top-level variable of
-/// one of these names needs `let` rather than `const`, since a later loop iteration
-/// reassigns it (and JS's block scoping means a *nested* `let` there would shadow instead
-/// of mutating).
+/// Names a top-level variable of which needs `let` rather than `const`: those assigned more than once at the top
+/// level, and those assigned inside a `while` body anywhere in the program, since a later loop iteration reassigns
+/// it (and JS's block scoping means a *nested* `let` there would shadow instead of mutating).
+fn names_reassigned(stmts: &[Statement]) -> HashSet<String> {
+    let mut names = names_reassigned_in_loops(stmts);
+    let mut seen = HashSet::new();
+    for stmt in stmts {
+        if let Statement::Assignment(node) = stmt {
+            let name = snake_to_camel(&node.name);
+            if !seen.insert(name.clone()) {
+                names.insert(name);
+            }
+        }
+    }
+    names
+}
+
 fn names_reassigned_in_loops(stmts: &[Statement]) -> HashSet<String> {
     let mut names = HashSet::new();
     for stmt in stmts {
@@ -62,7 +75,7 @@ impl JsTranspiler {
         let mut main_stmts = Vec::new();
         let mut main_declared_vars = HashSet::new();
         let mut known_bools: HashSet<String> = HashSet::new();
-        let reassigned = names_reassigned_in_loops(&program.statements);
+        let reassigned = names_reassigned(&program.statements);
 
         for stmt in &program.statements {
             match stmt {
@@ -111,8 +124,13 @@ impl JsTranspiler {
         } else {
             known_bools.remove(&node.name);
         }
-        main_declared_vars.insert(var_name.clone());
-        // `const` unless a later `while` loop reassigns this variable.
+        // declared once: a later assignment of the same name is a plain one
+        if !main_declared_vars.insert(var_name.clone()) {
+            main_stmts.push(format!("{} = {};", var_name, val));
+            main_stmts.push(format!("console.log(`{}: ${{{}}}`);", node.name, var_name));
+            return Ok(());
+        }
+        // `const` unless the variable is assigned again later (at the top level or in a `while` loop).
         let keyword = if reassigned.contains(&var_name) { "let" } else { "const" };
         if self.typed {
             let ty = if is_bool_now { "boolean" } else if is_str_literal { "string" } else { "Quantity" };
@@ -124,7 +142,8 @@ impl JsTranspiler {
         Ok(())
     }
 
-    /// A top-level expression: an `assert` call becomes the check it stands for, anything else is logged.
+    /// A top-level expression: an `assert` call becomes the check it stands for, anything else is logged as the text
+    /// of its value (a template string calls `toString()`; `console.log` of a WASM object prints its pointer).
     fn push_expr_statement(&self, expr: &Expr, known_bools: &HashSet<String>, main_stmts: &mut Vec<String>) -> Result<(), CodegenError> {
         let line = match super::as_assert_call(expr, known_bools) {
             Some(super::AssertShape::Bool { condition }) => {
@@ -139,7 +158,7 @@ impl JsTranspiler {
                 let method = if kind == "assert" { "physAssert" } else { "physExactAssert" };
                 format!("{}.{}({});", a_code, method, b_code)
             }
-            None => format!("console.log({});", self.generate_expr(expr)?),
+            None => format!("console.log(`${{{}}}`);", self.generate_expr(expr)?),
         };
         main_stmts.push(line);
         Ok(())
@@ -256,7 +275,9 @@ impl JsTranspiler {
         super::refuse_unsupported_call("JS/TS", name, args, kwargs)?;
         if !self.functions.contains(name) {
             return Err(CodegenError::Generic(format!(
-                "'{name}' cannot be transpiled to JavaScript or TypeScript: the WebAssembly `Quantity` of the `physure`                  package has no such method yet. Only arithmetic, `^`, `=>`, comparisons, `? :` and the functions the                  program defines are written; transpile to Python, Rust or Java to call '{name}'."
+                "'{name}' cannot be transpiled to JavaScript or TypeScript: the WebAssembly `Quantity` of the \
+                 `physure` package has no such method yet. Only arithmetic, `^`, `=>`, comparisons, `? :` and the \
+                 functions the program defines are written; transpile to Python, Rust or Java to call '{name}'."
             )));
         }
         let arg_strs = args.iter().map(|a| self.generate_expr(a)).collect::<Result<Vec<_>, _>>()?;
@@ -286,9 +307,7 @@ impl JsTranspiler {
 
 /// A quantity literal, with its uncertainty and unit when it has them.
 fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
-    if let Some(reason) = q.asymmetric_refusal() {
-        return Err(CodegenError::Generic(reason));
-    }
+    super::refuse_literal(q)?;
     let mut args = vec![format!("{}", q.magnitude)];
     if let Some(unc) = q.uncertainty {
         args.push(format!("{}", unc));

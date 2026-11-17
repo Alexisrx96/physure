@@ -79,6 +79,7 @@ fn a_builtin_the_wasm_quantity_has_no_method_for_is_refused() {
             let error = emit(source, target.clone()).expect_err(&format!("{target:?} transpiled a call to {name}"));
             assert!(error.contains(&format!("'{name}'")), "{target:?}: the error does not name {name}: {error}");
             assert!(error.contains("WebAssembly"), "{target:?}: {error}");
+            assert!(!error.contains("   "), "{target:?}: the message has a run of spaces: {error}");
         }
         for target in [Target::Python, Target::Rust, Target::Java] {
             emit(source, target.clone()).unwrap_or_else(|e| panic!("{target:?} refused {name}: {e}"));
@@ -93,3 +94,29 @@ fn a_user_function_is_still_called() {
         assert!(code.contains("area(new Quantity(2, \"m\"), new Quantity(3, \"m\"))"), "{target:?}:\n{code}");
     }
 }
+
+#[test]
+fn a_top_level_reassignment_declares_once_with_let() {
+    for target in JS_TARGETS {
+        let code = emit("q = 2 m\nq = 5 m\nr = 1 m\n", target.clone()).unwrap();
+        let first = if target == Target::TypeScript {
+            "let q: Quantity = new Quantity(2, \"m\");"
+        } else {
+            "let q = new Quantity(2, \"m\");"
+        };
+        assert!(code.contains(first), "{target:?}:\n{code}");
+        assert!(code.contains("\nq = new Quantity(5, \"m\");"), "{target:?}: the second is a plain assignment:\n{code}");
+        assert!(!code.contains("const q"), "{target:?}:\n{code}");
+        // a name assigned once stays `const`
+        assert!(code.contains("const r"), "{target:?}:\n{code}");
+    }
+}
+
+#[test]
+fn an_expression_statement_prints_the_text_of_its_value() {
+    for target in JS_TARGETS {
+        let code = emit("x = 2 m\nx * 3\n", target.clone()).unwrap();
+        assert!(code.contains("console.log(`${x.multiply(new Quantity(3, \"\"))}`);"), "{target:?}:\n{code}");
+    }
+}
+

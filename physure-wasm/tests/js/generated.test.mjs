@@ -21,7 +21,7 @@ const lf = (text) => text.replace(/\r\n/g, "\n");
 const modules = readdirSync(goldenDir).filter((name) => name.endsWith(".mjs")).sort();
 
 test("the golden directory holds generated modules", () => {
-  assert.ok(modules.length >= 8, `found ${modules.length} in ${goldenDir}`);
+  assert.ok(modules.length >= 10, `found ${modules.length} in ${goldenDir}`);
 });
 
 for (const name of modules) {

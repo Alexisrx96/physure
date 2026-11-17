@@ -359,7 +359,8 @@ impl RustTranspiler {
     }
 }
 
-/// Emitted once per generated library, before its shims: the last-error cell every shim writes and
+/// Emitted in every shim, before its exported functions (`phs export` builds one exported function per crate, so
+/// the crate has it once; concatenating two shims into one crate would define it twice): the last-error cell the shim writes and
 /// `<name>_last_error()` reads, the flag that says a shim is running on this thread, and `phs_guard`, which runs a
 /// shim's body so that a panic in it never leaves the `extern "C"` function (that aborts the host process).
 ///
@@ -384,9 +385,9 @@ fn phs_guard<T>(failure: T, body: impl FnOnce() -> T) -> T {
         }));
     });
     PHS_LAST_ERROR.with(|e| e.borrow_mut().clear());
-    PHS_IN_SHIM.with(|f| f.set(true));
+    let was_in_shim = PHS_IN_SHIM.with(|f| f.replace(true));
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
-    PHS_IN_SHIM.with(|f| f.set(false));
+    PHS_IN_SHIM.with(|f| f.set(was_in_shim));
     match outcome {
         Ok(result) => result,
         Err(payload) => {
@@ -410,9 +411,7 @@ fn last_error_export(name: &str) -> String {
 
 /// A quantity literal, with its uncertainty and unit when it has them.
 fn quantity_expr(node: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
-    if let Some(reason) = node.asymmetric_refusal() {
-        return Err(CodegenError::Generic(reason));
-    }
+    super::refuse_literal(node)?;
     let unit = match &node.unit {
         Some(u) => format!("\"{}\"", u),
         None => "\"\"".to_string(),
@@ -916,7 +915,17 @@ mod tests {
     }
 
     #[test]
-    fn both_export_shims_share_one_preamble_per_library() {
+    fn the_shim_flag_is_restored_to_what_it_was_not_cleared() {
+        // a nested use of `phs_guard` must not leave the flag false while an outer shim still runs
+        for shim in [shim_of(CONTRACT_LESS_THAT_PANICS), shim_with_a_refused_comparison()] {
+            assert!(shim.contains("let was_in_shim = PHS_IN_SHIM.with(|f| f.replace(true));"), "{shim}");
+            assert!(shim.contains("PHS_IN_SHIM.with(|f| f.set(was_in_shim));"), "{shim}");
+            assert!(!shim.contains("f.set(false)"), "{shim}");
+        }
+    }
+
+    #[test]
+    fn each_export_shim_holds_the_preamble_once() {
         for shim in [shim_of(CONTRACT_LESS_THAT_PANICS), shim_with_a_refused_comparison()] {
             assert_eq!(occurrences(&shim, "static PHS_LAST_ERROR"), 1, "{shim}");
             assert_eq!(occurrences(&shim, "static PHS_IN_SHIM"), 1, "{shim}");

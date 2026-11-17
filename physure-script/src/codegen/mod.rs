@@ -319,6 +319,23 @@ pub(crate) fn range_is_not_transpilable() -> CodegenError {
     )
 }
 
+/// Refuses a quantity literal no target can write: an asymmetric uncertainty, and a `sigma` bound. The number of a
+/// bound (`t +/- 2 sigma`) is a tolerance of the comparison it stands in, not an uncertainty of `t`; every target
+/// used to write it as one (`withUncertainty(t, 2, ..)`), and the comparison answered otherwise than PHS.
+pub(crate) fn refuse_literal(q: &QuantityNode) -> Result<(), CodegenError> {
+    if let Some(reason) = q.asymmetric_refusal() {
+        return Err(CodegenError::Generic(reason));
+    }
+    if q.is_sigma {
+        return Err(CodegenError::Generic(format!(
+            "A `sigma` bound (`+/- {} sigma`) cannot be transpiled: the generated code has no operator for it, and \
+             writing it as an uncertainty would change what the comparison answers.",
+            q.uncertainty.unwrap_or(1.0)
+        )));
+    }
+    Ok(())
+}
+
 /// Converts a PHS `snake_case` identifier to `camelCase`, the identifier casing shared
 /// by every target whose ecosystem convention is camelCase (Java, JS, TS).
 pub(crate) fn snake_to_camel(s: &str) -> String {

@@ -2,8 +2,8 @@
 //!
 //! For every `tests/golden/js/NAME.phs` there are two committed files:
 //! - `NAME.mjs`, the JavaScript the generator writes for it (an ES module importing `physure`);
-//! - `NAME.out`, what that module prints: one `name: value` line per top-level assignment, the line the generated
-//!   `console.log` writes, with the value the interpreter gives for the same statement.
+//! - `NAME.out`, what that module prints: one `name: value` line per top-level assignment and the value of each other
+//!   top-level expression, the lines the generated `console.log` calls write, with the values the interpreter gives.
 //!
 //! This test keeps the three consistent from Rust. `physure-wasm/tests/js/generated.test.mjs` runs each `NAME.mjs`
 //! with Node against the freshly built WebAssembly package and compares its stdout with `NAME.out`, so the generated
@@ -13,7 +13,7 @@
 //! bump does not change them. `PHYSURE_BLESS_GOLDEN=1` rewrites `NAME.mjs` and `NAME.out` from the current
 //! generator and interpreter; review the diff before committing it. Line endings are compared as `\n`.
 
-use physure_script::ast::Statement;
+use physure_script::ast::{Expr, Statement};
 use physure_script::codegen::{transpile, Target};
 use physure_script::interpreter::PhsInterpreter;
 use physure_script::parser::parse_phs;
@@ -36,14 +36,18 @@ fn interpreter_lines(source: &str) -> String {
     let mut interpreter = PhsInterpreter::default();
     let mut out = String::new();
     for statement in &program.statements {
-        interpreter.run_statement(statement).unwrap_or_else(|e| panic!("the interpreter refuses it: {e}"));
+        let value = interpreter.run_statement(statement).unwrap_or_else(|e| panic!("the interpreter refuses it: {e}"));
         match statement {
             Statement::Assignment(node) => {
                 let value = interpreter.get_var(&node.name).expect("an assigned variable");
                 out.push_str(&format!("{}: {}\n", node.name, value));
             }
+            // an `assert` is a check in the generated code, and prints nothing
+            Statement::Expr(Expr::FunctionCall { name, .. }) if name == "assert" || name == "exact_assert" => {}
+            // any other expression is printed: `console.log(`${expr}`)`, the text of its value
+            Statement::Expr(_) => out.push_str(&format!("{value}\n")),
             Statement::FunctionDef(_) | Statement::While { .. } => {}
-            other => panic!("a golden program prints through its assignments only, not {other:?}"),
+            other => panic!("a golden program prints through its assignments and expressions only, not {other:?}"),
         }
     }
     out
@@ -76,5 +80,5 @@ fn the_generated_javascript_and_its_output_match_the_golden_files() {
         }
         programs += 1;
     }
-    assert!(programs >= 8, "tests/golden/js should hold its 8 programs, found {programs}");
+    assert!(programs >= 10, "tests/golden/js should hold its 10 programs, found {programs}");
 }

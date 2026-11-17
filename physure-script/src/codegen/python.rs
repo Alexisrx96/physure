@@ -287,9 +287,7 @@ impl PythonTranspiler {
     }
 
     fn generate_quantity(&self, node: &QuantityNode) -> Result<String, CodegenError> {
-        if let Some(reason) = node.asymmetric_refusal() {
-            return Err(CodegenError::Generic(reason));
-        }
+        super::refuse_literal(node)?;
         let unit_str = node.unit.as_deref().unwrap_or("");
         let unc_str = if let Some(unc) = node.uncertainty {
             format!(", uncertainty={:?}", unc)

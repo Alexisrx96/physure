@@ -273,9 +273,7 @@ impl JavaTranspiler {
 
 /// A quantity literal, with its uncertainty and unit when it has them.
 fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
-    if let Some(reason) = q.asymmetric_refusal() {
-        return Err(CodegenError::Generic(reason));
-    }
+    super::refuse_literal(q)?;
     let mut args = vec![format!("{:?}", q.magnitude)];
     if let Some(unc) = q.uncertainty {
         args.push(format!("{:?}", unc));
