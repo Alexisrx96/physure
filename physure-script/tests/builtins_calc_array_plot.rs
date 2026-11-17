@@ -435,4 +435,6 @@ fn a_word_the_language_reads_is_not_a_symbol_of_a_symbolic_text() {
     assert!(calc(r#"simplify("sin(x) * 2")"#).contains("sin(x)"));
     assert_eq!(calc(r#"deriv("sigma^2", "sigma")"#), "2 * sigma");
     assert!(calc(r#"deriv("max * x", "x")"#).contains("max"));
+    // `sec` is also the unit second
+    assert!(calc(r#"deriv("3 sec * x", "x")"#).contains("sec"));
 }

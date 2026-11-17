@@ -355,13 +355,14 @@ fn product_step(t: &PhsToken) -> ProductStep {
 
 /// A word PHS reads as something other than a name is not a symbol of a symbolic text: `x and y` was `and * x * y`,
 /// and a function without its parentheses (`sin * x`) a symbol called `sin`. The words that are only plausible names
-/// (`sigma`, `max`, `dof`, a statement word) stay symbols, as the variables of an equation call do.
+/// (`sigma`, `max`, `dof`, a statement word) stay symbols, as the variables of an equation call do. `sec` is left
+/// alone: it is also the unit second (`3 sec`).
 fn refuse_bare_word(name: &str) -> PhysureResult<()> {
     use crate::reserved::{static_kind, Reserved};
     let message = match static_kind(name) {
         Some(Reserved::Keyword) => format!("`{name}` is a word of the language and is not a symbol of a symbolic text; use another name"),
         Some(Reserved::Literal) => format!("`{name}` is a literal of the language and is not a symbol of a symbolic text; use another name"),
-        _ if unary_function(name).is_some() || matches!(name, "deriv" | "integral") => {
+        _ if name != "sec" && (unary_function(name).is_some() || matches!(name, "deriv" | "integral")) => {
             format!("`{name}` is a function: write it with its argument in parentheses, `{name}(x)`")
         }
         _ => return Ok(()),

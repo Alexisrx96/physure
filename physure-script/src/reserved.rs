@@ -160,8 +160,10 @@ pub fn plan_import(
                     return Err(ImportError::Reserved(module_import_error(&call_name, domain)));
                 }
                 let wanted = (domain, sym.name.clone());
-                if unlocked.get(&call_name).is_some_and(|already| *already != wanted) {
-                    return Err(ImportError::Reserved(module_remap_error(&call_name, domain)));
+                if let Some((other, canonical)) = unlocked.get(&call_name) {
+                    if (*other, canonical) != (wanted.0, &wanted.1) {
+                        return Err(ImportError::Reserved(module_remap_error(&call_name, other)));
+                    }
                 }
                 imports.push((call_name, wanted));
             }
@@ -231,6 +233,16 @@ mod tests {
         let missing = import("calc", ImportSpecifier::Symbols(vec![symbol("nope", None)]));
         let error = plan_import(&missing, "calc", &MEMBERS, &none, &Unlocked::new()).unwrap_err();
         assert_eq!(error, ImportError::NoSuchFunction("no such function 'nope' in domain 'calc'".to_string()));
+    }
+
+    #[test]
+    fn a_remap_names_the_module_that_already_holds_the_name() {
+        let none = |_: &str| false;
+        let mut unlocked = Unlocked::new();
+        unlocked.insert("gradient".to_string(), ("calc", "gradient".to_string()));
+        let named = import("array", ImportSpecifier::Symbols(vec![symbol("gradient", None)]));
+        let error = plan_import(&named, "array", &["gradient", "dot"], &none, &unlocked).unwrap_err();
+        assert!(matches!(&error, ImportError::Reserved(m) if m.contains("already a function of `calc`")), "{error:?}");
     }
 
     #[test]
