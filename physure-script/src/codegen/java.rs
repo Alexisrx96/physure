@@ -200,7 +200,7 @@ impl JavaTranspiler {
 
     fn binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr) -> Result<String, CodegenError> {
         let l = self.generate_expr(left)?;
-        super::method_binary_expr(op, &l, right, |e| self.generate_expr(e))
+        super::method_binary_expr(op, &l, right, "getValue()", |e| self.generate_expr(e))
     }
 
     fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {

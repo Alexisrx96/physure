@@ -215,7 +215,7 @@ fn test_cli_transpile_typescript() {
     let _ = fs::remove_file(temp_output);
 
     assert!(generated.contains("import { Quantity } from \"physure\";"), "Expected generated code to import Quantity, got: {}", generated);
-    assert!(generated.contains("const m: Quantity = Quantity.of(75, \"kg\");"), "Expected generated code to declare typed const, got: {}", generated);
+    assert!(generated.contains("const m: Quantity = new Quantity(75, \"kg\");"), "Expected generated code to declare typed const, got: {}", generated);
 }
 
 #[test]

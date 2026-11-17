@@ -281,6 +281,18 @@ fn the_transpiler_writes_the_file_of_each_target() {
 }
 
 #[test]
+fn a_builtin_the_webassembly_quantity_lacks_stops_the_javascript_transpile() {
+    let dir = TempDir::new("transpile_js_refusal");
+    dir.write("calc.phs", "a = 4 m^2\nside = sqrt(a)\n");
+    for target in ["js", "ts"] {
+        let output = run_in(dir.path(), &["transpile", "calc.phs", "-t", target]);
+        assert!(!output.status.success(), "{target}: {}", stdout(&output));
+        let error = stderr(&output);
+        assert!(error.contains("'sqrt'") && error.contains("WebAssembly"), "{target}: {error}");
+    }
+}
+
+#[test]
 fn the_transpile_target_follows_the_output_file_when_none_is_named() {
     let dir = TempDir::new("transpile_ext");
     dir.write("calc.phs", "e = 2 m * 3 m\n");

@@ -433,8 +433,8 @@ fn every_target_writes_the_value_of_a_constant_fixed_at_generation_and_says_so()
         (Target::Rust, "//", "Quantity::new(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity::new(3.141592653589793, \"\")"),
         (Target::Python, "#", "Q_(8.31446261815324, \"J*mol^-1*K^-1\")", "Q_(3.141592653589793, \"\")"),
         (Target::Java, "//", "Quantity.of(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity.of(3.141592653589793)"),
-        (Target::JavaScript, "//", "Quantity.of(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity.of(3.141592653589793)"),
-        (Target::TypeScript, "//", "Quantity.of(8.31446261815324, \"J*mol^-1*K^-1\")", "Quantity.of(3.141592653589793)"),
+        (Target::JavaScript, "//", "new Quantity(8.31446261815324, \"J*mol^-1*K^-1\")", "new Quantity(3.141592653589793, \"\")"),
+        (Target::TypeScript, "//", "new Quantity(8.31446261815324, \"J*mol^-1*K^-1\")", "new Quantity(3.141592653589793, \"\")"),
     ] {
         let code = generated(source, target.clone());
         assert!(code.contains(constant), "{target:?}:\n{code}");
