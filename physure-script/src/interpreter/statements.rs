@@ -356,6 +356,12 @@ impl PhsInterpreter {
         self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(domain, _)| *domain)
     }
 
+    /// Forgets every function a `use` unlocked. A host that keeps one interpreter alive across edits of a text (the
+    /// language server) calls it before it replays the imports of the new text.
+    pub fn reset_imports(&self) {
+        self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
     /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. What an import may
     /// unlock is decided by [`crate::reserved::plan_import`], the function the checker asks too: a member whose name
     /// the program already holds (a variable or a function) is refused, so is one that would remap a name the

@@ -556,6 +556,18 @@ pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
         state.interp.env.remove(name);
     }
 
+    // What a `use` unlocked is kept by the interpreter for as long as the document lives. When the old or the new
+    // text has an import, forget it and run the imports of the new text again (they are idempotent): a name the old
+    // text imported is free again, and one the new text imports is reserved from the first dirty statement on.
+    let is_import = |statement: &Statement| matches!(statement, Statement::Import(_));
+    if old_statements.iter().chain(&new_statements).any(is_import) {
+        state.interp.reset_imports();
+        for statement in new_statements.iter().filter(|s| is_import(s)) {
+            // a refused import shows its error when it is dirty, or keeps the one it already had
+            let _ = state.interp.run_statement(statement);
+        }
+    }
+
     for (i, stmt) in new_statements.iter().enumerate() {
         if !dirty.contains(&i) {
             continue;
@@ -977,5 +989,28 @@ mod tests {
         assert!(ud != 0.0 && (ud / x.1 - 2f64.sqrt()).abs() < 0.1, "u(x - y) = {ud}, u(x) = {}", x.1);
         let (fresh, _) = run(None, "x = 10 +/- 1 m");
         assert_eq!(uncertain(&fresh, "x"), x, "a first open starts the stream of the seed again");
+    }
+
+    #[test]
+    fn deleting_an_import_frees_the_names_it_unlocked() {
+        let first = apply_change(None, "use * from calc\n");
+        assert!(first.diagnostics.is_empty(), "{:?}", first.diagnostics);
+        let second = apply_change(Some(first.state), "limit = 5\n");
+        assert!(second.diagnostics.is_empty(), "limit is free again: {:?}", second.diagnostics);
+    }
+
+    #[test]
+    fn narrowing_an_import_frees_the_rest_of_the_module() {
+        let first = apply_change(None, "use * from calc\n");
+        let second = apply_change(Some(first.state), "use solve from calc\nlimit = 5\n");
+        assert!(second.diagnostics.is_empty(), "{:?}", second.diagnostics);
+    }
+
+    #[test]
+    fn an_import_that_stays_keeps_its_names_reserved_through_an_unrelated_edit() {
+        let first = apply_change(None, "use * from calc\nx = 1\n");
+        let second = apply_change(Some(first.state), "use * from calc\nx = 2\nlimit = 5\n");
+        assert_eq!(second.diagnostics.len(), 1, "{:?}", second.diagnostics);
+        assert!(second.diagnostics[0].message.contains("`limit` is a function of `calc`"), "{:?}", second.diagnostics);
     }
 }
