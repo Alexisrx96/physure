@@ -15,7 +15,7 @@
 - Prefix every cargo command with `CARGO_TARGET_DIR=D:/Projects/physure/target` (shared target, never a second `target/`).
 - Rust, `CHANGELOG.md` and `docs/*.md` files are CRLF in the working tree: edit with the editor tool, or Python in default text mode chained with `&&` before `git commit`. `PHYSURE_LANGUAGE_GUIDE.md` is written by `phs doc --save` (LF); do not hand-edit it.
 - A change of criterion, decided while planning: phase 1 refused a value a host gives when it was named like a core function, and the final review of phase 1 found that this breaks the Java binding (`PhyEquation.callWith` binds the measured variables of an equation by name, so `F = sigma * A` with a measurement for `sigma` fails). A local never shadows a call (a call reaches the builtin first), so Task 1 narrows the rule for host values and equation-call arguments to what the language reads as something else. Task 5 writes it into the spec and the changelog.
-- Known and accepted: the Java and WASM suites cannot be run here (no JNI build, no `wasm-pack`); only a Rust-level test covers the Java route.
+- Known and accepted when this plan was written: the Java and WASM suites could not be run here (no JNI build, no `wasm-pack`); only a Rust-level test covers the Java route. (That was wrong: JDK 21, Maven, Node 24 and `wasm-pack` were installed, and both suites were run on 2026-11-17; see spec §11.)
 
 ---
 

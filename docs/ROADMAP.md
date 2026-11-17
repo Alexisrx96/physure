@@ -135,7 +135,7 @@ answer come first:
 - [ ] The JavaScript and TypeScript targets emit calls the binding does not have (T19).
 
 Then the ones that fail loudly or only read badly: T1 (reporting half), T4, T8, T9, T11, T16
-and T21 (T18 and T20 are fixed; for T21 the Python suite has been run on this branch, 1760 passed, and the Java and WebAssembly suites have not). The full list, with reproductions, is in section 11.2 of the audit.
+and T21 (T18, T20 and T21 are fixed or done: on this branch the Python suite passes with 1761 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
