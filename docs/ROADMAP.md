@@ -131,12 +131,15 @@ answer come first:
 - [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
 - [x] Covariance pruning read a missing variance as an absolute `1.0`, whatever the unit (T7). A block whose variances are not both stored is kept now. It was latent: no public call sequence reaches it, and pruning is off by default.
 - [x] `e` meant Euler's number in a symbolic string and was refused elsewhere (T13). It is a name like any other in both now, and `e^x` in a symbolic text is refused (write `exp(x)`). The same change fixed a silent wrong answer: a name ending in `e` before `^` was cut into the name and `e`, so `deriv("time^2", "time")` answered 0.
-- [ ] A compiled export without contracts has no way to report a failure (T15).
-- [ ] The JavaScript and TypeScript targets emit calls the binding does not have (T19).
+- [x] A compiled export without contracts had no way to report a failure (T15). Its shim catches a panic now, returns NaN and says what happened through `<name>_last_error()`, as the shim of a function with contracts does (commit `cb63930`).
+- [x] The JavaScript and TypeScript targets emitted calls the binding does not have (T19). They write `new Quantity(v, unit)`, the `value` getter and a JavaScript conditional now, refuse a call to any other builtin at transpile time, and a test runs the generated JavaScript against the real package (commits `d9fda26`, `1258dc1`).
 - [ ] The inverse trigonometric and hyperbolic functions the symbolic engine produces (`asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, ...) have no runtime function either, so an antiderivative that uses them cannot be confirmed by the quadrature (found while fixing T4).
+- [ ] The WebAssembly `Quantity` has no math methods (`sqrt`, `abs`, trig, `max`, ...), so the JavaScript and TypeScript targets refuse every builtin call (found fixing T19).
+- [ ] `phs export --native` copies the library from `<crate>/target/release`, so it fails when `CARGO_TARGET_DIR` is set (found fixing T15).
+- [ ] The Rust target emits `.powf(Quantity::new(..).unwrap())` for a non-integer exponent (`x ^ 0.5`), but `powf` takes an `f64`: the generated Rust does not compile (found fixing T15).
 
-Then the ones that fail loudly or only read badly: T1 (reporting half), T8, T11, T16
-and T21 (T4, T9, T18, T20 and T21 are fixed or done: on this branch the Python suite passes with 1761 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). The full list, with reproductions, is in section 11.2 of the audit.
+Then the ones that fail loudly or only read badly: T1 (reporting half), T8, T11
+and T21 (T4, T9, T18, T20 and T21 are fixed or done: on this branch the Python suite passes with 1761 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
