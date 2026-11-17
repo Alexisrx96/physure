@@ -1353,7 +1353,7 @@ impl PyInterpreter {
     /// Registers a Python callable as a PHS function named `name`. The callable
     /// receives PHS argument values converted to plain Python objects (Quantity,
     /// float, bool, str, None, or a list) and must return a value convertible back.
-    fn register_function(&mut self, callback: Py<PyAny>, name: String) {
+    fn register_function(&mut self, callback: Py<PyAny>, name: String) -> PyResult<()> {
         self.inner.register_fn(name, move |args: &[::physure_script::PhsValue]| {
             Python::with_gil(|py| {
                 let py_args = args
@@ -1370,7 +1370,7 @@ impl PyInterpreter {
                 py_to_phs_value(result.bind(py))
                     .map_err(|e| ::physure_core::error::PhysureError::Generic(e.to_string()))
             })
-        });
+        }).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     fn evaluate(&mut self, py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {

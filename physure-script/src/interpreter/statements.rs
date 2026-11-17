@@ -359,6 +359,17 @@ impl PhsInterpreter {
         self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
+    /// Refuses `name` as the name of a function a host registers or a plugin installs: a core builtin and an
+    /// imported module function answer a call first, so such a function would never be called, and `pi`, the
+    /// catalog's constants and the words of the language are not function names either.
+    pub(crate) fn refuse_function_name(&self, name: &str, what: &str) -> PhysureResult<()> {
+        crate::globals::refuse_binding(name, what)?;
+        if let Some(domain) = self.module_domain(name) {
+            return Err(PhysureError::Generic(crate::reserved::module_binding_error(name, domain, what)));
+        }
+        Ok(())
+    }
+
     /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. What an import may
     /// unlock is decided by [`crate::reserved::plan_import`], the function the checker asks too: a member whose name
     /// the program already holds (a variable or a function) is refused, so is one that would remap a name the
@@ -454,8 +465,16 @@ impl PhsInterpreter {
 
     /// Installs the requested (possibly aliased) subset of `functions` into
     /// `dynamic_externals`, erroring if a requested name isn't exported.
-    fn install_dynamic_externals(&self, specifier: &crate::ast::ImportSpecifier, module: &str, functions: &HashMap<String, ExternalFn>) -> PhysureResult<()> {
+    pub(crate) fn install_dynamic_externals(&self, specifier: &crate::ast::ImportSpecifier, module: &str, functions: &HashMap<String, ExternalFn>) -> PhysureResult<()> {
         use crate::ast::ImportSpecifier;
+        let names: Vec<String> = match specifier {
+            ImportSpecifier::Wildcard => functions.keys().cloned().collect(),
+            ImportSpecifier::Symbols(syms) => syms.iter().map(|sym| sym.alias.clone().unwrap_or_else(|| sym.name.clone())).collect(),
+            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        };
+        for name in &names {
+            self.refuse_function_name(name, &format!("a function of the plugin `{module}`"))?;
+        }
         let mut dynamic = self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner());
         match specifier {
             ImportSpecifier::Wildcard => {

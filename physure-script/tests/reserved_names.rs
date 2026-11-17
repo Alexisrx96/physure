@@ -300,3 +300,18 @@ fn the_checker_reports_every_finding_in_order() {
     let found = reserved_diagnostics("use * from calc\nlimit = 5\nmax = 1\n");
     assert_eq!(found.iter().map(|(line, _)| *line).collect::<Vec<_>>(), vec![2, 3], "{found:?}");
 }
+
+#[test]
+fn a_host_function_cannot_take_a_reserved_name() {
+    let mut interpreter = PhsInterpreter::default();
+    for name in ["max", "use", "inf", "pi"] {
+        let error = interpreter.register_fn(name, |_| Ok(PhsValue::Number(1.0))).unwrap_err().to_string();
+        assert!(error.contains(&format!("`{name}` is")) && error.contains("cannot be bound as a function a host registers"), "{name}: {error}");
+    }
+    interpreter.register_fn("double", |_| Ok(PhsValue::Number(2.0))).expect("a free name registers");
+    // a function of a module is reserved once the program imports the module
+    interpreter.run_program_with(&parse_phs("use * from calc
+1").expect("a program"), vec![]).expect("the import runs");
+    let error = interpreter.register_fn("limit", |_| Ok(PhsValue::Number(1.0))).unwrap_err().to_string();
+    assert!(error.contains("`limit` is a function of `calc`"), "{error}");
+}

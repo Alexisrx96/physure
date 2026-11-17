@@ -883,7 +883,7 @@ r3 = circuito_abierto(5 V, 2 A)
             Some(PhsValue::Quantity(q)) => Ok(PhsValue::Number(q.value.mean() * 2.0)),
             Some(PhsValue::Number(n)) => Ok(PhsValue::Number(n * 2.0)),
             _ => Err(PhysureError::Generic("double expects a number".into())),
-        });
+        }).expect("a free name");
 
         let results = interp.eval_str("double(21)").unwrap();
         assert_eq!(results, vec![PhsValue::Number(42.0)]);
@@ -1340,5 +1340,21 @@ mod sandbox_tests {
         let interp = PhsInterpreter::sandboxed(crate::Limits::sandboxed(std::time::Duration::from_secs(1)));
         assert!(interp.plugin_base_dir.is_none());
         assert!(interp.limits.sequential && !interp.limits.allow_files);
+    }
+
+    #[test]
+    fn a_plugin_cannot_install_a_function_under_a_reserved_name() {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        let interp = PhsInterpreter::default();
+        let mut functions: HashMap<String, ExternalFn> = HashMap::new();
+        functions.insert("max".to_string(), Arc::new(|_: &[PhsValue]| Ok(PhsValue::Number(1.0))));
+        functions.insert("helper".to_string(), Arc::new(|_: &[PhsValue]| Ok(PhsValue::Number(2.0))));
+        let error = interp.install_dynamic_externals(&ImportSpecifier::Wildcard, "m", &functions).unwrap_err().to_string();
+        assert!(error.contains("`max` is a function of PHS") && error.contains("a function of the plugin `m`"), "{error}");
+        assert!(interp.dynamic_externals.lock().unwrap().is_empty(), "nothing is installed when one name is refused");
+        functions.remove("max");
+        interp.install_dynamic_externals(&ImportSpecifier::Wildcard, "m", &functions).expect("free names install");
+        assert!(interp.dynamic_externals.lock().unwrap().contains_key("helper"));
     }
 }
