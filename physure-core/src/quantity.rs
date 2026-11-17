@@ -517,6 +517,40 @@ impl Quantity {
         self.trig("tan")
     }
 
+    /// The secant, 1/cos x, of an angle or a dimensionless value read as radians.
+    pub fn sec(&self) -> PhysureResult<Quantity> {
+        self.reciprocal_trig("sec", "cos")
+    }
+
+    /// The cosecant, 1/sin x. `csc(0)` is an error, not infinity.
+    pub fn csc(&self) -> PhysureResult<Quantity> {
+        self.reciprocal_trig("csc", "sin")
+    }
+
+    /// The cotangent, 1/tan x. `cot(0)` is an error, not infinity.
+    pub fn cot(&self) -> PhysureResult<Quantity> {
+        self.reciprocal_trig("cot", "tan")
+    }
+
+    /// `func` as the reciprocal of `base`, composed from the existing kernels: the argument is
+    /// read as an angle exactly as `sin` reads it, `base` is applied, and the power `-1` gives
+    /// the reciprocal. Composition keeps the derivative (and the correlations) right in every
+    /// propagation model without a new entry in the per-function tables, which fall through to
+    /// the identity for a name they do not know.
+    ///
+    /// A zero denominator is the pole of `func`: it is reported as a domain error naming the
+    /// function and the point rather than answered with infinity. A floating-point π/2 is not a
+    /// pole (cos of it is 6e-17), so `sec(pi/2)` is a huge finite number, like `tan(pi/2)`.
+    fn reciprocal_trig(&self, func: &str, base: &str) -> PhysureResult<Quantity> {
+        let radians = self.as_radians(func)?;
+        let denominator = radians.propagate_function(base)?;
+        if denominator.mean() == 0.0 {
+            return Err(PhysureError::DomainError(format!("{func} of {} is undefined", radians.mean())));
+        }
+        let new_value = denominator.propagate_pow(-1.0)?;
+        Ok(Quantity { value: new_value, unit: RationalUnit::dimensionless() })
+    }
+
     /// A trigonometric function takes an angle and returns a pure ratio.
     ///
     /// Two arguments are admissible: an angle, which is converted to radians by its own
@@ -551,6 +585,12 @@ impl Quantity {
 
     pub fn exp(&self) -> PhysureResult<Quantity> {
         self.transcendental("exp", "exp")
+    }
+
+    /// The error function. Like `exp`, it is a power series in its argument, so the argument
+    /// must be dimensionless; an angle is refused.
+    pub fn erf(&self) -> PhysureResult<Quantity> {
+        self.transcendental("erf", "erf")
     }
 
     /// The natural logarithm. The core calls it `log`; PHS and the rest of the world call
@@ -1220,6 +1260,84 @@ mod tests {
         assert!(matches!(zero.ln().unwrap_err(), PhysureError::DomainError(_)));
         let negative = Quantity::new(-5.0, "").unwrap();
         assert!(matches!(negative.ln().unwrap_err(), PhysureError::DomainError(_)));
+    }
+
+    fn close(actual: f64, expected: f64, rel: f64) -> bool {
+        (actual - expected).abs() <= rel * expected.abs().max(f64::MIN_POSITIVE)
+    }
+
+    #[test]
+    fn sec_csc_and_cot_of_a_plain_number_are_the_reciprocal_ratios() {
+        let one = Quantity::new(1.0, "").unwrap();
+        for (q, expected) in [
+            (one.sec().unwrap(), 1.8508157176809255),
+            (one.csc().unwrap(), 1.1883951057781212),
+            (one.cot().unwrap(), 0.6420926159343306),
+        ] {
+            assert!(close(q.value.mean(), expected, 1e-14), "{} != {expected}", q.value.mean());
+            assert!(q.unit.dimensions.is_empty(), "the result is a pure ratio");
+        }
+    }
+
+    #[test]
+    fn sec_of_an_angle_reads_its_unit_and_a_length_is_refused() {
+        let sixty = Quantity::new(60.0, "deg").unwrap();
+        assert!(close(sixty.sec().unwrap().value.mean(), 2.0, 1e-12));
+        let err = Quantity::new(1.0, "m").unwrap().sec().unwrap_err();
+        assert!(err.to_string().contains("sec"), "{err}");
+        assert!(Quantity::new(1.0, "m").unwrap().csc().is_err());
+        assert!(Quantity::new(1.0, "m").unwrap().cot().is_err());
+    }
+
+    #[test]
+    fn cot_and_csc_of_zero_are_domain_errors_not_infinity() {
+        let zero = Quantity::new(0.0, "").unwrap();
+        for (name, err) in [("cot", zero.cot().unwrap_err()), ("csc", zero.csc().unwrap_err())] {
+            assert!(matches!(err, PhysureError::DomainError(_)), "{err:?}");
+            assert!(err.to_string().contains(&format!("{name} of 0 is undefined")), "{err}");
+        }
+        // Like `tan(pi/2)`: the floating-point pi/2 is not the pole, and the answer is finite.
+        let half_pi = Quantity::new(std::f64::consts::FRAC_PI_2, "").unwrap();
+        assert!(half_pi.sec().unwrap().value.mean().is_finite());
+    }
+
+    #[test]
+    fn sec_csc_and_cot_propagate_the_derivative() {
+        let (m, s) = (0.5_f64, 0.01);
+        let x = Quantity::new_scalar(m, s, RationalUnit::dimensionless(), Some("gaussian"), None);
+        let (sec, csc, cot) = (1.0 / m.cos(), 1.0 / m.sin(), 1.0 / m.tan());
+        for (q, expected) in [
+            (x.sec().unwrap(), s * (sec * m.tan()).abs()),
+            (x.csc().unwrap(), s * (csc * cot).abs()),
+            (x.cot().unwrap(), s * csc * csc),
+        ] {
+            assert!(close(q.value.std_dev(), expected, 1e-12), "{} != {expected}", q.value.std_dev());
+        }
+    }
+
+    #[test]
+    fn erf_of_a_plain_number() {
+        let erf = |x: f64| Quantity::new(x, "").unwrap().erf().unwrap().value.mean();
+        assert!(close(erf(1.0), 0.8427007929497149, 1e-15));
+        assert_eq!(erf(0.0), 0.0);
+        assert!(close(erf(-1.0), -0.8427007929497149, 1e-15));
+        assert!(close(erf(1e-8), 1.1283791670955126e-8, 1e-14));
+        assert_eq!(erf(10.0), 1.0);
+    }
+
+    #[test]
+    fn erf_needs_a_dimensionless_value_and_refuses_an_angle() {
+        assert!(Quantity::new(1.0, "m").unwrap().erf().is_err());
+        let err = Quantity::new(1.0, "rad").unwrap().erf().unwrap_err();
+        assert!(err.to_string().contains("erf"), "{err}");
+        assert!(close(Quantity::new(50.0, "%").unwrap().erf().unwrap().value.mean(), crate::math::erf(0.5), 1e-15));
+    }
+
+    #[test]
+    fn erf_propagates_the_derivative() {
+        let x = Quantity::new_scalar(0.5, 0.01, RationalUnit::dimensionless(), Some("gaussian"), None);
+        let expected = 0.01 * 2.0 / std::f64::consts::PI.sqrt() * (-0.25_f64).exp();
+        assert!(close(x.erf().unwrap().value.std_dev(), expected, 1e-12));
     }
 
     #[test]

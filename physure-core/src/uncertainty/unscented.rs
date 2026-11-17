@@ -128,6 +128,7 @@ impl UncertaintyBackend for UnscentedBackend {
             "abs" => self.sigma_points.mapv(|x| x.abs()),
             "tan" => self.sigma_points.mapv(|x| x.tan()),
             "tanh" => self.sigma_points.mapv(|x| x.tanh()),
+            "erf" => self.sigma_points.mapv(crate::math::erf),
             _ => self.sigma_points.clone(),
         };
         Ok(Box::new(UnscentedBackend::from_points(new_points, self.weights.clone(), &self.sigma)))

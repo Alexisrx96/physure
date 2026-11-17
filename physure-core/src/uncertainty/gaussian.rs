@@ -116,6 +116,7 @@ pub(crate) fn function_mean_and_jacobian(func: &str, m: f64) -> (f64, f64) {
         "abs" => (m.abs(), if m < 0.0 { -1.0 } else { 1.0 }),
         "tan" => (m.tan(), 1.0 + m.tan().powi(2)),
         "tanh" => (m.tanh(), 1.0 - m.tanh().powi(2)),
+        "erf" => (crate::math::erf(m), crate::math::erf_derivative(m)),
         _ => (m, 1.0),
     }
 }

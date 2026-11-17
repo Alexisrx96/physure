@@ -17,6 +17,62 @@ fn mc(mean: f64, std_dev: f64) -> Quantity {
     )
 }
 
+type QuantityFunction = fn(&Quantity) -> crate::error::PhysureResult<Quantity>;
+
+/// The four functions T4 added, by name, for the guard below.
+const T4_FUNCTIONS: [(&str, QuantityFunction); 4] =
+    [("sec", Quantity::sec), ("csc", Quantity::csc), ("cot", Quantity::cot), ("erf", Quantity::erf)];
+
+/// `0.5 ± 0.01` in every propagation model a value can carry.
+fn in_every_mode() -> Vec<(&'static str, Quantity)> {
+    let dimensionless = RationalUnit::dimensionless;
+    vec![
+        ("gaussian", Quantity::new_scalar(0.5, 0.01, dimensionless(), Some("gaussian"), None)),
+        (
+            "monte_carlo",
+            with_seed(7, || Quantity::new_scalar(0.5, 0.01, dimensionless(), Some("monte_carlo"), Some(MC_SAMPLES))),
+        ),
+        ("unscented", Quantity::new_scalar(0.5, 0.01, dimensionless(), Some("unscented"), None)),
+        (
+            "moments",
+            Quantity::from_value(UncertaintyValue::Moments(MomentsBackend::measured(0.5, 0.01, 0.01).unwrap()), dimensionless()),
+        ),
+    ]
+}
+
+/// The Gaussian, Monte Carlo and unscented tables fall through to the identity for a name they
+/// do not know. A function missing from one of them would hand back its argument unchanged, so
+/// every new function must move the mean (or refuse) in every mode.
+#[test]
+fn no_t4_function_falls_through_to_the_identity_in_any_mode() {
+    for (mode, x) in in_every_mode() {
+        for (name, f) in T4_FUNCTIONS {
+            if let Ok(y) = f(&x) {
+                assert!((y.value.mean() - x.value.mean()).abs() > 1e-3, "{name} in {mode} returned its argument");
+            }
+        }
+    }
+}
+
+/// Monte Carlo and unscented values agree with the Gaussian derivative for a small spread, and
+/// moments either agree or refuse.
+#[test]
+fn t4_functions_spread_alike_in_every_mode() {
+    let modes = in_every_mode();
+    for (name, f) in T4_FUNCTIONS {
+        let gaussian = f(&modes[0].1).unwrap().value.std_dev();
+        for (mode, x) in &modes[1..] {
+            match f(x) {
+                Ok(y) => {
+                    let s = y.value.std_dev();
+                    assert!((s - gaussian).abs() < 0.03 * gaussian, "{name} in {mode}: {s} vs gaussian {gaussian}");
+                }
+                Err(e) => assert!(*mode == "moments", "{name} in {mode} refused: {e}"),
+            }
+        }
+    }
+}
+
 #[test]
 fn test_gaussian_tan_enum() {
     let g = UncertaintyValue::Gaussian(GaussianBackend::new(0.5, 0.1));
