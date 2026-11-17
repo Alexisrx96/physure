@@ -51,22 +51,72 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// Whether the checker finding `code` is the same problem as this interpreter error: the two word a problem
-/// differently, so the match is by the family of the wording; a message that matches no family is another problem.
-pub fn explains(code: &str, runtime_message: &str) -> bool {
-    let family: &[&str] = match code {
-        "dimension-mismatch" => &["Unit mismatch", "cannot compare", "cannot convert", "ncompatible", "cannot add", "cannot subtract"],
-        "unknown-name" => &["Unknown unit", "Invalid operand", "Undefined"],
-        "unknown-unit" => &["Unknown unit"],
-        "temperature-points" => &["absolute temperature"],
-        "bad-argument" => &["expects a", "Argument for parameter", "cannot convert a"],
-        "bad-exponent" => &["Exponent must be"],
-        "not-a-bool" => &["needs a Bool", "has no value; the Bool literals", "not a condition"],
-        "reserved-name" => &["cannot be bound", "is a function", "is a word", "is a literal", "is already a function"],
-        "constant-shadowing" => &["cannot be bound", "is a constant"],
-        _ => &[],
-    };
-    family.iter().any(|pattern| runtime_message.contains(pattern))
+/// Whether the checker finding (`code`, `finding_message`) is the same problem as this interpreter error: the two
+/// word a problem differently, so the match is by the wording of the problem's kind and by what names it (the
+/// unit, the function, the binding), never by the kind alone. A message this does not recognise as the finding's
+/// own is another problem, so it is reported too; a reworded message would be reported twice, which the guard test
+/// `a_flagged_line_is_not_said_twice` (`tests/report.rs`) catches.
+pub fn explains(code: &str, finding_message: &str, runtime_message: &str) -> bool {
+    match code {
+        "dimension-mismatch" => ["Unit mismatch", "with the plain number"].iter().any(|kind| runtime_message.contains(kind)),
+        "bad-argument" => is_bad_argument(finding_message, runtime_message),
+        // the same unit by name: `Unknown unit 'a'` does not say `'fooz' is neither a variable, a constant nor a unit`
+        "unknown-unit" | "unknown-name" => {
+            between(finding_message, '\'').is_some_and(|name| runtime_message.contains(&format!("Unknown unit '{name}'")))
+        }
+        "bad-exponent" => runtime_message.contains("Exponent must be"),
+        // the same operation on the temperatures
+        "temperature-points" => [
+            ("cannot be added", "cannot add two absolute temperatures"),
+            ("cannot be subtracted", "cannot subtract the absolute temperature"),
+            ("multiplied or divided", "cannot multiply or divide the absolute temperature"),
+        ]
+        .iter()
+        .any(|(finding, runtime)| finding_message.contains(finding) && runtime_message.contains(runtime)),
+        "not-a-bool" => condition_head(finding_message) == condition_head(runtime_message),
+        // the same name, in the words both messages take from one place (`reserved.rs`, `globals.rs`)
+        "reserved-name" | "constant-shadowing" => between(finding_message, '`')
+            .is_some_and(|name| runtime_message.contains(&format!("`{name}` is ")) && runtime_message.contains("choose another")),
+        _ => false,
+    }
+}
+
+/// The first text between two `quote` characters of `message`.
+fn between(message: &str, quote: char) -> Option<&str> {
+    message.split(quote).nth(1).filter(|name| !name.is_empty())
+}
+
+/// A builtin that wants an angle or a dimensionless value (`sin expects an angle or a dimensionless value, got L`;
+/// the interpreter says `exp expects a dimensionless value, got 's'`), or an annotated parameter that got another
+/// unit (`the argument for parameter 'm' of 'kinetic' is T, ...` and `Argument for parameter 'm' of function
+/// 'kinetic' has a unit incompatible ...`): the same function or the same parameter of the same function.
+fn is_bad_argument(finding_message: &str, runtime_message: &str) -> bool {
+    if let Some(function) = finding_message.split(" expects ").next().filter(|function| !function.contains(' ') && function.len() < finding_message.len()) {
+        let wants = [" expects an angle or a dimensionless value", " expects a dimensionless value"];
+        return wants.iter().any(|want| runtime_message.starts_with(&format!("{function}{want}")));
+    }
+    let mut names = finding_message.split('\'').skip(1).step_by(2);
+    match (names.next(), names.next()) {
+        (Some(parameter), Some(function)) => runtime_message.contains(&format!("Argument for parameter '{parameter}' of function '{function}'")),
+        _ => false,
+    }
+}
+
+/// What a condition message says before its detail: the construct and the kind of value, without the value
+/// (`(5.0)`, `(of dimension L)`) or the advice after the colon.
+fn condition_head(message: &str) -> String {
+    let mut head = String::new();
+    let mut depth = 0usize;
+    for c in message.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => break,
+            _ if depth == 0 => head.push(c),
+            _ => {}
+        }
+    }
+    head.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Parses `code` and checks it against the catalog that unit text is read against on this thread (the

@@ -52,12 +52,28 @@ fn a_dimension_error_is_said_once_by_the_checker() {
 
 #[test]
 fn a_second_problem_on_a_flagged_line_is_reported_too() {
+    // each line has two distinct problems: the checker says the first (the code), the interpreter stops at the other
     for (program, checker_code) in [
         ("undefined_fn(1) + (1 m + 1 s)", "dimension-mismatch"),
         ("x = 5 / 0 + (1 m + 1 s)", "dimension-mismatch"),
         ("y = ln(-1) + (1 m + 1 s)", "dimension-mismatch"),
         ("sqrt(-4 m^2) + 1 s", "dimension-mismatch"),
         ("x = vector(1 m, 2 s)[9] + 20 degC * 2", "temperature-points"),
+        // an unknown name is another problem when the checker's is a different name
+        ("undefined_fn(1) + 5 fooz", "unknown-name"),
+        ("(\"a\" + 1) + 5 fooz", "unknown-name"),
+        ("undefined_fn(1) + (5 m => fooz)", "unknown-unit"),
+        ("(\"a\" + 1) + (5 m => zzz)", "unknown-unit"),
+        // a comparison of two things that are not quantities is not the dimension error of the checker
+        ("(vector(1, 2) == vector(1, 2)) == (1 m + 1 s == 2 m)", "dimension-mismatch"),
+        ("(1 m != \"a\") == (1 m + 1 s == 2 m)", "dimension-mismatch"),
+        ("undefined_fn(1) + (1 m > 0)", "dimension-mismatch"),
+        // a function that wants another kind of argument is not the dimension of the checker's
+        ("uncertainty(\"a\") + sin(1 m)", "bad-argument"),
+        ("undefined_fn(1) + sin(1 m)", "bad-argument"),
+        ("undefined_fn(1) + 2 m ^ (1 s)", "bad-exponent"),
+        ("limit(\"x\", \"x\", 20 degC) + 20 degC * 2", "temperature-points"),
+        ("undefined_fn(1) + (if 5 then 1 else 2)", "not-a-bool"),
     ] {
         let report = run(program);
         assert!(!report.ok, "{program:?}");
@@ -65,11 +81,7 @@ fn a_second_problem_on_a_flagged_line_is_reported_too() {
         assert_eq!(errors, [(1, checker_code), (1, "runtime")], "{program:?}: {:?}", report.diagnostics);
         assert_eq!(
             canonical_witness(&report),
-            format!("{WITNESS_FORMAT}
-ok false
-error {checker_code}
-error runtime
-"),
+            format!("{WITNESS_FORMAT}\nok false\nerror {checker_code}\nerror runtime\n"),
             "{program:?}"
         );
     }
@@ -90,15 +102,12 @@ const ONE_PROBLEM: &[(&str, usize, &str)] = &[
     ("dimension-mismatch", 1, "2 kg >= 0.5"),
     ("dimension-mismatch", 1, "(2 m)^2 + 1 m"),
     ("dimension-mismatch", 1, "sqrt(4 m) + 1 m"),
-    ("dimension-mismatch", 2, "x = 2 m
-x > 0"),
-    ("dimension-mismatch", 3, "x = 1 m
-y = 2 s
-x + y"),
-    ("dimension-mismatch", 2, "x = 2 m
-x + 3 s"),
+    ("dimension-mismatch", 2, "x = 2 m\nx > 0"),
+    ("dimension-mismatch", 3, "x = 1 m\ny = 2 s\nx + y"),
+    ("dimension-mismatch", 2, "x = 2 m\nx + 3 s"),
     ("dimension-mismatch", 1, "1 J + 1 W"),
     ("dimension-mismatch", 1, "20 dB == 100"),
+    ("dimension-mismatch", 1, "5 m => kg"),
     ("unknown-unit", 1, "5 m => fooz"),
     ("unknown-unit", 1, "5 m => zzz"),
     ("unknown-name", 1, "5 fooz"),
@@ -108,35 +117,69 @@ x + 3 s"),
     ("bad-argument", 1, "ln(2 kg)"),
     ("bad-argument", 1, "sec(1 m)"),
     ("bad-argument", 1, "erf(1 m)"),
-    ("bad-argument", 2, "fn kinetic(m: kg, v: m/s) = 0.5 * m * v^2
-kinetic(2 s, 3 m/s)"),
-    ("bad-argument", 2, "fn speed(v: m/s) = v * 2
-speed(5)"),
+    ("bad-argument", 2, "fn kinetic(m: kg, v: m/s) = 0.5 * m * v^2\nkinetic(2 s, 3 m/s)"),
+    ("bad-argument", 2, "fn speed(v: m/s) = v * 2\nspeed(5)"),
     ("bad-exponent", 1, "2 m ^ (1 s)"),
     ("temperature-points", 1, "20 degC + 5 degC"),
     ("temperature-points", 1, "5 K - 20 degC"),
     ("temperature-points", 1, "20 degC * 2"),
     ("temperature-points", 1, "20 degC / 2"),
     ("temperature-points", 1, "2 / 5 degC"),
-    ("not-a-bool", 2, "x = 5
-if x then 1 else 2"),
+    ("not-a-bool", 2, "x = 5\nif x then 1 else 2"),
     ("not-a-bool", 1, "if 5 m then 1 else 2"),
-    ("not-a-bool", 2, "x = 2 m
-x ? 1 : 2"),
+    ("not-a-bool", 2, "x = 2 m\nx ? 1 : 2"),
     ("not-a-bool", 1, "not 5"),
-    ("not-a-bool", 2, "s = \"on\"
-if s then 1 else 2"),
-    ("not-a-bool", 1, "while true {
-  1
-}"),
+    ("not-a-bool", 2, "s = \"on\"\nif s then 1 else 2"),
+    ("not-a-bool", 1, "while true {\n  1\n}"),
     ("reserved-name", 1, "max = 3"),
     ("reserved-name", 1, "use = 3"),
     ("reserved-name", 1, "inf = 3"),
     ("reserved-name", 1, "fn f(round) = round"),
+    ("reserved-name", 1, "use solve as max from calc"),
+    ("reserved-name", 2, "limit = 1\nuse solve, limit from calc"),
+    ("reserved-name", 1, "x = 2 * y where y = 1, max = 3"),
     ("constant-shadowing", 1, "pi = 3"),
     ("constant-shadowing", 1, "molar_gas_constant = 8"),
     ("constant-shadowing", 1, "fn g(bohr_radius) = bohr_radius"),
 ];
+
+#[test]
+fn the_checker_explains_an_interpreter_error_only_by_its_own_words_and_names() {
+    use physure_script::check::explains;
+    // the same unit, by name
+    assert!(explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "Unknown unit 'fooz' - did you mean 'foot'?"));
+    assert!(!explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "Unknown unit 'a' - did you mean 'A'?"));
+    assert!(!explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "Undefined function 'fooz'"));
+    assert!(explains("unknown-unit", "Unknown unit 'zzz'", "Unknown unit 'zzz'"));
+    assert!(!explains("unknown-unit", "Unknown unit 'zzz'", "Unknown unit 'yyy'"));
+    // the same operation on the temperatures
+    let added = "two absolute temperatures cannot be added: one of them is an interval (K, delta_celsius)";
+    let scaled = "an absolute temperature cannot be multiplied or divided by a plain number: the result depends on the scale";
+    assert!(explains("temperature-points", added, "cannot add two absolute temperatures ('degC' and 'degC'): add an interval to one of them"));
+    assert!(!explains("temperature-points", added, "cannot multiply or divide the absolute temperature 'degC' by a plain number: the result depends on the scale"));
+    assert!(explains("temperature-points", scaled, "cannot multiply or divide the absolute temperature 'degC' by a plain number: the result depends on the scale"));
+    assert!(!explains("temperature-points", scaled, "cannot subtract the absolute temperature 'degC' from the interval 'K'"));
+    // the same function, or the same parameter of the same function
+    let sin = "sin expects an angle or a dimensionless value, got L";
+    assert!(explains("bad-argument", sin, "sin expects an angle or a dimensionless value, got 'm'"));
+    assert!(!explains("bad-argument", sin, "cos expects an angle or a dimensionless value, got 'm'"));
+    assert!(!explains("bad-argument", sin, "uncertainty expects a quantity"));
+    let parameter = "the argument for parameter 'm' of 'kinetic' is T, the declared unit is M";
+    assert!(explains("bad-argument", parameter, "Argument for parameter 'm' of function 'kinetic' has a unit incompatible with declared unit 'kg': Unit mismatch"));
+    assert!(!explains("bad-argument", parameter, "Argument for parameter 'v' of function 'kinetic' has a unit incompatible with declared unit 'kg': Unit mismatch"));
+    // a comparison of things that are not quantities is not a dimension error
+    assert!(explains("dimension-mismatch", "cannot add: the left side is L, the right side is T", "Unit mismatch: expected 'm', got 's'"));
+    assert!(!explains("dimension-mismatch", "cannot add: the left side is L, the right side is T", "cannot compare Vector and Vector with =="));
+    // the same name bound, the same condition
+    let bound = "`max` is a function of PHS and cannot be bound as a variable; choose another name";
+    assert!(explains("reserved-name", bound, bound));
+    assert!(!explains("reserved-name", bound, "`use` is a word of the language and cannot be bound as a variable; choose another name"));
+    let condition = "the condition of `if` needs a Bool (True or False), got a Quantity (of dimension L): a quantity is not a condition; compare it, e.g. `x != 0 m`";
+    assert!(explains("not-a-bool", condition, "the condition of `if` needs a Bool (True or False), got a Quantity (5.0 km): a quantity is not a condition; compare it, e.g. `x != 0 km`"));
+    assert!(!explains("not-a-bool", condition, "the condition of `while` needs a Bool (True or False), got a Quantity (5.0 m): a quantity is not a condition"));
+    // a warning, or a code the interpreter has no words for, explains nothing
+    assert!(!explains("mixed-extremum", "x", "Unit mismatch: expected 'm', got 's'"));
+}
 
 #[test]
 fn a_flagged_line_is_not_said_twice() {
