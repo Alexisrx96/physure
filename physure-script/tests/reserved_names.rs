@@ -121,3 +121,27 @@ fn importing_a_module_twice_is_not_a_binding() {
     assert_eq!(value("use * from calc\nuse * from calc\n1"), "1.0");
     assert_eq!(value("use solve from calc\nuse solve from calc\n1"), "1.0");
 }
+
+#[test]
+fn an_import_nested_in_a_body_is_not_a_binding_either() {
+    // a body can hold an import (the grammar's `stmt`); running it again binds nothing new
+    assert_eq!(value("use solve from calc
+while False {
+  use solve from calc
+}
+1"), "1.0");
+    assert_eq!(value("use solve from calc
+fn f(x) =
+  use solve from calc
+  x
+f(2)"), "2.0");
+}
+
+#[test]
+fn a_nested_binding_that_is_not_an_import_is_still_refused() {
+    let message = refused("use * from calc
+fn g(x) =
+  limit = 1
+  x");
+    assert!(message.contains("is a function of `calc`"), "{message}");
+}

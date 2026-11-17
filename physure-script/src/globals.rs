@@ -121,6 +121,9 @@ pub fn refuse_constant_binding(name: &str, what: &str) -> PhysureResult<()> {
     }
 }
 
+/// What `bindings_of` says binds a name an import brings; the text is followed by the path of the module.
+const IMPORT_BINDING: &str = "a name imported from";
+
 /// Every name `statement` binds, with what binds it, in source order: assignments, function names and parameters,
 /// `for` variables and `where` bindings anywhere inside it (function bodies included, whether or not they ever
 /// run), and the names an import of named symbols binds.
@@ -154,7 +157,7 @@ pub fn bindings_of(statement: &Statement, out: &mut Vec<(String, String)>) {
             if let ImportSpecifier::Symbols(symbols) = &import.specifier {
                 for symbol in symbols {
                     let name = symbol.alias.clone().unwrap_or_else(|| symbol.name.clone());
-                    out.push((name, format!("a name imported from `{}`", import.path)));
+                    out.push((name, format!("{IMPORT_BINDING} `{}`", import.path)));
                 }
             }
         }
@@ -190,9 +193,9 @@ pub fn bindings_in(expr: &Expr, out: &mut Vec<(String, String)>) {
 /// Refuses `statement` when it binds a reserved name anywhere inside it: a global identifier of the catalog in
 /// force, a statement word, a literal, a function of the core, or a function of a module the program has imported
 /// (`module_domain` answers the module of such a name). Checked once for a statement before it runs, so a loop
-/// does not pay for it at every iteration and a body that never runs is checked too. An `import` statement is not
-/// checked against the module functions: running `use * from calc` twice binds nothing new, and
-/// `PhsInterpreter::unlock_domain` refuses an import over a name the program holds.
+/// does not pay for it at every iteration and a body that never runs is checked too. A name an import binds is not
+/// checked against the module functions: running `use * from calc` again, wherever the import sits, binds nothing
+/// new.
 pub(crate) fn refuse_global_bindings(
     statement: &Statement,
     module_domain: &dyn Fn(&str) -> Option<&'static str>,
@@ -202,10 +205,9 @@ pub(crate) fn refuse_global_bindings(
     if bound.is_empty() {
         return Ok(());
     }
-    let is_import = matches!(statement, Statement::Import(_));
     for (name, what) in bound {
         refuse_binding(&name, &what)?;
-        if !is_import {
+        if !what.starts_with(IMPORT_BINDING) {
             if let Some(domain) = module_domain(&name) {
                 return Err(PhysureError::Generic(crate::reserved::module_binding_error(&name, domain, &what)));
             }
