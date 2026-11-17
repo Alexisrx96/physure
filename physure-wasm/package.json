@@ -22,6 +22,9 @@
     "webassembly",
     "scientific-computing"
   ],
+  "scripts": {
+    "test": "node --test tests/js/generated.test.mjs"
+  },
   "main": "./pkg-node/physure_wasm.js",
   "module": "./pkg-bundler/physure_wasm.js",
   "types": "./pkg-bundler/physure_wasm.d.ts",

@@ -1,0 +1,7 @@
+d = 1 km
+n = 0
+while d > 990 m {
+  d = d - 1 m
+  n = n + 1
+}
+steps = n * 1 m

@@ -151,3 +151,11 @@ jobs:
       - name: Run the WASM tests under Node
         working-directory: physure-wasm
         run: wasm-pack test --node
+      # The JavaScript `phs transpile` writes (tests/golden/js) is run against the package it imports, and must
+      # print what the interpreter answers (audit T19).
+      - name: Build the Node package
+        working-directory: physure-wasm
+        run: wasm-pack build --target nodejs --out-dir pkg-node
+      - name: Run the generated JavaScript against the package
+        working-directory: physure-wasm
+        run: node --test tests/js/generated.test.mjs
