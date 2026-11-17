@@ -141,7 +141,7 @@ photon = planck_constant * speed_of_light_in_vacuum / (500 nm) => eV   # 2.48 eV
 
 The constants are the `[Constants]` of the catalog in force, by their catalog names: the embedded catalog (411 CODATA values, with no uncertainties), a project's `physure.conf`, a frozen file, or the registry a binding evaluates for. An override or a frozen configuration changes them. Only the catalog's own names are constants: `e`, `c`, `k` and `R` are not (write `exp(1)`, `speed_of_light_in_vacuum`, `boltzmann_constant`, `molar_gas_constant`), and `h`, `g`, `G` are units (hour, gram, gauss). Seven names are a unit and a constant at once (`bohr_radius`, `electron_mass`, `electron_volt`, `planck_length`, `planck_mass`, `planck_temperature`, `planck_time`): the catalog gives both one value (a frozen file or a unit system where they differ is refused; a `physure.conf` where they differ loses the constant, with a message), so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) are the same length. A constant carries no uncertainty: a catalog line is `name = number unit`, and one written with `+/-` is an error when it is used.
 
-Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file.
+Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file. Section 1.7 lists the other names that can never be bound.
 
 ### 1.6 Settings that change a run
 The `[Settings]` of the frozen file in force (`phs conf`), or else of the `physure.conf` in the working directory, govern these. A key that is not set takes its default, which is the behaviour from before the key existed (but for the seed, below).
@@ -162,6 +162,31 @@ The `[Settings]` of the frozen file in force (`phs conf`), or else of the `physu
 **Printed text.** `@precision` wins over the display keys, and `x: base` follows the digits and thresholds without GUM rounding. The keys do not govern `format()` with a spec, `frac` and `ifrac`, plot axes or the symbolic printer. With `display_significant_digits = 6` and `uncertainty_digits = 3`, `x = 1/3` prints `0.333333` (by default `0.333333333333333`) and `10.0 +/- 0.15 m` prints `10.000 ± 0.150 m` (by default `10.0 ± 0.2 m`).
 
 Six old keys are accepted and do nothing: `default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose`, `mkml_recursion_limit`. `phs conf status` warns where a file of yours sets one.
+
+### 1.7 Reserved names
+A program can never bind a reserved name: not as a variable, a parameter, a function name, a `for` variable, a `where` binding or an import alias. The refusal comes before the program runs (`phs check` reports it with the code `reserved-name`) and says what the name is and what to do:
+
+| Class | Names |
+| :--- | :--- |
+| Keywords | `for`, `while`, `let`, `if`, `then`, `else`, `where`, `return`, `not`, `and`, `or`, `True`, `False` |
+| Statement words | `use`, `from`, `import`, `export`, `as`, `fn`, `in` |
+| Literals | `true`, `false`, `None`, `none`, `inf`, `infinity`, `oo` |
+| Functions of the core | `abs`, `approx`, `assert`, `ceil`, `cos`, `coverage_factor`, `dof`, `exact_assert`, `exp`, `expanded`, `floor`, `format`, `from_samples`, `if_then_else`, `ln`, `log`, `max`, `min`, `parallel_map`, `round`, `sigma`, `sin`, `sqrt`, `tan`, `ternary`, `uncertainty`, `vector` |
+| Functions of `calc` | `curl`, `deriv`, `diff`, `div`, `divergence`, `dsolve`, `expand`, `grad`, `gradient`, `integral`, `integrate`, `inv_laplace`, `inverse_laplace`, `laplace`, `laplacian`, `lim`, `limit`, `series`, `simplify`, `solve`, `sub`, `substitute`, `sym_charpoly`, `sym_det`, `sym_eigenvalues`, `sym_trace`, `sym_transpose`, `taylor` |
+| Functions of `array` | `cross`, `det`, `dot`, `gradient`, `linspace`, `matmul`, `norm`, `sym_charpoly`, `sym_det`, `sym_eigenvalues`, `sym_trace`, `sym_transpose`, `transpose`, `trapz`, `unit_vector` |
+| Functions of `plot` | `export3d`, `export_3d`, `plot`, `plot3d`, `plot_field`, `plot_nd` |
+| Constants | `pi`, `π` and every constant of the catalog (section 1.5) |
+
+```phs
+max = 3          # error: `max` is a function of PHS and cannot be bound as a variable; choose another name
+use = 3          # error: `use` is a word of the language and cannot be bound as a variable; choose another name
+```
+
+* The functions of a module are reserved from the `use` that imports them: `use * from calc` reserves all of `calc`, `use solve from calc` reserves `solve`, and `use solve as sv from calc` reserves `sv` and leaves `solve` free. Importing a function over a name the program already holds is an error too.
+* Not reserved: unit names (`m`, `s`, `kg`), `e`, the words of a format (`base`, `frac`).
+* A value a host gives a program, and the arguments of an equation call (`eq(sigma=5, A=2)`), are local to the run and never hide a call, so they may be named like a function (`sigma`, `max`, `dof`); a keyword, a literal, `pi` and the constants are still refused there.
+* A host function or a plugin function cannot be installed under a reserved name: a call would reach the builtin first.
+* In a symbolic text (`deriv`, `integral`, `solve`, ...), the keywords, the literals and the functions the symbolic parser knows (`sin`, `log`, `deriv`, `integral`, ...) are not symbols; `sigma`, `max`, `min`, `dof` and `sec` are.
 
 ---
 

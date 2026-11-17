@@ -475,6 +475,19 @@ fn base64_encode_bytes(bytes: &[u8]) -> String {
     out
 }
 
+/// The names as a list of code spans (`a`, `b`, `c`) for a table cell of the guide.
+fn code_list(names: &[&str]) -> String {
+    names.iter().map(|name| format!("`{name}`")).collect::<Vec<_>>().join(", ")
+}
+
+/// The functions a domain module exports, sorted and without repeats (an alias of a module may list a name twice).
+fn module_functions(domain: &str) -> String {
+    let mut names: Vec<&str> = physure_script::builtins::domain_members(domain).expect("a built-in module").to_vec();
+    names.sort_unstable();
+    names.dedup();
+    code_list(&names)
+}
+
 fn generate_language_docs_md() -> String {
     let (registry, _) = physure_core::units::conf::build_registry_from_conf();
     let mut md = String::new();
@@ -588,8 +601,29 @@ fn generate_language_docs_md() -> String {
     md.push_str("photon = planck_constant * speed_of_light_in_vacuum / (500 nm) => eV   # 2.48 eV\n");
     md.push_str("```\n\n");
     md.push_str("The constants are the `[Constants]` of the catalog in force, by their catalog names: the embedded catalog (411 CODATA values, with no uncertainties), a project's `physure.conf`, a frozen file, or the registry a binding evaluates for. An override or a frozen configuration changes them. Only the catalog's own names are constants: `e`, `c`, `k` and `R` are not (write `exp(1)`, `speed_of_light_in_vacuum`, `boltzmann_constant`, `molar_gas_constant`), and `h`, `g`, `G` are units (hour, gram, gauss). Seven names are a unit and a constant at once (`bohr_radius`, `electron_mass`, `electron_volt`, `planck_length`, `planck_mass`, `planck_temperature`, `planck_time`): the catalog gives both one value (a frozen file or a unit system where they differ is refused; a `physure.conf` where they differ loses the constant, with a message), so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) are the same length. A constant carries no uncertainty: a catalog line is `name = number unit`, and one written with `+/-` is an error when it is used.\n\n");
-    md.push_str("Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file.\n\n");
+    md.push_str("Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file. Section 1.7 lists the other names that can never be bound.\n\n");
     md.push_str("### 1.6 Settings that change a run\nThe `[Settings]` of the frozen file in force (`phs conf`), or else of the `physure.conf` in the working directory, govern these. A key that is not set takes its default, which is the behaviour from before the key existed (but for the seed, below).\n\n| Key | Default | What it governs |\n| :--- | :--- | :--- |\n| `max_while_iterations` | `10000` | the ceiling of one `while` loop (at least 1) |\n| `monte_carlo_samples` | `1000` | the samples a Monte Carlo measurement draws (2 to 10000000) |\n| `monte_carlo_seed` | `0` | the seed of the Monte Carlo draws, or `random` |\n| `default_dof` | `inf` | the degrees of freedom of an uncertainty that declares none (`dof`, `coverage_factor`, `expanded`) |\n| `display_significant_digits` | `15` | the significant digits of a printed decimal number (1 to 17; 17 prints every number exactly); not the scientific form |\n| `display_scientific_below` | `1e-4` | below this magnitude a number prints in scientific notation (1e-6 to 1) |\n| `display_scientific_from` | `1e16` | from this magnitude a number prints in scientific notation (finite, at least 1) |\n| `uncertainty_digits` | `gum` | the significant figures of a printed uncertainty: `gum` (the GUM rule) or a count from 1 to 17; the value is rounded to the same decimal place |\n\n**Monte Carlo draws are reproducible by default.** Under `propagation_mode = monte_carlo` each unit of evaluation draws one stream from the seed: a program run (`phs file.phs` and its viewers), a REPL session, a request of the editor daemon, one start of `phs serve`, a document of the language server. So the same program gives the same samples on every run, and two measurements of one run are independent. `monte_carlo_seed = random` draws operating-system entropy, different on every run (`phs conf status` warns that such a file is not reproducible). `phs eval --seed N` wins over the setting, and the JSON says which seed was used and where it came from. A `for` loop or `parallel_map` in `monte_carlo` mode runs on one thread, so its values never depend on the number of threads.\n\n**Printed text.** `@precision` wins over the display keys, and `x: base` follows the digits and thresholds without GUM rounding. The keys do not govern `format()` with a spec, `frac` and `ifrac`, plot axes or the symbolic printer. With `display_significant_digits = 6` and `uncertainty_digits = 3`, `x = 1/3` prints `0.333333` (by default `0.333333333333333`) and `10.0 +/- 0.15 m` prints `10.000 ± 0.150 m` (by default `10.0 ± 0.2 m`).\n\nSix old keys are accepted and do nothing: `default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose`, `mkml_recursion_limit`. `phs conf status` warns where a file of yours sets one.\n\n");
+
+    md.push_str("### 1.7 Reserved names\n");
+    md.push_str("A program can never bind a reserved name: not as a variable, a parameter, a function name, a `for` variable, a `where` binding or an import alias. The refusal comes before the program runs (`phs check` reports it with the code `reserved-name`) and says what the name is and what to do:\n\n");
+    md.push_str("| Class | Names |\n| :--- | :--- |\n");
+    md.push_str(&format!("| Keywords | {} |\n", code_list(&physure_script::reserved::KEYWORDS)));
+    md.push_str(&format!("| Statement words | {} |\n", code_list(&physure_script::reserved::STATEMENT_WORDS)));
+    md.push_str(&format!("| Literals | {} |\n", code_list(&physure_script::reserved::LITERALS)));
+    md.push_str(&format!("| Functions of the core | {} |\n", code_list(&physure_script::reserved::CORE_FUNCTIONS)));
+    md.push_str(&format!("| Functions of `calc` | {} |\n", module_functions("calc")));
+    md.push_str(&format!("| Functions of `array` | {} |\n", module_functions("array")));
+    md.push_str(&format!("| Functions of `plot` | {} |\n", module_functions("plot")));
+    md.push_str("| Constants | `pi`, `π` and every constant of the catalog (section 1.5) |\n\n");
+    md.push_str("```phs\n");
+    md.push_str("max = 3          # error: `max` is a function of PHS and cannot be bound as a variable; choose another name\n");
+    md.push_str("use = 3          # error: `use` is a word of the language and cannot be bound as a variable; choose another name\n");
+    md.push_str("```\n\n");
+    md.push_str("* The functions of a module are reserved from the `use` that imports them: `use * from calc` reserves all of `calc`, `use solve from calc` reserves `solve`, and `use solve as sv from calc` reserves `sv` and leaves `solve` free. Importing a function over a name the program already holds is an error too.\n");
+    md.push_str("* Not reserved: unit names (`m`, `s`, `kg`), `e`, the words of a format (`base`, `frac`).\n");
+    md.push_str("* A value a host gives a program, and the arguments of an equation call (`eq(sigma=5, A=2)`), are local to the run and never hide a call, so they may be named like a function (`sigma`, `max`, `dof`); a keyword, a literal, `pi` and the constants are still refused there.\n");
+    md.push_str("* A host function or a plugin function cannot be installed under a reserved name: a call would reach the builtin first.\n");
+    md.push_str("* In a symbolic text (`deriv`, `integral`, `solve`, ...), the keywords, the literals and the functions the symbolic parser knows (`sin`, `log`, `deriv`, `integral`, ...) are not symbols; `sigma`, `max`, `min`, `dof` and `sec` are.\n\n");
 
     md.push_str("---\n\n");
     md.push_str("## 2. 3D WebGL Surface Visualization & Mesh Export\n\n");

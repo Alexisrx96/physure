@@ -224,6 +224,36 @@ fn the_language_guide_is_printed_or_saved() {
 }
 
 #[test]
+fn the_committed_language_guide_is_what_phs_doc_prints() {
+    let dir = TempDir::new("guide");
+    let printed = stdout(&run_in(dir.path(), &["doc"]));
+    let committed = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("PHYSURE_LANGUAGE_GUIDE.md"))
+        .expect("the committed guide");
+    let normal = |text: &str| text.replace("\r\n", "\n").trim().to_string();
+    assert!(
+        normal(&printed) == normal(&committed),
+        "PHYSURE_LANGUAGE_GUIDE.md is out of date: run `phs doc --save` from the repository root and commit the file"
+    );
+}
+
+#[test]
+fn the_guide_lists_every_reserved_name_and_every_module_function() {
+    use physure_script::reserved::{CORE_FUNCTIONS, KEYWORDS, LITERALS, STATEMENT_WORDS};
+    let dir = TempDir::new("reserved");
+    let printed = stdout(&run_in(dir.path(), &["doc"]));
+    let section = printed.split("### 1.7 Reserved names").nth(1).expect("the section 1.7 of the guide");
+    let section = section.split("\n## ").next().unwrap_or(section);
+    for name in KEYWORDS.iter().chain(&STATEMENT_WORDS).chain(&LITERALS).chain(&CORE_FUNCTIONS) {
+        assert!(section.contains(&format!("`{name}`")), "the guide does not list `{name}`");
+    }
+    for domain in ["calc", "plot", "array"] {
+        for name in physure_script::builtins::domain_members(domain).expect("a module") {
+            assert!(section.contains(&format!("`{name}`")), "the guide does not list `{name}` of {domain}");
+        }
+    }
+}
+
+#[test]
 fn the_transpiler_writes_the_file_of_each_target() {
     let dir = TempDir::new("transpile");
     dir.write("calc.phs", "mass = 2 kg\nv = 3 m/s\ne = 0.5 * mass * v^2\n");
