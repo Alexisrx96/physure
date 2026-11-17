@@ -84,3 +84,40 @@ fn an_equation_call_may_name_a_variable_after_a_core_function() {
     // pi and the constants of the catalog are still refused
     assert!(refused("eq = \"y = 2 * x\"\neq(pi=3)").contains("`pi` is the constant"));
 }
+
+#[test]
+fn a_function_of_a_module_is_free_until_the_module_is_imported() {
+    assert_eq!(value("limit = 5\nlimit"), "5.0");
+    assert_eq!(value("fn series(a) = a + 1\nseries(1)"), "2.0");
+}
+
+#[test]
+fn a_function_of_an_imported_module_cannot_be_bound() {
+    for program in [
+        "use * from calc\nlimit = 5",
+        "use * from calc\nfn series(a) = a",
+        "use * from calc\nfn f(solve) = solve",
+        "use * from calc\nfor deriv in 0..3 { 1 }",
+        "use * from array\nnorm = 1",
+        "use * from plot\nplot = 1",
+    ] {
+        let message = refused(program);
+        assert!(message.contains("is a function of `") && message.contains("which this program imports"), "{program:?}: {message}");
+    }
+}
+
+#[test]
+fn only_what_is_imported_is_reserved() {
+    // `use solve from calc` brings `solve` and nothing else of calc
+    assert_eq!(value("use solve from calc\nlimit = 5\nlimit"), "5.0");
+    assert!(refused("use solve from calc\nsolve = 1").contains("`solve` is a function of `calc`"));
+    // an alias reserves the alias and leaves the name free
+    assert_eq!(value("use solve as sv from calc\nsolve = 2\nsolve"), "2.0");
+    assert!(refused("use solve as sv from calc\nsv = 1").contains("`sv` is a function of `calc`"));
+}
+
+#[test]
+fn importing_a_module_twice_is_not_a_binding() {
+    assert_eq!(value("use * from calc\nuse * from calc\n1"), "1.0");
+    assert_eq!(value("use solve from calc\nuse solve from calc\n1"), "1.0");
+}

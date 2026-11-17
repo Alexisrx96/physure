@@ -91,7 +91,7 @@ impl PhsInterpreter {
             let mut last = PhsValue::None;
             for (i, stmt) in program.statements.iter().enumerate() {
                 let line = program.lines.get(i).copied().unwrap_or(0);
-                crate::globals::refuse_global_bindings(stmt)?;
+                crate::globals::refuse_global_bindings(stmt, &|name| self.module_domain(name))?;
                 last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
             }
             Ok::<_, PhysureError>(last)
@@ -258,7 +258,7 @@ impl PhsInterpreter {
     pub(crate) fn eval_statement_in(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
         // once per statement before it runs, function bodies and loops included (see `globals`)
-        crate::globals::refuse_global_bindings(stmt)?;
+        crate::globals::refuse_global_bindings(stmt, &|name| self.module_domain(name))?;
         self.eval_statement_with_env_at(stmt, env, 0)
     }
 
@@ -341,6 +341,11 @@ impl PhsInterpreter {
         }
 
         Err(PhysureError::Generic(format!("No such module or domain '{}'", node.path)))
+    }
+
+    /// The module (`calc`, `plot`, `array`) whose function `name` the program has imported under that name.
+    pub(crate) fn module_domain(&self, name: &str) -> Option<&'static str> {
+        self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(domain, _)| *domain)
     }
 
     /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable.

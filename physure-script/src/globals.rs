@@ -187,17 +187,29 @@ pub fn bindings_in(expr: &Expr, out: &mut Vec<(String, String)>) {
     }
 }
 
-/// Refuses `statement` when it binds a global identifier of the catalog in force anywhere inside it. Checked once
-/// for a statement before it runs, so a loop does not pay for it at every iteration and a body that never runs is
-/// checked too.
-pub(crate) fn refuse_global_bindings(statement: &Statement) -> PhysureResult<()> {
+/// Refuses `statement` when it binds a reserved name anywhere inside it: a global identifier of the catalog in
+/// force, a statement word, a literal, a function of the core, or a function of a module the program has imported
+/// (`module_domain` answers the module of such a name). Checked once for a statement before it runs, so a loop
+/// does not pay for it at every iteration and a body that never runs is checked too. An `import` statement is not
+/// checked against the module functions: running `use * from calc` twice binds nothing new, and
+/// `PhsInterpreter::unlock_domain` refuses an import over a name the program holds.
+pub(crate) fn refuse_global_bindings(
+    statement: &Statement,
+    module_domain: &dyn Fn(&str) -> Option<&'static str>,
+) -> PhysureResult<()> {
     let mut bound = Vec::new();
     bindings_of(statement, &mut bound);
     if bound.is_empty() {
         return Ok(());
     }
+    let is_import = matches!(statement, Statement::Import(_));
     for (name, what) in bound {
         refuse_binding(&name, &what)?;
+        if !is_import {
+            if let Some(domain) = module_domain(&name) {
+                return Err(PhysureError::Generic(crate::reserved::module_binding_error(&name, domain, &what)));
+            }
+        }
     }
     Ok(())
 }
