@@ -147,7 +147,7 @@ answer come first:
 - [ ] `AutogradPropagator._compute_finite_diff` perturbs every element at once, so for a function that is not elementwise it returns a wrong diagonal Jacobian; the path is unused today (found measuring T8).
 
 Then the ones that fail loudly or only read badly: T1 (reporting half)
-and T11 (T4, T8, T9, T18, T20 and T21 are fixed or done; T8 was measured and closed with no code change, see `docs/superpowers/audits/2026-11-17-t8-noisy-jacobians.md`: on this branch the Python suite passes with 1762 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
+(T4, T8, T9, T11, T18, T20 and T21 are fixed or done; T8 was measured and closed with no code change, see `docs/superpowers/audits/2026-11-17-t8-noisy-jacobians.md`: on this branch the Python suite passes with 1762 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
