@@ -274,3 +274,22 @@ fn the_checker_does_not_report_what_the_interpreter_accepts() {
         assert_eq!(reserved_diagnostics(program), vec![], "{program:?}");
     }
 }
+
+#[test]
+fn the_checker_never_reports_an_error_the_interpreter_would_not_give() {
+    // a loop that does not run binds nothing, a function body is local, and a name bound only inside either is not held
+    for program in [
+        "while False {\n  limit = 1\n}\nuse * from calc\n1",
+        "fn g(x) =\n  limit = 1\n  return limit\nuse * from calc\n1",
+        "fn f(limit) = limit\nuse * from calc\n1",
+    ] {
+        assert_eq!(reserved_diagnostics(program), vec![], "{program:?}");
+        assert!(eval_phs(program).is_ok(), "{program:?} should run");
+    }
+}
+
+#[test]
+fn the_checker_reports_every_finding_in_order() {
+    let found = reserved_diagnostics("use * from calc\nlimit = 5\nmax = 1\n");
+    assert_eq!(found.iter().map(|(line, _)| *line).collect::<Vec<_>>(), vec![2, 3], "{found:?}");
+}

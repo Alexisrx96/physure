@@ -289,6 +289,10 @@ impl<'a> Checker<'a> {
     /// function of a module the program has imported by then (`reserved-name`). The top-level statements are read
     /// in order, keeping what the imports have unlocked and the names the program holds, so an import over a held
     /// name or a remap is reported too. Each finding is at the line of the top-level statement that holds it.
+    ///
+    /// It does not follow an import nested in a function or a loop body (whether it runs is not known statically), a
+    /// name a `.phs` import binds, or an assignment inside a loop; so it can miss what the interpreter refuses, and it
+    /// does not report what the interpreter accepts.
     fn refuse_reserved_bindings(&mut self, program: &Program) {
         let mut unlocked = crate::reserved::Unlocked::new();
         let mut held: HashSet<String> = HashSet::new();
@@ -319,7 +323,7 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            collect_assigned(std::slice::from_ref(statement), &mut held);
+            held.extend(bound_at_top_level(statement).map(str::to_string));
         }
         self.line = 0;
     }
@@ -1006,6 +1010,16 @@ fn bind_imported(specifier: &ImportSpecifier, env: &mut Env) {
         for symbol in symbols {
             env.insert(symbol.alias.clone().unwrap_or_else(|| symbol.name.clone()), Ty::Unknown);
         }
+    }
+}
+
+/// The name a top-level statement binds in the program's own scope, as the interpreter's `env` holds it when the next
+/// statement runs: an assignment or a function. A loop body is left out: it may never run.
+fn bound_at_top_level(statement: &Statement) -> Option<&str> {
+    match statement {
+        Statement::Assignment(node) => Some(&node.name),
+        Statement::FunctionDef(node) => Some(&node.name),
+        _ => None,
     }
 }
 
