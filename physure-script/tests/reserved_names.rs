@@ -315,3 +315,19 @@ fn a_host_function_cannot_take_a_reserved_name() {
     let error = interpreter.register_fn("limit", |_| Ok(PhsValue::Number(1.0))).unwrap_err().to_string();
     assert!(error.contains("`limit` is a function of `calc`"), "{error}");
 }
+
+#[test]
+fn an_import_cannot_cover_a_function_a_host_registered() {
+    let mut interpreter = PhsInterpreter::default();
+    interpreter.register_fn("limit", |_| Ok(PhsValue::Number(42.0))).expect("a free name registers");
+    let error = interpreter
+        .run_program_with(&parse_phs("use * from calc
+1").expect("a program"), vec![])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("`limit` is a function of `calc`") && error.contains("already bound"), "{error}");
+    // a named import of another function leaves the host function alone
+    interpreter.run_program_with(&parse_phs("use solve from calc
+1").expect("a program"), vec![]).expect("solve is free");
+    assert_eq!(interpreter.run_program_with(&parse_phs("limit(1)").expect("a program"), vec![]).unwrap().to_string(), "42.0");
+}

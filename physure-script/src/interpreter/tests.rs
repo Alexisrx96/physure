@@ -1357,4 +1357,17 @@ mod sandbox_tests {
         interp.install_dynamic_externals(&ImportSpecifier::Wildcard, "m", &functions).expect("free names install");
         assert!(interp.dynamic_externals.lock().unwrap().contains_key("helper"));
     }
+
+    #[test]
+    fn an_import_cannot_cover_a_function_a_plugin_installed() {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        let mut interp = PhsInterpreter::default();
+        let mut functions: HashMap<String, ExternalFn> = HashMap::new();
+        functions.insert("limit".to_string(), Arc::new(|_: &[PhsValue]| Ok(PhsValue::Number(42.0))));
+        interp.install_dynamic_externals(&ImportSpecifier::Wildcard, "m", &functions).expect("a free name installs");
+        let error = interp.eval_str("use * from calc
+1").unwrap_err().to_string();
+        assert!(error.contains("`limit` is a function of `calc`") && error.contains("already bound"), "{error}");
+    }
 }

@@ -379,8 +379,12 @@ impl PhsInterpreter {
             return Err(module_aliases_unsupported());
         }
         let domain = crate::reserved::domain_of(&node.path).expect("domain_members returned Some for unknown domain");
+        // the names a plugin installed, copied so that the two locks are never held together
+        let plugin_names: std::collections::HashSet<String> =
+            self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+        let held = |name: &str| env.contains_key(name) || self.externals.contains_key(name) || plugin_names.contains(name);
         let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
-        let imports = crate::reserved::plan_import(node, domain, members, &|name| env.contains_key(name), &unlocked)
+        let imports = crate::reserved::plan_import(node, domain, members, &held, &unlocked)
             .map_err(|error| PhysureError::Generic(error.message().to_string()))?;
         unlocked.extend(imports);
         Ok(())

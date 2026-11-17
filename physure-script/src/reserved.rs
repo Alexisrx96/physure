@@ -81,7 +81,7 @@ pub fn module_binding_error(name: &str, domain: &str, what: &str) -> String {
 
 /// The error for importing the function `name` of `domain` over a name the program already holds.
 pub fn module_import_error(name: &str, domain: &str) -> String {
-    format!("`{name}` is a function of `{domain}`, which this program imports, and `{name}` is already bound in the program; choose another name for it")
+    format!("`{name}` is a function of `{domain}`, which this program imports, and `{name}` is already bound in the program or by its host; choose another name for it")
 }
 
 /// The error for importing, as `name`, a function of `domain` when `name` is already another function of the program.
@@ -359,7 +359,7 @@ mod tests {
         );
         assert_eq!(
             module_import_error("limit", "calc"),
-            "`limit` is a function of `calc`, which this program imports, and `limit` is already bound in the program; choose another name for it"
+            "`limit` is a function of `calc`, which this program imports, and `limit` is already bound in the program or by its host; choose another name for it"
         );
         assert_eq!(
             module_remap_error("limit", "calc"),
