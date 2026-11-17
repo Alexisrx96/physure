@@ -278,7 +278,14 @@ impl PhsInterpreter {
         }
 
         let mut arg_vals = Vec::new();
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
+            // the spec of `x: base` is a word of the format, not a name to look up
+            if name == "format" && i == 1 {
+                if let Expr::Identifier(spec) = arg {
+                    arg_vals.push(PhsValue::String(spec.clone()));
+                    continue;
+                }
+            }
             arg_vals.push(self.eval_expr(arg, env)?);
         }
 
