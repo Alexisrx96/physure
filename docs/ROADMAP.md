@@ -125,7 +125,7 @@ answer come first:
 
 - [x] The symbolic engine dropped comparisons: `integral("x < 0.5", "x")` answered `x^2/2` (T2). The parser stopped at the first token it did not know and dropped the rest, so it now refuses any text it did not read, and names a comparison.
 - [x] The symbolic parser read `and`, `or` and `not` as symbols and multiplied them: `simplify("x and y")` was `and * x * y` and `deriv("x not y", "x")` was `not * y`. Fixed in phase 2 of the reserved names.
-- [ ] Reserved names that no program can bind (design: `docs/superpowers/specs/2026-11-16-reserved-names-design.md`). Phases 1 (the table, the interpreter, the imports) and 2 (`phs check`, the symbolic parser, the language server) are done. Phase 3 (hosts, the generated section of the language guide) is open. Known gaps recorded in the spec §11: the Java equation route, plugins, two wildcard imports with a shared name.
+- [x] Reserved names that no program can bind (design: `docs/superpowers/specs/2026-11-16-reserved-names-design.md`). Done in three phases: the table and the interpreter, `phs check`, the symbolic parser and the language server, and the hosts, the plugins and the language guide (section 1.7). Known gaps recorded in the spec §11: two wildcard imports with a shared name, what is unlocked per module scope, the language server's stale `env` and narrowed imports, the enum for what binds a name.
 - [x] `use * from matrix` panicked; it is an alias of `array` now.
 - [x] Only the first call of a user function is inlined in a symbolic expression (T3); arguments were not substituted either. Fixed in Phase 4b.
 - [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
@@ -135,7 +135,7 @@ answer come first:
 - [ ] The JavaScript and TypeScript targets emit calls the binding does not have (T19).
 
 Then the ones that fail loudly or only read badly: T1 (reporting half), T4, T8, T9, T11, T16
-and T21 (T18 and T20 are fixed). The full list, with reproductions, is in section 11.2 of the audit.
+and T21 (T18 and T20 are fixed; for T21 the Python suite has been run on this branch, 1760 passed, and the Java and WebAssembly suites have not). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
