@@ -226,7 +226,7 @@ fn syntax_report(message: String) -> Report {
 
 fn run_program(interp: &PhsInterpreter, program: &crate::ast::Program, registry: &UnitRegistry) -> Report {
     let mut diagnostics = static_findings(program, registry);
-    // the interpreter refuses what the checker already reported: say it once
+    // the interpreter refuses what the checker already reported: say it once; a different problem on that line is reported too
     let reported: HashSet<usize> = diagnostics.iter().filter(|d| d.severity == "error").map(|d| d.line).collect();
     let mut collected = Collected { results: Vec::new(), bytes: 0, cap: interp.limits.max_output_bytes };
     let mut env = HashMap::new();
@@ -286,7 +286,11 @@ impl Collected {
 /// Records a statement's runtime error; false when it ends the run (a limit).
 fn record_failure(line: usize, message: String, reported: &HashSet<usize>, diagnostics: &mut Vec<Finding>) -> bool {
     let code = classify(&message);
-    if code == "runtime" && reported.contains(&line) {
+    // the checker already said this problem on this line: say it once; another problem is another finding
+    if code == "runtime"
+        && reported.contains(&line)
+        && diagnostics.iter().any(|d| d.line == line && d.severity == "error" && crate::check::explains(&d.code, &message))
+    {
         return true;
     }
     diagnostics.push(error(line, code, message));

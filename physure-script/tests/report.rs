@@ -51,6 +51,104 @@ fn a_dimension_error_is_said_once_by_the_checker() {
 }
 
 #[test]
+fn a_second_problem_on_a_flagged_line_is_reported_too() {
+    for (program, checker_code) in [
+        ("undefined_fn(1) + (1 m + 1 s)", "dimension-mismatch"),
+        ("x = 5 / 0 + (1 m + 1 s)", "dimension-mismatch"),
+        ("y = ln(-1) + (1 m + 1 s)", "dimension-mismatch"),
+        ("sqrt(-4 m^2) + 1 s", "dimension-mismatch"),
+        ("x = vector(1 m, 2 s)[9] + 20 degC * 2", "temperature-points"),
+    ] {
+        let report = run(program);
+        assert!(!report.ok, "{program:?}");
+        let errors: Vec<(usize, &str)> = report.diagnostics.iter().filter(|d| d.severity == "error").map(|d| (d.line, d.code.as_str())).collect();
+        assert_eq!(errors, [(1, checker_code), (1, "runtime")], "{program:?}: {:?}", report.diagnostics);
+        assert_eq!(
+            canonical_witness(&report),
+            format!("{WITNESS_FORMAT}
+ok false
+error {checker_code}
+error runtime
+"),
+            "{program:?}"
+        );
+    }
+}
+
+/// `(the code the checker gives, the line it flags, a program with exactly ONE problem)`: the report says each
+/// once, never again as the interpreter's `runtime` error. A reworded interpreter message that the matcher
+/// (`check::explains`) stops recognising shows up here as a second finding.
+const ONE_PROBLEM: &[(&str, usize, &str)] = &[
+    ("dimension-mismatch", 1, "1 m + 1 s"),
+    ("dimension-mismatch", 1, "1 m - 1 s"),
+    ("dimension-mismatch", 1, "5 kg + 2 m/s"),
+    ("dimension-mismatch", 1, "1 m > 1 s"),
+    ("dimension-mismatch", 1, "1 m == 1 s"),
+    ("dimension-mismatch", 1, "1 m > 0"),
+    ("dimension-mismatch", 1, "0 < 1 m"),
+    ("dimension-mismatch", 1, "1 m == 1"),
+    ("dimension-mismatch", 1, "2 kg >= 0.5"),
+    ("dimension-mismatch", 1, "(2 m)^2 + 1 m"),
+    ("dimension-mismatch", 1, "sqrt(4 m) + 1 m"),
+    ("dimension-mismatch", 2, "x = 2 m
+x > 0"),
+    ("dimension-mismatch", 3, "x = 1 m
+y = 2 s
+x + y"),
+    ("dimension-mismatch", 2, "x = 2 m
+x + 3 s"),
+    ("dimension-mismatch", 1, "1 J + 1 W"),
+    ("dimension-mismatch", 1, "20 dB == 100"),
+    ("unknown-unit", 1, "5 m => fooz"),
+    ("unknown-unit", 1, "5 m => zzz"),
+    ("unknown-name", 1, "5 fooz"),
+    ("unknown-name", 1, "x = 3 barz"),
+    ("bad-argument", 1, "sin(1 m)"),
+    ("bad-argument", 1, "exp(1 s)"),
+    ("bad-argument", 1, "ln(2 kg)"),
+    ("bad-argument", 1, "sec(1 m)"),
+    ("bad-argument", 1, "erf(1 m)"),
+    ("bad-argument", 2, "fn kinetic(m: kg, v: m/s) = 0.5 * m * v^2
+kinetic(2 s, 3 m/s)"),
+    ("bad-argument", 2, "fn speed(v: m/s) = v * 2
+speed(5)"),
+    ("bad-exponent", 1, "2 m ^ (1 s)"),
+    ("temperature-points", 1, "20 degC + 5 degC"),
+    ("temperature-points", 1, "5 K - 20 degC"),
+    ("temperature-points", 1, "20 degC * 2"),
+    ("temperature-points", 1, "20 degC / 2"),
+    ("temperature-points", 1, "2 / 5 degC"),
+    ("not-a-bool", 2, "x = 5
+if x then 1 else 2"),
+    ("not-a-bool", 1, "if 5 m then 1 else 2"),
+    ("not-a-bool", 2, "x = 2 m
+x ? 1 : 2"),
+    ("not-a-bool", 1, "not 5"),
+    ("not-a-bool", 2, "s = \"on\"
+if s then 1 else 2"),
+    ("not-a-bool", 1, "while true {
+  1
+}"),
+    ("reserved-name", 1, "max = 3"),
+    ("reserved-name", 1, "use = 3"),
+    ("reserved-name", 1, "inf = 3"),
+    ("reserved-name", 1, "fn f(round) = round"),
+    ("constant-shadowing", 1, "pi = 3"),
+    ("constant-shadowing", 1, "molar_gas_constant = 8"),
+    ("constant-shadowing", 1, "fn g(bohr_radius) = bohr_radius"),
+];
+
+#[test]
+fn a_flagged_line_is_not_said_twice() {
+    for &(code, line, program) in ONE_PROBLEM {
+        let report = run(program);
+        assert!(!report.ok, "{program:?}");
+        let errors: Vec<(usize, &str)> = report.diagnostics.iter().filter(|d| d.severity == "error").map(|d| (d.line, d.code.as_str())).collect();
+        assert_eq!(errors, [(line, code)], "{program:?}: {:?}", report.diagnostics);
+    }
+}
+
+#[test]
 fn an_unknown_unit_is_reported() {
     let report = run("5 fooz");
     assert!(!report.ok);

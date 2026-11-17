@@ -51,6 +51,24 @@ pub struct Diagnostic {
     pub message: String,
 }
 
+/// Whether the checker finding `code` is the same problem as this interpreter error: the two word a problem
+/// differently, so the match is by the family of the wording; a message that matches no family is another problem.
+pub fn explains(code: &str, runtime_message: &str) -> bool {
+    let family: &[&str] = match code {
+        "dimension-mismatch" => &["Unit mismatch", "cannot compare", "cannot convert", "ncompatible", "cannot add", "cannot subtract"],
+        "unknown-name" => &["Unknown unit", "Invalid operand", "Undefined"],
+        "unknown-unit" => &["Unknown unit"],
+        "temperature-points" => &["absolute temperature"],
+        "bad-argument" => &["expects a", "Argument for parameter", "cannot convert a"],
+        "bad-exponent" => &["Exponent must be"],
+        "not-a-bool" => &["needs a Bool", "has no value; the Bool literals", "not a condition"],
+        "reserved-name" => &["cannot be bound", "is a function", "is a word", "is a literal", "is already a function"],
+        "constant-shadowing" => &["cannot be bound", "is a constant"],
+        _ => &[],
+    };
+    family.iter().any(|pattern| runtime_message.contains(pattern))
+}
+
 /// Parses `code` and checks it against the catalog that unit text is read against on this thread (the
 /// embedded one, plus a `physure.conf` in the working directory, unless a `units::with_catalog` scope is set).
 pub fn check_source(code: &str) -> PhysureResult<Vec<Diagnostic>> {
