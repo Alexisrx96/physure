@@ -335,7 +335,14 @@ only the single-function compile step it would eventually sit on top of.
   ```
   `.ok == false` means a `@requires`/`@ensures` check failed; the caller reads `simulate_last_error()`
   for which one and why. Functions with no contract decorators keep returning a bare `f64` — this
-  struct-return shape only applies once a function actually has something that can fail.
+  struct-return shape only applies once a function actually has something that can fail. That bare
+  `f64` can still fail, because the body can panic (a comparison the core refuses, a unit mismatch, a
+  division by zero): the shim catches the panic with `catch_unwind`, returns `NaN`, and exports the
+  same `<name>_last_error()` (a host reads it when the result is `NaN`), instead of aborting the host
+  process. The last error is cleared at the start of every call, and the panic message is not printed
+  to the host's stderr while a shim runs. The generated `Cargo.toml` asks for
+  `[profile.release] panic = "unwind"`; a rebuild of the crate with `RUSTFLAGS=-C panic=abort` brings
+  the abort back.
 - **CLI**: `phs export script.phs --fn simulate --target proto|native|all [-o <dir>]` writes
   `simulate.proto` and/or `simulate.dll`/`simulate.so` next to the script or to `-o`.
 - **Explicitly out of scope for Track E**: a curated multi-formula library/registry, a hosted
