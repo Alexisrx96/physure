@@ -177,7 +177,7 @@ fn a_constant_of_the_catalog_is_its_quantity() {
     }
     // `e`, `c`, `k`, `R` are not constants (only the catalog's own names are); `h`, `g`, `G` stay units
     for name in ["e", "c", "k", "R"] {
-        assert_eq!(last(name), PhsValue::String(name.to_string()), "{name}");
+        assert!(refused(name).starts_with(&format!("`{name}` has no value")), "{name}");
     }
     assert_eq!(in_unit("h", "s"), 3600.0);
     assert_eq!(in_unit("g", "kg"), 1e-3);
@@ -205,8 +205,8 @@ fn a_variable_or_a_unit_still_resolves_as_before() {
     assert!(close(in_unit("g = 9.81 m/s^2\ng * 2 kg", "N"), 19.62));
     // a free unit symbol is one of it (the symbolic layer relies on it)
     assert_eq!(in_unit("J", "J"), 1.0);
-    // a name that is nothing is still its text (T5, open)
-    assert_eq!(last("zz_unknown_name"), PhsValue::String("zz_unknown_name".into()));
+    // a name that is nothing has no value (T5)
+    assert!(refused("zz_unknown_name").starts_with("`zz_unknown_name` has no value"));
     // a function and a variable are found before the constants: a call of a user function named nothing global
     assert_eq!(number("f(x) = x * pi\nf(2)"), 2.0 * std::f64::consts::PI);
 }

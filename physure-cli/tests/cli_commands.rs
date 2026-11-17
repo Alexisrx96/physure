@@ -387,7 +387,7 @@ fn the_suggestion_for_an_unknown_unit_is_the_same_in_every_process() {
     for _ in 0..10 {
         let evaluated = run_with_input(dir.path(), &["eval", "-"], "x = 5 x\n");
         let report: serde_json::Value = serde_json::from_str(&stdout(&evaluated)).unwrap();
-        assert_eq!(report["diagnostics"][0]["message"], "Unknown unit 'x' — did you mean 'A'?", "{report}");
+        assert_eq!(report["diagnostics"][0]["message"], "`x` has no value — did you mean the unit 'A'?", "{report}");
     }
 }
 

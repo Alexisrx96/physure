@@ -70,6 +70,20 @@ fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
     Some(Quantity::new_scalar(1.0, 0.0, unit, None, None))
 }
 
+/// The error of a name that is no binding, constant or unit: `` `foo` has no value ``, with the unit the
+/// catalog finds closest when there is one (`5 metre` is a typo of a unit more often than a missing variable).
+fn unbound_name(name: &str) -> PhysureError {
+    let hint = match UnitParser::parse_expression(name) {
+        Err(PhysureError::UnknownUnit { suggestion: Some(unit), .. }) => format!(" — did you mean the unit '{unit}'?"),
+        _ => String::new(),
+    };
+    PhysureError::Generic(format!("`{name}` has no value{hint}"))
+}
+
+/// Whether `error` is the [`unbound_name`] error of `name`.
+fn is_unbound(error: &PhysureError, name: &str) -> bool {
+    error.to_string().starts_with(&format!("`{name}` has no value"))
+}
 
 /// A quantity literal, with the unit and uncertainty it was written with.
 fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsValue> {
@@ -218,7 +232,8 @@ impl PhsInterpreter {
     }
 
     /// A bare name, in the one resolution order of PHS (`crate::globals`): a binding in `env` (lexical, variable,
-    /// user function), then `pi`/`π` and the constants of the catalog in force, then a unit, else the name as text.
+    /// user function), then `pi`/`π` and the constants of the catalog in force, then a unit; a name that is none
+    /// of them is the error `` `foo` has no value `` (audit T5: it used to evaluate to its own text).
     fn eval_identifier(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         Ok(if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
             PhsValue::String(eval_template_string(name, self, env))
@@ -234,7 +249,7 @@ impl PhsInterpreter {
             // `env` still wins, so this only ever fires for an otherwise-free name.
             PhsValue::Quantity(unit)
         } else {
-            PhsValue::String(name.to_string())
+            return Err(unbound_name(name));
         })
     }
 
@@ -247,12 +262,6 @@ impl PhsInterpreter {
                 return Ok(l_val);
             }
             let parsed_unit = UnitParser::parse_expression(clean_target)?;
-            // a name with no value evaluates to its own text: say so, not "cannot convert a String"
-            if let (Expr::Identifier(name), PhsValue::String(text)) = (left, &l_val) {
-                if text == name && !env.contains_key(name) {
-                    return Err(PhysureError::Generic(format!("`{name}` has no value: there is nothing to convert to `{clean_target}`")));
-                }
-            }
             return self.convert_value_to_unit(l_val, &parsed_unit, clean_target);
         }
         let r_val = self.eval_expr(right, env)?;
@@ -286,7 +295,13 @@ impl PhsInterpreter {
                     continue;
                 }
             }
-            arg_vals.push(self.eval_expr(arg, env)?);
+            match (self.eval_expr(arg, env), arg) {
+                // `f'(x)` with a free `x` asks for the derivative as an expression, not at a value: `x` is its variable
+                (Err(error), Expr::Identifier(var)) if name.ends_with('\'') && is_unbound(&error, var) => {
+                    arg_vals.push(PhsValue::String(var.clone()));
+                }
+                (value, _) => arg_vals.push(value?),
+            }
         }
 
         let mut kwarg_vals = Vec::new();
@@ -364,7 +379,7 @@ impl PhsInterpreter {
             // `assert(true)`: a name with no value is told so, as in every condition
             ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 => {
                 match self.eval_condition(&args[0], env, "`assert`") {
-                    Err(e) if e.to_string().starts_with(&format!("`{name}` has no value")) => Some(Err(e)),
+                    Err(e) if is_unbound(&e, name) => Some(Err(e)),
                     _ => None,
                 }
             }
@@ -372,17 +387,17 @@ impl PhsInterpreter {
         }
     }
 
-    /// The truth of the condition `expr` (only a Bool has one: [`condition_of`]). A name with no value
-    /// evaluates to its own text; as a condition it is told so, naming it: `while true` read the text "true".
+    /// The truth of the condition `expr` (only a Bool has one: [`condition_of`]). A condition that is a name with
+    /// no value is told which literals are Bool: `while true` names `true` and says `True` and `False`.
     pub(crate) fn eval_condition(&self, expr: &Expr, env: &HashMap<String, PhsValue>, context: &str) -> PhysureResult<bool> {
-        let value = self.eval_expr(expr, env)?;
-        if let (Expr::Identifier(name), PhsValue::String(text)) = (expr, &value) {
-            if text == name && !env.contains_key(name) {
+        let value = match (expr, self.eval_expr(expr, env)) {
+            (Expr::Identifier(name), Err(error)) if is_unbound(&error, name) => {
                 return Err(PhysureError::Generic(format!(
                     "`{name}` has no value; the Bool literals are True and False ({context} needs a Bool)"
                 )));
             }
-        }
+            (_, other) => other?,
+        };
         condition_of(&value, context)
     }
 

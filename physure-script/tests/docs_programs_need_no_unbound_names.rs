@@ -53,7 +53,12 @@ const SHOWS_THE_ERROR: &[&str] = &["has no value"];
 /// and are not programs that run. (file name, blocks). A new fragment is not added here without reading it.
 const FRAGMENTS_OF_CONTEXT: &[(&str, &[usize])] = &[
     ("2026-08-26-phs-boolean-logic-and-assertions.md", &[0, 1, 2]),
-    ("2026-08-26-phs-boolean-logic-and-assertions-design.md", &[0, 3, 6, 7, 8, 10, 12, 13, 14]),
+    // blocks 1, 5, 9 (`actual == expected`, `pressure > 0 Pa`, `flag != False`) became `has no value` with audit T5:
+    // one-line fragments of the design that name words of their context, as the others of this file
+    ("2026-08-26-phs-boolean-logic-and-assertions-design.md", &[0, 1, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14]),
+    // a sketch of the chemistry API before it existed: `mass_to_moles` is planned, not implemented, so the line that
+    // would bind `n_co2` fails first and `n_co2` has no value where it is read (it was text before audit T5)
+    ("chemistry_roadmap.md", &[0]),
     ("2026-08-26-phs-gum-precision-design.md", &[0]),
     ("phs_primer.md", &[1, 4, 7, 8, 9]),
 ];

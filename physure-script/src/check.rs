@@ -60,10 +60,10 @@ pub fn explains(code: &str, finding_message: &str, runtime_message: &str) -> boo
     match code {
         "dimension-mismatch" => ["Unit mismatch", "with the plain number"].iter().any(|kind| runtime_message.contains(kind)),
         "bad-argument" => is_bad_argument(finding_message, runtime_message),
-        // the same unit by name: `Unknown unit 'a'` does not say `'fooz' is neither a variable, a constant nor a unit`
-        "unknown-unit" | "unknown-name" => {
-            between(finding_message, '\'').is_some_and(|name| runtime_message.contains(&format!("Unknown unit '{name}'")))
-        }
+        // the same unit or name by name: `Unknown unit 'a'` does not say `'fooz' is neither a variable, a constant nor a unit`
+        "unknown-unit" | "unknown-name" => between(finding_message, '\'').is_some_and(|name| {
+            runtime_message.contains(&format!("Unknown unit '{name}'")) || runtime_message.contains(&format!("`{name}` has no value"))
+        }),
         "bad-exponent" => runtime_message.contains("Exponent must be"),
         // the same operation on the temperatures
         "temperature-points" => [
@@ -228,8 +228,8 @@ enum Ty {
     Text(Option<String>),
     /// A vector literal `[...]` without a unit.
     Vector,
-    /// A bare word that is not bound, not imported and not a unit: the interpreter reads it as text, which
-    /// fails the moment it meets a quantity.
+    /// A bare word that is not bound, not imported and not a unit: the interpreter refuses it (`` `foo` has no
+    /// value ``).
     Symbol(String),
 }
 

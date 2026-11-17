@@ -76,7 +76,9 @@ fn a_bound_that_names_nothing_is_refused() {
     // before: an unknown string was read as 0, so this was 0.5
     let message = refused(r#"integral("x", "x", "a", 1)"#);
     assert!(message.contains("'a'"), "{message}");
-    assert!(refused(r#"integral("x", "x", 0, true)"#).contains("bound"));
+    assert!(refused(r#"integral("x", "x", 0, "true")"#).contains("bound"));
+    // a bare name that is nothing is refused before `integral` reads it (T5)
+    assert!(refused(r#"integral("x", "x", 0, true)"#).contains("`true` has no value"));
 }
 
 #[test]

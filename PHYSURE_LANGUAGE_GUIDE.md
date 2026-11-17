@@ -111,6 +111,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m) * cos(y / 1.0 m)
 
 ### 1.3 Control Flow & Local Bindings
 ```phs
+pressure = 75.0 kPa
 doubled = x * 2.0 where x = 10.0 m
 status = if pressure > 50.0 kPa then "High Pressure" else "Normal Pressure"
 ```

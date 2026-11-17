@@ -143,7 +143,7 @@ fn arithmetic_keeps_the_units_and_refuses_what_has_no_meaning() {
         ("5 +/- 0.1 m", "5.00 ± 0.10 m"),
         ("x = 5 +/- 0.1 m\nx * x", "25.0 ± 1.0 m^2"),
     ]);
-    assert!(refused("5 foobar").contains("Unknown unit 'foobar'"));
+    assert!(refused("5 foobar").contains("`foobar` has no value"));
     assert!(refused("(-8) ^ 0.5").contains("negative base"));
     assert!(refused("4 / 0").contains("Division by zero"));
     assert!(refused("4 m / 0 s").contains("Division by zero"));
@@ -189,7 +189,8 @@ fn the_math_builtins_agree_with_the_mathematics() {
     ]);
     assert!(refused("sqrt(-4)").contains("sqrt of a negative value"));
     assert!(refused("ln(0)").contains("ln of a non-positive value"));
-    assert!(refused("parallel_map(f, vector(1, 2))").contains("parallel_map expects (fn, vector)"));
+    assert!(refused("parallel_map(\"f\", vector(1, 2))").contains("parallel_map expects (fn, vector)"));
+    assert!(refused("parallel_map(f, vector(1, 2))").contains("`f` has no value"));
 }
 
 #[test]

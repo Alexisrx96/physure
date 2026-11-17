@@ -74,6 +74,9 @@ fn a_second_problem_on_a_flagged_line_is_reported_too() {
         ("undefined_fn(1) + 2 m ^ (1 s)", "bad-exponent"),
         ("limit(\"x\", \"x\", 20 degC) + 20 degC * 2", "temperature-points"),
         ("undefined_fn(1) + (if 5 then 1 else 2)", "not-a-bool"),
+        // a name with no value (T5) is a problem of its own when the checker's is another one
+        ("undefined_fn(barz_q) + (1 m + 1 s)", "dimension-mismatch"),
+        ("undefined_fn(barz_q) + 5 fooz", "unknown-name"),
     ] {
         let report = run(program);
         assert!(!report.ok, "{program:?}");
@@ -150,6 +153,9 @@ fn the_checker_explains_an_interpreter_error_only_by_its_own_words_and_names() {
     assert!(explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "Unknown unit 'fooz' - did you mean 'foot'?"));
     assert!(!explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "Unknown unit 'a' - did you mean 'A'?"));
     assert!(!explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "Undefined function 'fooz'"));
+    // the same name, in the interpreter's words for a name with no value (T5)
+    assert!(explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "`fooz` has no value — did you mean the unit 'foot'?"));
+    assert!(!explains("unknown-name", "'fooz' is neither a variable, a constant nor a unit, and meets a quantity here", "`barz` has no value"));
     assert!(explains("unknown-unit", "Unknown unit 'zzz'", "Unknown unit 'zzz'"));
     assert!(!explains("unknown-unit", "Unknown unit 'zzz'", "Unknown unit 'yyy'"));
     // the same operation on the temperatures

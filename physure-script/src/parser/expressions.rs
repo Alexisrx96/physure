@@ -516,7 +516,7 @@ fn parse_vector_literal(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr
         Ok(Expr::BinaryOp {
             op: BinaryOp::Mul,
             left: Box::new(vec_expr),
-            right: Box::new(Expr::Identifier(u)),
+            right: Box::new(super::quantities::unit_literal(&u)),
         })
     } else {
         Ok(vec_expr)

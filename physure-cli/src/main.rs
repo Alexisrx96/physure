@@ -580,6 +580,7 @@ fn generate_language_docs_md() -> String {
 
     md.push_str("### 1.3 Control Flow & Local Bindings\n");
     md.push_str("```phs\n");
+    md.push_str("pressure = 75.0 kPa\n");
     md.push_str("doubled = x * 2.0 where x = 10.0 m\n");
     md.push_str("status = if pressure > 50.0 kPa then \"High Pressure\" else \"Normal Pressure\"\n");
     md.push_str("```\n\n");

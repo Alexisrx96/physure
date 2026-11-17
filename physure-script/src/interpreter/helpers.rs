@@ -124,7 +124,7 @@ pub(crate) enum KnownCondition<'a> {
     Text(Option<&'a str>),
     /// A vector literal.
     Vector,
-    /// A name that is no variable, constant, unit or function: it evaluates to its own text.
+    /// A name that is no variable, constant, unit or function: it has no value (evaluating it is an error).
     Unbound(&'a str),
 }
 
