@@ -137,9 +137,14 @@ answer come first:
 - [ ] The WebAssembly `Quantity` has no math methods (`sqrt`, `abs`, trig, `max`, ...), so the JavaScript and TypeScript targets refuse every builtin call (found fixing T19).
 - [ ] `phs export --native` copies the library from `<crate>/target/release`, so it fails when `CARGO_TARGET_DIR` is set (found fixing T15).
 - [ ] The Rust target emits `.powf(Quantity::new(..).unwrap())` for a non-integer exponent (`x ^ 0.5`), but `powf` takes an `f64`: the generated Rust does not compile (found fixing T15).
+- [ ] A Bool prints `true`/`false` in the generated JavaScript, where the interpreter prints `True`/`False`.
+- [ ] An unbound name is a `ReferenceError` in the generated JavaScript, where the interpreter answers the text of the name (T5).
+- [ ] `erf` is unknown to the symbolic engine (`deriv`, `integral`).
+- [ ] The Java binding's `mathFunction` (`physure-java/src/lib.rs`) and the Python `Quantity` have no `sec`, `csc`, `cot`, `erf` (nor `exp`, `ln` in Java).
+- [ ] The Monte Carlo and unscented `propagate_function` tables fall through to the identity for an unknown function name, with no error (`erf` was added to all of them; the next function must be).
 
-Then the ones that fail loudly or only read badly: T1 (reporting half), T8, T11
-and T21 (T4, T9, T18, T20 and T21 are fixed or done: on this branch the Python suite passes with 1761 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
+Then the ones that fail loudly or only read badly: T1 (reporting half), T8
+and T11 (T4, T9, T18, T20 and T21 are fixed or done: on this branch the Python suite passes with 1762 tests, the Java suite with 226 on JDK 21 and the WebAssembly suite with 93 under Node 24; CI covers the other JDKs and platforms). T16 stays an error by decision of 2026-11-17: a sigma bound is written after a literal target (a variable may carry its own uncertainty, which makes 'exact target' ambiguous). The full list, with reproductions, is in section 11.2 of the audit.
 
 ---
 
