@@ -132,7 +132,7 @@ use linspace, gradient, trapz from array
 - Errors name the module: a name it does not define, a cyclic import (`a -> b -> a`), a file that cannot be parsed, and a module that binds a reserved name (section 1.5): a module with `pi = 3` makes every import from it an error, whichever name is imported.
 
 ### 1.5 Names: variables, `pi` and the constants of the catalog
-A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is its own text.
+A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is an error: `` `foo` has no value ``.
 
 ```phs
 area = pi * (2 m)^2                                   # 12.566 m^2

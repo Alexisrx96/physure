@@ -87,7 +87,7 @@ pub(crate) fn condition_of(value: &PhsValue, context: &str) -> PhysureResult<boo
 /// | anything else | a Vector: a Vector is not a condition (Matrix, Range, Function, Plot, Sigma, ...) |
 /// | None | None: None is not a condition |
 ///
-/// An identifier with no value is told so by the interpreter before it gets here (it evaluates to its own name).
+/// An identifier with no value is the error `` `foo` has no value `` before it gets here.
 pub(crate) fn not_a_bool(context: &str, value: &PhsValue) -> String {
     let kind = value.type_name();
     let article = if kind.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" };

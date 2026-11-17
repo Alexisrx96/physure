@@ -8,7 +8,7 @@
 //! 3. `pi` and `π` (the number `std::f64::consts::PI`), then the constants of the catalog in force, each a quantity
 //!    in the unit the catalog gives it;
 //! 4. units (`J` alone is one joule);
-//! 5. anything else is unknown (today the text of the name).
+//! 5. anything else is unknown, which the interpreter refuses as the error `` `foo` has no value `` (audit T5).
 //!
 //! The catalog in force is the one unit text is read against: the innermost `units::with_catalog` scope of this
 //! thread, else the configuration in force (a frozen file, or the embedded catalog plus the working directory's
