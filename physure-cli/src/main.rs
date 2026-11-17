@@ -647,7 +647,7 @@ fn generate_language_docs_md() -> String {
     md.push_str("| Domain / Module | Function | Description | Example |\n");
     md.push_str("| :--- | :--- | :--- | :--- |\n");
     md.push_str("| `core` | `sqrt(x)` | Square root | `sqrt(16.0 m^2)` |\n");
-    md.push_str("| `core` | `sin(x)`, `cos(x)`, `tan(x)` | Trigonometric functions | `sin(3.14159 / 2)` |\n");
+    md.push_str("| `core` | `sin(x)`, `cos(x)`, `tan(x)`, `sec(x)`, `csc(x)`, `cot(x)`, `erf(x)` | Trigonometric functions (of an angle or a plain number); `erf`, the error function (of a plain number) | `sin(3.14159 / 2)`, `sec(60 deg)` |\n");
     md.push_str("| `core` | `exp(x)`, `ln(x)`, `log(x)` | Exponents and logarithms | `ln(10.0)` |\n");
     md.push_str("| `core` | `abs(x)` | Absolute value | `abs(-5.0 m)` |\n");
     md.push_str("| `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |\n");

@@ -59,6 +59,19 @@ fn the_message_names_the_class() {
 }
 
 #[test]
+fn sec_is_a_function_of_phs_and_still_the_unit_second() {
+    assert!(refused("sec = 5").contains("`sec` is a function of PHS"));
+    // the workaround from before `sec` ran (audit T4)
+    assert!(refused("fn sec(x) = 1/cos(x)").contains("`sec` is a function of PHS"));
+    for name in ["csc", "cot", "erf"] {
+        assert!(refused(&format!("{name} = 5")).contains(&format!("`{name}` is a function of PHS")));
+    }
+    // a call needs `sec(`, and the unit grammar takes no `(`: the unit is untouched
+    assert_eq!(value("2 sec => ms"), "2000.0 ms");
+    assert_eq!(value("x = 3 sec\nx => ms"), "3000.0 ms");
+}
+
+#[test]
 fn a_name_that_is_not_reserved_still_binds() {
     // unit names are the variables of physics; `e`, the words of a format and a function of a module are free
     // until the module is imported

@@ -184,6 +184,12 @@ fn the_builtins_apply_their_dimension_rules() {
     assert_refused("sin(1 m)", 1, "bad-argument");
     assert_refused("exp(1 s)", 1, "bad-argument");
     assert_refused("ln(2 kg)", 1, "bad-argument");
+    assert_clean("sec(60 deg) + 1");
+    assert_clean("csc(30 deg) + cot(45 deg)");
+    assert_refused("sec(1 m)", 1, "bad-argument");
+    assert_refused("cot(1 s)", 1, "bad-argument");
+    assert_refused("erf(1 m)", 1, "bad-argument");
+    assert_clean("erf(0.5) + 1");
     assert_clean("sqrt(4 m^2) + 1 m");
     assert_refused("sqrt(4 m) + 1 m", 1, "dimension-mismatch");
     assert_clean("abs(-3 m) + 1 m");

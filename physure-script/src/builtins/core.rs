@@ -234,6 +234,10 @@ pub fn eval_core_builtin(
         "abs" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.abs()), |q| q.abs()),
         "log" => unary(name, args, A_NUMBER_OR_QUANTITY, log10_number, |q| q.log10()),
         "tan" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.tan()), |q| q.tan()),
+        "sec" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| reciprocal_number("sec", n, n.cos()), |q| q.sec()),
+        "csc" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| reciprocal_number("csc", n, n.sin()), |q| q.csc()),
+        "cot" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| reciprocal_number("cot", n, n.tan()), |q| q.cot()),
+        "erf" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(physure_core::math::erf(n)), |q| q.erf()),
         // Flooring the mean says nothing about how well it is known, so the unit
         // and the uncertainty ride along instead of being reset to zero.
         "floor" => unary(name, args, "number or quantity", |n| Ok(n.floor()), |q| q.floor()),
@@ -258,6 +262,16 @@ fn ln_number(n: f64) -> PhysureResult<f64> {
         Err(PhysureError::DomainError(format!("ln of a non-positive value ({n}) is undefined for real numbers")))
     } else {
         Ok(n.ln())
+    }
+}
+
+/// `func(n)` as `1 / denominator`, where `denominator` is `cos n`, `sin n` or `tan n`: a zero denominator is the
+/// pole of `func`, refused as the quantity form refuses it rather than answered with infinity.
+fn reciprocal_number(func: &str, n: f64, denominator: f64) -> PhysureResult<f64> {
+    if denominator == 0.0 {
+        Err(PhysureError::DomainError(format!("{func} of {n} is undefined")))
+    } else {
+        Ok(1.0 / denominator)
     }
 }
 

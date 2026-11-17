@@ -851,7 +851,9 @@ impl<'a> Checker<'a> {
                 Some(dim) => Ty::Qty(Dim { point: false, ..dim.pow(Rational64::new(1, 2)) }),
                 None => Ty::Unknown,
             },
-            "sin" | "cos" | "tan" | "exp" | "ln" | "log" => self.dimensionless_function(name, only(args)),
+            "sin" | "cos" | "tan" | "sec" | "csc" | "cot" | "exp" | "ln" | "log" | "erf" => {
+                self.dimensionless_function(name, only(args))
+            }
             // a count of degrees of freedom and a coverage factor are plain numbers; an expanded
             // uncertainty is in the unit of the measurement it expands
             "dof" | "coverage_factor" => Ty::Qty(Dim::dimensionless()),

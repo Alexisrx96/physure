@@ -228,6 +228,15 @@ fn a_closed_form_that_jumps_inside_the_interval_is_refused() {
 }
 
 #[test]
+fn an_antiderivative_in_sec_is_confirmed_now_that_sec_runs() {
+    // before (audit T4): refused, "the antiderivative tan(x) cannot be confirmed ... Undefined function 'sec'"
+    assert_close(number(r#"integral("sec(x)^2", "x", 0, 1)"#), 1.0_f64.tan(), 1e-12, "sec(x)^2 over [0, 1]");
+    assert_close(number(r#"integral("1/cos(x)^2", "x", 0, 1)"#), 1.0_f64.tan(), 1e-12, "1/cos(x)^2 over [0, 1]");
+    let ln_sec_plus_tan = (1.0 / 1.0_f64.cos() + 1.0_f64.tan()).ln();
+    assert_close(number(r#"integral("sec(x)", "x", 0, 1)"#), ln_sec_plus_tan, 1e-12, "sec(x) over [0, 1]");
+}
+
+#[test]
 fn a_confirmed_closed_form_keeps_its_exact_digits() {
     assert_eq!(number(r#"integral("x^2", "x", 0, 3)"#), 9.0);
     assert_eq!(number(r#"integral("x", "x", 0, 2)"#), 2.0);

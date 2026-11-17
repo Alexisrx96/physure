@@ -171,7 +171,7 @@ A program can never bind a reserved name: not as a variable, a parameter, a func
 | Keywords | `for`, `while`, `let`, `if`, `then`, `else`, `where`, `return`, `not`, `and`, `or`, `True`, `False` |
 | Statement words | `use`, `from`, `import`, `export`, `as`, `fn`, `in` |
 | Literals | `true`, `false`, `None`, `none`, `inf`, `infinity`, `oo` |
-| Functions of the core | `abs`, `approx`, `assert`, `ceil`, `cos`, `coverage_factor`, `dof`, `exact_assert`, `exp`, `expanded`, `floor`, `format`, `from_samples`, `if_then_else`, `ln`, `log`, `max`, `min`, `parallel_map`, `round`, `sigma`, `sin`, `sqrt`, `tan`, `ternary`, `uncertainty`, `vector` |
+| Functions of the core | `abs`, `approx`, `assert`, `ceil`, `cos`, `cot`, `coverage_factor`, `csc`, `dof`, `erf`, `exact_assert`, `exp`, `expanded`, `floor`, `format`, `from_samples`, `if_then_else`, `ln`, `log`, `max`, `min`, `parallel_map`, `round`, `sec`, `sigma`, `sin`, `sqrt`, `tan`, `ternary`, `uncertainty`, `vector` |
 | Functions of `calc` | `curl`, `deriv`, `diff`, `div`, `divergence`, `dsolve`, `expand`, `grad`, `gradient`, `integral`, `integrate`, `inv_laplace`, `inverse_laplace`, `laplace`, `laplacian`, `lim`, `limit`, `series`, `simplify`, `solve`, `sub`, `substitute`, `sym_charpoly`, `sym_det`, `sym_eigenvalues`, `sym_trace`, `sym_transpose`, `taylor` |
 | Functions of `array` | `cross`, `det`, `dot`, `gradient`, `linspace`, `matmul`, `norm`, `sym_charpoly`, `sym_det`, `sym_eigenvalues`, `sym_trace`, `sym_transpose`, `transpose`, `trapz`, `unit_vector` |
 | Functions of `plot` | `export3d`, `export_3d`, `plot`, `plot3d`, `plot_field`, `plot_nd` |
@@ -218,7 +218,7 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 | Domain / Module | Function | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `core` | `sqrt(x)` | Square root | `sqrt(16.0 m^2)` |
-| `core` | `sin(x)`, `cos(x)`, `tan(x)` | Trigonometric functions | `sin(3.14159 / 2)` |
+| `core` | `sin(x)`, `cos(x)`, `tan(x)`, `sec(x)`, `csc(x)`, `cot(x)`, `erf(x)` | Trigonometric functions (of an angle or a plain number); `erf`, the error function (of a plain number) | `sin(3.14159 / 2)`, `sec(60 deg)` |
 | `core` | `exp(x)`, `ln(x)`, `log(x)` | Exponents and logarithms | `ln(10.0)` |
 | `core` | `abs(x)` | Absolute value | `abs(-5.0 m)` |
 | `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |

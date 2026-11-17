@@ -38,10 +38,10 @@ pub const STATEMENT_WORDS: [&str; 7] = ["use", "from", "import", "export", "as",
 pub const LITERALS: [&str; 7] = ["true", "false", "None", "none", "inf", "infinity", "oo"];
 
 /// The names `eval_core_builtin` answers, without the `op_*` names the operators are rewritten to.
-pub const CORE_FUNCTIONS: [&str; 27] = [
-    "abs", "approx", "assert", "ceil", "cos", "coverage_factor", "dof", "exact_assert", "exp", "expanded", "floor",
-    "format", "from_samples", "if_then_else", "ln", "log", "max", "min", "parallel_map", "round", "sigma", "sin",
-    "sqrt", "tan", "ternary", "uncertainty", "vector",
+pub const CORE_FUNCTIONS: [&str; 31] = [
+    "abs", "approx", "assert", "ceil", "cos", "cot", "coverage_factor", "csc", "dof", "erf", "exact_assert", "exp",
+    "expanded", "floor", "format", "from_samples", "if_then_else", "ln", "log", "max", "min", "parallel_map", "round",
+    "sec", "sigma", "sin", "sqrt", "tan", "ternary", "uncertainty", "vector",
 ];
 
 /// The class of `name` among the classes that do not depend on the program, `None` when it is free.
