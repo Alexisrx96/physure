@@ -136,7 +136,7 @@ mod tests {
     }
 
     /// The text of the rule `name` in `phs.pest`: its first line and the lines up to the one that ends with `}`.
-    fn rule<'a>(pest: &'a str, name: &str) -> String {
+    fn rule(pest: &str, name: &str) -> String {
         let prefix = format!("{name} ");
         let mut text = Vec::new();
         for line in pest.lines().skip_while(|l| !l.starts_with(&prefix)) {

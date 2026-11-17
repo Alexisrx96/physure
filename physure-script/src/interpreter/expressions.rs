@@ -319,7 +319,7 @@ impl PhsInterpreter {
         }
         let mut local_env = env.clone();
         for (kwarg_name, kwarg_expr) in kwargs {
-            crate::globals::refuse_constant_binding(kwarg_name,&format!("an argument of the equation `{name}`"))?;
+            crate::globals::refuse_constant_binding(kwarg_name, &format!("an argument of the equation `{name}`"))?;
             let val = self.eval_expr(kwarg_expr, env)?;
             local_env.insert(kwarg_name.clone(), val);
         }
