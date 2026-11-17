@@ -122,7 +122,7 @@ pub fn refuse_constant_binding(name: &str, what: &str) -> PhysureResult<()> {
 }
 
 /// What `bindings_of` says binds a name an import brings; the text is followed by the path of the module.
-const IMPORT_BINDING: &str = "a name imported from";
+pub(crate) const IMPORT_BINDING: &str = "a name imported from";
 
 /// Every name `statement` binds, with what binds it, in source order: assignments, function names and parameters,
 /// `for` variables and `where` bindings anywhere inside it (function bodies included, whether or not they ever

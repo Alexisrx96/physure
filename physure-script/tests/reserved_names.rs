@@ -2,6 +2,7 @@
 //! literals and the functions of the core can never be bound, in any form that binds, and the names that are not
 //! reserved still bind.
 
+use physure_script::check::{check_source, Severity};
 use physure_script::interpreter::eval_phs;
 use physure_script::reserved::{CORE_FUNCTIONS, LITERALS, STATEMENT_WORDS};
 use physure_script::{parse_phs, PhsInterpreter, PhsValue};
@@ -217,4 +218,59 @@ fn a_value_a_host_gives_cannot_be_a_function_of_an_imported_module() {
 fn matrix_is_an_alias_of_array() {
     assert_eq!(value("use * from matrix
 1"), "1.0");
+}
+
+/// The diagnostics of `program` that carry the code `reserved-name`: `(line, message)`.
+fn reserved_diagnostics(program: &str) -> Vec<(usize, String)> {
+    check_source(program)
+        .unwrap_or_else(|e| panic!("{program:?}: {e}"))
+        .into_iter()
+        .filter(|d| d.code == "reserved-name" && d.severity == Severity::Error)
+        .map(|d| (d.line, d.message))
+        .collect()
+}
+
+#[test]
+fn the_checker_says_what_the_interpreter_says_for_every_reserved_name_and_form() {
+    for name in STATEMENT_WORDS.iter().chain(&LITERALS).chain(&CORE_FUNCTIONS) {
+        for program in bindings_of(name) {
+            let found = reserved_diagnostics(&program);
+            assert!(
+                found.iter().any(|(line, message)| *line == 1 && message.contains(&format!("`{name}` is"))),
+                "{program:?}: {found:?}"
+            );
+            // and it is the same sentence the interpreter gives
+            let said = refused(&program);
+            assert!(found.iter().any(|(_, message)| *message == said), "{program:?}: checker {found:?}, interpreter {said:?}");
+        }
+    }
+}
+
+#[test]
+fn the_checker_follows_the_imports_in_order() {
+    for (program, line) in [
+        ("use * from calc\nlimit = 5", 2),
+        ("use solve as sv from calc\nsv = 1", 2),
+        ("limit = 5\nuse * from calc", 2),
+        ("use * from calc\nuse solve as limit from calc", 2),
+        ("use * from calc\nfn f(solve) = solve", 2),
+    ] {
+        let found = reserved_diagnostics(program);
+        assert!(found.iter().any(|(l, _)| *l == line), "{program:?}: {found:?}");
+    }
+}
+
+#[test]
+fn the_checker_does_not_report_what_the_interpreter_accepts() {
+    for program in [
+        "limit = 5\nlimit",
+        "use solve from calc\nlimit = 5",
+        "use solve as sv from calc\nsolve = 2",
+        "use * from calc\nuse * from calc\n1",
+        "use solve as sv from calc\nuse solve as sv from calc\n1",
+        "m = 5 kg\ne = 2",
+        "eq = \"F = sigma * A\"\neq(sigma=5, A=2)",
+    ] {
+        assert_eq!(reserved_diagnostics(program), vec![], "{program:?}");
+    }
 }

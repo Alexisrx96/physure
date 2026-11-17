@@ -46,7 +46,7 @@ pub struct Diagnostic {
     pub line: usize,
     pub severity: Severity,
     /// A short stable name: `dimension-mismatch`, `unknown-unit`, `unknown-name`, `bad-argument`,
-    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`, `not-a-bool`.
+    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`, `reserved-name`, `not-a-bool`.
     pub code: &'static str,
     pub message: String,
 }
@@ -65,7 +65,7 @@ pub fn check_source(code: &str) -> PhysureResult<Vec<Diagnostic>> {
 /// Checks a parsed program against `registry`.
 pub fn check_program(program: &Program, registry: &UnitRegistry) -> Vec<Diagnostic> {
     let mut checker = Checker::new(registry);
-    checker.refuse_global_bindings(program);
+    checker.refuse_reserved_bindings(program);
     checker.prepare(&program.statements);
     let mut env = Env::new();
     checker.block(&program.statements, &program.lines, &mut env, 0);
@@ -283,21 +283,43 @@ impl<'a> Checker<'a> {
 
     // ---- global identifiers
 
-    /// A binding of `pi`, `π` or a constant of the catalog anywhere in a statement (function bodies included) is an
-    /// error, as the interpreter says before the statement runs (`crate::globals`). Reported at the line of the
-    /// top-level statement that holds it.
-    fn refuse_global_bindings(&mut self, program: &Program) {
+    /// A binding of a reserved name anywhere in a statement (function bodies included) is an error, as the
+    /// interpreter says before the statement runs (`crate::globals`, `crate::reserved`): `pi`, `π` and the
+    /// constants of the catalog (`constant-shadowing`), a statement word, a literal, a function of the core, and a
+    /// function of a module the program has imported by then (`reserved-name`). The top-level statements are read
+    /// in order, keeping what the imports have unlocked and the names the program holds, so an import over a held
+    /// name or a remap is reported too. Each finding is at the line of the top-level statement that holds it.
+    fn refuse_reserved_bindings(&mut self, program: &Program) {
+        let mut unlocked = crate::reserved::Unlocked::new();
+        let mut held: HashSet<String> = HashSet::new();
         for (index, statement) in program.statements.iter().enumerate() {
             self.line = program.lines.get(index).copied().unwrap_or(0);
             let mut bound = Vec::new();
             crate::globals::bindings_of(statement, &mut bound);
             for (name, what) in bound {
-                if crate::globals::is_global_in(&name, self.registry) {
+                if let Some(kind) = crate::reserved::static_kind(&name) {
+                    self.report(Severity::Error, "reserved-name", crate::reserved::binding_error(&name, &what, kind));
+                } else if crate::globals::is_global_in(&name, self.registry) {
                     let value = self.registry.constants_meta.get(&name).map(|meta| meta.value.clone());
                     let message = crate::globals::shadowing_error(&name, &what, value.as_deref());
                     self.report(Severity::Error, "constant-shadowing", message);
+                } else if !what.starts_with(crate::globals::IMPORT_BINDING) {
+                    if let Some((domain, _)) = unlocked.get(&name) {
+                        self.report(Severity::Error, "reserved-name", crate::reserved::module_binding_error(&name, domain, &what));
+                    }
                 }
             }
+            if let Statement::Import(import) = statement {
+                if let (Some(domain), Some(members)) = (crate::reserved::domain_of(&import.path), crate::builtins::domain_members(&import.path)) {
+                    match crate::reserved::plan_import(import, domain, members, &|name| held.contains(name), &unlocked) {
+                        Ok(imports) => unlocked.extend(imports),
+                        Err(crate::reserved::ImportError::Reserved(message)) => self.report(Severity::Error, "reserved-name", message),
+                        // the interpreter says so when it runs the import; the checker has no code for it
+                        Err(crate::reserved::ImportError::NoSuchFunction(_)) => {}
+                    }
+                }
+            }
+            collect_assigned(std::slice::from_ref(statement), &mut held);
         }
         self.line = 0;
     }
