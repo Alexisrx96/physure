@@ -189,6 +189,17 @@ class FunctionStrictTest {
     }
 
     @Test
+    void anEquationMayNameAVariableAfterAFunctionOfPhs() {
+        // `sigma` (stress) and `max` are physical symbols and also names of PHS functions: a measurement is bound by
+        // the name of its variable for the call only, so it never hides a call (reserved names, phase 3)
+        PhyEquation load = PhyEquation.of(registry, "F = sigma * A");
+        Quantity result = load.call("sigma", Quantity.withUncertainty(5, 0.5, "Pa"), "A", Quantity.of(2, "m^2"));
+        near(10, result.to("N"));
+        assertEquals(10 * 0.1, result.to("N").getUncertainty(), 1e-9);
+        near(6, PhyEquation.of(registry, "y = max * x").call("max", Quantity.of(3, "m"), "x", Quantity.of(2, "unity")).to("m"));
+    }
+
+    @Test
     void callingAnEquationNeedsPairsAndExactlyOneUnknown() {
         PhyEquation force = PhyEquation.of(registry, FORCE_LAW);
         assertThrows(IllegalArgumentException.class, () -> force.call("m"));
