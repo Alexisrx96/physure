@@ -226,7 +226,14 @@ fn the_language_guide_is_printed_or_saved() {
 #[test]
 fn the_committed_language_guide_is_what_phs_doc_prints() {
     let dir = TempDir::new("guide");
-    let printed = stdout(&run_in(dir.path(), &["doc"]));
+    let output = phs()
+        .args(["doc"])
+        .current_dir(dir.path())
+        .env_remove("PHYSURE_CONF")
+        .env_remove("PHYSURE_REQUIRE_FROZEN")
+        .output()
+        .expect("failed to run phs");
+    let printed = stdout(&output);
     let committed = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("PHYSURE_LANGUAGE_GUIDE.md"))
         .expect("the committed guide");
     let normal = |text: &str| text.replace("\r\n", "\n").trim().to_string();

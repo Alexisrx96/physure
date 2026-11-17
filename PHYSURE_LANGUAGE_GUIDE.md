@@ -164,7 +164,7 @@ The `[Settings]` of the frozen file in force (`phs conf`), or else of the `physu
 Six old keys are accepted and do nothing: `default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose`, `mkml_recursion_limit`. `phs conf status` warns where a file of yours sets one.
 
 ### 1.7 Reserved names
-A program can never bind a reserved name: not as a variable, a parameter, a function name, a `for` variable, a `where` binding or an import alias. The refusal comes before the program runs (`phs check` reports it with the code `reserved-name`) and says what the name is and what to do:
+A program can never bind a reserved name: not as a variable, a parameter, a function name, a `for` variable, a `where` binding or an import alias. The interpreter refuses it just before the statement runs, and `phs check` reports it before the program runs, with the code `reserved-name`; the message says what the name is and what to do:
 
 | Class | Names |
 | :--- | :--- |
@@ -182,7 +182,7 @@ max = 3          # error: `max` is a function of PHS and cannot be bound as a va
 use = 3          # error: `use` is a word of the language and cannot be bound as a variable; choose another name
 ```
 
-* The functions of a module are reserved from the `use` that imports them: `use * from calc` reserves all of `calc`, `use solve from calc` reserves `solve`, and `use solve as sv from calc` reserves `sv` and leaves `solve` free. Importing a function over a name the program already holds is an error too.
+* The functions of a module are reserved from the `use` that imports them: `use * from calc` reserves all of `calc`, `use solve from calc` reserves `solve`, and `use solve as sv from calc` reserves `sv` and leaves `solve` free. Importing a function over a name the program already holds, or that a host or a plugin registered, is an error too.
 * Not reserved: unit names (`m`, `s`, `kg`), `e`, the words of a format (`base`, `frac`).
 * A value a host gives a program, and the arguments of an equation call (`eq(sigma=5, A=2)`), are local to the run and never hide a call, so they may be named like a function (`sigma`, `max`, `dof`); a keyword, a literal, `pi` and the constants are still refused there.
 * A host function or a plugin function cannot be installed under a reserved name: a call would reach the builtin first.

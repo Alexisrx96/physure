@@ -99,5 +99,10 @@ D = 2.01410177812, 0.00000000012, standard
    cd ..
    ```
 
+   Adding or changing a unit, alias or constant also changes the output of
+   `phs doc`: run `phs doc --save` from the repository root and commit
+   `PHYSURE_LANGUAGE_GUIDE.md`, or the test
+   `the_committed_language_guide_is_what_phs_doc_prints` of `physure-cli` fails.
+
 6. **Run the tests**: `uv run pytest tests/ -x -q`. Add a conversion test
    if the unit has a nontrivial factor or offset.
