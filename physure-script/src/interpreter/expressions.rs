@@ -350,12 +350,12 @@ impl PhsInterpreter {
         match (name, args) {
             ("op_not", [operand]) => Some(self.eval_not(operand, env)),
             ("op_and" | "op_or", [left, right]) => Some(self.eval_and_or(name == "op_and", left, right, env)),
-            ("ternary" | "if_then_else", [cond, then, otherwise]) if !env.contains_key(name) => {
+            ("ternary" | "if_then_else", [cond, then, otherwise]) => {
                 let context = if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" };
                 Some(self.eval_conditional(cond, then, otherwise, env, context))
             }
             // `assert(true)`: a name with no value is told so, as in every condition
-            ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 && !env.contains_key("assert") => {
+            ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 => {
                 match self.eval_condition(&args[0], env, "`assert`") {
                     Err(e) if e.to_string().starts_with(&format!("`{name}` has no value")) => Some(Err(e)),
                     _ => None,
