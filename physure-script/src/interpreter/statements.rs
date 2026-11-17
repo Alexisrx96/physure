@@ -316,7 +316,7 @@ impl PhsInterpreter {
     /// and native plugin stems (`<base_dir>/ext/<stem>.<DLL_EXTENSION>`, dlopen'd lazily).
     fn resolve_use(&self, node: &crate::ast::ImportNode, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         if let Some(members) = crate::builtins::domain_members(&node.path) {
-            self.unlock_domain(node, members)?;
+            self.unlock_domain(node, members, env)?;
             return Ok(PhsValue::None);
         }
 
@@ -348,8 +348,10 @@ impl PhsInterpreter {
         self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(domain, _)| *domain)
     }
 
-    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable.
-    fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str]) -> PhysureResult<()> {
+    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. A member whose
+    /// name the program already holds (a variable or a function) is refused, so that a reserved name never has
+    /// two meanings in one program.
+    fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str], env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         use crate::ast::ImportSpecifier;
 
         let domain: &'static str = match node.path.as_str() {
@@ -359,8 +361,17 @@ impl PhsInterpreter {
             _ => unreachable!("domain_members returned Some for unknown domain"),
         };
         let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
+        let held = |name: &str| -> PhysureResult<()> {
+            if env.contains_key(name) {
+                return Err(PhysureError::Generic(crate::reserved::module_import_error(name, domain)));
+            }
+            Ok(())
+        };
         match &node.specifier {
             ImportSpecifier::Wildcard => {
+                for &member in members {
+                    held(member)?;
+                }
                 for &member in members {
                     unlocked.insert(member.to_string(), (domain, member.to_string()));
                 }
@@ -371,6 +382,7 @@ impl PhsInterpreter {
                         return Err(PhysureError::Generic(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
                     }
                     let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
+                    held(&call_name)?;
                     unlocked.insert(call_name, (domain, sym.name.clone()));
                 }
             }

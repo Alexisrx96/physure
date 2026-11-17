@@ -145,3 +145,24 @@ fn g(x) =
   x");
     assert!(message.contains("is a function of `calc`"), "{message}");
 }
+
+#[test]
+fn an_import_cannot_replace_a_name_the_program_already_holds() {
+    for program in [
+        "limit = 5
+use * from calc",
+        "fn series(a) = a
+use * from calc",
+        "solve = 1
+use solve from calc",
+        "sv = 1
+use solve as sv from calc",
+    ] {
+        let message = refused(program);
+        assert!(message.contains("is a function of `calc`") && message.contains("already bound in the program"), "{program:?}: {message}");
+    }
+    // a name the module does not bring stays free, before and after
+    assert_eq!(value("x = 1
+use solve from calc
+x"), "1.0");
+}

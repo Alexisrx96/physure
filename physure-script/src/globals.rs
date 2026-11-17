@@ -195,7 +195,7 @@ pub fn bindings_in(expr: &Expr, out: &mut Vec<(String, String)>) {
 /// (`module_domain` answers the module of such a name). Checked once for a statement before it runs, so a loop
 /// does not pay for it at every iteration and a body that never runs is checked too. A name an import binds is not
 /// checked against the module functions: running `use * from calc` again, wherever the import sits, binds nothing
-/// new.
+/// new. `PhsInterpreter::unlock_domain` refuses an import over a name the program holds.
 pub(crate) fn refuse_global_bindings(
     statement: &Statement,
     module_domain: &dyn Fn(&str) -> Option<&'static str>,
