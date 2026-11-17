@@ -35,24 +35,24 @@ One table, in `physure-script/src/reserved.rs`, is the source of truth.
 | Literal | `true false None none inf infinity oo` | new. `inf`, `infinity` and `oo` are the infinity literals of the `number` rule; `None` is a value kind; the lower-case `true`, `false` and `none` are reserved so that they cannot be confused with `True`, `False` and `None`. `NaN` is not a literal of the language and is not reserved |
 | Core function | every name `eval_core_builtin` answers (`abs approx assert ceil cos exact_assert exp floor format ln log max min parallel_map round sin sqrt tan uncertainty vector dof coverage_factor expanded from_samples ...`) | new; always |
 | Module function | every name the table of a module answers (`calc`: `deriv integral limit series solve ...`; `array`: `norm det dot cross transpose ...`; `plot`: `plot plot3d ...`) | new; while imported |
-| Constant | `pi`, `π` and the `[Constants]` of the catalog in force | exists in `globals.rs`; moves under the same function and the same message shape |
+| Constant | `pi`, `π` and the `[Constants]` of the catalog in force | stays in `globals.rs` (`refuse_constant_binding`), called from `refuse_binding` after the static classes |
 
-The function names are **not typed twice**. `reserved.rs` takes them from the builtin tables, and a drift test fails when a builtin is added or removed without the table following. The exact list is whatever those tables contain on the day of the plan; the table above names the classes.
+The core function names are typed once, in `reserved.rs`, and a drift test reads the arms of `eval_core_builtin` and fails when a builtin is added or removed without the table following. The module functions are not typed at all: they come from `domain_members` through what the interpreter has unlocked.
 
 A module function is reserved by what is imported: `use * from calc` reserves every name of `calc`, `use solve from calc` reserves `solve` only, and an alias (`use solve as sv from calc`) reserves `sv` and leaves `solve` free.
 
 ## 4. The function
 
 ```rust
-pub enum Reserved { Keyword, StatementWord, Literal, CoreFunction, ModuleFunction(&'static str), Constant }
-pub fn kind(name: &str, imported: &Imported) -> Option<Reserved>
+pub enum Reserved { Keyword, StatementWord, Literal, CoreFunction }
+pub fn static_kind(name: &str) -> Option<Reserved>
 ```
 
-`Imported` is the set of module names a program has brought in. `kind` is pure; the catalog in force is read only for the constants, as `globals.rs` does today.
+`static_kind` answers for the keywords, the statement words, the literals and the core functions, and is pure. The module functions depend on the program: the interpreter's `module_domain(name) -> Option<&'static str>` answers the module whose function the program imported under that name. The constants are checked by `globals.rs` (`refuse_constant_binding`), against the catalog in force.
 
 ## 5. Where it is enforced
 
-1. **Interpreter.** `refuse_binding` and `refuse_global_bindings` in `globals.rs` already check an assignment, a function name, a parameter, a `for` variable, a `where` binding and an imported name, once per statement and before it runs. They call `reserved::kind` instead of the constants test alone. The guards `!env.contains_key("assert")` and `!env.contains_key(name)` of `eval_short_circuit` can no longer be false once those names cannot be bound, and are deleted. The variables of an equation call (`eq(sigma=5, A=2)`) are local to the call and are refused only when they are `pi` or a catalog constant.
+1. **Interpreter.** `refuse_binding` and `refuse_global_bindings` in `globals.rs` already check an assignment, a function name, a parameter, a `for` variable, a `where` binding and an imported name, once per statement and before it runs. `refuse_binding` calls `reserved::static_kind`, and `refuse_global_bindings` also asks the interpreter's `module_domain`. The guards `!env.contains_key("assert")` and `!env.contains_key(name)` of `eval_short_circuit` can no longer be false once those names cannot be bound, and are deleted. The variables of an equation call (`eq(sigma=5, A=2)`) are local to the call and are refused only when they are `pi` or a catalog constant.
 2. **Importing over a variable.** `use * from calc` when the program already holds a variable named `limit` is an error that names the variable. A name bound before the import and a name bound after it are both refused, so a reserved name never has two meanings in one program. Only the names the program holds when the import runs (variables and functions) are looked at: a parameter or a local of a function defined before the import is local to that function and never shadows a call, so it is left alone.
 3. **`phs check`.** The same check before the program runs, in `refuse_global_bindings` of `check.rs`. The classes that are new report the code `reserved-name`; a constant keeps `constant-shadowing`.
 4. **Symbolic-string parser** (`physure-script/src/symbolic/parser.rs`). A reserved name without parentheses is not a symbol: `and`, `or`, `not`, `true`, `inf`, `sin` as a bare word are an error that names the class. With parentheses a function name is a call, as now. This closes the `and * x * y` finding.
@@ -63,7 +63,7 @@ pub fn kind(name: &str, imported: &Imported) -> Option<Reserved>
 The error names the class and the way out, in the shape of today's `shadowing_error`:
 
 > `max` is a function of PHS and cannot be bound as a variable; choose another name
-> `use` is a word of the language (it starts an import) and cannot be bound as a parameter of `f`; choose another name
+> `use` is a word of the language and cannot be bound as a parameter of `f`; choose another name
 > `limit` is a function of `calc`, which this program imports, and cannot be bound as a variable; choose another name
 
 A grammar keyword keeps the parse error it has today (it never reaches the check); improving that message is out of scope.
@@ -98,3 +98,8 @@ Adding a name to a reserved class is a breaking change: it goes in the changelog
 * **Unit names are not reserved.** `m = 5 kg` and `t = 3 s` stay valid. The unit lookup still prefers a variable to a unit, as `globals.rs` documents.
 * **The language server keeps one interpreter per open document, and what an import unlocks is never cleared.** After the user deletes or narrows a `use` in the editor, the old names stay reserved in that document until it is reopened, and a later `limit = 5` would be reported as an error. Phase 2 must reset the unlocked functions when an import statement is dirty or removed (`physure-lsp/src/incremental.rs`).
 * **Not in this spec:** reserving the words of a format, the improvement of the parse error of a keyword, rename and completion in the language server, and the unbound-name rule of audit T5 (a separate decision, measured on 2026-11-16: 435 fallbacks in 38 tests, most of them format words and partial documents).
+* **Hosts bind names by the same call.** `PhyEquation.callWith` in the Java binding binds the measured variables of an equation as host values, so a variable named `sigma`, `min`, `max`, `dof` or `in` is refused there, while the PHS form `eq(sigma=5, A=2)` is exempt. Phase 3 must give that route a local-binding variant (checked only against `pi` and the constants) or substitute the name in the text.
+* **Plugins and external functions are not checked.** `install_dynamic_externals` and the externals a host registers can install a function under a reserved name such as `max`; a core builtin answers first, so it is never called (the finding of §1). Phase 3.
+* **The variables of `integral` and `limit` get only the static classes.** `integral("x", "limit", 0, 1)` after `use * from calc` is allowed: that variable is local.
+* **Two wildcard imports that share a name** (`use * from calc` then `use * from array` share `gradient`, `sym_det`, `sym_trace`, `sym_charpoly`, `sym_eigenvalues`, `sym_transpose`) keep the older behaviour: the later import wins. Refusing it would break programs that import both; phase 2 or later decides.
+* **The checker will read the kind of a binding from the text of its description** (`what.starts_with(IMPORT_BINDING)` in `globals.rs`); an enum for what binds a name is sturdier once `check.rs` consumes it in phase 2.

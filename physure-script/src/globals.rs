@@ -193,9 +193,10 @@ pub fn bindings_in(expr: &Expr, out: &mut Vec<(String, String)>) {
 /// Refuses `statement` when it binds a reserved name anywhere inside it: a global identifier of the catalog in
 /// force, a statement word, a literal, a function of the core, or a function of a module the program has imported
 /// (`module_domain` answers the module of such a name). Checked once for a statement before it runs, so a loop
-/// does not pay for it at every iteration and a body that never runs is checked too. A name an import binds is not
-/// checked against the module functions: running `use * from calc` again, wherever the import sits, binds nothing
-/// new. `PhsInterpreter::unlock_domain` refuses an import over a name the program holds.
+/// does not pay for it at every iteration and a body that never runs is checked too. A name an import binds (a
+/// named import or an alias, from a module or from a `.phs` file) is not checked against the module functions here:
+/// running `use solve from calc` again, wherever the import sits, binds nothing new, and
+/// `PhsInterpreter::unlock_domain` refuses an import that would replace or remap a name the program holds.
 pub(crate) fn refuse_global_bindings(
     statement: &Statement,
     module_domain: &dyn Fn(&str) -> Option<&'static str>,

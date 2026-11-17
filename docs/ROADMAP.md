@@ -125,7 +125,8 @@ answer come first:
 
 - [x] The symbolic engine dropped comparisons: `integral("x < 0.5", "x")` answered `x^2/2` (T2). The parser stopped at the first token it did not know and dropped the rest, so it now refuses any text it did not read, and names a comparison.
 - [ ] The symbolic parser reads `and`, `or` and `not` as symbols and multiplies them: `simplify("x and y")` is `and * x * y` and `deriv("x not y", "x")` is `not * y`. Found while fixing T2.
-- [ ] Reserved names that no program can bind (design: `docs/superpowers/specs/2026-11-16-reserved-names-design.md`). Phase 1 is done: the table, the interpreter, the imports. Phase 2 (`phs check` and the symbolic parser, which closes the `and`, `or`, `not` item above, plus resetting what an import unlocks in the language server) and phase 3 (hosts, the generated section of the language guide) are open.
+- [ ] Reserved names that no program can bind (design: `docs/superpowers/specs/2026-11-16-reserved-names-design.md`). Phase 1 is done: the table, the interpreter, the imports. Phase 2 (`phs check` and the symbolic parser, which closes the `and`, `or`, `not` item above, plus resetting what an import unlocks in the language server) and phase 3 (hosts, the generated section of the language guide) are open. Known gaps recorded in the spec §11: the Java equation route, plugins, two wildcard imports with a shared name.
+- [x] `use * from matrix` panicked; it is an alias of `array` now.
 - [x] Only the first call of a user function is inlined in a symbolic expression (T3); arguments were not substituted either. Fixed in Phase 4b.
 - [ ] An unbound name evaluates to a string of itself instead of being an error (T5).
 - [x] Covariance pruning read a missing variance as an absolute `1.0`, whatever the unit (T7). A block whose variances are not both stored is kept now. It was latent: no public call sequence reaches it, and pruning is off by default.

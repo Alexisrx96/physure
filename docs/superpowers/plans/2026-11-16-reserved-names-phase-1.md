@@ -15,6 +15,7 @@
 - Build in the shared target so no second multi-GB `target/` appears: prefix every cargo command with `CARGO_TARGET_DIR=D:/Projects/physure/target`.
 - Source and docs files are CRLF in the working tree. Edit them with the editor tool, or with Python in default text mode (`open(p, encoding='utf-8')`), never `newline=''`, and chain a script and its `git commit` with `&&`.
 - Measured before writing this plan (2026-11-16): none of the 4 `.phs` files, the documentation examples, nor the PHS programs in the Rust tests binds a statement word, a literal or a core function as a variable, a parameter or a loop variable. Every one of the 41 names binds today in each of the 9 forms of Task 2 without error. Task 5 re-checks this by running every suite.
+- As built, the module doc says `static_kind` where this plan's first draft said `kind`; Tasks 2-4 grew review fixes recorded in the git history (commits after each task).
 
 ---
 
