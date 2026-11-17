@@ -49,6 +49,9 @@ def load_ext_functions(
                 continue
             if obj.__module__ != module_name:
                 continue  # skip names merely imported into the ext file
-            interp.register_function(obj, name)
+            try:
+                interp.register_function(obj, name)
+            except ValueError as e:
+                raise ValueError(f"{py_file}: function {name!r}: {e}") from e
             registered.append(name)
     return registered

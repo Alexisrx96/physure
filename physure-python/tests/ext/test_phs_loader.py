@@ -33,3 +33,14 @@ def test_a_host_function_cannot_take_a_reserved_name(tmp_path):
     interpreter.register_function(
         lambda *args: 2.0, "double"
     )  # a free name registers
+
+
+def test_the_loader_says_which_file_took_a_reserved_name(tmp_path):
+    ext_dir = tmp_path / "ext"
+    ext_dir.mkdir()
+    (ext_dir / "helpers.py").write_text("def max(*args):\n    return 1.0\n")
+    interp = Interpreter(base_dir=str(tmp_path))
+    with pytest.raises(ValueError, match=r"helpers.py") as info:
+        load_ext_functions(interp, tmp_path)
+    assert "'max'" in str(info.value)
+    assert "cannot be bound as a function a host registers" in str(info.value)
