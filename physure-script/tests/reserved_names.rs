@@ -166,3 +166,49 @@ use solve as sv from calc",
 use solve from calc
 x"), "1.0");
 }
+
+#[test]
+fn an_import_cannot_remap_a_module_function() {
+    for program in [
+        "use * from calc
+use solve as limit from calc",
+        "use deriv from calc
+use solve as deriv from calc",
+        "use solve as limit from calc
+use * from calc",
+    ] {
+        let message = refused(program);
+        assert!(message.contains("is already a function of `calc`"), "{program:?}: {message}");
+    }
+    // the same thing twice is not a remap
+    assert_eq!(value("use solve as sv from calc
+use solve as sv from calc
+1"), "1.0");
+    // two wildcards that share names keep working: the later one wins, as before
+    assert_eq!(value("use * from calc
+use * from array
+1"), "1.0");
+}
+
+#[test]
+fn a_named_import_that_fails_unlocks_nothing() {
+    let interpreter = PhsInterpreter::default();
+    let first = parse_phs("limit = 1
+use solve, limit from calc").expect("a program");
+    assert!(interpreter.run_program_with(&first, vec![]).is_err());
+    let second = parse_phs("solve = 4
+solve").expect("a program");
+    assert!(interpreter.run_program_with(&second, vec![]).is_ok());
+}
+
+#[test]
+fn a_value_a_host_gives_cannot_be_a_function_of_an_imported_module() {
+    let interpreter = PhsInterpreter::default();
+    interpreter.run_program_with(&parse_phs("use * from calc
+1").expect("a program"), vec![]).expect("the import runs");
+    let error = interpreter
+        .run_program_with(&parse_phs("1").expect("a program"), vec![("limit".to_string(), PhsValue::Number(1.0))])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("`limit` is a function of `calc`") && error.contains("a value given by the host"), "{error}");
+}

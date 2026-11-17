@@ -80,6 +80,11 @@ pub fn module_import_error(name: &str, domain: &str) -> String {
     format!("`{name}` is a function of `{domain}`, which this program imports, and `{name}` is already bound in the program; choose another name for it")
 }
 
+/// The error for importing, as `name`, a function of `domain` when `name` is already another function of the program.
+pub fn module_remap_error(name: &str, domain: &str) -> String {
+    format!("`{name}` is already a function of `{domain}` in this program and cannot be imported under that name as something else; choose another alias")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +209,10 @@ mod tests {
         assert_eq!(
             module_import_error("limit", "calc"),
             "`limit` is a function of `calc`, which this program imports, and `limit` is already bound in the program; choose another name for it"
+        );
+        assert_eq!(
+            module_remap_error("limit", "calc"),
+            "`limit` is already a function of `calc` in this program and cannot be imported under that name as something else; choose another alias"
         );
         assert_eq!(
             binding_error("while", "a variable", Reserved::Keyword),

@@ -235,9 +235,13 @@ impl PhsInterpreter {
     /// sources of their uncertainty: writing them as source text would make a new measurement of each, and
     /// `f(x, x)` would no longer see one.
     pub fn run_program_with(&self, program: &Program, bindings: Vec<(String, PhsValue)>) -> PhysureResult<PhsValue> {
-        // `pi` and the catalog's constants are global: a host cannot rebind them either
+        // the reserved names (`crate::reserved`), `pi`, the catalog's constants and the functions of the modules the
+        // program imported cannot be rebound by a host either
         for (name, _) in &bindings {
             crate::globals::refuse_binding(name, "a value given by the host")?;
+            if let Some(domain) = self.module_domain(name) {
+                return Err(PhysureError::Generic(crate::reserved::module_binding_error(name, domain, "a value given by the host")));
+            }
         }
         let mut env = self.env.clone();
         env.extend(bindings);
@@ -343,14 +347,19 @@ impl PhsInterpreter {
         Err(PhysureError::Generic(format!("No such module or domain '{}'", node.path)))
     }
 
-    /// The module (`calc`, `plot`, `array`) whose function `name` the program has imported under that name.
+    /// The module (`calc`, `plot`, `array`) whose function `name` the program has imported under that name. Inside a
+    /// module body there is none: the importer's imports are not that module's.
     pub(crate) fn module_domain(&self, name: &str) -> Option<&'static str> {
+        if LOADING_MODULES.with(|loading| !loading.borrow().is_empty()) {
+            return None;
+        }
         self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(domain, _)| *domain)
     }
 
     /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. A member whose
     /// name the program already holds (a variable or a function) is refused, so that a reserved name never has
-    /// two meanings in one program.
+    /// two meanings in one program, and so is one that would remap a name the program already imported as another
+    /// function. Nothing is unlocked unless every name of the import is accepted.
     fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str], env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
         use crate::ast::ImportSpecifier;
 
@@ -367,13 +376,19 @@ impl PhsInterpreter {
             }
             Ok(())
         };
+        let mut imports: Vec<(String, (&'static str, String))> = Vec::new();
         match &node.specifier {
             ImportSpecifier::Wildcard => {
                 for &member in members {
                     held(member)?;
-                }
-                for &member in members {
-                    unlocked.insert(member.to_string(), (domain, member.to_string()));
+                    // an alias of this module on the same name is a remap; another module's function of that name
+                    // is replaced by the later import, as it always was
+                    if let Some((other, canonical)) = unlocked.get(member) {
+                        if *other == domain && canonical != member {
+                            return Err(PhysureError::Generic(crate::reserved::module_remap_error(member, domain)));
+                        }
+                    }
+                    imports.push((member.to_string(), (domain, member.to_string())));
                 }
             }
             ImportSpecifier::Symbols(syms) => {
@@ -383,11 +398,16 @@ impl PhsInterpreter {
                     }
                     let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
                     held(&call_name)?;
-                    unlocked.insert(call_name, (domain, sym.name.clone()));
+                    let wanted = (domain, sym.name.clone());
+                    if unlocked.get(&call_name).is_some_and(|already| *already != wanted) {
+                        return Err(PhysureError::Generic(crate::reserved::module_remap_error(&call_name, domain)));
+                    }
+                    imports.push((call_name, wanted));
                 }
             }
             ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
         }
+        unlocked.extend(imports);
         Ok(())
     }
 
