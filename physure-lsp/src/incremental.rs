@@ -557,19 +557,20 @@ pub fn apply_change(prev: Option<DocState>, text: &str) -> ChangeOutcome {
     }
 
     // What a `use` unlocked is kept by the interpreter for as long as the document lives. When the old or the new
-    // text has an import, forget it and run the imports of the new text again (they are idempotent): a name the old
-    // text imported is free again, and one the new text imports is reserved from the first dirty statement on.
+    // text has an import, forget it and let the imports of the new text take effect in order, as a fresh run would:
+    // a dirty import runs as a dirty statement, a clean one is run again silently.
     let is_import = |statement: &Statement| matches!(statement, Statement::Import(_));
-    if old_statements.iter().chain(&new_statements).any(is_import) {
+    let replay_imports = old_statements.iter().chain(&new_statements).any(is_import);
+    if replay_imports {
         state.interp.reset_imports();
-        for statement in new_statements.iter().filter(|s| is_import(s)) {
-            // a refused import shows its error when it is dirty, or keeps the one it already had
-            let _ = state.interp.run_statement(statement);
-        }
     }
 
     for (i, stmt) in new_statements.iter().enumerate() {
         if !dirty.contains(&i) {
+            if replay_imports && is_import(stmt) {
+                // its diagnostic is the one it already has
+                let _ = state.interp.run_statement(stmt);
+            }
             continue;
         }
         let line = new_lines.get(i).copied().unwrap_or(0);
@@ -1012,5 +1013,33 @@ mod tests {
         let second = apply_change(Some(first.state), "use * from calc\nx = 2\nlimit = 5\n");
         assert_eq!(second.diagnostics.len(), 1, "{:?}", second.diagnostics);
         assert!(second.diagnostics[0].message.contains("`limit` is a function of `calc`"), "{:?}", second.diagnostics);
+    }
+
+    #[test]
+    fn a_first_open_lets_a_later_import_take_effect_only_from_its_own_line() {
+        for text in [
+            "fn f(limit) = limit\nuse * from calc\n1",
+            "fn g(x) =\n  limit = 1\n  return limit\nuse * from calc\n1",
+            "while False {\n  limit = 1\n}\nuse * from calc\n1",
+        ] {
+            let outcome = apply_change(None, text);
+            assert!(outcome.diagnostics.is_empty(), "{text:?}: {:?}", outcome.diagnostics);
+        }
+    }
+
+    #[test]
+    fn a_function_used_before_its_import_is_still_undefined_on_a_first_open() {
+        let outcome = apply_change(None, "x = solve(\"x = 2\", \"x\")\nuse * from calc");
+        assert_eq!(outcome.diagnostics.len(), 1, "{:?}", outcome.diagnostics);
+        assert!(outcome.diagnostics[0].message.contains("Undefined function"), "{:?}", outcome.diagnostics);
+        assert_eq!(outcome.diagnostics[0].range.start.line, 0);
+    }
+
+    #[test]
+    fn a_name_bound_before_its_import_is_reported_on_the_import() {
+        let outcome = apply_change(None, "limit = 5\nuse * from calc");
+        assert_eq!(outcome.diagnostics.len(), 1, "{:?}", outcome.diagnostics);
+        assert_eq!(outcome.diagnostics[0].range.start.line, 1, "{:?}", outcome.diagnostics);
+        assert!(outcome.diagnostics[0].message.contains("already bound"), "{:?}", outcome.diagnostics);
     }
 }
