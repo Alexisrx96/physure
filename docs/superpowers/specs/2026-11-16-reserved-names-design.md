@@ -9,10 +9,11 @@ Today PHS reserves two things: the keywords of the grammar (`for while let if th
 
 | Finding | What happened |
 |---|---|
-| Probe of 2026-11-16 | A program may assign `sin = 3`, `deriv = 1`, `assert = 2`, `max`, `format`, `print`, `use`, `from`, `fn`, `export`, `import`, `as`, `in`, `true`, `false`, `None`, `inf`, `oo`. Each is accepted. |
+| Probe of 2026-11-16 | A program may assign `sin = 3`, `deriv = 1`, `assert = 2`, `max`, `format`, `print`, `use`, `from`, `fn`, `export`, `import`, `as`, `in`, `true`, `false`, `None`, `inf`, `oo`. Each is accepted. For a variable the call still reaches the builtin (`sin = 3` then `sin(0)` is `0.0`, and an `assert(1 m == 2 m)` after `assert = 2` still fails), so the harm of a variable is confusion (`sin` is `3.0` and a function at once), not a wrong call. The silent cases are the two rows below. |
 | T2 follow-up | The symbolic parser reads `and`, `or` and `not` as symbols and multiplies them: `simplify("x and y")` is `and * x * y`. |
 | T5 | `true` (lower case) is the text `"true"`, so `while true` is an error only because the text is not a Bool. |
-| `assert` | The interpreter lets a variable named `assert` win over the builtin (`!env.contains_key("assert")` in `interpreter/expressions.rs`), so `assert = 2` switches the assertion off. |
+| A function the call never reaches | `call_by_name` (`interpreter/expressions.rs`) asks the core builtins first, then the unlocked module functions, then the program's functions. So `fn max(a, b) = 100` is accepted and `max(1, 2)` is `2.0`: the program's function is never called. After `use * from calc`, `fn limit(a) = 7` is accepted and `limit(1)` runs the builtin and fails with its own arity error. |
+| A value the name never reaches | `inf = 3` is accepted and `inf` still reads as infinity, because the infinity literal wins over the binding. |
 | T13 | `e` meant Euler's number in one path and nothing in the other, and a name ending in `e` was cut in two. |
 
 The principle is the one `globals.rs` already states for `pi`: a scientist who writes `pi = 3` has made a mistake, not a choice. This spec extends it to the words of the language itself, and gives the symbolic-string parser the same list.
@@ -51,7 +52,7 @@ pub fn kind(name: &str, imported: &Imported) -> Option<Reserved>
 
 ## 5. Where it is enforced
 
-1. **Interpreter.** `refuse_binding` and `refuse_global_bindings` in `globals.rs` already check an assignment, a function name, a parameter, a `for` variable, a `where` binding and an imported name, once per statement and before it runs. They call `reserved::kind` instead of the constants test alone. The special case for a variable named `assert` is deleted.
+1. **Interpreter.** `refuse_binding` and `refuse_global_bindings` in `globals.rs` already check an assignment, a function name, a parameter, a `for` variable, a `where` binding and an imported name, once per statement and before it runs. They call `reserved::kind` instead of the constants test alone. The guards `!env.contains_key("assert")` and `!env.contains_key(name)` of `eval_short_circuit` can no longer be false once those names cannot be bound, and are deleted.
 2. **Importing over a variable.** `use * from calc` when the program already holds a variable named `limit` is an error that names the variable. A name bound before the import and a name bound after it are both refused, so a reserved name never has two meanings in one program.
 3. **`phs check`.** The same check before the program runs, in `refuse_global_bindings` of `check.rs`. The classes that are new report the code `reserved-name`; a constant keeps `constant-shadowing`.
 4. **Symbolic-string parser** (`physure-script/src/symbolic/parser.rs`). A reserved name without parentheses is not a symbol: `and`, `or`, `not`, `true`, `inf`, `sin` as a bare word are an error that names the class. With parentheses a function name is a call, as now. This closes the `and * x * y` finding.
@@ -91,6 +92,7 @@ Adding a name to a reserved class is a breaking change: it goes in the changelog
 
 ## 11. Risks and what is deliberately left alone
 
-* **Programs that break.** A program that defines `fn max(...)`, a variable `min` or `round`, or that relied on a variable `assert` winning over the builtin stops running. That is the point of the change, and the changelog says it.
+* **Programs that break.** A program that defines `fn max(...)` (which never ran: the builtin answered every call) or binds a variable `min` or `round` is an error where it used to run. That is the point of the change, and the changelog says it.
+* **The weakest part of the case.** For a variable, a statement word (`use = 3` works today) and a lower-case literal (`true = 3` works today), the harm is confusion and a clearer parse of partial documents, not a wrong answer. They are reserved because the user asked for words that can never be rebound, and a class can be dropped from §3 without touching the rest.
 * **Unit names are not reserved.** `m = 5 kg` and `t = 3 s` stay valid. The unit lookup still prefers a variable to a unit, as `globals.rs` documents.
 * **Not in this spec:** reserving the words of a format, the improvement of the parse error of a keyword, rename and completion in the language server, and the unbound-name rule of audit T5 (a separate decision, measured on 2026-11-16: 435 fallbacks in 38 tests, most of them format words and partial documents).
