@@ -224,7 +224,8 @@ fn variables_belong_to_their_registry() {
     let (one, other) = (UnitRegistry::new(), UnitRegistry::new());
     one.evaluate("x = 5 m").unwrap();
     assert_eq!(one.evaluate("x * 2").unwrap().trim(), "10.0 m");
-    assert_ne!(other.evaluate("x").unwrap().trim(), "5.0 m");
+    // the other registry never heard of `x`: it has no value there (it used to read as the text "x")
+    assert!(message(other.evaluate("x").unwrap_err()).contains("`x` has no value"));
 }
 
 #[wasm_bindgen_test]

@@ -888,6 +888,14 @@ mod tests {
     }
 
     #[test]
+    fn a_half_typed_word_is_an_error_diagnostic_not_a_text_value() {
+        let (state, diagnostics) = run(None, "a = 1\nb = a + wher");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(diagnostics[0].message.contains("`wher` has no value"), "{}", diagnostics[0].message);
+        assert!(state.interp.env.get("b").is_none());
+    }
+
+    #[test]
     fn a_later_parse_error_leaves_the_previous_good_state_untouched() {
         let (state, _) = run(None, "a = 1");
         assert_eq!(state.interp.env.get("a").unwrap().to_string(), "1.0");
