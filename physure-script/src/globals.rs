@@ -121,6 +121,19 @@ pub fn refuse_constant_binding(name: &str, what: &str) -> PhysureResult<()> {
     }
 }
 
+/// An error when `name` cannot be bound as a LOCAL of one run: a value a host gives (`run_program_with`) or an
+/// argument of an equation call (`eq(sigma=5, A=2)`). A local never shadows a call (a call reaches the builtin
+/// first), so the name of a function of PHS or of a module is fine for it, and `sigma`, `max` and `dof` are physical
+/// symbols. What the language reads as something else is not: a keyword or a literal would be ignored (`inf = 3`),
+/// and `pi` and the constants of the catalog are refused as everywhere.
+pub fn refuse_local_binding(name: &str, what: &str) -> PhysureResult<()> {
+    use crate::reserved::Reserved;
+    if let Some(kind @ (Reserved::Keyword | Reserved::Literal)) = crate::reserved::static_kind(name) {
+        return Err(PhysureError::Generic(crate::reserved::binding_error(name, what, kind)));
+    }
+    refuse_constant_binding(name, what)
+}
+
 /// What `bindings_of` says binds a name an import brings; the text is followed by the path of the module.
 pub(crate) const IMPORT_BINDING: &str = "a name imported from";
 

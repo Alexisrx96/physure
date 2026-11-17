@@ -68,13 +68,32 @@ fn a_name_that_is_not_reserved_still_binds() {
 }
 
 #[test]
-fn a_value_a_host_gives_cannot_be_a_reserved_name() {
-    let program = parse_phs("1").expect("a program");
-    let error = PhsInterpreter::default()
-        .run_program_with(&program, vec![("max".to_string(), PhsValue::Number(1.0))])
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("`max` is a function of PHS and cannot be bound as a value given by the host"), "{error}");
+fn a_value_a_host_gives_is_local_and_may_be_named_like_a_function() {
+    // a measurement of an equation called from Java is bound by the name of its variable: `sigma`, `max`, `dof`...
+    let program = parse_phs("sigma * 2").expect("a program");
+    let value = PhsInterpreter::default()
+        .run_program_with(&program, vec![("sigma".to_string(), PhsValue::Number(5.0))])
+        .expect("sigma is local to the run");
+    assert_eq!(value.to_string(), "10.0");
+
+    // also after the module that has a function of that name is imported
+    let interpreter = PhsInterpreter::default();
+    interpreter.run_program_with(&parse_phs("use * from calc\n1").expect("a program"), vec![]).expect("the import runs");
+    let value = interpreter
+        .run_program_with(&parse_phs("limit + 1").expect("a program"), vec![("limit".to_string(), PhsValue::Number(1.0))])
+        .expect("limit is local to the run");
+    assert_eq!(value.to_string(), "2.0");
+}
+
+#[test]
+fn a_value_a_host_gives_cannot_be_a_word_the_language_reads_or_a_constant() {
+    for name in ["inf", "True", "pi"] {
+        let error = PhsInterpreter::default()
+            .run_program_with(&parse_phs("1").expect("a program"), vec![(name.to_string(), PhsValue::Number(1.0))])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&format!("`{name}` is")) && error.contains("cannot be bound as a value given by the host"), "{name}: {error}");
+    }
 }
 
 #[test]
@@ -200,18 +219,6 @@ use solve, limit from calc").expect("a program");
     let second = parse_phs("solve = 4
 solve").expect("a program");
     assert!(interpreter.run_program_with(&second, vec![]).is_ok());
-}
-
-#[test]
-fn a_value_a_host_gives_cannot_be_a_function_of_an_imported_module() {
-    let interpreter = PhsInterpreter::default();
-    interpreter.run_program_with(&parse_phs("use * from calc
-1").expect("a program"), vec![]).expect("the import runs");
-    let error = interpreter
-        .run_program_with(&parse_phs("1").expect("a program"), vec![("limit".to_string(), PhsValue::Number(1.0))])
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("`limit` is a function of `calc`") && error.contains("a value given by the host"), "{error}");
 }
 
 #[test]

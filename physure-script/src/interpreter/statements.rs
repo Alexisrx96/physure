@@ -235,13 +235,10 @@ impl PhsInterpreter {
     /// sources of their uncertainty: writing them as source text would make a new measurement of each, and
     /// `f(x, x)` would no longer see one.
     pub fn run_program_with(&self, program: &Program, bindings: Vec<(String, PhsValue)>) -> PhysureResult<PhsValue> {
-        // the reserved names (`crate::reserved`), `pi`, the catalog's constants and the functions of the modules the
-        // program imported cannot be rebound by a host either
+        // a value a host gives is local to the run and never shadows a call: only what the language reads as
+        // something else (a keyword, a literal), `pi` and the catalog's constants are refused
         for (name, _) in &bindings {
-            crate::globals::refuse_binding(name, "a value given by the host")?;
-            if let Some(domain) = self.module_domain(name) {
-                return Err(PhysureError::Generic(crate::reserved::module_binding_error(name, domain, "a value given by the host")));
-            }
+            crate::globals::refuse_local_binding(name, "a value given by the host")?;
         }
         let mut env = self.env.clone();
         env.extend(bindings);
