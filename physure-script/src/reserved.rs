@@ -5,7 +5,7 @@
 //! constants of the catalog (`pi`, `π`, `[Constants]`) are reserved by [`crate::globals`]. Not reserved: unit
 //! names, the words of a format, `e`, single letters.
 //!
-//! `kind` answers for the classes that do not depend on the program. A module function is reserved by what the
+//! [`static_kind`] answers for the classes that do not depend on the program. A module function is reserved by what the
 //! interpreter has unlocked, which only the interpreter knows (`PhsInterpreter::module_domain`).
 
 /// The class of a reserved name.
@@ -92,8 +92,15 @@ mod tests {
     #[test]
     fn the_keywords_are_those_of_the_grammar() {
         let pest = include_str!("phs.pest");
-        let line = pest.lines().find(|l| l.starts_with("keyword")).expect("the rule `keyword`");
-        let inside = line.split('(').nth(1).and_then(|rest| rest.split(')').next()).expect("the alternatives");
+        let line = pest
+            .lines()
+            .find(|l| l.starts_with("keyword "))
+            .expect("the rule `keyword` in phs.pest changed shape; update KEYWORDS or this parser");
+        let inside = line
+            .split('(')
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .expect("the alternatives of the rule `keyword` in phs.pest changed shape; update KEYWORDS or this parser");
         let in_grammar: Vec<String> = inside.split('|').map(|w| w.trim().trim_matches('"').to_string()).collect();
         assert_eq!(sorted(in_grammar), sorted(KEYWORDS.iter().map(|w| w.to_string()).collect()));
     }
@@ -103,12 +110,16 @@ mod tests {
         let source = include_str!("builtins/core.rs");
         let start = source.find("pub fn eval_core_builtin(").expect("the dispatcher");
         let end = start + source[start..].find("_ => Ok(None),").expect("its last arm");
+        let region = &source[start..end];
+        // Only the one-line style `"name" | "name" => ...` is supported by this parser.
         let mut arms = Vec::new();
-        for line in source[start..end].lines() {
+        let mut arm_lines = 0;
+        for line in region.lines() {
             let line = line.trim_start();
             if !line.starts_with('"') {
                 continue;
             }
+            arm_lines += 1;
             for part in line.split("=>").next().unwrap_or("").split('|') {
                 let name = part.trim().trim_matches('"');
                 if !name.starts_with("op_") {
@@ -116,24 +127,53 @@ mod tests {
                 }
             }
         }
+        let arrow_lines = region.lines().filter(|l| !l.trim_start().starts_with("//") && l.contains("=>")).count();
+        assert_eq!(
+            arrow_lines, arm_lines,
+            "an arm of eval_core_builtin is not written as `\"name\" | \"name\" => ...` on one line; update the parser of this test or the arm"
+        );
         assert_eq!(sorted(arms), sorted(CORE_FUNCTIONS.iter().map(|w| w.to_string()).collect()));
     }
 
+    /// The text of the rule `name` in `phs.pest`: its first line and the lines up to the one that ends with `}`.
+    fn rule<'a>(pest: &'a str, name: &str) -> String {
+        let prefix = format!("{name} ");
+        let mut text = Vec::new();
+        for line in pest.lines().skip_while(|l| !l.starts_with(&prefix)) {
+            text.push(line);
+            if line.trim_end().ends_with('}') {
+                break;
+            }
+        }
+        assert!(!text.is_empty(), "the rule `{name}` is not in phs.pest");
+        text.join("\n")
+    }
+
     #[test]
-    fn the_statement_words_and_the_infinity_literals_are_read_by_the_grammar() {
+    fn the_statement_words_and_the_infinity_literals_are_read_by_their_rules() {
         let pest = include_str!("phs.pest");
-        for word in STATEMENT_WORDS.iter().chain(["inf", "infinity", "oo"].iter()) {
-            assert!(pest.contains(&format!("\"{word}\"")), "the grammar no longer reads `{word}`");
+        let expected: [(&str, &[&str]); 5] = [
+            ("function_def", &["fn"]),
+            ("import_stmt", &["use", "from", "import", "as"]),
+            ("export_stmt", &["export", "as"]),
+            ("for_expr", &["in"]),
+            ("infinity_lit", &["inf", "infinity", "oo"]),
+        ];
+        for (name, words) in expected {
+            let text = rule(pest, name);
+            for word in words {
+                assert!(text.contains(&format!("\"{word}\"")), "the rule `{name}` no longer reads `{word}`");
+            }
         }
     }
 
     #[test]
     fn no_name_is_in_two_classes() {
         let all: Vec<&str> = KEYWORDS.iter().chain(&STATEMENT_WORDS).chain(&LITERALS).chain(&CORE_FUNCTIONS).copied().collect();
-        let mut unique = all.clone();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(all.len(), unique.len());
+        let mut sorted_all = all.clone();
+        sorted_all.sort_unstable();
+        let twice: Vec<&str> = sorted_all.windows(2).filter(|pair| pair[0] == pair[1]).map(|pair| pair[0]).collect();
+        assert!(twice.is_empty(), "names in two classes: {twice:?}");
     }
 
     #[test]
@@ -160,6 +200,18 @@ mod tests {
         assert_eq!(
             module_binding_error("limit", "calc", "a variable"),
             "`limit` is a function of `calc`, which this program imports, and cannot be bound as a variable; choose another name"
+        );
+        assert_eq!(
+            module_import_error("limit", "calc"),
+            "`limit` is a function of `calc`, which this program imports, and `limit` is already bound in the program; choose another name for it"
+        );
+        assert_eq!(
+            binding_error("while", "a variable", Reserved::Keyword),
+            "`while` is a word of the language and cannot be bound as a variable; choose another name"
+        );
+        assert_eq!(
+            binding_error("inf", "a variable", Reserved::Literal),
+            "`inf` is a literal of the language and cannot be bound as a variable; choose another name"
         );
     }
 }
