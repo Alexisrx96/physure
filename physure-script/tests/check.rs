@@ -197,11 +197,15 @@ fn the_builtins_apply_their_dimension_rules() {
 }
 
 #[test]
-fn a_maximum_of_different_dimensions_is_a_warning_the_interpreter_accepts() {
+fn an_extremum_of_different_dimensions_is_an_error() {
     let diagnostics = found("max(1 m, 1 s)");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!((diagnostics[0].severity, diagnostics[0].code), (Severity::Warning, "mixed-extremum"));
-    assert!(eval_phs("max(1 m, 1 s)").is_ok(), "the interpreter compares base-unit magnitudes");
+    assert_eq!((diagnostics[0].severity, diagnostics[0].code), (Severity::Error, "mixed-extremum"));
+    // the interpreter refuses it too (unit holes): it compared base-unit magnitudes and answered `1 m`
+    assert_refused("max(1 m, 1 s)", 1, "mixed-extremum");
+    assert_refused("min(1 m, 2)", 1, "mixed-extremum");
+    assert_refused("x = 2 kg\nmax(x, 1 m, 1 kg)", 2, "mixed-extremum");
+    assert_clean("max(1 m, 3 mm) + 1 m");
 }
 
 // ---- functions

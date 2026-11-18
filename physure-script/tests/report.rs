@@ -77,6 +77,8 @@ fn a_second_problem_on_a_flagged_line_is_reported_too() {
         // a name with no value (T5) is a problem of its own when the checker's is another one
         ("undefined_fn(barz_q) + (1 m + 1 s)", "dimension-mismatch"),
         ("undefined_fn(barz_q) + 5 fooz", "unknown-name"),
+        // a `max` of different dimensions is one problem, another on its line is another
+        ("undefined_fn(1) + max(1 m, 1 s)", "mixed-extremum"),
     ] {
         let report = run(program);
         assert!(!report.ok, "{program:?}");
@@ -144,6 +146,10 @@ const ONE_PROBLEM: &[(&str, usize, &str)] = &[
     ("constant-shadowing", 1, "pi = 3"),
     ("constant-shadowing", 1, "molar_gas_constant = 8"),
     ("constant-shadowing", 1, "fn g(bohr_radius) = bohr_radius"),
+    ("mixed-extremum", 1, "max(1 m, 1 s)"),
+    ("mixed-extremum", 1, "min(1 m, 2)"),
+    ("mixed-extremum", 2, "x = 1 rad
+max(x, 1)"),
 ];
 
 #[test]
@@ -183,8 +189,13 @@ fn the_checker_explains_an_interpreter_error_only_by_its_own_words_and_names() {
     let condition = "the condition of `if` needs a Bool (True or False), got a Quantity (of dimension L): a quantity is not a condition; compare it, e.g. `x != 0 m`";
     assert!(explains("not-a-bool", condition, "the condition of `if` needs a Bool (True or False), got a Quantity (5.0 km): a quantity is not a condition; compare it, e.g. `x != 0 km`"));
     assert!(!explains("not-a-bool", condition, "the condition of `while` needs a Bool (True or False), got a Quantity (5.0 m): a quantity is not a condition"));
-    // a warning, or a code the interpreter has no words for, explains nothing
-    assert!(!explains("mixed-extremum", "x", "Unit mismatch: expected 'm', got 's'"));
+    // the same function of different dimensions (unit holes), not another function nor another kind of problem
+    let extremum = "max of different dimensions (L, T): compare values of one dimension";
+    assert!(explains("mixed-extremum", extremum, "max of different dimensions: `1 m` is a length and `1 s` a time; compare values of one dimension"));
+    assert!(!explains("mixed-extremum", extremum, "min of different dimensions: `1 m` is a length and `1 s` a time; compare values of one dimension"));
+    assert!(!explains("mixed-extremum", extremum, "Unit mismatch: expected 'm', got 's'"));
+    // a code the interpreter has no words for explains nothing
+    assert!(!explains("unused", "x", "Unit mismatch: expected 'm', got 's'"));
 }
 
 #[test]

@@ -12,8 +12,9 @@
 //! neither a variable, a constant nor a unit and meets a quantity, a name of `pi`, `π` or a constant of the catalog
 //! is bound (`crate::globals`). A value the pass cannot type (an argument of a
 //! function it has not seen, a vector, an imported name) is `Unknown` and silences every check that depends
-//! on it. The one report that is a warning, not an error, is `min` or `max` of different dimensions, which
-//! the interpreter accepts (it compares base-unit magnitudes) and which is never what was meant.
+//! on it. `min` or `max` of different dimensions (`mixed-extremum`) was the one warning while the interpreter
+//! compared their base-unit magnitudes; the interpreter refuses it now (unit holes), so it is an error like the
+//! others, and no finding is a warning today.
 //!
 //! **Functions.** A parameter with a unit (`fn f(m: kg, v: m/s)`) is checked at every call and typed in
 //! the body. A parameter without one takes the dimension of the argument at each call site: the body is
@@ -36,7 +37,9 @@ use std::rc::Rc;
 pub enum Severity {
     /// The interpreter would stop here.
     Error,
-    /// The interpreter accepts it and it is almost certainly not what was meant.
+    /// The interpreter accepts it and it is almost certainly not what was meant. No finding is a warning today
+    /// (`mixed-extremum` was, until the interpreter refused it); the severity stays in the schema of the report, of
+    /// `phs check` and of the LSP.
     Warning,
 }
 
@@ -65,6 +68,11 @@ pub fn explains(code: &str, finding_message: &str, runtime_message: &str) -> boo
             runtime_message.contains(&format!("Unknown unit '{name}'")) || runtime_message.contains(&format!("`{name}` has no value"))
         }),
         "bad-exponent" => runtime_message.contains("Exponent must be"),
+        // the same function: `max of different dimensions (L, T): ...` and `` max of different dimensions: `1 m` is ... ``
+        "mixed-extremum" => finding_message
+            .split(' ')
+            .next()
+            .is_some_and(|function| runtime_message.contains(&format!("{function} of different dimensions:"))),
         // the same operation on the temperatures
         "temperature-points" => [
             ("cannot be added", "cannot add two absolute temperatures"),
@@ -986,7 +994,8 @@ impl<'a> Checker<'a> {
         Ty::Qty(Dim::dimensionless())
     }
 
-    /// `min` and `max` compare base-unit magnitudes with no dimension check, which the interpreter accepts.
+    /// `min` and `max` of different dimensions: the interpreter refuses them (`builtins::core::extremum`), so this is an
+    /// error. A vector argument is `Unknown` to the pass and silences it.
     fn extremum(&mut self, name: &str, args: &[Ty]) -> Ty {
         let dims: Vec<&Dim> = args.iter().filter_map(|t| if let Ty::Qty(d) = t { Some(d) } else { None }).collect();
         if dims.len() != args.len() || dims.is_empty() {
@@ -994,10 +1003,10 @@ impl<'a> Checker<'a> {
         }
         if dims.iter().any(|d| !d.same_dimension(dims[0])) {
             self.report(
-                Severity::Warning,
+                Severity::Error,
                 "mixed-extremum",
                 format!(
-                    "{name} of different dimensions ({}) compares their magnitudes in base units, which means nothing",
+                    "{name} of different dimensions ({}): compare values of one dimension",
                     dims.iter().map(|d| d.text()).collect::<Vec<_>>().join(", ")
                 ),
             );

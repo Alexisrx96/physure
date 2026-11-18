@@ -53,10 +53,12 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_is_a_warning() {
+    fn a_mixed_extremum_is_an_error() {
+        // it was the one warning of the checker, until the interpreter refused it (unit holes)
         let found = dimension_diagnostics("max(1 m, 1 s)");
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(found[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(found[0].code, Some(NumberOrString::String("mixed-extremum".to_string())));
     }
 
     #[test]
