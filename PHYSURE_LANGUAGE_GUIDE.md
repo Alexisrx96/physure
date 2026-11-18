@@ -222,13 +222,15 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 | `core` | `sin(x)`, `cos(x)`, `tan(x)`, `sec(x)`, `csc(x)`, `cot(x)`, `erf(x)` | Trigonometric functions (of an angle or a plain number); `erf`, the error function (of a plain number) | `sin(3.14159 / 2)`, `sec(60 deg)` |
 | `core` | `exp(x)`, `ln(x)`, `log(x)` | Exponents and logarithms | `ln(10.0)` |
 | `core` | `abs(x)` | Absolute value | `abs(-5.0 m)` |
-| `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |
+| `core` | `round(x, n)` | Round to n decimal places; `n` is a plain number (`round(1.5 m, 1 s)` is an error) | `round(3.14159, 2)` |
+| `core` | `min(a, b, ...)`, `max(a, b, ...)` | The smallest or largest of values of one dimension, in the unit it was written in; one vector argument is the extremum of its elements. Values of different dimensions are an error (`max(1 m, 1 s)`, `min(1 m, 2)`, `max(1 rad, 1)`): compare values of one dimension | `max(1 m, 30 cm)`, `min(vector(3 s, 2 s))` |
+| `core` | `vector(a, b, ...)`, `[a, b, ...]` | A vector. Its numbers and quantities share one dimension, in any of its units; `vector(1 m, 2 s)` is an error, and so is an elementwise operation whose result would mix dimensions (`2 m ^ vector(1, 2)`): put each dimension in its own vector | `[1 m, 2 km]` |
 | `calc` | `solve(eq, target)` | Symbolic equation solver | `solve("P = F / A", "F")` |
 | `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv("0.5 * m * v^2", "v")` |
 | `calc` | `integral(expr, var)` | Symbolic integral | `integral("m * g", "h")` |
 | `calc` | `integral(expr, var, a, b)` | Definite integral (closed form confirmed numerically, or tanh-sinh quadrature with an error estimate) | `integral("v", "t", 0 s, 1 h)` |
 | `calc` | `limit(expr, var, point, side?)` | Limit (value at a point of continuity, or Richardson extrapolation with a convergence check); two-sided, or from one side with `side` `"+"` (right) or `"-"` (left) | `limit("sin(x)/x", "x", 0)`, `limit("1/x", "x", 0, "+")` |
-| `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |
+| `array` | `linspace(a, b, n)` | Vector generation: `a` and `b` of one dimension, the points in the unit of `a` (`linspace(0 m, 1 km, 3)` is `0 m, 500 m, 1000 m`); `n` is a plain number | `linspace(0.0 m, 10.0 m, 100)` |
 | `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient([1, 4, 9] Pa, [1, 2, 3] m)` |
 | `array` | `trapz(y, x)` | Numerical integration (area) | `trapz([1, 2, 3] N, [0, 1, 2] m)` |
 
