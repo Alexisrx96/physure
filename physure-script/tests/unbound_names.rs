@@ -196,3 +196,15 @@ fn a_bare_variable_of_a_symbolic_function_says_to_write_it_as_text() {
         assert!(eval_phs(&program(quoted)).is_ok(), "{quoted:?}");
     }
 }
+
+/// `m = 5; [1, 2] m` was `[5.0, 10.0]` (the variable) while a unit after an expression was a name; it is ambiguous
+/// now, as `5 m` is, and the message speaks of the unit written, not of a literal `1 m` the program does not have.
+#[test]
+fn a_unit_after_an_expression_that_a_variable_shadows_is_ambiguous() {
+    for source in ["m = 5\n[1, 2] m", "m = 5\n(2 + 3) m"] {
+        let message = refused(source);
+        assert!(message.contains("Ambiguous 'm' in the unit `m` written after an expression"), "{source:?}: {message}");
+        assert!(!message.contains("1 m"), "{source:?}: {message}");
+    }
+    assert_eq!(shows("m = 5\n[1, 2] * \"m\" => cm"), shows("[100, 200] cm"));
+}

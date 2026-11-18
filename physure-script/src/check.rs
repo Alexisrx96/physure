@@ -667,7 +667,8 @@ impl<'a> Checker<'a> {
                 );
                 return Ty::Unknown;
             }
-            // a name that is not a variable is text, and the interpreter hands text back unconverted
+            // only a quantity has a dimension to compare; a name with no value (`Ty::Symbol`) is refused by the
+            // interpreter before the conversion (`` `foo` has no value ``), and this pass says nothing of it here
             if let Ty::Qty(dim) = &from {
                 let angle_only = physure_core::units::angle_mode::angle_mode()
                     == physure_core::units::angle_mode::AngleMode::Dimensionless
