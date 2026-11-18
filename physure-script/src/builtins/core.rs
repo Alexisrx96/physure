@@ -133,6 +133,19 @@ fn approx_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     approximately(&args[..2], rel, "approx")
 }
 
+/// The forms a format spec takes, for the error that refuses another one.
+const FORMAT_SPECS: &str = "`base`, `frac`, `ifrac`, or `.N` with N digits and optionally `f`, `e` or `g` (`.2f`, `.3e`, `.4g`, `.2`)";
+
+/// Whether `spec` is one of [`FORMAT_SPECS`]: an unknown spec used to be read as `.6f` without a word.
+fn is_format_spec(spec: &str) -> bool {
+    if matches!(spec, "base" | "frac" | "ifrac") {
+        return true;
+    }
+    let Some(rest) = spec.strip_prefix('.') else { return false };
+    let digits = rest.strip_suffix(['f', 'e', 'g']).unwrap_or(rest);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
 fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
     // `base` quotes the measurement in the units it is built from — `2 kΩ: base` is
     // `2000 A^-2 * kg * m^2 * s^-3`. The scale moves into the magnitude, so the physical
@@ -286,9 +299,15 @@ fn log10_number(n: f64) -> PhysureResult<f64> {
 fn format_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     let Some(val) = args.first() else { return Ok(None) };
     match args.get(1) {
-        Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+        Some(PhsValue::String(spec)) if is_format_spec(spec) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+        Some(PhsValue::String(spec)) => {
+            Err(PhysureError::Generic(format!("`{spec}` is not a format spec: write one of {FORMAT_SPECS}")))
+        }
+        Some(other) => Err(PhysureError::Generic(format!(
+            "the spec of `format` is a text, got {other}: write one of {FORMAT_SPECS}"
+        ))),
         // No spec, nothing to apply — hand the value back untouched.
-        _ => Ok(Some(val.clone())),
+        None => Ok(Some(val.clone())),
     }
 }
 

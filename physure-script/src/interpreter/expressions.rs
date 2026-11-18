@@ -287,14 +287,7 @@ impl PhsInterpreter {
         }
 
         let mut arg_vals = Vec::new();
-        for (i, arg) in args.iter().enumerate() {
-            // the spec of `x: base` is a word of the format, not a name to look up
-            if name == "format" && i == 1 {
-                if let Expr::Identifier(spec) = arg {
-                    arg_vals.push(PhsValue::String(spec.clone()));
-                    continue;
-                }
-            }
+        for arg in args {
             match (self.eval_expr(arg, env), arg) {
                 // `f'(x)` with a free `x` asks for the derivative as an expression, not at a value: `x` is its variable
                 (Err(error), Expr::Identifier(var)) if name.ends_with('\'') && is_unbound(&error, var) => {
