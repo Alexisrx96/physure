@@ -101,3 +101,25 @@ fn round_takes_a_plain_number_of_decimals() {
     assert!(eval_phs("round(1.5 m)").is_ok());
     assert_eq!(last("round(1.2345 m, 2)"), last("1.23 m"));
 }
+
+#[test]
+fn a_level_and_a_plain_number_have_no_order_nor_a_vector() {
+    // as `20 dB > 2` and `20 dB + 2` are refused: whether 2 is a ratio or 2 dB is a convention nothing written states
+    for source in ["max(20 dB, 2)", "max(3 dB, 2)", "min(2, 20 dB)", "max(20 dB, 50 percent)"] {
+        let message = refused(source);
+        assert!(message.contains("of different dimensions") && message.contains("a level"), "{source}: {message}");
+    }
+    for source in ["vector(10 dB, 3)", "vector(10 dB, 3 percent)", "[3, 10 dB]"] {
+        let message = refused(source);
+        assert!(message.contains("a vector holds one dimension") && message.contains("a level"), "{source}: {message}");
+    }
+    // two levels compare, as `<` compares them
+    assert_eq!(last("max(20 dB, 30 dB)"), last("30 dB"));
+    assert!(eval_phs("vector(10 dB, 20 dB)").is_ok());
+}
+
+#[test]
+fn an_angle_and_a_solid_angle_are_named_by_their_kind() {
+    let message = refused("vector(1 sr, 1 rad)");
+    assert!(message.contains("`1 sr` is a solid angle and `1 rad` an angle"), "{message}");
+}

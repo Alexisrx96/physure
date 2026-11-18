@@ -1,19 +1,26 @@
-//! The one place a builtin asks whether two numeric values have one dimension (the unit holes of `max`, `min`,
-//! `vector`, `linspace`, `round`), and the words that say they do not.
+//! The one place the interpreter asks whether two numeric values have one dimension (the unit holes of `max`, `min`,
+//! `vector`, `linspace`, `round`, and the invariant that a vector holds one dimension), and the words that say they
+//! do not.
 //!
-//! The comparison is the one `m + s` is refused by (`Quantity::add` asks `RationalUnit::same_dimensions`): a plain
-//! number is dimensionless, so is a ratio in a unit (`50 percent`), and an angle (`rad`) is a dimension of its own in
-//! every angle mode, as it is for a sum and a comparison.
+//! Two values have one dimension when the comparison `<` would set them side by side
+//! (`Quantity::comparable_magnitudes`): the same base dimensions (`RationalUnit::same_dimensions`, the test `m + s`
+//! is refused by), and a level (`dB`, `pH`) never against a dimensionless value that is not one. So a plain number
+//! is dimensionless, so is a ratio in a unit (`50 percent`), an angle (`rad`) is a dimension of its own in every angle
+//! mode, `20 dB` and `2` are refused as `20 dB > 2` is, and two levels compare as `<` compares them.
+
+use std::sync::OnceLock;
 
 use physure_core::units::{formula_text, RationalUnit};
+use physure_core::Quantity;
 
 use crate::value::PhsValue;
 
-/// The unit of a number (dimensionless) or a quantity; `None` for any other value.
-fn unit_of(value: &PhsValue) -> Option<RationalUnit> {
+/// The unit of a number (dimensionless) or a quantity, borrowed; `None` for any other value.
+fn unit_of(value: &PhsValue) -> Option<&RationalUnit> {
+    static DIMENSIONLESS: OnceLock<RationalUnit> = OnceLock::new();
     match value {
-        PhsValue::Number(_) => Some(RationalUnit::dimensionless()),
-        PhsValue::Quantity(q) => Some(q.unit.clone()),
+        PhsValue::Number(_) => Some(DIMENSIONLESS.get_or_init(RationalUnit::dimensionless)),
+        PhsValue::Quantity(q) => Some(&q.unit),
         _ => None,
     }
 }
@@ -23,15 +30,38 @@ pub(crate) fn is_numeric(value: &PhsValue) -> bool {
     unit_of(value).is_some()
 }
 
+/// Whether two numbers or quantities have one dimension, by the rule of the module.
+fn comparable(a: &PhsValue, ua: &RationalUnit, b: &PhsValue, ub: &RationalUnit) -> bool {
+    if !ua.same_dimensions(ub) {
+        return false;
+    }
+    if !ua.is_logarithmic() && !ub.is_logarithmic() {
+        return true;
+    }
+    // a level is in it: the comparison of the core says whether the two have an order
+    let as_quantity = |v: &PhsValue| match v {
+        PhsValue::Quantity(q) => q.clone(),
+        PhsValue::Number(n) => Quantity::new_scalar(*n, 0.0, RationalUnit::dimensionless(), None, None),
+        _ => unreachable!("only numbers and quantities have a unit"),
+    };
+    as_quantity(a).comparable_magnitudes(&as_quantity(b)).is_ok()
+}
+
 /// `None` when `a` and `b` have one dimension, or when either is not a number or a quantity (nothing to compare);
 /// otherwise the clause that says why not, both values as they print and their dimensions in words:
 /// `` `1 m` is a length and `1 s` a time ``.
 pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<String> {
     let (ua, ub) = (unit_of(a)?, unit_of(b)?);
-    if ua.same_dimensions(&ub) {
+    if comparable(a, ua, b, ub) {
         return None;
     }
-    Some(format!("`{}` is {} and `{}` {}", written(a), dimension_words(&ua), written(b), dimension_words(&ub)))
+    let (mut wa, mut wb) = (dimension_words(ua), dimension_words(ub));
+    if wa == wb {
+        // the words do not tell them apart (two markers read as one dimension): the units do
+        wa = format!("{wa} in `{}`", ua.__repr__());
+        wb = format!("{wb} in `{}`", ub.__repr__());
+    }
+    Some(format!("`{}` is {wa} and `{}` {wb}", written(a), written(b)))
 }
 
 /// The first two numeric items of `items` whose dimensions differ, as the clause of [`mismatch`]: every numeric item
@@ -61,17 +91,28 @@ fn written(value: &PhsValue) -> String {
     }
 }
 
-/// A dimension in words: a base dimension by its name (`a length`, `an angle`), `dimensionless`, anything else by
-/// its formula (`of dimension L·T⁻¹`), read from the catalog in force as `phs eval` reports a dimension.
+/// A dimension in words: a level as one (`a level`, `a level of L²·M·T⁻³`), the angles by their kind (`an angle`,
+/// `a solid angle`), a base dimension by its name (`a length`), `dimensionless`, anything else by its formula
+/// (`of dimension L·T⁻¹`), read from the catalog in force as `phs eval` reports a dimension.
 fn dimension_words(unit: &RationalUnit) -> String {
+    let level = unit.is_logarithmic();
     if unit.dimensions.is_empty() {
-        return "dimensionless".to_string();
+        return if level { "a level" } else { "dimensionless" }.to_string();
     }
     let dimension = crate::globals::with_catalog_in_force(|registry| registry.dimension_of(unit).ok())
         .ok()
         .flatten()
         .unwrap_or_else(|| unit.dimensions.iter().cloned().collect());
-    let named = match dimension.as_slice() {
+    let formula = formula_text(&dimension);
+    if level {
+        return format!("a level of {formula}");
+    }
+    let marker = match unit.dimensions.as_slice() {
+        [(symbol, (1, 1))] if symbol == "rad" => Some("an angle"),
+        [(symbol, (1, 1))] if symbol == "sr" => Some("a solid angle"),
+        _ => None,
+    };
+    let named = marker.or(match dimension.as_slice() {
         [(symbol, (1, 1))] => match symbol.as_str() {
             "L" => Some("a length"),
             "M" => Some("a mass"),
@@ -84,6 +125,6 @@ fn dimension_words(unit: &RationalUnit) -> String {
             _ => None,
         },
         _ => None,
-    };
-    named.map_or_else(|| format!("of dimension {}", formula_text(&dimension)), str::to_string)
+    });
+    named.map_or_else(|| format!("of dimension {formula}"), str::to_string)
 }
