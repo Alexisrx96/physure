@@ -382,12 +382,14 @@ fn eval_and_unit_answer_in_json() {
 
 #[test]
 fn the_suggestion_for_an_unknown_unit_is_the_same_in_every_process() {
-    // `x` is one edit from `A`, `K`, `m` and `s`: each process used to suggest whichever its maps met first.
+    // `barz` is one edit from `bar` and `barn`: each process used to suggest whichever its maps met first. (`x`, one
+    // edit from `A`, `K`, `m` and `s`, showed it before; a one-letter name gets no unit hint since audit T5. The name
+    // is assigned so that the checker, which flags a free name meeting a quantity, leaves the line to the interpreter.)
     let dir = TempDir::new("suggestion");
     for _ in 0..10 {
-        let evaluated = run_with_input(dir.path(), &["eval", "-"], "x = 5 x\n");
+        let evaluated = run_with_input(dir.path(), &["eval", "-"], "barz = 5 barz\n");
         let report: serde_json::Value = serde_json::from_str(&stdout(&evaluated)).unwrap();
-        assert_eq!(report["diagnostics"][0]["message"], "`x` has no value — did you mean the unit 'A'?", "{report}");
+        assert_eq!(report["diagnostics"][0]["message"], "`barz` has no value — did you mean the unit 'bar'?", "{report}");
     }
 }
 

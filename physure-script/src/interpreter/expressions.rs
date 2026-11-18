@@ -70,17 +70,103 @@ fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
     Some(Quantity::new_scalar(1.0, 0.0, unit, None, None))
 }
 
-/// The error of a name that is no binding, constant or unit: `` `foo` has no value ``, with the unit the
-/// catalog finds closest when there is one (`5 metre` is a typo of a unit more often than a missing variable).
-fn unbound_name(name: &str) -> PhysureError {
-    let hint = match UnitParser::parse_expression(name) {
-        Err(PhysureError::UnknownUnit { suggestion: Some(unit), .. }) => format!(" — did you mean the unit '{unit}'?"),
-        _ => String::new(),
-    };
-    PhysureError::Generic(format!("`{name}` has no value{hint}"))
+/// The edit distance of `a` and `b` counting a swap of two neighbours as one edit (optimal string alignment).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for j in 0..=b.len() {
+        d[0][j] = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
 }
 
-/// Whether `error` is the [`unbound_name`] error of `name`.
+/// The name bound in `env` that `name` is most likely a typo of: at most two edits away, both at least three
+/// characters long (`speeed` for `speed`; `x` for `y` would be a guess). Ties go to the first in order of the text.
+fn closest_binding<'a>(name: &str, env: &'a HashMap<String, PhsValue>) -> Option<&'a str> {
+    if name.chars().count() < 3 {
+        return None;
+    }
+    env.keys()
+        .filter(|bound| bound.chars().count() >= 3 && !bound.starts_with("__"))
+        .map(|bound| (edit_distance(name, bound), bound.as_str()))
+        .filter(|(distance, _)| *distance <= 2)
+        .min()
+        .map(|(_, bound)| bound)
+}
+
+/// The unit `name` is most likely a typo of: the catalog's closest symbol, when it differs from `name` by its case
+/// only (`Km`, `KPa`; not a one-letter `a`) or, for a name of four characters or more, by one edit (`metre`,
+/// `fooz`). A shorter name or a farther symbol is more often a variable than a unit, and the catalog has a symbol
+/// near almost every short word (`x` is one edit from `A`, `count` two from `pound`).
+fn closest_unit(name: &str) -> Option<String> {
+    let Err(PhysureError::UnknownUnit { suggestion: Some(unit), .. }) = UnitParser::parse_expression(name) else {
+        return None;
+    };
+    let length = name.chars().count();
+    let close = (length >= 2 && unit.to_lowercase() == name.to_lowercase()) || (length >= 4 && edit_distance(name, &unit) <= 1);
+    close.then_some(unit)
+}
+
+/// Whether `function` takes its variables as text: a function of `calc` or `plot` (`deriv("x^2", "x")`).
+fn takes_variables_as_text(function: &str) -> bool {
+    ["calc", "plot"].iter().any(|domain| crate::builtins::domain_members(domain).is_some_and(|members| members.contains(&function)))
+}
+
+impl PhsInterpreter {
+    /// `error` of the argument `arg` of a call of `function`, said in the words that help when it is a name with no
+    /// value written where the function takes a variable as text (`deriv("x^2", x)`, `grad(f, [x, y])`): write
+    /// `"x"`. These used to work only because a name with no value was its own text (audit T5).
+    fn symbolic_variable_error(&self, function: &str, arg: &Expr, error: PhysureError) -> PhysureError {
+        if !takes_variables_as_text(function) {
+            return error;
+        }
+        let names: Vec<&str> = match arg {
+            Expr::Identifier(var) => vec![var.as_str()],
+            Expr::FunctionCall { name, args, .. } if name == "vector" => {
+                args.iter().filter_map(|a| if let Expr::Identifier(var) = a { Some(var.as_str()) } else { None }).collect()
+            }
+            _ => Vec::new(),
+        };
+        match names.into_iter().find(|var| is_unbound(&error, var) && !self.is_function_of_phs(var)) {
+            Some(var) => PhysureError::Generic(format!("`{var}` has no value: the variable of `{function}` is text, write \"{var}\"")),
+            None => error,
+        }
+    }
+
+    /// Whether `name` is a function of PHS this program can call: a core function, or one of a module it imported.
+    fn is_function_of_phs(&self, name: &str) -> bool {
+        crate::reserved::CORE_FUNCTIONS.contains(&name) || self.module_domain(name).is_some()
+    }
+
+    /// The error of a name that is no binding, constant or unit: `` `foo` has no value ``, with what the name most
+    /// likely meant when something does: a function of PHS written as a value, a variable of the program, a unit.
+    pub(crate) fn unbound_name(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhysureError {
+        let hint = if self.is_function_of_phs(name) {
+            format!(": `{name}` is a function of PHS, not a value; pass a user function (`fn f(x) = {name}(x)`) or write the call")
+        } else if let Some(bound) = closest_binding(name, env) {
+            format!(": did you mean `{bound}`?")
+        } else if let Some(unit) = closest_unit(name) {
+            format!(" — did you mean the unit '{unit}'?")
+        } else {
+            String::new()
+        };
+        PhysureError::Generic(format!("`{name}` has no value{hint}"))
+    }
+}
+
+/// Whether `error` is the [`PhsInterpreter::unbound_name`] error of `name`.
 fn is_unbound(error: &PhysureError, name: &str) -> bool {
     error.to_string().starts_with(&format!("`{name}` has no value"))
 }
@@ -249,7 +335,7 @@ impl PhsInterpreter {
             // `env` still wins, so this only ever fires for an otherwise-free name.
             PhsValue::Quantity(unit)
         } else {
-            return Err(unbound_name(name));
+            return Err(self.unbound_name(name, env));
         })
     }
 
@@ -293,7 +379,8 @@ impl PhsInterpreter {
                 (Err(error), Expr::Identifier(var)) if name.ends_with('\'') && is_unbound(&error, var) => {
                     arg_vals.push(PhsValue::String(var.clone()));
                 }
-                (value, _) => arg_vals.push(value?),
+                (Err(error), _) => return Err(self.symbolic_variable_error(name, arg, error)),
+                (Ok(value), _) => arg_vals.push(value),
             }
         }
 
