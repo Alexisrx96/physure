@@ -132,7 +132,7 @@ use linspace, gradient, trapz from array
 - Errors name the module: a name it does not define, a cyclic import (`a -> b -> a`), a file that cannot be parsed, and a module that binds a reserved name (section 1.5): a module with `pi = 3` makes every import from it an error, whichever name is imported.
 
 ### 1.5 Names: variables, `pi` and the constants of the catalog
-A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is an error: `` `foo` has no value ``.
+A bare name resolves in one order, which the interpreter, the text of `integral` and `limit`, and `phs check` follow: a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is an error when its line runs: `` `foo` has no value `` (with the likely fix when there is one: a variable two edits away, a unit one edit away, a function of PHS written as a value). `phs check` reports it before the run only where the name meets a quantity (`5 foo`, `x + foo`).
 
 ```phs
 area = pi * (2 m)^2                                   # 12.566 m^2
@@ -223,14 +223,14 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 | `core` | `exp(x)`, `ln(x)`, `log(x)` | Exponents and logarithms | `ln(10.0)` |
 | `core` | `abs(x)` | Absolute value | `abs(-5.0 m)` |
 | `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |
-| `calc` | `solve(eq, target)` | Symbolic equation solver | `solve(P == F / A, F)` |
-| `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv(0.5 * m * v^2, v)` |
-| `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |
+| `calc` | `solve(eq, target)` | Symbolic equation solver | `solve("P = F / A", "F")` |
+| `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv("0.5 * m * v^2", "v")` |
+| `calc` | `integral(expr, var)` | Symbolic integral | `integral("m * g", "h")` |
 | `calc` | `integral(expr, var, a, b)` | Definite integral (closed form confirmed numerically, or tanh-sinh quadrature with an error estimate) | `integral("v", "t", 0 s, 1 h)` |
 | `calc` | `limit(expr, var, point, side?)` | Limit (value at a point of continuity, or Richardson extrapolation with a convergence check); two-sided, or from one side with `side` `"+"` (right) or `"-"` (left) | `limit("sin(x)/x", "x", 0)`, `limit("1/x", "x", 0, "+")` |
 | `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |
-| `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient(presion_vec, pos_vec)` |
-| `array` | `trapz(y, x)` | Numerical integration (area) | `trapz(fuerza_vec, pos_vec)` |
+| `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient([1, 4, 9] Pa, [1, 2, 3] m)` |
+| `array` | `trapz(y, x)` | Numerical integration (area) | `trapz([1, 2, 3] N, [0, 1, 2] m)` |
 
 #### Definite integrals
 

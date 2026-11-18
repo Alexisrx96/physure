@@ -60,8 +60,16 @@ const FRAGMENTS_OF_CONTEXT: &[(&str, &[usize])] = &[
     // would bind `n_co2` fails first and `n_co2` has no value where it is read (it was text before audit T5)
     ("chemistry_roadmap.md", &[0]),
     ("2026-08-26-phs-gum-precision-design.md", &[0]),
-    ("phs_primer.md", &[1, 4, 7, 8, 9]),
+    // the primer is one program read in order (see `CUMULATIVE`); blocks 7, 8 and 9 show the syntax of conditions
+    // and assertions with the names of an imagined pump (`count`, `sensor_disconnected`, `limit`, `enabled`,
+    // `override`, `power`, `minimum_pressure`, `actual`, `expected`) that the primer never defines
+    ("phs_primer.md", &[7, 8, 9]),
 ];
+
+/// Documents whose blocks build one program in order: each block runs after every earlier block of the file that
+/// is not a fragment, as a reader who typed them one after another (the primer's block 6 prints what blocks 0, 2
+/// and 4 computed).
+const CUMULATIVE: &[&str] = &["phs_primer.md"];
 
 fn is_a_fragment_of_context(origin: &str) -> bool {
     FRAGMENTS_OF_CONTEXT.iter().any(|(file, blocks)| blocks.iter().any(|block| origin.ends_with(&format!("{file} block {block}"))))
@@ -79,8 +87,18 @@ fn no_documented_program_relies_on_an_unbound_name() {
     files(&root(), "md", &mut markdown);
     for path in markdown {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let cumulative = CUMULATIVE.iter().any(|name| path.ends_with(name));
+        let mut earlier = String::new();
         for (i, block) in blocks(&text).into_iter().enumerate() {
-            programs.push((format!("{} block {i}", path.display()), block));
+            let origin = format!("{} block {i}", path.display());
+            if !cumulative {
+                programs.push((origin, block));
+                continue;
+            }
+            programs.push((origin.clone(), format!("{earlier}{block}")));
+            if !is_a_fragment_of_context(&origin) {
+                earlier.push_str(&block);
+            }
         }
     }
     assert!(programs.len() > 50, "found only {} programs: the search is broken", programs.len());
