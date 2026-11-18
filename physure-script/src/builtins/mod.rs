@@ -3,6 +3,7 @@ pub mod dof;
 pub mod array;
 pub mod calc;
 mod definite_integral;
+pub(crate) mod dimensions;
 mod inline;
 mod limit;
 mod quadrature;

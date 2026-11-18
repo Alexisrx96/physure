@@ -177,7 +177,7 @@ fn the_math_builtins_agree_with_the_mathematics() {
         ("format(3.14159, \".2f\")", "3.14"),
         ("format(1.5, \"frac\")", "3/2"),
         ("format(2 m, \"base\")", "2.0 m"),
-        ("min(3, 1 m)", "1.0 m"),
+        ("min(3 m, 1 m)", "1.0 m"),
         ("max(2, 5, 4)", "5.0"),
         ("round(3.14159, 2)", "3.14"),
         ("floor(2.7) + ceil(2.1)", "5.0"),
@@ -187,6 +187,8 @@ fn the_math_builtins_agree_with_the_mathematics() {
         ("vector(1, 2, 3)", "[1.0, 2.0, 3.0]"),
         ("\"hello {1 + 2}\"", "hello 3.0"),
     ]);
+    // a plain number and a length have no order: `min(3, 1 m)` answered `1.0 m` (unit holes)
+    assert!(refused("min(3, 1 m)").contains("min of different dimensions"));
     assert!(refused("sqrt(-4)").contains("sqrt of a negative value"));
     assert!(refused("ln(0)").contains("ln of a non-positive value"));
     assert!(refused("parallel_map(\"f\", vector(1, 2))").contains("parallel_map expects (fn, vector)"));

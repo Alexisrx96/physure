@@ -441,8 +441,18 @@ fn bool_assertion(cond: bool, message: &str) -> PhysureResult<Option<PhsValue>> 
 }
 
 /// `min` and `max`: the argument with the smallest (or, with `want_greater`, largest) base-SI magnitude, as it
-/// was written.
+/// was written. Every argument has the dimension of the first (a plain number is dimensionless): `max(1 m, 1 s)`
+/// has no answer, and comparing base-unit magnitudes gave `1 m` with a confident unit. One argument that is a
+/// vector is the extremum of its elements, which a vector already holds of one dimension; one number or quantity is
+/// itself.
 fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<Option<PhsValue>> {
+    let args = match args {
+        [PhsValue::Vector(items)] if items.is_empty() => {
+            return Err(PhysureError::Generic(format!("{name} of an empty vector has no answer")))
+        }
+        [PhsValue::Vector(items)] => items.as_slice(),
+        _ => args,
+    };
     if args.is_empty() {
         return Err(PhysureError::Generic(format!("{name} expects arguments")));
     }
@@ -451,6 +461,10 @@ fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<
         PhsValue::Quantity(q) => Ok(q.canonical_magnitude()),
         _ => Err(PhysureError::Generic(format!("{name} expects numbers or quantities"))),
     };
+    magnitude(&args[0])?;
+    if let Some(why) = args.iter().skip(1).find_map(|arg| crate::builtins::dimensions::mismatch(&args[0], arg)) {
+        return Err(PhysureError::Generic(format!("{name} of different dimensions: {why}; compare values of one dimension")));
+    }
     let mut best = &args[0];
     for arg in args.iter().skip(1) {
         let best_mag = magnitude(best)?;

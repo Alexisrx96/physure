@@ -34,7 +34,7 @@ use crate::value::PhsValue;
 pub const PI_NAMES: [&str; 2] = ["pi", "π"];
 
 /// Runs `f` against the catalog in force on this thread (see the module's documentation).
-fn with_catalog_in_force<R>(f: impl FnOnce(&UnitRegistry) -> R) -> PhysureResult<R> {
+pub(crate) fn with_catalog_in_force<R>(f: impl FnOnce(&UnitRegistry) -> R) -> PhysureResult<R> {
     physure_core::units::with_current_catalog(|scoped| match scoped {
         Some(registry) => Ok(f(registry)),
         None => physure_core::units::conf::try_with_conf_registry(f).map_err(|e| PhysureError::Generic(e.to_string())),
