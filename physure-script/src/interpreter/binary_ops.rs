@@ -81,10 +81,10 @@ impl PhsInterpreter {
                     return Err(PhysureError::Generic("Vector length mismatch in binary operation".into()));
                 }
                 let pairs = l_vec.into_iter().zip(r_vec);
-                collect_vector(pairs, |(l_item, r_item)| self.eval_binary_op_vals(op, l_item, r_item))
+                collect_vector(op, pairs, |(l_item, r_item)| self.eval_binary_op_vals(op, l_item, r_item))
             }
-            (PhsValue::Vector(v_vec), scalar) => collect_vector(v_vec, |item| self.eval_binary_op_vals(op, item, scalar.clone())),
-            (scalar, PhsValue::Vector(v_vec)) => collect_vector(v_vec, |item| self.eval_binary_op_vals(op, scalar.clone(), item)),
+            (PhsValue::Vector(v_vec), scalar) => collect_vector(op, v_vec, |item| self.eval_binary_op_vals(op, item, scalar.clone())),
+            (scalar, PhsValue::Vector(v_vec)) => collect_vector(op, v_vec, |item| self.eval_binary_op_vals(op, scalar.clone(), item)),
             (PhsValue::Quantity(l), PhsValue::Quantity(r)) => quantity_op(op, l, r),
             (PhsValue::Quantity(l), PhsValue::Number(r)) => {
                 self.eval_binary_op_vals(op, PhsValue::Quantity(l), PhsValue::Quantity(plain_quantity(r)))
@@ -150,9 +150,25 @@ fn equation_op(op: BinaryOp, left: (Node, Node), right: (Node, Node)) -> Physure
     Ok(PhsValue::Equation(new_l, new_r))
 }
 
-/// The vector of `f` applied to each item, or the first error.
-fn collect_vector<T>(items: impl IntoIterator<Item = T>, f: impl FnMut(T) -> PhysureResult<PhsValue>) -> PhysureResult<PhsValue> {
-    items.into_iter().map(f).collect::<PhysureResult<Vec<_>>>().map(PhsValue::Vector)
+/// The vector of `f` applied to each item, or the first error. A vector holds one dimension, so a result whose
+/// elements would not (`vector(1 m, 2 m) * vector(1 s, 2 m)` is `m·s` and `m²`) is refused as `vector(...)` refuses one.
+fn collect_vector<T>(op: BinaryOp, items: impl IntoIterator<Item = T>, f: impl FnMut(T) -> PhysureResult<PhsValue>) -> PhysureResult<PhsValue> {
+    let items = items.into_iter().map(f).collect::<PhysureResult<Vec<_>>>()?;
+    if let Some(why) = crate::builtins::dimensions::first_mismatch(&items) {
+        let symbol = match op {
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Pow => "^",
+            BinaryOp::Convert => "=>",
+            BinaryOp::Range => "..",
+        };
+        return Err(PhysureError::Generic(format!(
+            "a vector holds one dimension: the elementwise `{symbol}` gives one where {why}; put each dimension in its own vector"
+        )));
+    }
+    Ok(PhsValue::Vector(items))
 }
 
 fn quantity_op(op: BinaryOp, l: Quantity, r: Quantity) -> PhysureResult<PhsValue> {

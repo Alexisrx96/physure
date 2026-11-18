@@ -69,8 +69,15 @@ fn a_vector_of_one_dimension_keeps_working() {
 
 #[test]
 fn an_elementwise_result_of_mixed_dimensions_is_refused() {
+    // the spec's row: its right operand is already a vector of two dimensions, refused where it is made
     let message = refused("vector(1 m, 2 m) * vector(1 s, 2 m)");
     assert!(message.contains("a vector holds one dimension"), "{message}");
+    // operands of one dimension each whose elementwise result would hold two: refused by the operation, named
+    for source in ["vector(2 m, 3 m) ^ vector(1, 2)", "2 m ^ vector(1, 2)"] {
+        let message = refused(source);
+        assert!(message.contains("a vector holds one dimension: the elementwise `^`"), "{source}: {message}");
+    }
+    assert!(eval_phs("vector(2 m, 3 m) ^ vector(2, 2)").is_ok());
     assert!(eval_phs("vector(1 m, 2 m) * vector(1 s, 2 s)").is_ok());
     assert!(eval_phs("vector(1 m, 2 m) * 3 s").is_ok());
 }

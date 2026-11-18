@@ -238,7 +238,7 @@ pub fn eval_core_builtin(
         "ternary" | "if_then_else" => ternary(args),
         "uncertainty" | "sigma" => uncertainty_builtin(args),
         "dof" | "coverage_factor" | "expanded" | "from_samples" => crate::builtins::dof::eval_dof_builtin(name, args),
-        "vector" => Ok(Some(PhsValue::Vector(args.to_vec()))),
+        "vector" => vector_builtin(args),
         "sqrt" => unary(name, args, A_NUMBER_OR_QUANTITY, sqrt_number, |q| q.sqrt()),
         "sin" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.sin()), |q| q.sin()),
         "cos" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.cos()), |q| q.cos()),
@@ -260,6 +260,17 @@ pub fn eval_core_builtin(
         "round" => round_builtin(args),
         _ => Ok(None),
     }
+}
+
+/// `vector(...)` and `[...]` (the parser builds the call): the numbers and quantities of a vector share one dimension,
+/// in any of its units (`vector(1 m, 2 km)`). `norm`, `dot`, `trapz`, `det`, `matmul` refuse mixed elements one by
+/// one; a vector of a length and a time has no meaning for any of them, and is refused where it is made. Text and
+/// the rows of a matrix are not compared.
+fn vector_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    if let Some(why) = crate::builtins::dimensions::first_mismatch(args) {
+        return Err(PhysureError::Generic(format!("a vector holds one dimension: {why}; put each dimension in its own vector")));
+    }
+    Ok(Some(PhsValue::Vector(args.to_vec())))
 }
 
 fn sqrt_number(n: f64) -> PhysureResult<f64> {

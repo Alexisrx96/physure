@@ -125,7 +125,8 @@ fn what_cannot_be_evaluated_is_refused_with_the_reason() {
     assert!(refused("x = 1 +/- 0.1 m\ncoverage_factor(x, 0)").contains("coverage probability"));
     assert!(refused("x = 1 +/- 0.1 m\nexpanded(x, 2 m)").contains("probability"));
     assert!(refused("from_samples([1.0 V])").contains("at least two"));
-    assert!(refused("from_samples([1.0 V, 2.0 m])").to_lowercase().contains("unit"));
+    // observations of different dimensions: the vector that would hold them is refused before `from_samples` sees it
+    assert!(refused("from_samples([1.0 V, 2.0 m])").contains("a vector holds one dimension"));
     assert!(refused("from_samples([1.0 +/- 0.1 V, 2.0 V])").contains("exact"));
     assert!(refused("from_samples(3)").contains("vector"));
     // a measurement with no uncertainty has nothing to give degrees of freedom to
