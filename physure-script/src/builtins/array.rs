@@ -82,23 +82,41 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 2 {
         return Err(generic_error("linspace expects start and stop"));
     }
-    let mean_or = |v: &PhsValue, default: f64| match v {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        _ => default,
-    };
-    let start = mean_or(&args[0], 0.0);
-    let stop = mean_or(&args[1], 1.0);
-    // a literal such as `5` is a dimensionless quantity, not a bare number
-    let count = match args.get(2) {
-        Some(PhsValue::Number(n)) => *n as usize,
-        Some(PhsValue::Quantity(q)) => q.value.mean() as usize,
-        _ => 50,
-    };
+    // the endpoints have one dimension: `linspace(0 m, 1 s, 3)` took the unit of the first and the number of the second
+    if let Some(why) = crate::builtins::dimensions::mismatch(&args[0], &args[1]) {
+        return Err(PhysureError::Generic(format!(
+            "linspace needs endpoints of one dimension: {why}; write both endpoints in one dimension"
+        )));
+    }
     let unit = args[..2].iter().find_map(|v| match v {
         PhsValue::Quantity(q) => Some(q.unit.clone()),
         _ => None,
     });
+    // each endpoint is read in the unit of the points: `linspace(0 m, 1 km, 3)` read the `1` of `1 km` as metres
+    let mean_or = |v: &PhsValue, default: f64| -> PhysureResult<f64> {
+        match (v, &unit) {
+            (PhsValue::Quantity(q), Some(u)) => Ok(q.convert_to(u)?.value.mean()),
+            (PhsValue::Number(n), Some(u)) => {
+                Ok(physure_core::quantity::Quantity::new_scalar(*n, 0.0, physure_core::RationalUnit::dimensionless(), None, None)
+                    .convert_to(u)?
+                    .value
+                    .mean())
+            }
+            (PhsValue::Number(n), None) => Ok(*n),
+            _ => Ok(default),
+        }
+    };
+    let start = mean_or(&args[0], 0.0)?;
+    let stop = mean_or(&args[1], 1.0)?;
+    // a literal such as `5` is a dimensionless quantity, not a bare number; a count with a dimension is not a count
+    let count = match args.get(2) {
+        Some(PhsValue::Number(n)) => *n as usize,
+        Some(PhsValue::Quantity(q)) if q.unit.dimensions.is_empty() && !q.unit.is_logarithmic() => q.canonical_magnitude() as usize,
+        Some(other) => {
+            return Err(PhysureError::Generic(format!("linspace's count must be a plain number, got {other}")));
+        }
+        None => 50,
+    };
     // `count` is a caller-supplied argument driving `.collect()` below directly --
     // the identical unbounded-materialization shape as the for-expression's Range
     // branch and `parallel_map` (see `physure_core::settings::max_loop_iterations`'s

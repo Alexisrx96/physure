@@ -491,10 +491,14 @@ fn round_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() {
         return Err(PhysureError::Generic("round expects arguments".into()));
     }
+    // the number of decimals is a plain number: `round(1.5 m, 1 s)` read the `1` of `1 s` and ignored its unit
     let decimals = match args.get(1) {
         Some(PhsValue::Number(d)) => *d as i32,
-        Some(PhsValue::Quantity(q)) => q.canonical_magnitude() as i32,
-        _ => 0,
+        Some(PhsValue::Quantity(q)) if q.unit.dimensions.is_empty() && !q.unit.is_logarithmic() => q.canonical_magnitude() as i32,
+        Some(other) => {
+            return Err(PhysureError::Generic(format!("round expects a plain number of decimals, got {other}")));
+        }
+        None => 0,
     };
     let factor = 10.0f64.powi(decimals);
     match &args[0] {
