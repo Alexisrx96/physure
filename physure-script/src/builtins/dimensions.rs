@@ -113,7 +113,7 @@ pub(crate) fn first_mismatch(items: &[PhsValue]) -> Option<Mismatch> {
         if point.is_none() && unit.is_affine() {
             point = Some((place, item, unit));
         }
-        if interval.is_none() && unit.is_written_interval() {
+        if interval.is_none() && unit.is_interval() {
             interval = Some((place, item, unit));
         }
     }

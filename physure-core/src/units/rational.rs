@@ -203,7 +203,7 @@ pub struct RationalUnit {
     pub periodic: bool,
     /// Set on a temperature interval: a unit of an entry the catalog flags `interval` (`delta_celsius`,
     /// `delta_fahrenheit`, a unit of a user's conf), with its prefixes and aliases, and on what the core's arithmetic
-    /// makes an interval (see [`RationalUnit::is_written_interval`]). It survives a product or quotient with a
+    /// makes an interval (see [`RationalUnit::is_interval`]). It survives a product or quotient with a
     /// dimensionless operand that is not a level (`2`, `%`) and a power of one, and nothing else: `delta_degC / m`
     /// and `delta_degC^2` are not intervals, and neither is what a further step makes of them. Like `periodic` it is
     /// not part of equality or of the hash: `delta_degC` is a kelvin (one scale, no zero point), the two convert with
@@ -377,7 +377,7 @@ impl RationalUnit {
     /// [`RationalUnit::interval`]). The catalog makes `delta_celsius` a kelvin, so the flag is all that tells them
     /// apart, whatever name the unit is written by. `K` and `degR` sit on an absolute scale and stand for a point or an
     /// interval alike, so they are not one.
-    pub fn is_written_interval(&self) -> bool {
+    pub fn is_interval(&self) -> bool {
         self.interval && !self.is_affine() && self.log.is_none()
     }
 
@@ -392,10 +392,10 @@ impl RationalUnit {
     }
 
     /// A temperature point (`degC`, `degF`, [`RationalUnit::is_affine`]) against a temperature interval written as one
-    /// ([`RationalUnit::is_written_interval`]), in either order: two kinds that no comparison relates, as no sum
+    /// ([`RationalUnit::is_interval`]), in either order: two kinds that no comparison relates, as no sum
     /// of two points has a meaning. Point with point, interval with interval, and `K` with either are not.
     pub fn point_against_interval(&self, other: &Self) -> bool {
-        (self.is_affine() && other.is_written_interval()) || (other.is_affine() && self.is_written_interval())
+        (self.is_affine() && other.is_interval()) || (other.is_affine() && self.is_interval())
     }
 
     /// The purely multiplicative unit measuring *intervals* on this scale: degC => K,

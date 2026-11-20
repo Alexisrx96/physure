@@ -66,7 +66,7 @@ pub struct UnitFacts {
     /// The unit with every recipe unit (`N`, `J`, `Hz`...) replaced by its base symbols.
     pub simplified: String,
     /// A temperature interval: a unit the catalog flags `interval` (`delta_degC`, `kdelta_degC`), see
-    /// [`RationalUnit::is_written_interval`]. `K` stands for a point or an interval and is not one.
+    /// [`RationalUnit::is_interval`]. `K` stands for a point or an interval and is not one.
     pub interval: bool,
 }
 
@@ -761,7 +761,7 @@ impl UnitRegistry {
             alias: self.alias_of(&unit),
             simplified: unit.symbolic_repr(),
             // a level inside a compound has no expansion, and no interval in it either
-            interval: self.expand(&atomic).is_ok_and(|unit| unit.is_written_interval()),
+            interval: self.expand(&atomic).is_ok_and(|unit| unit.is_interval()),
         })
     }
 

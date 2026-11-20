@@ -2894,7 +2894,7 @@ mod tests {
     }
 
     fn interval_of(registry: &UnitRegistry, name: &str) -> bool {
-        registry.get_unit(name).unwrap_or_else(|| panic!("{name}")).is_written_interval()
+        registry.get_unit(name).unwrap_or_else(|| panic!("{name}")).is_interval()
     }
 
     #[test]

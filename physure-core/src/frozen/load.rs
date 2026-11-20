@@ -602,16 +602,16 @@ mod tests {
         let old = load(&write_file(&dir, &frozen(&[("embedded", &old_text), ("overrides", "")], release_engine()))).unwrap();
         let new = load(&write_file(&dir, &standard(""))).unwrap();
         for name in ["delta_celsius", "delta_degC", "degC_delta", "kdelta_degC", "delta_fahrenheit", "degF_delta"] {
-            assert!(old.registry.get_unit(name).unwrap().is_written_interval(), "{name} in the older file");
-            assert!(new.registry.get_unit(name).unwrap().is_written_interval(), "{name}");
+            assert!(old.registry.get_unit(name).unwrap().is_interval(), "{name} in the older file");
+            assert!(new.registry.get_unit(name).unwrap().is_interval(), "{name}");
         }
-        assert!(!new.registry.get_unit("K").unwrap().is_written_interval());
+        assert!(!new.registry.get_unit("K").unwrap().is_interval());
         let changes = crate::frozen::entries::diff(&old.entries(), &new.entries());
         assert!(changes.is_empty(), "the flag alone changed the catalog an older file determines: {changes:?}");
         let flagged = load(&write_file(&dir, &standard("[Units]\nzz_dt = 1.0, O, interval, [zz_dt]"))).unwrap();
         let plain = load(&write_file(&dir, &standard("[Units]\nzz_dt = 1.0, O, [zz_dt]"))).unwrap();
-        assert!(flagged.registry.get_unit("zz_dt").unwrap().is_written_interval());
-        assert!(!plain.registry.get_unit("zz_dt").unwrap().is_written_interval());
+        assert!(flagged.registry.get_unit("zz_dt").unwrap().is_interval());
+        assert!(!plain.registry.get_unit("zz_dt").unwrap().is_interval());
         let seen = crate::frozen::entries::diff(&plain.entries(), &flagged.entries());
         assert!(seen.iter().any(|c| c.kind() == "derived_unit" && c.name() == "zz_dt"), "{seen:?}");
         assert!(seen.iter().any(|c| c.kind() == "unit" && c.name() == "zz_dt"), "{seen:?}");

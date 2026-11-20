@@ -24,7 +24,7 @@ fn ok(result: physure_core::error::PhysureResult<Quantity>, what: &str) -> Quant
 
 /// `x` is a temperature interval: the core refuses it against `20 degC`, in both orders, with the words of the rule.
 fn assert_interval(x: &Quantity, what: &str) {
-    assert!(x.unit.is_written_interval(), "{what} = {x} should be an interval");
+    assert!(x.unit.is_interval(), "{what} = {x} should be an interval");
     let point = q(20.0, "degC");
     for (a, b) in [(x, &point), (&point, x)] {
         let error = a.phs_compare(b, "<").expect_err(&format!("{what}: {a} < {b} should be refused"));
@@ -34,7 +34,7 @@ fn assert_interval(x: &Quantity, what: &str) {
 
 /// `x` is not an interval: it compares with `20 degC` (a point, or a neutral `K`).
 fn assert_not_interval(x: &Quantity, what: &str) {
-    assert!(!x.unit.is_written_interval(), "{what} = {x} should not be an interval");
+    assert!(!x.unit.is_interval(), "{what} = {x} should not be an interval");
     let point = q(20.0, "degC");
     for (a, b) in [(x, &point), (&point, x)] {
         a.phs_compare(b, "<").unwrap_or_else(|e| panic!("{what}: {a} < {b} should compare: {e}"));
@@ -48,10 +48,10 @@ fn assert_shown(x: &Quantity, shown: &str) {
 #[test]
 fn the_catalog_flags_the_delta_units_and_nothing_else() {
     for name in ["delta_celsius", "delta_degC", "degC_delta", "delta_fahrenheit", "delta_degF", "degF_delta", "kdelta_degC", "mdelta_degF"] {
-        assert!(q(1.0, name).unit.is_written_interval(), "{name}");
+        assert!(q(1.0, name).unit.is_interval(), "{name}");
     }
     for name in ["K", "kelvin", "mK", "degR", "rankine", "degC", "degF", "m", "percent"] {
-        assert!(!q(1.0, name).unit.is_written_interval(), "{name}");
+        assert!(!q(1.0, name).unit.is_interval(), "{name}");
     }
 }
 
@@ -119,7 +119,7 @@ fn a_point_and_an_interval_or_two_points_combine_as_before_and_two_points_make_a
     let (p, d) = (q(20.0, "degC"), q(5.0, "delta_degC"));
     let later = q(30.0, "degC");
     for (sum, what) in [(ok(p.add(&d), "p + d"), "p + d"), (ok(d.add(&p), "d + p"), "d + p"), (ok(p.sub(&d), "p - d"), "p - d")] {
-        assert!(sum.unit.is_affine() && !sum.unit.is_written_interval(), "{what}: {sum}");
+        assert!(sum.unit.is_affine() && !sum.unit.is_interval(), "{what}: {sum}");
         sum.phs_compare(&later, "<").unwrap_or_else(|e| panic!("{what}: {e}"));
     }
     assert_shown(&ok(p.add(&d), "p + d"), "25.0 degC");
@@ -143,12 +143,12 @@ fn a_point_and_an_interval_or_two_points_combine_as_before_and_two_points_make_a
 fn a_unit_combined_with_another_dimension_is_no_longer_an_interval() {
     let d = q(5.0, "delta_degC");
     let gradient = ok(d.div(&q(1.0, "m")), "d / m");
-    assert!(!gradient.unit.is_written_interval(), "{gradient}");
+    assert!(!gradient.unit.is_interval(), "{gradient}");
     assert_not_interval(&ok(gradient.mul(&q(1.0, "m")), "d / m * m"), "(d / m) * m");
     assert_not_interval(&ok(ok(d.mul(&q(1.0, "s")), "d * s").div(&q(1.0, "s")), "d * s / s"), "d * s / s");
     assert_not_interval(&ok(ok(d.pow(2.0), "d^2").sqrt(), "sqrt(d^2)"), "sqrt(d^2)");
-    assert!(!ok(d.mul(&d), "d * d").unit.is_written_interval());
-    assert!(!ok(d.div(&d), "d / d").unit.is_written_interval());
+    assert!(!ok(d.mul(&d), "d * d").unit.is_interval());
+    assert!(!ok(d.div(&d), "d / d").unit.is_interval());
 }
 
 #[test]
@@ -288,5 +288,5 @@ fn the_flag_needs_a_point_of_its_dimension() {
     let mut ordered = UnitRegistry::new();
     let found = problems(&mut ordered, "[Units]\nkelvin = 1.0, O, [K]\ncelsius = 1.0, 273.15, O, [degC]\ndT = 1.0, O, interval, [dT]\n");
     assert!(found.is_empty(), "{found:?}");
-    assert!(ordered.get_unit("dT").unwrap().is_written_interval());
+    assert!(ordered.get_unit("dT").unwrap().is_interval());
 }
