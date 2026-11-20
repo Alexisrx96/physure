@@ -745,14 +745,22 @@ impl Quantity {
             return Some(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
         }
         if self.unit.point_against_interval(&other.unit) {
-            let (point, interval) = if self.unit.is_affine() { (self, other) } else { (other, self) };
-            return Some(PhysureError::Generic(format!(
-                "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval \
-                 is how far apart two points are, not where one is; convert the interval to a point (`x => K`) or \
-                 compare a difference of two points (`T2 - T1`)"
-            )));
+            return Some(self.point_against_interval(other));
         }
         None
+    }
+
+    /// The error of a temperature point compared with a temperature interval, point first. Out of line: the comparison
+    /// is hot, and its message is not.
+    #[cold]
+    #[inline(never)]
+    fn point_against_interval(&self, other: &Quantity) -> PhysureError {
+        let (point, interval) = if self.unit.is_affine() { (self, other) } else { (other, self) };
+        PhysureError::Generic(format!(
+            "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval is \
+             how far apart two points are, not where one is; convert the interval to a point (`x => K`) or compare a \
+             difference of two points (`T2 - T1`)"
+        ))
     }
 
     /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],
