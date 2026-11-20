@@ -152,7 +152,7 @@ def test_a_point_and_an_interval_have_no_order(q, compare):
 
 def test_a_point_and_an_interval_are_never_equal(q):
     """`==` does not raise in Python: a point is not an interval, so it is False."""
-    assert not (q(5, "delta_degC") == q(5, "degC"))
+    assert (q(5, "delta_degC") == q(5, "degC")) is False
     assert q(5, "delta_degC") != q(5, "degC")
     assert q(5, "degC") != q(5, "delta_degC")
 

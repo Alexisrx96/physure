@@ -1592,6 +1592,12 @@ class Quantity(
         return {}
 
     # --- Comparison Methods ---
+    def _point_against_interval(self, other: Quantity) -> bool:
+        """A temperature point (degC) against an interval (delta_degC), as the core says."""
+        return self.system.core_registry.point_against_interval(
+            self.unit, other.unit
+        )
+
     def _compare(self, other: Any, op: Any) -> Any:
         if isinstance(other, Quantity):
             if self.dimension != other.dimension:
@@ -1600,6 +1606,9 @@ class Quantity(
             # Optimization: check if conversion needed
             if self.unit == other.unit:
                 return op(self.magnitude, other.magnitude)
+            # `5 delta_degC < 20 degC` has no answer: an interval is not where a temperature is
+            if self._point_against_interval(other):
+                raise IncompatibleUnitsError(self.unit, other.unit)
 
             other_converted = other.to(self.unit)
             return op(self.magnitude, other_converted.magnitude)
@@ -1618,6 +1627,9 @@ class Quantity(
         # We should allow semantic equality: 1 m == 100 cm
         if isinstance(other, Quantity):
             if self.dimension != other.dimension:
+                return False
+            # a point is never an interval (`<` raises for the pair)
+            if self.unit != other.unit and self._point_against_interval(other):
                 return False
             try:
                 other_converted = other.to(self.unit)

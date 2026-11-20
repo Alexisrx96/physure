@@ -426,6 +426,13 @@ impl PyUnitRegistry {
         get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
     }
 
+    /// Whether two units written as symbols are a temperature point (`degC`) and a temperature interval written as one
+    /// (`delta_degC`), in either order: the pair the core's comparison refuses (`RationalUnit::point_against_interval`).
+    fn point_against_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
+        let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
+        Ok(a.point_against_interval(&b))
+    }
+
     /// Every name the registry holds for a unit, sorted (a prefixed name is read, not held).
     fn names(&self) -> Vec<String> {
         self.0.names()
