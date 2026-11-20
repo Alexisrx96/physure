@@ -24,6 +24,9 @@ from physure.domain.measurement.units import (
 
 _Quantity = None
 
+# the dimension of a temperature, by dimension symbol
+_TEMPERATURE = {"O": 1}
+
 
 def _q():
     global _Quantity
@@ -781,9 +784,42 @@ class ArithmeticMixin:
         )
 
     def _point_difference(self, other: Quantity) -> Quantity:
-        """Two points make an interval, in the base unit of their dimension."""
+        """Two points make an interval, in the base unit of their dimension.
+
+        Printed in K, and an interval as the core has it: a point does not
+        compare with it (`(20 degC - 10 degC) < 20 degC` raises).
+        """
         base = self.unit.base_unit(self.system)
-        return self.to(base) - other.to(base)
+        return self._made_interval(self.to(base) - other.to(base))
+
+    @staticmethod
+    def _made_interval(result: Quantity) -> Quantity:
+        """`result`, a quantity this operation made, standing for an interval."""
+        if not result.unit.interval:
+            object.__setattr__(result, "_unit", result.unit.as_interval())
+        return result
+
+    def _sum_kind(self, other: Quantity | Numeric, result: Any) -> Any:
+        """The kind of a sum of temperatures, as the core's arithmetic says.
+
+        An interval with an interval or with a kelvin is an interval, in
+        either order (`1 K + 5 delta_degC`); a point is decided by
+        `_affine_check`. Only a temperature asks the core.
+        """
+        if (
+            not isinstance(other, _q())
+            or not isinstance(result, _q())
+            or result is self
+            or result is other
+            or result.unit.interval
+            or self.dimension.exponents != _TEMPERATURE
+            or result._is_absolute()
+            or other._is_absolute()
+        ):
+            return result
+        if self.system.core_registry.sum_is_interval(self.unit, other.unit):
+            return self._made_interval(result)
+        return result
 
     def _refuse_plain_number(self) -> None:
         """Raises: a plain number does not scale an absolute temperature."""
@@ -1148,11 +1184,11 @@ class ArithmeticMixin:
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Quantity | Numeric) -> Quantity:
         """Handles arithmetic with Affine Support."""
-        return self._add_sub_impl(other, is_add=True)
+        return self._sum_kind(other, self._add_sub_impl(other, is_add=True))
 
     def __sub__(self, other: Quantity | Numeric) -> Quantity:
         """Handles subtraction."""
-        return self._add_sub_impl(other, is_add=False)
+        return self._sum_kind(other, self._add_sub_impl(other, is_add=False))
 
     def _add_sub_same_unit(
         self, other: Quantity, u_other: Numeric, is_add: bool, op: str

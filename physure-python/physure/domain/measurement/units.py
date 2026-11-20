@@ -51,11 +51,14 @@ def get_default_system() -> UnitSystem:
     return get_current_system()
 
 
-def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
+def reconstruct_compound_unit(
+    exponents: ExponentsDict, interval: bool = False
+) -> CompoundUnit:
     """Factory function to reconstruct CompoundUnit instances.
 
     This implements the Reconstruct-by-Value pattern to decouple serialization
-    from runtime namespace pollution.
+    from runtime namespace pollution. `interval` restores a unit made a
+    temperature interval (`CompoundUnit.as_interval`).
     """
     from physure.domain.measurement.units import (
         CompoundUnit,
@@ -74,7 +77,8 @@ def reconstruct_compound_unit(exponents: ExponentsDict) -> CompoundUnit:
     if not isinstance(cls, type):  # pyright: ignore[reportUnnecessaryIsInstance]
         cls = _CompoundUnit
 
-    return cls(exponents)
+    unit = cls(exponents)
+    return unit.as_interval() if interval else unit
 
 
 _CORE_ERRORS = (_CoreUnknownUnitError, _CoreUnitMismatchError)
@@ -91,6 +95,11 @@ def _python_error(
         getattr(error, "symbol", str(error)),
         [suggestion] if suggestion else None,
     )
+
+
+# the key of a unit made an interval in the flyweight cache, which no set of
+# powers can be
+_INTERVAL_KEY = object()
 
 
 @dataclass(frozen=True)
@@ -176,7 +185,36 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         By returning (reconstruct_compound_unit, (args,)), we bypass direct
         class lookups that can be corrupted by namespace shadowing.
         """
+        if self.interval:
+            return (reconstruct_compound_unit, (dict(self.exponents), True))
         return (reconstruct_compound_unit, (dict(self.exponents),))
+
+    def as_interval(self) -> CompoundUnit:
+        """This unit standing for a temperature interval, whatever its symbols say.
+
+        The core's arithmetic makes the sum of a kelvin and an interval an
+        interval, still written `K` (`1 K + 5 delta_degC`), and a point minus a
+        point one too: the unit carries the core's flag (`interval`), which
+        `UnitRegistry.expand` keeps, so a point does not compare with it nor
+        convert to it. It equals the unit it was made from: the flag says
+        what kind of temperature a number is, not what unit it is in.
+        """
+        if self.interval:
+            return self
+        key = (_INTERVAL_KEY, tuple(sorted(self.exponents.items())))
+        instance = CompoundUnit._cache.get(key)
+        if instance is None:
+            instance = RationalUnit.__new__(
+                type(self),
+                {
+                    symbol: exact_power(power)
+                    for symbol, power in self.exponents.items()
+                },
+                interval=True,
+            )
+            object.__setattr__(instance, "exponents", self.exponents)
+            CompoundUnit._cache[key] = cast("CompoundUnit", instance)
+        return cast("CompoundUnit", instance)
 
     def __hash__(self) -> int:
         """Returns a hash value for the compound unit."""

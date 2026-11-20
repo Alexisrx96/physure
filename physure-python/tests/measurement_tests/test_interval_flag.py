@@ -27,7 +27,10 @@ def test_the_core_says_which_unit_is_an_interval():
 
 
 def test_a_kelvin_plus_an_interval_is_an_interval_in_either_order(q):
-    for total in (q(1, "K") + q(5, "delta_degC"), q(5, "delta_degC") + q(1, "K")):
+    for total in (
+        q(1, "K") + q(5, "delta_degC"),
+        q(5, "delta_degC") + q(1, "K"),
+    ):
         for a, b in ((total, q(20, "degC")), (q(20, "degC"), total)):
             with pytest.raises(IncompatibleUnitsError, match=COMPARE):
                 _ = a < b
@@ -47,11 +50,16 @@ def test_a_point_minus_a_point_is_an_interval_still_in_kelvin(q):
         _ = difference < q(20, "degC")
     assert difference > q(5, "delta_degC")
     # a difference moves a point
-    assert (q(20, "degC") + difference).to("degC").magnitude == pytest.approx(30.0)
+    assert (q(20, "degC") + difference).to("degC").magnitude == pytest.approx(
+        30.0
+    )
 
 
 def test_a_point_converted_to_an_interval_unit_raises(q):
-    for value, point, interval in ((20, "degC", "delta_degC"), (68, "degF", "delta_degF")):
+    for value, point, interval in (
+        (20, "degC", "delta_degC"),
+        (68, "degF", "delta_degF"),
+    ):
         with pytest.raises(
             IncompatibleUnitsError,
             match="cannot convert a temperature point",
@@ -68,11 +76,15 @@ def test_a_point_converted_to_an_interval_unit_raises(q):
 
 def test_a_unit_of_a_system_flagged_interval_is_an_interval():
     system = create_default_system()
-    system.extend_core("[Units]\ndT = 1.0, O, interval, [dT]\ndU = 1.0, O, [dU]\n")
+    system.extend_core(
+        "[Units]\ndT = 1.0, O, interval, [dT]\ndU = 1.0, O, [dU]\n"
+    )
     assert system.core_registry.facts("dT")["interval"] is True
     with pytest.raises(IncompatibleUnitsError, match=COMPARE):
         _ = system.Q_(5, "dT") < system.Q_(20, "degC")
-    with pytest.raises(IncompatibleUnitsError, match="cannot convert a temperature point"):
+    with pytest.raises(
+        IncompatibleUnitsError, match="cannot convert a temperature point"
+    ):
         system.Q_(20, "degC").to("dT")
     # without the flag a scale-1 temperature unit is a kelvin under another name
     assert system.Q_(5, "dU") < system.Q_(20, "degC")
@@ -82,3 +94,20 @@ def test_the_flag_on_a_point_is_refused():
     system = create_default_system()
     with pytest.raises(ValueError, match="interval"):
         system.extend_core("[Units]\ndC = 1.0, 273.15, O, interval, [dC]\n")
+
+
+def test_a_unit_made_an_interval_equals_its_unit_and_survives_pickling(q):
+    import pickle
+
+    difference = q(20, "degC") - q(10, "degC")
+    assert difference.unit.interval is True
+    assert difference.unit == q(1, "K").unit
+    restored = pickle.loads(pickle.dumps(difference.unit))
+    assert restored.interval is True
+    assert restored is difference.unit
+    # what carries the unit over carries the flag: a negation, a plain factor
+    for scaled in (-difference, difference * 2, 2 * difference):
+        with pytest.raises(IncompatibleUnitsError, match=COMPARE):
+            _ = scaled < q(20, "degC")
+    # `=> K` reads it as a kelvin, as the core does
+    assert difference.to("K") < q(20, "degC")

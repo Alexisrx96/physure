@@ -271,8 +271,12 @@ class Quantity(
         if dims is None:
             dims = getattr(u, "exponents", {})
 
-        # Always call CU(dims) to ensure we get the cached singleton instance
-        object.__setattr__(self, "_unit", CU(dims))
+        # Always call CU(dims) to ensure we get the cached singleton instance;
+        # a unit made an interval (`1 K + 5 delta_degC`) stays one
+        unit = CU(dims)
+        if getattr(self._core_unit, "interval", False):
+            unit = unit.as_interval()
+        object.__setattr__(self, "_unit", unit)
 
         if system is not None:
             object.__setattr__(self, "system", system)
@@ -1140,6 +1144,11 @@ class Quantity(
             )
         except _CORE_ERRORS as error:
             raise _python_error(error, self.unit, target_unit) from error
+        except ValueError as error:
+            # a temperature point to an interval unit, or back: the core's words
+            raise IncompatibleUnitsError(
+                self.unit, target_unit, str(error)
+            ) from error
         magnitude, uncertainty = apply_conversion(
             plan,
             self.magnitude,  # pyright: ignore[reportArgumentType]
@@ -1290,8 +1299,12 @@ class Quantity(
             written_text = target_unit
             target_unit = self.system.get_unit(target_unit)
 
-        # Fast path for same unit
-        if target_unit == self.unit:
+        # Fast path for same unit (`=> K` makes an interval in K a plain K, as in
+        # the core)
+        if (
+            target_unit == self.unit
+            and target_unit.interval == self.unit.interval
+        ):
             return self
 
         if self.dimension != target_unit.dimension(self.system):

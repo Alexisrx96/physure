@@ -442,11 +442,20 @@ impl PyUnitRegistry {
         get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
     }
 
-    /// Whether two units written as symbols are a temperature point (`degC`) and a temperature interval written as one
-    /// (`delta_degC`), in either order: the pair the core's comparison refuses (`RationalUnit::point_against_interval`).
+    /// Whether two units written as symbols are a temperature point (`degC`) and a temperature interval (a unit the
+    /// catalog flags `interval`, or one made an interval), in either order: the pair the core's comparison refuses
+    /// (`RationalUnit::point_against_interval`).
     fn point_against_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
         let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
         Ok(a.point_against_interval(&b))
+    }
+
+    /// Whether the sum or difference of quantities in two units written as symbols (of one dimension, neither a point
+    /// nor a level) is a temperature interval, as the core's arithmetic says (`RationalUnit::sum_unit`): an interval
+    /// with an interval or with a `K`, in either order.
+    fn sum_is_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
+        let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
+        Ok(a.sum_unit(&b).is_written_interval())
     }
 
     /// Every name the registry holds for a unit, sorted (a prefixed name is read, not held).
