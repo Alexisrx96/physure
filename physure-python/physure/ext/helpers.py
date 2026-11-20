@@ -106,12 +106,30 @@ def from_samples(values: Any) -> Any:
 
 
 def linspace(start: Any, stop: Any, num: int = 50) -> Any:
-    """Generate linearly spaced numbers or Quantities."""
+    """Generate linearly spaced numbers or Quantities, in the unit of the first quantity.
+
+    As PHS `linspace`: each endpoint is converted to that unit (`1 km` is 1000 in metres),
+    so endpoints of different dimensions, or a plain number with a quantity that has a
+    dimension, raise ``IncompatibleUnitsError``; an endpoint that is neither a number nor
+    a quantity raises ``TypeError``.
+    """
     import numpy as np
 
-    start_val = getattr(start, "magnitude", start)
-    stop_val = getattr(stop, "magnitude", stop)
+    for end in (start, stop):
+        if not hasattr(end, "magnitude") and (
+            isinstance(end, bool) or not isinstance(end, (int, float))
+        ):
+            raise TypeError(
+                f"linspace's endpoints are numbers or quantities, got {end!r}"
+            )
     unit = getattr(start, "unit", getattr(stop, "unit", None))
+    if unit is None:
+        start_val, stop_val = start, stop
+    else:
+        quantities = (
+            e if hasattr(e, "magnitude") else Q_(e, "") for e in (start, stop)
+        )
+        start_val, stop_val = (q.to(unit).magnitude for q in quantities)
     arr = np.linspace(float(start_val), float(stop_val), int(num))
     if unit:
         return Q_(arr, str(unit))

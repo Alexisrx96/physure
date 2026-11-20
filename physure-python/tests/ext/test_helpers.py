@@ -50,7 +50,26 @@ def test_linspace_gives_an_array_or_a_quantity_with_the_unit_it_is_given():
     metres = helpers.linspace(Q_(0.0, "m"), Q_(2.0, "m"), 3)
     assert list(metres.magnitude) == [0.0, 1.0, 2.0]
     assert str(metres.unit) == "m"
-    assert str(helpers.linspace(0, Q_(2.0, "s"), 3).unit) == "s"
+    assert str(helpers.linspace(0 * Q_(1.0, "s"), Q_(2.0, "s"), 3).unit) == "s"
+
+
+def test_linspace_reads_both_endpoints_in_the_unit_of_the_first():
+    # the second endpoint's number was read in the first's unit: 1 km was 1 m (unit holes)
+    metres = helpers.linspace(Q_(0.0, "m"), Q_(1.0, "km"), 3)
+    assert list(metres.magnitude) == [0.0, 500.0, 1000.0]
+    assert str(metres.unit) == "m"
+
+
+def test_linspace_refuses_endpoints_of_different_dimensions():
+    with pytest.raises(Exception, match="incompatible units"):
+        helpers.linspace(Q_(0.0, "m"), Q_(1.0, "s"), 3)
+    # a plain number and a quantity with a dimension, as PHS `linspace(0, 2 s, 3)`
+    with pytest.raises(Exception, match="incompatible units"):
+        helpers.linspace(0, Q_(2.0, "s"), 3)
+    with pytest.raises(TypeError, match="endpoints are numbers or quantities"):
+        helpers.linspace(Q_(0.0, "m"), "x", 3)
+    with pytest.raises(TypeError, match="endpoints are numbers or quantities"):
+        helpers.linspace(True, 2, 3)
 
 
 def test_plot_draws_one_or_two_series_and_reports_what_it_cannot(
