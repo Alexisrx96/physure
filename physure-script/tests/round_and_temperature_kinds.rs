@@ -127,7 +127,11 @@ fn a_temperature_point_and_a_temperature_interval_have_no_order() {
         assert!(refused(source).contains("with a temperature interval"), "{source}: {}", refused(source));
     }
     let message = refused("5 delta_degC < 20 degC");
-    assert!(message.contains("convert the interval to a point"), "{message}");
+    assert!(message.contains("compare a difference of two points with the interval (`T2 - T1 > 5 delta_degC`)"), "{message}");
+    assert!(message.contains("`x => K` does not make an interval a point, it reads its number as kelvin above absolute zero"), "{message}");
+    assert!(!message.contains("convert the interval to a point"), "{message}");
+    let message = refused("max(5 delta_degC, 20 degC)");
+    assert!(message.contains("; compare a difference of two points with the interval"), "{message}");
 }
 
 #[test]

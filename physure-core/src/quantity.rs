@@ -37,6 +37,13 @@ impl PartialEq for Quantity {
     }
 }
 
+/// What to write instead of comparing a temperature point with a temperature interval, the advice every message about
+/// the pair ends with (the core's comparison, `max`, `min`, a vector, a range, Python): the difference of two points
+/// first, since `=> K` does not make an interval a point, it reads its number as kelvin above absolute zero.
+pub const POINT_AGAINST_INTERVAL_ADVICE: &str = "compare a difference of two points with the interval (`T2 - T1 > 5 \
+     delta_degC`); `x => K` does not make an interval a point, it reads its number as kelvin above absolute zero \
+     (`5 delta_degC => K` is 5 K, -268.15 degC)";
+
 /// The relative bound of PHS `==` ([`Quantity::phs_eq`]): two canonical magnitudes are equal when they differ by at
 /// most this fraction of the larger. It absorbs the rounding of a conversion and of ordinary arithmetic
 /// (`1000 * 0.1` and `100` are 63 ulps apart) and still separates physically different values.
@@ -764,8 +771,7 @@ impl Quantity {
         let (point, interval) = if self.unit.is_affine() { (self, other) } else { (other, self) };
         PhysureError::Generic(format!(
             "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval is \
-             how far apart two points are, not where one is; convert the interval to a point (`x => K`) or compare a \
-             difference of two points (`T2 - T1`)"
+             how far apart two points are, not where one is; {POINT_AGAINST_INTERVAL_ADVICE}"
         ))
     }
 

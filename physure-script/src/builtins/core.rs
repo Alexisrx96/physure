@@ -477,8 +477,8 @@ fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<
         }
         Some(Mismatch::TemperatureKind(why)) => {
             return Err(PhysureError::Generic(format!(
-                "{name} of a temperature point and a temperature interval: {why}; convert the interval to a point \
-                 (`x => K`) or compare a difference of two points (`T2 - T1`)"
+                "{name} of a temperature point and a temperature interval: {why}; {}",
+                physure_core::quantity::POINT_AGAINST_INTERVAL_ADVICE
             )))
         }
         None => {}
