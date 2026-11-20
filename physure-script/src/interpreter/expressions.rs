@@ -267,11 +267,8 @@ fn range_items(start: &PhsValue, end: &PhsValue) -> PhysureResult<Vec<PhsValue>>
         }
         _ => return Err(PhysureError::Generic("Range start must be a number or quantity".into())),
     };
-    let end_num = match end {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        _ => return Err(PhysureError::Generic("Range end must be a number or quantity".into())),
-    };
+    // the items are whole numbers of the start's unit, so the end is counted in it too (`1 km .. 3000 m` is 1 km, 2 km)
+    let end_num = super::helpers::range_end_in_start_unit(start, end)?;
     let start_i = start_num as i64;
     let end_i = end_num as i64;
     let count = end_i.saturating_sub(start_i).max(0) as usize;

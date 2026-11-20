@@ -223,3 +223,41 @@ fn linspace_needs_endpoints_of_one_kind_of_temperature() {
     assert!(message.contains("one kind of temperature"), "{message}");
     assert!(eval_phs("use * from array\nlinspace(10 degC, 20 degC, 3)").is_ok());
 }
+
+/// The items of the vector `source` ends with, as they print.
+fn items(source: &str) -> Vec<String> {
+    match last_value(source) {
+        PhsValue::Vector(items) => items.iter().map(|item| item.to_string()).collect(),
+        other => panic!("{source:?} gave {other:?}, expected a vector"),
+    }
+}
+
+/// A range is iterated in the unit of its start: the end is converted to it, as `linspace` converts its endpoints.
+/// It read the end's raw number in the start's unit: `1 km .. 3000 m` ran to 2999 km.
+#[test]
+fn a_range_is_iterated_in_the_unit_of_its_start() {
+    assert_eq!(items("for t in 1 km .. 3000 m { t }"), vec![last("1 km"), last("2 km")]);
+    assert_eq!(items("for t in 1 m .. 300 cm { t }"), vec![last("1 m"), last("2 m")]);
+    let kelvins = items("for t in 0 K .. 2 degC { t }");
+    assert_eq!(kelvins.len(), 275, "0 K .. 275.15 K");
+    assert_eq!((kelvins[0].as_str(), kelvins[274].as_str()), (last("0 K").as_str(), last("274 K").as_str()));
+    // the range itself keeps its ends as written (`0 m .. 10 m => km` shows where the conversion went)
+    assert_eq!(last("1 km .. 3000 m"), "1.0 km .. 3000.0 m");
+    // the end stays exclusive, and a plain-number range is unchanged
+    assert_eq!(items("for t in 1 m .. 5 m { t }").len(), 4);
+    assert_eq!(items("for t in 0 degC .. 3 degC { t }"), vec![last("0 degC"), last("1 degC"), last("2 degC")]);
+    assert_eq!(items("for t in 0 K .. 3 K { t }"), vec![last("0 K"), last("1 K"), last("2 K")]);
+    assert_eq!(items("for t in 1 .. 4 { t }"), vec!["1.0", "2.0", "3.0"]);
+    assert_eq!(items("for t in 0 .. 3 m { t }").len(), 3);
+}
+
+#[test]
+fn a_range_of_a_point_and_an_interval_is_refused() {
+    for source in ["5 delta_degC .. 20 degC", "r = 5 delta_degC .. 20 degC\nr", "for t in 5 delta_degC .. 20 degC { t }"] {
+        let message = refused(source);
+        assert!(message.starts_with("a range of a temperature point and a temperature interval"), "{source}: {message}");
+        assert!(message.contains("`5 delta_degC` is a temperature interval and `20 degC` a temperature point"), "{message}");
+    }
+    // different dimensions are refused where the range is made, as before
+    assert!(refused("1 m .. 5 s").contains("range"));
+}
