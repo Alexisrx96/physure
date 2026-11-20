@@ -378,5 +378,12 @@ class QuantityStrictTest {
         PhysureException level = assertThrows(PhysureException.class, () -> q(20.0, "dB").phsCompare(Quantity.of(100.0), "=="));
         assertTrue(level.getMessage().contains("write the level with its unit"), level.getMessage());
         assertThrows(PhysureException.class, () -> q(1.0, "m").phsCompare(q(1.0, "s"), "<"));
+        // a temperature point and a temperature interval have no comparison; K compares with both
+        for (String op : new String[] {"<", ">", "<=", ">=", "==", "!="}) {
+            PhysureException kinds = assertThrows(PhysureException.class, () -> q(5.0, "delta_degC").phsCompare(q(20.0, "degC"), op));
+            assertTrue(kinds.getMessage().contains("with a temperature interval"), kinds.getMessage());
+        }
+        assertTrue(q(20.0, "degC").phsCompare(q(10.0, "K"), ">"));
+        assertTrue(q(5.0, "delta_degC").phsCompare(q(6.0, "delta_degC"), "<"));
     }
 }

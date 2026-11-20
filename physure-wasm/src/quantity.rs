@@ -230,6 +230,11 @@ mod tests {
             let js_error = err.unwrap_err().dyn_into::<js_sys::Error>().expect("should be a JS Error");
             assert!(String::from(js_error.message()).contains("compare") || String::from(js_error.message()).contains("mismatch"));
         }
+        // a temperature point and a temperature interval have no comparison; K compares with both
+        let err = Quantity::new(5.0, "delta_degC").unwrap().phs_compare(&Quantity::new(20.0, "degC").unwrap(), "<");
+        let js_error = err.unwrap_err().dyn_into::<js_sys::Error>().expect("should be a JS Error");
+        assert!(String::from(js_error.message()).contains("with a temperature interval"));
+        assert!(Quantity::new(20.0, "degC").unwrap().phs_compare(&Quantity::new(10.0, "K").unwrap(), ">").unwrap());
     }
 
     #[wasm_bindgen_test]
