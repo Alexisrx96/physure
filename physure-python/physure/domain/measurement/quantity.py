@@ -130,7 +130,13 @@ class CoreQuantity:
 
 from physure._core import RationalUnit as _CoreRationalUnit  # noqa: E402
 from physure._core import (  # noqa: E402
+    TemperatureKindError as _TemperatureKindError,
+)
+from physure._core import (  # noqa: E402
     point_against_interval_message as _point_against_interval_message,
+)
+from physure._core import (  # noqa: E402
+    point_interval_conversion_message as _point_interval_conversion_message,
 )
 
 # the dimension of a temperature, the only one with points and intervals
@@ -1144,10 +1150,15 @@ class Quantity(
             )
         except _CORE_ERRORS as error:
             raise _python_error(error, self.unit, target_unit) from error
-        except ValueError as error:
-            # a temperature point to an interval unit, or back: the core's words
+        except _TemperatureKindError as error:
+            # a temperature point to an interval unit, or back: the core's
+            # words, with the quantity as it prints
             raise IncompatibleUnitsError(
-                self.unit, target_unit, str(error)
+                self.unit,
+                target_unit,
+                _point_interval_conversion_message(
+                    str(self), str(written or target_unit), self._is_absolute()
+                ),
             ) from error
         magnitude, uncertainty = apply_conversion(
             plan,

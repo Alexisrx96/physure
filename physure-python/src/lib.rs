@@ -305,6 +305,12 @@ fn parse_exponent(v: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
 
 pyo3::create_exception!(_core, UnknownUnitError, pyo3::exceptions::PyValueError, "A unit the registry does not know.");
 pyo3::create_exception!(_core, UnitMismatchError, pyo3::exceptions::PyValueError, "Units of different dimensions.");
+pyo3::create_exception!(
+    _core,
+    TemperatureKindError,
+    pyo3::exceptions::PyValueError,
+    "A temperature point converted to a temperature interval, or an interval to a point."
+);
 
 /// A core error as the Python exception that says what it was: an unknown unit carries its
 /// `symbol` and a `suggestion`, a mismatch the `expected` and `actual` units. Both are `ValueError`s.
@@ -538,7 +544,15 @@ impl PyUnitRegistry {
             Ok(out)
         };
         let out = PyDict::new(py);
-        match self.0.conversion(&source.0, &target.0).map_err(value_error)? {
+        let plan = self.0.conversion(&source.0, &target.0).map_err(|e| match e {
+            PhysureError::Generic(message)
+                if message.starts_with(::physure_core::quantity::POINT_INTERVAL_CONVERSION_PREFIX) =>
+            {
+                TemperatureKindError::new_err(message)
+            }
+            other => value_error(other),
+        })?;
+        match plan {
             Conversion::Affine { scale, shift } => {
                 out.set_item("kind", "affine")?;
                 out.set_item("scale", scale)?;
@@ -976,6 +990,13 @@ impl PyCovarianceStore {
 #[pyfunction]
 fn point_against_interval_message(point: &str, interval: &str) -> String {
     ::physure_core::quantity::point_against_interval_message(point, interval)
+}
+
+/// The core's words for a temperature point converted to an interval unit (`from_point`) or an interval to a point,
+/// each side written as the binding prints it.
+#[pyfunction]
+fn point_interval_conversion_message(source: &str, target: &str, from_point: bool) -> String {
+    ::physure_core::quantity::point_interval_conversion_message(source, target, from_point)
 }
 
 #[pyfunction]
@@ -2107,6 +2128,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnitRegistry>()?;
     m.add("UnknownUnitError", m.py().get_type::<UnknownUnitError>())?;
     m.add("UnitMismatchError", m.py().get_type::<UnitMismatchError>())?;
+    m.add("TemperatureKindError", m.py().get_type::<TemperatureKindError>())?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyQuantityVector>()?;
     m.add_class::<PyQuantityMatrix>()?;
@@ -2133,6 +2155,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(export_mesh_3d_native, m)?)?;
     m.add_function(wrap_pyfunction!(point_against_interval_message, m)?)?;
+    m.add_function(wrap_pyfunction!(point_interval_conversion_message, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

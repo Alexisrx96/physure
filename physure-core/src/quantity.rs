@@ -57,6 +57,9 @@ pub fn point_against_interval_message(point: &str, interval: &str) -> String {
 /// `20 degC => delta_degC` read the point's absolute value (293.15 delta_degC) and `5 delta_degC => degC` read the
 /// interval as kelvin above absolute zero (-268.15 degC). `from` is the quantity (or the unit) as it prints, `to` the
 /// target unit; `from_point` says which of the two is the point.
+/// How every message of [`point_interval_conversion_message`] starts: a binding tells the refusal from other errors by it.
+pub const POINT_INTERVAL_CONVERSION_PREFIX: &str = "cannot convert a temperature ";
+
 pub fn point_interval_conversion_message(from: &str, to: &str, from_point: bool) -> String {
     if from_point {
         format!(

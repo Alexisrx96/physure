@@ -126,3 +126,16 @@ def test_a_unit_made_an_interval_equals_its_unit_and_survives_pickling(q):
             _ = scaled < q(20, "degC")
     # `=> K` reads it as a kelvin, as the core does
     assert difference.to("K") < q(20, "degC")
+
+
+def test_a_refused_conversion_says_the_quantity_in_the_cores_words(q):
+    with pytest.raises(IncompatibleUnitsError) as refused:
+        (q(20, "degC") - q(10, "degC")).to("degC")
+    assert str(refused.value).startswith(
+        "cannot convert a temperature interval (`10.0 K`) to a temperature point"
+    ), str(refused.value)
+    with pytest.raises(IncompatibleUnitsError) as refused:
+        q(20, "degC").to("delta_degC")
+    assert str(refused.value).startswith(
+        "cannot convert a temperature point (`20.0 degC`) to a temperature interval"
+    ), str(refused.value)
