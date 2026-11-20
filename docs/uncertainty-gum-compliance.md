@@ -292,7 +292,11 @@ The PHS function `round(x, n)` is different from display rounding. It changes th
 to `n` decimal places but preserves the existing uncertainty and unit. For example,
 `round(9.81 +/- 0.05 m/s^2, 1)` retains a mean of `9.8` and a standard uncertainty of `0.05`,
 which is displayed as `9.80 +/- 0.05 m/s^2`. It does not round the uncertainty distribution or
-make the result exact.
+make the result exact. Ties go away from zero (`round(2.5 m)` is `3 m`), and the sources of the
+uncertainty are kept with it, so `x - round(x, 1)` has no uncertainty and the degrees of freedom
+survive. Python's `round(q, n)`, `math.floor(q)`, `math.ceil(q)` and `math.trunc(q)` of a scalar
+`Quantity` are the same operations of the core; an array-backed magnitude (NumPy, PyTorch, JAX)
+keeps its own backend's rounding instead.
 
 This behavior covers coordinated reporting of a value and its already-evaluated standard
 uncertainty. It does **not** model rounding, digitization, or instrument resolution as a new
