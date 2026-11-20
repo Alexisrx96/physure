@@ -44,8 +44,9 @@ use physure_script::symbolic::Expr;
 // `RationalUnit::id` is derived from the dimensions alone, so it cannot be the whole key:
 // J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
 // handed back whichever of them was cached first.
-// The key carries `periodic`: equality ignores the flag, but a flagged hertz must not be answered by an unflagged one.
-static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool), PyObject>>> = OnceLock::new();
+// The key carries `periodic` and `interval`: equality ignores both flags, but a flagged hertz must not be answered by
+// an unflagged one, nor an interval by a kelvin.
+static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool, bool), PyObject>>> = OnceLock::new();
 
 // The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
 // other backends, which live in Python, so Python registers the factory at import.
@@ -54,7 +55,7 @@ static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
-    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic);
+    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic, unit.interval);
     if let Some(existing) = cache.get(&key) {
         return Ok(existing.clone_ref(py));
     }
@@ -192,12 +193,27 @@ impl PyRationalUnit {
             .map(|d| parse_dimensions_dict(&d))
             .transpose()?
             .unwrap_or_default();
-        Ok(PyRationalUnit(RationalUnit::new_from_dimensions(dimensions)))
+        // `interval=True`: a unit written as symbols that stands for a temperature interval whatever its symbols say
+        // (`K` as the sum of a kelvin and an interval); the registry's `expand` carries it over
+        let interval = match kwargs.map(|kw| kw.get_item("interval")).transpose()?.flatten() {
+            Some(flag) => flag.is_truthy()?,
+            None => false,
+        };
+        let mut unit = RationalUnit::new_from_dimensions(dimensions);
+        unit.interval = interval;
+        Ok(PyRationalUnit(unit))
     }
 
     #[getter]
     fn dimensions(&self) -> HashMap<String, (i64, i64)> {
         self.0.dimensions_map()
+    }
+
+    /// Whether this unit stands for a temperature interval (the core's `RationalUnit::interval`): set on a unit
+    /// the catalog flags `interval`, and on a unit written as symbols that was made one.
+    #[getter]
+    fn interval(&self) -> bool {
+        self.0.interval
     }
 
     #[getter]
@@ -2014,6 +2030,7 @@ fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -
     out.set_item("is_linear", facts.is_linear)?;
     out.set_item("alias", facts.alias)?;
     out.set_item("simplified", facts.simplified)?;
+    out.set_item("interval", facts.interval)?;
     Ok(out)
 }
 

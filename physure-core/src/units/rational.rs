@@ -201,6 +201,15 @@ pub struct RationalUnit {
     /// one) and nothing else: `Hz*rad`, `Hz^2` and `1/Hz` are not the hertz. It is not part of equality or of the hash:
     /// `Hz` and `s^-1` are the same unit.
     pub periodic: bool,
+    /// Set on a temperature interval: a unit of an entry the catalog flags `interval` (`delta_celsius`,
+    /// `delta_fahrenheit`, a unit of a user's conf), with its prefixes and aliases, and on what the core's arithmetic
+    /// makes an interval (see [`RationalUnit::is_written_interval`]). It survives a product or quotient with a
+    /// dimensionless operand that is not a level (`2`, `%`) and a power of one, and nothing else: `delta_degC / m`
+    /// and `delta_degC^2` are not intervals, and neither is what a further step makes of them. Like `periodic` it is
+    /// not part of equality or of the hash: `delta_degC` is a kelvin (one scale, no zero point), the two convert with
+    /// the factor 1 and compare equal in value; the flag says what kind of temperature a number is, which only the
+    /// comparison and the conversion to or from a point read.
+    pub interval: bool,
 }
 
 impl Eq for RationalUnit {}
@@ -249,7 +258,7 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None, periodic: false }
+        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None, periodic: false, interval: false }
     }
 
     /// Returns a copy of this unit with a different scale factor (same dimensions/id). The
@@ -357,14 +366,13 @@ impl RationalUnit {
         self.offset != 0.0
     }
 
-    /// A temperature interval written as one: a unit named as a difference, the catalog's `delta_*` entries and their
-    /// aliases (`delta_degC`, `degC_delta`, `delta_fahrenheit`), prefixed or not. The catalog makes `delta_celsius` a
-    /// kelvin, so the name it is written by is all that tells them apart. `K` and `degR` sit on an absolute scale and
-    /// stand for a point or an interval alike (a point minus a point is in `K`), so they are not one.
+    /// A temperature interval: a unit the catalog flags `interval` (`delta_celsius`, `delta_fahrenheit` and their
+    /// aliases and prefixed forms, a user's own `dT = 1.0, O, interval`), or what the core's arithmetic makes one (see
+    /// [`RationalUnit::interval`]). The catalog makes `delta_celsius` a kelvin, so the flag is all that tells them
+    /// apart, whatever name the unit is written by. `K` and `degR` sit on an absolute scale and stand for a point or an
+    /// interval alike, so they are not one.
     pub fn is_written_interval(&self) -> bool {
-        !self.is_affine()
-            && self.log.is_none()
-            && self.display_name.as_deref().is_some_and(|name| name.contains("delta_") || name.ends_with("_delta"))
+        self.interval && !self.is_affine() && self.log.is_none()
     }
 
     /// A temperature point (`degC`, `degF`, [`RationalUnit::is_affine`]) against a temperature interval written as one
@@ -399,6 +407,7 @@ impl RationalUnit {
             id: 0,
             display_name: None,
             periodic: false,
+            interval: false,
         }
     }
 
@@ -469,16 +478,16 @@ impl RationalUnit {
         // A level times a plain number keeps the level's name with its `log` below. The level
         // itself has a dimensionless scale of 1, so the plain-operand rule that follows took the
         // plain number's name (none) for `-1 * dB`: `-5 dB` printed `-5.0` while still a level.
-        let (display_name, periodic) = if self.log.is_some() && other.is_plain_number() {
-            (self.display_name.clone(), self.periodic)
+        let (display_name, periodic, interval) = if self.log.is_some() && other.is_plain_number() {
+            (self.display_name.clone(), self.periodic, self.interval)
         } else if other.log.is_some() && self.is_plain_number() {
-            (other.display_name.clone(), other.periodic)
+            (other.display_name.clone(), other.periodic, other.interval)
         } else if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
-            (self.display_name.clone(), self.periodic)
+            (self.display_name.clone(), self.periodic, self.interval)
         } else if self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9 {
-            (other.display_name.clone(), other.periodic)
+            (other.display_name.clone(), other.periodic, other.interval)
         } else {
-            (None, false)
+            (None, false, false)
         };
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.mul(b)),
@@ -496,16 +505,16 @@ impl RationalUnit {
         } else {
             None
         };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, interval }
     }
 
     pub fn div(&self, other: &Self) -> Self {
         let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, true);
         let id = Self::calculate_id(&new_dims);
-        let (display_name, periodic) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
-            (self.display_name.clone(), self.periodic)
+        let (display_name, periodic, interval) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+            (self.display_name.clone(), self.periodic, self.interval)
         } else {
-            (None, false)
+            (None, false, false)
         };
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.div(b)),
@@ -513,7 +522,7 @@ impl RationalUnit {
         };
         let scale = exact.as_ref().map_or(self.scale / other.scale, ExactScale::to_f64);
         let log = if other.is_plain_number() { self.log } else { None };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, interval }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -537,9 +546,10 @@ impl RationalUnit {
         let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
         let log = if exp_r == Rational64::from_integer(1) { self.log } else { None };
         let periodic = exp_r == Rational64::from_integer(1) && self.periodic;
+        let interval = exp_r == Rational64::from_integer(1) && self.interval;
         // the first power is the unit itself: `(5 dB)^1` is still `5 dB`, by name too
         let display_name = if exp_r == Rational64::from_integer(1) { self.display_name.clone() } else { None };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, interval }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

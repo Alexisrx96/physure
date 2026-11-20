@@ -236,3 +236,13 @@ fn the_flag_on_a_point_a_level_or_a_base_unit_is_a_problem() {
     let found = problems(&mut empty, "[Units]\nkelvin = 1.0, O, interval, [K]\n");
     assert!(found.iter().any(|p| p.contains("interval")), "{found:?}");
 }
+
+#[test]
+fn the_facts_of_a_unit_say_whether_it_is_an_interval() {
+    physure_core::units::conf::with_conf_registry(|registry| {
+        for (name, interval) in [("delta_degC", true), ("degF_delta", true), ("kdelta_degC", true), ("K", false), ("degC", false), ("m", false)] {
+            assert_eq!(registry.facts(name).unwrap().interval, interval, "{name}");
+        }
+        assert!(!registry.facts("dB*m").map(|facts| facts.interval).unwrap_or(false));
+    });
+}

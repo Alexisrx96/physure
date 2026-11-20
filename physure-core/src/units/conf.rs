@@ -15,8 +15,23 @@ pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
 
 /// Words that can stand among the fields of a unit line without being one of its values.
 fn is_flag(field: &str) -> bool {
-    matches!(field, "noprefix" | "own_kind")
+    matches!(field, "noprefix" | "own_kind" | "interval")
 }
+
+/// Whether the values of a unit line carry `flag`, among fields separated by commas or by spaces.
+fn has_flag(val_part: &str, flag: &str) -> bool {
+    val_part.split(|c: char| c == ',' || c.is_whitespace()).any(|field| field == flag)
+}
+
+/// Why `interval` cannot flag a level: it is the logarithm of a ratio, not a temperature that moves a point.
+const INTERVAL_ON_A_LEVEL: &str =
+    "`interval` marks a temperature interval (how far apart two points are); a level (`Log, ...`) is the logarithm of a ratio and is never one";
+/// Why `interval` cannot flag a unit with a zero point.
+const INTERVAL_ON_A_POINT: &str =
+    "`interval` marks a temperature interval (how far apart two points are), and a unit with a zero point is a temperature point (like degC): a unit is one or the other";
+/// Why `interval` cannot flag the base unit of a dimension.
+const INTERVAL_ON_A_BASE: &str =
+    "`interval` cannot flag the base unit of a dimension: a difference of two points is written in it, so it stands for a point or an interval alike (like K); flag a unit of scale 1 declared after it (`dT = 1.0, O, interval, [dT]`)";
 
 /// Parses a `physure.conf` configuration string into a UnitRegistry and constants map.
 /// All dimension symbols (L, M, T, I, O, N, J, A, etc.), prefixes, units, aliases,
@@ -933,7 +948,7 @@ fn strict_line_problem(section: &str, line: &str, defined: &mut HashSet<(String,
 
 /// The values of a unit line the reader does not look at, if there are any (a misspelt flag, a stray word): a level
 /// reads `Log, factor, reference, dimension`; another unit its factor, an optional zero point, its dimension, and a
-/// recipe only when the dimension is not one with a base unit. The flags are `noprefix` and `own_kind`.
+/// recipe only when the dimension is not one with a base unit. The flags are `noprefix`, `own_kind` and `interval`.
 fn unread_unit_fields(line: &str, dim_to_base: &HashMap<String, String>) -> Option<String> {
     let (_, val_part, _) = cut_unit_line(line)?;
     let parts = unit_value_fields(val_part);
@@ -953,7 +968,7 @@ fn unread_unit_fields(line: &str, dim_to_base: &HashMap<String, String>) -> Opti
     };
     let unread = parts.get(read..).filter(|rest| !rest.is_empty())?;
     Some(format!(
-        "the values {} are not read (the flags are noprefix and own_kind; a recipe is read only for a dimension without a base unit, or when it is that base unit)",
+        "the values {} are not read (the flags are noprefix, own_kind and interval; a recipe is read only for a dimension without a base unit, or when it is that base unit)",
         unread.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ")
     ))
 }
@@ -1352,7 +1367,7 @@ fn is_single_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-/// The fields of a unit line's values, without the flags (`noprefix`, `own_kind`); a single field with spaces in it
+/// The fields of a unit line's values, without the flags (`noprefix`, `own_kind`, `interval`); a single field with spaces in it
 /// is read as the fields separated by them.
 fn unit_value_fields(val_part: &str) -> Vec<&str> {
     let parts: Vec<&str> = val_part
@@ -1388,6 +1403,8 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     let symbol = aliases[0].clone();
 
     let no_prefix = val_part.split(',').any(|field| field.trim() == "noprefix");
+    // `delta_celsius = 1.0, O, interval, [...]`: a temperature interval, which a point does not compare with
+    let interval = has_flag(val_part, "interval");
 
     let parts = unit_value_fields(val_part);
 
@@ -1398,6 +1415,9 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`. Its dimension
     // is "1" when it is the logarithm of a ratio, or the dimensions of a quantity (`dBW`).
     if parts[0].eq_ignore_ascii_case("log") {
+        if interval {
+            return Err(INTERVAL_ON_A_LEVEL.to_string());
+        }
         register_level(&parts, &symbol, registry, dim_to_base)?;
         register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
         return Ok(());
@@ -1419,6 +1439,12 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     let dim_str = if parts.len() > dim_index { parts[dim_index] } else { "1" };
 
     let base_symbol = dim_to_base.get(dim_str).cloned().unwrap_or_default();
+    if interval && offset != 0.0 {
+        return Err(INTERVAL_ON_A_POINT.to_string());
+    }
+    if interval && factor == 1.0 && symbol == base_symbol {
+        return Err(INTERVAL_ON_A_BASE.to_string());
+    }
 
     // Dimension "1" is tested before `base_symbol`, which maps it to the `unity` unit:
     // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
@@ -1435,6 +1461,10 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     } else {
         let recipe_str = recipe_field(&parts, dim_index + 1);
         register_recipe_unit(registry, &symbol, &names, (dim_str, recipe_str), &scale, dim_to_base)?;
+    }
+    // what its line says, and nothing a recipe of an interval unit would pass on
+    if let Some(unit) = registry.derived_units.get_mut(&symbol) {
+        unit.interval = interval;
     }
 
     register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
