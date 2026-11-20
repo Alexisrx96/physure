@@ -898,6 +898,12 @@ impl PyCovarianceStore {
 ///
 /// This is the core of the zero-copy FFI strategy: Python never copies data.
 /// Rust reads & writes directly to Python-owned memory.
+/// The core's words for a temperature point compared with a temperature interval, each written as Python prints it.
+#[pyfunction]
+fn point_against_interval_message(point: &str, interval: &str) -> String {
+    ::physure_core::quantity::point_against_interval_message(point, interval)
+}
+
 #[pyfunction]
 fn batch_to_si_inplace(py: Python<'_>, buf: PyBuffer<f64>, factor: f64) -> PyResult<()> {
     let slice = buf.as_slice(py).ok_or_else(|| pyo3::exceptions::PyBufferError::new_err("Invalid buffer"))?;
@@ -2051,6 +2057,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(export_mesh_3d_native, m)?)?;
+    m.add_function(wrap_pyfunction!(point_against_interval_message, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

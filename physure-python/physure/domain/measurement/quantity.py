@@ -129,6 +129,12 @@ class CoreQuantity:
 
 
 from physure._core import RationalUnit as _CoreRationalUnit  # noqa: E402
+from physure._core import (  # noqa: E402
+    point_against_interval_message as _point_against_interval_message,
+)
+
+# the dimension of a temperature, the only one with points and intervals
+_TEMPERATURE = {"O": 1}
 
 # Helpers moved to end of file to resolve circular reference with Quantity class
 from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
@@ -1593,9 +1599,25 @@ class Quantity(
 
     # --- Comparison Methods ---
     def _point_against_interval(self, other: Quantity) -> bool:
-        """A temperature point (degC) against an interval (delta_degC), as the core says."""
-        return self.system.core_registry.point_against_interval(
-            self.unit, other.unit
+        """A temperature point (degC) against an interval (delta_degC), as the core says.
+
+        Both are of one dimension already; only a temperature asks the core.
+        """
+        return self.dimension.exponents == _TEMPERATURE and (
+            self.system.core_registry.point_against_interval(
+                self.unit, other.unit
+            )
+        )
+
+    def _refuse_point_against_interval(self, other: Quantity) -> None:
+        """Raises the core's words for a temperature point against an interval."""
+        point, interval = (
+            (self, other) if self._is_absolute() else (other, self)
+        )
+        raise IncompatibleUnitsError(
+            self.unit,
+            other.unit,
+            _point_against_interval_message(str(point), str(interval)),
         )
 
     def _compare(self, other: Any, op: Any) -> Any:
@@ -1608,7 +1630,7 @@ class Quantity(
                 return op(self.magnitude, other.magnitude)
             # `5 delta_degC < 20 degC` has no answer: an interval is not where a temperature is
             if self._point_against_interval(other):
-                raise IncompatibleUnitsError(self.unit, other.unit)
+                self._refuse_point_against_interval(other)
 
             other_converted = other.to(self.unit)
             return op(self.magnitude, other_converted.magnitude)

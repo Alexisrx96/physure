@@ -44,6 +44,15 @@ pub const POINT_AGAINST_INTERVAL_ADVICE: &str = "compare a difference of two poi
      delta_degC`); `x => K` does not make an interval a point, it reads its number as kelvin above absolute zero \
      (`5 delta_degC => K` is 5 K, -268.15 degC)";
 
+/// The words of a temperature point compared with a temperature interval, each written as its binding prints it:
+/// what the core's comparison says, and what a binding with a comparison of its own (Python) says.
+pub fn point_against_interval_message(point: &str, interval: &str) -> String {
+    format!(
+        "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval is how \
+         far apart two points are, not where one is; {POINT_AGAINST_INTERVAL_ADVICE}"
+    )
+}
+
 /// The relative bound of PHS `==` ([`Quantity::phs_eq`]): two canonical magnitudes are equal when they differ by at
 /// most this fraction of the larger. It absorbs the rounding of a conversion and of ordinary arithmetic
 /// (`1000 * 0.1` and `100` are 63 ulps apart) and still separates physically different values.
@@ -769,10 +778,7 @@ impl Quantity {
     #[inline(never)]
     fn point_against_interval(&self, other: &Quantity) -> PhysureError {
         let (point, interval) = if self.unit.is_affine() { (self, other) } else { (other, self) };
-        PhysureError::Generic(format!(
-            "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval is \
-             how far apart two points are, not where one is; {POINT_AGAINST_INTERVAL_ADVICE}"
-        ))
+        PhysureError::Generic(point_against_interval_message(&point.to_string(), &interval.to_string()))
     }
 
     /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],

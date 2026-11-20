@@ -144,10 +144,16 @@ def test_a_point_and_an_interval_have_no_order(q, compare):
     from physure.domain.exceptions import IncompatibleUnitsError
 
     interval, point = q(5, "delta_degC"), q(20, "degC")
-    with pytest.raises(IncompatibleUnitsError):
-        compare(interval, point)
-    with pytest.raises(IncompatibleUnitsError):
-        compare(point, interval)
+    words = (
+        "cannot compare a temperature point (`20.0 degC`) with a temperature "
+        "interval (`5.0 delta_degC`)"
+    )
+    for a, b in ((interval, point), (point, interval)):
+        with pytest.raises(IncompatibleUnitsError) as refused:
+            compare(a, b)
+        message = str(refused.value)
+        assert message.startswith(words), message
+        assert "compare a difference of two points" in message, message
 
 
 def test_a_point_and_an_interval_are_never_equal(q):
