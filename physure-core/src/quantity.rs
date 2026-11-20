@@ -159,11 +159,13 @@ fn magnitude_exponent(x: f64) -> i32 {
 /// Rounds `x` to `decimal_places` digits after the decimal point, ties away from zero. Negative rounds to a power
 /// of ten instead (`-1` rounds to the nearest ten).
 ///
-/// It never overflows: a finite `x` never gives `NaN` or infinity. A place finer than `x` has digits for (`x * 10^d`
-/// not finite, or at least 2^53, where every double is a whole number) leaves `x` as it is; a place above every digit
-/// (`10^-d` not finite) gives 0; a rounding the double cannot hold (`1.7e308` to a multiple of `1e308`) leaves `x`. A
-/// negative place divides by `10^-d` and multiplies back, which is exact where multiplying by the inexact `10^d` was
-/// not. A non-finite `x` is returned unchanged. It was `(x * 10^d).round() / 10^d`, which made `round(1.5, 400)` NaN.
+/// It never overflows: a finite `x` never gives `NaN` or infinity. A place `x` has no digit at is left as it is: one
+/// finer than its last digit (`x * 10^d` not finite, or at least 2^53, where every double is a whole number), and,
+/// for a negative place, one where `x / 10^-d` is at least 2^53 (`round(1.2345e23, -1)`: dividing and multiplying
+/// back moved it by an ulp). A place above every digit (`10^-d` not finite) gives 0; a rounding the double cannot hold
+/// (`1.7e308` to a multiple of `1e308`) leaves `x`. Otherwise a negative place divides by `10^-d` and multiplies back,
+/// which is exact where multiplying by the inexact `10^d` was not (`round(123456.789, -2)` is exactly 123500). A
+/// non-finite `x` is returned unchanged. It was `(x * 10^d).round() / 10^d`, which made `round(1.5, 400)` NaN.
 pub fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
     const WHOLE: f64 = 9_007_199_254_740_992.0; // 2^53
     if !x.is_finite() {
@@ -181,7 +183,11 @@ pub fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
     if !divisor.is_finite() {
         return 0.0;
     }
-    let rounded = (x / divisor).round() * divisor;
+    let scaled = x / divisor;
+    if scaled.abs() >= WHOLE {
+        return x;
+    }
+    let rounded = scaled.round() * divisor;
     if rounded.is_finite() { rounded } else { x }
 }
 
@@ -1259,6 +1265,47 @@ mod tests {
         assert_eq!(round_to_decimal_place(123456.789, -2), 123500.0);
         assert!(round_to_decimal_place(f64::NAN, 2).is_nan());
         assert_eq!(round_to_decimal_place(f64::INFINITY, -2), f64::INFINITY);
+    }
+
+    /// A negative place above 2^53 units of that place has nothing to round: dividing and multiplying back moved the
+    /// value by an ulp (`round(1.2345e23, -1)`).
+    #[test]
+    fn rounding_a_value_with_no_digit_at_a_negative_place_is_the_value_itself() {
+        assert_eq!(round_to_decimal_place(1.2345e23, -1).to_bits(), 1.2345e23f64.to_bits());
+        assert_eq!(round_to_decimal_place(1.7e308, -15).to_bits(), 1.7e308f64.to_bits());
+        assert_eq!(round_to_decimal_place(123456.789, -2), 123500.0);
+        assert_eq!(round_to_decimal_place(1234.5, -1), 1230.0);
+        assert_eq!(round_to_decimal_place(1235.0, -1), 1240.0);
+        assert_eq!(round_to_decimal_place(1e300, -301), 0.0);
+        assert_eq!(round_to_decimal_place(5e300, -301), 1e301);
+    }
+
+    /// Over a grid of magnitudes and places: a finite value gives a finite one, rounding twice is rounding once, and a
+    /// value with no digit at the place (`|x| / 10^-d >= 2^53`, so every `|x| >= 1e20` for `d` from -1 to -4) is
+    /// returned bit for bit.
+    #[test]
+    fn rounding_is_finite_idempotent_and_the_identity_where_there_is_no_digit() {
+        let mantissas = [1.0, 1.2345, -2.5, 3.999_999_999, -7.123_456_789_012_345, 9.87654321];
+        let exponents = [-300, -20, -5, -1, 0, 1, 3, 7, 14, 15, 16, 20, 23, 100, 300];
+        let mut checked = 0;
+        for m in mantissas {
+            for e in exponents {
+                let x = m * 10f64.powi(e);
+                for d in -25..=25 {
+                    let once = round_to_decimal_place(x, d);
+                    assert!(once.is_finite(), "round({x:e}, {d}) = {once}");
+                    assert_eq!(round_to_decimal_place(once, d).to_bits(), once.to_bits(), "round(round({x:e}, {d}), {d})");
+                    if d < 0 && x.abs() / 10f64.powi(-d) >= 9_007_199_254_740_992.0 {
+                        assert_eq!(once.to_bits(), x.to_bits(), "round({x:e}, {d}) moved a value with no digit there");
+                    }
+                    if d < 0 && d >= -4 && x.abs() >= 1e20 {
+                        assert_eq!(once.to_bits(), x.to_bits(), "round({x:e}, {d})");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 300);
     }
 
     #[test]

@@ -52,6 +52,12 @@ fn round_to_a_place_above_every_digit_is_zero() {
     // a place the double can still hold, read by division: 123500, not 123500.00000000001
     assert_eq!(mean_and_unit("round(123456.789 m, -2)"), (123500.0, "m".to_string()));
     assert_eq!(last("round(1234.5, -1)"), "1230.0");
+    assert_eq!(last("round(1235, -1)"), "1240.0");
+    // a negative place the value has no digit at leaves it bit for bit (dividing and multiplying back moved it)
+    assert_eq!(mean_and_unit("round(1.2345e23 m, -1)").0.to_bits(), 1.2345e23f64.to_bits());
+    assert_eq!(mean_and_unit("round(1.7e308 m, -15)").0.to_bits(), 1.7e308f64.to_bits());
+    assert_eq!(mean_and_unit("round(5e300 m, -301)").0, 1e301);
+    assert_eq!(mean_and_unit("round(1e300 m, -301)").0, 0.0);
 }
 
 #[test]
