@@ -590,6 +590,33 @@ mod tests {
         assert_eq!(now(), before, "a failed load applied something");
     }
 
+    /// A file frozen before the `interval` flag (its `embedded` source writes `delta_celsius = 1.0, O, [...]`) keeps
+    /// the shipped intervals: the trusted reading flags them, so the rule the library applied by name is not lost and
+    /// the old and the new catalog determine the same units. An override flags a unit of its own, and the entries
+    /// (`phs conf diff`, `show`) see the flag.
+    #[test]
+    fn the_interval_flag_is_read_from_the_sources_and_an_older_file_keeps_the_shipped_intervals() {
+        let old_text = DEFAULT_PHYSURE_CONF.replace(", O, interval, [delta_deg", ", O, [delta_deg");
+        assert_eq!(old_text.matches(", O, [delta_deg").count(), 2, "the test's anchors are gone from the catalog");
+        let dir = Dir::new();
+        let old = load(&write_file(&dir, &frozen(&[("embedded", &old_text), ("overrides", "")], release_engine()))).unwrap();
+        let new = load(&write_file(&dir, &standard(""))).unwrap();
+        for name in ["delta_celsius", "delta_degC", "degC_delta", "kdelta_degC", "delta_fahrenheit", "degF_delta"] {
+            assert!(old.registry.get_unit(name).unwrap().is_written_interval(), "{name} in the older file");
+            assert!(new.registry.get_unit(name).unwrap().is_written_interval(), "{name}");
+        }
+        assert!(!new.registry.get_unit("K").unwrap().is_written_interval());
+        let changes = crate::frozen::entries::diff(&old.entries(), &new.entries());
+        assert!(changes.is_empty(), "the flag alone changed the catalog an older file determines: {changes:?}");
+        let flagged = load(&write_file(&dir, &standard("[Units]\nzz_dt = 1.0, O, interval, [zz_dt]"))).unwrap();
+        let plain = load(&write_file(&dir, &standard("[Units]\nzz_dt = 1.0, O, [zz_dt]"))).unwrap();
+        assert!(flagged.registry.get_unit("zz_dt").unwrap().is_written_interval());
+        assert!(!plain.registry.get_unit("zz_dt").unwrap().is_written_interval());
+        let seen = crate::frozen::entries::diff(&plain.entries(), &flagged.entries());
+        assert!(seen.iter().any(|c| c.kind() == "derived_unit" && c.name() == "zz_dt"), "{seen:?}");
+        assert!(seen.iter().any(|c| c.kind() == "unit" && c.name() == "zz_dt"), "{seen:?}");
+    }
+
     #[test]
     fn the_catalog_comes_only_from_the_sources() {
         let original = "molar_gas_constant = 8.31446261815324 J*mol^-1*K^-1";
