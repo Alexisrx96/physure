@@ -1374,8 +1374,74 @@ class Quantity(
         """Converts to int."""
         return int(self.magnitude)  # pyright: ignore[reportArgumentType]
 
+    def _round_in_core(self, op: str, *args: int) -> Quantity | None:
+        """`op` (`round`, `floor`, `ceil` or `trunc`) of the Rust core, or `None` for an array.
+
+        The core moves the mean and keeps everything else (`Quantity::shift_mean_to`): the
+        unit, the uncertainty and its sources, so the degrees of freedom and the correlation
+        with the unrounded value survive, and `round` ties away from zero without overflow.
+        A scalar of the default model crosses with its lineage (`from_lineage`) and comes back
+        with the core's; a sampling mode already holds the core quantity. The core is scalar:
+        an array (or a value live in a JAX/torch graph) answers `None` and keeps its backend.
+        """
+        from physure._core import Lineage
+        from physure._core import Quantity as RustCoreQuantity
+
+        core = self._core_magnitude
+        if isinstance(core, RustCoreQuantity):
+            # the sampling modes, as `_check_and_handle_rust_propagation` delegates them
+            return type(self).from_input(
+                getattr(core, op)(*args), self.unit, self.system
+            )
+        magnitude: Any = self.magnitude
+        if self._backend.is_array(magnitude) or self._backend.is_tracing(
+            magnitude
+        ):
+            return None
+        model = self._uncertainty_obj
+        lineage = (
+            model.native if isinstance(model, LineageModel) else Lineage.exact()
+        )
+        result = getattr(
+            RustCoreQuantity.from_lineage(
+                float(magnitude), _ensure_rational(self.unit), lineage
+            ),
+            op,
+        )(*args)
+        if isinstance(model, LineageModel):
+            uncertainty: Any = LineageModel(native=result.lineage)
+        elif model is not None:
+            # `python_lineage()` and `uncorrelated` have no core form; the core keeps the
+            # uncertainty as it is, so the model is kept as it is
+            uncertainty = model
+        else:
+            uncertainty = self.uncertainty
+        return type(self).from_input(
+            result.magnitude, self.unit, self.system, uncertainty
+        )
+
     def __round__(self, ndigits: int | None = None) -> Quantity:
-        """Rounds the quantity."""
+        """The quantity rounded by the core: ties away from zero, as PHS rounds.
+
+        `round(q)` is `round(q, 0)`; `ndigits` is an integer (a negative one rounds to a
+        power of ten). The unit, the uncertainty, its sources and degrees of freedom are
+        kept, so `q - round(q, 1)` has no uncertainty. An array-backed magnitude keeps its
+        backend's own elementwise rounding (JAX: half to even).
+
+        Examples:
+            >>> from physure import Q_
+            >>> round(Q_(2.5, "m"))
+            Quantity(3.0, m)
+            >>> round(Q_(0.125, "m"), 2)
+            Quantity(0.13, m)
+            >>> x = Q_(1.234, "m", 0.1)
+            >>> (x - round(x, 1)).uncertainty
+            0.0
+        """
+        places = 0 if ndigits is None else operator.index(ndigits)
+        rounded = self._round_in_core("round", places)
+        if rounded is not None:
+            return rounded
         val = round(  # pyright: ignore[reportCallIssue]
             self.magnitude,  # pyright: ignore[reportArgumentType]
             ndigits,  # pyright: ignore[reportArgumentType]
@@ -1385,7 +1451,10 @@ class Quantity(
         )
 
     def __floor__(self) -> Quantity:
-        """Returns floor of quantity."""
+        """The core's floor: the integer below, the unit and uncertainty kept."""
+        floored = self._round_in_core("floor")
+        if floored is not None:
+            return floored
         return Quantity.from_input(
             math.floor(  # pyright: ignore[reportCallIssue]
                 self.magnitude  # pyright: ignore[reportArgumentType]
@@ -1396,7 +1465,10 @@ class Quantity(
         )
 
     def __ceil__(self) -> Quantity:
-        """Returns ceiling of quantity."""
+        """The core's ceil: the integer above, the unit and uncertainty kept."""
+        ceiled = self._round_in_core("ceil")
+        if ceiled is not None:
+            return ceiled
         return Quantity.from_input(
             math.ceil(  # pyright: ignore[reportCallIssue]
                 self.magnitude  # pyright: ignore[reportArgumentType]
@@ -1407,7 +1479,10 @@ class Quantity(
         )
 
     def __trunc__(self) -> Quantity:
-        """Truncates quantity."""
+        """The core's trunc: towards zero, the unit and uncertainty kept."""
+        truncated = self._round_in_core("trunc")
+        if truncated is not None:
+            return truncated
         return Quantity.from_input(
             math.trunc(self.magnitude),  # pyright: ignore[reportArgumentType]
             self.unit,
