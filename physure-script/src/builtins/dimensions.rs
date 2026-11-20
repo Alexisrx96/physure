@@ -78,11 +78,7 @@ pub(crate) enum Mismatch {
 pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<Mismatch> {
     let (ua, ub) = (unit_of(a)?, unit_of(b)?);
     if comparable(a, ua, b, ub) {
-        if !ua.point_against_interval(ub) {
-            return None;
-        }
-        let kind = |unit: &RationalUnit| if unit.is_affine() { "a temperature point" } else { "a temperature interval" };
-        return Some(Mismatch::TemperatureKind(format!("`{}` is {} and `{}` {}", written(a), kind(ua), written(b), kind(ub))));
+        return ua.point_against_interval(ub).then(|| kind_clash(a, ua, b, ub));
     }
     let (mut wa, mut wb) = (dimension_words(ua), dimension_words(ub));
     if wa == wb {
@@ -93,12 +89,37 @@ pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<Mismatch> {
     Some(Mismatch::Dimension(format!("`{}` is {wa} and `{}` {wb}", written(a), written(b))))
 }
 
-/// The first two numeric items of `items` that do not stand side by side ([`mismatch`]): every numeric item is set
-/// against the first one. Items that are not numbers or quantities (text, the rows of a matrix) are not compared.
+/// The [`Mismatch::TemperatureKind`] clause of a point and an interval, in the order given.
+fn kind_clash(a: &PhsValue, ua: &RationalUnit, b: &PhsValue, ub: &RationalUnit) -> Mismatch {
+    let kind = |unit: &RationalUnit| if unit.is_affine() { "a temperature point" } else { "a temperature interval" };
+    Mismatch::TemperatureKind(format!("`{}` is {} and `{}` {}", written(a), kind(ua), written(b), kind(ub)))
+}
+
+/// Two numeric items of `items` that do not stand side by side ([`mismatch`]), in one pass: every numeric item is set
+/// against the first one for its dimension, and the first temperature point and the first temperature interval of the
+/// list against each other. One kind of temperature is not transitive: `K` stands for either, so `[1 K, 5
+/// delta_degC, 20 degC]` holds a point and an interval although each element matches the first. A different
+/// dimension is said before a kind. Items that are not numbers or quantities (text, the rows of a matrix) are not
+/// compared.
 pub(crate) fn first_mismatch(items: &[PhsValue]) -> Option<Mismatch> {
-    let mut numeric = items.iter().filter(|item| is_numeric(item));
-    let first = numeric.next()?;
-    numeric.find_map(|item| mismatch(first, item))
+    let mut numeric = items.iter().filter_map(|item| unit_of(item).map(|unit| (item, unit))).enumerate();
+    let (_, (first, _)) = numeric.clone().next()?;
+    // the first point and the first interval, with their place in the list
+    let (mut point, mut interval) = (None, None);
+    for (place, (item, unit)) in numeric.by_ref() {
+        if let Some(Mismatch::Dimension(why)) = mismatch(first, item) {
+            return Some(Mismatch::Dimension(why));
+        }
+        if point.is_none() && unit.is_affine() {
+            point = Some((place, item, unit));
+        }
+        if interval.is_none() && unit.is_written_interval() {
+            interval = Some((place, item, unit));
+        }
+    }
+    let (Some(p), Some(i)) = (point, interval) else { return None };
+    let ((_, a, ua), (_, b, ub)) = if p.0 < i.0 { (p, i) } else { (i, p) };
+    Some(kind_clash(a, ua, b, ub))
 }
 
 /// A value as it prints, with a whole number written without its `.0` (`1 m`, `2`), so that the message shows what

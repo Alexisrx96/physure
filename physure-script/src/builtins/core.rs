@@ -470,8 +470,8 @@ fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<
         _ => Err(PhysureError::Generic(format!("{name} expects numbers or quantities"))),
     };
     magnitude(&args[0])?;
-    use crate::builtins::dimensions::{mismatch, Mismatch};
-    match args.iter().skip(1).find_map(|arg| mismatch(&args[0], arg)) {
+    use crate::builtins::dimensions::{first_mismatch, Mismatch};
+    match first_mismatch(args) {
         Some(Mismatch::Dimension(why)) => {
             return Err(PhysureError::Generic(format!("{name} of different dimensions: {why}; compare values of one dimension")))
         }

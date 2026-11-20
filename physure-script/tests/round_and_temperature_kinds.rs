@@ -173,6 +173,46 @@ fn a_vector_holds_one_kind_of_temperature() {
     assert!(refused("vector(1 m, 2 s)").starts_with("a vector holds one dimension: "));
 }
 
+/// `K` stands for a point or an interval, so "one kind of temperature" is not transitive through it: every element is
+/// set against the first point and the first interval of the list, not only against the first element.
+#[test]
+fn a_kelvin_does_not_join_a_point_and_an_interval() {
+    for source in [
+        "max(1 K, 25 delta_degC, 20 degC)",
+        "max(25 delta_degC, 1 K, 20 degC)",
+        "max(25 delta_degC, 20 degC, 1 K)",
+        "min(1 K, 25 delta_degC, 20 degC)",
+        "min(20 degC, 1 K, 25 delta_degC)",
+    ] {
+        let message = refused(source);
+        assert!(message.contains("of a temperature point and a temperature interval"), "{source}: {message}");
+    }
+    let message = refused("max(1 K, 25 delta_degC, 20 degC)");
+    assert!(message.contains("`25 delta_degC` is a temperature interval and `20 degC` a temperature point"), "{message}");
+    for source in [
+        "[1 K, 25 delta_degC, 20 degC]",
+        "vector(300 K, 5 delta_degC, 20 degC)",
+        "vector(5 delta_degC, 300 K, 20 degC)",
+        "vector(5 delta_degC, 20 degC, 300 K)",
+        "[20 degC, 1 K, 5 delta_degC]",
+        // the vector is refused where it is made, before max sees it
+        "max(vector(1 K, 25 delta_degC, 20 degC))",
+    ] {
+        let message = refused(source);
+        assert!(message.starts_with("a vector holds one dimension and one kind of temperature"), "{source}: {message}");
+    }
+    let message = refused("vector(300 K, 5 delta_degC, 20 degC)");
+    assert!(message.contains("`5 delta_degC` is a temperature interval and `20 degC` a temperature point"), "{message}");
+    // a K with points only, or with intervals only, is fine
+    assert_eq!(last("max(1 K, 2 degC)"), last("2 degC"));
+    assert_eq!(last("max(1 K, 2 delta_degC)"), last("2 delta_degC"));
+    assert!(eval_phs("vector(1 K, 20 degC, 30 degC)").is_ok());
+    assert!(eval_phs("vector(1 K, 5 delta_degC)").is_ok());
+    assert!(eval_phs("vector(5 delta_degC, 1 K, 3 delta_degF)").is_ok());
+    // a dimension mismatch is still said as one
+    assert!(refused("vector(1 K, 20 degC, 1 m)").starts_with("a vector holds one dimension: "));
+}
+
 #[test]
 fn linspace_needs_endpoints_of_one_kind_of_temperature() {
     let message = refused("use * from array\nlinspace(5 delta_degC, 20 degC, 3)");
