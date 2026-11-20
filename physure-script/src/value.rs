@@ -133,10 +133,15 @@ impl PhsValue {
     /// [`PhsValue::vector_checked`], with what made the vector said in its error (`the elementwise `*` gives one
     /// where `, `the `for` gives one where `).
     pub(crate) fn vector_made_by(items: Vec<PhsValue>, made_by: &str) -> physure_core::error::PhysureResult<PhsValue> {
-        match crate::builtins::dimensions::first_mismatch(&items) {
+        use crate::builtins::dimensions::{first_mismatch, Mismatch};
+        match first_mismatch(&items) {
             None => Ok(PhsValue::Vector(items)),
-            Some(why) => Err(physure_core::error::PhysureError::Generic(format!(
+            Some(Mismatch::Dimension(why)) => Err(physure_core::error::PhysureError::Generic(format!(
                 "a vector holds one dimension: {made_by}{why}; put each dimension in its own vector"
+            ))),
+            Some(Mismatch::TemperatureKind(why)) => Err(physure_core::error::PhysureError::Generic(format!(
+                "a vector holds one dimension and one kind of temperature: {made_by}{why}; put the points and the \
+                 intervals in vectors of their own"
             ))),
         }
     }

@@ -90,10 +90,20 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
         )));
     }
     // the endpoints have one dimension: `linspace(0 m, 1 s, 3)` took the unit of the first and the number of the second
-    if let Some(why) = crate::builtins::dimensions::mismatch(&args[0], &args[1]) {
-        return Err(PhysureError::Generic(format!(
-            "linspace needs endpoints of one dimension: {why}; write both endpoints in one dimension"
-        )));
+    use crate::builtins::dimensions::{mismatch, Mismatch};
+    match mismatch(&args[0], &args[1]) {
+        Some(Mismatch::Dimension(why)) => {
+            return Err(PhysureError::Generic(format!(
+                "linspace needs endpoints of one dimension: {why}; write both endpoints in one dimension"
+            )))
+        }
+        Some(Mismatch::TemperatureKind(why)) => {
+            return Err(PhysureError::Generic(format!(
+                "linspace needs endpoints of one dimension and one kind of temperature: {why}; write both endpoints as \
+                 points or both as intervals"
+            )))
+        }
+        None => {}
     }
     let unit = args[..2].iter().find_map(|v| match v {
         PhsValue::Quantity(q) => Some(q.unit.clone()),

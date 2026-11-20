@@ -693,7 +693,9 @@ impl Quantity {
     ///   is a ratio, a power ratio or 100 dB is a convention nothing written states. Two levels compare by the ratios
     ///   they stand for, and a level with a dimension compares with a linear quantity of that dimension;
     /// * a dimensionless quantity that is not a level, in any unit (a plain number, `unity`, `%`, `ppm`), compares with
-    ///   plain numbers by its ratio: `50 % == 0.5`, `1 % > 0`.
+    ///   plain numbers by its ratio: `50 % == 0.5`, `1 % > 0`;
+    /// * **a temperature point and a temperature interval** have no comparison (`5 delta_degC < 20 degC` has no answer,
+    ///   [`RationalUnit::point_against_interval`]); point with point (`20 degC > 10 K`) and interval with interval do.
     pub fn comparable_magnitudes(&self, other: &Quantity) -> PhysureResult<(f64, f64)> {
         if let Some(message) = self.incomparability(other) {
             return Err(message);
@@ -741,6 +743,14 @@ impl Quantity {
         }
         if !self.unit.same_dimensions(&other.unit) {
             return Some(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
+        }
+        if self.unit.point_against_interval(&other.unit) {
+            let (point, interval) = if self.unit.is_affine() { (self, other) } else { (other, self) };
+            return Some(PhysureError::Generic(format!(
+                "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval \
+                 is how far apart two points are, not where one is; convert the interval to a point (`x => K`) or \
+                 compare a difference of two points (`T2 - T1`)"
+            )));
         }
         None
     }

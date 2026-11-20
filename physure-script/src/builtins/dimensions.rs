@@ -62,13 +62,27 @@ fn comparable(a: &PhsValue, ua: &RationalUnit, b: &PhsValue, ub: &RationalUnit) 
     as_quantity(a).comparable_magnitudes(&as_quantity(b)).is_ok()
 }
 
-/// `None` when `a` and `b` have one dimension, or when either is not a number or a quantity (nothing to compare);
-/// otherwise the clause that says why not, both values as they print and their dimensions in words:
-/// `` `1 m` is a length and `1 s` a time ``.
-pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<String> {
+/// Why two numeric values do not stand side by side: the clause that says so, both values as they print.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Mismatch {
+    /// Different dimensions, in words: `` `1 m` is a length and `1 s` a time ``.
+    Dimension(String),
+    /// One dimension, but a temperature point against a temperature interval, the pair the comparison of the core
+    /// refuses (`RationalUnit::point_against_interval`): `` `5 delta_degC` is a temperature interval and `20 degC` a
+    /// temperature point ``.
+    TemperatureKind(String),
+}
+
+/// `None` when `a` and `b` have one dimension and one kind of temperature, or when either is not a number or a
+/// quantity (nothing to compare); otherwise why not ([`Mismatch`]).
+pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<Mismatch> {
     let (ua, ub) = (unit_of(a)?, unit_of(b)?);
     if comparable(a, ua, b, ub) {
-        return None;
+        if !ua.point_against_interval(ub) {
+            return None;
+        }
+        let kind = |unit: &RationalUnit| if unit.is_affine() { "a temperature point" } else { "a temperature interval" };
+        return Some(Mismatch::TemperatureKind(format!("`{}` is {} and `{}` {}", written(a), kind(ua), written(b), kind(ub))));
     }
     let (mut wa, mut wb) = (dimension_words(ua), dimension_words(ub));
     if wa == wb {
@@ -76,13 +90,12 @@ pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<String> {
         wa = format!("{wa} in `{}`", ua.__repr__());
         wb = format!("{wb} in `{}`", ub.__repr__());
     }
-    Some(format!("`{}` is {wa} and `{}` {wb}", written(a), written(b)))
+    Some(Mismatch::Dimension(format!("`{}` is {wa} and `{}` {wb}", written(a), written(b))))
 }
 
-/// The first two numeric items of `items` whose dimensions differ, as the clause of [`mismatch`]: every numeric item
-/// is set against the first one. Items that are not numbers or quantities (text, the rows of a matrix) are not
-/// compared.
-pub(crate) fn first_mismatch(items: &[PhsValue]) -> Option<String> {
+/// The first two numeric items of `items` that do not stand side by side ([`mismatch`]): every numeric item is set
+/// against the first one. Items that are not numbers or quantities (text, the rows of a matrix) are not compared.
+pub(crate) fn first_mismatch(items: &[PhsValue]) -> Option<Mismatch> {
     let mut numeric = items.iter().filter(|item| is_numeric(item));
     let first = numeric.next()?;
     numeric.find_map(|item| mismatch(first, item))

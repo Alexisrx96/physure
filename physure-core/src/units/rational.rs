@@ -357,6 +357,23 @@ impl RationalUnit {
         self.offset != 0.0
     }
 
+    /// A temperature interval written as one: a unit named as a difference, the catalog's `delta_*` entries and their
+    /// aliases (`delta_degC`, `degC_delta`, `delta_fahrenheit`), prefixed or not. The catalog makes `delta_celsius` a
+    /// kelvin, so the name it is written by is all that tells them apart. `K` and `degR` sit on an absolute scale and
+    /// stand for a point or an interval alike (a point minus a point is in `K`), so they are not one.
+    pub fn is_written_interval(&self) -> bool {
+        !self.is_affine()
+            && self.log.is_none()
+            && self.display_name.as_deref().is_some_and(|name| name.contains("delta_") || name.ends_with("_delta"))
+    }
+
+    /// A temperature point (`degC`, `degF`, [`RationalUnit::is_affine`]) against a temperature interval written as one
+    /// ([`RationalUnit::is_written_interval`]), in either order: two kinds that no comparison relates, as no sum
+    /// of two points has a meaning. Point with point, interval with interval, and `K` with either are not.
+    pub fn point_against_interval(&self, other: &Self) -> bool {
+        (self.is_affine() && other.is_written_interval()) || (other.is_affine() && self.is_written_interval())
+    }
+
     /// The purely multiplicative unit measuring *intervals* on this scale: degC => K,
     /// degF => 5/9 K. Dropping the offset is what makes a temperature *difference*
     /// meaningful, so this is the form every arithmetic operation works in.

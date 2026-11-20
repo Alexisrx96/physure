@@ -470,8 +470,18 @@ fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<
         _ => Err(PhysureError::Generic(format!("{name} expects numbers or quantities"))),
     };
     magnitude(&args[0])?;
-    if let Some(why) = args.iter().skip(1).find_map(|arg| crate::builtins::dimensions::mismatch(&args[0], arg)) {
-        return Err(PhysureError::Generic(format!("{name} of different dimensions: {why}; compare values of one dimension")));
+    use crate::builtins::dimensions::{mismatch, Mismatch};
+    match args.iter().skip(1).find_map(|arg| mismatch(&args[0], arg)) {
+        Some(Mismatch::Dimension(why)) => {
+            return Err(PhysureError::Generic(format!("{name} of different dimensions: {why}; compare values of one dimension")))
+        }
+        Some(Mismatch::TemperatureKind(why)) => {
+            return Err(PhysureError::Generic(format!(
+                "{name} of a temperature point and a temperature interval: {why}; convert the interval to a point \
+                 (`x => K`) or compare a difference of two points (`T2 - T1`)"
+            )))
+        }
+        None => {}
     }
     let mut best = &args[0];
     for arg in args.iter().skip(1) {
