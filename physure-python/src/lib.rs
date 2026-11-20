@@ -732,6 +732,49 @@ impl PyQuantity {
         Ok(PyQuantity(new_q))
     }
 
+    /// The core's `Quantity::round`: the mean to `decimal_places` (ties away from zero, never `NaN` or
+    /// infinity, negative rounds to a power of ten), the unit and the uncertainty with its sources kept. A
+    /// count beyond the 32 bits the core takes saturates: at that many places there is no digit left to move.
+    #[pyo3(signature = (decimal_places = 0))]
+    fn round(&self, decimal_places: i64) -> PyResult<PyQuantity> {
+        let places = decimal_places.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        self.0.round(places).map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// The core's `Quantity::floor`: the mean to the integer below it, everything else kept.
+    fn floor(&self) -> PyResult<PyQuantity> {
+        self.0.floor().map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// The core's `Quantity::ceil`: the mean to the integer above it, everything else kept.
+    fn ceil(&self) -> PyResult<PyQuantity> {
+        self.0.ceil().map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// The core's `Quantity::trunc`: the mean towards zero, everything else kept.
+    fn trunc(&self) -> PyResult<PyQuantity> {
+        self.0.trunc().map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// A Gaussian quantity whose standard deviation is `lineage`, sources and all: the core form of a Python
+    /// scalar `Quantity` with the default (lineage-tracked) uncertainty, so an operation the core keeps the
+    /// sources through (`round`, `floor`, ...) can be asked of the core without minting a new source.
+    #[staticmethod]
+    fn from_lineage(mean: f64, unit: PyRationalUnit, lineage: PyLineage) -> PyQuantity {
+        PyQuantity(Quantity::from_value(UncertaintyValue::Gaussian(GaussianBackend::derived(mean, lineage.0)), unit.0))
+    }
+
+    /// The provenance of this quantity's uncertainty (`UncertaintyValue::lineage`): a Gaussian or unscented
+    /// value's own sources; any other model reports one fresh independent source.
+    #[getter]
+    fn lineage(&self) -> PyLineage {
+        PyLineage(self.0.value.lineage())
+    }
+
     /// PHS `self op other` for `op` one of `<`, `>`, `<=`, `>=`, `==`, `!=`: the core's comparison
     /// (`Quantity::phs_compare`). A `ValueError` (`UnitMismatchError` for different dimensions) when they have none:
     /// a zero written without a unit, a level against a plain number.
