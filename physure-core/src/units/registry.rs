@@ -769,7 +769,16 @@ impl UnitRegistry {
     /// registry says it is, with its exact scale (`km/h` is 5/18 m/s). `atomic` is a unit parsed
     /// with `Parser::parse_expression_atomic`. A symbol the registry does not know is an error, and
     /// so is a level inside a compound (`RationalUnit::refuse_logarithmic_compound`).
+    ///
+    /// A unit written as symbols that was made an interval (`atomic.interval`: `K` as the sum of a kelvin and an
+    /// interval, in a binding that keeps its units as symbols) stands for one: the flag is carried over.
     pub fn expand(&self, atomic: &RationalUnit) -> PhysureResult<RationalUnit> {
+        let mut expanded = self.expand_symbols(atomic)?;
+        expanded.interval |= atomic.interval;
+        Ok(expanded)
+    }
+
+    fn expand_symbols(&self, atomic: &RationalUnit) -> PhysureResult<RationalUnit> {
         // A single unit is what the registry says it is, zero point and level included: a product
         // would keep only its scale.
         if let [(symbol, (1, 1))] = atomic.dimensions.iter().collect::<Vec<_>>().as_slice() {
@@ -827,11 +836,19 @@ impl UnitRegistry {
     /// How a number in `from` becomes a number in `to`, two units written as symbols of the same
     /// dimension: the plan the core itself follows in `Quantity::convert_to`. A caller that holds
     /// its numbers elsewhere (NumPy, torch) applies the plan with its own operations and gets the
-    /// answer of the core, rounded the same way.
+    /// answer of the core, rounded the same way. A temperature point and a temperature interval do not
+    /// convert to each other, as there.
     pub fn conversion(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<Conversion> {
         let (from, to) = (self.expand(from)?, self.expand(to)?);
         if !from.convertible_to(&to) {
             return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
+        }
+        if from.point_against_interval(&to) {
+            return Err(PhysureError::Generic(crate::quantity::point_interval_conversion_message(
+                &from.__repr__(),
+                &to.__repr__(),
+                from.is_affine(),
+            )));
         }
         if from.is_logarithmic() || to.is_logarithmic() {
             if from.log == to.log && from.scale == to.scale {

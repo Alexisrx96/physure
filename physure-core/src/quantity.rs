@@ -53,6 +53,24 @@ pub fn point_against_interval_message(point: &str, interval: &str) -> String {
     )
 }
 
+/// The words of a conversion between a temperature point and a temperature interval, refused in either direction:
+/// `20 degC => delta_degC` read the point's absolute value (293.15 delta_degC) and `5 delta_degC => degC` read the
+/// interval as kelvin above absolute zero (-268.15 degC). `from` is the quantity (or the unit) as it prints, `to` the
+/// target unit; `from_point` says which of the two is the point.
+pub fn point_interval_conversion_message(from: &str, to: &str, from_point: bool) -> String {
+    if from_point {
+        format!(
+            "cannot convert a temperature point (`{from}`) to a temperature interval (`{to}`): a point says where, an \
+             interval says how far; use a difference of two points (`T2 - T1`); {POINT_AGAINST_INTERVAL_ADVICE}"
+        )
+    } else {
+        format!(
+            "cannot convert a temperature interval (`{from}`) to a temperature point (`{to}`): an interval says how \
+             far, a point says where; add the interval to a point (`T1 + {from}`); {POINT_AGAINST_INTERVAL_ADVICE}"
+        )
+    }
+}
+
 /// The relative bound of PHS `==` ([`Quantity::phs_eq`]): two canonical magnitudes are equal when they differ by at
 /// most this fraction of the larger. It absorbs the rounding of a conversion and of ordinary arithmetic
 /// (`1000 * 0.1` and `100` are 63 ulps apart) and still separates physically different values.
@@ -787,6 +805,14 @@ impl Quantity {
         PhysureError::Generic(point_against_interval_message(&point.to_string(), &interval.to_string()))
     }
 
+    /// The error of this quantity converted between a temperature point and a temperature interval. Out of line, as
+    /// the comparison's.
+    #[cold]
+    #[inline(never)]
+    fn point_interval_conversion(&self, target: &RationalUnit) -> PhysureError {
+        PhysureError::Generic(point_interval_conversion_message(&self.to_string(), &target.__repr__(), self.unit.is_affine()))
+    }
+
     /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],
     /// `!=` its negation, the order is that of the canonical magnitudes; operands without a comparison are an error
     /// ([`Quantity::comparable_magnitudes`]). This is what transpiled code calls, so that it answers what the
@@ -917,12 +943,19 @@ impl Quantity {
     /// Converts this quantity to an equivalent one expressed in `target`'s unit/scale.
     /// Errors if `target` has different physical dimensions. In `Dimensionless` angle mode it may read `rad` and
     /// `sr` as 1 (see `RationalUnit::convertible_to`); a sum or a comparison never does.
+    ///
+    /// A temperature point does not convert to a temperature interval, nor an interval to a point
+    /// ([`RationalUnit::point_against_interval`]): `20 degC => delta_degC` is refused, `10 K => delta_degC` and
+    /// `5 delta_degC => K` are not (`K` stands for either).
     pub fn convert_to(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
         if !self.unit.convertible_to(target) {
             return Err(PhysureError::UnitMismatch {
                 expected: self.unit.__repr__(),
                 actual: target.__repr__(),
             });
+        }
+        if self.unit.point_against_interval(target) {
+            return Err(self.point_interval_conversion(target));
         }
         if self.unit.is_logarithmic() || target.is_logarithmic() {
             return self.convert_logarithmic(target);
