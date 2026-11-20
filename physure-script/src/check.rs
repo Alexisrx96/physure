@@ -16,6 +16,12 @@
 //! compared their base-unit magnitudes; the interpreter refuses it now (unit holes), so it is an error like the
 //! others, and no finding is a warning today.
 //!
+//! One exception to "certain to refuse": the body of a function is checked with what it knows of it (the units of
+//! annotated parameters, the literals) even if the function is never called, so `fn f(a: m) = max(a, 1 s)` and
+//! `fn g(b) = max(1 m, 1 s)` are errors at check time although the interpreter, which never runs the body, accepts
+//! the program. The body would be refused at every call, so the finding is of the same kind as every other one the
+//! checker reports in a function body.
+//!
 //! **Functions.** A parameter with a unit (`fn f(m: kg, v: m/s)`) is checked at every call and typed in
 //! the body. A parameter without one takes the dimension of the argument at each call site: the body is
 //! checked again for those dimensions (memoised, with a guard against recursion), and a mismatch inside it
