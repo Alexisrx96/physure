@@ -3,7 +3,7 @@ from fractions import Fraction
 from pathlib import Path
 
 # Words that stand among the fields of a unit line without being a value or an alias.
-_FLAGS = ("noprefix", "own_kind")
+_FLAGS = ("noprefix", "own_kind", "interval")
 
 
 def generate_units_markdown():
@@ -67,6 +67,10 @@ def generate_units_markdown():
                 dim = parts[1]
                 scale = f"Scale {parts[0]}"
                 aliases = parts[2:]
+
+        if "interval" in parts:
+            # a temperature interval: a point does not compare with it nor convert to it
+            scale += ", interval"
 
         aliases_str = (
             ", ".join(a for a in aliases if a not in _FLAGS)

@@ -352,8 +352,8 @@ The micro sign, `µ` (U+00B5, as a keyboard types it) or `μ` (U+03BC, the Greek
 | Unit Name | Scaling / Converter | Symbols & Aliases |
 | --- | --- | --- |
 | `celsius` | Scale 1.0 (Offset 273.15) | `°C, celsius, centigrade, degC` |
-| `delta_celsius` | Scale 1.0 | `delta_degC, degC_delta, delta_celsius` |
-| `delta_fahrenheit` | Scale 5/9 | `delta_degF, degF_delta, delta_fahrenheit` |
+| `delta_celsius` | Scale 1.0, interval | `delta_degC, degC_delta, delta_celsius` |
+| `delta_fahrenheit` | Scale 5/9, interval | `delta_degF, degF_delta, delta_fahrenheit` |
 | `fahrenheit` | Scale 5/9 (Offset 45967/180) | `°F, fahrenheit, degF` |
 | `kelvin` | Scale 1.0 | `K, kelvin, kelvins` |
 | `planck_temperature` | Scale 1.416784e32 | `K, Tp, planck_temperature` |
