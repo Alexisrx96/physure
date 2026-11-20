@@ -44,3 +44,12 @@ def test_the_loader_says_which_file_took_a_reserved_name(tmp_path):
         load_ext_functions(interp, tmp_path)
     assert "'max'" in str(info.value)
     assert "cannot be bound as a function a host registers" in str(info.value)
+
+
+def test_a_host_function_cannot_hand_back_a_vector_of_two_dimensions(tmp_path):
+    # a vector holds one dimension, also when a host builds it (unit holes)
+    interpreter = Interpreter(base_dir=str(tmp_path))
+    interpreter.register_function(lambda a, b: [a, b], "pair")
+    with pytest.raises(ValueError, match="a vector holds one dimension"):
+        interpreter.evaluate("pair(1 m, 1 s)")
+    assert len(interpreter.evaluate("pair(1 m, 2 km)")[-1]) == 2

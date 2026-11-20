@@ -200,7 +200,7 @@ fn from_plugin_value(value: &PluginValue) -> PhysureResult<PhsValue> {
                 .iter()
                 .map(from_plugin_value)
                 .collect::<PhysureResult<Vec<_>>>()?;
-            Ok(PhsValue::Vector(converted))
+            PhsValue::vector_made_by(converted, "the plugin gives one where ")
         }
     }
 }
@@ -602,6 +602,16 @@ mod tests {
         let plugin_value = arena.push(&v).unwrap();
         let back = from_plugin_value(&plugin_value).unwrap();
         assert_eq!(back, v);
+    }
+
+    #[test]
+    fn a_plugin_cannot_hand_back_a_vector_of_two_dimensions() {
+        let mut arena = ValueArena::default();
+        let metre = PhsValue::Quantity(Quantity::new(1.0, "m").unwrap());
+        let second = PhsValue::Quantity(Quantity::new(1.0, "s").unwrap());
+        let plugin_value = arena.push(&PhsValue::Vector(vec![metre, second])).unwrap();
+        let error = from_plugin_value(&plugin_value).unwrap_err().to_string();
+        assert!(error.contains("a vector holds one dimension: the plugin gives one where"), "{error}");
     }
 
     #[test]

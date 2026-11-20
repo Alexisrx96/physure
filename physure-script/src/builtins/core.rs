@@ -267,10 +267,7 @@ pub fn eval_core_builtin(
 /// one; a vector of a length and a time has no meaning for any of them, and is refused where it is made. Text and
 /// the rows of a matrix are not compared.
 fn vector_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
-    if let Some(why) = crate::builtins::dimensions::first_mismatch(args) {
-        return Err(PhysureError::Generic(format!("a vector holds one dimension: {why}; put each dimension in its own vector")));
-    }
-    Ok(Some(PhsValue::Vector(args.to_vec())))
+    PhsValue::vector_checked(args.to_vec()).map(Some)
 }
 
 fn sqrt_number(n: f64) -> PhysureResult<f64> {
@@ -412,7 +409,7 @@ fn parallel_map(
     // the draws must be the next ones of the unit's stream (`PhsInterpreter::runs_in_parallel`).
     if !interpreter.runs_in_parallel() {
         let results = vec.into_iter().enumerate().map(call).collect::<PhysureResult<Vec<PhsValue>>>()?;
-        return Ok(Some(PhsValue::Vector(results)));
+        return PhsValue::vector_made_by(results, "`parallel_map` gives one where ").map(Some);
     }
     use rayon::prelude::*;
     crate::interpreter::count_parallel_loop();
@@ -420,7 +417,7 @@ fn parallel_map(
     let results = crate::interpreter::helpers::CallerScopes::capture(|scopes| {
         vec.into_par_iter().enumerate().map(|item| scopes.run(|| call(item))).collect::<PhysureResult<Vec<PhsValue>>>()
     })?;
-    Ok(Some(PhsValue::Vector(results)))
+    PhsValue::vector_made_by(results, "`parallel_map` gives one where ").map(Some)
 }
 
 fn assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {

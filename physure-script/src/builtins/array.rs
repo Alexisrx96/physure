@@ -152,7 +152,7 @@ fn gradient(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
         let dx = eval_bin_op(BinaryOp::Sub, &x_vec[i_next], &x_vec[i_prev])?;
         result.push(eval_bin_op(BinaryOp::Div, &dy, &dx)?);
     }
-    Ok(Some(PhsValue::Vector(result)))
+    PhsValue::vector_made_by(result, "`gradient` gives one where ").map(Some)
 }
 
 fn trapz(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
@@ -197,7 +197,7 @@ fn cross(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Optio
             interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[k].clone(), v2[j].clone())?,
         )
     };
-    Ok(Some(PhsValue::Vector(vec![component(1, 2)?, component(2, 0)?, component(0, 1)?])))
+    PhsValue::vector_made_by(vec![component(1, 2)?, component(2, 0)?, component(0, 1)?], "`cross` gives one where ").map(Some)
 }
 
 fn norm(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
@@ -225,8 +225,12 @@ fn transpose(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
             transposed[c][r] = matrix[r][c].clone();
         }
     }
-    let res_rows = transposed.into_iter().map(PhsValue::Vector).collect();
-    Ok(Some(PhsValue::Vector(res_rows)))
+    // a row of the transpose is a column of the matrix: the rows of `[[1 m], [1 s]]` may differ, its column may not
+    let res_rows = transposed
+        .into_iter()
+        .map(|row| PhsValue::vector_made_by(row, "the transpose gives one where "))
+        .collect::<PhysureResult<Vec<_>>>()?;
+    PhsValue::vector_checked(res_rows).map(Some)
 }
 
 fn matmul(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
@@ -244,9 +248,9 @@ fn matmul(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Opti
         for c in 0..columns {
             res_row.push(sum_of_products(interpreter, inner, |k| (row[k].clone(), m2[k][c].clone()))?);
         }
-        res_mat.push(PhsValue::Vector(res_row));
+        res_mat.push(PhsValue::vector_made_by(res_row, "`matmul` gives one where ")?);
     }
-    Ok(Some(PhsValue::Vector(res_mat)))
+    PhsValue::vector_checked(res_mat).map(Some)
 }
 
 fn det(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {

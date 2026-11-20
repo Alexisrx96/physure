@@ -623,7 +623,7 @@ impl PhsInterpreter {
                     })
                     .collect::<PhysureResult<Vec<PhsValue>>>()
             })?;
-            return Ok(PhsValue::Vector(results));
+            return PhsValue::vector_made_by(results, "the `for` gives one where ");
         }
         let mut local_env = env.clone();
         let mut results = Vec::with_capacity(items.len());
@@ -631,7 +631,7 @@ impl PhsInterpreter {
             local_env.insert(var.to_string(), item);
             results.push(self.eval_expr(body, &local_env)?);
         }
-        Ok(PhsValue::Vector(results))
+        PhsValue::vector_made_by(results, "the `for` gives one where ")
     }
 
     fn eval_prime_function_call(

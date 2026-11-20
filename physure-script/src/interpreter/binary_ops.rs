@@ -151,24 +151,21 @@ fn equation_op(op: BinaryOp, left: (Node, Node), right: (Node, Node)) -> Physure
 }
 
 /// The vector of `f` applied to each item, or the first error. A vector holds one dimension, so a result whose
-/// elements would not (`vector(1 m, 2 m) * vector(1 s, 2 m)` is `m·s` and `m²`) is refused as `vector(...)` refuses one.
+/// elements would not (`2 m ^ vector(1, 2)` is `m` and `m²`) is refused as `vector(...)` refuses one, naming the
+/// operation. A unary minus is `-1 * x` in the syntax tree, so it would be named `*`; it never gets here with a mixed
+/// result, since the negation of a vector of one dimension has one dimension.
 fn collect_vector<T>(op: BinaryOp, items: impl IntoIterator<Item = T>, f: impl FnMut(T) -> PhysureResult<PhsValue>) -> PhysureResult<PhsValue> {
     let items = items.into_iter().map(f).collect::<PhysureResult<Vec<_>>>()?;
-    if let Some(why) = crate::builtins::dimensions::first_mismatch(&items) {
-        let symbol = match op {
-            BinaryOp::Add => "+",
-            BinaryOp::Sub => "-",
-            BinaryOp::Mul => "*",
-            BinaryOp::Div => "/",
-            BinaryOp::Pow => "^",
-            BinaryOp::Convert => "=>",
-            BinaryOp::Range => "..",
-        };
-        return Err(PhysureError::Generic(format!(
-            "a vector holds one dimension: the elementwise `{symbol}` gives one where {why}; put each dimension in its own vector"
-        )));
-    }
-    Ok(PhsValue::Vector(items))
+    let symbol = match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Pow => "^",
+        BinaryOp::Convert => "=>",
+        BinaryOp::Range => "..",
+    };
+    PhsValue::vector_made_by(items, &format!("the elementwise `{symbol}` gives one where "))
 }
 
 fn quantity_op(op: BinaryOp, l: Quantity, r: Quantity) -> PhysureResult<PhsValue> {

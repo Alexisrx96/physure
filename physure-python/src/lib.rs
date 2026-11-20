@@ -1323,7 +1323,8 @@ fn py_to_phs_value(obj: &Bound<'_, PyAny>) -> PyResult<::physure_script::PhsValu
         let values = items
             .map(|item| py_to_phs_value(&item?))
             .collect::<PyResult<Vec<_>>>()?;
-        Ok(PhsValue::Vector(values))
+        // a vector holds one dimension: `[Q_(1, "m"), Q_(1, "s")]` from a host function is refused as `[1 m, 1 s]` is
+        PhsValue::vector_checked(values).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     } else {
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Cannot convert Python value {obj} to a PHS value"

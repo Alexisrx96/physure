@@ -123,3 +123,28 @@ fn an_angle_and_a_solid_angle_are_named_by_their_kind() {
     let message = refused("vector(1 sr, 1 rad)");
     assert!(message.contains("`1 sr` is a solid angle and `1 rad` an angle"), "{message}");
 }
+
+#[test]
+fn every_vector_the_interpreter_builds_holds_one_dimension() {
+    for (source, made_by) in [
+        ("v = for i in 0..2 { if i == 0 then 1 m else 1 s }", "the `for` gives one where"),
+        ("fn f(x) = for i in 0..2 { if i == 0 then x else 1 s }\nf(1 m)", "the `for` gives one where"),
+        ("fn g(i) = if i == 1 then 1 m else 1 s\nparallel_map(g, [1, 2])", "`parallel_map` gives one where"),
+        ("use * from array\ntranspose([[1 m], [1 s]])", "the transpose gives one where"),
+        ("use * from array\ntranspose([[1 m, 2 m], [1 s, 2 s]])", "the transpose gives one where"),
+    ] {
+        let message = refused(source);
+        assert!(message.contains(&format!("a vector holds one dimension: {made_by}")), "{source}: {message}");
+    }
+    // the same programs of one dimension are unchanged
+    assert_eq!(last("v = for i in 0..2 { i * 1 m }\nw = for e in v { e }\nw"), last("[0 m, 1 m]"));
+    assert!(eval_phs("fn g(i) = i * 1 m\nparallel_map(g, [1, 2])").is_ok());
+    assert!(eval_phs("use * from array\ntranspose([[1 m, 2 m], [3 m, 4 km]])").is_ok());
+}
+
+#[test]
+fn a_matrix_may_hold_rows_of_different_dimensions() {
+    // decision of 2026-11-17: the rows are not compared with each other; each row holds one dimension
+    assert!(eval_phs("[[1 m, 2 m], [1 s, 2 s]]").is_ok());
+    assert!(refused("[[1 m, 2 s], [1 s, 2 s]]").contains("a vector holds one dimension"));
+}
