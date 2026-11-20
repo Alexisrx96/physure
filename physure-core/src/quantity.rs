@@ -536,6 +536,12 @@ impl Quantity {
         self.shift_mean_to(self.value.mean().ceil())
     }
 
+    /// The integer part of the mean (towards zero: `floor` above zero, `ceil` below), same unit, same
+    /// uncertainty and sources.
+    pub fn trunc(&self) -> PhysureResult<Quantity> {
+        self.shift_mean_to(self.value.mean().trunc())
+    }
+
     /// The mean rounded to `decimal_places` ([`round_to_decimal_place`]: ties away from zero, never `NaN` or
     /// infinity), everything else kept as `floor` keeps it: the unit, the uncertainty and its sources, so the degrees
     /// of freedom and the correlation with the unrounded value survive. Rebuilding the quantity from its mean and
@@ -1331,6 +1337,21 @@ mod tests {
         assert_eq!(rounded.effective_dof().unwrap(), 2.0);
         assert_eq!(measured.sub(&rounded).unwrap().value.std_dev(), 0.0, "the same source, fully correlated");
         assert_eq!(measured.round(400).unwrap().value.mean(), measured.value.mean());
+    }
+
+    #[test]
+    fn trunc_moves_the_mean_towards_zero_and_keeps_everything_else() {
+        let unit = RationalUnit::new_from_dimensions([("V".to_string(), (1, 1))]);
+        let measured = Quantity::from_samples_in(&[1.0, 2.0, 4.0], unit.clone()).unwrap();
+        let truncated = measured.trunc().unwrap();
+        assert_eq!(truncated.value.mean(), 2.0);
+        assert_eq!(truncated.value.std_dev(), measured.value.std_dev());
+        assert_eq!(truncated.unit, measured.unit);
+        assert_eq!(truncated.effective_dof().unwrap(), 2.0);
+        assert_eq!(measured.sub(&truncated).unwrap().value.std_dev(), 0.0, "the same source, fully correlated");
+        let negative = Quantity::new_scalar(-2.7, 0.1, unit, None, None);
+        assert_eq!(negative.trunc().unwrap().value.mean(), -2.0);
+        assert_eq!(negative.floor().unwrap().value.mean(), -3.0);
     }
 
     #[test]
