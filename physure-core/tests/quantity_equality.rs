@@ -136,6 +136,40 @@ fn phs_compare_is_the_interpreter_s_comparison() {
     assert!(a.phs_compare(&b, "<>").is_err());
 }
 
+/// A temperature point (degC, degF) and a temperature interval written as one (delta_degC, delta_degF) are
+/// different kinds: no comparison relates them, in either order, with any operator. `K` and `degR` are on an absolute
+/// scale and read as either, so they compare with both.
+#[test]
+fn a_temperature_point_and_a_temperature_interval_have_no_comparison() {
+    let (point, interval) = (q(20.0, "degC"), q(5.0, "delta_degC"));
+    let words = "cannot compare a temperature point (`20.0 degC`) with a temperature interval (`5.0 delta_degC`)";
+    for op in ["<", ">", "<=", ">=", "==", "!=", "≤", "≥", "≠"] {
+        for (a, b) in [(&point, &interval), (&interval, &point)] {
+            let error = a.phs_compare(b, op).unwrap_err().to_string();
+            assert!(error.starts_with(words), "{a} {op} {b}: {error}");
+        }
+    }
+    assert!(point.phs_eq(&interval).is_err());
+    assert!(point.comparable_magnitudes(&interval).is_err());
+    assert!(point.phs_approx(&interval, 1e-3).is_err());
+    assert!(point.phs_assert(&interval).unwrap_err().to_string().contains("with a temperature interval"));
+    for (a, b) in [("degF", "delta_degF"), ("degC", "delta_fahrenheit"), ("degF", "degC_delta"), ("degC", "delta_celsius")] {
+        assert!(q(1.0, a).phs_compare(&q(1.0, b), "<").is_err(), "{a} < {b}");
+    }
+    // point with point, interval with interval, and K or degR against either: unchanged
+    assert!(q(20.0, "degC").phs_compare(&q(10.0, "K"), ">").unwrap());
+    assert!(q(10.0, "K").phs_compare(&q(20.0, "degC"), "<").unwrap());
+    assert!(q(500.0, "degR").phs_compare(&q(0.0, "degF"), ">").unwrap());
+    assert!(eq(&q(20.0, "degC"), &q(68.0, "degF")));
+    assert!(q(5.0, "delta_degC").phs_compare(&q(6.0, "delta_degC"), "<").unwrap());
+    assert!(eq(&q(9.0, "delta_degF"), &q(5.0, "delta_degC")));
+    assert!(q(5.0, "delta_degC").phs_compare(&q(6.0, "K"), "<").unwrap());
+    // the kind is that of the unit: a point minus a point is an interval in K, and compares with both
+    let difference = q(30.0, "degC").sub(&q(20.0, "degC")).unwrap();
+    assert!(difference.phs_compare(&q(5.0, "delta_degC"), ">").unwrap());
+    assert!(difference.phs_compare(&q(20.0, "degC"), "<").unwrap());
+}
+
 #[test]
 fn assert_uses_phs_eq() {
     assert!(q(1.0, "fm").phs_assert(&q(1000.0, "fm")).is_err(), "ABS_TOL 1e-12 let 1 fm pass for 1000 fm");

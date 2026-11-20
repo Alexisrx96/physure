@@ -1,0 +1,175 @@
+//! `round` overflow and degrees of freedom, and a temperature point against a temperature interval (spec
+//! `2026-11-20-round-and-temperature-kinds-design.md`). Every row of its section 1: the refused ones with the words
+//! of the error, the valid neighbours with their values.
+
+use physure_script::interpreter::eval_phs;
+use physure_script::PhsValue;
+
+fn refused(source: &str) -> String {
+    match eval_phs(source) {
+        Ok(values) => panic!("{source:?} gave {values:?}, expected an error"),
+        Err(error) => error.to_string(),
+    }
+}
+
+fn last_value(source: &str) -> PhsValue {
+    eval_phs(source).unwrap_or_else(|e| panic!("{source:?}: {e}")).pop().unwrap()
+}
+
+fn last(source: &str) -> String {
+    last_value(source).to_string()
+}
+
+/// The mean and the unit of the quantity `source` ends with.
+fn mean_and_unit(source: &str) -> (f64, String) {
+    match last_value(source) {
+        PhsValue::Quantity(q) => (q.value.mean(), q.unit.__repr__()),
+        other => panic!("{source:?} gave {other:?}, expected a quantity"),
+    }
+}
+
+const POINT_AND_INTERVAL: &str = "cannot compare a temperature point (`20.0 degC`) with a temperature interval (`5.0 delta_degC`)";
+
+#[test]
+fn round_to_more_decimals_than_a_double_holds_is_the_value_itself() {
+    assert_eq!(mean_and_unit("round(1.5 m, 400)"), (1.5, "m".to_string()));
+    assert_eq!(mean_and_unit("round(1e300 m, 10)"), (1e300, "m".to_string()));
+    assert_eq!(mean_and_unit("round(-1e300 m, 10)"), (-1e300, "m".to_string()));
+    // past 2^53 every double is a whole number: nothing to round, and the value is returned bit for bit
+    assert_eq!(mean_and_unit("round(9007199254740993.0 m, 3)").0.to_bits(), 9007199254740992.0f64.to_bits());
+    assert_eq!(mean_and_unit("round(123456789.123456789 m, 9)"), (123456789.123456789, "m".to_string()));
+    assert_eq!(last("round(1.5, 400)"), "1.5");
+    assert_eq!(last("round(1e300, 10)"), last("1e300"));
+}
+
+#[test]
+fn round_to_a_place_above_every_digit_is_zero() {
+    assert_eq!(mean_and_unit("round(123456.789 m, -400)"), (0.0, "m".to_string()));
+    assert_eq!(mean_and_unit("round(-123456.789 m, -400)").0, 0.0);
+    assert_eq!(last("round(123456.789, -400)"), "0.0");
+    assert_eq!(last("round(123456.789, -2147483648)"), "0.0");
+    assert_eq!(last("round(1.5, 2147483647)"), "1.5");
+    // a place the double can still hold, read by division: 123500, not 123500.00000000001
+    assert_eq!(mean_and_unit("round(123456.789 m, -2)"), (123500.0, "m".to_string()));
+    assert_eq!(last("round(1234.5, -1)"), "1230.0");
+}
+
+#[test]
+fn round_never_answers_nan_or_infinity_for_a_finite_value() {
+    for source in [
+        "round(1.5 m, 400)",
+        "round(123456.789 m, -400)",
+        "round(1e300 m, 10)",
+        "round(1.7e308 m, -308)",
+        "round(-1.7e308 m, -308)",
+        "round(1e-300 m, 400)",
+        "round(1.7e308, -308)",
+    ] {
+        let mean = match last_value(source) {
+            PhsValue::Quantity(q) => q.value.mean(),
+            PhsValue::Number(n) => n,
+            other => panic!("{source}: {other:?}"),
+        };
+        assert!(mean.is_finite(), "{source} gave {mean}");
+    }
+}
+
+#[test]
+fn round_of_ordinary_values_is_unchanged() {
+    assert_eq!(mean_and_unit("round(1.2345 m, 2)"), (1.23, "m".to_string()));
+    assert_eq!(last("round(1.2345 m, 2)"), last("1.23 m"));
+    assert_eq!(last("round(1.2345, 2)"), "1.23");
+    assert_eq!(last("round(2.5)"), "3.0");
+    assert_eq!(last("round(-2.5)"), "-3.0");
+    assert_eq!(last("round(1.5 m)"), last("2 m"));
+    assert_eq!(last("round(0.125, 2)"), "0.13");
+}
+
+#[test]
+fn round_keeps_the_degrees_of_freedom_and_the_uncertainty() {
+    assert_eq!(last("dof(from_samples([1 V, 2 V, 4 V]))"), "2.0");
+    assert_eq!(last("dof(round(from_samples([1 V, 2 V, 4 V]), 1))"), "2.0");
+    assert_eq!(last("dof(round(from_samples([1 V, 2 V, 4 V])))"), "2.0");
+    let (std_dev, rounded_std_dev) = match (
+        last_value("from_samples([1 V, 2 V, 4 V])"),
+        last_value("round(from_samples([1 V, 2 V, 4 V]), 1)"),
+    ) {
+        (PhsValue::Quantity(a), PhsValue::Quantity(b)) => (a.value.std_dev(), b.value.std_dev()),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(std_dev, rounded_std_dev);
+    assert_eq!(mean_and_unit("round(from_samples([1 V, 2 V, 4 V]), 1)"), (2.3, "V".to_string()));
+    // the rounded value is the same measurement: it keeps its source, so the difference has no uncertainty left
+    match last_value("x = from_samples([1 V, 2 V, 4 V])\nx - round(x, 1)") {
+        PhsValue::Quantity(difference) => assert_eq!(difference.value.std_dev(), 0.0, "{difference}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_temperature_point_and_a_temperature_interval_have_no_order() {
+    for op in ["<", ">", "<=", ">=", "==", "!="] {
+        for source in [format!("5 delta_degC {op} 20 degC"), format!("20 degC {op} 5 delta_degC")] {
+            let message = refused(&source);
+            assert!(message.contains(POINT_AND_INTERVAL), "{source}: {message}");
+        }
+    }
+    let message = refused("5 delta_degC == 5 degC");
+    assert!(message.contains("a temperature point (`5.0 degC`) with a temperature interval (`5.0 delta_degC`)"), "{message}");
+    assert!(refused("5 delta_degC != 5 degC").contains("with a temperature interval"));
+    for source in ["5 delta_degF < 20 degC", "5 degC_delta < 20 degF", "5 delta_fahrenheit < 20 degF", "2 delta_celsius >= 1 degC"] {
+        assert!(refused(source).contains("with a temperature interval"), "{source}: {}", refused(source));
+    }
+    let message = refused("5 delta_degC < 20 degC");
+    assert!(message.contains("convert the interval to a point"), "{message}");
+}
+
+#[test]
+fn points_with_points_and_intervals_with_intervals_still_compare() {
+    assert_eq!(last("20 degC > 10 K"), "True");
+    assert_eq!(last("10 K < 20 degC"), "True");
+    assert_eq!(last("20 degC == 68 degF"), "True");
+    assert_eq!(last("5 delta_degC < 6 delta_degC"), "True");
+    assert_eq!(last("9 delta_degF == 5 delta_degC"), "True");
+    assert_eq!(last("5 delta_degC < 6 K"), "True");
+    assert_eq!(last("(30 degC - 20 degC) > 5 delta_degC"), "True");
+    assert_eq!(last("(5 delta_degC => K) < 20 degC"), "True");
+    assert_eq!(last("20 degC + 5 delta_degC"), last("25 degC"));
+    assert_eq!(last("20 degC - 10 degC"), last("10 K"));
+}
+
+#[test]
+fn an_extremum_of_a_point_and_an_interval_is_refused() {
+    let message = refused("max(5 delta_degC, 20 degC)");
+    assert!(message.starts_with("max of a temperature point and a temperature interval"), "{message}");
+    assert!(message.contains("`5 delta_degC` is a temperature interval and `20 degC` a temperature point"), "{message}");
+    let message = refused("min(20 degC, 5 delta_degC)");
+    assert!(message.starts_with("min of a temperature point and a temperature interval"), "{message}");
+    assert!(message.contains("`20 degC` is a temperature point and `5 delta_degC` a temperature interval"), "{message}");
+    assert!(refused("max(vector(5 delta_degC, 20 degC))").contains("one kind of temperature"));
+    assert_eq!(last("max(5 degC, 3 degC)"), last("5 degC"));
+    assert_eq!(last("min(5 delta_degC, 3 delta_degC)"), last("3 delta_degC"));
+    assert_eq!(last("max(20 degC, 300 K)"), last("300 K"));
+}
+
+#[test]
+fn a_vector_holds_one_kind_of_temperature() {
+    for source in ["vector(5 delta_degC, 20 degC)", "[20 degC, 5 delta_degC]", "[20 degC, 300 K, 5 delta_degC]"] {
+        let message = refused(source);
+        assert!(message.starts_with("a vector holds one dimension and one kind of temperature"), "{source}: {message}");
+    }
+    let message = refused("vector(5 delta_degC, 20 degC)");
+    assert!(message.contains("`5 delta_degC` is a temperature interval and `20 degC` a temperature point"), "{message}");
+    assert!(eval_phs("vector(20 degC, 300 K)").is_ok());
+    assert!(eval_phs("vector(5 delta_degC, 3 K)").is_ok());
+    assert!(eval_phs("vector(5 delta_degC, 3 delta_degF)").is_ok());
+    // a dimension mismatch keeps its own words
+    assert!(refused("vector(1 m, 2 s)").starts_with("a vector holds one dimension: "));
+}
+
+#[test]
+fn linspace_needs_endpoints_of_one_kind_of_temperature() {
+    let message = refused("linspace(5 delta_degC, 20 degC, 3)");
+    assert!(message.contains("one kind of temperature"), "{message}");
+    assert!(eval_phs("linspace(10 degC, 20 degC, 3)").is_ok());
+}
