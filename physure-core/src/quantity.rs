@@ -156,11 +156,33 @@ fn magnitude_exponent(x: f64) -> i32 {
     x.abs().log10().floor() as i32
 }
 
-/// Rounds `x` to `decimal_places` digits after the decimal point. Negative rounds to a power
+/// Rounds `x` to `decimal_places` digits after the decimal point, ties away from zero. Negative rounds to a power
 /// of ten instead (`-1` rounds to the nearest ten).
-fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
-    let factor = 10f64.powi(decimal_places);
-    (x * factor).round() / factor
+///
+/// It never overflows: a finite `x` never gives `NaN` or infinity. A place finer than `x` has digits for (`x * 10^d`
+/// not finite, or at least 2^53, where every double is a whole number) leaves `x` as it is; a place above every digit
+/// (`10^-d` not finite) gives 0; a rounding the double cannot hold (`1.7e308` to a multiple of `1e308`) leaves `x`. A
+/// negative place divides by `10^-d` and multiplies back, which is exact where multiplying by the inexact `10^d` was
+/// not. A non-finite `x` is returned unchanged. It was `(x * 10^d).round() / 10^d`, which made `round(1.5, 400)` NaN.
+pub fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
+    const WHOLE: f64 = 9_007_199_254_740_992.0; // 2^53
+    if !x.is_finite() {
+        return x;
+    }
+    if decimal_places >= 0 {
+        let factor = 10f64.powi(decimal_places);
+        let scaled = x * factor;
+        if !scaled.is_finite() || scaled.abs() >= WHOLE {
+            return x;
+        }
+        return scaled.round() / factor;
+    }
+    let divisor = decimal_places.checked_neg().map_or(f64::INFINITY, |places| 10f64.powi(places));
+    if !divisor.is_finite() {
+        return 0.0;
+    }
+    let rounded = (x / divisor).round() * divisor;
+    if rounded.is_finite() { rounded } else { x }
 }
 
 /// Rounds `x` to `sig_figs` significant figures.
@@ -490,6 +512,14 @@ impl Quantity {
     /// The `floor` counterpart: the integer above the mean, same unit, same uncertainty.
     pub fn ceil(&self) -> PhysureResult<Quantity> {
         self.shift_mean_to(self.value.mean().ceil())
+    }
+
+    /// The mean rounded to `decimal_places` ([`round_to_decimal_place`]: ties away from zero, never `NaN` or
+    /// infinity), everything else kept as `floor` keeps it: the unit, the uncertainty and its sources, so the degrees
+    /// of freedom and the correlation with the unrounded value survive. Rebuilding the quantity from its mean and
+    /// standard deviation minted a new source and lost them (`dof(round(from_samples(..), 1))` was infinite).
+    pub fn round(&self, decimal_places: i32) -> PhysureResult<Quantity> {
+        self.shift_mean_to(round_to_decimal_place(self.value.mean(), decimal_places))
     }
 
     /// Slides the whole distribution so its mean lands on `target`.
@@ -1196,6 +1226,34 @@ mod tests {
 
     fn milliamp_unit() -> RationalUnit {
         RationalUnit::new_from_dimensions([("A".to_string(), (1, 1))]).with_scale(0.001)
+    }
+
+    #[test]
+    fn rounding_to_a_decimal_place_never_overflows() {
+        assert_eq!(round_to_decimal_place(1.5, 400), 1.5);
+        assert_eq!(round_to_decimal_place(1e300, 10), 1e300);
+        assert_eq!(round_to_decimal_place(123456.789, -400), 0.0);
+        assert_eq!(round_to_decimal_place(-123456.789, i32::MIN), 0.0);
+        assert_eq!(round_to_decimal_place(1.7e308, -308), 1.7e308, "2e308 is not a double");
+        assert_eq!(round_to_decimal_place(1.2345, 2), 1.23);
+        assert_eq!(round_to_decimal_place(2.5, 0), 3.0);
+        assert_eq!(round_to_decimal_place(-2.5, 0), -3.0);
+        assert_eq!(round_to_decimal_place(123456.789, -2), 123500.0);
+        assert!(round_to_decimal_place(f64::NAN, 2).is_nan());
+        assert_eq!(round_to_decimal_place(f64::INFINITY, -2), f64::INFINITY);
+    }
+
+    #[test]
+    fn round_keeps_everything_but_the_mean() {
+        let unit = RationalUnit::new_from_dimensions([("V".to_string(), (1, 1))]);
+        let measured = Quantity::from_samples_in(&[1.0, 2.0, 4.0], unit).unwrap();
+        let rounded = measured.round(1).unwrap();
+        assert_eq!(rounded.value.mean(), 2.3);
+        assert_eq!(rounded.value.std_dev(), measured.value.std_dev());
+        assert_eq!(rounded.unit, measured.unit);
+        assert_eq!(rounded.effective_dof().unwrap(), 2.0);
+        assert_eq!(measured.sub(&rounded).unwrap().value.std_dev(), 0.0, "the same source, fully correlated");
+        assert_eq!(measured.round(400).unwrap().value.mean(), measured.value.mean());
     }
 
     #[test]

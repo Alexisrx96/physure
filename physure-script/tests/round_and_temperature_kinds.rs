@@ -169,7 +169,7 @@ fn a_vector_holds_one_kind_of_temperature() {
 
 #[test]
 fn linspace_needs_endpoints_of_one_kind_of_temperature() {
-    let message = refused("linspace(5 delta_degC, 20 degC, 3)");
+    let message = refused("use * from array\nlinspace(5 delta_degC, 20 degC, 3)");
     assert!(message.contains("one kind of temperature"), "{message}");
-    assert!(eval_phs("linspace(10 degC, 20 degC, 3)").is_ok());
+    assert!(eval_phs("use * from array\nlinspace(10 degC, 20 degC, 3)").is_ok());
 }

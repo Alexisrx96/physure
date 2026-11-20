@@ -500,21 +500,12 @@ fn round_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
             None => return Err(PhysureError::Generic(format!("round expects a plain number of decimals, got {value}"))),
         },
     };
-    let factor = 10.0f64.powi(decimals);
+    // the core rounds without overflow (`round(1.5 m, 400)` was NaN m) and keeps everything but the mean: rounding
+    // says nothing about how well the value is known, so the uncertainty, its sources and their degrees of freedom
+    // ride along (rebuilding from the mean and the standard deviation lost the degrees of freedom)
     match &args[0] {
-        PhsValue::Number(n) => Ok(Some(PhsValue::Number((n * factor).round() / factor))),
-        PhsValue::Quantity(q) => {
-            // Rounding the mean says nothing about how well it is known, so the
-            // uncertainty rides along untouched rather than being reset to zero.
-            let rounded = physure_core::Quantity::new_scalar(
-                (q.value.mean() * factor).round() / factor,
-                q.value.std_dev(),
-                q.unit.clone(),
-                None,
-                None,
-            );
-            Ok(Some(PhsValue::Quantity(rounded)))
-        }
+        PhsValue::Number(n) => Ok(Some(PhsValue::Number(physure_core::quantity::round_to_decimal_place(*n, decimals)))),
+        PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.round(decimals)?))),
         _ => Err(PhysureError::Generic("round expects number or quantity".into())),
     }
 }
