@@ -386,4 +386,16 @@ class QuantityStrictTest {
         assertTrue(q(20.0, "degC").phsCompare(q(10.0, "K"), ">"));
         assertTrue(q(5.0, "delta_degC").phsCompare(q(6.0, "delta_degC"), "<"));
     }
+
+    @Test
+    void aTemperaturePointAndAnIntervalDoNotConvert() {
+        PhysureException toInterval = assertThrows(PhysureException.class, () -> q(20.0, "degC").convertTo("delta_degC"));
+        assertTrue(toInterval.getMessage().contains("cannot convert a temperature point"), toInterval.getMessage());
+        PhysureException toPoint = assertThrows(PhysureException.class, () -> q(5.0, "delta_degC").convertTo("degC"));
+        assertTrue(toPoint.getMessage().contains("cannot convert a temperature interval"), toPoint.getMessage());
+        assertTrue(q(10.0, "K").convertTo("delta_degC").phsCompare(q(10.0, "delta_degC"), "=="));
+        assertTrue(q(5.0, "delta_degC").convertTo("K").phsCompare(q(20.0, "degC"), "<"), "=> K reads a kelvin");
+        // A Java Quantity carries its unit as text, so an interval the core's arithmetic makes in K (20 degC - 10 degC,
+        // 1 K + 5 delta_degC) is a plain K once it is back in Java: an open line of docs/ROADMAP.md section 3.
+    }
 }

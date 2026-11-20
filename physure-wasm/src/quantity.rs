@@ -238,6 +238,18 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn a_temperature_point_and_an_interval_do_not_convert_and_a_difference_of_points_is_an_interval() {
+        let message = |err: JsValue| String::from(err.dyn_into::<js_sys::Error>().expect("should be a JS Error").message());
+        let point = Quantity::new(20.0, "degC").unwrap();
+        assert!(message(point.convert_to("delta_degC").unwrap_err()).contains("cannot convert a temperature point"));
+        assert!(message(Quantity::new(5.0, "delta_degC").unwrap().convert_to("degC").unwrap_err())
+            .contains("cannot convert a temperature interval"));
+        assert!(Quantity::new(10.0, "K").unwrap().convert_to("delta_degC").is_ok());
+        let difference = point.subtract(&Quantity::new(10.0, "degC").unwrap()).unwrap();
+        assert!(message(difference.phs_compare(&point, "<").unwrap_err()).contains("with a temperature interval"));
+    }
+
+    #[wasm_bindgen_test]
     fn phys_exact_assert_throws_when_conversion_would_be_required() {
         let a = Quantity::new(1.0, "km").unwrap();
         let b = Quantity::new(1000.0, "m").unwrap();
