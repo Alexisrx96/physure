@@ -28,6 +28,16 @@ fn has_flag(val_part: &str, flag: &str) -> bool {
 /// existed (`delta_celsius = 1.0, O, [...]`) must not lose the rule its library already applied by name.
 const SHIPPED_INTERVALS: [&str; 2] = ["delta_celsius", "delta_fahrenheit"];
 
+/// Why `interval` cannot flag a unit of a dimension with no temperature point.
+const INTERVAL_WITHOUT_A_POINT: &str =
+    "`interval` marks the difference of two points of a scale with a zero point (degC, degF), and no unit with a zero point of this dimension is defined before this line: a unit of a dimension without points is neither a point nor an interval";
+
+/// Whether the dimension of the unit registered as `symbol` has a point: a unit with a zero point (`degC`).
+fn has_a_point(registry: &UnitRegistry, symbol: &str) -> bool {
+    let Some(unit) = registry.derived_units.get(symbol) else { return false };
+    registry.derived_units.values().any(|other| other.is_affine() && other.same_dimensions(unit))
+}
+
 /// Why `interval` cannot flag a level: it is the logarithm of a ratio, not a temperature that moves a point.
 const INTERVAL_ON_A_LEVEL: &str =
     "`interval` marks a temperature interval (how far apart two points are); a level (`Log, ...`) is the logarithm of a ratio and is never one";
@@ -1458,6 +1468,18 @@ fn parse_unit_line(
     if interval && factor == 1.0 && symbol == base_symbol {
         return Err(INTERVAL_ON_A_BASE.to_string());
     }
+    // a line that restates an interval entry (`delta_celsius` copied from an older catalog) without the flag would
+    // silently make it a kelvin again: refused, so the definition in force stays
+    if !interval {
+        if let Some(name) = [key, symbol.as_str()].into_iter().find(|name| {
+            registry.derived_units.get(&registry.resolve_symbol(name)).is_some_and(|unit| unit.interval)
+        }) {
+            return Err(format!(
+                "`{name}` is a temperature interval: the line needs the `interval` flag (`{key} = ..., interval, [...]`);                  without it a temperature point would compare with it and convert to it. The definition in force stays"
+            ));
+        }
+    }
+    let previous = registry.derived_units.get(&symbol).cloned();
 
     // Dimension "1" is tested before `base_symbol`, which maps it to the `unity` unit:
     // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
@@ -1478,6 +1500,14 @@ fn parse_unit_line(
     // what its line says, and nothing a recipe of an interval unit would pass on
     if let Some(unit) = registry.derived_units.get_mut(&symbol) {
         unit.interval = interval;
+    }
+    // an interval is the difference of two points: its dimension needs a point (a unit with a zero point, like degC)
+    if interval && !has_a_point(registry, &symbol) {
+        match previous {
+            Some(unit) => registry.derived_units.insert(symbol.clone(), unit),
+            None => registry.derived_units.remove(&symbol),
+        };
+        return Err(INTERVAL_WITHOUT_A_POINT.to_string());
     }
 
     register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
@@ -2885,16 +2915,26 @@ mod tests {
             assert!(interval_of(&trusted, name), "{name}");
         }
         assert!(!interval_of(&trusted, "K") && !interval_of(&trusted, "degR"));
-        // a user's text that redefines the entry without the flag gets what it wrote: a kelvin under another name
+        // a user's text that restates the entry without the flag is refused, and the entry stays an interval
         let mut user = trusted.clone();
-        extend_registry(&mut user, &mut HashMap::new(), "[Units]\ndelta_celsius = 1.0, O, [delta_degC, delta_celsius]\n").unwrap();
-        assert!(!interval_of(&user, "delta_degC"));
+        let refused = extend_registry(&mut user, &mut HashMap::new(), "[Units]\ndelta_celsius = 1.0, O, [delta_degC, delta_celsius]\n");
+        assert!(refused.unwrap_err().iter().any(|p| p.contains("needs the `interval` flag")));
+        assert!(interval_of(&user, "delta_degC"));
+        // read leniently (a project's physure.conf), the line is reported and ignored
+        let mut lenient = trusted.clone();
+        let problems = read_leniently_collected(
+            "[Units]\ndelta_celsius = 1.0, O, [delta_degC, delta_celsius]\n",
+            &mut lenient,
+            &mut HashMap::new(),
+            &mut ProcessSettings::default(),
+            false,
+        );
+        assert!(problems.iter().any(|p| p.contains("`delta_celsius` is a temperature interval")), "{problems:?}");
+        assert!(interval_of(&lenient, "delta_degC"));
         // the old line read as a user's (untrusted) is a user's line
         let mut untrusted = UnitRegistry::new();
-        let old_lines = "[Units]
-kelvin = 1.0, O, [K, kelvin]
-delta_celsius = 1.0, O, [delta_degC, degC_delta, delta_celsius]
-";
+        let old_lines =
+            "[Units]\nkelvin = 1.0, O, [K, kelvin]\ncelsius = 1.0, 273.15, O, [degC]\ndelta_celsius = 1.0, O, [delta_degC, degC_delta, delta_celsius]\n";
         extend_registry(&mut untrusted, &mut HashMap::new(), old_lines).unwrap();
         assert!(!interval_of(&untrusted, "delta_degC"));
         let (mut again, mut c, mut s) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());

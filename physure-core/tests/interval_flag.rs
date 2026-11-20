@@ -255,3 +255,38 @@ fn the_facts_of_a_unit_say_whether_it_is_an_interval() {
         assert!(!registry.facts("dB*m").map(|facts| facts.interval).unwrap_or(false));
     });
 }
+
+#[test]
+fn a_users_line_that_restates_an_interval_entry_without_the_flag_is_refused_and_the_entry_stays() {
+    for line in [
+        "delta_celsius = 1.0, O, [delta_degC, degC_delta, delta_celsius]",
+        "delta_fahrenheit = 5/9, O, [delta_degF, degF_delta, delta_fahrenheit]",
+        "delta_celsius = 1.0, O",
+    ] {
+        let mut registry = custom("");
+        let found = problems(&mut registry, &format!("[Units]\n{line}\n"));
+        assert!(found.iter().any(|p| p.contains("is a temperature interval: the line needs the `interval` flag")), "{line}: {found:?}");
+        with_catalog(&registry, || assert_interval(&q(5.0, "delta_degC"), line));
+    }
+    // with the flag it is a definition like any other
+    let registry = custom("[Units]\ndelta_celsius = 1.0, O, interval, [delta_degC, degC_delta, delta_celsius]\n");
+    with_catalog(&registry, || assert_interval(&q(5.0, "delta_degC"), "restated with the flag"));
+    // a user's own unit of another name is what its line says
+    let registry = custom("[Units]\ndV = 1.0, O, [dV]\n");
+    with_catalog(&registry, || assert_not_interval(&q(5.0, "dV"), "dV"));
+}
+
+#[test]
+fn the_flag_needs_a_point_of_its_dimension() {
+    let mut registry = custom("");
+    let found = problems(&mut registry, "[Units]\nzm = 2.0, L, interval, [zm]\n");
+    assert!(found.iter().any(|p| p.contains("no unit with a zero point")), "{found:?}");
+    // in a text of its own, the point comes first
+    let mut fresh = UnitRegistry::new();
+    let found = problems(&mut fresh, "[Units]\nkelvin = 1.0, O, [K]\ndT = 1.0, O, interval, [dT]\ncelsius = 1.0, 273.15, O, [degC]\n");
+    assert!(found.iter().any(|p| p.contains("no unit with a zero point")), "{found:?}");
+    let mut ordered = UnitRegistry::new();
+    let found = problems(&mut ordered, "[Units]\nkelvin = 1.0, O, [K]\ncelsius = 1.0, 273.15, O, [degC]\ndT = 1.0, O, interval, [dT]\n");
+    assert!(found.is_empty(), "{found:?}");
+    assert!(ordered.get_unit("dT").unwrap().is_written_interval());
+}
