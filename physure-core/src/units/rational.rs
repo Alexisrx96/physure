@@ -382,11 +382,12 @@ impl RationalUnit {
     }
 
     /// The unit of a sum or a difference of a quantity in this unit and one in `other`, of the same dimensions and
-    /// neither a point nor a level: this unit, as it was written, and an interval when either operand is one. An
-    /// interval plus a `K` is an interval in either order (`1 K + 5 delta_degC` prints `6 K` and is one).
+    /// neither a point nor a level: this unit, as it was written, and an interval only when both operands are known
+    /// intervals. A plain `K` is of unknown kind (an absolute temperature, `20 degC => K`, or a difference), and so is
+    /// its sum with an interval, in either order: `300 K + 5 delta_degC` compares with a point and is 31.85 degC.
     pub fn sum_unit(&self, other: &Self) -> Self {
         let mut unit = self.clone();
-        unit.interval = self.interval || other.interval;
+        unit.interval = self.interval && other.interval;
         unit
     }
 

@@ -89,16 +89,24 @@ fn an_interval_times_or_over_a_plain_number_is_an_interval() {
 }
 
 #[test]
-fn a_sum_or_difference_of_intervals_or_of_an_interval_and_a_kelvin_is_an_interval() {
+fn a_sum_of_intervals_is_an_interval_and_a_kelvin_with_an_interval_is_of_unknown_kind() {
     let (d, f, k) = (q(5.0, "delta_degC"), q(9.0, "delta_degF"), q(1.0, "K"));
     assert_interval(&ok(d.add(&d), "d + d"), "d + d");
     assert_interval(&ok(d.sub(&f), "d - f"), "d - f");
     assert_interval(&ok(f.add(&d), "f + d"), "f + d");
-    // either order: the kind no longer follows the name of the left operand
-    assert_interval(&ok(d.add(&k), "d + K"), "5 delta_degC + 1 K");
-    assert_interval(&ok(k.add(&d), "K + d"), "1 K + 5 delta_degC");
-    assert_interval(&ok(d.sub(&k), "d - K"), "5 delta_degC - 1 K");
-    assert_interval(&ok(k.sub(&d), "K - d"), "1 K - 5 delta_degC");
+    // a plain K may be an absolute temperature (`20 degC => K`) or a difference: with an interval, the sum is of
+    // unknown kind too, in either order, and compares with a point (300 K + 5 delta_degC is 31.85 degC)
+    assert_not_interval(&ok(d.add(&k), "d + K"), "5 delta_degC + 1 K");
+    assert_not_interval(&ok(k.add(&d), "K + d"), "1 K + 5 delta_degC");
+    assert_not_interval(&ok(d.sub(&k), "d - K"), "5 delta_degC - 1 K");
+    assert_not_interval(&ok(k.sub(&d), "K - d"), "1 K - 5 delta_degC");
+    // a difference of two points is a known interval: with an interval, an interval
+    let difference = ok(q(20.0, "degC").sub(&q(10.0, "degC")), "20 degC - 10 degC");
+    assert_interval(&ok(difference.add(&d), "(p - p) + d"), "(20 degC - 10 degC) + 5 delta_degC");
+    assert_interval(&ok(d.add(&difference), "d + (p - p)"), "5 delta_degC + (20 degC - 10 degC)");
+    assert_not_interval(&ok(difference.add(&k), "(p - p) + K"), "(20 degC - 10 degC) + 1 K");
+    let absolute = ok(q(300.0, "K").add(&d), "300 K + d");
+    assert_shown(&ok(absolute.convert_to(&q(1.0, "degC").unit), "=> degC"), "31.85 degC");
     // printed as before: in the unit of the left operand
     assert_shown(&ok(k.add(&d), "K + d"), "6.0 K");
     assert_shown(&ok(d.add(&k), "d + K"), "6.0 delta_degC");
@@ -212,7 +220,8 @@ fn a_unit_of_a_users_conf_flagged_interval_behaves_like_delta_degc() {
         for name in ["dT", "dTs", "kdT"] {
             assert_interval(&q(5.0, name), name);
         }
-        assert_interval(&ok(q(2.0, "dT").add(&q(1.0, "K")), "dT + K"), "2 dT + 1 K");
+        assert_interval(&ok(q(2.0, "dT").add(&q(5.0, "dT")), "dT + dT"), "2 dT + 5 dT");
+        assert_not_interval(&ok(q(2.0, "dT").add(&q(1.0, "K")), "dT + K"), "2 dT + 1 K");
         assert!(q(20.0, "degC").convert_to(&q(1.0, "dT").unit).is_err());
         assert!(q(5.0, "dT").convert_to(&q(1.0, "degC").unit).is_err());
         // without the flag a scale-1 temperature unit is a kelvin under another name: neutral

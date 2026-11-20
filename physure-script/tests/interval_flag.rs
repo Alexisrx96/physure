@@ -35,9 +35,10 @@ fn refused_against_a_point(source: &str) {
 /// Section 1: the holes the name heuristic left, with what the flag answers.
 #[test]
 fn the_holes_of_the_name_heuristic() {
-    // the kind no longer follows the name of the left operand
-    refused_against_a_point("(1 K + 5 delta_degC) < 20 degC");
-    refused_against_a_point("(5 delta_degC + 1 K) < 20 degC");
+    // a plain K may be an absolute temperature: with an interval its sum is of unknown kind, in either order, and
+    // compares with a point (the name made the second one an interval)
+    assert!(truth("(1 K + 5 delta_degC) < 20 degC"));
+    assert!(truth("(5 delta_degC + 1 K) < 20 degC"));
     // a point minus a point is an interval, still printed in K
     refused_against_a_point("(20 degC - 10 degC) < 20 degC");
     assert_eq!(last("20 degC - 10 degC"), "10.0 K");
@@ -65,20 +66,50 @@ fn an_interval_scaled_by_a_plain_number_or_a_ratio_is_an_interval() {
 }
 
 #[test]
-fn sums_of_intervals_and_kelvins_are_intervals_in_either_order() {
+fn sums_of_known_intervals_are_intervals_and_a_kelvin_makes_the_kind_unknown() {
     for source in [
         "(5 delta_degC + 5 delta_degC) < 20 degC",
+        "(5 delta_degC - 9 delta_degF) < 20 degC",
+        "(20 degC - 10 degC) + 5 delta_degC < 20 degC",
+        "20 degC > (5 delta_degC + (30 degC - 20 degC))",
+    ] {
+        refused_against_a_point(source);
+    }
+    for source in [
         "(5 delta_degC - 1 K) < 20 degC",
         "(1 K - 5 delta_degC) < 20 degC",
         "(9 delta_degF + 1 K) < 20 degC",
         "20 degC > (1 K + 5 delta_degC)",
+        "(1 K + 1 K) < 20 degC",
+        "(1 degR + 5 delta_degF) < 20 degF",
     ] {
-        refused_against_a_point(source);
+        assert!(truth(source), "{source}");
     }
     assert_eq!(last("1 K + 5 delta_degC"), "6.0 K");
     assert_eq!(last("5 delta_degC + 1 K"), "6.0 delta_degC");
-    assert!(truth("(1 K + 1 K) < 20 degC"), "a kelvin with a kelvin stays neutral");
-    assert!(truth("(1 K + 5 delta_degC) < 10 delta_degC"), "an interval compares with an interval");
+    assert!(truth("(1 K + 5 delta_degC) < 10 delta_degC"), "K compares with an interval");
+}
+
+/// The programs a K standing for an absolute temperature runs, which the rule "K plus an interval is an interval"
+/// refused (review of the interval flag).
+#[test]
+fn a_kelvin_that_is_an_absolute_temperature_moves_by_an_interval() {
+    assert_eq!(last("(300 K + 5 delta_degC) => degC"), "31.85 degC");
+    assert_eq!(last("T1 = 293.15 K
+T1 + 5 delta_degC => degC"), "25.0 degC");
+    assert!(truth("T1 = 20 degC => K
+T3 = T1 + (30 degC - 20 degC)
+T3 > 25 degC"));
+    assert_eq!(last("T1 = 20 degC => K
+T3 = T1 + (30 degC - 20 degC)
+T3 => degC"), "30.0 degC");
+    assert!(truth("T = 20 degC => K
+T - 5 delta_degC > 10 degC"));
+    assert!(truth("T = 300 K
+dT = 30 degC - 20 degC
+(T - dT) < 30 degC"));
+    assert_eq!(last("T1 = 293.15 K
+max(T1 + 5 delta_degC, 20 degC)"), "298.15 K");
 }
 
 #[test]
@@ -120,7 +151,8 @@ fn a_unit_of_a_users_conf_flagged_interval_is_an_interval() {
     let registry = registry("[Units]\ndT = 1.0, O, interval, [dT]\ndU = 1.0, O, [dU]\n");
     with_catalog(&registry, || {
         refused_against_a_point("5 dT < 20 degC");
-        refused_against_a_point("(2 dT + 1 K) < 20 degC");
+        refused_against_a_point("(2 dT + 5 dT) < 20 degC");
+        assert!(truth("(2 dT + 1 K) < 20 degC"), "a kelvin makes the kind unknown");
         assert!(refused("20 degC => dT").contains("cannot convert a temperature point"));
         assert_eq!(last("20 degC + 5 dT"), "25.0 degC");
         assert!(truth("5 dU < 20 degC"), "without the flag it is a kelvin under another name");
@@ -130,11 +162,11 @@ fn a_unit_of_a_users_conf_flagged_interval_is_an_interval() {
 #[test]
 fn max_min_vector_and_ranges_read_the_flag() {
     for source in [
-        "max(1 K + 5 delta_degC, 20 degC)",
+        "max(5 delta_degC + 5 delta_degC, 20 degC)",
         "min(20 degC - 10 degC, 20 degC)",
         "vector(5 delta_degC * 50 %, 20 degC)",
         "use * from array
-linspace(1 K + 5 delta_degC, 20 degC, 3)",
+linspace(5 delta_degC * 2, 20 degC, 3)",
     ] {
         let error = refused(source);
         assert!(error.contains("temperature point") && error.contains("temperature interval"), "{source:?}: {error}");

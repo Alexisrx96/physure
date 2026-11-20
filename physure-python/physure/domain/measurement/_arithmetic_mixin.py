@@ -802,23 +802,28 @@ class ArithmeticMixin:
     def _sum_kind(self, other: Quantity | Numeric, result: Any) -> Any:
         """The kind of a sum of temperatures, as the core's arithmetic says.
 
-        An interval with an interval or with a kelvin is an interval, in
-        either order (`1 K + 5 delta_degC`); a point is decided by
-        `_affine_check`. Only a temperature asks the core.
+        Two known intervals make an interval; a plain K is of unknown kind
+        (it may be an absolute temperature), and so is its sum with an
+        interval, in either order (`1 K + 5 delta_degC`). Such a sum is
+        written in the base unit (K), since `delta_degC` would say interval.
+        A point is decided by `_affine_check`. Only a temperature asks the
+        core.
         """
         if (
             not isinstance(other, _q())
             or not isinstance(result, _q())
             or result is self
             or result is other
-            or result.unit.interval
             or self.dimension.exponents != _TEMPERATURE
             or result._is_absolute()
             or other._is_absolute()
         ):
             return result
-        if self.system.core_registry.sum_is_interval(self.unit, other.unit):
+        registry = self.system.core_registry
+        if registry.sum_is_interval(self.unit, other.unit):
             return self._made_interval(result)
+        if registry.is_interval(result.unit):
+            return result.to(result.unit.base_unit(self.system))
         return result
 
     def _refuse_plain_number(self) -> None:

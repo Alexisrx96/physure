@@ -26,20 +26,35 @@ def test_the_core_says_which_unit_is_an_interval():
     assert registry.facts("degC")["interval"] is False
 
 
-def test_a_kelvin_plus_an_interval_is_an_interval_in_either_order(q):
+def test_a_kelvin_plus_an_interval_is_of_unknown_kind_in_either_order(q):
+    """A plain K may be an absolute temperature: with an interval, the sum is too."""
     for total in (
         q(1, "K") + q(5, "delta_degC"),
         q(5, "delta_degC") + q(1, "K"),
     ):
-        for a, b in ((total, q(20, "degC")), (q(20, "degC"), total)):
-            with pytest.raises(IncompatibleUnitsError, match=COMPARE):
-                _ = a < b
-    # printed as before, in the unit of the left operand
-    assert str((q(1, "K") + q(5, "delta_degC")).unit) == "K"
-    assert (q(1, "K") + q(5, "delta_degC")).magnitude == pytest.approx(6.0)
-    # a kelvin with a kelvin stays neutral, and an interval compares with an interval
+        assert total < q(20, "degC")
+        assert q(20, "degC") > total
+        assert total.magnitude == pytest.approx(6.0)
+        assert total.unit.interval is False
+        # written in K: delta_degC would say interval
+        assert str(total.unit) == "K"
     assert q(1, "K") + q(1, "K") < q(20, "degC")
     assert q(1, "K") + q(5, "delta_degC") < q(10, "delta_degC")
+    # two known intervals make an interval
+    with pytest.raises(IncompatibleUnitsError, match=COMPARE):
+        _ = q(5, "delta_degC") + q(5, "delta_degC") < q(20, "degC")
+    with pytest.raises(IncompatibleUnitsError, match=COMPARE):
+        _ = (q(20, "degC") - q(10, "degC")) + q(5, "delta_degC") < q(
+            20, "degC"
+        )
+
+
+def test_a_kelvin_that_is_an_absolute_temperature_moves_by_an_interval(q):
+    moved = q(20, "degC").to("K") + q(5, "delta_degC")
+    assert moved.to("degC").magnitude == pytest.approx(25.0)
+    assert (q(300, "K") + q(5, "delta_degC")).to("degC").magnitude == (
+        pytest.approx(31.85)
+    )
 
 
 def test_a_point_minus_a_point_is_an_interval_still_in_kelvin(q):

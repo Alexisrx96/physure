@@ -451,11 +451,17 @@ impl PyUnitRegistry {
     }
 
     /// Whether the sum or difference of quantities in two units written as symbols (of one dimension, neither a point
-    /// nor a level) is a temperature interval, as the core's arithmetic says (`RationalUnit::sum_unit`): an interval
-    /// with an interval or with a `K`, in either order.
+    /// nor a level) is a temperature interval, as the core's arithmetic says (`RationalUnit::sum_unit`): only two known
+    /// intervals make one; a plain `K` is of unknown kind, and so is its sum with an interval.
     fn sum_is_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
         let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
         Ok(a.sum_unit(&b).is_written_interval())
+    }
+
+    /// Whether a unit written as symbols stands for a temperature interval (a unit the catalog flags `interval`, or
+    /// one made an interval).
+    fn is_interval(&self, unit: &PyRationalUnit) -> PyResult<bool> {
+        Ok(self.0.expand(&unit.0).map_err(value_error)?.is_written_interval())
     }
 
     /// Every name the registry holds for a unit, sorted (a prefixed name is read, not held).
