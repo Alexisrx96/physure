@@ -489,13 +489,16 @@ fn round_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
         return Err(PhysureError::Generic("round expects arguments".into()));
     }
     // the number of decimals is a plain number: `round(1.5 m, 1 s)` read the `1` of `1 s` and ignored its unit
+    // and a whole one: `round(x, 2.7)` and `round(x, 1 percent)` (0.01) were truncated; `-1` rounds to tens
     let decimals = match args.get(1) {
-        Some(PhsValue::Number(d)) => *d as i32,
-        Some(PhsValue::Quantity(q)) if q.unit.dimensions.is_empty() && !q.unit.is_logarithmic() => q.canonical_magnitude() as i32,
-        Some(other) => {
-            return Err(PhysureError::Generic(format!("round expects a plain number of decimals, got {other}")));
-        }
         None => 0,
+        Some(value) => match crate::builtins::dimensions::whole_number(value) {
+            Some(d) => d as i32,
+            None if crate::builtins::dimensions::plain_number(value).is_some() => {
+                return Err(PhysureError::Generic(format!("round needs a whole number of decimals, got {value}")));
+            }
+            None => return Err(PhysureError::Generic(format!("round expects a plain number of decimals, got {value}"))),
+        },
     };
     let factor = 10.0f64.powi(decimals);
     match &args[0] {

@@ -148,3 +148,27 @@ fn a_matrix_may_hold_rows_of_different_dimensions() {
     assert!(eval_phs("[[1 m, 2 m], [1 s, 2 s]]").is_ok());
     assert!(refused("[[1 m, 2 s], [1 s, 2 s]]").contains("a vector holds one dimension"));
 }
+
+#[test]
+fn linspace_has_numeric_endpoints_and_a_whole_count() {
+    for source in ["linspace(0 m, \"x\", 3)", "linspace(\"x\", 2 m, 3)", "linspace(\"a\", \"b\", 3)", "linspace(True, 2, 3)"] {
+        let message = refused(&format!("use * from array\n{source}"));
+        assert!(message.contains("linspace's endpoints are numbers or quantities"), "{source}: {message}");
+    }
+    for source in ["linspace(0, 1, 50 percent)", "linspace(0, 1, 2.7)", "linspace(0, 1, -3)"] {
+        let message = refused(&format!("use * from array\n{source}"));
+        assert!(message.contains("linspace needs a whole, non-negative count"), "{source}: {message}");
+    }
+    // the default count stays 50, and a whole count written as a quantity is still a count
+    assert!(last("use * from array\nlinspace(0, 1)").contains("(50 items)"));
+    assert_eq!(last("use * from array\nlinspace(0, 1, 300 percent)"), last("[0, 0.5, 1]"));
+    assert!(eval_phs("use * from array\nlinspace(0, 1, 0)").is_ok());
+}
+
+#[test]
+fn round_takes_a_whole_number_of_decimals() {
+    assert!(refused("round(1.2345, 2.7)").contains("round needs a whole number of decimals"));
+    assert!(refused("round(1.2345 m, 1 percent)").contains("round needs a whole number of decimals"));
+    assert_eq!(last("round(1234.5, -1)"), "1230.0");
+    assert_eq!(last("round(1.2345 m, 2)"), last("1.23 m"));
+}

@@ -30,6 +30,21 @@ pub(crate) fn is_numeric(value: &PhsValue) -> bool {
     unit_of(value).is_some()
 }
 
+/// A number, or a dimensionless quantity that is not a level, as the plain number it stands for (`50 percent` is
+/// 0.5); `None` for anything else. What a count or a number of decimals must be.
+pub(crate) fn plain_number(value: &PhsValue) -> Option<f64> {
+    match value {
+        PhsValue::Number(n) => Some(*n),
+        PhsValue::Quantity(q) if q.unit.dimensions.is_empty() && !q.unit.is_logarithmic() => Some(q.canonical_magnitude()),
+        _ => None,
+    }
+}
+
+/// [`plain_number`] when it is a finite whole number (`3`, `-1`, `300 percent`), `None` otherwise.
+pub(crate) fn whole_number(value: &PhsValue) -> Option<f64> {
+    plain_number(value).filter(|n| n.is_finite() && n.fract() == 0.0)
+}
+
 /// Whether two numbers or quantities have one dimension, by the rule of the module.
 fn comparable(a: &PhsValue, ua: &RationalUnit, b: &PhsValue, ub: &RationalUnit) -> bool {
     if !ua.same_dimensions(ub) {

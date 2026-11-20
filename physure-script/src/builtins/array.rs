@@ -82,6 +82,13 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 2 {
         return Err(generic_error("linspace expects start and stop"));
     }
+    // an endpoint that is not a number or a quantity was read as 0 or 1
+    if let Some(other) = args[..2].iter().find(|v| !crate::builtins::dimensions::is_numeric(v)) {
+        return Err(PhysureError::Generic(format!(
+            "linspace's endpoints are numbers or quantities, got {} ({other})",
+            other.type_name()
+        )));
+    }
     // the endpoints have one dimension: `linspace(0 m, 1 s, 3)` took the unit of the first and the number of the second
     if let Some(why) = crate::builtins::dimensions::mismatch(&args[0], &args[1]) {
         return Err(PhysureError::Generic(format!(
@@ -93,7 +100,7 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
         _ => None,
     });
     // each endpoint is read in the unit of the points: `linspace(0 m, 1 km, 3)` read the `1` of `1 km` as metres
-    let mean_or = |v: &PhsValue, default: f64| -> PhysureResult<f64> {
+    let mean_of = |v: &PhsValue| -> PhysureResult<f64> {
         match (v, &unit) {
             (PhsValue::Quantity(q), Some(u)) => Ok(q.convert_to(u)?.value.mean()),
             (PhsValue::Number(n), Some(u)) => {
@@ -103,19 +110,23 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
                     .mean())
             }
             (PhsValue::Number(n), None) => Ok(*n),
-            _ => Ok(default),
+            _ => unreachable!("the endpoints were checked to be numbers or quantities"),
         }
     };
-    let start = mean_or(&args[0], 0.0)?;
-    let stop = mean_or(&args[1], 1.0)?;
-    // a literal such as `5` is a dimensionless quantity, not a bare number; a count with a dimension is not a count
+    let start = mean_of(&args[0])?;
+    let stop = mean_of(&args[1])?;
+    // a literal such as `5` is a dimensionless quantity, not a bare number; a count with a dimension is not a count,
+    // and neither is `2.7` or `50 percent` (0.5), which were truncated
     let count = match args.get(2) {
-        Some(PhsValue::Number(n)) => *n as usize,
-        Some(PhsValue::Quantity(q)) if q.unit.dimensions.is_empty() && !q.unit.is_logarithmic() => q.canonical_magnitude() as usize,
-        Some(other) => {
-            return Err(PhysureError::Generic(format!("linspace's count must be a plain number, got {other}")));
-        }
         None => 50,
+        Some(value) => match crate::builtins::dimensions::whole_number(value) {
+            Some(n) if n >= 0.0 => n as usize,
+            Some(_) => return Err(PhysureError::Generic(format!("linspace needs a whole, non-negative count, got {value}"))),
+            None if crate::builtins::dimensions::plain_number(value).is_some() => {
+                return Err(PhysureError::Generic(format!("linspace needs a whole, non-negative count, got {value}")));
+            }
+            None => return Err(PhysureError::Generic(format!("linspace's count must be a plain number, got {value}"))),
+        },
     };
     // `count` is a caller-supplied argument driving `.collect()` below directly --
     // the identical unbounded-materialization shape as the for-expression's Range
