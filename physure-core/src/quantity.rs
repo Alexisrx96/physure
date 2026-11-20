@@ -428,7 +428,7 @@ impl Quantity {
             other.value.clone()
         };
         let new_value = self.value.propagate_add(&other_value)?;
-        Ok(Quantity { value: new_value, unit: self.unit.clone() })
+        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit) })
     }
 
     pub fn sub(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -450,7 +450,7 @@ impl Quantity {
             other.value.clone()
         };
         let new_value = self.value.propagate_sub(&other_value)?;
-        Ok(Quantity { value: new_value, unit: self.unit.clone() })
+        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit) })
     }
 
     pub fn mul(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -944,7 +944,8 @@ impl Quantity {
     /// point; an interval (K, degR, delta_celsius...) moves it, and two points give an interval:
     ///
     /// - point + interval and interval + point are a point in the point's scale;
-    /// - point - interval is a point, and point - point is an interval, in kelvin;
+    /// - point - interval is a point, and point - point is an interval, in kelvin (printed `K`, flagged an interval:
+    ///   `(20 degC - 10 degC) < 20 degC` has no answer);
     /// - point + point (the sum of two temperatures) and interval - point have no meaning.
     fn combine_with_point(&self, other: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
         match (self.unit.is_affine(), other.unit.is_affine(), subtract) {
@@ -954,7 +955,11 @@ impl Quantity {
                 self.unit.__repr__(),
                 other.unit.__repr__()
             ))),
-            (true, true, true) => self.to_delta()?.sub(&other.to_delta()?),
+            (true, true, true) => {
+                let mut difference = self.to_delta()?.sub(&other.to_delta()?)?;
+                difference.unit.interval = true;
+                Ok(difference)
+            }
             (false, true, true) => Err(PhysureError::Generic(format!(
                 "cannot subtract the absolute temperature '{}' from the interval '{}'",
                 other.unit.__repr__(),

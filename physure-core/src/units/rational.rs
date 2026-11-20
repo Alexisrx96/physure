@@ -347,6 +347,12 @@ impl RationalUnit {
         self.log.is_none() && self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9
     }
 
+    /// A ratio: no dimensions and not a level, in any scale (a plain number, `%`, `ppm`). What scales a quantity
+    /// without changing what kind of quantity it is.
+    fn is_ratio(&self) -> bool {
+        self.log.is_none() && self.dimensions.is_empty()
+    }
+
     /// A level stands alone: `dB/km` or `dB^2` would keep the number and lose the logarithm
     /// it is the level of. `result` is what `operands` combined into; if a level went in and
     /// no level came out, say so instead of returning a plain ratio.
@@ -373,6 +379,15 @@ impl RationalUnit {
     /// interval alike, so they are not one.
     pub fn is_written_interval(&self) -> bool {
         self.interval && !self.is_affine() && self.log.is_none()
+    }
+
+    /// The unit of a sum or a difference of a quantity in this unit and one in `other`, of the same dimensions and
+    /// neither a point nor a level: this unit, as it was written, and an interval when either operand is one. An
+    /// interval plus a `K` is an interval in either order (`1 K + 5 delta_degC` prints `6 K` and is one).
+    pub fn sum_unit(&self, other: &Self) -> Self {
+        let mut unit = self.clone();
+        unit.interval = self.interval || other.interval;
+        unit
     }
 
     /// A temperature point (`degC`, `degF`, [`RationalUnit::is_affine`]) against a temperature interval written as one
@@ -478,17 +493,19 @@ impl RationalUnit {
         // A level times a plain number keeps the level's name with its `log` below. The level
         // itself has a dimensionless scale of 1, so the plain-operand rule that follows took the
         // plain number's name (none) for `-1 * dB`: `-5 dB` printed `-5.0` while still a level.
-        let (display_name, periodic, interval) = if self.log.is_some() && other.is_plain_number() {
-            (self.display_name.clone(), self.periodic, self.interval)
+        let (display_name, periodic) = if self.log.is_some() && other.is_plain_number() {
+            (self.display_name.clone(), self.periodic)
         } else if other.log.is_some() && self.is_plain_number() {
-            (other.display_name.clone(), other.periodic, other.interval)
+            (other.display_name.clone(), other.periodic)
         } else if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
-            (self.display_name.clone(), self.periodic, self.interval)
+            (self.display_name.clone(), self.periodic)
         } else if self.dimensions.is_empty() && (self.scale - 1.0).abs() < 1e-9 {
-            (other.display_name.clone(), other.periodic, other.interval)
+            (other.display_name.clone(), other.periodic)
         } else {
-            (None, false, false)
+            (None, false)
         };
+        // an interval scaled by a ratio (`2`, `50 %`), in either order, is an interval; with a dimension it is not
+        let interval = (self.interval && other.is_ratio()) || (other.interval && self.is_ratio());
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.mul(b)),
             _ => None,
@@ -511,11 +528,13 @@ impl RationalUnit {
     pub fn div(&self, other: &Self) -> Self {
         let new_dims = combine_dimensions(&self.dimensions, &other.dimensions, true);
         let id = Self::calculate_id(&new_dims);
-        let (display_name, periodic, interval) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
-            (self.display_name.clone(), self.periodic, self.interval)
+        let (display_name, periodic) = if other.dimensions.is_empty() && (other.scale - 1.0).abs() < 1e-9 {
+            (self.display_name.clone(), self.periodic)
         } else {
-            (None, false, false)
+            (None, false)
         };
+        // an interval over a ratio is an interval; a ratio over an interval, or anything over a dimension, is not
+        let interval = self.interval && other.is_ratio();
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.div(b)),
             _ => None,

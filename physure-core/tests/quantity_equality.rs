@@ -164,10 +164,11 @@ fn a_temperature_point_and_a_temperature_interval_have_no_comparison() {
     assert!(q(5.0, "delta_degC").phs_compare(&q(6.0, "delta_degC"), "<").unwrap());
     assert!(eq(&q(9.0, "delta_degF"), &q(5.0, "delta_degC")));
     assert!(q(5.0, "delta_degC").phs_compare(&q(6.0, "K"), "<").unwrap());
-    // the kind is that of the unit: a point minus a point is an interval in K, and compares with both
+    // a point minus a point is an interval, printed in K: it compares with an interval and not with a point (the
+    // interval flag; the name heuristic made it a K that compared with both)
     let difference = q(30.0, "degC").sub(&q(20.0, "degC")).unwrap();
     assert!(difference.phs_compare(&q(5.0, "delta_degC"), ">").unwrap());
-    assert!(difference.phs_compare(&q(20.0, "degC"), "<").unwrap());
+    assert!(difference.phs_compare(&q(20.0, "degC"), "<").is_err());
 }
 
 #[test]

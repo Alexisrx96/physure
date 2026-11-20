@@ -133,7 +133,8 @@ fn max_min_vector_and_ranges_read_the_flag() {
         "max(1 K + 5 delta_degC, 20 degC)",
         "min(20 degC - 10 degC, 20 degC)",
         "vector(5 delta_degC * 50 %, 20 degC)",
-        "linspace(1 K + 5 delta_degC, 20 degC, 3)",
+        "use * from array
+linspace(1 K + 5 delta_degC, 20 degC, 3)",
     ] {
         let error = refused(source);
         assert!(error.contains("temperature point") && error.contains("temperature interval"), "{source:?}: {error}");
