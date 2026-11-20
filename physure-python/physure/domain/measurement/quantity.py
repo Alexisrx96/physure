@@ -1400,7 +1400,9 @@ class Quantity(
             return None
         model = self._uncertainty_obj
         lineage = (
-            model.native if isinstance(model, LineageModel) else Lineage.exact()
+            model.native
+            if isinstance(model, LineageModel)
+            else Lineage.exact()
         )
         result = getattr(
             RustCoreQuantity.from_lineage(
