@@ -840,6 +840,7 @@ class ArithmeticMixin:
             or result is other
             or self.dimension.exponents != _TEMPERATURE
             or result._is_absolute()
+            or self._is_absolute()
             or other._is_absolute()
         ):
             return result
@@ -1054,12 +1055,17 @@ class ArithmeticMixin:
         return self._backend.mul(self._backend.ones(size), param)
 
     def _affine_check(self, other: Quantity, is_add: bool) -> Quantity | None:
-        """Checks and performs point and interval arithmetic if applicable."""
-        is_absolute_self = self._is_absolute()
-        is_absolute_other = other._is_absolute()
+        """Checks and performs point and interval arithmetic if applicable.
 
-        if not (is_absolute_self or is_absolute_other):
+        Applies when a side has a zero point (degC); the sides are then told
+        apart as points or not as the core does, so a K that holds a point
+        (`10 degC => K`) is a point here: `20 degC - (10 degC => K)` is 10 K
+        and `20 degC + (10 degC => K)` is refused.
+        """
+        if not (self._is_absolute() or other._is_absolute()):
             return None
+        is_absolute_self = self._is_point()
+        is_absolute_other = other._is_point()
 
         # Check for compatibility
         if self.dimension != other.dimension:
@@ -1087,7 +1093,8 @@ class ArithmeticMixin:
 
         # V - P -> Error
         raise ValueError(
-            "Cannot subtract an absolute quantity from a difference."
+            "Cannot subtract an absolute quantity from a difference "
+            "(an interval, or a K of unknown kind)."
         )
 
     def _logarithmic_add_sub(

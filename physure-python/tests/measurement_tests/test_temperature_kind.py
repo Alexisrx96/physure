@@ -192,3 +192,45 @@ def test_array_sums_of_temperatures_keep_their_values_and_kinds(q):
     with_d = difference + q(1, "delta_degC")
     np.testing.assert_allclose(with_d.magnitude, [11.0, 21.0])
     assert with_d.unit.interval is True
+
+
+def test_a_point_with_a_zero_point_and_a_marked_kelvin_are_two_points(q):
+    """As the core: `20 degC - (10 degC => K)` was -263.15 degC, it is an interval of 10 K."""
+    ten = q(10, "degC").to("K")
+    for difference, mean in (
+        (q(20, "degC") - ten, 10.0),
+        (q(25, "degC") - q(0, "degC").to("K"), 25.0),
+        (ten - q(20, "degC"), -10.0),
+        (q(25, "degC").to("K") - q(0, "degC"), 25.0),
+        (_u(20, "degC") - _u(10, "degC").to("K"), 10.0),
+    ):
+        assert difference.magnitude == pytest.approx(mean)
+        assert str(difference.unit) == "K"
+        assert difference.unit.interval is True
+        with pytest.raises(IncompatibleUnitsError, match=COMPARE):
+            _ = difference < q(20, "degC")
+    for left, right in ((q(20, "degC"), ten), (ten, q(20, "degC"))):
+        with pytest.raises(ValueError, match="Cannot add two absolute"):
+            _ = left + right
+    with pytest.raises(ValueError, match="K of unknown kind"):
+        _ = q(10, "K") - q(20, "degC")
+    resistance = q(100, "ohm") * (
+        1 + q(0.00385, "1/K") * (q(25, "degC").to("K") - q(0, "degC"))
+    )
+    assert resistance.to("ohm").magnitude == pytest.approx(109.625)
+
+
+def test_the_functional_sum_reads_a_marked_kelvin_as_a_point(q):
+    from physure.core.functional import add_quantities, sub_quantities
+
+    system = get_default_system()
+    celsius = q(1, "degC").unit
+    point = q(10, "degC").to("K").unit
+    value, unit = sub_quantities(20.0, celsius, 283.15, point, system)
+    assert (value, str(unit)) == (pytest.approx(10.0), "K")
+    with pytest.raises(ValueError, match="Cannot add two absolute"):
+        add_quantities(20.0, celsius, 283.15, point, system)
+    value, unit = sub_quantities(283.15, point, 20.0, celsius, system)
+    assert (value, str(unit)) == (pytest.approx(-10.0), "K")
+    value, unit = sub_quantities(20.0, celsius, 283.15, q(1, "K").unit, system)
+    assert (value, str(unit)) == (pytest.approx(-263.15), "degC")
