@@ -124,8 +124,10 @@ def test_a_unit_made_an_interval_equals_its_unit_and_survives_pickling(q):
     for scaled in (-difference, difference * 2, 2 * difference):
         with pytest.raises(IncompatibleUnitsError, match=COMPARE):
             _ = scaled < q(20, "degC")
-    # `=> K` reads it as a kelvin, as the core does
-    assert difference.to("K") < q(20, "degC")
+    # an interval in K is still an interval, as the core says
+    assert difference.to("K").unit.interval is True
+    with pytest.raises(IncompatibleUnitsError, match=COMPARE):
+        _ = difference.to("K") < q(20, "degC")
 
 
 def test_a_refused_conversion_says_the_quantity_in_the_cores_words(q):

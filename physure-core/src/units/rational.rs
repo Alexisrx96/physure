@@ -185,13 +185,12 @@ pub enum TemperatureKind {
     Interval,
 }
 
-// A conversion ([`RationalUnit::converted_from`]) keeps a point and not an interval, on purpose. A point's number is an
-// absolute temperature in every unit without a zero point (`(20 degC => K) => mK` is still where), and there is no
-// other reading of it. An interval converted to a unit without the `interval` flag (`(T2 - T1) => mK`,
-// `5 delta_degC => K`) is of unknown kind: `x => K` is the documented way to read an interval's number as a kelvin
-// (the advice of every point-interval message, `POINT_AGAINST_INTERVAL_ADVICE`: `5 delta_degC => K` is 5 K,
-// -268.15 degC), which the interval flag's change decided and tests; keeping the kind would make that reading
-// impossible. An interval converted to an interval unit (`=> delta_degC`) is an interval by the target's flag.
+// A conversion ([`RationalUnit::converted_from`]) keeps the kind: a quantity expressed in another unit is the same
+// quantity. A point's number is an absolute temperature in every unit without a zero point (`(20 degC => K) => mK` is
+// still where), and an interval's is a difference in every unit (`5 delta_degC => K` is a kelvin difference, not 5 K
+// above absolute zero; `(T2 - T1) => mK` is still how far): `(5 delta_degC => K) < 20 degC` is refused as
+// `5 delta_degC < 20 degC` is. A K of unknown kind stays unknown (`10 K => mK`), and becomes an interval only in a unit
+// the catalog flags (`10 K => delta_degC`).
 
 /// A unit representation using rational exponents to avoid floating-point errors.
 #[derive(Clone, Debug)]
@@ -458,14 +457,19 @@ impl RationalUnit {
         unit
     }
 
-    /// The unit a quantity in `from` takes when it is converted to this unit: this unit, holding a point when `from`
-    /// holds one and this unit has no zero point and is not an interval (`20 degC => K`, `68 degF => degR`, `T => K`
-    /// of a point `T`). An interval converted to `K` is of unknown kind: `5 delta_degC => K` reads it as kelvin above
-    /// absolute zero, which is what the advice of the comparison says.
+    /// The unit a quantity in `from` takes when it is converted to this unit: this unit, of the kind `from` holds
+    /// (see the note after [`TemperatureKind`]). A point stays a point in a unit without a zero point that is not an
+    /// interval (`20 degC => K`, `68 degF => degR`, `T => mK` of a point `T`); an interval stays an interval in a unit
+    /// without a zero point (`5 delta_degC => K`, `(T2 - T1) => mK`). The other pairs are refused before
+    /// (`Quantity::convert_to`, [`RationalUnit::point_against_interval`]).
     pub fn converted_from(&self, from: &Self) -> Self {
         let mut unit = self.clone();
-        if from.is_point() && !self.is_affine() && !self.is_interval() && self.log.is_none() {
-            unit.temperature = TemperatureKind::Point;
+        if !self.is_affine() && self.log.is_none() {
+            if from.is_point() && !self.is_interval() {
+                unit.temperature = TemperatureKind::Point;
+            } else if from.is_interval() {
+                unit.temperature = TemperatureKind::Interval;
+            }
         }
         unit
     }

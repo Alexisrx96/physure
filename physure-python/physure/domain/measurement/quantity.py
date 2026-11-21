@@ -1182,15 +1182,20 @@ class Quantity(
             self.system,
             uncertainty=uncertainty,
         )
-        if (
-            not kind_free
-            and self.dimension.exponents == _TEMPERATURE
-            and self.system.core_registry.converted_kind(
+        if not kind_free and self.dimension.exponents == _TEMPERATURE:
+            # the same quantity in another unit is of the same kind, as the
+            # core says: a point stays a point, an interval an interval
+            kind = self.system.core_registry.converted_kind(
                 self.unit, written or target_unit
             )
-            == "point"
-        ):
-            object.__setattr__(converted, "_unit", converted.unit.as_point())
+            if kind == "point":
+                object.__setattr__(
+                    converted, "_unit", converted.unit.as_point()
+                )
+            elif kind == "interval" and not converted.unit.interval:
+                object.__setattr__(
+                    converted, "_unit", converted.unit.as_interval()
+                )
         # A conversion restates the same measurement in another unit, so it keeps the
         # sources it came from, rescaled: `x.to("mm") - x.to("mm")` is zero and the degrees
         # of freedom stay with it. `from_input` alone would mint a new, independent source.

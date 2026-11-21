@@ -224,7 +224,7 @@ fn a_marked_point_does_not_convert_to_an_interval_unit() {
     assert!(ok(q(68.0, "degF").convert_to(&unit("degR")), "68 degF => degR").convert_to(&unit("delta_degF")).is_err());
     assert_shown(&ok(q(300.0, "K").convert_to(&unit("delta_degC")), "300 K => delta_degC"), "300.0 delta_degC");
     assert_shown(&ok(q(5.0, "delta_degC").convert_to(&unit("K")), "5 delta_degC => K"), "5.0 K");
-    assert_unknown(&ok(q(5.0, "delta_degC").convert_to(&unit("K")), "=> K"), "5 delta_degC => K");
+    assert_interval(&ok(q(5.0, "delta_degC").convert_to(&unit("K")), "=> K"), "5 delta_degC => K");
     // the plan a binding applies with its own numbers says the same of a unit marked a point
     let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
     physure_core::units::conf::with_conf_registry(|catalog| {
@@ -286,4 +286,45 @@ fn a_point_with_a_zero_point_and_a_marked_kelvin_are_two_points() {
         "R",
     );
     assert!((resistance.canonical_magnitude() - 109.625).abs() < 1e-9, "{resistance}");
+}
+
+/// An interval expressed in another unit is still an interval (review of the temperature kind, owner's rule): a
+/// kelvin difference, not a kelvin above absolute zero. A K of unknown kind converted to an interval unit is one by
+/// the target's flag, as before.
+#[test]
+fn an_interval_keeps_its_kind_through_a_conversion() {
+    let difference = ok(later_k().sub(&point_k()), "T2 - T1");
+    for (from, target) in [
+        (q(5.0, "delta_degC"), "K"),
+        (q(5.0, "delta_degC"), "mK"),
+        (q(5.0, "delta_degC"), "delta_degF"),
+        (q(5.0, "delta_degC"), "degR"),
+        (difference.clone(), "K"),
+        (difference.clone(), "mK"),
+    ] {
+        let what = format!("{from} => {target}");
+        assert_interval(&ok(from.convert_to(&unit(target)), &what), &what);
+    }
+    assert_shown(&ok(q(5.0, "delta_degC").convert_to(&unit("K")), "=> K"), "5.0 K");
+    // what an interval in K combines into is unchanged: with a K of unknown kind unknown, with a point a point
+    let in_k = ok(q(5.0, "delta_degC").convert_to(&unit("K")), "=> K");
+    assert_unknown(&ok(in_k.add(&q(1.0, "K")), "d_K + 1 K"), "(5 delta_degC => K) + 1 K");
+    assert_point(&ok(in_k.add(&point_k()), "d_K + T"), "(5 delta_degC => K) + T");
+    assert!(in_k.phs_compare(&q(5.0, "K"), "==").unwrap());
+    let heat = ok(ok(q(2.0, "kg").mul(&q(4186.0, "J/(kg*K)")), "m * c").mul(&in_k), "Q");
+    assert_shown(&heat, "41860.0 J");
+    assert!(!ok(in_k.div(&q(1.0, "s")), "d_K / s").unit.is_interval());
+    // an interval converted to K is still not a point: no reading of it as an absolute temperature
+    assert!(in_k.convert_to(&unit("degC")).is_err());
+    // a K of unknown kind is what it was
+    assert_unknown(&ok(q(10.0, "K").convert_to(&unit("mK")), "10 K => mK"), "10 K => mK");
+    assert_interval(&ok(q(10.0, "K").convert_to(&unit("delta_degC")), "10 K => delta_degC"), "10 K => delta_degC");
+    // the plan a binding applies says the same of a unit marked an interval
+    let atomic = |text: &str| Parser::parse_expression_atomic(text).unwrap();
+    physure_core::units::conf::with_conf_registry(|catalog| {
+        let mut marked = atomic("K");
+        marked.temperature = physure_core::units::TemperatureKind::Interval;
+        assert!(catalog.conversion(&marked, &atomic("degC")).is_err());
+        assert!(catalog.conversion(&marked, &atomic("mK")).is_ok());
+    });
 }

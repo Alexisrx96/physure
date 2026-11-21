@@ -234,3 +234,26 @@ def test_the_functional_sum_reads_a_marked_kelvin_as_a_point(q):
     assert (value, str(unit)) == (pytest.approx(-10.0), "K")
     value, unit = sub_quantities(20.0, celsius, 283.15, q(1, "K").unit, system)
     assert (value, str(unit)) == (pytest.approx(-263.15), "degC")
+
+
+def test_an_interval_converted_to_another_unit_is_still_an_interval(q):
+    """`(5 delta_degC => K) < 20 degC` has no answer: a kelvin difference is not where a temperature is."""
+    difference = q(30, "degC").to("K") - q(20, "degC").to("K")
+    for converted in (
+        q(5, "delta_degC").to("K"),
+        q(5, "delta_degC").to("mK"),
+        q(5, "delta_degC").to("delta_degF"),
+        difference.to("K"),
+        difference.to("mK"),
+        (q(20, "degC") - q(10, "degC")).to("K"),
+    ):
+        assert converted.unit.interval is True
+        with pytest.raises(IncompatibleUnitsError, match=COMPARE):
+            _ = converted < q(20, "degC")
+    in_k = q(5, "delta_degC").to("K")
+    assert in_k.magnitude == pytest.approx(5.0)
+    assert in_k == q(5, "K")
+    assert (in_k + q(1, "K")) < q(20, "degC")
+    heat = q(2, "kg") * q(4186, "J/(kg*K)") * difference.to("K")
+    assert heat.to("J").magnitude == pytest.approx(83720.0)
+    assert q(10, "K").to("mK").unit.interval is False

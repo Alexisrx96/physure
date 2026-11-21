@@ -117,3 +117,28 @@ fn a_point_with_a_zero_point_and_a_marked_kelvin_are_two_points() {
     assert!(error.contains("from 'K', an interval or a kelvin of unknown kind"), "{error}");
     assert_eq!(last("R0 = 100 Ohm\nalpha = 0.00385 / K\nT = 25 degC => K\nT0 = 0 degC\nR0*(1 + alpha*(T - T0))"), "109.625 Ohm");
 }
+
+/// An interval expressed in another unit is still an interval: `(5 delta_degC => K) < 20 degC` has no answer, and the
+/// heat and rate programs written with a converted difference keep their values.
+#[test]
+fn an_interval_converted_to_kelvin_is_still_an_interval() {
+    for source in [
+        "(5 delta_degC => K) < 20 degC",
+        "(5 delta_degC => mK) < 20 degC",
+        "T1 = 20 degC => K\nT2 = 30 degC => K\n(T2 - T1 => K) < 20 degC",
+        "T1 = 20 degC => K\nT2 = 30 degC => K\n((T2 - T1) => mK) < T1",
+        "(5 delta_degC => delta_degF) < 20 degC",
+    ] {
+        let error = refused(source);
+        assert!(error.contains(COMPARE), "{source:?}: {error}");
+    }
+    assert!(refused("(5 delta_degC => K) => degC").contains("cannot convert a temperature interval"));
+    assert_eq!(last("5 delta_degC => K"), "5.0 K");
+    assert!(truth("(5 delta_degC => K) == 5 K"));
+    assert!(truth("(5 delta_degC => K) < 6 delta_degC"));
+    assert!(truth("((5 delta_degC => K) + 1 K) < 20 degC"), "with a K of unknown kind, unknown");
+    assert!(truth("T = 20 degC => K\n(T + (5 delta_degC => K)) > 20 degC"), "with a point, a point");
+    assert_eq!(last("m = 2 kg\nc = 4186 J/(kg*K)\ndT = 30 degC - 20 degC\nm*c*(dT => K)"), "83720.0 J");
+    assert_eq!(last("dT = 30 degC - 20 degC\n(dT => K) / (1 s)"), "10.0 K * s^-1");
+    assert!(truth("(10 K => mK) < 20 degC"), "a K written by hand stays of unknown kind");
+}

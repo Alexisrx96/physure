@@ -128,7 +128,7 @@ fn a_temperature_point_and_a_temperature_interval_have_no_order() {
     }
     let message = refused("5 delta_degC < 20 degC");
     assert!(message.contains("compare a difference of two points with the interval (`T2 - T1 > 5 delta_degC`)"), "{message}");
-    assert!(message.contains("`x => K` does not make an interval a point, it reads its number as kelvin above absolute zero"), "{message}");
+    assert!(message.contains("`x => K` does not make an interval a point, an interval in K is still an interval"), "{message}");
     assert!(!message.contains("convert the interval to a point"), "{message}");
     let message = refused("max(5 delta_degC, 20 degC)");
     assert!(message.contains("; compare a difference of two points with the interval"), "{message}");
@@ -143,7 +143,8 @@ fn points_with_points_and_intervals_with_intervals_still_compare() {
     assert_eq!(last("9 delta_degF == 5 delta_degC"), "True");
     assert_eq!(last("5 delta_degC < 6 K"), "True");
     assert_eq!(last("(30 degC - 20 degC) > 5 delta_degC"), "True");
-    assert_eq!(last("(5 delta_degC => K) < 20 degC"), "True");
+    // an interval in K is still an interval (temperature kind review): `(5 delta_degC => K) < 20 degC` is refused
+    assert!(refused("(5 delta_degC => K) < 20 degC").contains("with a temperature interval"));
     assert_eq!(last("20 degC + 5 delta_degC"), last("25 degC"));
     assert_eq!(last("20 degC - 10 degC"), last("10 K"));
 }

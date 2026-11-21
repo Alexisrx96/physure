@@ -39,10 +39,11 @@ impl PartialEq for Quantity {
 
 /// What to write instead of comparing a temperature point with a temperature interval, the advice every message about
 /// the pair ends with (the core's comparison, `max`, `min`, a vector, a range, Python): the difference of two points
-/// first, since `=> K` does not make an interval a point, it reads its number as kelvin above absolute zero.
+/// first; a conversion does not change the kind (`5 delta_degC => K` is a kelvin difference), and a point is a point
+/// moved by the interval.
 pub const POINT_AGAINST_INTERVAL_ADVICE: &str = "compare a difference of two points with the interval (`T2 - T1 > 5 \
-     delta_degC`); `x => K` does not make an interval a point, it reads its number as kelvin above absolute zero \
-     (`5 delta_degC => K` is 5 K, -268.15 degC)";
+     delta_degC`); `x => K` does not make an interval a point, an interval in K is still an interval; a point moved by \
+     the interval is a point (`T1 + 5 delta_degC`)";
 
 /// The words of a temperature point compared with a temperature interval, each written as its binding prints it:
 /// what the core's comparison says, and what a binding with a comparison of its own (Python) says.
@@ -953,7 +954,8 @@ impl Quantity {
     ///
     /// A temperature point does not convert to a temperature interval, nor an interval to a point
     /// ([`RationalUnit::point_against_interval`]): `20 degC => delta_degC` is refused, `10 K => delta_degC` and
-    /// `5 delta_degC => K` are not (`K` stands for either).
+    /// `5 delta_degC => K` are not. The result keeps the kind of this quantity ([`RationalUnit::converted_from`]):
+    /// `5 delta_degC => K` is a kelvin interval, `20 degC => K` a kelvin point, `10 K => mK` of unknown kind.
     pub fn convert_to(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
         if !self.unit.convertible_to(target) {
             return Err(PhysureError::UnitMismatch {

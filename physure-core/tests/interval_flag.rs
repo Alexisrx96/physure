@@ -203,8 +203,8 @@ fn a_kelvin_or_an_interval_converts_to_an_interval_unit_and_a_point_to_a_kelvin_
     let from_f = ok(q(9.0, "delta_degF").convert_to(&delta_c), "9 delta_degF => delta_degC");
     assert!((from_f.value.mean() - 5.0).abs() < 1e-12);
     assert_interval(&from_f, "9 delta_degF => delta_degC");
-    // `=> K` stays allowed: the advice of the comparison says what it reads
-    assert_not_interval(&ok(q(5.0, "delta_degC").convert_to(&q(1.0, "K").unit), "5 delta_degC => K"), "5 delta_degC => K");
+    // `=> K` stays allowed, and an interval in K is still an interval (a kelvin difference: temperature kind review)
+    assert_interval(&ok(q(5.0, "delta_degC").convert_to(&q(1.0, "K").unit), "5 delta_degC => K"), "5 delta_degC => K");
     assert_shown(&ok(q(25.0, "degC").convert_to(&q(1.0, "K").unit), "25 degC => K"), "298.15 K");
     assert_shown(&ok(q(300.0, "K").convert_to(&q(1.0, "degC").unit), "300 K => degC"), "26.85 degC");
 }
@@ -266,6 +266,7 @@ fn a_users_line_that_restates_an_interval_entry_without_the_flag_is_refused_and_
         let mut registry = custom("");
         let found = problems(&mut registry, &format!("[Units]\n{line}\n"));
         assert!(found.iter().any(|p| p.contains("is a temperature interval: the line needs the `interval` flag")), "{line}: {found:?}");
+        assert!(found.iter().all(|p| !p.contains("  ")), "a run of spaces in the words: {found:?}");
         with_catalog(&registry, || assert_interval(&q(5.0, "delta_degC"), line));
     }
     // with the flag it is a definition like any other
