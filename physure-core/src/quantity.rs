@@ -808,7 +808,7 @@ impl Quantity {
     #[cold]
     #[inline(never)]
     fn point_against_interval(&self, other: &Quantity) -> PhysureError {
-        let (point, interval) = if self.unit.is_affine() { (self, other) } else { (other, self) };
+        let (point, interval) = if self.unit.is_point() { (self, other) } else { (other, self) };
         PhysureError::Generic(point_against_interval_message(&point.to_string(), &interval.to_string()))
     }
 
@@ -817,7 +817,7 @@ impl Quantity {
     #[cold]
     #[inline(never)]
     fn point_interval_conversion(&self, target: &RationalUnit) -> PhysureError {
-        PhysureError::Generic(point_interval_conversion_message(&self.to_string(), &target.__repr__(), self.unit.is_affine()))
+        PhysureError::Generic(point_interval_conversion_message(&self.to_string(), &target.__repr__(), self.unit.is_point()))
     }
 
     /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],

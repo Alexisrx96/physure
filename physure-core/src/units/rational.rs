@@ -461,11 +461,12 @@ impl RationalUnit {
         unit
     }
 
-    /// A temperature point (`degC`, `degF`, [`RationalUnit::is_affine`]) against a temperature interval written as one
-    /// ([`RationalUnit::is_interval`]), in either order: two kinds that no comparison relates, as no sum
-    /// of two points has a meaning. Point with point, interval with interval, and `K` with either are not.
+    /// A temperature point (`degC`, `degF`, a `K` that holds a point: [`RationalUnit::is_point`]) against a temperature
+    /// interval ([`RationalUnit::is_interval`]), in either order: two kinds that no comparison relates, as no sum of
+    /// two points has a meaning. Point with point, interval with interval, and a `K` of unknown kind with either are
+    /// not.
     pub fn point_against_interval(&self, other: &Self) -> bool {
-        (self.is_affine() && other.is_interval()) || (other.is_affine() && self.is_interval())
+        (self.is_point() && other.is_interval()) || (other.is_point() && self.is_interval())
     }
 
     /// The purely multiplicative unit measuring *intervals* on this scale: degC => K,

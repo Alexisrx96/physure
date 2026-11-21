@@ -91,7 +91,7 @@ pub(crate) fn mismatch(a: &PhsValue, b: &PhsValue) -> Option<Mismatch> {
 
 /// The [`Mismatch::TemperatureKind`] clause of a point and an interval, in the order given.
 fn kind_clash(a: &PhsValue, ua: &RationalUnit, b: &PhsValue, ub: &RationalUnit) -> Mismatch {
-    let kind = |unit: &RationalUnit| if unit.is_affine() { "a temperature point" } else { "a temperature interval" };
+    let kind = |unit: &RationalUnit| if unit.is_point() { "a temperature point" } else { "a temperature interval" };
     Mismatch::TemperatureKind(format!("`{}` is {} and `{}` {}", written(a), kind(ua), written(b), kind(ub)))
 }
 
@@ -110,7 +110,7 @@ pub(crate) fn first_mismatch(items: &[PhsValue]) -> Option<Mismatch> {
         if let Some(Mismatch::Dimension(why)) = mismatch(first, item) {
             return Some(Mismatch::Dimension(why));
         }
-        if point.is_none() && unit.is_affine() {
+        if point.is_none() && unit.is_point() {
             point = Some((place, item, unit));
         }
         if interval.is_none() && unit.is_interval() {
