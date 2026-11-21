@@ -250,6 +250,18 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn a_point_converted_to_kelvin_stays_a_point_and_a_kelvin_by_hand_stands_for_either() {
+        let message = |err: JsValue| String::from(err.dyn_into::<js_sys::Error>().expect("should be a JS Error").message());
+        let interval = Quantity::new(5.0, "delta_degC").unwrap();
+        let point = Quantity::new(20.0, "degC").unwrap().convert_to("K").unwrap();
+        assert!(message(point.phs_compare(&interval, "<").unwrap_err()).contains("cannot compare a temperature point (`293.15 K`)"));
+        assert!(message(point.convert_to("delta_degC").unwrap_err()).contains("cannot convert a temperature point"));
+        let average = point.add(&Quantity::new(30.0, "degC").unwrap().convert_to("K").unwrap()).unwrap();
+        assert!(average.phs_compare(&interval, ">").unwrap(), "a sum of two points is of unknown kind");
+        assert!(Quantity::new(300.0, "K").unwrap().phs_compare(&interval, ">").unwrap());
+    }
+
+    #[wasm_bindgen_test]
     fn phys_exact_assert_throws_when_conversion_would_be_required() {
         let a = Quantity::new(1.0, "km").unwrap();
         let b = Quantity::new(1000.0, "m").unwrap();
