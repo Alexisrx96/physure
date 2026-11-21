@@ -106,7 +106,19 @@ fn temperature_points_and_intervals_follow_the_core() {
     assert_clean("25 degC - 20 degC");
     assert_clean("20 degC - 5 K");
     assert_refused("20 degC + 5 degC", 1, "temperature-points");
-    assert_refused("5 K - 20 degC", 1, "temperature-points");
+    // a K may hold a point at run time (`T = 25 degC => K`): the checker has no opinion on a difference with one
+    assert!(errors("5 K - 20 degC").is_empty());
+    assert!(eval_phs("5 K - 20 degC").is_err(), "a K written by hand is not a point");
+    assert_clean("T = 25 degC => K
+T - 0 degC");
+    assert_clean("T = 25 degC => K
+T0 = 0 degC
+R0 = 100 Ohm
+alpha = 0.00385 / K
+R0*(1 + alpha*(T - T0))");
+    assert_clean("T = 10 degC => K
+d = 20 degC - T
+d * 2");
     assert_refused("20 degC * 2", 1, "temperature-points");
     assert_refused("20 degC / 2", 1, "temperature-points");
     // an absolute temperature in a product with a dimensioned quantity is the absolute scale

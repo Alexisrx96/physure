@@ -981,14 +981,16 @@ impl Quantity {
     }
 
     /// What can be done with an absolute temperature (degC, degF) and something else. It is a
-    /// point; an interval (K, degR, delta_celsius...) moves it, and two points give an interval:
+    /// point; an interval (delta_celsius..., or a K or degR of unknown kind) moves it, and two points give an interval.
+    /// The operands are told apart by [`RationalUnit::is_point`], so a `K` that holds a point (`10 degC => K`) is a
+    /// point here too:
     ///
     /// - point + interval and interval + point are a point in the point's scale;
     /// - point - interval is a point, and point - point is an interval, in kelvin (printed `K`, flagged an interval:
-    ///   `(20 degC - 10 degC) < 20 degC` has no answer);
-    /// - point + point (the sum of two temperatures) and interval - point have no meaning.
+    ///   `(20 degC - 10 degC) < 20 degC` has no answer; `20 degC - (10 degC => K)` is 10 K);
+    /// - point + point (the sum of two temperatures, `20 degC + (10 degC => K)`) and interval - point have no meaning.
     fn combine_with_point(&self, other: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
-        match (self.unit.is_affine(), other.unit.is_affine(), subtract) {
+        match (self.unit.is_point(), other.unit.is_point(), subtract) {
             (true, true, false) => Err(PhysureError::Generic(format!(
                 "cannot add two absolute temperatures ('{}' and '{}'): add an interval to one of them \
                  (the midpoint of T1 and T2 is T1 + (T2 - T1) / 2)",
@@ -1001,7 +1003,9 @@ impl Quantity {
                 Ok(difference)
             }
             (false, true, true) => Err(PhysureError::Generic(format!(
-                "cannot subtract the absolute temperature '{}' from the interval '{}'",
+                "cannot subtract the absolute temperature '{}' from '{}', an interval or a kelvin of unknown kind: an \
+                 interval minus a point has no meaning (a kelvin converted from a point, `T = 20 degC => K`, is a \
+                 point, and a point minus a point is an interval)",
                 other.unit.__repr__(),
                 self.unit.__repr__()
             ))),

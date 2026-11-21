@@ -82,7 +82,6 @@ pub fn explains(code: &str, finding_message: &str, runtime_message: &str) -> boo
         // the same operation on the temperatures
         "temperature-points" => [
             ("cannot be added", "cannot add two absolute temperatures"),
-            ("cannot be subtracted", "cannot subtract the absolute temperature"),
             ("multiplied or divided", "cannot multiply or divide the absolute temperature"),
         ]
         .iter()
@@ -751,8 +750,11 @@ impl<'a> Checker<'a> {
         Ty::Qty(Dim { exps: a.exps.clone(), point, level: a.level && b.level, constant })
     }
 
-    /// Whether the result of a sum or difference is an absolute temperature; `None` (after reporting) when the
-    /// operands may not be combined at all.
+    /// Whether the result of a sum or difference is an absolute temperature; `None` when the operands may not be
+    /// combined at all (after reporting) or when the checker has no opinion. `point` is a unit with a zero point
+    /// (`degC`): a `K` here may hold a point at run time (`T = 20 degC => K`) or not (`300 K`), so a difference with
+    /// one is not reported (`T - 0 degC` is an interval when `T` is a point, refused when it is not) and its result
+    /// is of no known kind (`20 degC - T` is a point or an interval).
     fn temperature_point(&mut self, op: BinaryOp, left_point: bool, right_point: bool) -> Option<bool> {
         match (op, left_point, right_point) {
             (BinaryOp::Add, true, true) => {
@@ -763,15 +765,10 @@ impl<'a> Checker<'a> {
                 );
                 None
             }
-            (BinaryOp::Sub, false, true) => {
-                self.report(
-                    Severity::Error,
-                    "temperature-points",
-                    "an absolute temperature cannot be subtracted from an interval".to_string(),
-                );
-                None
-            }
-            (BinaryOp::Add, true, false) | (BinaryOp::Add, false, true) | (BinaryOp::Sub, true, false) => Some(true),
+            // accepted only when the K is a point, and then an interval
+            (BinaryOp::Sub, false, true) => Some(false),
+            (BinaryOp::Sub, true, false) => None,
+            (BinaryOp::Add, true, false) | (BinaryOp::Add, false, true) => Some(true),
             _ => Some(false),
         }
     }

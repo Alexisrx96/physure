@@ -100,3 +100,20 @@ fn max_min_vector_and_ranges_read_the_kind() {
     }
     assert_eq!(last("T = 20 degC => K\nmax(T, 300 K, 20 degC)"), "300.0 K");
 }
+
+/// A point with a zero point and a `K` that holds a point are two points: a difference in either order is an
+/// interval, a sum is refused (review of the temperature kind).
+#[test]
+fn a_point_with_a_zero_point_and_a_marked_kelvin_are_two_points() {
+    assert_eq!(last("20 degC - (10 degC => K)"), "10.0 K");
+    assert_eq!(last("25 degC - (0 degC => K)"), "25.0 K");
+    assert_eq!(last("(10 degC => K) - 20 degC"), "-10.0 K");
+    assert_eq!(last("T = 25 degC => K\nT - 0 degC"), "25.0 K");
+    for source in ["20 degC + (10 degC => K)", "(10 degC => K) + 20 degC"] {
+        assert!(refused(source).contains("cannot add two absolute temperatures"), "{source}");
+    }
+    assert!(refused("(20 degC - (10 degC => K)) < 20 degC").contains(COMPARE));
+    let error = refused("10 K - 20 degC");
+    assert!(error.contains("from 'K', an interval or a kelvin of unknown kind"), "{error}");
+    assert_eq!(last("R0 = 100 Ohm\nalpha = 0.00385 / K\nT = 25 degC => K\nT0 = 0 degC\nR0*(1 + alpha*(T - T0))"), "109.625 Ohm");
+}

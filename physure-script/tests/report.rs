@@ -126,7 +126,8 @@ const ONE_PROBLEM: &[(&str, usize, &str)] = &[
     ("bad-argument", 2, "fn speed(v: m/s) = v * 2\nspeed(5)"),
     ("bad-exponent", 1, "2 m ^ (1 s)"),
     ("temperature-points", 1, "20 degC + 5 degC"),
-    ("temperature-points", 1, "5 K - 20 degC"),
+    // a K may hold a point at run time: the checker leaves the difference to the interpreter, which refuses this one
+    ("runtime", 1, "5 K - 20 degC"),
     ("temperature-points", 1, "20 degC * 2"),
     ("temperature-points", 1, "20 degC / 2"),
     ("temperature-points", 1, "2 / 5 degC"),

@@ -256,3 +256,34 @@ fn the_holes_of_a_forgotten_point() {
     assert!((rate.canonical_magnitude() - 10.0).abs() < 1e-9);
     assert!(ok(later_k().sub(&t), "T2 - T1").phs_compare(&q(5.0, "K"), ">").unwrap());
 }
+
+/// A point with a zero point and a `K` that holds a point are two points (review of the temperature kind): their
+/// difference is an interval in either order, their sum is refused, as for two points with a zero point.
+#[test]
+fn a_point_with_a_zero_point_and_a_marked_kelvin_are_two_points() {
+    let ten = ok(q(10.0, "degC").convert_to(&unit("K")), "10 degC => K");
+    let difference = ok(q(20.0, "degC").sub(&ten), "20 degC - (10 degC => K)");
+    assert_shown(&difference, "10.0 K");
+    assert_interval(&difference, "20 degC - (10 degC => K)");
+    let zero = ok(q(0.0, "degC").convert_to(&unit("K")), "0 degC => K");
+    assert_shown(&ok(q(25.0, "degC").sub(&zero), "25 degC - (0 degC => K)"), "25.0 K");
+    let reversed = ok(ten.sub(&q(20.0, "degC")), "(10 degC => K) - 20 degC");
+    assert_shown(&reversed, "-10.0 K");
+    assert_interval(&reversed, "(10 degC => K) - 20 degC");
+    let warm = ok(q(25.0, "degC").convert_to(&unit("K")), "25 degC => K");
+    assert_shown(&ok(warm.sub(&q(0.0, "degC")), "T - 0 degC"), "25.0 K");
+    for sum in [q(20.0, "degC").add(&ten), ten.add(&q(20.0, "degC"))] {
+        let error = sum.expect_err("a sum of two points").to_string();
+        assert!(error.starts_with("cannot add two absolute temperatures"), "{error}");
+    }
+    // a kelvin of unknown kind is still read as an interval, and an interval minus a point still has no meaning
+    assert_shown(&ok(q(20.0, "degC").sub(&q(10.0, "K")), "20 degC - 10 K"), "10.0 degC");
+    let error = q(10.0, "K").sub(&q(20.0, "degC")).unwrap_err().to_string();
+    assert!(error.contains("from 'K', an interval or a kelvin of unknown kind"), "{error}");
+    // the resistance thermometer: R0 * (1 + alpha * (T - T0)), T a kelvin converted from a point, T0 in degC
+    let resistance = ok(
+        q(100.0, "Ohm").mul(&ok(q(1.0, "").add(&ok(q(0.00385, "1/K").mul(&warm.sub(&q(0.0, "degC")).unwrap()), "alpha dT")), "1 + ...")),
+        "R",
+    );
+    assert!((resistance.canonical_magnitude() - 109.625).abs() < 1e-9, "{resistance}");
+}
