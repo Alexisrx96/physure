@@ -106,3 +106,89 @@ def test_a_unit_made_a_point_survives_pickling_and_the_cache(q):
     assert registry.expand(t.unit).point is True
     assert registry.expand(q(1, "K").unit).point is False
     assert registry.expand(t.unit).point is True
+
+
+def _u(value, unit):
+    return get_default_system().Q_(value, unit, uncertainty=0.1)
+
+
+@pytest.mark.parametrize(
+    ("make", "mean", "kind"),
+    [
+        (lambda: _u(20, "degC").to("K") + _u(1, "K"), 294.15, "unknown"),
+        (lambda: _u(1, "K") + _u(20, "degC").to("K"), 294.15, "unknown"),
+        (lambda: _u(20, "degC").to("K") - _u(1, "K"), 292.15, "unknown"),
+        (
+            lambda: _u(20, "degC").to("K") + _u(5, "delta_degC"),
+            298.15,
+            "point",
+        ),
+        (
+            lambda: _u(5, "delta_degC") + _u(20, "degC").to("K"),
+            298.15,
+            "point",
+        ),
+        (
+            lambda: _u(20, "degC").to("K") - _u(10, "degC").to("K"),
+            10.0,
+            "interval",
+        ),
+        (
+            lambda: (_u(20, "degC") - _u(10, "degC")) + _u(1, "delta_degC"),
+            11.0,
+            "interval",
+        ),
+        (
+            lambda: (_u(20, "degC") - _u(10, "degC")) + _u(1, "K"),
+            11.0,
+            "unknown",
+        ),
+        (
+            lambda: (_u(20, "degC") - _u(10, "degC")) * 2 + _u(1, "K"),
+            21.0,
+            "unknown",
+        ),
+        (lambda: _u(20, "degC").to("K") + _u(1, "mK"), 293.151, "unknown"),
+    ],
+)
+def test_an_uncertain_sum_of_temperatures_keeps_its_value_and_kind(
+    make, mean, kind
+):
+    """Uncertain operands take the same-unit path of a sum (it recursed for a marked unit)."""
+    result = make()
+    assert result.magnitude == pytest.approx(mean)
+    assert result.uncertainty > 0
+    assert (result.unit.point, result.unit.interval) == (
+        kind == "point",
+        kind == "interval",
+    )
+
+
+def test_an_exact_point_with_an_uncertain_kelvin_and_back(q):
+    for result in (
+        q(20, "degC").to("K") + _u(1, "K"),
+        _u(20, "degC").to("K") + q(1, "K"),
+    ):
+        assert result.magnitude == pytest.approx(294.15)
+        assert result.uncertainty == pytest.approx(0.1)
+    total = _u(20, "degC").to("mK") + _u(30, "degC").to("K")
+    assert str(total.unit) == "mK"
+    assert total.magnitude == pytest.approx(596300.0)
+
+
+def test_array_sums_of_temperatures_keep_their_values_and_kinds(q):
+    import numpy as np
+
+    points = q(np.array([20.0, 30.0]), "degC").to("K")
+    moved = points + q(1, "K")
+    np.testing.assert_allclose(moved.magnitude, [294.15, 304.15])
+    assert moved.unit.point is False
+    difference = q(np.array([20.0, 30.0]), "degC") - q(
+        np.array([10.0, 10.0]), "degC"
+    )
+    with_k = difference + q(1, "K")
+    np.testing.assert_allclose(with_k.magnitude, [11.0, 21.0])
+    assert with_k.unit.interval is False
+    with_d = difference + q(1, "delta_degC")
+    np.testing.assert_allclose(with_d.magnitude, [11.0, 21.0])
+    assert with_d.unit.interval is True

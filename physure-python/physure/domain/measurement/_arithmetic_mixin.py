@@ -863,9 +863,15 @@ class ArithmeticMixin:
 
         A point moved by an interval written in the interval's unit
         (`5 delta_degC + (20 degC => K)`) is not a point converted to an
-        interval: the sum decides the kind of its result (`_sum_kind`).
+        interval: the sum decides the kind of its result (`_sum_kind`). The
+        operand comes back in `unit` itself, the very object, so that the
+        same-unit path of the sum takes it (`self.unit is other.unit`): in the
+        plain flyweight of a marked unit it would be converted again, forever.
         """
-        return self._convert_by_plan(unit.as_plain(), kind_free=True)
+        read = self._convert_by_plan(unit.as_plain(), kind_free=True)
+        if read.unit is not unit:
+            object.__setattr__(read, "_unit", unit)
+        return read
 
     def _plain_kind(self) -> Self:
         """This quantity, made by an operation, in its unit of unknown kind."""
