@@ -1002,14 +1002,6 @@ impl PyCovarianceStore {
     }
 }
 
-// ── Zero-copy Buffer Protocol helpers ───────────────────────────────────────
-
-/// Convert a batch of values in-place using the C Buffer Protocol.
-/// Accepts any Python object that supports the buffer protocol with f64 items:
-///   - `bytearray` (raw), `memoryview`, `numpy.ndarray` (dtype=float64)
-///
-/// This is the core of the zero-copy FFI strategy: Python never copies data.
-/// Rust reads & writes directly to Python-owned memory.
 /// The name Python gives a temperature kind.
 fn temperature_kind_name(kind: TemperatureKind) -> &'static str {
     match kind {
@@ -1032,6 +1024,14 @@ fn point_interval_conversion_message(source: &str, target: &str, from_point: boo
     ::physure_core::quantity::point_interval_conversion_message(source, target, from_point)
 }
 
+// ── Zero-copy Buffer Protocol helpers ───────────────────────────────────────
+
+/// Convert a batch of values in-place using the C Buffer Protocol.
+/// Accepts any Python object that supports the buffer protocol with f64 items:
+///   - `bytearray` (raw), `memoryview`, `numpy.ndarray` (dtype=float64)
+///
+/// This is the core of the zero-copy FFI strategy: Python never copies data.
+/// Rust reads & writes directly to Python-owned memory.
 #[pyfunction]
 fn batch_to_si_inplace(py: Python<'_>, buf: PyBuffer<f64>, factor: f64) -> PyResult<()> {
     let slice = buf.as_slice(py).ok_or_else(|| pyo3::exceptions::PyBufferError::new_err("Invalid buffer"))?;

@@ -185,6 +185,14 @@ pub enum TemperatureKind {
     Interval,
 }
 
+// A conversion ([`RationalUnit::converted_from`]) keeps a point and not an interval, on purpose. A point's number is an
+// absolute temperature in every unit without a zero point (`(20 degC => K) => mK` is still where), and there is no
+// other reading of it. An interval converted to a unit without the `interval` flag (`(T2 - T1) => mK`,
+// `5 delta_degC => K`) is of unknown kind: `x => K` is the documented way to read an interval's number as a kelvin
+// (the advice of every point-interval message, `POINT_AGAINST_INTERVAL_ADVICE`: `5 delta_degC => K` is 5 K,
+// -268.15 degC), which the interval flag's change decided and tests; keeping the kind would make that reading
+// impossible. An interval converted to an interval unit (`=> delta_degC`) is an interval by the target's flag.
+
 /// A unit representation using rational exponents to avoid floating-point errors.
 #[derive(Clone, Debug)]
 pub struct RationalUnit {
@@ -395,8 +403,9 @@ impl RationalUnit {
     /// A temperature interval: a unit the catalog flags `interval` (`delta_celsius`, `delta_fahrenheit` and their
     /// aliases and prefixed forms, a user's own `dT = 1.0, O, interval`), or what the core's arithmetic makes one (see
     /// [`RationalUnit::temperature`]). The catalog makes `delta_celsius` a kelvin, so the flag is all that tells them
-    /// apart, whatever name the unit is written by. `K` and `degR` sit on an absolute scale and stand for a point or an
-    /// interval alike, so they are not one.
+    /// apart, whatever name the unit is written by. A `K` or `degR` written by hand sits on an absolute scale and stands
+    /// for a point or an interval alike, so it is not one; a `K` the arithmetic made an interval (`T2 - T1` of two
+    /// points, printed `K`) is.
     pub fn is_interval(&self) -> bool {
         self.temperature == TemperatureKind::Interval && !self.is_affine() && self.log.is_none()
     }
