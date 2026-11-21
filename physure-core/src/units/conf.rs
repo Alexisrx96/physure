@@ -1475,7 +1475,8 @@ fn parse_unit_line(
             registry.derived_units.get(&registry.resolve_symbol(name)).is_some_and(|unit| unit.temperature == crate::units::TemperatureKind::Interval)
         }) {
             return Err(format!(
-                "`{name}` is a temperature interval: the line needs the `interval` flag (`{key} = ..., interval, [...]`);                  without it a temperature point would compare with it and convert to it. The definition in force stays"
+                "`{name}` is a temperature interval: the line needs the `interval` flag (`{key} = ..., interval, [...]`); \
+                 without it a temperature point would compare with it and convert to it. The definition in force stays"
             ));
         }
     }
