@@ -1472,7 +1472,7 @@ fn parse_unit_line(
     // silently make it a kelvin again: refused, so the definition in force stays
     if !interval {
         if let Some(name) = [key, symbol.as_str()].into_iter().find(|name| {
-            registry.derived_units.get(&registry.resolve_symbol(name)).is_some_and(|unit| unit.interval)
+            registry.derived_units.get(&registry.resolve_symbol(name)).is_some_and(|unit| unit.temperature == crate::units::TemperatureKind::Interval)
         }) {
             return Err(format!(
                 "`{name}` is a temperature interval: the line needs the `interval` flag (`{key} = ..., interval, [...]`);                  without it a temperature point would compare with it and convert to it. The definition in force stays"
@@ -1499,7 +1499,7 @@ fn parse_unit_line(
     }
     // what its line says, and nothing a recipe of an interval unit would pass on
     if let Some(unit) = registry.derived_units.get_mut(&symbol) {
-        unit.interval = interval;
+        unit.temperature = if interval { crate::units::TemperatureKind::Interval } else { crate::units::TemperatureKind::Unknown };
     }
     // an interval is the difference of two points: its dimension needs a point (a unit with a zero point, like degC)
     if interval && !has_a_point(registry, &symbol) {

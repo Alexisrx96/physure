@@ -33,6 +33,7 @@ use ::physure_core::{
     DimVector, UnitKind,
 };
 use ::physure_core::units::registry::{Conversion, Stage};
+use ::physure_core::units::TemperatureKind;
 use ::physure_core::units::angle_mode::{self as angle, AngleMode, AngleModeGuard};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
 use ::physure_core::uncertainty::{coverage_factor_for, declare_dof, type_a};
@@ -44,9 +45,9 @@ use physure_script::symbolic::Expr;
 // `RationalUnit::id` is derived from the dimensions alone, so it cannot be the whole key:
 // J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
 // handed back whichever of them was cached first.
-// The key carries `periodic` and `interval`: equality ignores both flags, but a flagged hertz must not be answered by
-// an unflagged one, nor an interval by a kelvin.
-static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool, bool), PyObject>>> = OnceLock::new();
+// The key carries `periodic` and the temperature kind: equality ignores both, but a flagged hertz must not be answered
+// by an unflagged one, nor an interval or a point by a kelvin of unknown kind.
+static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool, TemperatureKind), PyObject>>> = OnceLock::new();
 
 // The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
 // other backends, which live in Python, so Python registers the factory at import.
@@ -55,7 +56,7 @@ static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
-    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic, unit.interval);
+    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic, unit.temperature);
     if let Some(existing) = cache.get(&key) {
         return Ok(existing.clone_ref(py));
     }
@@ -200,7 +201,9 @@ impl PyRationalUnit {
             None => false,
         };
         let mut unit = RationalUnit::new_from_dimensions(dimensions);
-        unit.interval = interval;
+        if interval {
+            unit.temperature = TemperatureKind::Interval;
+        }
         Ok(PyRationalUnit(unit))
     }
 
@@ -209,11 +212,11 @@ impl PyRationalUnit {
         self.0.dimensions_map()
     }
 
-    /// Whether this unit stands for a temperature interval (the core's `RationalUnit::interval`): set on a unit
+    /// Whether this unit stands for a temperature interval (the core's `RationalUnit::temperature` is `Interval`): set on a unit
     /// the catalog flags `interval`, and on a unit written as symbols that was made one.
     #[getter]
     fn interval(&self) -> bool {
-        self.0.interval
+        self.0.temperature == TemperatureKind::Interval
     }
 
     #[getter]

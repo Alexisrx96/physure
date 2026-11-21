@@ -168,6 +168,23 @@ pub enum UnitKind {
     Point,
 }
 
+/// What kind of temperature a number in a unit without a zero point stands for (spec
+/// `2026-11-20-temperature-kind-design.md`). The SI writes a place on the scale and a difference of two places in the
+/// same kelvin, so a `K` written by hand is of [`TemperatureKind::Unknown`] kind, and so is every unit that is not a
+/// temperature. A unit with a zero point (`degC`, `degF`) is a point by its offset whatever this says
+/// ([`RationalUnit::is_point`]): the field matters for the units without one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TemperatureKind {
+    /// A point or an interval alike: `300 K` written by hand, a constant, a scaled absolute temperature.
+    #[default]
+    Unknown,
+    /// A known place on the scale: a point converted to a unit without a zero point (`20 degC => K`), or such a point
+    /// moved by an interval.
+    Point,
+    /// A known difference of two places: a unit the catalog flags `interval` (`delta_degC`), a point minus a point.
+    Interval,
+}
+
 /// A unit representation using rational exponents to avoid floating-point errors.
 #[derive(Clone, Debug)]
 pub struct RationalUnit {
@@ -201,15 +218,15 @@ pub struct RationalUnit {
     /// one) and nothing else: `Hz*rad`, `Hz^2` and `1/Hz` are not the hertz. It is not part of equality or of the hash:
     /// `Hz` and `s^-1` are the same unit.
     pub periodic: bool,
-    /// Set on a temperature interval: a unit of an entry the catalog flags `interval` (`delta_celsius`,
-    /// `delta_fahrenheit`, a unit of a user's conf), with its prefixes and aliases, and on what the core's arithmetic
-    /// makes an interval (see [`RationalUnit::is_interval`]). It survives a product or quotient with a
-    /// dimensionless operand that is not a level (`2`, `%`) and a power of one, and nothing else: `delta_degC / m`
-    /// and `delta_degC^2` are not intervals, and neither is what a further step makes of them. Like `periodic` it is
-    /// not part of equality or of the hash: `delta_degC` is a kelvin (one scale, no zero point), the two convert with
-    /// the factor 1 and compare equal in value; the flag says what kind of temperature a number is, which only the
-    /// comparison and the conversion to or from a point read.
-    pub interval: bool,
+    /// The kind of temperature a number in this unit is ([`TemperatureKind`]). `Interval` is set on a unit of an
+    /// entry the catalog flags `interval` (`delta_celsius`, `delta_fahrenheit`, a unit of a user's conf), with its
+    /// prefixes and aliases, and on what the core's arithmetic makes an interval (see [`RationalUnit::is_interval`]).
+    /// An interval survives a product or quotient with a dimensionless operand that is not a level (`2`, `%`) and a
+    /// power of one, and nothing else: `delta_degC / m` and `delta_degC^2` are not intervals, and neither is what a
+    /// further step makes of them. Like `periodic` it is not part of equality or of the hash: `delta_degC` is a kelvin
+    /// (one scale, no zero point), the two convert with the factor 1 and compare equal in value; the kind says what a
+    /// number is, which only the comparison and the conversion between a point and an interval read.
+    pub temperature: TemperatureKind,
 }
 
 impl Eq for RationalUnit {}
@@ -258,7 +275,7 @@ impl RationalUnit {
         let mut dimensions: DimVec = dims.into_iter().filter(|(_, (n, _))| *n != 0).collect();
         dimensions.sort_by(|a, b| a.0.cmp(&b.0));
         let id = Self::calculate_id(&dimensions);
-        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None, periodic: false, interval: false }
+        RationalUnit { dimensions, scale: 1.0, exact: Some(ExactScale::one()), offset: 0.0, exact_offset: None, log: None, id, display_name: None, periodic: false, temperature: TemperatureKind::Unknown }
     }
 
     /// Returns a copy of this unit with a different scale factor (same dimensions/id). The
@@ -374,11 +391,22 @@ impl RationalUnit {
 
     /// A temperature interval: a unit the catalog flags `interval` (`delta_celsius`, `delta_fahrenheit` and their
     /// aliases and prefixed forms, a user's own `dT = 1.0, O, interval`), or what the core's arithmetic makes one (see
-    /// [`RationalUnit::interval`]). The catalog makes `delta_celsius` a kelvin, so the flag is all that tells them
+    /// [`RationalUnit::temperature`]). The catalog makes `delta_celsius` a kelvin, so the flag is all that tells them
     /// apart, whatever name the unit is written by. `K` and `degR` sit on an absolute scale and stand for a point or an
     /// interval alike, so they are not one.
     pub fn is_interval(&self) -> bool {
-        self.interval && !self.is_affine() && self.log.is_none()
+        self.temperature == TemperatureKind::Interval && !self.is_affine() && self.log.is_none()
+    }
+
+    /// The kind field says interval, whatever the unit is (what the unit algebra carries; [`RationalUnit::is_interval`]
+    /// is what a consumer reads).
+    fn has_interval_kind(&self) -> bool {
+        self.temperature == TemperatureKind::Interval
+    }
+
+    /// `Interval` when `kept`, `Unknown` otherwise.
+    fn kept_interval(kept: bool) -> TemperatureKind {
+        if kept { TemperatureKind::Interval } else { TemperatureKind::Unknown }
     }
 
     /// The unit of a sum or a difference of a quantity in this unit and one in `other`, of the same dimensions and
@@ -387,7 +415,7 @@ impl RationalUnit {
     /// its sum with an interval, in either order: `300 K + 5 delta_degC` compares with a point and is 31.85 degC.
     pub fn sum_unit(&self, other: &Self) -> Self {
         let mut unit = self.clone();
-        unit.interval = self.interval && other.interval;
+        unit.temperature = Self::kept_interval(self.has_interval_kind() && other.has_interval_kind());
         unit
     }
 
@@ -423,7 +451,7 @@ impl RationalUnit {
             id: 0,
             display_name: None,
             periodic: false,
-            interval: false,
+            temperature: TemperatureKind::Unknown,
         }
     }
 
@@ -506,7 +534,7 @@ impl RationalUnit {
             (None, false)
         };
         // an interval scaled by a ratio (`2`, `50 %`), in either order, is an interval; with a dimension it is not
-        let interval = (self.interval && other.is_ratio()) || (other.interval && self.is_ratio());
+        let temperature = Self::kept_interval((self.has_interval_kind() && other.is_ratio()) || (other.has_interval_kind() && self.is_ratio()));
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.mul(b)),
             _ => None,
@@ -523,7 +551,7 @@ impl RationalUnit {
         } else {
             None
         };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, interval }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, temperature }
     }
 
     pub fn div(&self, other: &Self) -> Self {
@@ -535,14 +563,14 @@ impl RationalUnit {
             (None, false)
         };
         // an interval over a ratio is an interval; a ratio over an interval, or anything over a dimension, is not
-        let interval = self.interval && other.is_ratio();
+        let temperature = Self::kept_interval(self.has_interval_kind() && other.is_ratio());
         let exact = match (&self.exact, &other.exact) {
             (Some(a), Some(b)) => Some(a.div(b)),
             _ => None,
         };
         let scale = exact.as_ref().map_or(self.scale / other.scale, ExactScale::to_f64);
         let log = if other.is_plain_number() { self.log } else { None };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, interval }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, temperature }
     }
 
     pub fn pow(&self, exp_r: Rational64) -> Self {
@@ -566,10 +594,10 @@ impl RationalUnit {
         let scale = exact.as_ref().map_or(self.scale.powf(exp_f), ExactScale::to_f64);
         let log = if exp_r == Rational64::from_integer(1) { self.log } else { None };
         let periodic = exp_r == Rational64::from_integer(1) && self.periodic;
-        let interval = exp_r == Rational64::from_integer(1) && self.interval;
+        let temperature = Self::kept_interval(exp_r == Rational64::from_integer(1) && self.has_interval_kind());
         // the first power is the unit itself: `(5 dB)^1` is still `5 dB`, by name too
         let display_name = if exp_r == Rational64::from_integer(1) { self.display_name.clone() } else { None };
-        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, interval }
+        RationalUnit { dimensions: new_dims, scale, exact, offset: 0.0, exact_offset: None, log, id, display_name, periodic, temperature }
     }
 
     /// Maps a dimension signature to its named SI derived unit, where one exists.

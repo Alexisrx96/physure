@@ -770,11 +770,13 @@ impl UnitRegistry {
     /// with `Parser::parse_expression_atomic`. A symbol the registry does not know is an error, and
     /// so is a level inside a compound (`RationalUnit::refuse_logarithmic_compound`).
     ///
-    /// A unit written as symbols that was made an interval (`atomic.interval`: `K` as the sum of a kelvin and an
+    /// A unit written as symbols that was made an interval (`atomic.temperature`: `K` as the sum of a kelvin and an
     /// interval, in a binding that keeps its units as symbols) stands for one: the flag is carried over.
     pub fn expand(&self, atomic: &RationalUnit) -> PhysureResult<RationalUnit> {
         let mut expanded = self.expand_symbols(atomic)?;
-        expanded.interval |= atomic.interval;
+        if atomic.temperature == crate::units::TemperatureKind::Interval {
+            expanded.temperature = crate::units::TemperatureKind::Interval;
+        }
         Ok(expanded)
     }
 

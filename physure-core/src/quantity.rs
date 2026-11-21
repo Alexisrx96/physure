@@ -993,7 +993,7 @@ impl Quantity {
             ))),
             (true, true, true) => {
                 let mut difference = self.to_delta()?.sub(&other.to_delta()?)?;
-                difference.unit.interval = true;
+                difference.unit.temperature = crate::units::TemperatureKind::Interval;
                 Ok(difference)
             }
             (false, true, true) => Err(PhysureError::Generic(format!(
