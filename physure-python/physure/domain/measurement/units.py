@@ -52,13 +52,14 @@ def get_default_system() -> UnitSystem:
 
 
 def reconstruct_compound_unit(
-    exponents: ExponentsDict, interval: bool = False
+    exponents: ExponentsDict, interval: bool = False, point: bool = False
 ) -> CompoundUnit:
     """Factory function to reconstruct CompoundUnit instances.
 
     This implements the Reconstruct-by-Value pattern to decouple serialization
     from runtime namespace pollution. `interval` restores a unit made a
-    temperature interval (`CompoundUnit.as_interval`).
+    temperature interval (`CompoundUnit.as_interval`), `point` one made a
+    temperature point (`CompoundUnit.as_point`).
     """
     from physure.domain.measurement.units import (
         CompoundUnit,
@@ -78,7 +79,9 @@ def reconstruct_compound_unit(
         cls = _CompoundUnit
 
     unit = cls(exponents)
-    return unit.as_interval() if interval else unit
+    if interval:
+        return unit.as_interval()
+    return unit.as_point() if point else unit
 
 
 _CORE_ERRORS = (_CoreUnknownUnitError, _CoreUnitMismatchError)
@@ -97,9 +100,10 @@ def _python_error(
     )
 
 
-# the key of a unit made an interval in the flyweight cache, which no set of
-# powers can be
+# the keys of a unit made an interval or a point in the flyweight cache, which
+# no set of powers can be
 _INTERVAL_KEY = object()
+_POINT_KEY = object()
 
 
 @dataclass(frozen=True)
@@ -187,6 +191,11 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         """
         if self.interval:
             return (reconstruct_compound_unit, (dict(self.exponents), True))
+        if self.point:
+            return (
+                reconstruct_compound_unit,
+                (dict(self.exponents), False, True),
+            )
         return (reconstruct_compound_unit, (dict(self.exponents),))
 
     def as_interval(self) -> CompoundUnit:
@@ -201,7 +210,29 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
         """
         if self.interval:
             return self
-        key = (_INTERVAL_KEY, tuple(sorted(self.exponents.items())))
+        return self._of_kind(_INTERVAL_KEY, interval=True)
+
+    def as_point(self) -> CompoundUnit:
+        """This unit standing for a known absolute temperature, whatever its symbols say.
+
+        The core marks a point converted to a unit without a zero point a
+        point (`20 degC => K`), and that point moved by an interval: a K that
+        holds one is not compared with an interval nor converted to one. It
+        equals the unit it was made from, as `as_interval` does.
+        """
+        if self.point:
+            return self
+        return self._of_kind(_POINT_KEY, point=True)
+
+    def as_plain(self) -> CompoundUnit:
+        """This unit of unknown kind: the flyweight of its powers."""
+        if not (self.interval or self.point):
+            return self
+        return CompoundUnit(dict(self.exponents))
+
+    def _of_kind(self, marker: object, **kind: bool) -> CompoundUnit:
+        """The flyweight of this unit's powers carrying the kind `kind` names."""
+        key = (marker, tuple(sorted(self.exponents.items())))
         instance = CompoundUnit._cache.get(key)
         if instance is None:
             instance = RationalUnit.__new__(
@@ -210,7 +241,7 @@ class CompoundUnit(  # pyright: ignore[reportUnsafeMultipleInheritance]
                     symbol: exact_power(power)
                     for symbol, power in self.exponents.items()
                 },
-                interval=True,
+                **kind,
             )
             object.__setattr__(instance, "exponents", self.exponents)
             CompoundUnit._cache[key] = cast("CompoundUnit", instance)

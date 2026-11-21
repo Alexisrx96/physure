@@ -101,3 +101,8 @@ def test_a_unit_made_a_point_survives_pickling_and_the_cache(q):
     # the plain kelvin of the cache is not answered by the point, nor the point by it
     assert q(1, "K").unit.point is False
     assert q(20, "degC").to("K").unit.point is True
+    # nor through the core's cache of units, which equality alone would merge
+    registry = get_default_system().core_registry
+    assert registry.expand(t.unit).point is True
+    assert registry.expand(q(1, "K").unit).point is False
+    assert registry.expand(t.unit).point is True

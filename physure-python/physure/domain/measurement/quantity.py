@@ -282,6 +282,8 @@ class Quantity(
         unit = CU(dims)
         if getattr(self._core_unit, "interval", False):
             unit = unit.as_interval()
+        elif getattr(self._core_unit, "point", False):
+            unit = unit.as_point()
         object.__setattr__(self, "_unit", unit)
 
         if system is not None:
@@ -1136,17 +1138,25 @@ class Quantity(
         )
 
     def _convert_by_plan(
-        self, target_unit: CompoundUnit, written: CompoundUnit | None = None
+        self,
+        target_unit: CompoundUnit,
+        written: CompoundUnit | None = None,
+        *,
+        kind_free: bool = False,
     ) -> Quantity[ValueType, UncType, UnitType]:
         """Converts by the plan that the core registry gives for the two units.
 
         `written` is the target as it was typed, before a recipe unit was replaced
         by its base units: the core flags the hertz by how a unit is written, and
-        `Hz` is `s^-1` once simplified.
+        `Hz` is `s^-1` once simplified. A point converted to a unit without a
+        zero point is a point (`20 degC => K`), as the core says. `kind_free`
+        reads the number in the target unit whatever kind of temperature it is
+        (a sum's operand: the sum decides the kind of the result).
         """
+        source = self.unit.as_plain() if kind_free else self.unit
         try:
             plan = self.system.core_registry.conversion(
-                self.unit, written or target_unit
+                source, written or target_unit
             )
         except _CORE_ERRORS as error:
             raise _python_error(error, self.unit, target_unit) from error
@@ -1157,7 +1167,7 @@ class Quantity(
                 self.unit,
                 target_unit,
                 _point_interval_conversion_message(
-                    str(self), str(written or target_unit), self._is_absolute()
+                    str(self), str(written or target_unit), self._is_point()
                 ),
             ) from error
         magnitude, uncertainty = apply_conversion(
@@ -1172,6 +1182,15 @@ class Quantity(
             self.system,
             uncertainty=uncertainty,
         )
+        if (
+            not kind_free
+            and self.dimension.exponents == _TEMPERATURE
+            and self.system.core_registry.converted_kind(
+                self.unit, written or target_unit
+            )
+            == "point"
+        ):
+            object.__setattr__(converted, "_unit", converted.unit.as_point())
         # A conversion restates the same measurement in another unit, so it keeps the
         # sources it came from, rescaled: `x.to("mm") - x.to("mm")` is zero and the degrees
         # of freedom stay with it. `from_input` alone would mint a new, independent source.
@@ -1712,9 +1731,7 @@ class Quantity(
 
     def _refuse_point_against_interval(self, other: Quantity) -> None:
         """Raises the core's words for a temperature point against an interval."""
-        point, interval = (
-            (self, other) if self._is_absolute() else (other, self)
-        )
+        point, interval = (self, other) if self._is_point() else (other, self)
         raise IncompatibleUnitsError(
             self.unit,
             other.unit,
@@ -1726,12 +1743,14 @@ class Quantity(
             if self.dimension != other.dimension:
                 raise IncompatibleUnitsError(self.unit, other.unit)
             # Convert to self unit for comparison
+            # `5 delta_degC < 20 degC` has no answer: an interval is not where a
+            # temperature is, also when both are written in K (a point and a
+            # difference of two points)
+            if self._point_against_interval(other):
+                self._refuse_point_against_interval(other)
             # Optimization: check if conversion needed
             if self.unit == other.unit:
                 return op(self.magnitude, other.magnitude)
-            # `5 delta_degC < 20 degC` has no answer: an interval is not where a temperature is
-            if self._point_against_interval(other):
-                self._refuse_point_against_interval(other)
 
             other_converted = other.to(self.unit)
             return op(self.magnitude, other_converted.magnitude)
@@ -1752,7 +1771,7 @@ class Quantity(
             if self.dimension != other.dimension:
                 return False
             # a point is never an interval (`<` raises for the pair)
-            if self.unit != other.unit and self._point_against_interval(other):
+            if self._point_against_interval(other):
                 return False
             try:
                 other_converted = other.to(self.unit)

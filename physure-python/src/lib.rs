@@ -194,15 +194,20 @@ impl PyRationalUnit {
             .map(|d| parse_dimensions_dict(&d))
             .transpose()?
             .unwrap_or_default();
-        // `interval=True`: a unit written as symbols that stands for a temperature interval whatever its symbols say
-        // (`K` as the sum of a kelvin and an interval); the registry's `expand` carries it over
-        let interval = match kwargs.map(|kw| kw.get_item("interval")).transpose()?.flatten() {
-            Some(flag) => flag.is_truthy()?,
-            None => false,
+        // `interval=True` / `point=True`: a unit written as symbols that stands for a temperature interval (`K` as a
+        // point minus a point) or a point (`K` as `20 degC => K`) whatever its symbols say; the registry's `expand`
+        // carries it over
+        let flag = |name: &str| -> PyResult<bool> {
+            match kwargs.map(|kw| kw.get_item(name)).transpose()?.flatten() {
+                Some(flag) => flag.is_truthy(),
+                None => Ok(false),
+            }
         };
         let mut unit = RationalUnit::new_from_dimensions(dimensions);
-        if interval {
+        if flag("interval")? {
             unit.temperature = TemperatureKind::Interval;
+        } else if flag("point")? {
+            unit.temperature = TemperatureKind::Point;
         }
         Ok(PyRationalUnit(unit))
     }
@@ -217,6 +222,13 @@ impl PyRationalUnit {
     #[getter]
     fn interval(&self) -> bool {
         self.0.temperature == TemperatureKind::Interval
+    }
+
+    /// Whether this unit stands for a known absolute temperature without a zero point (the core's
+    /// `RationalUnit::temperature` is `Point`): set on a unit written as symbols that a point was converted to.
+    #[getter]
+    fn point(&self) -> bool {
+        self.0.temperature == TemperatureKind::Point
     }
 
     #[getter]
@@ -459,12 +471,21 @@ impl PyUnitRegistry {
         Ok(a.point_against_interval(&b))
     }
 
-    /// Whether the sum or difference of quantities in two units written as symbols (of one dimension, neither a point
-    /// nor a level) is a temperature interval, as the core's arithmetic says (`RationalUnit::sum_unit`): only two known
-    /// intervals make one; a plain `K` is of unknown kind, and so is its sum with an interval.
-    fn sum_is_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
+    /// The kind of temperature (`"point"`, `"interval"` or `"unknown"`) of the sum (`subtract` false) or the difference
+    /// of quantities in two units written as symbols (of one dimension, neither with a zero point nor a level), as the
+    /// core's arithmetic says (`RationalUnit::sum_unit`): a point moved by an interval is a point, a point minus a point
+    /// and two intervals an interval, a plain `K` makes it unknown.
+    fn sum_kind(&self, a: &PyRationalUnit, b: &PyRationalUnit, subtract: bool) -> PyResult<&'static str> {
         let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
-        Ok(a.sum_unit(&b, false).is_interval())
+        Ok(temperature_kind_name(a.sum_unit(&b, subtract).temperature_kind()))
+    }
+
+    /// The kind of temperature (`"point"`, `"interval"` or `"unknown"`) a quantity in `source` has once converted to
+    /// `target`, both written as symbols, as `Quantity::convert_to` gives it (`RationalUnit::converted_from`): a point
+    /// converted to a unit without a zero point is a point.
+    fn converted_kind(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<&'static str> {
+        let (source, target) = (self.0.expand(&source.0).map_err(value_error)?, self.0.expand(&target.0).map_err(value_error)?);
+        Ok(temperature_kind_name(target.converted_from(&source).temperature_kind()))
     }
 
     /// Whether a unit written as symbols stands for a temperature interval (a unit the catalog flags `interval`, or
@@ -989,6 +1010,15 @@ impl PyCovarianceStore {
 ///
 /// This is the core of the zero-copy FFI strategy: Python never copies data.
 /// Rust reads & writes directly to Python-owned memory.
+/// The name Python gives a temperature kind.
+fn temperature_kind_name(kind: TemperatureKind) -> &'static str {
+    match kind {
+        TemperatureKind::Unknown => "unknown",
+        TemperatureKind::Point => "point",
+        TemperatureKind::Interval => "interval",
+    }
+}
+
 /// The core's words for a temperature point compared with a temperature interval, each written as Python prints it.
 #[pyfunction]
 fn point_against_interval_message(point: &str, interval: &str) -> String {
