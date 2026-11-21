@@ -464,7 +464,7 @@ impl PyUnitRegistry {
     /// intervals make one; a plain `K` is of unknown kind, and so is its sum with an interval.
     fn sum_is_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
         let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
-        Ok(a.sum_unit(&b).is_interval())
+        Ok(a.sum_unit(&b, false).is_interval())
     }
 
     /// Whether a unit written as symbols stands for a temperature interval (a unit the catalog flags `interval`, or

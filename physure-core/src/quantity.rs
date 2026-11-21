@@ -443,13 +443,17 @@ impl Quantity {
                 actual: other.unit.__repr__(),
             });
         }
+        // an interval plus a point is a point, written in the point's unit as `5 delta_degC + 20 degC` is in degC
+        if self.unit.is_interval() && other.unit.is_point() {
+            return other.add(self);
+        }
         let other_value = if self.unit.scale != other.unit.scale {
             Self::scale_value(&other.value, other.unit.ratio_to(&self.unit))?
         } else {
             other.value.clone()
         };
         let new_value = self.value.propagate_add(&other_value)?;
-        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit) })
+        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit, false) })
     }
 
     pub fn sub(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -471,7 +475,7 @@ impl Quantity {
             other.value.clone()
         };
         let new_value = self.value.propagate_sub(&other_value)?;
-        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit) })
+        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit, true) })
     }
 
     pub fn mul(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -969,11 +973,11 @@ impl Quantity {
         if self.unit.is_affine() || target.is_affine() {
             let (scale, shift) = self.unit.affine_to(target);
             let new_value = Self::shift_value(&Self::scale_value(&self.value, scale)?, shift)?;
-            return Ok(Quantity { value: new_value, unit: target.clone() });
+            return Ok(Quantity { value: new_value, unit: target.converted_from(&self.unit) });
         }
         let ratio = self.unit.ratio_to(target);
         let new_value = Self::scale_value(&self.value, ratio)?;
-        Ok(Quantity { value: new_value, unit: target.clone() })
+        Ok(Quantity { value: new_value, unit: target.converted_from(&self.unit) })
     }
 
     /// What can be done with an absolute temperature (degC, degF) and something else. It is a
