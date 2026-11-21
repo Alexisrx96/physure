@@ -1729,6 +1729,23 @@ class Quantity(
             )
         )
 
+    def _same_plain_unit(self, other: Quantity) -> bool:
+        """One unit on both sides, neither made a point nor an interval.
+
+        Then the two are of one kind (both degC, both delta_degC, both a K of
+        unknown kind), so a comparison needs no question to the core.
+        """
+        unit, other_unit = self.unit, other.unit
+        if unit is other_unit:
+            # one flyweight: one kind, whatever it is (a point is never an
+            # interval of itself)
+            return True
+        return (
+            unit == other_unit
+            and not (unit.point or unit.interval)
+            and not (other_unit.point or other_unit.interval)
+        )
+
     def _refuse_point_against_interval(self, other: Quantity) -> None:
         """Raises the core's words for a temperature point against an interval."""
         point, interval = (self, other) if self._is_point() else (other, self)
@@ -1743,6 +1760,9 @@ class Quantity(
             if self.dimension != other.dimension:
                 raise IncompatibleUnitsError(self.unit, other.unit)
             # Convert to self unit for comparison
+            # the same unit, neither made a point nor an interval: one kind
+            if self._same_plain_unit(other):
+                return op(self.magnitude, other.magnitude)
             # `5 delta_degC < 20 degC` has no answer: an interval is not where a
             # temperature is, also when both are written in K (a point and a
             # difference of two points)
@@ -1770,6 +1790,8 @@ class Quantity(
         if isinstance(other, Quantity):
             if self.dimension != other.dimension:
                 return False
+            if self._same_plain_unit(other):
+                return self.magnitude == other.magnitude
             # a point is never an interval (`<` raises for the pair)
             if self._point_against_interval(other):
                 return False
