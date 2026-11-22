@@ -1749,9 +1749,41 @@ class Quantity(
             holder[0] = self
             return holder.reshape(())
         elements = np.empty(math.prod(shape), dtype=object)
-        for position, index in enumerate(np.ndindex(*shape)):
-            elements[position] = self[index]
+        if isinstance(magnitude, np.ndarray):
+            self._fill_numpy_elements(np, elements, magnitude, shape)
+        else:
+            for position, index in enumerate(np.ndindex(*shape)):
+                elements[position] = self[index]
         return elements.reshape(shape)
+
+    def _fill_numpy_elements(
+        self, np: Any, elements: Any, magnitude: Any, shape: tuple[int, ...]
+    ) -> None:
+        """`elements[i]` is `q[i]`, built from one element's state instead of `from_input`.
+
+        Building each element through `from_input` took about 50 us, so
+        `np.asarray` of 1e5 elements took 5 s. Every element shares the unit, system,
+        dimension and backend of the first; its own are the magnitude and, as `q[i]`
+        gives it, a new measurement of its standard deviation (`from_standard`).
+        """
+        first = self[(0,) * len(shape)]
+        state = first.__dict__
+        cls = type(first)
+        values = magnitude.reshape(-1)
+        sigmas = np.broadcast_to(
+            np.asarray(self._numeric_std_dev, dtype=float), shape
+        ).reshape(-1)
+        for position in range(values.size):
+            element = object.__new__(cls)
+            element.__dict__.update(state)
+            element.__dict__["_core_magnitude"] = values[position]
+            sigma = sigmas[position]
+            model = Uncertainty.from_standard(float(sigma)) if sigma else None
+            element.__dict__["_core_uncertainty"] = (
+                model.std_dev if model is not None else sigma
+            )
+            element.__dict__["_uncertainty_obj"] = model
+            elements[position] = element
 
     def __float__(self) -> float:
         """The value in the coherent unit as a bare number.

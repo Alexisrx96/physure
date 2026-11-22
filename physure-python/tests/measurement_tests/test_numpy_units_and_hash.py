@@ -665,3 +665,30 @@ def test_np_std_of_a_list_is_first_order_in_the_errors():
     assert np.std([Q_(100, "cm"), Q_(2, "m")]).to(
         "cm"
     ).magnitude == pytest.approx(50.0)
+
+
+@pytest.mark.parametrize("unit", ["m", "degC", "delta_degC"])
+def test_the_elements_of_np_asarray_are_the_elements_q_i(unit):
+    q = Q_(
+        np.array([[1.0, 2.0], [3.0, 4.0]]),
+        unit,
+        uncertainty=np.array([[0.1, 0.0], [0.2, 0.3]]),
+    )
+    elements = np.asarray(q)
+    for index in np.ndindex(2, 2):
+        element, reference = elements[index], q[index]
+        assert element.magnitude == reference.magnitude
+        assert element.unit == reference.unit
+        assert element.unit.point == reference.unit.point
+        assert element.uncertainty == reference.uncertainty
+        assert type(element._uncertainty_obj) is type(
+            reference._uncertainty_obj
+        )
+    # each element is its own measurement, as q[i] is
+    assert (elements[0, 0] - elements[0, 0]).uncertainty == 0.0
+    assert (elements[0, 0] - elements[1, 0]).uncertainty == pytest.approx(
+        math.hypot(0.1, 0.2)
+    )
+    exact = np.asarray(Q_(np.arange(5.0), unit))
+    assert [e.magnitude for e in exact] == [0.0, 1.0, 2.0, 3.0, 4.0]
+    assert all(e.uncertainty == 0.0 for e in exact)
