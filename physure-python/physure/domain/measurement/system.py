@@ -58,7 +58,7 @@ class UnitSystem:
         self._units: dict[str, CompoundUnit] = {}
         # unit -> how a number in it becomes the value in the coherent unit
         # (`Quantity._coherent_value`), forgotten whenever the registry changes
-        self._coherent_plans: dict[CompoundUnit, tuple[Any, ...]] = {}
+        self._coherent_plans: dict[int, tuple[CompoundUnit, Any]] = {}
 
     @property
     def core_registry(self) -> _RustUnitRegistry:

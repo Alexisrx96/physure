@@ -904,10 +904,15 @@ class Quantity(
         """
         system = self.system
         unit = self.unit
-        plans = system.__dict__.setdefault("_coherent_plans", {})
-        known = plans.get(unit)
-        if known is not None:
-            return known
+        try:
+            plans = system._coherent_plans
+        except AttributeError:  # a system unpickled from before the plans
+            plans = system._coherent_plans = {}
+        # by identity (a unit is a flyweight): hashing the unit costs more than
+        # the lookup; the unit is kept with its plan, so its id is not reused
+        known = plans.get(id(unit))
+        if known is not None and known[0] is unit:
+            return known[1]
         coherent = unit.base_unit(system)
         if coherent == unit and not self._is_level():
             known = (coherent, None, None)
@@ -921,7 +926,7 @@ class Quantity(
                 else (Fraction(exact[0]), Fraction(exact[1])),
                 registry.conversion(unit, coherent),
             )
-        plans[unit] = known
+        plans[id(unit)] = (unit, known)
         return known
 
     def _stripped_value(self, operation: str) -> Any:
@@ -2060,6 +2065,11 @@ class Quantity(
             True
         """
         if isinstance(other, Quantity):
+            if other.unit is self.unit and self._coherent_plan()[2] is None:
+                # one unit, the coherent one: the magnitudes are the coherent values
+                return _python_scalar(self.magnitude) == _python_scalar(
+                    other.magnitude
+                )
             if self.dimension != other.dimension:
                 return False
             # a point is never an interval (`<` raises for the pair)
