@@ -440,6 +440,16 @@ class BackendMixin:
                 np, func is np.mean, {**named, **kwargs}
             )
 
+        if (
+            func in (np.dot, np.cross)
+            and len(args) == 2
+            and not kwargs
+            and all(isinstance(arg, _q()) for arg in args)
+        ):
+            # the two quantities alone: an `out`, an axis or a plain array is refused
+            left, right = args
+            return left.dot(right) if func is np.dot else left.cross(right)
+
         return NotImplemented
 
     def _numpy_sum_or_mean(

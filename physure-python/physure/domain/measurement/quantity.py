@@ -1892,6 +1892,19 @@ class Quantity(
             )
         return self._vector_product(other, "cross")
 
+    def __matmul__(self, other: object) -> Quantity:
+        """`a @ b` of 1-D and 2-D quantities: NumPy's matrix product, which is `a.dot(b)`.
+
+        A scalar, an array of more than two dimensions or a plain array is not taken
+        (NumPy's `@` refuses scalars and broadcasts stacks of matrices, which `dot`
+        does not), so `@` raises `TypeError` for them.
+        """
+        if not isinstance(other, Quantity) or not (
+            1 <= self._ndim() <= 2 and 1 <= other._ndim() <= 2
+        ):
+            return NotImplemented
+        return self.dot(other)
+
     def __bool__(self) -> bool:
         """Returns the boolean value of the magnitude."""
         if hasattr(self.magnitude, "ndim") and self.magnitude.ndim > 0:
