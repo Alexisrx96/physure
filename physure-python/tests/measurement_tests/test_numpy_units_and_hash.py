@@ -468,3 +468,133 @@ def test_the_coherent_value_follows_a_unit_the_system_redefines():
         assert float(redefined) == 120.0
     assert redefined == Q_(120, "USD")
     assert hash(redefined) == hash(Q_(120, "USD"))
+
+
+# --- an exact array combined with an uncertain scalar shares the scalar's error -----
+
+
+@pytest.fixture
+def exact_lengths():
+    return Q_(np.array([1.0, 2.0, 4.0]), "m")
+
+
+@pytest.mark.parametrize("scalar_left", [False, True], ids=["e+x", "x+e"])
+def test_an_exact_array_plus_an_uncertain_scalar_shares_its_error(
+    exact_lengths, scalar_left
+):
+    x = Q_(0.5, "m", 0.3)
+    shifted = x + exact_lengths if scalar_left else exact_lengths + x
+    assert np.allclose(shifted.uncertainty, [0.3, 0.3, 0.3])
+    # every element carries the one error of x: sum is 3 x, not sqrt(3) x
+    assert np.sum(shifted).magnitude == pytest.approx(8.5)
+    assert np.sum(shifted).uncertainty == pytest.approx(0.9, rel=1e-12)
+    assert np.mean(shifted).uncertainty == pytest.approx(0.3, rel=1e-12)
+    # and the same x taken away again leaves the exact array
+    assert np.sum(shifted - x).uncertainty == pytest.approx(0.0, abs=1e-12)
+
+
+def test_an_exact_array_times_an_uncertain_scalar_shares_its_error(
+    exact_lengths,
+):
+    k = Q_(2, "", 0.1)
+    scaled = exact_lengths * k
+    assert np.allclose(scaled.uncertainty, [0.1, 0.2, 0.4])
+    assert np.sum(scaled).uncertainty == pytest.approx(0.7, rel=1e-12)
+    halved = exact_lengths / k
+    # d(sum e / k)/dk = -sum(e) / k^2 = -7/4
+    assert np.sum(halved).uncertainty == pytest.approx(0.175, rel=1e-12)
+
+
+def test_np_sum_refuses_elements_whose_shared_error_was_already_dropped(
+    exact_lengths,
+):
+    # the uncorrelated mode keeps variances only: the error of x shared by the
+    # elements is gone, and a sum read from them would be too small
+    with physure.propagation_mode("uncorrelated"):
+        shifted = exact_lengths + Q_(0.5, "m", 0.3)
+        for reduce in (np.sum, np.mean, np.add.reduce):
+            with pytest.raises(TypeError, match="correlation"):
+                reduce(shifted)
+
+
+# --- == is an equivalence on the coherent value, hash follows it -------------------
+
+_FAMILIES = [
+    ["m", "cm", "mm", "km", "inch", "ft", "mile", "um"],
+    ["s", "ms", "min", "h"],
+    ["kg", "g", "lb", "oz"],
+    ["K", "degC", "degF", "mK"],
+    ["J", "kJ", "kWh", "cal", "eV"],
+    ["rad", "deg", "arcsec", "arcmin"],
+    ["percent", "ppm", ""],
+]
+
+
+def _random_quantities(rng, count):
+    """Quantities in random units of one family, many of them equal by construction."""
+    quantities = []
+    for _ in range(count):
+        family = _FAMILIES[rng.integers(len(_FAMILIES))]
+        unit = family[rng.integers(len(family))]
+        value = float(np.round(rng.normal(0, 100), int(rng.integers(0, 4))))
+        q = Q_(value, unit)
+        other = family[rng.integers(len(family))]
+        quantities.append((q, q.to(other), family))
+    return quantities
+
+
+def test_float32_and_float64_magnitudes_compare_and_hash_as_one_number():
+    a, b = Q_(np.float32(0.1), "m"), Q_(0.1, "m")
+    assert (a == b) == (hash(a) == hash(b)) or a != b
+    assert a != b  # 0.10000000149011612 m is not 0.1 m
+    assert Q_(np.float32(0.5), "m") == Q_(0.5, "m")
+    assert hash(Q_(np.float32(0.5), "m")) == hash(Q_(0.5, "m"))
+    assert hash(Q_(np.int64(2), "km")) == hash(Q_(2000, "m"))
+    assert Q_(np.float64(0.1), "cm") == Q_(1, "mm")
+
+
+def test_equality_is_transitive_through_conversions():
+    rng = np.random.default_rng(20261121)
+    violations = 0
+    triples = 0
+    for q, converted, family in _random_quantities(rng, 1500):
+        for third_unit in family[:3]:
+            third = converted.to(third_unit)
+            if (
+                q._is_point() != third._is_point()
+                and q.dimension.exponents == {"O": 1}
+            ):
+                continue
+            triples += 1
+            if q == converted and converted == third and q != third:
+                violations += 1
+    assert triples >= 3000
+    assert violations == 0
+
+
+def test_equal_quantities_always_hash_alike():
+    rng = np.random.default_rng(7)
+    pairs = _random_quantities(rng, 5000)
+    scalar_types = (np.float64, np.float32, float)
+    checked = 0
+    for index, (q, converted, _) in enumerate(pairs):
+        kind = scalar_types[index % 3]
+        left = Q_(kind(q.magnitude), q.unit)
+        for a, b in ((q, converted), (left, q), (left, converted)):
+            checked += 1
+            if a == b:
+                assert hash(a) == hash(b), (a, b)
+    assert checked >= 5000
+
+
+def test_a_value_beyond_a_double_stays_exact_and_strips_to_an_infinity():
+    big = Q_(1e308, "km")
+    assert big == Q_(1e308, "km")
+    assert big != Q_(1e308, "m")
+    assert isinstance(hash(big), int)
+    with pytest.warns(physure.UnitStrippedWarning):
+        assert float(big) == math.inf
+    with pytest.warns(physure.UnitStrippedWarning):
+        assert float(Q_(-1e308, "km")) == -math.inf
+    with pytest.warns(physure.UnitStrippedWarning):
+        assert np.asarray(big, dtype=float) == math.inf

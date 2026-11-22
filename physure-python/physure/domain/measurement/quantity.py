@@ -166,6 +166,22 @@ def _exact_number(value: Any) -> Fraction | None:
     return None
 
 
+def _as_float(value: Any) -> float:
+    """`float(value)`, an infinity of its sign beyond the range of a double."""
+    try:
+        return float(value)
+    except OverflowError:
+        return math.inf if value > 0 else -math.inf
+
+
+def _python_scalar(value: Any) -> Any:
+    """A NumPy scalar as the Python number it holds; anything else (an array) as it is."""
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, numpy.generic):
+        return value.item()
+    return value
+
+
 def _is_plain_real(value: Any) -> bool:
     """A plain real number a dimensionless quantity may equal: a Python or NumPy int or float."""
     if isinstance(value, (int, float)):
@@ -847,19 +863,28 @@ class Quantity(
         `293.15000000000003 K` for `68 degF`), `2.54 cm` is `0.0254 m` like `1 inch`, and
         `q.to(unit)` usually rounds back to the same double. A level, a unit known only
         as a double, or an array take the core's rounded plan, as `to` applies it.
+
+        A NumPy scalar is read as the Python number it holds (`np.float32(0.1)` is
+        `0.10000000149011612`), so `==` and `hash` see one number. A value beyond the
+        range of a double stays the exact `Fraction` (`1e308 km`), which compares and
+        hashes exactly; `float()` makes it an infinity.
         """
         coherent, exact_plan, rounded_plan = self._coherent_plan()
-        magnitude: Any = self.magnitude
+        magnitude: Any = _python_scalar(self.magnitude)
         if rounded_plan is None:
             return coherent, magnitude
         exact = _exact_number(magnitude) if exact_plan is not None else None
         if exact is not None:
             scale, shift = exact_plan
-            return coherent, float(exact * scale + shift)
+            value = exact * scale + shift
+            try:
+                return coherent, float(value)
+            except OverflowError:
+                return coherent, value
         value, _ = apply_conversion(
             rounded_plan, magnitude, 0.0, self._backend
         )
-        return coherent, value
+        return coherent, _python_scalar(value)
 
     def _coherent_plan(self) -> tuple[CompoundUnit, Any, Any]:
         """The coherent unit, the exact plan to it (Fractions) and the core's rounded one.
@@ -1705,6 +1730,8 @@ class Quantity(
                 )
             return self._object_array(np)
         values = self._stripped_value(f"np.asarray(dtype={np.dtype(dtype)})")
+        if isinstance(values, Fraction):
+            values = _as_float(values)
         return np.asarray(values, dtype=dtype)
 
     def _object_array(self, np: Any) -> Any:
@@ -1734,11 +1761,14 @@ class Quantity(
         warns (`UnitStrippedWarning`) with what is dropped; `q.to(unit).magnitude` is
         the explicit, silent way.
         """
-        return float(self._stripped_value("float()"))
+        return _as_float(self._stripped_value("float()"))
 
     def __complex__(self) -> complex:
         """The value in the coherent unit as a complex number; warns as `float` does."""
-        return complex(self._stripped_value("complex()"))
+        value = self._stripped_value("complex()")
+        return complex(
+            _as_float(value) if isinstance(value, Fraction) else value
+        )
 
     # --- Math & Vector Ops ---
 
@@ -1967,10 +1997,13 @@ class Quantity(
     def __eq__(self, other: object) -> Any:
         """Equal values in the coherent unit (`1 m == 100 cm`); the uncertainty is not compared.
 
-        Both sides are the double `_coherent_value` gives (converted exactly, rounded
-        once), so `==` and `hash` cannot disagree and `20 degC == 68 degF` holds. One plain unit on
-        both sides compares the magnitudes, which says the same. A temperature point is
-        never an interval (`20 degC != 5 delta_degC`); a plain `K` equals either by value.
+        Both sides are the number `_coherent_value` gives (converted exactly, rounded
+        once), so `==` is an equivalence on them, `==` and `hash` cannot disagree, and
+        `20 degC == 68 degF` holds. Two magnitudes in the same unit that is not the
+        coherent one are compared through it too: comparing them directly would make
+        `-55.2 arcsec == x rad == -55.199999999999996 arcsec` true and the two arcsec
+        values unequal. A temperature point is never an interval
+        (`20 degC != 5 delta_degC`); a plain `K` equals either by value.
         A dimensionless quantity equals the plain number of its coherent value
         (`Q_(100, "percent") == 1`).
 
@@ -1984,8 +2017,6 @@ class Quantity(
         if isinstance(other, Quantity):
             if self.dimension != other.dimension:
                 return False
-            if self._same_plain_unit(other):
-                return self.magnitude == other.magnitude
             # a point is never an interval (`<` raises for the pair)
             if self._point_against_interval(other):
                 return False
@@ -2001,7 +2032,7 @@ class Quantity(
                 _, value = self._coherent_value()
             except Exception:
                 return False
-            return value == other
+            return value == _python_scalar(other)
         return False
 
     def __ne__(self, other: object) -> Any:
