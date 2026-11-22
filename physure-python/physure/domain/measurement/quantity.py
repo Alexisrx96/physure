@@ -848,27 +848,47 @@ class Quantity(
         `q.to(unit)` usually rounds back to the same double. A level, a unit known only
         as a double, or an array take the core's rounded plan, as `to` applies it.
         """
-        system = self.system
-        unit = self.unit
-        coherent = unit.base_unit(system)
+        coherent, exact_plan, rounded_plan = self._coherent_plan()
         magnitude: Any = self.magnitude
-        if coherent == unit and not self._is_level():
+        if rounded_plan is None:
             return coherent, magnitude
-        exact = _exact_number(magnitude)
+        exact = _exact_number(magnitude) if exact_plan is not None else None
         if exact is not None:
-            plan = system.core_registry.exact_conversion(unit, coherent)
-            if plan is not None:
-                scale, shift = plan
-                return coherent, float(
-                    exact * Fraction(scale) + Fraction(shift)
-                )
+            scale, shift = exact_plan
+            return coherent, float(exact * scale + shift)
         value, _ = apply_conversion(
-            system.core_registry.conversion(unit, coherent),
-            magnitude,
-            0.0,
-            self._backend,
+            rounded_plan, magnitude, 0.0, self._backend
         )
         return coherent, value
+
+    def _coherent_plan(self) -> tuple[CompoundUnit, Any, Any]:
+        """The coherent unit, the exact plan to it (Fractions) and the core's rounded one.
+
+        Both plans are `None` for a unit that is its own coherent unit; the exact one is
+        `None` when the core has none. Kept per unit on the system, which forgets them
+        when its registry changes (`UnitSystem.extend_core`).
+        """
+        system = self.system
+        unit = self.unit
+        plans = system.__dict__.setdefault("_coherent_plans", {})
+        known = plans.get(unit)
+        if known is not None:
+            return known
+        coherent = unit.base_unit(system)
+        if coherent == unit and not self._is_level():
+            known = (coherent, None, None)
+        else:
+            registry = system.core_registry
+            exact = registry.exact_conversion(unit, coherent)
+            known = (
+                coherent,
+                None
+                if exact is None
+                else (Fraction(exact[0]), Fraction(exact[1])),
+                registry.conversion(unit, coherent),
+            )
+        plans[unit] = known
+        return known
 
     def _stripped_value(self, operation: str) -> Any:
         """The value in the coherent unit for a bare number, warning about what is lost.

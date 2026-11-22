@@ -450,3 +450,21 @@ def test_equal_implies_equal_hash_through_a_conversion(unit, other, value):
         assert hash(a) == hash(b)
     if b == a:
         assert hash(a) == hash(b)
+
+
+def test_the_coherent_value_follows_a_unit_the_system_redefines():
+    from physure.application.context import get_current_system
+    from physure.ext.currency import enable_currency
+
+    system = get_current_system()
+    enable_currency()
+    shipped = Q_(100, "EUR")
+    with pytest.warns(physure.UnitStrippedWarning):
+        before = float(shipped)
+    assert shipped == Q_(before, "USD")
+    system.extend_core("[Units]\nEUR = 1.2, $, noprefix, [euros]\n")
+    redefined = Q_(100, "EUR")
+    with pytest.warns(physure.UnitStrippedWarning):
+        assert float(redefined) == 120.0
+    assert redefined == Q_(120, "USD")
+    assert hash(redefined) == hash(Q_(120, "USD"))
