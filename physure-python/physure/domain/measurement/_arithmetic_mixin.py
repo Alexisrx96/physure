@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import operator
+import sys
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -36,6 +37,23 @@ def _q():
 
         _Quantity = Quantity
     return _Quantity
+
+
+def _python_number(value: Any) -> Any:
+    """A NumPy scalar number as the Python number it holds; anything else as it is.
+
+    `np.mean` of quantities divides their sum by a `np.intp`, and `np.int64` (unlike
+    `np.float64`) is not a Python number, so `Quantity / np.int64(3)` found no path and
+    NumPy reported that every operand returned `NotImplemented`.
+    """
+    numpy = sys.modules.get("numpy")
+    if (
+        numpy is not None
+        and isinstance(value, numpy.number)
+        and not isinstance(value, (float, complex))
+    ):
+        return value.item()
+    return value
 
 
 def _without_point(result: Any, *operands: Any) -> Any:
@@ -1249,12 +1267,14 @@ class ArithmeticMixin:
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Quantity | Numeric) -> Quantity:
         """Handles arithmetic with Affine Support."""
+        other = _python_number(other)
         return self._sum_kind(
             other, self._add_sub_impl(other, is_add=True), subtract=False
         )
 
     def __sub__(self, other: Quantity | Numeric) -> Quantity:
         """Handles subtraction."""
+        other = _python_number(other)
         return self._sum_kind(
             other, self._add_sub_impl(other, is_add=False), subtract=True
         )
@@ -1390,6 +1410,7 @@ class ArithmeticMixin:
 
     def __rsub__(self, other: Quantity | Numeric) -> Quantity:
         """Right subtraction."""
+        other = _python_number(other)
         self._reject_bare_number_add_sub(other)
         rust_res = self._check_and_handle_rust_propagation(other, "rsub")
         if rust_res is not None:
@@ -1404,6 +1425,7 @@ class ArithmeticMixin:
         A scaled absolute temperature is no longer a place on the scale: the
         product of a point (`20 degC => K`) is of unknown kind, as in the core.
         """
+        other = _python_number(other)
         return _without_point(self._mul_keeping_kind(other), self, other)
 
     def _mul_keeping_kind(
@@ -1509,6 +1531,7 @@ class ArithmeticMixin:
         self, other: Quantity | Numeric | CompoundUnit
     ) -> Quantity:
         """Divides two quantities; the quotient of a point is of unknown kind."""
+        other = _python_number(other)
         return _without_point(self._truediv_keeping_kind(other), self, other)
 
     def _truediv_keeping_kind(
@@ -1620,6 +1643,7 @@ class ArithmeticMixin:
 
     def __pow__(self, exponent: float) -> Quantity:
         """Raises quantity to power."""
+        exponent = _python_number(exponent)
         rust_res = self._check_and_handle_rust_propagation(exponent, "pow")
         if rust_res is not None:
             return rust_res
@@ -1666,6 +1690,7 @@ class ArithmeticMixin:
 
     def __rtruediv__(self, other: Numeric) -> Quantity:
         """Right division."""
+        other = _python_number(other)
         rust_res = self._check_and_handle_rust_propagation(other, "rtruediv")
         if rust_res is not None:
             return rust_res

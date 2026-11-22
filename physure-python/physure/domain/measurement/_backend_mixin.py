@@ -51,7 +51,10 @@ class BackendMixin:
     def _numpy_ufunc_reduce(
         self, ufunc: Any, inputs: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        """Handle np.add.reduce (e.g. np.sum); return NotImplemented for others."""
+        """`np.add.reduce`, the sum `np.sum` is; NotImplemented for the other reductions.
+
+        It used to sum the numbers alone and drop the uncertainty.
+        """
         import numpy as np
 
         if ufunc != np.add:
@@ -59,8 +62,7 @@ class BackendMixin:
         inp = inputs[0]
         if not isinstance(inp, _q()):
             return NotImplemented
-        res_mag = self._backend.sum(inp.magnitude, axis=kwargs.get("axis"))
-        return type(self).from_input(res_mag, inp.unit, self.system)
+        return inp._numpy_sum_or_mean(np, False, {"axis": 0, **kwargs})
 
     def _numpy_ufunc_check_compatible(self, val: Any) -> None:
         """Raise IncompatibleUnitsError on dimension mismatch."""
@@ -222,17 +224,110 @@ class BackendMixin:
         if func == np.concatenate:
             return self._numpy_concatenate(np, args, kwargs)
 
-        if func == np.mean:
+        if func in (np.sum, np.mean):
             q = args[0]
-            if isinstance(q, _q()):
-                # ponytail: same mixin-blindness as _numpy_concatenate above.
-                return type(self)(
-                    np.mean(q.magnitude, **kwargs),  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
-                    q.unit,
-                    system=q.system,  # ty: ignore[unknown-argument]
-                )
+            if not isinstance(q, _q()):
+                return NotImplemented
+            # np.sum(a, axis, dtype, out, keepdims): positional ones named
+            names = ("axis", "dtype", "out", "keepdims")
+            named = dict(zip(names[: len(args) - 1], args[1:], strict=True))
+            return q._numpy_sum_or_mean(
+                np, func is np.mean, {**named, **kwargs}
+            )
 
         return NotImplemented
+
+    def _numpy_sum_or_mean(
+        self, np: Any, mean: bool, kwargs: dict[str, Any]
+    ) -> Any:
+        """`np.sum` or `np.mean` of this quantity, its unit and uncertainty kept.
+
+        An exact array reduces its numbers (vectorised, any NumPy keyword). With an
+        uncertainty, the whole array is reduced: the value is the sum of the numbers and
+        the standard deviation that of `J x` with `J` a row of ones, which the core's
+        covariance store propagates (`J Σ Jᵀ`), so elements that share an error
+        (`x * [1, 1, 2]`) count it once; independent elements give
+        `sqrt(sum(u_i^2))`, the uncertainty of `q[0] + q[1] + ...`. The mean is the sum
+        divided by `n`. The result is a new scalar measurement, as `q[i]` is.
+        """
+        name = "np.mean" if mean else "np.sum"
+        if self._is_level():  # pyright: ignore[reportAttributeAccessIssue]
+            raise TypeError(
+                f"{name} of levels ('{self.unit}'): a level adds as the quantity it "
+                "stands for, not by its numbers; convert to its plain unit first"
+            )
+        if not mean and self._is_point():  # pyright: ignore[reportAttributeAccessIssue]
+            raise ValueError(
+                f"{name} of temperature points ('{self.unit}'): cannot add absolute "
+                "quantities; np.mean of points, or a sum of differences, has a meaning"
+            )
+        magnitude: Any = self.magnitude
+        backend = self._backend
+        shape = (
+            tuple(backend.shape(magnitude))
+            if backend.is_array(magnitude)
+            else ()
+        )
+        if not shape:
+            return self  # one number: its own sum and mean
+        if len(shape) == 1 and kwargs.get("axis") in (0, -1, (0,), (-1,)):
+            kwargs = {**kwargs, "axis": None}
+        reduce = np.mean if mean else np.sum
+        if not self._has_uncertainty:  # pyright: ignore[reportAttributeAccessIssue]
+            # ponytail: same mixin-blindness as _numpy_concatenate above.
+            return type(self)(
+                reduce(magnitude, **kwargs),  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
+                self.unit,
+                system=self.system,  # ty: ignore[unknown-argument]
+            )
+        refused = sorted(k for k, v in kwargs.items() if v is not None)
+        if refused:
+            raise TypeError(
+                f"{name} of an array-backed quantity with an uncertainty reduces the "
+                f"whole array; {', '.join(refused)} (along an axis, a dtype, an out "
+                "array) cannot propagate the uncertainty yet: index the quantity first, "
+                "or take the magnitude on purpose (q.magnitude)"
+            )
+        size = backend.size(magnitude)
+        total = backend.sum(magnitude)
+        sigma = self._sum_standard_deviation(np, size, name)
+        if mean:
+            total, sigma = total / size, sigma / size
+        return type(self).from_input(  # pyright: ignore[reportAttributeAccessIssue]
+            total, self.unit, self.system, uncertainty=sigma
+        )
+
+    def _sum_standard_deviation(self, np: Any, size: int, name: str) -> float:
+        """The standard deviation of the sum of the elements, by the core's covariance store."""
+        from physure.domain.measurement.uncertainty import (
+            CovarianceModel,
+            VarianceModel,
+        )
+        from physure.domain.measurement.vectorized_uncertainty import (
+            _dense_host,
+            ensure_store,
+        )
+
+        model = self._uncertainty_obj  # pyright: ignore[reportAttributeAccessIssue]
+        backend = self._backend
+        store = ensure_store(backend)
+        if isinstance(model, CovarianceModel):
+            elements = model.ensure_vector_slice(backend)
+        elif isinstance(model, VarianceModel):
+            elements = store.register_independent_array(model.std_dev)
+        else:
+            raise TypeError(
+                f"{name} cannot propagate an uncertainty held as "
+                f"{type(model).__name__}: only a covariance or variance model of the "
+                "array says how its elements are correlated"
+            )
+        out = store.allocate(1)
+        store.update_from_propagation(out, [elements], [np.ones((1, size))])
+        block = store.get_covariance_block(out, out)
+        variance = np.asarray(
+            _dense_host(backend.sparse_diagonal(block)), dtype=float
+        ).reshape(-1)[0]
+        return float(np.sqrt(variance))
 
     @classmethod
     def _torch_unwrap(cls, obj: Any) -> Any:

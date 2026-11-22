@@ -161,16 +161,24 @@ def test_np_sum_and_mean_of_an_uncertain_array_agree_with_element_arithmetic():
 
 
 def test_np_sum_of_an_array_with_correlated_elements_counts_the_shared_error():
+    # every element carries the one error of `x`: the covariance store holds it
+    b = Q_(np.array([1.0, 2.0, 4.0]), "m", uncertainty=0.1)
     x = Q_(2, "m", 0.1)
-    a = Q_(np.array([1.0, 1.0, 2.0]), "") * x
-    reference = x * 1.0 + x * 1.0 + x * 2.0  # the same sources, as lineage
-    assert np.sum(a).magnitude == pytest.approx(8.0)
+    a = b + x
+    # sum(b_i + x) = sum(b_i) + 3 x, with lineage scalars standing for the elements
+    b0, b1, b2 = (Q_(v, "m", 0.1) for v in (1.0, 2.0, 4.0))
+    reference = (b0 + x) + (b1 + x) + (b2 + x)
+    assert reference.uncertainty == pytest.approx(math.sqrt(3 * 0.01 + 0.09))
+    assert np.sum(a).magnitude == pytest.approx(13.0)
     assert np.sum(a).uncertainty == pytest.approx(
         reference.uncertainty, rel=1e-12
     )
     assert np.mean(a).uncertainty == pytest.approx(
         reference.uncertainty / 3, rel=1e-12
     )
+    # element arithmetic on `list(a)` cannot see the shared error (each `a[i]` is a
+    # new measurement), which is why the sum is not taken that way
+    assert _reduce_add(list(a)).uncertainty < reference.uncertainty
 
 
 def test_np_sum_of_an_uncertain_array_in_uncorrelated_mode():
