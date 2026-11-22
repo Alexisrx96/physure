@@ -174,11 +174,39 @@ def test_dot_of_an_exact_and_an_uncertain_array():
 
 
 def test_dot_of_one_element_arrays():
-    dot = Q_(np.array([2.0]), "m", uncertainty=0.1).dot(
-        Q_(np.array([3.0]), "N", uncertainty=0.2)
+    # a 1-element array made inside a store context has its slot, as a larger one
+    with physure.PhysureContext():
+        x = Q_(np.array([2.0]), "m", uncertainty=0.1)
+        y = Q_(np.array([3.0]), "N", uncertainty=0.2)
+        dot = x.dot(y)
+        assert dot.magnitude == pytest.approx(6.0)
+        assert dot.uncertainty == pytest.approx(0.5, rel=1e-12)
+        assert x.dot(x).uncertainty == pytest.approx(0.4, rel=1e-12)
+
+
+def test_dot_of_one_element_arrays_holding_variances_only_is_refused():
+    # outside a store context a 1-element array holds a variance only (as arithmetic
+    # in the uncorrelated mode leaves it): which other quantity shares its error is
+    # not known, so a dot of it could be wrong either way
+    x = Q_(np.array([2.0]), "m", uncertainty=0.1)
+    y = Q_(np.array([3.0]), "N", uncertainty=0.2)
+    with pytest.raises(TypeError, match=r"dot.*correlation"):
+        x.dot(y)
+
+
+def test_the_covariance_store_reads_a_column_major_jacobian_in_its_order():
+    from physure.core.dispatcher import BackendManager
+    from physure.domain.measurement.vectorized_uncertainty import ensure_store
+
+    store = ensure_store(BackendManager.get_backend(np.zeros(2)))
+    source = store.register_independent_array(np.array([0.3, 0.3]))
+    jacobian = np.asfortranarray([[1.0, -3.0], [2.0, 4.0], [0.5, 2.0]])
+    out = store.allocate(3)
+    store.update_from_propagation(out, [source], [jacobian])
+    block = np.asarray(store.get_covariance_block(out, out).toarray())
+    np.testing.assert_allclose(
+        np.sqrt(np.diag(block)), 0.3 * np.sqrt([10.0, 20.0, 4.25]), rtol=1e-12
     )
-    assert dot.magnitude == pytest.approx(6.0)
-    assert dot.uncertainty == pytest.approx(0.5, rel=1e-12)
 
 
 def test_dot_of_large_arrays_is_fast_and_right():

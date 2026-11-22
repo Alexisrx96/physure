@@ -269,8 +269,10 @@ class CovarianceStore:
             # diagonal the backend rebuilt from a numpy vector, is converted the same way.
             # The core takes dense arrays, so a sparse torch operator (the
             # element-wise Jacobian is one) is densified here, as scipy's is above.
+            # The core reads the buffer in row-major order: a column-major array
+            # (a transpose, `np.kron(I, B.T)`) would be read transposed, without error.
             final_jacs = [
-                np.asarray(_dense_host(jac), dtype=np.float64)
+                np.ascontiguousarray(_dense_host(jac), dtype=np.float64)
                 for jac in final_jacs
             ]
         self._core.propagate(out_id, input_ids, final_jacs)
