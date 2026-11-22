@@ -29,6 +29,28 @@ def _q():
 class BackendMixin:
     """NumPy ufunc/function and PyTorch function dispatch methods."""
 
+    # ponytail: what the host class (Quantity) provides, declared for the type
+    # checkers that read the mixin on its own, as ArithmeticMixin does.
+    if TYPE_CHECKING:
+        unit: CompoundUnit
+        system: Any
+        magnitude: Any
+        _backend: Any
+        _uncertainty_obj: Any
+
+        @property
+        def _numeric_std_dev(self) -> Any: ...
+
+        @property
+        def _has_uncertainty(self) -> bool: ...
+
+        def _is_level(self) -> bool: ...
+
+        def _is_point(self) -> bool: ...
+
+        @classmethod
+        def from_input(cls, *args: Any, **kwargs: Any) -> Any: ...
+
     # --- NumPy Integration (Soft Dependency) ---
 
     _NUMPY_TRIG_NAMES = frozenset(
