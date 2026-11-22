@@ -273,7 +273,7 @@ class BackendMixin:
         if len(shape) == 1 and kwargs.get("axis") in (0, -1, (0,), (-1,)):
             kwargs = {**kwargs, "axis": None}
         reduce = np.mean if mean else np.sum
-        if not self._has_uncertainty:  # pyright: ignore[reportAttributeAccessIssue]
+        if self._is_exact_array(np):
             # ponytail: same mixin-blindness as _numpy_concatenate above.
             return type(self)(
                 reduce(magnitude, **kwargs),  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
@@ -296,6 +296,25 @@ class BackendMixin:
         return type(self).from_input(  # pyright: ignore[reportAttributeAccessIssue]
             total, self.unit, self.system, uncertainty=sigma
         )
+
+    def _is_exact_array(self, np: Any) -> bool:
+        """No uncertainty on any element; one pass (`max`) for a NumPy array of them.
+
+        `_has_uncertainty` builds a boolean array first, which costs more than the
+        reduction itself. A standard deviation is never negative, and a NaN is not zero.
+        """
+        known = self.__dict__.get("_exact_array")
+        if known is not None:
+            # the uncertainty is fixed when the quantity is made (`q[i] = x` sets
+            # the magnitude only), so the answer is kept
+            return known
+        unc = self._numeric_std_dev  # pyright: ignore[reportAttributeAccessIssue]
+        if isinstance(unc, np.ndarray) and unc.size:
+            exact = bool(unc.max() == 0)
+        else:
+            exact = not self._has_uncertainty  # pyright: ignore[reportAttributeAccessIssue]
+        object.__setattr__(self, "_exact_array", exact)
+        return exact
 
     def _sum_standard_deviation(self, np: Any, size: int, name: str) -> float:
         """The standard deviation of the sum of the elements, by the core's covariance store."""
