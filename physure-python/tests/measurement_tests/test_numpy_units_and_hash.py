@@ -696,3 +696,11 @@ def test_the_elements_of_np_asarray_are_the_elements_q_i(unit):
     exact = np.asarray(Q_(np.arange(5.0), unit))
     assert [e.magnitude for e in exact] == [0.0, 1.0, 2.0, 3.0, 4.0]
     assert all(e.uncertainty == 0.0 for e in exact)
+
+
+def test_np_sum_takes_numpy_positional_arguments():
+    exact = Q_(np.array([1.0, 2.0, 4.0]), "m")
+    assert np.sum(exact, 0, None, None, False, 1.0).magnitude == 8.0
+    uncertain = Q_(np.array([1.0, 2.0, 4.0]), "m", uncertainty=0.1)
+    with pytest.raises(TypeError, match="initial"):
+        np.sum(uncertain, None, None, None, False, 1.0)

@@ -338,6 +338,13 @@ class BackendMixin:
                 return NotImplemented
             # np.sum(a, axis, dtype, out, keepdims): positional ones named
             names = ("axis", "dtype", "out", "keepdims")
+            if func is np.sum:
+                names = (*names, "initial", "where")
+            if len(args) - 1 > len(names):
+                raise TypeError(
+                    f"np.{func.__name__} takes at most {len(names)} arguments after "
+                    f"the array ({', '.join(names)}), {len(args) - 1} were given"
+                )
             named = dict(zip(names[: len(args) - 1], args[1:], strict=True))
             return q._numpy_sum_or_mean(
                 np, func is np.mean, {**named, **kwargs}
