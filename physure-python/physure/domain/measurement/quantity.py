@@ -166,6 +166,16 @@ def _exact_number(value: Any) -> Fraction | None:
     return None
 
 
+def _is_plain_real(value: Any) -> bool:
+    """A plain real number a dimensionless quantity may equal: a Python or NumPy int or float."""
+    if isinstance(value, (int, float)):
+        return True
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and isinstance(
+        value, (numpy.integer, numpy.floating)
+    )
+
+
 # Helpers moved to end of file to resolve circular reference with Quantity class
 from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
     ArithmeticMixin,
@@ -792,17 +802,35 @@ class Quantity(
         )
 
     def __hash__(self) -> int:
-        """Computes hash of the quantity."""
-        # Note: If magnitude is array, it might not be hashable.
-        # Python arrays are not hashable. Tuple is.
-        # We rely on self.magnitude.__hash__()
-        # If not hashable, raises TypeError (expected for mutable types).
+        """The hash of the value in the coherent unit, so that `a == b` gives `hash(a) == hash(b)`.
+
+        `1 m`, `100 cm` and `0.001 km` hash alike, and a dict keyed by one finds the
+        others. Neither the uncertainty (`==` does not compare it) nor the unit it is
+        written in nor the kind of a temperature enters the hash. A dimensionless quantity
+        hashes as the number it equals (`hash(Q_(100, "percent")) == hash(1)`). An array
+        magnitude is unhashable.
+
+        Examples:
+            >>> from physure import Q_
+            >>> len({Q_(1, "m"), Q_(100, "cm"), Q_(2, "m", 0.1)})
+            2
+        """
+        magnitude: Any = self.magnitude
+        if self._backend.is_array(magnitude) and tuple(
+            self._backend.shape(magnitude)
+        ):
+            raise TypeError(
+                "unhashable type: 'Quantity' with an array magnitude"
+            )
         try:
-            return hash((self.magnitude, self.unit, self.uncertainty))
+            _, value = self._coherent_value()
+        except Exception:  # a value the core cannot convert (a tracer)
+            value = magnitude
+        try:
+            if self.dimension.is_dimensionless:
+                return hash(value)
+            return hash((self.dimension, value))
         except TypeError:
-            # Fallback for unhashable magnitude (like numpy array)
-            # Maybe hash bytes? Or raise.
-            # Usually Quantity with array magnitude != hashable.
             raise TypeError(
                 "unhashable type: 'Quantity' with unhashable magnitude"
             ) from None
@@ -810,37 +838,37 @@ class Quantity(
     def _coherent_value(self) -> tuple[CompoundUnit, Any]:
         """The value in the coherent unit of the quantity, and that unit (`m`, `K`, `kg·m²/s²`).
 
-        What `==`, `hash` and `float` read. A real scalar is exact: its magnitude is read
-        as the decimal it prints as (the core reads a double so, `ExactScale::from_f64`)
-        and the core's plan to the coherent unit is applied before its rounding
-        (`UnitRegistry.exact_conversion`), so `68 degF` and `20 degC` are both
-        `5863/20 K`, which the rounded plan does not say (`293.15000000000003 K`). A
-        level, a unit known only as a double, or an array take the core's rounded plan,
-        as `to` applies it; a real scalar result is then read as its decimal too, so the
-        two routes compare alike.
+        What `==`, `hash` and `float` read: one double, rounded once. A real scalar in
+        another unit is converted exactly and then rounded: its magnitude read as the
+        decimal it prints as (as the core reads a double, `ExactScale::from_f64`), the
+        core's plan to the coherent unit applied before its rounding
+        (`UnitRegistry.exact_conversion`), and the result rounded to the nearest double.
+        So `68 degF` and `20 degC` are both `293.15 K` (the rounded plan gives
+        `293.15000000000003 K` for `68 degF`), `2.54 cm` is `0.0254 m` like `1 inch`, and
+        `q.to(unit)` usually rounds back to the same double. A level, a unit known only
+        as a double, or an array take the core's rounded plan, as `to` applies it.
         """
         system = self.system
         unit = self.unit
         coherent = unit.base_unit(system)
         magnitude: Any = self.magnitude
+        if coherent == unit and not self._is_level():
+            return coherent, magnitude
         exact = _exact_number(magnitude)
         if exact is not None:
-            if coherent == unit and not self._is_level():
-                return coherent, exact
             plan = system.core_registry.exact_conversion(unit, coherent)
             if plan is not None:
                 scale, shift = plan
-                return coherent, exact * Fraction(scale) + Fraction(shift)
-        if coherent == unit and not self._is_level():
-            return coherent, magnitude
+                return coherent, float(
+                    exact * Fraction(scale) + Fraction(shift)
+                )
         value, _ = apply_conversion(
             system.core_registry.conversion(unit, coherent),
             magnitude,
             0.0,
             self._backend,
         )
-        read = _exact_number(value)
-        return coherent, value if read is None else read
+        return coherent, value
 
     def _stripped_value(self, operation: str) -> Any:
         """The value in the coherent unit for a bare number, warning about what is lost.
@@ -1657,8 +1685,6 @@ class Quantity(
                 )
             return self._object_array(np)
         values = self._stripped_value(f"np.asarray(dtype={np.dtype(dtype)})")
-        if isinstance(values, Fraction):
-            values = float(values)
         return np.asarray(values, dtype=dtype)
 
     def _object_array(self, np: Any) -> Any:
@@ -1919,10 +1945,22 @@ class Quantity(
         return NotImplemented
 
     def __eq__(self, other: object) -> Any:
-        """Checks for equality."""
-        # Dataclass __eq__ overridden for semantic equality
-        # But frozen dataclass uses fields.
-        # We should allow semantic equality: 1 m == 100 cm
+        """Equal values in the coherent unit (`1 m == 100 cm`); the uncertainty is not compared.
+
+        Both sides are the double `_coherent_value` gives (converted exactly, rounded
+        once), so `==` and `hash` cannot disagree and `20 degC == 68 degF` holds. One plain unit on
+        both sides compares the magnitudes, which says the same. A temperature point is
+        never an interval (`20 degC != 5 delta_degC`); a plain `K` equals either by value.
+        A dimensionless quantity equals the plain number of its coherent value
+        (`Q_(100, "percent") == 1`).
+
+        Examples:
+            >>> from physure import Q_
+            >>> Q_(20, "degC") == Q_(68, "degF"), Q_(1, "inch") == Q_(2.54, "cm")
+            (True, True)
+            >>> Q_(50, "percent") == 0.5
+            True
+        """
         if isinstance(other, Quantity):
             if self.dimension != other.dimension:
                 return False
@@ -1932,12 +1970,18 @@ class Quantity(
             if self._point_against_interval(other):
                 return False
             try:
-                other_converted = other.to(self.unit)
-                return self.magnitude == other_converted.magnitude
+                unit, value = self._coherent_value()
+                other_unit, other_value = other._coherent_value()
             except Exception:
                 return False
-        if isinstance(other, (int, float)) and self.dimension.is_dimensionless:
-            return self.magnitude == other
+            # `sr` and `rad` share the dimension A and are never the same quantity
+            return unit == other_unit and value == other_value
+        if _is_plain_real(other) and self.dimension.is_dimensionless:
+            try:
+                _, value = self._coherent_value()
+            except Exception:
+                return False
+            return value == other
         return False
 
     def __ne__(self, other: object) -> Any:
