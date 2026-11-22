@@ -18,6 +18,7 @@ import pytest
 
 import physure
 from physure import Q_
+from physure.domain.exceptions import IncompatibleUnitsError
 
 
 def _reduce_add(quantities):
@@ -598,3 +599,69 @@ def test_a_value_beyond_a_double_stays_exact_and_strips_to_an_infinity():
         assert float(Q_(-1e308, "km")) == -math.inf
     with pytest.warns(physure.UnitStrippedWarning):
         assert np.asarray(big, dtype=float) == math.inf
+
+
+# --- tolerance comparisons, sqrt and std ------------------------------------------
+
+
+def test_np_isclose_and_allclose_compare_in_the_coherent_unit():
+    a = Q_(np.array([1.0, 2.0]), "m")
+    b = Q_(np.array([100.0, 200.0]), "cm")
+    assert np.isclose(Q_(1, "m"), Q_(100, "cm"))
+    assert np.isclose(a, b).tolist() == [True, True]
+    assert np.allclose(a, b)
+    assert np.allclose(a, [Q_(100.0, "cm"), Q_(2000, "mm")])
+    assert not np.allclose(Q_(1, "m"), Q_(1.001, "m"))
+    assert np.allclose(Q_(1, "m"), Q_(1.001, "m"), rtol=1e-2)
+    assert np.allclose(Q_(1, "m"), Q_(1.001, "m"), atol=Q_(2, "mm"))
+    assert np.isclose(Q_(20, "degC"), Q_(293.15, "K"))
+    assert np.isclose(Q_(50, "percent"), 0.5)
+
+
+def test_np_isclose_of_lists_takes_a_quantity_atol():
+    left = [Q_(1.0, "m"), Q_(2.0, "m")]
+    right = [Q_(100.0, "cm"), Q_(2000, "mm")]
+    assert np.isclose(left, right, atol=Q_(0, "m")).tolist() == [True, True]
+    np.testing.assert_allclose(Q_(1.0, "m"), Q_(100.0, "cm"), atol=Q_(0, "m"))
+
+
+def test_np_isclose_refuses_what_has_no_common_unit():
+    with pytest.raises(IncompatibleUnitsError):
+        np.isclose(Q_(1, "m"), Q_(1, "s"))
+    with pytest.raises(IncompatibleUnitsError):
+        np.isclose(Q_(1, "m"), 1.0)
+    with pytest.raises(IncompatibleUnitsError, match="interval"):
+        np.isclose(Q_(20, "degC"), Q_(5, "delta_degC"))
+    with pytest.raises(TypeError, match="atol"):
+        np.isclose(Q_(1, "m"), Q_(1, "m"), atol=1e-3)
+    with pytest.raises(IncompatibleUnitsError):
+        np.isclose(Q_(1, "m"), Q_(1, "m"), atol=Q_(1, "s"))
+
+
+def test_np_sqrt_of_a_list_takes_the_root_of_unit_and_uncertainty():
+    roots = np.sqrt([Q_(4, "m^2", 0.4), Q_(9, "m^2")])
+    assert roots[0].magnitude == 2.0
+    assert roots[0].dimension == Q_(1, "m").dimension
+    assert roots[0].uncertainty == pytest.approx(0.1)
+    assert roots[1].uncertainty == 0.0
+    assert Q_(1 + 2j, "m").conjugate().magnitude == 1 - 2j
+    q = Q_(3, "m", 0.1)
+    assert q.conjugate() is q
+
+
+def test_np_std_of_a_list_is_first_order_in_the_errors():
+    values = np.array([1.0, 2.0, 4.0])
+    sigmas = np.array([0.1, 0.1, 0.2])
+    spread = np.std(
+        [Q_(v, "m", s) for v, s in zip(values, sigmas, strict=True)]
+    )
+    assert spread.magnitude == pytest.approx(np.std(values))
+    assert spread.dimension == Q_(1, "m").dimension
+    # d std / d x_i = (x_i - mean) / (n std)
+    slopes = (values - values.mean()) / (3 * np.std(values))
+    assert spread.uncertainty == pytest.approx(
+        math.sqrt(np.sum((slopes * sigmas) ** 2)), rel=1e-12
+    )
+    assert np.std([Q_(100, "cm"), Q_(2, "m")]).to(
+        "cm"
+    ).magnitude == pytest.approx(50.0)

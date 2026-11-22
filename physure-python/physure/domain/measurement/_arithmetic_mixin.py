@@ -1059,6 +1059,32 @@ class ArithmeticMixin:
         """Computes the hyperbolic tangent."""
         return self._apply_transcendental("tanh")
 
+    def sqrt(self) -> Quantity:
+        """The square root, `self ** 0.5`: half the unit's powers, the uncertainty propagated.
+
+        NumPy calls it on each element of an object array (`np.sqrt([4 m^2, 9 m^2])`).
+        """
+        return cast("Quantity", self**0.5)  # pyright: ignore[reportOperatorIssue]
+
+    def conjugate(self) -> Quantity:
+        """The complex conjugate: the quantity itself when its magnitude is real.
+
+        NumPy calls it on each element of an object array (`np.std` of quantities).
+        """
+        magnitude: Any = self.magnitude
+        if not self._backend.is_array(magnitude) and not isinstance(
+            magnitude, complex
+        ):
+            return cast("Quantity", self)
+        return type(self).from_input(
+            self._backend.conj(magnitude)
+            if hasattr(self._backend, "conj")
+            else magnitude.conjugate(),
+            self.unit,
+            self.system,
+            uncertainty=self.uncertainty,
+        )
+
     def _broadcast_to_size(self, param: Numeric, size: int) -> Numeric:
         """Helper to broadcast a parameter to a flat size-vector."""
         if self._backend.is_array(param):

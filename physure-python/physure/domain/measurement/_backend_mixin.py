@@ -26,6 +26,89 @@ def _q():
     return _Quantity
 
 
+_TOLERANCE_ARGS = ("a", "b", "rtol", "atol", "equal_nan")
+
+
+def _coherent_operand(np: Any, operand: Any) -> tuple[Any, Any, Any]:
+    """`(dimension, coherent unit, float array)` of a quantity, of an array or list of them.
+
+    Plain numbers (no quantity among them) are dimensionless: dimension `None`.
+    """
+    if isinstance(operand, _q()):
+        unit, value = operand._coherent_value()
+        return operand.dimension, unit, np.asarray(value, dtype=float)
+    items = np.asarray(operand, dtype=object)
+    flat = items.reshape(-1)
+    quantities = [item for item in flat if isinstance(item, _q())]
+    if not quantities:
+        return None, None, np.asarray(operand, dtype=float)
+    first = quantities[0]
+    first_unit = first._coherent_value()[0]
+    values = np.empty(flat.shape, dtype=float)
+    for position, item in enumerate(flat):
+        if not isinstance(item, _q()):
+            raise IncompatibleUnitsError(first.unit, CompoundUnit({}))
+        unit, value = item._coherent_value()
+        if item.dimension != first.dimension or unit != first_unit:
+            raise IncompatibleUnitsError(first.unit, item.unit)
+        values[position] = value
+    return first.dimension, first_unit, values.reshape(items.shape)
+
+
+def _isclose(
+    np: Any, all_of_them: bool, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> Any:
+    """`np.isclose` and `np.allclose` of quantities, compared in their coherent unit.
+
+    Each side (a quantity, an array-backed one, an array or a list of them) is read as
+    its value in the coherent unit, so `1 m` is close to `100 cm`; another dimension
+    raises. `rtol` is a plain number. `atol` is a quantity of the same dimension, or
+    `0`: NumPy's default `1e-8` has no unit, so for a dimensional comparison the
+    default `atol` is `0`, and a bare non-zero `atol` raises `TypeError`.
+    """
+    bound = dict(zip(_TOLERANCE_ARGS, args, strict=False))
+    bound.update(kwargs)
+    a, b = bound["a"], bound["b"]
+    if (
+        isinstance(a, _q())
+        and isinstance(b, _q())
+        and a._point_against_interval(b)
+    ):
+        a._refuse_point_against_interval(b)
+    left_dimension, left_unit, left = _coherent_operand(np, a)
+    right_dimension, right_unit, right = _coherent_operand(np, b)
+    if left_dimension is not None:
+        dimension, unit = left_dimension, left_unit
+    else:
+        dimension, unit = right_dimension, right_unit
+    dimensional = dimension is not None and not dimension.is_dimensionless
+    if left_dimension is not None and right_dimension is not None:
+        if left_dimension != right_dimension or left_unit != right_unit:
+            raise IncompatibleUnitsError(left_unit, right_unit)
+    elif dimensional:
+        # a plain number against a length has no unit to be compared in
+        raise IncompatibleUnitsError(unit, CompoundUnit({}))
+    atol = bound.get("atol", 0.0 if dimensional else 1e-8)
+    if isinstance(atol, _q()):
+        if atol.dimension != dimension:
+            raise IncompatibleUnitsError(atol.unit, unit)
+        atol = float(np.asarray(atol._coherent_value()[1], dtype=float))
+    elif dimensional and atol != 0:
+        message = (
+            f"atol={atol!r} has no unit and the quantities compared are in '{unit}': "
+            f"give atol as a quantity (atol=Q_(1e-9, '{unit}')) or 0"
+        )
+        raise TypeError(message)
+    close = np.isclose(
+        left,
+        right,
+        rtol=bound.get("rtol", 1e-05),
+        atol=atol,
+        equal_nan=bound.get("equal_nan", False),
+    )
+    return bool(np.all(close)) if all_of_them else close
+
+
 class BackendMixin:
     """NumPy ufunc/function and PyTorch function dispatch methods."""
 
@@ -245,6 +328,9 @@ class BackendMixin:
 
         if func == np.concatenate:
             return self._numpy_concatenate(np, args, kwargs)
+
+        if func in (np.isclose, np.allclose):
+            return _isclose(np, func is np.allclose, args, kwargs)
 
         if func in (np.sum, np.mean):
             q = args[0]
