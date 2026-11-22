@@ -641,7 +641,7 @@ class VarianceModel(Uncertainty[UncType]):
         jac_self: Numeric = 1.0,
         jac_other: Numeric = 1.0,
         out_magnitude: Numeric | None = None,
-    ) -> Uncertainty[UncType]:
+    ) -> VarianceModel[UncType] | CovarianceModel[Any]:
         """Adds two uncertainty models.
 
         An exact array (all variances zero) combined with an uncertain operand of a
@@ -656,7 +656,9 @@ class VarianceModel(Uncertainty[UncType]):
             isinstance(other, (LineageModel, CovarianceModel))
             and out_magnitude is not None
             and backend.is_array(out_magnitude)
-            and not backend.any(backend.not_equal(self.variance, 0))
+            and not backend.any(
+                backend.not_equal(self.variance, 0)  # ty: ignore[invalid-argument-type]
+            )
         ):
             return _carried_into_array(other, jac_other, out_magnitude)
 
@@ -689,7 +691,7 @@ class VarianceModel(Uncertainty[UncType]):
         result_value: Numeric,
         jac_self: Numeric | None = None,
         jac_other: Numeric | None = None,
-    ) -> VarianceModel[Any]:
+    ) -> VarianceModel[Any] | CovarianceModel[Any]:
         """Propagates uncertainty for multiplication/division.
 
         Callers must pass explicit Jacobians; the operation cannot be

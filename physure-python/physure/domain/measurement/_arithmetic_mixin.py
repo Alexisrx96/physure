@@ -1077,9 +1077,7 @@ class ArithmeticMixin:
         ):
             return cast("Quantity", self)
         return type(self).from_input(
-            self._backend.conj(magnitude)
-            if hasattr(self._backend, "conj")
-            else magnitude.conjugate(),
+            magnitude.conjugate(),
             self.unit,
             self.system,
             uncertainty=self.uncertainty,
