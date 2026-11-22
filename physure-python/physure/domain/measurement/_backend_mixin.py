@@ -579,7 +579,9 @@ class BackendMixin:
             # the Python backend's vectors (it does not call them arrays)
             return 1
         backend = self._backend
-        return len(backend.shape(magnitude)) if backend.is_array(magnitude) else 0
+        return (
+            len(backend.shape(magnitude)) if backend.is_array(magnitude) else 0
+        )
 
     def _exact_operand(self) -> bool:
         """No uncertainty on any element (NumPy is optional: a list-backed one asks plainly)."""

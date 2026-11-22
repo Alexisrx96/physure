@@ -30,7 +30,10 @@ def _total(quantities):
 def _scalars(values, unit, sigma):
     """One scalar measurement per value: independent errors, each with its own lineage."""
     sigmas = np.broadcast_to(sigma, np.shape(values))
-    return [Q_(float(v), unit, float(s)) for v, s in zip(values, sigmas, strict=True)]
+    return [
+        Q_(float(v), unit, float(s))
+        for v, s in zip(values, sigmas, strict=True)
+    ]
 
 
 def _independent_dot_sigma(a, b, sa, sb):
@@ -80,7 +83,10 @@ def test_dot_equals_the_sum_of_the_elementwise_product(a, b):
 
 def test_dot_equals_the_reduction_through_scalar_quantities():
     values_a, values_b = [1.5, -2.0, 3.25, 0.5], [4.0, 5.5, -6.0, 2.0]
-    sigma_a, sigma_b = np.array([0.1, 0.2, 0.05, 0.3]), np.array([0.2, 0.1, 0.4, 0.0])
+    sigma_a, sigma_b = (
+        np.array([0.1, 0.2, 0.05, 0.3]),
+        np.array([0.2, 0.1, 0.4, 0.0]),
+    )
     a = Q_(np.array(values_a), "m", uncertainty=sigma_a)
     b = Q_(np.array(values_b), "N", uncertainty=sigma_b)
     reference = _total(
@@ -107,7 +113,9 @@ def test_dot_of_an_array_with_itself_counts_each_error_twice(a):
     assert dot.uncertainty == pytest.approx(expected, rel=1e-12)
     reference = _total(q * q for q in _scalars([1, 2, 3], "m", 0.1))
     assert reference.uncertainty == pytest.approx(expected, rel=1e-12)
-    assert dot.uncertainty == pytest.approx(np.sum(a * a).uncertainty, rel=1e-12)
+    assert dot.uncertainty == pytest.approx(
+        np.sum(a * a).uncertainty, rel=1e-12
+    )
 
 
 def test_dot_of_arrays_that_share_a_source_counts_it_once():
@@ -117,7 +125,9 @@ def test_dot_of_arrays_that_share_a_source_counts_it_once():
     c = Q_(np.array([4.0, -5.0, 6.0]), "N", uncertainty=0.2)
     elements = _scalars([1.0, 2.0, 4.0], "m", 0.1)
     others = _scalars([4.0, -5.0, 6.0], "N", 0.2)
-    reference = _total((e + x) * o for e, o in zip(elements, others, strict=True))
+    reference = _total(
+        (e + x) * o for e, o in zip(elements, others, strict=True)
+    )
     # analytic: d/dx = sum(c_i) = 5, d/db_i = c_i, d/dc_i = b_i + x
     analytic = math.sqrt(
         (5 * 0.1) ** 2
@@ -167,10 +177,18 @@ def test_dot_of_exact_arrays_is_unchanged():
 
 def test_dot_of_an_exact_and_an_uncertain_array():
     exact = Q_(np.array([1.0, 2.0, 3.0]), "m")
-    uncertain = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=np.array([0.0, 0.1, 0.2]))
-    expected = _independent_dot_sigma([1, 2, 3], [4, 5, 6], 0.0, [0.0, 0.1, 0.2])
-    assert exact.dot(uncertain).uncertainty == pytest.approx(expected, rel=1e-12)
-    assert uncertain.dot(exact).uncertainty == pytest.approx(expected, rel=1e-12)
+    uncertain = Q_(
+        np.array([4.0, 5.0, 6.0]), "N", uncertainty=np.array([0.0, 0.1, 0.2])
+    )
+    expected = _independent_dot_sigma(
+        [1, 2, 3], [4, 5, 6], 0.0, [0.0, 0.1, 0.2]
+    )
+    assert exact.dot(uncertain).uncertainty == pytest.approx(
+        expected, rel=1e-12
+    )
+    assert uncertain.dot(exact).uncertainty == pytest.approx(
+        expected, rel=1e-12
+    )
 
 
 def test_dot_of_one_element_arrays():
@@ -228,12 +246,12 @@ def test_dot_of_large_arrays_is_fast_and_right():
 
 
 def test_dot_of_mismatched_shapes_raises(a):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not aligned"):
         a.dot(Q_(np.array([1.0, 2.0]), "N", uncertainty=0.1))
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not aligned"):
         a.dot(Q_(np.array([1.0, 2.0]), "N"))
     # a 1-element array does not broadcast in a dot product
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="not aligned"):
         a.dot(Q_(np.array([2.0]), "N", uncertainty=0.1))
 
 
@@ -253,7 +271,9 @@ def test_dot_of_temperature_points_is_the_product_in_kelvin():
     dot = t.dot(t)
     kelvins = np.array([283.15, 293.15])
     assert dot.to("K**2").magnitude == pytest.approx(np.dot(kelvins, kelvins))
-    assert dot.to("K**2").magnitude == pytest.approx(np.sum(t * t).to("K**2").magnitude)
+    assert dot.to("K**2").magnitude == pytest.approx(
+        np.sum(t * t).to("K**2").magnitude
+    )
     uncertain = Q_(np.array([10.0, 20.0]), "degC", uncertainty=0.1)
     assert uncertain.dot(uncertain).uncertainty == pytest.approx(
         2 * 0.1 * math.sqrt(float(np.sum(kelvins**2))), rel=1e-12
@@ -295,7 +315,9 @@ def test_dot_of_an_array_and_a_scalar_is_their_product(a):
     dot = a.dot(y)
     product = a * y
     np.testing.assert_allclose(dot.magnitude, [3.0, 6.0, 9.0])
-    np.testing.assert_allclose(dot.uncertainty, product.uncertainty, rtol=1e-12)
+    np.testing.assert_allclose(
+        dot.uncertainty, product.uncertainty, rtol=1e-12
+    )
     # the one error of y is in every element: the sum counts it once
     assert np.sum(dot).uncertainty == pytest.approx(
         math.sqrt(3 * (3 * 0.1) ** 2 + (6 * 0.2) ** 2), rel=1e-12
@@ -328,7 +350,8 @@ def test_dot_of_a_matrix_and_a_vector_is_the_reduction_through_scalars():
     w_scalars = _scalars(w_values, "s", 0.3)
     left = w.dot(m)
     left_reference = [
-        _total(w_scalars[i] * m_scalars[i][j] for i in range(2)) for j in range(3)
+        _total(w_scalars[i] * m_scalars[i][j] for i in range(2))
+        for j in range(3)
     ]
     np.testing.assert_allclose(left.magnitude, w_values @ m_values)
     np.testing.assert_allclose(
@@ -394,7 +417,9 @@ def test_cross_of_independent_vectors_propagates(a, b):
         math.hypot(bv[1] * 0.1, bv[0] * 0.1, av[0] * 0.2, av[1] * 0.2),
     ]
     np.testing.assert_allclose(cross.uncertainty, analytic, rtol=1e-12)
-    reference = _cross_by_scalars(_scalars(av, "m", 0.1), _scalars(bv, "N", 0.2))
+    reference = _cross_by_scalars(
+        _scalars(av, "m", 0.1), _scalars(bv, "N", 0.2)
+    )
     np.testing.assert_allclose(
         cross.uncertainty, [r.uncertainty for r in reference], rtol=1e-12
     )
@@ -409,9 +434,13 @@ def test_cross_of_vectors_that_share_a_source():
     a = Q_(np.array([1.0, 2.0, 4.0]), "m", uncertainty=0.1) + x
     c = Q_(np.array([4.0, -5.0, 6.0]), "N", uncertainty=0.2)
     elements = [e + x for e in _scalars([1.0, 2.0, 4.0], "m", 0.1)]
-    reference = _cross_by_scalars(elements, _scalars([4.0, -5.0, 6.0], "N", 0.2))
+    reference = _cross_by_scalars(
+        elements, _scalars([4.0, -5.0, 6.0], "N", 0.2)
+    )
     cross = a.cross(c)
-    np.testing.assert_allclose(cross.magnitude, [r.magnitude for r in reference])
+    np.testing.assert_allclose(
+        cross.magnitude, [r.magnitude for r in reference]
+    )
     np.testing.assert_allclose(
         cross.uncertainty, [r.uncertainty for r in reference], rtol=1e-12
     )
@@ -434,7 +463,9 @@ def test_cross_of_two_vectors_of_the_plane():
     assert float(cross.magnitude) == pytest.approx(-2.0)
     # z = a0 b1 - a1 b0
     analytic = math.hypot(4 * 0.1, 3 * 0.1, 2 * 0.2, 1 * 0.2)
-    assert float(np.asarray(cross.uncertainty)) == pytest.approx(analytic, rel=1e-12)
+    assert float(np.asarray(cross.uncertainty)) == pytest.approx(
+        analytic, rel=1e-12
+    )
 
 
 def test_cross_of_exact_vectors_is_unchanged():
@@ -480,10 +511,14 @@ def test_cross_of_temperature_points_and_levels():
 def test_np_dot_np_cross_and_matmul_route_to_the_methods(a, b):
     for result in (np.dot(a, b), a @ b):
         assert result.magnitude == pytest.approx(32.0)
-        assert result.uncertainty == pytest.approx(a.dot(b).uncertainty, rel=1e-12)
+        assert result.uncertainty == pytest.approx(
+            a.dot(b).uncertainty, rel=1e-12
+        )
     cross = np.cross(a, b)
     np.testing.assert_allclose(cross.magnitude, [-3.0, 6.0, -3.0])
-    np.testing.assert_allclose(cross.uncertainty, a.cross(b).uncertainty, rtol=1e-12)
+    np.testing.assert_allclose(
+        cross.uncertainty, a.cross(b).uncertainty, rtol=1e-12
+    )
 
 
 def test_np_dot_and_np_cross_with_options_or_plain_arrays_still_raise(a, b):
