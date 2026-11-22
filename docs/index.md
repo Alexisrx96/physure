@@ -33,6 +33,7 @@ c = a + b
 ## Best Practices
 
 - **Use the `Q_` factory** for everything: it parses units and dispatches backends automatically (`Q_(np.array([1, 2, 3]), "m/s")` stays in NumPy; a torch tensor stays in torch).
+- **Hand NumPy quantities, take numbers on purpose.** `np.sum`, `np.mean`, `np.dot` and friends keep the unit and the uncertainty of a list of quantities (NumPy holds the quantities in an object array) and of an array-backed one. For bare numbers write `q.to("m").magnitude` (and `q.uncertainty`): `float(q)` and `np.asarray(q, dtype=float)` give the value in the coherent unit and warn with `physure.UnitStrippedWarning` when a unit or an uncertainty is dropped. `==` and `hash` compare the value in the coherent unit, so `{Q_(1, "m"), Q_(100, "cm")}` has one element.
 - **Let uncertainty propagate itself.** Never add standard deviations manually — correlated errors are tracked through the covariance store.
 - **In hot loops, do arithmetic in identical units**: same-unit operations take a fast path that bypasses parsing and validation.
 - **Validate with Pydantic** by annotating model fields as `Quantity`; strings like `"101.3 kPa"` are parsed and dimension-checked on model construction.
