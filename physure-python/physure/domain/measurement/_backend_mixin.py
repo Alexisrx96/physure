@@ -134,8 +134,7 @@ def _store_propagation(
     variance = np.asarray(
         _dense_host(backend.sparse_diagonal(block)), dtype=float
     ).reshape(-1)
-    # a variance that cancels to zero (a x a) may come out a rounding below it
-    return np.sqrt(np.maximum(variance, 0.0)), out
+    return np.sqrt(variance), out
 
 
 def _dot_jacobians(np: Any, a: Any, b: Any) -> tuple[Any, Any]:

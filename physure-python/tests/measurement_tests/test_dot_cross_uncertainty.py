@@ -260,6 +260,17 @@ def test_dot_of_temperature_points_is_the_product_in_kelvin():
     )
 
 
+def test_dot_of_fahrenheit_points_carries_the_derivative_of_the_conversion():
+    # T_K = (T_F - 32) 5/9 + 273.15: an error of 0.1 degF is one of 5/9 * 0.1 K
+    t = Q_(np.array([50.0, 68.0]), "degF", uncertainty=0.1)
+    kelvins = (np.array([50.0, 68.0]) - 32) * 5 / 9 + 273.15
+    dot = t.dot(t)
+    assert dot.to("K**2").magnitude == pytest.approx(np.dot(kelvins, kelvins))
+    assert dot.to("K**2").uncertainty == pytest.approx(
+        2 * (5 / 9) * 0.1 * math.sqrt(float(np.sum(kelvins**2))), rel=1e-9
+    )
+
+
 def test_dot_of_a_temperature_point_and_a_plain_number_is_refused():
     with pytest.raises(ValueError, match="absolute temperature"):
         Q_(np.array([10.0, 20.0]), "degC").dot(Q_(np.array([1.0, 2.0]), ""))

@@ -1879,8 +1879,10 @@ class Quantity(
         >>> a = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
         >>> b = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=0.2)
         >>> torque = a.cross(b)
-        >>> print(torque.magnitude, np.round(torque.uncertainty, 4))
-        [-3.  6. -3.] [1.063  0.9592 0.781 ]
+        >>> print(torque.magnitude)
+        [-3.  6. -3.]
+        >>> print(np.round(torque.uncertainty, 4))
+        [1.063  0.9592 0.781 ]
         >>> print(np.round(a.cross(a).uncertainty, 12))
         [0. 0. 0.]
         """
