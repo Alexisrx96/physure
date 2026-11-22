@@ -1841,8 +1841,10 @@ class Quantity(
         >>> a = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
         >>> b = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=0.2)
         >>> work = a.dot(b)
-        >>> print(f"{float(work.magnitude)} {work.unit} {work.uncertainty:.4f}")
-        32.0 J 1.1533
+        >>> print(f"{float(work.magnitude)} {work.uncertainty:.4f}")
+        32.0 1.1533
+        >>> work.dimension == Q_(1, "J").dimension
+        True
         """
         # ponytail: defensive runtime guard against duck-typed callers that
         # bypass the static type hint; basedpyright sees `other: Quantity`
@@ -1859,21 +1861,36 @@ class Quantity(
         return self._vector_product(other, "dot")
 
     def cross(self, other: Quantity) -> Quantity:
-        """Computes cross product."""
+        """The cross product (NumPy's `cross`), with its unit and its uncertainty.
+
+        Each component carries its first-order uncertainty, propagated by the core's
+        covariance store from the errors of both vectors with every correlation it
+        knows: `a.cross(a)` is exactly zero with no uncertainty, a shared error
+        (`a = b + x`) counts once, and the components stay correlated with each
+        other (`np.sum(a.cross(b))`). One pair of 2- or 3-vectors of one length
+        propagates; an uncertain batch or mixed lengths raise `TypeError`, as do
+        elements whose correlation was lost (the uncorrelated mode); an exact cross
+        product of any shape is NumPy's, as before. The unit is the product's;
+        absolute temperatures multiply in kelvin and levels are refused, as `*`
+        has them.
+
+        >>> import numpy as np
+        >>> from physure import Q_
+        >>> a = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
+        >>> b = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=0.2)
+        >>> torque = a.cross(b)
+        >>> print(torque.magnitude, np.round(torque.uncertainty, 4))
+        [-3.  6. -3.] [1.063  0.9592 0.781 ]
+        >>> print(np.round(a.cross(a).uncertainty, 12))
+        [0. 0. 0.]
+        """
         if not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
             other, Quantity
         ):
             raise TypeError(  # pyright: ignore[reportUnreachable]
                 f"cross requires Quantity, got {type(other)}"
             )
-
-        mag = self._backend.cross(
-            self.magnitude,  # pyright: ignore[reportArgumentType]
-            other.magnitude,
-        )
-        new_unit = self.unit * other.unit
-        # Uncertainty ignored for now
-        return Quantity.from_input(mag, new_unit, self.system)
+        return self._vector_product(other, "cross")
 
     def __bool__(self) -> bool:
         """Returns the boolean value of the magnitude."""
