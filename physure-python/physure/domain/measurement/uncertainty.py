@@ -641,9 +641,24 @@ class VarianceModel(Uncertainty[UncType]):
         jac_self: Numeric = 1.0,
         jac_other: Numeric = 1.0,
         out_magnitude: Numeric | None = None,
-    ) -> VarianceModel[UncType]:
-        """Adds two uncertainty models."""
+    ) -> Uncertainty[UncType]:
+        """Adds two uncertainty models.
+
+        An exact array (all variances zero) combined with an uncertain operand of a
+        correlated model (an uncertain scalar `x`, an uncertain array) carries that
+        operand's error in every element it reaches: the result is a covariance model
+        that holds it once (`e + x`, `e * x` share the one error of `x`; `(e + x) - x`
+        is exact again). Summed as independent variances it was too small.
+        """
         backend = BackendManager.get_backend(self.variance)
+
+        if (
+            isinstance(other, (LineageModel, CovarianceModel))
+            and out_magnitude is not None
+            and backend.is_array(out_magnitude)
+            and not backend.any(backend.not_equal(self.variance, 0))
+        ):
+            return _carried_into_array(other, jac_other, out_magnitude)
 
         v_self = self._apply_jacobian(self.variance, jac_self, backend)
 
@@ -726,6 +741,32 @@ class VarianceModel(Uncertainty[UncType]):
                 "unhashable type: 'VarianceModel' with array variance"
             )
         return hash(self.variance)
+
+
+def _carried_into_array(
+    model: Uncertainty, jacobian: Numeric, out_magnitude: Numeric
+) -> CovarianceModel:
+    """The error of `model` carried by `jacobian` into an array result, as one covariance.
+
+    The operand keeps one slot of the covariance store however many operations it
+    takes part in (`register_independent_model` for a scalar, its own slice for an
+    array), so a later `- x` cancels against it.
+    """
+    from physure.domain.measurement.vectorized_uncertainty import ensure_store
+
+    backend = BackendManager.get_backend(out_magnitude)
+    store = ensure_store(backend)
+    if isinstance(model, CovarianceModel) and model.vector_slice:
+        source = model.vector_slice
+    else:
+        source = store.register_independent_model(model, model.std_dev)
+    out = store.allocate(backend.size(out_magnitude))
+    store.update_from_propagation(out, [source], [jacobian])
+    diagonal = backend.sparse_diagonal(store.get_covariance_block(out, out))
+    std_dev = backend.reshape(
+        backend.sqrt(diagonal), backend.shape(out_magnitude)
+    )
+    return CovarianceModel(std_dev_internal=std_dev, vector_slice=out)
 
 
 @dataclass(frozen=True, slots=True)

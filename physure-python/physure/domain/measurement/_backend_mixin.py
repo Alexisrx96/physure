@@ -355,7 +355,17 @@ class BackendMixin:
         if isinstance(model, CovarianceModel):
             elements = model.ensure_vector_slice(backend)
         elif isinstance(model, VarianceModel):
-            elements = store.register_independent_array(model.std_dev)
+            # an array of variances only comes out of arithmetic that already dropped
+            # how its elements are correlated (an array with a scalar of the
+            # uncorrelated mode shares that scalar's error in every element): summed
+            # as independent, it would give a confident uncertainty that is too small
+            raise TypeError(
+                f"{name} cannot propagate the uncertainty of these elements: their "
+                "correlation was lost by the arithmetic that made them (variances "
+                "only, as in the uncorrelated mode), so a sum of them as independent "
+                "errors could be too small; build the array in the default mode, or "
+                "sum the magnitudes on purpose (q.magnitude)"
+            )
         else:
             raise TypeError(
                 f"{name} cannot propagate an uncertainty held as "
