@@ -1823,7 +1823,27 @@ class Quantity(
     # --- Math & Vector Ops ---
 
     def dot(self, other: Quantity) -> Quantity:
-        """Computes dot product."""
+        """The dot product (NumPy's `dot`), with its unit and its uncertainty.
+
+        Of two vectors it is `np.sum(a * b)`: the same value and the same
+        uncertainty, propagated by the core's covariance store, so an error the
+        elements share (`a.dot(a)`, `a = b + x`) counts once. A 1-D or 2-D operand
+        gives the vector or matrix product with each element's uncertainty; a scalar
+        operand gives the product `a * b`. An exact product is NumPy's `dot` of the
+        magnitudes. The unit is the product's (`m * N` is `J`); absolute temperatures
+        multiply in kelvin and levels are refused, as `*` has them. An uncertainty that
+        cannot be propagated raises `TypeError` (an array of more than two
+        dimensions, or elements whose correlation was lost, as in the uncorrelated
+        mode), never a zero. A scalar result is a new measurement, as `np.sum`'s is.
+
+        >>> import numpy as np
+        >>> from physure import Q_
+        >>> a = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
+        >>> b = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=0.2)
+        >>> work = a.dot(b)
+        >>> print(f"{float(work.magnitude)} {work.unit} {work.uncertainty:.4f}")
+        32.0 J 1.1533
+        """
         # ponytail: defensive runtime guard against duck-typed callers that
         # bypass the static type hint; basedpyright sees `other: Quantity`
         # as already-narrowed, so it flags this as unreachable/unnecessary.
@@ -1833,14 +1853,10 @@ class Quantity(
             raise TypeError(  # pyright: ignore[reportUnreachable]
                 f"dot requires Quantity, got {type(other)}"
             )
-
-        mag = self._backend.dot(
-            self.magnitude,  # pyright: ignore[reportArgumentType]
-            other.magnitude,
-        )
-        new_unit = self.unit * other.unit
-        # Uncertainty ignored for now
-        return Quantity.from_input(mag, new_unit, self.system)
+        if not (self._ndim() and other._ndim()):
+            # NumPy's dot of a scalar is the product
+            return self * other
+        return self._vector_product(other, "dot")
 
     def cross(self, other: Quantity) -> Quantity:
         """Computes cross product."""
