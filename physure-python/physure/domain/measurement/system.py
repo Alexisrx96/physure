@@ -76,6 +76,8 @@ class UnitSystem:
         self._core_texts.append(conf_text)
         self._units.clear()
         self.__dict__.setdefault("_coherent_plans", {}).clear()
+        # what a quantity cached from the old registry (its hash) is no longer
+        self.generation = self.__dict__.get("generation", 0) + 1
 
     def __getstate__(self) -> dict[str, Any]:
         """Pickles the texts of the registry: the registry itself cannot be."""

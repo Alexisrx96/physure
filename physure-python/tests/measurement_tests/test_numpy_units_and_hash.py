@@ -463,12 +463,16 @@ def test_the_coherent_value_follows_a_unit_the_system_redefines():
     with pytest.warns(physure.UnitStrippedWarning):
         before = float(shipped)
     assert shipped == Q_(before, "USD")
+    assert hash(shipped) == hash(Q_(before, "USD"))  # and kept on `shipped`
     system.extend_core("[Units]\nEUR = 1.2, $, noprefix, [euros]\n")
     redefined = Q_(100, "EUR")
     with pytest.warns(physure.UnitStrippedWarning):
         assert float(redefined) == 120.0
     assert redefined == Q_(120, "USD")
     assert hash(redefined) == hash(Q_(120, "USD"))
+    # the hash kept on `shipped` is not the one of the old EUR any more
+    assert shipped == Q_(120, "USD")
+    assert hash(shipped) == hash(Q_(120, "USD"))
 
 
 # --- an exact array combined with an uncertain scalar shares the scalar's error -----

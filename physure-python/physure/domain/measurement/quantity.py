@@ -838,18 +838,27 @@ class Quantity(
             raise TypeError(
                 "unhashable type: 'Quantity' with an array magnitude"
             )
+        # kept on the quantity: a scalar magnitude does not change, and the value
+        # in the coherent unit only when the registry of its system does
+        stamp = (id(self.system), self.system.__dict__.get("generation", 0))
+        cached = self.__dict__.get("_hash")
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
         try:
             _, value = self._coherent_value()
         except Exception:  # a value the core cannot convert (a tracer)
             value = magnitude
         try:
             if self.dimension.is_dimensionless:
-                return hash(value)
-            return hash((self.dimension, value))
+                result = hash(value)
+            else:
+                result = hash((self.dimension, value))
         except TypeError:
             raise TypeError(
                 "unhashable type: 'Quantity' with unhashable magnitude"
             ) from None
+        object.__setattr__(self, "_hash", (stamp, result))
+        return result
 
     def _coherent_value(self) -> tuple[CompoundUnit, Any]:
         """The value in the coherent unit of the quantity, and that unit (`m`, `K`, `kg·m²/s²`).
@@ -1767,7 +1776,11 @@ class Quantity(
         gives it, a new measurement of its standard deviation (`from_standard`).
         """
         first = self[(0,) * len(shape)]
-        state = first.__dict__
+        state = {
+            key: value
+            for key, value in first.__dict__.items()
+            if key not in ("_hash", "_exact_array")
+        }
         cls = type(first)
         values = magnitude.reshape(-1)
         sigmas = np.broadcast_to(
