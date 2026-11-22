@@ -591,6 +591,14 @@ impl PyUnitRegistry {
         Ok(out)
     }
 
+    /// The affine plan of `conversion` before its rounding: `(scale, shift)` as exact rationals written as
+    /// `Fraction` reads them (`("5/9", "45967/180")` from degF to K), or `None` for a level and for a unit whose
+    /// scale or zero point is known only as a double. Python's `==` and `hash` compare the exact values in the
+    /// coherent unit with it.
+    fn exact_conversion(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<Option<(String, String)>> {
+        self.0.exact_conversion(&source.0, &target.0).map_err(value_error)
+    }
+
     /// Dimension, kind, linearity, alias and simplified form of a unit expression.
     fn facts<'py>(&self, py: Python<'py>, expression: &str) -> PyResult<Bound<'py, PyDict>> {
         facts_dict(py, &self.0, expression)

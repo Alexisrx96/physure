@@ -348,6 +348,15 @@ impl RationalUnit {
         (scale, shift)
     }
 
+    /// The coefficients of [`RationalUnit::affine_to`] before their rounding, written as
+    /// [`ExactScale::ratio_text`] writes a value: `("5/9", "45967/180")` from degF to K. `None` when a
+    /// scale or a zero point is known only as a double.
+    pub fn exact_affine_to(&self, target: &Self) -> Option<(String, String)> {
+        let (from, to) = (self.exact.as_ref()?, target.exact.as_ref()?);
+        let (from_zero, to_zero) = (self.exact_zero_point()?, target.exact_zero_point()?);
+        Some((from.div(to).ratio_text(), ExactScale::shifted_quotient_text(from_zero, to_zero, to)))
+    }
+
     /// The zero point as an exact value: `Some(None)` when it is zero, `Some(Some(e))` when it is
     /// known, `None` when it is not.
     fn exact_zero_point(&self) -> Option<Option<&ExactScale>> {

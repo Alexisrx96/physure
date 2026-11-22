@@ -842,17 +842,7 @@ impl UnitRegistry {
     /// answer of the core, rounded the same way. A temperature point and a temperature interval do not
     /// convert to each other, as there.
     pub fn conversion(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<Conversion> {
-        let (from, to) = (self.expand(from)?, self.expand(to)?);
-        if !from.convertible_to(&to) {
-            return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
-        }
-        if from.point_against_interval(&to) {
-            return Err(PhysureError::Generic(crate::quantity::point_interval_conversion_message(
-                &from.__repr__(),
-                &to.__repr__(),
-                from.is_point(),
-            )));
-        }
+        let (from, to) = self.convertible_pair(from, to)?;
         if from.is_logarithmic() || to.is_logarithmic() {
             if from.log == to.log && from.scale == to.scale {
                 // the same level under another name (decibel, dB): nothing to convert
@@ -865,6 +855,38 @@ impl UnitRegistry {
             return Ok(Conversion::Affine { scale, shift });
         }
         Ok(Conversion::Affine { scale: from.ratio_to(&to), shift: 0.0 })
+    }
+
+    /// [`UnitRegistry::conversion`] before its rounding: the scale and the shift of an affine plan as exact
+    /// rationals, written as Python's `Fraction` reads them (`("5/9", "45967/180")` from degF to K). A binding
+    /// compares quantities by their exact values in the coherent unit with it (Python's `==` and `hash`): the
+    /// rounded plan gives `293.15000000000003` for `68 degF` and `293.15` for `20 degC`. `None` for a level, which
+    /// converts through a logarithm, and for a unit whose scale or zero point is known only as a double. The same
+    /// refusals as [`UnitRegistry::conversion`].
+    pub fn exact_conversion(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<Option<(String, String)>> {
+        let (from, to) = self.convertible_pair(from, to)?;
+        if from.is_logarithmic() || to.is_logarithmic() {
+            let same_level = from.log == to.log && from.scale == to.scale;
+            return Ok(same_level.then(|| ("1".to_string(), "0".to_string())));
+        }
+        Ok(from.exact_affine_to(&to))
+    }
+
+    /// The two units expanded, refused as a conversion refuses them: another dimension, or a temperature point
+    /// against an interval.
+    fn convertible_pair(&self, from: &RationalUnit, to: &RationalUnit) -> PhysureResult<(RationalUnit, RationalUnit)> {
+        let (from, to) = (self.expand(from)?, self.expand(to)?);
+        if !from.convertible_to(&to) {
+            return Err(PhysureError::UnitMismatch { expected: from.__repr__(), actual: to.__repr__() });
+        }
+        if from.point_against_interval(&to) {
+            return Err(PhysureError::Generic(crate::quantity::point_interval_conversion_message(
+                &from.__repr__(),
+                &to.__repr__(),
+                from.is_point(),
+            )));
+        }
+        Ok((from, to))
     }
 
     /// The base or derived unit that `symbol` names, directly or through an alias.
@@ -1064,6 +1086,48 @@ mod tests {
         let (symbol, factor, _unit) = reg.split_prefix("km").expect("km should split as k + m");
         assert_eq!(symbol, "k");
         assert_eq!(factor, 1000.0);
+    }
+
+    /// The plan before its rounding: `68 degF` and `20 degC` are both exactly `5863/20 K`, which the rounded plan
+    /// does not say (`68 * 0.5555555555555556 + 255.37222222222223` is `293.15000000000003`).
+    #[test]
+    fn an_exact_conversion_is_the_plan_before_its_rounding() {
+        let (reg, _) = crate::units::conf::build_registry_from_conf();
+        let atomic = |text: &str| crate::units::parser::Parser::parse_expression_atomic(text).unwrap();
+        let exact = |from: &str, to: &str| reg.exact_conversion(&atomic(from), &atomic(to)).unwrap();
+        let pair = |scale: &str, shift: &str| Some((scale.to_string(), shift.to_string()));
+        assert_eq!(exact("degF", "K"), pair("5/9", "45967/180"));
+        assert_eq!(exact("degC", "K"), pair("1", "5463/20"));
+        assert_eq!(exact("K", "degC"), pair("1", "-5463/20"));
+        assert_eq!(exact("inch", "m"), pair("127/5000", "0"));
+        assert_eq!(exact("km", "m"), pair("1000", "0"));
+        assert_eq!(exact("percent", "1"), pair("1/100", "0"));
+        assert_eq!(exact("dB", "dB"), pair("1", "0"));
+        // a level converts through a logarithm: no scale and no shift
+        assert_eq!(exact("dB", "1"), None);
+        // the refusals of `conversion`
+        assert!(reg.exact_conversion(&atomic("m"), &atomic("s")).is_err());
+        assert!(reg.exact_conversion(&atomic("degC"), &atomic("delta_degC")).is_err());
+        // what the plan rounds once
+        match reg.conversion(&atomic("degF"), &atomic("K")).unwrap() {
+            super::Conversion::Affine { scale, shift } => assert_eq!((scale, shift), (5.0 / 9.0, 45967.0 / 180.0)),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// A scale that reached the registry as a bare double has no exact form to give.
+    #[test]
+    fn an_exact_conversion_needs_exact_scales() {
+        use super::UnitRegistry;
+        let mut reg = UnitRegistry::new();
+        reg.add_base_unit("m".to_string());
+        let mut odd = reg.get_unit("m").unwrap().clone();
+        odd.scale = 0.3;
+        odd.exact = None;
+        reg.derived_units.insert("odd".to_string(), odd);
+        let atomic = |text: &str| crate::units::parser::Parser::parse_expression_atomic(text).unwrap();
+        assert_eq!(reg.exact_conversion(&atomic("odd"), &atomic("m")).unwrap(), None);
+        assert_eq!(reg.exact_conversion(&atomic("m"), &atomic("m")).unwrap(), Some(("1".to_string(), "0".to_string())));
     }
 
     #[test]
