@@ -652,13 +652,19 @@ class BackendMixin:
             np, left.magnitude, right.magnitude
         )
         factors = (left_factor, right_factor)
-        used = [i for i, slot in enumerate(slots) if slot is not None]
+        used = [
+            (slot, jacobian * factor)
+            for slot, jacobian, factor in zip(
+                slots, jacobians, factors, strict=True
+            )
+            if slot is not None
+        ]
         sigma, out = _store_propagation(
             np,
             self._backend,
             int(np.size(magnitude)),
-            [slots[i] for i in used],
-            [jacobians[i] * factors[i] for i in used],
+            [slot for slot, _ in used],
+            [jacobian for _, jacobian in used],
         )
         shape = np.shape(magnitude)
         if not shape:
