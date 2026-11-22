@@ -91,6 +91,7 @@ if TYPE_CHECKING:
         ConversionError,
         PhysureError,
         UnitNotFoundError,
+        UnitStrippedWarning,
         UnknownUnitError,
     )
     from physure.domain.measurement.equivalencies import (
@@ -147,6 +148,7 @@ _EXCEPTION_ATTRS = {
     "PhysureError",
     "UnitNotFoundError",
     "UnknownUnitError",
+    "UnitStrippedWarning",
 }
 _VECTORIZED_ATTRS = {"PhysureContext"}
 _PLOT_ATTRS = {
@@ -408,6 +410,7 @@ __all__ = [
     "Uncertainty",
     "UnitNotFoundError",
     "UnknownUnitError",
+    "UnitStrippedWarning",
     "acos",
     "approx_eq",
     "asin",

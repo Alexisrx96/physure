@@ -3,7 +3,10 @@
 import numpy as np
 import pytest
 
-from physure.domain.exceptions import IncompatibleUnitsError
+from physure.domain.exceptions import (
+    IncompatibleUnitsError,
+    UnitStrippedWarning,
+)
 from physure.domain.measurement.dimensions import Dimension
 from physure.domain.measurement.units import CompoundUnit
 
@@ -133,7 +136,10 @@ def test_dunder_methods(quantity_system):
     assert (-q1).magnitude == -10
     assert (+q1).magnitude == 10
     assert abs(quantity_system.Q_(-5, "m")).magnitude == 5
-    assert float(q2) == 5.0
+    # a bare number drops the unit: it warns, and `q.to("m").magnitude` is silent
+    with pytest.warns(UnitStrippedWarning, match="'m'"):
+        assert float(q2) == 5.0
+    assert q2.to("m").magnitude == 5.0
 
     assert repr(q1) in [
         "Quantity(10.0, m, uncertainty=0.1)",

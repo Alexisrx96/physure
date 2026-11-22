@@ -102,3 +102,12 @@ class DimensionError(PhysureError):
     """Raised when an invalid operation is performed on dimensions."""
 
     pass
+
+
+class UnitStrippedWarning(UserWarning):
+    """A quantity was turned into a bare number: its unit or its uncertainty is gone.
+
+    Raised by `float(q)`, `int(q)`, `complex(q)` and `np.asarray(q, dtype=float)`. The
+    number is the value in the coherent unit. To take a number on purpose and silently,
+    write `q.to(unit).magnitude` (and `q.uncertainty`), or filter this warning.
+    """

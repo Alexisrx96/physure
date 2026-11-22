@@ -142,6 +142,30 @@ from physure._core import (  # noqa: E402
 # the dimension of a temperature, the only one with points and intervals
 _TEMPERATURE = {"O": 1}
 
+
+def _exact_number(value: Any) -> Fraction | None:
+    """A real scalar as an exact rational, `None` for anything else (an array, a tracer, a complex).
+
+    A double is read as the decimal it prints as, the way the core reads one
+    (`ExactScale::from_f64`): `2.54` is `127/50`, so `2.54 cm` is exactly `1 inch`.
+    A non-finite double has no rational.
+    """
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, int):
+        return Fraction(value)
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, numpy.integer):
+        return Fraction(int(value))
+    if isinstance(value, float) or (
+        numpy is not None and isinstance(value, numpy.floating)
+    ):
+        number = float(value)
+        if math.isfinite(number):
+            return Fraction(repr(number))
+    return None
+
+
 # Helpers moved to end of file to resolve circular reference with Quantity class
 from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
     ArithmeticMixin,
@@ -783,6 +807,75 @@ class Quantity(
                 "unhashable type: 'Quantity' with unhashable magnitude"
             ) from None
 
+    def _coherent_value(self) -> tuple[CompoundUnit, Any]:
+        """The value in the coherent unit of the quantity, and that unit (`m`, `K`, `kg·m²/s²`).
+
+        What `==`, `hash` and `float` read. A real scalar is exact: its magnitude is read
+        as the decimal it prints as (the core reads a double so, `ExactScale::from_f64`)
+        and the core's plan to the coherent unit is applied before its rounding
+        (`UnitRegistry.exact_conversion`), so `68 degF` and `20 degC` are both
+        `5863/20 K`, which the rounded plan does not say (`293.15000000000003 K`). A
+        level, a unit known only as a double, or an array take the core's rounded plan,
+        as `to` applies it; a real scalar result is then read as its decimal too, so the
+        two routes compare alike.
+        """
+        system = self.system
+        unit = self.unit
+        coherent = unit.base_unit(system)
+        magnitude: Any = self.magnitude
+        exact = _exact_number(magnitude)
+        if exact is not None:
+            if coherent == unit and not self._is_level():
+                return coherent, exact
+            plan = system.core_registry.exact_conversion(unit, coherent)
+            if plan is not None:
+                scale, shift = plan
+                return coherent, exact * Fraction(scale) + Fraction(shift)
+        if coherent == unit and not self._is_level():
+            return coherent, magnitude
+        value, _ = apply_conversion(
+            system.core_registry.conversion(unit, coherent),
+            magnitude,
+            0.0,
+            self._backend,
+        )
+        read = _exact_number(value)
+        return coherent, value if read is None else read
+
+    def _stripped_value(self, operation: str) -> Any:
+        """The value in the coherent unit for a bare number, warning about what is lost.
+
+        `UnitStrippedWarning` names the unit (unless the quantity is dimensionless and
+        not a level, `50 percent` is the number `0.5`) and the uncertainty when there is
+        one, and the explicit, silent way to take the number.
+        """
+        coherent, value = self._coherent_value()
+        lost = []
+        if self._is_level():
+            lost.append(
+                f"the level unit '{self.unit}' (the number is the ratio it stands for)"
+            )
+        elif not self.dimension.is_dimensionless:
+            lost.append(f"the unit '{coherent}'")
+        if self._has_uncertainty:
+            lost.append(f"the uncertainty {self._numeric_std_dev}")
+        if lost:
+            import warnings
+
+            from physure.domain.exceptions import UnitStrippedWarning
+
+            target = "1" if coherent.is_dimensionless else str(coherent)
+            uncertainty = " and q.uncertainty" if self._has_uncertainty else ""
+            warnings.warn(
+                f"{operation} of {self!r} drops {' and '.join(lost)}: the number "
+                f"is the value in the coherent unit '{target}'. To take the number "
+                f"on purpose and silently, write q.to('{target}').magnitude"
+                f"{uncertainty}.",
+                UnitStrippedWarning,
+                stacklevel=3,
+            )
+        return value
+
     @property
     def _numeric_std_dev(self) -> Any:
         """Returns the numeric standard deviation, even if std_dev returns a model."""
@@ -1419,8 +1512,8 @@ class Quantity(
     # meaningful for scalar magnitudes; array-backed ones fail at runtime
     # with a clear TypeError from the builtin itself, which is acceptable.
     def __int__(self) -> int:
-        """Converts to int."""
-        return int(self.magnitude)  # pyright: ignore[reportArgumentType]
+        """The value in the coherent unit, truncated; `UnitStrippedWarning` as `float` warns."""
+        return int(self._stripped_value("int()"))
 
     def _round_in_core(self, op: str, *args: int) -> Quantity | None:
         """`op` (`round`, `floor`, `ceil` or `trunc`) of the Rust core, or `None` for an array.
@@ -1541,24 +1634,65 @@ class Quantity(
         )
 
     # --- Container / Array Methods ---
-    def __array__(self, dtype=None) -> Any:
-        """Returns the magnitude as a NumPy array (strips units)."""
-        # Note: Ideally avoid importing numpy, but this hook is for numpy.
-        # If magnitude is already array, return it.
-        # If not, convert.
-        try:
-            import numpy as np
+    def __array__(self, dtype: Any = None, copy: bool | None = None) -> Any:
+        """The quantity as NumPy sees it: an object array of quantities, never silent numbers.
 
-            if dtype:
-                return np.array(self.magnitude, dtype=dtype)
-            return np.array(self.magnitude)
-        except ImportError:
-            # Should not happen if this is called by numpy
-            return self.magnitude
+        Without a `dtype` (or with `object`) the array holds the quantity itself (0-d for
+        a scalar) or, for an array-backed quantity, its elements as scalar quantities
+        with their units and uncertainties (`q[i]`). A list of quantities becomes such
+        an array, so `np.sum`, `np.dot`, `np.cross`, `np.prod`, ... run through
+        `Quantity` arithmetic and keep the unit and the uncertainty.
+
+        A numeric `dtype` (`np.asarray(q, dtype=float)`) is a request for numbers: the
+        value in the coherent unit, with a `UnitStrippedWarning` that names what is
+        dropped. `q.to(unit).magnitude` is the explicit, silent way.
+        """
+        import numpy as np
+
+        if dtype is None or np.dtype(dtype) == np.dtype(object):
+            if copy is False:
+                raise ValueError(
+                    "a Quantity becomes a new object array of quantities, it cannot be "
+                    "viewed without a copy: use q.magnitude for the numbers"
+                )
+            return self._object_array(np)
+        values = self._stripped_value(f"np.asarray(dtype={np.dtype(dtype)})")
+        if isinstance(values, Fraction):
+            values = float(values)
+        return np.asarray(values, dtype=dtype)
+
+    def _object_array(self, np: Any) -> Any:
+        """The quantity, or its elements as scalar quantities, in an object array of its shape."""
+        magnitude: Any = self.magnitude
+        shape = (
+            tuple(self._backend.shape(magnitude))
+            if self._backend.is_array(magnitude)
+            else ()
+        )
+        if not shape:
+            # an element assignment stores the object itself, where np.array would ask
+            # it for an array again
+            holder = np.empty(1, dtype=object)
+            holder[0] = self
+            return holder.reshape(())
+        elements = np.empty(math.prod(shape), dtype=object)
+        for position, index in enumerate(np.ndindex(*shape)):
+            elements[position] = self[index]
+        return elements.reshape(shape)
 
     def __float__(self) -> float:
-        """Converts to float. May fail for arrays."""
-        return float(self.magnitude)  # pyright: ignore[reportArgumentType]
+        """The value in the coherent unit as a bare number.
+
+        `float(Q_(50, "percent"))` is `0.5` and `float(Q_(1, "km"))` is `1000.0`. A
+        quantity with a unit (other than a dimensionless one) or with an uncertainty
+        warns (`UnitStrippedWarning`) with what is dropped; `q.to(unit).magnitude` is
+        the explicit, silent way.
+        """
+        return float(self._stripped_value("float()"))
+
+    def __complex__(self) -> complex:
+        """The value in the coherent unit as a complex number; warns as `float` does."""
+        return complex(self._stripped_value("complex()"))
 
     # --- Math & Vector Ops ---
 
@@ -1666,17 +1800,14 @@ class Quantity(
         # unless vector_slice logic is enhanced.
         new_unc_obj = Uncertainty.from_standard(new_unc_val)
 
-        # If slicing a single element, we might get a scalar magnitude.
-        # backend might need update if it was caching type info?
-        # Quantity._fast_new handles it.
-
-        return self._fast_new(
+        # `from_input` keeps the model and gives the element its numeric standard
+        # deviation: `q[0].uncertainty` is a number, as for any scalar quantity (it
+        # used to be the model object, which `np.asarray(q)` elements then carried)
+        return type(self).from_input(
             new_mag,
             self.unit,
-            new_unc_obj,
             self.system,
-            self.dimension,
-            self._backend,
+            uncertainty=new_unc_val if new_unc_obj is None else new_unc_obj,
         )
 
     def __setitem__(self, key: Any, value: Any) -> None:
