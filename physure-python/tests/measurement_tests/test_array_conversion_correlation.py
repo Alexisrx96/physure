@@ -457,3 +457,96 @@ def test_the_covariance_matrix_and_own_slot_of_a_converted_level():
     np.testing.assert_allclose(
         block, np.diag((slope * sigmas) ** 2), rtol=1e-12
     )
+
+
+# --- the store an array's slot belongs to (review I2) -------------------------
+
+_OTHER_STORE = "another covariance store"
+
+
+def _array():
+    return Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=[0.1, 0.2, 0.3])
+
+
+_SUM_SIGMA = math.sqrt(0.14)
+
+
+def test_an_array_made_and_used_outside_any_context():
+    a = _array()
+    assert np.sum(a).uncertainty == pytest.approx(_SUM_SIGMA, rel=1e-12)
+    assert np.sum(a.to("cm")).uncertainty == pytest.approx(
+        100 * _SUM_SIGMA, rel=1e-12
+    )
+
+
+def test_an_array_made_and_used_inside_one_context():
+    with physure.PhysureContext():
+        a = _array()
+        assert np.sum(a.to("cm")).uncertainty == pytest.approx(
+            100 * _SUM_SIGMA, rel=1e-12
+        )
+        _zero((a.to("cm") - a).uncertainty)
+
+
+def test_an_array_made_outside_is_refused_inside_a_context():
+    # its slot is in another store: read there it was a silent 0.0
+    a = _array()
+    converted = a.to("cm")
+    with physure.PhysureContext():
+        for use in (
+            lambda: np.sum(a),
+            lambda: np.sum(converted),
+            lambda: a * 2,
+            lambda: converted + a,
+            lambda: a.dot(a),
+        ):
+            with pytest.raises(TypeError, match=_OTHER_STORE):
+                use()
+        # a conversion reads no slot: it is made, and refused where it is used
+        inside = a.to("mm")
+        with pytest.raises(TypeError, match=_OTHER_STORE):
+            np.sum(inside)
+    assert np.sum(inside).uncertainty == pytest.approx(
+        1000 * _SUM_SIGMA, rel=1e-12
+    )
+
+
+def test_an_array_made_inside_is_refused_after_the_context():
+    with physure.PhysureContext():
+        a = _array()
+        converted = a.to("cm")
+    with pytest.raises(TypeError, match=_OTHER_STORE):
+        np.sum(a)
+    with pytest.raises(TypeError, match=_OTHER_STORE):
+        converted - a
+
+
+def test_nested_contexts_keep_each_array_in_its_own_store():
+    # decision: an inner context is a store of its own, so an array of the outer
+    # one is refused there, and usable again once the inner context is left
+    with physure.PhysureContext():
+        outer = _array()
+        with physure.PhysureContext():
+            with pytest.raises(TypeError, match=_OTHER_STORE):
+                np.sum(outer)
+            inner = _array()
+            assert np.sum(inner).uncertainty == pytest.approx(
+                _SUM_SIGMA, rel=1e-12
+            )
+        assert np.sum(outer.to("cm")).uncertainty == pytest.approx(
+            100 * _SUM_SIGMA, rel=1e-12
+        )
+
+
+def test_scalars_and_exact_arrays_cross_contexts_freely():
+    x = Q_(2.0, "m", 0.1)
+    exact = Q_(np.array([1.0, 2.0]), "m")
+    with physure.PhysureContext():
+        b = Q_(np.array([1.0, 2.0]), "m", uncertainty=0.1)
+        np.testing.assert_allclose(
+            ((b + x) - x.to("cm")).uncertainty, 0.1, rtol=1e-12
+        )
+        np.testing.assert_allclose((exact + b).uncertainty, 0.1, rtol=1e-12)
+        np.testing.assert_allclose(
+            (exact.to("cm") + x).uncertainty, 10.0, rtol=1e-12
+        )
