@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import operator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from typing import Self
@@ -532,17 +532,23 @@ class BackendMixin:
 
     def _sum_standard_deviation(self, np: Any, size: int, name: str) -> float:
         """The standard deviation of the sum of the elements, by the core's covariance store."""
-        elements = self._store_slice(np, name)
+        # an exact array is summed before this (`_is_exact_array`), so it has a slot
+        elements, factor = cast(
+            "tuple[slice, float]", self._store_operand(np, name)
+        )
         sigma, _ = _store_propagation(
-            np, self._backend, 1, [elements], [np.ones((1, size))]
+            np, self._backend, 1, [elements], [np.ones((1, size)) * factor]
         )
         return float(sigma[0])
 
-    def _store_slice(self, np: Any, name: str) -> slice | None:
-        """The slot of this array's elements in the core's covariance store; `None` if exact.
+    def _store_operand(self, np: Any, name: str) -> tuple[slice, float] | None:
+        """The slot of this array's elements in the core's covariance store and `d elements/d slot`.
 
-        Raises `TypeError` (naming `name`) where the model cannot say how the elements
-        are correlated: a propagation from it could give an uncertainty that is too small.
+        `None` if exact. The factor is not 1 for an array converted to another unit: it
+        is read from the slot of the array it was converted from
+        (`CovarianceModel.store_operand`). Raises `TypeError` (naming `name`) where the
+        model cannot say how the elements are correlated: a propagation from it could
+        give an uncertainty that is too small.
         """
         from physure.domain.measurement.uncertainty import (
             CovarianceModel,
@@ -553,7 +559,7 @@ class BackendMixin:
             return None
         model = self._uncertainty_obj  # pyright: ignore[reportAttributeAccessIssue]
         if isinstance(model, CovarianceModel):
-            return model.ensure_vector_slice(self._backend)
+            return model.store_operand(self._backend)
         if isinstance(model, VarianceModel):
             # an array of variances only comes out of arithmetic that already dropped
             # how its elements are correlated (an array with a scalar of the
@@ -647,17 +653,20 @@ class BackendMixin:
             return type(self).from_input(magnitude, unit, self.system)
         import numpy as np
 
-        slots = (self._store_slice(np, name), other._store_slice(np, name))
+        operands = (
+            self._store_operand(np, name),
+            other._store_operand(np, name),
+        )
         jacobians = (_dot_jacobians if name == "dot" else _cross_jacobians)(
             np, left.magnitude, right.magnitude
         )
         factors = (left_factor, right_factor)
         used = [
-            (slot, jacobian * factor)
-            for slot, jacobian, factor in zip(
-                slots, jacobians, factors, strict=True
+            (operand[0], jacobian * factor * operand[1])
+            for operand, jacobian, factor in zip(
+                operands, jacobians, factors, strict=True
             )
-            if slot is not None
+            if operand is not None
         ]
         sigma, out = _store_propagation(
             np,

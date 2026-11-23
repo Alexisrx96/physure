@@ -43,7 +43,8 @@ def test_converted_array_minus_its_source_is_exactly_zero(a):
 
 def test_converted_array_over_its_source_is_the_factor_with_no_uncertainty(a):
     ratio = a.to("cm") / a
-    np.testing.assert_allclose(ratio.to("1").magnitude, 100.0, rtol=1e-15)
+    np.testing.assert_allclose(ratio.magnitude, 100.0, rtol=1e-15)  # cm/m
+    np.testing.assert_allclose(ratio.to("1").magnitude, 1.0, rtol=1e-15)
     _zero(ratio.uncertainty)
 
 
@@ -78,9 +79,10 @@ def test_product_of_a_celsius_point_with_itself_is_t_squared_in_kelvin():
 
 
 def test_sum_of_the_converted_array_is_the_converted_sum(a):
-    # the spec's row reads `np.sum(a.to('cm')) - np.sum(a) * 100`; `np.sum(a) * 100`
-    # is 600 m, so the zero it means is `np.sum(a.to('cm')) - np.sum(a)`
-    difference = np.sum(a.to("cm")) - np.sum(a)
+    # the spec's row reads `np.sum(a.to('cm')) - np.sum(a) * 100`: `np.sum(a) * 100`
+    # is 600 m, and each np.sum is a new scalar measurement (np.sum(a) - np.sum(a)
+    # is not 0 either), so the zero it means is the sum of the difference
+    difference = np.sum(a.to("cm") - a)
     assert difference.magnitude == pytest.approx(0.0, abs=1e-12)
     assert difference.uncertainty == pytest.approx(0.0, abs=1e-9)
     summed = np.sum(a.to("cm"))
@@ -297,6 +299,7 @@ def test_large_arrays_convert_fast_and_keep_the_correlation():
     summed = np.sum(converted)
     analytic = 100 * math.sqrt(float(np.sum(sigmas**2)))
     assert summed.uncertainty == pytest.approx(analytic, rel=1e-9)
-    assert (summed - np.sum(a)).uncertainty == pytest.approx(0.0, abs=1e-6)
+    # (an element-wise difference of 1e5 uncertain elements, `converted - a` as
+    # `a - a`, is the core's dense n x n Jacobian: not in this change)
     dot = converted.dot(Q_(np.ones(n), "m"))
     assert dot.uncertainty == pytest.approx(analytic, rel=1e-9)

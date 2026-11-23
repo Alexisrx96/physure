@@ -26,17 +26,22 @@ from typing import (
 from physure.core.dispatcher import BackendManager
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
     from typing import Self
 
     from physure.core.protocols import BackendOps, Numeric
     from physure.domain.measurement.dimensions import Dimension
 
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.conversion_plan import apply_conversion
+from physure.domain.measurement.conversion_plan import (
+    apply_conversion,
+    conversion_slope,
+)
 from physure.domain.measurement.uncertainty import (
+    CovarianceModel,
     LineageModel,
     Uncertainty,
+    VarianceModel,
 )
 from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import (
@@ -1356,11 +1361,15 @@ class Quantity(
             self.uncertainty,
             self._backend,
         )
-        converted = Quantity.from_input(
+        converted = self._restated(
             magnitude,
             target_unit,
-            self.system,
-            uncertainty=uncertainty,
+            uncertainty,
+            lambda: conversion_slope(
+                plan,
+                self.magnitude,  # pyright: ignore[reportArgumentType]
+                self._backend,
+            ),
         )
         if not kind_free and self.dimension.exponents == _TEMPERATURE:
             # the same quantity in another unit is of the same kind, as the
@@ -1376,19 +1385,56 @@ class Quantity(
                 object.__setattr__(
                     converted, "_unit", converted.unit.as_interval()
                 )
-        # A conversion restates the same measurement in another unit, so it keeps the
-        # sources it came from, rescaled: `x.to("mm") - x.to("mm")` is zero and the degrees
-        # of freedom stay with it. `from_input` alone would mint a new, independent source.
+        return cast("Quantity[ValueType, UncType, UnitType]", converted)
+
+    def _restated(
+        self,
+        magnitude: Any,
+        unit: CompoundUnit,
+        uncertainty: Any,
+        slope: Callable[[], Any],
+    ) -> Quantity:
+        """This measurement restated as `magnitude` in `unit`, keeping the sources it came from.
+
+        A conversion is the same measurement in another unit, so `x.to("mm") - x` is
+        zero and the degrees of freedom stay with it; `from_input` alone would mint a
+        new, independent source. A scalar's lineage is rescaled to `uncertainty`. An
+        array's elements are read from the covariance store as `slope()` (`d new/d
+        old`, asked only then) times the source's (`CovarianceModel.converted`). An
+        array of variances only (the uncorrelated mode's arithmetic, a 1-element array
+        outside a store context) holds no correlation to keep: its variance is
+        scaled, as for any such array the result is not correlated with the source.
+        """
         model = self._uncertainty_obj
+        if isinstance(model, CovarianceModel) and (
+            model.vector_slice or model.scaled_slot
+        ):
+            return Quantity.from_input(
+                magnitude,
+                unit,
+                self.system,
+                uncertainty=model.converted(
+                    uncertainty, slope(), self._backend
+                ),
+            )
+        if isinstance(model, VarianceModel) and self._backend.is_array(
+            uncertainty
+        ):
+            # still variances only: a new slot would pass for an array that knows
+            # how its elements are correlated (np.sum and dot refuse this one)
+            uncertainty = VarianceModel.from_standard(uncertainty)
+        restated = Quantity.from_input(
+            magnitude, unit, self.system, uncertainty=uncertainty
+        )
         if (
             isinstance(model, LineageModel)
             and isinstance(uncertainty, (int, float))
             and uncertainty > 0
         ):
-            converted._uncertainty_obj = LineageModel(
+            restated._uncertainty_obj = LineageModel(
                 native=model.native.rescaled_to(float(uncertainty))
             )
-        return cast("Quantity[ValueType, UncType, UnitType]", converted)
+        return restated
 
     def plot(
         self,
