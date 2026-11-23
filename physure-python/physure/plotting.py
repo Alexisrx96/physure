@@ -1064,14 +1064,14 @@ def get_covariance_matrix(quantity: Quantity) -> Numeric | None:
         if unc_obj is None and hasattr(quantity, "uncertainty_obj"):
             unc_obj = quantity.uncertainty_obj
 
-        if (
-            isinstance(unc_obj, CovarianceModel)
-            and unc_obj.vector_slice is not None
+        if isinstance(unc_obj, CovarianceModel) and (
+            unc_obj.vector_slice is not None or unc_obj.scaled_slot is not None
         ):
             backend = BackendManager.get_backend(quantity.magnitude)
             store = ensure_store(backend)
-            slc = unc_obj.vector_slice
-            cov = store.get_covariance_block(slc, slc)
+            # a converted array is read from its source's slot, scaled
+            slc, factor = unc_obj.store_operand(backend)
+            cov = store.get_covariance_block(slc, slc) * factor**2
             return to_numpy(cov)
     except Exception:
         pass

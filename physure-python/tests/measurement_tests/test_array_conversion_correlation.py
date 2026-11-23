@@ -305,3 +305,15 @@ def test_large_arrays_convert_fast_and_keep_the_correlation():
     # `a - a`, is the core's dense n x n Jacobian: not in this change)
     dot = converted.dot(Q_(np.ones(n), "m"))
     assert dot.uncertainty == pytest.approx(analytic, rel=1e-9)
+
+
+def test_the_covariance_matrix_of_a_converted_array(a):
+    from physure.plotting import get_covariance_matrix
+
+    source = np.asarray(get_covariance_matrix(a))
+    np.testing.assert_allclose(source, np.eye(3) * 0.01, rtol=1e-12)
+    np.testing.assert_allclose(
+        np.asarray(get_covariance_matrix(a.to("cm"))),
+        source * 100.0**2,
+        rtol=1e-12,
+    )
