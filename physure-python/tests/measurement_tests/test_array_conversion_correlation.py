@@ -123,6 +123,8 @@ def test_converted_array_that_shares_a_source_keeps_it():
     without_x = b.to("cm") - x
     np.testing.assert_allclose(without_x.magnitude, [100.0, 200.0, 400.0])
     np.testing.assert_allclose(without_x.uncertainty, 10.0, rtol=1e-12)
+    # x in another unit is still x (another model of the same source)
+    np.testing.assert_allclose((b - x.to("cm")).uncertainty, 0.1, rtol=1e-12)
     # the scalar route agrees, element by element
     for value, sigma in zip(
         [1.0, 2.0, 4.0], without_x.uncertainty, strict=True

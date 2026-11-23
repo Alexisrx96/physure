@@ -36,6 +36,13 @@ def _dense_host(jac: Any) -> Any:
     return jac.detach().cpu() if hasattr(jac, "detach") else jac
 
 
+def _native_lineage_terms(model: Any) -> list[tuple[int, float]] | None:
+    """The `(source, coefficient)` terms of a scalar with the core's lineage, else None."""
+    native = getattr(model, "native", None)
+    terms = getattr(native, "terms", None)
+    return list(terms()) if callable(terms) else None
+
+
 def _scipy() -> Any:
     """Return the scipy module, or None if not installed.
 
@@ -78,6 +85,10 @@ class CovarianceStore:
     # model -> its slot: a scalar (or size-1) uncertainty used in several array
     # operations is one variable
     _model_slots: dict[int, tuple[Any, slice]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    # a source of the core's lineage -> its slot (`_register_lineage`)
+    _lineage_sources: dict[int, slice] = field(
         default_factory=dict, init=False, repr=False
     )
 
@@ -338,9 +349,40 @@ class CovarianceStore:
         known = self._model_slots.get(id(model))
         if known is not None and known[0] is model:
             return known[1]
-        slc = self.register_independent_array(std_dev)
+        terms = _native_lineage_terms(model)
+        slc = (
+            self._register_lineage(terms)
+            if terms
+            else self.register_independent_array(std_dev)
+        )
         self._model_slots[id(model)] = (model, slc)
         return slc
+
+    def _register_lineage(self, terms: list[tuple[int, float]]) -> slice:
+        """A scalar with the core's lineage, as the combination of its sources it is.
+
+        `sum c_k e_k` with each source `e_k` one slot of unit variance, kept for the
+        store's life: `x` and `x.to("cm")` are two models (two objects) of one source,
+        and the store must know they are `x` twice, or an array that carries `x`
+        minus `x` in another unit keeps a share of the error that cancels.
+        """
+        sources = []
+        for source_id, _ in terms:
+            slot = self._lineage_sources.get(source_id)
+            if slot is None:
+                slot = self.allocate(1)
+                self._register_diagonal_with_fallback(
+                    slot.start, np.array([1.0]), 1
+                )
+                self._lineage_sources[source_id] = slot
+            sources.append(slot)
+        out = self.allocate(1)
+        self.update_from_propagation(
+            out,
+            sources,
+            [np.array([[coefficient]]) for _, coefficient in terms],
+        )
+        return out
 
     def register_independent_array(self, std_dev: Numeric) -> slice:
         """Registers a new independent array and returns its slice."""
