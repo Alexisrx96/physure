@@ -11,7 +11,10 @@ if TYPE_CHECKING:
     from physure.core.protocols import Numeric
 
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.uncertainty import Uncertainty
+from physure.domain.measurement.uncertainty import (
+    Uncertainty,
+    with_slot_scale,
+)
 from physure.domain.measurement.units import CompoundUnit
 
 _Quantity = None
@@ -534,14 +537,18 @@ class BackendMixin:
         """The standard deviation of the sum of the elements, by the core's covariance store."""
         # an exact array is summed before this (`_is_exact_array`), so it has a slot
         elements, factor = cast(
-            "tuple[slice, float]", self._store_operand(np, name)
+            "tuple[slice, Any]", self._store_operand(np, name)
         )
         sigma, _ = _store_propagation(
-            np, self._backend, 1, [elements], [np.ones((1, size)) * factor]
+            np,
+            self._backend,
+            1,
+            [elements],
+            [with_slot_scale(np.ones((1, size)), factor)],
         )
         return float(sigma[0])
 
-    def _store_operand(self, np: Any, name: str) -> tuple[slice, float] | None:
+    def _store_operand(self, np: Any, name: str) -> tuple[slice, Any] | None:
         """The slot of this array's elements in the core's covariance store and `d elements/d slot`.
 
         `None` if exact. The factor is not 1 for an array converted to another unit: it
@@ -662,7 +669,7 @@ class BackendMixin:
         )
         factors = (left_factor, right_factor)
         used = [
-            (operand[0], jacobian * factor * operand[1])
+            (operand[0], with_slot_scale(jacobian * factor, operand[1]))
             for operand, jacobian, factor in zip(
                 operands, jacobians, factors, strict=True
             )

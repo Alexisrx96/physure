@@ -745,14 +745,35 @@ class VarianceModel(Uncertainty[UncType]):
         return hash(self.variance)
 
 
-def with_slot_scale(jacobian: Any, factor: float) -> Any:
+def _slot_key(scaled_slot: tuple[slice, Any] | None) -> Any:
+    """A hashable form of a scaled slot: a factor per element is read by its bytes."""
+    if scaled_slot is None or isinstance(scaled_slot[1], (int, float)):
+        return scaled_slot
+    slot, factor = scaled_slot
+    import numpy as np
+
+    data = np.ascontiguousarray(factor, dtype=np.float64)
+    return (slot, data.shape, data.tobytes())
+
+
+def with_slot_scale(jacobian: Any, factor: Any) -> Any:
     """A Jacobian taken with respect to elements that are `factor` times their slot.
 
-    `d out/d slot = d out/d elements * factor` (`CovarianceModel.store_operand`). The
-    factor is a number, so this holds for every form a Jacobian takes here: a number,
-    a vector of an element-wise derivative, a dense or a sparse matrix.
+    `d out/d slot = d out/d elements * diag(factor)` (`CovarianceModel.store_operand`).
+    `factor` is one number (a factor, two temperature scales) or one per element, flat
+    (a level's slope at each value): each column of the Jacobian is scaled by the
+    factor of its element. A Jacobian is a number or a vector of an element-wise
+    derivative (a diagonal, scaled element by element), or a dense or sparse matrix
+    (scaled column by column, without building `diag(factor)` densely).
     """
-    return jacobian if factor == 1.0 else jacobian * factor
+    if isinstance(factor, (int, float)):
+        return jacobian if factor == 1.0 else jacobian * factor
+    if hasattr(jacobian, "multiply") and hasattr(jacobian, "tocsr"):
+        # a SciPy sparse matrix: `*` would be a matrix product
+        return jacobian.multiply(factor.reshape(1, -1)).tocsr()
+    if getattr(jacobian, "ndim", 0) == 2:
+        return jacobian * factor.reshape(1, -1)
+    return jacobian * factor
 
 
 def _carried_into_array(
@@ -795,11 +816,12 @@ class CovarianceModel(Uncertainty[UncType]):
     std_dev_internal: UncType
     lineage: dict[str, UncType] = field(default_factory=dict)
     vector_slice: slice | None = None
-    # `(slot, f)`: these elements are `f` times those of `slot` in the store (an array
-    # converted to another unit is the same measurement). A dense `f I` Jacobian to
-    # give them a slot of their own needs n^2 doubles, so the operations that read the
-    # store take the slot with `f` in their Jacobian instead (`store_operand`).
-    scaled_slot: tuple[slice, float] | None = None
+    # `(slot, f)`: these elements are `diag(f)` times those of `slot` in the store (an
+    # array converted to another unit is the same measurement); `f` is one number or
+    # one per element, flat (a level's slope at each value). A dense `diag(f)` Jacobian
+    # to give them a slot of their own needs n^2 doubles, so the operations that read
+    # the store take the slot with `f` in their Jacobian instead (`store_operand`).
+    scaled_slot: tuple[slice, Any] | None = None
 
     @property
     def std_dev(self) -> UncType:
@@ -808,12 +830,12 @@ class CovarianceModel(Uncertainty[UncType]):
 
     def store_operand(
         self, backend: BackendOps | None = None
-    ) -> tuple[slice, float]:
+    ) -> tuple[slice, Any]:
         """The slot these elements are read from in the store, and `d(elements)/d(slot)`.
 
         `(own slot, 1.0)`, or the slot of the array this one was converted from with
-        the factor of the conversion: a Jacobian taken with respect to these elements
-        is multiplied by it (`with_slot_scale`).
+        the factor of the conversion (a number, or one per element): a Jacobian taken
+        with respect to these elements is scaled by it (`with_slot_scale`).
         """
         if self.scaled_slot is not None:
             return self.scaled_slot
@@ -825,30 +847,20 @@ class CovarianceModel(Uncertainty[UncType]):
         """These elements in another unit, still the same measurement.
 
         `slope` is `d new/d old`: one number for a factor or two scales with zero
-        points (5/9 from degF to K), whose elements are read from this model's slot
-        scaled (no n x n Jacobian, however large the array); one per element for a
-        level (its conversion is not linear), whose elements get a slot of their own
-        propagated from this one by `diag(slope)`, a dense Jacobian like that of any
-        element-wise operation. `std_dev` is the converted standard deviation.
+        points (5/9 from degF to K), one per element for a level (its conversion is
+        not linear: the slope at each value). The new elements are read from this
+        model's slot scaled by it, with no n x n Jacobian however large the array;
+        chained conversions multiply their slopes. `std_dev` is the converted
+        standard deviation.
         """
         source, factor = self.store_operand(backend)
-        if isinstance(slope, float):
-            return CovarianceModel(
-                std_dev_internal=std_dev,
-                scaled_slot=(source, factor * slope),
-            )
-        from physure.domain.measurement.vectorized_uncertainty import (
-            ensure_store,
+        if not isinstance(slope, float):
+            # one slope per element, flat as the slot is
+            slope = backend.reshape(slope, (-1,))
+        return CovarianceModel(
+            std_dev_internal=std_dev,
+            scaled_slot=(source, factor * slope),
         )
-
-        store = ensure_store(backend)
-        own = store.allocate(source.stop - source.start)
-        store.update_from_propagation(
-            own,
-            [source],
-            [with_slot_scale(backend.reshape(slope, (-1,)), factor)],
-        )
-        return CovarianceModel(std_dev_internal=std_dev, vector_slice=own)
 
     @classmethod
     def from_standard(
@@ -1002,7 +1014,7 @@ class CovarianceModel(Uncertainty[UncType]):
                 self.std_dev_internal,
                 lineage_items,
                 self.vector_slice,
-                self.scaled_slot,
+                _slot_key(self.scaled_slot),
             )
         )
 
@@ -1271,16 +1283,24 @@ def _register_jax_pytrees() -> None:
     def cov_flatten(m):
         keys = tuple(sorted(m.lineage.keys()))
         values = tuple(m.lineage[k] for k in keys)
-        return (m.std_dev_internal, values), (
+        # a factor per element is data (a child); a slot and one number are static
+        slot, factor = m.scaled_slot or (None, None)
+        per_element = factor is not None and not isinstance(
+            factor, (int, float)
+        )
+        return (m.std_dev_internal, values, factor if per_element else None), (
             m.vector_slice,
             keys,
-            m.scaled_slot,
+            slot,
+            None if per_element else factor,
         )
 
     def cov_unflatten(aux, children):
-        vector_slice, keys, scaled_slot = aux
-        std_dev, values = children
+        vector_slice, keys, slot, number = aux
+        std_dev, values, per_element = children
         lineage = dict(zip(keys, values, strict=False))
+        factor = per_element if per_element is not None else number
+        scaled_slot = None if slot is None else (slot, factor)
         return CovarianceModel(
             std_dev_internal=std_dev,
             lineage=lineage,

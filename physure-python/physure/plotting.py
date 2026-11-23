@@ -1069,10 +1069,16 @@ def get_covariance_matrix(quantity: Quantity) -> Numeric | None:
         ):
             backend = BackendManager.get_backend(quantity.magnitude)
             store = ensure_store(backend)
-            # a converted array is read from its source's slot, scaled
+            # a converted array is read from its source's slot, scaled: by one
+            # number, or by one per element (a level's slope)
             slc, factor = unc_obj.store_operand(backend)
-            cov = store.get_covariance_block(slc, slc) * factor**2
-            return to_numpy(cov)
+            cov = to_numpy(store.get_covariance_block(slc, slc))
+            if isinstance(factor, (int, float)):
+                return cov * factor**2
+            import numpy as np
+
+            scale = np.asarray(factor, dtype=float).reshape(-1)
+            return cov * np.outer(scale, scale)
     except Exception:
         pass
     return None
