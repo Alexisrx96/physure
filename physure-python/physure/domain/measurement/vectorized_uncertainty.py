@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextvars
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -82,6 +83,11 @@ class CovarianceStore:
     _core: CoreStore = field(init=False)
     _next_idx: int = 0
     _initialized: bool = False
+    # who this store is: a model records the token of the store its slots are in
+    # (`CovarianceModel.store_token`); random, so a pickled one never matches
+    token: str = field(
+        default_factory=lambda: uuid.uuid4().hex, init=False, repr=False
+    )
     # model -> its slot: a scalar (or size-1) uncertainty used in several array
     # operations is one variable
     _model_slots: dict[int, tuple[Any, slice]] = field(

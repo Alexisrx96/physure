@@ -802,7 +802,9 @@ def _carried_into_array(
     std_dev = backend.reshape(
         backend.sqrt(diagonal), backend.shape(out_magnitude)
     )
-    return CovarianceModel(std_dev_internal=std_dev, vector_slice=out)
+    return CovarianceModel(
+        std_dev_internal=std_dev, vector_slice=out, store_token=store.token
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -822,11 +824,37 @@ class CovarianceModel(Uncertainty[UncType]):
     # to give them a slot of their own needs n^2 doubles, so the operations that read
     # the store take the slot with `f` in their Jacobian instead (`store_operand`).
     scaled_slot: tuple[slice, Any] | None = None
+    # the `token` of the store those slots are in: a slot read in another store (an
+    # array made outside a `PhysureContext()` and used inside one) is another
+    # variable there, or none, so it is refused (`_store`); None: not recorded
+    store_token: str | None = None
 
     @property
     def std_dev(self) -> UncType:
         """Returns the standard deviation."""
         return self.std_dev_internal
+
+    def _store(self, backend: BackendOps | None) -> CovarianceStore:
+        """The active covariance store; `TypeError` if this model's slot is in another."""
+        from physure.domain.measurement.vectorized_uncertainty import (
+            ensure_store,
+        )
+
+        if backend is None:
+            backend = BackendManager.get_backend(self.std_dev_internal)
+        store = ensure_store(backend)
+        if (
+            self.store_token is not None
+            and self.store_token != store.token
+            and (self.vector_slice or self.scaled_slot)
+        ):
+            raise TypeError(
+                "this array's uncertainty belongs to another covariance store; "
+                "create it inside the same PhysureContext (an array made outside "
+                "a context, or in another one, holds its correlations in that "
+                "store, and read in this one they would be lost)"
+            )
+        return store
 
     def store_operand(
         self, backend: BackendOps | None = None
@@ -838,6 +866,7 @@ class CovarianceModel(Uncertainty[UncType]):
         with respect to these elements is scaled by it (`with_slot_scale`).
         """
         if self.scaled_slot is not None:
+            self._store(backend)
             return self.scaled_slot
         return self.ensure_vector_slice(backend), 1.0
 
@@ -851,15 +880,21 @@ class CovarianceModel(Uncertainty[UncType]):
         not linear: the slope at each value). The new elements are read from this
         model's slot scaled by it, with no n x n Jacobian however large the array;
         chained conversions multiply their slopes. `std_dev` is the converted
-        standard deviation.
+        standard deviation. Only a model with a slot is converted this way
+        (`Quantity._restated`); no store is read, so the conversion is made in any
+        context and refused where it is used in a store that is not its own.
         """
-        source, factor = self.store_operand(backend)
+        source, factor = self.scaled_slot or (
+            cast("slice", self.vector_slice),
+            1.0,
+        )
         if not isinstance(slope, float):
             # one slope per element, flat as the slot is
             slope = backend.reshape(slope, (-1,))
         return CovarianceModel(
             std_dev_internal=std_dev,
             scaled_slot=(source, factor * slope),
+            store_token=self.store_token,
         )
 
     @classmethod
@@ -876,7 +911,11 @@ class CovarianceModel(Uncertainty[UncType]):
 
             store = ensure_store(backend)
             slc = store.register_independent_array(std_dev)
-            return cls(std_dev_internal=std_dev, vector_slice=slc)
+            return cls(
+                std_dev_internal=std_dev,
+                vector_slice=slc,
+                store_token=store.token,
+            )
 
         uid = measurement_id or str(uuid.uuid4())
         # ponytail: UncType is unbound here; basedpyright can't verify
@@ -922,7 +961,11 @@ class CovarianceModel(Uncertainty[UncType]):
         out_cov = store.get_covariance_block(out_slice, out_slice)
         diag = backend.sparse_diagonal(out_cov)
         std_dev = backend.reshape(backend.sqrt(diag), backend.shape(result))
-        return cls(std_dev_internal=std_dev, vector_slice=out_slice)
+        return cls(
+            std_dev_internal=std_dev,
+            vector_slice=out_slice,
+            store_token=store.token,
+        )
 
     @staticmethod
     def _scalar_lineage_from_uncertainty(u: Uncertainty) -> dict[str, Numeric]:
@@ -1024,16 +1067,11 @@ class CovarianceModel(Uncertainty[UncType]):
         Elements read from a scaled slot get a slot of their own that the store knows
         is that scaled slot (`f I` propagated from it, once): correct, but a dense
         n x n Jacobian, so the store's own operations use `store_operand` instead.
+        A slot of another store is refused (`_store`).
         """
+        store = self._store(backend)
         if self.vector_slice:
             return self.vector_slice
-        from physure.domain.measurement.vectorized_uncertainty import (
-            ensure_store,
-        )
-
-        if backend is None:
-            backend = BackendManager.get_backend(self.std_dev_internal)
-        store = ensure_store(backend)
         if self.scaled_slot is None:
             return store.register_independent_array(self.std_dev_internal)
         source, factor = self.scaled_slot
@@ -1113,7 +1151,9 @@ class CovarianceModel(Uncertainty[UncType]):
             backend.sqrt(diag), backend.shape(out_magnitude)
         )
         return CovarianceModel(
-            std_dev_internal=std_dev, vector_slice=out_slice
+            std_dev_internal=std_dev,
+            vector_slice=out_slice,
+            store_token=store.token,
         )
 
     def _merge_lineage_with_jac(
@@ -1293,10 +1333,11 @@ def _register_jax_pytrees() -> None:
             keys,
             slot,
             None if per_element else factor,
+            m.store_token,
         )
 
     def cov_unflatten(aux, children):
-        vector_slice, keys, slot, number = aux
+        vector_slice, keys, slot, number, store_token = aux
         std_dev, values, per_element = children
         lineage = dict(zip(keys, values, strict=False))
         factor = per_element if per_element is not None else number
@@ -1306,6 +1347,7 @@ def _register_jax_pytrees() -> None:
             lineage=lineage,
             vector_slice=vector_slice,
             scaled_slot=scaled_slot,
+            store_token=store_token,
         )
 
     jax.tree_util.register_pytree_node(

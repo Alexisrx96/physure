@@ -689,9 +689,14 @@ class BackendMixin:
                 magnitude, unit, self.system, uncertainty=float(sigma[0])
             )
         from physure.domain.measurement.uncertainty import CovarianceModel
+        from physure.domain.measurement.vectorized_uncertainty import (
+            ensure_store,
+        )
 
         model = CovarianceModel(
-            std_dev_internal=sigma.reshape(shape), vector_slice=out
+            std_dev_internal=sigma.reshape(shape),
+            vector_slice=out,
+            store_token=ensure_store(self._backend).token,
         )
         return type(self).from_input(
             magnitude, unit, self.system, uncertainty=model
