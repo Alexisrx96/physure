@@ -317,3 +317,143 @@ def test_the_covariance_matrix_of_a_converted_array(a):
         source * 100.0**2,
         rtol=1e-12,
     )
+
+
+# --- levels: one slope per element (review I1) -------------------------------
+
+
+def _level(n, seed=3):
+    rng = np.random.default_rng(seed)
+    values = rng.uniform(0.0, 30.0, n)
+    sigmas = rng.uniform(0.01, 0.2, n)
+    return values, sigmas, Q_(values, "dB", uncertainty=sigmas)
+
+
+@pytest.mark.parametrize("n", [1_000, 10_000, 100_000])
+def test_a_level_converts_by_its_slope_without_a_dense_jacobian(n):
+    values, sigmas, level = _level(n)
+    start = time.perf_counter()
+    ratio = level.to("1")
+    elapsed = time.perf_counter() - start
+    expected = 10 ** (values / 10)
+    np.testing.assert_allclose(ratio.magnitude, expected, rtol=1e-12)
+    # r = 10^(L/10): dr/dL = r ln10 / 10
+    np.testing.assert_allclose(
+        ratio.uncertainty, expected * math.log(10) / 10 * sigmas, rtol=1e-12
+    )
+    # an n x n Jacobian is 74.5 GiB at 1e5 (and 0.3 s at 1e4); the base took 6.5 ms
+    assert elapsed < 0.25
+    # the sum reads the slopes from the source's slot
+    assert np.sum(ratio).uncertainty == pytest.approx(
+        math.sqrt(float(np.sum((expected * math.log(10) / 10 * sigmas) ** 2))),
+        rel=1e-9,
+    )
+
+
+def test_a_converted_level_is_its_source_chained_and_correlated():
+    values, sigmas, level = _level(1_000)
+    ratio = level.to("1")
+    _zero((level.to("1") - ratio).uncertainty)
+    # chained: the slopes multiply (percent is 100 x the ratio)
+    percent = ratio.to("percent")
+    np.testing.assert_allclose(
+        percent.uncertainty, 100 * ratio.uncertainty, rtol=1e-12
+    )
+    _zero((percent - ratio).uncertainty)
+    _zero((level.to("percent") - ratio).uncertainty)
+    # a level sum with a shared scalar x: (L + x) as a ratio, minus x, is L's ratio
+    x = Q_(3.0, "dB", 0.2)
+    total = (level + x).to("1") - x.to("1")
+    np.testing.assert_allclose(total.magnitude, 10 ** (values / 10), rtol=1e-9)
+    np.testing.assert_allclose(
+        total.uncertainty,
+        10 ** (values / 10) * math.log(10) / 10 * sigmas,
+        rtol=1e-9,
+    )
+
+
+def test_np_sum_of_a_level_is_still_refused():
+    _, _, level = _level(10)
+    with pytest.raises(TypeError, match="level"):
+        np.sum(level)
+
+
+def test_a_converted_level_survives_pickle_and_copy():
+    import copy
+    import pickle
+
+    _, _, level = _level(50)
+    ratio = level.to("1")
+    for clone in (
+        pickle.loads(pickle.dumps(ratio)),
+        copy.copy(ratio),
+        copy.deepcopy(ratio),
+    ):
+        np.testing.assert_allclose(clone.uncertainty, ratio.uncertainty)
+        _zero((clone - ratio).uncertainty)
+
+
+def test_a_scaled_slot_with_one_factor_per_element_hashes_by_its_numbers():
+    from physure.domain.measurement.uncertainty import CovarianceModel
+
+    def model(factor):
+        return CovarianceModel(
+            std_dev_internal=0.5, scaled_slot=(slice(0, 2), factor)
+        )
+
+    same = hash(model(np.array([1.0, 2.0])))
+    assert same == hash(model(np.array([1.0, 2.0])))
+    assert same != hash(model(np.array([1.0, 3.0])))
+    assert hash(model(2.0)) == hash(model(2.0))
+
+
+def test_a_scaled_slot_round_trips_through_a_jax_pytree():
+    jax = pytest.importorskip("jax")
+    from physure.domain.measurement.uncertainty import (
+        CovarianceModel,
+        _register_jax_pytrees,
+    )
+
+    _register_jax_pytrees()
+    factor = np.array([1.0, 2.0, 3.0])
+    original = CovarianceModel(
+        std_dev_internal=np.array([0.1, 0.2, 0.3]),
+        scaled_slot=(slice(4, 7), factor),
+    )
+    leaves, tree = jax.tree_util.tree_flatten(original)
+    # a factor per element is data (a leaf), not static structure
+    assert any(
+        np.shape(leaf) == (3,) and np.allclose(leaf, factor) for leaf in leaves
+    )
+    rebuilt = jax.tree_util.tree_unflatten(tree, leaves)
+    assert rebuilt.scaled_slot[0] == slice(4, 7)
+    np.testing.assert_array_equal(rebuilt.scaled_slot[1], factor)
+    scalar = CovarianceModel(
+        std_dev_internal=np.array([0.1]), scaled_slot=(slice(0, 1), 100.0)
+    )
+    leaves, tree = jax.tree_util.tree_flatten(scalar)
+    assert jax.tree_util.tree_unflatten(tree, leaves).scaled_slot == (
+        slice(0, 1),
+        100.0,
+    )
+
+
+def test_the_covariance_matrix_and_own_slot_of_a_converted_level():
+    from physure.core.dispatcher import BackendManager
+    from physure.domain.measurement.vectorized_uncertainty import ensure_store
+    from physure.plotting import get_covariance_matrix
+
+    values, sigmas, level = _level(4)
+    ratio = level.to("1")
+    slope = 10 ** (values / 10) * math.log(10) / 10
+    np.testing.assert_allclose(
+        np.asarray(get_covariance_matrix(ratio)),
+        np.diag((slope * sigmas) ** 2),
+        rtol=1e-12,
+    )
+    backend = BackendManager.get_backend(values)
+    own = ratio._uncertainty_obj.ensure_vector_slice(backend)
+    block = ensure_store(backend).get_covariance_block(own, own).toarray()
+    np.testing.assert_allclose(
+        block, np.diag((slope * sigmas) ** 2), rtol=1e-12
+    )
