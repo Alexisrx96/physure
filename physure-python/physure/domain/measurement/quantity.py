@@ -1417,11 +1417,14 @@ class Quantity(
                     uncertainty, slope(), self._backend
                 ),
             )
-        if isinstance(model, VarianceModel) and self._backend.is_array(
-            uncertainty
+        if (
+            isinstance(model, VarianceModel)
+            and self._backend.is_array(uncertainty)
+            and not self._exact_operand()
         ):
             # still variances only: a new slot would pass for an array that knows
-            # how its elements are correlated (np.sum and dot refuse this one)
+            # how its elements are correlated (np.sum and dot refuse this one). An
+            # exact array (zero variances) keeps its fast path.
             uncertainty = VarianceModel.from_standard(uncertainty)
         restated = Quantity.from_input(
             magnitude, unit, self.system, uncertainty=uncertainty
