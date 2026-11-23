@@ -807,13 +807,17 @@ class ArithmeticMixin:
         )
 
     def _shift_point(self, interval: Quantity, subtract: bool) -> Quantity:
-        """This point moved by an interval, in the point's own scale."""
+        """This point moved by an interval, in the point's own scale.
+
+        The interval in the point's scale is the same measurement (`_restated`), so
+        `(t + d) - d` keeps `t`'s error alone, whatever scale `d` is written in.
+        """
         factor = interval.unit.conversion_factor_to(self.unit, self.system)
-        moved = type(self).from_input(
+        moved = interval._restated(
             self._backend.mul(interval.magnitude, factor),
             self.unit,
-            self.system,
-            uncertainty=self._backend.mul(interval.uncertainty, abs(factor)),
+            self._backend.mul(interval.uncertainty, abs(factor)),
+            lambda: float(factor),
         )
         return self._add_sub_same_unit(
             moved,
