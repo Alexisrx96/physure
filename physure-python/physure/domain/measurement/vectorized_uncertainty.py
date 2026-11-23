@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -35,6 +36,10 @@ def _dense_host(jac: Any) -> Any:
     if getattr(jac, "is_sparse", False):
         jac = jac.to_dense()
     return jac.detach().cpu() if hasattr(jac, "detach") else jac
+
+
+# combinations of lineage sources a store keeps by their terms (`_lineage_operand`)
+_LINEAGE_CACHE = 4096
 
 
 def _native_lineage_terms(model: Any) -> list[tuple[int, float]] | None:
@@ -93,9 +98,13 @@ class CovarianceStore:
     _model_slots: dict[int, tuple[Any, slice]] = field(
         default_factory=dict, init=False, repr=False
     )
-    # a source of the core's lineage -> its slot (`_register_lineage`)
-    _lineage_sources: dict[int, slice] = field(
+    # a source of the core's lineage -> its block and index (`_lineage_operand`)
+    _lineage_sources: dict[int, tuple[slice, int]] = field(
         default_factory=dict, init=False, repr=False
+    )
+    # the terms of a combination of sources -> its slot, most recent last
+    _lineage_combinations: OrderedDict[tuple[Any, ...], tuple[slice, Any]] = (
+        field(default_factory=OrderedDict, init=False, repr=False)
     )
 
     def __post_init__(self) -> None:
@@ -342,53 +351,87 @@ class CovarianceStore:
                     "Rust CoreStore.register_diagonal missing."
                 ) from err
 
-    def register_independent_model(
-        self, model: Any, std_dev: Numeric
-    ) -> slice:
-        """Registers `model`'s standard deviation once and returns the same slot on every later use.
+    def model_operand(self, model: Any, std_dev: Numeric) -> tuple[slice, Any]:
+        """The slot of a scalar's error in this store and `d model/d slot` (`with_slot_scale`).
 
-        An uncertainty that is not a vector model (a scalar's, say) has no slot of its
-        own. Registering it afresh at each use made `(a * s) / s` treat the two `s` as
-        independent errors instead of one, and the result carried an uncertainty that
-        the shared factor should have cancelled.
+        The same error is the same slot on every use: registering it afresh made
+        `(a * s) / s` treat the two `s` as independent errors, and the shared factor did
+        not cancel. A scalar with the core's lineage is the combination of its sources
+        it is (`_lineage_operand`), so two models of one source (`x` and `x.to("cm")`)
+        are one error; any other model is one slot, kept per model object.
         """
+        terms = _native_lineage_terms(model)
+        if terms:
+            return self._lineage_operand(terms)
         known = self._model_slots.get(id(model))
         if known is not None and known[0] is model:
-            return known[1]
-        terms = _native_lineage_terms(model)
-        slc = (
-            self._register_lineage(terms)
-            if terms
-            else self.register_independent_array(std_dev)
-        )
+            return known[1], 1.0
+        slc = self.register_independent_array(std_dev)
         self._model_slots[id(model)] = (model, slc)
-        return slc
+        return slc, 1.0
 
-    def _register_lineage(self, terms: list[tuple[int, float]]) -> slice:
-        """A scalar with the core's lineage, as the combination of its sources it is.
+    def _lineage_operand(
+        self, terms: list[tuple[int, float]]
+    ) -> tuple[slice, Any]:
+        """A scalar with the core's lineage as `sum c_k e_k` over its sources `e_k`.
 
-        `sum c_k e_k` with each source `e_k` one slot of unit variance, kept for the
-        store's life: `x` and `x.to("cm")` are two models (two objects) of one source,
-        and the store must know they are `x` twice, or an array that carries `x`
-        minus `x` in another unit keeps a share of the error that cancels.
+        Each source is a unit-variance element of the store, kept for the store's
+        life, so every model of it (`x`, `x.to("cm")`, a sum that holds `x`) is read
+        from the same error. The cost is bounded so:
+
+        - the sources first seen together get one slot (a block of unit variances):
+          a scalar of 1e4 sources is one registration, not 1e4;
+        - a scalar of one source is that source's slot scaled by its coefficient
+          (`(slot, c)`), with no slot of its own, when the source is alone in its slot;
+        - any other combination gets one slot, propagated once from the blocks of its
+          sources (a row of coefficients each), and is kept by its terms (not by its
+          model object, which is not kept alive) for the last `_LINEAGE_CACHE`
+          combinations; a combination met again after that is propagated again from
+          the same sources, which is the same error (exact, only slower).
+
+        Every source slot and combination slot holds covariance blocks in the core's
+        store, which visits all of its blocks at each propagation; a long loop that
+        meets a new scalar at each step therefore grows the store (as each new array
+        result does): its cost per step grows with the number of results correlated
+        with the operands, on the base as well.
         """
-        sources = []
-        for source_id, _ in terms:
-            slot = self._lineage_sources.get(source_id)
-            if slot is None:
-                slot = self.allocate(1)
-                self._register_diagonal_with_fallback(
-                    slot.start, np.array([1.0]), 1
+        key = tuple(terms)
+        known = self._lineage_combinations.get(key)
+        if known is not None:
+            self._lineage_combinations.move_to_end(key)
+            return known
+        fresh = [sid for sid, _ in terms if sid not in self._lineage_sources]
+        if fresh:
+            block = self.allocate(len(fresh))
+            self._register_diagonal_with_fallback(
+                block.start, np.ones(len(fresh)), len(fresh)
+            )
+            for index, sid in enumerate(fresh):
+                self._lineage_sources[sid] = (block, index)
+        if len(terms) == 1:
+            sid, coefficient = terms[0]
+            block, _ = self._lineage_sources[sid]
+            if block.stop - block.start == 1:
+                return block, float(coefficient)
+        rows: dict[int, tuple[slice, Any]] = {}
+        for sid, coefficient in terms:
+            block, index = self._lineage_sources[sid]
+            if block.start not in rows:
+                rows[block.start] = (
+                    block,
+                    np.zeros((1, block.stop - block.start)),
                 )
-                self._lineage_sources[source_id] = slot
-            sources.append(slot)
+            rows[block.start][1][0, index] += coefficient
         out = self.allocate(1)
         self.update_from_propagation(
             out,
-            sources,
-            [np.array([[coefficient]]) for _, coefficient in terms],
+            [block for block, _ in rows.values()],
+            [row for _, row in rows.values()],
         )
-        return out
+        self._lineage_combinations[key] = (out, 1.0)
+        if len(self._lineage_combinations) > _LINEAGE_CACHE:
+            self._lineage_combinations.popitem(last=False)
+        return out, 1.0
 
     def register_independent_array(self, std_dev: Numeric) -> slice:
         """Registers a new independent array and returns its slice."""

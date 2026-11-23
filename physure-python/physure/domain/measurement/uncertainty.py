@@ -782,7 +782,7 @@ def _carried_into_array(
     """The error of `model` carried by `jacobian` into an array result, as one covariance.
 
     The operand keeps one slot of the covariance store however many operations it
-    takes part in (`register_independent_model` for a scalar, its own slice for an
+    takes part in (`model_operand` for a scalar, its own slice for an
     array), so a later `- x` cancels against it.
     """
     from physure.domain.measurement.vectorized_uncertainty import ensure_store
@@ -795,7 +795,8 @@ def _carried_into_array(
         source, factor = model.store_operand(backend)
         jacobian = with_slot_scale(jacobian, factor)
     else:
-        source = store.register_independent_model(model, model.std_dev)
+        source, factor = store.model_operand(model, model.std_dev)
+        jacobian = with_slot_scale(jacobian, factor)
     out = store.allocate(backend.size(out_magnitude))
     store.update_from_propagation(out, [source], [jacobian])
     diagonal = backend.sparse_diagonal(store.get_covariance_block(out, out))
@@ -1118,7 +1119,9 @@ class CovarianceModel(Uncertainty[UncType]):
         else:
             std = getattr(other, "std_dev", other)
             # the same model is the same variable, however many operations it takes part in
-            in_slices.append(store.register_independent_model(other, std))
+            slot, factor = store.model_operand(other, std)
+            in_slices.append(slot)
+            jac_other = with_slot_scale(jac_other, factor)
         jacobians.append(jac_other)
 
     def _add_vector_path(
