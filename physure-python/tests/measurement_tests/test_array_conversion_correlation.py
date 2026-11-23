@@ -550,3 +550,78 @@ def test_scalars_and_exact_arrays_cross_contexts_freely():
         np.testing.assert_allclose(
             (exact.to("cm") + x).uncertainty, 10.0, rtol=1e-12
         )
+
+
+# --- a scalar with lineage in the store (review I3) --------------------------
+
+
+def _store():
+    from physure.core.dispatcher import BackendManager
+    from physure.domain.measurement.vectorized_uncertainty import ensure_store
+
+    return ensure_store(BackendManager.get_backend(np.zeros(1)))
+
+
+def test_a_scalar_of_many_sources_meets_an_array_fast_and_exactly():
+    import functools
+    import operator
+
+    k = 10_000
+    x = functools.reduce(operator.add, [Q_(1.0, "m", 0.01) for _ in range(k)])
+    b = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
+    start = time.perf_counter()
+    total = b + x
+    elapsed = time.perf_counter() - start
+    np.testing.assert_allclose(
+        total.uncertainty, math.hypot(0.1, 0.01 * math.sqrt(k)), rtol=1e-12
+    )
+    np.testing.assert_allclose(((b + x) - x).uncertainty, 0.1, rtol=1e-9)
+    # one registration of the 1e4 sources, not one per source (1.3 s)
+    assert elapsed < 0.2
+
+
+def test_scalars_that_share_some_sources():
+    b = Q_(np.array([1.0, 2.0]), "m", uncertainty=0.1)
+    p, q1, q2 = Q_(1.0, "m", 0.3), Q_(1.0, "m", 0.4), Q_(1.0, "m", 0.2)
+    x1, x2 = p + q1, p + q2
+    # b + x1 - x2 = b + q1 - q2
+    np.testing.assert_allclose(
+        ((b + x1) - x2).uncertainty, math.sqrt(0.01 + 0.16 + 0.04), rtol=1e-12
+    )
+    # b x1 - b x2 = b (q1 - q2)
+    np.testing.assert_allclose(
+        (b * x1 - b * x2).uncertainty,
+        np.array([1.0, 2.0]) * math.hypot(0.4, 0.2),
+        rtol=1e-12,
+    )
+    y = Q_(2.0, "m", 0.3) + Q_(1.0, "m", 0.4)  # sigma 0.5, two sources
+    np.testing.assert_allclose(
+        ((b + y) + y).uncertainty, math.hypot(0.1, 2 * 0.5), rtol=1e-12
+    )
+    np.testing.assert_allclose(
+        ((b + y) - y.to("cm") - y.to("km")).uncertainty,
+        math.hypot(0.1, 0.5),
+        rtol=1e-12,
+    )
+
+
+def test_a_combination_met_again_after_the_cache_is_the_same_error(
+    monkeypatch,
+):
+    import physure.domain.measurement.vectorized_uncertainty as store_module
+
+    monkeypatch.setattr(store_module, "_LINEAGE_CACHE", 1)
+    b = Q_(np.array([1.0, 2.0]), "m", uncertainty=0.1)
+    x = Q_(2.0, "m", 0.3) + Q_(1.0, "m", 0.4)
+    y = Q_(5.0, "m", 0.2) + Q_(1.0, "m", 0.2)
+    first = b + x
+    _ = b + y  # x's combination leaves the cache
+    np.testing.assert_allclose((first - x).uncertainty, 0.1, rtol=1e-12)
+    assert len(_store()._lineage_combinations) == 1
+
+
+def test_the_store_keeps_no_scalar_model_alive():
+    b = Q_(np.array([1.0, 2.0]), "m", uncertainty=0.1)
+    for value in range(5):
+        _ = b + Q_(float(value), "m", 0.01)
+    assert _store()._model_slots == {}
