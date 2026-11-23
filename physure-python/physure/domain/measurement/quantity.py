@@ -197,6 +197,20 @@ def _is_plain_real(value: Any) -> bool:
     )
 
 
+def _is_zero_numpy_array(value: Any) -> bool:
+    """A NumPy array of zeros (an exact array's standard deviations), in one pass.
+
+    Only NumPy is asked: a torch or JAX array may be live in a traced graph, where
+    reading its values breaks the graph.
+    """
+    numpy = sys.modules.get("numpy")
+    return (
+        numpy is not None
+        and isinstance(value, numpy.ndarray)
+        and not value.any()
+    )
+
+
 # Helpers moved to end of file to resolve circular reference with Quantity class
 from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
     ArithmeticMixin,
@@ -1420,11 +1434,10 @@ class Quantity(
         if (
             isinstance(model, VarianceModel)
             and self._backend.is_array(uncertainty)
-            and not self._exact_operand()
+            and not _is_zero_numpy_array(uncertainty)
         ):
             # still variances only: a new slot would pass for an array that knows
-            # how its elements are correlated (np.sum and dot refuse this one). An
-            # exact array (zero variances) keeps its fast path.
+            # how its elements are correlated (np.sum and dot refuse this one)
             uncertainty = VarianceModel.from_standard(uncertainty)
         restated = Quantity.from_input(
             magnitude, unit, self.system, uncertainty=uncertainty
