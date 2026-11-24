@@ -237,28 +237,34 @@ fn lit(a: f64, unit: &str) -> String {
     format!("{a:?} {unit}")
 }
 
+/// `metres` written in the unit `u1` (of `f1` metres) and in `u2` (of `f2` metres) compare as one length, in either
+/// order; a value off by 1e-9 of itself is different, one off by 1e-4 is only approximately equal.
+fn assert_compares_as_one_length(metres: f64, (u1, f1): (&str, f64), (u2, f2): (&str, f64)) {
+    let (a, b) = (metres / f1, metres / f2);
+    let near = b * (1.0 + 1e-4);
+    let far = b * (1.0 + 1e-9);
+    for (x, y) in [(lit(a, u1), lit(b, u2)), (lit(b, u2), lit(a, u1))] {
+        assert!(truth(&format!("{x} == {y}")), "{x} == {y}");
+        assert!(!truth(&format!("{x} != {y}")), "{x} != {y}");
+        assert!(truth(&format!("{x} ≈ {y}")), "{x} ≈ {y}");
+    }
+    for (x, y) in [(lit(a, u1), lit(far, u2)), (lit(far, u2), lit(a, u1))] {
+        assert!(!truth(&format!("{x} == {y}")), "{x} == {y}");
+        assert!(truth(&format!("{x} != {y}")), "{x} != {y}");
+    }
+    for (x, y) in [(lit(a, u1), lit(near, u2)), (lit(near, u2), lit(a, u1))] {
+        assert!(truth(&format!("{x} ≈ {y}")), "{x} ≈ {y}");
+        assert!(!truth(&format!("{x} == {y}")), "{x} == {y}");
+    }
+}
+
 #[test]
 fn the_answer_does_not_depend_on_the_units_the_operands_are_written_in() {
     let lengths = [("m", 1.0), ("mm", 1e-3), ("km", 1e3), ("µm", 1e-6)];
     for metres in [1e-15, 3.7e-9, 0.1, 1.0, 42.5, 1e6, 7.3e12] {
-        for (u1, f1) in lengths {
-            for (u2, f2) in lengths {
-                let (a, b) = (metres / f1, metres / f2);
-                let near = b * (1.0 + 1e-4);
-                let far = b * (1.0 + 1e-9);
-                for (x, y) in [(lit(a, u1), lit(b, u2)), (lit(b, u2), lit(a, u1))] {
-                    assert!(truth(&format!("{x} == {y}")), "{x} == {y}");
-                    assert!(!truth(&format!("{x} != {y}")), "{x} != {y}");
-                    assert!(truth(&format!("{x} ≈ {y}")), "{x} ≈ {y}");
-                }
-                for (x, y) in [(lit(a, u1), lit(far, u2)), (lit(far, u2), lit(a, u1))] {
-                    assert!(!truth(&format!("{x} == {y}")), "{x} == {y}");
-                    assert!(truth(&format!("{x} != {y}")), "{x} != {y}");
-                }
-                for (x, y) in [(lit(a, u1), lit(near, u2)), (lit(near, u2), lit(a, u1))] {
-                    assert!(truth(&format!("{x} ≈ {y}")), "{x} ≈ {y}");
-                    assert!(!truth(&format!("{x} == {y}")), "{x} == {y}");
-                }
+        for first in lengths {
+            for second in lengths {
+                assert_compares_as_one_length(metres, first, second);
             }
         }
     }

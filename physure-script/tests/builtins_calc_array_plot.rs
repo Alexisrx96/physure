@@ -183,6 +183,47 @@ fn an_integral_that_is_not_known_is_refused_not_guessed() {
     assert!(calc_refused(r#"integral("x + 1")"#).contains("integral expects"));
 }
 
+/// Audit T2: the symbolic parser stopped at the first token it did not know and dropped the rest, so
+/// `integral("x < 0.5", "x")` was `integral("x", "x")` = `x^2/2`, and `deriv("x > 0", "x")` was 1.
+#[test]
+fn a_comparison_is_not_a_symbolic_expression() {
+    for op in ["<", ">", "<=", ">=", "!="] {
+        let text = format!("x {op} 0.5");
+        for call in [format!(r#"integral("{text}", "x")"#), format!(r#"deriv("{text}", "x")"#), format!(r#"simplify("{text}")"#)] {
+            let message = calc_refused(&call);
+            assert!(message.contains(&format!("`{op}`")) && message.contains("comparison"), "{call}: {message}");
+        }
+    }
+    // the same for `solve` and a comparison after an equation; `limit` samples the expression and already saw a Bool
+    assert!(calc_refused(r#"solve("x^2 < 4", "x")"#).contains("comparison"));
+    assert!(calc_refused(r#"limit("x > 0", "x", 0)"#).contains("Bool"));
+    assert!(calc_refused(r#"solve("x = 2 < 3", "x")"#).contains("comparison"));
+    // `substitute` took the `=` of `<=` for an equation, and a comparison as the replacement for its right side
+    assert!(calc_refused(r#"substitute("x <= 3", "x", "2")"#).contains("`<=`"));
+    assert!(calc_refused(r#"substitute("x + 1", "x", "y >= 2")"#).contains("`>=`"));
+}
+
+/// Audit T13: `e` was Euler's number in a symbolic text and nothing in a numeric one. To read `2xe^x` the parser also
+/// cut every name that ends in `e` before a `^` into the name and `e`, so a variable named `time`, `rate` or `Re` (the
+/// Reynolds number) was `tim * e`: `deriv("time^2", "time")` answered 0.
+#[test]
+fn e_is_not_euler_s_number_in_a_symbolic_text_and_a_name_ending_in_e_is_that_name() {
+    assert!(calc_refused(r#"deriv("e^x", "x")"#).contains("exp(x)"));
+    assert!(calc_refused(r#"integral("e^x", "x")"#).contains("exp(x)"));
+    assert_eq!(calc(r#"deriv("time^2", "time")"#), "2 * time");
+    assert_eq!(calc(r#"deriv("Re^2", "Re")"#), "2 * Re");
+    assert_eq!(calc(r#"simplify("rate^2")"#), "rate^2");
+    assert_eq!(calc(r#"deriv("exp(x)", "x")"#), "exp(x)");
+}
+
+/// The cause behind T2: whatever the parser did not read was dropped, not only comparisons.
+#[test]
+fn text_after_a_symbolic_expression_is_refused_not_dropped() {
+    assert!(calc_refused(r#"deriv("x^2 )", "x")"#).contains("`)`"));
+    assert!(calc_refused(r#"deriv("x^2 , 3", "x")"#).contains("`,`"));
+    assert!(calc_refused(r#"deriv("sin(x", "x")"#).contains("Expected closing"));
+}
+
 #[test]
 fn a_definite_integral_is_the_area_under_the_curve() {
     // symbolic antiderivative at both ends
@@ -368,4 +409,32 @@ fn a_plot_that_is_not_given_what_it_needs_says_so() {
     assert!(plot_refused("plot_field(1, 2)").contains("plot_field expects u(x, y)"));
     assert!(plot_refused("plot_nd()").contains("2D matrix"));
     assert!(plot_refused("plot_nd(3)").contains("2D matrix"));
+}
+
+/// The follow-up of audit T2: the symbolic parser read `and`, `or` and `not` as symbols and multiplied them
+/// (`simplify("x and y")` was `and * x * y`, `deriv("x not y", "x")` was `not * y`), and a function written without
+/// its parentheses (`sin * x`) as a symbol called `sin`.
+#[test]
+fn a_word_the_language_reads_is_not_a_symbol_of_a_symbolic_text() {
+    for (text, word) in [
+        ("x and y", "and"),
+        ("x or y", "or"),
+        ("not x", "not"),
+        ("if x", "if"),
+        ("x where y", "where"),
+        ("True * x", "True"),
+        ("true * x", "true"),
+        ("x * inf", "inf"),
+        ("sin * x", "sin"),
+        ("x * log", "log"),
+    ] {
+        let message = calc_refused(&format!(r#"simplify("{text}")"#));
+        assert!(message.contains(&format!("`{word}`")), "{text}: {message}");
+    }
+    // a function with its parentheses, and a word that is only a name, stay what they were
+    assert!(calc(r#"simplify("sin(x) * 2")"#).contains("sin(x)"));
+    assert_eq!(calc(r#"deriv("sigma^2", "sigma")"#), "2 * sigma");
+    assert!(calc(r#"deriv("max * x", "x")"#).contains("max"));
+    // `sec` is also the unit second
+    assert!(calc(r#"deriv("3 sec * x", "x")"#).contains("sec"));
 }

@@ -15,8 +15,38 @@ pub const DEFAULT_PHYSURE_CONF: &str = include_str!("physure.conf");
 
 /// Words that can stand among the fields of a unit line without being one of its values.
 fn is_flag(field: &str) -> bool {
-    matches!(field, "noprefix" | "own_kind")
+    matches!(field, "noprefix" | "own_kind" | "interval")
 }
+
+/// Whether the values of a unit line carry `flag`, among fields separated by commas or by spaces.
+fn has_flag(val_part: &str, flag: &str) -> bool {
+    val_part.split(|c: char| c == ',' || c.is_whitespace()).any(|field| field == flag)
+}
+
+/// The entries of the shipped catalog that are temperature intervals. The trusted reading (the embedded catalog, and
+/// the `embedded` source of a frozen file) flags them even when their line does not: a file frozen before the flag
+/// existed (`delta_celsius = 1.0, O, [...]`) must not lose the rule its library already applied by name.
+const SHIPPED_INTERVALS: [&str; 2] = ["delta_celsius", "delta_fahrenheit"];
+
+/// Why `interval` cannot flag a unit of a dimension with no temperature point.
+const INTERVAL_WITHOUT_A_POINT: &str =
+    "`interval` marks the difference of two points of a scale with a zero point (degC, degF), and no unit with a zero point of this dimension is defined before this line: a unit of a dimension without points is neither a point nor an interval";
+
+/// Whether the dimension of the unit registered as `symbol` has a point: a unit with a zero point (`degC`).
+fn has_a_point(registry: &UnitRegistry, symbol: &str) -> bool {
+    let Some(unit) = registry.derived_units.get(symbol) else { return false };
+    registry.derived_units.values().any(|other| other.is_affine() && other.same_dimensions(unit))
+}
+
+/// Why `interval` cannot flag a level: it is the logarithm of a ratio, not a temperature that moves a point.
+const INTERVAL_ON_A_LEVEL: &str =
+    "`interval` marks a temperature interval (how far apart two points are); a level (`Log, ...`) is the logarithm of a ratio and is never one";
+/// Why `interval` cannot flag a unit with a zero point.
+const INTERVAL_ON_A_POINT: &str =
+    "`interval` marks a temperature interval (how far apart two points are), and a unit with a zero point is a temperature point (like degC): a unit is one or the other";
+/// Why `interval` cannot flag the base unit of a dimension.
+const INTERVAL_ON_A_BASE: &str =
+    "`interval` cannot flag the base unit of a dimension: a difference of two points is written in it, so it stands for a point or an interval alike (like K); flag a unit of scale 1 declared after it (`dT = 1.0, O, interval, [dT]`)";
 
 /// Parses a `physure.conf` configuration string into a UnitRegistry and constants map.
 /// All dimension symbols (L, M, T, I, O, N, J, A, etc.), prefixes, units, aliases,
@@ -866,7 +896,7 @@ fn parse_conf(
 
     // Pass 2: Parse and register all units using the dynamic dimension map
     for line in unit_lines {
-        if let Err(reason) = parse_unit_line(line, registry, &dim_to_base) {
+        if let Err(reason) = parse_unit_line(line, registry, &dim_to_base, trusted) {
             problems.push(format!("{line}: {reason}"));
         } else if strict_sections {
             if let Some(why) = unread_unit_fields(line, &dim_to_base) {
@@ -933,7 +963,7 @@ fn strict_line_problem(section: &str, line: &str, defined: &mut HashSet<(String,
 
 /// The values of a unit line the reader does not look at, if there are any (a misspelt flag, a stray word): a level
 /// reads `Log, factor, reference, dimension`; another unit its factor, an optional zero point, its dimension, and a
-/// recipe only when the dimension is not one with a base unit. The flags are `noprefix` and `own_kind`.
+/// recipe only when the dimension is not one with a base unit. The flags are `noprefix`, `own_kind` and `interval`.
 fn unread_unit_fields(line: &str, dim_to_base: &HashMap<String, String>) -> Option<String> {
     let (_, val_part, _) = cut_unit_line(line)?;
     let parts = unit_value_fields(val_part);
@@ -953,7 +983,7 @@ fn unread_unit_fields(line: &str, dim_to_base: &HashMap<String, String>) -> Opti
     };
     let unread = parts.get(read..).filter(|rest| !rest.is_empty())?;
     Some(format!(
-        "the values {} are not read (the flags are noprefix and own_kind; a recipe is read only for a dimension without a base unit, or when it is that base unit)",
+        "the values {} are not read (the flags are noprefix, own_kind and interval; a recipe is read only for a dimension without a base unit, or when it is that base unit)",
         unread.iter().map(|p| format!("'{p}'")).collect::<Vec<_>>().join(", ")
     ))
 }
@@ -1352,7 +1382,7 @@ fn is_single_ident(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
-/// The fields of a unit line's values, without the flags (`noprefix`, `own_kind`); a single field with spaces in it
+/// The fields of a unit line's values, without the flags (`noprefix`, `own_kind`, `interval`); a single field with spaces in it
 /// is read as the fields separated by them.
 fn unit_value_fields(val_part: &str) -> Vec<&str> {
     let parts: Vec<&str> = val_part
@@ -1370,7 +1400,13 @@ fn unit_value_fields(val_part: &str) -> Vec<&str> {
     parts
 }
 
-fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMap<String, String>) -> Result<(), String> {
+/// One line of `[Units]`. `trusted` is the reading of the library's own text, which flags [`SHIPPED_INTERVALS`].
+fn parse_unit_line(
+    line: &str,
+    registry: &mut UnitRegistry,
+    dim_to_base: &HashMap<String, String>,
+    trusted: bool,
+) -> Result<(), String> {
     let Some((key, val_part, mut aliases)) = cut_unit_line(line) else {
         return Err("a unit line is `name = factor, dimension, [names]`".to_string());
     };
@@ -1388,6 +1424,8 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     let symbol = aliases[0].clone();
 
     let no_prefix = val_part.split(',').any(|field| field.trim() == "noprefix");
+    // `delta_celsius = 1.0, O, interval, [...]`: a temperature interval, which a point does not compare with
+    let interval = has_flag(val_part, "interval");
 
     let parts = unit_value_fields(val_part);
 
@@ -1398,6 +1436,9 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     // `pH = Log, -1, 1.0, 1, noprefix`: a level is `Log, factor, reference, dimension`. Its dimension
     // is "1" when it is the logarithm of a ratio, or the dimensions of a quantity (`dBW`).
     if parts[0].eq_ignore_ascii_case("log") {
+        if interval {
+            return Err(INTERVAL_ON_A_LEVEL.to_string());
+        }
         register_level(&parts, &symbol, registry, dim_to_base)?;
         register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
         return Ok(());
@@ -1419,6 +1460,27 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     let dim_str = if parts.len() > dim_index { parts[dim_index] } else { "1" };
 
     let base_symbol = dim_to_base.get(dim_str).cloned().unwrap_or_default();
+    if interval && offset != 0.0 {
+        return Err(INTERVAL_ON_A_POINT.to_string());
+    }
+    // an old shipped line without the flag keeps the rule; one with a zero point would be a point, not an interval
+    let interval = interval || (trusted && offset == 0.0 && SHIPPED_INTERVALS.contains(&key));
+    if interval && factor == 1.0 && symbol == base_symbol {
+        return Err(INTERVAL_ON_A_BASE.to_string());
+    }
+    // a line that restates an interval entry (`delta_celsius` copied from an older catalog) without the flag would
+    // silently make it a kelvin again: refused, so the definition in force stays
+    if !interval {
+        if let Some(name) = [key, symbol.as_str()].into_iter().find(|name| {
+            registry.derived_units.get(&registry.resolve_symbol(name)).is_some_and(|unit| unit.temperature == crate::units::TemperatureKind::Interval)
+        }) {
+            return Err(format!(
+                "`{name}` is a temperature interval: the line needs the `interval` flag (`{key} = ..., interval, [...]`); \
+                 without it a temperature point would compare with it and convert to it. The definition in force stays"
+            ));
+        }
+    }
+    let previous = registry.derived_units.get(&symbol).cloned();
 
     // Dimension "1" is tested before `base_symbol`, which maps it to the `unity` unit:
     // going through that mapping would make every scaled ratio (`%`, `ppm`) a quantity of
@@ -1435,6 +1497,18 @@ fn parse_unit_line(line: &str, registry: &mut UnitRegistry, dim_to_base: &HashMa
     } else {
         let recipe_str = recipe_field(&parts, dim_index + 1);
         register_recipe_unit(registry, &symbol, &names, (dim_str, recipe_str), &scale, dim_to_base)?;
+    }
+    // what its line says, and nothing a recipe of an interval unit would pass on
+    if let Some(unit) = registry.derived_units.get_mut(&symbol) {
+        unit.temperature = if interval { crate::units::TemperatureKind::Interval } else { crate::units::TemperatureKind::Unknown };
+    }
+    // an interval is the difference of two points: its dimension needs a point (a unit with a zero point, like degC)
+    if interval && !has_a_point(registry, &symbol) {
+        match previous {
+            Some(unit) => registry.derived_units.insert(symbol.clone(), unit),
+            None => registry.derived_units.remove(&symbol),
+        };
+        return Err(INTERVAL_WITHOUT_A_POINT.to_string());
     }
 
     register_aliases(registry, key, &symbol, &aliases, &names, no_prefix);
@@ -2445,7 +2519,7 @@ mod tests {
         assert!(frozen_problems("[Compatibility]\nperiodic = hertz\nsr, plain = convert\n").is_empty());
         assert!(frozen_problems("# only a comment\n\n").is_empty());
         // a recipe, the base unit named after its dimension, flags, a zero point and a level are all read
-        let units = "[Units]\nzza = 2.0, L, m, [zza]\nzzb = 1.0, M*L*T^-2, kg*m/s^2, noprefix, [zzb]\nzzc = 1.0, 10.0, O, [zzc]\nzzd = Log, 10, 1.0, 1, noprefix, [zzd]\nzze = 1.0, A, own_kind, [zze]\n";
+        let units = "[Units]\nzza = 2.0, L, m, [zza]\nzzb = 1.0, M*L*T^-2, kg*m/s^2, noprefix, [zzb]\nzzc = 1.0, 10.0, O, [zzc]\nzzd = Log, 10, 1.0, 1, noprefix, [zzd]\nzze = 1.0, A, own_kind, [zze]\nzzf = 1.0, O, interval, [zzf]\n";
         assert!(frozen_problems(units).is_empty(), "{:?}", frozen_problems(units));
         // a unit and a constant of one name may both be overridden, to one value
         let both = "[Units]\nbohr = 6e-11, L, m, [a0, bohr, bohr_radius]\n[Constants]\nbohr_radius = 6e-11 m\n";
@@ -2811,5 +2885,61 @@ mod tests {
         assert!(matches!(read_compatibility_row("rad, plain = convert"), Ok(Marker::Radian)));
         assert!(matches!(read_compatibility_row("plain, steradian = convert"), Ok(Marker::Steradian)));
         assert!(matches!(read_compatibility_row("sr, plain = convert"), Ok(Marker::Steradian)));
+    }
+
+    /// The shipped catalog with the `interval` flag taken off its lines: the text of a file frozen before the flag.
+    fn catalog_before_the_interval_flag() -> String {
+        let old = DEFAULT_PHYSURE_CONF.replace(", O, interval, [delta_deg", ", O, [delta_deg");
+        assert_eq!(old.matches(", O, [delta_deg").count(), 2, "the test's anchors are gone from the catalog");
+        old
+    }
+
+    fn interval_of(registry: &UnitRegistry, name: &str) -> bool {
+        registry.get_unit(name).unwrap_or_else(|| panic!("{name}")).is_interval()
+    }
+
+    #[test]
+    fn the_shipped_intervals_carry_the_flag_on_their_lines() {
+        // the trusted rule below is for older texts only: the catalog says it itself
+        for key in SHIPPED_INTERVALS {
+            let line = DEFAULT_PHYSURE_CONF.lines().find(|l| l.split('=').next().is_some_and(|k| k.trim() == key)).unwrap();
+            assert!(has_flag(line.split_once('=').unwrap().1.split('[').next().unwrap(), "interval"), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_trusted_text_without_the_flag_keeps_the_shipped_intervals_and_an_untrusted_one_does_not() {
+        let old = catalog_before_the_interval_flag();
+        let (mut trusted, mut constants, mut collected) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        replay_source(&mut trusted, &mut constants, &mut collected, &old, true).unwrap();
+        for name in ["delta_celsius", "delta_degC", "degC_delta", "kdelta_degC", "delta_fahrenheit", "delta_degF"] {
+            assert!(interval_of(&trusted, name), "{name}");
+        }
+        assert!(!interval_of(&trusted, "K") && !interval_of(&trusted, "degR"));
+        // a user's text that restates the entry without the flag is refused, and the entry stays an interval
+        let mut user = trusted.clone();
+        let refused = extend_registry(&mut user, &mut HashMap::new(), "[Units]\ndelta_celsius = 1.0, O, [delta_degC, delta_celsius]\n");
+        assert!(refused.unwrap_err().iter().any(|p| p.contains("needs the `interval` flag")));
+        assert!(interval_of(&user, "delta_degC"));
+        // read leniently (a project's physure.conf), the line is reported and ignored
+        let mut lenient = trusted.clone();
+        let problems = read_leniently_collected(
+            "[Units]\ndelta_celsius = 1.0, O, [delta_degC, delta_celsius]\n",
+            &mut lenient,
+            &mut HashMap::new(),
+            &mut ProcessSettings::default(),
+            false,
+        );
+        assert!(problems.iter().any(|p| p.contains("`delta_celsius` is a temperature interval")), "{problems:?}");
+        assert!(interval_of(&lenient, "delta_degC"));
+        // the old line read as a user's (untrusted) is a user's line
+        let mut untrusted = UnitRegistry::new();
+        let old_lines =
+            "[Units]\nkelvin = 1.0, O, [K, kelvin]\ncelsius = 1.0, 273.15, O, [degC]\ndelta_celsius = 1.0, O, [delta_degC, degC_delta, delta_celsius]\n";
+        extend_registry(&mut untrusted, &mut HashMap::new(), old_lines).unwrap();
+        assert!(!interval_of(&untrusted, "delta_degC"));
+        let (mut again, mut c, mut s) = (UnitRegistry::new(), HashMap::new(), ProcessSettings::default());
+        replay_source(&mut again, &mut c, &mut s, old_lines, true).unwrap();
+        assert!(interval_of(&again, "delta_degC"), "the same lines, trusted");
     }
 }

@@ -17,13 +17,13 @@ pub fn run_check(args: &[String]) {
     let files: Vec<&str> = args.iter().skip(2).filter(|a| !a.starts_with("--")).map(String::as_str).collect();
     if files.is_empty() {
         eprintln!("usage: phs check <file.phs>... [--json]");
-        std::process::exit(2);
+        crate::exit(2);
     }
     let report = check_files(&files, json);
     if !report.output.is_empty() {
         println!("{}", report.output);
     }
-    std::process::exit(report.exit_code);
+    crate::exit(report.exit_code);
 }
 
 pub fn check_files(files: &[&str], json: bool) -> Report {
@@ -99,11 +99,21 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_does_not_fail() {
-        let path = file_with("warning.phs", "max(1 m, 1 s)\n");
+    fn a_mixed_extremum_is_an_error() {
+        // it was the one warning, until the interpreter refused it (unit holes)
+        let path = file_with("extremum.phs", "max(1 m, 1 s)\n");
         let report = check_files(&[&path], false);
-        assert_eq!(report.exit_code, 0);
-        assert!(report.output.contains("warning[mixed-extremum]"), "{}", report.output);
+        assert_eq!(report.exit_code, 1);
+        assert!(report.output.contains("error[mixed-extremum]"), "{}", report.output);
+    }
+
+    #[test]
+    fn a_warning_says_warning() {
+        // no finding is a warning today; the line and the record still say one as one
+        let finding = physure_script::Diagnostic { line: 3, severity: Severity::Warning, code: "some-code", message: "m".into() };
+        let (line, record) = describe("f.phs", &finding);
+        assert_eq!(line, "f.phs:3: warning[some-code]: m");
+        assert_eq!(record["severity"], "warning");
     }
 
     #[test]

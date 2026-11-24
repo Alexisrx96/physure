@@ -267,10 +267,11 @@ impl RustTranspiler {
     /// diverge by construction. On the first failing check, the message is stashed in a
     /// thread-local string readable via `<name>_last_error()`, mirroring `errno`/`GetLastError`.
     ///
-    /// The body runs inside `std::panic::catch_unwind`: a comparison the core refuses (different
-    /// dimensions, a zero without a unit, a level against a plain number) panics in the generated
-    /// code, and a panic that leaves an `extern "C"` function aborts the host process. Caught, it is
-    /// the shim's failure status instead: `ok: false`, with the panic message as the last error.
+    /// The body runs inside `std::panic::catch_unwind` (see [`EXPORT_PREAMBLE`]): a comparison the
+    /// core refuses (different dimensions, a zero without a unit, a level against a plain number)
+    /// panics in the generated code, and a panic that leaves an `extern "C"` function aborts the host
+    /// process. Caught, it is the shim's failure status instead: `ok: false` with the panic message as
+    /// the last error, or NaN for a function without contracts (same symbol and signature as ever).
     pub fn generate_export_shim(&self, node: &FunctionDefNode) -> Result<String, CodegenError> {
         let impl_name = format!("{}_impl", node.name);
         let mut impl_node = node.clone();
@@ -293,28 +294,29 @@ impl RustTranspiler {
         let mut shim = String::new();
         shim.push_str(&impl_fn);
         shim.push_str("\n\n");
+        shim.push_str(EXPORT_PREAMBLE);
+        shim.push('\n');
 
         if !has_contract {
+            let body: String = format!("{binds}\n    {call}.value.mean()\n", binds = binds, call = call_expr)
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect();
             shim.push_str(&format!(
-                "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> f64 {{\n{binds}\n    {call}.value.mean()\n}}\n",
+                "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> f64 {{\n    phs_guard(f64::NAN, move || -> f64 {{\n{body}    }})\n}}\n\n",
                 name = node.name,
                 params = params_sig.join(", "),
-                binds = binds,
-                call = call_expr,
+                body = body,
             ));
+            shim.push_str(&last_error_export(&node.name));
             return Ok(shim);
         }
 
         let pascal = super::to_pascal_case(&node.name);
-        let error_static = format!("{}_LAST_ERROR", node.name.to_uppercase());
 
         shim.push_str(&format!(
             "#[repr(C)]\npub struct {pascal}Result {{\n    pub value: f64,\n    pub ok: bool,\n}}\n\n",
             pascal = pascal,
-        ));
-        shim.push_str(&format!(
-            "thread_local! {{\n    static {error_static}: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());\n}}\n\n",
-            error_static = error_static,
         ));
 
         let mut body = String::new();
@@ -325,8 +327,8 @@ impl RustTranspiler {
                 let cond = self.generate_expr(&dec.args[0])?;
                 let msg = message_literal(&dec.args[1]);
                 body.push_str(&format!(
-                    "    if !({cond}) {{\n        {error_static}.with(|e| *e.borrow_mut() = {msg}.to_string());\n        return {pascal}Result {{ value: 0.0, ok: false }};\n    }}\n",
-                    cond = cond, error_static = error_static, msg = msg, pascal = pascal,
+                    "    if !({cond}) {{\n        PHS_LAST_ERROR.with(|e| *e.borrow_mut() = {msg}.to_string());\n        return {pascal}Result {{ value: 0.0, ok: false }};\n    }}\n",
+                    cond = cond, msg = msg, pascal = pascal,
                 ));
             }
         }
@@ -336,8 +338,8 @@ impl RustTranspiler {
                 let cond = self.generate_expr(&dec.args[0])?;
                 let msg = message_literal(&dec.args[1]);
                 body.push_str(&format!(
-                    "    if !({cond}) {{\n        {error_static}.with(|e| *e.borrow_mut() = {msg}.to_string());\n        return {pascal}Result {{ value: 0.0, ok: false }};\n    }}\n",
-                    cond = cond, error_static = error_static, msg = msg, pascal = pascal,
+                    "    if !({cond}) {{\n        PHS_LAST_ERROR.with(|e| *e.borrow_mut() = {msg}.to_string());\n        return {pascal}Result {{ value: 0.0, ok: false }};\n    }}\n",
+                    cond = cond, msg = msg, pascal = pascal,
                 ));
             }
         }
@@ -345,38 +347,71 @@ impl RustTranspiler {
 
         let body: String = body.lines().map(|line| format!("    {line}\n")).collect();
         shim.push_str(&format!(
-            "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> {pascal}Result {{\n    \
-             match std::panic::catch_unwind(move || -> {pascal}Result {{\n{body}    }}) {{\n        \
-             Ok(result) => result,\n        \
-             Err(payload) => {{\n            \
-             let message = payload.downcast_ref::<String>().cloned()\n                \
-             .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))\n                \
-             .unwrap_or_else(|| \"{name} panicked\".to_string());\n            \
-             {error_static}.with(|e| *e.borrow_mut() = message);\n            \
-             {pascal}Result {{ value: 0.0, ok: false }}\n        \
-             }}\n    }}\n}}\n\n",
+            "#[no_mangle]\npub extern \"C\" fn {name}({params}) -> {pascal}Result {{\n    phs_guard({pascal}Result {{ value: 0.0, ok: false }}, move || -> {pascal}Result {{\n{body}    }})\n}}\n\n",
             name = node.name,
             params = params_sig.join(", "),
             pascal = pascal,
             body = body,
-            error_static = error_static,
         ));
-
-        shim.push_str(&format!(
-            "#[no_mangle]\npub extern \"C\" fn {name}_last_error() -> *const std::os::raw::c_char {{\n    {error_static}.with(|e| std::ffi::CString::new(e.borrow().clone()).unwrap_or_default().into_raw())\n}}\n",
-            name = node.name,
-            error_static = error_static,
-        ));
+        shim.push_str(&last_error_export(&node.name));
 
         Ok(shim)
     }
 }
 
+/// Emitted in every shim, before its exported functions (`phs export` builds one exported function per crate, so
+/// the crate has it once; concatenating two shims into one crate would define it twice): the last-error cell the shim writes and
+/// `<name>_last_error()` reads, the flag that says a shim is running on this thread, and `phs_guard`, which runs a
+/// shim's body so that a panic in it never leaves the `extern "C"` function (that aborts the host process).
+///
+/// The panic hook is installed once and is quiet only while a shim runs on the calling thread -- the shim reads
+/// the message from the payload `catch_unwind` returns -- and otherwise passes on to whatever hook was there, so a
+/// host's own Rust hook keeps working. The last error is cleared at the start of each call: it used to stay after
+/// a success.
+const EXPORT_PREAMBLE: &str = r#"thread_local! {
+    static PHS_LAST_ERROR: std::cell::RefCell<String> = std::cell::RefCell::new(String::new());
+    static PHS_IN_SHIM: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
+static PHS_HOOK: std::sync::Once = std::sync::Once::new();
+
+fn phs_guard<T>(failure: T, body: impl FnOnce() -> T) -> T {
+    PHS_HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !PHS_IN_SHIM.with(|f| f.get()) {
+                previous(info);
+            }
+        }));
+    });
+    PHS_LAST_ERROR.with(|e| e.borrow_mut().clear());
+    let was_in_shim = PHS_IN_SHIM.with(|f| f.replace(true));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    PHS_IN_SHIM.with(|f| f.set(was_in_shim));
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload.downcast_ref::<String>().cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "the exported function panicked".to_string());
+            PHS_LAST_ERROR.with(|e| *e.borrow_mut() = message);
+            failure
+        }
+    }
+}
+"#;
+
+/// `<name>_last_error()`: the message of the last failed call on this thread, empty after a call that succeeded.
+fn last_error_export(name: &str) -> String {
+    format!(
+        "#[no_mangle]\npub extern \"C\" fn {name}_last_error() -> *const std::os::raw::c_char {{\n    PHS_LAST_ERROR.with(|e| std::ffi::CString::new(e.borrow().clone()).unwrap_or_default().into_raw())\n}}\n",
+        name = name,
+    )
+}
+
 /// A quantity literal, with its uncertainty and unit when it has them.
 fn quantity_expr(node: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
-    if let Some(reason) = node.asymmetric_refusal() {
-        return Err(CodegenError::Generic(reason));
-    }
+    super::refuse_literal(node)?;
     let unit = match &node.unit {
         Some(u) => format!("\"{}\"", u),
         None => "\"\"".to_string(),
@@ -832,20 +867,78 @@ mod tests {
         // before: the comparison was `phs_compare(..).unwrap_or_else(|e| panic!("{e}"))` straight in the
         // `extern "C"` body, and a panic that leaves an `extern "C"` function aborts the process
         let shim = shim_with_a_refused_comparison();
-        assert!(shim.contains("match std::panic::catch_unwind(move || -> MassResult {"), "{shim}");
-        assert!(shim.contains("MASS_LAST_ERROR.with(|e| *e.borrow_mut() = message);"), "{shim}");
-        assert!(shim.contains("MassResult { value: 0.0, ok: false }"), "{shim}");
+        assert!(shim.contains("phs_guard(MassResult { value: 0.0, ok: false }, move || -> MassResult {"), "{shim}");
+        assert!(shim.contains("catch_unwind(std::panic::AssertUnwindSafe(body))"), "{shim}");
+        assert!(shim.contains("PHS_LAST_ERROR.with(|e| *e.borrow_mut() = message);"), "{shim}");
     }
 
-    /// Builds and runs the shim with a `main` that calls it: the refused comparison is `ok: false` with the core's
-    /// message, and the process goes on (it exits 0 and prints).
+    /// The shim of `source`'s one function (a function without `@requires`/`@ensures` when the source has none).
+    fn shim_of(source: &str) -> String {
+        let program = crate::parser::parse_phs(source).unwrap();
+        let node = program
+            .statements
+            .iter()
+            .find_map(|s| match s {
+                Statement::FunctionDef(node) => Some(node.clone()),
+                _ => None,
+            })
+            .unwrap();
+        RustTranspiler.generate_export_shim(&node).unwrap()
+    }
+
+    /// A function whose body panics for some inputs: `1 / 0` is refused by the core.
+    const CONTRACT_LESS_THAT_PANICS: &str = "fn inverse(x) = 1.0 / x\n";
+
+    fn occurrences(text: &str, needle: &str) -> usize {
+        text.matches(needle).count()
+    }
+
     #[test]
-    fn export_shim_with_a_refused_comparison_returns_failure_when_called() {
+    fn export_shim_without_contracts_catches_a_panic_and_exports_the_last_error() {
+        // before: `Quantity::new(..).unwrap()` and `inverse_impl(..)` ran straight in the `extern "C"` body, and a
+        // panic that leaves an `extern "C"` function aborts the host process
+        let shim = shim_of(CONTRACT_LESS_THAT_PANICS);
+        assert!(shim.contains("catch_unwind"), "{shim}");
+        assert!(shim.contains("pub extern \"C\" fn inverse_last_error() -> *const std::os::raw::c_char"), "{shim}");
+        assert!(shim.contains("set_hook"), "{shim}");
+        assert!(shim.contains("pub extern \"C\" fn inverse(x: f64) -> f64"), "the symbol and signature do not change:\n{shim}");
+        assert!(shim.contains("f64::NAN"), "{shim}");
+    }
+
+    #[test]
+    fn both_export_shims_clear_the_last_error_before_the_call() {
+        for shim in [shim_of(CONTRACT_LESS_THAT_PANICS), shim_with_a_refused_comparison()] {
+            let clear = shim.find("e.borrow_mut().clear()").unwrap_or_else(|| panic!("no clear of the last error:\n{shim}"));
+            let catch = shim.find("catch_unwind(").unwrap_or_else(|| panic!("no catch_unwind:\n{shim}"));
+            assert!(clear < catch, "the last error is cleared before the body runs:\n{shim}");
+        }
+    }
+
+    #[test]
+    fn the_shim_flag_is_restored_to_what_it_was_not_cleared() {
+        // a nested use of `phs_guard` must not leave the flag false while an outer shim still runs
+        for shim in [shim_of(CONTRACT_LESS_THAT_PANICS), shim_with_a_refused_comparison()] {
+            assert!(shim.contains("let was_in_shim = PHS_IN_SHIM.with(|f| f.replace(true));"), "{shim}");
+            assert!(shim.contains("PHS_IN_SHIM.with(|f| f.set(was_in_shim));"), "{shim}");
+            assert!(!shim.contains("f.set(false)"), "{shim}");
+        }
+    }
+
+    #[test]
+    fn each_export_shim_holds_the_preamble_once() {
+        for shim in [shim_of(CONTRACT_LESS_THAT_PANICS), shim_with_a_refused_comparison()] {
+            assert_eq!(occurrences(&shim, "static PHS_LAST_ERROR"), 1, "{shim}");
+            assert_eq!(occurrences(&shim, "static PHS_IN_SHIM"), 1, "{shim}");
+            assert_eq!(occurrences(&shim, "static PHS_HOOK"), 1, "{shim}");
+            assert_eq!(occurrences(&shim, "set_hook("), 1, "{shim}");
+            assert_eq!(occurrences(&shim, "take_hook()"), 1, "{shim}");
+        }
+    }
+
+    /// Compiles `code` as the `main.rs` of a temp crate against `physure-core` and runs it; `None` when cargo is not
+    /// available.
+    fn run_in_a_temp_crate(code: &str) -> Option<std::process::Output> {
         use std::hash::{Hash, Hasher};
-        let code = format!(
-            "#![allow(unused)]\nuse physure_core::Quantity;\n{}\nfn main() {{\n    let r = mass(2.0);\n    let error = unsafe {{ std::ffi::CString::from_raw(mass_last_error() as *mut std::os::raw::c_char) }};\n    println!(\"ok={{}} error={{}}\", r.ok, error.to_str().unwrap());\n}}\n",
-            shim_with_a_refused_comparison()
-        );
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().to_path_buf();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         code.hash(&mut hasher);
@@ -860,7 +953,7 @@ mod tests {
             ),
         )
         .unwrap();
-        std::fs::write(temp_dir.join("src").join("main.rs"), &code).unwrap();
+        std::fs::write(temp_dir.join("src").join("main.rs"), code).unwrap();
         let output = std::process::Command::new("cargo")
             .args(["run", "--quiet"])
             .env("RUSTFLAGS", "-A unused_parens")
@@ -868,7 +961,65 @@ mod tests {
             .current_dir(&temp_dir)
             .output();
         let _ = std::fs::remove_dir_all(&temp_dir);
-        let Ok(output) = output else {
+        output.ok()
+    }
+
+    /// A function without contracts whose body panics: the host survives, gets NaN, reads the message from
+    /// `inverse_last_error()`, sees nothing on its stderr, and the next successful call leaves no stale error.
+    #[test]
+    fn export_shim_without_contracts_returns_nan_and_survives_a_panic_when_called() {
+        let code = format!(
+            "#![allow(unused)]\nuse physure_core::Quantity;\n{}\nfn main() {{\n    \
+             let last = || unsafe {{ std::ffi::CStr::from_ptr(inverse_last_error()).to_str().unwrap().to_string() }};\n    \
+             let failed = inverse(0.0);\n    let error = last();\n    \
+             let fine = inverse(4.0);\n    let after = last();\n    \
+             println!(\"nan={{}} error={{:?}} fine={{}} after={{:?}}\", failed.is_nan(), error, fine, after);\n}}\n",
+            shim_of(CONTRACT_LESS_THAT_PANICS)
+        );
+        let Some(output) = run_in_a_temp_crate(&code) else {
+            eprintln!("skipping the run: cargo unavailable in this environment");
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "the host process did not survive:\n{code}\nstderr: {stderr}");
+        assert!(stdout.starts_with("nan=true error=\""), "{stdout}");
+        assert!(stdout.contains("fine=0.25 after=\"\""), "the last error stays after a success:\n{stdout}");
+        assert!(!stdout.contains("error=\"\""), "the message must say what happened:\n{stdout}");
+        assert!(!stderr.contains("panicked at"), "the panic message reached the host's stderr:\n{stderr}");
+    }
+
+    /// The contract shim clears the last error at the start of each call: a failure followed by a success used to
+    /// leave the failure's message behind.
+    #[test]
+    fn export_shim_with_contracts_clears_the_last_error_on_the_next_call() {
+        let source = "@requires(x > 0.0 kg, \"x must be positive\")\nfn same(x: kg) = x\n";
+        let code = format!(
+            "#![allow(unused)]\nuse physure_core::Quantity;\n{}\nfn main() {{\n    \
+             let last = || unsafe {{ std::ffi::CStr::from_ptr(same_last_error()).to_str().unwrap().to_string() }};\n    \
+             let bad = same(-1.0);\n    let error = last();\n    \
+             let good = same(2.0);\n    let after = last();\n    \
+             println!(\"bad={{}} error={{:?}} good={{}} after={{:?}}\", bad.ok, error, good.ok, after);\n}}\n",
+            shim_of(source)
+        );
+        let Some(output) = run_in_a_temp_crate(&code) else {
+            eprintln!("skipping the run: cargo unavailable in this environment");
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{code}\nstderr: {}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(stdout.trim(), "bad=false error=\"x must be positive\" good=true after=\"\"");
+    }
+
+    /// Builds and runs the shim with a `main` that calls it: the refused comparison is `ok: false` with the core's
+    /// message, and the process goes on (it exits 0 and prints).
+    #[test]
+    fn export_shim_with_a_refused_comparison_returns_failure_when_called() {
+        let code = format!(
+            "#![allow(unused)]\nuse physure_core::Quantity;\n{}\nfn main() {{\n    let r = mass(2.0);\n    let error = unsafe {{ std::ffi::CString::from_raw(mass_last_error() as *mut std::os::raw::c_char) }};\n    println!(\"ok={{}} error={{}}\", r.ok, error.to_str().unwrap());\n}}\n",
+            shim_with_a_refused_comparison()
+        );
+        let Some(output) = run_in_a_temp_crate(&code) else {
             eprintln!("skipping the run: cargo unavailable in this environment");
             return;
         };

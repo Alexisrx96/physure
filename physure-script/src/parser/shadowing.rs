@@ -169,6 +169,20 @@ fn check_quantity_shadowing(node: &QuantityNode, bound: &HashSet<String>, line: 
     Ok(())
 }
 
+/// [`check_quantity_shadowing`] of the unit written after an expression (`[1, 2] m` in a script that binds `m`).
+fn check_unit_factor_shadowing(node: &QuantityNode, bound: &HashSet<String>, line: usize, col: usize) -> PhysureResult<()> {
+    let Some(unit) = &node.unit else { return Ok(()) };
+    match unit_chain_tokens(unit).into_iter().find(|token| bound.contains(&token.text)) {
+        Some(token) => Err(PhysureError::Generic(format!(
+            "--> {line}:{col}\nAmbiguous '{token}' in the unit `{unit}` written after an expression: '{token}' is a \
+registered unit symbol and also a name this script binds earlier, and PhysureScript will not guess which one you \
+meant. Write `* {unit}` after the expression to multiply by the variable, or `* \"{unit}\"` to keep the unit.",
+            token = token.text,
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn check_call_shadowing(
     name: &str,
     args: &[Expr],
@@ -200,9 +214,16 @@ fn check_expr_shadowing(expr: &Expr, bound: &HashSet<String>, line: usize, col: 
     match expr {
         Expr::Quantity(node) => check_quantity_shadowing(node, bound, line, col),
         Expr::Identifier(_) | Expr::Str(_) | Expr::Bool(_) => Ok(()),
-        Expr::BinaryOp { left, right, .. } => {
+        Expr::BinaryOp { op, left, right } => {
             check_expr_shadowing(left, bound, line, col)?;
-            check_expr_shadowing(right, bound, line, col)
+            match right.as_ref() {
+                // `[1, 2] m`, `(2 + 3) m`: the parser makes the unit written after an expression a factor of one
+                // of it (`unit_literal`), so the message speaks of the unit, not of a literal `1 m` never written
+                Expr::Quantity(node) if *op == BinaryOp::Mul && node.magnitude == 1.0 && node.uncertainty.is_none() => {
+                    check_unit_factor_shadowing(node, bound, line, col)
+                }
+                _ => check_expr_shadowing(right, bound, line, col),
+            }
         }
         Expr::FunctionCall { name, args, kwargs } => check_call_shadowing(name, args, kwargs, bound, line, col),
         Expr::ForExpr { var, iterable, body } => {

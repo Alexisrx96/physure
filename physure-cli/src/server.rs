@@ -884,7 +884,7 @@ fn percent_decode(s: &str) -> String {
 /// before it ever becomes `self.config.auth_token`, means the server can never end up in
 /// that silently-open "Enabled" state. It's a free function (not inlined into `run_serve`)
 /// specifically so it can be unit-tested directly -- `run_serve` itself exits the process on
-/// failure via `std::process::exit`, which isn't practical to exercise in-process.
+/// failure via `crate::exit`, which isn't practical to exercise in-process.
 fn validate_auth_token(token: &Option<String>) -> Result<(), String> {
     if let Some(t) = token {
         if t.trim().is_empty() {
@@ -971,7 +971,7 @@ pub fn run_serve(args: &[String]) {
 
     if let Err(msg) = validate_auth_token(&token) {
         eprintln!("Configuration Error: {}", msg);
-        std::process::exit(1);
+        crate::exit(1);
     }
 
     let input_path = target.unwrap_or_else(|| ".".to_string());
@@ -986,7 +986,7 @@ pub fn run_serve(args: &[String]) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Initialization Error: {}", e);
-            std::process::exit(1);
+            crate::exit(1);
         }
     };
 
@@ -995,7 +995,7 @@ pub fn run_serve(args: &[String]) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("Failed to bind server to '{}': {}", bind_addr, e);
-            std::process::exit(1);
+            crate::exit(1);
         }
     };
 

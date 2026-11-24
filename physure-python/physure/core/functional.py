@@ -159,9 +159,12 @@ def _add_sub_nonlinear(
     xp = get_xp(val1, val2)
     if unit1.dimension(system) != unit2.dimension(system):
         raise IncompatibleUnitsError(unit1, unit2)
-    point1 = unit1.kind(system) == "absolute"
-    point2 = unit2.kind(system) == "absolute"
-    if point1 or point2:
+    absolute1 = unit1.kind(system) == "absolute"
+    absolute2 = unit2.kind(system) == "absolute"
+    if absolute1 or absolute2:
+        # a K that holds a point (`20 degC => K`) is a point beside a degC
+        point1 = absolute1 or bool(getattr(unit1, "point", False))
+        point2 = absolute2 or bool(getattr(unit2, "point", False))
         return _add_sub_with_point(
             xp, (val1, unit1, point1), (val2, unit2, point2), system, subtract
         )
@@ -198,7 +201,8 @@ def _add_sub_with_point(
         return op(val1, xp.multiply(val2, factor)), unit1
     if subtract:
         raise ValueError(
-            "Cannot subtract an absolute quantity from a difference."
+            "Cannot subtract an absolute quantity from a difference "
+            "(an interval, or a K of unknown kind)."
         )
     factor = unit1.conversion_factor_to(unit2, system)
     return xp.add(xp.multiply(val1, factor), val2), unit2

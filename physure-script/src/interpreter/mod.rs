@@ -229,12 +229,19 @@ impl PhsInterpreter {
     }
 
     /// Registers a host function under `name`, callable from PHS source like any builtin.
-    /// Takes precedence over user-defined PHS functions but not over builtins.
-    pub fn register_fn<F>(&mut self, name: impl Into<String>, f: F)
+    /// Takes precedence over user-defined PHS functions but not over builtins. A name that is reserved (a core
+    /// function, a word of the language, a function of a module the program imported, `pi` or a constant) is
+    /// refused: a call would reach the builtin first and the function would never run.
+    /// A function a host registers also keeps the name: a later `use` of a module function with the same name is
+    /// refused.
+    pub fn register_fn<F>(&mut self, name: impl Into<String>, f: F) -> PhysureResult<()>
     where
         F: Fn(&[PhsValue]) -> PhysureResult<PhsValue> + Send + Sync + 'static,
     {
-        self.externals.insert(name.into(), Arc::new(f));
+        let name = name.into();
+        self.refuse_function_name(&name, "a function a host registers")?;
+        self.externals.insert(name, Arc::new(f));
+        Ok(())
     }
 
 }

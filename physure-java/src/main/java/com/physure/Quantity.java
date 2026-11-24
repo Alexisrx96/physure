@@ -5,6 +5,7 @@ import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -69,10 +70,10 @@ public class Quantity {
     private final String unit;
     /**
      * Null until needed for a quantity constructed here: a result of the core arrives with its sources, and the
-     * first use of a quantity with an uncertainty mints one id for it (see {@link #sources()}). Volatile and
-     * immutable, so that threads racing on the first use agree on the id.
+     * first use of a quantity with an uncertainty mints one id for it (see {@link #sources()}). An atomic
+     * reference to an immutable value, so that threads racing on the first use agree on the id.
      */
-    private volatile Sources sources;
+    private final AtomicReference<Sources> sources = new AtomicReference<>();
 
     public Quantity(double value, String unit) {
         this(value, 0.0, unit);
@@ -97,13 +98,13 @@ public class Quantity {
     Quantity(double value, double uncertainty, String unit, long[] ids, double[] coefficients) {
         this(value, uncertainty, unit);
         if (ids != null && coefficients != null) {
-            this.sources = new Sources(ids, coefficients);
+            this.sources.set(new Sources(ids, coefficients));
         }
     }
 
     private Quantity(double value, double uncertainty, String unit, Sources sources) {
         this(value, uncertainty, unit);
-        this.sources = sources;
+        this.sources.set(sources);
     }
 
     /**
@@ -112,17 +113,19 @@ public class Quantity {
      * and one that is never used in arithmetic never takes an id.
      */
     private Sources sources() {
-        Sources known = sources;
+        Sources known = sources.get();
         if (known != null) {
             return known;
         }
         synchronized (this) {
-            if (sources == null) {
-                sources = uncertainty == 0.0
+            known = sources.get();
+            if (known == null) {
+                known = uncertainty == 0.0
                     ? Sources.EXACT
                     : new Sources(new long[] {NativeEngine.newSourceId()}, new double[] {uncertainty});
+                sources.set(known);
             }
-            return sources;
+            return known;
         }
     }
 

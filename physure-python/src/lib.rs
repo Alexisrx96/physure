@@ -33,6 +33,7 @@ use ::physure_core::{
     DimVector, UnitKind,
 };
 use ::physure_core::units::registry::{Conversion, Stage};
+use ::physure_core::units::TemperatureKind;
 use ::physure_core::units::angle_mode::{self as angle, AngleMode, AngleModeGuard};
 use ::physure_core::uncertainty::lineage::{self, Lineage};
 use ::physure_core::uncertainty::{coverage_factor_for, declare_dof, type_a};
@@ -44,8 +45,9 @@ use physure_script::symbolic::Expr;
 // `RationalUnit::id` is derived from the dimensions alone, so it cannot be the whole key:
 // J, kJ and kg·m²/s² share one id but differ in scale and display name, and keying on it
 // handed back whichever of them was cached first.
-// The key carries `periodic`: equality ignores the flag, but a flagged hertz must not be answered by an unflagged one.
-static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool), PyObject>>> = OnceLock::new();
+// The key carries `periodic` and the temperature kind: equality ignores both, but a flagged hertz must not be answered
+// by an unflagged one, nor an interval or a point by a kelvin of unknown kind.
+static UNIT_CACHE: OnceLock<Mutex<HashMap<(u64, u64, Option<String>, bool, TemperatureKind), PyObject>>> = OnceLock::new();
 
 // The function `5 * unit` calls to build a quantity. A quantity holds arrays, autograd and the
 // other backends, which live in Python, so Python registers the factory at import.
@@ -54,7 +56,7 @@ static QUANTITY_FACTORY: Mutex<Option<PyObject>> = Mutex::new(None);
 fn get_cached_unit(py: Python<'_>, unit: RationalUnit) -> PyResult<PyObject> {
     let mutex = UNIT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = mutex.lock().unwrap();
-    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic);
+    let key = (unit.id, unit.scale.to_bits(), unit.display_name.clone(), unit.periodic, unit.temperature);
     if let Some(existing) = cache.get(&key) {
         return Ok(existing.clone_ref(py));
     }
@@ -192,12 +194,41 @@ impl PyRationalUnit {
             .map(|d| parse_dimensions_dict(&d))
             .transpose()?
             .unwrap_or_default();
-        Ok(PyRationalUnit(RationalUnit::new_from_dimensions(dimensions)))
+        // `interval=True` / `point=True`: a unit written as symbols that stands for a temperature interval (`K` as a
+        // point minus a point) or a point (`K` as `20 degC => K`) whatever its symbols say; the registry's `expand`
+        // carries it over
+        let flag = |name: &str| -> PyResult<bool> {
+            match kwargs.map(|kw| kw.get_item(name)).transpose()?.flatten() {
+                Some(flag) => flag.is_truthy(),
+                None => Ok(false),
+            }
+        };
+        let mut unit = RationalUnit::new_from_dimensions(dimensions);
+        if flag("interval")? {
+            unit.temperature = TemperatureKind::Interval;
+        } else if flag("point")? {
+            unit.temperature = TemperatureKind::Point;
+        }
+        Ok(PyRationalUnit(unit))
     }
 
     #[getter]
     fn dimensions(&self) -> HashMap<String, (i64, i64)> {
         self.0.dimensions_map()
+    }
+
+    /// Whether this unit stands for a temperature interval (the core's `RationalUnit::temperature` is `Interval`): set on a unit
+    /// the catalog flags `interval`, and on a unit written as symbols that was made one.
+    #[getter]
+    fn interval(&self) -> bool {
+        self.0.temperature == TemperatureKind::Interval
+    }
+
+    /// Whether this unit stands for a known absolute temperature without a zero point (the core's
+    /// `RationalUnit::temperature` is `Point`): set on a unit written as symbols that a point was converted to.
+    #[getter]
+    fn point(&self) -> bool {
+        self.0.temperature == TemperatureKind::Point
     }
 
     #[getter]
@@ -289,6 +320,12 @@ fn parse_exponent(v: &Bound<'_, PyAny>) -> Option<(i64, i64)> {
 
 pyo3::create_exception!(_core, UnknownUnitError, pyo3::exceptions::PyValueError, "A unit the registry does not know.");
 pyo3::create_exception!(_core, UnitMismatchError, pyo3::exceptions::PyValueError, "Units of different dimensions.");
+pyo3::create_exception!(
+    _core,
+    TemperatureKindError,
+    pyo3::exceptions::PyValueError,
+    "A temperature point converted to a temperature interval, or an interval to a point."
+);
 
 /// A core error as the Python exception that says what it was: an unknown unit carries its
 /// `symbol` and a `suggestion`, a mismatch the `expected` and `actual` units. Both are `ValueError`s.
@@ -426,6 +463,37 @@ impl PyUnitRegistry {
         get_cached_unit(py, self.0.expand(&unit.0).map_err(value_error)?)
     }
 
+    /// Whether two units written as symbols are a temperature point (`degC`) and a temperature interval (a unit the
+    /// catalog flags `interval`, or one made an interval), in either order: the pair the core's comparison refuses
+    /// (`RationalUnit::point_against_interval`).
+    fn point_against_interval(&self, a: &PyRationalUnit, b: &PyRationalUnit) -> PyResult<bool> {
+        let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
+        Ok(a.point_against_interval(&b))
+    }
+
+    /// The kind of temperature (`"point"`, `"interval"` or `"unknown"`) of the sum (`subtract` false) or the difference
+    /// of quantities in two units written as symbols (of one dimension, neither with a zero point nor a level), as the
+    /// core's arithmetic says (`RationalUnit::sum_unit`): a point moved by an interval is a point, a point minus a point
+    /// and two intervals an interval, a plain `K` makes it unknown.
+    fn sum_kind(&self, a: &PyRationalUnit, b: &PyRationalUnit, subtract: bool) -> PyResult<&'static str> {
+        let (a, b) = (self.0.expand(&a.0).map_err(value_error)?, self.0.expand(&b.0).map_err(value_error)?);
+        Ok(temperature_kind_name(a.sum_unit(&b, subtract).temperature_kind()))
+    }
+
+    /// The kind of temperature (`"point"`, `"interval"` or `"unknown"`) a quantity in `source` has once converted to
+    /// `target`, both written as symbols, as `Quantity::convert_to` gives it (`RationalUnit::converted_from`): a point
+    /// converted to a unit without a zero point is a point.
+    fn converted_kind(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<&'static str> {
+        let (source, target) = (self.0.expand(&source.0).map_err(value_error)?, self.0.expand(&target.0).map_err(value_error)?);
+        Ok(temperature_kind_name(target.converted_from(&source).temperature_kind()))
+    }
+
+    /// Whether a unit written as symbols stands for a temperature interval (a unit the catalog flags `interval`, or
+    /// one made an interval).
+    fn is_interval(&self, unit: &PyRationalUnit) -> PyResult<bool> {
+        Ok(self.0.expand(&unit.0).map_err(value_error)?.is_interval())
+    }
+
     /// Every name the registry holds for a unit, sorted (a prefixed name is read, not held).
     fn names(&self) -> Vec<String> {
         self.0.names()
@@ -500,7 +568,15 @@ impl PyUnitRegistry {
             Ok(out)
         };
         let out = PyDict::new(py);
-        match self.0.conversion(&source.0, &target.0).map_err(value_error)? {
+        let plan = self.0.conversion(&source.0, &target.0).map_err(|e| match e {
+            PhysureError::Generic(message)
+                if message.starts_with(::physure_core::quantity::POINT_INTERVAL_CONVERSION_PREFIX) =>
+            {
+                TemperatureKindError::new_err(message)
+            }
+            other => value_error(other),
+        })?;
+        match plan {
             Conversion::Affine { scale, shift } => {
                 out.set_item("kind", "affine")?;
                 out.set_item("scale", scale)?;
@@ -513,6 +589,14 @@ impl PyUnitRegistry {
             }
         }
         Ok(out)
+    }
+
+    /// The affine plan of `conversion` before its rounding: `(scale, shift)` as exact rationals written as
+    /// `Fraction` reads them (`("5/9", "45967/180")` from degF to K), or `None` for a level and for a unit whose
+    /// scale or zero point is known only as a double. Python's `==` and `hash` compare the exact values in the
+    /// coherent unit with it.
+    fn exact_conversion(&self, source: &PyRationalUnit, target: &PyRationalUnit) -> PyResult<Option<(String, String)>> {
+        self.0.exact_conversion(&source.0, &target.0).map_err(value_error)
     }
 
     /// Dimension, kind, linearity, alias and simplified form of a unit expression.
@@ -725,6 +809,49 @@ impl PyQuantity {
         Ok(PyQuantity(new_q))
     }
 
+    /// The core's `Quantity::round`: the mean to `decimal_places` (ties away from zero, never `NaN` or
+    /// infinity, negative rounds to a power of ten), the unit and the uncertainty with its sources kept. A
+    /// count beyond the 32 bits the core takes saturates: at that many places there is no digit left to move.
+    #[pyo3(signature = (decimal_places = 0))]
+    fn round(&self, decimal_places: i64) -> PyResult<PyQuantity> {
+        let places = decimal_places.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+        self.0.round(places).map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// The core's `Quantity::floor`: the mean to the integer below it, everything else kept.
+    fn floor(&self) -> PyResult<PyQuantity> {
+        self.0.floor().map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// The core's `Quantity::ceil`: the mean to the integer above it, everything else kept.
+    fn ceil(&self) -> PyResult<PyQuantity> {
+        self.0.ceil().map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// The core's `Quantity::trunc`: the mean towards zero, everything else kept.
+    fn trunc(&self) -> PyResult<PyQuantity> {
+        self.0.trunc().map(PyQuantity)
+            .map_err(|e| pyo3::exceptions::PyArithmeticError::new_err(e.to_string()))
+    }
+
+    /// A Gaussian quantity whose standard deviation is `lineage`, sources and all: the core form of a Python
+    /// scalar `Quantity` with the default (lineage-tracked) uncertainty, so an operation the core keeps the
+    /// sources through (`round`, `floor`, ...) can be asked of the core without minting a new source.
+    #[staticmethod]
+    fn from_lineage(mean: f64, unit: PyRationalUnit, lineage: PyLineage) -> PyQuantity {
+        PyQuantity(Quantity::from_value(UncertaintyValue::Gaussian(GaussianBackend::derived(mean, lineage.0)), unit.0))
+    }
+
+    /// The provenance of this quantity's uncertainty (`UncertaintyValue::lineage`): a Gaussian or unscented
+    /// value's own sources; any other model reports one fresh independent source.
+    #[getter]
+    fn lineage(&self) -> PyLineage {
+        PyLineage(self.0.value.lineage())
+    }
+
     /// PHS `self op other` for `op` one of `<`, `>`, `<=`, `>=`, `==`, `!=`: the core's comparison
     /// (`Quantity::phs_compare`). A `ValueError` (`UnitMismatchError` for different dimensions) when they have none:
     /// a zero written without a unit, a level against a plain number.
@@ -881,6 +1008,28 @@ impl PyCovarianceStore {
     fn prune(&mut self) {
         self.0.prune();
     }
+}
+
+/// The name Python gives a temperature kind.
+fn temperature_kind_name(kind: TemperatureKind) -> &'static str {
+    match kind {
+        TemperatureKind::Unknown => "unknown",
+        TemperatureKind::Point => "point",
+        TemperatureKind::Interval => "interval",
+    }
+}
+
+/// The core's words for a temperature point compared with a temperature interval, each written as Python prints it.
+#[pyfunction]
+fn point_against_interval_message(point: &str, interval: &str) -> String {
+    ::physure_core::quantity::point_against_interval_message(point, interval)
+}
+
+/// The core's words for a temperature point converted to an interval unit (`from_point`) or an interval to a point,
+/// each side written as the binding prints it.
+#[pyfunction]
+fn point_interval_conversion_message(source: &str, target: &str, from_point: bool) -> String {
+    ::physure_core::quantity::point_interval_conversion_message(source, target, from_point)
 }
 
 // ── Zero-copy Buffer Protocol helpers ───────────────────────────────────────
@@ -1323,7 +1472,8 @@ fn py_to_phs_value(obj: &Bound<'_, PyAny>) -> PyResult<::physure_script::PhsValu
         let values = items
             .map(|item| py_to_phs_value(&item?))
             .collect::<PyResult<Vec<_>>>()?;
-        Ok(PhsValue::Vector(values))
+        // a vector holds one dimension: `[Q_(1, "m"), Q_(1, "s")]` from a host function is refused as `[1 m, 1 s]` is
+        PhsValue::vector_checked(values).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     } else {
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "Cannot convert Python value {obj} to a PHS value"
@@ -1353,7 +1503,7 @@ impl PyInterpreter {
     /// Registers a Python callable as a PHS function named `name`. The callable
     /// receives PHS argument values converted to plain Python objects (Quantity,
     /// float, bool, str, None, or a list) and must return a value convertible back.
-    fn register_function(&mut self, callback: Py<PyAny>, name: String) {
+    fn register_function(&mut self, callback: Py<PyAny>, name: String) -> PyResult<()> {
         self.inner.register_fn(name, move |args: &[::physure_script::PhsValue]| {
             Python::with_gil(|py| {
                 let py_args = args
@@ -1370,7 +1520,7 @@ impl PyInterpreter {
                 py_to_phs_value(result.bind(py))
                     .map_err(|e| ::physure_core::error::PhysureError::Generic(e.to_string()))
             })
-        });
+        }).map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     fn evaluate(&mut self, py: Python<'_>, source: &str) -> PyResult<Vec<PyObject>> {
@@ -1957,6 +2107,7 @@ fn facts_dict<'py>(py: Python<'py>, registry: &UnitRegistry, expression: &str) -
     out.set_item("is_linear", facts.is_linear)?;
     out.set_item("alias", facts.alias)?;
     out.set_item("simplified", facts.simplified)?;
+    out.set_item("interval", facts.interval)?;
     Ok(out)
 }
 
@@ -2018,6 +2169,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnitRegistry>()?;
     m.add("UnknownUnitError", m.py().get_type::<UnknownUnitError>())?;
     m.add("UnitMismatchError", m.py().get_type::<UnitMismatchError>())?;
+    m.add("TemperatureKindError", m.py().get_type::<TemperatureKindError>())?;
     m.add_class::<PyQuantity>()?;
     m.add_class::<PyQuantityVector>()?;
     m.add_class::<PyQuantityMatrix>()?;
@@ -2043,6 +2195,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(evaluate_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(transpile_phs_native, m)?)?;
     m.add_function(wrap_pyfunction!(export_mesh_3d_native, m)?)?;
+    m.add_function(wrap_pyfunction!(point_against_interval_message, m)?)?;
+    m.add_function(wrap_pyfunction!(point_interval_conversion_message, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

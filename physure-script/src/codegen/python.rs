@@ -271,13 +271,9 @@ impl PythonTranspiler {
             )));
         }
         let mut arg_strs = Vec::new();
-        for (i, arg) in args.iter().enumerate() {
-            let arg_s = self.generate_expr(arg)?;
-            if name == "format" && i == 1 && !arg_s.starts_with('"') {
-                arg_strs.push(format!("\"{}\"", arg_s));
-            } else {
-                arg_strs.push(arg_s);
-            }
+        for arg in args {
+            // the spec of `x: .2f` is a text of the syntax tree already, and `format(x, s1)` passes the variable
+            arg_strs.push(self.generate_expr(arg)?);
         }
         for (kwarg_name, kwarg_expr) in kwargs {
             let kwarg_s = self.generate_expr(kwarg_expr)?;
@@ -287,9 +283,7 @@ impl PythonTranspiler {
     }
 
     fn generate_quantity(&self, node: &QuantityNode) -> Result<String, CodegenError> {
-        if let Some(reason) = node.asymmetric_refusal() {
-            return Err(CodegenError::Generic(reason));
-        }
+        super::refuse_literal(node)?;
         let unit_str = node.unit.as_deref().unwrap_or("");
         let unc_str = if let Some(unc) = node.uncertainty {
             format!(", uncertainty={:?}", unc)

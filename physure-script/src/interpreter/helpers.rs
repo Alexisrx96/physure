@@ -12,6 +12,20 @@ pub(crate) fn range_endpoint(val: &PhsValue) -> Option<Quantity> {
     }
 }
 
+/// The number of a range's end in the unit of its start, the one every reader of a range (a `for`, a plot) counts in:
+/// the end's raw number read in the start's unit made `1 km .. 3000 m` run to 2999 km and `0 K .. 2 degC` stop at
+/// 1 K. A dimensionless start keeps the end's number as written (`0 .. 50 %` runs to 50).
+pub(crate) fn range_end_in_start_unit(start: &PhsValue, end: &PhsValue) -> PhysureResult<f64> {
+    match (start, end) {
+        (PhsValue::Quantity(s), PhsValue::Quantity(e)) if !s.unit.dimensions.is_empty() && s.unit != e.unit => {
+            Ok(e.convert_to(&s.unit)?.value.mean())
+        }
+        (_, PhsValue::Quantity(e)) => Ok(e.value.mean()),
+        (_, PhsValue::Number(n)) => Ok(*n),
+        _ => Err(PhysureError::Generic("Range end must be a number or quantity".into())),
+    }
+}
+
 /// Builds `min .. max`, after checking that it names an interval at all.
 ///
 /// An endpoint with no dimension of its own takes the other's unit, so `0 .. 100 m` reads
@@ -38,7 +52,18 @@ pub(crate) fn make_range(l_val: PhsValue, r_val: PhsValue) -> PhysureResult<PhsV
             dim2: max.unit.__repr__(),
         });
     }
-
+    // A temperature point and a temperature interval do not bound one range (`5 delta_degC .. 20 degC` ran over 15
+    // numbers read in delta_degC).
+    if min.unit.point_against_interval(&max.unit) {
+        if let Some(crate::builtins::dimensions::Mismatch::TemperatureKind(why)) =
+            crate::builtins::dimensions::mismatch(&l_val, &r_val)
+        {
+            return Err(PhysureError::Generic(format!(
+                "a range of a temperature point and a temperature interval: {why}; {}",
+                physure_core::quantity::POINT_AGAINST_INTERVAL_ADVICE
+            )));
+        }
+    }
     let (lo, hi) = (min.canonical_magnitude(), max.canonical_magnitude());
     if lo.is_nan() || hi.is_nan() {
         return Err(PhysureError::Generic(format!(
@@ -87,7 +112,7 @@ pub(crate) fn condition_of(value: &PhsValue, context: &str) -> PhysureResult<boo
 /// | anything else | a Vector: a Vector is not a condition (Matrix, Range, Function, Plot, Sigma, ...) |
 /// | None | None: None is not a condition |
 ///
-/// An identifier with no value is told so by the interpreter before it gets here (it evaluates to its own name).
+/// An identifier with no value is the error `` `foo` has no value `` before it gets here.
 pub(crate) fn not_a_bool(context: &str, value: &PhsValue) -> String {
     let kind = value.type_name();
     let article = if kind.starts_with(['A', 'E', 'I', 'O', 'U']) { "an" } else { "a" };
@@ -124,7 +149,7 @@ pub(crate) enum KnownCondition<'a> {
     Text(Option<&'a str>),
     /// A vector literal.
     Vector,
-    /// A name that is no variable, constant, unit or function: it evaluates to its own text.
+    /// A name that is no variable, constant, unit or function: it has no value (evaluating it is an error).
     Unbound(&'a str),
 }
 

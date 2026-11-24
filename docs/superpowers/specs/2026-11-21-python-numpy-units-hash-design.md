@@ -1,0 +1,47 @@
+# Python: NumPy never strips units silently; `==` and `hash` agree
+
+Date: 2026-11-21. Branch: `docs/post-release-0.4.0`. Approved by the owner on 2026-11-21 with the condition that explicit use must remain possible ("it may not feel native, but at least unexpected errors are reduced"): stripping units on request works (with a warning that says what was lost) and there is a documented explicit, silent way; an error only where nothing can be preserved. Spec and plan in one document.
+
+Project invariant (CLAUDE.md): never silently drop a dimension, a conversion factor or an uncertainty; if an operation cannot preserve them, raise.
+
+## 1. Measured (2026-11-21, `physure-python`, worktree venv)
+
+| Program | Today | Should be |
+|---|---|---|
+| `np.sum(list of Q_)`, `np.mean(list)` | bare `np.float64(7.0)`: unit and uncertainty lost | `7.0 m ± 0.245` (the builtin `sum` gives it) |
+| `np.dot(list, list)` | `5.0`, no `m^2` | `m^2` with its uncertainty |
+| `np.cross(list3, list3)` | a bare float array | each element with its unit and uncertainty |
+| `np.mean(Q_(array,'m',uncertainty=0.1))` | `2.33 m`, uncertainty `0.0` (silent zero) | the propagated uncertainty (about 0.058 for independent errors) |
+| `np.sum(Q_ array)`, `np.dot`, `np.std`, `np.linalg.norm`... on an array-backed Q_ | `TypeError` | unchanged unless listed in section 2 |
+| `float(Q_(1,'m'))`, `np.asarray(Q_(1,'m'))`, `np.array(list, dtype=float)` | plain floats, no word | plain floats WITH a warning that names what was lost |
+| `1 m == 100 cm` | `True`, hashes differ: `{1 m, 100 cm}` has 2 elements, dict lookup by `100 cm` fails | equal hashes |
+| `0 degC == 273.15 K`, `20 degC == 68 degF`, `5 delta_degC == 5 K`, `1 km == 1000 m` | `True`, hashes differ | equal hashes |
+| `2 m ± 0.1 == 2 m ± 0.2` | `True` (the uncertainty is not compared) but the hash includes it | equal hashes |
+| `Q_(100,'percent') == 1`, `Q_(50,'percent') == 0.5` | `False` (compares the raw magnitude) | `True` |
+
+Experiment (2026-11-21): an object array that holds the Quantities themselves makes NumPy run through `Quantity` arithmetic: `np.sum` gives `7.0 m ± 0.245`, `np.dot` `21 m^2 ± 1.66`, `np.prod`, `np.cumsum`, `np.max`, `np.cross` all keep unit and uncertainty. `np.mean` fails on an object array (`Quantity / numpy integer` gives `NotImplemented` in `__array_ufunc__`), `np.std` fails (`conjugate`).
+
+## 2. The design
+
+1. **Implicit conversion keeps the quantity.** `Quantity.__array__(dtype=None, copy=None)` (`physure/domain/measurement/_backend_mixin.py`/`quantity.py`: find it) returns, when `dtype` is `None` or `object`, an object array whose element(s) are the Quantity itself (a 0-d object array for a scalar magnitude; for an array-backed Quantity, an object array of the per-element scalar Quantities carrying their uncertainty slice: find how `__getitem__` does it). Lists of scalar Quantities therefore go through `Quantity` arithmetic in every NumPy function that works on object arrays. Array-backed Quantities keep their `__array_function__` path for the functions they implement (do not make those slower).
+2. **Explicit requests strip, with a warning.** `np.asarray(q, dtype=float)`, `np.array(list, dtype=float)`, `float(q)`, `int(q)`, `complex(q)`: return the number in the COHERENT unit (the canonical magnitude; `float(Q_(50,'percent'))` is `0.5`: check what it gives today and report) and emit `physure.UnitStrippedWarning(UserWarning)` (new, exported) when the quantity has a non-dimensionless unit OR an uncertainty other than zero: the message says what is dropped (the unit `m`, the uncertainty `0.1`) and how to do it on purpose and silently: `q.to('m').magnitude`. A dimensionless exact quantity converts silently. The documented silent route is `.magnitude` / `.to(unit).magnitude` (already there); document it. Users may also silence with the standard `warnings` filter on `UnitStrippedWarning`.
+3. **`np.mean` and `np.sum` of an array-backed Quantity with uncertainty propagate correctly** (today: `sum` raises, `mean` gives uncertainty 0): implement them in the `__array_function__` table as the reduction through `Quantity` arithmetic of the elements (the same result as the builtin `sum(list(q))` and `sum / n`), or a vectorised formula that gives EXACTLY the same value and uncertainty for independent and for correlated (lineage) errors; where it cannot propagate correctly (covariance models that the elementwise route cannot express), raise `TypeError` naming the function and the reason, never a zero. Exact quantities (no uncertainty) keep a fast vectorised path. Fix `Quantity / numpy integer` (and numpy floats) in `__array_ufunc__`/`__truediv__`/`__rtruediv__` so object-array `np.mean` works. `np.std`, `np.var`, `np.median`: unchanged (they raise): record in ROADMAP as open.
+4. **`==` and `hash` agree** (the Python data-model rule `a == b` implies `hash(a) == hash(b)`): equality of two Quantities of the same dimension compares the value in the COHERENT unit (the core's conversion; Rust first: reuse the registry conversion, do not write a new one), or the magnitudes when both have the same plain unit (a shortcut that agrees with it); the uncertainty is NOT compared (as today); the temperature rules stay (a point is never equal to an interval: `Q_(20,'degC') == Q_(5,'delta_degC')` is `False`; a plain `K` equals either by value). Equality with a plain number for a dimensionless Quantity compares the coherent value (`Q_(100,'percent') == 1` is `True`). `__hash__` is `hash((dimension key, canonical magnitude))` for a scalar magnitude, and for a dimensionless quantity `hash(float(canonical magnitude))` so it equals `hash(1.0)` where `==` with the number is True; no unit, no uncertainty, no temperature kind in the hash; an array magnitude stays unhashable (`TypeError`). Floating point: the canonical magnitude must be the same float on both sides of any pair that `==` says equal: define `==` ON the canonical magnitudes for different units (so `==` and the hash cannot disagree), and report every pair that used to be equal and no longer is (an ulp difference of the conversion), with the old and new values.
+5. **Internal callers.** Find every use of `__array__`/`np.asarray(q)`/`np.array(q)` on a Quantity inside `physure/` and the tests, and make them explicit (`.magnitude` or `.to(unit).magnitude`); run `matplotlib`/`pandas`/`scipy` smoke tests if installed (the repository has plotting and io extras): an implicit `np.asarray(q)` in a third-party library may now give an object array: report which library calls do and whether they still work.
+
+## 3. Tasks (commit each; red tests first; one mutation check per behaviour)
+
+1. **Tests** (red) in `physure-python/tests/`: every row of section 1; both uncertainty paths (a list of scalar quantities with uncertainty, and an array-backed one with a scalar `uncertainty` and with a covariance/lineage model if the fixtures have it: compare `np.mean`/`np.sum` with `sum(list(q))`); explicit strip warns and names the loss; `float` of a dimensionless exact quantity is silent; hash/eq table (the pairs of section 1 plus `100 percent == 1`, a set and a dict lookup across units, `{Q_(1,'m'), Q_(100,'cm')}` has one element, uncertainty does not change the hash, an array magnitude raises TypeError, `Q_(20,'degC') != Q_(5,'delta_degC')`); NumPy functions on lists (`sum`, `mean`, `dot`, `cross`, `prod`, `cumsum`, `max`) keep unit and uncertainty.
+2. **`__array__` and explicit stripping** (points 1, 2, 5), **`mean`/`sum` and the division fix** (point 3), **`==` and `hash`** (point 4): one commit each.
+3. **Full runs**: Rust is unchanged unless you add a core helper (then run `cargo test -p physure-script -p physure-cli -p physure-lsp --no-fail-fast` and `cargo test -p physure --no-fail-fast`); Python: rebuild in this worktree only if Rust changed (`cd physure-python && unset VIRTUAL_ENV && CARGO_TARGET_DIR=D:/Projects/physure/target uv run --no-sync maturin develop --release`; verify `_core.__file__`), `uv run --no-sync pytest -q` (doctests included), `ruff check .`, `ruff format --check .`, `ty check` must not gain errors on touched files; time 1e6 `Q_(1,'m') == Q_(2,'m')` and 1e5 `hash(Q_(...))` before/after, and `np.mean` of 1e5 exact array-backed quantities (must not become slower than before for the exact path).
+4. **Docs**: CHANGELOG `[Unreleased]` (Changed, breaking: `np.asarray(q, dtype=...)`/`float(q)` of a quantity with a unit now warns; implicit conversion gives an object array; `100 percent == 1`; hash changes; Fixed: `np.mean` zero uncertainty, `np.sum(list)` losing units), `docs/ROADMAP.md` (remove the open lines for the zero uncertainty and the hash vs `==`; add `np.std`/`np.var`/`np.median` unsupported), the Python docs that talk about NumPy interop (grep `docs/` for `numpy`, `asarray`, `magnitude`), `uv run --no-sync mkdocs build --strict`.
+
+## 4. Not in this change
+
+JAX/torch tracing behaviour; `np.std`/`np.var`/`np.median`; the symbolic layer; the other open items of the ROADMAP.
+
+## 5. Risks
+
+* Third-party code calling `np.asarray(q)` implicitly now receives an object array (a loud error or a slow path, never a silent wrong number): measured in point 5.
+* `==` on quantities that used to compare equal through an inexact conversion may differ by an ulp: reported pair by pair.
+* The object-array route is O(n) Python for lists of scalar quantities: documented; array-backed quantities keep the vectorised path.

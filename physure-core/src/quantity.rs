@@ -37,6 +37,44 @@ impl PartialEq for Quantity {
     }
 }
 
+/// What to write instead of comparing a temperature point with a temperature interval, the advice every message about
+/// the pair ends with (the core's comparison, `max`, `min`, a vector, a range, Python): the difference of two points
+/// first; a conversion does not change the kind (`5 delta_degC => K` is a kelvin difference), and a point is a point
+/// moved by the interval.
+pub const POINT_AGAINST_INTERVAL_ADVICE: &str = "compare a difference of two points with the interval (`T2 - T1 > 5 \
+     delta_degC`); `x => K` does not make an interval a point, an interval in K is still an interval; a point moved by \
+     the interval is a point (`T1 + 5 delta_degC`)";
+
+/// The words of a temperature point compared with a temperature interval, each written as its binding prints it:
+/// what the core's comparison says, and what a binding with a comparison of its own (Python) says.
+pub fn point_against_interval_message(point: &str, interval: &str) -> String {
+    format!(
+        "cannot compare a temperature point (`{point}`) with a temperature interval (`{interval}`): an interval is how \
+         far apart two points are, not where one is; {POINT_AGAINST_INTERVAL_ADVICE}"
+    )
+}
+
+/// The words of a conversion between a temperature point and a temperature interval, refused in either direction:
+/// `20 degC => delta_degC` read the point's absolute value (293.15 delta_degC) and `5 delta_degC => degC` read the
+/// interval as kelvin above absolute zero (-268.15 degC). `from` is the quantity (or the unit) as it prints, `to` the
+/// target unit; `from_point` says which of the two is the point.
+/// How every message of [`point_interval_conversion_message`] starts: a binding tells the refusal from other errors by it.
+pub const POINT_INTERVAL_CONVERSION_PREFIX: &str = "cannot convert a temperature ";
+
+pub fn point_interval_conversion_message(from: &str, to: &str, from_point: bool) -> String {
+    if from_point {
+        format!(
+            "cannot convert a temperature point (`{from}`) to a temperature interval (`{to}`): a point says where, an \
+             interval says how far; use a difference of two points (`T2 - T1`); {POINT_AGAINST_INTERVAL_ADVICE}"
+        )
+    } else {
+        format!(
+            "cannot convert a temperature interval (`{from}`) to a temperature point (`{to}`): an interval says how \
+             far, a point says where; add the interval to a point (`T1 + {from}`); {POINT_AGAINST_INTERVAL_ADVICE}"
+        )
+    }
+}
+
 /// The relative bound of PHS `==` ([`Quantity::phs_eq`]): two canonical magnitudes are equal when they differ by at
 /// most this fraction of the larger. It absorbs the rounding of a conversion and of ordinary arithmetic
 /// (`1000 * 0.1` and `100` are 63 ulps apart) and still separates physically different values.
@@ -113,6 +151,10 @@ fn format_float_with(n: f64, rules: &crate::settings::DisplayRules) -> String {
     if n == 0.0 {
         return "0.0".to_string();
     }
+    // `NaN` has no `.` and no `e`, so the `.0` below made it `NaN.0` (audit T20); the infinities are `{:e}` ones
+    if n.is_nan() {
+        return "NaN".to_string();
+    }
     let abs_n = n.abs();
     if rules.is_scientific(n) {
         format!("{:e}", n)
@@ -152,11 +194,54 @@ fn magnitude_exponent(x: f64) -> i32 {
     x.abs().log10().floor() as i32
 }
 
-/// Rounds `x` to `decimal_places` digits after the decimal point. Negative rounds to a power
+/// 10^n as the double nearest to it, the same on every platform. `f64::powi` is not correctly rounded: from 10^23 (the
+/// first power of ten a double cannot hold exactly) it multiplies, and the answer is off by an ulp on some platforms
+/// and not on others, so `round(5e300, -301)` was `1e301` on Windows and `0.0` on Linux. A power of ten up to 10^22 is
+/// exact; any other is read from its decimal text, which the standard library rounds correctly (10^400 is infinity).
+fn pow10(n: i32) -> f64 {
+    const EXACT: [f64; 23] = [
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20,
+        1e21, 1e22,
+    ];
+    if let Some(&power) = usize::try_from(n).ok().and_then(|i| EXACT.get(i)) {
+        return power;
+    }
+    format!("1e{n}").parse().unwrap_or(f64::INFINITY)
+}
+
+/// Rounds `x` to `decimal_places` digits after the decimal point, ties away from zero. Negative rounds to a power
 /// of ten instead (`-1` rounds to the nearest ten).
-fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
-    let factor = 10f64.powi(decimal_places);
-    (x * factor).round() / factor
+///
+/// It never overflows: a finite `x` never gives `NaN` or infinity. A place `x` has no digit at is left as it is: one
+/// finer than its last digit (`x * 10^d` not finite, or at least 2^53, where every double is a whole number), and,
+/// for a negative place, one where `x / 10^-d` is at least 2^53 (`round(1.2345e23, -1)`: dividing and multiplying
+/// back moved it by an ulp). A place above every digit (`10^-d` not finite) gives 0; a rounding the double cannot hold
+/// (`1.7e308` to a multiple of `1e308`) leaves `x`. Otherwise a negative place divides by `10^-d` and multiplies back,
+/// which is exact where multiplying by the inexact `10^d` was not (`round(123456.789, -2)` is exactly 123500). A
+/// non-finite `x` is returned unchanged. It was `(x * 10^d).round() / 10^d`, which made `round(1.5, 400)` NaN.
+pub fn round_to_decimal_place(x: f64, decimal_places: i32) -> f64 {
+    const WHOLE: f64 = 9_007_199_254_740_992.0; // 2^53
+    if !x.is_finite() {
+        return x;
+    }
+    if decimal_places >= 0 {
+        let factor = pow10(decimal_places);
+        let scaled = x * factor;
+        if !scaled.is_finite() || scaled.abs() >= WHOLE {
+            return x;
+        }
+        return scaled.round() / factor;
+    }
+    let divisor = decimal_places.checked_neg().map_or(f64::INFINITY, pow10);
+    if !divisor.is_finite() {
+        return 0.0;
+    }
+    let scaled = x / divisor;
+    if scaled.abs() >= WHOLE {
+        return x;
+    }
+    let rounded = scaled.round() * divisor;
+    if rounded.is_finite() { rounded } else { x }
 }
 
 /// Rounds `x` to `sig_figs` significant figures.
@@ -170,7 +255,7 @@ fn round_to_sig_figs(x: f64, sig_figs: u32) -> f64 {
 /// The single leading digit of `x`, once `x` is already a "clean" value at a known order of
 /// magnitude (as produced by `round_to_sig_figs`) -- `4` for `40.0`, `1` for `1.0`.
 fn leading_digit(x: f64) -> i64 {
-    (x.abs() / 10f64.powi(magnitude_exponent(x))).round() as i64
+    (x.abs() / pow10(magnitude_exponent(x))).round() as i64
 }
 
 /// GUM-style correlated rounding: under `[Settings] uncertainty_digits = gum` (the default) the
@@ -284,9 +369,11 @@ impl Quantity {
     /// `samples: None` draws `[Settings] monte_carlo_samples` (default 1000, see
     /// [`crate::settings::monte_carlo_samples`]).
     ///
-    /// **Panics** when `samples` is `Some(n)` with `n < 2` and the backend is Monte Carlo (see
-    /// [`MonteCarloBackend::from_stats`]); a sample count that comes from a user goes through
-    /// [`Quantity::try_new_scalar`], which returns the error instead.
+    /// **Panics** only when a Rust caller names a Monte Carlo sample count outside 2 to
+    /// [`crate::settings::MAX_MONTE_CARLO_SAMPLES`] explicitly (`samples: Some(n)`, see
+    /// [`MonteCarloBackend::from_stats`]); the setting can no longer hold such a count, so `samples: None` never
+    /// panics. Code that can receive a user's count goes through [`Quantity::try_new_scalar`], which returns the
+    /// error instead.
     pub fn new_scalar(mean: f64, std_dev: f64, unit: RationalUnit, mode: Option<&str>, samples: Option<usize>) -> Self {
         Self::try_new_scalar(mean, std_dev, unit, mode, samples).unwrap_or_else(|e| panic!("{e}"))
     }
@@ -372,13 +459,17 @@ impl Quantity {
                 actual: other.unit.__repr__(),
             });
         }
+        // an interval plus a point is a point, written in the point's unit as `5 delta_degC + 20 degC` is in degC
+        if self.unit.is_interval() && other.unit.is_point() {
+            return other.add(self);
+        }
         let other_value = if self.unit.scale != other.unit.scale {
             Self::scale_value(&other.value, other.unit.ratio_to(&self.unit))?
         } else {
             other.value.clone()
         };
         let new_value = self.value.propagate_add(&other_value)?;
-        Ok(Quantity { value: new_value, unit: self.unit.clone() })
+        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit, false) })
     }
 
     pub fn sub(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -400,7 +491,7 @@ impl Quantity {
             other.value.clone()
         };
         let new_value = self.value.propagate_sub(&other_value)?;
-        Ok(Quantity { value: new_value, unit: self.unit.clone() })
+        Ok(Quantity { value: new_value, unit: self.unit.sum_unit(&other.unit, true) })
     }
 
     pub fn mul(&self, other: &Quantity) -> PhysureResult<Quantity> {
@@ -486,6 +577,20 @@ impl Quantity {
         self.shift_mean_to(self.value.mean().ceil())
     }
 
+    /// The integer part of the mean (towards zero: `floor` above zero, `ceil` below), same unit, same
+    /// uncertainty and sources.
+    pub fn trunc(&self) -> PhysureResult<Quantity> {
+        self.shift_mean_to(self.value.mean().trunc())
+    }
+
+    /// The mean rounded to `decimal_places` ([`round_to_decimal_place`]: ties away from zero, never `NaN` or
+    /// infinity), everything else kept as `floor` keeps it: the unit, the uncertainty and its sources, so the degrees
+    /// of freedom and the correlation with the unrounded value survive. Rebuilding the quantity from its mean and
+    /// standard deviation minted a new source and lost them (`dof(round(from_samples(..), 1))` was infinite).
+    pub fn round(&self, decimal_places: i32) -> PhysureResult<Quantity> {
+        self.shift_mean_to(round_to_decimal_place(self.value.mean(), decimal_places))
+    }
+
     /// Slides the whole distribution so its mean lands on `target`.
     ///
     /// The shift is applied as an addition of an exact constant rather than by rebuilding
@@ -509,6 +614,40 @@ impl Quantity {
 
     pub fn tan(&self) -> PhysureResult<Quantity> {
         self.trig("tan")
+    }
+
+    /// The secant, 1/cos x, of an angle or a dimensionless value read as radians.
+    pub fn sec(&self) -> PhysureResult<Quantity> {
+        self.reciprocal_trig("sec", "cos")
+    }
+
+    /// The cosecant, 1/sin x. `csc(0)` is an error, not infinity.
+    pub fn csc(&self) -> PhysureResult<Quantity> {
+        self.reciprocal_trig("csc", "sin")
+    }
+
+    /// The cotangent, 1/tan x. `cot(0)` is an error, not infinity.
+    pub fn cot(&self) -> PhysureResult<Quantity> {
+        self.reciprocal_trig("cot", "tan")
+    }
+
+    /// `func` as the reciprocal of `base`, composed from the existing kernels: the argument is
+    /// read as an angle exactly as `sin` reads it, `base` is applied, and the power `-1` gives
+    /// the reciprocal. Composition keeps the derivative (and the correlations) right in every
+    /// propagation model without a new entry in the per-function tables, which fall through to
+    /// the identity for a name they do not know.
+    ///
+    /// A zero denominator is the pole of `func`: it is reported as a domain error naming the
+    /// function and the point rather than answered with infinity. A floating-point π/2 is not a
+    /// pole (cos of it is 6e-17), so `sec(pi/2)` is a huge finite number, like `tan(pi/2)`.
+    fn reciprocal_trig(&self, func: &str, base: &str) -> PhysureResult<Quantity> {
+        let radians = self.as_radians(func)?;
+        let denominator = radians.propagate_function(base)?;
+        if denominator.mean() == 0.0 {
+            return Err(PhysureError::DomainError(format!("{func} of {} is undefined", radians.mean())));
+        }
+        let new_value = denominator.propagate_pow(-1.0)?;
+        Ok(Quantity { value: new_value, unit: RationalUnit::dimensionless() })
     }
 
     /// A trigonometric function takes an angle and returns a pure ratio.
@@ -545,6 +684,12 @@ impl Quantity {
 
     pub fn exp(&self) -> PhysureResult<Quantity> {
         self.transcendental("exp", "exp")
+    }
+
+    /// The error function. Like `exp`, it is a power series in its argument, so the argument
+    /// must be dimensionless; an angle is refused.
+    pub fn erf(&self) -> PhysureResult<Quantity> {
+        self.transcendental("erf", "erf")
     }
 
     /// The natural logarithm. The core calls it `log`; PHS and the rest of the world call
@@ -617,7 +762,9 @@ impl Quantity {
     ///   is a ratio, a power ratio or 100 dB is a convention nothing written states. Two levels compare by the ratios
     ///   they stand for, and a level with a dimension compares with a linear quantity of that dimension;
     /// * a dimensionless quantity that is not a level, in any unit (a plain number, `unity`, `%`, `ppm`), compares with
-    ///   plain numbers by its ratio: `50 % == 0.5`, `1 % > 0`.
+    ///   plain numbers by its ratio: `50 % == 0.5`, `1 % > 0`;
+    /// * **a temperature point and a temperature interval** have no comparison (`5 delta_degC < 20 degC` has no answer,
+    ///   [`RationalUnit::point_against_interval`]); point with point (`20 degC > 10 K`) and interval with interval do.
     pub fn comparable_magnitudes(&self, other: &Quantity) -> PhysureResult<(f64, f64)> {
         if let Some(message) = self.incomparability(other) {
             return Err(message);
@@ -666,7 +813,27 @@ impl Quantity {
         if !self.unit.same_dimensions(&other.unit) {
             return Some(PhysureError::UnitMismatch { expected: self.unit.__repr__(), actual: other.unit.__repr__() });
         }
+        if self.unit.point_against_interval(&other.unit) {
+            return Some(self.point_against_interval(other));
+        }
         None
+    }
+
+    /// The error of a temperature point compared with a temperature interval, point first. Out of line: the comparison
+    /// is hot, and its message is not.
+    #[cold]
+    #[inline(never)]
+    fn point_against_interval(&self, other: &Quantity) -> PhysureError {
+        let (point, interval) = if self.unit.is_point() { (self, other) } else { (other, self) };
+        PhysureError::Generic(point_against_interval_message(&point.to_string(), &interval.to_string()))
+    }
+
+    /// The error of this quantity converted between a temperature point and a temperature interval. Out of line, as
+    /// the comparison's.
+    #[cold]
+    #[inline(never)]
+    fn point_interval_conversion(&self, target: &RationalUnit) -> PhysureError {
+        PhysureError::Generic(point_interval_conversion_message(&self.to_string(), &target.__repr__(), self.unit.is_point()))
     }
 
     /// PHS `<`, `>`, `<=`, `>=`, `==` and `!=` (`≤`, `≥`, `≠` too) of two quantities: `==` is [`Quantity::phs_eq`],
@@ -799,12 +966,20 @@ impl Quantity {
     /// Converts this quantity to an equivalent one expressed in `target`'s unit/scale.
     /// Errors if `target` has different physical dimensions. In `Dimensionless` angle mode it may read `rad` and
     /// `sr` as 1 (see `RationalUnit::convertible_to`); a sum or a comparison never does.
+    ///
+    /// A temperature point does not convert to a temperature interval, nor an interval to a point
+    /// ([`RationalUnit::point_against_interval`]): `20 degC => delta_degC` is refused, `10 K => delta_degC` and
+    /// `5 delta_degC => K` are not. The result keeps the kind of this quantity ([`RationalUnit::converted_from`]):
+    /// `5 delta_degC => K` is a kelvin interval, `20 degC => K` a kelvin point, `10 K => mK` of unknown kind.
     pub fn convert_to(&self, target: &RationalUnit) -> PhysureResult<Quantity> {
         if !self.unit.convertible_to(target) {
             return Err(PhysureError::UnitMismatch {
                 expected: self.unit.__repr__(),
                 actual: target.__repr__(),
             });
+        }
+        if self.unit.point_against_interval(target) {
+            return Err(self.point_interval_conversion(target));
         }
         if self.unit.is_logarithmic() || target.is_logarithmic() {
             return self.convert_logarithmic(target);
@@ -815,30 +990,39 @@ impl Quantity {
         if self.unit.is_affine() || target.is_affine() {
             let (scale, shift) = self.unit.affine_to(target);
             let new_value = Self::shift_value(&Self::scale_value(&self.value, scale)?, shift)?;
-            return Ok(Quantity { value: new_value, unit: target.clone() });
+            return Ok(Quantity { value: new_value, unit: target.converted_from(&self.unit) });
         }
         let ratio = self.unit.ratio_to(target);
         let new_value = Self::scale_value(&self.value, ratio)?;
-        Ok(Quantity { value: new_value, unit: target.clone() })
+        Ok(Quantity { value: new_value, unit: target.converted_from(&self.unit) })
     }
 
     /// What can be done with an absolute temperature (degC, degF) and something else. It is a
-    /// point; an interval (K, degR, delta_celsius...) moves it, and two points give an interval:
+    /// point; an interval (delta_celsius..., or a K or degR of unknown kind) moves it, and two points give an interval.
+    /// The operands are told apart by [`RationalUnit::is_point`], so a `K` that holds a point (`10 degC => K`) is a
+    /// point here too:
     ///
     /// - point + interval and interval + point are a point in the point's scale;
-    /// - point - interval is a point, and point - point is an interval, in kelvin;
-    /// - point + point (the sum of two temperatures) and interval - point have no meaning.
+    /// - point - interval is a point, and point - point is an interval, in kelvin (printed `K`, flagged an interval:
+    ///   `(20 degC - 10 degC) < 20 degC` has no answer; `20 degC - (10 degC => K)` is 10 K);
+    /// - point + point (the sum of two temperatures, `20 degC + (10 degC => K)`) and interval - point have no meaning.
     fn combine_with_point(&self, other: &Quantity, subtract: bool) -> PhysureResult<Quantity> {
-        match (self.unit.is_affine(), other.unit.is_affine(), subtract) {
+        match (self.unit.is_point(), other.unit.is_point(), subtract) {
             (true, true, false) => Err(PhysureError::Generic(format!(
                 "cannot add two absolute temperatures ('{}' and '{}'): add an interval to one of them \
                  (the midpoint of T1 and T2 is T1 + (T2 - T1) / 2)",
                 self.unit.__repr__(),
                 other.unit.__repr__()
             ))),
-            (true, true, true) => self.to_delta()?.sub(&other.to_delta()?),
+            (true, true, true) => {
+                let mut difference = self.to_delta()?.sub(&other.to_delta()?)?;
+                difference.unit.temperature = crate::units::TemperatureKind::Interval;
+                Ok(difference)
+            }
             (false, true, true) => Err(PhysureError::Generic(format!(
-                "cannot subtract the absolute temperature '{}' from the interval '{}'",
+                "cannot subtract the absolute temperature '{}' from '{}', an interval or a kelvin of unknown kind: an \
+                 interval minus a point has no meaning (a kelvin converted from a point, `T = 20 degC => K`, is a \
+                 point, and a point minus a point is an interval)",
                 other.unit.__repr__(),
                 self.unit.__repr__()
             ))),
@@ -1153,6 +1337,111 @@ mod tests {
     }
 
     #[test]
+    fn rounding_to_a_decimal_place_never_overflows() {
+        assert_eq!(round_to_decimal_place(1.5, 400), 1.5);
+        assert_eq!(round_to_decimal_place(1e300, 10), 1e300);
+        assert_eq!(round_to_decimal_place(123456.789, -400), 0.0);
+        assert_eq!(round_to_decimal_place(-123456.789, i32::MIN), 0.0);
+        assert_eq!(round_to_decimal_place(1.7e308, -308), 1.7e308, "2e308 is not a double");
+        assert_eq!(round_to_decimal_place(1.2345, 2), 1.23);
+        assert_eq!(round_to_decimal_place(2.5, 0), 3.0);
+        assert_eq!(round_to_decimal_place(-2.5, 0), -3.0);
+        assert_eq!(round_to_decimal_place(123456.789, -2), 123500.0);
+        assert!(round_to_decimal_place(f64::NAN, 2).is_nan());
+        assert_eq!(round_to_decimal_place(f64::INFINITY, -2), f64::INFINITY);
+    }
+
+    /// A negative place above 2^53 units of that place has nothing to round: dividing and multiplying back moved the
+    /// value by an ulp (`round(1.2345e23, -1)`).
+    #[test]
+    fn rounding_a_value_with_no_digit_at_a_negative_place_is_the_value_itself() {
+        assert_eq!(round_to_decimal_place(1.2345e23, -1).to_bits(), 1.2345e23f64.to_bits());
+        assert_eq!(round_to_decimal_place(1.7e308, -15).to_bits(), 1.7e308f64.to_bits());
+        assert_eq!(round_to_decimal_place(123456.789, -2), 123500.0);
+        assert_eq!(round_to_decimal_place(1234.5, -1), 1230.0);
+        assert_eq!(round_to_decimal_place(1235.0, -1), 1240.0);
+        assert_eq!(round_to_decimal_place(1e300, -301), 0.0);
+        assert_eq!(round_to_decimal_place(5e300, -301), 1e301);
+    }
+
+    /// A power of ten is the double nearest to it on every platform (`powi` is not: `round(5e300, -301)` was `0.0` on
+    /// Linux). The literals are the compiler's own, correctly rounded.
+    #[test]
+    fn a_power_of_ten_is_the_nearest_double() {
+        assert_eq!(pow10(0), 1.0);
+        assert_eq!(pow10(22), 1e22);
+        assert_eq!(pow10(23), 1e23);
+        assert_eq!(pow10(300), 1e300);
+        assert_eq!(pow10(301), 1e301);
+        assert_eq!(pow10(308), 1e308);
+        assert_eq!(pow10(-1), 1e-1);
+        assert_eq!(pow10(-5), 1e-5);
+        assert_eq!(pow10(-300), 1e-300);
+        assert!(pow10(309).is_infinite());
+        assert_eq!(pow10(-400), 0.0);
+        assert!(pow10(i32::MAX).is_infinite());
+        for n in -320..=320 {
+            assert_eq!(pow10(n).to_bits(), format!("1e{n}").parse::<f64>().unwrap().to_bits(), "10^{n}");
+        }
+    }
+
+    /// Over a grid of magnitudes and places: a finite value gives a finite one, rounding twice is rounding once, and a
+    /// value with no digit at the place (`|x| / 10^-d >= 2^53`, so every `|x| >= 1e20` for `d` from -1 to -4) is
+    /// returned bit for bit.
+    #[test]
+    fn rounding_is_finite_idempotent_and_the_identity_where_there_is_no_digit() {
+        let mantissas = [1.0, 1.2345, -2.5, 3.999_999_999, -7.123_456_789_012_345, 9.87654321];
+        let exponents = [-300, -20, -5, -1, 0, 1, 3, 7, 14, 15, 16, 20, 23, 100, 300];
+        let mut checked = 0;
+        for m in mantissas {
+            for e in exponents {
+                let x = m * 10f64.powi(e);
+                for d in -25..=25 {
+                    let once = round_to_decimal_place(x, d);
+                    assert!(once.is_finite(), "round({x:e}, {d}) = {once}");
+                    assert_eq!(round_to_decimal_place(once, d).to_bits(), once.to_bits(), "round(round({x:e}, {d}), {d})");
+                    if d < 0 && x.abs() / 10f64.powi(-d) >= 9_007_199_254_740_992.0 {
+                        assert_eq!(once.to_bits(), x.to_bits(), "round({x:e}, {d}) moved a value with no digit there");
+                    }
+                    if d < 0 && d >= -4 && x.abs() >= 1e20 {
+                        assert_eq!(once.to_bits(), x.to_bits(), "round({x:e}, {d})");
+                    }
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 300);
+    }
+
+    #[test]
+    fn round_keeps_everything_but_the_mean() {
+        let unit = RationalUnit::new_from_dimensions([("V".to_string(), (1, 1))]);
+        let measured = Quantity::from_samples_in(&[1.0, 2.0, 4.0], unit).unwrap();
+        let rounded = measured.round(1).unwrap();
+        assert_eq!(rounded.value.mean(), 2.3);
+        assert_eq!(rounded.value.std_dev(), measured.value.std_dev());
+        assert_eq!(rounded.unit, measured.unit);
+        assert_eq!(rounded.effective_dof().unwrap(), 2.0);
+        assert_eq!(measured.sub(&rounded).unwrap().value.std_dev(), 0.0, "the same source, fully correlated");
+        assert_eq!(measured.round(400).unwrap().value.mean(), measured.value.mean());
+    }
+
+    #[test]
+    fn trunc_moves_the_mean_towards_zero_and_keeps_everything_else() {
+        let unit = RationalUnit::new_from_dimensions([("V".to_string(), (1, 1))]);
+        let measured = Quantity::from_samples_in(&[1.0, 2.0, 4.0], unit.clone()).unwrap();
+        let truncated = measured.trunc().unwrap();
+        assert_eq!(truncated.value.mean(), 2.0);
+        assert_eq!(truncated.value.std_dev(), measured.value.std_dev());
+        assert_eq!(truncated.unit, measured.unit);
+        assert_eq!(truncated.effective_dof().unwrap(), 2.0);
+        assert_eq!(measured.sub(&truncated).unwrap().value.std_dev(), 0.0, "the same source, fully correlated");
+        let negative = Quantity::new_scalar(-2.7, 0.1, unit, None, None);
+        assert_eq!(negative.trunc().unwrap().value.mean(), -2.0);
+        assert_eq!(negative.floor().unwrap().value.mean(), -3.0);
+    }
+
+    #[test]
     fn display_folds_anonymous_compound_scale_and_aliases_to_known_symbol() {
         // 560 Ohm * 428 mA should display as "239.68 V", not "239680 A^-1 * kg * m^2 * s^-3".
         let r = Quantity::new_scalar(560.0, 0.0, ohm_unit(), None, None);
@@ -1214,6 +1503,84 @@ mod tests {
         assert!(matches!(zero.ln().unwrap_err(), PhysureError::DomainError(_)));
         let negative = Quantity::new(-5.0, "").unwrap();
         assert!(matches!(negative.ln().unwrap_err(), PhysureError::DomainError(_)));
+    }
+
+    fn close(actual: f64, expected: f64, rel: f64) -> bool {
+        (actual - expected).abs() <= rel * expected.abs().max(f64::MIN_POSITIVE)
+    }
+
+    #[test]
+    fn sec_csc_and_cot_of_a_plain_number_are_the_reciprocal_ratios() {
+        let one = Quantity::new(1.0, "").unwrap();
+        for (q, expected) in [
+            (one.sec().unwrap(), 1.8508157176809255),
+            (one.csc().unwrap(), 1.1883951057781212),
+            (one.cot().unwrap(), 0.6420926159343306),
+        ] {
+            assert!(close(q.value.mean(), expected, 1e-14), "{} != {expected}", q.value.mean());
+            assert!(q.unit.dimensions.is_empty(), "the result is a pure ratio");
+        }
+    }
+
+    #[test]
+    fn sec_of_an_angle_reads_its_unit_and_a_length_is_refused() {
+        let sixty = Quantity::new(60.0, "deg").unwrap();
+        assert!(close(sixty.sec().unwrap().value.mean(), 2.0, 1e-12));
+        let err = Quantity::new(1.0, "m").unwrap().sec().unwrap_err();
+        assert!(err.to_string().contains("sec"), "{err}");
+        assert!(Quantity::new(1.0, "m").unwrap().csc().is_err());
+        assert!(Quantity::new(1.0, "m").unwrap().cot().is_err());
+    }
+
+    #[test]
+    fn cot_and_csc_of_zero_are_domain_errors_not_infinity() {
+        let zero = Quantity::new(0.0, "").unwrap();
+        for (name, err) in [("cot", zero.cot().unwrap_err()), ("csc", zero.csc().unwrap_err())] {
+            assert!(matches!(err, PhysureError::DomainError(_)), "{err:?}");
+            assert!(err.to_string().contains(&format!("{name} of 0 is undefined")), "{err}");
+        }
+        // Like `tan(pi/2)`: the floating-point pi/2 is not the pole, and the answer is finite.
+        let half_pi = Quantity::new(std::f64::consts::FRAC_PI_2, "").unwrap();
+        assert!(half_pi.sec().unwrap().value.mean().is_finite());
+    }
+
+    #[test]
+    fn sec_csc_and_cot_propagate_the_derivative() {
+        let (m, s) = (0.5_f64, 0.01);
+        let x = Quantity::new_scalar(m, s, RationalUnit::dimensionless(), Some("gaussian"), None);
+        let (sec, csc, cot) = (1.0 / m.cos(), 1.0 / m.sin(), 1.0 / m.tan());
+        for (q, expected) in [
+            (x.sec().unwrap(), s * (sec * m.tan()).abs()),
+            (x.csc().unwrap(), s * (csc * cot).abs()),
+            (x.cot().unwrap(), s * csc * csc),
+        ] {
+            assert!(close(q.value.std_dev(), expected, 1e-12), "{} != {expected}", q.value.std_dev());
+        }
+    }
+
+    #[test]
+    fn erf_of_a_plain_number() {
+        let erf = |x: f64| Quantity::new(x, "").unwrap().erf().unwrap().value.mean();
+        assert!(close(erf(1.0), 0.8427007929497149, 1e-15));
+        assert_eq!(erf(0.0), 0.0);
+        assert!(close(erf(-1.0), -0.8427007929497149, 1e-15));
+        assert!(close(erf(1e-8), 1.1283791670955126e-8, 1e-14));
+        assert_eq!(erf(10.0), 1.0);
+    }
+
+    #[test]
+    fn erf_needs_a_dimensionless_value_and_refuses_an_angle() {
+        assert!(Quantity::new(1.0, "m").unwrap().erf().is_err());
+        let err = Quantity::new(1.0, "rad").unwrap().erf().unwrap_err();
+        assert!(err.to_string().contains("erf"), "{err}");
+        assert!(close(Quantity::new(50.0, "%").unwrap().erf().unwrap().value.mean(), crate::math::erf(0.5), 1e-15));
+    }
+
+    #[test]
+    fn erf_propagates_the_derivative() {
+        let x = Quantity::new_scalar(0.5, 0.01, RationalUnit::dimensionless(), Some("gaussian"), None);
+        let expected = 0.01 * 2.0 / std::f64::consts::PI.sqrt() * (-0.25_f64).exp();
+        assert!(close(x.erf().unwrap().value.std_dev(), expected, 1e-12));
     }
 
     #[test]
@@ -1320,6 +1687,14 @@ mod tests {
         assert_eq!(format_float(1234567.0), "1.234567e6");
         assert_eq!(format_float(-0.0), "0.0");
         assert_eq!(format_float(f64::INFINITY), "inf");
+    }
+
+    /// Audit T20: a `.0` was appended to any text without a `.` or an `e`, and `NaN` has neither.
+    #[test]
+    fn a_number_that_is_not_a_number_prints_as_nan() {
+        assert_eq!(format_float(f64::NAN), "NaN");
+        assert_eq!(format_float(-f64::NAN), "NaN");
+        assert_eq!(Quantity::new(f64::NAN, "m").unwrap().to_string(), "NaN m");
     }
 
     #[test]

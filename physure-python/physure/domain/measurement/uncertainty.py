@@ -641,9 +641,26 @@ class VarianceModel(Uncertainty[UncType]):
         jac_self: Numeric = 1.0,
         jac_other: Numeric = 1.0,
         out_magnitude: Numeric | None = None,
-    ) -> VarianceModel[UncType]:
-        """Adds two uncertainty models."""
+    ) -> VarianceModel[UncType] | CovarianceModel[Any]:
+        """Adds two uncertainty models.
+
+        An exact array (all variances zero) combined with an uncertain operand of a
+        correlated model (an uncertain scalar `x`, an uncertain array) carries that
+        operand's error in every element it reaches: the result is a covariance model
+        that holds it once (`e + x`, `e * x` share the one error of `x`; `(e + x) - x`
+        is exact again). Summed as independent variances it was too small.
+        """
         backend = BackendManager.get_backend(self.variance)
+
+        if (
+            isinstance(other, (LineageModel, CovarianceModel))
+            and out_magnitude is not None
+            and backend.is_array(out_magnitude)
+            and not backend.any(
+                backend.not_equal(self.variance, 0)  # ty: ignore[invalid-argument-type]
+            )
+        ):
+            return _carried_into_array(other, jac_other, out_magnitude)
 
         v_self = self._apply_jacobian(self.variance, jac_self, backend)
 
@@ -674,7 +691,7 @@ class VarianceModel(Uncertainty[UncType]):
         result_value: Numeric,
         jac_self: Numeric | None = None,
         jac_other: Numeric | None = None,
-    ) -> VarianceModel[Any]:
+    ) -> VarianceModel[Any] | CovarianceModel[Any]:
         """Propagates uncertainty for multiplication/division.
 
         Callers must pass explicit Jacobians; the operation cannot be
@@ -728,6 +745,81 @@ class VarianceModel(Uncertainty[UncType]):
         return hash(self.variance)
 
 
+def _slice_key(value: slice | None) -> tuple[Any, Any, Any] | None:
+    """A hashable form of a slice: a `slice` is not hashable before Python 3.12."""
+    return None if value is None else (value.start, value.stop, value.step)
+
+
+def _slice_of(key: tuple[Any, Any, Any] | None) -> slice | None:
+    """The slice that `_slice_key` read."""
+    return None if key is None else slice(*key)
+
+
+def _slot_key(scaled_slot: tuple[slice, Any] | None) -> Any:
+    """A hashable form of a scaled slot: a factor per element is read by its bytes."""
+    if scaled_slot is None:
+        return None
+    slot, factor = scaled_slot
+    if isinstance(factor, (int, float)):
+        return (_slice_key(slot), factor)
+    import numpy as np
+
+    data = np.ascontiguousarray(factor, dtype=np.float64)
+    return (_slice_key(slot), data.shape, data.tobytes())
+
+
+def with_slot_scale(jacobian: Any, factor: Any) -> Any:
+    """A Jacobian taken with respect to elements that are `factor` times their slot.
+
+    `d out/d slot = d out/d elements * diag(factor)` (`CovarianceModel.store_operand`).
+    `factor` is one number (a factor, two temperature scales) or one per element, flat
+    (a level's slope at each value): each column of the Jacobian is scaled by the
+    factor of its element. A Jacobian is a number or a vector of an element-wise
+    derivative (a diagonal, scaled element by element), or a dense or sparse matrix
+    (scaled column by column, without building `diag(factor)` densely).
+    """
+    if isinstance(factor, (int, float)):
+        return jacobian if factor == 1.0 else jacobian * factor
+    if hasattr(jacobian, "multiply") and hasattr(jacobian, "tocsr"):
+        # a SciPy sparse matrix: `*` would be a matrix product
+        return jacobian.multiply(factor.reshape(1, -1)).tocsr()
+    if getattr(jacobian, "ndim", 0) == 2:
+        return jacobian * factor.reshape(1, -1)
+    return jacobian * factor
+
+
+def _carried_into_array(
+    model: Uncertainty, jacobian: Numeric, out_magnitude: Numeric
+) -> CovarianceModel:
+    """The error of `model` carried by `jacobian` into an array result, as one covariance.
+
+    The operand keeps one slot of the covariance store however many operations it
+    takes part in (`model_operand` for a scalar, its own slice for an
+    array), so a later `- x` cancels against it.
+    """
+    from physure.domain.measurement.vectorized_uncertainty import ensure_store
+
+    backend = BackendManager.get_backend(out_magnitude)
+    store = ensure_store(backend)
+    if isinstance(model, CovarianceModel) and (
+        model.vector_slice or model.scaled_slot
+    ):
+        source, factor = model.store_operand(backend)
+        jacobian = with_slot_scale(jacobian, factor)
+    else:
+        source, factor = store.model_operand(model, model.std_dev)
+        jacobian = with_slot_scale(jacobian, factor)
+    out = store.allocate(backend.size(out_magnitude))
+    store.update_from_propagation(out, [source], [jacobian])
+    diagonal = backend.sparse_diagonal(store.get_covariance_block(out, out))
+    std_dev = backend.reshape(
+        backend.sqrt(diagonal), backend.shape(out_magnitude)
+    )
+    return CovarianceModel(
+        std_dev_internal=std_dev, vector_slice=out, store_token=store.token
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class CovarianceModel(Uncertainty[UncType]):
     """Correlated uncertainty model (Lineage or Covariance Matrix).
@@ -739,11 +831,84 @@ class CovarianceModel(Uncertainty[UncType]):
     std_dev_internal: UncType
     lineage: dict[str, UncType] = field(default_factory=dict)
     vector_slice: slice | None = None
+    # `(slot, f)`: these elements are `diag(f)` times those of `slot` in the store (an
+    # array converted to another unit is the same measurement); `f` is one number or
+    # one per element, flat (a level's slope at each value). A dense `diag(f)` Jacobian
+    # to give them a slot of their own needs n^2 doubles, so the operations that read
+    # the store take the slot with `f` in their Jacobian instead (`store_operand`).
+    scaled_slot: tuple[slice, Any] | None = None
+    # the `token` of the store those slots are in: a slot read in another store (an
+    # array made outside a `PhysureContext()` and used inside one) is another
+    # variable there, or none, so it is refused (`_store`); None: not recorded
+    store_token: str | None = None
 
     @property
     def std_dev(self) -> UncType:
         """Returns the standard deviation."""
         return self.std_dev_internal
+
+    def _store(self, backend: BackendOps | None) -> CovarianceStore:
+        """The active covariance store; `TypeError` if this model's slot is in another."""
+        from physure.domain.measurement.vectorized_uncertainty import (
+            ensure_store,
+        )
+
+        if backend is None:
+            backend = BackendManager.get_backend(self.std_dev_internal)
+        store = ensure_store(backend)
+        if (
+            self.store_token is not None
+            and self.store_token != store.token
+            and (self.vector_slice or self.scaled_slot)
+        ):
+            raise TypeError(
+                "this array's uncertainty belongs to another covariance store; "
+                "create it inside the same PhysureContext (an array made outside "
+                "a context, or in another one, holds its correlations in that "
+                "store, and read in this one they would be lost)"
+            )
+        return store
+
+    def store_operand(
+        self, backend: BackendOps | None = None
+    ) -> tuple[slice, Any]:
+        """The slot these elements are read from in the store, and `d(elements)/d(slot)`.
+
+        `(own slot, 1.0)`, or the slot of the array this one was converted from with
+        the factor of the conversion (a number, or one per element): a Jacobian taken
+        with respect to these elements is scaled by it (`with_slot_scale`).
+        """
+        if self.scaled_slot is not None:
+            self._store(backend)
+            return self.scaled_slot
+        return self.ensure_vector_slice(backend), 1.0
+
+    def converted(
+        self, std_dev: Any, slope: Any, backend: BackendOps
+    ) -> CovarianceModel:
+        """These elements in another unit, still the same measurement.
+
+        `slope` is `d new/d old`: one number for a factor or two scales with zero
+        points (5/9 from degF to K), one per element for a level (its conversion is
+        not linear: the slope at each value). The new elements are read from this
+        model's slot scaled by it, with no n x n Jacobian however large the array;
+        chained conversions multiply their slopes. `std_dev` is the converted
+        standard deviation. Only a model with a slot is converted this way
+        (`Quantity._restated`); no store is read, so the conversion is made in any
+        context and refused where it is used in a store that is not its own.
+        """
+        source, factor = self.scaled_slot or (
+            cast("slice", self.vector_slice),
+            1.0,
+        )
+        if not isinstance(slope, float):
+            # one slope per element, flat as the slot is
+            slope = backend.reshape(slope, (-1,))
+        return CovarianceModel(
+            std_dev_internal=std_dev,
+            scaled_slot=(source, factor * slope),
+            store_token=self.store_token,
+        )
 
     @classmethod
     def from_standard(
@@ -759,7 +924,11 @@ class CovarianceModel(Uncertainty[UncType]):
 
             store = ensure_store(backend)
             slc = store.register_independent_array(std_dev)
-            return cls(std_dev_internal=std_dev, vector_slice=slc)
+            return cls(
+                std_dev_internal=std_dev,
+                vector_slice=slc,
+                store_token=store.token,
+            )
 
         uid = measurement_id or str(uuid.uuid4())
         # ponytail: UncType is unbound here; basedpyright can't verify
@@ -791,7 +960,9 @@ class CovarianceModel(Uncertainty[UncType]):
             if u is None:
                 continue
             if isinstance(u, CovarianceModel):
-                in_slices.append(u.ensure_vector_slice(backend))
+                slot, factor = u.store_operand(backend)
+                in_slices.append(slot)
+                jac = with_slot_scale(jac, factor)
             else:
                 slc = store.register_independent_array(u.std_dev)
                 in_slices.append(slc)
@@ -803,7 +974,11 @@ class CovarianceModel(Uncertainty[UncType]):
         out_cov = store.get_covariance_block(out_slice, out_slice)
         diag = backend.sparse_diagonal(out_cov)
         std_dev = backend.reshape(backend.sqrt(diag), backend.shape(result))
-        return cls(std_dev_internal=std_dev, vector_slice=out_slice)
+        return cls(
+            std_dev_internal=std_dev,
+            vector_slice=out_slice,
+            store_token=store.token,
+        )
 
     @staticmethod
     def _scalar_lineage_from_uncertainty(u: Uncertainty) -> dict[str, Numeric]:
@@ -890,20 +1065,34 @@ class CovarianceModel(Uncertainty[UncType]):
                 "unhashable type: 'CovarianceModel' with array std_dev"
             )
 
-        return hash((self.std_dev_internal, lineage_items, self.vector_slice))
-
-    def ensure_vector_slice(self, backend: BackendOps | None = None) -> slice:
-        """Ensures the vector slice is allocated in the store."""
-        if self.vector_slice:
-            return self.vector_slice
-        from physure.domain.measurement.vectorized_uncertainty import (
-            ensure_store,
+        return hash(
+            (
+                self.std_dev_internal,
+                lineage_items,
+                _slice_key(self.vector_slice),
+                _slot_key(self.scaled_slot),
+            )
         )
 
-        if backend is None:
-            backend = BackendManager.get_backend(self.std_dev_internal)
-        store = ensure_store(backend)
-        return store.register_independent_array(self.std_dev_internal)
+    def ensure_vector_slice(self, backend: BackendOps | None = None) -> slice:
+        """Ensures the vector slice is allocated in the store.
+
+        Elements read from a scaled slot get a slot of their own that the store knows
+        is that scaled slot (`f I` propagated from it, once): correct, but a dense
+        n x n Jacobian, so the store's own operations use `store_operand` instead.
+        A slot of another store is refused (`_store`).
+        """
+        store = self._store(backend)
+        if self.vector_slice:
+            return self.vector_slice
+        if self.scaled_slot is None:
+            return store.register_independent_array(self.std_dev_internal)
+        source, factor = self.scaled_slot
+        own = store.allocate(source.stop - source.start)
+        store.update_from_propagation(own, [source], [factor])
+        # the model is frozen; the slot it stands for is the same either way
+        object.__setattr__(self, "vector_slice", own)
+        return own
 
     def _compute_std_dev(
         self, lineage: dict[str, UncType], backend: BackendOps
@@ -936,11 +1125,15 @@ class CovarianceModel(Uncertainty[UncType]):
         if other is None:
             return
         if isinstance(other, CovarianceModel):
-            in_slices.append(other.ensure_vector_slice(backend))
+            slot, factor = other.store_operand(backend)
+            in_slices.append(slot)
+            jac_other = with_slot_scale(jac_other, factor)
         else:
             std = getattr(other, "std_dev", other)
             # the same model is the same variable, however many operations it takes part in
-            in_slices.append(store.register_independent_model(other, std))
+            slot, factor = store.model_operand(other, std)
+            in_slices.append(slot)
+            jac_other = with_slot_scale(jac_other, factor)
         jacobians.append(jac_other)
 
     def _add_vector_path(
@@ -957,8 +1150,9 @@ class CovarianceModel(Uncertainty[UncType]):
         )
 
         store = ensure_store(backend)
-        in_slices = [self.ensure_vector_slice(backend)]
-        jacobians = [jac_self]
+        slot, factor = self.store_operand(backend)
+        in_slices = [slot]
+        jacobians = [with_slot_scale(jac_self, factor)]
         self._add_other_to_store(
             other, jac_other, store, backend, in_slices, jacobians
         )
@@ -972,7 +1166,9 @@ class CovarianceModel(Uncertainty[UncType]):
             backend.sqrt(diag), backend.shape(out_magnitude)
         )
         return CovarianceModel(
-            std_dev_internal=std_dev, vector_slice=out_slice
+            std_dev_internal=std_dev,
+            vector_slice=out_slice,
+            store_token=store.token,
         )
 
     def _merge_lineage_with_jac(
@@ -1142,16 +1338,33 @@ def _register_jax_pytrees() -> None:
     def cov_flatten(m):
         keys = tuple(sorted(m.lineage.keys()))
         values = tuple(m.lineage[k] for k in keys)
-        return (m.std_dev_internal, values), (m.vector_slice, keys)
+        # a factor per element is data (a child); a slot and one number are static
+        slot, factor = m.scaled_slot or (None, None)
+        per_element = factor is not None and not isinstance(
+            factor, (int, float)
+        )
+        # the aux data must be hashable: a slice is not, before Python 3.12
+        return (m.std_dev_internal, values, factor if per_element else None), (
+            _slice_key(m.vector_slice),
+            keys,
+            _slice_key(slot),
+            None if per_element else factor,
+            m.store_token,
+        )
 
     def cov_unflatten(aux, children):
-        vector_slice, keys = aux
-        std_dev, values = children
+        vector_slice_key, keys, slot_key, number, store_token = aux
+        std_dev, values, per_element = children
         lineage = dict(zip(keys, values, strict=False))
+        factor = per_element if per_element is not None else number
+        slot = _slice_of(slot_key)
+        scaled_slot = None if slot is None else (slot, factor)
         return CovarianceModel(
             std_dev_internal=std_dev,
             lineage=lineage,
-            vector_slice=vector_slice,
+            vector_slice=_slice_of(vector_slice_key),
+            scaled_slot=scaled_slot,
+            store_token=store_token,
         )
 
     jax.tree_util.register_pytree_node(

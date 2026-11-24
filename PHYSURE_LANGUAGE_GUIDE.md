@@ -55,6 +55,8 @@ Different dimensions, and operand types that have no comparison (two vectors, a 
 | `30 deg > 0`, `1 rad > 0.5` | error: an angle is a dimension in a comparison, in either angle mode | `30 deg > 0 deg`, `1 rad > 0.5 rad` |
 | `20 dB == 100` | error: "cannot compare 20.0 dB with the plain number 100: write the level with its unit (`x > 20 dB`) or compare the ratio explicitly (`(x => unity) > 100`)": whether 100 is a ratio, a power ratio or 100 dB is written nowhere | `20 dB > 10 dB`; `(20 dB => unity) == 100` is true |
 | `5 dB > 0`, `0 dB == 0` | error: the zero message | `5 dB > 0 dB` |
+| `5 delta_degC < 20 degC`, `5 delta_degC == 5 degC` | error: "cannot compare a temperature point (`20.0 degC`) with a temperature interval (`5.0 delta_degC`): ...": an interval (`delta_degC`, `delta_degF`, any unit the catalog flags `interval`) is how far apart two points (`degC`, `degF`) are, not where one is; `max`, `min`, a vector and `linspace` refuse the pair too. An interval times a ratio (`2`, `50 %`), an interval plus or minus an interval, and a point minus a point (printed in `K`) are intervals: `(20 degC - 10 degC) < 20 degC` is refused too; a step through another dimension (`x / 1 m * 1 m`) loses the kind. A `K` or `degR` that comes out of a point (`20 degC => K`, `68 degF => degR`), or such a point moved by an interval, is a known point: `(20 degC => K) < 5 delta_degC` is refused, two of them make an interval (`T2 - T1`), and so does one with a `degC` (`20 degC - (10 degC => K)` is 10 K; `20 degC + (10 degC => K)` is refused). A `K` or `degR` written by hand is of unknown kind (it may be an absolute temperature or a difference), and so is its sum with anything, a scaled point (`T * 2`) and a sum of two points (`(T1 + T2) / 2`, an average): `20 degC > 10 K`, `(300 K + 5 delta_degC) < 40 degC` and `(30 degC - 20 degC) > 5 delta_degC` are true | `T2 - T1 > 5 delta_degC`: compare a difference of two points with the interval. `x => K` does not make an interval a point: an interval in K is still an interval (`(5 delta_degC => K) < 20 degC` is refused); a point moved by the interval is a point, `T1 + 5 delta_degC` |
+| `20 degC => delta_degC`, `5 delta_degC => degC` | error: "cannot convert a temperature point (`20.0 degC`) to a temperature interval (`delta_degC`): a point says where, an interval says how far ..." (and the reverse): it read the point's absolute value (293.15 delta_degC) or the interval as kelvin above absolute zero (-268.15 degC). A point converted to `K` is still a point: `T = 20 degC => K; T => delta_degC` is refused too. `10 K => delta_degC` and `5 delta_degC => K` convert, each keeping its kind: an interval in K is still an interval, a `K` written by hand stands for either | a difference of two points, `(20 degC - 0 degC) => delta_degC` (20 delta_degC); a point moved by an interval, `T1 + 5 delta_degC` |
 | `50 % == 0.5`, `1 % > 0`, `3 ppm == 3e-6`, `(2 m / 1 m) > 1` | true: a dimensionless ratio in any unit (not a level) compares with plain numbers by its ratio | |
 
 A test against zero with a tolerance writes the tolerance in the unit of `x`: `abs(x) < 1e-9 m`.
@@ -111,6 +113,7 @@ P(x, y) = 100.0 kPa * sin(x / 1.0 m) * cos(y / 1.0 m)
 
 ### 1.3 Control Flow & Local Bindings
 ```phs
+pressure = 75.0 kPa
 doubled = x * 2.0 where x = 10.0 m
 status = if pressure > 50.0 kPa then "High Pressure" else "Normal Pressure"
 ```
@@ -131,7 +134,7 @@ use linspace, gradient, trapz from array
 - Errors name the module: a name it does not define, a cyclic import (`a -> b -> a`), a file that cannot be parsed, and a module that binds a reserved name (section 1.5): a module with `pi = 3` makes every import from it an error, whichever name is imported.
 
 ### 1.5 Names: variables, `pi` and the constants of the catalog
-A bare name resolves in one order, the same everywhere (the interpreter, the text of `integral` and `limit`, `phs check`): a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is its own text.
+A bare name resolves in one order, which the interpreter, the text of `integral` and `limit`, and `phs check` follow: a parameter, a `where` binding or a `for` variable, then a variable or a function of the program; then `pi` (or `π`), the number π; then a constant of the catalog in force, a quantity in the unit the catalog gives it; then a unit (`J` alone is one joule). Any other name is an error when its line runs: `` `foo` has no value `` (with the likely fix when there is one: a variable two edits away, a unit one edit away, a function of PHS written as a value). `phs check` reports it before the run only where the name meets a quantity (`5 foo`, `x + foo`).
 
 ```phs
 area = pi * (2 m)^2                                   # 12.566 m^2
@@ -141,7 +144,7 @@ photon = planck_constant * speed_of_light_in_vacuum / (500 nm) => eV   # 2.48 eV
 
 The constants are the `[Constants]` of the catalog in force, by their catalog names: the embedded catalog (411 CODATA values, with no uncertainties), a project's `physure.conf`, a frozen file, or the registry a binding evaluates for. An override or a frozen configuration changes them. Only the catalog's own names are constants: `e`, `c`, `k` and `R` are not (write `exp(1)`, `speed_of_light_in_vacuum`, `boltzmann_constant`, `molar_gas_constant`), and `h`, `g`, `G` are units (hour, gram, gauss). Seven names are a unit and a constant at once (`bohr_radius`, `electron_mass`, `electron_volt`, `planck_length`, `planck_mass`, `planck_temperature`, `planck_time`): the catalog gives both one value (a frozen file or a unit system where they differ is refused; a `physure.conf` where they differ loses the constant, with a message), so `2 bohr_radius` (the unit) and `2 * bohr_radius` (the constant) are the same length. A constant carries no uncertainty: a catalog line is `name = number unit`, and one written with `+/-` is an error when it is used.
 
-Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file.
+Binding one of these names is an error, whatever binds it: `pi = 3`, `f(pi) = ...`, `for pi in ...`, `... where pi = 3`, a function called `pi`, an import of a module that defines it, a value a host passes under that name. The catalog in force decides which names those are, so a `physure.conf` or a frozen file that adds a `[Constants]` entry makes a script that binds that name an error under that configuration only. `phs transpile` cannot read a catalog when the generated code runs: it writes each constant's value at generation, listed in a comment at the top of the file. Section 1.7 lists the other names that can never be bound.
 
 ### 1.6 Settings that change a run
 The `[Settings]` of the frozen file in force (`phs conf`), or else of the `physure.conf` in the working directory, govern these. A key that is not set takes its default, which is the behaviour from before the key existed (but for the seed, below).
@@ -162,6 +165,31 @@ The `[Settings]` of the frozen file in force (`phs conf`), or else of the `physu
 **Printed text.** `@precision` wins over the display keys, and `x: base` follows the digits and thresholds without GUM rounding. The keys do not govern `format()` with a spec, `frac` and `ifrac`, plot axes or the symbolic printer. With `display_significant_digits = 6` and `uncertainty_digits = 3`, `x = 1/3` prints `0.333333` (by default `0.333333333333333`) and `10.0 +/- 0.15 m` prints `10.000 ± 0.150 m` (by default `10.0 ± 0.2 m`).
 
 Six old keys are accepted and do nothing: `default_output`, `auto_simplify`, `default_system`, `readable_representation`, `verbose`, `mkml_recursion_limit`. `phs conf status` warns where a file of yours sets one.
+
+### 1.7 Reserved names
+A program can never bind a reserved name: not as a variable, a parameter, a function name, a `for` variable, a `where` binding or an import alias. The interpreter refuses it just before the statement runs, and `phs check` reports it before the program runs, with the code `reserved-name`; the message says what the name is and what to do:
+
+| Class | Names |
+| :--- | :--- |
+| Keywords | `for`, `while`, `let`, `if`, `then`, `else`, `where`, `return`, `not`, `and`, `or`, `True`, `False` |
+| Statement words | `use`, `from`, `import`, `export`, `as`, `fn`, `in` |
+| Literals | `true`, `false`, `None`, `none`, `inf`, `infinity`, `oo` |
+| Functions of the core | `abs`, `approx`, `assert`, `ceil`, `cos`, `cot`, `coverage_factor`, `csc`, `dof`, `erf`, `exact_assert`, `exp`, `expanded`, `floor`, `format`, `from_samples`, `if_then_else`, `ln`, `log`, `max`, `min`, `parallel_map`, `round`, `sec`, `sigma`, `sin`, `sqrt`, `tan`, `ternary`, `uncertainty`, `vector` |
+| Functions of `calc` | `curl`, `deriv`, `diff`, `div`, `divergence`, `dsolve`, `expand`, `grad`, `gradient`, `integral`, `integrate`, `inv_laplace`, `inverse_laplace`, `laplace`, `laplacian`, `lim`, `limit`, `series`, `simplify`, `solve`, `sub`, `substitute`, `sym_charpoly`, `sym_det`, `sym_eigenvalues`, `sym_trace`, `sym_transpose`, `taylor` |
+| Functions of `array` | `cross`, `det`, `dot`, `gradient`, `linspace`, `matmul`, `norm`, `sym_charpoly`, `sym_det`, `sym_eigenvalues`, `sym_trace`, `sym_transpose`, `transpose`, `trapz`, `unit_vector` |
+| Functions of `plot` | `export3d`, `export_3d`, `plot`, `plot3d`, `plot_field`, `plot_nd` |
+| Constants | `pi`, `π` and every constant of the catalog (section 1.5) |
+
+```phs
+max = 3          # error: `max` is a function of PHS and cannot be bound as a variable; choose another name
+use = 3          # error: `use` is a word of the language and cannot be bound as a variable; choose another name
+```
+
+* The functions of a module are reserved from the `use` that imports them: `use * from calc` reserves all of `calc`, `use solve from calc` reserves `solve`, and `use solve as sv from calc` reserves `sv` and leaves `solve` free. Importing a function over a name the program already holds, or that a host or a plugin registered, is an error too.
+* Not reserved: unit names (`m`, `s`, `kg`), `e`, the words of a format (`base`, `frac`).
+* A value a host gives a program, and the arguments of an equation call (`eq(sigma=5, A=2)`), are local to the run and never hide a call, so they may be named like a function (`sigma`, `max`, `dof`); a keyword, a literal, `pi` and the constants are still refused there.
+* A host function or a plugin function cannot be installed under a reserved name: a call would reach the builtin first.
+* In a symbolic text (`deriv`, `integral`, `solve`, ...), the keywords, the literals and the functions the symbolic parser knows (`sin`, `log`, `deriv`, `integral`, ...) are not symbols; `sigma`, `max`, `min`, `dof` and `sec` are.
 
 ---
 
@@ -193,18 +221,20 @@ export3d(P, x: rango_x, y: rango_y, file: "mesh.ply", format: "ply")
 | Domain / Module | Function | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `core` | `sqrt(x)` | Square root | `sqrt(16.0 m^2)` |
-| `core` | `sin(x)`, `cos(x)`, `tan(x)` | Trigonometric functions | `sin(3.14159 / 2)` |
+| `core` | `sin(x)`, `cos(x)`, `tan(x)`, `sec(x)`, `csc(x)`, `cot(x)`, `erf(x)` | Trigonometric functions (of an angle or a plain number); `erf`, the error function (of a plain number) | `sin(3.14159 / 2)`, `sec(60 deg)` |
 | `core` | `exp(x)`, `ln(x)`, `log(x)` | Exponents and logarithms | `ln(10.0)` |
 | `core` | `abs(x)` | Absolute value | `abs(-5.0 m)` |
-| `core` | `round(x, n)` | Round to n decimal places | `round(3.14159, 2)` |
-| `calc` | `solve(eq, target)` | Symbolic equation solver | `solve(P == F / A, F)` |
-| `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv(0.5 * m * v^2, v)` |
-| `calc` | `integral(expr, var)` | Symbolic integral | `integral(m * g, h)` |
+| `core` | `round(x, n)` | Round to n decimal places, ties away from zero; `n` is a whole, plain number, negative to round to tens (`round(1.5 m, 1 s)` and `round(x, 2.7)` are errors). The uncertainty and its degrees of freedom are kept; a place finer than the value has digits for leaves it as it is (`round(1.5 m, 400)` is `1.5 m`), one above every digit gives 0 | `round(3.14159, 2)` |
+| `core` | `min(a, b, ...)`, `max(a, b, ...)` | The smallest or largest of values of one dimension, in the unit it was written in; one vector argument is the extremum of its elements. Values of different dimensions are an error (`max(1 m, 1 s)`, `min(1 m, 2)`, `max(1 rad, 1)`, a level and a plain number `max(20 dB, 2)`): compare values of one dimension | `max(1 m, 30 cm)`, `min(vector(3 s, 2 s))` |
+| `core` | `vector(a, b, ...)`, `[a, b, ...]` | A vector. Its numbers and quantities share one dimension, in any of its units; `vector(1 m, 2 s)` is an error, and so is any vector that would mix dimensions, whatever builds it (an elementwise operation such as `2 m ^ vector(1, 2)`, a `for`, `parallel_map`, `transpose`, a host function): put each dimension in its own vector. The rows of a matrix may differ from one another (`[[1 m, 2 m], [1 s, 2 s]]`), not within a row | `[1 m, 2 km]` |
+| `calc` | `solve(eq, target)` | Symbolic equation solver | `solve("P = F / A", "F")` |
+| `calc` | `deriv(expr, var)` | Symbolic derivative | `deriv("0.5 * m * v^2", "v")` |
+| `calc` | `integral(expr, var)` | Symbolic integral | `integral("m * g", "h")` |
 | `calc` | `integral(expr, var, a, b)` | Definite integral (closed form confirmed numerically, or tanh-sinh quadrature with an error estimate) | `integral("v", "t", 0 s, 1 h)` |
 | `calc` | `limit(expr, var, point, side?)` | Limit (value at a point of continuity, or Richardson extrapolation with a convergence check); two-sided, or from one side with `side` `"+"` (right) or `"-"` (left) | `limit("sin(x)/x", "x", 0)`, `limit("1/x", "x", 0, "+")` |
-| `array` | `linspace(a, b, n)` | Vector generation | `linspace(0.0 m, 10.0 m, 100)` |
-| `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient(presion_vec, pos_vec)` |
-| `array` | `trapz(y, x)` | Numerical integration (area) | `trapz(fuerza_vec, pos_vec)` |
+| `array` | `linspace(a, b, n)` | Vector generation: `a` and `b` numbers or quantities of one dimension, the points in the unit of `a` (`linspace(0 m, 1 km, 3)` is `0 m, 500 m, 1000 m`); `n` is a whole, non-negative plain number (50 when it is left out) | `linspace(0.0 m, 10.0 m, 100)` |
+| `array` | `gradient(y, x)` | Numerical derivative dy/dx | `gradient([1, 4, 9] Pa, [1, 2, 3] m)` |
+| `array` | `trapz(y, x)` | Numerical integration (area) | `trapz([1, 2, 3] N, [0, 1, 2] m)` |
 
 #### Definite integrals
 

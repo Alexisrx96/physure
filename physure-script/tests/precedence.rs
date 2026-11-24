@@ -219,13 +219,28 @@ impl Reference<'_> {
 
     /// Precedence climbing: an operand, then every operator that binds at least as tightly as `min`.
     fn climb(&mut self, min: u8) -> Option<String> {
-        let mut left = match self.peek()? {
+        let mut left = self.operand(min)?;
+        while let Some(op) = self.peek().map(str::to_string) {
+            let Some(power) = binding(&op) else { break };
+            if power < min {
+                break;
+            }
+            self.take();
+            left = self.infix(&op, power, left)?;
+        }
+        Some(left)
+    }
+
+    /// The operand that starts an expression binding at least as tightly as `min`: a `not` or a negation, or a
+    /// primary.
+    fn operand(&mut self, min: u8) -> Option<String> {
+        match self.peek()? {
             "not" => {
                 if min > 3 {
                     return None;
                 }
                 self.take();
-                format!("(not {})", self.climb(3)?)
+                Some(format!("(not {})", self.climb(3)?))
             }
             "-" => {
                 if min > 9 {
@@ -235,50 +250,50 @@ impl Reference<'_> {
                 if self.peek()? == "-" {
                     return None;
                 }
-                format!("(* -1 {})", self.climb(10)?)
+                Some(format!("(* -1 {})", self.climb(10)?))
             }
-            _ => self.primary()?,
-        };
-        while let Some(op) = self.peek().map(str::to_string) {
-            let Some(power) = binding(&op) else { break };
-            if power < min {
-                break;
-            }
-            self.take();
-            left = match op.as_str() {
-                // the exponent is a primary, and a power is not an operand of another power
-                "^" => {
-                    let exponent = if self.signed_exponent && self.peek() == Some("-") {
-                        self.take();
-                        format!("(* -1 {})", self.primary()?)
-                    } else {
-                        self.primary()?
-                    };
-                    if self.peek() == Some("^") {
-                        return None;
-                    }
-                    format!("(^ {left} {exponent})")
-                }
-                "=>" => {
-                    let unit = self.take()?;
-                    // a unit is never followed by `+` or `-`
-                    if matches!(self.peek(), Some("+" | "-")) {
-                        return None;
-                    }
-                    format!("(=> {left} {unit})")
-                }
-                // non-associative: one comparison, one range
-                "==" | "!=" | "<" | ">" | "<=" | ">=" | ".." => {
-                    let right = self.climb(power + 1)?;
-                    if self.peek().and_then(binding) == Some(power) {
-                        return None;
-                    }
-                    format!("({op} {left} {right})")
-                }
-                _ => format!("({op} {left} {})", self.climb(power + 1)?),
-            };
+            _ => self.primary(),
         }
-        Some(left)
+    }
+
+    /// `left op ...` once `op` (of binding `power`) is taken: the rest of the operation.
+    fn infix(&mut self, op: &str, power: u8, left: String) -> Option<String> {
+        match op {
+            // the exponent is a primary, and a power is not an operand of another power
+            "^" => {
+                let exponent = self.exponent()?;
+                if self.peek() == Some("^") {
+                    return None;
+                }
+                Some(format!("(^ {left} {exponent})"))
+            }
+            "=>" => {
+                let unit = self.take()?;
+                // a unit is never followed by `+` or `-`
+                if matches!(self.peek(), Some("+" | "-")) {
+                    return None;
+                }
+                Some(format!("(=> {left} {unit})"))
+            }
+            // non-associative: one comparison, one range
+            "==" | "!=" | "<" | ">" | "<=" | ">=" | ".." => {
+                let right = self.climb(power + 1)?;
+                if self.peek().and_then(binding) == Some(power) {
+                    return None;
+                }
+                Some(format!("({op} {left} {right})"))
+            }
+            _ => Some(format!("({op} {left} {})", self.climb(power + 1)?)),
+        }
+    }
+
+    /// The exponent after `^`: a primary, with a sign when the reading allows one.
+    fn exponent(&mut self) -> Option<String> {
+        if self.signed_exponent && self.peek() == Some("-") {
+            self.take();
+            return Some(format!("(* -1 {})", self.primary()?));
+        }
+        self.primary()
     }
 }
 
@@ -422,7 +437,7 @@ fn symbolic_tree(node: &Node) -> String {
 /// The strings `deriv`, `integral`, `limit` and the other symbolic builtins read go through a second parser
 /// (`symbolic::parser`). It must bind the same way: `-x^2` is `-(x^2)` there too (it was `(-x)^2`, so
 /// `deriv("-x^2", "x")` answered `2 * x`), and a power of a power is refused there too. The one difference it keeps
-/// is a sign on an exponent (`e^-x`), which the reference is told about.
+/// is a sign on an exponent (`x^-2`), which the reference is told about.
 #[test]
 fn the_symbolic_parser_agrees_with_the_same_reference() {
     let mut random = Random(0x2545_f491_4f6c_dd1d);
@@ -473,5 +488,7 @@ fn a_power_of_a_power_is_refused_in_symbolic_strings_as_in_phs() {
     }
     assert!(SymbolicParser::parse_str("(x^2)^3").is_ok());
     assert!(SymbolicParser::parse_str("x^(2^3)").is_ok());
-    assert!(SymbolicParser::parse_str("e^2x").is_ok());
+    // `e` is not Euler's number in a symbolic text (audit T13): `exp(2x)` is
+    assert!(SymbolicParser::parse_str("e^2x").unwrap_err().to_string().contains("exp(x)"));
+    assert!(SymbolicParser::parse_str("exp(2x)").is_ok());
 }

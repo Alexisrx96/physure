@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import operator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from typing import Self
@@ -11,7 +11,10 @@ if TYPE_CHECKING:
     from physure.core.protocols import Numeric
 
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.uncertainty import Uncertainty
+from physure.domain.measurement.uncertainty import (
+    Uncertainty,
+    with_slot_scale,
+)
 from physure.domain.measurement.units import CompoundUnit
 
 _Quantity = None
@@ -26,8 +29,202 @@ def _q():
     return _Quantity
 
 
+_TOLERANCE_ARGS = ("a", "b", "rtol", "atol", "equal_nan")
+
+
+def _coherent_operand(np: Any, operand: Any) -> tuple[Any, Any, Any]:
+    """`(dimension, coherent unit, float array)` of a quantity, of an array or list of them.
+
+    Plain numbers (no quantity among them) are dimensionless: dimension `None`.
+    """
+    if isinstance(operand, _q()):
+        unit, value = operand._coherent_value()
+        return operand.dimension, unit, np.asarray(value, dtype=float)
+    items = np.asarray(operand, dtype=object)
+    flat = items.reshape(-1)
+    quantities = [item for item in flat if isinstance(item, _q())]
+    if not quantities:
+        return None, None, np.asarray(operand, dtype=float)
+    first = quantities[0]
+    first_unit = first._coherent_value()[0]
+    values = np.empty(flat.shape, dtype=float)
+    for position, item in enumerate(flat):
+        if not isinstance(item, _q()):
+            raise IncompatibleUnitsError(first.unit, CompoundUnit({}))
+        unit, value = item._coherent_value()
+        if item.dimension != first.dimension or unit != first_unit:
+            raise IncompatibleUnitsError(first.unit, item.unit)
+        values[position] = value
+    return first.dimension, first_unit, values.reshape(items.shape)
+
+
+def _isclose(
+    np: Any, all_of_them: bool, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> Any:
+    """`np.isclose` and `np.allclose` of quantities, compared in their coherent unit.
+
+    Each side (a quantity, an array-backed one, an array or a list of them) is read as
+    its value in the coherent unit, so `1 m` is close to `100 cm`; another dimension
+    raises. `rtol` is a plain number. `atol` is a quantity of the same dimension, or
+    `0`: NumPy's default `1e-8` has no unit, so for a dimensional comparison the
+    default `atol` is `0`, and a bare non-zero `atol` raises `TypeError`.
+    """
+    bound = dict(zip(_TOLERANCE_ARGS, args, strict=False))
+    bound.update(kwargs)
+    a, b = bound["a"], bound["b"]
+    if (
+        isinstance(a, _q())
+        and isinstance(b, _q())
+        and a._point_against_interval(b)
+    ):
+        a._refuse_point_against_interval(b)
+    left_dimension, left_unit, left = _coherent_operand(np, a)
+    right_dimension, right_unit, right = _coherent_operand(np, b)
+    if left_dimension is not None:
+        dimension, unit = left_dimension, left_unit
+    else:
+        dimension, unit = right_dimension, right_unit
+    dimensional = dimension is not None and not dimension.is_dimensionless
+    if left_dimension is not None and right_dimension is not None:
+        if left_dimension != right_dimension or left_unit != right_unit:
+            raise IncompatibleUnitsError(left_unit, right_unit)
+    elif dimensional:
+        # a plain number against a length has no unit to be compared in
+        raise IncompatibleUnitsError(unit, CompoundUnit({}))
+    atol = bound.get("atol", 0.0 if dimensional else 1e-8)
+    if isinstance(atol, _q()):
+        if atol.dimension != dimension:
+            raise IncompatibleUnitsError(atol.unit, unit)
+        atol = float(np.asarray(atol._coherent_value()[1], dtype=float))
+    elif dimensional and atol != 0:
+        message = (
+            f"atol={atol!r} has no unit and the quantities compared are in '{unit}': "
+            f"give atol as a quantity (atol=Q_(1e-9, '{unit}')) or 0"
+        )
+        raise TypeError(message)
+    close = np.isclose(
+        left,
+        right,
+        rtol=bound.get("rtol", 1e-05),
+        atol=atol,
+        equal_nan=bound.get("equal_nan", False),
+    )
+    return bool(np.all(close)) if all_of_them else close
+
+
+def _store_propagation(
+    np: Any,
+    backend: Any,
+    size: int,
+    slots: list[slice],
+    jacobians: list[Any],
+) -> tuple[Any, slice]:
+    """The standard deviations of `sum J_k x_k` (flat) and its new slot in the store.
+
+    `x_k` are the arrays in `slots`; the core's covariance store propagates
+    `J Σ Jᵀ` with every covariance it holds between them, so a slot given twice
+    (`a.dot(a)`) is one variable.
+    """
+    from physure.domain.measurement.vectorized_uncertainty import (
+        _dense_host,
+        ensure_store,
+    )
+
+    store = ensure_store(backend)
+    out = store.allocate(size)
+    store.update_from_propagation(out, slots, jacobians)
+    block = store.get_covariance_block(out, out)
+    variance = np.asarray(
+        _dense_host(backend.sparse_diagonal(block)), dtype=float
+    ).reshape(-1)
+    return np.sqrt(variance), out
+
+
+def _dot_jacobians(np: Any, a: Any, b: Any) -> tuple[Any, Any]:
+    """`d(a.b)/da` and `d(a.b)/db` (flattened, row-major) for 1-D and 2-D operands.
+
+    With `a` read as an (m, k) matrix (a row for a vector) and `b` as (k, n) (a
+    column for a vector), `C = A B` has `dC_il/dA_i'j = δ_ii' B_jl` and
+    `dC_il/dB_jl' = A_ij δ_ll'`: `kron(I_m, Bᵀ)` and `kron(A, I_n)`.
+    """
+    left = np.asarray(a, dtype=float)
+    right = np.asarray(b, dtype=float)
+    if left.ndim > 2 or right.ndim > 2:
+        raise TypeError(
+            "dot of uncertain arrays of more than two dimensions cannot propagate "
+            "the uncertainty yet: take the product of 1-D or 2-D quantities, or of "
+            "the magnitudes on purpose (q.magnitude)"
+        )
+    rows = left.reshape(1, -1) if left.ndim == 1 else left
+    columns = right.reshape(-1, 1) if right.ndim == 1 else right
+    return (
+        np.kron(np.eye(rows.shape[0]), columns.T),
+        np.kron(rows, np.eye(columns.shape[1])),
+    )
+
+
+def _cross_jacobians(np: Any, a: Any, b: Any) -> tuple[Any, Any]:
+    """`d(a x b)/da` and `d(a x b)/db` for one pair of 2- or 3-vectors of one length.
+
+    For 3-vectors `a x b = -[b]x a = [a]x b`, with `[v]x` the matrix of `v x .`;
+    for 2-vectors `a0 b1 - a1 b0`.
+    """
+    left = np.asarray(a, dtype=float)
+    right = np.asarray(b, dtype=float)
+    if (
+        left.ndim != 1
+        or left.shape != right.shape
+        or left.shape[0] not in (2, 3)
+    ):
+        raise TypeError(
+            "cross of uncertain quantities propagates the uncertainty for one pair "
+            "of 2- or 3-vectors of one length; batches and mixed lengths cannot yet: "
+            "take each pair (q[i]) on its own, or the magnitudes on purpose "
+            "(q.magnitude)"
+        )
+    if left.shape[0] == 2:
+        return (
+            np.array([[right[1], -right[0]]]),
+            np.array([[-left[1], left[0]]]),
+        )
+
+    def skew(v: Any) -> Any:
+        return np.array(
+            [[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]]
+        )
+
+    return -skew(right), skew(left)
+
+
 class BackendMixin:
     """NumPy ufunc/function and PyTorch function dispatch methods."""
+
+    # ponytail: what the host class (Quantity) provides, declared for the type
+    # checkers that read the mixin on its own, as ArithmeticMixin does.
+    if TYPE_CHECKING:
+        unit: CompoundUnit
+        system: Any
+        magnitude: Any
+        dimension: Any
+        _backend: Any
+        _uncertainty_obj: Any
+
+        @property
+        def _numeric_std_dev(self) -> Any: ...
+
+        @property
+        def _has_uncertainty(self) -> bool: ...
+
+        def _is_level(self) -> bool: ...
+
+        def _is_point(self) -> bool: ...
+
+        def _is_absolute(self) -> bool: ...
+
+        def _refuse_plain_number(self) -> None: ...
+
+        @classmethod
+        def from_input(cls, *args: Any, **kwargs: Any) -> Any: ...
 
     # --- NumPy Integration (Soft Dependency) ---
 
@@ -51,7 +248,10 @@ class BackendMixin:
     def _numpy_ufunc_reduce(
         self, ufunc: Any, inputs: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        """Handle np.add.reduce (e.g. np.sum); return NotImplemented for others."""
+        """`np.add.reduce`, the sum `np.sum` is; NotImplemented for the other reductions.
+
+        It used to sum the numbers alone and drop the uncertainty.
+        """
         import numpy as np
 
         if ufunc != np.add:
@@ -59,8 +259,7 @@ class BackendMixin:
         inp = inputs[0]
         if not isinstance(inp, _q()):
             return NotImplemented
-        res_mag = self._backend.sum(inp.magnitude, axis=kwargs.get("axis"))
-        return type(self).from_input(res_mag, inp.unit, self.system)
+        return inp._numpy_sum_or_mean(np, False, {"axis": 0, **kwargs})
 
     def _numpy_ufunc_check_compatible(self, val: Any) -> None:
         """Raise IncompatibleUnitsError on dimension mismatch."""
@@ -185,7 +384,12 @@ class BackendMixin:
     def _numpy_concatenate(
         self, np: Any, args: tuple[Any, ...], kwargs: dict[str, Any]
     ) -> Any:
-        """Collect magnitudes from a same-unit sequence and concatenate them."""
+        """Collect magnitudes from a same-unit sequence and concatenate them.
+
+        Exact quantities only: the result's elements would be the parts' own, and
+        nothing here gives them their slots in the covariance store, so an uncertain
+        part is refused rather than concatenated to an uncertainty of 0.
+        """
         mags = []
         unit = None
         for arg in args[0]:
@@ -195,6 +399,13 @@ class BackendMixin:
                 unit = arg.unit
             elif arg.unit != unit:
                 return NotImplemented  # Strict unit check
+            if not arg._exact_operand():
+                raise TypeError(
+                    "np.concatenate of quantities with an uncertainty cannot keep "
+                    "it yet (their correlations are not carried into the result); "
+                    "concatenate the magnitudes on purpose (q.magnitude) and give "
+                    "the result its uncertainty"
+                )
             mags.append(arg.magnitude)
         res_mag = np.concatenate(mags, **kwargs)
         # ponytail: BackendMixin is only ever mixed into Quantity, whose
@@ -222,17 +433,286 @@ class BackendMixin:
         if func == np.concatenate:
             return self._numpy_concatenate(np, args, kwargs)
 
-        if func == np.mean:
+        if func in (np.isclose, np.allclose):
+            return _isclose(np, func is np.allclose, args, kwargs)
+
+        if func in (np.sum, np.mean):
             q = args[0]
-            if isinstance(q, _q()):
-                # ponytail: same mixin-blindness as _numpy_concatenate above.
-                return type(self)(
-                    np.mean(q.magnitude, **kwargs),  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
-                    q.unit,
-                    system=q.system,  # ty: ignore[unknown-argument]
+            if not isinstance(q, _q()):
+                return NotImplemented
+            # np.sum(a, axis, dtype, out, keepdims): positional ones named
+            names = ("axis", "dtype", "out", "keepdims")
+            if func is np.sum:
+                names = (*names, "initial", "where")
+            if len(args) - 1 > len(names):
+                raise TypeError(
+                    f"np.{func.__name__} takes at most {len(names)} arguments after "
+                    f"the array ({', '.join(names)}), {len(args) - 1} were given"
                 )
+            named = dict(zip(names[: len(args) - 1], args[1:], strict=True))
+            return q._numpy_sum_or_mean(
+                np, func is np.mean, {**named, **kwargs}
+            )
+
+        if (
+            func in (np.dot, np.cross)
+            and len(args) == 2
+            and not kwargs
+            and all(isinstance(arg, _q()) for arg in args)
+        ):
+            # the two quantities alone: an `out`, an axis or a plain array is refused
+            left, right = args
+            return left.dot(right) if func is np.dot else left.cross(right)
 
         return NotImplemented
+
+    def _numpy_sum_or_mean(
+        self, np: Any, mean: bool, kwargs: dict[str, Any]
+    ) -> Any:
+        """`np.sum` or `np.mean` of this quantity, its unit and uncertainty kept.
+
+        An exact array reduces its numbers (vectorised, any NumPy keyword). With an
+        uncertainty, the whole array is reduced: the value is the sum of the numbers and
+        the standard deviation that of `J x` with `J` a row of ones, which the core's
+        covariance store propagates (`J Σ Jᵀ`), so elements that share an error
+        (`x * [1, 1, 2]`) count it once; independent elements give
+        `sqrt(sum(u_i^2))`, the uncertainty of `q[0] + q[1] + ...`. The mean is the sum
+        divided by `n`. The result is a new scalar measurement, as `q[i]` is.
+        """
+        name = "np.mean" if mean else "np.sum"
+        if self._is_level():  # pyright: ignore[reportAttributeAccessIssue]
+            raise TypeError(
+                f"{name} of levels ('{self.unit}'): a level adds as the quantity it "
+                "stands for, not by its numbers; convert to its plain unit first"
+            )
+        if not mean and self._is_point():  # pyright: ignore[reportAttributeAccessIssue]
+            raise ValueError(
+                f"{name} of temperature points ('{self.unit}'): cannot add absolute "
+                "quantities; np.mean of points, or a sum of differences, has a meaning"
+            )
+        magnitude: Any = self.magnitude
+        backend = self._backend
+        shape = (
+            tuple(backend.shape(magnitude))
+            if backend.is_array(magnitude)
+            else ()
+        )
+        if not shape:
+            return self  # one number: its own sum and mean
+        if len(shape) == 1 and kwargs.get("axis") in (0, -1, (0,), (-1,)):
+            kwargs = {**kwargs, "axis": None}
+        reduce = np.mean if mean else np.sum
+        if self._is_exact_array(np):
+            # ponytail: same mixin-blindness as _numpy_concatenate above.
+            return type(self)(
+                reduce(magnitude, **kwargs),  # pyright: ignore[reportCallIssue]  # ty: ignore[too-many-positional-arguments]
+                self.unit,
+                system=self.system,  # ty: ignore[unknown-argument]
+            )
+        refused = sorted(k for k, v in kwargs.items() if v is not None)
+        if refused:
+            raise TypeError(
+                f"{name} of an array-backed quantity with an uncertainty reduces the "
+                f"whole array; {', '.join(refused)} (along an axis, a dtype, an out "
+                "array) cannot propagate the uncertainty yet: index the quantity first, "
+                "or take the magnitude on purpose (q.magnitude)"
+            )
+        size = backend.size(magnitude)
+        total = backend.sum(magnitude)
+        sigma = self._sum_standard_deviation(np, size, name)
+        if mean:
+            total, sigma = total / size, sigma / size
+        return type(self).from_input(  # pyright: ignore[reportAttributeAccessIssue]
+            total, self.unit, self.system, uncertainty=sigma
+        )
+
+    def _is_exact_array(self, np: Any) -> bool:
+        """No uncertainty on any element; one pass (`max`) for a NumPy array of them.
+
+        `_has_uncertainty` builds a boolean array first, which costs more than the
+        reduction itself. A standard deviation is never negative, and a NaN is not zero.
+        """
+        known = self.__dict__.get("_exact_array")
+        if known is not None:
+            # the uncertainty is fixed when the quantity is made (`q[i] = x` sets
+            # the magnitude only), so the answer is kept
+            return known
+        unc = self._numeric_std_dev  # pyright: ignore[reportAttributeAccessIssue]
+        if isinstance(unc, np.ndarray) and unc.size:
+            exact = bool(unc.max() == 0)
+        else:
+            exact = not self._has_uncertainty  # pyright: ignore[reportAttributeAccessIssue]
+        object.__setattr__(self, "_exact_array", exact)
+        return exact
+
+    def _sum_standard_deviation(self, np: Any, size: int, name: str) -> float:
+        """The standard deviation of the sum of the elements, by the core's covariance store."""
+        # an exact array is summed before this (`_is_exact_array`), so it has a slot
+        elements, factor = cast(
+            "tuple[slice, Any]", self._store_operand(np, name)
+        )
+        sigma, _ = _store_propagation(
+            np,
+            self._backend,
+            1,
+            [elements],
+            [with_slot_scale(np.ones((1, size)), factor)],
+        )
+        return float(sigma[0])
+
+    def _store_operand(self, np: Any, name: str) -> tuple[slice, Any] | None:
+        """The slot of this array's elements in the core's covariance store and `d elements/d slot`.
+
+        `None` if exact. The factor is not 1 for an array converted to another unit: it
+        is read from the slot of the array it was converted from
+        (`CovarianceModel.store_operand`). Raises `TypeError` (naming `name`) where the
+        model cannot say how the elements are correlated: a propagation from it could
+        give an uncertainty that is too small.
+        """
+        from physure.domain.measurement.uncertainty import (
+            CovarianceModel,
+            VarianceModel,
+        )
+
+        if self._is_exact_array(np):
+            return None
+        model = self._uncertainty_obj  # pyright: ignore[reportAttributeAccessIssue]
+        if isinstance(model, CovarianceModel):
+            return model.store_operand(self._backend)
+        if isinstance(model, VarianceModel):
+            # an array of variances only comes out of arithmetic that already dropped
+            # how its elements are correlated (an array with a scalar of the
+            # uncorrelated mode shares that scalar's error in every element): summed
+            # as independent, it would give a confident uncertainty that is too small
+            raise TypeError(
+                f"{name} cannot propagate the uncertainty of these elements: their "
+                "correlation was lost by the arithmetic that made them (variances "
+                "only, as in the uncorrelated mode), so a result read from them as "
+                "independent errors could be too small; build the array in the default mode, or "
+                "use the magnitudes on purpose (q.magnitude)"
+            )
+        raise TypeError(
+            f"{name} cannot propagate an uncertainty held as "
+            f"{type(model).__name__}: only a covariance or variance model of the "
+            "array says how its elements are correlated"
+        )
+
+    def _ndim(self) -> int:
+        """The number of dimensions of the magnitude (0 for a scalar)."""
+        magnitude: Any = self.magnitude
+        if isinstance(magnitude, (list, tuple)):
+            # the Python backend's vectors (it does not call them arrays)
+            return 1
+        backend = self._backend
+        return (
+            len(backend.shape(magnitude)) if backend.is_array(magnitude) else 0
+        )
+
+    def _exact_operand(self) -> bool:
+        """No uncertainty on any element (NumPy is optional: a list-backed one asks plainly)."""
+        try:
+            import numpy as np
+        except ImportError:
+            return not self._has_uncertainty
+        return self._is_exact_array(np)
+
+    def _vector_operands(
+        self, other: Any, name: str
+    ) -> tuple[tuple[Any, float], tuple[Any, float]]:
+        """The factors of a dot or cross product as `*` takes them, each with `d new/d old`.
+
+        A level is refused (it multiplies as the quantity it stands for, not by its
+        numbers). An absolute temperature is a factor in kelvin (`R * T`), and one
+        against a plain number is refused, as `*` refuses `2 * 20 degC`. The
+        derivative of that conversion (1 for degC, 5/9 for degF) carries the
+        uncertainty of the operand itself, whose slot in the store is the one that
+        its other uses share.
+        """
+        for operand in (self, other):
+            if operand._is_level():
+                raise TypeError(
+                    f"{name} of levels ('{operand.unit}'): a level multiplies as the "
+                    "quantity it stands for, not by its numbers; convert to its plain "
+                    "unit first"
+                )
+        absolute = [q for q in (self, other) if q._is_absolute()]
+        if not absolute:
+            return (self, 1.0), (other, 1.0)
+        if any(q.dimension.is_dimensionless for q in (self, other)):
+            absolute[0]._refuse_plain_number()
+
+        def in_kelvin(q: Any) -> tuple[Any, float]:
+            if not q._is_absolute():
+                return q, 1.0
+            base = q.unit.base_unit(q.system)
+            return (
+                type(q).from_input(q.to(base).magnitude, base, q.system),
+                q.unit.conversion_factor_to(base, q.system),
+            )
+
+        return in_kelvin(self), in_kelvin(other)
+
+    def _vector_product(self, other: Any, name: str) -> Any:
+        """`self.dot(other)` or `self.cross(other)`, the unit and the uncertainty kept.
+
+        The value is the backend's `dot`/`cross` of the magnitudes (an exact product
+        is that alone, as it always was). With an uncertainty, the product is
+        bilinear, so its first-order uncertainty is that of `J_a a + J_b b` with the
+        Jacobians taken at the values; the core's covariance store propagates it
+        (`J Σ Jᵀ`), as it does for `np.sum`, so elements that share an error (`a.dot(a)`,
+        `a = b + x`) count it as the one error it is: `a.dot(b)` is `np.sum(a * b)`.
+        """
+        (left, left_factor), (right, right_factor) = self._vector_operands(
+            other, name
+        )
+        product = self._backend.dot if name == "dot" else self._backend.cross
+        magnitude = product(left.magnitude, right.magnitude)
+        unit = left.unit * right.unit
+        if self._exact_operand() and other._exact_operand():
+            return type(self).from_input(magnitude, unit, self.system)
+        import numpy as np
+
+        operands = (
+            self._store_operand(np, name),
+            other._store_operand(np, name),
+        )
+        jacobians = (_dot_jacobians if name == "dot" else _cross_jacobians)(
+            np, left.magnitude, right.magnitude
+        )
+        factors = (left_factor, right_factor)
+        used = [
+            (operand[0], with_slot_scale(jacobian * factor, operand[1]))
+            for operand, jacobian, factor in zip(
+                operands, jacobians, factors, strict=True
+            )
+            if operand is not None
+        ]
+        sigma, out = _store_propagation(
+            np,
+            self._backend,
+            int(np.size(magnitude)),
+            [slot for slot, _ in used],
+            [jacobian for _, jacobian in used],
+        )
+        shape = np.shape(magnitude)
+        if not shape:
+            # a new scalar measurement, as np.sum's result is
+            return type(self).from_input(
+                magnitude, unit, self.system, uncertainty=float(sigma[0])
+            )
+        from physure.domain.measurement.uncertainty import CovarianceModel
+        from physure.domain.measurement.vectorized_uncertainty import (
+            ensure_store,
+        )
+
+        model = CovarianceModel(
+            std_dev_internal=sigma.reshape(shape),
+            vector_slice=out,
+            store_token=ensure_store(self._backend).token,
+        )
+        return type(self).from_input(
+            magnitude, unit, self.system, uncertainty=model
+        )
 
     @classmethod
     def _torch_unwrap(cls, obj: Any) -> Any:

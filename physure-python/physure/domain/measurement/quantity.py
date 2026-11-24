@@ -26,17 +26,22 @@ from typing import (
 from physure.core.dispatcher import BackendManager
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
     from typing import Self
 
     from physure.core.protocols import BackendOps, Numeric
     from physure.domain.measurement.dimensions import Dimension
 
 from physure.domain.exceptions import IncompatibleUnitsError
-from physure.domain.measurement.conversion_plan import apply_conversion
+from physure.domain.measurement.conversion_plan import (
+    apply_conversion,
+    conversion_slope,
+)
 from physure.domain.measurement.uncertainty import (
+    CovarianceModel,
     LineageModel,
     Uncertainty,
+    VarianceModel,
 )
 from physure.domain.measurement.unit_text import parse_unit_string
 from physure.domain.measurement.units import (
@@ -129,6 +134,82 @@ class CoreQuantity:
 
 
 from physure._core import RationalUnit as _CoreRationalUnit  # noqa: E402
+from physure._core import (  # noqa: E402
+    TemperatureKindError as _TemperatureKindError,
+)
+from physure._core import (  # noqa: E402
+    point_against_interval_message as _point_against_interval_message,
+)
+from physure._core import (  # noqa: E402
+    point_interval_conversion_message as _point_interval_conversion_message,
+)
+
+# the dimension of a temperature, the only one with points and intervals
+_TEMPERATURE = {"O": 1}
+
+
+def _exact_number(value: Any) -> Fraction | None:
+    """A real scalar as an exact rational, `None` for anything else (an array, a tracer, a complex).
+
+    A double is read as the decimal it prints as, the way the core reads one
+    (`ExactScale::from_f64`): `2.54` is `127/50`, so `2.54 cm` is exactly `1 inch`.
+    A non-finite double has no rational.
+    """
+    if isinstance(value, Fraction):
+        return value
+    if isinstance(value, int):
+        return Fraction(value)
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, numpy.integer):
+        return Fraction(int(value))
+    if isinstance(value, float) or (
+        numpy is not None and isinstance(value, numpy.floating)
+    ):
+        number = float(value)
+        if math.isfinite(number):
+            return Fraction(repr(number))
+    return None
+
+
+def _as_float(value: Any) -> float:
+    """`float(value)`, an infinity of its sign beyond the range of a double."""
+    try:
+        return float(value)
+    except OverflowError:
+        return math.inf if value > 0 else -math.inf
+
+
+def _python_scalar(value: Any) -> Any:
+    """A NumPy scalar as the Python number it holds; anything else (an array) as it is."""
+    numpy = sys.modules.get("numpy")
+    if numpy is not None and isinstance(value, numpy.generic):
+        return value.item()
+    return value
+
+
+def _is_plain_real(value: Any) -> bool:
+    """A plain real number a dimensionless quantity may equal: a Python or NumPy int or float."""
+    if isinstance(value, (int, float)):
+        return True
+    numpy = sys.modules.get("numpy")
+    return numpy is not None and isinstance(
+        value, (numpy.integer, numpy.floating)
+    )
+
+
+def _is_zero_numpy_array(value: Any) -> bool:
+    """A NumPy array of zeros (an exact array's standard deviations), in one pass.
+
+    Only NumPy is asked: a torch or JAX array may be live in a traced graph, where
+    reading its values breaks the graph.
+    """
+    numpy = sys.modules.get("numpy")
+    return (
+        numpy is not None
+        and isinstance(value, numpy.ndarray)
+        and not value.any()
+    )
+
 
 # Helpers moved to end of file to resolve circular reference with Quantity class
 from physure.domain.measurement._arithmetic_mixin import (  # noqa: E402
@@ -265,8 +346,14 @@ class Quantity(
         if dims is None:
             dims = getattr(u, "exponents", {})
 
-        # Always call CU(dims) to ensure we get the cached singleton instance
-        object.__setattr__(self, "_unit", CU(dims))
+        # Always call CU(dims) to ensure we get the cached singleton instance;
+        # a unit made an interval (`1 K + 5 delta_degC`) stays one
+        unit = CU(dims)
+        if getattr(self._core_unit, "interval", False):
+            unit = unit.as_interval()
+        elif getattr(self._core_unit, "point", False):
+            unit = unit.as_point()
+        object.__setattr__(self, "_unit", unit)
 
         if system is not None:
             object.__setattr__(self, "system", system)
@@ -750,20 +837,150 @@ class Quantity(
         )
 
     def __hash__(self) -> int:
-        """Computes hash of the quantity."""
-        # Note: If magnitude is array, it might not be hashable.
-        # Python arrays are not hashable. Tuple is.
-        # We rely on self.magnitude.__hash__()
-        # If not hashable, raises TypeError (expected for mutable types).
+        """The hash of the value in the coherent unit, so that `a == b` gives `hash(a) == hash(b)`.
+
+        `1 m`, `100 cm` and `0.001 km` hash alike, and a dict keyed by one finds the
+        others. Neither the uncertainty (`==` does not compare it) nor the unit it is
+        written in nor the kind of a temperature enters the hash. A dimensionless quantity
+        hashes as the number it equals (`hash(Q_(100, "percent")) == hash(1)`). An array
+        magnitude is unhashable.
+
+        Examples:
+            >>> from physure import Q_
+            >>> len({Q_(1, "m"), Q_(100, "cm"), Q_(2, "m", 0.1)})
+            2
+        """
+        magnitude: Any = self.magnitude
+        if self._backend.is_array(magnitude) and tuple(
+            self._backend.shape(magnitude)
+        ):
+            raise TypeError(
+                "unhashable type: 'Quantity' with an array magnitude"
+            )
+        # kept on the quantity: a scalar magnitude does not change, and the value
+        # in the coherent unit only when the registry of its system does
+        stamp = (id(self.system), self.system.__dict__.get("generation", 0))
+        cached = self.__dict__.get("_hash")
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
         try:
-            return hash((self.magnitude, self.unit, self.uncertainty))
+            _, value = self._coherent_value()
+        except Exception:  # a value the core cannot convert (a tracer)
+            value = magnitude
+        try:
+            if self.dimension.is_dimensionless:
+                result = hash(value)
+            else:
+                result = hash((self.dimension, value))
         except TypeError:
-            # Fallback for unhashable magnitude (like numpy array)
-            # Maybe hash bytes? Or raise.
-            # Usually Quantity with array magnitude != hashable.
             raise TypeError(
                 "unhashable type: 'Quantity' with unhashable magnitude"
             ) from None
+        object.__setattr__(self, "_hash", (stamp, result))
+        return result
+
+    def _coherent_value(self) -> tuple[CompoundUnit, Any]:
+        """The value in the coherent unit of the quantity, and that unit (`m`, `K`, `kg·m²/s²`).
+
+        What `==`, `hash` and `float` read: one double, rounded once. A real scalar in
+        another unit is converted exactly and then rounded: its magnitude read as the
+        decimal it prints as (as the core reads a double, `ExactScale::from_f64`), the
+        core's plan to the coherent unit applied before its rounding
+        (`UnitRegistry.exact_conversion`), and the result rounded to the nearest double.
+        So `68 degF` and `20 degC` are both `293.15 K` (the rounded plan gives
+        `293.15000000000003 K` for `68 degF`), `2.54 cm` is `0.0254 m` like `1 inch`, and
+        `q.to(unit)` usually rounds back to the same double. A level, a unit known only
+        as a double, or an array take the core's rounded plan, as `to` applies it.
+
+        A NumPy scalar is read as the Python number it holds (`np.float32(0.1)` is
+        `0.10000000149011612`), so `==` and `hash` see one number. A value beyond the
+        range of a double stays the exact `Fraction` (`1e308 km`), which compares and
+        hashes exactly; `float()` makes it an infinity.
+        """
+        coherent, exact_plan, rounded_plan = self._coherent_plan()
+        magnitude: Any = _python_scalar(self.magnitude)
+        if rounded_plan is None:
+            return coherent, magnitude
+        exact = _exact_number(magnitude) if exact_plan is not None else None
+        if exact is not None:
+            scale, shift = exact_plan
+            value = exact * scale + shift
+            try:
+                return coherent, float(value)
+            except OverflowError:
+                return coherent, value
+        value, _ = apply_conversion(
+            rounded_plan, magnitude, 0.0, self._backend
+        )
+        return coherent, _python_scalar(value)
+
+    def _coherent_plan(self) -> tuple[CompoundUnit, Any, Any]:
+        """The coherent unit, the exact plan to it (Fractions) and the core's rounded one.
+
+        Both plans are `None` for a unit that is its own coherent unit; the exact one is
+        `None` when the core has none. Kept per unit on the system, which forgets them
+        when its registry changes (`UnitSystem.extend_core`).
+        """
+        system = self.system
+        unit = self.unit
+        try:
+            plans = system._coherent_plans
+        except AttributeError:  # a system unpickled from before the plans
+            plans = system._coherent_plans = {}
+        # by identity (a unit is a flyweight): hashing the unit costs more than
+        # the lookup; the unit is kept with its plan, so its id is not reused
+        known = plans.get(id(unit))
+        if known is not None and known[0] is unit:
+            return known[1]
+        coherent = unit.base_unit(system)
+        if coherent == unit and not self._is_level():
+            known = (coherent, None, None)
+        else:
+            registry = system.core_registry
+            exact = registry.exact_conversion(unit, coherent)
+            known = (
+                coherent,
+                None
+                if exact is None
+                else (Fraction(exact[0]), Fraction(exact[1])),
+                registry.conversion(unit, coherent),
+            )
+        plans[id(unit)] = (unit, known)
+        return known
+
+    def _stripped_value(self, operation: str) -> Any:
+        """The value in the coherent unit for a bare number, warning about what is lost.
+
+        `UnitStrippedWarning` names the unit (unless the quantity is dimensionless and
+        not a level, `50 percent` is the number `0.5`) and the uncertainty when there is
+        one, and the explicit, silent way to take the number.
+        """
+        coherent, value = self._coherent_value()
+        lost = []
+        if self._is_level():
+            lost.append(
+                f"the level unit '{self.unit}' (the number is the ratio it stands for)"
+            )
+        elif not self.dimension.is_dimensionless:
+            lost.append(f"the unit '{coherent}'")
+        if self._has_uncertainty:
+            lost.append(f"the uncertainty {self._numeric_std_dev}")
+        if lost:
+            import warnings
+
+            from physure.domain.exceptions import UnitStrippedWarning
+
+            target = "1" if coherent.is_dimensionless else str(coherent)
+            uncertainty = " and q.uncertainty" if self._has_uncertainty else ""
+            warnings.warn(
+                f"{operation} of {self!r} drops {' and '.join(lost)}: the number "
+                f"is the value in the coherent unit '{target}'. To take the number "
+                f"on purpose and silently, write q.to('{target}').magnitude"
+                f"{uncertainty}.",
+                UnitStrippedWarning,
+                stacklevel=3,
+            )
+        return value
 
     @property
     def _numeric_std_dev(self) -> Any:
@@ -1120,45 +1337,120 @@ class Quantity(
         )
 
     def _convert_by_plan(
-        self, target_unit: CompoundUnit, written: CompoundUnit | None = None
+        self,
+        target_unit: CompoundUnit,
+        written: CompoundUnit | None = None,
+        *,
+        kind_free: bool = False,
     ) -> Quantity[ValueType, UncType, UnitType]:
         """Converts by the plan that the core registry gives for the two units.
 
         `written` is the target as it was typed, before a recipe unit was replaced
         by its base units: the core flags the hertz by how a unit is written, and
-        `Hz` is `s^-1` once simplified.
+        `Hz` is `s^-1` once simplified. A point converted to a unit without a
+        zero point is a point (`20 degC => K`), as the core says. `kind_free`
+        reads the number in the target unit whatever kind of temperature it is
+        (a sum's operand: the sum decides the kind of the result).
         """
+        source = self.unit.as_plain() if kind_free else self.unit
         try:
             plan = self.system.core_registry.conversion(
-                self.unit, written or target_unit
+                source, written or target_unit
             )
         except _CORE_ERRORS as error:
             raise _python_error(error, self.unit, target_unit) from error
+        except _TemperatureKindError as error:
+            # a temperature point to an interval unit, or back: the core's
+            # words, with the quantity as it prints
+            raise IncompatibleUnitsError(
+                self.unit,
+                target_unit,
+                _point_interval_conversion_message(
+                    str(self), str(written or target_unit), self._is_point()
+                ),
+            ) from error
         magnitude, uncertainty = apply_conversion(
             plan,
             self.magnitude,  # pyright: ignore[reportArgumentType]
             self.uncertainty,
             self._backend,
         )
-        converted = Quantity.from_input(
+        converted = self._restated(
             magnitude,
             target_unit,
-            self.system,
-            uncertainty=uncertainty,
+            uncertainty,
+            lambda: conversion_slope(
+                plan,
+                self.magnitude,  # pyright: ignore[reportArgumentType]
+                self._backend,
+            ),
         )
-        # A conversion restates the same measurement in another unit, so it keeps the
-        # sources it came from, rescaled: `x.to("mm") - x.to("mm")` is zero and the degrees
-        # of freedom stay with it. `from_input` alone would mint a new, independent source.
+        if not kind_free and self.dimension.exponents == _TEMPERATURE:
+            # the same quantity in another unit is of the same kind, as the
+            # core says: a point stays a point, an interval an interval
+            kind = self.system.core_registry.converted_kind(
+                self.unit, written or target_unit
+            )
+            if kind == "point":
+                object.__setattr__(
+                    converted, "_unit", converted.unit.as_point()
+                )
+            elif kind == "interval" and not converted.unit.interval:
+                object.__setattr__(
+                    converted, "_unit", converted.unit.as_interval()
+                )
+        return cast("Quantity[ValueType, UncType, UnitType]", converted)
+
+    def _restated(
+        self,
+        magnitude: Any,
+        unit: CompoundUnit,
+        uncertainty: Any,
+        slope: Callable[[], Any],
+    ) -> Quantity:
+        """This measurement restated as `magnitude` in `unit`, keeping the sources it came from.
+
+        A conversion is the same measurement in another unit, so `x.to("mm") - x` is
+        zero and the degrees of freedom stay with it; `from_input` alone would mint a
+        new, independent source. A scalar's lineage is rescaled to `uncertainty`. An
+        array's elements are read from the covariance store as `slope()` (`d new/d
+        old`, asked only then) times the source's (`CovarianceModel.converted`). An
+        array of variances only (the uncorrelated mode's arithmetic, a 1-element array
+        outside a store context) holds no correlation to keep: its variance is
+        scaled, as for any such array the result is not correlated with the source.
+        """
         model = self._uncertainty_obj
+        if isinstance(model, CovarianceModel) and (
+            model.vector_slice or model.scaled_slot
+        ):
+            return Quantity.from_input(
+                magnitude,
+                unit,
+                self.system,
+                uncertainty=model.converted(
+                    uncertainty, slope(), self._backend
+                ),
+            )
+        if (
+            isinstance(model, VarianceModel)
+            and self._backend.is_array(uncertainty)
+            and not _is_zero_numpy_array(uncertainty)
+        ):
+            # still variances only: a new slot would pass for an array that knows
+            # how its elements are correlated (np.sum and dot refuse this one)
+            uncertainty = VarianceModel.from_standard(uncertainty)
+        restated = Quantity.from_input(
+            magnitude, unit, self.system, uncertainty=uncertainty
+        )
         if (
             isinstance(model, LineageModel)
             and isinstance(uncertainty, (int, float))
             and uncertainty > 0
         ):
-            converted._uncertainty_obj = LineageModel(
+            restated._uncertainty_obj = LineageModel(
                 native=model.native.rescaled_to(float(uncertainty))
             )
-        return cast("Quantity[ValueType, UncType, UnitType]", converted)
+        return restated
 
     def plot(
         self,
@@ -1284,8 +1576,12 @@ class Quantity(
             written_text = target_unit
             target_unit = self.system.get_unit(target_unit)
 
-        # Fast path for same unit
-        if target_unit == self.unit:
+        # Fast path for same unit (`=> K` makes an interval in K a plain K, as in
+        # the core)
+        if (
+            target_unit == self.unit
+            and target_unit.interval == self.unit.interval
+        ):
             return self
 
         if self.dimension != target_unit.dimension(self.system):
@@ -1365,11 +1661,79 @@ class Quantity(
     # meaningful for scalar magnitudes; array-backed ones fail at runtime
     # with a clear TypeError from the builtin itself, which is acceptable.
     def __int__(self) -> int:
-        """Converts to int."""
-        return int(self.magnitude)  # pyright: ignore[reportArgumentType]
+        """The value in the coherent unit, truncated; `UnitStrippedWarning` as `float` warns."""
+        return int(self._stripped_value("int()"))
+
+    def _round_in_core(self, op: str, *args: int) -> Quantity | None:
+        """`op` (`round`, `floor`, `ceil` or `trunc`) of the Rust core, or `None` for an array.
+
+        The core moves the mean and keeps everything else (`Quantity::shift_mean_to`): the
+        unit, the uncertainty and its sources, so the degrees of freedom and the correlation
+        with the unrounded value survive, and `round` ties away from zero without overflow.
+        A scalar of the default model crosses with its lineage (`from_lineage`) and comes back
+        with the core's; a sampling mode already holds the core quantity. The core is scalar:
+        an array (or a value live in a JAX/torch graph) answers `None` and keeps its backend.
+        """
+        from physure._core import Lineage
+        from physure._core import Quantity as RustCoreQuantity
+
+        core = self._core_magnitude
+        if isinstance(core, RustCoreQuantity):
+            # the sampling modes, as `_check_and_handle_rust_propagation` delegates them
+            return type(self).from_input(
+                getattr(core, op)(*args), self.unit, self.system
+            )
+        magnitude: Any = self.magnitude
+        if self._backend.is_array(magnitude) or self._backend.is_tracing(
+            magnitude
+        ):
+            return None
+        model = self._uncertainty_obj
+        lineage = (
+            model.native
+            if isinstance(model, LineageModel)
+            else Lineage.exact()
+        )
+        result = getattr(
+            RustCoreQuantity.from_lineage(
+                float(magnitude), _ensure_rational(self.unit), lineage
+            ),
+            op,
+        )(*args)
+        if isinstance(model, LineageModel):
+            uncertainty: Any = LineageModel(native=result.lineage)
+        elif model is not None:
+            # `python_lineage()` and `uncorrelated` have no core form; the core keeps the
+            # uncertainty as it is, so the model is kept as it is
+            uncertainty = model
+        else:
+            uncertainty = self.uncertainty
+        return type(self).from_input(
+            result.magnitude, self.unit, self.system, uncertainty
+        )
 
     def __round__(self, ndigits: int | None = None) -> Quantity:
-        """Rounds the quantity."""
+        """The quantity rounded by the core: ties away from zero, as PHS rounds.
+
+        `round(q)` is `round(q, 0)`; `ndigits` is an integer (a negative one rounds to a
+        power of ten). The unit, the uncertainty, its sources and degrees of freedom are
+        kept, so `q - round(q, 1)` has no uncertainty. An array-backed magnitude keeps its
+        backend's own elementwise rounding (JAX: half to even).
+
+        Examples:
+            >>> from physure import Q_
+            >>> round(Q_(2.5, "m"))
+            Quantity(3.0, m)
+            >>> round(Q_(0.125, "m"), 2)
+            Quantity(0.13, m)
+            >>> x = Q_(1.234, "m", 0.1)
+            >>> (x - round(x, 1)).uncertainty
+            0.0
+        """
+        places = 0 if ndigits is None else operator.index(ndigits)
+        rounded = self._round_in_core("round", places)
+        if rounded is not None:
+            return rounded
         val = round(  # pyright: ignore[reportCallIssue]
             self.magnitude,  # pyright: ignore[reportArgumentType]
             ndigits,  # pyright: ignore[reportArgumentType]
@@ -1379,7 +1743,10 @@ class Quantity(
         )
 
     def __floor__(self) -> Quantity:
-        """Returns floor of quantity."""
+        """The core's floor: the integer below, the unit and uncertainty kept."""
+        floored = self._round_in_core("floor")
+        if floored is not None:
+            return floored
         return Quantity.from_input(
             math.floor(  # pyright: ignore[reportCallIssue]
                 self.magnitude  # pyright: ignore[reportArgumentType]
@@ -1390,7 +1757,10 @@ class Quantity(
         )
 
     def __ceil__(self) -> Quantity:
-        """Returns ceiling of quantity."""
+        """The core's ceil: the integer above, the unit and uncertainty kept."""
+        ceiled = self._round_in_core("ceil")
+        if ceiled is not None:
+            return ceiled
         return Quantity.from_input(
             math.ceil(  # pyright: ignore[reportCallIssue]
                 self.magnitude  # pyright: ignore[reportArgumentType]
@@ -1401,7 +1771,10 @@ class Quantity(
         )
 
     def __trunc__(self) -> Quantity:
-        """Truncates quantity."""
+        """The core's trunc: towards zero, the unit and uncertainty kept."""
+        truncated = self._round_in_core("trunc")
+        if truncated is not None:
+            return truncated
         return Quantity.from_input(
             math.trunc(self.magnitude),  # pyright: ignore[reportArgumentType]
             self.unit,
@@ -1410,29 +1783,131 @@ class Quantity(
         )
 
     # --- Container / Array Methods ---
-    def __array__(self, dtype=None) -> Any:
-        """Returns the magnitude as a NumPy array (strips units)."""
-        # Note: Ideally avoid importing numpy, but this hook is for numpy.
-        # If magnitude is already array, return it.
-        # If not, convert.
-        try:
-            import numpy as np
+    def __array__(self, dtype: Any = None, copy: bool | None = None) -> Any:
+        """The quantity as NumPy sees it: an object array of quantities, never silent numbers.
 
-            if dtype:
-                return np.array(self.magnitude, dtype=dtype)
-            return np.array(self.magnitude)
-        except ImportError:
-            # Should not happen if this is called by numpy
-            return self.magnitude
+        Without a `dtype` (or with `object`) the array holds the quantity itself (0-d for
+        a scalar) or, for an array-backed quantity, its elements as scalar quantities
+        with their units and uncertainties (`q[i]`). A list of quantities becomes such
+        an array, so `np.sum`, `np.dot`, `np.cross`, `np.prod`, ... run through
+        `Quantity` arithmetic and keep the unit and the uncertainty.
+
+        A numeric `dtype` (`np.asarray(q, dtype=float)`) is a request for numbers: the
+        value in the coherent unit, with a `UnitStrippedWarning` that names what is
+        dropped. `q.to(unit).magnitude` is the explicit, silent way.
+        """
+        import numpy as np
+
+        if dtype is None or np.dtype(dtype) == np.dtype(object):
+            if copy is False:
+                raise ValueError(
+                    "a Quantity becomes a new object array of quantities, it cannot be "
+                    "viewed without a copy: use q.magnitude for the numbers"
+                )
+            return self._object_array(np)
+        values = self._stripped_value(f"np.asarray(dtype={np.dtype(dtype)})")
+        if isinstance(values, Fraction):
+            values = _as_float(values)
+        return np.asarray(values, dtype=dtype)
+
+    def _object_array(self, np: Any) -> Any:
+        """The quantity, or its elements as scalar quantities, in an object array of its shape."""
+        magnitude: Any = self.magnitude
+        shape = (
+            tuple(self._backend.shape(magnitude))
+            if self._backend.is_array(magnitude)
+            else ()
+        )
+        if not shape:
+            # an element assignment stores the object itself, where np.array would ask
+            # it for an array again
+            holder = np.empty(1, dtype=object)
+            holder[0] = self
+            return holder.reshape(())
+        elements = np.empty(math.prod(shape), dtype=object)
+        if isinstance(magnitude, np.ndarray):
+            self._fill_numpy_elements(np, elements, magnitude, shape)
+        else:
+            for position, index in enumerate(np.ndindex(*shape)):
+                elements[position] = self[index]
+        return elements.reshape(shape)
+
+    def _fill_numpy_elements(
+        self, np: Any, elements: Any, magnitude: Any, shape: tuple[int, ...]
+    ) -> None:
+        """`elements[i]` is `q[i]`, built from one element's state instead of `from_input`.
+
+        Building each element through `from_input` took about 50 us, so
+        `np.asarray` of 1e5 elements took 5 s. Every element shares the unit, system,
+        dimension and backend of the first; its own are the magnitude and, as `q[i]`
+        gives it, a new measurement of its standard deviation (`from_standard`).
+        """
+        first = self[(0,) * len(shape)]
+        state = {
+            key: value
+            for key, value in first.__dict__.items()
+            if key not in ("_hash", "_exact_array")
+        }
+        cls = type(first)
+        values = magnitude.reshape(-1)
+        sigmas = np.broadcast_to(
+            np.asarray(self._numeric_std_dev, dtype=float), shape
+        ).reshape(-1)
+        for position in range(values.size):
+            element = object.__new__(cls)
+            element.__dict__.update(state)
+            element.__dict__["_core_magnitude"] = values[position]
+            sigma = sigmas[position]
+            model = Uncertainty.from_standard(float(sigma)) if sigma else None
+            element.__dict__["_core_uncertainty"] = (
+                model.std_dev if model is not None else sigma
+            )
+            element.__dict__["_uncertainty_obj"] = model
+            elements[position] = element
 
     def __float__(self) -> float:
-        """Converts to float. May fail for arrays."""
-        return float(self.magnitude)  # pyright: ignore[reportArgumentType]
+        """The value in the coherent unit as a bare number.
+
+        `float(Q_(50, "percent"))` is `0.5` and `float(Q_(1, "km"))` is `1000.0`. A
+        quantity with a unit (other than a dimensionless one) or with an uncertainty
+        warns (`UnitStrippedWarning`) with what is dropped; `q.to(unit).magnitude` is
+        the explicit, silent way.
+        """
+        return _as_float(self._stripped_value("float()"))
+
+    def __complex__(self) -> complex:
+        """The value in the coherent unit as a complex number; warns as `float` does."""
+        value = self._stripped_value("complex()")
+        return complex(
+            _as_float(value) if isinstance(value, Fraction) else value
+        )
 
     # --- Math & Vector Ops ---
 
     def dot(self, other: Quantity) -> Quantity:
-        """Computes dot product."""
+        """The dot product (NumPy's `dot`), with its unit and its uncertainty.
+
+        Of two vectors it is `np.sum(a * b)`: the same value and the same
+        uncertainty, propagated by the core's covariance store, so an error the
+        elements share (`a.dot(a)`, `a = b + x`) counts once. A 1-D or 2-D operand
+        gives the vector or matrix product with each element's uncertainty; a scalar
+        operand gives the product `a * b`. An exact product is NumPy's `dot` of the
+        magnitudes. The unit is the product's (`m * N` is `J`); absolute temperatures
+        multiply in kelvin and levels are refused, as `*` has them. An uncertainty that
+        cannot be propagated raises `TypeError` (an array of more than two
+        dimensions, or elements whose correlation was lost, as in the uncorrelated
+        mode), never a zero. A scalar result is a new measurement, as `np.sum`'s is.
+
+        >>> import numpy as np
+        >>> from physure import Q_
+        >>> a = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
+        >>> b = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=0.2)
+        >>> work = a.dot(b)
+        >>> print(f"{float(work.magnitude)} {work.uncertainty:.4f}")
+        32.0 1.1533
+        >>> work.dimension == Q_(1, "J").dimension
+        True
+        """
         # ponytail: defensive runtime guard against duck-typed callers that
         # bypass the static type hint; basedpyright sees `other: Quantity`
         # as already-narrowed, so it flags this as unreachable/unnecessary.
@@ -1442,31 +1917,57 @@ class Quantity(
             raise TypeError(  # pyright: ignore[reportUnreachable]
                 f"dot requires Quantity, got {type(other)}"
             )
-
-        mag = self._backend.dot(
-            self.magnitude,  # pyright: ignore[reportArgumentType]
-            other.magnitude,
-        )
-        new_unit = self.unit * other.unit
-        # Uncertainty ignored for now
-        return Quantity.from_input(mag, new_unit, self.system)
+        if not (self._ndim() and other._ndim()):
+            # NumPy's dot of a scalar is the product
+            return self * other
+        return self._vector_product(other, "dot")
 
     def cross(self, other: Quantity) -> Quantity:
-        """Computes cross product."""
+        """The cross product (NumPy's `cross`), with its unit and its uncertainty.
+
+        Each component carries its first-order uncertainty, propagated by the core's
+        covariance store from the errors of both vectors with every correlation it
+        knows: `a.cross(a)` is exactly zero with no uncertainty, a shared error
+        (`a = b + x`) counts once, and the components stay correlated with each
+        other (`np.sum(a.cross(b))`). One pair of 2- or 3-vectors of one length
+        propagates; an uncertain batch or mixed lengths raise `TypeError`, as do
+        elements whose correlation was lost (the uncorrelated mode); an exact cross
+        product of any shape is NumPy's, as before. The unit is the product's;
+        absolute temperatures multiply in kelvin and levels are refused, as `*`
+        has them.
+
+        >>> import numpy as np
+        >>> from physure import Q_
+        >>> a = Q_(np.array([1.0, 2.0, 3.0]), "m", uncertainty=0.1)
+        >>> b = Q_(np.array([4.0, 5.0, 6.0]), "N", uncertainty=0.2)
+        >>> torque = a.cross(b)
+        >>> print(torque.magnitude)
+        [-3.  6. -3.]
+        >>> print(np.round(torque.uncertainty, 4))
+        [1.063  0.9592 0.781 ]
+        >>> print(np.round(a.cross(a).uncertainty, 12))
+        [0. 0. 0.]
+        """
         if not isinstance(  # pyright: ignore[reportUnnecessaryIsInstance]
             other, Quantity
         ):
             raise TypeError(  # pyright: ignore[reportUnreachable]
                 f"cross requires Quantity, got {type(other)}"
             )
+        return self._vector_product(other, "cross")
 
-        mag = self._backend.cross(
-            self.magnitude,  # pyright: ignore[reportArgumentType]
-            other.magnitude,
-        )
-        new_unit = self.unit * other.unit
-        # Uncertainty ignored for now
-        return Quantity.from_input(mag, new_unit, self.system)
+    def __matmul__(self, other: object) -> Quantity:
+        """`a @ b` of 1-D and 2-D quantities: NumPy's matrix product, which is `a.dot(b)`.
+
+        A scalar, an array of more than two dimensions or a plain array is not taken
+        (NumPy's `@` refuses scalars and broadcasts stacks of matrices, which `dot`
+        does not), so `@` raises `TypeError` for them.
+        """
+        if not isinstance(other, Quantity) or not (
+            1 <= self._ndim() <= 2 and 1 <= other._ndim() <= 2
+        ):
+            return NotImplemented
+        return self.dot(other)
 
     def __bool__(self) -> bool:
         """Returns the boolean value of the magnitude."""
@@ -1535,17 +2036,14 @@ class Quantity(
         # unless vector_slice logic is enhanced.
         new_unc_obj = Uncertainty.from_standard(new_unc_val)
 
-        # If slicing a single element, we might get a scalar magnitude.
-        # backend might need update if it was caching type info?
-        # Quantity._fast_new handles it.
-
-        return self._fast_new(
+        # `from_input` keeps the model and gives the element its numeric standard
+        # deviation: `q[0].uncertainty` is a number, as for any scalar quantity (it
+        # used to be the model object, which `np.asarray(q)` elements then carried)
+        return type(self).from_input(
             new_mag,
             self.unit,
-            new_unc_obj,
             self.system,
-            self.dimension,
-            self._backend,
+            uncertainty=new_unc_val if new_unc_obj is None else new_unc_obj,
         )
 
     def __setitem__(self, key: Any, value: Any) -> None:
@@ -1592,11 +2090,56 @@ class Quantity(
         return {}
 
     # --- Comparison Methods ---
+    def _point_against_interval(self, other: Quantity) -> bool:
+        """A temperature point (degC) against an interval (delta_degC), as the core says.
+
+        Both are of one dimension already; only a temperature asks the core.
+        """
+        return self.dimension.exponents == _TEMPERATURE and (
+            self.system.core_registry.point_against_interval(
+                self.unit, other.unit
+            )
+        )
+
+    def _same_plain_unit(self, other: Quantity) -> bool:
+        """One unit on both sides, neither made a point nor an interval.
+
+        Then the two are of one kind (both degC, both delta_degC, both a K of
+        unknown kind), so a comparison needs no question to the core.
+        """
+        unit, other_unit = self.unit, other.unit
+        if unit is other_unit:
+            # one flyweight: one kind, whatever it is (a point is never an
+            # interval of itself)
+            return True
+        return (
+            unit == other_unit
+            and not (unit.point or unit.interval)
+            and not (other_unit.point or other_unit.interval)
+        )
+
+    def _refuse_point_against_interval(self, other: Quantity) -> None:
+        """Raises the core's words for a temperature point against an interval."""
+        point, interval = (self, other) if self._is_point() else (other, self)
+        raise IncompatibleUnitsError(
+            self.unit,
+            other.unit,
+            _point_against_interval_message(str(point), str(interval)),
+        )
+
     def _compare(self, other: Any, op: Any) -> Any:
         if isinstance(other, Quantity):
             if self.dimension != other.dimension:
                 raise IncompatibleUnitsError(self.unit, other.unit)
             # Convert to self unit for comparison
+            # the same unit, neither made a point nor an interval: one kind
+            if self._same_plain_unit(other):
+                return op(self.magnitude, other.magnitude)
+            # `5 delta_degC < 20 degC` has no answer: an interval is not where a
+            # temperature is, also when both are written in K (a point and a
+            # difference of two points)
+            if self._point_against_interval(other):
+                self._refuse_point_against_interval(other)
             # Optimization: check if conversion needed
             if self.unit == other.unit:
                 return op(self.magnitude, other.magnitude)
@@ -1612,20 +2155,49 @@ class Quantity(
         return NotImplemented
 
     def __eq__(self, other: object) -> Any:
-        """Checks for equality."""
-        # Dataclass __eq__ overridden for semantic equality
-        # But frozen dataclass uses fields.
-        # We should allow semantic equality: 1 m == 100 cm
+        """Equal values in the coherent unit (`1 m == 100 cm`); the uncertainty is not compared.
+
+        Both sides are the number `_coherent_value` gives (converted exactly, rounded
+        once), so `==` is an equivalence on them, `==` and `hash` cannot disagree, and
+        `20 degC == 68 degF` holds. Two magnitudes in the same unit that is not the
+        coherent one are compared through it too: comparing them directly would make
+        `-55.2 arcsec == x rad == -55.199999999999996 arcsec` true and the two arcsec
+        values unequal. A temperature point is never an interval
+        (`20 degC != 5 delta_degC`); a plain `K` equals either by value.
+        A dimensionless quantity equals the plain number of its coherent value
+        (`Q_(100, "percent") == 1`).
+
+        Examples:
+            >>> from physure import Q_
+            >>> Q_(20, "degC") == Q_(68, "degF"), Q_(1, "inch") == Q_(2.54, "cm")
+            (True, True)
+            >>> Q_(50, "percent") == 0.5
+            True
+        """
         if isinstance(other, Quantity):
+            if other.unit is self.unit and self._coherent_plan()[2] is None:
+                # one unit, the coherent one: the magnitudes are the coherent values
+                return _python_scalar(self.magnitude) == _python_scalar(
+                    other.magnitude
+                )
             if self.dimension != other.dimension:
                 return False
+            # a point is never an interval (`<` raises for the pair)
+            if self._point_against_interval(other):
+                return False
             try:
-                other_converted = other.to(self.unit)
-                return self.magnitude == other_converted.magnitude
+                unit, value = self._coherent_value()
+                other_unit, other_value = other._coherent_value()
             except Exception:
                 return False
-        if isinstance(other, (int, float)) and self.dimension.is_dimensionless:
-            return self.magnitude == other
+            # `sr` and `rad` share the dimension A and are never the same quantity
+            return unit == other_unit and value == other_value
+        if _is_plain_real(other) and self.dimension.is_dimensionless:
+            try:
+                _, value = self._coherent_value()
+            except Exception:
+                return False
+            return value == _python_scalar(other)
         return False
 
     def __ne__(self, other: object) -> Any:

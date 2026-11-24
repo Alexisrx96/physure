@@ -231,13 +231,33 @@ pub fn monte_carlo_samples() -> usize {
 /// Sets the process-wide sample count, returning the one it replaced. The conf readers validate it (from
 /// [`MIN_MONTE_CARLO_SAMPLES`] to [`MAX_MONTE_CARLO_SAMPLES`]); for a temporary change, use
 /// [`scoped_monte_carlo_samples`].
+///
+/// # Panics
+///
+/// When `n` is outside that range. That is a programmer error: a value read from a file is validated by the conf
+/// parser and never reaches this function, and a count below 2 held here would make every later Monte Carlo literal
+/// panic in `Quantity::new_scalar`.
 pub fn set_monte_carlo_samples(n: usize) -> usize {
+    assert_monte_carlo_samples_in_range(n);
     MONTE_CARLO_SAMPLES.swap(n, Ordering::Relaxed)
 }
 
 /// Overrides the sample count on this thread until the returned guard is dropped.
+///
+/// # Panics
+///
+/// When `n` is outside [`MIN_MONTE_CARLO_SAMPLES`]..=[`MAX_MONTE_CARLO_SAMPLES`], for the reason given at
+/// [`set_monte_carlo_samples`].
 pub fn scoped_monte_carlo_samples(n: usize) -> MonteCarloSamplesGuard {
+    assert_monte_carlo_samples_in_range(n);
     MonteCarloSamplesGuard(SAMPLES_OVERRIDE.with(|slot| slot.replace(Some(n))))
+}
+
+fn assert_monte_carlo_samples_in_range(n: usize) {
+    assert!(
+        (MIN_MONTE_CARLO_SAMPLES..=MAX_MONTE_CARLO_SAMPLES).contains(&n),
+        "monte_carlo_samples must be between {MIN_MONTE_CARLO_SAMPLES} and {MAX_MONTE_CARLO_SAMPLES}, got {n}"
+    );
 }
 
 /// Restores the sample count that was in force before its [`scoped_monte_carlo_samples`] call, including on unwind.
@@ -534,6 +554,60 @@ mod tests {
             assert_eq!(monte_carlo_samples(), 17);
         }
         assert_eq!(monte_carlo_samples(), baseline);
+    }
+
+    #[test]
+    #[should_panic(expected = "monte_carlo_samples must be between 2 and 10000000, got 0")]
+    fn set_monte_carlo_samples_refuses_zero() {
+        set_monte_carlo_samples(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "monte_carlo_samples must be between 2 and 10000000, got 1")]
+    fn set_monte_carlo_samples_refuses_one() {
+        set_monte_carlo_samples(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "monte_carlo_samples must be between 2 and 10000000, got 10000001")]
+    fn set_monte_carlo_samples_refuses_more_than_the_maximum() {
+        set_monte_carlo_samples(MAX_MONTE_CARLO_SAMPLES + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "monte_carlo_samples must be between 2 and 10000000, got 0")]
+    fn scoped_monte_carlo_samples_refuses_zero() {
+        let _guard = scoped_monte_carlo_samples(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "monte_carlo_samples must be between 2 and 10000000, got 1")]
+    fn scoped_monte_carlo_samples_refuses_one() {
+        let _guard = scoped_monte_carlo_samples(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "monte_carlo_samples must be between 2 and 10000000, got 10000001")]
+    fn scoped_monte_carlo_samples_refuses_more_than_the_maximum() {
+        let _guard = scoped_monte_carlo_samples(MAX_MONTE_CARLO_SAMPLES + 1);
+    }
+
+    #[test]
+    fn the_bounds_of_the_sample_count_are_accepted_and_restored() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let baseline = monte_carlo_samples();
+        let original = set_monte_carlo_samples(MIN_MONTE_CARLO_SAMPLES);
+        assert_eq!(monte_carlo_samples(), 2);
+        assert_eq!(set_monte_carlo_samples(MAX_MONTE_CARLO_SAMPLES), 2);
+        assert_eq!(monte_carlo_samples(), 10_000_000);
+        set_monte_carlo_samples(original);
+        for bound in [MIN_MONTE_CARLO_SAMPLES, MAX_MONTE_CARLO_SAMPLES] {
+            {
+                let _guard = scoped_monte_carlo_samples(bound);
+                assert_eq!(monte_carlo_samples(), bound);
+            }
+            assert_eq!(monte_carlo_samples(), baseline);
+        }
     }
 
     #[test]

@@ -366,6 +366,7 @@ impl UncertaintyValue {
                     "abs" => m.samples.mapv(|x| x.abs()),
                     "tan" => m.samples.mapv(|x| x.tan()),
                     "tanh" => m.samples.mapv(|x| x.tanh()),
+                    "erf" => m.samples.mapv(crate::math::erf),
                     _ => m.samples.clone(),
                 };
                 Ok(Self::MonteCarlo(MonteCarloBackend { samples: new_samples }))
@@ -381,6 +382,7 @@ impl UncertaintyValue {
                     "abs" => u.sigma_points.mapv(|x| x.abs()),
                     "tan" => u.sigma_points.mapv(|x| x.tan()),
                     "tanh" => u.sigma_points.mapv(|x| x.tanh()),
+                    "erf" => u.sigma_points.mapv(crate::math::erf),
                     _ => u.sigma_points.clone(),
                 };
                 Ok(Self::Unscented(UnscentedBackend::from_points(new_points, u.weights.clone(), &u.sigma)))

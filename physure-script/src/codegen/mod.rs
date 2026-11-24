@@ -51,7 +51,7 @@ pub fn transpile(program: &Program, target: Target) -> Result<String, CodegenErr
         Target::Java => (java::JavaTranspiler::default().generate_program(&compiled)?, "//"),
         Target::JavaWithClass(name) => (java::JavaTranspiler::new(&name).generate_program(&compiled)?, "//"),
         Target::JavaScript => (js::JsTranspiler::default().generate_program(&compiled)?, "//"),
-        Target::TypeScript => (js::JsTranspiler { typed: true }.generate_program(&compiled)?, "//"),
+        Target::TypeScript => (js::JsTranspiler { typed: true, ..Default::default() }.generate_program(&compiled)?, "//"),
     };
     Ok(format!("{}{code}", fixed_constants_header(&fixed, comment)))
 }
@@ -319,6 +319,23 @@ pub(crate) fn range_is_not_transpilable() -> CodegenError {
     )
 }
 
+/// Refuses a quantity literal no target can write: an asymmetric uncertainty, and a `sigma` bound. The number of a
+/// bound (`t +/- 2 sigma`) is a tolerance of the comparison it stands in, not an uncertainty of `t`; every target
+/// used to write it as one (`withUncertainty(t, 2, ..)`), and the comparison answered otherwise than PHS.
+pub(crate) fn refuse_literal(q: &QuantityNode) -> Result<(), CodegenError> {
+    if let Some(reason) = q.asymmetric_refusal() {
+        return Err(CodegenError::Generic(reason));
+    }
+    if q.is_sigma {
+        return Err(CodegenError::Generic(format!(
+            "A `sigma` bound (`+/- {} sigma`) cannot be transpiled: the generated code has no operator for it, and \
+             writing it as an uncertainty would change what the comparison answers.",
+            q.uncertainty.unwrap_or(1.0)
+        )));
+    }
+    Ok(())
+}
+
 /// Converts a PHS `snake_case` identifier to `camelCase`, the identifier casing shared
 /// by every target whose ecosystem convention is camelCase (Java, JS, TS).
 pub(crate) fn snake_to_camel(s: &str) -> String {
@@ -517,11 +534,13 @@ pub(crate) fn push_block_lines(lines: &mut Vec<String>, stmt_code: String) {
 }
 
 /// The form Java and JS/TS share for a binary operator, a method call on the left operand: `l.add(r)`,
-/// `l.pow(2)`, `l.convertTo("km")`. `generate` writes the right operand in the target's own syntax.
+/// `l.pow(2)`, `l.convertTo("km")`. `generate` writes the right operand in the target's own syntax, and a
+/// non-literal exponent is read with `value_accessor` (`getValue()` in Java, the `value` getter in JS/TS).
 pub(crate) fn method_binary_expr(
     op: BinaryOp,
     l: &str,
     right: &Expr,
+    value_accessor: &str,
     generate: impl FnOnce(&Expr) -> Result<String, CodegenError>,
 ) -> Result<String, CodegenError> {
     let method = match op {
@@ -533,7 +552,7 @@ pub(crate) fn method_binary_expr(
         BinaryOp::Pow => {
             return match right {
                 Expr::Quantity(q) => Ok(format!("{}.pow({})", l, q.magnitude)),
-                _ => Ok(format!("{}.pow({}.getValue())", l, generate(right)?)),
+                _ => Ok(format!("{}.pow({}.{})", l, generate(right)?, value_accessor)),
             };
         }
         BinaryOp::Range => return Err(range_is_not_transpilable()),
@@ -832,7 +851,7 @@ mod const_fold_tests {
             match target {
                 Target::JavaScript | Target::TypeScript => {
                     assert_eq!(
-                        code.matches("Quantity.of(2, \"m\")").count(),
+                        code.matches("new Quantity(2, \"m\")").count(),
                         2,
                         "{name} lost a binding:\n{code}"
                     );
@@ -898,11 +917,8 @@ mod const_fold_tests {
             Target::Python,
             Target::Rust,
             Target::Java,
-            Target::JavaScript,
-            Target::TypeScript,
         ] {
             let code = transpile(&program, target.clone()).unwrap();
-            let name = format!("{target:?}");
 
             match target {
                 Target::Python => {
@@ -920,11 +936,31 @@ mod const_fold_tests {
                     assert!(!code.contains("Quantity i = i.add("), "Java contains duplicate Quantity declaration in while: {code}");
                     assert!(code.contains(".stream().map(x ->"), "Java missing for expr: {code}");
                 }
-                Target::JavaScript | Target::TypeScript => {
-                    assert!(code.contains("while "), "{name} missing while: {code}");
-                    assert!(code.contains(".map((x) =>"), "{name} missing for expr: {code}");
-                }
+                Target::JavaScript | Target::TypeScript => unreachable!("tested below, without `vector`"),
             }
+        }
+    }
+
+    #[test]
+    fn the_javascript_targets_transpile_loops_and_for_expressions_but_not_vector() {
+        let program = crate::parser::parse_phs(
+            "items = vector(1, 2, 3, 4)\ni = 0\nwhile i < 5 {\n  i = i + 1\n}\nres = for x in items { x * 2 }\n",
+        )
+        .unwrap();
+        // the WebAssembly `Quantity` has no vectors: the JavaScript targets refuse the call to `vector`
+        for target in [Target::JavaScript, Target::TypeScript] {
+            let error = transpile(&program, target).unwrap_err().to_string();
+            assert!(error.contains("'vector'"), "{error}");
+        }
+        let program = crate::parser::parse_phs(
+            "fn double_all(items) = for x in items { x * 2 }\ni = 0\nwhile i < 5 {\n  i = i + 1\n}\n",
+        )
+        .unwrap();
+        for target in [Target::JavaScript, Target::TypeScript] {
+            let name = format!("{target:?}");
+            let code = transpile(&program, target).unwrap();
+            assert!(code.contains("while "), "{name} missing while: {code}");
+            assert!(code.contains(".map((x) =>"), "{name} missing for expr: {code}");
         }
     }
 

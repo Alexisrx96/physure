@@ -84,10 +84,25 @@ def apply_conversion(
         return new_magnitude, backend.mul(uncertainty, abs(scale))
 
     source, target = plan["from"], plan["to"]
+    new_magnitude = _from_ratio(target, _to_ratio(source, magnitude))
+    slope = conversion_slope(plan, magnitude, backend)
+    return new_magnitude, backend.mul(uncertainty, backend.abs(slope))
+
+
+def conversion_slope(
+    plan: dict[str, Any], magnitude: Any, backend: BackendOps
+) -> Any:
+    """`d new/d old` of the plan at the magnitude.
+
+    The scale of an affine plan, a plain number (a zero point moves the value, not
+    its error: 5/9 for degF to K, 1 for degC to K); for a level, the slope at each
+    value (an array for an array).
+    """
+    if plan["kind"] == "affine":
+        return float(plan["scale"])
+    source, target = plan["from"], plan["to"]
     ratio = _to_ratio(source, magnitude)
-    new_magnitude = _from_ratio(target, ratio)
-    slope = backend.mul(
+    return backend.mul(
         _slope_to_ratio(source, magnitude),
         _slope_from_ratio(target, ratio),
     )
-    return new_magnitude, backend.mul(uncertainty, backend.abs(slope))

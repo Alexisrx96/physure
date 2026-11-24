@@ -128,3 +128,45 @@ def test_vector_point_error(q):
         ValueError, match="Cannot subtract an absolute quantity"
     ):
         _ = d - p
+
+
+@pytest.mark.parametrize(
+    "compare",
+    [
+        lambda a, b: a < b,
+        lambda a, b: a > b,
+        lambda a, b: a <= b,
+        lambda a, b: a >= b,
+    ],
+)
+def test_a_point_and_an_interval_have_no_order(q, compare):
+    """5 delta_degC < 20 degC has no answer: the Rust core refuses the pair."""
+    from physure.domain.exceptions import IncompatibleUnitsError
+
+    interval, point = q(5, "delta_degC"), q(20, "degC")
+    words = (
+        "cannot compare a temperature point (`20.0 degC`) with a temperature "
+        "interval (`5.0 delta_degC`)"
+    )
+    for a, b in ((interval, point), (point, interval)):
+        with pytest.raises(IncompatibleUnitsError) as refused:
+            compare(a, b)
+        message = str(refused.value)
+        assert message.startswith(words), message
+        assert "compare a difference of two points" in message, message
+
+
+def test_a_point_and_an_interval_are_never_equal(q):
+    """`==` does not raise in Python: a point is not an interval, so it is False."""
+    assert (q(5, "delta_degC") == q(5, "degC")) is False
+    assert q(5, "delta_degC") != q(5, "degC")
+    assert q(5, "degC") != q(5, "delta_degC")
+
+
+def test_points_with_points_and_intervals_with_intervals_still_compare(q):
+    """20 degC > 10 K, 5 delta_degC < 6 delta_degC, and K against an interval."""
+    assert q(20, "degC") > q(10, "K")
+    assert q(10, "K") < q(20, "degC")
+    assert q(5, "delta_degC") < q(6, "delta_degC")
+    assert q(5, "delta_degC") < q(6, "K")
+    assert q(20, "degC") == q(68, "degF")

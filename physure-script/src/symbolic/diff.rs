@@ -27,7 +27,7 @@ fn is_known_function_name(s: &str) -> bool {
             | "asin" | "arcsin" | "acos" | "arccos" | "atan" | "arctan"
             | "acot" | "arccot" | "asec" | "arcsec" | "acsc" | "arccsc"
             | "arccosec" | "sinh" | "cosh" | "tanh" | "coth" | "sech"
-            | "csch" | "abs" | "sqrt" | "ln" | "exp" | "log" | "e" | "pi"
+            | "csch" | "abs" | "sqrt" | "ln" | "exp" | "log" | "pi"
     )
 }
 

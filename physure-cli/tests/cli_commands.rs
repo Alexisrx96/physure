@@ -224,6 +224,43 @@ fn the_language_guide_is_printed_or_saved() {
 }
 
 #[test]
+fn the_committed_language_guide_is_what_phs_doc_prints() {
+    let dir = TempDir::new("guide");
+    let output = phs()
+        .args(["doc"])
+        .current_dir(dir.path())
+        .env_remove("PHYSURE_CONF")
+        .env_remove("PHYSURE_REQUIRE_FROZEN")
+        .output()
+        .expect("failed to run phs");
+    let printed = stdout(&output);
+    let committed = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("PHYSURE_LANGUAGE_GUIDE.md"))
+        .expect("the committed guide");
+    let normal = |text: &str| text.replace("\r\n", "\n").trim().to_string();
+    assert!(
+        normal(&printed) == normal(&committed),
+        "PHYSURE_LANGUAGE_GUIDE.md is out of date: run `phs doc --save` from the repository root and commit the file"
+    );
+}
+
+#[test]
+fn the_guide_lists_every_reserved_name_and_every_module_function() {
+    use physure_script::reserved::{CORE_FUNCTIONS, KEYWORDS, LITERALS, STATEMENT_WORDS};
+    let dir = TempDir::new("reserved");
+    let printed = stdout(&run_in(dir.path(), &["doc"]));
+    let section = printed.split("### 1.7 Reserved names").nth(1).expect("the section 1.7 of the guide");
+    let section = section.split("\n## ").next().unwrap_or(section);
+    for name in KEYWORDS.iter().chain(&STATEMENT_WORDS).chain(&LITERALS).chain(&CORE_FUNCTIONS) {
+        assert!(section.contains(&format!("`{name}`")), "the guide does not list `{name}`");
+    }
+    for domain in ["calc", "plot", "array"] {
+        for name in physure_script::builtins::domain_members(domain).expect("a module") {
+            assert!(section.contains(&format!("`{name}`")), "the guide does not list `{name}` of {domain}");
+        }
+    }
+}
+
+#[test]
 fn the_transpiler_writes_the_file_of_each_target() {
     let dir = TempDir::new("transpile");
     dir.write("calc.phs", "mass = 2 kg\nv = 3 m/s\ne = 0.5 * mass * v^2\n");
@@ -240,6 +277,18 @@ fn the_transpiler_writes_the_file_of_each_target() {
         assert!(stdout(&output).contains("Transpiled"), "{args:?}: {}", stdout(&output));
         let text = std::fs::read_to_string(dir.path().join(produced)).unwrap_or_else(|_| panic!("{produced} was not written"));
         assert!(!text.trim().is_empty(), "{produced}");
+    }
+}
+
+#[test]
+fn a_builtin_the_webassembly_quantity_lacks_stops_the_javascript_transpile() {
+    let dir = TempDir::new("transpile_js_refusal");
+    dir.write("calc.phs", "a = 4 m^2\nside = sqrt(a)\n");
+    for target in ["js", "ts"] {
+        let output = run_in(dir.path(), &["transpile", "calc.phs", "-t", target]);
+        assert!(!output.status.success(), "{target}: {}", stdout(&output));
+        let error = stderr(&output);
+        assert!(error.contains("'sqrt'") && error.contains("WebAssembly"), "{target}: {error}");
     }
 }
 
@@ -333,12 +382,14 @@ fn eval_and_unit_answer_in_json() {
 
 #[test]
 fn the_suggestion_for_an_unknown_unit_is_the_same_in_every_process() {
-    // `x` is one edit from `A`, `K`, `m` and `s`: each process used to suggest whichever its maps met first.
+    // `barz` is one edit from `bar` and `barn`: each process used to suggest whichever its maps met first. (`x`, one
+    // edit from `A`, `K`, `m` and `s`, showed it before; a one-letter name gets no unit hint since audit T5. The name
+    // is assigned so that the checker, which flags a free name meeting a quantity, leaves the line to the interpreter.)
     let dir = TempDir::new("suggestion");
     for _ in 0..10 {
-        let evaluated = run_with_input(dir.path(), &["eval", "-"], "x = 5 x\n");
+        let evaluated = run_with_input(dir.path(), &["eval", "-"], "barz = 5 barz\n");
         let report: serde_json::Value = serde_json::from_str(&stdout(&evaluated)).unwrap();
-        assert_eq!(report["diagnostics"][0]["message"], "Unknown unit 'x' — did you mean 'A'?", "{report}");
+        assert_eq!(report["diagnostics"][0]["message"], "`barz` has no value — did you mean the unit 'bar'?", "{report}");
     }
 }
 

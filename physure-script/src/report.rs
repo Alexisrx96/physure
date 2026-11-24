@@ -8,7 +8,7 @@ use crate::{run_sandboxed, Limits, PhsInterpreter, PhsValue};
 use physure_core::units::conf::try_with_conf_registry;
 use physure_core::units::{formula_text, with_current_catalog, UnitKind, UnitRegistry};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// The seed of a deterministic evaluation (`phs eval`, MCP, a user witness) when neither a flag nor the setting gives
 /// one: the compiled default of `[Settings] monte_carlo_seed`, and what they use when the setting is `random`.
@@ -226,15 +226,14 @@ fn syntax_report(message: String) -> Report {
 
 fn run_program(interp: &PhsInterpreter, program: &crate::ast::Program, registry: &UnitRegistry) -> Report {
     let mut diagnostics = static_findings(program, registry);
-    // the interpreter refuses what the checker already reported: say it once
-    let reported: HashSet<usize> = diagnostics.iter().filter(|d| d.severity == "error").map(|d| d.line).collect();
+    // the interpreter refuses what the checker already reported: say it once; a different problem on that line is reported too
     let mut collected = Collected { results: Vec::new(), bytes: 0, cap: interp.limits.max_output_bytes };
     let mut env = HashMap::new();
     for (statement, &line) in program.statements.iter().zip(&program.lines) {
         let go_on = match interp.eval_statement_with_env(statement, &mut env) {
             Ok(PhsValue::None) => true,
             Ok(value) => collected.add(statement, line, &value, registry, &mut diagnostics),
-            Err(failure) => record_failure(line, failure.to_string(), &reported, &mut diagnostics),
+            Err(failure) => record_failure(line, failure.to_string(), &mut diagnostics),
         };
         if !go_on {
             break;
@@ -283,10 +282,13 @@ impl Collected {
     }
 }
 
-/// Records a statement's runtime error; false when it ends the run (a limit).
-fn record_failure(line: usize, message: String, reported: &HashSet<usize>, diagnostics: &mut Vec<Finding>) -> bool {
+/// Records a statement's runtime error; false when it ends the run (a limit). An error the checker already said on
+/// this line (`check::explains`, which knows the checker's words and the interpreter's for one problem) is not said
+/// again; any other error on the line is another problem and is reported, and so is one `explains` cannot tell
+/// from the checker's by its words.
+fn record_failure(line: usize, message: String, diagnostics: &mut Vec<Finding>) -> bool {
     let code = classify(&message);
-    if code == "runtime" && reported.contains(&line) {
+    if code == "runtime" && diagnostics.iter().any(|d| d.line == line && d.severity == "error" && crate::check::explains(&d.code, &d.message, &message)) {
         return true;
     }
     diagnostics.push(error(line, code, message));

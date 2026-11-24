@@ -133,6 +133,19 @@ fn approx_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     approximately(&args[..2], rel, "approx")
 }
 
+/// The forms a format spec takes, for the error that refuses another one.
+const FORMAT_SPECS: &str = "`base`, `frac`, `ifrac`, or `.N` with N digits and optionally `f`, `e` or `g` (`.2f`, `.3e`, `.4g`, `.2`)";
+
+/// Whether `spec` is one of [`FORMAT_SPECS`]: an unknown spec used to be read as `.6f` without a word.
+fn is_format_spec(spec: &str) -> bool {
+    if matches!(spec, "base" | "frac" | "ifrac") {
+        return true;
+    }
+    let Some(rest) = spec.strip_prefix('.') else { return false };
+    let digits = rest.strip_suffix(['f', 'e', 'g']).unwrap_or(rest);
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
 fn apply_format_spec(value: &PhsValue, spec: &str) -> String {
     // `base` quotes the measurement in the units it is built from — `2 kΩ: base` is
     // `2000 A^-2 * kg * m^2 * s^-3`. The scale moves into the magnitude, so the physical
@@ -225,7 +238,7 @@ pub fn eval_core_builtin(
         "ternary" | "if_then_else" => ternary(args),
         "uncertainty" | "sigma" => uncertainty_builtin(args),
         "dof" | "coverage_factor" | "expanded" | "from_samples" => crate::builtins::dof::eval_dof_builtin(name, args),
-        "vector" => Ok(Some(PhsValue::Vector(args.to_vec()))),
+        "vector" => vector_builtin(args),
         "sqrt" => unary(name, args, A_NUMBER_OR_QUANTITY, sqrt_number, |q| q.sqrt()),
         "sin" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.sin()), |q| q.sin()),
         "cos" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.cos()), |q| q.cos()),
@@ -234,6 +247,10 @@ pub fn eval_core_builtin(
         "abs" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.abs()), |q| q.abs()),
         "log" => unary(name, args, A_NUMBER_OR_QUANTITY, log10_number, |q| q.log10()),
         "tan" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(n.tan()), |q| q.tan()),
+        "sec" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| reciprocal_number("sec", n, n.cos()), |q| q.sec()),
+        "csc" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| reciprocal_number("csc", n, n.sin()), |q| q.csc()),
+        "cot" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| reciprocal_number("cot", n, n.tan()), |q| q.cot()),
+        "erf" => unary(name, args, A_NUMBER_OR_QUANTITY, |n| Ok(physure_core::math::erf(n)), |q| q.erf()),
         // Flooring the mean says nothing about how well it is known, so the unit
         // and the uncertainty ride along instead of being reset to zero.
         "floor" => unary(name, args, "number or quantity", |n| Ok(n.floor()), |q| q.floor()),
@@ -243,6 +260,14 @@ pub fn eval_core_builtin(
         "round" => round_builtin(args),
         _ => Ok(None),
     }
+}
+
+/// `vector(...)` and `[...]` (the parser builds the call): the numbers and quantities of a vector share one dimension,
+/// in any of its units (`vector(1 m, 2 km)`). `norm`, `dot`, `trapz`, `det`, `matmul` refuse mixed elements one by
+/// one; a vector of a length and a time has no meaning for any of them, and is refused where it is made. Text and
+/// the rows of a matrix are not compared.
+fn vector_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
+    PhsValue::vector_checked(args.to_vec()).map(Some)
 }
 
 fn sqrt_number(n: f64) -> PhysureResult<f64> {
@@ -261,6 +286,16 @@ fn ln_number(n: f64) -> PhysureResult<f64> {
     }
 }
 
+/// `func(n)` as `1 / denominator`, where `denominator` is `cos n`, `sin n` or `tan n`: a zero denominator is the
+/// pole of `func`, refused as the quantity form refuses it rather than answered with infinity.
+fn reciprocal_number(func: &str, n: f64, denominator: f64) -> PhysureResult<f64> {
+    if denominator == 0.0 {
+        Err(PhysureError::DomainError(format!("{func} of {n} is undefined")))
+    } else {
+        Ok(1.0 / denominator)
+    }
+}
+
 fn log10_number(n: f64) -> PhysureResult<f64> {
     if n <= 0.0 {
         Err(PhysureError::DomainError(format!("log of a non-positive value ({n}) is undefined for real numbers")))
@@ -272,9 +307,15 @@ fn log10_number(n: f64) -> PhysureResult<f64> {
 fn format_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     let Some(val) = args.first() else { return Ok(None) };
     match args.get(1) {
-        Some(PhsValue::String(spec)) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+        Some(PhsValue::String(spec)) if is_format_spec(spec) => Ok(Some(PhsValue::String(apply_format_spec(val, spec)))),
+        Some(PhsValue::String(spec)) => {
+            Err(PhysureError::Generic(format!("`{spec}` is not a format spec: write one of {FORMAT_SPECS}")))
+        }
+        Some(other) => Err(PhysureError::Generic(format!(
+            "the spec of `format` is a text, got {other}: write one of {FORMAT_SPECS}"
+        ))),
         // No spec, nothing to apply — hand the value back untouched.
-        _ => Ok(Some(val.clone())),
+        None => Ok(Some(val.clone())),
     }
 }
 
@@ -368,7 +409,7 @@ fn parallel_map(
     // the draws must be the next ones of the unit's stream (`PhsInterpreter::runs_in_parallel`).
     if !interpreter.runs_in_parallel() {
         let results = vec.into_iter().enumerate().map(call).collect::<PhysureResult<Vec<PhsValue>>>()?;
-        return Ok(Some(PhsValue::Vector(results)));
+        return PhsValue::vector_made_by(results, "`parallel_map` gives one where ").map(Some);
     }
     use rayon::prelude::*;
     crate::interpreter::count_parallel_loop();
@@ -376,7 +417,7 @@ fn parallel_map(
     let results = crate::interpreter::helpers::CallerScopes::capture(|scopes| {
         vec.into_par_iter().enumerate().map(|item| scopes.run(|| call(item))).collect::<PhysureResult<Vec<PhsValue>>>()
     })?;
-    Ok(Some(PhsValue::Vector(results)))
+    PhsValue::vector_made_by(results, "`parallel_map` gives one where ").map(Some)
 }
 
 fn assert_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
@@ -408,8 +449,18 @@ fn bool_assertion(cond: bool, message: &str) -> PhysureResult<Option<PhsValue>> 
 }
 
 /// `min` and `max`: the argument with the smallest (or, with `want_greater`, largest) base-SI magnitude, as it
-/// was written.
+/// was written. Every argument has the dimension of the first (a plain number is dimensionless): `max(1 m, 1 s)`
+/// has no answer, and comparing base-unit magnitudes gave `1 m` with a confident unit. One argument that is a
+/// vector is the extremum of its elements, which a vector already holds of one dimension; one number or quantity is
+/// itself.
 fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<Option<PhsValue>> {
+    let args = match args {
+        [PhsValue::Vector(items)] if items.is_empty() => {
+            return Err(PhysureError::Generic(format!("{name} of an empty vector has no answer")))
+        }
+        [PhsValue::Vector(items)] => items.as_slice(),
+        _ => args,
+    };
     if args.is_empty() {
         return Err(PhysureError::Generic(format!("{name} expects arguments")));
     }
@@ -418,6 +469,20 @@ fn extremum(name: &str, args: &[PhsValue], want_greater: bool) -> PhysureResult<
         PhsValue::Quantity(q) => Ok(q.canonical_magnitude()),
         _ => Err(PhysureError::Generic(format!("{name} expects numbers or quantities"))),
     };
+    magnitude(&args[0])?;
+    use crate::builtins::dimensions::{first_mismatch, Mismatch};
+    match first_mismatch(args) {
+        Some(Mismatch::Dimension(why)) => {
+            return Err(PhysureError::Generic(format!("{name} of different dimensions: {why}; compare values of one dimension")))
+        }
+        Some(Mismatch::TemperatureKind(why)) => {
+            return Err(PhysureError::Generic(format!(
+                "{name} of a temperature point and a temperature interval: {why}; {}",
+                physure_core::quantity::POINT_AGAINST_INTERVAL_ADVICE
+            )))
+        }
+        None => {}
+    }
     let mut best = &args[0];
     for arg in args.iter().skip(1) {
         let best_mag = magnitude(best)?;
@@ -433,26 +498,24 @@ fn round_builtin(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     if args.is_empty() {
         return Err(PhysureError::Generic("round expects arguments".into()));
     }
+    // the number of decimals is a plain number: `round(1.5 m, 1 s)` read the `1` of `1 s` and ignored its unit
+    // and a whole one: `round(x, 2.7)` and `round(x, 1 percent)` (0.01) were truncated; `-1` rounds to tens
     let decimals = match args.get(1) {
-        Some(PhsValue::Number(d)) => *d as i32,
-        Some(PhsValue::Quantity(q)) => q.canonical_magnitude() as i32,
-        _ => 0,
+        None => 0,
+        Some(value) => match crate::builtins::dimensions::whole_number(value) {
+            Some(d) => d as i32,
+            None if crate::builtins::dimensions::plain_number(value).is_some() => {
+                return Err(PhysureError::Generic(format!("round needs a whole number of decimals, got {value}")));
+            }
+            None => return Err(PhysureError::Generic(format!("round expects a plain number of decimals, got {value}"))),
+        },
     };
-    let factor = 10.0f64.powi(decimals);
+    // the core rounds without overflow (`round(1.5 m, 400)` was NaN m) and keeps everything but the mean: rounding
+    // says nothing about how well the value is known, so the uncertainty, its sources and their degrees of freedom
+    // ride along (rebuilding from the mean and the standard deviation lost the degrees of freedom)
     match &args[0] {
-        PhsValue::Number(n) => Ok(Some(PhsValue::Number((n * factor).round() / factor))),
-        PhsValue::Quantity(q) => {
-            // Rounding the mean says nothing about how well it is known, so the
-            // uncertainty rides along untouched rather than being reset to zero.
-            let rounded = physure_core::Quantity::new_scalar(
-                (q.value.mean() * factor).round() / factor,
-                q.value.std_dev(),
-                q.unit.clone(),
-                None,
-                None,
-            );
-            Ok(Some(PhsValue::Quantity(rounded)))
-        }
+        PhsValue::Number(n) => Ok(Some(PhsValue::Number(physure_core::quantity::round_to_decimal_place(*n, decimals)))),
+        PhsValue::Quantity(q) => Ok(Some(PhsValue::Quantity(q.round(decimals)?))),
         _ => Err(PhysureError::Generic("round expects number or quantity".into())),
     }
 }

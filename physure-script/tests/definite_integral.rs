@@ -76,7 +76,9 @@ fn a_bound_that_names_nothing_is_refused() {
     // before: an unknown string was read as 0, so this was 0.5
     let message = refused(r#"integral("x", "x", "a", 1)"#);
     assert!(message.contains("'a'"), "{message}");
-    assert!(refused(r#"integral("x", "x", 0, true)"#).contains("bound"));
+    assert!(refused(r#"integral("x", "x", 0, "true")"#).contains("bound"));
+    // a bare name that is nothing is refused before `integral` reads it (T5)
+    assert!(refused(r#"integral("x", "x", 0, true)"#).contains("`true` has no value"));
 }
 
 #[test]
@@ -222,8 +224,18 @@ fn a_closed_form_that_jumps_inside_the_interval_is_refused() {
     assert!(refused(r#"integral("1/cos(x)^2", "x", 0, 3)"#).contains("did not converge"));
     // before: did not stop (the deadlock), and once unblocked -1.99 across the pole of tan at pi/2
     assert!(refused(r#"integral("tan(x)", "x", 0, 3)"#).starts_with("integral: "));
-    // the symbolic engine reads `x < 0.5` as `x` and integrates it to x^2/2 (0.5 here); the integrand is a Bool
+    // the symbolic engine used to read `x < 0.5` as `x` and integrate it to x^2/2 (0.5 here, audit T2); it refuses the
+    // comparison now, so no closed form is tried and the quadrature sees what the integrand is: a Bool
     assert!(refused(r#"integral("x < 0.5", "x", 0, 1)"#).contains("Bool"));
+}
+
+#[test]
+fn an_antiderivative_in_sec_is_confirmed_now_that_sec_runs() {
+    // before (audit T4): refused, "the antiderivative tan(x) cannot be confirmed ... Undefined function 'sec'"
+    assert_close(number(r#"integral("sec(x)^2", "x", 0, 1)"#), 1.0_f64.tan(), 1e-12, "sec(x)^2 over [0, 1]");
+    assert_close(number(r#"integral("1/cos(x)^2", "x", 0, 1)"#), 1.0_f64.tan(), 1e-12, "1/cos(x)^2 over [0, 1]");
+    let ln_sec_plus_tan = (1.0 / 1.0_f64.cos() + 1.0_f64.tan()).ln();
+    assert_close(number(r#"integral("sec(x)", "x", 0, 1)"#), ln_sec_plus_tan, 1e-12, "sec(x) over [0, 1]");
 }
 
 #[test]

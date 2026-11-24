@@ -155,3 +155,49 @@ fn native_export_refused_comparison_returns_failure_instead_of_aborting() {
     assert!(!ok, "a refused comparison is a failure");
     assert!(error.contains("cannot compare"), "{error}");
 }
+
+/// `1.0 / x` with `x = 0` is refused by the core, which panics inside the shim's body.
+const CONTRACT_LESS_PANICS_SCRIPT: &str = r#"
+fn inverse(x) = 1.0 / x
+
+export inverse as inverse
+"#;
+
+/// Before: a function without contracts had no `catch_unwind`, so the panic aborted the calling process. Now the
+/// same symbol returns NaN, `inverse_last_error` says why, and the host goes on.
+#[test]
+#[ignore]
+fn native_export_without_contracts_survives_a_refused_comparison() {
+    let dir = std::env::temp_dir().join("phs_export_roundtrip_contract_less_panic");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let script_path = dir.join("inverse.phs");
+    fs::write(&script_path, CONTRACT_LESS_PANICS_SCRIPT).unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_phs"))
+        .args(["export", script_path.to_str().unwrap(), "--fn", "inverse", "--native", "-o"])
+        .arg(&dir)
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let lib_ext = if cfg!(target_os = "windows") { "dll" } else if cfg!(target_os = "macos") { "dylib" } else { "so" };
+    let lib_path = dir.join(format!("inverse.{}", lib_ext));
+
+    let (failed, error, fine, after) = unsafe {
+        let lib = libloading::Library::new(&lib_path).unwrap();
+        let func: libloading::Symbol<unsafe extern "C" fn(f64) -> f64> = lib.get(b"inverse").unwrap();
+        let last_error: libloading::Symbol<unsafe extern "C" fn() -> *const std::os::raw::c_char> =
+            lib.get(b"inverse_last_error").unwrap();
+        let read = || std::ffi::CStr::from_ptr(last_error()).to_string_lossy().into_owned();
+        let failed = func(0.0);
+        let error = read();
+        let fine = func(4.0);
+        let after = read();
+        (failed, error, fine, after)
+    };
+    assert!(failed.is_nan(), "a failure is NaN, got {failed}");
+    assert!(!error.is_empty(), "the last error must say what happened");
+    assert_eq!(fine, 0.25);
+    assert_eq!(after, "", "the last error is cleared by the next call");
+}

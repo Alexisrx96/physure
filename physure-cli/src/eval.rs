@@ -62,15 +62,15 @@ fn parse_args(args: &[String]) -> Result<EvalArgs, String> {
 pub fn run_eval(args: &[String]) {
     let parsed = parse_args(args).unwrap_or_else(|message| {
         eprintln!("{message}");
-        std::process::exit(2);
+        crate::exit(2);
     });
     let source = read_source(&parsed.path).unwrap_or_else(|error| {
         eprintln!("{}: cannot read: {error}", parsed.path);
-        std::process::exit(2);
+        crate::exit(2);
     });
     let outcome = evaluate_text(&source, parsed.seed, parsed.timeout, WATCHDOG_GRACE);
     println!("{}", outcome.json);
-    std::process::exit(outcome.exit_code);
+    crate::exit(outcome.exit_code);
 }
 
 /// Evaluates `source` in the sandbox under `seed` (`--seed`, or `None` for the setting in force: see the module
@@ -113,11 +113,11 @@ fn with_watchdog(work: impl FnOnce() -> Report + Send + 'static, limit: Duration
 pub fn run_unit(args: &[String]) {
     let Some(symbol) = args.get(2) else {
         eprintln!("usage: phs unit <symbol>");
-        std::process::exit(2);
+        crate::exit(2);
     };
     let outcome = unit_json(symbol);
     println!("{}", outcome.json);
-    std::process::exit(outcome.exit_code);
+    crate::exit(outcome.exit_code);
 }
 
 pub fn unit_json(symbol: &str) -> Outcome {

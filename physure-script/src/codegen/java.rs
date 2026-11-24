@@ -200,7 +200,7 @@ impl JavaTranspiler {
 
     fn binary_expr(&self, op: BinaryOp, left: &Expr, right: &Expr) -> Result<String, CodegenError> {
         let l = self.generate_expr(left)?;
-        super::method_binary_expr(op, &l, right, |e| self.generate_expr(e))
+        super::method_binary_expr(op, &l, right, "getValue()", |e| self.generate_expr(e))
     }
 
     fn call_expr(&self, expr: &Expr, name: &str, args: &[Expr], kwargs: &[(String, Expr)]) -> Result<String, CodegenError> {
@@ -273,9 +273,7 @@ impl JavaTranspiler {
 
 /// A quantity literal, with its uncertainty and unit when it has them.
 fn quantity_expr(q: &crate::ast::QuantityNode) -> Result<String, CodegenError> {
-    if let Some(reason) = q.asymmetric_refusal() {
-        return Err(CodegenError::Generic(reason));
-    }
+    super::refuse_literal(q)?;
     let mut args = vec![format!("{:?}", q.magnitude)];
     if let Some(unc) = q.uncertainty {
         args.push(format!("{:?}", unc));

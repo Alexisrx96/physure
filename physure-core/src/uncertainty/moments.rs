@@ -622,6 +622,7 @@ fn function_mean_and_jacobian(func: &str, m: f64) -> PhysureResult<(f64, f64)> {
             (t, 1.0 - t * t)
         }
         "abs" => (m.abs(), if m >= 0.0 { 1.0 } else { -1.0 }),
+        "erf" => (crate::math::erf(m), crate::math::erf_derivative(m)),
         _ => return Err(not_implemented(func)),
     })
 }

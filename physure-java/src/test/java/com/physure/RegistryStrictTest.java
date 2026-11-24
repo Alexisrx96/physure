@@ -1,7 +1,6 @@
 package com.physure;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -91,7 +90,8 @@ class RegistryStrictTest {
         try (UnitRegistry one = new UnitRegistry(); UnitRegistry other = new UnitRegistry()) {
             one.evaluateRaw("x = 5 m");
             assertEquals(10.0, one.evaluate("x * 2").getValue());
-            assertNotEquals("5.0 m", other.evaluateRaw("x").trim());
+            // the other registry never heard of `x`: it has no value there (it used to read as the text "x")
+            assertTrue(assertThrows(PhysureException.class, () -> other.evaluateRaw("x")).getMessage().contains("`x` has no value"));
         }
     }
 

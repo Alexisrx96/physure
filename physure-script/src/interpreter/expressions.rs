@@ -70,6 +70,106 @@ fn unit_symbol_as_quantity(name: &str) -> Option<Quantity> {
     Some(Quantity::new_scalar(1.0, 0.0, unit, None, None))
 }
 
+/// The edit distance of `a` and `b` counting a swap of two neighbours as one edit (optimal string alignment).
+fn edit_distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for j in 0..=b.len() {
+        d[0][j] = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i][j] = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+            }
+        }
+    }
+    d[a.len()][b.len()]
+}
+
+/// The name bound in `env` that `name` is most likely a typo of: at most two edits away, both at least three
+/// characters long (`speeed` for `speed`; `x` for `y` would be a guess). Ties go to the first in order of the text.
+fn closest_binding<'a>(name: &str, env: &'a HashMap<String, PhsValue>) -> Option<&'a str> {
+    if name.chars().count() < 3 {
+        return None;
+    }
+    env.keys()
+        .filter(|bound| bound.chars().count() >= 3 && !bound.starts_with("__"))
+        .map(|bound| (edit_distance(name, bound), bound.as_str()))
+        .filter(|(distance, _)| *distance <= 2)
+        .min()
+        .map(|(_, bound)| bound)
+}
+
+/// The unit `name` is most likely a typo of: the catalog's closest symbol, when it differs from `name` by its case
+/// only (`Km`, `KPa`; not a one-letter `a`) or, for a name of four characters or more, by one edit (`metre`,
+/// `fooz`). A shorter name or a farther symbol is more often a variable than a unit, and the catalog has a symbol
+/// near almost every short word (`x` is one edit from `A`, `count` two from `pound`).
+fn closest_unit(name: &str) -> Option<String> {
+    let Err(PhysureError::UnknownUnit { suggestion: Some(unit), .. }) = UnitParser::parse_expression(name) else {
+        return None;
+    };
+    let length = name.chars().count();
+    let close = (length >= 2 && unit.to_lowercase() == name.to_lowercase()) || (length >= 4 && edit_distance(name, &unit) <= 1);
+    close.then_some(unit)
+}
+
+/// Whether `function` takes its variables as text: a function of `calc` or `plot` (`deriv("x^2", "x")`).
+fn takes_variables_as_text(function: &str) -> bool {
+    ["calc", "plot"].iter().any(|domain| crate::builtins::domain_members(domain).is_some_and(|members| members.contains(&function)))
+}
+
+impl PhsInterpreter {
+    /// `error` of the argument `arg` of a call of `function`, said in the words that help when it is a name with no
+    /// value written where the function takes a variable as text (`deriv("x^2", x)`, `grad(f, [x, y])`): write
+    /// `"x"`. These used to work only because a name with no value was its own text (audit T5).
+    fn symbolic_variable_error(&self, function: &str, arg: &Expr, error: PhysureError) -> PhysureError {
+        if !takes_variables_as_text(function) {
+            return error;
+        }
+        let names: Vec<&str> = match arg {
+            Expr::Identifier(var) => vec![var.as_str()],
+            Expr::FunctionCall { name, args, .. } if name == "vector" => {
+                args.iter().filter_map(|a| if let Expr::Identifier(var) = a { Some(var.as_str()) } else { None }).collect()
+            }
+            _ => Vec::new(),
+        };
+        match names.into_iter().find(|var| is_unbound(&error, var) && !self.is_function_of_phs(var)) {
+            Some(var) => PhysureError::Generic(format!("`{var}` has no value: the variable of `{function}` is text, write \"{var}\"")),
+            None => error,
+        }
+    }
+
+    /// Whether `name` is a function of PHS this program can call: a core function, or one of a module it imported.
+    fn is_function_of_phs(&self, name: &str) -> bool {
+        crate::reserved::CORE_FUNCTIONS.contains(&name) || self.module_domain(name).is_some()
+    }
+
+    /// The error of a name that is no binding, constant or unit: `` `foo` has no value ``, with what the name most
+    /// likely meant when something does: a function of PHS written as a value, a variable of the program, a unit.
+    pub(crate) fn unbound_name(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhysureError {
+        let hint = if self.is_function_of_phs(name) {
+            format!(": `{name}` is a function of PHS, not a value; pass a user function (`fn f(x) = {name}(x)`) or write the call")
+        } else if let Some(bound) = closest_binding(name, env) {
+            format!(": did you mean `{bound}`?")
+        } else if let Some(unit) = closest_unit(name) {
+            format!(" — did you mean the unit '{unit}'?")
+        } else {
+            String::new()
+        };
+        PhysureError::Generic(format!("`{name}` has no value{hint}"))
+    }
+}
+
+/// Whether `error` is the [`PhsInterpreter::unbound_name`] error of `name`.
+fn is_unbound(error: &PhysureError, name: &str) -> bool {
+    error.to_string().starts_with(&format!("`{name}` has no value"))
+}
 
 /// A quantity literal, with the unit and uncertainty it was written with.
 fn eval_quantity_literal(node: &crate::ast::QuantityNode) -> PhysureResult<PhsValue> {
@@ -167,11 +267,8 @@ fn range_items(start: &PhsValue, end: &PhsValue) -> PhysureResult<Vec<PhsValue>>
         }
         _ => return Err(PhysureError::Generic("Range start must be a number or quantity".into())),
     };
-    let end_num = match end {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        _ => return Err(PhysureError::Generic("Range end must be a number or quantity".into())),
-    };
+    // the items are whole numbers of the start's unit, so the end is counted in it too (`1 km .. 3000 m` is 1 km, 2 km)
+    let end_num = super::helpers::range_end_in_start_unit(start, end)?;
     let start_i = start_num as i64;
     let end_i = end_num as i64;
     let count = end_i.saturating_sub(start_i).max(0) as usize;
@@ -218,7 +315,8 @@ impl PhsInterpreter {
     }
 
     /// A bare name, in the one resolution order of PHS (`crate::globals`): a binding in `env` (lexical, variable,
-    /// user function), then `pi`/`π` and the constants of the catalog in force, then a unit, else the name as text.
+    /// user function), then `pi`/`π` and the constants of the catalog in force, then a unit; a name that is none
+    /// of them is the error `` `foo` has no value `` (audit T5: it used to evaluate to its own text).
     fn eval_identifier(&self, name: &str, env: &HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         Ok(if name.starts_with('`') || (name.contains('{') && name.contains('}')) {
             PhsValue::String(eval_template_string(name, self, env))
@@ -234,7 +332,7 @@ impl PhsInterpreter {
             // `env` still wins, so this only ever fires for an otherwise-free name.
             PhsValue::Quantity(unit)
         } else {
-            PhsValue::String(name.to_string())
+            return Err(self.unbound_name(name, env));
         })
     }
 
@@ -247,12 +345,6 @@ impl PhsInterpreter {
                 return Ok(l_val);
             }
             let parsed_unit = UnitParser::parse_expression(clean_target)?;
-            // a name with no value evaluates to its own text: say so, not "cannot convert a String"
-            if let (Expr::Identifier(name), PhsValue::String(text)) = (left, &l_val) {
-                if text == name && !env.contains_key(name) {
-                    return Err(PhysureError::Generic(format!("`{name}` has no value: there is nothing to convert to `{clean_target}`")));
-                }
-            }
             return self.convert_value_to_unit(l_val, &parsed_unit, clean_target);
         }
         let r_val = self.eval_expr(right, env)?;
@@ -279,7 +371,14 @@ impl PhsInterpreter {
 
         let mut arg_vals = Vec::new();
         for arg in args {
-            arg_vals.push(self.eval_expr(arg, env)?);
+            match (self.eval_expr(arg, env), arg) {
+                // `f'(x)` with a free `x` asks for the derivative as an expression, not at a value: `x` is its variable
+                (Err(error), Expr::Identifier(var)) if name.ends_with('\'') && is_unbound(&error, var) => {
+                    arg_vals.push(PhsValue::String(var.clone()));
+                }
+                (Err(error), _) => return Err(self.symbolic_variable_error(name, arg, error)),
+                (Ok(value), _) => arg_vals.push(value),
+            }
         }
 
         let mut kwarg_vals = Vec::new();
@@ -319,7 +418,7 @@ impl PhsInterpreter {
         }
         let mut local_env = env.clone();
         for (kwarg_name, kwarg_expr) in kwargs {
-            crate::globals::refuse_binding(kwarg_name, &format!("an argument of the equation `{name}`"))?;
+            crate::globals::refuse_local_binding(kwarg_name, &format!("an argument of the equation `{name}`"))?;
             let val = self.eval_expr(kwarg_expr, env)?;
             local_env.insert(kwarg_name.clone(), val);
         }
@@ -350,14 +449,14 @@ impl PhsInterpreter {
         match (name, args) {
             ("op_not", [operand]) => Some(self.eval_not(operand, env)),
             ("op_and" | "op_or", [left, right]) => Some(self.eval_and_or(name == "op_and", left, right, env)),
-            ("ternary" | "if_then_else", [cond, then, otherwise]) if !env.contains_key(name) => {
+            ("ternary" | "if_then_else", [cond, then, otherwise]) => {
                 let context = if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" };
                 Some(self.eval_conditional(cond, then, otherwise, env, context))
             }
             // `assert(true)`: a name with no value is told so, as in every condition
-            ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 && !env.contains_key("assert") => {
+            ("assert", [Expr::Identifier(name), ..]) if args.len() <= 2 => {
                 match self.eval_condition(&args[0], env, "`assert`") {
-                    Err(e) if e.to_string().starts_with(&format!("`{name}` has no value")) => Some(Err(e)),
+                    Err(e) if is_unbound(&e, name) => Some(Err(e)),
                     _ => None,
                 }
             }
@@ -365,17 +464,17 @@ impl PhsInterpreter {
         }
     }
 
-    /// The truth of the condition `expr` (only a Bool has one: [`condition_of`]). A name with no value
-    /// evaluates to its own text; as a condition it is told so, naming it: `while true` read the text "true".
+    /// The truth of the condition `expr` (only a Bool has one: [`condition_of`]). A condition that is a name with
+    /// no value is told which literals are Bool: `while true` names `true` and says `True` and `False`.
     pub(crate) fn eval_condition(&self, expr: &Expr, env: &HashMap<String, PhsValue>, context: &str) -> PhysureResult<bool> {
-        let value = self.eval_expr(expr, env)?;
-        if let (Expr::Identifier(name), PhsValue::String(text)) = (expr, &value) {
-            if text == name && !env.contains_key(name) {
+        let value = match (expr, self.eval_expr(expr, env)) {
+            (Expr::Identifier(name), Err(error)) if is_unbound(&error, name) => {
                 return Err(PhysureError::Generic(format!(
                     "`{name}` has no value; the Bool literals are True and False ({context} needs a Bool)"
                 )));
             }
-        }
+            (_, other) => other?,
+        };
         condition_of(&value, context)
     }
 
@@ -521,7 +620,7 @@ impl PhsInterpreter {
                     })
                     .collect::<PhysureResult<Vec<PhsValue>>>()
             })?;
-            return Ok(PhsValue::Vector(results));
+            return PhsValue::vector_made_by(results, "the `for` gives one where ");
         }
         let mut local_env = env.clone();
         let mut results = Vec::with_capacity(items.len());
@@ -529,7 +628,7 @@ impl PhsInterpreter {
             local_env.insert(var.to_string(), item);
             results.push(self.eval_expr(body, &local_env)?);
         }
-        Ok(PhsValue::Vector(results))
+        PhsValue::vector_made_by(results, "the `for` gives one where ")
     }
 
     fn eval_prime_function_call(

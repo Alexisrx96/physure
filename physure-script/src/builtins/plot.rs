@@ -72,7 +72,7 @@ struct SurfaceRequest {
 }
 
 impl SurfaceRequest {
-    fn read(name: &str, args: &[PhsValue], kwargs: &[(String, PhsValue)]) -> Self {
+    fn read(name: &str, args: &[PhsValue], kwargs: &[(String, PhsValue)]) -> PhysureResult<Self> {
         let mut req = SurfaceRequest {
             x_min: -2.0,
             x_max: 2.0,
@@ -86,8 +86,8 @@ impl SurfaceRequest {
         };
         for (k, v) in kwargs {
             match (k.as_str(), v) {
-                ("x" | "x_range", _) => read_range(v, &mut req.x_min, &mut req.x_max, &mut req.x_unit),
-                ("y" | "y_range", _) => read_range(v, &mut req.y_min, &mut req.y_max, &mut req.y_unit),
+                ("x" | "x_range", _) => read_range(v, &mut req.x_min, &mut req.x_max, &mut req.x_unit)?,
+                ("y" | "y_range", _) => read_range(v, &mut req.y_min, &mut req.y_max, &mut req.y_unit)?,
                 ("title", PhsValue::String(s)) => req.title = s.clone(),
                 ("file" | "filename", PhsValue::String(s)) => req.set_filename(s),
                 ("format", PhsValue::String(s)) => req.format_name = s.clone(),
@@ -106,7 +106,7 @@ impl SurfaceRequest {
                 req.format_name = s.clone();
             }
         }
-        req
+        Ok(req)
     }
 
     /// The file to write; its extension, if it has one, is the format.
@@ -118,10 +118,11 @@ impl SurfaceRequest {
     }
 }
 
-/// A `start .. end` range: its ends, and the unit of the start when it is a quantity.
-fn read_range(v: &PhsValue, min: &mut f64, max: &mut f64, unit: &mut String) {
+/// A `start .. end` range: its ends, both in the unit of the start when it is a quantity (`0 m .. 300 cm` runs to 3,
+/// not 300).
+fn read_range(v: &PhsValue, min: &mut f64, max: &mut f64, unit: &mut String) -> PhysureResult<()> {
     let PhsValue::Range(start, end) = v else {
-        return;
+        return Ok(());
     };
     match start.as_ref() {
         PhsValue::Quantity(q) => {
@@ -131,11 +132,10 @@ fn read_range(v: &PhsValue, min: &mut f64, max: &mut f64, unit: &mut String) {
         PhsValue::Number(n) => *min = *n,
         _ => {}
     }
-    match end.as_ref() {
-        PhsValue::Quantity(q) => *max = q.value.mean(),
-        PhsValue::Number(n) => *max = *n,
-        _ => {}
+    if matches!(end.as_ref(), PhsValue::Quantity(_) | PhsValue::Number(_)) {
+        *max = crate::interpreter::helpers::range_end_in_start_unit(start, end)?;
     }
+    Ok(())
 }
 
 /// `steps` evenly spaced values from `min` to `max`.
@@ -221,7 +221,7 @@ fn plot_3d(
     interpreter: &PhsInterpreter,
     env: &std::collections::HashMap<String, PhsValue>,
 ) -> PhysureResult<Option<PhsValue>> {
-    let mut req = SurfaceRequest::read(name, args, kwargs);
+    let mut req = SurfaceRequest::read(name, args, kwargs)?;
 
     let steps = 25;
     let x_grid = grid(req.x_min, req.x_max, steps);

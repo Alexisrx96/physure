@@ -161,9 +161,31 @@ impl ExactScale {
     /// `(plus - minus) / divisor` rounded once; a missing operand is zero. The shift of an
     /// affine conversion, whose operands (the zero points) may be zero or differ in sign.
     pub fn shifted_quotient(plus: Option<&Self>, minus: Option<&Self>, divisor: &Self) -> f64 {
+        Self::shifted_ratio(plus, minus, divisor).to_f64().unwrap_or(f64::NAN)
+    }
+
+    /// [`ExactScale::shifted_quotient`] before its rounding, written as [`ExactScale::ratio_text`] writes a value
+    /// (`-160/9`, `32`, `0`).
+    pub fn shifted_quotient_text(plus: Option<&Self>, minus: Option<&Self>, divisor: &Self) -> String {
+        Self::shifted_ratio(plus, minus, divisor).to_string()
+    }
+
+    fn shifted_ratio(plus: Option<&Self>, minus: Option<&Self>, divisor: &Self) -> BigRational {
         let plus = plus.map_or_else(BigRational::zero, Self::to_big);
         let minus = minus.map_or_else(BigRational::zero, Self::to_big);
-        ((plus - minus) / divisor.to_big()).to_f64().unwrap_or(f64::NAN)
+        (plus - minus) / divisor.to_big()
+    }
+
+    /// The exact value written as Python's `Fraction` reads it: `127/5000`, `1000`, `1`. A binding that needs the
+    /// value itself (Python's `==` and `hash` on the value in the coherent unit) reads it from this text instead of
+    /// from the double, which is rounded.
+    pub fn ratio_text(&self) -> String {
+        match &self.0 {
+            Repr::One => "1".to_string(),
+            Repr::Small(numer, 1) => numer.to_string(),
+            Repr::Small(numer, denom) => format!("{numer}/{denom}"),
+            Repr::Big(ratio) => ratio.to_string(),
+        }
     }
 
     /// The nearest `f64`, rounded once (ties to even).
@@ -411,6 +433,21 @@ mod tests {
         assert_eq!(ExactScale::shifted_quotient(Some(&kelvin_of_degf), Some(&kelvin_of_degc), &ExactScale::one()), -160.0 / 9.0);
         assert_eq!(ExactScale::shifted_quotient(None, None, &degf), 0.0);
         assert_eq!(ExactScale::shifted_quotient(Some(&kelvin_of_degc), None, &ExactScale::one()), 273.15);
+    }
+
+    #[test]
+    fn a_shift_and_a_value_are_written_exactly_as_fraction_reads_them() {
+        let kelvin_of_degc = exact("273.15");
+        let kelvin_of_degf = exact("45967/180");
+        let degf = exact("5/9");
+        assert_eq!(ExactScale::shifted_quotient_text(Some(&kelvin_of_degc), Some(&kelvin_of_degf), &degf), "32");
+        assert_eq!(ExactScale::shifted_quotient_text(Some(&kelvin_of_degf), Some(&kelvin_of_degc), &ExactScale::one()), "-160/9");
+        assert_eq!(ExactScale::shifted_quotient_text(None, None, &degf), "0");
+        assert_eq!(ExactScale::one().ratio_text(), "1");
+        assert_eq!(exact("1e3").ratio_text(), "1000");
+        assert_eq!(exact("0.0254").ratio_text(), "127/5000");
+        assert_eq!(degf.ratio_text(), "5/9");
+        assert_eq!(exact("1e-50").ratio_text(), format!("1/1{}", "0".repeat(50)));
     }
 
     #[test]

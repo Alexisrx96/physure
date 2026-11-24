@@ -73,6 +73,11 @@ Working in a git worktree? Run `uv run maturin develop --release` from that work
 `physure-python/`. If you ever run `maturin` without `uv run`, check `echo $VIRTUAL_ENV`
 first: a venv inherited from another checkout would receive your build silently.
 
+Every worktree that builds keeps its own `target/` (5 to 50 GB) and `.venv`. After a branch
+merges, run `python scripts/clean_worktrees.py` to see which worktrees are fully in `origin/main`,
+and `--apply` to remove them with their branches. It keeps any worktree with uncommitted changes
+or with a patch `origin/main` lacks.
+
 ---
 
 ## Test

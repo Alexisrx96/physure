@@ -46,7 +46,7 @@ fn java_calls_the_core_comparison() {
 fn javascript_and_typescript_call_the_core_comparison() {
     for target in [Target::JavaScript, Target::TypeScript] {
         let code = emit(PROGRAM, target).unwrap();
-        assert!(code.contains("x.phsCompare(Quantity.of(0, \"m\"), \">\")"), "{code}");
+        assert!(code.contains("x.phsCompare(new Quantity(0, \"m\"), \">\")"), "{code}");
         assert!(!code.contains("getValue()"), "`getValue` is not a method of the WASM Quantity:\n{code}");
     }
 }
@@ -58,7 +58,7 @@ fn every_operator_reaches_the_core_with_its_own_symbol() {
         assert!(emit(&source, Target::Rust).unwrap().contains(&format!("\"{op}\").unwrap_or_else")), "{op}");
         assert!(emit(&source, Target::Python).unwrap().contains(&format!("phs_compare(x, \"{op}\", ")), "{op}");
         assert!(emit(&source, Target::Java).unwrap().contains(&format!("\"{op}\")")), "{op}");
-        assert!(emit(&source, Target::JavaScript).unwrap().contains(&format!(".phsCompare(Quantity.of(3, \"m\"), \"{op}\")")), "{op}");
+        assert!(emit(&source, Target::JavaScript).unwrap().contains(&format!(".phsCompare(new Quantity(3, \"m\"), \"{op}\")")), "{op}");
     }
 }
 

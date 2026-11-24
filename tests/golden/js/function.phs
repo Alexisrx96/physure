@@ -1,0 +1,2 @@
+fn kinetic_energy(m, v) = 0.5 * m * v^2
+ke = kinetic_energy(80 kg, 15 m/s) => kJ

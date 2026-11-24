@@ -33,7 +33,7 @@ three loop and pipeline ceilings (fixed at the compiled defaults) and the seed (
 |---|---|---|---|---|
 | `[Dimensions]`: the base dimensions and the base unit each is measured in | `physure-core/src/units/physure.conf` | frozen | entries `base_unit`, `base_dimension`, `dimension_base`; every units witness, e.g. `builtin.units.foot_to_metre` | - |
 | `[Prefixes]`: the SI prefixes, their exact factors and spelled-out names (`micro = u`) | `physure-core/src/units/physure.conf` | frozen | entries `prefix`, `prefix_exact`, `prefix_name`; `builtin.units.kmh_to_ms`, `builtin.units.atm_to_kpa` | - |
-| `[Units]`: every unit, its exact scale, offset (temperatures) or level (dB, pH), aliases, `noprefix`, metadata | `physure-core/src/units/physure.conf` | frozen | entries `derived_unit`, `alias`, `unit`, `unit_names`, `recipe`, `no_prefix`, `unit_meta`; `builtin.units.degf_to_degc_212`, `builtin.units.db_20_to_ratio`, `builtin.units.ph_7_to_ratio` | - |
+| `[Units]`: every unit, its exact scale, offset (temperatures) or level (dB, pH), aliases, `noprefix`, `interval` (a temperature interval, read from the line; a file frozen before the flag keeps it on the shipped `delta_celsius` and `delta_fahrenheit`), metadata | `physure-core/src/units/physure.conf` | frozen | entries `derived_unit`, `alias`, `unit`, `unit_names`, `recipe`, `no_prefix`, `unit_meta`; `builtin.units.degf_to_degc_212`, `builtin.units.db_20_to_ratio`, `builtin.units.ph_7_to_ratio` | - |
 | `[Constants]`: the physical constants (CODATA 2022 values). **They carry no uncertainty**: the grammar has none, so a measured constant such as G is exact here (audit T14, a row of section 3) | `physure-core/src/units/physure.conf` | frozen | entries `constant`, `constant_meta`; `builtin.const.molar_gas_constant`, `builtin.const.planck_constant`, `builtin.const.speed_of_light_in_vacuum` | - |
 | `[Thermochemistry:legacy-python-1]`: the shipped edition of standard enthalpies and entropies of formation (8 species, 298.15 K, 1 bar; its quality is a row of section 3, see [Standard thermochemical data](thermochemistry.md)) | `physure-core/src/units/physure.conf` | frozen | entries `thermochemistry_table`, `thermochemistry_edition`; `builtin.chem.dhf_h2o_l`, `builtin.chem.entropy_h2o_l`, `builtin.chem.gibbs_formation_h2o_l` | - |
 | `[Thermochemistry]`: your definitions, which apply with any edition | `physure-core/src/units/physure.conf` | frozen | entries `thermochemistry`; the three thermochemistry witnesses above | - |
@@ -169,7 +169,6 @@ The seed is a frozen setting (section 1.2); what it makes reproducible is this.
 | Plot axis labels `{:.3e}` and the symbolic printer's integer cut at 1e15 | `physure-script/src/builtins/plot.rs`, `physure-script/src/symbolic/display.rs` | not frozen | none | engine (no key planned) |
 | Python `str` and `repr` of a quantity: the raw float text, no GUM rounding, the unit not folded (C11) | `physure-python/physure/domain/measurement/quantity.py` | not frozen | none | Phase 5 (call the core's display) |
 | Unit names written by code tables, not the catalog: `µ` where the catalog's micro is `u`, 16 derived symbols (M10). When it moves, unit text changes, and with it the hash of a user witness (`unit=` is part of `phs-witness-1`) | `physure-core/src/units/rational.rs` | not frozen | none | Phase 5 (deferred by the owner) |
-| NaN prints as `NaN.0` (T20); no display witness records NaN while it is open | `physure-core/src/quantity.rs` | not frozen | none | defect, open |
 
 ### 3.5 Accepted, ignored, and known gaps
 
@@ -179,8 +178,7 @@ The seed is a frozen setting (section 1.2); what it makes reproducible is this.
 | The uncertainties of the catalog constants: none is recorded (T14) | `physure-core/src/units/physure.conf` | not frozen | none | a later catalog task (grammar for a `[Constants]` uncertainty) |
 | `legacy-python-1` is textbook data rounded to 0.1, with no uncertainty and mixed sources (NH3(g) S° about 7 σ from CODATA); a better-sourced edition with uncertainties is future work | `physure-core/src/units/physure.conf` | not frozen | none | future edition (docs/thermochemistry.md) |
 | `phs conf status` names the atomic-weight edition in force but has no thermochemistry line (`phs conf show` lists the thermochemistry entries) | `physure-cli/src/conf.rs` | not frozen | none | Phase 4b docs and follow-up |
-| An unbound PHS identifier evaluates to its own name as text (T5) | `physure-script` interpreter | not frozen | none | language semantics, owner decision |
-| The symbolic engine has its own parser: `e` before `^` is Euler's number there and refused in the numeric path (T13) | `physure-script/src/symbolic/parser.rs` | not frozen | none | language semantics, open |
+| An unbound PHS identifier is the error `` `x` has no value `` (T5; it used to evaluate to its own name as text) | `physure-script` interpreter | not frozen | none | language semantics, decided 2026-11-17: an error everywhere |
 
 ## 4. What a validated site must still do itself
 

@@ -11,31 +11,38 @@ fn frame(json: &str) -> Vec<u8> {
     format!("Content-Length: {}\r\n\r\n{json}", json.len()).into_bytes()
 }
 
+/// The `Content-Length` of the next message's headers (0 when they name none), or `None` at the end of the stream.
+fn content_length(reader: &mut impl BufRead) -> Option<usize> {
+    let mut length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            return None;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            return Some(length);
+        }
+        if let Some(value) = line.strip_prefix("Content-Length:") {
+            length = value.trim().parse().unwrap_or(0);
+        }
+    }
+}
+
+/// The body of the next framed message, or `None` at the end of the stream.
+fn read_message(reader: &mut impl BufRead) -> Option<String> {
+    let mut body = vec![0; content_length(reader)?];
+    reader.read_exact(&mut body).ok()?;
+    Some(String::from_utf8_lossy(&body).into_owned())
+}
+
 /// Reads framed messages from the server's stdout into a channel.
 fn messages(stdout: impl Read + Send + 'static) -> mpsc::Receiver<String> {
     let (send, receive) = mpsc::channel();
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
-        loop {
-            let mut length = 0usize;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    return;
-                }
-                let line = line.trim();
-                if line.is_empty() {
-                    break;
-                }
-                if let Some(value) = line.strip_prefix("Content-Length:") {
-                    length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut body = vec![0; length];
-            if reader.read_exact(&mut body).is_err() {
-                return;
-            }
-            if send.send(String::from_utf8_lossy(&body).into_owned()).is_err() {
+        while let Some(message) = read_message(&mut reader) {
+            if send.send(message).is_err() {
                 return;
             }
         }

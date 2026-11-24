@@ -26,7 +26,9 @@ impl SymbolicParser {
         let lexer = PhsLexer::new(clean_input);
         let tokens = lexer.tokenize()?;
         let mut parser = SymbolicParser { tokens, pos: 0 };
-        parser.parse_equality()
+        let node = parser.parse_equality()?;
+        parser.finish()?;
+        Ok(node)
     }
 
     /// Parses `input` as `lhs = rhs` without collapsing to `Sub`, for coercing a
@@ -47,6 +49,7 @@ impl SymbolicParser {
         let left = parser.parse_sum()?;
         if parser.match_op("=") || parser.match_op("==") {
             let right = parser.parse_sum()?;
+            parser.finish()?;
             Ok(Some((left.simplify(), right.simplify())))
         } else {
             Ok(None)
@@ -55,6 +58,41 @@ impl SymbolicParser {
 
     fn peek(&self) -> Option<&PhsToken> {
         self.tokens.get(self.pos)
+    }
+
+    /// The whole text must have been read. The parser stops at the first token no rule takes, and what followed
+    /// was dropped without a word: `integral("x < 0.5", "x")` was the integral of `x` (audit T2), and
+    /// `deriv("x^2 )", "x")` was `2 * x`.
+    fn finish(&self) -> PhysureResult<()> {
+        self.refuse_comparison()?;
+        match self.peek() {
+            None => Ok(()),
+            Some(t) => Err(PhysureError::Generic(format!("unexpected `{}` after the end of the expression", t.value))),
+        }
+    }
+
+    /// A comparison is named where the parser meets one, inside parentheses too (`(y >= 2) + 1`), not reported as
+    /// a missing `)`.
+    fn refuse_comparison(&self) -> PhysureResult<()> {
+        match self.peek() {
+            Some(t) if COMPARISONS.contains(&t.value.as_str()) => Err(PhysureError::Generic(format!(
+                "`{}` is a comparison, which a symbolic expression cannot hold: write an expression, or an equation \
+                 with `=`",
+                t.value
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Consumes the `)` that closes a group or a call, or fails with `message`.
+    fn expect_close(&mut self, message: &str) -> PhysureResult<()> {
+        self.refuse_comparison()?;
+        // the end of the text is no closing parenthesis either: `sin(x` was `sin(x)`
+        if self.next().is_some_and(|t| t.value == ")") {
+            Ok(())
+        } else {
+            Err(PhysureError::Generic(message.to_string()))
+        }
     }
 
     fn next(&mut self) -> Option<PhsToken> {
@@ -160,6 +198,12 @@ impl SymbolicParser {
         if !self.at_power() {
             return Ok(base);
         }
+        // `e` is a name like any other here and Euler's number nowhere, as in the numeric path (audit T13)
+        if matches!(&base, Node::Symbol(name) if name == "e") {
+            return Err(PhysureError::Generic(
+                "`e` is not Euler's number in a symbolic text: write `exp(x)` for e^x, or another name for a variable".to_string(),
+            ));
+        }
         self.next();
         let mut exponent = self.parse_exponent()?;
         // a number exponent followed by a name takes the name along (`e^2x` is `e^(2 x)`)
@@ -202,13 +246,11 @@ impl SymbolicParser {
 
         match tok.kind {
             TokenKind::Number(n) => Ok(Node::Number(n)),
-            TokenKind::Ident(ref name) => self.parse_identifier(name, tok.pos),
+            TokenKind::Ident(ref name) => self.parse_identifier(name),
             TokenKind::Op(ref op) if op == "(" => {
                 let node = self.parse_equality()?;
-                match self.next() {
-                    Some(close_t) if close_t.value == ")" => Ok(node),
-                    _ => Err(PhysureError::Generic("Expected closing ')'".to_string())),
-                }
+                self.expect_close("Expected closing ')'")?;
+                Ok(node)
             }
             TokenKind::StringLiteral(ref s) => {
                 Self::parse_str(s)
@@ -226,33 +268,21 @@ impl SymbolicParser {
         }
     }
 
-    /// A name: a function call when `(` follows, otherwise a symbol. A name ending in `e` before `^` is the
-    /// symbol and the constant `e` (`2xe^x`), so the `e` goes back as a token of its own.
-    fn parse_identifier(&mut self, name: &str, pos: usize) -> PhysureResult<Node> {
+    /// A name: a function call when `(` follows, otherwise a symbol, whole. It used to cut a name that ends in `e`
+    /// before `^` into the name and the constant `e` (to read `2xe^x`), so `time^2` was `tim * e^2` and `deriv("time^2",
+    /// "time")` answered 0 (audit T13).
+    fn parse_identifier(&mut self, name: &str) -> PhysureResult<Node> {
         if self.peek().is_some_and(|next_t| next_t.value == "(") {
             return self.parse_func_call(name);
         }
-        let before_power = self.peek().is_some_and(|next_t| next_t.value == "^" || next_t.value == "**");
-        if name.len() > 1 && name.ends_with('e') && before_power {
-            let prefix = name[..name.len() - 1].to_string();
-            self.tokens.insert(self.pos, PhsToken {
-                kind: TokenKind::Ident("e".to_string()),
-                value: "e".to_string(),
-                pos: pos + prefix.len(),
-            });
-            return Ok(Node::Symbol(prefix));
-        }
+        refuse_bare_word(name)?;
         Ok(Node::Symbol(name.to_string()))
     }
 
     fn parse_func_call(&mut self, name: &str) -> PhysureResult<Node> {
         self.next(); // consume '('
         let mut args = self.parse_call_arguments()?;
-        if let Some(close_t) = self.next() {
-            if close_t.value != ")" {
-                return Err(PhysureError::Generic("Expected closing ')' after function arguments".to_string()));
-            }
-        }
+        self.expect_close("Expected closing ')' after function arguments")?;
 
         match name {
             "deriv" | "diff" => {
@@ -298,6 +328,9 @@ impl SymbolicParser {
     }
 }
 
+/// The operators of PHS that compare; `=` and `==` are the equation, not in this list.
+const COMPARISONS: [&str; 6] = ["<", ">", "<=", ">=", "!=", "≈"];
+
 /// What follows a factor in a product.
 #[derive(Clone, Copy)]
 enum ProductStep {
@@ -318,6 +351,23 @@ fn product_step(t: &PhsToken) -> ProductStep {
     } else {
         ProductStep::Stop
     }
+}
+
+/// A word PHS reads as something other than a name is not a symbol of a symbolic text: `x and y` was `and * x * y`,
+/// and a function without its parentheses (`sin * x`) a symbol called `sin`. The words that are only plausible names
+/// (`sigma`, `max`, `dof`, a statement word) stay symbols, as the variables of an equation call do. `sec` is left
+/// alone: it is also the unit second (`3 sec`).
+fn refuse_bare_word(name: &str) -> PhysureResult<()> {
+    use crate::reserved::{static_kind, Reserved};
+    let message = match static_kind(name) {
+        Some(Reserved::Keyword) => format!("`{name}` is a word of the language and is not a symbol of a symbolic text; use another name"),
+        Some(Reserved::Literal) => format!("`{name}` is a literal of the language and is not a symbol of a symbolic text; use another name"),
+        _ if name != "sec" && (unary_function(name).is_some() || matches!(name, "deriv" | "integral")) => {
+            format!("`{name}` is a function: write it with its argument in parentheses, `{name}(x)`")
+        }
+        _ => return Ok(()),
+    };
+    Err(PhysureError::Generic(message))
 }
 
 /// The node built by a one-argument symbolic function, by the name it is written with, and the name its

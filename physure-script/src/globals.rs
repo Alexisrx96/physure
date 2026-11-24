@@ -8,7 +8,7 @@
 //! 3. `pi` and `π` (the number `std::f64::consts::PI`), then the constants of the catalog in force, each a quantity
 //!    in the unit the catalog gives it;
 //! 4. units (`J` alone is one joule);
-//! 5. anything else is unknown (today the text of the name).
+//! 5. anything else is unknown, which the interpreter refuses as the error `` `foo` has no value `` (audit T5).
 //!
 //! The catalog in force is the one unit text is read against: the innermost `units::with_catalog` scope of this
 //! thread, else the configuration in force (a frozen file, or the embedded catalog plus the working directory's
@@ -18,8 +18,9 @@
 //!
 //! **Shadowing is an error.** A name of step 3 cannot be bound by an assignment, a parameter, a `for` variable, a
 //! `where` binding, a function definition, an import or a host: a scientist who writes `pi = 3` has made a mistake,
-//! not a choice. Which names those are depends on the catalog in force, so a conf that adds a `[Constants]` entry
-//! makes a script that binds that name an error under that conf only.
+//! not a choice. Which names of step 3 those are depends on the catalog in force, so a conf that adds a `[Constants]`
+//! entry makes a script that binds that name an error under that conf only. The statement words, the literals and the
+//! functions of the core (see [`crate::reserved`]) are refused the same way under every conf.
 //!
 //! Only the catalog's own names are constants: `e`, `c`, `k`, `R` are not (`h`, `g`, `G` are units).
 
@@ -33,7 +34,7 @@ use crate::value::PhsValue;
 pub const PI_NAMES: [&str; 2] = ["pi", "π"];
 
 /// Runs `f` against the catalog in force on this thread (see the module's documentation).
-fn with_catalog_in_force<R>(f: impl FnOnce(&UnitRegistry) -> R) -> PhysureResult<R> {
+pub(crate) fn with_catalog_in_force<R>(f: impl FnOnce(&UnitRegistry) -> R) -> PhysureResult<R> {
     physure_core::units::with_current_catalog(|scoped| match scoped {
         Some(registry) => Ok(f(registry)),
         None => physure_core::units::conf::try_with_conf_registry(f).map_err(|e| PhysureError::Generic(e.to_string())),
@@ -98,8 +99,18 @@ pub fn shadowing_error(name: &str, what: &str, value: Option<&str>) -> String {
     format!("`{name}` is {which} and cannot be bound as {what}; choose another name")
 }
 
-/// An error when `name` is a global identifier of the catalog in force: it cannot be bound as `what`.
+/// An error when `name` is reserved (a statement word, a literal or a function of PHS) or a global identifier of the
+/// catalog in force: it cannot be bound as `what`.
 pub fn refuse_binding(name: &str, what: &str) -> PhysureResult<()> {
+    if let Some(kind) = crate::reserved::static_kind(name) {
+        return Err(PhysureError::Generic(crate::reserved::binding_error(name, what, kind)));
+    }
+    refuse_constant_binding(name, what)
+}
+
+/// An error when `name` is `pi`, `π` or a constant of the catalog in force: it cannot be bound as `what`. It does not
+/// refuse the reserved words, for the places where a name is local and never shadows a call.
+pub fn refuse_constant_binding(name: &str, what: &str) -> PhysureResult<()> {
     if PI_NAMES.contains(&name) {
         return Err(PhysureError::Generic(shadowing_error(name, what, None)));
     }
@@ -109,6 +120,22 @@ pub fn refuse_binding(name: &str, what: &str) -> PhysureResult<()> {
         None => Ok(()),
     }
 }
+
+/// An error when `name` cannot be bound as a LOCAL of one run: a value a host gives (`run_program_with`) or an
+/// argument of an equation call (`eq(sigma=5, A=2)`). A local never shadows a call (a call reaches the builtin
+/// first), so the name of a function of PHS or of a module is fine for it, and `sigma`, `max` and `dof` are physical
+/// symbols. What the language reads as something else is not: a keyword or a literal would be ignored (`inf = 3`),
+/// and `pi` and the constants of the catalog are refused as everywhere.
+pub fn refuse_local_binding(name: &str, what: &str) -> PhysureResult<()> {
+    use crate::reserved::Reserved;
+    if let Some(kind @ (Reserved::Keyword | Reserved::Literal)) = crate::reserved::static_kind(name) {
+        return Err(PhysureError::Generic(crate::reserved::binding_error(name, what, kind)));
+    }
+    refuse_constant_binding(name, what)
+}
+
+/// What `bindings_of` says binds a name an import brings; the text is followed by the path of the module.
+pub(crate) const IMPORT_BINDING: &str = "a name imported from";
 
 /// Every name `statement` binds, with what binds it, in source order: assignments, function names and parameters,
 /// `for` variables and `where` bindings anywhere inside it (function bodies included, whether or not they ever
@@ -143,7 +170,7 @@ pub fn bindings_of(statement: &Statement, out: &mut Vec<(String, String)>) {
             if let ImportSpecifier::Symbols(symbols) = &import.specifier {
                 for symbol in symbols {
                     let name = symbol.alias.clone().unwrap_or_else(|| symbol.name.clone());
-                    out.push((name, format!("a name imported from `{}`", import.path)));
+                    out.push((name, format!("{IMPORT_BINDING} `{}`", import.path)));
                 }
             }
         }
@@ -176,10 +203,17 @@ pub fn bindings_in(expr: &Expr, out: &mut Vec<(String, String)>) {
     }
 }
 
-/// Refuses `statement` when it binds a global identifier of the catalog in force anywhere inside it. Checked once
-/// for a statement before it runs, so a loop does not pay for it at every iteration and a body that never runs is
-/// checked too.
-pub(crate) fn refuse_global_bindings(statement: &Statement) -> PhysureResult<()> {
+/// Refuses `statement` when it binds a reserved name anywhere inside it: a global identifier of the catalog in
+/// force, a statement word, a literal, a function of the core, or a function of a module the program has imported
+/// (`module_domain` answers the module of such a name). Checked once for a statement before it runs, so a loop
+/// does not pay for it at every iteration and a body that never runs is checked too. A name an import binds (a
+/// named import or an alias, from a module or from a `.phs` file) is not checked against the module functions here:
+/// running `use solve from calc` again, wherever the import sits, binds nothing new, and
+/// `PhsInterpreter::unlock_domain` refuses an import that would replace or remap a name the program holds.
+pub(crate) fn refuse_global_bindings(
+    statement: &Statement,
+    module_domain: &dyn Fn(&str) -> Option<&'static str>,
+) -> PhysureResult<()> {
     let mut bound = Vec::new();
     bindings_of(statement, &mut bound);
     if bound.is_empty() {
@@ -187,6 +221,11 @@ pub(crate) fn refuse_global_bindings(statement: &Statement) -> PhysureResult<()>
     }
     for (name, what) in bound {
         refuse_binding(&name, &what)?;
+        if !what.starts_with(IMPORT_BINDING) {
+            if let Some(domain) = module_domain(&name) {
+                return Err(PhysureError::Generic(crate::reserved::module_binding_error(&name, domain, &what)));
+            }
+        }
     }
     Ok(())
 }

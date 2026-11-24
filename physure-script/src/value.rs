@@ -116,6 +116,36 @@ impl fmt::Display for PhsValue {
 }
 
 impl PhsValue {
+    /// The vector of `items`, or the error that refuses it: a vector holds one dimension. Its numbers and quantities
+    /// share one dimension (in any of its units: `[1 m, 2 km]`); text, and the rows of a matrix, are not compared, so
+    /// a matrix whose rows differ in dimension from one row to the next is a value, and its transpose is refused.
+    /// Every vector the interpreter builds, and every vector a host hands it, is made here, so that `norm`, `max` or
+    /// a code generator never meets `[1 m, 2 s]`.
+    ///
+    /// ```
+    /// use physure_script::PhsValue;
+    /// assert!(PhsValue::vector_checked(vec![PhsValue::Number(1.0), PhsValue::Number(2.0)]).is_ok());
+    /// ```
+    pub fn vector_checked(items: Vec<PhsValue>) -> physure_core::error::PhysureResult<PhsValue> {
+        Self::vector_made_by(items, "")
+    }
+
+    /// [`PhsValue::vector_checked`], with what made the vector said in its error (`the elementwise `*` gives one
+    /// where `, `the `for` gives one where `).
+    pub(crate) fn vector_made_by(items: Vec<PhsValue>, made_by: &str) -> physure_core::error::PhysureResult<PhsValue> {
+        use crate::builtins::dimensions::{first_mismatch, Mismatch};
+        match first_mismatch(&items) {
+            None => Ok(PhsValue::Vector(items)),
+            Some(Mismatch::Dimension(why)) => Err(physure_core::error::PhysureError::Generic(format!(
+                "a vector holds one dimension: {made_by}{why}; put each dimension in its own vector"
+            ))),
+            Some(Mismatch::TemperatureKind(why)) => Err(physure_core::error::PhysureError::Generic(format!(
+                "a vector holds one dimension and one kind of temperature: {made_by}{why}; put the points and the \
+                 intervals in vectors of their own"
+            ))),
+        }
+    }
+
     /// A short, human-readable name for this value's PHS type. Used by the strict-Bool
     /// logical operators and the `assert`/`exact_assert` dispatcher, neither of which may
     /// guess a truth -- their errors need to say what type they actually got.

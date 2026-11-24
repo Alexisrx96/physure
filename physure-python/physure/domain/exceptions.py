@@ -32,16 +32,24 @@ class PhysureError(Exception):
 class IncompatibleUnitsError(PhysureError):
     """Raised when trying to perform an operation with incompatible units."""
 
-    def __init__(self, unit1: CompoundUnit, unit2: CompoundUnit):
+    def __init__(
+        self,
+        unit1: CompoundUnit,
+        unit2: CompoundUnit,
+        reason: str | None = None,
+    ):
         """Initialize the exception with the incompatible units.
 
         :param unit1: The first unit involved in the operation.
         :param unit2: The second unit involved in the operation.
+        :param reason: Why they are incompatible, when the units alone do not
+            say it (a temperature point against an interval); it is the message.
         """
         self.unit1 = unit1
         self.unit2 = unit2
         super().__init__(
-            f"Cannot operate with incompatible units: '{unit1}' and '{unit2}'."
+            reason
+            or f"Cannot operate with incompatible units: '{unit1}' and '{unit2}'."
         )
 
 
@@ -94,3 +102,12 @@ class DimensionError(PhysureError):
     """Raised when an invalid operation is performed on dimensions."""
 
     pass
+
+
+class UnitStrippedWarning(UserWarning):
+    """A quantity was turned into a bare number: its unit or its uncertainty is gone.
+
+    Issued by `float(q)`, `int(q)`, `complex(q)` and `np.asarray(q, dtype=float)`. The
+    number is the value in the coherent unit. To take a number on purpose and silently,
+    write `q.to(unit).magnitude` (and `q.uncertainty`), or filter this warning.
+    """

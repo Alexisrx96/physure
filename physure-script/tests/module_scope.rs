@@ -296,3 +296,27 @@ fn a_module_given_in_memory_is_evaluated_in_its_own_scope() {
     let tail: Vec<f64> = values[values.len() - 2..].iter().map(mean).collect();
     assert_eq!(tail, [6.0, 2.0]);
 }
+
+// --- the imports of the importer are not the module's ---
+
+#[test]
+fn the_functions_the_importer_imported_are_not_reserved_inside_a_module() {
+    let modules = Modules::new("reserved_leak", &[("modlz.phs", "limit = 5
+z = limit + 1
+")]);
+    assert_eq!(last(&modules.run("use * from calc
+use z from \"modlz\"
+z")), 6.0);
+    assert_eq!(last(&modules.run("use z from \"modlz\"
+use * from calc
+z")), 6.0);
+}
+
+#[test]
+fn a_core_function_is_still_reserved_inside_a_module() {
+    let modules = Modules::new("reserved_static", &[("modmax.phs", "max = 5
+z = max
+")]);
+    let message = modules.refused("use z from \"modmax\"");
+    assert!(message.contains("`max` is a function of PHS"), "{message}");
+}

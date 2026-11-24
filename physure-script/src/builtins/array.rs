@@ -82,23 +82,62 @@ fn linspace(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
     if args.len() < 2 {
         return Err(generic_error("linspace expects start and stop"));
     }
-    let mean_or = |v: &PhsValue, default: f64| match v {
-        PhsValue::Number(n) => *n,
-        PhsValue::Quantity(q) => q.value.mean(),
-        _ => default,
-    };
-    let start = mean_or(&args[0], 0.0);
-    let stop = mean_or(&args[1], 1.0);
-    // a literal such as `5` is a dimensionless quantity, not a bare number
-    let count = match args.get(2) {
-        Some(PhsValue::Number(n)) => *n as usize,
-        Some(PhsValue::Quantity(q)) => q.value.mean() as usize,
-        _ => 50,
-    };
+    // an endpoint that is not a number or a quantity was read as 0 or 1
+    if let Some(other) = args[..2].iter().find(|v| !crate::builtins::dimensions::is_numeric(v)) {
+        return Err(PhysureError::Generic(format!(
+            "linspace's endpoints are numbers or quantities, got {} ({other})",
+            other.type_name()
+        )));
+    }
+    // the endpoints have one dimension: `linspace(0 m, 1 s, 3)` took the unit of the first and the number of the second
+    use crate::builtins::dimensions::{mismatch, Mismatch};
+    match mismatch(&args[0], &args[1]) {
+        Some(Mismatch::Dimension(why)) => {
+            return Err(PhysureError::Generic(format!(
+                "linspace needs endpoints of one dimension: {why}; write both endpoints in one dimension"
+            )))
+        }
+        Some(Mismatch::TemperatureKind(why)) => {
+            return Err(PhysureError::Generic(format!(
+                "linspace needs endpoints of one dimension and one kind of temperature: {why}; write both endpoints as \
+                 points or both as intervals"
+            )))
+        }
+        None => {}
+    }
     let unit = args[..2].iter().find_map(|v| match v {
         PhsValue::Quantity(q) => Some(q.unit.clone()),
         _ => None,
     });
+    // each endpoint is read in the unit of the points: `linspace(0 m, 1 km, 3)` read the `1` of `1 km` as metres
+    let mean_of = |v: &PhsValue| -> PhysureResult<f64> {
+        match (v, &unit) {
+            (PhsValue::Quantity(q), Some(u)) => Ok(q.convert_to(u)?.value.mean()),
+            (PhsValue::Number(n), Some(u)) => {
+                Ok(physure_core::quantity::Quantity::new_scalar(*n, 0.0, physure_core::RationalUnit::dimensionless(), None, None)
+                    .convert_to(u)?
+                    .value
+                    .mean())
+            }
+            (PhsValue::Number(n), None) => Ok(*n),
+            _ => unreachable!("the endpoints were checked to be numbers or quantities"),
+        }
+    };
+    let start = mean_of(&args[0])?;
+    let stop = mean_of(&args[1])?;
+    // a literal such as `5` is a dimensionless quantity, not a bare number; a count with a dimension is not a count,
+    // and neither is `2.7` or `50 percent` (0.5), which were truncated
+    let count = match args.get(2) {
+        None => 50,
+        Some(value) => match crate::builtins::dimensions::whole_number(value) {
+            Some(n) if n >= 0.0 => n as usize,
+            Some(_) => return Err(PhysureError::Generic(format!("linspace needs a whole, non-negative count, got {value}"))),
+            None if crate::builtins::dimensions::plain_number(value).is_some() => {
+                return Err(PhysureError::Generic(format!("linspace needs a whole, non-negative count, got {value}")));
+            }
+            None => return Err(PhysureError::Generic(format!("linspace's count must be a plain number, got {value}"))),
+        },
+    };
     // `count` is a caller-supplied argument driving `.collect()` below directly --
     // the identical unbounded-materialization shape as the for-expression's Range
     // branch and `parallel_map` (see `physure_core::settings::max_loop_iterations`'s
@@ -134,7 +173,7 @@ fn gradient(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
         let dx = eval_bin_op(BinaryOp::Sub, &x_vec[i_next], &x_vec[i_prev])?;
         result.push(eval_bin_op(BinaryOp::Div, &dy, &dx)?);
     }
-    Ok(Some(PhsValue::Vector(result)))
+    PhsValue::vector_made_by(result, "`gradient` gives one where ").map(Some)
 }
 
 fn trapz(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
@@ -179,7 +218,7 @@ fn cross(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Optio
             interpreter.eval_binary_op_vals(BinaryOp::Mul, v1[k].clone(), v2[j].clone())?,
         )
     };
-    Ok(Some(PhsValue::Vector(vec![component(1, 2)?, component(2, 0)?, component(0, 1)?])))
+    PhsValue::vector_made_by(vec![component(1, 2)?, component(2, 0)?, component(0, 1)?], "`cross` gives one where ").map(Some)
 }
 
 fn norm(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
@@ -207,8 +246,12 @@ fn transpose(args: &[PhsValue]) -> PhysureResult<Option<PhsValue>> {
             transposed[c][r] = matrix[r][c].clone();
         }
     }
-    let res_rows = transposed.into_iter().map(PhsValue::Vector).collect();
-    Ok(Some(PhsValue::Vector(res_rows)))
+    // a row of the transpose is a column of the matrix: the rows of `[[1 m], [1 s]]` may differ, its column may not
+    let res_rows = transposed
+        .into_iter()
+        .map(|row| PhsValue::vector_made_by(row, "the transpose gives one where "))
+        .collect::<PhysureResult<Vec<_>>>()?;
+    PhsValue::vector_checked(res_rows).map(Some)
 }
 
 fn matmul(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {
@@ -226,9 +269,9 @@ fn matmul(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Opti
         for c in 0..columns {
             res_row.push(sum_of_products(interpreter, inner, |k| (row[k].clone(), m2[k][c].clone()))?);
         }
-        res_mat.push(PhsValue::Vector(res_row));
+        res_mat.push(PhsValue::vector_made_by(res_row, "`matmul` gives one where ")?);
     }
-    Ok(Some(PhsValue::Vector(res_mat)))
+    PhsValue::vector_checked(res_mat).map(Some)
 }
 
 fn det(args: &[PhsValue], interpreter: &PhsInterpreter) -> PhysureResult<Option<PhsValue>> {

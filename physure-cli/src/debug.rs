@@ -5,7 +5,6 @@
 //! convention (`run_debug(args)`, dispatched from `main.rs` via `if args[1] == "debug"`).
 
 use std::io::{self, Write};
-use std::process;
 use std::sync::Arc;
 
 use physure_script::debug::{Breakpoint, DebugAction, DebugContext, DebugHook};
@@ -273,7 +272,7 @@ pub fn run_debug(args: &[String]) {
         Some(p) if !p.starts_with('-') => p.clone(),
         _ => {
             eprintln!("Usage: phs debug <script.phs> [--break-fn name] [--break N[:cond]]");
-            process::exit(1);
+            crate::exit(1);
         }
     };
     let loaded = std::fs::read_to_string(&script_path)
@@ -283,7 +282,7 @@ pub fn run_debug(args: &[String]) {
         Ok(p) => p,
         Err(message) => {
             eprintln!("error: {message}");
-            process::exit(1);
+            crate::exit(1);
         }
     };
 
@@ -298,7 +297,7 @@ pub fn run_debug(args: &[String]) {
         Ok(_) => println!("Program finished."),
         Err(e) => {
             eprintln!("Error: {}", e);
-            process::exit(1);
+            crate::exit(1);
         }
     }
 }

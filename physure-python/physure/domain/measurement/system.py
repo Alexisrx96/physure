@@ -56,6 +56,9 @@ class UnitSystem:
         # the units that expressions resolved to, forgotten whenever the
         # registry changes
         self._units: dict[str, CompoundUnit] = {}
+        # unit -> how a number in it becomes the value in the coherent unit
+        # (`Quantity._coherent_value`), forgotten whenever the registry changes
+        self._coherent_plans: dict[int, tuple[CompoundUnit, Any]] = {}
 
     @property
     def core_registry(self) -> _RustUnitRegistry:
@@ -72,18 +75,23 @@ class UnitSystem:
         self._core_registry.extend_conf(conf_text)
         self._core_texts.append(conf_text)
         self._units.clear()
+        self.__dict__.setdefault("_coherent_plans", {}).clear()
+        # what a quantity cached from the old registry (its hash) is no longer
+        self.generation = self.__dict__.get("generation", 0) + 1
 
     def __getstate__(self) -> dict[str, Any]:
         """Pickles the texts of the registry: the registry itself cannot be."""
         state = self.__dict__.copy()
         state["_core_registry"] = None
         state["_units"] = {}
+        state["_coherent_plans"] = {}
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Rebuilds the registry of the core from its texts."""
         self.__dict__.update(state)
         self.__dict__.setdefault("_units", {})
+        self.__dict__.setdefault("_coherent_plans", {})
         self._core_registry = _RustUnitRegistry()
         for text in self.__dict__.get("_core_texts", ()):
             self._core_registry.extend_conf(text)

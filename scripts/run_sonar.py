@@ -132,9 +132,17 @@ def find_llvm_cov_env() -> tuple[dict, str | None]:
     return env, ("cargo-llvm-cov" if llvm_cov_found else None)
 
 
+def native_library_dir() -> Path:
+    """Where `cargo build --release -p physure-java` leaves the native library: `<target dir>/release`, the target
+    dir being CARGO_TARGET_DIR when it is set (a shared one), else `<repo>/target`."""
+    target = os.getenv("CARGO_TARGET_DIR", "").strip()
+    return (Path(target) if target else REPO_ROOT / "target") / "release"
+
+
 def compile_physure_java():
     """Run physure-java's tests with JaCoCo: that gives the Java sensor class files (sonar.java.binaries) and a
-    coverage report (sonar.coverage.jacoco.xmlReportPaths). The tests load the native library, so build it first."""
+    coverage report (sonar.coverage.jacoco.xmlReportPaths). The tests load the native library, so build it first and
+    tell Maven where it is (the pom's default, ../target/debug, misses a shared CARGO_TARGET_DIR and a release build)."""
     mvn_bin = shutil.which("mvn")
     if not mvn_bin:
         log_warning("mvn not found. Skipping physure-java (Java analysis will fail without target/classes).")
@@ -142,8 +150,9 @@ def compile_physure_java():
 
     log_info("Building the native library and running physure-java's tests with coverage...")
     try:
-        subprocess.run([find_cargo_bin(), "build", "-p", "physure-java"], cwd=REPO_ROOT, check=True)
-        subprocess.run([mvn_bin, "-q", "-Pcoverage", "test"], cwd=REPO_ROOT / "physure-java", check=True)
+        subprocess.run([find_cargo_bin(), "build", "--release", "-p", "physure-java"], cwd=REPO_ROOT, check=True)
+        native_dir = f"-Dphysure.native.dir={native_library_dir().as_posix()}"
+        subprocess.run([mvn_bin, "-q", "-Pcoverage", native_dir, "test"], cwd=REPO_ROOT / "physure-java", check=True)
         log_success("physure-java tested with coverage (target/classes, target/site/jacoco/jacoco.xml)")
     except Exception as e:
         log_warning(f"physure-java coverage run failed: {e}; compiling only")

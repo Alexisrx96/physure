@@ -91,7 +91,7 @@ impl PhsInterpreter {
             let mut last = PhsValue::None;
             for (i, stmt) in program.statements.iter().enumerate() {
                 let line = program.lines.get(i).copied().unwrap_or(0);
-                crate::globals::refuse_global_bindings(stmt)?;
+                crate::globals::refuse_global_bindings(stmt, &|name| self.module_domain(name))?;
                 last = self.eval_statement_with_env_at(stmt, &mut env, line)?;
             }
             Ok::<_, PhysureError>(last)
@@ -235,9 +235,10 @@ impl PhsInterpreter {
     /// sources of their uncertainty: writing them as source text would make a new measurement of each, and
     /// `f(x, x)` would no longer see one.
     pub fn run_program_with(&self, program: &Program, bindings: Vec<(String, PhsValue)>) -> PhysureResult<PhsValue> {
-        // `pi` and the catalog's constants are global: a host cannot rebind them either
+        // a value a host gives is local to the run and never shadows a call: only what the language reads as
+        // something else (a keyword, a literal), `pi` and the catalog's constants are refused
         for (name, _) in &bindings {
-            crate::globals::refuse_binding(name, "a value given by the host")?;
+            crate::globals::refuse_local_binding(name, "a value given by the host")?;
         }
         let mut env = self.env.clone();
         env.extend(bindings);
@@ -258,7 +259,7 @@ impl PhsInterpreter {
     pub(crate) fn eval_statement_in(&self, stmt: &Statement, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         let _stack = crate::limits::StackScope::begin(self.limits.max_stack_bytes);
         // once per statement before it runs, function bodies and loops included (see `globals`)
-        crate::globals::refuse_global_bindings(stmt)?;
+        crate::globals::refuse_global_bindings(stmt, &|name| self.module_domain(name))?;
         self.eval_statement_with_env_at(stmt, env, 0)
     }
 
@@ -316,7 +317,7 @@ impl PhsInterpreter {
     /// and native plugin stems (`<base_dir>/ext/<stem>.<DLL_EXTENSION>`, dlopen'd lazily).
     fn resolve_use(&self, node: &crate::ast::ImportNode, env: &mut HashMap<String, PhsValue>) -> PhysureResult<PhsValue> {
         if let Some(members) = crate::builtins::domain_members(&node.path) {
-            self.unlock_domain(node, members)?;
+            self.unlock_domain(node, members, env)?;
             return Ok(PhsValue::None);
         }
 
@@ -343,34 +344,49 @@ impl PhsInterpreter {
         Err(PhysureError::Generic(format!("No such module or domain '{}'", node.path)))
     }
 
-    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable.
-    fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str]) -> PhysureResult<()> {
-        use crate::ast::ImportSpecifier;
-
-        let domain: &'static str = match node.path.as_str() {
-            "calc" => "calc",
-            "plot" => "plot",
-            "array" => "array",
-            _ => unreachable!("domain_members returned Some for unknown domain"),
-        };
-        let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
-        match &node.specifier {
-            ImportSpecifier::Wildcard => {
-                for &member in members {
-                    unlocked.insert(member.to_string(), (domain, member.to_string()));
-                }
-            }
-            ImportSpecifier::Symbols(syms) => {
-                for sym in syms {
-                    if !members.contains(&sym.name.as_str()) {
-                        return Err(PhysureError::Generic(format!("no such function '{}' in domain '{}'", sym.name, node.path)));
-                    }
-                    let call_name = sym.alias.as_deref().unwrap_or(&sym.name).to_string();
-                    unlocked.insert(call_name, (domain, sym.name.clone()));
-                }
-            }
-            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+    /// The module (`calc`, `plot`, `array`) whose function `name` the program has imported under that name. Inside a
+    /// module body there is none: the importer's imports are not that module's.
+    pub(crate) fn module_domain(&self, name: &str) -> Option<&'static str> {
+        if LOADING_MODULES.with(|loading| !loading.borrow().is_empty()) {
+            return None;
         }
+        self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).get(name).map(|(domain, _)| *domain)
+    }
+
+    /// Forgets every function a `use` unlocked. A host that keeps one interpreter alive across edits of a text (the
+    /// language server) calls it before it replays the imports of the new text.
+    pub fn reset_imports(&self) {
+        self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
+    /// Refuses `name` as the name of a function a host registers or a plugin installs: a core builtin and an
+    /// imported module function answer a call first, so such a function would never be called, and `pi`, the
+    /// catalog's constants and the words of the language are not function names either.
+    pub(crate) fn refuse_function_name(&self, name: &str, what: &str) -> PhysureResult<()> {
+        crate::globals::refuse_binding(name, what)?;
+        if let Some(domain) = self.module_domain(name) {
+            return Err(PhysureError::Generic(crate::reserved::module_binding_error(name, domain, what)));
+        }
+        Ok(())
+    }
+
+    /// `use calc`, `use plot` or `use array`: makes the named members (or all of them) callable. What an import may
+    /// unlock is decided by [`crate::reserved::plan_import`], the function the checker asks too: a member whose name
+    /// the program already holds (a variable or a function) is refused, so is one that would remap a name the
+    /// program already imported as another function, and nothing is unlocked unless every name is accepted.
+    fn unlock_domain(&self, node: &crate::ast::ImportNode, members: &[&str], env: &HashMap<String, PhsValue>) -> PhysureResult<()> {
+        if let crate::ast::ImportSpecifier::ModuleAlias(_) = &node.specifier {
+            return Err(module_aliases_unsupported());
+        }
+        let domain = crate::reserved::domain_of(&node.path).expect("domain_members returned Some for unknown domain");
+        // the names a plugin installed, copied so that the two locks are never held together
+        let plugin_names: std::collections::HashSet<String> =
+            self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
+        let held = |name: &str| env.contains_key(name) || self.externals.contains_key(name) || plugin_names.contains(name);
+        let mut unlocked = self.unlocked_builtins.lock().unwrap_or_else(|e| e.into_inner());
+        let imports = crate::reserved::plan_import(node, domain, members, &held, &unlocked)
+            .map_err(|error| PhysureError::Generic(error.message().to_string()))?;
+        unlocked.extend(imports);
         Ok(())
     }
 
@@ -453,8 +469,16 @@ impl PhsInterpreter {
 
     /// Installs the requested (possibly aliased) subset of `functions` into
     /// `dynamic_externals`, erroring if a requested name isn't exported.
-    fn install_dynamic_externals(&self, specifier: &crate::ast::ImportSpecifier, module: &str, functions: &HashMap<String, ExternalFn>) -> PhysureResult<()> {
+    pub(crate) fn install_dynamic_externals(&self, specifier: &crate::ast::ImportSpecifier, module: &str, functions: &HashMap<String, ExternalFn>) -> PhysureResult<()> {
         use crate::ast::ImportSpecifier;
+        let names: Vec<String> = match specifier {
+            ImportSpecifier::Wildcard => functions.keys().cloned().collect(),
+            ImportSpecifier::Symbols(syms) => syms.iter().map(|sym| sym.alias.clone().unwrap_or_else(|| sym.name.clone())).collect(),
+            ImportSpecifier::ModuleAlias(_alias) => return Err(module_aliases_unsupported()),
+        };
+        for name in &names {
+            self.refuse_function_name(name, &format!("a function of the plugin `{module}`"))?;
+        }
         let mut dynamic = self.dynamic_externals.lock().unwrap_or_else(|e| e.into_inner());
         match specifier {
             ImportSpecifier::Wildcard => {

@@ -10,7 +10,6 @@
 use std::collections::BTreeSet;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process;
 
 use physure_core::frozen::active::resolve_process;
 use physure_core::frozen::canonical::canonical_text;
@@ -164,6 +163,37 @@ fn accepted_flags() -> String {
     all.join(", ")
 }
 
+impl ConfArgs {
+    /// Stores `value` in the field of the value flag `flag` (one of [`VALUE_FLAGS`]).
+    fn set_value(&mut self, flag: &str, value: &str) -> Result<(), String> {
+        match flag {
+            "--conf" => self.conf = Some(PathBuf::from(value)),
+            "--reason" => self.reason = Some(value.to_string()),
+            "--engine-policy" => self.policy = Some(value.parse()?),
+            "--out" => self.out = Some(PathBuf::from(value)),
+            "--witness" => self.witness.push(PathBuf::from(value)),
+            "--accept-witness-changes" => self.accept = Some(Accept::parse(value)?),
+            "--timeout-ms" => {
+                let ms = value.parse::<u64>().ok().filter(|ms| *ms > 0);
+                self.timeout_ms = Some(ms.ok_or_else(|| format!("--timeout-ms takes a whole number of milliseconds above 0, found {value:?}"))?);
+            }
+            _ => self.expect = Some(value.to_string()),
+        }
+        Ok(())
+    }
+
+    /// Turns on the field of the switch `switch` (one of [`SWITCHES`]).
+    fn set_switch(&mut self, switch: &str) {
+        match switch {
+            "--json" => self.json = true,
+            "--yes" => self.yes = true,
+            "--origin" => self.origin = true,
+            "--run" => self.run = true,
+            _ => self.help = true,
+        }
+    }
+}
+
 /// Parses the arguments that follow `conf`. `Err` is the message, which names the accepted flags.
 pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
     let mut parsed = ConfArgs::default();
@@ -180,28 +210,10 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 return Err(format!("{flag} is given twice; expected it once (only {REPEATABLE} may be repeated)"));
             }
             parsed.given.push(flag);
-            match flag {
-                "--conf" => parsed.conf = Some(PathBuf::from(value)),
-                "--reason" => parsed.reason = Some(value.clone()),
-                "--engine-policy" => parsed.policy = Some(value.parse()?),
-                "--out" => parsed.out = Some(PathBuf::from(value)),
-                "--witness" => parsed.witness.push(PathBuf::from(value)),
-                "--accept-witness-changes" => parsed.accept = Some(Accept::parse(value)?),
-                "--timeout-ms" => {
-                    let ms = value.parse::<u64>().ok().filter(|ms| *ms > 0);
-                    parsed.timeout_ms = Some(ms.ok_or_else(|| format!("--timeout-ms takes a whole number of milliseconds above 0, found {value:?}"))?);
-                }
-                _ => parsed.expect = Some(value.clone()),
-            }
+            parsed.set_value(flag, value)?;
         } else if let Some(&switch) = SWITCHES.iter().find(|s| **s == arg) {
             parsed.given.push(switch);
-            match switch {
-                "--json" => parsed.json = true,
-                "--yes" => parsed.yes = true,
-                "--origin" => parsed.origin = true,
-                "--run" => parsed.run = true,
-                _ => parsed.help = true,
-            }
+            parsed.set_switch(switch);
         } else if arg.starts_with('-') {
             return Err(format!("unknown flag {arg}; the flags of `phs conf` are: {}", accepted_flags()));
         } else if command.is_none() {
@@ -296,7 +308,7 @@ pub fn run_conf(args: &[String]) -> ! {
     } else {
         say(&escape_controls(&outcome.text));
     }
-    process::exit(outcome.code)
+    crate::exit(outcome.code)
 }
 
 /// The flags and the number of positional arguments each command takes.
@@ -314,57 +326,72 @@ fn shape(command: &str) -> (&'static [&'static str], usize) {
     }
 }
 
-fn run(args: &ConfArgs) -> Outcome {
-    let command = args.command.as_str();
+/// The misuse of the command's shape, if any: an unknown command, a flag or an argument too many, a FILE and --conf
+/// together. Decided without reading anything.
+fn shape_misuse(command: &str, args: &ConfArgs) -> Option<Outcome> {
     if !COMMANDS.contains(&command) {
-        return failure("conf", 2, format!("unknown command {command:?}; the commands are: {}", COMMANDS.join(", ")));
+        return Some(failure("conf", 2, format!("unknown command {command:?}; the commands are: {}", COMMANDS.join(", "))));
     }
     if command == "freeze" && args.conf.is_some() {
-        return failure(
+        return Some(failure(
             command,
             2,
             "`phs conf freeze` does not take --conf: it makes a new file from what is in force unfrozen; name where it goes with --out",
-        );
+        ));
     }
     let (flags, positional) = shape(command);
     if let Some(flag) = args.given.iter().find(|f| !flags.contains(f)) {
-        return failure(command, 2, format!("`phs conf {command}` does not take {flag}; it takes: {}", flags.join(", ")));
+        return Some(failure(command, 2, format!("`phs conf {command}` does not take {flag}; it takes: {}", flags.join(", "))));
     }
     if args.positional.len() > positional {
-        return failure(
+        return Some(failure(
             command,
             2,
             format!("`phs conf {command}` takes at most {positional} argument(s), found: {}", args.positional.join(" ")),
-        );
+        ));
     }
-    // what is decided without reading anything: misuse comes before any file is read
     if args.conf.is_some() && !args.positional.is_empty() && ["verify", "history", "diff"].contains(&command) {
-        return failure(
+        return Some(failure(
             command,
             2,
             format!(
                 "`phs conf {command}` was given both a FILE ({}) and --conf: which one it acts on would be ambiguous; give one",
                 args.positional.join(" ")
             ),
-        );
+        ));
     }
+    None
+}
+
+/// The misuse of a flag's value, if any: a missing or multi-line --reason, --timeout-ms without --run, an --expect
+/// that is not a seal. Decided without reading anything.
+fn value_misuse(command: &str, args: &ConfArgs) -> Option<String> {
     if ["freeze", "update", "seal"].contains(&command) && args.reason.as_deref().is_none_or(|r| r.trim().is_empty()) {
-        return failure(command, 2, format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
+        return Some(format!("`phs conf {command}` needs --reason \"...\" (not empty): the history records why"));
     }
     if let Some(control) = args.reason.as_deref().and_then(|r| r.chars().find(|c| c.is_control())) {
-        return failure(
-            command,
-            2,
-            format!("--reason must be one line without control characters (the history records it), found the control character {control:?}"),
-        );
+        return Some(format!(
+            "--reason must be one line without control characters (the history records it), found the control character {control:?}"
+        ));
     }
     if args.timeout_ms.is_some() && !args.run {
-        return failure(command, 2, "--timeout-ms bounds the witnesses of --run: give it with --run");
+        return Some("--timeout-ms bounds the witnesses of --run: give it with --run".to_string());
     }
-    if let Some(expected) = &args.expect {
-        if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return failure(command, 2, format!("--expect takes a seal: 64 hexadecimal characters, found {expected:?}"));
-        }
+    let expected = args.expect.as_ref()?;
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(format!("--expect takes a seal: 64 hexadecimal characters, found {expected:?}"));
+    }
+    None
+}
+
+fn run(args: &ConfArgs) -> Outcome {
+    let command = args.command.as_str();
+    // what is decided without reading anything: misuse comes before any file is read
+    if let Some(outcome) = shape_misuse(command, args) {
+        return outcome;
+    }
+    if let Some(message) = value_misuse(command, args) {
+        return failure(command, 2, message);
     }
     if let Ok(exe) = std::env::current_exe() {
         set_engine_file(Some(exe));
@@ -675,6 +702,45 @@ type Listing = Vec<(Entry, String)>;
 /// The sections a `show` of the catalog groups several kinds under: the kind is shown with the key there.
 const POOLED_SECTIONS: [&str; 4] = ["units", "atomic_weights", "thermochemistry", "settings"];
 
+/// The catalog `show` lists, each entry with its origin: that of the frozen file in force (with its path), or the
+/// unfrozen one of the working directory (with the warnings of its reading). `Err` is the failure to report.
+fn show_listing() -> Result<(Listing, Vec<String>, Option<PathBuf>), Outcome> {
+    let Some(active) = active().map_err(|e| failure("show", e.exit_code(), e.to_string()))? else {
+        let (found, warnings) = unfrozen_listing().map_err(|message| failure("show", 1, message))?;
+        return Ok((found, warnings, None));
+    };
+    match entries_with_origin(&active.catalog.file) {
+        Ok(found) => Ok((found.into_iter().map(|(entry, origin)| (entry, origin.to_string())).collect(), Vec::new(), Some(active.path.clone()))),
+        Err((source, problems)) => Err(failure("show", 1, format!("{}: source {source} does not replay: {}", shown(&active.path), problems.join("; ")))),
+    }
+}
+
+/// The chosen entries as `show` prints them (`section.key (kind) = value  [origin]`, sorted; the kind only in a
+/// pooled section, the origin only when asked) and as JSON rows.
+fn show_rows(chosen: &[&(Entry, String)], with_origin: bool) -> (String, Vec<Value>) {
+    let mut rows: Vec<(String, String, &str, &str, &str)> = chosen
+        .iter()
+        .map(|(entry, origin)| {
+            let (section, key) = section_and_key(entry);
+            (section, key, entry.kind, entry.value.as_str(), origin.as_str())
+        })
+        .collect();
+    rows.sort();
+    let mut text = String::new();
+    let mut json_rows = Vec::with_capacity(rows.len());
+    for (section, key, kind, value, origin) in &rows {
+        let kind_shown = if POOLED_SECTIONS.contains(&section.as_str()) { format!(" ({kind})") } else { String::new() };
+        let origin_shown = if with_origin { format!("  [{origin}]") } else { String::new() };
+        text.push_str(&format!("{section}.{key}{kind_shown} = {value}{origin_shown}\n"));
+        let mut row = json!({ "section": section, "key": key, "kind": kind, "value": value });
+        if with_origin {
+            row["origin"] = Value::from(*origin);
+        }
+        json_rows.push(row);
+    }
+    (text, json_rows)
+}
+
 /// `phs conf show [SELECTOR] [--origin]`: the catalog in force. Unlike the other commands it needs the configuration
 /// in force to be usable (decision 2 of the Phase 2 plan), so a broken file is its exit code (1, 2 or 3).
 fn show(args: &ConfArgs) -> Outcome {
@@ -682,18 +748,9 @@ fn show(args: &ConfArgs) -> Outcome {
         return failure("show", e.exit_code(), e.to_string());
     }
     let selector = args.positional.first().map_or("", String::as_str);
-    let (listed, warnings, path): (Listing, Vec<String>, Option<PathBuf>) = match active() {
-        Err(e) => return failure("show", e.exit_code(), e.to_string()),
-        Ok(Some(active)) => match entries_with_origin(&active.catalog.file) {
-            Ok(found) => (found.into_iter().map(|(entry, origin)| (entry, origin.to_string())).collect(), Vec::new(), Some(active.path.clone())),
-            Err((source, problems)) => {
-                return failure("show", 1, format!("{}: source {source} does not replay: {}", shown(&active.path), problems.join("; ")))
-            }
-        },
-        Ok(None) => match unfrozen_listing() {
-            Ok((found, warnings)) => (found, warnings, None),
-            Err(message) => return failure("show", 1, message),
-        },
+    let (listed, warnings, path) = match show_listing() {
+        Ok(listing) => listing,
+        Err(outcome) => return outcome,
     };
     let chosen = select(&listed, selector);
     if chosen.is_empty() {
@@ -707,27 +764,7 @@ fn show(args: &ConfArgs) -> Outcome {
             ),
         );
     }
-    let mut rows: Vec<(String, String, &str, &str, &str)> = chosen
-        .iter()
-        .map(|(entry, origin)| {
-            let (section, key) = section_and_key(entry);
-            (section, key, entry.kind, entry.value.as_str(), origin.as_str())
-        })
-        .collect();
-    rows.sort();
-    let mut text = String::new();
-    let mut json_rows = Vec::with_capacity(rows.len());
-    for (section, key, kind, value, origin) in &rows {
-        let kind_shown = if POOLED_SECTIONS.contains(&section.as_str()) { format!(" ({kind})") } else { String::new() };
-        let origin_shown = if args.origin { format!("  [{origin}]") } else { String::new() };
-        text.push_str(&format!("{section}.{key}{kind_shown} = {value}{origin_shown}
-"));
-        let mut row = json!({ "section": section, "key": key, "kind": kind, "value": value });
-        if args.origin {
-            row["origin"] = Value::from(*origin);
-        }
-        json_rows.push(row);
-    }
+    let (text, json_rows) = show_rows(&chosen, args.origin);
     if !args.json {
         for warning in &warnings {
             say_error(&format!("phs conf: warning: {}\n", escape_controls(warning)));
@@ -1011,6 +1048,20 @@ fn findings_text(report: &physure_script::report::Report) -> String {
         .join("; ")
 }
 
+/// The line `verify --expect SEAL` adds, and whether the seal of the inspected file is the one expected: a file that
+/// does not verify says that its stored seal vouches for nothing.
+fn expected_seal_line(inspection: &Inspection, expected: &str) -> (String, bool) {
+    if inspection.seal_matches(expected) {
+        return ("expected seal: matches\n".to_string(), true);
+    }
+    let why = if inspection.unreadable.is_some() || !inspection.problems.is_empty() {
+        " (the file does not verify, so its stored seal vouches for nothing)"
+    } else {
+        ""
+    };
+    (format!("expected seal: the seal does not match --expect {expected}{why}\n"), false)
+}
+
 /// `phs conf verify [FILE] [--expect SEAL] [--run [--timeout-ms N]]`.
 fn verify(args: &ConfArgs) -> Outcome {
     let path = match target("verify", args) {
@@ -1023,21 +1074,12 @@ fn verify(args: &ConfArgs) -> Outcome {
     fields["seal_matches"] = Value::Null;
     let mut expect_mismatch = false;
     if let Some(expected) = &args.expect {
-        let matches = inspection.seal_matches(expected);
-        expect_mismatch = !matches;
+        let (line, matches) = expected_seal_line(&inspection, expected);
+        text.push_str(&line);
         fields["seal_matches"] = Value::Bool(matches);
-        if matches {
-            text.push_str("expected seal: matches
-");
-        } else {
+        expect_mismatch = !matches;
+        if !matches {
             code = 1;
-            let why = if inspection.unreadable.is_some() || !inspection.problems.is_empty() {
-                " (the file does not verify, so its stored seal vouches for nothing)"
-            } else {
-                ""
-            };
-            text.push_str(&format!("expected seal: the seal does not match --expect {expected}{why}
-"));
         }
     }
     if args.run {
@@ -1165,6 +1207,39 @@ fn new_battery_cases_are_errors(compared: &mut WitnessReport) {
     }
 }
 
+/// One differing witness for people and as JSON: two numbers with both bit patterns, both decimals and the distance in
+/// ulps; a user witness with only that its result changed and `running_canonical`, its running canonical text (empty
+/// when it has none); anything else with both values as recorded.
+fn differs_row(key: &str, recorded: &str, running: &str, ulps: Option<u64>, running_canonical: Option<String>) -> (String, Value) {
+    let mut entry = json!({ "key": key, "recorded": recorded, "running": running, "ulps": ulps });
+    let mut text = format!("DIFFERS {key}\n");
+    if let (Ok(WitnessValue::Number { mean: m1, uncertainty: u1, unit: a }), Ok(WitnessValue::Number { mean: m2, uncertainty: u2, unit: b })) =
+        (parse_value(recorded), parse_value(running))
+    {
+        let decimal = |bits: u64| format!("{:?}", f64::from_bits(bits));
+        text.push_str(&format!("  recorded: mean {m1:016x} ({}), uncertainty {u1:016x} ({}), unit {a:?}\n", decimal(m1), decimal(u1)));
+        text.push_str(&format!("  running:  mean {m2:016x} ({}), uncertainty {u2:016x} ({}), unit {b:?}\n", decimal(m2), decimal(u2)));
+        text.push_str(&match ulps {
+            Some(1) => "  distance: 1 ulp\n".to_string(),
+            Some(n) => format!("  distance: {n} ulps\n"),
+            None => "  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)\n".to_string(),
+        });
+        entry["recorded_decimal"] = json!({ "mean": decimal(m1), "uncertainty": decimal(u1) });
+        entry["running_decimal"] = json!({ "mean": decimal(m2), "uncertainty": decimal(u2) });
+        return (text, entry);
+    }
+    text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n"));
+    if key.starts_with("user.") {
+        text.push_str("  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):\n");
+        let running_text = running_canonical.unwrap_or_default();
+        for line in running_text.lines() {
+            text.push_str(&format!("  | {line}\n"));
+        }
+        entry["running_canonical"] = Value::from(running_text);
+    }
+    (text, entry)
+}
+
 /// The rows of a witness comparison for people and as JSON (`match`, `differs`, `missing`, `new`, `errors`): the
 /// differing witnesses first (numbers with both bit patterns, both decimals and the distance in ulps; a user witness
 /// only that its result changed, with the running canonical text), then the missing, the new and the errors, then
@@ -1180,32 +1255,8 @@ fn witness_rows(compared: &WitnessReport, run: &WitnessRun) -> (String, Value) {
     let (mut differs, mut missing_keys, mut new_keys, mut error_rows) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for row in &compared.rows {
         if let WitnessStatus::Differs { recorded, running, ulps } = &row.status {
-            let mut entry = json!({ "key": row.key, "recorded": recorded, "running": running, "ulps": ulps });
-            text.push_str(&format!("DIFFERS {}\n", row.key));
-            match (parse_value(recorded), parse_value(running)) {
-                (Ok(WitnessValue::Number { mean: m1, uncertainty: u1, unit: a }), Ok(WitnessValue::Number { mean: m2, uncertainty: u2, unit: b })) => {
-                    let decimal = |bits: u64| format!("{:?}", f64::from_bits(bits));
-                    text.push_str(&format!("  recorded: mean {m1:016x} ({}), uncertainty {u1:016x} ({}), unit {a:?}\n", decimal(m1), decimal(u1)));
-                    text.push_str(&format!("  running:  mean {m2:016x} ({}), uncertainty {u2:016x} ({}), unit {b:?}\n", decimal(m2), decimal(u2)));
-                    match ulps {
-                        Some(1) => text.push_str("  distance: 1 ulp\n"),
-                        Some(n) => text.push_str(&format!("  distance: {n} ulps\n")),
-                        None => text.push_str("  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)\n"),
-                    }
-                    entry["recorded_decimal"] = json!({ "mean": decimal(m1), "uncertainty": decimal(u1) });
-                    entry["running_decimal"] = json!({ "mean": decimal(m2), "uncertainty": decimal(u2) });
-                }
-                _ if row.key.starts_with("user.") => {
-                    text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n"));
-                    text.push_str("  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):\n");
-                    let running_text = canonical(&row.key).unwrap_or_default();
-                    for line in running_text.lines() {
-                        text.push_str(&format!("  | {line}\n"));
-                    }
-                    entry["running_canonical"] = Value::from(running_text);
-                }
-                _ => text.push_str(&format!("  recorded: {recorded}\n  running:  {running}\n")),
-            }
+            let (row_text, entry) = differs_row(&row.key, recorded, running, *ulps, canonical(&row.key));
+            text.push_str(&row_text);
             differs.push(entry);
         }
     }
@@ -1878,5 +1929,194 @@ mod tests {
         assert!(shape("freeze").0.contains(&"--witness") && !shape("verify").0.contains(&"--witness"));
         assert!(shape("verify").0.contains(&"--run") && shape("verify").0.contains(&"--timeout-ms"));
         assert!(!shape("status").0.contains(&"--run"));
+    }
+
+    /// Characterization of `parse` before its split: every value flag and switch lands in its field, in order.
+    #[test]
+    fn parse_puts_every_flag_and_switch_in_its_field() {
+        let parsed = parse(&args(&[
+            "seal", "--conf", "c.conf", "--reason", "why", "--engine-policy", "binary", "--out", "o.conf", "--expect", "ee",
+            "--witness", "w.phs", "--timeout-ms", "9", "--accept-witness-changes", " b, a ,b", "--json", "--yes", "--origin", "--run",
+            "extra", "more",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.command, "seal");
+        assert_eq!(parsed.positional, vec!["extra", "more"]);
+        assert_eq!(parsed.conf, Some(PathBuf::from("c.conf")));
+        assert_eq!(parsed.reason.as_deref(), Some("why"));
+        assert_eq!(parsed.policy, Some(EnginePolicy::Binary));
+        assert_eq!(parsed.out, Some(PathBuf::from("o.conf")));
+        assert_eq!(parsed.expect.as_deref(), Some("ee"));
+        assert_eq!(parsed.witness, vec![PathBuf::from("w.phs")]);
+        assert_eq!(parsed.timeout_ms, Some(9));
+        assert_eq!(parsed.accept, Some(Accept::Keys(vec!["b".into(), "a".into()])));
+        assert!(parsed.json && parsed.yes && parsed.origin && parsed.run && !parsed.help);
+        assert_eq!(
+            parsed.given,
+            vec![
+                "--conf", "--reason", "--engine-policy", "--out", "--expect", "--witness", "--timeout-ms", "--accept-witness-changes",
+                "--json", "--yes", "--origin", "--run"
+            ]
+        );
+        for help in ["--help", "-h"] {
+            let parsed = parse(&args(&[help])).unwrap();
+            assert!(parsed.help && !parsed.json, "{help}");
+            assert_eq!((parsed.command.as_str(), parsed.given.clone()), ("status", vec![help]));
+        }
+        assert_eq!(parse(&args(&["--accept-witness-changes", " all "])).unwrap().accept, Some(Accept::All));
+        assert_eq!(
+            parse(&args(&["--accept-witness-changes", "a,,b"])).unwrap_err(),
+            "--accept-witness-changes takes all or a comma-separated list of witness keys (builtin.<id>, user.<name>), found \"a,,b\""
+        );
+        assert_eq!(parse(&args(&["--out", "--json"])).unwrap_err(), "--out expects a value, found none");
+        assert_eq!(parse(&args(&["--timeout-ms", "0"])).unwrap_err(), "--timeout-ms takes a whole number of milliseconds above 0, found \"0\"");
+        assert_eq!(parse(&args(&["--expect", "a", "--expect", "b"])).unwrap_err(), "--expect is given twice; expected it once (only --witness may be repeated)");
+        assert_eq!(parse(&args(&["--yes", "--yes"])).unwrap().given, vec!["--yes", "--yes"], "a switch may be repeated");
+        assert_eq!(
+            parse(&args(&["-x"])).unwrap_err(),
+            format!("unknown flag -x; the flags of `phs conf` are: {}", accepted_flags())
+        );
+    }
+
+    /// Characterization of `run` before its split: each misuse is refused with its message and exit 2, before anything
+    /// is read or put in force.
+    #[test]
+    fn run_refuses_each_misuse_with_its_message() {
+        let hex = "a".repeat(64);
+        let cases: Vec<(Vec<&str>, &str, String)> = vec![
+            (vec!["nope"], "conf", "unknown command \"nope\"; the commands are: status, show, diff, update, seal, history, freeze, verify".into()),
+            (
+                vec!["freeze", "--conf", "x", "--reason", "r"],
+                "freeze",
+                "`phs conf freeze` does not take --conf: it makes a new file from what is in force unfrozen; name where it goes with --out".into(),
+            ),
+            (vec!["status", "--origin"], "status", "`phs conf status` does not take --origin; it takes: --conf, --json".into()),
+            (vec!["show", "a", "b"], "show", "`phs conf show` takes at most 1 argument(s), found: a b".into()),
+            (
+                vec!["history", "f.conf", "--conf", "g.conf"],
+                "history",
+                "`phs conf history` was given both a FILE (f.conf) and --conf: which one it acts on would be ambiguous; give one".into(),
+            ),
+            (vec!["update"], "update", "`phs conf update` needs --reason \"...\" (not empty): the history records why".into()),
+            (vec!["seal", "--reason", "  "], "seal", "`phs conf seal` needs --reason \"...\" (not empty): the history records why".into()),
+            (
+                vec!["freeze", "--reason", "a\tb"],
+                "freeze",
+                "--reason must be one line without control characters (the history records it), found the control character '\\t'".into(),
+            ),
+            (vec!["verify", "--timeout-ms", "5"], "verify", "--timeout-ms bounds the witnesses of --run: give it with --run".into()),
+            (vec!["verify", "--expect", "abc"], "verify", "--expect takes a seal: 64 hexadecimal characters, found \"abc\"".into()),
+            (
+                vec!["verify", "--expect", &hex[..63]],
+                "verify",
+                format!("--expect takes a seal: 64 hexadecimal characters, found {:?}", &hex[..63]),
+            ),
+        ];
+        for (items, command, message) in cases {
+            let outcome = run(&parse(&args(&items)).unwrap());
+            assert_eq!((outcome.code, outcome.error), (2, true), "{items:?}");
+            assert_eq!(outcome.text, message, "{items:?}");
+            assert_eq!(outcome.json, json!({ "schema": 1, "command": command, "error": message, "exit_code": 2 }), "{items:?}");
+        }
+        // the ambiguity is only for the commands whose positional argument is a file
+        let outcome = run(&parse(&args(&["diff", "a", "--conf", "b", "--expect", "x"])).unwrap());
+        assert!(outcome.text.starts_with("`phs conf diff` does not take --expect"), "{}", outcome.text);
+        assert_eq!(shape("nope"), (&[][..], 0));
+    }
+
+    /// Characterization of `witness_rows` before its split: every kind of row, in the order and wording shown.
+    #[test]
+    fn witness_rows_shows_every_kind_of_row() {
+        use crate::conf_witness::WitnessResult;
+        use physure_core::frozen::format_value;
+        use physure_script::report::Report;
+        let number = |mean: f64, unit: &str| format_value(&WitnessValue::Number { mean: mean.to_bits(), uncertainty: 0.5f64.to_bits(), unit: unit.into() });
+        let row = |key: &str, status| WitnessRow { key: key.into(), status };
+        let differs = |recorded: String, running: String, ulps| WitnessStatus::Differs { recorded, running, ulps };
+        let compared = WitnessReport {
+            rows: vec![
+                row("builtin.one", differs(number(1.0, "m"), number(1.0000000000000002, "m"), Some(1))),
+                row("builtin.many", differs(number(1.0, "m"), number(2.0, "m"), Some(7))),
+                row("builtin.unit", differs(number(1.0, "m"), number(1.0, "s"), None)),
+                row("user.mine", differs("sha256:aa".into(), "sha256:bb".into(), None)),
+                row("user.gone", differs("sha256:aa".into(), "sha256:cc".into(), None)),
+                row("builtin.text", differs("text=a".into(), "text=b".into(), None)),
+                row("builtin.same", WitnessStatus::Match),
+                row("builtin.lost", WitnessStatus::Missing),
+                row("builtin.fresh", WitnessStatus::New),
+                row("user.fresh", WitnessStatus::New),
+                row("builtin.bad", WitnessStatus::Error("it panicked".into())),
+                row("builtin.same2", WitnessStatus::Match),
+            ],
+        };
+        let result = WitnessResult {
+            report: Report { ok: true, results: Vec::new(), diagnostics: Vec::new() },
+            canonical: "phs-witness-1\nok true\n".into(),
+            sha256: "bb".into(),
+        };
+        let run = WitnessRun {
+            rows: Vec::new(),
+            user: vec![("mine".into(), Ok(result)), ("gone".into(), Err("failed".into()))],
+            stuck: false,
+        };
+        let (text, fields) = witness_rows(&compared, &run);
+        let expected = "\
+DIFFERS builtin.one
+  recorded: mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  running:  mean 3ff0000000000001 (1.0000000000000002), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  distance: 1 ulp
+DIFFERS builtin.many
+  recorded: mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  running:  mean 4000000000000000 (2.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  distance: 7 ulps
+DIFFERS builtin.unit
+  recorded: mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"m\"
+  running:  mean 3ff0000000000000 (1.0), uncertainty 3fe0000000000000 (0.5), unit \"s\"
+  distance: not measurable in ulps (a unit, a sign or a non-finite value differs)
+DIFFERS user.mine
+  recorded: sha256:aa
+  running:  sha256:bb
+  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):
+  | phs-witness-1
+  | ok true
+DIFFERS user.gone
+  recorded: sha256:aa
+  running:  sha256:cc
+  a user witness records a hash: only that its result changed is shown; the running canonical result (compare it with a copy kept outside):
+DIFFERS builtin.text
+  recorded: text=a
+  running:  text=b
+MISSING builtin.lost: recorded, but this build has no such witness
+NEW builtin.fresh: this build has it and the file does not record it (informational)
+NEW user.fresh: this build has it and the file does not record it (informational)
+ERROR builtin.bad: it panicked
+2 matched
+";
+        assert_eq!(text, expected);
+        let decimal = |mean: &str| json!({ "mean": mean, "uncertainty": "0.5" });
+        assert_eq!(
+            fields,
+            json!({
+                "match": 2,
+                "differs": [
+                    { "key": "builtin.one", "recorded": number(1.0, "m"), "running": number(1.0000000000000002, "m"), "ulps": 1,
+                      "recorded_decimal": decimal("1.0"), "running_decimal": decimal("1.0000000000000002") },
+                    { "key": "builtin.many", "recorded": number(1.0, "m"), "running": number(2.0, "m"), "ulps": 7,
+                      "recorded_decimal": decimal("1.0"), "running_decimal": decimal("2.0") },
+                    { "key": "builtin.unit", "recorded": number(1.0, "m"), "running": number(1.0, "s"), "ulps": null,
+                      "recorded_decimal": decimal("1.0"), "running_decimal": decimal("1.0") },
+                    { "key": "user.mine", "recorded": "sha256:aa", "running": "sha256:bb", "ulps": null,
+                      "running_canonical": "phs-witness-1\nok true\n" },
+                    { "key": "user.gone", "recorded": "sha256:aa", "running": "sha256:cc", "ulps": null, "running_canonical": "" },
+                    { "key": "builtin.text", "recorded": "text=a", "running": "text=b", "ulps": null },
+                ],
+                "missing": ["builtin.lost"],
+                "new": ["builtin.fresh", "user.fresh"],
+                "errors": [{ "key": "builtin.bad", "message": "it panicked" }],
+            })
+        );
+        let (text, fields) = witness_rows(&WitnessReport { rows: Vec::new() }, &WitnessRun { rows: Vec::new(), user: Vec::new(), stuck: false });
+        assert_eq!(text, "0 matched\n");
+        assert_eq!(fields, json!({ "match": 0, "differs": [], "missing": [], "new": [], "errors": [] }));
     }
 }

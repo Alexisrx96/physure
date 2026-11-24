@@ -431,10 +431,7 @@ pub(crate) fn definite_integral(
     if a == b {
         // an empty interval: zero, in the unit the integral has
         let unit = integrand.value_at(a)?.unit;
-        let mut zero = Quantity::new_scalar(0.0, 0.0, unit, None, None);
-        if let Some(var_unit) = &integrand.var_unit {
-            zero = zero.mul(&Quantity::new_scalar(1.0, 0.0, var_unit.clone(), None, None))?;
-        }
+        let zero = times_variable_unit(Quantity::new_scalar(0.0, 0.0, unit, None, None), &integrand)?;
         return finish(zero, &integrand);
     }
     // the rule integrates from the smaller end to the larger one
@@ -443,15 +440,11 @@ pub(crate) fn definite_integral(
     let quadrature = numeric(&mut integrand, from, to, &mut divisors);
     let interval = format!("[{}, {}]", end_text(a, &integrand.var_unit), end_text(b, &integrand.var_unit));
 
-    if let (End::Finite(lo), End::Finite(hi)) = (&lower, &upper) {
-        if let Some((f, f_text)) = antiderivative(&inlined, var) {
-            if let Some((f_lo, f_hi)) = closed_form(&f, &integrand, lo, hi) {
-                let quadrature = quadrature.map_err(|e| {
-                    refusal(format!("the antiderivative {f_text} cannot be confirmed on {interval}: {}", strip(&e)))
-                })?;
-                return confirmed_closed_form(f_lo, f_hi, &f_text, orientation, &quadrature, &integrand, &interval);
-            }
-        }
+    if let Some((f_lo, f_hi, f_text)) = finite_closed_form(&inlined, var, &integrand, &lower, &upper) {
+        let quadrature = quadrature.map_err(|e| {
+            refusal(format!("the antiderivative {f_text} cannot be confirmed on {interval}: {}", strip(&e)))
+        })?;
+        return confirmed_closed_form(f_lo, f_hi, &f_text, orientation, &quadrature, &integrand, &interval);
     }
 
     let quadrature = quadrature?;
@@ -459,17 +452,40 @@ pub(crate) fn definite_integral(
         return Err(not_converged(&quadrature, &interval));
     }
     let unit = integrand.unit.clone().unwrap_or_else(RationalUnit::dimensionless);
-    let mut total = if integrand.uncertain {
+    let total = if integrand.uncertain {
         let coefficients = quadrature.coefficients.iter().zip(&divisors).map(|(c, u)| orientation * c / u / u);
         weighted_sum(&integrand.samples, coefficients, &unit)?
     } else {
         Quantity::new_scalar(orientation * quadrature.value, 0.0, unit, None, None)
     };
-    if let Some(var_unit) = &integrand.var_unit {
-        total = total.mul(&Quantity::new_scalar(1.0, 0.0, var_unit.clone(), None, None))?;
-    }
-    total = with_bound_uncertainty(total, &mut integrand, &lower, &upper)?;
+    let total = times_variable_unit(total, &integrand)?;
+    let total = with_bound_uncertainty(total, &mut integrand, &lower, &upper)?;
     finish(total, &integrand)
+}
+
+/// `q` times the unit of the variable of integration, when it has one.
+fn times_variable_unit(q: Quantity, integrand: &Integrand) -> PhysureResult<Quantity> {
+    match &integrand.var_unit {
+        Some(var_unit) => q.mul(&Quantity::new_scalar(1.0, 0.0, var_unit.clone(), None, None)),
+        None => Ok(q),
+    }
+}
+
+/// The antiderivative of the integrand `inlined` in `var` at both ends, and its text, when both ends are finite
+/// and it has a closed form there.
+fn finite_closed_form(
+    inlined: &str,
+    var: &str,
+    integrand: &Integrand,
+    lower: &End,
+    upper: &End,
+) -> Option<(Quantity, Quantity, String)> {
+    let (End::Finite(lo), End::Finite(hi)) = (lower, upper) else {
+        return None;
+    };
+    let (f, f_text) = antiderivative(inlined, var)?;
+    let (f_lo, f_hi) = closed_form(&f, integrand, lo, hi)?;
+    Some((f_lo, f_hi, f_text))
 }
 
 /// The text of an error of this module without its `integral: ` prefix, to nest it in another one.

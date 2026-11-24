@@ -106,7 +106,19 @@ fn temperature_points_and_intervals_follow_the_core() {
     assert_clean("25 degC - 20 degC");
     assert_clean("20 degC - 5 K");
     assert_refused("20 degC + 5 degC", 1, "temperature-points");
-    assert_refused("5 K - 20 degC", 1, "temperature-points");
+    // a K may hold a point at run time (`T = 25 degC => K`): the checker has no opinion on a difference with one
+    assert!(errors("5 K - 20 degC").is_empty());
+    assert!(eval_phs("5 K - 20 degC").is_err(), "a K written by hand is not a point");
+    assert_clean("T = 25 degC => K
+T - 0 degC");
+    assert_clean("T = 25 degC => K
+T0 = 0 degC
+R0 = 100 Ohm
+alpha = 0.00385 / K
+R0*(1 + alpha*(T - T0))");
+    assert_clean("T = 10 degC => K
+d = 20 degC - T
+d * 2");
     assert_refused("20 degC * 2", 1, "temperature-points");
     assert_refused("20 degC / 2", 1, "temperature-points");
     // an absolute temperature in a product with a dimensioned quantity is the absolute scale
@@ -184,6 +196,12 @@ fn the_builtins_apply_their_dimension_rules() {
     assert_refused("sin(1 m)", 1, "bad-argument");
     assert_refused("exp(1 s)", 1, "bad-argument");
     assert_refused("ln(2 kg)", 1, "bad-argument");
+    assert_clean("sec(60 deg) + 1");
+    assert_clean("csc(30 deg) + cot(45 deg)");
+    assert_refused("sec(1 m)", 1, "bad-argument");
+    assert_refused("cot(1 s)", 1, "bad-argument");
+    assert_refused("erf(1 m)", 1, "bad-argument");
+    assert_clean("erf(0.5) + 1");
     assert_clean("sqrt(4 m^2) + 1 m");
     assert_refused("sqrt(4 m) + 1 m", 1, "dimension-mismatch");
     assert_clean("abs(-3 m) + 1 m");
@@ -191,11 +209,15 @@ fn the_builtins_apply_their_dimension_rules() {
 }
 
 #[test]
-fn a_maximum_of_different_dimensions_is_a_warning_the_interpreter_accepts() {
+fn an_extremum_of_different_dimensions_is_an_error() {
     let diagnostics = found("max(1 m, 1 s)");
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert_eq!((diagnostics[0].severity, diagnostics[0].code), (Severity::Warning, "mixed-extremum"));
-    assert!(eval_phs("max(1 m, 1 s)").is_ok(), "the interpreter compares base-unit magnitudes");
+    assert_eq!((diagnostics[0].severity, diagnostics[0].code), (Severity::Error, "mixed-extremum"));
+    // the interpreter refuses it too (unit holes): it compared base-unit magnitudes and answered `1 m`
+    assert_refused("max(1 m, 1 s)", 1, "mixed-extremum");
+    assert_refused("min(1 m, 2)", 1, "mixed-extremum");
+    assert_refused("x = 2 kg\nmax(x, 1 m, 1 kg)", 2, "mixed-extremum");
+    assert_clean("max(1 m, 3 mm) + 1 m");
 }
 
 // ---- functions

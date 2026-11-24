@@ -59,7 +59,7 @@ pub fn run_upgrade(nightly: bool) {
     });
     if let Err(e) = outcome {
         eprintln!("{e}");
-        std::process::exit(1);
+        crate::exit(1);
     }
     if let Some(hint) = frozen_hint(&physure_core::frozen::active::resolve_process()) {
         println!("{hint}");

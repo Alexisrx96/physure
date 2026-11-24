@@ -1064,15 +1064,21 @@ def get_covariance_matrix(quantity: Quantity) -> Numeric | None:
         if unc_obj is None and hasattr(quantity, "uncertainty_obj"):
             unc_obj = quantity.uncertainty_obj
 
-        if (
-            isinstance(unc_obj, CovarianceModel)
-            and unc_obj.vector_slice is not None
+        if isinstance(unc_obj, CovarianceModel) and (
+            unc_obj.vector_slice is not None or unc_obj.scaled_slot is not None
         ):
             backend = BackendManager.get_backend(quantity.magnitude)
             store = ensure_store(backend)
-            slc = unc_obj.vector_slice
-            cov = store.get_covariance_block(slc, slc)
-            return to_numpy(cov)
+            # a converted array is read from its source's slot, scaled: by one
+            # number, or by one per element (a level's slope)
+            slc, factor = unc_obj.store_operand(backend)
+            cov = to_numpy(store.get_covariance_block(slc, slc))
+            if isinstance(factor, (int, float)):
+                return cov * factor**2
+            import numpy as np
+
+            scale = np.asarray(factor, dtype=float).reshape(-1)
+            return cov * np.outer(scale, scale)
     except Exception:
         pass
     return None

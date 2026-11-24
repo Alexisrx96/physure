@@ -270,7 +270,21 @@ fn build_quantity(
             }
             Expr::Quantity(q)
         }
-        other => Expr::BinaryOp { op: BinaryOp::Mul, left: Box::new(other), right: Box::new(Expr::Identifier(u)) },
+        other => Expr::BinaryOp { op: BinaryOp::Mul, left: Box::new(other), right: Box::new(unit_literal(&u)) },
+    })
+}
+
+/// One of the unit `unit` (`1 m/s`), the factor a unit written after an expression stands for (`(2 + 3) m/s`,
+/// `[1, 2] m`). It used to be a name made of the unit's text, which evaluated to that text only because a name
+/// with no value did (audit T5).
+pub(crate) fn unit_literal(unit: &str) -> Expr {
+    Expr::Quantity(QuantityNode {
+        magnitude: 1.0,
+        uncertainty: None,
+        uncertainty_lower: None,
+        is_sigma: false,
+        dof: None,
+        unit: Some(unit.trim().to_string()),
     })
 }
 

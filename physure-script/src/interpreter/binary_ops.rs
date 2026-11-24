@@ -36,7 +36,7 @@ fn value_to_symbolic_node(val: &PhsValue) -> PhysureResult<Node> {
 
 /// A plain string holding `"lhs = rhs"` (e.g. from a bare assignment, not `solve()`)
 /// is coerced into an `Equation` so it supports the same arithmetic. Strings without
-/// a top-level `=` (unit symbols, bare variable names) pass through unchanged.
+/// a top-level `=` (a unit written as text, `"m/s"`, or any other text) pass through unchanged.
 pub(crate) fn coerce_equation_string(val: PhsValue) -> PhsValue {
     if let PhsValue::String(ref s) = val {
         if let Ok(Some((l, r))) = crate::symbolic::SymbolicParser::parse_equation_str(s) {
@@ -81,10 +81,10 @@ impl PhsInterpreter {
                     return Err(PhysureError::Generic("Vector length mismatch in binary operation".into()));
                 }
                 let pairs = l_vec.into_iter().zip(r_vec);
-                collect_vector(pairs, |(l_item, r_item)| self.eval_binary_op_vals(op, l_item, r_item))
+                collect_vector(op, pairs, |(l_item, r_item)| self.eval_binary_op_vals(op, l_item, r_item))
             }
-            (PhsValue::Vector(v_vec), scalar) => collect_vector(v_vec, |item| self.eval_binary_op_vals(op, item, scalar.clone())),
-            (scalar, PhsValue::Vector(v_vec)) => collect_vector(v_vec, |item| self.eval_binary_op_vals(op, scalar.clone(), item)),
+            (PhsValue::Vector(v_vec), scalar) => collect_vector(op, v_vec, |item| self.eval_binary_op_vals(op, item, scalar.clone())),
+            (scalar, PhsValue::Vector(v_vec)) => collect_vector(op, v_vec, |item| self.eval_binary_op_vals(op, scalar.clone(), item)),
             (PhsValue::Quantity(l), PhsValue::Quantity(r)) => quantity_op(op, l, r),
             (PhsValue::Quantity(l), PhsValue::Number(r)) => {
                 self.eval_binary_op_vals(op, PhsValue::Quantity(l), PhsValue::Quantity(plain_quantity(r)))
@@ -93,10 +93,10 @@ impl PhsInterpreter {
                 self.eval_binary_op_vals(op, PhsValue::Quantity(plain_quantity(l)), PhsValue::Quantity(r))
             }
             (PhsValue::Number(l), PhsValue::Number(r)) => number_op(op, l, r),
-            // A bare word that isn't a bound variable arrives here as a String, so these
-            // four arms are where `5 foobar` is decided. The unit parser now reports the
-            // offending symbol and the nearest registered one; swallowing that with `if
-            // let Ok` would replace a usable message with a bare "Unknown unit symbol".
+            // A unit written as text (`5 * "m"`, `[1, 2] * "m"`) is decided by these four arms. A bare word
+            // no longer arrives here: a name with no value is an error before it (audit T5). The unit parser
+            // reports the offending symbol and the nearest registered one; swallowing that with `if let Ok`
+            // would replace a usable message with a bare "Unknown unit symbol".
             (PhsValue::Quantity(l), PhsValue::String(r)) => quantity_by_unit_text(op, l, &r, true),
             (PhsValue::Number(l), PhsValue::String(r)) => quantity_by_unit_text(op, plain_quantity(l), &r, false),
             (PhsValue::String(l), PhsValue::Quantity(r)) => unit_text_by_quantity(op, &l, r),
@@ -150,9 +150,22 @@ fn equation_op(op: BinaryOp, left: (Node, Node), right: (Node, Node)) -> Physure
     Ok(PhsValue::Equation(new_l, new_r))
 }
 
-/// The vector of `f` applied to each item, or the first error.
-fn collect_vector<T>(items: impl IntoIterator<Item = T>, f: impl FnMut(T) -> PhysureResult<PhsValue>) -> PhysureResult<PhsValue> {
-    items.into_iter().map(f).collect::<PhysureResult<Vec<_>>>().map(PhsValue::Vector)
+/// The vector of `f` applied to each item, or the first error. A vector holds one dimension, so a result whose
+/// elements would not (`2 m ^ vector(1, 2)` is `m` and `m²`) is refused as `vector(...)` refuses one, naming the
+/// operation. A unary minus is `-1 * x` in the syntax tree, so it would be named `*`; it never gets here with a mixed
+/// result, since the negation of a vector of one dimension has one dimension.
+fn collect_vector<T>(op: BinaryOp, items: impl IntoIterator<Item = T>, f: impl FnMut(T) -> PhysureResult<PhsValue>) -> PhysureResult<PhsValue> {
+    let items = items.into_iter().map(f).collect::<PhysureResult<Vec<_>>>()?;
+    let symbol = match op {
+        BinaryOp::Add => "+",
+        BinaryOp::Sub => "-",
+        BinaryOp::Mul => "*",
+        BinaryOp::Div => "/",
+        BinaryOp::Pow => "^",
+        BinaryOp::Convert => "=>",
+        BinaryOp::Range => "..",
+    };
+    PhsValue::vector_made_by(items, &format!("the elementwise `{symbol}` gives one where "))
 }
 
 fn quantity_op(op: BinaryOp, l: Quantity, r: Quantity) -> PhysureResult<PhsValue> {
@@ -201,7 +214,7 @@ fn unsupported_with_unit_text() -> PhysureError {
     PhysureError::Generic("Unsupported op with unit string".into())
 }
 
-/// `quantity op unit-word`: `5 m / s`, and a conversion to the unit the word names when `convert` (a plain number
+/// `quantity op unit-text`: `5 m / "s"`, and a conversion to the unit the word names when `convert` (a plain number
 /// is not converted: `5 => m` stays unsupported).
 fn quantity_by_unit_text(op: BinaryOp, l: Quantity, text: &str, convert: bool) -> PhysureResult<PhsValue> {
     let parsed_unit = UnitParser::parse_expression(strip_unit_comment(text))?;
@@ -215,7 +228,7 @@ fn quantity_by_unit_text(op: BinaryOp, l: Quantity, text: &str, convert: bool) -
     Ok(PhsValue::Quantity(res))
 }
 
-/// `unit-word op quantity`: `m * 5`, `s ^ 2`.
+/// `unit-text op quantity`: `"m" * 5`, `"s" ^ 2`.
 fn unit_text_by_quantity(op: BinaryOp, text: &str, r: Quantity) -> PhysureResult<PhsValue> {
     let parsed_unit = UnitParser::parse_expression(strip_unit_comment(text))?;
     let unit_q = Quantity::new_scalar(1.0, 0.0, parsed_unit, None, None);

@@ -488,12 +488,12 @@ fn locate_manifest(path: &Path) -> (PathBuf, PathBuf) {
                 "Error: manifest file 'phs.toml' not found in directory '{}'",
                 path.display()
             );
-            std::process::exit(1);
+            crate::exit(1);
         }
         (candidate, path.to_path_buf())
     } else {
         eprintln!("Error: path '{}' does not exist", path.display());
-        std::process::exit(1);
+        crate::exit(1);
     }
 }
 
@@ -526,7 +526,7 @@ pub fn run_pack(args: &[String]) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            crate::exit(1);
         }
     };
 
@@ -559,7 +559,7 @@ pub fn run_pack(args: &[String]) {
         }
         Err(e) => {
             eprintln!("Packaging Error: {}", e);
-            std::process::exit(1);
+            crate::exit(1);
         }
     }
 }

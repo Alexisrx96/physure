@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import operator
+import sys
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -24,6 +26,9 @@ from physure.domain.measurement.units import (
 
 _Quantity = None
 
+# the dimension of a temperature, by dimension symbol
+_TEMPERATURE = {"O": 1}
+
 
 def _q():
     global _Quantity
@@ -32,6 +37,39 @@ def _q():
 
         _Quantity = Quantity
     return _Quantity
+
+
+def _python_number(value: Any) -> Any:
+    """A NumPy scalar number as the Python number it holds; anything else as it is.
+
+    `np.mean` of quantities divides their sum by a `np.intp`, and `np.int64` (unlike
+    `np.float64`) is not a Python number, so `Quantity / np.int64(3)` found no path and
+    NumPy reported that every operand returned `NotImplemented`.
+    """
+    numpy = sys.modules.get("numpy")
+    if (
+        numpy is not None
+        and isinstance(value, numpy.number)
+        and not isinstance(value, (float, complex))
+    ):
+        return value.item()
+    return value
+
+
+def _without_point(result: Any, *operands: Any) -> Any:
+    """`result` of a product, quotient or negation, no longer a temperature point.
+
+    A plain factor carries its operand's unit over, kind and all; an interval
+    stays one (`2 * (T2 - T1)`), a point does not (`2 * (20 degC => K)` is not a
+    place on the scale), as the core's unit algebra says. An operand handed
+    back as it is (`x * 1`) is copied, not changed.
+    """
+    if not isinstance(result, _q()) or not result.unit.point:
+        return result
+    if any(result is operand for operand in operands):
+        result = copy.copy(result)
+    object.__setattr__(result, "_unit", result.unit.as_plain())
+    return result
 
 
 class ArithmeticMixin:
@@ -119,7 +157,7 @@ class ArithmeticMixin:
         ):
             if self.dimension != other.dimension:
                 raise IncompatibleUnitsError(self.unit, other.unit)
-            return other.to(self.unit)
+            return other._read_in(self.unit)
         return other
 
     def _rust_mul_div(
@@ -757,6 +795,10 @@ class ArithmeticMixin:
         """True for an absolute temperature (degC, degF): a point, not an interval."""
         return self.unit.kind(self.system) == "absolute"
 
+    def _is_point(self) -> bool:
+        """A temperature point: a unit with a zero point, or a K made one (`20 degC => K`)."""
+        return self.unit.point or self._is_absolute()
+
     def _is_level(self) -> bool:
         """True for a level (dB, pH): the logarithm of a ratio."""
         return (
@@ -765,13 +807,17 @@ class ArithmeticMixin:
         )
 
     def _shift_point(self, interval: Quantity, subtract: bool) -> Quantity:
-        """This point moved by an interval, in the point's own scale."""
+        """This point moved by an interval, in the point's own scale.
+
+        The interval in the point's scale is the same measurement (`_restated`), so
+        `(t + d) - d` keeps `t`'s error alone, whatever scale `d` is written in.
+        """
         factor = interval.unit.conversion_factor_to(self.unit, self.system)
-        moved = type(self).from_input(
+        moved = interval._restated(
             self._backend.mul(interval.magnitude, factor),
             self.unit,
-            self.system,
-            uncertainty=self._backend.mul(interval.uncertainty, abs(factor)),
+            self._backend.mul(interval.uncertainty, abs(factor)),
+            lambda: float(factor),
         )
         return self._add_sub_same_unit(
             moved,
@@ -781,9 +827,80 @@ class ArithmeticMixin:
         )
 
     def _point_difference(self, other: Quantity) -> Quantity:
-        """Two points make an interval, in the base unit of their dimension."""
+        """Two points make an interval, in the base unit of their dimension.
+
+        Printed in K, and an interval as the core has it: a point does not
+        compare with it (`(20 degC - 10 degC) < 20 degC` raises).
+        """
         base = self.unit.base_unit(self.system)
-        return self.to(base) - other.to(base)
+        return self._made_interval(self.to(base) - other.to(base))
+
+    @staticmethod
+    def _made_interval(result: Quantity) -> Quantity:
+        """`result`, a quantity this operation made, standing for an interval."""
+        if not result.unit.interval:
+            object.__setattr__(result, "_unit", result.unit.as_interval())
+        return result
+
+    def _sum_kind(
+        self, other: Quantity | Numeric, result: Any, subtract: bool
+    ) -> Any:
+        """The kind of a sum or a difference of temperatures, as the core's arithmetic says.
+
+        A point moved by an interval is a point (`(20 degC => K) + 5
+        delta_degC`), a point minus a point and two intervals an interval; a
+        plain K is of unknown kind (it may be an absolute temperature), and so
+        is its sum with an interval, in either order (`1 K + 5 delta_degC`).
+        A sum that is not an interval is written in the base unit (K), since
+        `delta_degC` would say interval. A unit with a zero point is decided
+        by `_affine_check`. Only a temperature asks the core.
+        """
+        if (
+            not isinstance(other, _q())
+            or not isinstance(result, _q())
+            or result is self
+            or result is other
+            or self.dimension.exponents != _TEMPERATURE
+            or result._is_absolute()
+            or self._is_absolute()
+            or other._is_absolute()
+        ):
+            return result
+        registry = self.system.core_registry
+        kind = registry.sum_kind(self.unit, other.unit, subtract)
+        if kind == "interval":
+            return self._made_interval(result)
+        if registry.is_interval(result.unit):
+            result = result._plain_kind().to(
+                result.unit.base_unit(self.system)
+            )
+        result = result._plain_kind()
+        if kind == "point":
+            object.__setattr__(result, "_unit", result.unit.as_point())
+        return result
+
+    def _read_in(self, unit: CompoundUnit) -> Quantity:
+        """This quantity's number in `unit`, read as an operand of a sum.
+
+        It reads the number whatever kind of temperature either unit is.
+
+        A point moved by an interval written in the interval's unit
+        (`5 delta_degC + (20 degC => K)`) is not a point converted to an
+        interval: the sum decides the kind of its result (`_sum_kind`). The
+        operand comes back in `unit` itself, the very object, so that the
+        same-unit path of the sum takes it (`self.unit is other.unit`): in the
+        plain flyweight of a marked unit it would be converted again, forever.
+        """
+        read = self._convert_by_plan(unit.as_plain(), kind_free=True)
+        if read.unit is not unit:
+            object.__setattr__(read, "_unit", unit)
+        return read
+
+    def _plain_kind(self) -> Self:
+        """This quantity, made by an operation, in its unit of unknown kind."""
+        if self.unit.point or self.unit.interval:
+            object.__setattr__(self, "_unit", self.unit.as_plain())
+        return self
 
     def _refuse_plain_number(self) -> None:
         """Raises: a plain number does not scale an absolute temperature."""
@@ -946,6 +1063,30 @@ class ArithmeticMixin:
         """Computes the hyperbolic tangent."""
         return self._apply_transcendental("tanh")
 
+    def sqrt(self) -> Quantity:
+        """The square root, `self ** 0.5`: half the unit's powers, the uncertainty propagated.
+
+        NumPy calls it on each element of an object array (`np.sqrt([4 m^2, 9 m^2])`).
+        """
+        return cast("Quantity", self**0.5)  # pyright: ignore[reportOperatorIssue]
+
+    def conjugate(self) -> Quantity:
+        """The complex conjugate: the quantity itself when its magnitude is real.
+
+        NumPy calls it on each element of an object array (`np.std` of quantities).
+        """
+        magnitude: Any = self.magnitude
+        if not self._backend.is_array(magnitude) and not isinstance(
+            magnitude, complex
+        ):
+            return cast("Quantity", self)
+        return type(self).from_input(
+            magnitude.conjugate(),
+            self.unit,
+            self.system,
+            uncertainty=self.uncertainty,
+        )
+
     def _broadcast_to_size(self, param: Numeric, size: int) -> Numeric:
         """Helper to broadcast a parameter to a flat size-vector."""
         if self._backend.is_array(param):
@@ -960,12 +1101,17 @@ class ArithmeticMixin:
         return self._backend.mul(self._backend.ones(size), param)
 
     def _affine_check(self, other: Quantity, is_add: bool) -> Quantity | None:
-        """Checks and performs point and interval arithmetic if applicable."""
-        is_absolute_self = self._is_absolute()
-        is_absolute_other = other._is_absolute()
+        """Checks and performs point and interval arithmetic if applicable.
 
-        if not (is_absolute_self or is_absolute_other):
+        Applies when a side has a zero point (degC); the sides are then told
+        apart as points or not as the core does, so a K that holds a point
+        (`10 degC => K`) is a point here: `20 degC - (10 degC => K)` is 10 K
+        and `20 degC + (10 degC => K)` is refused.
+        """
+        if not (self._is_absolute() or other._is_absolute()):
             return None
+        is_absolute_self = self._is_point()
+        is_absolute_other = other._is_point()
 
         # Check for compatibility
         if self.dimension != other.dimension:
@@ -993,7 +1139,8 @@ class ArithmeticMixin:
 
         # V - P -> Error
         raise ValueError(
-            "Cannot subtract an absolute quantity from a difference."
+            "Cannot subtract an absolute quantity from a difference "
+            "(an interval, or a K of unknown kind)."
         )
 
     def _logarithmic_add_sub(
@@ -1025,7 +1172,7 @@ class ArithmeticMixin:
         if self.unit != other.unit:
             if self.dimension != other.dimension:
                 raise IncompatibleUnitsError(self.unit, other.unit)
-            return other.to(self.unit).magnitude
+            return other._read_in(self.unit).magnitude
         return other.magnitude
 
     def _scalar_with_array(self, other: object) -> bool:
@@ -1148,11 +1295,17 @@ class ArithmeticMixin:
     # --- Arithmetic Dunder Methods ---
     def __add__(self, other: Quantity | Numeric) -> Quantity:
         """Handles arithmetic with Affine Support."""
-        return self._add_sub_impl(other, is_add=True)
+        other = _python_number(other)
+        return self._sum_kind(
+            other, self._add_sub_impl(other, is_add=True), subtract=False
+        )
 
     def __sub__(self, other: Quantity | Numeric) -> Quantity:
         """Handles subtraction."""
-        return self._add_sub_impl(other, is_add=False)
+        other = _python_number(other)
+        return self._sum_kind(
+            other, self._add_sub_impl(other, is_add=False), subtract=True
+        )
 
     def _add_sub_same_unit(
         self, other: Quantity, u_other: Numeric, is_add: bool, op: str
@@ -1278,11 +1431,14 @@ class ArithmeticMixin:
         if self.dimension != other.dimension:
             raise IncompatibleUnitsError(self.unit, other.unit)
 
-        # Recurse with unit-converted other
-        return self._add_sub_impl(other.to(self.unit), is_add)
+        # Recurse with unit-converted other; a sum reads the numbers whatever
+        # their kind (the kind of the result is `_sum_kind`'s): a point moved by
+        # an interval in the interval's unit is not a point converted to it
+        return self._add_sub_impl(other._read_in(self.unit), is_add)
 
     def __rsub__(self, other: Quantity | Numeric) -> Quantity:
         """Right subtraction."""
+        other = _python_number(other)
         self._reject_bare_number_add_sub(other)
         rust_res = self._check_and_handle_rust_propagation(other, "rsub")
         if rust_res is not None:
@@ -1292,7 +1448,18 @@ class ArithmeticMixin:
         return (-self) + other
 
     def __mul__(self, other: Quantity | Numeric | CompoundUnit) -> Quantity:
-        """Multiplies two quantities."""
+        """Multiplies two quantities.
+
+        A scaled absolute temperature is no longer a place on the scale: the
+        product of a point (`20 degC => K`) is of unknown kind, as in the core.
+        """
+        other = _python_number(other)
+        return _without_point(self._mul_keeping_kind(other), self, other)
+
+    def _mul_keeping_kind(
+        self, other: Quantity | Numeric | CompoundUnit
+    ) -> Quantity:
+        """Multiplies two quantities; a unit carried over keeps its kind."""
         if self._scalar_with_array(other):
             return other.__mul__(self)
         rust_res = self._check_and_handle_rust_propagation(other, "mul")
@@ -1391,7 +1558,14 @@ class ArithmeticMixin:
     def __truediv__(
         self, other: Quantity | Numeric | CompoundUnit
     ) -> Quantity:
-        """Divides two quantities."""
+        """Divides two quantities; the quotient of a point is of unknown kind."""
+        other = _python_number(other)
+        return _without_point(self._truediv_keeping_kind(other), self, other)
+
+    def _truediv_keeping_kind(
+        self, other: Quantity | Numeric | CompoundUnit
+    ) -> Quantity:
+        """Divides two quantities; a unit carried over keeps its kind."""
         if self._scalar_with_array(other):
             # s / A == A**-1 * s for the propagation (first order, the same
             # Jacobians), but the magnitude is the quotient itself, not 1/a * s:
@@ -1497,6 +1671,7 @@ class ArithmeticMixin:
 
     def __pow__(self, exponent: float) -> Quantity:
         """Raises quantity to power."""
+        exponent = _python_number(exponent)
         rust_res = self._check_and_handle_rust_propagation(exponent, "pow")
         if rust_res is not None:
             return rust_res
@@ -1543,6 +1718,7 @@ class ArithmeticMixin:
 
     def __rtruediv__(self, other: Numeric) -> Quantity:
         """Right division."""
+        other = _python_number(other)
         rust_res = self._check_and_handle_rust_propagation(other, "rtruediv")
         if rust_res is not None:
             return rust_res
@@ -1583,7 +1759,11 @@ class ArithmeticMixin:
         return res
 
     def __neg__(self) -> Self:
-        """Returns the negation of the quantity."""
+        """Returns the negation of the quantity; that of a point is of unknown kind."""
+        return cast("Self", _without_point(self._neg_keeping_kind(), self))
+
+    def _neg_keeping_kind(self) -> Self:
+        """Returns the negation of the quantity; its unit keeps its kind."""
         rust_res = self._check_and_handle_rust_propagation(None, "neg")
         if rust_res is not None:
             return cast("Self", rust_res)

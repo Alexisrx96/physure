@@ -126,12 +126,13 @@ fn parse_base_expr(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr> {
     let mut left = parse_comp_expr(first)?;
 
     while let Some(op_pair) = inner.next() {
-        // The spec closes the expression — `a + b: .2f` formats the sum, not `b`.
+        // The spec closes the expression — `a + b: .2f` formats the sum, not `b`. The spec is a word of the
+        // syntax, so it is text (`format(x, "base")`): a variable named `base` does not change it.
         if op_pair.as_rule() == Rule::op_format {
             let spec = op_pair.into_inner().next().map(|p| p.as_str().to_string()).unwrap_or_default();
             left = Expr::FunctionCall {
                 name: "format".to_string(),
-                args: vec![left, Expr::Identifier(spec)],
+                args: vec![left, Expr::Str(spec)],
                 kwargs: Vec::new(),
             };
             continue;
@@ -516,7 +517,7 @@ fn parse_vector_literal(pair: pest::iterators::Pair<Rule>) -> PhysureResult<Expr
         Ok(Expr::BinaryOp {
             op: BinaryOp::Mul,
             left: Box::new(vec_expr),
-            right: Box::new(Expr::Identifier(u)),
+            right: Box::new(super::quantities::unit_literal(&u)),
         })
     } else {
         Ok(vec_expr)

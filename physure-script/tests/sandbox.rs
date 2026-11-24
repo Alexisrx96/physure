@@ -164,7 +164,7 @@ fn a_sandboxed_for_expression_stays_on_one_thread() {
     interp.register_fn("probe", move |args| {
         seen.lock().unwrap().insert(std::thread::current().id());
         Ok(args[0].clone())
-    });
+    }).expect("a free name");
     let values = run_sandboxed_with(interp, "res = for i in 1..20000 { probe(i) }\nres");
     values.unwrap();
     let used = threads.lock().unwrap().len();

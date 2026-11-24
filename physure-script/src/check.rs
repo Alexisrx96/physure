@@ -12,8 +12,15 @@
 //! neither a variable, a constant nor a unit and meets a quantity, a name of `pi`, `π` or a constant of the catalog
 //! is bound (`crate::globals`). A value the pass cannot type (an argument of a
 //! function it has not seen, a vector, an imported name) is `Unknown` and silences every check that depends
-//! on it. The one report that is a warning, not an error, is `min` or `max` of different dimensions, which
-//! the interpreter accepts (it compares base-unit magnitudes) and which is never what was meant.
+//! on it. `min` or `max` of different dimensions (`mixed-extremum`) was the one warning while the interpreter
+//! compared their base-unit magnitudes; the interpreter refuses it now (unit holes), so it is an error like the
+//! others, and no finding is a warning today.
+//!
+//! One exception to "certain to refuse": the body of a function is checked with what it knows of it (the units of
+//! annotated parameters, the literals) even if the function is never called, so `fn f(a: m) = max(a, 1 s)` and
+//! `fn g(b) = max(1 m, 1 s)` are errors at check time although the interpreter, which never runs the body, accepts
+//! the program. The body would be refused at every call, so the finding is of the same kind as every other one the
+//! checker reports in a function body.
 //!
 //! **Functions.** A parameter with a unit (`fn f(m: kg, v: m/s)`) is checked at every call and typed in
 //! the body. A parameter without one takes the dimension of the argument at each call site: the body is
@@ -22,7 +29,7 @@
 //!
 //! **Where.** The AST carries the line of each statement and no column, so a diagnostic points at a line.
 
-use crate::ast::{AssignmentNode, BinaryOp, Expr, FunctionDefNode, ImportSpecifier, Program, QuantityNode, Statement};
+use crate::ast::{AssignmentNode, BinaryOp, Expr, FunctionDefNode, ImportNode, ImportSpecifier, Program, QuantityNode, Statement};
 use crate::interpreter::helpers::strip_unit_comment;
 use num_rational::Rational64;
 use physure_core::error::PhysureResult;
@@ -36,7 +43,9 @@ use std::rc::Rc;
 pub enum Severity {
     /// The interpreter would stop here.
     Error,
-    /// The interpreter accepts it and it is almost certainly not what was meant.
+    /// The interpreter accepts it and it is almost certainly not what was meant. No finding is a warning today
+    /// (`mixed-extremum` was, until the interpreter refused it); the severity stays in the schema of the report, of
+    /// `phs check` and of the LSP.
     Warning,
 }
 
@@ -46,9 +55,81 @@ pub struct Diagnostic {
     pub line: usize,
     pub severity: Severity,
     /// A short stable name: `dimension-mismatch`, `unknown-unit`, `unknown-name`, `bad-argument`,
-    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`, `not-a-bool`.
+    /// `bad-exponent`, `temperature-points`, `mixed-extremum`, `constant-shadowing`, `reserved-name`, `not-a-bool`.
     pub code: &'static str,
     pub message: String,
+}
+
+/// Whether the checker finding (`code`, `finding_message`) is the same problem as this interpreter error: the two
+/// word a problem differently, so the match is by the wording of the problem's kind and by what names it (the
+/// unit, the function, the binding), never by the kind alone. A message this does not recognise as the finding's
+/// own is another problem, so it is reported too; a reworded message would be reported twice, which the guard test
+/// `a_flagged_line_is_not_said_twice` (`tests/report.rs`) catches.
+pub fn explains(code: &str, finding_message: &str, runtime_message: &str) -> bool {
+    match code {
+        "dimension-mismatch" => ["Unit mismatch", "with the plain number"].iter().any(|kind| runtime_message.contains(kind)),
+        "bad-argument" => is_bad_argument(finding_message, runtime_message),
+        // the same unit or name by name: `Unknown unit 'a'` does not say `'fooz' is neither a variable, a constant nor a unit`
+        "unknown-unit" | "unknown-name" => between(finding_message, '\'').is_some_and(|name| {
+            runtime_message.contains(&format!("Unknown unit '{name}'")) || runtime_message.contains(&format!("`{name}` has no value"))
+        }),
+        "bad-exponent" => runtime_message.contains("Exponent must be"),
+        // the same function: `max of different dimensions (L, T): ...` and `` max of different dimensions: `1 m` is ... ``
+        "mixed-extremum" => finding_message
+            .split(' ')
+            .next()
+            .is_some_and(|function| runtime_message.contains(&format!("{function} of different dimensions:"))),
+        // the same operation on the temperatures
+        "temperature-points" => [
+            ("cannot be added", "cannot add two absolute temperatures"),
+            ("multiplied or divided", "cannot multiply or divide the absolute temperature"),
+        ]
+        .iter()
+        .any(|(finding, runtime)| finding_message.contains(finding) && runtime_message.contains(runtime)),
+        "not-a-bool" => condition_head(finding_message) == condition_head(runtime_message),
+        // the same name, in the words both messages take from one place (`reserved.rs`, `globals.rs`)
+        "reserved-name" | "constant-shadowing" => between(finding_message, '`')
+            .is_some_and(|name| runtime_message.contains(&format!("`{name}` is ")) && runtime_message.contains("choose another")),
+        _ => false,
+    }
+}
+
+/// The first text between two `quote` characters of `message`.
+fn between(message: &str, quote: char) -> Option<&str> {
+    message.split(quote).nth(1).filter(|name| !name.is_empty())
+}
+
+/// A builtin that wants an angle or a dimensionless value (`sin expects an angle or a dimensionless value, got L`;
+/// the interpreter says `exp expects a dimensionless value, got 's'`), or an annotated parameter that got another
+/// unit (`the argument for parameter 'm' of 'kinetic' is T, ...` and `Argument for parameter 'm' of function
+/// 'kinetic' has a unit incompatible ...`): the same function or the same parameter of the same function.
+fn is_bad_argument(finding_message: &str, runtime_message: &str) -> bool {
+    if let Some(function) = finding_message.split(" expects ").next().filter(|function| !function.contains(' ') && function.len() < finding_message.len()) {
+        let wants = [" expects an angle or a dimensionless value", " expects a dimensionless value"];
+        return wants.iter().any(|want| runtime_message.starts_with(&format!("{function}{want}")));
+    }
+    let mut names = finding_message.split('\'').skip(1).step_by(2);
+    match (names.next(), names.next()) {
+        (Some(parameter), Some(function)) => runtime_message.contains(&format!("Argument for parameter '{parameter}' of function '{function}'")),
+        _ => false,
+    }
+}
+
+/// What a condition message says before its detail: the construct and the kind of value, without the value
+/// (`(5.0)`, `(of dimension L)`) or the advice after the colon.
+fn condition_head(message: &str) -> String {
+    let mut head = String::new();
+    let mut depth = 0usize;
+    for c in message.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ':' if depth == 0 => break,
+            _ if depth == 0 => head.push(c),
+            _ => {}
+        }
+    }
+    head.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Parses `code` and checks it against the catalog that unit text is read against on this thread (the
@@ -65,7 +146,7 @@ pub fn check_source(code: &str) -> PhysureResult<Vec<Diagnostic>> {
 /// Checks a parsed program against `registry`.
 pub fn check_program(program: &Program, registry: &UnitRegistry) -> Vec<Diagnostic> {
     let mut checker = Checker::new(registry);
-    checker.refuse_global_bindings(program);
+    checker.refuse_reserved_bindings(program);
     checker.prepare(&program.statements);
     let mut env = Env::new();
     checker.block(&program.statements, &program.lines, &mut env, 0);
@@ -160,8 +241,8 @@ enum Ty {
     Text(Option<String>),
     /// A vector literal `[...]` without a unit.
     Vector,
-    /// A bare word that is not bound, not imported and not a unit: the interpreter reads it as text, which
-    /// fails the moment it meets a quantity.
+    /// A bare word that is not bound, not imported and not a unit: the interpreter refuses it (`` `foo` has no
+    /// value ``).
     Symbol(String),
 }
 
@@ -283,23 +364,68 @@ impl<'a> Checker<'a> {
 
     // ---- global identifiers
 
-    /// A binding of `pi`, `π` or a constant of the catalog anywhere in a statement (function bodies included) is an
-    /// error, as the interpreter says before the statement runs (`crate::globals`). Reported at the line of the
-    /// top-level statement that holds it.
-    fn refuse_global_bindings(&mut self, program: &Program) {
+    /// A binding of a reserved name anywhere in a statement (function bodies included) is an error, as the
+    /// interpreter says before the statement runs (`crate::globals`, `crate::reserved`): `pi`, `π` and the
+    /// constants of the catalog (`constant-shadowing`), a statement word, a literal, a function of the core, and a
+    /// function of a module the program has imported by then (`reserved-name`). The top-level statements are read
+    /// in order, keeping what the imports have unlocked and the names the program holds, so an import over a held
+    /// name or a remap is reported too. Each finding is at the line of the top-level statement that holds it.
+    ///
+    /// It does not follow an import nested in a function or a loop body (whether it runs is not known statically), a
+    /// name a `.phs` import binds, or an assignment inside a loop; so it can miss what the interpreter refuses, and it
+    /// does not report what the interpreter accepts.
+    fn refuse_reserved_bindings(&mut self, program: &Program) {
+        let mut unlocked = crate::reserved::Unlocked::new();
+        let mut held: HashSet<String> = HashSet::new();
         for (index, statement) in program.statements.iter().enumerate() {
             self.line = program.lines.get(index).copied().unwrap_or(0);
             let mut bound = Vec::new();
             crate::globals::bindings_of(statement, &mut bound);
             for (name, what) in bound {
-                if crate::globals::is_global_in(&name, self.registry) {
-                    let value = self.registry.constants_meta.get(&name).map(|meta| meta.value.clone());
-                    let message = crate::globals::shadowing_error(&name, &what, value.as_deref());
-                    self.report(Severity::Error, "constant-shadowing", message);
-                }
+                self.refuse_reserved_binding(&name, &what, &unlocked);
             }
+            if let Statement::Import(import) = statement {
+                self.unlock_import(import, &held, &mut unlocked);
+            }
+            held.extend(bound_at_top_level(statement).map(str::to_string));
         }
         self.line = 0;
+    }
+
+    /// Reports the binding of `name` as `what` when the name is reserved: a word, a literal or a function of the
+    /// language, `pi` or a constant of the catalog, or a function of a module the program has `unlocked` (unless
+    /// the binding is that import itself).
+    fn refuse_reserved_binding(&mut self, name: &str, what: &str, unlocked: &crate::reserved::Unlocked) {
+        if let Some(kind) = crate::reserved::static_kind(name) {
+            self.report(Severity::Error, "reserved-name", crate::reserved::binding_error(name, what, kind));
+            return;
+        }
+        if crate::globals::is_global_in(name, self.registry) {
+            let value = self.registry.constants_meta.get(name).map(|meta| meta.value.clone());
+            let message = crate::globals::shadowing_error(name, what, value.as_deref());
+            self.report(Severity::Error, "constant-shadowing", message);
+            return;
+        }
+        if what.starts_with(crate::globals::IMPORT_BINDING) {
+            return;
+        }
+        if let Some((domain, _)) = unlocked.get(name) {
+            self.report(Severity::Error, "reserved-name", crate::reserved::module_binding_error(name, domain, what));
+        }
+    }
+
+    /// Adds to `unlocked` what the `import` of a module unlocks, or reports why it is refused (over a name the
+    /// program already `held`, or a remap). An import of a `.phs` file unlocks nothing here.
+    fn unlock_import(&mut self, import: &ImportNode, held: &HashSet<String>, unlocked: &mut crate::reserved::Unlocked) {
+        let (Some(domain), Some(members)) = (crate::reserved::domain_of(&import.path), crate::builtins::domain_members(&import.path)) else {
+            return;
+        };
+        match crate::reserved::plan_import(import, domain, members, &|name| held.contains(name), unlocked) {
+            Ok(imports) => unlocked.extend(imports),
+            Err(crate::reserved::ImportError::Reserved(message)) => self.report(Severity::Error, "reserved-name", message),
+            // the interpreter says so when it runs the import; the checker has no code for it
+            Err(crate::reserved::ImportError::NoSuchFunction(_)) => {}
+        }
     }
 
     /// The type of the global identifier `name` (`pi`, `π` or a constant of the catalog), `None` when it is not one.
@@ -474,13 +600,7 @@ impl<'a> Checker<'a> {
             Ty::Unknown | Ty::Bool => return,
             Ty::Qty(dim) if dim.is_ratio() && !dim.point => KnownCondition::Number,
             Ty::Qty(dim) => {
-                let unit = if dim.level || dim.point || dim.exps.is_empty() {
-                    None
-                } else {
-                    let dimension: Vec<(String, (i64, i64))> =
-                        dim.exps.iter().map(|(symbol, power)| (symbol.clone(), (*power.numer(), *power.denom()))).collect();
-                    self.registry.unit_of_dimension(&dimension).ok().map(|unit| unit.__repr__())
-                };
+                let unit = if dim.level || dim.point || dim.exps.is_empty() { None } else { self.unit_of(dim) };
                 let described = if dim.level || dim.point { dim.described() } else { format!("of dimension {}", dim.text()) };
                 KnownCondition::Quantity { described, unit }
             }
@@ -558,41 +678,7 @@ impl<'a> Checker<'a> {
 
     fn binary(&mut self, op: BinaryOp, left: &Expr, right: &Expr, env: &Env, depth: usize) -> Ty {
         if op == BinaryOp::Convert {
-            let from = self.expr(left, env, depth);
-            let target_text = crate::codegen::expr_to_unit_string(right);
-            let clean = strip_unit_comment(&target_text);
-            if clean.is_empty() {
-                return from;
-            }
-            let Some(target) = self.unit_dim(clean) else { return Ty::Unknown };
-            // a Bool or text has no unit to convert: the interpreter refuses it (`convert_value_to_unit`)
-            let no_unit = match &from {
-                Ty::Bool => Some("a Bool"),
-                Ty::Text(_) => Some("a String"),
-                _ => None,
-            };
-            if let Some(kind) = no_unit {
-                self.report(
-                    Severity::Error,
-                    "bad-argument",
-                    format!("cannot convert {kind} to `{clean}`: only a quantity or a number, or a vector, matrix or range of them, has a unit to convert"),
-                );
-                return Ty::Unknown;
-            }
-            // a name that is not a variable is text, and the interpreter hands text back unconverted
-            if let Ty::Qty(dim) = &from {
-                let angle_only = physure_core::units::angle_mode::angle_mode()
-                    == physure_core::units::angle_mode::AngleMode::Dimensionless
-                    && dim.same_apart_from_angle(&target);
-                if !dim.same_dimension(&target) && !angle_only {
-                    self.report(
-                        Severity::Error,
-                        "dimension-mismatch",
-                        format!("cannot convert {} to '{}' ({})", dim.text(), clean, target.text()),
-                    );
-                }
-            }
-            return Ty::Qty(Dim { constant: None, ..target });
+            return self.convert(left, right, env, depth);
         }
         let l = self.expr(left, env, depth);
         let r = self.expr(right, env, depth);
@@ -606,6 +692,53 @@ impl<'a> Checker<'a> {
                 Ty::Unknown
             }
             _ => Ty::Unknown,
+        }
+    }
+
+    /// `left => right`: the dimension of the unit `right`, after reporting a value that has no unit to convert or
+    /// a quantity of another dimension.
+    fn convert(&mut self, left: &Expr, right: &Expr, env: &Env, depth: usize) -> Ty {
+        let from = self.expr(left, env, depth);
+        let target_text = crate::codegen::expr_to_unit_string(right);
+        let clean = strip_unit_comment(&target_text);
+        if clean.is_empty() {
+            return from;
+        }
+        let Some(target) = self.unit_dim(clean) else { return Ty::Unknown };
+        // a Bool or text has no unit to convert: the interpreter refuses it (`convert_value_to_unit`)
+        let no_unit = match &from {
+            Ty::Bool => Some("a Bool"),
+            Ty::Text(_) => Some("a String"),
+            _ => None,
+        };
+        if let Some(kind) = no_unit {
+            self.report(
+                Severity::Error,
+                "bad-argument",
+                format!("cannot convert {kind} to `{clean}`: only a quantity or a number, or a vector, matrix or range of them, has a unit to convert"),
+            );
+            return Ty::Unknown;
+        }
+        // only a quantity has a dimension to compare; a name with no value (`Ty::Symbol`) is refused by the
+        // interpreter before the conversion (`` `foo` has no value ``), and this pass says nothing of it here
+        if let Ty::Qty(dim) = &from {
+            self.check_conversion_dimension(dim, &target, clean);
+        }
+        Ty::Qty(Dim { constant: None, ..target })
+    }
+
+    /// Reports the conversion of a quantity of dimension `dim` to the unit `clean` (of dimension `target`) when
+    /// the dimensions differ, apart from an angle while angles are dimensionless.
+    fn check_conversion_dimension(&mut self, dim: &Dim, target: &Dim, clean: &str) {
+        let angle_only = physure_core::units::angle_mode::angle_mode()
+            == physure_core::units::angle_mode::AngleMode::Dimensionless
+            && dim.same_apart_from_angle(target);
+        if !dim.same_dimension(target) && !angle_only {
+            self.report(
+                Severity::Error,
+                "dimension-mismatch",
+                format!("cannot convert {} to '{}' ({})", dim.text(), clean, target.text()),
+            );
         }
     }
 
@@ -648,8 +781,11 @@ impl<'a> Checker<'a> {
         Ty::Qty(Dim { exps: a.exps.clone(), point, level: a.level && b.level, constant })
     }
 
-    /// Whether the result of a sum or difference is an absolute temperature; `None` (after reporting) when the
-    /// operands may not be combined at all.
+    /// Whether the result of a sum or difference is an absolute temperature; `None` when the operands may not be
+    /// combined at all (after reporting) or when the checker has no opinion. `point` is a unit with a zero point
+    /// (`degC`): a `K` here may hold a point at run time (`T = 20 degC => K`) or not (`300 K`), so a difference with
+    /// one is not reported (`T - 0 degC` is an interval when `T` is a point, refused when it is not) and its result
+    /// is of no known kind (`20 degC - T` is a point or an interval).
     fn temperature_point(&mut self, op: BinaryOp, left_point: bool, right_point: bool) -> Option<bool> {
         match (op, left_point, right_point) {
             (BinaryOp::Add, true, true) => {
@@ -660,33 +796,17 @@ impl<'a> Checker<'a> {
                 );
                 None
             }
-            (BinaryOp::Sub, false, true) => {
-                self.report(
-                    Severity::Error,
-                    "temperature-points",
-                    "an absolute temperature cannot be subtracted from an interval".to_string(),
-                );
-                None
-            }
-            (BinaryOp::Add, true, false) | (BinaryOp::Add, false, true) | (BinaryOp::Sub, true, false) => Some(true),
+            // accepted only when the K is a point, and then an interval
+            (BinaryOp::Sub, false, true) => Some(false),
+            (BinaryOp::Sub, true, false) => None,
+            (BinaryOp::Add, true, false) | (BinaryOp::Add, false, true) => Some(true),
             _ => Some(false),
         }
     }
 
     fn mul_div(&mut self, op: BinaryOp, a: &Dim, b: &Dim) -> Ty {
-        // An exact sign mirrors an absolute temperature in its own scale, as the core does (`-10 degC`, which
-        // the parser reads as `-1 * 10 degC`, and `-t`); a point is never a divisor.
-        let is_sign = |d: &Dim| d.exps.is_empty() && matches!(d.constant, Some(c) if c.abs() == 1.0);
-        if (a.point && is_sign(b)) || (b.point && is_sign(a) && op == BinaryOp::Mul) {
-            return Ty::Qty(Dim { constant: None, ..(if a.point { a } else { b }).clone() });
-        }
-        // A level times a plain number, or over one, stays a level in the core (`5 dB * 2`, `2 * 5 dB`, and `-5 dB`,
-        // which the parser reads as `-1 * 5 dB`), and keeps its unit name (`-5 dB` prints `-5.0 dB`).
-        if a.level && b.is_ratio() {
-            return Ty::Qty(Dim { constant: None, ..a.clone() });
-        }
-        if b.level && a.is_ratio() && op == BinaryOp::Mul {
-            return Ty::Qty(Dim { constant: None, ..b.clone() });
+        if let Some(kept) = kind_kept_by(op, a, b) {
+            return Ty::Qty(Dim { constant: None, ..kept.clone() });
         }
         if (a.point && b.exps.is_empty()) || (b.point && a.exps.is_empty()) {
             self.report(
@@ -820,62 +940,46 @@ impl<'a> Checker<'a> {
     }
 
     fn builtin(&mut self, name: &str, args: &[Ty]) -> Ty {
-        let only = |args: &[Ty]| -> Option<Dim> {
-            match args {
-                [Ty::Qty(dim)] => Some(dim.clone()),
-                _ => None,
-            }
-        };
         match name {
-            "sqrt" => match only(args) {
-                Some(dim) => Ty::Qty(Dim { point: false, ..dim.pow(Rational64::new(1, 2)) }),
-                None => Ty::Unknown,
-            },
-            "sin" | "cos" | "tan" | "exp" | "ln" | "log" => self.dimensionless_function(name, only(args)),
-            // a count of degrees of freedom and a coverage factor are plain numbers; an expanded
-            // uncertainty is in the unit of the measurement it expands
-            "dof" | "coverage_factor" => Ty::Qty(Dim::dimensionless()),
-            "expanded" => match args.first() {
-                Some(Ty::Qty(dim)) => Ty::Qty(Dim { constant: None, point: false, ..dim.clone() }),
-                _ => Ty::Unknown,
-            },
-            "abs" | "floor" | "ceil" | "uncertainty" | "sigma" => match only(args) {
-                Some(dim) => Ty::Qty(Dim { constant: None, ..dim }),
-                None => Ty::Unknown,
-            },
-            "round" => match args.first() {
-                Some(Ty::Qty(dim)) => Ty::Qty(Dim { constant: None, ..dim.clone() }),
-                _ => Ty::Unknown,
-            },
+            "sin" | "cos" | "tan" | "sec" | "csc" | "cot" | "exp" | "ln" | "log" | "erf" => {
+                self.dimensionless_function(name, only_quantity(args))
+            }
             "min" | "max" => self.extremum(name, args),
             "op_<" | "op_>" | "op_<=" | "op_>=" | "op_==" | "op_!=" | "op_\u{2260}" | "op_\u{2264}" | "op_\u{2265}" | "op_\u{2248}" | "op_approx" => {
                 self.comparison(args)
             }
-            "op_and" | "op_or" => {
-                let word = if name == "op_and" { "and" } else { "or" };
-                if let Some(left) = args.first() {
-                    self.condition(left, &format!("the left side of `{word}`"));
-                }
-                if let Some(right) = args.get(1) {
-                    self.condition(right, &format!("the right side of `{word}`"));
-                }
-                Ty::Bool
-            }
+            "op_and" | "op_or" => self.logical(name, args),
             "op_not" => {
                 if let Some(operand) = args.first() {
                     self.condition(operand, "`not`");
                 }
                 Ty::Bool
             }
-            "ternary" | "if_then_else" => {
-                if let Some(cond) = args.first() {
-                    self.condition(cond, if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" });
-                }
-                match args {
-                    [_, then, otherwise] if then == otherwise => then.clone(),
-                    _ => Ty::Unknown,
-                }
-            }
+            "ternary" | "if_then_else" => self.conditional(name, args),
+            _ => dimension_function(name, args),
+        }
+    }
+
+    /// `a and b`, `a or b`: both operands are conditions, and the result is a Bool.
+    fn logical(&mut self, name: &str, args: &[Ty]) -> Ty {
+        let word = if name == "op_and" { "and" } else { "or" };
+        if let Some(left) = args.first() {
+            self.condition(left, &format!("the left side of `{word}`"));
+        }
+        if let Some(right) = args.get(1) {
+            self.condition(right, &format!("the right side of `{word}`"));
+        }
+        Ty::Bool
+    }
+
+    /// `c ? a : b` and `if c then a else b`: the condition is checked, and the result is the type of the branches
+    /// when they agree.
+    fn conditional(&mut self, name: &str, args: &[Ty]) -> Ty {
+        if let Some(cond) = args.first() {
+            self.condition(cond, if name == "ternary" { "the condition of `? :`" } else { "the condition of `if`" });
+        }
+        match args {
+            [_, then, otherwise] if then == otherwise => then.clone(),
             _ => Ty::Unknown,
         }
     }
@@ -895,7 +999,8 @@ impl<'a> Checker<'a> {
         Ty::Qty(Dim::dimensionless())
     }
 
-    /// `min` and `max` compare base-unit magnitudes with no dimension check, which the interpreter accepts.
+    /// `min` and `max` of different dimensions: the interpreter refuses them (`builtins::core::extremum`), so this is an
+    /// error. A vector argument is `Unknown` to the pass and silences it.
     fn extremum(&mut self, name: &str, args: &[Ty]) -> Ty {
         let dims: Vec<&Dim> = args.iter().filter_map(|t| if let Ty::Qty(d) = t { Some(d) } else { None }).collect();
         if dims.len() != args.len() || dims.is_empty() {
@@ -903,16 +1008,32 @@ impl<'a> Checker<'a> {
         }
         if dims.iter().any(|d| !d.same_dimension(dims[0])) {
             self.report(
-                Severity::Warning,
+                Severity::Error,
                 "mixed-extremum",
                 format!(
-                    "{name} of different dimensions ({}) compares their magnitudes in base units, which means nothing",
+                    "{name} of different dimensions ({}): compare values of one dimension",
                     dims.iter().map(|d| d.text()).collect::<Vec<_>>().join(", ")
                 ),
             );
             return Ty::Unknown;
         }
         Ty::Qty(Dim { constant: None, ..dims[0].clone() })
+    }
+
+    /// A unit of the dimension `dim`, from the registry: `kg` for a mass, `K` for an absolute temperature.
+    fn unit_of(&self, dim: &Dim) -> Option<String> {
+        let dimension: Vec<(String, (i64, i64))> =
+            dim.exps.iter().map(|(symbol, power)| (symbol.clone(), (*power.numer(), *power.denom()))).collect();
+        self.registry.unit_of_dimension(&dimension).ok().map(|unit| unit.__repr__())
+    }
+
+    /// The unit the message of a zero tells to write (audit T18). The interpreter knows the unit the operand was
+    /// written in; the checker knows its dimension only, so it names a unit of that dimension (`dB` for a level).
+    fn zero_unit(&self, dim: &Dim) -> String {
+        if dim.level && dim.exps.is_empty() {
+            return "dB".to_string();
+        }
+        self.unit_of(dim).unwrap_or_else(|| "<its unit>".to_string())
     }
 
     /// The rule of `Quantity::comparable_magnitudes`: different dimensions have no comparison, so a zero needs a
@@ -923,10 +1044,11 @@ impl<'a> Checker<'a> {
             let (with, plain) = if b.is_ratio() && !a.is_ratio() { (a, b) } else { (b, a) };
             let message = if plain.is_ratio() && !with.is_ratio() && plain.constant == Some(0.0) {
                 Some(format!(
-                    "cannot compare {} with the plain number 0: a zero needs a unit, write it with one (`x > 0 m`; for \
+                    "cannot compare {} with the plain number 0: a zero needs a unit, write it with one (`x > 0 {}`; for \
                      a temperature point or a level, each scale's zero is a different value: 0 degC is 273.15 K, 0 dB \
                      is a ratio of 1)",
-                    with.described()
+                    with.described(),
+                    self.zero_unit(with)
                 ))
             } else if plain.is_ratio() && with.level && with.exps.is_empty() {
                 Some(format!(
@@ -959,6 +1081,65 @@ fn dim_of(facts: &physure_core::units::UnitFacts) -> Dim {
     Dim { exps, point, level: !facts.is_linear && !point, constant: None }
 }
 
+/// The operand of `a op b` (a product or a quotient) whose kind the result keeps, as the core does: an absolute
+/// temperature times or over an exact sign stays a point in its own scale (`-10 degC`, which the parser reads as
+/// `-1 * 10 degC`, and `-t`; a point is never a divisor), and a level times or over a plain number stays a level
+/// with its unit name (`5 dB * 2`, `2 * 5 dB`, and `-5 dB`, read as `-1 * 5 dB`, prints `-5.0 dB`). `None` for
+/// every other product or quotient.
+fn kind_kept_by<'d>(op: BinaryOp, a: &'d Dim, b: &'d Dim) -> Option<&'d Dim> {
+    let is_sign = |d: &Dim| d.exps.is_empty() && matches!(d.constant, Some(c) if c.abs() == 1.0);
+    let multiplies = op == BinaryOp::Mul;
+    if a.point && is_sign(b) {
+        return Some(a);
+    }
+    if b.point && is_sign(a) && multiplies {
+        // `a` is a point too only if a point can be a bare sign; the point on the left is kept then
+        return Some(if a.point { a } else { b });
+    }
+    if a.level && b.is_ratio() {
+        return Some(a);
+    }
+    if b.level && a.is_ratio() && multiplies {
+        return Some(b);
+    }
+    None
+}
+
+/// The only argument of a call when it is a quantity.
+fn only_quantity(args: &[Ty]) -> Option<Dim> {
+    match args {
+        [Ty::Qty(dim)] => Some(dim.clone()),
+        _ => None,
+    }
+}
+
+/// The type of a call of the builtin `name` that only carries or changes its argument's dimension (`sqrt`, `abs`,
+/// `round`, `expanded`...), `Unknown` for any other name or an argument that is not a quantity.
+fn dimension_function(name: &str, args: &[Ty]) -> Ty {
+    match name {
+        "sqrt" => match only_quantity(args) {
+            Some(dim) => Ty::Qty(Dim { point: false, ..dim.pow(Rational64::new(1, 2)) }),
+            None => Ty::Unknown,
+        },
+        // a count of degrees of freedom and a coverage factor are plain numbers; an expanded
+        // uncertainty is in the unit of the measurement it expands
+        "dof" | "coverage_factor" => Ty::Qty(Dim::dimensionless()),
+        "expanded" => match args.first() {
+            Some(Ty::Qty(dim)) => Ty::Qty(Dim { constant: None, point: false, ..dim.clone() }),
+            _ => Ty::Unknown,
+        },
+        "abs" | "floor" | "ceil" | "uncertainty" | "sigma" => match only_quantity(args) {
+            Some(dim) => Ty::Qty(Dim { constant: None, ..dim }),
+            None => Ty::Unknown,
+        },
+        "round" => match args.first() {
+            Some(Ty::Qty(dim)) => Ty::Qty(Dim { constant: None, ..dim.clone() }),
+            _ => Ty::Unknown,
+        },
+        _ => Ty::Unknown,
+    }
+}
+
 /// What several branches agree on, or `Unknown`.
 fn join(types: Vec<Ty>) -> Ty {
     match types.split_first() {
@@ -973,6 +1154,16 @@ fn bind_imported(specifier: &ImportSpecifier, env: &mut Env) {
         for symbol in symbols {
             env.insert(symbol.alias.clone().unwrap_or_else(|| symbol.name.clone()), Ty::Unknown);
         }
+    }
+}
+
+/// The name a top-level statement binds in the program's own scope, as the interpreter's `env` holds it when the next
+/// statement runs: an assignment or a function. A loop body is left out: it may never run.
+fn bound_at_top_level(statement: &Statement) -> Option<&str> {
+    match statement {
+        Statement::Assignment(node) => Some(&node.name),
+        Statement::FunctionDef(node) => Some(&node.name),
+        _ => None,
     }
 }
 
