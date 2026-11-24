@@ -123,55 +123,87 @@ impl Inliner<'_> {
         owner: &str,
         stack: &mut Vec<String>,
     ) -> PhysureResult<String> {
-        let cannot = |what: &str| {
-            refusal(format!("'{owner}' cannot be inlined into a symbolic expression: its body holds {what}"))
-        };
         match e {
             Expr::Identifier(name) => Ok(match substitution.get(name.as_str()) {
                 Some(argument) => format!("({argument})"),
                 None => name.clone(),
             }),
-            Expr::Quantity(q) => quantity(q).map_err(|what| cannot(&what)),
-            Expr::BinaryOp { op, left, right } => {
-                let symbol = match op {
-                    BinaryOp::Add => "+",
-                    BinaryOp::Sub => "-",
-                    BinaryOp::Mul => "*",
-                    BinaryOp::Div => "/",
-                    BinaryOp::Pow => "^",
-                    BinaryOp::Convert => return Err(cannot("a conversion `=>`")),
-                    BinaryOp::Range => return Err(cannot("a range `..`")),
-                };
-                let mut left_text = self.expr(left, substitution, owner, stack)?;
-                // a name before `^` in parentheses: the symbolic parser reads `rate^2` as `rat * e^2`
-                if *op == BinaryOp::Pow && matches!(**left, Expr::Identifier(_)) && !left_text.starts_with('(') {
-                    left_text = format!("({left_text})");
-                }
-                let right_text = self.expr(right, substitution, owner, stack)?;
-                Ok(format!("({left_text} {symbol} {right_text})"))
-            }
+            Expr::Quantity(q) => quantity(q).map_err(|what| cannot(owner, &what)),
+            Expr::BinaryOp { op, left, right } => self.binary(*op, left, right, substitution, owner, stack),
             Expr::FunctionCall { name, args, kwargs } => {
-                if let Some(what) = not_algebra(name) {
-                    return Err(cannot(what));
-                }
-                if !kwargs.is_empty() {
-                    return Err(cannot(&format!("a call of '{name}' with keyword arguments")));
-                }
-                if substitution.contains_key(name.as_str()) {
-                    return Err(cannot(&format!("a call of its parameter '{name}'")));
-                }
-                let arguments =
-                    args.iter().map(|a| self.expr(a, substitution, owner, stack)).collect::<PhysureResult<Vec<_>>>()?;
-                if self.functions.contains_key(name.as_str()) {
-                    self.call(name, &arguments, stack)
-                } else {
-                    Ok(format!("{name}({})", arguments.join(", ")))
-                }
+                self.function_call(name, args, !kwargs.is_empty(), substitution, owner, stack)
             }
-            Expr::Str(s) => Err(cannot(&format!("the string {s:?}"))),
-            Expr::Bool(b) => Err(cannot(&format!("the boolean {}", if *b { "True" } else { "False" }))),
-            Expr::ForExpr { .. } => Err(cannot("a `for` loop")),
+            Expr::Str(s) => Err(cannot(owner, &format!("the string {s:?}"))),
+            Expr::Bool(b) => Err(cannot(owner, &format!("the boolean {}", if *b { "True" } else { "False" }))),
+            Expr::ForExpr { .. } => Err(cannot(owner, "a `for` loop")),
         }
+    }
+
+    /// The operation `left op right` of the body of `owner` as text, in parentheses.
+    fn binary(
+        &self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        substitution: &HashMap<&str, &str>,
+        owner: &str,
+        stack: &mut Vec<String>,
+    ) -> PhysureResult<String> {
+        let symbol = operator_symbol(op).map_err(|what| cannot(owner, what))?;
+        let mut left_text = self.expr(left, substitution, owner, stack)?;
+        // a name before `^` in parentheses: the symbolic parser reads `rate^2` as `rat * e^2`
+        if op == BinaryOp::Pow && matches!(left, Expr::Identifier(_)) && !left_text.starts_with('(') {
+            left_text = format!("({left_text})");
+        }
+        let right_text = self.expr(right, substitution, owner, stack)?;
+        Ok(format!("({left_text} {symbol} {right_text})"))
+    }
+
+    /// The call `name(args)` of the body of `owner` as text: a user function's body inlined, any other function's
+    /// call with its arguments as text. A call with keyword arguments is refused.
+    fn function_call(
+        &self,
+        name: &str,
+        args: &[Expr],
+        has_kwargs: bool,
+        substitution: &HashMap<&str, &str>,
+        owner: &str,
+        stack: &mut Vec<String>,
+    ) -> PhysureResult<String> {
+        if let Some(what) = not_algebra(name) {
+            return Err(cannot(owner, what));
+        }
+        if has_kwargs {
+            return Err(cannot(owner, &format!("a call of '{name}' with keyword arguments")));
+        }
+        if substitution.contains_key(name) {
+            return Err(cannot(owner, &format!("a call of its parameter '{name}'")));
+        }
+        let arguments =
+            args.iter().map(|a| self.expr(a, substitution, owner, stack)).collect::<PhysureResult<Vec<_>>>()?;
+        if self.functions.contains_key(name) {
+            self.call(name, &arguments, stack)
+        } else {
+            Ok(format!("{name}({})", arguments.join(", ")))
+        }
+    }
+}
+
+/// The refusal of inlining `owner`, whose body holds `what`.
+fn cannot(owner: &str, what: &str) -> PhysureError {
+    refusal(format!("'{owner}' cannot be inlined into a symbolic expression: its body holds {what}"))
+}
+
+/// The symbol of the operation `op` in a symbolic expression, or what the body holds when it has none.
+fn operator_symbol(op: BinaryOp) -> Result<&'static str, &'static str> {
+    match op {
+        BinaryOp::Add => Ok("+"),
+        BinaryOp::Sub => Ok("-"),
+        BinaryOp::Mul => Ok("*"),
+        BinaryOp::Div => Ok("/"),
+        BinaryOp::Pow => Ok("^"),
+        BinaryOp::Convert => Err("a conversion `=>`"),
+        BinaryOp::Range => Err("a range `..`"),
     }
 }
 
@@ -283,31 +315,65 @@ fn call_arguments<'t>(
     let mut depth = 0usize;
     let mut start = tokens[open].pos + 1;
     for (index, token) in tokens.iter().enumerate().skip(open) {
-        if is_op(token, "(") || is_op(token, "[") {
-            depth += 1;
-        } else if is_op(token, ")") || is_op(token, "]") {
-            depth -= 1;
-            if depth == 0 {
-                let last = text[start..token.pos].trim();
-                // `f()` has no arguments; `f(a, )` has an empty one
-                if !(last.is_empty() && arguments.is_empty()) {
-                    arguments.push(last);
+        match CallToken::of(token) {
+            CallToken::Open => depth += 1,
+            CallToken::Close => {
+                depth -= 1;
+                if depth == 0 {
+                    let arguments = last_argument(arguments, text[start..token.pos].trim(), text, name)?;
+                    return Ok((arguments, index));
                 }
-                if arguments.iter().any(|a| a.is_empty()) {
-                    return Err(refusal(format!("the call of '{name}' in {text:?} has an empty argument")));
-                }
-                return Ok((arguments, index));
             }
-        } else if depth == 1 && is_op(token, ",") {
-            arguments.push(text[start..token.pos].trim());
-            start = token.pos + 1;
-        } else if depth == 1 && is_op(token, "=") {
-            return Err(refusal(format!(
-                "the call of '{name}' in {text:?} names an argument, and an inlined call takes its arguments by position"
-            )));
+            CallToken::Comma if depth == 1 => {
+                arguments.push(text[start..token.pos].trim());
+                start = token.pos + 1;
+            }
+            CallToken::Equals if depth == 1 => {
+                return Err(refusal(format!(
+                    "the call of '{name}' in {text:?} names an argument, and an inlined call takes its arguments by position"
+                )));
+            }
+            _ => {}
         }
     }
     Err(refusal(format!("the call of '{name}' in {text:?} is not closed")))
+}
+
+/// What a token is to the reading of a call's arguments.
+enum CallToken {
+    Open,
+    Close,
+    Comma,
+    Equals,
+    Other,
+}
+
+impl CallToken {
+    fn of(token: &PhsToken) -> CallToken {
+        if is_op(token, "(") || is_op(token, "[") {
+            CallToken::Open
+        } else if is_op(token, ")") || is_op(token, "]") {
+            CallToken::Close
+        } else if is_op(token, ",") {
+            CallToken::Comma
+        } else if is_op(token, "=") {
+            CallToken::Equals
+        } else {
+            CallToken::Other
+        }
+    }
+}
+
+/// The arguments of a call of `name` in `text` once its `)` is read, `last` the text after its last comma.
+fn last_argument<'t>(mut arguments: Vec<&'t str>, last: &'t str, text: &str, name: &str) -> PhysureResult<Vec<&'t str>> {
+    // `f()` has no arguments; `f(a, )` has an empty one
+    if !(last.is_empty() && arguments.is_empty()) {
+        arguments.push(last);
+    }
+    if arguments.iter().any(|a| a.is_empty()) {
+        return Err(refusal(format!("the call of '{name}' in {text:?} has an empty argument")));
+    }
+    Ok(arguments)
 }
 
 #[cfg(test)]
