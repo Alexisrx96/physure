@@ -636,3 +636,48 @@ def test_np_concatenate_of_uncertain_arrays_is_refused():
             np.concatenate(parts)
     joined = np.concatenate([exact, exact])
     np.testing.assert_array_equal(joined.magnitude, [4.0, 5.0, 4.0, 5.0])
+
+
+def test_an_element_wise_operation_reads_a_level_slope_per_element():
+    _, _, level = _level(20)
+    ratio = level.to("1")
+    # a sparse Jacobian (the sum) and an element-wise one (the product)
+    np.testing.assert_allclose(
+        (ratio + ratio).uncertainty, 2 * ratio.uncertainty, rtol=1e-12
+    )
+    np.testing.assert_allclose(
+        (ratio * ratio).uncertainty,
+        2 * ratio.magnitude * ratio.uncertainty,
+        rtol=1e-12,
+    )
+
+
+def test_a_source_alone_in_its_slot_and_in_a_combination_is_one_error():
+    b = Q_(np.array([1.0, 2.0]), "m", uncertainty=0.1)
+    p, q = Q_(1.0, "m", 0.3), Q_(1.0, "m", 0.4)
+    _ = b + p  # p's source gets a slot of its own
+    # (b + (p + q)) - p = b + q
+    np.testing.assert_allclose(
+        ((b + (p + q)) - p).uncertainty, math.hypot(0.1, 0.4), rtol=1e-12
+    )
+
+
+def test_with_slot_scale_scales_every_form_of_jacobian_by_column():
+    # torch and JAX hand dense or element-wise Jacobians; NumPy's are sparse
+    from scipy import sparse
+
+    from physure.domain.measurement.uncertainty import with_slot_scale
+
+    factor = np.array([2.0, 3.0, 5.0])
+    dense = np.arange(6.0).reshape(2, 3)
+    np.testing.assert_allclose(
+        with_slot_scale(dense, factor), dense @ np.diag(factor)
+    )
+    scaled = with_slot_scale(sparse.csr_matrix(np.eye(3)), factor)
+    np.testing.assert_allclose(scaled.toarray(), np.diag(factor))
+    element_wise = np.array([1.0, -1.0, 0.5])
+    np.testing.assert_allclose(
+        with_slot_scale(element_wise, factor), element_wise * factor
+    )
+    np.testing.assert_allclose(with_slot_scale(4.0, factor), 4.0 * factor)
+    assert with_slot_scale(dense, 1.0) is dense
