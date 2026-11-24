@@ -54,56 +54,102 @@ enum NestingToken {
 
 /// The tokens of `code`, each with whether it is the first of its line and has blanks before it.
 fn nesting_tokens(code: &str) -> Vec<(NestingToken, bool)> {
-    let chars: Vec<char> = code.chars().collect();
-    let at = |i: usize| chars.get(i).copied();
-    let (mut tokens, mut i, mut line_start, mut indented) = (Vec::new(), 0, true, false);
-    let mut push = |token: NestingToken, line_start: &mut bool, indented: &mut bool| {
-        let first_indented = *line_start && *indented;
-        *line_start = token == NestingToken::LineEnd;
-        *indented = false;
-        tokens.push((token, first_indented));
-    };
-    while let Some(c) = at(i) {
-        if c == '\n' || c == '\r' {
-            i += if c == '\r' && at(i + 1) == Some('\n') { 2 } else { 1 };
-            push(NestingToken::LineEnd, &mut line_start, &mut indented);
-        } else if c == ' ' || c == '\t' {
-            indented |= line_start;
-            i += 1;
-        } else if c == '#' || (c == '/' && at(i + 1) == Some('/')) {
-            let doc = c == '/' && at(i + 2) == Some('/');
-            while at(i).is_some_and(|c| c != '\n' && c != '\r') {
-                i += 1;
-            }
-            if doc {
-                push(NestingToken::Doc, &mut line_start, &mut indented);
-            }
-        } else if c == '`' && at(i + 1) == Some('`') && at(i + 2) == Some('`') {
-            i += 3;
-            while at(i).is_some() && !(at(i) == Some('`') && at(i + 1) == Some('`') && at(i + 2) == Some('`')) {
-                i += 1;
-            }
-            i += 3;
-            push(NestingToken::Text, &mut line_start, &mut indented);
-        } else if c == '"' {
-            i += 1;
-            while at(i).is_some_and(|c| c != '"') {
-                i += 1;
-            }
-            i += 1;
-            push(NestingToken::Text, &mut line_start, &mut indented);
-        } else if c.is_alphanumeric() || c == '_' {
-            let start = i;
-            while at(i).is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                i += 1;
-            }
-            push(NestingToken::Word(chars[start..i].iter().collect()), &mut line_start, &mut indented);
-        } else {
-            i += 1;
-            push(NestingToken::Symbol(c), &mut line_start, &mut indented);
+    let mut lexer = NestingLexer { chars: code.chars().collect(), i: 0, tokens: Vec::new(), line_start: true, indented: false };
+    while let Some(c) = lexer.at(0) {
+        lexer.step(c);
+    }
+    lexer.tokens
+}
+
+/// The reading of `nesting_tokens`: the source, where it is in it, the tokens so far, and whether no token of the
+/// current line has been read yet and blanks have.
+struct NestingLexer {
+    chars: Vec<char>,
+    i: usize,
+    tokens: Vec<(NestingToken, bool)>,
+    line_start: bool,
+    indented: bool,
+}
+
+impl NestingLexer {
+    /// The character `offset` places after the current one.
+    fn at(&self, offset: usize) -> Option<char> {
+        self.chars.get(self.i + offset).copied()
+    }
+
+    fn push(&mut self, token: NestingToken) {
+        let first_indented = self.line_start && self.indented;
+        self.line_start = token == NestingToken::LineEnd;
+        self.indented = false;
+        self.tokens.push((token, first_indented));
+    }
+
+    fn skip_while(&mut self, keep: impl Fn(char) -> bool) {
+        while self.at(0).is_some_and(&keep) {
+            self.i += 1;
         }
     }
-    tokens
+
+    fn at_raw_fence(&self) -> bool {
+        self.at(0) == Some('`') && self.at(1) == Some('`') && self.at(2) == Some('`')
+    }
+
+    /// Reads what starts with the current character `c`: a line end, a blank, a comment or a token.
+    fn step(&mut self, c: char) {
+        match c {
+            '\n' | '\r' => {
+                self.i += if c == '\r' && self.at(1) == Some('\n') { 2 } else { 1 };
+                self.push(NestingToken::LineEnd);
+            }
+            ' ' | '\t' => {
+                self.indented |= self.line_start;
+                self.i += 1;
+            }
+            '#' => self.comment(),
+            '/' if self.at(1) == Some('/') => self.comment(),
+            '`' if self.at_raw_fence() => self.raw_block(),
+            '"' => self.string(),
+            _ if c.is_alphanumeric() || c == '_' => self.word(),
+            _ => {
+                self.i += 1;
+                self.push(NestingToken::Symbol(c));
+            }
+        }
+    }
+
+    /// A comment up to the end of its line: nothing, or a `Doc` for a `///` line.
+    fn comment(&mut self) {
+        let doc = self.at(0) == Some('/') && self.at(2) == Some('/');
+        self.skip_while(|c| c != '\n' && c != '\r');
+        if doc {
+            self.push(NestingToken::Doc);
+        }
+    }
+
+    /// A raw block from its opening fence to past its closing one (or the end of the source).
+    fn raw_block(&mut self) {
+        self.i += 3;
+        while self.at(0).is_some() && !self.at_raw_fence() {
+            self.i += 1;
+        }
+        self.i += 3;
+        self.push(NestingToken::Text);
+    }
+
+    /// A string literal from its opening quote to past its closing one (or the end of the source).
+    fn string(&mut self) {
+        self.i += 1;
+        self.skip_while(|c| c != '"');
+        self.i += 1;
+        self.push(NestingToken::Text);
+    }
+
+    fn word(&mut self) {
+        let start = self.i;
+        self.skip_while(|c| c.is_alphanumeric() || c == '_');
+        let word = self.chars[start..self.i].iter().collect();
+        self.push(NestingToken::Word(word));
+    }
 }
 
 #[derive(Default)]
@@ -151,24 +197,44 @@ impl Nesting {
 
     fn read(&mut self, token: NestingToken, indented: bool) -> PhysureResult<()> {
         if token == NestingToken::LineEnd {
-            if let (Some(first), Some(last)) = (self.first.take(), self.last.take()) {
-                if is_symbol(&last, &['=']) {
-                    self.bodies += 1;
-                    self.refuse_past_limit("function bodies are")?;
-                }
-                let decorated = is_symbol(&first, &['@']) || first == NestingToken::Doc;
-                self.line_before = Some((last, decorated));
-            }
-            return Ok(());
+            return self.end_line();
         }
+        self.place_in_line(&token, indented);
+        self.count(&token)?;
+        self.previous = Some(token);
+        Ok(())
+    }
+
+    /// The end of a line: one that ends in `=` may start a function body, and the line is remembered as the one
+    /// before the next.
+    fn end_line(&mut self) -> PhysureResult<()> {
+        let (Some(first), Some(last)) = (self.first.take(), self.last.take()) else {
+            return Ok(());
+        };
+        if is_symbol(&last, &['=']) {
+            self.bodies += 1;
+            self.refuse_past_limit("function bodies are")?;
+        }
+        let decorated = is_symbol(&first, &['@']) || first == NestingToken::Doc;
+        self.line_before = Some((last, decorated));
+        Ok(())
+    }
+
+    /// Records `token` as the last of its line, and as the first when it is; a first token that surely starts a
+    /// new statement closes every function body counted so far.
+    fn place_in_line(&mut self, token: &NestingToken, indented: bool) {
         if self.first.is_none() {
-            if !indented && self.base == 0 && !self.continues(&token) {
+            if !indented && self.base == 0 && !self.continues(token) {
                 self.bodies = 0;
             }
             self.first = Some(token.clone());
         }
         self.last = Some(token.clone());
-        match &token {
+    }
+
+    /// Counts the `if` or the bracket `token` is, refusing the source past the limit.
+    fn count(&mut self, token: &NestingToken) -> PhysureResult<()> {
+        match token {
             NestingToken::Word(word) if word == "if" => {
                 let chained = self.previous.as_ref().is_some_and(|previous| is_word(previous, &["else", "then", "if"]));
                 self.run = if chained { self.run + 1 } else { 1 };
@@ -188,7 +254,6 @@ impl Nesting {
             }
             _ => {}
         }
-        self.previous = Some(token);
         Ok(())
     }
 }
