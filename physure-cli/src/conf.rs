@@ -163,6 +163,37 @@ fn accepted_flags() -> String {
     all.join(", ")
 }
 
+impl ConfArgs {
+    /// Stores `value` in the field of the value flag `flag` (one of [`VALUE_FLAGS`]).
+    fn set_value(&mut self, flag: &str, value: &str) -> Result<(), String> {
+        match flag {
+            "--conf" => self.conf = Some(PathBuf::from(value)),
+            "--reason" => self.reason = Some(value.to_string()),
+            "--engine-policy" => self.policy = Some(value.parse()?),
+            "--out" => self.out = Some(PathBuf::from(value)),
+            "--witness" => self.witness.push(PathBuf::from(value)),
+            "--accept-witness-changes" => self.accept = Some(Accept::parse(value)?),
+            "--timeout-ms" => {
+                let ms = value.parse::<u64>().ok().filter(|ms| *ms > 0);
+                self.timeout_ms = Some(ms.ok_or_else(|| format!("--timeout-ms takes a whole number of milliseconds above 0, found {value:?}"))?);
+            }
+            _ => self.expect = Some(value.to_string()),
+        }
+        Ok(())
+    }
+
+    /// Turns on the field of the switch `switch` (one of [`SWITCHES`]).
+    fn set_switch(&mut self, switch: &str) {
+        match switch {
+            "--json" => self.json = true,
+            "--yes" => self.yes = true,
+            "--origin" => self.origin = true,
+            "--run" => self.run = true,
+            _ => self.help = true,
+        }
+    }
+}
+
 /// Parses the arguments that follow `conf`. `Err` is the message, which names the accepted flags.
 pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
     let mut parsed = ConfArgs::default();
@@ -179,28 +210,10 @@ pub fn parse(args: &[String]) -> Result<ConfArgs, String> {
                 return Err(format!("{flag} is given twice; expected it once (only {REPEATABLE} may be repeated)"));
             }
             parsed.given.push(flag);
-            match flag {
-                "--conf" => parsed.conf = Some(PathBuf::from(value)),
-                "--reason" => parsed.reason = Some(value.clone()),
-                "--engine-policy" => parsed.policy = Some(value.parse()?),
-                "--out" => parsed.out = Some(PathBuf::from(value)),
-                "--witness" => parsed.witness.push(PathBuf::from(value)),
-                "--accept-witness-changes" => parsed.accept = Some(Accept::parse(value)?),
-                "--timeout-ms" => {
-                    let ms = value.parse::<u64>().ok().filter(|ms| *ms > 0);
-                    parsed.timeout_ms = Some(ms.ok_or_else(|| format!("--timeout-ms takes a whole number of milliseconds above 0, found {value:?}"))?);
-                }
-                _ => parsed.expect = Some(value.clone()),
-            }
+            parsed.set_value(flag, value)?;
         } else if let Some(&switch) = SWITCHES.iter().find(|s| **s == arg) {
             parsed.given.push(switch);
-            match switch {
-                "--json" => parsed.json = true,
-                "--yes" => parsed.yes = true,
-                "--origin" => parsed.origin = true,
-                "--run" => parsed.run = true,
-                _ => parsed.help = true,
-            }
+            parsed.set_switch(switch);
         } else if arg.starts_with('-') {
             return Err(format!("unknown flag {arg}; the flags of `phs conf` are: {}", accepted_flags()));
         } else if command.is_none() {
