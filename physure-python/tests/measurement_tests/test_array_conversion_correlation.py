@@ -681,3 +681,23 @@ def test_with_slot_scale_scales_every_form_of_jacobian_by_column():
     )
     np.testing.assert_allclose(with_slot_scale(4.0, factor), 4.0 * factor)
     assert with_slot_scale(dense, 1.0) is dense
+
+
+def test_a_hash_key_never_holds_a_raw_slice():
+    """A `slice` is not hashable before Python 3.12 (the CI runs 3.11): the keys of a model are tuples."""
+    from physure.domain.measurement.uncertainty import (
+        _slice_key,
+        _slice_of,
+        _slot_key,
+    )
+
+    assert _slice_key(slice(1, 5, None)) == (1, 5, None)
+    assert _slice_of(_slice_key(slice(1, 5, 2))) == slice(1, 5, 2)
+    assert _slice_key(None) is None
+    assert _slice_of(None) is None
+    one_number = _slot_key((slice(0, 3), 2.0))
+    assert one_number == ((0, 3, None), 2.0)
+    per_element = _slot_key((slice(0, 3), np.array([1.0, 2.0, 3.0])))
+    assert not any(isinstance(part, slice) for part in per_element)
+    assert hash(one_number) != hash(per_element)
+    assert _slot_key(None) is None

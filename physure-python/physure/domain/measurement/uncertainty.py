@@ -745,15 +745,27 @@ class VarianceModel(Uncertainty[UncType]):
         return hash(self.variance)
 
 
+def _slice_key(value: slice | None) -> tuple[Any, Any, Any] | None:
+    """A hashable form of a slice: a `slice` is not hashable before Python 3.12."""
+    return None if value is None else (value.start, value.stop, value.step)
+
+
+def _slice_of(key: tuple[Any, Any, Any] | None) -> slice | None:
+    """The slice that `_slice_key` read."""
+    return None if key is None else slice(*key)
+
+
 def _slot_key(scaled_slot: tuple[slice, Any] | None) -> Any:
     """A hashable form of a scaled slot: a factor per element is read by its bytes."""
-    if scaled_slot is None or isinstance(scaled_slot[1], (int, float)):
-        return scaled_slot
+    if scaled_slot is None:
+        return None
     slot, factor = scaled_slot
+    if isinstance(factor, (int, float)):
+        return (_slice_key(slot), factor)
     import numpy as np
 
     data = np.ascontiguousarray(factor, dtype=np.float64)
-    return (slot, data.shape, data.tobytes())
+    return (_slice_key(slot), data.shape, data.tobytes())
 
 
 def with_slot_scale(jacobian: Any, factor: Any) -> Any:
@@ -1057,7 +1069,7 @@ class CovarianceModel(Uncertainty[UncType]):
             (
                 self.std_dev_internal,
                 lineage_items,
-                self.vector_slice,
+                _slice_key(self.vector_slice),
                 _slot_key(self.scaled_slot),
             )
         )
@@ -1331,24 +1343,26 @@ def _register_jax_pytrees() -> None:
         per_element = factor is not None and not isinstance(
             factor, (int, float)
         )
+        # the aux data must be hashable: a slice is not, before Python 3.12
         return (m.std_dev_internal, values, factor if per_element else None), (
-            m.vector_slice,
+            _slice_key(m.vector_slice),
             keys,
-            slot,
+            _slice_key(slot),
             None if per_element else factor,
             m.store_token,
         )
 
     def cov_unflatten(aux, children):
-        vector_slice, keys, slot, number, store_token = aux
+        vector_slice_key, keys, slot_key, number, store_token = aux
         std_dev, values, per_element = children
         lineage = dict(zip(keys, values, strict=False))
         factor = per_element if per_element is not None else number
+        slot = _slice_of(slot_key)
         scaled_slot = None if slot is None else (slot, factor)
         return CovarianceModel(
             std_dev_internal=std_dev,
             lineage=lineage,
-            vector_slice=vector_slice,
+            vector_slice=_slice_of(vector_slice_key),
             scaled_slot=scaled_slot,
             store_token=store_token,
         )
